@@ -433,6 +433,10 @@ Release 必须提供当前 OS/架构的 `codex-proxy-rs_<version>_<os>_<arch>.ta
 
 ### 备份内容与限制
 
+管理端新建备份采用流式压缩的 `.sql.gz` 业务归档，保留业务配置、账号身份、
+额度账务和全局小时用量，不含请求明细、详细错误采集及审计日志。
+完整范围、统计精度和新旧格式兼容见 [业务备份说明](../docs/business-backup.md)。
+
 - 运行时镜像的 `pg_dump`/`pg_restore` 在构建期从与 compose 服务端同一固定
   `postgres:18-bookworm` 镜像（`Dockerfile` 的 `POSTGRES_IMAGE`）COPY 到
   `/usr/lib/postgresql/18/bin` 并加入容器 PATH，版本与服务端严格一致；运行时只从
@@ -455,8 +459,15 @@ Release 必须提供当前 OS/架构的 `codex-proxy-rs_<version>_<os>_<arch>.ta
 
 ### 人工恢复数据库
 
-备份归档由 `pg_dump --format=custom --no-owner --no-privileges` 生成，可通过标准 PostgreSQL
-工具离线恢复：
+新业务归档使用匹配版本的 PostgreSQL 客户端恢复到空目标库：
+
+```bash
+set -o pipefail
+gzip -dc backup.sql.gz | psql -X --single-transaction --set=ON_ERROR_STOP=1 --password \
+  --dbname='postgresql://restore_user@127.0.0.1:5432/restore_db'
+```
+
+升级前生成的 custom 格式 `.dump` 仍使用原命令：
 
 ```bash
 pg_restore --no-owner --no-privileges --password \

@@ -90,6 +90,17 @@ new chain. Keep the separate Excel replay contract.
 
 ## 4. Validation Matrix
 
+### v3.29.6 建连恢复
+
+- WS origin breaker 只统计真实 opening 结果；前台快速回退不是建连失败。
+  用代次隔离过期结果，同一 closed 代成功不能作废其他尚未完成的 opening。
+  保留 NewCPR 动态 RequestTuningHandle。
+- NotSent 建连失败先恢复原账号；允许换号时为其后续账号预留一次 opening 和半个剩余窗口。
+  沿用现有换号上限、路由次数、required owner、身份剥离和已发送水位线。
+- 无可选账号时消费兜底状态并回到原账号，跨 Provider 必须清除旧账号兜底。
+  不把本地恢复预算解释为上游 429 冷却或新的生成超时。
+- 测试包括零换号配置、固定账号、原生续接、Sent/Ambiguous/禁止重试，以及慢 WS 成功复用。
+
 ### v3.28.0 Adaptation
 
 Client-turn failure markers are scoped by client key, thread and turn. Keep

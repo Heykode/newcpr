@@ -628,9 +628,6 @@ fn start_pooled_websocket_connect(
     let task_key = connect_lease.key().clone();
     let started_at = connect_lease.started_at();
     let cancellation = connect_lease.cancellation_token();
-    let fast_path_reporter = permit
-        .as_ref()
-        .map(WebSocketOriginBreakerPermit::fast_path_reporter);
     let keepalive = pool.keepalive();
     let context = PumpLogContext::new(
         Some(task_key.account_id().to_owned()),
@@ -658,22 +655,9 @@ fn start_pooled_websocket_connect(
                 return;
             }
             result = async {
-                let connecting = connect_websocket_connection(&connection, keepalive, context, connection_budget.as_ref(), proxy_permit);
-                tokio::pin!(connecting);
-                // Capacity waiting shortens only the foreground deadline. The opening
-                // owns its full slow-connect budget, even after that caller leaves.
-                let opening_budget = fast_path_reporter
-                    .as_ref()
-                    .map(|_| WEBSOCKET_FAST_PATH_BUDGET);
-                match wait_for_fast_path(started_at, opening_budget, &mut connecting).await {
-                    WebSocketFastPath::Ready(result) => result,
-                    WebSocketFastPath::Missed => {
-                        if let Some(reporter) = &fast_path_reporter {
-                            reporter.missed();
-                        }
-                        connecting.await
-                    }
-                }
+                // Foreground fallback leaves this opening alive; only its final result
+                // belongs to the origin breaker.
+                connect_websocket_connection(&connection, keepalive, context, connection_budget.as_ref(), proxy_permit).await
             } => result,
         };
         if let Err(error) = &connected

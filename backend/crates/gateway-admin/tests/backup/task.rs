@@ -27,7 +27,7 @@ async fn backup_task_runs_full_dump_upload_verify_pipeline() {
         id: backup_id("manual"),
         trigger_kind: BackupTriggerKind::Manual,
         scheduled_at: None,
-        object_key: "codex/2026/08/01/manual.dump".to_owned(),
+        object_key: "codex/2026/08/01/manual.sql.gz".to_owned(),
         expires_at: None,
     };
     repository
@@ -55,6 +55,28 @@ async fn backup_task_runs_full_dump_upload_verify_pipeline() {
         .object(&seed.object_key)
         .expect("uploaded object exists");
     assert_eq!(stored.as_slice(), DUMP_CONTENT);
+    assert!(dump.inspect_staging(&seed.id).await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn old_queued_backup_does_not_upload_gzip_with_a_custom_archive_name() {
+    let repository = Arc::new(FakeBackupRepository::new(configured_settings()));
+    let dump = Arc::new(FakeDumpPort::new());
+    let objects = Arc::new(FakeObjectStore::new());
+    let seed = BackupRecordSeed {
+        id: backup_id("legacy-queued"),
+        trigger_kind: BackupTriggerKind::Manual,
+        scheduled_at: None,
+        object_key: "synthetic/legacy.dump".into(),
+        expires_at: None,
+    };
+    repository.insert_backup_record(seed.clone()).await.unwrap();
+    BackupTask::new(repository.clone(), dump.clone(), objects.clone())
+        .run_cycle(&CancellationToken::new())
+        .await
+        .unwrap();
+    assert_eq!(repository.all_records()[0].status, BackupStatus::Failed);
+    assert!(objects.object(&seed.object_key).is_none());
     assert!(dump.inspect_staging(&seed.id).await.unwrap().is_none());
 }
 
@@ -129,7 +151,7 @@ async fn backup_task_marks_failed_when_dump_port_fails() {
         id: backup_id("fail"),
         trigger_kind: BackupTriggerKind::Manual,
         scheduled_at: None,
-        object_key: "codex/2026/08/01/fail.dump".to_owned(),
+        object_key: "codex/2026/08/01/fail.sql.gz".to_owned(),
         expires_at: None,
     };
     repository
@@ -161,7 +183,7 @@ async fn backup_task_marks_failed_with_the_upload_error() {
         id: backup_id("upload-failure"),
         trigger_kind: BackupTriggerKind::Manual,
         scheduled_at: None,
-        object_key: "codex/2026/08/01/upload-failure.dump".to_owned(),
+        object_key: "codex/2026/08/01/upload-failure.sql.gz".to_owned(),
         expires_at: None,
     };
     repository
@@ -199,7 +221,7 @@ async fn upload_failure_keeps_cleanup_failure_without_leaking_details() {
                 id: backup_id("cleanup-failure"),
                 trigger_kind: BackupTriggerKind::Manual,
                 scheduled_at: None,
-                object_key: "synthetic/cleanup.dump".to_owned(),
+                object_key: "synthetic/cleanup.sql.gz".to_owned(),
                 expires_at: expires.then(|| Utc::now() + chrono::TimeDelta::days(1)),
             })
             .await
