@@ -156,6 +156,23 @@ jobs:
             echo "CPR_TEST_REDIS_URL=redis://:${redis_password}@127.0.0.1:6379"
           } >> "$GITHUB_ENV"
 
+      - name: Use matching PostgreSQL clients for backup tests
+        shell: bash
+        env:
+          POSTGRES_TEST_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          set -euo pipefail
+          client_bin="$RUNNER_TEMP/cpr-postgres-bin"
+          mkdir -p "$client_bin"
+          for client in pg_dump psql; do
+            printf '#!/usr/bin/env bash\nexec docker exec --interactive --env PGPASSWORD %q %q "$@"\n' \
+              "$POSTGRES_TEST_CONTAINER" "$client" > "$client_bin/$client"
+            chmod 700 "$client_bin/$client"
+          done
+          echo "$client_bin" >> "$GITHUB_PATH"
+          "$client_bin/pg_dump" --version
+          "$client_bin/psql" --version
+
       - name: Rust tests
         env:
           BACKEND_PACKAGES: ${{ inputs.backend_packages }}
