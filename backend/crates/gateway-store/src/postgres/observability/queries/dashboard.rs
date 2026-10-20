@@ -100,7 +100,12 @@ pub(crate) async fn request_metrics(
         .fetch_one(&mut *connection)
         .await
         .map_err(|error| postgres_unavailable("load request metrics").with_source(error))?;
-    request_metrics_from_row(&row)
+    let mut metrics = request_metrics_from_row(&row)?;
+    super::restored::add_metrics(
+        &mut metrics,
+        &super::restored::restored_metrics(connection, range, filter).await?,
+    )?;
+    Ok(metrics)
 }
 
 pub(crate) async fn dashboard_totals(
@@ -110,16 +115,17 @@ pub(crate) async fn dashboard_totals(
     // 当前区间指标所需的延迟分位数。
     let fact = completed_usage_fact_predicate("mr");
     let mut query = QueryBuilder::<Postgres>::new(format!(
-        "select count(*)::bigint as request_count,
+        "select sum(request_count)::bigint as request_count,sum(input_tokens)::bigint as input_tokens,sum(cached_tokens)::bigint as cached_tokens,sum(total_tokens)::bigint as total_tokens,sum(billing_usd)::text as billing_usd from (select count(*)::bigint as request_count,
                 coalesce(sum(input_tokens) filter (where {fact}), 0)::bigint as input_tokens,
                 coalesce(sum(cached_tokens) filter (where {fact}), 0)::bigint as cached_tokens,
                 coalesce(sum(total_tokens) filter (where {fact}), 0)::bigint as total_tokens,
-                sum(cost_amount) filter (where {fact} and cost_currency = 'USD')::text
+                sum(cost_amount) filter (where {fact} and cost_currency = 'USD')
                   as billing_usd
            from model_requests mr
           where mr.recovered_at is null"
     ));
     push_business_request_filter(&mut query, "mr");
+    query.push(" union all select (counts->>'request_count')::bigint,(counts->>'input_tokens')::bigint,(counts->>'cached_tokens')::bigint,(counts->>'total_tokens')::bigint,(costs->>'USD')::numeric from backup_usage_hours) combined");
     let row = query
         .build()
         .fetch_one(&mut *connection)
@@ -159,14 +165,20 @@ pub(crate) async fn dashboard_card_metrics(
         .map_err(|error| {
             postgres_unavailable("load dashboard comparison counters").with_source(error)
         })?;
-    Ok(RequestMetrics {
+    let mut metrics = RequestMetrics {
         request_count: unsigned(&row, "request_count")?,
         input_tokens: unsigned(&row, "input_tokens")?,
         output_tokens: unsigned(&row, "output_tokens")?,
         cached_tokens: unsigned(&row, "cached_tokens")?,
         total_tokens: unsigned(&row, "total_tokens")?,
         ..RequestMetrics::default()
-    })
+    };
+    super::restored::add_metrics(
+        &mut metrics,
+        &super::restored::restored_metrics(connection, range, &UsageRecordFilter::default())
+            .await?,
+    )?;
+    Ok(metrics)
 }
 
 pub(crate) async fn request_metric_series(
@@ -310,6 +322,7 @@ async fn request_metric_series_inner(
             },
         );
     }
+    super::restored::add_series(connection, range, filter, granularity, &mut points).await?;
     if load_costs {
         let bucket_costs = request_costs_by_bucket(connection, range, filter, granularity).await?;
         for (bucket, costs) in bucket_costs {
@@ -367,11 +380,13 @@ pub(crate) async fn request_costs_by_bucket(
     filter: &UsageRecordFilter,
     granularity: ObservationGranularity,
 ) -> StoreResult<BTreeMap<DateTime<Utc>, Vec<CurrencyCostTotal>>> {
-    let mut query = QueryBuilder::<Postgres>::new("select date_bin(");
+    let mut query = QueryBuilder::<Postgres>::new(
+        "select bucket_start,cost_currency,sum(amount)::text as amount from (select date_bin(",
+    );
     query.push_bind(granularity.sql_interval());
     query.push(
         "::interval, mr.started_at, timestamptz '1970-01-01 00:00:00+00') as bucket_start,
-                mr.cost_currency, sum(mr.cost_amount)::text as amount
+                mr.cost_currency, sum(mr.cost_amount) as amount
          from model_requests mr
          where mr.started_at >= ",
     );
@@ -381,7 +396,17 @@ pub(crate) async fn request_costs_by_bucket(
     query.push(" and mr.cost_amount is not null and mr.cost_currency is not null");
     push_completed_usage_fact_filter(&mut query, "mr");
     push_usage_filter(&mut query, filter, "mr");
-    query.push(" group by bucket_start, mr.cost_currency order by bucket_start, mr.cost_currency");
+    query.push(" group by bucket_start, mr.cost_currency");
+    if *filter == UsageRecordFilter::default() {
+        query.push(" union all select date_bin(");
+        query.push_bind(granularity.sql_interval());
+        query.push("::interval,bucket_start,timestamptz 'epoch'),c.key,c.value::numeric from backup_usage_hours cross join lateral jsonb_each_text(costs) c where bucket_start >= ");
+        query.push_bind(range.start);
+        query.push(" and bucket_start < ");
+        query.push_bind(range.end);
+    }
+    query
+        .push(") combined group by bucket_start,cost_currency order by bucket_start,cost_currency");
     let rows = query
         .build()
         .fetch_all(&mut *connection)
@@ -522,7 +547,7 @@ pub(crate) async fn request_costs(
     filter: &UsageRecordFilter,
 ) -> StoreResult<Vec<CurrencyCostTotal>> {
     let mut query = QueryBuilder::<Postgres>::new(
-        "select mr.cost_currency, sum(mr.cost_amount)::text as amount
+        "select cost_currency,sum(amount)::text as amount from (select mr.cost_currency, sum(mr.cost_amount) as amount
          from model_requests mr where mr.started_at >= ",
     );
     query.push_bind(range.start);
@@ -531,7 +556,14 @@ pub(crate) async fn request_costs(
     query.push(" and mr.cost_amount is not null and mr.cost_currency is not null");
     push_completed_usage_fact_filter(&mut query, "mr");
     push_usage_filter(&mut query, filter, "mr");
-    query.push(" group by mr.cost_currency order by mr.cost_currency");
+    query.push(" group by mr.cost_currency");
+    if *filter == UsageRecordFilter::default() {
+        query.push(" union all select c.key,c.value::numeric from backup_usage_hours cross join lateral jsonb_each_text(costs) c where bucket_start >= ");
+        query.push_bind(range.start);
+        query.push(" and bucket_start < ");
+        query.push_bind(range.end);
+    }
+    query.push(") combined group by cost_currency order by cost_currency");
     query
         .build()
         .fetch_all(&mut *connection)

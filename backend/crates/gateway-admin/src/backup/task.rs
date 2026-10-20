@@ -380,6 +380,15 @@ impl BackupTask {
                 .await;
         }
 
+        if !record.object_key.ends_with(".sql.gz") {
+            return self
+                .fail_task(
+                    record,
+                    code::PG_DUMP_FAILED,
+                    "旧格式待执行备份请重新创建；已完成归档仍可下载",
+                )
+                .await;
+        }
         let now = Utc::now();
         let artifact = match self
             .dump

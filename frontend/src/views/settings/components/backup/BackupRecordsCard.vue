@@ -93,7 +93,7 @@ function canDelete(record: BackupRecord): boolean {
 <template>
   <BaseCard
     title="备份记录"
-    description="创建手动备份和管理已有备份记录"
+    description="业务备份保留账号、设置、已用额度、累计费用及全局小时用量；不含请求明细、错误采集和审计日志。历史明细及按账号、Key 筛选的历史需整库备份。"
   >
     <template #actions>
       <div class="flex flex-wrap items-center gap-2">

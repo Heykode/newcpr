@@ -35,7 +35,7 @@ fn object_key_shape() {
     let key = build_object_key("production/backups", "backup_abc", at).unwrap();
     assert_eq!(
         key,
-        "production/backups/2026/08/01/codex-proxy-rs_20260801_123000_abc.dump"
+        "production/backups/2026/08/01/codex-proxy-rs_20260801_123000_abc.sql.gz"
     );
 }
 
@@ -48,6 +48,19 @@ fn object_key_rejects_dangerous_prefixes() {
     assert!(build_object_key("a\u{0001}b", "backup_x", at).is_err());
     assert!(build_object_key("", "backup_x", at).is_err());
     assert!(build_object_key("trailing//", "backup_x", at).is_ok());
+}
+
+#[test]
+fn downloads_preserve_the_stored_archive_format() {
+    use gateway_admin::model::backup::build_download_file_name;
+    assert_eq!(
+        build_download_file_name("backup_abc", "backups/old.dump"),
+        "codex-proxy-rs_abc.dump"
+    );
+    assert_eq!(
+        build_download_file_name("backup_abc", "backups/new.sql.gz"),
+        "codex-proxy-rs_abc.sql.gz"
+    );
 }
 
 #[test]

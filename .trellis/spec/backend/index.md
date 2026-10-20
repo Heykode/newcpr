@@ -14,6 +14,7 @@ This directory contains guidelines for backend development. Fill in each file wi
 
 | Guide | Description | Status |
 |-------|-------------|--------|
+| [业务备份](./business-backup.md) | 同快照业务归档、全局小时基线与新旧恢复格式 | 隔离恢复验证 |
 | [Recent Update Migration](./recent-update-migration.md) | Affinity, refresh, Live, Fast, diagnostics and administration integration boundaries | Local migration verification |
 | [Reset Credits](./reset-credits.md) | Earliest-expiry batch confirmation, persistent deduplication and unknown-result recovery | Local isolated verification |
 | [Log Cleanup](./log-cleanup.md) | 分类占用、管理员清理、固定边界与任务互斥 | 本地隔离验证 |

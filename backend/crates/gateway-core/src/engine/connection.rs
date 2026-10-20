@@ -17,6 +17,7 @@ struct State {
 pub struct ConnectionBudget {
     state: Arc<Mutex<State>>,
     now: fn() -> Instant,
+    reserve_next_opening: bool,
 }
 
 impl Default for ConnectionBudget {
@@ -35,7 +36,24 @@ impl ConnectionBudget {
         Self {
             state: Arc::default(),
             now,
+            reserve_next_opening: false,
         }
+    }
+
+    /// Leave one opening and half the remaining time for another account.
+    #[must_use]
+    pub fn reserve_next_opening(mut self) -> Self {
+        self.reserve_next_opening = true;
+        self
+    }
+
+    #[must_use]
+    pub fn remaining_openings(&self) -> u32 {
+        let state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        MAX_OPENINGS.saturating_sub(state.openings)
     }
 
     /// Count HTTP sends and new WS handshakes once, including handshakes that
@@ -51,11 +69,16 @@ impl ConnectionBudget {
         let started = *state.started.get_or_insert_with(self.now);
         let remaining =
             STARTUP_TIMEOUT.saturating_sub((self.now)().saturating_duration_since(started));
-        if state.openings >= MAX_OPENINGS || remaining.is_zero() {
+        let opening_limit = MAX_OPENINGS - u32::from(self.reserve_next_opening);
+        if state.openings >= opening_limit || remaining.is_zero() {
             return Err(ConnectionBudgetExhausted);
         }
         state.openings += 1;
-        Ok(Some(remaining))
+        Ok(Some(if self.reserve_next_opening {
+            remaining / 2
+        } else {
+            remaining
+        }))
     }
 
     /// Sending (including an ambiguous send) permanently closes this recovery window.

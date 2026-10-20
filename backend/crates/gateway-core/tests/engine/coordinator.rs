@@ -4673,6 +4673,112 @@ fn connection_recovery_keeps_required_account_and_stops_after_three_retries() {
 }
 
 #[test]
+fn connection_recovery_retries_original_then_rotates_or_falls_back() {
+    for no_alternative in [false, true] {
+        let operation = generate_operation();
+        let route_plan = plan(&operation);
+        let failure = || Script::Stream {
+            account_id: "acct_first",
+            items: vec![Err(ProviderError::new(
+                ProviderErrorKind::Transport,
+                UpstreamSendState::NotSent,
+            )
+            .with_connection_retry(AttemptTransport::Fallback))],
+        };
+        let mut scripts = vec![failure(), failure()];
+        if no_alternative {
+            scripts.push(Script::Error(ProviderError::new(
+                ProviderErrorKind::NoEligibleAccount,
+                UpstreamSendState::NotSent,
+            )));
+        }
+        scripts.push(Script::Stream {
+            account_id: if no_alternative {
+                "acct_first"
+            } else {
+                "acct_second"
+            },
+            items: image_stream(None),
+        });
+        let (coordinator, _store, provider) = coordinator(scripts);
+        let mut session = block_on(coordinator.start(
+            model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
+            operation,
+            route_plan,
+            None,
+            None,
+            CancellationToken::new(),
+        ))
+        .unwrap();
+        block_on(session.collect_uncommitted()).unwrap();
+        let contexts = provider.contexts.lock().unwrap();
+        assert_eq!(contexts.len(), if no_alternative { 4 } else { 3 });
+        assert_eq!(
+            contexts[1].required_account().unwrap().as_str(),
+            "acct_first"
+        );
+        assert!(contexts[2].required_account().is_none());
+        assert!(
+            contexts[2]
+                .excluded_accounts()
+                .iter()
+                .any(|id| id.as_str() == "acct_first")
+        );
+        assert_eq!(contexts[2].transport(), AttemptTransport::Fallback);
+        if no_alternative {
+            assert_eq!(
+                contexts[3].required_account().unwrap().as_str(),
+                "acct_first"
+            );
+            assert!(contexts[3].excluded_accounts().is_empty());
+        }
+    }
+}
+
+#[test]
+fn connection_recovery_respects_zero_account_switch_budget() {
+    let operation = generate_operation();
+    let route_plan = plan_with_tuning(
+        &operation,
+        AccountSelectionPolicy::new(RotationStrategy::Smart, NonZeroU32::MIN, Duration::ZERO),
+        gateway_core::routing::RequestTuning {
+            max_account_switches: 0,
+            ..Default::default()
+        },
+    );
+    let scripts = (0..4)
+        .map(|_| Script::Stream {
+            account_id: "acct_first",
+            items: vec![Err(ProviderError::new(
+                ProviderErrorKind::Transport,
+                UpstreamSendState::NotSent,
+            )
+            .with_connection_retry(AttemptTransport::Fallback))],
+        })
+        .collect();
+    let (coordinator, _store, provider) = coordinator(scripts);
+    let mut session = block_on(coordinator.start(
+        model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
+        operation,
+        route_plan,
+        None,
+        None,
+        CancellationToken::new(),
+    ))
+    .unwrap();
+    assert!(matches!(
+        block_on(session.collect_uncommitted()),
+        Err(EngineError::Provider(_))
+    ));
+    let contexts = provider.contexts.lock().unwrap();
+    assert_eq!(contexts.len(), 4);
+    for context in contexts.iter().skip(1) {
+        assert_eq!(context.required_account().unwrap().as_str(), "acct_first");
+        assert!(context.excluded_accounts().is_empty());
+    }
+}
+
+#[test]
 fn connection_recovery_never_replays_sent_ambiguous_or_prohibited_requests() {
     for (send_state, prohibited) in [
         (UpstreamSendState::Sent, false),

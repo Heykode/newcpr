@@ -31,6 +31,23 @@ fn four_openings_are_bounded_across_clones() {
 }
 
 #[test]
+fn recovery_reserves_half_the_time_and_one_opening_for_another_account() {
+    let budget = ConnectionBudget::with_clock(now);
+    budget.begin().unwrap();
+    budget.begin().unwrap();
+    NOW.with(|now| now.set(now.get() + Duration::from_secs(16)));
+    let retry = budget.clone().reserve_next_opening();
+    assert_eq!(retry.begin().unwrap(), Some(Duration::from_secs(7)));
+    assert_eq!(budget.remaining_openings(), 1);
+    assert!(retry.begin().is_err());
+    NOW.with(|now| now.set(now.get() + Duration::from_secs(7)));
+    assert_eq!(budget.begin().unwrap(), Some(Duration::from_secs(7)));
+    assert!(budget.remaining().is_none());
+    budget.complete();
+    assert_eq!(retry.begin().unwrap(), None);
+}
+
+#[test]
 fn sending_disables_recovery_without_limiting_generation() {
     let budget = ConnectionBudget::with_clock(now);
     budget.begin().unwrap();

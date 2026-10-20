@@ -468,7 +468,7 @@ impl BackupError {
 /// 构造稳定错误码常量。
 pub mod code;
 
-/// 构建对象 key：`{prefix}/YYYY/MM/DD/codex-proxy-rs_{UTC seconds}_{backup id}.dump`。
+/// 构建新业务归档的对象 key，后缀为 `.sql.gz`。
 ///
 /// 规范化规则：prefix 不得为空、不得以前导 `/` 开头、不得包含 `..`、反斜杠或控制字符；
 /// 输出统一使用 `/` 分隔且不含空段。
@@ -479,7 +479,7 @@ pub fn build_object_key(
 ) -> Result<String, BackupError> {
     let prefix = normalize_prefix(prefix)?;
     Ok(format!(
-        "{prefix}/{}/{:02}/{:02}/codex-proxy-rs_{}_{}.dump",
+        "{prefix}/{}/{:02}/{:02}/codex-proxy-rs_{}_{}.sql.gz",
         at.format("%Y"),
         at.format("%m"),
         at.format("%d"),
@@ -488,10 +488,15 @@ pub fn build_object_key(
     ))
 }
 
-/// 下载文件名：`codex-proxy-rs_{短 id}.dump`，与对象 key 的文件名一致。
+/// 下载名保留对象实际格式，旧 custom 归档仍用 `.dump`。
 #[must_use]
-pub fn build_download_file_name(backup_id: &str) -> String {
-    format!("codex-proxy-rs_{}.dump", short_backup_id(backup_id))
+pub fn build_download_file_name(backup_id: &str, object_key: &str) -> String {
+    let extension = if object_key.ends_with(".sql.gz") {
+        "sql.gz"
+    } else {
+        "dump"
+    };
+    format!("codex-proxy-rs_{}.{extension}", short_backup_id(backup_id))
 }
 
 /// 截取备份 id 的可读短标识：去掉 `backup_` 前缀，最多保留 8 位 hex。

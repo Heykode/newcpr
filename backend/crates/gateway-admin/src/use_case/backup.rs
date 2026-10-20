@@ -255,7 +255,8 @@ impl BackupService for DefaultBackupService {
         let Some(config) = BackupStorageConfig::from_settings(&settings) else {
             return Err(AdminError::bad_request("备份存储配置不完整"));
         };
-        let file_name = crate::model::backup::build_download_file_name(backup_id);
+        let file_name =
+            crate::model::backup::build_download_file_name(backup_id, &record.object_key);
         let url = self
             .object_store
             .presigned_download(&config, &record.object_key, &file_name, DOWNLOAD_TTL)
