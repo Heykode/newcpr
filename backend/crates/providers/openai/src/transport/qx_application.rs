@@ -3,7 +3,9 @@
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use sha2::{Digest, Sha256};
+
+use super::correlation;
+pub(crate) use super::correlation::AccountCorrelation;
 
 use super::{CodexClientResult, CodexRequestContext, protocol::responses::CodexResponsesRequest};
 
@@ -73,25 +75,8 @@ fn wire_identity(
         .clone()
         .unwrap_or_else(|| identity_seed(request, context.request_id));
     let account = context.account_id.unwrap_or_default();
-    let derive = |kind: &str, anchor: &str| {
-        let mut hash = Sha256::new();
-        for part in [
-            "cpr-qx-account-identity-v1",
-            kind,
-            key,
-            installation,
-            account,
-            anchor,
-        ] {
-            hash.update((part.len() as u64).to_be_bytes());
-            hash.update(part.as_bytes());
-        }
-        let mut bytes: [u8; 16] = hash.finalize()[..16].try_into().expect("SHA-256 prefix");
-        // Deterministic UUID-shaped identifier, not a timestamp or upstream-issued credential.
-        bytes[6] = (bytes[6] & 0x0f) | 0x70;
-        bytes[8] = (bytes[8] & 0x3f) | 0x80;
-        uuid::Uuid::from_bytes(bytes).to_string()
-    };
+    let scope = AccountCorrelation::new(key, installation, account);
+    let derive = |kind: &str, anchor: &str| scope.derive(kind, anchor);
     let session = derive("session", &seed.session);
     let thread = derive("thread", &seed.thread);
     let generation = [context.codex_window_id, request.codex_window_id.as_deref()]
@@ -123,7 +108,16 @@ pub fn project_response_request(
     projected
         .identity_seed
         .get_or_insert_with(|| identity_seed(request, context.request_id));
-    project_response_body(projected.body_mut(), request, context);
+    let mapped = std::cell::RefCell::new(std::collections::BTreeMap::new());
+    if let Some(scope) = correlation_scope(request, context) {
+        project_body(
+            projected.body_mut(),
+            request,
+            context,
+            scope.recording(&mapped),
+        );
+        projected.correlation_originals = mapped.into_inner();
+    }
     projected
 }
 
@@ -132,23 +126,78 @@ pub(crate) fn project_response_body(
     request: &CodexResponsesRequest,
     context: CodexRequestContext<'_>,
 ) {
+    let Some(scope) = correlation_scope(request, context) else {
+        return;
+    };
+    project_body(body, request, context, scope);
+}
+
+fn project_body(
+    body: &mut Map<String, Value>,
+    request: &CodexResponsesRequest,
+    context: CodexRequestContext<'_>,
+    scope: AccountCorrelation<'_>,
+) {
     let Some(ids) = wire_identity(request, context) else {
         return;
     };
+    scope.scope_input(body);
+    project_identity_fields(body, &ids, scope);
+    // The cache key is already projected by wire_identity; never hash it twice.
     body.insert(
         "prompt_cache_key".to_owned(),
         Value::String(ids.thread.clone()),
     );
-    project_identity_fields(body, &ids);
     if let Some(metadata) = body
         .get_mut("client_metadata")
         .and_then(Value::as_object_mut)
     {
-        project_identity_fields(metadata, &ids);
+        project_identity_fields(metadata, &ids, scope);
     }
 }
 
-fn project_identity_fields(fields: &mut Map<String, Value>, ids: &WireIdentity) {
+fn correlation_scope<'a>(
+    request: &'a CodexResponsesRequest,
+    context: CodexRequestContext<'a>,
+) -> Option<AccountCorrelation<'a>> {
+    Some(
+        AccountCorrelation::new(
+            nonblank(request.client_api_key_id.as_deref())?,
+            nonblank(context.installation_id)?,
+            context.account_id.unwrap_or_default(),
+        )
+        .with_originals(&request.correlation_originals),
+    )
+}
+
+fn project_identity_fields(
+    fields: &mut Map<String, Value>,
+    ids: &WireIdentity,
+    scope: AccountCorrelation<'_>,
+) {
+    project_flat_identity(fields, ids, scope);
+    for key in ["turn_metadata", "turnMetadata", "x-codex-turn-metadata"] {
+        match fields.get_mut(key) {
+            Some(Value::Object(metadata)) => project_flat_identity(metadata, ids, scope),
+            Some(Value::String(raw)) => {
+                if let Ok(Value::Object(mut metadata)) = serde_json::from_str(raw) {
+                    project_flat_identity(&mut metadata, ids, scope);
+                    if let Some(encoded) = super::request::encode_turn_metadata(&metadata) {
+                        *raw = encoded;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn project_flat_identity(
+    fields: &mut Map<String, Value>,
+    ids: &WireIdentity,
+    scope: AccountCorrelation<'_>,
+) {
+    scope.scope_fields(fields);
     for (names, value) in [
         (
             &["session_id", "session-id", "sessionId"][..],
@@ -187,26 +236,6 @@ fn project_identity_fields(fields: &mut Map<String, Value>, ids: &WireIdentity) 
             }
         }
     }
-    for key in ["turn_metadata", "turnMetadata", "x-codex-turn-metadata"] {
-        if let Some(raw) = fields.get(key).and_then(Value::as_str)
-            && let Ok(Value::Object(mut metadata)) = serde_json::from_str::<Value>(raw)
-        {
-            // Embedded turn metadata is a flat identity projection, not arbitrary recursive content.
-            for (name, value) in [
-                ("session_id", ids.session.as_str()),
-                ("thread_id", ids.thread.as_str()),
-                ("window_id", ids.window.as_str()),
-                ("x-client-request-id", ids.thread.as_str()),
-            ] {
-                if metadata.contains_key(name) {
-                    metadata.insert(name.to_owned(), Value::String(value.to_owned()));
-                }
-            }
-            if let Some(raw) = super::request::encode_turn_metadata(&metadata) {
-                fields.insert(key.to_owned(), Value::String(raw));
-            }
-        }
-    }
 }
 
 fn nonblank(value: Option<&str>) -> Option<&str> {
@@ -224,6 +253,7 @@ pub fn apply_response_headers(
 ) -> CodexClientResult<()> {
     // Installation identity belongs in account-scoped body metadata, not a standalone header.
     headers.remove("x-codex-installation-id");
+    correlation::strip_trace_headers(headers);
     let conversation = protocol_value(request.client_conversation_id.as_deref());
     let ids = wire_identity(request, context);
     let session = ids
@@ -286,6 +316,8 @@ pub fn apply_response_headers(
         }
     }
     if let Some(ids) = ids {
+        let scope = correlation_scope(request, context).expect("wire identity authority");
+        scope.scope_turn_headers(headers);
         headers.remove("x-codex-parent-thread-id");
         if let Some(parent) = &ids.parent {
             headers.insert("x-codex-parent-thread-id", HeaderValue::from_str(parent)?);
@@ -296,7 +328,7 @@ pub fn apply_response_headers(
             .and_then(|value| value.to_str().ok())
             && let Ok(Value::Object(mut fields)) = serde_json::from_str::<Value>(raw)
         {
-            project_identity_fields(&mut fields, &ids);
+            project_identity_fields(&mut fields, &ids, scope);
             if let Some(raw) = super::request::encode_turn_metadata(&fields) {
                 headers.insert("x-codex-turn-metadata", HeaderValue::from_str(&raw)?);
             }

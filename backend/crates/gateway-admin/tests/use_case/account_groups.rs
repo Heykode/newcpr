@@ -908,7 +908,7 @@ async fn monitor_worker_retries_without_page_reads_on_the_next_ten_second_tick_a
         .expect("monitor contribution");
     let cancellation = CancellationToken::new();
     let stop = cancellation.clone();
-    let handle = tokio::spawn(async move { task.run(stop).await });
+    let handle = tokio::spawn(async move { task.run(stop.into()).await });
     tokio::time::timeout(std::time::Duration::from_secs(1), async {
         while groups.samples.load(Ordering::SeqCst) < 1 {
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;

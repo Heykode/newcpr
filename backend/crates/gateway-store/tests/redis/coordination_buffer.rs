@@ -204,5 +204,5 @@ fn spawn_writer<T>(
 where
     T: gateway_core::task::DaemonTask + 'static,
 {
-    tokio::spawn(async move { writer.run(cancellation).await })
+    tokio::spawn(async move { writer.run(cancellation.into()).await })
 }

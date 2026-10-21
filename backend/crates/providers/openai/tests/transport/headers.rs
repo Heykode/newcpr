@@ -518,14 +518,14 @@ async fn backend_http_should_preserve_business_headers_without_downstream_transp
         ("x-still-valid", b"after-invalid".as_slice()),
         ("authorization", b"Bearer lease-token".as_slice()),
         ("chatgpt-account-id", b"lease-account".as_slice()),
-        ("traceparent", b"synthetic-trace".as_slice()),
-        ("tracestate", b"synthetic-state".as_slice()),
         ("idempotency-key", b"synthetic-idempotency".as_slice()),
         ("x-authenticateresponse-business", b"keep".as_slice()),
     ] {
         assert_eq!(raw_header_values(&raw, name), vec![value.to_vec()]);
     }
     // 指纹头由运行时画像生成，不透传客户端值。
+    assert!(raw_header_values(&raw, "traceparent").is_empty());
+    assert!(raw_header_values(&raw, "tracestate").is_empty());
     assert_eq!(
         raw_header_values(&raw, "user-agent"),
         vec![expected_user_agent.as_bytes().to_vec()]
@@ -699,8 +699,8 @@ async fn backend_websocket_should_preserve_business_headers_without_downstream_t
     );
     assert!(values("x-codex-installation-id").is_empty());
     assert_eq!(values("x-codex-turn-state"), vec![b"turn-ascii".to_vec()]);
-    assert_eq!(values("traceparent"), vec![b"synthetic-trace".to_vec()]);
-    assert_eq!(values("tracestate"), vec![b"synthetic-state".to_vec()]);
+    assert!(values("traceparent").is_empty());
+    assert!(values("tracestate").is_empty());
     assert_eq!(
         values("idempotency-key"),
         vec![b"synthetic-idempotency".to_vec()]

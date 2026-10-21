@@ -1312,7 +1312,6 @@ async fn image_endpoints_bypass_only_the_text_catalog_and_preserve_the_current_c
         Mock::given(method("POST"))
             .and(path(*endpoint))
             .and(header("originator", "codex_cli_rs"))
-            .and(header("x-codex-image-turn-id", "turn_image_contract"))
             .and(header("version", "0.144.0"))
             .and(header("accept", "*/*"))
             .and(body_bytes(body.to_vec()))
@@ -1392,6 +1391,18 @@ async fn image_endpoints_bypass_only_the_text_catalog_and_preserve_the_current_c
         assert!(observed_http_json);
         assert_eq!(raw_response.as_deref(), Some(*expected_response));
     }
+    let requests = server.received_requests().await.unwrap();
+    let mut turns = Vec::new();
+    for request in requests.iter().filter(|request| request.method == "POST") {
+        let values = captured_header_values(request, "x-codex-image-turn-id");
+        assert_eq!(values.len(), 1);
+        let value = std::str::from_utf8(&values[0]).unwrap();
+        uuid::Uuid::parse_str(value).unwrap();
+        assert_ne!(value, "turn_image_contract");
+        turns.push(value.to_owned());
+    }
+    assert_eq!(turns.len(), cases.len());
+    assert!(turns.iter().all(|turn| turn == &turns[0]));
     server.verify().await;
 }
 
@@ -2008,7 +2019,6 @@ async fn standalone_search_preserves_wire_and_scopes_turn_metadata_to_the_select
         .and(header("originator", "codex_cli_rs"))
         .and(header("version", "0.144.0"))
         .and(header("accept", "*/*"))
-        .and(body_bytes(request_body.to_vec()))
         .respond_with(
             ResponseTemplate::new(200)
                 .insert_header("content-type", "application/json")
@@ -2061,13 +2071,28 @@ async fn standalone_search_preserves_wire_and_scopes_turn_metadata_to_the_select
     assert_eq!(raw_response.as_deref(), Some(response_body.as_slice()));
     let requests = server.received_requests().await.expect("received requests");
     let request = requests.first().expect("single search request");
-    assert_eq!(request.body.as_slice(), request_body);
+    let body: Value = serde_json::from_slice(&request.body).unwrap();
+    let id = body["id"].as_str().unwrap();
+    uuid::Uuid::parse_str(id).unwrap();
+    assert_ne!(id, "search-session");
+    assert_eq!(
+        std::str::from_utf8(&request.body).unwrap(),
+        std::str::from_utf8(request_body)
+            .unwrap()
+            .replace("search-session", id)
+    );
     let metadata_values = captured_header_values(request, "x-codex-turn-metadata");
     assert_eq!(metadata_values.len(), 1);
     let metadata: Value = serde_json::from_slice(&metadata_values[0]).expect("turn metadata JSON");
-    assert_eq!(metadata.get("session_id"), Some(&json!("session")));
-    assert_eq!(metadata.get("thread_id"), Some(&json!("thread")));
-    assert_eq!(metadata.get("turn_id"), Some(&json!("turn")));
+    for (field, original) in [
+        ("session_id", "session"),
+        ("thread_id", "thread"),
+        ("turn_id", "turn"),
+    ] {
+        let scoped = metadata[field].as_str().unwrap();
+        uuid::Uuid::parse_str(scoped).unwrap();
+        assert_ne!(scoped, original);
+    }
     assert_eq!(metadata.get("future"), Some(&json!(true)));
     assert!(metadata.get("account_id").is_none());
     assert_ne!(
@@ -2087,7 +2112,6 @@ async fn standalone_search_returns_the_exact_upstream_error_response() {
     let response_body = br#"{ "error":{"message":"future search validation","type":"search_error","code":"future_code"}, "future":9007199254740993 }"#;
     Mock::given(method("POST"))
         .and(path("/codex/alpha/search"))
-        .and(body_bytes(request_body.to_vec()))
         .respond_with(
             ResponseTemplate::new(422)
                 .insert_header("content-type", "application/problem+json")
@@ -2129,6 +2153,16 @@ async fn standalone_search_returns_the_exact_upstream_error_response() {
     assert!(response.headers().iter().any(|header| {
         header.name() == "x-future-search-error" && header.value().as_ref() == b"preserved"
     }));
+    let requests = server.received_requests().await.unwrap();
+    let body: Value = serde_json::from_slice(&requests[0].body).unwrap();
+    let id = body["id"].as_str().unwrap();
+    uuid::Uuid::parse_str(id).unwrap();
+    assert_eq!(
+        std::str::from_utf8(&requests[0].body).unwrap(),
+        std::str::from_utf8(request_body)
+            .unwrap()
+            .replace("search-session", id)
+    );
     server.verify().await;
 }
 

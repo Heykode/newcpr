@@ -13,6 +13,7 @@ import { useProxyCatalog } from '@/composables/useProxyCatalog'
 const props = withDefaults(defineProps<{
   accountId?: string
   endpoint?: string | null
+  currentProxyId?: string | null
   currentSource?: RequestProxySource
   openai?: boolean
   disabled?: boolean
@@ -50,8 +51,8 @@ const options = computed(() => [
     : []),
 ])
 const proxyOptions = computed(() => [
-  ...(props.egressReadState && props.endpoint && (!props.currentSource || props.currentSource === 'account') && !proxyId.value
-    ? [{ value: '', label: `已绑定代理 · ${props.endpoint}`, disabled: true }]
+  ...(props.egressReadState && props.endpoint && (!props.currentSource || props.currentSource === 'account') && !proxies.value.some(proxy => proxy.id === props.currentProxyId)
+    ? [{ value: props.currentProxyId ?? '', label: `已绑定代理 · ${props.endpoint}`, disabled: true }]
     : []),
   ...proxies.value.map(proxy => ({
     value: proxy.id,
@@ -66,8 +67,8 @@ const currentLabel = computed(() => {
     return 'Mihomo 会话代理池'
   if (props.currentSource === 'proxy_pool')
     return '普通代理池'
-  if (props.endpoint)
-    return props.endpoint
+  if (props.currentProxyId || props.endpoint)
+    return proxies.value.find(proxy => proxy.id === props.currentProxyId)?.name || props.endpoint || '已绑定代理'
   if (!props.openai)
     return '服务器默认直连'
   const override = props.accountId && config.value?.accountOverrides[props.accountId]

@@ -299,6 +299,27 @@ async fn groups_aggregate_cross_provider_members_and_key_bindings_without_multip
     )
     .await;
     seed_account(&database.pool, "acct_group_xai", "xai", "xAI Account").await;
+    use gateway_admin::{model::proxies::NewProxy, ports::proxy::ProxyStore};
+    let proxy = gateway_store::postgres::PgProxyRepository::new(database.pool.clone())
+        .create(
+            NewProxy {
+                auto_location: false,
+                test: None,
+                request_location: None,
+                name: "Group member exit".into(),
+                proxy: gateway_core::account::OutboundProxy::parse("http://127.0.0.1:8080")
+                    .unwrap()
+                    .with_max_websocket_connections(7),
+            },
+            &context("group-proxy"),
+        )
+        .await
+        .unwrap()
+        .record;
+    sqlx::query("update provider_accounts set outbound_proxy_id = $1, outbound_proxy_url = $2 where id = 'acct_group_openai'")
+        .bind(&proxy.id)
+        .bind("http://127.0.0.1:8080")
+        .execute(&database.pool).await.unwrap();
     sqlx::query(
         "update provider_accounts set concurrency_limit = 4 where id = 'acct_group_openai'",
     )

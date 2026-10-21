@@ -4034,6 +4034,7 @@ pub(super) fn account_record(kind: &str) -> AccountRecord {
         effective_excel_models: Default::default(),
         model_access: Default::default(),
         custom_name: None,
+        outbound_proxy_id: None,
         outbound_proxy: None,
         id: "acct_test".to_owned(),
         provider_kind: ProviderKind::new(kind).expect("provider kind"),

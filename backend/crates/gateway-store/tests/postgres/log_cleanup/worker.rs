@@ -33,7 +33,7 @@ fn spawn_worker(
     let cancellation = CancellationToken::new();
     let worker_cancel = cancellation.clone();
     let store = store.clone();
-    let handle = tokio::spawn(async move { store.run(worker_cancel).await });
+    let handle = tokio::spawn(async move { store.run(worker_cancel.into()).await });
     (cancellation, handle)
 }
 

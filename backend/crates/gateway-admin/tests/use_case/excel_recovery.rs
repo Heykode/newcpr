@@ -178,7 +178,7 @@ async fn recovery_worker_requires_matching_nonce_and_drains_timeout_or_supersede
         let cancel = CancellationToken::new();
         let child = cancel.clone();
         let worker = tokio::spawn(async move {
-            task.run(child).await.unwrap();
+            task.run(child.into()).await.unwrap();
         });
         for _ in 0..100 {
             if probe.started.load(Ordering::SeqCst) {

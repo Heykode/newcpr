@@ -239,7 +239,7 @@ fn opaque_turn_metadata_body_shapes_keep_the_existing_passthrough_contract() {
         json!("{"),
         json!(null),
         json!(["opaque"]),
-        json!({"account_id":"old"}),
+        json!({"future":"opaque"}),
     ] {
         let body = json!({
             "prompt":"keep",
@@ -251,6 +251,18 @@ fn opaque_turn_metadata_body_shapes_keep_the_existing_passthrough_contract() {
         assert_eq!(scoped.as_ptr(), original.as_ptr());
         assert_eq!(scoped, original);
     }
+}
+
+#[test]
+fn object_turn_metadata_removes_account_identity_but_preserves_business_fields() {
+    let original = Bytes::from_static(br#"{"turnMetadata":{"account_id":"old","future":1},"client_metadata":{"turn_metadata":{"installation_id":"old","future":2}}}"#);
+    let scoped = scope_raw_json_to_account(&original, "current");
+    let body: Value = serde_json::from_slice(&scoped).unwrap();
+    assert_eq!(body["turnMetadata"], json!({"future":1}));
+    assert_eq!(
+        body["client_metadata"]["turn_metadata"],
+        json!({"installation_id":"current","future":2})
+    );
 }
 
 #[test]

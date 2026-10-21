@@ -183,6 +183,7 @@ export type ResponsesUpstream = 'codex' | 'excel'
 
 export interface Account {
   customName?: string | null
+  outboundProxyId?: string | null
   outboundProxyEndpoint: string | null
   id: string
   name: string

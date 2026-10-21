@@ -12,11 +12,21 @@ const IDLE_POLL_INTERVAL: Duration = Duration::from_secs(2);
 const RETRY_INTERVAL: Duration = Duration::from_secs(1);
 
 impl DaemonTask for PgLogCleanupStore {
-    fn run(&self, cancellation: CancellationToken) -> BoxFuture<'_, Result<(), WorkerTaskError>> {
+    fn run(
+        &self,
+        context: gateway_core::task::WorkerDaemonContext,
+    ) -> BoxFuture<'_, Result<(), WorkerTaskError>> {
         Box::pin(async move {
-            run_loop(&self.wakeup, cancellation, || self.run_next_batch())
-                .await
-                .map_err(|_| WorkerTaskError::safe("retention cleanup failed"))
+            let cancellation = context.cancellation().clone();
+            run_loop(&self.wakeup, cancellation, || async {
+                let result = self.run_next_batch().await;
+                if result.is_ok() {
+                    context.succeeded();
+                }
+                result
+            })
+            .await
+            .map_err(|_| WorkerTaskError::safe("retention cleanup failed"))
         })
     }
 }

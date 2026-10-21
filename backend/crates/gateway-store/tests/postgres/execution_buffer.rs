@@ -207,7 +207,7 @@ async fn observation_writer_persists_commands_in_enqueue_order() {
     let task = tokio::spawn({
         let writer = Arc::clone(&writer);
         let cancellation = cancellation.clone();
-        async move { writer.run(cancellation).await }
+        async move { writer.run(cancellation.into()).await }
     });
     tokio::time::timeout(Duration::from_secs(1), async {
         loop {
@@ -252,7 +252,7 @@ async fn observation_writer_continues_after_a_database_write_failure() {
     let cancellation = CancellationToken::new();
     cancellation.cancel();
     writer
-        .run(cancellation)
+        .run(cancellation.into())
         .await
         .expect("shutdown drains observations");
 
@@ -285,7 +285,7 @@ async fn shutdown_drains_observations_already_accepted_by_the_queue() {
     let cancellation = CancellationToken::new();
     cancellation.cancel();
     writer
-        .run(cancellation)
+        .run(cancellation.into())
         .await
         .expect("shutdown drains observations");
 
@@ -364,7 +364,7 @@ async fn zero_attempt_create_and_finalize_drain_in_order_with_trace() {
     let cancellation = CancellationToken::new();
     cancellation.cancel();
     writer
-        .run(cancellation)
+        .run(cancellation.into())
         .await
         .expect("shutdown drains accepted commands");
     let stats = store.stats();
@@ -411,7 +411,10 @@ async fn zero_attempt_dropped_finalize_is_fail_open_and_recoverable_at_deadline(
     assert_eq!(store.stats().dropped_total, 1);
     let cancellation = CancellationToken::new();
     cancellation.cancel();
-    writer.run(cancellation).await.expect("drain create only");
+    writer
+        .run(cancellation.into())
+        .await
+        .expect("drain create only");
     let repository = observability_repository(&database.pool);
     let pending = repository
         .usage_record_detail(request.id.as_str())
@@ -493,7 +496,7 @@ async fn zero_attempt_dropped_create_does_not_make_finalize_an_upsert() {
     let cancellation = CancellationToken::new();
     cancellation.cancel();
     writer
-        .run(cancellation)
+        .run(cancellation.into())
         .await
         .expect("drain orphan finalization");
     assert_eq!(store.stats().persisted_total, 0);
@@ -564,7 +567,7 @@ async fn zero_attempt_postgres_write_failures_are_not_retried_and_do_not_stop_th
     let cancellation = CancellationToken::new();
     cancellation.cancel();
     writer
-        .run(cancellation)
+        .run(cancellation.into())
         .await
         .expect("continue draining after PG errors");
     let stats = store.stats();

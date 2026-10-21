@@ -1,7 +1,7 @@
 //! Worker 贡献、调度定义与健康探针。
 
 use super::*;
-use gateway_core::{lifecycle::CancellationToken, task::DaemonTask};
+use gateway_core::task::DaemonTask;
 
 pub(crate) fn store_worker_contributions(
     execution: Arc<postgres::PgExecutionStore>,
@@ -163,9 +163,9 @@ pub(crate) struct RetentionTask {
 impl DaemonTask for RetentionTask {
     fn run(
         &self,
-        cancellation: CancellationToken,
+        context: gateway_core::task::WorkerDaemonContext,
     ) -> futures::future::BoxFuture<'_, Result<(), WorkerTaskError>> {
-        self.retention.run(cancellation)
+        self.retention.run(context)
     }
 }
 

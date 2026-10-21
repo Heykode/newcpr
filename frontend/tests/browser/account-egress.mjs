@@ -322,6 +322,25 @@ async function main() {
     assert.equal(writes.at(-1).body.settings.egressMode, 'fixed_ipv6_reuse')
     assert.equal(writes.at(-1).body.settings.clearOutboundProxy, true)
     assert.equal(writes.at(-1).body.outboundProxyId, undefined)
+    for (const [id, label] of [
+      ['proxy-same-endpoint', '同地址不同认证代理'],
+      ['proxy-disabled', '停用出口（已禁用）'],
+      ['proxy-removed', '已绑定代理'],
+    ]) {
+      accounts[0].requestProxySource = 'account'
+      accounts[0].outboundProxyId = id
+      accounts[0].outboundProxyEndpoint = 'http://proxy.example:8080'
+      await page.reload()
+      await first().getByRole('button', { name: '编辑账号', exact: true }).click()
+      const selected = dialog.getByRole('combobox', { name: '指定代理', exact: true })
+      await page.waitForFunction(expected => document.querySelector('[aria-label="指定代理"]')?.textContent.includes(expected), label)
+      assert.match(await selected.textContent(), new RegExp(label.replace(/[()]/g, '\\$&')))
+      await layout(`bound-${id}`)
+      await dialog.getByRole('button', { name: '保存账号设置', exact: true }).click()
+      await dialog.waitFor({ state: 'hidden' })
+      for (const key of ['outboundProxyId', 'egressMode', 'requestProxySource'])
+        assert.equal(key in writes.at(-1).body, false)
+    }
     assert.deepEqual(errors, [])
     process.stdout.write(`${JSON.stringify({ writes: writes.map(item => item.path), screenshots: 18, errors })}\n`)
   }

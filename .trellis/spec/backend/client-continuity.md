@@ -754,3 +754,36 @@ unchanged original quota/opening observation times.
 
 Wrong: turn every pump exit into `ClosedBeforeTerminal` with an absent code.
 Correct: use the pump's recorded reason while preserving transport recovery rules.
+
+## 17. Account Correlation Isolation
+
+Adapt upstream `7a60bc6d` and `28fa655c2` at the outbound-copy boundary. Keep the
+existing length-prefixed `cpr-qx-account-identity-v1` hash, trusted Key scope,
+durable installation, account, session/thread anchors and UUID shape. Scheduling
+receives the original request. UA, TLS, account device and egress policy do not
+derive from the additional turn fields.
+
+- Session, thread and turn aliases share their respective namespace. Parent,
+  root and fork references map to the matching thread/turn. Window generations
+  retain the established thread-plus-generation contract. Do not hash the already
+  projected prompt cache key a second time.
+- Headers, outer metadata and historical
+  `internal_chat_message_metadata_passthrough.turn_id` use the same turn mapping.
+  The private `correlation_originals` map stores mapped-to-original identifier
+  strings only, allowing repeat projections and account changes without rehashing
+  an earlier outbound value. Never serialize it or retain complete input payloads.
+- Remove known client trace propagation fields. Handle object and JSON-string
+  turn metadata; retain header-safe ASCII encoding. Preserve opaque response IDs,
+  tool call IDs, encrypted contents and normal user/tool text.
+- Only recognized complete Desktop Git context is edited, with XML node/byte
+  bounds and explicit content classification respected. Map its three correlation
+  fields; leave workspace paths and other content intact.
+- Native Search/images/compact use lossless known-field JSON span edits. Search
+  root `id` is a thread reference; other endpoint root IDs stay unchanged. Preserve
+  duplicate keys, number lexemes and unrelated bytes. Excel keeps its own protocol.
+- Regression tests must capture real loopback HTTP/WS sends, same-account and
+  cross-account/Key projections, history references, image header/body agreement,
+  duplicate Search IDs, metadata objects and frozen profile publication.
+
+This contract reduces shared correlation identifiers; it does not establish a
+measured reduction in upstream risk controls, account bans or rate limits.

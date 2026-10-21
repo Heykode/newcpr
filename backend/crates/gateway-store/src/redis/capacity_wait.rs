@@ -7,7 +7,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use futures::future::BoxFuture;
 use futures::stream::{FuturesUnordered, StreamExt};
 use gateway_core::account::ProviderAccountId;
-use gateway_core::lifecycle::{CancellationToken, Deadline};
+use gateway_core::lifecycle::Deadline;
 use gateway_core::provider_ports::{
     ProviderConcurrencyPool, ProviderLeaseAcquisition, ProviderSchedulingLeaseRequest,
     ProviderStoreError, ProviderStoreErrorKind, ProviderWaitLease, ProviderWaitLeaseAcquisition,
@@ -578,8 +578,12 @@ pub struct CapacityWaitCleanupWriter {
 }
 
 impl DaemonTask for CapacityWaitCleanupWriter {
-    fn run(&self, cancellation: CancellationToken) -> BoxFuture<'_, Result<(), WorkerTaskError>> {
+    fn run(
+        &self,
+        context: gateway_core::task::WorkerDaemonContext,
+    ) -> BoxFuture<'_, Result<(), WorkerTaskError>> {
         Box::pin(async move {
+            let cancellation = context.cancellation().clone();
             let mut receiver = self.receiver.lock().await;
             let mut pending = FuturesUnordered::new();
             let mut input_closed = false;
@@ -600,7 +604,9 @@ impl DaemonTask for CapacityWaitCleanupWriter {
                         stopping = true;
                     }
                     () = self.lifecycle.changed.notified(), if stopping => {}
-                    Some(()) = pending.next(), if !pending.is_empty() => {}
+                    Some(succeeded) = pending.next(), if !pending.is_empty() => {
+                        if succeeded { context.succeeded(); }
+                    }
                     cleanup = receiver.recv(), if !input_closed && pending.len() < CLEANUP_CONCURRENCY => {
                         match cleanup {
                             Some(cleanup) => pending.push(cleanup_until_expired(
@@ -615,7 +621,7 @@ impl DaemonTask for CapacityWaitCleanupWriter {
     }
 }
 
-async fn cleanup_until_expired(connection: ConnectionManager, cleanup: Cleanup) {
+async fn cleanup_until_expired(connection: ConnectionManager, cleanup: Cleanup) -> bool {
     let remaining = cleanup
         .cleanup_deadline
         .duration_since(SystemTime::now())
@@ -626,7 +632,7 @@ async fn cleanup_until_expired(connection: ConnectionManager, cleanup: Cleanup) 
         let result =
             tokio::time::timeout_at(deadline, cleanup_once(connection.clone(), &cleanup)).await;
         if matches!(result, Ok(Ok(()))) {
-            return;
+            return true;
         }
         failures = failures.saturating_add(1);
         if failures == 1 || Instant::now() >= deadline {
@@ -637,7 +643,7 @@ async fn cleanup_until_expired(connection: ConnectionManager, cleanup: Cleanup) 
             );
         }
         if Instant::now() >= deadline {
-            return;
+            return false;
         }
         tokio::time::sleep_until(deadline.min(Instant::now() + RETRY_DELAY)).await;
     }

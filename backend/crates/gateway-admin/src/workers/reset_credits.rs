@@ -1,11 +1,8 @@
 use crate::{model::AdminError, use_case::reset_credits::ResetCreditsService};
 use futures::future::BoxFuture;
-use gateway_core::{
-    lifecycle::CancellationToken,
-    task::{
-        DaemonRestartPolicy, DaemonTask, WorkerContribution, WorkerId, WorkerKind,
-        WorkerRegistration, WorkerRunnable, WorkerTaskError,
-    },
+use gateway_core::task::{
+    DaemonRestartPolicy, DaemonTask, WorkerContribution, WorkerId, WorkerKind, WorkerRegistration,
+    WorkerRunnable, WorkerTaskError,
 };
 use std::{sync::Arc, time::Duration};
 
@@ -33,13 +30,21 @@ pub(crate) fn contribution(
 }
 struct ResetWorker(Arc<ResetCreditsService>);
 impl DaemonTask for ResetWorker {
-    fn run(&self, cancellation: CancellationToken) -> BoxFuture<'_, Result<(), WorkerTaskError>> {
+    fn run(
+        &self,
+        context: gateway_core::task::WorkerDaemonContext,
+    ) -> BoxFuture<'_, Result<(), WorkerTaskError>> {
         Box::pin(async move {
+            let cancellation = context.cancellation().clone();
             let lane = || async {
                 loop {
                     tokio::select! { biased; () = cancellation.cancelled() => break,
                     () = tokio::time::sleep(Duration::from_secs(1)) => {} }
-                    if self.0.run_one().await.is_err() {
+                    let result = self.0.run_one().await;
+                    if result.is_ok() {
+                        context.succeeded();
+                    }
+                    if result.is_err() {
                         tracing::warn!(
                             "reset credit job could not update; no automatic consumption retry"
                         );
@@ -56,8 +61,11 @@ impl DaemonTask for ResetWorker {
                             break;
                         }
                         match self.0.check_auto_one().await {
-                            Ok(true) => {}
-                            Ok(false) => break,
+                            Ok(true) => context.succeeded(),
+                            Ok(false) => {
+                                context.succeeded();
+                                break;
+                            }
                             Err(_) => {
                                 tracing::warn!(
                                     "automatic reset check could not update; no consumption retry"

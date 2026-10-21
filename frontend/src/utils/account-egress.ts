@@ -30,14 +30,15 @@ export function accountEgressFromAccount(account: {
   id: string
   provider: string
   requestProxySource?: RequestProxySource
+  outboundProxyId?: string | null
   outboundProxyEndpoint?: string | null
 }, config?: Ipv6EgressConfig): AccountEgressDraft | undefined {
   const draft = { proxyMode: '', proxyId: '', egressMode: 'fixed_ipv6_reuse' }
   if (account.provider === 'openai' && (account.requestProxySource === 'mihomo' || account.requestProxySource === 'proxy_pool'))
     return { ...draft, proxyMode: account.requestProxySource }
   // The redacted endpoint is display-only, not a saved proxy ID or connection URL.
-  if (account.outboundProxyEndpoint)
-    return { ...draft, proxyMode: 'proxy' }
+  if (account.outboundProxyId || account.outboundProxyEndpoint)
+    return { ...draft, proxyMode: 'proxy', proxyId: account.outboundProxyId ?? '' }
   if (account.provider !== 'openai')
     return { ...draft, proxyMode: 'direct' }
   if (!config)

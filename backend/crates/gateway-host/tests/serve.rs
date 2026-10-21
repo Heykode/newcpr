@@ -352,8 +352,12 @@ impl Drop for TaskLifetime {
 }
 
 impl DaemonTask for WriterTask {
-    fn run(&self, cancellation: CancellationToken) -> BoxFuture<'_, Result<(), WorkerTaskError>> {
+    fn run(
+        &self,
+        context: gateway_core::task::WorkerDaemonContext,
+    ) -> BoxFuture<'_, Result<(), WorkerTaskError>> {
         Box::pin(async move {
+            let cancellation = context.cancellation().clone();
             let _lifetime = TaskLifetime(self.probe.dropped.clone());
             let mut received = self.received.lock().await;
             self.probe.started.cancel();
@@ -381,8 +385,12 @@ impl DaemonTask for WriterTask {
 struct IdleTask;
 
 impl DaemonTask for IdleTask {
-    fn run(&self, cancellation: CancellationToken) -> BoxFuture<'_, Result<(), WorkerTaskError>> {
+    fn run(
+        &self,
+        context: gateway_core::task::WorkerDaemonContext,
+    ) -> BoxFuture<'_, Result<(), WorkerTaskError>> {
         Box::pin(async move {
+            let cancellation = context.cancellation().clone();
             cancellation.cancelled().await;
             Ok(())
         })

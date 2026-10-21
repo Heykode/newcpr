@@ -3,8 +3,13 @@
 //! 本模块不执行任务，也不启动异步运行时。各业务 owner 只返回
 //! [`WorkerContribution`]，由 Host 负责监督、续租、重启与关闭。
 
+use event_listener::Event;
 use std::fmt;
 use std::num::NonZeroU64;
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+};
 use std::time::Duration;
 
 use futures::future::BoxFuture;
@@ -331,11 +336,65 @@ pub trait ScheduledTask: Send + Sync {
     fn run_cycle(&self, context: WorkerCycleContext) -> BoxFuture<'_, Result<(), WorkerTaskError>>;
 }
 
-/// 长驻任务。
-///
-/// 实现负责连接级重连退避；Host 负责任务退出或 panic 后的重启退避。
+/// 一次 daemon 运行的取消与成功进度，重启时必须创建新上下文
+#[derive(Clone)]
+pub struct WorkerDaemonContext {
+    cancellation: CancellationToken,
+    progress: Arc<DaemonProgress>,
+}
+
+#[derive(Default)]
+struct DaemonProgress {
+    completed: AtomicU64,
+    changed: Event,
+}
+
+impl WorkerDaemonContext {
+    #[must_use]
+    pub fn new(cancellation: CancellationToken) -> Self {
+        Self {
+            cancellation,
+            progress: Arc::default(),
+        }
+    }
+
+    #[must_use]
+    pub const fn cancellation(&self) -> &CancellationToken {
+        &self.cancellation
+    }
+
+    /// 仅在实际工作或依赖检查成功后通知 Host；进入 run 不代表恢复
+    pub fn succeeded(&self) {
+        if !self.cancellation.is_cancelled() {
+            self.progress.completed.fetch_add(1, Ordering::Release);
+            self.progress.changed.notify(usize::MAX);
+        }
+    }
+
+    #[must_use]
+    pub fn completed_cycles(&self) -> u64 {
+        self.progress.completed.load(Ordering::Acquire)
+    }
+
+    /// 先注册再检查计数，避免报告与等待交错时丢失成功通知
+    pub async fn progress_since(&self, completed: u64) {
+        let changed = self.progress.changed.listen();
+        if self.completed_cycles() == completed {
+            changed.await;
+        }
+    }
+}
+
+impl From<CancellationToken> for WorkerDaemonContext {
+    fn from(cancellation: CancellationToken) -> Self {
+        Self::new(cancellation)
+    }
+}
+
+/// 长驻任务。实现负责连接级重连，Host 负责退出后的重启退避。
+/// 实际工作成功后通过上下文报告进度。
 pub trait DaemonTask: Send + Sync {
-    fn run(&self, cancellation: CancellationToken) -> BoxFuture<'_, Result<(), WorkerTaskError>>;
+    fn run(&self, context: WorkerDaemonContext) -> BoxFuture<'_, Result<(), WorkerTaskError>>;
 }
 
 /// Host 可执行的两种任务形态，无法组合出“守护任务 + 周期调度”等非法状态。

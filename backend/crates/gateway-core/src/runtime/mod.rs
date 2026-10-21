@@ -532,8 +532,12 @@ struct RuntimeSnapshotSubscriptionTask {
 }
 
 impl DaemonTask for RuntimeSnapshotSubscriptionTask {
-    fn run(&self, cancellation: CancellationToken) -> BoxFuture<'_, Result<(), WorkerTaskError>> {
+    fn run(
+        &self,
+        context: crate::task::WorkerDaemonContext,
+    ) -> BoxFuture<'_, Result<(), WorkerTaskError>> {
         Box::pin(async move {
+            let cancellation = context.cancellation().clone();
             let mut retry_delay = INITIAL_BACKOFF;
             loop {
                 if cancellation.is_cancelled() {
@@ -543,6 +547,7 @@ impl DaemonTask for RuntimeSnapshotSubscriptionTask {
                 let mut subscription = match subscription {
                     Ok(subscription) => {
                         retry_delay = INITIAL_BACKOFF;
+                        context.succeeded();
                         subscription
                     }
                     Err(_) => {
@@ -561,7 +566,9 @@ impl DaemonTask for RuntimeSnapshotSubscriptionTask {
                     };
                     match notified {
                         Some(Ok(_)) => {
-                            let _ = self.publisher.refresh_committed().await;
+                            if self.publisher.refresh_committed().await.is_ok() {
+                                context.succeeded();
+                            }
                         }
                         Some(Err(_)) | None => break,
                     }

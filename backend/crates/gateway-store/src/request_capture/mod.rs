@@ -13,10 +13,7 @@ use gateway_admin::{
     model::request_capture::*,
     ports::store::{AdminStoreError, AdminStoreErrorKind, AdminStoreResult},
 };
-use gateway_core::{
-    lifecycle::CancellationToken,
-    task::{DaemonTask, WorkerTaskError},
-};
+use gateway_core::task::{DaemonTask, WorkerTaskError};
 use serde_json::{Value, json};
 use sqlx::PgPool;
 use std::{
@@ -458,8 +455,12 @@ async fn write_line(
 }
 
 impl DaemonTask for CaptureWriter {
-    fn run(&self, cancellation: CancellationToken) -> BoxFuture<'_, Result<(), WorkerTaskError>> {
+    fn run(
+        &self,
+        context: gateway_core::task::WorkerDaemonContext,
+    ) -> BoxFuture<'_, Result<(), WorkerTaskError>> {
         Box::pin(async move {
+            let cancellation = context.cancellation().clone();
             let mut receiver = self.receiver.lock().await;
             let mut cleanup = tokio::time::interval(Duration::from_secs(30));
             cleanup.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -468,11 +469,13 @@ impl DaemonTask for CaptureWriter {
                     biased;
                     () = cancellation.cancelled() => return Ok(()),
                     _ = cleanup.tick() => {
-                        if self.manager.cleanup().await.is_err() { self.manager.fault(); }
+                        if self.manager.cleanup().await.is_err() { self.manager.fault(); } else { context.succeeded(); }
                     }
                     bundle = receiver.recv() => {
                         let Some(bundle) = bundle else { return Ok(()) };
-                        if self.manager.persist(bundle).await.is_err() {
+                        let result = self.manager.persist(bundle).await;
+                        if result.is_ok() { context.succeeded(); }
+                        if result.is_err() {
                             self.manager.fault();
                             tracing::warn!("request capture storage disabled after write failure");
                         }

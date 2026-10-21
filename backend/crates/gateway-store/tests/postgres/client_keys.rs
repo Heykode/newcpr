@@ -335,7 +335,7 @@ async fn client_key_usage_daemon_should_flush_pending_touch_on_shutdown() {
     let task = {
         let writer = Arc::clone(&writer);
         let cancellation = cancellation.clone();
-        tokio::spawn(async move { writer.run(cancellation).await })
+        tokio::spawn(async move { writer.run(cancellation.into()).await })
     };
     sink.record_used(&ClientApiKeyId::new("key_usage_daemon").expect("valid client API Key ID"));
     cancellation.cancel();

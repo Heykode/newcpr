@@ -1,10 +1,9 @@
 use std::{borrow::Cow, fmt};
 
+use crate::transport::qx_application::AccountCorrelation;
 use bytes::Bytes;
-use serde::{
-    Deserialize, Deserializer,
-    de::{MapAccess, Visitor},
-};
+use serde::de::{MapAccess, Visitor};
+use serde::{Deserialize, Deserializer};
 use serde_json::value::RawValue;
 
 use super::{
@@ -77,6 +76,15 @@ fn scope_object(
     installation_id: &str,
     scope: Scope,
 ) -> Result<Option<String>, serde_json::Error> {
+    rewrite_object(raw, |key, value| {
+        member_change(key, value, installation_id, scope)
+    })
+}
+
+fn rewrite_object(
+    raw: &str,
+    mut change: impl FnMut(&str, &RawValue) -> Change,
+) -> Result<Option<String>, serde_json::Error> {
     let object = serde_json::from_str::<RawObject<'_>>(raw)?;
     let mut cursor = raw.find('{').unwrap_or(0) + 1;
     let opening = cursor;
@@ -93,7 +101,7 @@ fn scope_object(
             &prefix[prefix.find(',').unwrap_or(0) + 1..]
         };
         cursor = start + value.get().len();
-        match member_change(&key, value, installation_id, scope) {
+        match change(&key, value) {
             Change::Keep => retained.push((prefix, Cow::Borrowed(value.get()))),
             Change::Remove => changed = true,
             Change::Replace(replacement) => {
@@ -118,6 +126,80 @@ fn scope_object(
     Ok(Some(output))
 }
 
+/// Rewrite only known correlation spans, retaining duplicate business keys and number lexemes.
+pub(crate) fn scope_raw_correlations(
+    body: &Bytes,
+    identity: AccountCorrelation<'_>,
+    search: bool,
+) -> Bytes {
+    let Ok(raw) = std::str::from_utf8(body) else {
+        return body.clone();
+    };
+    correlation_object(raw, identity, search, 0)
+        .ok()
+        .flatten()
+        .map(Bytes::from)
+        .unwrap_or_else(|| body.clone())
+}
+
+pub(crate) fn scope_raw_turn_correlations(
+    raw: &str,
+    identity: AccountCorrelation<'_>,
+) -> Option<String> {
+    Some(
+        correlation_object(raw, identity, false, 2)
+            .ok()?
+            .unwrap_or_else(|| raw.to_owned()),
+    )
+}
+
+fn correlation_object(
+    raw: &str,
+    identity: AccountCorrelation<'_>,
+    search: bool,
+    depth: u8,
+) -> Result<Option<String>, serde_json::Error> {
+    rewrite_object(raw, |key, value| {
+        if AccountCorrelation::is_trace(key) {
+            return Change::Remove;
+        }
+        if depth == 0 && key == "client_metadata" {
+            return correlation_object(value.get(), identity, false, 1)
+                .ok()
+                .flatten()
+                .map(Change::Replace)
+                .unwrap_or(Change::Keep);
+        }
+        if depth < 2 && TURN_METADATA_KEYS.contains(&key) {
+            let string = serde_json::from_str::<String>(value.get()).ok();
+            let raw = string.as_deref().unwrap_or(value.get());
+            let Some(mapped) = correlation_object(raw, identity, false, 2).ok().flatten() else {
+                return Change::Keep;
+            };
+            return if string.is_some() {
+                serde_json::to_string(&mapped)
+                    .map(Change::Replace)
+                    .unwrap_or(Change::Keep)
+            } else {
+                Change::Replace(mapped)
+            };
+        }
+        let Ok(original) = serde_json::from_str::<String>(value.get()) else {
+            return Change::Keep;
+        };
+        let name = if search && key == "id" {
+            "thread_id"
+        } else {
+            key
+        };
+        identity
+            .field(name, &original)
+            .and_then(|mapped| serde_json::to_string(&mapped).ok())
+            .map(Change::Replace)
+            .unwrap_or(Change::Keep)
+    })
+}
+
 fn member_change(key: &str, value: &RawValue, installation_id: &str, scope: Scope) -> Change {
     if CROSS_ACCOUNT_IDENTITY_KEYS.contains(&key) || ACCOUNT_BOUND_STATE_KEYS.contains(&key) {
         return Change::Remove;
@@ -134,6 +216,13 @@ fn member_change(key: &str, value: &RawValue, installation_id: &str, scope: Scop
     if TURN_METADATA_KEYS.contains(&key) {
         if matches!(scope, Scope::Turn) {
             return Change::Remove;
+        }
+        if value.get().starts_with('{') {
+            return scope_object(value.get(), installation_id, Scope::Turn)
+                .ok()
+                .flatten()
+                .map(Change::Replace)
+                .unwrap_or(Change::Keep);
         }
         let Ok(metadata) = serde_json::from_str::<String>(value.get()) else {
             return Change::Keep;

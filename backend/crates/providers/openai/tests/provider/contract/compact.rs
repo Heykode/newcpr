@@ -41,7 +41,6 @@ async fn compact_uses_model_aware_http_json_and_preserves_output_and_usage() {
             "chatgpt-acct_provider_contract",
         ))
         .and(header("content-type", "application/json"))
-        .and(body_bytes(request_body.as_slice()))
         .respond_with(
             ResponseTemplate::new(200)
                 .set_body_raw(COMPACT_RESPONSE, "application/json")
@@ -106,6 +105,17 @@ async fn compact_uses_model_aware_http_json_and_preserves_output_and_usage() {
     );
     assert!(requests[0].headers.contains_key("user-agent"));
     assert!(!requests[0].headers.contains_key("upgrade"));
+    let body: Value = serde_json::from_slice(&requests[0].body).unwrap();
+    let cache = body["prompt_cache_key"].as_str().unwrap();
+    uuid::Uuid::parse_str(cache).unwrap();
+    assert_ne!(cache, "compact-cache");
+    assert_eq!(
+        std::str::from_utf8(&requests[0].body).unwrap(),
+        std::str::from_utf8(request_body)
+            .unwrap()
+            .replace("compact-cache", cache),
+        "only the cache correlation changes; business bytes remain exact"
+    );
 }
 
 #[tokio::test]

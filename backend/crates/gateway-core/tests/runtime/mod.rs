@@ -628,7 +628,7 @@ fn subscription_refresh_should_preempt_inflight_catalog_and_reload_authoritative
         );
         let task = subscription_task(&publisher);
         let cancellation = CancellationToken::new();
-        let mut daemon = task.run(cancellation.clone());
+        let mut daemon = task.run(cancellation.clone().into());
         let mut old = Box::pin(publisher.refresh());
         assert!(futures::poll!(old.as_mut()).is_pending());
         assert_eq!(catalog.queries.load(Ordering::SeqCst), 2);
@@ -721,7 +721,7 @@ fn subscription_refresh_failure_after_catalog_preemption_should_suspend_and_reco
         );
         let task = subscription_task(&publisher);
         let cancellation = CancellationToken::new();
-        let mut daemon = task.run(cancellation.clone());
+        let mut daemon = task.run(cancellation.clone().into());
         let mut old = Box::pin(publisher.refresh());
         assert!(futures::poll!(old.as_mut()).is_pending());
         *store.facts.lock().expect("facts lock") = Err(SnapshotStoreError::unavailable());

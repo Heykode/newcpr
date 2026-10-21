@@ -18,7 +18,7 @@ use gateway_core::engine::execution::{
 use gateway_core::lifecycle::CancellationToken;
 use gateway_core::policy::ClientApiKeyId;
 use gateway_core::routing::ProviderKind;
-use gateway_core::task::{DaemonTask, WorkerTaskError};
+use gateway_core::task::{DaemonTask, WorkerDaemonContext, WorkerTaskError};
 use tokio::sync::{Mutex, mpsc};
 
 const DEFAULT_QUEUE_CAPACITY: usize = 4_096;
@@ -135,8 +135,9 @@ pub struct ClientAdmissionReleaseWriter {
 }
 
 impl DaemonTask for ClientAdmissionReleaseWriter {
-    fn run(&self, cancellation: CancellationToken) -> BoxFuture<'_, Result<(), WorkerTaskError>> {
+    fn run(&self, context: WorkerDaemonContext) -> BoxFuture<'_, Result<(), WorkerTaskError>> {
         Box::pin(async move {
+            let cancellation = context.cancellation();
             let mut receiver = self.receiver.lock().await;
             loop {
                 let release = tokio::select! {
@@ -157,6 +158,9 @@ impl DaemonTask for ClientAdmissionReleaseWriter {
                         .release(&release.client_api_key_id, &release.model_request_id)
                         .await
                 };
+                if result.is_ok() {
+                    context.succeeded();
+                }
                 if let Err(error) = result {
                     tracing::warn!(%error, "Client admission 后台释放失败，依赖租约 TTL 收敛");
                 }
@@ -250,8 +254,12 @@ pub struct ProviderCircuitFeedbackWriter {
 }
 
 impl DaemonTask for ProviderCircuitFeedbackWriter {
-    fn run(&self, cancellation: CancellationToken) -> BoxFuture<'_, Result<(), WorkerTaskError>> {
+    fn run(
+        &self,
+        context: gateway_core::task::WorkerDaemonContext,
+    ) -> BoxFuture<'_, Result<(), WorkerTaskError>> {
         Box::pin(async move {
+            let cancellation = context.cancellation().clone();
             let mut receiver = self.receiver.lock().await;
             loop {
                 let feedback = tokio::select! {
@@ -271,6 +279,9 @@ impl DaemonTask for ProviderCircuitFeedbackWriter {
                         self.inner.observe_success(&provider).await
                     }
                 };
+                if result.is_ok() {
+                    context.succeeded();
+                }
                 if let Err(error) = result {
                     tracing::warn!(%error, "Provider circuit feedback 后台写入失败");
                 }

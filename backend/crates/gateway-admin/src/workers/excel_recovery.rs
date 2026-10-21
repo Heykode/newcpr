@@ -1,11 +1,8 @@
 use crate::{model::AdminError, use_case::excel_recovery::ExcelRecoveryService};
 use futures::future::BoxFuture;
-use gateway_core::{
-    lifecycle::CancellationToken,
-    task::{
-        DaemonRestartPolicy, DaemonTask, WorkerContribution, WorkerId, WorkerKind,
-        WorkerRegistration, WorkerRunnable, WorkerTaskError,
-    },
+use gateway_core::task::{
+    DaemonRestartPolicy, DaemonTask, WorkerContribution, WorkerId, WorkerKind, WorkerRegistration,
+    WorkerRunnable, WorkerTaskError,
 };
 use std::{sync::Arc, time::Duration};
 
@@ -33,15 +30,23 @@ pub(crate) fn contribution(
 
 struct RecoveryWorker(Arc<ExcelRecoveryService>);
 impl DaemonTask for RecoveryWorker {
-    fn run(&self, cancellation: CancellationToken) -> BoxFuture<'_, Result<(), WorkerTaskError>> {
+    fn run(
+        &self,
+        context: gateway_core::task::WorkerDaemonContext,
+    ) -> BoxFuture<'_, Result<(), WorkerTaskError>> {
         Box::pin(async move {
+            let cancellation = context.cancellation().clone();
             let lane = || async {
                 let mut interval = tokio::time::interval(Duration::from_secs(60));
                 interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
                 loop {
                     tokio::select! { biased; ()=cancellation.cancelled()=>break, _=interval.tick()=>{} }
                     // Durable database slots, not this process count, enforce the global cap.
-                    if self.0.run_one(cancellation.clone()).await.is_err() {
+                    let result = self.0.run_one(cancellation.clone()).await;
+                    if result.is_ok() {
+                        context.succeeded();
+                    }
+                    if result.is_err() {
                         tracing::warn!("Excel recovery worker failed; scheduling was not restored");
                     }
                 }

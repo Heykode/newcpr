@@ -348,6 +348,7 @@ pub struct AccountSummaryView {
 #[serde(rename_all = "camelCase")]
 pub struct AccountView {
     pub custom_name: Option<String>,
+    pub outbound_proxy_id: Option<String>,
     pub outbound_proxy_endpoint: Option<String>,
     pub id: String,
     pub name: String,

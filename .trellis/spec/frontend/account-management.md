@@ -207,12 +207,13 @@ Never infer principal identity from email or erase usage while editing a price.
   three egress fields on save. Unknown/loading/failed selections stay blank and
   disabled; unrelated edits remain saveable without an egress patch. No read,
   cancellation or retry publishes a runtime configuration change.
-- Account list endpoints are redacted and expose no saved proxy ID. Display an
-  existing active proxy as a disabled bound-proxy option with an empty ID; an
-  unchanged save omits the proxy patch. Never infer IDs from endpoints (two proxy
-  credentials may share one endpoint) or submit that endpoint as a URL. Explicit
-  replacement uses the existing tested-proxy catalog. Dormant proxies under a
-  managed pool are not presented as the newly selected account route.
+- Account list/detail endpoints expose the saved `outboundProxyId` independently
+  of the redacted endpoint. Match catalog names by ID, including disabled bindings;
+  unchanged saves still omit the proxy patch. Older servers or removed catalog
+  entries keep a disabled bound-proxy option. Never infer IDs from endpoints (two
+  proxy credentials may share one endpoint) or submit the endpoint as a URL.
+  Explicit replacement retains existing enablement/test eligibility checks.
+  Dormant proxies under a managed pool are not presented as the selected route.
 - Regression coverage in `account-egress.test.mjs` and `browser/account-egress.mjs`
   exercises every saved mode, save/reopen, cancellation, stale reads, failure,
   same-endpoint proxies, one GET per editor open, and unchanged template/batch

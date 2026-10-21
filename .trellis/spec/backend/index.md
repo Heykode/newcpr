@@ -34,6 +34,7 @@ This directory contains guidelines for backend development. Fill in each file wi
 | [Account Cumulative Costs](./account-cumulative-costs.md) | 独立累计、请求去重、日志保留及金额容量 | 已验证消费合同 |
 | [Quota Forecast](./quota-forecast.md) | Read-only paired quota estimates, inference filtering and UI lifecycle | v3.5 integration contract |
 | [Client Continuity](./client-continuity.md) | Default/custom UA, durable devices and opt-in IPv6 routes | Integration verification |
+| [Daemon Health](./daemon-health.md) | Successful-work recovery, restart generations and idle health | Isolated regression coverage |
 | [Protocol Compatibility](./protocol-compatibility.md) | Chat delivery, explicit compaction and multipart image boundaries | Local compatibility contracts |
 | [Scheduling Affinity](./scheduling-affinity.md) | Supplemental hints, checked migration and retry/owner precedence | Local affinity contracts |
 | [账号容量等待](./account-capacity-wait.md) | 单一权威、冻结候选与实时容量、共享截止及取消所有权 | 实现合同；专项验收待完成 |

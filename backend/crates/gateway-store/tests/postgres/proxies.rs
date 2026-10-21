@@ -142,6 +142,15 @@ async fn proxy_disable_projects_direct_and_reenable_restores_unchanged_accounts(
         for (id, provider) in [("acct_proxy_openai", "openai"), ("acct_proxy_xai", "xai")] {
             let id = ProviderAccountId::new(id).unwrap();
             let kind = ProviderKind::new(provider).unwrap();
+            let detail = admin
+                .load_account(id.as_str(), Default::default())
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                detail.account.outbound_proxy_id.as_deref(),
+                Some(saved.id.as_str())
+            );
             projected.push(accounts.get_account(&id).await.unwrap().unwrap());
             projected.push(accounts.load_current_credential(&id).await.unwrap().account);
             projected.extend(accounts.list_for_provider(&kind).await.unwrap());
