@@ -197,7 +197,7 @@ async fn frozen_request_profile_survives_publication_without_reusing_account_ide
             };
             consume_identity_request(
                 &provider,
-                identity_request(json!("hello"), true, websocket),
+                correlation_request(websocket),
                 scoped_context_with_profile("profile-retry", "key-profile", account, Some(profile)),
             )
             .await;
@@ -227,6 +227,8 @@ async fn frozen_request_profile_survives_publication_without_reusing_account_ide
             captures[1].1["client_metadata"]["x-codex-installation-id"]
         );
         assert_ne!(captures[0].0["thread-id"], captures[1].0["thread-id"]);
+        assert_ne!(captures[0].1["turn_id"], captures[1].1["turn_id"]);
+        assert_eq!(captures[1].1["turn_id"], captures[2].1["turn_id"]);
         assert_eq!(
             captures[1].1["client_metadata"]["x-codex-installation-id"],
             captures[2].1["client_metadata"]["x-codex-installation-id"]
@@ -237,6 +239,14 @@ async fn frozen_request_profile_survives_publication_without_reusing_account_ide
             "acct_profile_second",
         ]) {
             assert!(!headers.contains_key("x-codex-installation-id"));
+            let metadata: Value =
+                serde_json::from_str(headers["x-codex-turn-metadata"].to_str().unwrap()).unwrap();
+            assert_ne!(body["turn_id"], "shared-turn");
+            assert_eq!(metadata["turn_id"], body["turn_id"]);
+            assert_eq!(
+                body["input"][0]["internal_chat_message_metadata_passthrough"]["turn_id"],
+                body["turn_id"]
+            );
             let selected = store
                 .repository()
                 .load_runtime_credential(&store.account(account).unwrap())
@@ -593,6 +603,16 @@ async fn generate_compatibility_matches_wire_and_session_facts_in_both_profiles_
             }
         }
     }
+}
+
+fn correlation_request(websocket: bool) -> GenerateRequest {
+    GenerateRequest::from_protocol_payload(ProtocolPayload::json_object("openai", json!({
+        "model":"gpt-5.4", "instructions":"stable", "session_id":"raw-session", "thread_id":"raw-thread", "turn_id":"shared-turn",
+        "input":[{"role":"user", "content":"hello", "internal_chat_message_metadata_passthrough":{"turn_id":"shared-turn"}}]
+    }).as_object().unwrap().clone()).unwrap().with_context(Map::from_iter([
+        ("use_websocket".to_owned(), json!(websocket)),
+        ("turn_metadata".to_owned(), json!("{\"turn_id\":\"shared-turn\"}")),
+    ])))
 }
 
 fn identity_request(input: Value, explicit: bool, websocket: bool) -> GenerateRequest {

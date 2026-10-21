@@ -19,7 +19,9 @@ const CLEAN_BODY: &[u8] = br#" {
 
 const IDENTITY_BODY: &[u8] = br#" {
   "model":"gpt-5.4", "input":[{"type":"compaction","encrypted_content":"opaque"}],
-  "id":"shared-root", "session_id":"shared-root", "conversation_id":"client-correlation",
+  "id":"shared-root", "id":"shared-root", "session_id":"shared-root", "conversation_id":"client-correlation",
+  "turn_id":"shared-turn", "traceparent":"discard-me",
+  "turn_metadata":{"turn_id":"shared-turn","account_id":"discard-me","tracestate":"discard-me","business":"unchanged"},
   "prompt":"literal \u4e2d text", "commands":{"search_query":[{"q":"test","account_id":"business"}]},
   "images":[{"image_url":"data:image/png;base64,c3ludGhldGlj"}],
   "metadata":{"account_id":"business"}, "future":9007199254740993,
@@ -141,9 +143,25 @@ fn assert_scoped_request(request: &wiremock::Request, account: &str) -> String {
     ] {
         assert!(body.get(name).is_none());
     }
-    assert_eq!(body["session_id"], "shared-root");
-    assert_eq!(body["id"], "shared-root");
-    assert_eq!(body["conversation_id"], "client-correlation");
+    assert_ne!(body["session_id"], "shared-root");
+    uuid::Uuid::parse_str(body["session_id"].as_str().unwrap()).unwrap();
+    if request.url.path().ends_with("alpha/search") {
+        assert_ne!(body["id"], "shared-root");
+    } else {
+        assert_eq!(body["id"], "shared-root");
+    }
+    assert_ne!(body["conversation_id"], "client-correlation");
+    assert_ne!(body["turn_id"], "shared-turn");
+    assert_eq!(body["turn_metadata"]["turn_id"], body["turn_id"]);
+    assert_eq!(body["turn_metadata"]["business"], "unchanged");
+    assert!(body["turn_metadata"].get("account_id").is_none());
+    assert!(body["turn_metadata"].get("tracestate").is_none());
+    let encoded_id = format!("\"id\":{}", serde_json::to_string(&body["id"]).unwrap());
+    assert_eq!(
+        raw.matches(&encoded_id).count(),
+        2,
+        "both ID occurrences must be preserved and scoped consistently"
+    );
     let device = body["installation_id"].as_str().expect("current device");
     assert!(!device.is_empty());
     assert_eq!(body["installationId"], device);
@@ -184,7 +202,18 @@ async fn standalone_endpoints_keep_clean_wire_bytes_without_inventing_identity_f
         .await;
         let requests = server.received_requests().await.expect("requests");
         assert_eq!(requests.len(), 1);
-        assert_eq!(requests[0].body, CLEAN_BODY);
+        let raw = std::str::from_utf8(&requests[0].body).unwrap();
+        assert_business_preserved(raw);
+        let value: Value = serde_json::from_slice(&requests[0].body).unwrap();
+        assert_ne!(value["session_id"], "shared-root");
+        assert_eq!(
+            value.as_object().unwrap().len(),
+            serde_json::from_slice::<Value>(CLEAN_BODY)
+                .unwrap()
+                .as_object()
+                .unwrap()
+                .len()
+        );
         assert!(captured_header_values(&requests[0], "x-codex-installation-id").is_empty());
         server.verify().await;
     }
@@ -234,6 +263,10 @@ async fn standalone_endpoints_rebuild_identity_after_account_change_without_muta
         let first_device = assert_scoped_request(&requests[0], "acct_affinity_switch_a");
         let second_device = assert_scoped_request(&requests[1], "acct_affinity_switch_b");
         assert_ne!(first_device, second_device);
+        let first: Value = serde_json::from_slice(&requests[0].body).unwrap();
+        let second: Value = serde_json::from_slice(&requests[1].body).unwrap();
+        assert_ne!(first["session_id"], second["session_id"]);
+        assert_ne!(first["conversation_id"], second["conversation_id"]);
         server.verify().await;
     }
 }
@@ -282,4 +315,49 @@ async fn standalone_search_sends_formatted_unicode_metadata_without_losing_busin
     assert_eq!(scoped["label"], "中😀");
     assert_eq!(scoped["text"], "keep\nline");
     server.verify().await;
+}
+
+#[tokio::test]
+async fn standalone_images_match_body_and_header_turn_correlations() {
+    for endpoint in ["images/generations", "images/edits"] {
+        let store = Arc::new(MemoryAccountStore::default());
+        create_account(&store, "acct_provider_contract").await;
+        let server = MockServer::start().await;
+        mount_response(&server, endpoint, 1).await;
+        let payload = RawJsonPayload::new("openai", Bytes::from_static(IDENTITY_BODY))
+            .unwrap()
+            .with_context(Map::from_iter([
+                ("image_turn_id".to_owned(), json!("shared-turn")),
+                ("turn_metadata".to_owned(), json!(r#"{"turn_id":"shared-turn","account_id":"discard-me","traceparent":"discard-me","future":1,"future":2}"#)),
+            ]));
+        let kind = if endpoint == "images/edits" {
+            ImageRequestKind::Edit
+        } else {
+            ImageRequestKind::Generation
+        };
+        execute_raw(
+            &provider_with_base_url(&store, server.uri()),
+            endpoint,
+            Operation::GenerateImage(ImageRequest::from_raw_json(kind, payload)),
+            context("req_image_correlations", CancellationToken::new()),
+        )
+        .await;
+        let requests = server.received_requests().await.unwrap();
+        assert_scoped_request(&requests[0], "acct_provider_contract");
+        let body: Value = serde_json::from_slice(&requests[0].body).unwrap();
+        let turn = body["turn_id"].as_str().unwrap();
+        assert_eq!(
+            captured_header_values(&requests[0], "x-codex-image-turn-id"),
+            [turn.as_bytes().to_vec()]
+        );
+        let headers = captured_header_values(&requests[0], "x-codex-turn-metadata");
+        assert_eq!(headers.len(), 1);
+        let raw = std::str::from_utf8(&headers[0]).unwrap();
+        assert!(!raw.contains("discard-me"));
+        assert!(raw.contains(r#""future":1"#));
+        assert!(raw.contains(r#""future":2"#));
+        let metadata: Value = serde_json::from_str(raw).unwrap();
+        assert_eq!(metadata["turn_id"], turn);
+        server.verify().await;
+    }
 }

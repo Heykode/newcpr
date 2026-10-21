@@ -966,8 +966,10 @@ async fn relaxed_compact_forwarding_preserves_business_body_and_rebuilds_account
     let requests = upstream.received_requests().await.unwrap();
     assert_eq!(requests.len(), 1);
     let sent: Value = serde_json::from_slice(&requests[0].body).unwrap();
-    assert_eq!(sent["session_id"], "root");
-    assert_eq!(sent["thread_id"], "child");
+    assert_ne!(sent["session_id"], "root");
+    assert_ne!(sent["thread_id"], "child");
+    uuid::Uuid::parse_str(sent["session_id"].as_str().unwrap()).unwrap();
+    uuid::Uuid::parse_str(sent["thread_id"].as_str().unwrap()).unwrap();
     assert_eq!(sent["input"][0]["content"], "retain history");
     assert_eq!(sent["future"], json!(9007199254740993u64));
     assert!(sent.get("account_id").is_none());

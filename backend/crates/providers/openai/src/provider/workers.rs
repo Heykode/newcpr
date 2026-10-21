@@ -445,12 +445,13 @@ fn random_duration(max_exclusive: Duration) -> Duration {
 impl DaemonTask for OpenAiCatalogEtagTask {
     fn run(
         &self,
-        cancellation: gateway_core::lifecycle::CancellationToken,
+        context: gateway_core::task::WorkerDaemonContext,
     ) -> BoxFuture<'_, Result<(), WorkerTaskError>> {
         Box::pin(async move {
             let mut backoff =
                 EtagRefreshBackoff::new(WORKER_INITIAL_BACKOFF, WORKER_MAXIMUM_BACKOFF);
             let mut consecutive_failures = 0_u32;
+            let cancellation = context.cancellation();
             loop {
                 tokio::select! {
                     () = cancellation.cancelled() => return Ok(()),
@@ -470,6 +471,7 @@ impl DaemonTask for OpenAiCatalogEtagTask {
                         }
                         consecutive_failures = 0;
                         backoff.reset();
+                        context.succeeded();
                     }
                     Err(error) => {
                         consecutive_failures = consecutive_failures.saturating_add(1);

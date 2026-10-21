@@ -21,6 +21,7 @@ withDefaults(defineProps<{
   disabled: boolean
   batch?: boolean
   endpoint?: string | null
+  currentProxyId?: string | null
   accountId?: string
   preserveProxy?: boolean
   egressReadState?: AccountEgressReadState
@@ -266,6 +267,7 @@ const updateProxy = defineModel<boolean>('updateProxy', { default: false })
       :egress-read-state="egressReadState"
       :error="proxyError"
       :endpoint="endpoint"
+      :current-proxy-id="currentProxyId"
       :account-id="accountId"
       :disabled="disabled || (batch && !updateProxy)"
     >

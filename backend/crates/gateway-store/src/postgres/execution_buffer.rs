@@ -12,8 +12,7 @@ use gateway_core::engine::{
     NewModelRequest, ProbeFailure, RecoveryReport,
 };
 use gateway_core::error::{ProviderError, StoreError};
-use gateway_core::lifecycle::CancellationToken;
-use gateway_core::task::{DaemonTask, WorkerTaskError};
+use gateway_core::task::{DaemonTask, WorkerDaemonContext, WorkerTaskError};
 use gateway_core::upstream::UpstreamSendState;
 use tokio::sync::{Mutex, mpsc};
 
@@ -377,9 +376,10 @@ where
 {
     fn run(
         &self,
-        cancellation: CancellationToken,
+        context: WorkerDaemonContext,
     ) -> futures::future::BoxFuture<'_, Result<(), WorkerTaskError>> {
         Box::pin(async move {
+            let cancellation = context.cancellation();
             let mut receiver = self.receiver.lock().await;
             loop {
                 let queued = tokio::select! {
@@ -396,13 +396,15 @@ where
                 let Some(queued) = queued else {
                     return Err(WorkerTaskError::safe("execution observation queue closed"));
                 };
-                persist_queued(queued, self.inner.as_ref()).await;
+                if persist_queued(queued, self.inner.as_ref()).await {
+                    context.succeeded();
+                }
             }
         })
     }
 }
 
-async fn persist_queued<S>(mut queued: QueuedExecutionObservation, store: &S)
+async fn persist_queued<S>(mut queued: QueuedExecutionObservation, store: &S) -> bool
 where
     S: ExecutionStore + ?Sized,
 {
@@ -416,12 +418,15 @@ where
             request_id = ?request_id,
             "执行观测队列内部状态无效，已丢弃本次写入"
         );
-        return;
+        return false;
     };
     // Store 写入没有统一幂等键；超时可能表示已提交，不能在这里盲目重试并
     // 制造重复 ops_events。失败会被计数并丢弃，数据面始终不等待补偿。
     match write.persist(store).await {
-        Ok(()) => state.record_persisted(),
+        Ok(()) => {
+            state.record_persisted();
+            true
+        }
         Err(error) => {
             state.record_write_failure();
             let stats = state.snapshot();
@@ -432,6 +437,7 @@ where
                 write_failure_total = stats.write_failure_total,
                 "执行观测写入失败，数据面不受影响"
             );
+            false
         }
     }
 }

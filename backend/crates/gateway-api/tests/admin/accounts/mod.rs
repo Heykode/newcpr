@@ -1786,6 +1786,7 @@ mod response {
                 excel_models: Default::default(),
                 concurrency_limit: None,
                 weight: AccountWeight::DEFAULT,
+                outbound_proxy_id: None,
                 outbound_proxy: None,
                 credential_state: CredentialState::Ready,
                 credential_observed_at: now,

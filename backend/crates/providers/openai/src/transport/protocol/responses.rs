@@ -175,6 +175,7 @@ pub struct CodexResponsesRequest {
     pub client_api_key_id: Option<String>,
     /// Original protocol anchors retained across wire projections and owned continuations.
     pub(crate) identity_seed: Option<crate::transport::qx_application::CodexIdentitySeed>,
+    pub(crate) correlation_originals: std::collections::BTreeMap<String, String>,
     /// 是否偏好 WebSocket 传输。
     pub use_websocket: bool,
     /// 是否强制 HTTP SSE。
@@ -646,6 +647,7 @@ impl CodexResponsesRequest {
             client_user_agent: None,
             client_api_key_id: None,
             identity_seed: None,
+            correlation_originals: std::collections::BTreeMap::new(),
             use_websocket: false,
             force_http_sse: false,
             turn_state: None,

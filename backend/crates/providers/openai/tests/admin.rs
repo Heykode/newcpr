@@ -2356,6 +2356,7 @@ fn account_record(account: &ProviderAccount) -> AccountRecord {
         effective_excel_models: Default::default(),
         model_access: Default::default(),
         custom_name: None,
+        outbound_proxy_id: None,
         outbound_proxy: None,
         id: account.id().to_string(),
         provider_kind: account.provider().clone(),

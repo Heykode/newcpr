@@ -3,12 +3,9 @@
 use std::{sync::Arc, time::Duration};
 
 use futures::future::BoxFuture;
-use gateway_core::{
-    lifecycle::CancellationToken,
-    task::{
-        DaemonRestartPolicy, DaemonTask, WorkerContribution, WorkerId, WorkerKind,
-        WorkerRegistration, WorkerRunnable, WorkerTaskError,
-    },
+use gateway_core::task::{
+    DaemonRestartPolicy, DaemonTask, WorkerContribution, WorkerId, WorkerKind, WorkerRegistration,
+    WorkerRunnable, WorkerTaskError,
 };
 
 use crate::{GroupMonitorService, model::AdminError};
@@ -41,8 +38,12 @@ struct GroupMonitorSampler {
 }
 
 impl DaemonTask for GroupMonitorSampler {
-    fn run(&self, cancellation: CancellationToken) -> BoxFuture<'_, Result<(), WorkerTaskError>> {
+    fn run(
+        &self,
+        context: gateway_core::task::WorkerDaemonContext,
+    ) -> BoxFuture<'_, Result<(), WorkerTaskError>> {
         Box::pin(async move {
+            let cancellation = context.cancellation().clone();
             let mut interval = tokio::time::interval(INTERVAL);
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
@@ -55,6 +56,7 @@ impl DaemonTask for GroupMonitorSampler {
                     biased;
                     () = cancellation.cancelled() => return Ok(()),
                     result = self.service.sample() => {
+                        if result.is_ok() { context.succeeded(); }
                         if result.is_err() {
                             // Display-only sampling must not fail gateway readiness.
                             tracing::warn!("group monitor sampling failed; previous snapshot retained");

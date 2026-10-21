@@ -392,7 +392,7 @@ async fn guardian_waiters_are_fifo_without_blocking_normal_promotion() {
     let writer = fixture.writer.take().expect("cleanup writer");
     let cancellation = CancellationToken::new();
     let worker_cancellation = cancellation.clone();
-    let worker = tokio::spawn(async move { writer.run(worker_cancellation).await });
+    let worker = tokio::spawn(async move { writer.run(worker_cancellation.into()).await });
     drop(active);
     tokio::time::timeout(Duration::from_secs(2), async {
         while fixture
@@ -1211,7 +1211,7 @@ async fn capacity_wait_running_writer_cleans_promptly_and_retries_redis_disconne
     );
     let cancellation = CancellationToken::new();
     let worker_cancellation = cancellation.clone();
-    let worker = tokio::spawn(async move { writer.run(worker_cancellation).await });
+    let worker = tokio::spawn(async move { writer.run(worker_cancellation.into()).await });
     let started = tokio::time::Instant::now();
     drop(waiter);
     tokio::time::timeout(Duration::from_secs(4), async {
@@ -1282,7 +1282,7 @@ async fn capacity_wait_shutdown_keeps_receiving_drops_after_a_long_http_drain() 
     let writer = fixture.writer.take().expect("cleanup writer");
     let cancellation = CancellationToken::new();
     cancellation.cancel();
-    let worker = tokio::spawn(async move { writer.run(cancellation).await });
+    let worker = tokio::spawn(async move { writer.run(cancellation.into()).await });
     tokio::time::sleep(Duration::from_millis(30)).await;
     assert!(
         !worker.is_finished(),
@@ -1348,7 +1348,7 @@ async fn capacity_wait_unreturned_owner_requires_outer_shutdown_timeout_and_abor
     let writer = fixture.writer.take().expect("cleanup writer");
     let cancellation = CancellationToken::new();
     cancellation.cancel();
-    let mut worker = tokio::spawn(async move { writer.run(cancellation).await });
+    let mut worker = tokio::spawn(async move { writer.run(cancellation.into()).await });
     // This is a caller-owned deadline, not a standalone daemon shutdown promise.
     assert!(
         tokio::time::timeout(Duration::from_millis(100), &mut worker)
@@ -1614,7 +1614,7 @@ impl Fixture {
 async fn drain(writer: CapacityWaitCleanupWriter) {
     let cancellation = CancellationToken::new();
     cancellation.cancel();
-    tokio::time::timeout(Duration::from_secs(6), writer.run(cancellation))
+    tokio::time::timeout(Duration::from_secs(6), writer.run(cancellation.into()))
         .await
         .expect("bounded cleanup drain")
         .expect("cleanup worker");

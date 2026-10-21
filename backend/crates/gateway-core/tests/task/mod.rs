@@ -23,7 +23,10 @@ impl ScheduledTask for NoopScheduledTask {
 struct NoopDaemonTask;
 
 impl DaemonTask for NoopDaemonTask {
-    fn run(&self, _cancellation: CancellationToken) -> BoxFuture<'_, Result<(), WorkerTaskError>> {
+    fn run(
+        &self,
+        _context: gateway_core::task::WorkerDaemonContext,
+    ) -> BoxFuture<'_, Result<(), WorkerTaskError>> {
         Box::pin(async { Ok(()) })
     }
 }

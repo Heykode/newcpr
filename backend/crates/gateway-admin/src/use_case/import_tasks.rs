@@ -370,8 +370,12 @@ impl Drop for WorkerRunGuard<'_> {
 }
 
 impl DaemonTask for ImportTaskWorker {
-    fn run(&self, cancellation: CancellationToken) -> BoxFuture<'_, Result<(), WorkerTaskError>> {
+    fn run(
+        &self,
+        context: gateway_core::task::WorkerDaemonContext,
+    ) -> BoxFuture<'_, Result<(), WorkerTaskError>> {
         Box::pin(async move {
+            let cancellation = context.cancellation().clone();
             let _guard = WorkerRunGuard {
                 service: &self.0,
                 cancellation: &cancellation,
@@ -396,6 +400,7 @@ impl DaemonTask for ImportTaskWorker {
                     };
                     active.push(self.0.execute(id, index, input));
                 }
+                context.succeeded();
                 tokio::select! {
                     () = &mut cancelled => {},
                     _ = active.next(), if !active.is_empty() => {},

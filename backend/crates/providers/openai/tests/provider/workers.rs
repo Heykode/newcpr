@@ -220,7 +220,7 @@ async fn model_etag_daemon_backs_off_and_resets_after_success() {
         .expect("ETag daemon contribution");
     let cancellation = CancellationToken::new();
     let run_cancellation = cancellation.clone();
-    let daemon_handle = tokio::spawn(async move { daemon.run(run_cancellation).await });
+    let daemon_handle = tokio::spawn(async move { daemon.run(run_cancellation.into()).await });
 
     execute_response(&provider, account_id, "req_etag_backoff_first").await;
     wait_for_calls(&catalog_calls, 1).await;

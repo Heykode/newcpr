@@ -291,6 +291,17 @@ test('late supplementary reads and list refreshes never overwrite a user-edited 
   assert.equal(requests[0].egressMode, 'random_ipv6_fresh')
 })
 
+test('bound proxy IDs populate the editor and unchanged saves preserve bindings', async (t) => {
+  const { editor, accounts, requests } = editorHarness(t, { outboundProxyId: 'proxy-bound', outboundProxyEndpoint: 'http://proxy.example:8080' })
+  editor.open(accounts.value[0])
+  await settleReads()
+  assert.equal(editor.proxyMode.value, 'proxy')
+  assert.equal(editor.proxyId.value, 'proxy-bound')
+  await editor.save()
+  assert.equal('outboundProxyId' in requests[0], false)
+  assert.equal('egressMode' in requests[0], false)
+})
+
 test('non-OpenAI accounts do not read IPv6 policy or submit unchanged proxy settings', async (t) => {
   for (const endpoint of [null, 'http://proxy.example:8080']) {
     const { editor, accounts, requests, reads } = editorHarness(t, { provider: 'anthropic', outboundProxyEndpoint: endpoint })

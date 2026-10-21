@@ -6,6 +6,7 @@ pub mod client;
 mod client_json;
 mod client_live;
 mod client_sse;
+mod correlation;
 pub mod diagnostics;
 pub mod egress;
 pub mod endpoints;

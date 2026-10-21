@@ -16,6 +16,7 @@ use gateway_core::task::{
 };
 use gateway_host::workers::{WorkerStartError, WorkerSupervisor};
 use tokio::sync::Notify;
+mod recovery;
 
 const ACTIVE_KINDS: [WorkerKind; 8] = [
     WorkerKind::OAuthRefresh,
@@ -208,8 +209,12 @@ struct HungDaemon {
 }
 
 impl DaemonTask for HungDaemon {
-    fn run(&self, cancellation: CancellationToken) -> BoxFuture<'_, Result<(), WorkerTaskError>> {
+    fn run(
+        &self,
+        context: gateway_core::task::WorkerDaemonContext,
+    ) -> BoxFuture<'_, Result<(), WorkerTaskError>> {
         Box::pin(async move {
+            let cancellation = context.cancellation().clone();
             self.active.fetch_add(1, Ordering::SeqCst);
             let _guard = ActiveCycle(Arc::clone(&self.active));
             cancellation.cancelled().await;

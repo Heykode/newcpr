@@ -252,7 +252,7 @@ async fn setup(
     let cancel = CancellationToken::new();
     let stop = cancel.clone();
     let worker = tokio::spawn(async move {
-        writer.run(stop).await.unwrap();
+        writer.run(stop.into()).await.unwrap();
     });
     (manager, cancel, worker)
 }

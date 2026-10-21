@@ -84,7 +84,12 @@ impl CodexProvider {
                     image.payload().context(),
                 ),
                 image_turn_id,
-                turn_metadata: None,
+                turn_metadata: image
+                    .payload()
+                    .context()
+                    .get("turn_metadata")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
                 session_affinity,
                 upstream_model: None,
             },
@@ -256,13 +261,30 @@ impl CodexProvider {
         ));
         // Standalone Provider 端点没有可证明的账号 owner；Search metadata 必须按
         // 跨账号输入收敛到当前 lease，不能沿用下游声明的账号或 installation identity。
-        let turn_metadata = request.turn_metadata.as_deref().and_then(|metadata| {
+        let mut turn_metadata = request.turn_metadata.as_deref().and_then(|metadata| {
             crate::transport::request::scope_raw_turn_metadata(metadata, lease.installation_id())
         });
-        let body = crate::transport::request::scope_raw_json_to_account(
+        let mut body = crate::transport::request::scope_raw_json_to_account(
             &request.body,
             lease.installation_id(),
         );
+        if excel.is_none() && excel_image.is_none() {
+            let identity = crate::transport::qx_application::AccountCorrelation::new(
+                context.client_api_key_ref().as_str(),
+                lease.installation_id(),
+                lease.account().upstream_account_id().unwrap_or_default(),
+            );
+            body = crate::transport::request::scope_raw_correlations(
+                &body,
+                identity,
+                request.endpoint_path == CODEX_ALPHA_SEARCH_PATH,
+            );
+            identity.scope_endpoint_headers(&mut request.passthrough_headers);
+            turn_metadata = turn_metadata.and_then(|raw| identity.scope_metadata(&raw));
+            request.image_turn_id = request
+                .image_turn_id
+                .and_then(|raw| identity.field("x-codex-image-turn-id", &raw));
+        }
         let session = session_affinity
             .as_ref()
             .and_then(CodexSessionAffinity::persistence_hash);

@@ -530,6 +530,7 @@ mod provider {
                 excel_models: Default::default(),
                 concurrency_limit: None,
                 weight: AccountWeight::default(),
+                outbound_proxy_id: None,
                 outbound_proxy: None,
                 credential_state: facts.credential_state,
                 credential_observed_at: now,

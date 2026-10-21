@@ -78,7 +78,9 @@ fn start(bundle: &mut AdminBundle) -> (CancellationToken, tokio::task::JoinHandl
     let cancellation = CancellationToken::new();
     let token = cancellation.clone();
     let handle = tokio::spawn(async move {
-        task.run(token).await.expect("import daemon exits cleanly");
+        task.run(token.into())
+            .await
+            .expect("import daemon exits cleanly");
     });
     (cancellation, handle)
 }

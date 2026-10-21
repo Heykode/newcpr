@@ -299,6 +299,148 @@ fn scoped_request(key: &str) -> CodexResponsesRequest {
 }
 
 #[test]
+fn correlation_turns_match_headers_history_and_metadata_without_touching_opaque_state() {
+    let mut request = scoped_request("key-a");
+    let mut body = request.body().clone();
+    body.insert("turn_id".into(), json!("turn-root"));
+    body.insert("traceparent".into(), json!("client-trace"));
+    body.insert(
+        "turnMetadata".into(),
+        json!({"turn_id":"turn-root", "root_turn_id":"turn-root", "traceparent":"trace"}),
+    );
+    body.insert("input".into(), json!([
+        {"role":"user","content":"turn-root", "internal_chat_message_metadata_passthrough":{"turn_id":"turn-root","other":"turn-root"}},
+        {"type":"reasoning", "id":"rs_opaque", "encrypted_content":"encrypted-original"},
+        {"type":"function_call_output", "call_id":"call_original", "output":"turn-root"}
+    ]));
+    body.insert("previous_response_id".into(), json!("resp-original"));
+    request = with_scoped_body(&request, body);
+    let before = request.body().clone();
+    let projected = project_response_request(&request, context());
+    let turn = projected.body()["turn_id"].as_str().unwrap();
+    assert_ne!(turn, "turn-root");
+    assert_eq!(projected.body()["turnMetadata"]["root_turn_id"], turn);
+    assert_eq!(
+        projected.body()["input"][0]["internal_chat_message_metadata_passthrough"]["turn_id"],
+        turn
+    );
+    assert_eq!(projected.body()["input"][0]["content"], "turn-root");
+    assert_eq!(
+        projected.body()["input"][0]["internal_chat_message_metadata_passthrough"]["other"],
+        "turn-root"
+    );
+    assert_eq!(projected.body()["input"][1], before["input"][1]);
+    assert_eq!(projected.body()["input"][2], before["input"][2]);
+    assert_eq!(projected.body()["previous_response_id"], "resp-original");
+    assert!(!projected.body().contains_key("traceparent"));
+    assert!(
+        projected.body()["turnMetadata"]
+            .get("traceparent")
+            .is_none()
+    );
+    let mut headers = HeaderMap::new();
+    headers.insert("x-client-turn-id", HeaderValue::from_static("turn-root"));
+    headers.insert(
+        "x-codex-turn-metadata",
+        HeaderValue::from_static("{\"turn_id\":\"turn-root\",\"tracestate\":\"trace\"}"),
+    );
+    headers.insert("traceparent", HeaderValue::from_static("client-trace"));
+    apply_response_headers(&mut headers, &projected, context()).unwrap();
+    assert_eq!(headers["x-client-turn-id"], turn);
+    let metadata: serde_json::Value =
+        serde_json::from_str(headers["x-codex-turn-metadata"].to_str().unwrap()).unwrap();
+    assert_eq!(metadata["turn_id"], turn);
+    assert!(metadata.get("tracestate").is_none());
+    assert!(!headers.contains_key("traceparent"));
+    assert_eq!(request.body(), &before);
+    assert_eq!(
+        project_response_request(&projected, context()).body(),
+        projected.body()
+    );
+    let mut other = context();
+    other.account_id = Some("other-account");
+    let changed = project_response_request(&request, other);
+    assert_ne!(changed.body()["turn_id"], turn);
+    assert_eq!(
+        project_response_request(&projected, other).body(),
+        changed.body()
+    );
+    request.client_api_key_id = Some("key-b".into());
+    assert_ne!(
+        project_response_request(&request, context()).body()["turn_id"],
+        turn
+    );
+}
+
+#[test]
+fn correlation_parent_thread_and_desktop_git_references_use_existing_thread_domain() {
+    let parent = scoped_request("key-a");
+    let projected_parent = project_response_request(&parent, context());
+    let parent_thread = projected_parent.prompt_cache_key().unwrap();
+    let mut child = scoped_request("key-a");
+    child.client_thread_id = Some("child-thread".into());
+    child.parent_thread_id = Some("original-thread".into());
+    let mut body = child.body().clone();
+    body.insert("client_metadata".into(), json!({
+        "parentThreadId":"original-thread", "forked_from_thread_id":"original-thread", "root_thread_id":"original-thread"
+    }));
+    let git = "<external_codex_git_state><environment_context><git>{\"sessionId\":\"original-session\",\"threadId\":\"original-thread\",\"clientUserMessageId\":\"turn-root\",\"cwd\":\"/workspace/project\"}</git></environment_context></external_codex_git_state>";
+    body.insert(
+        "input".into(),
+        json!([
+            {"role":"user", "content":[{"type":"input_text", "text":git}]},
+            {"role":"user", "content":[{"type":"input_text", "text":git}],
+             "internal_chat_message_metadata_passthrough":{"content_item_kinds":["user_text"]}},
+            {"role":"assistant", "content":[{"type":"input_text", "text":git}]}
+        ]),
+    );
+    child = with_scoped_body(&child, body);
+    let projected = project_response_request(&child, context());
+    for name in ["parentThreadId", "forked_from_thread_id", "root_thread_id"] {
+        assert_eq!(projected.body()["client_metadata"][name], parent_thread);
+    }
+    let mapped = projected.body()["input"][0]["content"][0]["text"]
+        .as_str()
+        .unwrap();
+    assert!(mapped.contains(parent_thread));
+    assert!(mapped.contains("/workspace/project"));
+    for index in [1, 2] {
+        assert_eq!(projected.body()["input"][index]["content"][0]["text"], git);
+    }
+    let mut headers = HeaderMap::new();
+    apply_response_headers(&mut headers, &projected, context()).unwrap();
+    assert_eq!(headers["x-codex-parent-thread-id"], parent_thread);
+    assert_ne!(headers["thread-id"], parent_thread);
+    assert_eq!(
+        project_response_request(&projected, context()).body(),
+        projected.body()
+    );
+}
+
+fn with_scoped_body(
+    original: &CodexResponsesRequest,
+    body: serde_json::Map<String, serde_json::Value>,
+) -> CodexResponsesRequest {
+    let mut request = CodexResponsesRequest::from_body(body);
+    request
+        .client_api_key_id
+        .clone_from(&original.client_api_key_id);
+    request
+        .client_session_id
+        .clone_from(&original.client_session_id);
+    request
+        .client_thread_id
+        .clone_from(&original.client_thread_id);
+    request
+        .parent_thread_id
+        .clone_from(&original.parent_thread_id);
+    request
+        .codex_window_id
+        .clone_from(&original.codex_window_id);
+    request
+}
+
+#[test]
 fn account_scoped_projection_is_stable_and_does_not_feed_back_into_local_identity() {
     let request = scoped_request("key-a");
     let before = request.body().clone();

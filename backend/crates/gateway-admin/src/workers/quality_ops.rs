@@ -1,11 +1,8 @@
 use crate::{model::AdminError, use_case::quality_ops::QualityOpsService};
 use futures::future::BoxFuture;
-use gateway_core::{
-    lifecycle::CancellationToken,
-    task::{
-        DaemonRestartPolicy, DaemonTask, WorkerContribution, WorkerId, WorkerKind,
-        WorkerRegistration, WorkerRunnable, WorkerTaskError,
-    },
+use gateway_core::task::{
+    DaemonRestartPolicy, DaemonTask, WorkerContribution, WorkerId, WorkerKind, WorkerRegistration,
+    WorkerRunnable, WorkerTaskError,
 };
 use std::{sync::Arc, time::Duration};
 
@@ -36,8 +33,12 @@ struct QualityWorker {
 }
 
 impl DaemonTask for QualityWorker {
-    fn run(&self, cancellation: CancellationToken) -> BoxFuture<'_, Result<(), WorkerTaskError>> {
+    fn run(
+        &self,
+        context: gateway_core::task::WorkerDaemonContext,
+    ) -> BoxFuture<'_, Result<(), WorkerTaskError>> {
         Box::pin(async move {
+            let cancellation = context.cancellation().clone();
             let lane = || async {
                 let mut interval = tokio::time::interval(Duration::from_secs(5));
                 interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -47,7 +48,11 @@ impl DaemonTask for QualityWorker {
                         () = cancellation.cancelled() => break,
                         _ = interval.tick() => {}
                     }
-                    if self.service.run_one(cancellation.clone()).await.is_err() {
+                    let result = self.service.run_one(cancellation.clone()).await;
+                    if result.is_ok() {
+                        context.succeeded();
+                    }
+                    if result.is_err() {
                         tracing::warn!("quality check worker failed; ordinary requests unaffected");
                     }
                 }
@@ -60,7 +65,11 @@ impl DaemonTask for QualityWorker {
                         () = cancellation.cancelled() => break,
                         _ = interval.tick() => {}
                     }
-                    if self.service.cleanup().await.is_err() {
+                    let result = self.service.cleanup().await;
+                    if result.is_ok() {
+                        context.succeeded();
+                    }
+                    if result.is_err() {
                         tracing::warn!("quality history retention failed");
                     }
                 }
@@ -81,6 +90,7 @@ impl DaemonTask for QualityWorker {
                         biased;
                         () = cancellation.cancelled() => break,
                         result = self.service.sync_groups() => {
+                            if result.is_ok() { context.succeeded(); }
                             if result.is_err() { tracing::warn!("quality group sync failed"); }
                         }
                     }

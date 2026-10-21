@@ -1,11 +1,8 @@
 use crate::{model::AdminError, use_case::notifications::NotificationsService};
 use futures::future::BoxFuture;
-use gateway_core::{
-    lifecycle::CancellationToken,
-    task::{
-        DaemonRestartPolicy, DaemonTask, WorkerContribution, WorkerId, WorkerKind,
-        WorkerRegistration, WorkerRunnable, WorkerTaskError,
-    },
+use gateway_core::task::{
+    DaemonRestartPolicy, DaemonTask, WorkerContribution, WorkerId, WorkerKind, WorkerRegistration,
+    WorkerRunnable, WorkerTaskError,
 };
 use std::{sync::Arc, time::Duration};
 
@@ -38,8 +35,12 @@ struct NotificationDispatcher {
 }
 
 impl DaemonTask for NotificationDispatcher {
-    fn run(&self, cancellation: CancellationToken) -> BoxFuture<'_, Result<(), WorkerTaskError>> {
+    fn run(
+        &self,
+        context: gateway_core::task::WorkerDaemonContext,
+    ) -> BoxFuture<'_, Result<(), WorkerTaskError>> {
         Box::pin(async move {
+            let cancellation = context.cancellation().clone();
             let mut interval = tokio::time::interval(INTERVAL);
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
@@ -49,8 +50,11 @@ impl DaemonTask for NotificationDispatcher {
                         return Ok(());
                     }
                     match self.service.dispatch_one().await {
-                        Ok(true) => {}
-                        Ok(false) => break,
+                        Ok(true) => context.succeeded(),
+                        Ok(false) => {
+                            context.succeeded();
+                            break;
+                        }
                         Err(error) => {
                             tracing::warn!(error = %error, "notification dispatcher cycle failed");
                             break;

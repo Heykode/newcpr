@@ -4,7 +4,9 @@ pub(crate) mod compatibility;
 mod raw_json;
 pub(crate) mod search_history;
 
+pub(crate) use raw_json::scope_raw_correlations;
 pub use raw_json::scope_raw_json_to_account;
+pub(crate) use raw_json::scope_raw_turn_correlations;
 pub(crate) use raw_json::scope_raw_turn_metadata;
 
 use std::io;
@@ -783,12 +785,12 @@ pub(crate) fn scope_request_to_account(
         request.replace_existing_identity_field(key, Some(installation_id));
     }
     for key in TURN_METADATA_KEYS {
-        let scoped = request
-            .body()
-            .get(*key)
-            .and_then(Value::as_str)
-            .and_then(|value| scope_turn_metadata(value, installation_id, reset_account_state));
-        replace_existing_body_string(request, key, scoped.as_deref());
+        let scoped = request.body().get(*key).and_then(|value| {
+            scope_turn_metadata_value(value, installation_id, reset_account_state)
+        });
+        if let Some(value) = scoped {
+            request.body_mut().insert((*key).to_owned(), value);
+        }
     }
 
     let client_metadata = request
@@ -801,8 +803,8 @@ pub(crate) fn scope_request_to_account(
                 .map(|key| {
                     (
                         key,
-                        metadata.get(key).and_then(Value::as_str).and_then(|value| {
-                            scope_turn_metadata(value, installation_id, reset_account_state)
+                        metadata.get(key).and_then(|value| {
+                            scope_turn_metadata_value(value, installation_id, reset_account_state)
                         }),
                     )
                 });
@@ -836,7 +838,9 @@ pub(crate) fn scope_request_to_account(
                 client_metadata_turn_metadata.as_deref(),
             );
             for (key, value) in scoped_turn_metadata {
-                replace_existing_metadata_field(&mut metadata, key, value.as_deref());
+                if let Some(value) = value {
+                    metadata.insert(key.to_owned(), value);
+                }
             }
             (!metadata.is_empty()).then_some(Value::Object(metadata))
         }
@@ -855,6 +859,24 @@ fn metadata_string(request: &CodexResponsesRequest, key: &str) -> Option<String>
         .get(key)?
         .as_str()
         .map(ToOwned::to_owned)
+}
+
+fn scope_turn_metadata_value(
+    value: &Value,
+    installation_id: &str,
+    cross_account: bool,
+) -> Option<Value> {
+    match value {
+        Value::String(raw) => {
+            scope_turn_metadata(raw, installation_id, cross_account).map(Value::String)
+        }
+        Value::Object(_) => {
+            let raw = serde_json::to_string(value).ok()?;
+            let scoped = scope_turn_metadata(&raw, installation_id, cross_account)?;
+            serde_json::from_str(&scoped).ok()
+        }
+        _ => None,
+    }
 }
 
 pub(crate) fn scope_turn_metadata(
@@ -926,20 +948,6 @@ impl serde_json::ser::Formatter for AsciiTurnMetadataFormatter {
             start = index + ch.len_utf8();
         }
         writer.write_all(&fragment.as_bytes()[start..])
-    }
-}
-
-fn replace_existing_body_string(
-    request: &mut CodexResponsesRequest,
-    key: &str,
-    value: Option<&str>,
-) {
-    if request.body().get(key).is_some_and(Value::is_string)
-        && let Some(value) = value
-    {
-        request
-            .body_mut()
-            .insert(key.to_owned(), Value::String(value.to_owned()));
     }
 }
 

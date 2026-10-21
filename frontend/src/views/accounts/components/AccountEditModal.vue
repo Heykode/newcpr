@@ -107,6 +107,7 @@ const egressMode = defineModel<string>('egressMode', { required: true })
         :egress-read-state="egressReadState"
         :disabled="saving"
         :endpoint="account.outboundProxyEndpoint"
+        :current-proxy-id="account.outboundProxyId"
         :account-id="account.id"
       />
       <AccountPurchaseFields v-model:amount="purchaseAmount" v-model:cycle-start="purchaseCycleStart" :disabled="saving || !account.purchaseCost" />
