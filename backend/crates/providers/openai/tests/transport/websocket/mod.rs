@@ -2061,10 +2061,13 @@ async fn codex_backend_client_stream_should_cancel_while_inbound_is_backpressure
         timeout(Duration::from_secs(1), async {
             loop {
                 match websocket.next().await {
-                    Some(Ok(Message::Close(_))) => return,
+                    None
+                    | Some(Ok(Message::Close(_)))
+                    | Some(Err(tungstenite::Error::Protocol(
+                        tungstenite::error::ProtocolError::ResetWithoutClosingHandshake,
+                    ))) => return,
                     Some(Ok(_)) => continue,
-                    Some(Err(error)) => panic!("websocket close should be graceful: {error}"),
-                    None => panic!("websocket ended without a close frame"),
+                    Some(Err(error)) => panic!("unexpected websocket cleanup error: {error}"),
                 }
             }
         })

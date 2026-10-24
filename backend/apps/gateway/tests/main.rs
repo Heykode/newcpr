@@ -153,6 +153,18 @@ fn is_audited_private_test(member: &str, relative: &Path, item: &Item) -> bool {
         return false;
     }
     match (member, relative.to_str(), item) {
+        // These owner-local tests cover redacted export data and decoder diagnostics
+        // without exporting wire internals or trace mutation APIs.
+        ("crates/gateway-api", Some("admin/accounts/wire.rs"), Item::Mod(module)) => {
+            module.ident == "account_export_data_tests"
+                && module.content.is_some()
+                && matches!(module.vis, syn::Visibility::Inherited)
+        }
+        ("crates/providers/openai", Some("transport/canonical.rs"), Item::Mod(module)) => {
+            module.ident == "reasoning_tests"
+                && module.content.is_some()
+                && matches!(module.vis, syn::Visibility::Inherited)
+        }
         // Server-relative presentation and raw Live handshakes stay private.
         ("crates/gateway-api", Some("time.rs"), Item::Mod(module)) => {
             module.ident == "tests"
@@ -182,6 +194,16 @@ fn is_audited_private_test(member: &str, relative: &Path, item: &Item) -> bool {
         (
             "crates/providers/openai",
             Some("transport/request/search_history.rs"),
+            Item::Mod(module),
+        ) => {
+            module.ident == "tests"
+                && module.content.is_some()
+                && matches!(module.vis, syn::Visibility::Inherited)
+        }
+        // Eligibility and idempotency tests use the private final-wire request type.
+        (
+            "crates/providers/openai",
+            Some("transport/request/quota_overdraft.rs"),
             Item::Mod(module),
         ) => {
             module.ident == "tests"
@@ -744,6 +766,44 @@ fn quota_reset_lock_tests_require_exact_private_owner() {
     ] {
         let item: Item = syn::parse_str(source).unwrap();
         assert!(!is_audited_private_test(owner, path, &item), "{source}");
+    }
+}
+
+#[test]
+fn export_reasoning_and_overdraft_tests_require_exact_private_inline_owners() {
+    for (owner, relative, name) in [
+        (
+            "crates/gateway-api",
+            "admin/accounts/wire.rs",
+            "account_export_data_tests",
+        ),
+        (
+            "crates/providers/openai",
+            "transport/canonical.rs",
+            "reasoning_tests",
+        ),
+        (
+            "crates/providers/openai",
+            "transport/request/quota_overdraft.rs",
+            "tests",
+        ),
+    ] {
+        let path = Path::new(relative);
+        let item: Item = syn::parse_str(&format!("#[cfg(test)] mod {name} {{}}")).unwrap();
+        assert!(is_audited_private_test(owner, path, &item));
+        assert!(!is_audited_private_test("crates/gateway-core", path, &item));
+        assert!(!is_audited_private_test(owner, Path::new("lib.rs"), &item));
+        for source in [
+            format!("mod {name} {{}}"),
+            format!("#[cfg(test)] mod {name};"),
+            format!("#[cfg(test)] pub(crate) mod {name} {{}}"),
+            format!("#[cfg(test)] pub mod {name} {{}}"),
+            format!("#[cfg(any(test, feature = \"production\"))] mod {name} {{}}"),
+            format!("#[cfg(test)] #[path = \"fixture.rs\"] mod {name} {{}}"),
+        ] {
+            let item: Item = syn::parse_str(&source).unwrap();
+            assert!(!is_audited_private_test(owner, path, &item), "{source}");
+        }
     }
 }
 

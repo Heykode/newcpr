@@ -12,6 +12,31 @@ use gateway_store::postgres::PgProviderAccountRepository;
 
 use super::{TestDatabase, admin_account_store};
 
+async fn assert_account_list_readable(store: &impl AccountStore) {
+    use gateway_admin::model::{
+        PageSize,
+        accounts::{AccountListQuery, AccountRuntimeSnapshot},
+    };
+    let page = store
+        .list_accounts(
+            AccountListQuery {
+                page: 1,
+                page_size: PageSize::new(20).unwrap(),
+                provider_kind: None,
+                group_filter: None,
+                search: None,
+                status: None,
+                plan_type: None,
+                sort: None,
+            },
+            AccountRuntimeSnapshot::default(),
+        )
+        .await
+        .expect("overdraft projection must preserve admin list queries");
+    assert_eq!(page.items.len(), 1);
+    assert_eq!(page.items[0].account.id, "acct_overdraft_test");
+}
+
 #[tokio::test]
 async fn overdraft_claims_are_single_owner_revision_fenced_and_recover_with_quota() {
     let Some(database) = TestDatabase::create("codex_quota_overdraft").await else {
@@ -39,6 +64,7 @@ async fn overdraft_claims_are_single_owner_revision_fenced_and_recover_with_quot
     .await
     .unwrap();
     let store = admin_account_store(&database.pool);
+    assert_account_list_readable(&store).await;
     let first = store
         .claim_codex_quota_overdraft()
         .await
@@ -81,6 +107,7 @@ async fn overdraft_claims_are_single_owner_revision_fenced_and_recover_with_quot
         .await
         .unwrap();
     assert_eq!(states["acct_overdraft_test"].status, "passed");
+    assert_account_list_readable(&store).await;
 
     let repository = PgProviderAccountRepository::new(database.pool.clone());
     let previous_generation = second.generation;
@@ -139,5 +166,10 @@ async fn overdraft_claims_are_single_owner_revision_fenced_and_recover_with_quot
         .await
         .unwrap();
     assert_eq!(states["acct_overdraft_test"].status, "recovered");
+    sqlx::query("update runtime_settings set codex_quota_overdraft_enabled=false where id=1")
+        .execute(&database.pool)
+        .await
+        .unwrap();
+    assert_account_list_readable(&store).await;
     database.close().await;
 }

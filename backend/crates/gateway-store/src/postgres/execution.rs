@@ -6,6 +6,7 @@ use serde_json::Value;
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use gateway_core::diagnostics::MAX_TRACE_SNAPSHOT_BYTES;
 use gateway_core::engine::{
     AttemptRecord as CoreAttemptRecord, ExecutionStore, IntermediateFailure,
     ModelRequestFinalization as CoreModelRequestFinalization, ModelRequestId,
@@ -373,13 +374,11 @@ impl ModelRequestFinalization {
         {
             return Err(invalid("provider observation must be a JSON object"));
         }
-        if self
-            .diagnostic_trace_json
-            .as_ref()
-            .is_some_and(|trace| !trace.is_object() || trace.to_string().len() > 64 * 1024)
-        {
+        if self.diagnostic_trace_json.as_ref().is_some_and(|trace| {
+            !trace.is_object() || trace.to_string().len() > MAX_TRACE_SNAPSHOT_BYTES
+        }) {
             return Err(invalid(
-                "diagnostic trace must be a JSON object within 64 KiB",
+                "diagnostic trace must be a JSON object within the snapshot size limit",
             ));
         }
         validate_optional_stable_reason(

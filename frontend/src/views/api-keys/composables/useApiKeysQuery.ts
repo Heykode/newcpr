@@ -4,11 +4,13 @@ import { watchDebounced } from '@vueuse/core'
 import { computed, onMounted, shallowRef } from 'vue'
 import { getApiKeys } from '@/api'
 import { useRequestState } from '@/composables/useRequestState'
+import { useTableSort } from '@/composables/useTableSort'
 import { formatDateTime } from '@/utils/date'
+import { apiKeyColumns } from '../constants'
 
 export function useApiKeysQuery() {
   const searchQuery = shallowRef('')
-  const sort = shallowRef<BaseTableSort>()
+  const sort = useTableSort(apiKeyColumns, 'api-keys')
   const page = shallowRef(1)
   const pageSize = shallowRef(20)
   const total = shallowRef(0)

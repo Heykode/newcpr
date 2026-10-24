@@ -125,7 +125,7 @@ pub(crate) async fn load_admin_account_page(
            select count(*)::bigint as filtered_total from filtered
          ),
          settings as (
-           select config_revision, usage_retention_days
+           select config_revision, usage_retention_days, codex_quota_overdraft_enabled
              from runtime_settings
             where id = 1
          )

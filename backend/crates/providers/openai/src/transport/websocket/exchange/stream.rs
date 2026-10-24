@@ -601,7 +601,7 @@ async fn discard_stream_websocket(
             .discard_with_observation(websocket, tombstone_observation)
             .await;
     } else {
-        websocket.close().await;
+        websocket.abort_and_wait().await;
     }
 }
 

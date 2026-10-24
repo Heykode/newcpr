@@ -4,6 +4,8 @@ import { useIntervalFn, watchDebounced } from '@vueuse/core'
 import { computed, onMounted, onScopeDispose, shallowRef, watch } from 'vue'
 import { getAccounts } from '@/api'
 import { usePagedQuery } from '@/composables/usePagedQuery'
+import { useTableSort } from '@/composables/useTableSort'
+import { accountColumns } from '../constants'
 
 type AccountRow = Awaited<ReturnType<typeof getAccounts>>['items'][number]
 
@@ -13,7 +15,7 @@ export function useAccountsQuery() {
   const statusQuery = shallowRef('')
   const groupQuery = shallowRef('')
   const planTypeQuery = shallowRef('')
-  const sort = shallowRef<BaseTableSort>()
+  const sort = useTableSort(accountColumns, 'accounts')
   const activeRequests = shallowRef(0)
   let loadedQueryKey: string | undefined
   let disposed = false

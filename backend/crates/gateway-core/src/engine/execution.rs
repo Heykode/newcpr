@@ -1532,7 +1532,7 @@ async fn settle_budget(
             observations,
             &request_id,
             "settle_client_budget",
-            "Client budget settlement failed; storage will retry on the next request",
+            "Client budget settlement failed; background writer will retry",
             error,
         );
     }

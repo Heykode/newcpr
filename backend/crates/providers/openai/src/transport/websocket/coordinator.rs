@@ -1012,7 +1012,7 @@ async fn discard_after_send(
     if let Some(lease) = lease {
         let _ = lease.discard_with_observation(websocket, observation).await;
     } else {
-        websocket.close().await;
+        websocket.abort_and_wait().await;
     }
 }
 

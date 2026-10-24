@@ -522,6 +522,12 @@ pagination.
   formatting; precision and expiry semantics remain unchanged.
 - A cleared table sort remains cleared in UI state. Apply the default newest
   first order in request construction, not by forcing UI state back to `desc`.
+- Persist account and downstream-Key sorting separately through `useTableSort`.
+  Accept only current sortable keys and `asc`/`desc`; corrupt or obsolete values
+  fall back to the existing request defaults. Clearing removes the saved value.
+  Do not react to other tabs' storage changes while a paginated query is active:
+  its sort and cursor must remain consistent. Verify remount, invalid values and
+  actual account/Key pages on desktop and mobile in the isolated browser suite.
 - Retain intentional hidden-column choices. Preference watchers must not assign
   a fresh equivalent array to the same watched ref on every invocation.
 - Composite group colors against the current theme surface before choosing

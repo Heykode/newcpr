@@ -131,7 +131,7 @@ impl ClientBudgetPort for Budget {
             assert!(self.active.load(Ordering::SeqCst));
             self.charges.lock().unwrap().push(charge);
             if self.fail_settlement {
-                Err(ClientBudgetError)
+                Err(ClientBudgetError(None))
             } else {
                 Ok(())
             }

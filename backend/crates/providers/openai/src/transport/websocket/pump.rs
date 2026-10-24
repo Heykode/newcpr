@@ -465,11 +465,16 @@ impl PumpedWebSocket {
     }
 
     /// Bound graceful close, then abort/join so callers can safely release socket capacity.
-    pub(crate) async fn close(mut self) {
+    pub(crate) async fn close(self) {
         if !self.is_closed() {
             let _ = tokio::time::timeout(WEBSOCKET_CLOSE_TIMEOUT, self.send(Message::Close(None)))
                 .await;
         }
+        self.abort_and_wait().await;
+    }
+
+    /// Error cleanup must not wait behind a blocked data or control write.
+    pub(crate) async fn abort_and_wait(mut self) {
         if let Some(pump) = &mut self.pump {
             pump.abort();
             let _ = pump.await;

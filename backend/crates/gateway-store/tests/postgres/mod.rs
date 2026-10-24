@@ -14,6 +14,7 @@ mod account_groups;
 mod admin_security_audit;
 mod admission_recovery;
 mod backup;
+mod client_budget_buffer;
 mod client_budgets;
 mod client_keys;
 mod egress;
@@ -292,6 +293,7 @@ async fn connect_and_migrate_should_apply_all_migrations_once_and_reopen_cleanly
             "client_api_keys",
             "client_key_budget_windows",
             "client_key_charge_events",
+            "codex_quota_overdraft_states",
             "excel_recovery_slots",
             "log_cleanup_control",
             "model_requests",

@@ -180,6 +180,10 @@ pub async fn initialize(mut config: StoreConfig) -> StoreResult<StoreBundle> {
     ));
     let (client_key_usage, client_key_usage_writer) =
         postgres::PgClientApiKeyUsageSink::new(pool.clone());
+    let (budget, budget_writer) = postgres::BufferedClientBudgetStore::new(
+        postgres::PgClientBudgetStore::new(pool.clone()),
+        operational_diagnostics.clone(),
+    );
     let admissions: Arc<dyn gateway_core::engine::admission::ClientAdmissionPort> =
         Arc::new(client_admissions);
     let circuits: Arc<dyn gateway_core::engine::execution::ProviderCircuitPort> =
@@ -216,7 +220,7 @@ pub async fn initialize(mut config: StoreConfig) -> StoreResult<StoreBundle> {
         ),
         Arc::new(client_key_usage),
     )
-    .with_budget(Arc::new(postgres::PgClientBudgetStore::new(pool.clone())))
+    .with_budget(Arc::new(budget))
     .with_client_retry(Arc::new(redis::RedisClientRetryRepository::new(
         redis_connection.clone(),
         REDIS_NAMESPACE,
@@ -265,7 +269,7 @@ pub async fn initialize(mut config: StoreConfig) -> StoreResult<StoreBundle> {
     let mut worker_contributions = store_worker_contributions(
         execution_repository,
         execution_writer,
-        client_key_usage_writer,
+        (client_key_usage_writer, budget_writer),
         admission_release_writer,
         circuit_feedback_writer,
         capacity_wait_cleanup_writer,

@@ -88,6 +88,22 @@
     "reason": "Manually reviewed newly generated UUID and literal test password on loopback, used as isolated proxy capacity identities in socket lifetime tests."
   },
   {
+    "path": "backend/crates/providers/openai/src/transport/websocket/pool/lifecycle_tests.rs",
+    "rule": "authenticated-url",
+    "line": 192,
+    "file_sha256": "24921b87975c771a0e0b0859aa90c8a239b00e87e1737ee1a049578709417562",
+    "line_sha256": "875e8b1086e7a4c097fa37de7f9f09d2077cca7ee7a8d9b5e23bdad3d272880d",
+    "reason": "Manually re-reviewed after socket cleanup tests changed: a generated UUID and literal test password identify a loopback-only capacity key; no real account or proxy credentials."
+  },
+  {
+    "path": "backend/crates/providers/openai/src/transport/websocket/pool/lifecycle_tests.rs",
+    "rule": "authenticated-url",
+    "line": 224,
+    "file_sha256": "24921b87975c771a0e0b0859aa90c8a239b00e87e1737ee1a049578709417562",
+    "line_sha256": "982e19cc84707f4b99caf4f6226319e49b972d6f59e8ad261c0becf13602b301",
+    "reason": "Manually re-reviewed after socket cleanup tests changed: a generated UUID and literal test password identify a loopback-only capacity key; no real account or proxy credentials."
+  },
+  {
     "path": "backend/crates/providers/openai/src/transport/websocket/pool/proxy_capacity_tests.rs",
     "rule": "authenticated-url",
     "line": 8,

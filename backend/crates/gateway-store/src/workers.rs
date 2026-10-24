@@ -6,12 +6,16 @@ use gateway_core::task::DaemonTask;
 pub(crate) fn store_worker_contributions(
     execution: Arc<postgres::PgExecutionStore>,
     execution_writer: postgres::ExecutionObservationWriter<postgres::PgExecutionStore>,
-    client_key_usage_writer: postgres::PgClientApiKeyUsageWriter,
+    client_writers: (
+        postgres::PgClientApiKeyUsageWriter,
+        postgres::ClientBudgetWriter,
+    ),
     admission_release_writer: redis::ClientAdmissionReleaseWriter,
     circuit_feedback_writer: redis::ProviderCircuitFeedbackWriter,
     capacity_wait_cleanup_writer: redis::CapacityWaitCleanupWriter,
     retention: Arc<postgres::PgLogCleanupStore>,
 ) -> StoreResult<Vec<WorkerContribution>> {
+    let (client_key_usage_writer, budget_writer) = client_writers;
     let stale_id = WorkerId::try_new(WorkerKind::StaleModelRequestRecovery, "postgres")
         .map_err(worker_definition_error)?;
     let retention_id =
@@ -23,6 +27,8 @@ pub(crate) fn store_worker_contributions(
             .map_err(worker_definition_error)?;
     let admission_flush_id = WorkerId::try_new(WorkerKind::OpsFlush, "redis_admission")
         .map_err(worker_definition_error)?;
+    let budget_flush_id = WorkerId::try_new(WorkerKind::OpsFlush, "postgres_client_budget")
+        .map_err(worker_definition_error)?;
     let circuit_flush_id = WorkerId::try_new(WorkerKind::OpsFlush, "redis_circuit")
         .map_err(worker_definition_error)?;
     let capacity_cleanup_id = WorkerId::try_new(WorkerKind::OpsFlush, "redis_capacity_wait")
@@ -31,6 +37,16 @@ pub(crate) fn store_worker_contributions(
         DaemonRestartPolicy::try_new(Duration::from_secs(1), Duration::from_secs(60))
             .map_err(worker_definition_error)?;
     Ok(vec![
+        WorkerContribution::Registration(
+            WorkerRegistration::try_new(
+                budget_flush_id,
+                WorkerRunnable::Daemon {
+                    restart: ops_flush_restart,
+                    task: Box::new(budget_writer),
+                },
+            )
+            .map_err(worker_definition_error)?,
+        ),
         WorkerContribution::Registration(scheduled_worker(
             stale_id,
             Duration::from_secs(30),

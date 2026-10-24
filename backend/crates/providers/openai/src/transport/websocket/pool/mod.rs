@@ -486,7 +486,7 @@ impl CodexWebSocketPool {
             }
             _ => {
                 drop(state);
-                return self.start_closing_socket(websocket, None);
+                return self.start_discarding_socket(websocket, None);
             }
         };
         let retired = Self::retire_websocket(
@@ -497,7 +497,7 @@ impl CodexWebSocketPool {
             observation,
         );
         drop(state);
-        self.start_closing_one(retired)
+        self.start_discarding_one(retired)
     }
 
     fn discard_reserved_after_termination(

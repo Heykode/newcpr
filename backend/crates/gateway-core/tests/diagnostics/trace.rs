@@ -6,6 +6,38 @@ use std::{
 use gateway_core::diagnostics::{TraceContext, body_fingerprint};
 
 #[test]
+fn encoded_snapshot_limit_includes_envelope_and_preserves_evidence() {
+    let trace = TraceContext::new("req_encoded_limit");
+    let stage: &'static str = Box::leak("synthetic_stage_".repeat(220).into_boxed_str());
+    for _ in 0..30 {
+        trace.record(stage, serde_json::json!({"synthetic": "x".repeat(1800)}));
+    }
+    for _ in 0..3 {
+        trace.record_evidence(
+            "attempt.failed",
+            serde_json::json!({"synthetic": "x".repeat(12000)}),
+        );
+    }
+    let snapshot = trace.snapshot().expect("bounded snapshot");
+    assert!(
+        serde_json::to_vec(&snapshot).unwrap().len()
+            <= gateway_core::diagnostics::MAX_TRACE_SNAPSHOT_BYTES
+    );
+    assert!(snapshot["droppedEvents"].as_u64().unwrap() > 0);
+    assert_eq!(snapshot["droppedEvidenceEvents"], 0);
+    assert_eq!(snapshot["stageCounts"][stage], 30);
+    assert_eq!(
+        snapshot["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|event| event["stage"] == "attempt.failed")
+            .count(),
+        3
+    );
+}
+
+#[test]
 fn terminal_cache_counts_survive_metadata_truncation_and_keep_unknown_distinct() {
     for cached in [Some(0), Some(123), None] {
         let trace = TraceContext::new("req_cache_counts");

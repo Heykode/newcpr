@@ -13,6 +13,9 @@ use serde_json::{Value, json};
 use super::capture::{bounded, diagnostic_event_json, diagnostic_event_type};
 use super::{body_fingerprint, diagnostic_headers};
 
+/// Shared encoded snapshot limit for trace producers and persistent storage.
+pub const MAX_TRACE_SNAPSHOT_BYTES: usize = 128 * 1024;
+
 const MAX_EVENTS: usize = 128;
 const HEAD_EVENTS: usize = 8;
 const MAX_DATA_BYTES: usize = 4096;
@@ -358,32 +361,33 @@ impl TraceContext {
     /// 与请求终态原子持久化；旧记录没有此字段，不伪造历史时间线。
     #[must_use]
     pub fn snapshot(&self) -> Option<Value> {
-        let state = self
+        let mut state = self
             .state
             .as_ref()?
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let mut events = state
-            .events
-            .iter()
-            .chain(state.evidence.iter())
-            .collect::<Vec<_>>();
-        events.sort_unstable_by_key(|event| event.sequence);
-        Some(json!({
-            "schemaVersion": 1, "requestId": state.request_id,
-            "startedAtUnixMs": state.started_at_ms, "totalEvents": state.sequence,
-            "droppedEvents": state.dropped_events, "maxEvents": MAX_EVENTS + MAX_EVIDENCE_EVENTS,
-            "maxRoutineEvents": MAX_EVENTS, "maxEvidenceEvents": MAX_EVIDENCE_EVENTS,
-            "captureMode": "sanitized", "events": events,
-            "droppedEvidenceEvents": state.dropped_evidence_events,
-            "stageCounts": state.stage_counts,
-            "maxEvidenceBytes": MAX_EVIDENCE_BYTES,
-            "wireDumpEnabled": state.runtime_logging && tracing::enabled!(target: "request_dump", tracing::Level::INFO),
-            "wireFrames": state.wire_frames, "wireBytes": state.wire_bytes,
-            "maxBufferBytes": MAX_BUFFER_BYTES + MAX_EVIDENCE_BYTES,
-            "maxRoutineBufferBytes": MAX_BUFFER_BYTES, "headEvents": HEAD_EVENTS,
-            "snapshotBoundary": "execution_finalization",
-        }))
+        loop {
+            let snapshot = state.snapshot();
+            if snapshot.to_string().len() <= MAX_TRACE_SNAPSHOT_BYTES {
+                return Some(snapshot);
+            }
+            // Preserve evidence until ordinary events are exhausted, including metadata overhead.
+            if !state.events.is_empty() {
+                let index = if state.events.len() > HEAD_EVENTS {
+                    HEAD_EVENTS
+                } else {
+                    0
+                };
+                let event = state.events.remove(index)?;
+                state.bytes = state.bytes.saturating_sub(event.bytes);
+                state.dropped_events += event.count;
+            } else {
+                let event = state.evidence.pop_front()?;
+                state.evidence_bytes = state.evidence_bytes.saturating_sub(event.bytes);
+                state.dropped_evidence_events += event.count;
+                state.dropped_events += event.count;
+            }
+        }
     }
 
     fn push(&self, stage: &'static str, mut data: Value, coalesce: bool) {
@@ -516,6 +520,33 @@ impl TraceContext {
                 state.dropped_events += event.count;
             }
         }
+    }
+}
+
+impl TraceState {
+    fn snapshot(&self) -> Value {
+        let mut events = self
+            .events
+            .iter()
+            .chain(self.evidence.iter())
+            .collect::<Vec<_>>();
+        events.sort_unstable_by_key(|event| event.sequence);
+        json!({
+            "schemaVersion": 1, "requestId": self.request_id,
+            "startedAtUnixMs": self.started_at_ms, "totalEvents": self.sequence,
+            "droppedEvents": self.dropped_events, "maxEvents": MAX_EVENTS + MAX_EVIDENCE_EVENTS,
+            "maxRoutineEvents": MAX_EVENTS, "maxEvidenceEvents": MAX_EVIDENCE_EVENTS,
+            "captureMode": "sanitized", "events": events,
+            "droppedEvidenceEvents": self.dropped_evidence_events,
+            "stageCounts": self.stage_counts,
+            "maxEvidenceBytes": MAX_EVIDENCE_BYTES,
+            "maxSnapshotBytes": MAX_TRACE_SNAPSHOT_BYTES,
+            "wireDumpEnabled": self.runtime_logging && tracing::enabled!(target: "request_dump", tracing::Level::INFO),
+            "wireFrames": self.wire_frames, "wireBytes": self.wire_bytes,
+            "maxBufferBytes": MAX_BUFFER_BYTES + MAX_EVIDENCE_BYTES,
+            "maxRoutineBufferBytes": MAX_BUFFER_BYTES, "headEvents": HEAD_EVENTS,
+            "snapshotBoundary": "execution_finalization",
+        })
     }
 }
 

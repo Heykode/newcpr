@@ -269,6 +269,11 @@ async fn encrypted_omission_upgrade_preserves_accounts_and_unrelated_settings() 
         ("account_warmup_cursor", serde_json::Value::Null),
         ("openai_session_binding_ttl_hours", serde_json::json!(24)),
         ("openai_account_affinity", serde_json::json!("strict")),
+        ("codex_quota_overdraft_enabled", serde_json::json!(false)),
+        (
+            "codex_quota_overdraft_probe_model",
+            serde_json::json!("gpt-6-astra"),
+        ),
     ] {
         assert_eq!(settings.remove(field), Some(default), "{field} default");
     }

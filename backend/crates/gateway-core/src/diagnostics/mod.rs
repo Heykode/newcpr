@@ -10,4 +10,4 @@ mod trace;
 
 pub use capture::{body_fingerprint, diagnostic_headers, diagnostic_json, json_fingerprint};
 pub use stream::{StreamCapture, StreamFormat};
-pub use trace::TraceContext;
+pub use trace::{MAX_TRACE_SNAPSHOT_BYTES, TraceContext};

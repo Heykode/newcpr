@@ -321,7 +321,6 @@ impl CodexBackendClient {
         if excel.is_some_and(|prepared| super::excel::images::has_images(&prepared.body)) {
             headers.insert("copilot-vision-request", HeaderValue::from_static("true"));
         }
-        let headers_started_at = Instant::now();
         // 身份投影先完成，再按最终 JSON 大小决定是否使用 zstd。
         // Codex 上游只交付 SSE；即使下游请求 `stream: false`，也要上游流式执行，
         // 再由 API 层收集 canonical events 并返回完整 JSON。不能把下游的传输偏好
@@ -402,6 +401,7 @@ impl CodexBackendClient {
                 serde_json::json!({"phase":"exchange_started"}),
             );
         }
+        let headers_started_at = Instant::now();
         let response = self
             .send_profiled(&profile, false, |client| {
                 let builder = client.post(endpoint).headers(headers).body(body);

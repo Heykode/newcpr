@@ -131,6 +131,10 @@ impl CodexWebSocketPool {
         self.start_closing_socket(retired.websocket, Some((retired.key, retired.id)))
     }
 
+    pub(super) fn start_discarding_one(&self, retired: RetiredConnection) -> JoinHandle<()> {
+        self.start_discarding_socket(retired.websocket, Some((retired.key, retired.id)))
+    }
+
     pub(super) async fn close_retired_connections(&self, connections: Vec<RetiredConnection>) {
         for task in self.start_closing(connections) {
             let _ = task.await;
@@ -161,6 +165,18 @@ impl CodexWebSocketPool {
             termination.wait().await;
             pool.finish_closing(reservation);
         }));
+    }
+
+    pub(super) fn start_discarding_socket(
+        &self,
+        websocket: PumpedWebSocket,
+        reservation: Option<(CodexWebSocketPoolKey, Uuid)>,
+    ) -> JoinHandle<()> {
+        let pool = self.clone();
+        self.tasks.spawn(async move {
+            websocket.abort_and_wait().await;
+            pool.finish_closing(reservation);
+        })
     }
 
     fn finish_closing(&self, reservation: Option<(CodexWebSocketPoolKey, Uuid)>) {
