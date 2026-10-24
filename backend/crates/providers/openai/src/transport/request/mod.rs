@@ -1,6 +1,7 @@
 //! 核心 Generate operation 到 Codex Responses wire request 的严格编码。
 
 pub(crate) mod compatibility;
+pub(crate) mod quota_overdraft;
 mod raw_json;
 pub(crate) mod search_history;
 

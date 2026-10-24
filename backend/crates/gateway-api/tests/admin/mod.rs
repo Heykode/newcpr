@@ -490,6 +490,12 @@ impl SettingsStore for MemorySettingsStore {
             account_warmup_model: command
                 .account_warmup_model
                 .unwrap_or_else(|| settings.account_warmup_model.clone()),
+            codex_quota_overdraft_enabled: command
+                .codex_quota_overdraft_enabled
+                .unwrap_or(settings.codex_quota_overdraft_enabled),
+            codex_quota_overdraft_probe_model: command
+                .codex_quota_overdraft_probe_model
+                .unwrap_or_else(|| settings.codex_quota_overdraft_probe_model.clone()),
             request_interval_ms: command.request_interval_ms,
             rotation_strategy: command.rotation_strategy,
             min_codex_desktop_version: command.min_codex_desktop_version,
@@ -1601,6 +1607,8 @@ fn test_runtime_settings() -> RuntimeSettings {
         account_warmup_enabled: false,
         account_warmup_schedule_time: "08:00".to_owned(),
         account_warmup_model: None,
+        codex_quota_overdraft_enabled: false,
+        codex_quota_overdraft_probe_model: "gpt-6-astra".to_owned(),
         request_interval_ms: 50,
         rotation_strategy: RotationStrategy::Smart,
         min_codex_desktop_version: None,

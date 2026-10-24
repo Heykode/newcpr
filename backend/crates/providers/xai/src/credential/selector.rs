@@ -231,6 +231,7 @@ impl GrokAccountSessionSelector {
             } else {
                 AccountEligibilityPolicy::Enforce
             },
+            allow_codex_quota_overdraft: false,
             account_scope: (!diagnostic).then(|| Arc::clone(request.account_scope())),
             reserved_concurrency: 0,
         };

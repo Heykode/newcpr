@@ -529,6 +529,7 @@ impl DefaultAccountsService {
             mut cumulative_costs,
             mut purchase_costs,
             mut excel_recoveries,
+            mut codex_quota_overdraft,
         ) = futures::try_join!(
             self.accounts.load_account_usage(rolling_range, &ids),
             self.accounts
@@ -536,8 +537,37 @@ impl DefaultAccountsService {
             self.accounts.load_account_cumulative_costs(&ids),
             self.accounts.load_account_purchase_costs(&ids),
             self.accounts.load_excel_recovery(&ids),
+            self.accounts.load_codex_quota_overdraft(&ids),
         )
         .map_err(|error| map_store_error(error, "account usage"))?;
+        let overdraft_windows = codex_quota_overdraft
+            .values()
+            .flat_map(|state| {
+                state.windows.iter().filter_map(|window| {
+                    let start = window.started_at?;
+                    window.active.then(|| AccountUsageWindowQuery {
+                        account_id: state.account_id.clone(),
+                        key: format!("{}:{}", state.account_id, window.window_key),
+                        range: TimeRange { start, end: now },
+                    })
+                })
+            })
+            .collect::<Vec<_>>();
+        let overdraft_usage = self
+            .accounts
+            .load_account_usage_by_windows(&overdraft_windows)
+            .await
+            .map_err(|error| map_store_error(error, "Codex quota overdraft usage"))?
+            .into_iter()
+            .map(|value| (value.key, value.usage))
+            .collect::<BTreeMap<_, _>>();
+        for state in codex_quota_overdraft.values_mut() {
+            for window in &mut state.windows {
+                window.stats = overdraft_usage
+                    .get(&format!("{}:{}", state.account_id, window.window_key))
+                    .cloned();
+            }
+        }
         let rolling_usage = rolling_usage.into_iter().next();
         let health_timeline = health_usage
             .into_iter()
@@ -566,8 +596,37 @@ impl DefaultAccountsService {
         let usage = quota
             .usage_window()
             .and_then(|(window, _)| window.local_usage.clone());
+        let mut overdraft = codex_quota_overdraft.remove(account_id.as_str());
+        if let Some(state) = overdraft.as_mut() {
+            let mut active_windows = Vec::new();
+            for window in &mut state.windows {
+                let label = window.window_key.clone();
+                let seconds = match window.window_key.as_str() {
+                    "5h" => 18_000,
+                    "7d" => 604_800,
+                    _ => continue,
+                };
+                if let Some(projected) = quota
+                    .windows
+                    .iter()
+                    .find(|projected| projected.window_seconds == Some(seconds))
+                {
+                    window.active &= projected.limit_reached;
+                    window.window_key = projected.key.clone();
+                    if window.active {
+                        active_windows.push(label);
+                    }
+                }
+            }
+            state.quota_window = match active_windows.as_slice() {
+                [window] => window.clone(),
+                [_, _, ..] => "multiple".to_owned(),
+                [] => state.quota_window.clone(),
+            };
+        }
         let default_concurrency = self.default_concurrency_limit().await?;
         Ok(AccountDirectoryItem {
+            codex_quota_overdraft: overdraft,
             excel_recovery: excel_recoveries.remove(account_id.as_str()),
             purchase_cost: purchase_costs.remove(account_id.as_str()),
             turn_state: None,
@@ -654,6 +713,7 @@ impl AccountsService for DefaultAccountsService {
             mut cumulative_costs,
             mut purchase_costs,
             mut excel_recoveries,
+            mut codex_quota_overdraft,
         ) = futures::try_join!(
             self.accounts.load_account_usage(rolling_range, &ids),
             self.accounts
@@ -661,8 +721,37 @@ impl AccountsService for DefaultAccountsService {
             self.accounts.load_account_cumulative_costs(&ids),
             self.accounts.load_account_purchase_costs(&ids),
             self.accounts.load_excel_recovery(&ids),
+            self.accounts.load_codex_quota_overdraft(&ids),
         )
         .map_err(|error| map_store_error(error, "account usage"))?;
+        let overdraft_windows = codex_quota_overdraft
+            .values()
+            .flat_map(|state| {
+                state.windows.iter().filter_map(|window| {
+                    let start = window.started_at?;
+                    window.active.then(|| AccountUsageWindowQuery {
+                        account_id: state.account_id.clone(),
+                        key: format!("{}:{}", state.account_id, window.window_key),
+                        range: TimeRange { start, end: now },
+                    })
+                })
+            })
+            .collect::<Vec<_>>();
+        let overdraft_usage = self
+            .accounts
+            .load_account_usage_by_windows(&overdraft_windows)
+            .await
+            .map_err(|error| map_store_error(error, "Codex quota overdraft usage"))?
+            .into_iter()
+            .map(|value| (value.key, value.usage))
+            .collect::<BTreeMap<_, _>>();
+        for state in codex_quota_overdraft.values_mut() {
+            for window in &mut state.windows {
+                window.stats = overdraft_usage
+                    .get(&format!("{}:{}", state.account_id, window.window_key))
+                    .cloned();
+            }
+        }
         let rolling_usage = rolling_usage
             .into_iter()
             .map(|usage| (usage.account_id.clone(), usage))
@@ -680,6 +769,34 @@ impl AccountsService for DefaultAccountsService {
             .into_iter()
             .zip(quotas)
             .map(|(mut item, quota)| {
+                let mut overdraft = codex_quota_overdraft.remove(&item.account.id);
+                if let Some(overdraft) = overdraft.as_mut() {
+                    let mut active_windows = Vec::new();
+                    for window in &mut overdraft.windows {
+                        let label = window.window_key.clone();
+                        let seconds = match window.window_key.as_str() {
+                            "5h" => 18_000,
+                            "7d" => 604_800,
+                            _ => continue,
+                        };
+                        if let Some(projected) = quota
+                            .windows
+                            .iter()
+                            .find(|projected| projected.window_seconds == Some(seconds))
+                        {
+                            window.active &= projected.limit_reached;
+                            window.window_key = projected.key.clone();
+                            if window.active {
+                                active_windows.push(label);
+                            }
+                        }
+                    }
+                    overdraft.quota_window = match active_windows.as_slice() {
+                        [window] => window.clone(),
+                        [_, _, ..] => "multiple".to_owned(),
+                        [] => overdraft.quota_window.clone(),
+                    };
+                }
                 let health_timeline = health_usage
                     .get(&item.account.id)
                     .map(|usage| usage.request_buckets.clone())
@@ -688,6 +805,7 @@ impl AccountsService for DefaultAccountsService {
                     .usage_window()
                     .and_then(|(window, _)| window.local_usage.clone());
                 AccountDirectoryItem {
+                    codex_quota_overdraft: overdraft,
                     excel_recovery: excel_recoveries.remove(&item.account.id),
                     purchase_cost: purchase_costs.remove(&item.account.id),
                     turn_state: None,

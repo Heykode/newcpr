@@ -160,6 +160,7 @@ pub struct ProviderAccountSummary {
     pub credential_state: CredentialState,
     pub credential_observed_at: DateTime<Utc>,
     pub quota: QuotaState,
+    pub codex_quota_overdraft_passed: bool,
     pub last_error_reason: Option<AccountErrorReason>,
     pub last_error_message: Option<String>,
     pub created_at: DateTime<Utc>,
@@ -474,6 +475,7 @@ pub(crate) const ACCOUNT_SELECT: &str = "select
             has_refresh_token, access_token_expires_at, next_refresh_at, enabled, turn_state_injection_enabled, responses_upstream, excel_models, excel_models_follow_global, excel_cache_creation_as_input, excel_ignore_encrypted_content, request_proxy_source, excel_auto_disable_on_403, excel_403_action, excel_auto_disabled_at, excel_403_warning_at, excel_mode_disabled_at,
             case when excel_models_follow_global then (select excel_default_models from runtime_settings where id = 1) else excel_models end as effective_excel_models, concurrency_limit, weight, model_access_json, credential_state,
             provider_quota_json, quota_access_state, quota_evidence, quota_access_observed_at, quota_reset_at,
+            coalesce((select status = 'passed' from codex_quota_overdraft_states where account_id = provider_accounts.id and credential_revision = provider_accounts.credential_revision and config_revision = (select config_revision from runtime_settings where id = 1) and exists(select 1 from runtime_settings where id = 1 and codex_quota_overdraft_enabled)), false) as codex_quota_overdraft_passed,
             last_error_reason, last_error_message,
             credential_observed_at, quota_observed_at, created_at, updated_at, relogin_count, last_relogin_at
      from provider_accounts where id = $1";
@@ -487,6 +489,7 @@ pub(crate) const ACCOUNT_SELECT_BY_IDS: &str = "select
             has_refresh_token, access_token_expires_at, next_refresh_at, enabled, turn_state_injection_enabled, responses_upstream, excel_models, excel_models_follow_global, excel_cache_creation_as_input, excel_ignore_encrypted_content, request_proxy_source, excel_auto_disable_on_403, excel_403_action, excel_auto_disabled_at, excel_403_warning_at, excel_mode_disabled_at,
             case when excel_models_follow_global then (select excel_default_models from runtime_settings where id = 1) else excel_models end as effective_excel_models, concurrency_limit, weight, model_access_json, credential_state,
             provider_quota_json, quota_access_state, quota_evidence, quota_access_observed_at, quota_reset_at,
+            coalesce((select status = 'passed' from codex_quota_overdraft_states where account_id = provider_accounts.id and credential_revision = provider_accounts.credential_revision and config_revision = (select config_revision from runtime_settings where id = 1) and exists(select 1 from runtime_settings where id = 1 and codex_quota_overdraft_enabled)), false) as codex_quota_overdraft_passed,
             last_error_reason, last_error_message,
             credential_observed_at, quota_observed_at, created_at, updated_at, relogin_count, last_relogin_at
      from provider_accounts
@@ -502,6 +505,7 @@ pub(crate) const REFRESH_CANDIDATES_SELECT: &str = "select
             has_refresh_token, access_token_expires_at, next_refresh_at, enabled, turn_state_injection_enabled, responses_upstream, excel_models, excel_models_follow_global, excel_cache_creation_as_input, excel_ignore_encrypted_content, request_proxy_source, excel_auto_disable_on_403, excel_403_action, excel_auto_disabled_at, excel_403_warning_at, excel_mode_disabled_at,
             case when excel_models_follow_global then (select excel_default_models from runtime_settings where id = 1) else excel_models end as effective_excel_models, concurrency_limit, weight, model_access_json, credential_state,
             provider_quota_json, quota_access_state, quota_evidence, quota_access_observed_at, quota_reset_at,
+            coalesce((select status = 'passed' from codex_quota_overdraft_states where account_id = provider_accounts.id and credential_revision = provider_accounts.credential_revision and config_revision = (select config_revision from runtime_settings where id = 1) and exists(select 1 from runtime_settings where id = 1 and codex_quota_overdraft_enabled)), false) as codex_quota_overdraft_passed,
             last_error_reason, last_error_message,
             credential_observed_at, quota_observed_at, created_at, updated_at, relogin_count, last_relogin_at
      from provider_accounts
@@ -582,6 +586,7 @@ pub(crate) fn core_account_from_summary(
         summary.last_error_reason,
         summary.last_error_message,
     )
+    .with_codex_quota_overdraft_passed(summary.codex_quota_overdraft_passed)
     .with_turn_state_injection_enabled(summary.turn_state_injection_enabled)
     .with_responses_upstream(summary.responses_upstream)
     .with_excel_models(summary.effective_excel_models)
@@ -723,6 +728,7 @@ pub(crate) fn account_summary_from_row(
         credential_state: status.credential_state,
         credential_observed_at: get(&row, "credential_observed_at")?,
         quota: status.quota,
+        codex_quota_overdraft_passed: get(&row, "codex_quota_overdraft_passed")?,
         last_error_reason: status.last_error_reason,
         last_error_message: status.last_error_message,
         created_at: get(&row, "created_at")?,

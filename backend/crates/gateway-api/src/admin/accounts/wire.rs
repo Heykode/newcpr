@@ -525,6 +525,43 @@ pub struct AccountQuotaView {
     pub rate_limited_until: Option<String>,
     pub windows: Vec<AccountQuotaWindowView>,
     pub credits: Option<AccountQuotaCreditsView>,
+    pub overdraft: Option<CodexQuotaOverdraftView>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexQuotaOverdraftView {
+    pub status: String,
+    pub quota_window: String,
+    pub probe_model: String,
+    pub attempts: u32,
+    pub attempt_limit: u32,
+    pub reason_code: Option<String>,
+    pub tested_at: Option<String>,
+    pub retry_at: Option<String>,
+    pub recover_at: Option<String>,
+    pub windows: Vec<CodexQuotaOverdraftWindowView>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexQuotaOverdraftWindowView {
+    pub window_key: String,
+    pub active: bool,
+    pub started_at: Option<String>,
+    pub recover_at: Option<String>,
+    pub stats: Option<CodexQuotaOverdraftStatsView>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexQuotaOverdraftStatsView {
+    pub requests: u64,
+    pub requests_display: String,
+    pub tokens: u64,
+    pub tokens_display: String,
+    pub cost_usd: String,
+    pub cost_usd_display: String,
 }
 
 #[derive(Debug, Clone, Serialize)]

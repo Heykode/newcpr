@@ -66,6 +66,15 @@ pub(crate) async fn load_admin_account_page(
                     when not a.enabled then 'disabled'
                     when a.credential_state <> 'ready'
                       or a.access_token_expires_at <= $2 then 'error'
+                    when a.quota_access_state = 'exhausted' and exists(
+                      select 1 from codex_quota_overdraft_states overdraft
+                      join runtime_settings settings on settings.id=1
+                        and settings.codex_quota_overdraft_enabled
+                        and settings.config_revision=overdraft.config_revision
+                      where overdraft.account_id=a.id
+                        and overdraft.credential_revision=a.credential_revision
+                        and overdraft.status='passed'
+                    ) then 'normal'
                     when a.quota_access_state = 'exhausted' then 'quota_exhausted'
                     when a.id = any($1::text[]) then 'rate_limited'
                     else 'normal'
@@ -131,6 +140,7 @@ pub(crate) async fn load_admin_account_page(
                 a.concurrency_limit, a.weight, a.model_access_json,
                 a.credential_state, a.quota_access_state, a.quota_evidence,
                 a.quota_access_observed_at, a.quota_reset_at, a.last_error_reason,
+                coalesce((select status = 'passed' from codex_quota_overdraft_states where account_id = a.id and credential_revision = a.credential_revision and config_revision = settings.config_revision and settings.codex_quota_overdraft_enabled), false) as codex_quota_overdraft_passed,
                 a.last_error_message, a.credential_observed_at, a.created_at, a.updated_at,
                 filtered_total.filtered_total,
                 global_summary.summary_total, global_summary.summary_normal,

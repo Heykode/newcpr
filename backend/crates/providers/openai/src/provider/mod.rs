@@ -499,6 +499,7 @@ impl Provider for CodexProvider {
                 UpstreamSendState::NotSent,
             ));
         };
+        let quota_overdraft_probe = generate.codex_quota_overdraft_probe();
         let Some(upstream_model) = candidate.upstream_model() else {
             return Err(provider_error(
                 ProviderErrorKind::Protocol,
@@ -570,6 +571,15 @@ impl Provider for CodexProvider {
             context.is_quality_check(),
             context.request_id().as_str(),
         )?;
+        let quota_overdraft_eligible = context.codex_quota_overdraft_enabled()
+            && crate::transport::request::quota_overdraft::eligible(&upstream_request);
+        let quota_overdraft_turn = quota_overdraft_eligible.then(|| {
+            crate::transport::request::quota_overdraft::CodexQuotaOverdraftTurn::for_request(
+                context.request_id().as_str(),
+                upstream_request.client_turn_id.as_deref(),
+            )
+        });
+        let context = context.with_codex_quota_overdraft_eligibility(quota_overdraft_eligible);
         // 编码已生成独立请求；HTTP、WS 与重试在头部和计量之前共用此策略。
         let supports_priority = candidate.model_presentation().is_some_and(|model| {
             model
@@ -822,6 +832,18 @@ impl Provider for CodexProvider {
                 &self.excel_image_relay,
             )
             .await?;
+        }
+        if !excel
+            && lease.account().authentication_kind() == "oauth"
+            && let Some(turn) = quota_overdraft_turn.as_ref()
+        {
+            crate::transport::request::quota_overdraft::inject(&mut upstream_request, turn);
+            if quota_overdraft_probe
+                || (lease.account().quota().is_exhausted()
+                    && lease.account().codex_quota_overdraft_passed())
+            {
+                upstream_request.mark_quota_overdraft_active();
+            }
         }
         let requirement = transport_requirement(&upstream_request);
         let requested_transport = selected_transport(&upstream_request);

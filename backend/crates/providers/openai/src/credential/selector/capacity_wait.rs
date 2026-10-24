@@ -254,6 +254,7 @@ impl CodexCredentialSelector {
                         .and_then(CodexSessionAffinity::guardian_parent_preference_key),
                     &candidates,
                     SystemTime::now(),
+                    request.attempt.codex_quota_overdraft_eligible(),
                 )
                 .await
             })
@@ -325,6 +326,7 @@ impl CodexCredentialSelector {
                 } else {
                     AccountEligibilityPolicy::Enforce
                 },
+                allow_codex_quota_overdraft: request.attempt.codex_quota_overdraft_eligible(),
                 account_scope: request.attempt.account_scope().cloned(),
                 reserved_concurrency: request.reserved_concurrency(),
             },
@@ -350,6 +352,7 @@ impl CodexCredentialSelector {
                             binding,
                             &candidates,
                             SystemTime::now(),
+                            request.attempt.codex_quota_overdraft_eligible(),
                         );
                     }
                     SessionAffinityLookup::Unavailable => {

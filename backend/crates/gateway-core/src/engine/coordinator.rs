@@ -1094,6 +1094,11 @@ where
                         .flatten(),
                 )
                 .with_disable_fast(self.plan.disable_fast())
+                .with_codex_quota_overdraft(
+                    self.plan.codex_quota_overdraft_enabled(),
+                    self.plan.codex_quota_overdraft_probe_model().clone(),
+                    self.plan.config_revision(),
+                )
                 .with_request_location(self.plan.request_location().cloned())
                 .with_timing_started_at(self.observation.timing_started_at)
                 .with_trace(self.trace.clone()),

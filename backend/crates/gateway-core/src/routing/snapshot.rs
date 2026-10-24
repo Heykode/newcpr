@@ -36,6 +36,8 @@ pub struct SnapshotSettingsFacts {
     openai_guardian_reserved_concurrency: u32,
     openai_session_binding_ttl_hours: u32,
     openai_account_affinity: crate::account::AccountAffinity,
+    codex_quota_overdraft_enabled: bool,
+    codex_quota_overdraft_probe_model: String,
     request_interval_ms: u64,
     rotation_strategy: String,
     model_mappings: BTreeMap<String, String>,
@@ -98,6 +100,8 @@ impl SnapshotSettingsFacts {
             openai_session_binding_ttl_hours:
                 crate::account::DEFAULT_OPENAI_SESSION_BINDING_TTL_HOURS,
             openai_account_affinity: crate::account::AccountAffinity::Strict,
+            codex_quota_overdraft_enabled: false,
+            codex_quota_overdraft_probe_model: "gpt-6-astra".to_owned(),
             request_location: None,
             request_interval_ms,
             rotation_strategy: rotation_strategy.into(),
@@ -162,6 +166,13 @@ impl SnapshotSettingsFacts {
         mode: crate::account::AccountAffinity,
     ) -> Self {
         self.openai_account_affinity = mode;
+        self
+    }
+
+    #[must_use]
+    pub fn with_codex_quota_overdraft(mut self, enabled: bool, probe_model: String) -> Self {
+        self.codex_quota_overdraft_enabled = enabled;
+        self.codex_quota_overdraft_probe_model = probe_model;
         self
     }
 }
@@ -615,6 +626,9 @@ async fn compile_runtime_snapshot(
     )
     .with_probe_proxy(facts.settings.turn_state_probe_proxy)
     .with_probe_concurrency(facts.settings.turn_state_probe_concurrency);
+    let codex_quota_overdraft_probe_model =
+        UpstreamModelId::new(facts.settings.codex_quota_overdraft_probe_model)
+            .map_err(|_| RuntimeSnapshotCompileError::InvalidData)?;
     let selection_policy = AccountSelectionPolicy::new(
         rotation_strategy,
         default_concurrency,
@@ -701,6 +715,10 @@ async fn compile_runtime_snapshot(
             .with_request_tuning(request_tuning)
             .with_excel_image_transport(facts.settings.excel_image_transport)
             .with_openai_turn_state_policy(turn_state_policy)
+            .with_codex_quota_overdraft(
+                facts.settings.codex_quota_overdraft_enabled,
+                codex_quota_overdraft_probe_model,
+            )
             .with_request_location(facts.settings.request_location)
             .with_account_concurrency_limits(account_limits)
     })
@@ -713,6 +731,8 @@ type ModelCatalogAccounts = BTreeMap<ProviderKind, BTreeMap<String, BTreeSet<Pro
 pub struct RuntimeSnapshot {
     excel_image_transport: Option<super::ExcelImageTransport>,
     disable_fast: bool,
+    codex_quota_overdraft_enabled: bool,
+    codex_quota_overdraft_probe_model: UpstreamModelId,
     responses_max_decompressed_body_bytes: std::num::NonZeroUsize,
     request_location: Option<crate::account::RequestLocation>,
     revision: ConfigRevision,
@@ -766,6 +786,27 @@ impl RuntimeSnapshot {
     ) -> Self {
         self.responses_max_decompressed_body_bytes = bytes;
         self
+    }
+
+    #[must_use]
+    pub fn with_codex_quota_overdraft(
+        mut self,
+        enabled: bool,
+        probe_model: UpstreamModelId,
+    ) -> Self {
+        self.codex_quota_overdraft_enabled = enabled;
+        self.codex_quota_overdraft_probe_model = probe_model;
+        self
+    }
+
+    #[must_use]
+    pub const fn codex_quota_overdraft_enabled(&self) -> bool {
+        self.codex_quota_overdraft_enabled
+    }
+
+    #[must_use]
+    pub const fn codex_quota_overdraft_probe_model(&self) -> &UpstreamModelId {
+        &self.codex_quota_overdraft_probe_model
     }
 
     #[must_use]
@@ -852,6 +893,9 @@ impl RuntimeSnapshot {
         Ok(Self {
             disable_fast: false,
             excel_image_transport: None,
+            codex_quota_overdraft_enabled: false,
+            codex_quota_overdraft_probe_model: UpstreamModelId::new("gpt-6-astra")
+                .expect("valid default overdraft probe model"),
             responses_max_decompressed_body_bytes: std::num::NonZeroUsize::new(
                 super::DEFAULT_RESPONSES_MAX_DECOMPRESSED_BODY_BYTES as usize,
             )
@@ -1246,6 +1290,8 @@ impl RuntimeSnapshot {
 
         Ok(RoutingPlan {
             disable_fast: self.disable_fast || account_scope.disable_fast(),
+            codex_quota_overdraft_enabled: self.codex_quota_overdraft_enabled,
+            codex_quota_overdraft_probe_model: self.codex_quota_overdraft_probe_model.clone(),
             config_revision: self.revision,
             account_selection_policy: self.account_selection_policy,
             operation: operation.kind(),
@@ -1291,6 +1337,8 @@ impl RuntimeSnapshot {
         };
         Ok(RoutingPlan {
             disable_fast: self.disable_fast || account_scope.disable_fast(),
+            codex_quota_overdraft_enabled: self.codex_quota_overdraft_enabled,
+            codex_quota_overdraft_probe_model: self.codex_quota_overdraft_probe_model.clone(),
             config_revision: self.revision,
             account_selection_policy: self.account_selection_policy,
             operation: operation.kind(),

@@ -1314,7 +1314,10 @@ pub(super) fn cold_response_stream_once(response: ColdResponse) -> EventStream {
                     &quota,
                     &active_account,
                     passive_quota_observation.rate_limits(),
-                    if quota_success && terminal_failure.is_none() {
+                    if quota_success
+                        && terminal_failure.is_none()
+                        && !request.quota_overdraft_active()
+                    {
                         crate::credential::QuotaRefreshAuthority::ObserveAccess
                     } else {
                         crate::credential::QuotaRefreshAuthority::PreserveAccess
@@ -1453,7 +1456,10 @@ pub(super) fn cold_response_stream_once(response: ColdResponse) -> EventStream {
                 &quota,
                 &active_account,
                 passive_quota_observation.rate_limits(),
-                if quota_success && terminal_failure.is_none() {
+                if quota_success
+                    && terminal_failure.is_none()
+                    && !request.quota_overdraft_active()
+                {
                     crate::credential::QuotaRefreshAuthority::ObserveAccess
                 } else {
                     crate::credential::QuotaRefreshAuthority::PreserveAccess

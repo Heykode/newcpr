@@ -805,6 +805,8 @@ impl ProviderCandidate {
 #[derive(Debug, Clone)]
 pub struct RoutingPlan {
     disable_fast: bool,
+    codex_quota_overdraft_enabled: bool,
+    codex_quota_overdraft_probe_model: UpstreamModelId,
     request_location: Option<crate::account::RequestLocation>,
     config_revision: ConfigRevision,
     account_selection_policy: AccountSelectionPolicy,
@@ -819,6 +821,16 @@ impl RoutingPlan {
     #[must_use]
     pub const fn disable_fast(&self) -> bool {
         self.disable_fast
+    }
+
+    #[must_use]
+    pub const fn codex_quota_overdraft_enabled(&self) -> bool {
+        self.codex_quota_overdraft_enabled
+    }
+
+    #[must_use]
+    pub const fn codex_quota_overdraft_probe_model(&self) -> &UpstreamModelId {
+        &self.codex_quota_overdraft_probe_model
     }
 
     #[must_use]

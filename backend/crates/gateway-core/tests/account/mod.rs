@@ -131,9 +131,43 @@ fn context(strategy: RotationStrategy) -> AccountSelectionContext {
         preferred_account_overrides_weight: false,
         round_robin_cursor: 0,
         eligibility: AccountEligibilityPolicy::Enforce,
+        allow_codex_quota_overdraft: false,
         account_scope: None,
         reserved_concurrency: 0,
     }
+}
+
+#[test]
+fn passed_overdraft_only_overrides_quota_exhaustion_when_request_allows_it() {
+    let now = SystemTime::now();
+    let exhausted = account("acct_overdraft_passed")
+        .with_account_facts(
+            true,
+            CredentialState::Ready,
+            QuotaState::exhausted(QuotaEvidence::UsageLimitReached, now, None),
+            None,
+            None,
+        )
+        .with_codex_quota_overdraft_passed(true);
+    let mut candidates = vec![AccountCandidate {
+        account: exhausted,
+        signals: AccountRuntimeSignals {
+            in_flight: 0,
+            last_started_at: None,
+            quota_reset_at: None,
+            quota_remaining_rank: None,
+            rate_limited_until: None,
+            failure_rate_basis_points: None,
+            first_output_latency_ms: None,
+        },
+    }];
+    let mut denied = context(RotationStrategy::Smart);
+    denied.now = now;
+    assert!(AccountSelector.select(&candidates, &denied).is_none());
+    denied.allow_codex_quota_overdraft = true;
+    assert!(AccountSelector.select(&candidates, &denied).is_some());
+    candidates[0].signals.rate_limited_until = Some(now + Duration::from_secs(60));
+    assert!(AccountSelector.select(&candidates, &denied).is_none());
 }
 
 #[test]

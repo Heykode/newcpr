@@ -69,6 +69,7 @@ pub(super) fn account_view(
 ) -> AccountView {
     let AccountDirectoryItem {
         turn_state,
+        codex_quota_overdraft,
         account,
         effective_concurrency_limit,
         plan_type_display,
@@ -90,8 +91,10 @@ pub(super) fn account_view(
     let added_at = timezone_rfc3339(&account.created_at, timezone);
     let updated_at = timezone_rfc3339(&account.updated_at, timezone);
     let usage = account_usage_view(usage, quota.usage_window(), now, timezone);
-    let (quota, refresh_token_expires_at) =
+    let (mut quota, refresh_token_expires_at) =
         account_quota_view(quota, rate_limited_until, now, timezone);
+    quota.overdraft =
+        codex_quota_overdraft.map(|state| codex_quota_overdraft_view(state, timezone));
     AccountView {
         purchase_cost,
         excel_recovery,
@@ -369,9 +372,74 @@ pub(super) fn account_quota_view(
                 unlimited: credits.unlimited,
                 balance: credits.balance,
             }),
+            overdraft: None,
         },
         refresh_token_expires_at,
     )
+}
+
+fn codex_quota_overdraft_view(
+    state: gateway_admin::model::codex_quota_overdraft::CodexQuotaOverdraftState,
+    timezone: DeploymentTimeZone,
+) -> CodexQuotaOverdraftView {
+    CodexQuotaOverdraftView {
+        status: state.status,
+        quota_window: state.quota_window,
+        probe_model: state.probe_model,
+        attempts: state.attempts,
+        attempt_limit: state.attempt_limit,
+        reason_code: state.reason_code,
+        tested_at: state
+            .tested_at
+            .as_ref()
+            .map(|value| timezone_rfc3339(value, timezone)),
+        retry_at: state
+            .retry_at
+            .as_ref()
+            .map(|value| timezone_rfc3339(value, timezone)),
+        recover_at: state
+            .recover_at
+            .as_ref()
+            .map(|value| timezone_rfc3339(value, timezone)),
+        windows: state
+            .windows
+            .into_iter()
+            .map(|window| {
+                let stats = window.stats.map(|usage| {
+                    let usd = usage
+                        .costs
+                        .iter()
+                        .find(|cost| cost.currency.eq_ignore_ascii_case("USD"));
+                    let total_tokens = usage.total_tokens.unwrap_or_default();
+                    CodexQuotaOverdraftStatsView {
+                        requests: usage.request_count,
+                        requests_display: format_number(usage.request_count),
+                        tokens: total_tokens,
+                        tokens_display: display_optional_tokens(usage.total_tokens),
+                        cost_usd: usd
+                            .map(|cost| cost.amount.as_str().to_owned())
+                            .unwrap_or_else(|| "0".to_owned()),
+                        cost_usd_display: usd
+                            .map(|cost| format!("{}{}", '$', cost.amount))
+                            .unwrap_or_else(|| "—".to_owned()),
+                    }
+                });
+                CodexQuotaOverdraftWindowView {
+                    window_key: window.window_key,
+                    active: window.active,
+                    started_at: window
+                        .started_at
+                        .as_ref()
+                        .map(|value| timezone_rfc3339(value, timezone)),
+                    recover_at: window
+                        .recover_at
+                        .as_ref()
+                        .map(|value| timezone_rfc3339(value, timezone)),
+                    stats,
+                }
+            })
+            .collect(),
+    }
 }
 
 pub(crate) fn quota_window_view_with_timezone(

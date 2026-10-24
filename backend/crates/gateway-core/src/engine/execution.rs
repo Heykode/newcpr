@@ -831,6 +831,7 @@ impl DefaultExecutionService {
         cancellation: CancellationToken,
         retest: bool,
         recovery_config_revision: Option<u64>,
+        exact_upstream_model: bool,
     ) -> Result<AccountProbeResult, AccountProbeError> {
         let state_probe = matches!(&request.operation, Operation::Generate(generate) if generate.quality_probe().is_some());
         let excel_recovery = matches!(&request.operation, Operation::Generate(generate) if generate.excel_recovery_revision().is_some());
@@ -859,17 +860,27 @@ impl DefaultExecutionService {
                 .all_account_scope()
                 .for_quality_check(request.account_id.clone()),
         );
-        let plan = snapshot
-            .plan(
+        let routing_context = RoutingContext {
+            required_provider: Some(request.provider_kind.clone()),
+            ..RoutingContext::default()
+        };
+        let plan = if exact_upstream_model {
+            snapshot.plan_provider_endpoint(
+                &request.provider_kind,
+                Some(&request.upstream_model),
+                &request.operation,
+                account_scope,
+                &routing_context,
+            )
+        } else {
+            snapshot.plan(
                 &public_model,
                 &request.operation,
                 account_scope,
-                &RoutingContext {
-                    required_provider: Some(request.provider_kind),
-                    ..RoutingContext::default()
-                },
+                &routing_context,
             )
-            .map_err(map_routing_error)?;
+        }
+        .map_err(map_routing_error)?;
         let started_at = SystemTime::now();
         let deadline_at = started_at + timeout_duration;
         let actor = ClientApiKeyId::new("admin_quality_check")
@@ -1372,6 +1383,26 @@ impl ExecutionService for DefaultExecutionService {
 }
 
 impl AccountProbe for DefaultExecutionService {
+    fn codex_quota_overdraft(
+        &self,
+        mut request: AccountProbeRequest,
+        cancellation: CancellationToken,
+    ) -> BoxFuture<'_, Result<AccountProbeResult, AccountProbeError>> {
+        Box::pin(async move {
+            let Operation::Generate(generate) = &request.operation else {
+                return Err(GatewayError::new(
+                    GatewayErrorKind::Unsupported,
+                    "invalid Codex quota overdraft operation",
+                )
+                .into());
+            };
+            request.operation =
+                Operation::Generate(generate.clone().with_codex_quota_overdraft_probe());
+            self.quality_check_inner(request, cancellation, true, None, true)
+                .await
+        })
+    }
+
     fn excel_recovery(
         &self,
         mut request: AccountProbeRequest,
@@ -1391,7 +1422,7 @@ impl AccountProbe for DefaultExecutionService {
             request.operation = Operation::Generate(
                 generate.with_excel_recovery(credential_revision, expected_nonce),
             );
-            self.quality_check_inner(request, cancellation, true, Some(config_revision))
+            self.quality_check_inner(request, cancellation, true, Some(config_revision), false)
                 .await
         })
     }
@@ -1423,7 +1454,7 @@ impl AccountProbe for DefaultExecutionService {
                         .with_quality_probe(exchange.step(continuation)),
                 );
                 if let Err(error) = self
-                    .quality_check_inner(shot, cancellation.clone(), true, None)
+                    .quality_check_inner(shot, cancellation.clone(), true, None, false)
                     .await
                 {
                     let mut report = exchange.report();
@@ -1457,7 +1488,7 @@ impl AccountProbe for DefaultExecutionService {
         cancellation: CancellationToken,
     ) -> BoxFuture<'_, Result<AccountProbeResult, AccountProbeError>> {
         Box::pin(async move {
-            self.quality_check_inner(request, cancellation, false, None)
+            self.quality_check_inner(request, cancellation, false, None, false)
                 .await
         })
     }
@@ -1468,7 +1499,7 @@ impl AccountProbe for DefaultExecutionService {
         cancellation: CancellationToken,
     ) -> BoxFuture<'_, Result<AccountProbeResult, AccountProbeError>> {
         Box::pin(async move {
-            self.quality_check_inner(request, cancellation, true, None)
+            self.quality_check_inner(request, cancellation, true, None, false)
                 .await
         })
     }

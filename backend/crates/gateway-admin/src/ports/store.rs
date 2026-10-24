@@ -166,6 +166,30 @@ pub trait AccountStore: Send + Sync {
         Ok(None)
     }
 
+    async fn claim_codex_quota_overdraft(
+        &self,
+    ) -> AdminStoreResult<Option<crate::model::codex_quota_overdraft::CodexQuotaOverdraftClaim>>
+    {
+        Ok(None)
+    }
+
+    async fn finish_codex_quota_overdraft(
+        &self,
+        _claim: &crate::model::codex_quota_overdraft::CodexQuotaOverdraftClaim,
+        _outcome: crate::model::codex_quota_overdraft::CodexQuotaOverdraftOutcome,
+    ) -> AdminStoreResult<bool> {
+        Ok(false)
+    }
+
+    async fn load_codex_quota_overdraft(
+        &self,
+        _account_ids: &[String],
+    ) -> AdminStoreResult<
+        BTreeMap<String, crate::model::codex_quota_overdraft::CodexQuotaOverdraftState>,
+    > {
+        Ok(BTreeMap::new())
+    }
+
     async fn excel_recovery_current(
         &self,
         _claim: &crate::model::excel_recovery::ExcelRecoveryClaim,

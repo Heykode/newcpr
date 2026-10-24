@@ -403,6 +403,7 @@ pub async fn initialize_with_timezone(
     let openai = registry
         .require(&provider_kind(OPENAI_PROVIDER_KIND)?)
         .map_err(map_provider_registry_error)?;
+    let openai_quota_overdraft = openai.clone();
     let xai = registry
         .require(&provider_kind(XAI_PROVIDER_KIND)?)
         .map_err(map_provider_registry_error)?;
@@ -500,8 +501,15 @@ pub async fn initialize_with_timezone(
         store.account_groups(),
         store.account_runtime(),
         registry.clone(),
-        probe,
+        probe.clone(),
     ));
+    let codex_quota_overdraft = Arc::new(
+        use_case::codex_quota_overdraft::CodexQuotaOverdraftService {
+            accounts: store.accounts(),
+            provider: openai_quota_overdraft,
+            probe,
+        },
+    );
     let services = AdminServices {
         mihomo: None,
         quality_ops: quality_ops.clone(),
@@ -580,6 +588,9 @@ pub async fn initialize_with_timezone(
     )?);
     worker_contributions.push(workers::group_monitor::contribution(group_monitor)?);
     worker_contributions.push(workers::quality_ops::contribution(quality_ops)?);
+    worker_contributions.push(workers::codex_quota_overdraft::contribution(
+        codex_quota_overdraft,
+    )?);
     worker_contributions.push(workers::excel_recovery::contribution(excel_recovery)?);
     worker_contributions.push(workers::reset_credits::contribution(reset_credits)?);
     worker_contributions.push(workers::notifications::contribution(notifications)?);

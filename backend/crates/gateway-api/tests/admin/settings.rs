@@ -88,6 +88,8 @@ fn update_body() -> Value {
     body["accountWarmupEnabled"] = json!(false);
     body["accountWarmupScheduleTime"] = json!("08:00");
     body["accountWarmupModel"] = Value::Null;
+    body["codexQuotaOverdraftEnabled"] = json!(false);
+    body["codexQuotaOverdraftProbeModel"] = json!("gpt-6-astra");
     body["requestTuning"]["excelImageRelayBytes"] = Value::Null;
     body["requestTuning"]["smartScheduling"] = Value::Null;
     body["requestTuning"]["excelImageRelayRequests"] = Value::Null;
@@ -484,6 +486,8 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
         account_warmup_enabled: false,
         account_warmup_schedule_time: "08:00".to_owned(),
         account_warmup_model: None,
+        codex_quota_overdraft_enabled: false,
+        codex_quota_overdraft_probe_model: "gpt-6-astra".to_owned(),
         request_interval_ms: 25,
         rotation_strategy: RotationStrategy::RoundRobin,
         min_codex_desktop_version: Some("26.825.6671".to_owned()),
@@ -587,6 +591,8 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
     expected["accountWarmupEnabled"] = json!(false);
     expected["accountWarmupScheduleTime"] = json!("08:00");
     expected["accountWarmupModel"] = Value::Null;
+    expected["codexQuotaOverdraftEnabled"] = json!(false);
+    expected["codexQuotaOverdraftProbeModel"] = json!("gpt-6-astra");
     expected["requestTuning"]["excelImageTransport"] = json!({"mode":"native"});
     expected["requestTuning"]["excelImageRelayBytes"] = json!(67108864);
     expected["requestTuning"]["smartScheduling"] = Value::Null;
@@ -660,6 +666,8 @@ fn settings_request_and_response_fields_should_stay_in_lockstep() {
         account_warmup_enabled: false,
         account_warmup_schedule_time: "08:00".to_owned(),
         account_warmup_model: None,
+        codex_quota_overdraft_enabled: false,
+        codex_quota_overdraft_probe_model: "gpt-6-astra".to_owned(),
         request_interval_ms: request.request_interval_ms,
         rotation_strategy: RotationStrategy::parse(&request.rotation_strategy)
             .expect("fixture rotation strategy"),

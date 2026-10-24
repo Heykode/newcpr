@@ -150,6 +150,7 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
             case when excel_models_follow_global then (select excel_default_models from runtime_settings where id = 1) else excel_models end as effective_excel_models, concurrency_limit, weight, model_access_json, credential_state,
                     credential_observed_at, quota_access_state, quota_evidence,
                     quota_access_observed_at, quota_reset_at,
+                    coalesce((select status = 'passed' from codex_quota_overdraft_states where account_id = provider_accounts.id and credential_revision = provider_accounts.credential_revision and config_revision = (select config_revision from runtime_settings where id = 1) and exists(select 1 from runtime_settings where id = 1 and codex_quota_overdraft_enabled)), false) as codex_quota_overdraft_passed,
                     quota_observed_at, last_error_reason, last_error_message, created_at, updated_at,
                     relogin_count, last_relogin_at
              from provider_accounts

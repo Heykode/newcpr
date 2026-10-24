@@ -142,6 +142,7 @@ pub struct CodexResponsesRequest {
     /// Original effort for diagnostics when the native compatibility alias is applied.
     pub(crate) requested_reasoning_effort: Option<String>,
     pub(crate) quality_probe: Option<gateway_core::operation::quality_probe::QualityProbeStep>,
+    pub(crate) quota_overdraft_active: bool,
     /// Trusted recovery expectation, never read from or serialized into client JSON.
     pub(crate) excel_recovery_nonce: Option<String>,
     pub(crate) excel: Option<crate::transport::excel::ExcelPreparedRequest>,
@@ -631,6 +632,7 @@ impl CodexResponsesRequest {
             requested_reasoning_effort: None,
             excel: None,
             quality_probe: None,
+            quota_overdraft_active: false,
             excel_recovery_nonce: None,
             body,
             passthrough_headers: HeaderMap::new(),
@@ -672,6 +674,15 @@ impl CodexResponsesRequest {
     /// Provider adapter 编码阶段写入已经白名单校验的上游字段。
     pub(crate) fn body_mut(&mut self) -> &mut Map<String, Value> {
         &mut self.body
+    }
+
+    #[must_use]
+    pub(crate) const fn quota_overdraft_active(&self) -> bool {
+        self.quota_overdraft_active
+    }
+
+    pub(crate) const fn mark_quota_overdraft_active(&mut self) {
+        self.quota_overdraft_active = true;
     }
 
     // --- body 字段类型化访问器（上游语义字段，透传不重写）---

@@ -198,6 +198,8 @@ fn settings_with_margin(refresh_margin_seconds: u64) -> RuntimeSettingsUpdate {
         account_warmup_enabled: false,
         account_warmup_schedule_time: "03:00".to_owned(),
         account_warmup_model: None,
+        codex_quota_overdraft_enabled: false,
+        codex_quota_overdraft_probe_model: "gpt-6-astra".to_owned(),
         request_interval_ms: 50,
         rotation_strategy: "smart".to_owned(),
         model_mappings: BTreeMap::from([

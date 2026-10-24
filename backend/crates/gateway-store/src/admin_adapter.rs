@@ -128,6 +128,12 @@ impl SettingsStore for AdminSettingsStoreAdapter {
                 account_warmup_model: command
                     .account_warmup_model
                     .unwrap_or(current.settings.account_warmup_model),
+                codex_quota_overdraft_enabled: command
+                    .codex_quota_overdraft_enabled
+                    .unwrap_or(current.settings.codex_quota_overdraft_enabled),
+                codex_quota_overdraft_probe_model: command
+                    .codex_quota_overdraft_probe_model
+                    .unwrap_or(current.settings.codex_quota_overdraft_probe_model),
                 request_interval_ms: command.request_interval_ms,
                 openai_session_binding_ttl_hours: command.openai_session_binding_ttl_hours,
                 rotation_strategy: command.rotation_strategy.as_str().to_owned(),
@@ -159,6 +165,7 @@ impl SettingsStore for AdminSettingsStoreAdapter {
                     "request_interval_ms".to_owned(),
                     "openai_session_binding_ttl_hours".to_owned(),
                     "openai_account_affinity".to_owned(),
+                    "codex_quota_overdraft".to_owned(),
                     "rotation_strategy".to_owned(),
                     "min_codex_desktop_version".to_owned(),
                     "min_codex_cli_version".to_owned(),
@@ -284,6 +291,8 @@ pub(crate) fn admin_runtime_settings(
         account_warmup_enabled: settings.account_warmup_enabled,
         account_warmup_schedule_time: settings.account_warmup_schedule_time,
         account_warmup_model: settings.account_warmup_model,
+        codex_quota_overdraft_enabled: settings.codex_quota_overdraft_enabled,
+        codex_quota_overdraft_probe_model: settings.codex_quota_overdraft_probe_model,
         request_interval_ms: settings.request_interval_ms,
         openai_session_binding_ttl_hours: settings.openai_session_binding_ttl_hours,
         openai_account_affinity: settings.openai_account_affinity,

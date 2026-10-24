@@ -24,6 +24,8 @@ pub struct SnapshotRuntimeSettings {
     pub disable_fast: bool,
     pub responses_max_decompressed_body_bytes: u64,
     pub openai_account_affinity: gateway_core::account::AccountAffinity,
+    pub codex_quota_overdraft_enabled: bool,
+    pub codex_quota_overdraft_probe_model: String,
     pub openai_session_binding_ttl_hours: u32,
     pub refresh_margin_seconds: u64,
     pub refresh_concurrency: u32,
@@ -173,6 +175,10 @@ impl SnapshotStorePort for PgRuntimeSnapshotRepository {
             )
             .with_openai_session_binding_ttl_hours(data.settings.openai_session_binding_ttl_hours)
             .with_openai_account_affinity(data.settings.openai_account_affinity);
+            let settings = settings.with_codex_quota_overdraft(
+                data.settings.codex_quota_overdraft_enabled,
+                data.settings.codex_quota_overdraft_probe_model,
+            );
             let client_policies = data
                 .client_api_keys
                 .into_iter()
@@ -354,32 +360,34 @@ fn to_core_request_tuning(
 async fn load_settings(
     transaction: &mut Transaction<'_, Postgres>,
 ) -> StoreResult<(Revision, SnapshotRuntimeSettings)> {
-    let row = sqlx::query_as::<
-        _,
-        (
-            i64,
-            i64,
-            i64,
-            i64,
-            i64,
-            String,
-            sqlx::types::Json<BTreeMap<String, String>>,
-            Option<String>,
-            Option<String>,
-            Option<sqlx::types::Json<RequestTuningOverrides>>,
-            bool,
-            i64,
-            i64,
-            i64,
-            String,
-        ),
-    >(
+    #[derive(sqlx::FromRow)]
+    struct SettingsRow {
+        config_revision: i64,
+        refresh_margin_seconds: i64,
+        refresh_concurrency: i64,
+        max_concurrent_per_account: i64,
+        request_interval_ms: i64,
+        rotation_strategy: String,
+        model_mappings_json: sqlx::types::Json<BTreeMap<String, String>>,
+        min_codex_desktop_version: Option<String>,
+        min_codex_cli_version: Option<String>,
+        request_tuning_json: Option<sqlx::types::Json<RequestTuningOverrides>>,
+        disable_fast: bool,
+        responses_max_decompressed_body_bytes: i64,
+        openai_guardian_reserved_concurrency: i64,
+        openai_session_binding_ttl_hours: i64,
+        openai_account_affinity: String,
+        codex_quota_overdraft_enabled: bool,
+        codex_quota_overdraft_probe_model: String,
+    }
+    let row = sqlx::query_as::<_, SettingsRow>(
         "select config_revision, refresh_margin_seconds, refresh_concurrency,
                 max_concurrent_per_account, request_interval_ms, rotation_strategy,
                 model_mappings_json, min_codex_desktop_version,
                 min_codex_cli_version, request_tuning_json, disable_fast,
                 responses_max_decompressed_body_bytes,
-                openai_guardian_reserved_concurrency, openai_session_binding_ttl_hours, openai_account_affinity
+                openai_guardian_reserved_concurrency, openai_session_binding_ttl_hours, openai_account_affinity,
+                codex_quota_overdraft_enabled, codex_quota_overdraft_probe_model
          from runtime_settings where id = 1",
     )
     .fetch_optional(&mut **transaction)
@@ -390,25 +398,31 @@ async fn load_settings(
         id: "1".to_owned(),
     })?;
     Ok((
-        revision_from_i64(row.0)?,
+        revision_from_i64(row.config_revision)?,
         SnapshotRuntimeSettings {
-            openai_account_affinity: gateway_core::account::AccountAffinity::parse(&row.14)
-                .ok_or_else(|| invalid("invalid account affinity"))?,
-            openai_session_binding_ttl_hours: to_u32(row.13)?,
-            refresh_margin_seconds: to_u64(row.1)?,
-            refresh_concurrency: to_u32(row.2)?,
-            max_concurrent_per_account: to_u32(row.3)?,
-            request_interval_ms: to_u64(row.4)?,
-            rotation_strategy: row.5,
-            model_mappings: row.6.0,
-            min_codex_desktop_version: row.7,
-            min_codex_cli_version: row.8,
+            openai_account_affinity: gateway_core::account::AccountAffinity::parse(
+                &row.openai_account_affinity,
+            )
+            .ok_or_else(|| invalid("invalid account affinity"))?,
+            codex_quota_overdraft_enabled: row.codex_quota_overdraft_enabled,
+            codex_quota_overdraft_probe_model: row.codex_quota_overdraft_probe_model,
+            openai_session_binding_ttl_hours: to_u32(row.openai_session_binding_ttl_hours)?,
+            refresh_margin_seconds: to_u64(row.refresh_margin_seconds)?,
+            refresh_concurrency: to_u32(row.refresh_concurrency)?,
+            max_concurrent_per_account: to_u32(row.max_concurrent_per_account)?,
+            request_interval_ms: to_u64(row.request_interval_ms)?,
+            rotation_strategy: row.rotation_strategy,
+            model_mappings: row.model_mappings_json.0,
+            min_codex_desktop_version: row.min_codex_desktop_version,
+            min_codex_cli_version: row.min_codex_cli_version,
             request_tuning: row
-                .9
+                .request_tuning_json
                 .map_or_else(RequestTuningOverrides::default, |value| value.0),
-            disable_fast: row.10,
-            responses_max_decompressed_body_bytes: to_u64(row.11)?,
-            openai_guardian_reserved_concurrency: to_u32(row.12)?,
+            disable_fast: row.disable_fast,
+            responses_max_decompressed_body_bytes: to_u64(
+                row.responses_max_decompressed_body_bytes,
+            )?,
+            openai_guardian_reserved_concurrency: to_u32(row.openai_guardian_reserved_concurrency)?,
         },
     ))
 }

@@ -33,6 +33,7 @@ mod proxy_test_locks;
 mod quality_ops;
 mod query_budget;
 mod quota_learning;
+mod quota_overdraft;
 mod relogin;
 mod request_capture;
 mod reset_credits;

@@ -170,6 +170,20 @@ impl From<GatewayError> for AccountProbeError {
 }
 
 pub trait AccountProbe: Send + Sync {
+    fn codex_quota_overdraft(
+        &self,
+        _request: AccountProbeRequest,
+        _cancellation: crate::lifecycle::CancellationToken,
+    ) -> BoxFuture<'_, Result<AccountProbeResult, AccountProbeError>> {
+        Box::pin(async {
+            Err(GatewayError::new(
+                GatewayErrorKind::Unsupported,
+                "Codex quota overdraft probe unavailable",
+            )
+            .into())
+        })
+    }
+
     /// Trusted fixed-account BPS recovery, never derived from client JSON.
     fn excel_recovery(
         &self,
