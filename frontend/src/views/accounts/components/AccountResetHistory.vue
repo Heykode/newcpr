@@ -6,6 +6,7 @@ import { getResetHistory, retryResetBatch } from '@/api/modules/reset-credits'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
+import { t } from '@/i18n'
 import { errorMessage } from '@/utils/async'
 
 const result = ref<ResetHistoryPage | null>(null)
@@ -91,7 +92,7 @@ onBeforeUnmount(() => {
   <div class="grid min-w-0 gap-3">
     <form class="flex min-w-0 items-center gap-2" @submit.prevent="filter">
       <BaseInput v-model="search" aria-label="搜索重置记录账号" placeholder="账号名称、邮箱或 ID" :maxlength="200" />
-      <BaseIconButton type="submit" label="搜索账号" :disabled="loading">
+      <BaseIconButton type="submit" :label="t('accounts.filters.searchLabel')" :disabled="loading">
         <Search class="size-4" />
       </BaseIconButton>
       <BaseIconButton label="刷新重置记录" :disabled="loading" @click="load(1, true)">
@@ -117,6 +118,9 @@ onBeforeUnmount(() => {
           <div class="min-w-0">
             <div class="break-all font-medium">
               {{ result?.accountNames[item.accountId] || item.accountId }}
+            </div>
+            <div v-if="result?.accountEmails[item.accountId]" class="mt-1 break-all text-cp-text-secondary">
+              {{ result.accountEmails[item.accountId] }}
             </div>
             <div class="mt-1 break-words text-cp-text-secondary">
               {{ item.credit?.title || item.credit?.resetType || '未选卡' }} · 可用次数 {{ item.availableCount ?? '未知' }}

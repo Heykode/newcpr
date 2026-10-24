@@ -5,6 +5,7 @@ import type { BaseTableColumn } from '@/components/base/BaseTable/columns'
 import { Minimize2 } from '@lucide/vue'
 import BaseTable from '@/components/base/BaseTable/index.vue'
 import ProviderIconGroup from '@/components/ProviderIconGroup.vue'
+import { t } from '@/i18n'
 import AccountPlanBadge from '@/views/accounts/components/AccountPlanBadge.vue'
 import {
   usageAccountText,
@@ -120,8 +121,8 @@ const emit = defineEmits<{ filter: [value: UsageFilterParams] }>()
         <span
           v-if="usageIsCompact(row)"
           class="inline-flex shrink-0 text-cp-orange-text"
-          title="压缩请求"
-          aria-label="压缩请求"
+          :title="t('usage.route.compressionRequest')"
+          :aria-label="t('usage.route.compressionRequest')"
         >
           <Minimize2 class="size-3.5" stroke-width="2.4" />
         </span>

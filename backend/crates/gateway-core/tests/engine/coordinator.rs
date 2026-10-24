@@ -6652,6 +6652,69 @@ fn interrupted_terminal_send_state_write_resumes_without_restarting_cleanup() {
 }
 
 #[test]
+fn interrupted_stream_failure_keeps_error_lease_and_single_attempt() {
+    block_on(async {
+        for cancel in [false, true] {
+            let operation = generate_operation();
+            let (coordinator, store, provider) = coordinator(vec![Script::Stream {
+                account_id: "acct_first",
+                items: vec![
+                    Ok(GatewayEvent::Started(ResponseMeta::new(
+                        "response-1",
+                        "gpt-5",
+                    ))),
+                    Err(ProviderError::new(
+                        ProviderErrorKind::Unavailable,
+                        UpstreamSendState::Sent,
+                    )
+                    .with_retry_prohibited()),
+                ],
+            }]);
+            let mut session = coordinator
+                .start(
+                    model_request(&operation, SystemTime::now() + Duration::from_secs(60)),
+                    operation.clone(),
+                    plan(&operation),
+                    None,
+                    None,
+                    CancellationToken::new(),
+                )
+                .await
+                .unwrap();
+            session.next_event().await.unwrap().unwrap();
+            session.commit_downstream(Some(200)).await.unwrap();
+            let (release, gate) = oneshot::channel();
+            *store.send_state_gate.lock().unwrap() = Some(gate);
+            let mut waiting = Box::pin(session.next_event());
+            assert!(futures::poll!(waiting.as_mut()).is_pending());
+            drop(waiting);
+            assert_eq!(provider.released_leases.load(Ordering::SeqCst), 0);
+            if cancel {
+                session.cancel_and_finalize().await.unwrap();
+            } else {
+                release
+                    .send(())
+                    .expect("failure write survives cancelled poll");
+                assert!(session.next_event().await.is_err());
+            }
+            assert!(session.is_finalized());
+            assert_eq!(provider.contexts.lock().unwrap().len(), 1);
+            let state = store.state.lock().unwrap();
+            assert_eq!(state.finalizations.len(), 1);
+            assert_eq!(state.finalizations[0].outcome, ExecutionOutcome::Incomplete);
+            assert_eq!(state.finalizations[0].send_state, UpstreamSendState::Sent);
+            assert_eq!(
+                state.finalizations[0].error_kind,
+                Some(GatewayErrorKind::UpstreamUnavailable)
+            );
+            drop(state);
+            drop(session);
+            assert_eq!(provider.released_leases.load(Ordering::SeqCst), 1);
+        }
+    });
+}
+
+#[test]
 fn deadline_after_commit_is_incomplete_without_provider_circuit_failure() {
     let operation = generate_operation();
     let route_plan = plan(&operation);

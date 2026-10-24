@@ -6,6 +6,7 @@
 use std::time::Instant;
 
 use bytes::Bytes;
+use gateway_core::operation::ProviderHttpHeader;
 use gateway_protocol::openai::is_transport_managed_request_header;
 use reqwest::header::HeaderMap;
 
@@ -26,17 +27,55 @@ impl CodexBackendClient {
     pub(crate) fn live_request_headers(
         &self,
         context: CodexRequestContext<'_>,
-        extra_protocol_headers: &[(String, String)],
+        extra_protocol_headers: &[ProviderHttpHeader],
+        content_type: Option<&str>,
     ) -> CodexClientResult<HeaderMap> {
         let mut headers = self.model_request_headers(&self.profile.snapshot(), context)?;
-        for (name, value) in extra_protocol_headers {
-            let name = reqwest::header::HeaderName::from_bytes(name.as_bytes())?;
+        for header in extra_protocol_headers {
+            let name = reqwest::header::HeaderName::from_bytes(header.name().as_bytes())?;
             if is_managed_identity_header(name.as_str())
-                || is_transport_managed_request_header(name.as_str())
+                // This Live business reference is a local-only hint in Responses.
+                || (name != "x-session-id"
+                    && (is_transport_managed_request_header(name.as_str())
+                        || super::request::provider_managed_header(name.as_str())))
+                || matches!(
+                    name.as_str(),
+                    "x-codex-routing-hint" | "x-codex-turn-state" | "x-codex-turn-id"
+                )
             {
                 continue;
             }
-            headers.append(name, reqwest::header::HeaderValue::from_str(value)?);
+            let value = if name == "x-codex-turn-metadata" {
+                let Some(value) = context
+                    .installation_id
+                    .zip(std::str::from_utf8(header.value()).ok())
+                    .and_then(|(installation, raw)| {
+                        super::request::scope_turn_metadata(raw, installation, true)
+                    })
+                else {
+                    continue;
+                };
+                reqwest::header::HeaderValue::from_str(&value)?
+            } else {
+                reqwest::header::HeaderValue::from_bytes(header.value())?
+            };
+            headers.append(name, value);
+        }
+        if let Some(content_type) = content_type {
+            headers.insert(
+                reqwest::header::CONTENT_TYPE,
+                reqwest::header::HeaderValue::from_str(content_type)?,
+            );
+        }
+        if let Some(installation) = context.installation_id {
+            super::correlation::AccountCorrelation::new(
+                "",
+                installation,
+                context.account_id.unwrap_or(""),
+            )
+            .scope_endpoint_headers(&mut headers);
+        } else {
+            super::correlation::strip_trace_headers(&mut headers);
         }
         Ok(headers)
     }
@@ -44,7 +83,7 @@ impl CodexBackendClient {
     pub(crate) fn live_sideband_connection(
         &self,
         endpoint: String,
-        headers: Vec<(String, String)>,
+        headers: HeaderMap,
     ) -> CodexClientResult<CodexWebSocketConnection> {
         let route = match (&self.egress_runtime, &self.egress_account) {
             (Some(runtime), Some(account)) => runtime.select(account)?,
@@ -67,7 +106,7 @@ impl CodexBackendClient {
         endpoint_path: &'static str,
         query: Option<&str>,
         content_type: Option<&str>,
-        extra_protocol_headers: &[(String, String)],
+        extra_protocol_headers: &[ProviderHttpHeader],
         body: Bytes,
         context: CodexRequestContext<'_>,
     ) -> CodexClientResult<CodexLiveCallResponse> {
@@ -85,7 +124,7 @@ impl CodexBackendClient {
         &self,
         url: String,
         content_type: Option<&str>,
-        extra_protocol_headers: &[(String, String)],
+        extra_protocol_headers: &[ProviderHttpHeader],
         body: Bytes,
         context: CodexRequestContext<'_>,
     ) -> CodexClientResult<CodexLiveCallResponse> {
@@ -97,16 +136,16 @@ impl CodexBackendClient {
         &self,
         url: String,
         content_type: Option<&str>,
-        extra_protocol_headers: &[(String, String)],
+        extra_protocol_headers: &[ProviderHttpHeader],
         body: Bytes,
         context: CodexRequestContext<'_>,
     ) -> CodexClientResult<CodexLiveCallResponse> {
         let profile = self.profile.snapshot();
-        let mut headers = self.live_request_headers(context, extra_protocol_headers)?;
-        headers.insert(
-            reqwest::header::CONTENT_TYPE,
-            reqwest::header::HeaderValue::from_str(content_type.unwrap_or("application/json"))?,
-        );
+        let headers = self.live_request_headers(
+            context,
+            extra_protocol_headers,
+            Some(content_type.unwrap_or("application/json")),
+        )?;
 
         let trace = context
             .trace
@@ -219,24 +258,20 @@ impl CodexBackendClient {
 }
 
 /// 上游 2xx 响应中可回传客户端的头；`Location` 是客户端获知 call id 的合同。
-fn live_forwarded_headers(headers: &HeaderMap) -> Vec<(String, String)> {
-    const FORWARDABLE: [&str; 5] = [
-        "location",
-        "content-type",
-        "retry-after",
-        "x-request-id",
-        "openai-request-id",
-    ];
-    headers
-        .iter()
-        .filter(|(name, _)| FORWARDABLE.contains(&name.as_str()))
-        .filter_map(|(name, value)| {
-            value
-                .to_str()
-                .ok()
-                .map(|value| (name.as_str().to_owned(), value.to_owned()))
-        })
-        .collect()
+fn live_forwarded_headers(headers: &HeaderMap) -> Vec<(String, Bytes)> {
+    let mut forwarded = response_meta::client_headers(headers);
+    forwarded.extend(
+        headers
+            .get_all(reqwest::header::CONTENT_TYPE)
+            .iter()
+            .map(|value| {
+                (
+                    "content-type".to_owned(),
+                    Bytes::copy_from_slice(value.as_bytes()),
+                )
+            }),
+    );
+    forwarded
 }
 
 /// Live 通话引导与 hangup 的账号级响应。
@@ -252,7 +287,7 @@ pub struct CodexLiveCallResponse {
     pub content_type: Option<String>,
     pub retry_after_seconds: Option<u64>,
     /// 可回传客户端的响应头子集。
-    pub forwarded_headers: Vec<(String, String)>,
+    pub forwarded_headers: Vec<(String, Bytes)>,
     pub set_cookie_headers: Vec<String>,
     pub rate_limit_headers: Vec<(String, String)>,
     pub diagnostics: CodexUpstreamDiagnostics,
@@ -293,14 +328,31 @@ mod tests {
                     Some("fixed-device"),
                 ),
                 &[
-                    ("Authorization".into(), "Bearer stale-token".into()),
-                    ("chatgpt-account-id".into(), "stale-account".into()),
-                    ("user-agent".into(), "forged-agent".into()),
-                    ("x-codex-installation-id".into(), "forged-device".into()),
-                    ("cookie".into(), "other-account-cookie".into()),
-                    ("host".into(), "other-host".into()),
-                    ("x-client-turn-id".into(), "turn_test".into()),
+                    ProviderHttpHeader::new(
+                        "Authorization",
+                        Bytes::from_static(b"Bearer stale-token"),
+                    ),
+                    ProviderHttpHeader::new(
+                        "chatgpt-account-id",
+                        Bytes::from_static(b"stale-account"),
+                    ),
+                    ProviderHttpHeader::new("user-agent", Bytes::from_static(b"forged-agent")),
+                    ProviderHttpHeader::new(
+                        "x-codex-installation-id",
+                        Bytes::from_static(b"forged-device"),
+                    ),
+                    ProviderHttpHeader::new("cookie", Bytes::from_static(b"other-account-cookie")),
+                    ProviderHttpHeader::new("host", Bytes::from_static(b"other-host")),
+                    ProviderHttpHeader::new("x-client-turn-id", Bytes::from_static(b"turn_test")),
+                    ProviderHttpHeader::new("x-session-id", Bytes::from_static(b"voice-business")),
+                    ProviderHttpHeader::new("voice-session-id", Bytes::from_static(b"voice-ref")),
+                    ProviderHttpHeader::new("session-id", Bytes::from_static(b"tracking")),
+                    ProviderHttpHeader::new("traceparent", Bytes::from_static(b"trace")),
+                    ProviderHttpHeader::new("x-codex-turn-state", Bytes::from_static(b"old-state")),
+                    ProviderHttpHeader::new("x-business", Bytes::from_static(b"one")),
+                    ProviderHttpHeader::new("x-business", Bytes::from_static(b"two\xff")),
                 ],
+                None,
             )
             .unwrap();
         assert_eq!(headers["authorization"], "Bearer current-token");
@@ -308,6 +360,19 @@ mod tests {
         assert_eq!(headers["user-agent"], frozen.user_agent());
         assert!(!headers.contains_key("x-codex-installation-id"));
         assert_eq!(headers["x-client-turn-id"], "turn_test");
+        assert_eq!(headers["x-session-id"], "voice-business");
+        assert_eq!(headers["voice-session-id"], "voice-ref");
+        assert_ne!(headers["session-id"], "tracking");
+        assert!(!headers.contains_key("traceparent"));
+        assert!(!headers.contains_key("x-codex-turn-state"));
+        assert_eq!(
+            headers
+                .get_all("x-business")
+                .iter()
+                .map(|v| v.as_bytes())
+                .collect::<Vec<_>>(),
+            vec![b"one".as_slice(), b"two\xff".as_slice()]
+        );
         assert!(!headers.contains_key("cookie"));
         assert!(!headers.contains_key("host"));
         assert_ne!(client.profile.snapshot(), state.snapshot());

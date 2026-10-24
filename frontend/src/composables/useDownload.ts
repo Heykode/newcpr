@@ -10,7 +10,11 @@ export function useDownload() {
   }
 
   async function downloadText(content: string, fileName: string, type = 'text/plain;charset=utf-8') {
-    object.value = new Blob([content], { type })
+    await downloadBlob(new Blob([content], { type }), fileName)
+  }
+
+  async function downloadBlob(content: Blob, fileName: string) {
+    object.value = content
     await nextTick()
 
     if (!objectUrl.value)
@@ -27,5 +31,6 @@ export function useDownload() {
   return {
     downloadJson,
     downloadText,
+    downloadBlob,
   }
 }

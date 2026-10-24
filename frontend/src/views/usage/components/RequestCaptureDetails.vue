@@ -5,6 +5,7 @@ import { captureExportUrl } from '@/api/modules/request-capture'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseSelect from '@/components/base/BaseSelect.vue'
+import { t } from '@/i18n'
 import { formatDateTime } from '@/utils/date'
 import { useRequestCaptureDetails } from '../composables/useRequestCaptureDetails'
 import UsageDetailCodePanel from './UsageDetailCodePanel.vue'
@@ -51,7 +52,7 @@ const options = computed(() => records.value.map(record => ({
       <div v-else-if="readError" role="alert" class="text-cp-sm text-cp-error-text">
         {{ readError }}
         <BaseButton variant="soft" size="sm" @click="retry">
-          重试
+          {{ t('common.actions.retry') }}
         </BaseButton>
       </div>
       <UsageDetailCodePanel v-else-if="page" title="采集正文（已脱敏）" max-height="360px" :content="page.text" />

@@ -62,6 +62,7 @@ impl CodexWebSocketConnection {
         Self {
             endpoint,
             headers,
+            live_headers: None,
             outbound_proxy: None,
             egress_source: None,
             session_proxy: None,
@@ -377,13 +378,38 @@ fn websocket_handshake_request(
     let mut builder = WsRequest::builder()
         .method("GET")
         .uri(connection.endpoint());
+    if connection.live_headers.is_some() {
+        if let Some(host) = websocket_host_header(connection.endpoint()) {
+            builder = builder.header("host", host);
+        }
+        builder = builder
+            .header("connection", "Upgrade")
+            .header("upgrade", "websocket")
+            .header("sec-websocket-version", "13")
+            .header(
+                "sec-websocket-key",
+                tungstenite::handshake::client::generate_key(),
+            );
+    }
     for (name, value) in connection.headers() {
         if name.eq_ignore_ascii_case("sec-websocket-extensions") {
             continue;
         }
         builder = builder.header(name.as_str(), value.as_str());
     }
-    builder.body(())
+    let mut request = builder.body(())?;
+    if let Some(headers) = &connection.live_headers {
+        for name in headers.keys() {
+            request.headers_mut().remove(name);
+            for value in headers.get_all(name) {
+                // Tungstenite serializes header values as text, as in Responses.
+                if value.to_str().is_ok() {
+                    request.headers_mut().append(name.clone(), value.clone());
+                }
+            }
+        }
+    }
+    Ok(request)
 }
 
 fn websocket_config() -> WebSocketConfig {
@@ -444,4 +470,109 @@ fn websocket_host_header(endpoint: &str) -> Option<String> {
         Some(port) => format!("{host}:{port}"),
         None => host.to_string(),
     })
+}
+
+#[cfg(test)]
+mod live_header_tests {
+    use super::*;
+
+    struct VerifyBusinessHeaders;
+
+    impl tungstenite::handshake::server::Callback for VerifyBusinessHeaders {
+        fn on_request(
+            self,
+            request: &WsRequest,
+            mut response: tungstenite::handshake::server::Response,
+        ) -> Result<
+            tungstenite::handshake::server::Response,
+            tungstenite::handshake::server::ErrorResponse,
+        > {
+            assert_eq!(request.headers()["x-session-id"], "voice-reference");
+            assert_eq!(
+                request
+                    .headers()
+                    .get_all("x-business")
+                    .iter()
+                    .map(|value| value.as_bytes())
+                    .collect::<Vec<_>>(),
+                vec![b"second".as_slice(), b"third".as_slice()]
+            );
+            response.headers_mut().insert(
+                "sec-websocket-extensions",
+                "permessage-deflate".parse().unwrap(),
+            );
+            Ok(response)
+        }
+    }
+
+    #[tokio::test]
+    async fn live_sideband_opens_with_representable_business_headers_on_wire() {
+        use futures::{SinkExt, StreamExt};
+        use reqwest::header::{HeaderMap, HeaderValue};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("ws://{}/v1/live/call_test", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut websocket = tokio_tungstenite::accept_hdr_async_with_config(
+                stream,
+                VerifyBusinessHeaders,
+                Some(websocket_config()),
+            )
+            .await
+            .unwrap();
+            websocket
+                .send(Message::Text("live-ready".into()))
+                .await
+                .unwrap();
+        });
+        let mut headers = HeaderMap::new();
+        headers.append("x-business", HeaderValue::from_bytes(b"first\xff").unwrap());
+        headers.append("x-business", HeaderValue::from_static("second"));
+        headers.append("x-business", HeaderValue::from_static("third"));
+        headers.insert("x-session-id", HeaderValue::from_static("voice-reference"));
+        let connection = CodexWebSocketConnection::live(&endpoint, headers, None, None);
+        timeout(Duration::from_secs(10), async {
+            let (mut socket, response) = connect_sideband_websocket(&connection).await.unwrap();
+            assert_eq!(response.status().as_u16(), 101);
+            assert_eq!(
+                socket.next().await.unwrap().unwrap(),
+                Message::Text("live-ready".into())
+            );
+            server.await.unwrap();
+        })
+        .await
+        .unwrap();
+    }
+
+    #[test]
+    fn live_handshake_retains_representable_multivalue_business_headers() {
+        use reqwest::header::{HeaderMap, HeaderValue};
+        let mut headers = HeaderMap::new();
+        headers.append("x-business", HeaderValue::from_bytes(b"first\xff").unwrap());
+        headers.append("x-business", HeaderValue::from_static("second"));
+        headers.append("x-business", HeaderValue::from_static("third"));
+        headers.insert("x-session-id", HeaderValue::from_static("voice-reference"));
+        let connection = CodexWebSocketConnection::live(
+            "wss://example.test/v1/live/call_test",
+            headers,
+            None,
+            None,
+        );
+        let request = websocket_handshake_request(&connection).unwrap();
+        assert_eq!(request.headers()["host"], "example.test");
+        assert_eq!(request.headers()["connection"], "Upgrade");
+        assert_eq!(request.headers()["upgrade"], "websocket");
+        assert_eq!(request.headers()["sec-websocket-version"], "13");
+        assert_eq!(request.headers()["sec-websocket-key"].as_bytes().len(), 24);
+        assert_eq!(
+            request
+                .headers()
+                .get_all("x-business")
+                .iter()
+                .map(|v| v.as_bytes())
+                .collect::<Vec<_>>(),
+            vec![b"second".as_slice(), b"third".as_slice()]
+        );
+        assert_eq!(request.headers()["x-session-id"], "voice-reference");
+    }
 }

@@ -1,13 +1,14 @@
 <script setup lang="ts">
 import { Apple, Copy, Monitor } from '@lucide/vue'
 import { computed, shallowRef } from 'vue'
-
 import BaseButton from '@/components/base/BaseButton.vue'
+
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseModal from '@/components/base/BaseModal/index.vue'
 import BaseScrollbar from '@/components/base/BaseScrollbar.vue'
 import BaseSegmented from '@/components/base/BaseSegmented.vue'
 import BaseSwitch from '@/components/base/BaseSwitch.vue'
+import { t } from '@/i18n'
 import {
   buildCodexConfigFiles,
   CODEX_WEBSOCKET_ENABLED_BY_DEFAULT,
@@ -59,16 +60,16 @@ const visibleFiles = computed(() => [
 <template>
   <BaseModal
     v-model="open"
-    title="使用密钥"
+    :title="t('keys.configuration.title')"
     description="将下方内容保存或合并到对应文件，保存后重新启动 Codex"
     size="lg"
   >
     <div class="flex flex-col gap-5">
       <div class="flex flex-wrap items-center justify-between gap-3">
-        <BaseSegmented v-model="activePlatform" label="配置平台" :options="platformOptions" />
+        <BaseSegmented v-model="activePlatform" :label="t('keys.configuration.platform')" :options="platformOptions" />
         <BaseSwitch
           v-model="websocketEnabled"
-          label="切换 WebSocket 配置"
+          :label="t('keys.configuration.toggleWebSocket')"
           active-text="WS"
           inactive-text="WS"
           inline-prompt
@@ -95,7 +96,7 @@ const visibleFiles = computed(() => [
             <BaseIconButton
               variant="secondary"
               size="sm"
-              label="复制"
+              :label="t('common.actions.copy')"
               @click="emit('copy', file.content)"
             >
               <Copy class="size-3.5" />
@@ -118,7 +119,7 @@ const visibleFiles = computed(() => [
 
     <template #footer>
       <BaseButton variant="primary" @click="open = false">
-        关闭
+        {{ t('common.actions.close') }}
       </BaseButton>
     </template>
   </BaseModal>

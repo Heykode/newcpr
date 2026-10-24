@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import type { AccountGroup } from '@/api'
 import { Pencil, Power, Trash2 } from '@lucide/vue'
-
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
+
+import { t } from '@/i18n'
 
 defineProps<{
   group: AccountGroup
@@ -21,7 +22,7 @@ const emit = defineEmits<{
     <BaseIconButton
       variant="ghost"
       size="sm"
-      label="编辑分组"
+      :label="t('groups.actions.editGroup')"
       @click.stop="emit('edit', group)"
     >
       <Pencil class="size-3.5 text-cp-link" />
@@ -41,7 +42,7 @@ const emit = defineEmits<{
     <BaseIconButton
       variant="ghost"
       size="sm"
-      label="删除分组"
+      :label="t('groups.actions.deleteGroup')"
       :disabled="deleting"
       @click.stop="emit('delete', group)"
     >

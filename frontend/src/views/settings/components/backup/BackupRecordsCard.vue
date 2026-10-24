@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { BackupRecord } from '@/api'
-
 import { Download, Play, RefreshCw, Trash2 } from '@lucide/vue'
+
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseConfirmModal from '@/components/base/BaseConfirmModal.vue'
@@ -9,6 +9,7 @@ import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseTablePagination from '@/components/base/BaseTable/BaseTablePagination.vue'
 import { defineTableColumns } from '@/components/base/BaseTable/columns'
 import BaseTable from '@/components/base/BaseTable/index.vue'
+import { t } from '@/i18n'
 import { formatDateTime } from '@/utils/date'
 
 import BackupStatusBadge from './BackupStatusBadge.vue'
@@ -92,7 +93,7 @@ function canDelete(record: BackupRecord): boolean {
 
 <template>
   <BaseCard
-    title="备份记录"
+    :title="t('settings.backup.backupRecords')"
     description="业务备份保留账号、设置、已用额度、累计费用及全局小时用量；不含请求明细、错误采集和审计日志。历史明细及按账号、Key 筛选的历史需整库备份。"
   >
     <template #actions>
@@ -120,7 +121,7 @@ function canDelete(record: BackupRecord): boolean {
           <template #icon>
             <RefreshCw class="size-4" />
           </template>
-          刷新
+          {{ t('common.actions.refresh') }}
         </BaseButton>
       </div>
     </template>
@@ -132,7 +133,7 @@ function canDelete(record: BackupRecord): boolean {
         :rows="records"
         row-key="id"
         :loading="loading"
-        empty-text="暂无备份记录"
+        :empty-text="t('settings.backup.noBackupRecordYet')"
       >
         <template #id="{ row }">
           <span class="text-cp-text-secondary" :title="row.id">{{ shortId(row.id) }}</span>
@@ -174,7 +175,7 @@ function canDelete(record: BackupRecord): boolean {
               variant="ghost"
               :disabled="!canDownload(row)"
               :loading="Boolean(downloadStates[row.id])"
-              label="下载备份"
+              :label="t('settings.backup.downloadBackup')"
               @click="emit('download', row)"
             >
               <Download class="size-4" />
@@ -182,7 +183,7 @@ function canDelete(record: BackupRecord): boolean {
             <BaseIconButton
               variant="ghost"
               :disabled="!canDelete(row)"
-              label="删除备份"
+              :label="t('settings.backup.deleteBackup')"
               @click="emit('requestDelete', row)"
             >
               <Trash2 class="size-4" />
@@ -200,15 +201,15 @@ function canDelete(record: BackupRecord): boolean {
 
     <BaseConfirmModal
       v-model="deleteOpen"
-      title="删除备份"
-      description="将删除远端对象并移除记录，此操作不可撤销"
+      :title="t('settings.backup.deleteBackup')"
+      :description="t('settings.backup.deleteWarning')"
       destructive
-      confirm-text="确认删除"
+      :confirm-text="t('common.actions.delete')"
       :loading="deleting"
       @confirm="emit('confirmDelete')"
     >
       <p class="m-0">
-        确定要删除备份 <span class="font-emphasis">{{ deleteTarget?.id }}</span> 吗？
+        {{ t('settings.backup.deleteConfirmation') }} <span class="font-emphasis">{{ deleteTarget?.id }}</span> {{ t('settings.backup.message') }}
       </p>
     </BaseConfirmModal>
   </BaseCard>

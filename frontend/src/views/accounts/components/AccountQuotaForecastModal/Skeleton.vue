@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import BaseSkeleton from '@/components/base/BaseSkeleton.vue'
+import { t } from '@/i18n'
 </script>
 
 <template>
   <div role="status" aria-busy="true">
-    <span class="sr-only">正在加载额度预测</span>
+    <span class="sr-only">{{ t('accounts.quotaForecast.loadingQuotaForecast') }}</span>
     <div aria-hidden="true">
       <div class="flex min-h-96 flex-col justify-between gap-5 rounded-cp-card bg-cp-fill-tertiary/70 p-4 [html[data-theme=light]_&]:bg-cp-fill-quaternary/70">
         <div>

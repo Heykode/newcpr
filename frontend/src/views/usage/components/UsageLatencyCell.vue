@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import type { UsageDisplayRecord } from '../utils/records'
-
 import { computed } from 'vue'
+
+import { t } from '@/i18n'
 import { usageLatencyDetails } from '../utils/records'
 import UsageDetailPopover from './UsageDetailPopover.vue'
 
@@ -25,7 +26,7 @@ const latencyTones = {
     >
       <span class="text-cp-xs text-cp-text-quaternary">{{ latencyDetails.firstOutputLabel }}</span>
       <span :class="latencyDetails.firstOutputSeverity === null ? 'text-cp-text-quaternary' : latencyTones[latencyDetails.firstOutputSeverity]">{{ latencyDetails.firstOutputDisplay }}</span>
-      <span class="text-cp-xs text-cp-text-quaternary">总耗时</span>
+      <span class="text-cp-xs text-cp-text-quaternary">{{ t('usage.latency.totalLatency') }}</span>
       <span :class="latencyDetails.totalSeverity === null ? 'text-cp-text-quaternary' : latencyTones[latencyDetails.totalSeverity]">{{ latencyDetails.totalDisplay }}</span>
     </div>
 
@@ -50,7 +51,7 @@ const latencyTones = {
       </p>
 
       <div class="flex justify-between border-t border-cp-split pt-2">
-        <span class="whitespace-nowrap text-cp-text-secondary">总耗时</span>
+        <span class="whitespace-nowrap text-cp-text-secondary">{{ t('usage.latency.totalLatency') }}</span>
         <span class="whitespace-nowrap font-mono font-heavy text-cp-info-text">
           {{ latencyDetails.totalDisplay }}
         </span>
@@ -61,7 +62,7 @@ const latencyTones = {
         class="grid gap-1.5 border-t border-cp-split pt-2 text-cp-text-secondary"
       >
         <p class="m-0 font-heavy text-cp-text">
-          传输观测
+          {{ t('usage.status.transport') }}
         </p>
         <div
           v-for="item in latencyDetails.transportItems"

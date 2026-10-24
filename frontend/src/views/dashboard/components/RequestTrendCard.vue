@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import type { dashboardTrendView, normalizeDashboardTrendKind } from '../composables/useDashboard'
-
 import { toRef } from 'vue'
+
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseEmpty from '@/components/base/BaseEmpty.vue'
 import BaseSegmented from '@/components/base/BaseSegmented.vue'
 import BaseChart from '@/components/charts/BaseChart.vue'
+import { t } from '@/i18n'
 import { useRequestTrendChart } from '../composables/useRequestTrendChart'
 
 type TrendKind = ReturnType<typeof normalizeDashboardTrendKind>
@@ -44,11 +45,11 @@ const {
 </script>
 
 <template>
-  <BaseCard as="article" title="使用趋势" class="min-h-95 w-full">
+  <BaseCard as="article" :title="t('dashboard.trends.title')" class="min-h-95 w-full">
     <template #actions>
       <BaseSegmented
         v-model="activeKind"
-        label="趋势指标"
+        :label="t('dashboard.trends.metric')"
         :options="tabs"
         class="w-full max-w-61.5 sm:w-61.5"
         @update:model-value="handleTrendChange"
@@ -62,7 +63,7 @@ const {
             v-for="item in props.summary"
             :key="item.label"
             type="button"
-            :aria-label="`突出显示${item.label}曲线`"
+            :aria-label="t('dashboard.trends.highlight', { label: item.label })"
             :aria-pressed="pinnedSummaryLabel === item.label"
             class="group grid min-w-0 grid-cols-[8px_minmax(0,1fr)] items-center gap-x-2 rounded-lg border-0 bg-transparent px-2.5 py-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-cp-control-outline"
             @click="toggleSummarySeries(item.label)"
@@ -100,7 +101,7 @@ const {
           <BaseEmpty
             v-else-if="!loading"
             surface="none"
-            :title="error || '暂无趋势数据'"
+            :title="error || t('dashboard.trends.empty')"
             class="h-full place-content-center"
           />
         </div>

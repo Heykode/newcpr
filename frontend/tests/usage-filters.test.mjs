@@ -72,7 +72,7 @@ test('shared request filters stay inside request details, below summary and insi
   assert.ok(details > page.indexOf('<UsageInsightsGrid'))
   assert.ok(!page.slice(0, details).includes('<UsageQueryFilters'))
   assert.equal(page.match(/<UsageQueryFilters\b/g)?.length, 1)
-  assert.match(page.slice(details), /请求明细[\s\S]*<template #body>\s*<UsageQueryFilters v-model="draft"/)
+  assert.match(page.slice(details), /t\('usage\.page\.requestDetails'\)[\s\S]*<template #body>\s*<UsageQueryFilters v-model="draft"/)
   assert.match(page.slice(details), /:errors="recordView === 'errors'" :error="filterError"/)
 })
 

@@ -22,7 +22,7 @@ async function main() {
     browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_PATH || undefined })
     await mkdir(output, { recursive: true })
     for (const width of [1440, 390, 320]) {
-      const page = await browser.newPage({ viewport: { width, height: 1000 }, reducedMotion: 'reduce' })
+      const page = await browser.newPage({ locale: 'zh-CN', viewport: { width, height: 1000 }, reducedMotion: 'reduce' })
       const errors = []
       const unexpected = []
       let resetReads = 0
@@ -120,7 +120,7 @@ async function main() {
         await auto.getByRole('spinbutton', { name: '7 天已用阈值', exact: true }).fill('0')
         await auto.getByRole('button', { name: '保存自动重置', exact: true }).click()
         await auto.getByText('设置已保存；已发送的重置请求不受关闭操作影响。').waitFor()
-        assert.deepEqual(autoPolicy.config, { enabled: true, fiveHourUsedMillis: 75500, sevenDayUsedMillis: 0 })
+        assert.deepEqual(autoPolicy.config, { enabled: true, fiveHourUsedMillis: 75500, sevenDayUsedMillis: 0, maxWeeklyRemainingPercent: null, expiryEnabled: false, expiryLeadMinutes: 10 })
         assert.ok(await auto.evaluate(el => el.scrollWidth <= el.clientWidth + 1))
         await auto.scrollIntoViewIfNeeded()
         await page.screenshot({ path: `${output}/auto-reset-${width}.png`, animations: 'disabled' })

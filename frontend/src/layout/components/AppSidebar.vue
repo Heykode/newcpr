@@ -25,9 +25,11 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, useTem
 import { useRoute, useRouter } from 'vue-router'
 
 import AppBrandMark from '@/components/AppBrandMark.vue'
+import AppLanguageMenu from '@/components/AppLanguageMenu.vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseMotionIcon from '@/components/base/BaseMotionIcon.vue'
 import BaseScrollbar from '@/components/base/BaseScrollbar.vue'
+import { t } from '@/i18n'
 import { useAuthStore } from '@/stores/modules/auth'
 import { useSystemUpdateStore } from '@/stores/modules/system-update'
 import { useThemeStore } from '@/stores/modules/theme'
@@ -59,19 +61,19 @@ const { effectiveTheme } = storeToRefs(themeStore)
 const { toggleTheme } = themeStore
 const preferredMotion = usePreferredReducedMotion()
 
-const navItems = [
-  { label: '概览', icon: LayoutDashboard, path: '/' },
-  { label: '账号管理', icon: Users, path: '/accounts' },
-  { label: '失效重登', icon: RefreshCw, path: '/relogin' },
-  { label: '代理管理', icon: Network, path: '/proxies' },
-  { label: 'IPv6 出口', icon: Network, path: '/ipv6-egress' },
-  { label: '分组管理', icon: FolderTree, path: '/account-groups' },
-  { label: 'API 密钥', icon: KeyRound, path: '/api-keys' },
-  { label: '使用统计', icon: ChartNoAxesColumn, path: '/usage' },
-  { label: '质量运维', icon: ClipboardCheck, path: '/quality-ops' },
-  { label: '主题设置', icon: Palette, path: '/theme' },
-  { label: '系统设置', icon: Settings, path: '/settings' },
-]
+const navItems = computed(() => [
+  { label: t('navigation.overview'), icon: LayoutDashboard, path: '/' },
+  { label: t('navigation.accounts'), icon: Users, path: '/accounts' },
+  { label: t('navigation.relogin'), icon: RefreshCw, path: '/relogin' },
+  { label: t('navigation.proxies'), icon: Network, path: '/proxies' },
+  { label: t('navigation.ipv6'), icon: Network, path: '/ipv6-egress' },
+  { label: t('navigation.groups'), icon: FolderTree, path: '/account-groups' },
+  { label: t('navigation.apiKeys'), icon: KeyRound, path: '/api-keys' },
+  { label: t('navigation.usage'), icon: ChartNoAxesColumn, path: '/usage' },
+  { label: t('navigation.quality'), icon: ClipboardCheck, path: '/quality-ops' },
+  { label: t('navigation.appearance'), icon: Palette, path: '/theme' },
+  { label: t('navigation.settings'), icon: Settings, path: '/settings' },
+])
 
 function isActive(path: string) {
   if (path === '/')
@@ -80,7 +82,7 @@ function isActive(path: string) {
 }
 
 const activeNavIndex = computed(() => {
-  const index = navItems.findIndex(item => isActive(item.path))
+  const index = navItems.value.findIndex(item => isActive(item.path))
   return Math.max(0, index)
 })
 const activeNavIndicatorStyle = computed(() => ({
@@ -365,7 +367,7 @@ onBeforeUnmount(() => {
 
     <BaseScrollbar class="my-6 w-full flex-1">
       <div class="px-4">
-        <nav class="relative grid gap-3" :class="isCollapsed ? 'mx-auto w-11.5' : 'w-full'" aria-label="主导航">
+        <nav class="relative grid gap-3" :class="isCollapsed ? 'mx-auto w-11.5' : 'w-full'" :aria-label="t('navigation.mainLabel')">
           <span
             class="pointer-events-none absolute inset-x-0 top-0 h-11.5 overflow-hidden rounded-cp bg-cp-menu-item-selected-bg transition-transform duration-260 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none"
             :style="activeNavIndicatorStyle"
@@ -414,10 +416,11 @@ onBeforeUnmount(() => {
           class="inline-flex whitespace-nowrap h-7 items-center gap-1.5 rounded-lg bg-cp-success-container px-2.5 text-xs leading-none font-emphasis text-cp-success-on-container"
         >
           <i class="size-1.5 rounded-full bg-cp-success" />
-          在线
+          {{ t('navigation.online') }}
         </span>
 
         <div class="flex items-center" :class="isCollapsed ? 'grid gap-1' : 'gap-1'">
+          <AppLanguageMenu />
           <BaseIconButton
             v-if="isCollapsed && hasUpdate"
             variant="success"
@@ -430,7 +433,7 @@ onBeforeUnmount(() => {
 
           <BaseIconButton
             :size="isCollapsed ? 'md' : 'sm'"
-            label="退出登录"
+            :label="t('auth.signOut')"
             variant="destructive"
             :disabled="authStore.loading || !authStore.isAuthenticated"
             @click="handleLogout"
@@ -452,7 +455,7 @@ onBeforeUnmount(() => {
             <Info :size="isCollapsed ? 19 : 18" />
           </BaseIconButton>
 
-          <BaseIconButton v-if="mobile" variant="ghost" size="sm" label="关闭侧边栏" @click="emit('close')">
+          <BaseIconButton v-if="mobile" variant="ghost" size="sm" :label="t('navigation.sidebar.close')" @click="emit('close')">
             <PanelLeftClose :size="18" />
           </BaseIconButton>
 

@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import type { AccountGroup, AccountModelAccess } from '@/api'
-
 import type { Excel403Action } from '@/utils/excel-settings'
 
 import BaseButton from '@/components/base/BaseButton.vue'
+
 import BaseModal from '@/components/base/BaseModal/index.vue'
+import { t } from '@/i18n'
 import AccountPurchaseFields from './AccountPurchaseFields.vue'
 import AccountSettingsFields from './AccountSettingsFields.vue'
 
@@ -63,7 +64,7 @@ const egressMode = defineModel<string>('egressMode', { required: true })
 <template>
   <BaseModal
     v-model="open"
-    title="批量编辑账号"
+    :title="t('accounts.batchEdit.title')"
     :description="`已选择 ${selectedCount} 个账号`"
     size="md"
     :dismissible="!saving"
@@ -116,7 +117,7 @@ const egressMode = defineModel<string>('egressMode', { required: true })
 
     <template #footer>
       <BaseButton variant="secondary" :disabled="saving" @click="open = false">
-        取消
+        {{ t('common.actions.cancel') }}
       </BaseButton>
       <BaseButton
         variant="primary"

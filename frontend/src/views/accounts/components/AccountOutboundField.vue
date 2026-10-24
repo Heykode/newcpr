@@ -9,6 +9,7 @@ import { getMihomo } from '@/api/modules/mihomo'
 import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
 import BaseSelect from '@/components/base/BaseSelect.vue'
 import { useProxyCatalog } from '@/composables/useProxyCatalog'
+import { t } from '@/i18n'
 
 const props = withDefaults(defineProps<{
   accountId?: string
@@ -127,7 +128,7 @@ function selectMode(value: string) {
 
 <template>
   <div class="grid gap-3">
-    <BaseFormItem label="出站隧道" :error="error">
+    <BaseFormItem :label="t('accounts.proxy.outboundTunnel')" :error="error">
       <template v-if="$slots.extra" #extra>
         <slot name="extra" />
       </template>
@@ -138,7 +139,7 @@ function selectMode(value: string) {
         :options="options"
         :disabled="fieldDisabled"
         :placeholder="unresolved ? (egressReadState?.loading ? '正在读取出口…' : '出口读取失败') : '请选择'"
-        aria-label="出站隧道"
+        :aria-label="t('accounts.proxy.outboundTunnel')"
         @update:model-value="selectMode"
       />
     </BaseFormItem>

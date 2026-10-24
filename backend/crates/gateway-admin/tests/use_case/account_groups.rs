@@ -3,7 +3,7 @@ use std::{
     str::FromStr as _,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     },
 };
 
@@ -93,6 +93,9 @@ async fn group_query_service_enriches_only_current_page_members_with_runtime_fac
 
 #[derive(Default)]
 struct FakeGroupStore {
+    projection_failure: bool,
+    missing_record: bool,
+    published_revision: Option<Arc<AtomicU64>>,
     requested_groups: Mutex<Vec<String>>,
     snapshot: Mutex<Option<GroupMonitorReport>>,
     samples: AtomicUsize,
@@ -199,6 +202,16 @@ impl AccountGroupStore for FakeGroupStore {
         &self,
         group_ids: &[AccountGroupId],
     ) -> AdminStoreResult<Vec<AccountGroupMemberFact>> {
+        if self.projection_failure {
+            assert_eq!(
+                self.published_revision
+                    .as_ref()
+                    .expect("publication counter")
+                    .load(Ordering::SeqCst),
+                2
+            );
+            return Err(unused());
+        }
         *self.requested_groups.lock().expect("requested groups") = group_ids
             .iter()
             .map(|group_id| group_id.as_str().to_owned())
@@ -224,10 +237,16 @@ impl AccountGroupStore for FakeGroupStore {
 
     async fn set_account_group_enabled(
         &self,
-        _: SetAccountGroupEnabled,
+        command: SetAccountGroupEnabled,
         _: &MutationContext,
     ) -> AdminStoreResult<AccountGroupMutation> {
-        Err(unused())
+        let mut record = group_record();
+        record.enabled = command.enabled;
+        Ok(AccountGroupMutation {
+            config_revision: Revision::new(2).expect("committed revision"),
+            id: record.id.clone(),
+            record: (!self.missing_record).then_some(record),
+        })
     }
 
     async fn delete_account_group(
@@ -236,6 +255,52 @@ impl AccountGroupStore for FakeGroupStore {
         _: &MutationContext,
     ) -> AdminStoreResult<AccountGroupMutation> {
         Err(unused())
+    }
+}
+
+struct RecordingPublication(Arc<AtomicU64>);
+
+impl gateway_core::runtime::SnapshotControl for RecordingPublication {
+    fn publish_committed(
+        &self,
+        revision: gateway_core::routing::ConfigRevision,
+    ) -> futures::future::BoxFuture<'_, ()> {
+        Box::pin(async move {
+            self.0.store(revision.get(), Ordering::SeqCst);
+        })
+    }
+}
+
+#[tokio::test]
+async fn committed_group_mutations_publish_even_when_the_display_projection_is_unavailable() {
+    for missing_record in [false, true] {
+        let published = Arc::new(AtomicU64::new(0));
+        let groups = Arc::new(FakeGroupStore {
+            projection_failure: true,
+            missing_record,
+            published_revision: Some(published.clone()),
+            ..Default::default()
+        });
+        let services = AdminHarness::new()
+            .account_groups(groups)
+            .snapshot(Arc::new(RecordingPublication(published.clone())))
+            .build()
+            .await;
+        let mutation = services
+            .account_groups()
+            .set_enabled(
+                &crate::backup::support::system_context(),
+                SetAccountGroupEnabled {
+                    id: group_id(),
+                    enabled: false,
+                },
+            )
+            .await
+            .expect("committed mutation remains successful");
+        assert_eq!(mutation.config_revision.get(), 2);
+        assert_eq!(mutation.id, group_id());
+        assert!(mutation.record.is_none());
+        assert_eq!(published.load(Ordering::SeqCst), 2);
     }
 }
 

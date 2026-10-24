@@ -38,6 +38,8 @@ pub struct RuntimeSettings {
     pub account_warmup_enabled: bool,
     pub account_warmup_schedule_time: String,
     pub account_warmup_model: Option<String>,
+    pub codex_quota_overdraft_enabled: bool,
+    pub codex_quota_overdraft_probe_model: String,
     pub request_interval_ms: u64,
     pub rotation_strategy: String,
     pub model_mappings: BTreeMap<String, String>,
@@ -81,6 +83,14 @@ impl fmt::Debug for RuntimeSettings {
             )
             .field("request_interval_ms", &self.request_interval_ms)
             .field("rotation_strategy", &self.rotation_strategy)
+            .field(
+                "codex_quota_overdraft_enabled",
+                &self.codex_quota_overdraft_enabled,
+            )
+            .field(
+                "codex_quota_overdraft_probe_model",
+                &self.codex_quota_overdraft_probe_model,
+            )
             .field("model_mappings", &self.model_mappings)
             .field("min_codex_desktop_version", &self.min_codex_desktop_version)
             .field("min_codex_cli_version", &self.min_codex_cli_version)
@@ -111,6 +121,8 @@ pub struct RuntimeSettingsUpdate {
     pub account_warmup_enabled: bool,
     pub account_warmup_schedule_time: String,
     pub account_warmup_model: Option<String>,
+    pub codex_quota_overdraft_enabled: bool,
+    pub codex_quota_overdraft_probe_model: String,
     pub request_interval_ms: u64,
     pub rotation_strategy: String,
     pub model_mappings: BTreeMap<String, String>,
@@ -176,6 +188,7 @@ impl RuntimeSettingsUpdate {
             )
             || (self.account_warmup_enabled && self.account_warmup_model.is_none())
             || !valid_warmup_model(self.account_warmup_model.as_deref())
+            || !valid_required_model_name(&self.codex_quota_overdraft_probe_model)
             || RotationStrategy::parse(&self.rotation_strategy).is_none()
             || !self.request_tuning.validate()
         {
@@ -237,7 +250,7 @@ pub(crate) async fn load_runtime_settings_from_pool(pool: &PgPool) -> StoreResul
                     audit_retention_days, min_codex_desktop_version,
                     min_codex_cli_version, request_tuning_json, updated_at, turn_state_probe_concurrency,
                     openai_guardian_reserved_concurrency,
-                    account_warmup_enabled, account_warmup_schedule_time, account_warmup_model, openai_session_binding_ttl_hours, openai_account_affinity
+                    account_warmup_enabled, account_warmup_schedule_time, account_warmup_model, codex_quota_overdraft_enabled, codex_quota_overdraft_probe_model, openai_session_binding_ttl_hours, openai_account_affinity
              from runtime_settings where id = 1",
         )
     .fetch_optional(pool)
@@ -333,7 +346,7 @@ pub(crate) async fn load_runtime_settings_in_transaction(
                 audit_retention_days, min_codex_desktop_version,
                 min_codex_cli_version, request_tuning_json, updated_at, turn_state_probe_concurrency,
                 openai_guardian_reserved_concurrency,
-                account_warmup_enabled, account_warmup_schedule_time, account_warmup_model, openai_session_binding_ttl_hours, openai_account_affinity
+                account_warmup_enabled, account_warmup_schedule_time, account_warmup_model, codex_quota_overdraft_enabled, codex_quota_overdraft_probe_model, openai_session_binding_ttl_hours, openai_account_affinity
          from runtime_settings where id = 1",
     )
     .fetch_optional(&mut **transaction)
@@ -415,8 +428,10 @@ pub(crate) async fn update_runtime_settings_in_transaction(
                  account_warmup_enabled = $23,
                  account_warmup_schedule_time = $24,
                  account_warmup_model = $25,
-                 openai_session_binding_ttl_hours = coalesce($26, openai_session_binding_ttl_hours),
-                 openai_account_affinity = coalesce($27, openai_account_affinity),
+                 codex_quota_overdraft_enabled = $26,
+                 codex_quota_overdraft_probe_model = $27,
+                 openai_session_binding_ttl_hours = coalesce($28, openai_session_binding_ttl_hours),
+                 openai_account_affinity = coalesce($29, openai_account_affinity),
                  updated_at = now()
 	             where id = 1
 	             returning config_revision",
@@ -449,6 +464,8 @@ pub(crate) async fn update_runtime_settings_in_transaction(
     .bind(update.account_warmup_enabled)
     .bind(&update.account_warmup_schedule_time)
     .bind(update.account_warmup_model.as_deref())
+    .bind(update.codex_quota_overdraft_enabled)
+    .bind(&update.codex_quota_overdraft_probe_model)
     .bind(update.openai_session_binding_ttl_hours.map(i64::from))
     .bind(update.openai_account_affinity.map(|mode| mode.as_str()))
     .fetch_optional(&mut **transaction)
@@ -530,6 +547,8 @@ struct RuntimeSettingsRow {
     account_warmup_enabled: bool,
     account_warmup_schedule_time: String,
     account_warmup_model: Option<String>,
+    codex_quota_overdraft_enabled: bool,
+    codex_quota_overdraft_probe_model: String,
     openai_session_binding_ttl_hours: i64,
     openai_account_affinity: String,
 }
@@ -573,6 +592,8 @@ fn runtime_settings_from_row(row: RuntimeSettingsRow) -> StoreResult<RuntimeSett
         account_warmup_enabled: row.account_warmup_enabled,
         account_warmup_schedule_time: row.account_warmup_schedule_time,
         account_warmup_model: row.account_warmup_model,
+        codex_quota_overdraft_enabled: row.codex_quota_overdraft_enabled,
+        codex_quota_overdraft_probe_model: row.codex_quota_overdraft_probe_model,
         updated_at: row.updated_at,
         openai_session_binding_ttl_hours: to_u32(row.openai_session_binding_ttl_hours)?,
     })
@@ -640,4 +661,11 @@ fn valid_warmup_model(value: Option<&str>) -> bool {
             && value == value.trim()
             && !value.bytes().any(|byte| byte.is_ascii_control())
     })
+}
+
+fn valid_required_model_name(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value == value.trim()
+        && !value.bytes().any(|byte| byte.is_ascii_control())
 }

@@ -1,0 +1,1 @@
+{ "ui": { "confirm": "Confirm", "cancel": "Cancel", "closeDialog": "Close dialog", "empty": "No data", "total": "{count} records", "pageSize": "Rows per page", "pagination": "Pagination", "previous": "Previous page", "next": "Next page" } }

@@ -260,17 +260,26 @@ impl ResetCreditsStore for PgResetCreditsStore {
             .iter()
             .flat_map(|batch| batch.items.iter().map(|item| item.account_id.as_str()))
             .collect();
-        let names: Vec<(String, String)> = sqlx::query_as(
-            "select id,coalesce(nullif(custom_name,''),nullif(email,''),name,id)
+        let identities: Vec<(String, String, Option<String>)> = sqlx::query_as(
+            "select id,coalesce(nullif(custom_name,''),nullif(name,''),id),nullif(email,'')
              from provider_accounts where id=any($1::text[])",
         )
         .bind(&ids)
         .fetch_all(&self.0)
         .await
         .map_err(unavailable)?;
+        let mut account_names = std::collections::BTreeMap::new();
+        let mut account_emails = std::collections::BTreeMap::new();
+        for (id, name, email) in identities {
+            account_names.insert(id.clone(), name);
+            if let Some(email) = email {
+                account_emails.insert(id, email);
+            }
+        }
         Ok(ResetHistoryPage {
             items,
-            account_names: names.into_iter().collect(),
+            account_names,
+            account_emails,
             before,
             has_more,
         })

@@ -311,6 +311,7 @@ struct GeneratePayload {
     client_turn: Option<ClientTurn>,
     provider_session_state: Option<ProviderSessionState>,
     quality_probe: Option<quality_probe::QualityProbeStep>,
+    codex_quota_overdraft_probe: bool,
     excel_recovery_revision: Option<u64>,
     excel_recovery_nonce: Option<String>,
 }
@@ -360,6 +361,7 @@ impl GenerateRequest {
                 client_turn: None,
                 provider_session_state: None,
                 quality_probe: None,
+                codex_quota_overdraft_probe: false,
                 excel_recovery_revision: None,
                 excel_recovery_nonce: None,
             }),
@@ -387,6 +389,17 @@ impl GenerateRequest {
     #[must_use]
     pub fn quality_probe(&self) -> Option<&quality_probe::QualityProbeStep> {
         self.payload.quality_probe.as_ref()
+    }
+
+    #[must_use]
+    pub fn with_codex_quota_overdraft_probe(mut self) -> Self {
+        Arc::make_mut(&mut self.payload).codex_quota_overdraft_probe = true;
+        self
+    }
+
+    #[must_use]
+    pub fn codex_quota_overdraft_probe(&self) -> bool {
+        self.payload.codex_quota_overdraft_probe
     }
 
     pub(crate) fn with_excel_recovery(mut self, revision: u64, nonce: String) -> Self {
@@ -735,9 +748,7 @@ impl ProviderHttpRequest {
                     let value = header.value.as_ref();
                     (!name.is_empty()
                         && name.len() <= 128
-                        && name
-                            .iter()
-                            .all(|byte| byte.is_ascii_alphanumeric() || *byte == b'-')
+                        && http::HeaderName::from_bytes(name).is_ok()
                         && value.len() <= 8 * 1024
                         && !value.iter().any(|byte| matches!(byte, b'\r' | b'\n' | 0)))
                     .then_some(())

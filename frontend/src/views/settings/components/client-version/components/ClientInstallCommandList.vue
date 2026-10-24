@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { Copy } from '@lucide/vue'
-
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
+
 import { useCopyText } from '@/composables/useCopyText'
+import { t } from '@/i18n'
 
 defineOptions({ name: 'ClientInstallCommandList' })
 
@@ -33,7 +34,7 @@ function copyCommand(command: string) {
         </p>
         <code class="mt-1.5 block overflow-x-auto whitespace-nowrap font-mono text-cp-sm leading-[1.5] font-semibold text-cp-text">{{ item.command }}</code>
       </div>
-      <BaseIconButton size="sm" label="复制命令" @click="copyCommand(item.command)">
+      <BaseIconButton size="sm" :label="t('settings.clientVersion.copyCommand')" @click="copyCommand(item.command)">
         <Copy class="size-3.5" />
       </BaseIconButton>
     </article>

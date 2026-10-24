@@ -5,7 +5,6 @@ import type {
   ThemeEditorDraft,
 } from '../composables/useThemeEditor'
 import type { ResolvedTheme, ThemeComponentOverrides, ThemeTokenName } from '@/theme'
-
 import {
   AppWindow,
   Compass,
@@ -15,7 +14,9 @@ import {
   MousePointerClick,
   TableProperties,
 } from '@lucide/vue'
+
 import { computed } from 'vue'
+import { t } from '@/i18n'
 
 import ThemeColorTokenField from './ThemeColorTokenField.vue'
 import ThemeNumberTokenField from './ThemeNumberTokenField.vue'
@@ -147,10 +148,10 @@ function numericTokenValue(name: ThemeTokenName) {
       <div class="mb-2 flex items-center gap-2 px-1">
         <AppWindow class="size-3.5 text-cp-primary-text" />
         <h3 id="component-catalog-title" class="m-0 text-cp font-heavy text-cp-text">
-          Component Token
+          {{ t('appearance.componentTokens.kindLabel') }}
         </h3>
       </div>
-      <div class="grid grid-cols-2 gap-2" role="listbox" aria-label="Component Token 组件族">
+      <div class="grid grid-cols-2 gap-2" role="listbox" :aria-label="t('appearance.componentTokens.componentTokenComponentFamily')">
         <button
           v-for="option in components"
           :key="option.id"
@@ -210,7 +211,7 @@ function numericTokenValue(name: ThemeTokenName) {
       </template>
 
       <div v-if="visibleTokens.length === 0" class="rounded-cp-lg bg-cp-fill-quaternary px-3 py-6 text-center text-cp-xs font-emphasis text-cp-text-quaternary">
-        没有匹配的 Component Token
+        {{ t('appearance.componentTokens.noMatchingComponentToken') }}
       </div>
     </section>
   </div>

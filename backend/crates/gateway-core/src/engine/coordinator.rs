@@ -290,6 +290,7 @@ where
             last_retryable_failure_events: Vec::new(),
             provider_attempt_outcomes: Vec::new(),
             pending_terminal_failure: None,
+            pending_stream_failure: None,
             client_retry: None,
         };
 
@@ -443,12 +444,19 @@ pub struct ResponseExecutionSession<S: ?Sized> {
     provider_attempt_outcomes: Vec<ProviderAttemptOutcome>,
     /// 原子失败批次已交给协议层、但尚待下游提交后收敛的原 Provider 错误。
     pending_terminal_failure: Option<PendingTerminalFailure>,
+    pending_stream_failure: Option<PendingStreamFailure>,
     client_retry: Option<ClientRetryGuard>,
 }
 
 struct PendingTerminalFailure {
-    error: ProviderError,
+    error: Arc<ProviderError>,
     send_state: UpstreamSendState,
+    events: Vec<ProviderEvent>,
+}
+
+struct PendingStreamFailure {
+    completion: BoxFuture<'static, ()>,
+    outcome: StreamErrorOutcome,
 }
 
 enum RequestFinalization {
@@ -492,13 +500,11 @@ where
         if self.delivery_pending {
             return Err(EngineError::DownstreamCommitRequired);
         }
-        if let Some(pending) = self.pending_terminal_failure.take() {
-            self.finish_provider_error_with_send_state(&pending.error, pending.send_state)
-                .await?;
-            return Err(provider_engine_error(pending.error));
-        }
         if self.is_finalized() {
             return Ok(None);
+        }
+        if self.pending_terminal_failure.is_some() {
+            return self.next_terminal_failure().await;
         }
         loop {
             match self.pull().await? {
@@ -526,17 +532,12 @@ where
                     error,
                     send_state,
                 } => {
-                    self.record_client_retry_failure(&error).await;
-                    self.replay_barrier_reached = true;
-                    let requirement = if self.downstream_committed_at.is_some() {
-                        CommitRequirement::AlreadyCommitted
-                    } else {
-                        self.delivery_pending = true;
-                        CommitRequirement::CommitBeforeDelivery
-                    };
-                    self.pending_terminal_failure =
-                        Some(PendingTerminalFailure { error, send_state });
-                    return CoordinatedEvent::try_batch(events, requirement).map(Some);
+                    self.pending_terminal_failure = Some(PendingTerminalFailure {
+                        error: Arc::new(error),
+                        send_state,
+                        events,
+                    });
+                    return self.next_terminal_failure().await;
                 }
                 PullOutcome::End => {
                     if self.downstream_committed_at.is_some() {
@@ -570,9 +571,14 @@ where
                 PullOutcome::TerminalFailure {
                     error, send_state, ..
                 } => {
-                    self.finish_provider_error_with_send_state(&error, send_state)
-                        .await?;
-                    return Err(provider_engine_error(error));
+                    self.pending_terminal_failure = Some(PendingTerminalFailure {
+                        error: Arc::new(error),
+                        send_state,
+                        events: Vec::new(),
+                    });
+                    return Err(provider_engine_error(
+                        self.finalize_pending_terminal_failure().await?,
+                    ));
                 }
                 PullOutcome::End => {
                     if events.is_empty() {
@@ -782,15 +788,15 @@ where
     /// 观测写入失败只记录告警，不改变取消结果。
     pub async fn cancel_and_finalize(&mut self) -> Result<(), EngineError> {
         self.cancellation.cancel();
+        self.retain_pending_terminal_failure();
         self.resume_finalization().await;
         if self.is_finalized() {
             return Ok(());
         }
         self.delivery_pending = false;
-        if let Some(pending) = self.pending_terminal_failure.take() {
-            return self
-                .finish_provider_error_with_send_state(&pending.error, pending.send_state)
-                .await;
+        if self.pending_terminal_failure.is_some() {
+            self.finalize_pending_terminal_failure().await?;
+            return Ok(());
         }
         self.finish_interruption(&EngineError::Cancelled).await
     }
@@ -803,15 +809,15 @@ where
     /// Observation write failures remain best effort, as for other finalization.
     pub async fn fail_delivery(&mut self, error: GatewayError) -> Result<(), EngineError> {
         self.cancellation.cancel();
+        self.retain_pending_terminal_failure();
         self.resume_finalization().await;
         if self.is_finalized() {
             return Ok(());
         }
         self.delivery_pending = false;
-        if let Some(pending) = self.pending_terminal_failure.take() {
-            return self
-                .finish_provider_error_with_send_state(&pending.error, pending.send_state)
-                .await;
+        if self.pending_terminal_failure.is_some() {
+            self.finalize_pending_terminal_failure().await?;
+            return Ok(());
         }
         self.response_commit.finish();
         let outcome = if self.response_commit.committed_at().is_some() {
@@ -824,6 +830,9 @@ where
 
     async fn pull(&mut self) -> Result<PullOutcome, EngineError> {
         loop {
+            if self.pending_stream_failure.is_some() {
+                return self.resume_stream_failure().await;
+            }
             if self.current.is_none() {
                 match self.prepare_attempt().await {
                     Ok(Some(outcome)) => return Ok(outcome),
@@ -855,7 +864,7 @@ where
                 }
                 PollBoundary::Deadline => {
                     // 会话 deadline 是网关自身的请求预算，不是上游超时；
-                    // 真正的上游超时会作为流错误进入 `handle_stream_error` 记账。
+                    // 真正的上游超时会作为流错误进入 `begin_stream_failure` 记账。
                     // 这里不写 provider 失败，避免长流集中到期误触 provider 熔断。
                     self.finish_interruption(&EngineError::Deadline).await?;
                     return Err(EngineError::Deadline);
@@ -905,14 +914,8 @@ where
                     return Ok(PullOutcome::Event(event));
                 }
                 PollBoundary::Item(Some(Err(error))) => {
-                    match self.handle_stream_error(error).await? {
-                        StreamErrorOutcome::AttemptDiscarded => {
-                            return Ok(PullOutcome::AttemptDiscarded);
-                        }
-                        terminal @ StreamErrorOutcome::TerminalFailure { .. } => {
-                            return Ok(terminal.into_pull_outcome());
-                        }
-                    }
+                    self.begin_stream_failure(error)?;
+                    return self.resume_stream_failure().await;
                 }
                 PollBoundary::Item(None) => {
                     self.record_current_provider_success();
@@ -1091,6 +1094,11 @@ where
                         .flatten(),
                 )
                 .with_disable_fast(self.plan.disable_fast())
+                .with_codex_quota_overdraft(
+                    self.plan.codex_quota_overdraft_enabled(),
+                    self.plan.codex_quota_overdraft_probe_model().clone(),
+                    self.plan.config_revision(),
+                )
                 .with_request_location(self.plan.request_location().cloned())
                 .with_timing_started_at(self.observation.timing_started_at)
                 .with_trace(self.trace.clone()),
@@ -1508,10 +1516,7 @@ where
     }
 
     /// 失败可重试时要求丢弃本 attempt；预算耗尽时可返回最后一批原始失败事件。
-    async fn handle_stream_error(
-        &mut self,
-        mut error: ProviderError,
-    ) -> Result<StreamErrorOutcome, EngineError> {
+    fn begin_stream_failure(&mut self, mut error: ProviderError) -> Result<(), EngineError> {
         // 原始 wire 只活在 request-local 决策状态；clone、attempt 记录与持久化终态
         // 均只接触已剥离的稳定错误字段。
         record_trace_error(&self.trace.attempt(self.attempts), &error);
@@ -1551,16 +1556,6 @@ where
         let send_state = self.raise_send_watermark(attempt_send_state);
         if send_state != UpstreamSendState::NotSent {
             self.connection_budget.complete();
-        }
-        if self.request_persisted {
-            best_effort_store_write(
-                "mark_send_state",
-                &self.request_id,
-                self.engine
-                    .store()
-                    .mark_send_state(&self.request_id, send_state),
-            )
-            .await;
         }
         let provider_proved_replay_safe = provider_proved_replay_safe(&error);
         let continuation_retry = self.prepare_continuation_retry(
@@ -1722,7 +1717,8 @@ where
             "credentialRecoveryAttempted": self.credential_recovery_attempted_accounts.contains(current.metadata.provider_account_id()),
             "sendState": format!("{attempt_send_state:?}"),
         }));
-        if retryable {
+        let mut intermediate = None;
+        let outcome = if retryable {
             for event in &atomic_client_events {
                 for fact in event.canonical_facts() {
                     self.observation.observe_event(fact);
@@ -1771,51 +1767,152 @@ where
             self.last_retryable_failure_events = atomic_client_events;
             self.last_retryable_failure = Some(error);
             if let Some(error) = persistence_error {
-                best_effort_store_write(
-                    "record_intermediate_failure",
-                    &self.request_id,
-                    self.engine
-                        .store()
-                        .record_intermediate_failure(IntermediateFailure {
-                            request_id: self.request_id.clone(),
-                            attempt_index: current.index,
-                            trigger: current.trigger,
-                            provider_kind: current.metadata.provider().clone(),
-                            account_id: Some(current.metadata.provider_account_id().clone()),
-                            upstream_model_id: current.metadata.upstream_model().cloned(),
-                            upstream_status_code: error.upstream_status().or_else(|| {
-                                current
-                                    .response_observation
-                                    .as_ref()
-                                    .and_then(ProviderResponseObservation::status_code)
-                            }),
-                            upstream_request_id: error
-                                .upstream_request_id()
-                                .map(|id| id.as_str())
-                                .or_else(|| current.upstream_request_id())
-                                .map(str::to_owned),
-                            latency: current.started_at.elapsed().unwrap_or_default(),
-                            error,
-                        }),
-                )
-                .await;
+                intermediate = Some(IntermediateFailure {
+                    request_id: self.request_id.clone(),
+                    attempt_index: current.index,
+                    trigger: current.trigger,
+                    provider_kind: current.metadata.provider().clone(),
+                    account_id: Some(current.metadata.provider_account_id().clone()),
+                    upstream_model_id: current.metadata.upstream_model().cloned(),
+                    upstream_status_code: error.upstream_status().or_else(|| {
+                        current
+                            .response_observation
+                            .as_ref()
+                            .and_then(ProviderResponseObservation::status_code)
+                    }),
+                    upstream_request_id: error
+                        .upstream_request_id()
+                        .map(|id| id.as_str())
+                        .or_else(|| current.upstream_request_id())
+                        .map(str::to_owned),
+                    latency: current.started_at.elapsed().unwrap_or_default(),
+                    error,
+                });
             }
-            self.reset_uncommitted_observations();
-            return Ok(StreamErrorOutcome::AttemptDiscarded);
-        }
-
-        self.current = Some(current);
-        if !atomic_client_events.is_empty() {
+            self.current = Some(current);
+            StreamErrorOutcome::AttemptDiscarded
+        } else {
+            self.current = Some(current);
             self.observe_atomic_terminal_events(&mut atomic_client_events);
-            return Ok(StreamErrorOutcome::TerminalFailure {
+            StreamErrorOutcome::TerminalFailure {
                 events: atomic_client_events,
                 error,
                 send_state,
+            }
+        };
+        let store = Arc::clone(self.engine.store());
+        let request_id = self.request_id.clone();
+        let persisted = self.request_persisted;
+        self.pending_stream_failure = Some(PendingStreamFailure {
+            outcome,
+            completion: Box::pin(async move {
+                if persisted {
+                    best_effort_store_write(
+                        "mark_send_state",
+                        &request_id,
+                        store.mark_send_state(&request_id, send_state),
+                    )
+                    .await;
+                }
+                if let Some(intermediate) = intermediate {
+                    best_effort_store_write(
+                        "record_intermediate_failure",
+                        &request_id,
+                        store.record_intermediate_failure(intermediate),
+                    )
+                    .await;
+                }
+            }),
+        });
+        Ok(())
+    }
+
+    fn retain_pending_terminal_failure(&mut self) {
+        if let Some(pending) = self.pending_stream_failure.take()
+            && let StreamErrorOutcome::TerminalFailure {
+                events,
+                error,
+                send_state,
+            } = pending.outcome
+        {
+            self.pending_terminal_failure = Some(PendingTerminalFailure {
+                error: Arc::new(error),
+                send_state,
+                events,
             });
         }
+    }
+
+    async fn resume_stream_failure(&mut self) -> Result<PullOutcome, EngineError> {
+        let pending = self
+            .pending_stream_failure
+            .as_mut()
+            .ok_or(EngineError::NoActiveAttempt)?;
+        pending.completion.as_mut().await;
+        let pending = self
+            .pending_stream_failure
+            .take()
+            .ok_or(EngineError::NoActiveAttempt)?;
+        if matches!(pending.outcome, StreamErrorOutcome::AttemptDiscarded) {
+            self.current.take();
+            self.reset_uncommitted_observations();
+        }
+        Ok(pending.outcome.into_pull_outcome())
+    }
+
+    async fn next_terminal_failure(&mut self) -> Result<Option<CoordinatedEvent>, EngineError> {
+        let pending = self
+            .pending_terminal_failure
+            .as_ref()
+            .ok_or(EngineError::NoActiveAttempt)?;
+        if pending.events.is_empty() {
+            return Err(provider_engine_error(
+                self.finalize_pending_terminal_failure().await?,
+            ));
+        }
+        let error = Arc::clone(&pending.error);
+        self.record_client_retry_failure(&error).await;
+        let pending = self
+            .pending_terminal_failure
+            .as_mut()
+            .ok_or(EngineError::NoActiveAttempt)?;
+        let events = std::mem::take(&mut pending.events);
+        let requirement = if self.downstream_committed_at.is_some() {
+            CommitRequirement::AlreadyCommitted
+        } else {
+            self.delivery_pending = true;
+            CommitRequirement::CommitBeforeDelivery
+        };
+        self.replay_barrier_reached = true;
+        CoordinatedEvent::try_batch(events, requirement).map(Some)
+    }
+
+    async fn finalize_pending_terminal_failure(&mut self) -> Result<ProviderError, EngineError> {
+        let pending = self
+            .pending_terminal_failure
+            .as_ref()
+            .ok_or(EngineError::NoActiveAttempt)?;
+        let error = Arc::clone(&pending.error);
+        let send_state = pending.send_state;
         self.finish_provider_error_with_send_state(&error, send_state)
             .await?;
-        Err(provider_engine_error(error))
+        drop(error);
+        let pending = self
+            .pending_terminal_failure
+            .take()
+            .ok_or(EngineError::NoActiveAttempt)?;
+        Ok(Arc::try_unwrap(pending.error).expect("terminal failure is owned by the session"))
+    }
+
+    fn record_final_usage(&self) {
+        let usage = &self.observation.usage;
+        self.trace.record_evidence("request.usage", json!({
+            "boundary": "gateway_finalization",
+            "inputTokens": usage.input_tokens, "outputTokens": usage.output_tokens,
+            "cachedInputTokens": usage.cached_tokens, "cacheWriteInputTokens": usage.cache_write_tokens,
+            "reasoningOutputTokens": usage.reasoning_tokens, "totalTokens": usage.total_tokens,
+            "imageInputTokens": usage.image_input_tokens, "imageOutputTokens": usage.image_output_tokens,
+        }));
     }
 
     fn observe_atomic_terminal_events(&mut self, events: &mut [ProviderEvent]) {
@@ -1975,6 +2072,7 @@ where
             self.current_transport_observation();
         let service_tier = self.current_service_tier();
         let provider_metadata_json = self.current_provider_metadata_json();
+        self.record_final_usage();
         self.trace.record(
             "request.finished",
             json!({"outcome": "succeeded", "attempts": self.attempts}),
@@ -2175,14 +2273,6 @@ where
         if self.is_finalized() {
             return Ok(());
         }
-        self.trace.record(
-            "request.finished",
-            json!({
-                "outcome": format!("{:?}", finalization.outcome),
-                "errorKind": finalization.error.kind().as_str(),
-                "sendState": format!("{:?}", finalization.send_state), "attempts": self.attempts,
-            }),
-        );
         let completed_at = SystemTime::now();
         self.observation.finish();
         let upstream_request_id = self
@@ -2199,6 +2289,15 @@ where
             self.current_transport_observation();
         let service_tier = self.current_service_tier();
         let provider_metadata_json = self.current_provider_metadata_json();
+        self.record_final_usage();
+        self.trace.record(
+            "request.finished",
+            json!({
+                "outcome": format!("{:?}", finalization.outcome),
+                "errorKind": finalization.error.kind().as_str(),
+                "sendState": format!("{:?}", finalization.send_state), "attempts": self.attempts,
+            }),
+        );
         self.persist_finalization(
             ModelRequestFinalization {
                 request_id: self.request_id.clone(),

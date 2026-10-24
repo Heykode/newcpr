@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { useAccountConnectionTest } from '../composables/useAccountConnectionTest'
-
 import { RefreshCw } from '@lucide/vue'
+
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
@@ -10,6 +10,7 @@ import BaseModal from '@/components/base/BaseModal/index.vue'
 import BaseScrollbar from '@/components/base/BaseScrollbar.vue'
 import BaseSelect from '@/components/base/BaseSelect.vue'
 import BaseTextarea from '@/components/base/BaseTextarea.vue'
+import { t } from '@/i18n'
 import AccountIdentityCell from './AccountIdentityCell.vue'
 import AccountStatusBadge from './AccountStatusBadge/index.vue'
 
@@ -54,8 +55,8 @@ function connectionLogClass(tone: string) {
 <template>
   <BaseModal
     v-model="open"
-    title="测试连接"
-    description="验证账号凭据、身份绑定与上游模型端点是否可用"
+    :title="t('accounts.connectionTest.title')"
+    :description="t('accounts.connectionTest.description')"
     tone="info"
     size="lg"
   >
@@ -77,12 +78,12 @@ function connectionLogClass(tone: string) {
         <div class="grid gap-3">
           <div class="flex min-h-8 items-center justify-between gap-3">
             <span class="text-cp-sm font-heavy text-cp-text-quaternary">
-              测试模型
+              {{ t('accounts.connectionTest.model') }}
             </span>
             <BaseIconButton
               variant="ghost"
               size="sm"
-              label="刷新上游模型"
+              :label="t('accounts.connectionTest.refreshModels')"
               :loading="refreshingModels"
               :disabled="status === 'running' || loadingModels"
               @click="emit('refreshModels')"
@@ -95,11 +96,11 @@ function connectionLogClass(tone: string) {
           </div>
           <BaseSelect
             v-model="selectedModel"
-            aria-label="测试模型"
+            :aria-label="t('accounts.connectionTest.model')"
             :options="modelOptions"
             :disabled="status === 'running' || loadingModels || refreshingModels"
             :placeholder="loadingModels ? '加载模型中' : '选择上游模型'"
-            empty-text="上游没有返回模型"
+            :empty-text="t('accounts.connectionTest.noModels')"
           />
           <div class="grid gap-3 sm:grid-cols-2">
             <BaseFormItem label="测试接口">
@@ -174,7 +175,7 @@ function connectionLogClass(tone: string) {
         <div class="mt-4 grid gap-3 sm:grid-cols-3">
           <div class="rounded-lg bg-cp-bg-container px-3 py-2.5">
             <p class="m-0 text-cp-xs font-heavy text-cp-text-quaternary">
-              开始时间
+              {{ t('accounts.concurrency.startTime') }}
             </p>
             <p class="mt-1.5 mb-0 font-mono text-cp-sm font-emphasis text-cp-text">
               {{ startedAt || '-' }}
@@ -182,7 +183,7 @@ function connectionLogClass(tone: string) {
           </div>
           <div class="rounded-lg bg-cp-bg-container px-3 py-2.5">
             <p class="m-0 text-cp-xs font-heavy text-cp-text-quaternary">
-              完成时间
+              {{ t('accounts.connectionTest.completedAt') }}
             </p>
             <p class="mt-1.5 mb-0 font-mono text-cp-sm font-emphasis text-cp-text">
               {{ finishedAt || '-' }}
@@ -190,17 +191,17 @@ function connectionLogClass(tone: string) {
           </div>
           <div class="rounded-lg bg-cp-bg-container px-3 py-2.5">
             <p class="m-0 text-cp-xs font-heavy text-cp-text-quaternary">
-              响应耗时
+              {{ t('accounts.connectionTest.duration') }}
             </p>
-            <p class="mt-1.5 mb-0 font-mono text-cp-sm font-emphasis text-cp-text">
-              {{ durationMs !== null ? `${durationMs}ms` : '-' }}
+            <p class="mt-1.5 mb-0 font-mono text-cp-sm font-emphasis whitespace-nowrap text-cp-text">
+              {{ durationMs !== null ? `${durationMs} ms` : '-' }}
             </p>
           </div>
         </div>
 
         <div class="mt-3 rounded-lg bg-cp-bg-container px-3 py-2.5">
           <p class="m-0 text-cp-xs font-heavy text-cp-text-quaternary">
-            测试模型
+            {{ t('accounts.connectionTest.model') }}
           </p>
           <p
             class="mt-1.5 mb-0 truncate font-mono text-cp-sm font-emphasis text-cp-text"
@@ -224,7 +225,7 @@ function connectionLogClass(tone: string) {
 
         <div class="mt-3 rounded-lg bg-cp-bg-container px-3 py-2.5">
           <p class="m-0 text-cp-xs font-heavy text-cp-text-quaternary">
-            事件轨迹
+            {{ t('accounts.connectionTest.events.title') }}
           </p>
           <BaseScrollbar max-height="260px">
             <div class="pt-2">
@@ -250,7 +251,7 @@ function connectionLogClass(tone: string) {
                         v-if="item.tone === 'danger'"
                         class="mt-0 mb-2 text-cp-xs font-heavy text-cp-text-quaternary"
                       >
-                        原始诊断
+                        {{ t('accounts.connectionTest.diagnostics') }}
                       </p>
                       <BaseScrollbar max-height="138px">
                         <div>
@@ -272,7 +273,7 @@ function connectionLogClass(tone: string) {
 
     <template #footer>
       <BaseButton variant="secondary" @click="open = false">
-        关闭
+        {{ t('common.actions.close') }}
       </BaseButton>
       <BaseButton
         variant="primary"

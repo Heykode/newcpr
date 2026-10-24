@@ -1,12 +1,14 @@
 <script setup lang="ts">
-import { Check, RotateCcw, Save, Search, Undo2 } from '@lucide/vue'
-
+import { Check, PanelsTopLeft, RotateCcw, Save, Search, Undo2 } from '@lucide/vue'
+import { shallowRef } from 'vue'
 import BaseButton from '@/components/base/BaseButton.vue'
+
 import BaseInput from '@/components/base/BaseInput.vue'
 import BasePageHeader from '@/components/base/BasePageHeader.vue'
 import BaseScrollbar from '@/components/base/BaseScrollbar.vue'
 import BaseSegmented from '@/components/base/BaseSegmented.vue'
 import { toast } from '@/components/base/BaseToast'
+import { t } from '@/i18n'
 
 import { useThemeEditor } from '../composables/useThemeEditor'
 import ThemeComponentTokenPanel from './ThemeComponentTokenPanel.vue'
@@ -45,6 +47,8 @@ const scopeOptions = [
   { label: '组件', value: 'component' },
 ]
 
+const mobilePreviewOpen = shallowRef(false)
+
 function switchScope(value: string) {
   scope.value = value === 'component' ? 'component' : 'global'
 }
@@ -60,7 +64,7 @@ function saveTheme(event: MouseEvent) {
 
 <template>
   <div class="flex min-h-0 w-full flex-col">
-    <BasePageHeader class="xl:h-17" title="主题设置">
+    <BasePageHeader class="xl:h-17" :title="t('navigation.appearance')">
       <template #description>
         <span class="flex flex-wrap items-center gap-x-2 gap-y-1">
           <span>自定义当前浏览器中的管理端配色与界面风格</span>
@@ -76,9 +80,15 @@ function saveTheme(event: MouseEvent) {
 
       <template #actions>
         <div class="flex flex-wrap items-center justify-end gap-2">
+          <BaseButton size="sm" variant="secondary" class="min-[768px]:hidden" :aria-pressed="mobilePreviewOpen" @click="mobilePreviewOpen = !mobilePreviewOpen">
+            <template #icon>
+              <PanelsTopLeft class="size-3.5" />
+            </template>
+            {{ mobilePreviewOpen ? t('appearance.preview.edit') : t('appearance.preview.open') }}
+          </BaseButton>
           <BaseSegmented
             :model-value="scope"
-            label="主题编辑层级"
+            :label="t('appearance.settings.themeEditingLevel')"
             :options="scopeOptions"
             size="sm"
             @update:model-value="switchScope"
@@ -87,13 +97,13 @@ function saveTheme(event: MouseEvent) {
             <template #icon>
               <Undo2 class="size-3.5" />
             </template>
-            撤销草稿
+            {{ t('appearance.settings.undoDraft') }}
           </BaseButton>
           <BaseButton size="sm" variant="secondary" @click="restoreDefaults">
             <template #icon>
               <RotateCcw class="size-3.5" />
             </template>
-            恢复默认
+            {{ t('appearance.settings.restoreDefault') }}
           </BaseButton>
           <BaseButton size="sm" variant="primary" :disabled="!dirty" @click="saveTheme">
             <template #icon>
@@ -108,20 +118,21 @@ function saveTheme(event: MouseEvent) {
 
     <section
       class="theme-workbench isolate mt-5 overflow-hidden rounded-cp-card bg-cp-bg-layout shadow-cp-card xl:flex xl:min-h-0 xl:flex-1 xl:flex-col"
-      aria-label="主题编辑器"
+      :aria-label="t('appearance.settings.themeEditor')"
     >
       <div
         class="theme-workbench-body grid min-h-180 gap-3 xl:min-h-0 xl:flex-1 xl:overflow-hidden xl:grid-cols-[370px_minmax(0,1fr)]"
       >
         <aside
-          class="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-3 overflow-hidden rounded-cp-lg bg-cp-bg-container pt-3 pr-0 pb-3 pl-3 shadow-cp-secondary"
-          aria-label="主题 Token 编辑面板"
+          class="h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-3 overflow-hidden rounded-cp-lg bg-cp-bg-container pt-3 pr-0 pb-3 pl-3 shadow-cp-secondary min-[768px]:grid"
+          :class="mobilePreviewOpen ? 'hidden' : 'grid'"
+          :aria-label="t('appearance.settings.themeTokenEditingPanel')"
         >
           <BaseInput
             v-model="query"
             class="mr-3"
-            aria-label="搜索 Token"
-            placeholder="搜索 Seed、Alias 或 Component Token"
+            :aria-label="t('appearance.settings.searchToken')"
+            :placeholder="t('appearance.settings.searchPlaceholder')"
           >
             <template #prefix>
               <Search class="size-4" />
@@ -158,7 +169,7 @@ function saveTheme(event: MouseEvent) {
           </BaseScrollbar>
         </aside>
 
-        <div class="hidden min-h-0 min-[768px]:block">
+        <div class="min-h-0 min-[768px]:block" :class="mobilePreviewOpen ? 'block' : 'hidden'">
           <ThemeEditorPreview v-model="preview" class="h-full" :theme="previewTheme" :style="previewStyle" />
         </div>
       </div>

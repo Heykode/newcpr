@@ -104,6 +104,7 @@ pub(super) struct AdminHarness {
     probe: Arc<dyn AccountProbe>,
     proxy_probe: Arc<dyn gateway_admin::ports::proxy::ProxyProbe>,
     system: Arc<dyn SystemOperations>,
+    snapshot: Arc<dyn SnapshotControl>,
 }
 
 impl AdminHarness {
@@ -129,6 +130,7 @@ impl AdminHarness {
             probe: Arc::new(UnavailableProbe),
             proxy_probe: Arc::new(proxies::TestProxies::default()),
             system: Arc::new(UnavailableSystem),
+            snapshot: Arc::new(NoopSnapshot),
         }
     }
 
@@ -162,6 +164,11 @@ impl AdminHarness {
 
     pub(super) fn account_groups(mut self, store: Arc<dyn AccountGroupStore>) -> Self {
         self.account_groups = store;
+        self
+    }
+
+    pub(super) fn snapshot(mut self, snapshot: Arc<dyn SnapshotControl>) -> Self {
+        self.snapshot = snapshot;
         self
     }
 
@@ -253,7 +260,7 @@ impl AdminHarness {
             },
             stores,
             self.providers,
-            Arc::new(NoopSnapshot),
+            self.snapshot,
             (self.probe, self.proxy_probe),
             Arc::new(NoopClientDistribution),
             (
@@ -853,6 +860,7 @@ pub(super) fn dashboard_profile_provider() -> Arc<dyn ProviderAdmin> {
             },
             user_agent: "gateway-admin-test".to_owned(),
             attributes: vec![DashboardWireAttribute {
+                key: "core",
                 label: "Core".to_owned(),
                 value: "test".to_owned(),
             }],

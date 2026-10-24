@@ -10,6 +10,7 @@ import BaseEmpty from '@/components/base/BaseEmpty.vue'
 import BaseModal from '@/components/base/BaseModal/index.vue'
 import BasePopover from '@/components/base/BasePopover.vue'
 import BaseSegmented from '@/components/base/BaseSegmented.vue'
+import { t } from '@/i18n'
 import { useAccountQuotaForecast } from '../../composables/useAccountQuotaForecast'
 import AccountIdentityCell from '../AccountIdentityCell.vue'
 import ForecastCapacity from './ForecastCapacity.vue'
@@ -70,8 +71,8 @@ function handleExplanationKeydown(event: KeyboardEvent) {
 <template>
   <BaseModal
     v-model="open"
-    title="额度预测"
-    description="按本周期估算，重置后重新累计"
+    :title="t('accounts.quotaForecast.quotaForecast')"
+    :description="t('accounts.quotaForecast.periodHelp')"
     size="md"
     tone="info"
   >
@@ -86,23 +87,23 @@ function handleExplanationKeydown(event: KeyboardEvent) {
             <span class="min-w-0 text-cp-xs wrap-anywhere text-cp-text-secondary">{{ account.planTypeDisplay }}</span>
           </template>
         </AccountIdentityCell>
-        <BaseSegmented v-model="period" label="预测周期" :options="options" class="w-48" />
+        <BaseSegmented v-model="period" :label="t('accounts.quotaForecast.forecastPeriod')" :options="options" class="w-48" />
       </div>
 
       <div class="min-w-0" aria-live="polite" :aria-busy="loading || refreshing">
         <ForecastSkeleton v-if="loading || refreshing" />
         <div v-else-if="error && !report" class="grid rounded-cp-card bg-cp-fill-tertiary/70 [html[data-theme=light]_&]:bg-cp-fill-quaternary/70">
-          <BaseEmpty title="预测加载失败" description="暂时无法取得预测数据，请重新加载。" surface="none" class="min-h-80 content-center">
+          <BaseEmpty :title="t('accounts.quotaForecast.predictionLoadFailed')" description="暂时无法取得预测数据，请重新加载。" surface="none" class="min-h-80 content-center">
             <template #action>
               <BaseButton variant="secondary" @click="load">
-                重新加载
+                {{ t('accounts.quotaForecast.reload') }}
               </BaseButton>
             </template>
           </BaseEmpty>
         </div>
         <template v-else-if="forecast">
           <div v-if="unavailableReason" class="grid rounded-cp-card bg-cp-fill-tertiary/70 [html[data-theme=light]_&]:bg-cp-fill-quaternary/70">
-            <BaseEmpty title="暂时无法预测" :description="unavailableReason" :icon="ChartNoAxesCombined" surface="none" class="min-h-72 content-center" />
+            <BaseEmpty :title="t('accounts.quotaForecast.unpredictableAtMoment')" :description="unavailableReason" :icon="ChartNoAxesCombined" surface="none" class="min-h-72 content-center" />
           </div>
           <ForecastCapacity v-else :forecast="forecast" />
         </template>
@@ -123,12 +124,12 @@ function handleExplanationKeydown(event: KeyboardEvent) {
               <template #icon>
                 <Info class="size-3.5" />
               </template>
-              预测说明
+              {{ t('accounts.quotaForecast.forecastDescription') }}
             </BaseButton>
           </template>
           <section :id="explanationId" role="tooltip" class="grid w-96 max-w-[calc(100vw-2rem)] gap-3 p-4 text-cp-xs leading-relaxed text-cp-text-secondary">
             <h4 class="m-0 font-heavy text-cp-text">
-              仅供参考
+              {{ t('accounts.quotaForecast.forReferenceOnly') }}
             </h4>
             <p class="m-0">
               Token 总量为本周期已记录用量加预计剩余，剩余量按本周期内近期用量估算。
@@ -152,7 +153,7 @@ function handleExplanationKeydown(event: KeyboardEvent) {
         </span>
       </div>
       <BaseButton variant="secondary" @click="open = false">
-        关闭
+        {{ t('common.actions.close') }}
       </BaseButton>
       <BaseButton variant="primary" :loading="refreshing" :disabled="loading" @click="refresh">
         <template #loading>
@@ -161,7 +162,7 @@ function handleExplanationKeydown(event: KeyboardEvent) {
         <template #icon>
           <RefreshCw class="size-3.5" />
         </template>
-        刷新额度
+        {{ t('accounts.quotaForecast.refreshQuota') }}
       </BaseButton>
     </template>
   </BaseModal>

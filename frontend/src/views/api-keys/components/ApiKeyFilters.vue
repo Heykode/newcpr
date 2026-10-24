@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { Plus, Search, Trash2 } from '@lucide/vue'
-
 import BaseButton from '@/components/base/BaseButton.vue'
+
 import BaseInput from '@/components/base/BaseInput.vue'
+import { t } from '@/i18n'
 
 defineProps<{
   batchDeleting: boolean
@@ -21,7 +22,7 @@ const search = defineModel<string>('search', { required: true })
   <div
     class="flex w-full flex-wrap items-center gap-3"
     role="group"
-    aria-label="API Key 筛选与操作"
+    :aria-label="t('keys.filters.apiKeyFilteringAndOperations')"
   >
     <div class="min-w-0 flex-1 md:w-96 md:flex-none">
       <BaseInput v-model="search" placeholder="搜索名称、标签或 ID" class="w-full">
@@ -47,7 +48,7 @@ const search = defineModel<string>('search', { required: true })
         <template #icon>
           <Plus class="size-4" />
         </template>
-        创建 API Key
+        {{ t('keys.filters.createApiKey') }}
       </BaseButton>
     </div>
   </div>

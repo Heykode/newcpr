@@ -56,13 +56,48 @@ export interface AccountQuotaCredits {
   balance: string | null
 }
 
+export type CodexQuotaOverdraftStatus
+  = 'pending' | 'passed' | 'inconclusive' | 'failed' | 'recovered'
+
+export interface CodexQuotaOverdraftStats {
+  requests: number
+  requestsDisplay: string
+  tokens: number
+  tokensDisplay: string
+  costUsd: string
+  costUsdDisplay: string
+}
+
+export interface CodexQuotaOverdraftWindow {
+  windowKey: string
+  active: boolean
+  startedAt: string | null
+  recoverAt: string | null
+  stats: CodexQuotaOverdraftStats | null
+}
+
+export interface CodexQuotaOverdraftState {
+  status: CodexQuotaOverdraftStatus
+  quotaWindow: string | null
+  probeModel: string | null
+  attempts: number
+  attemptLimit: number
+  reasonCode: string | null
+  testedAt: string | null
+  retryAt: string | null
+  recoverAt: string | null
+  windows: CodexQuotaOverdraftWindow[]
+}
+
 export interface AccountQuota {
   refreshedAtDisplay: string
+  refreshedAtRelative?: import('../time').RelativeTimeView | null
   limitReached: boolean
   // 429 临时限流（Redis 冷却）到期时间；非限流中为 null。
   rateLimitedUntil: string | null
   windows: AccountQuotaWindow[]
   credits: AccountQuotaCredits | null
+  overdraft?: CodexQuotaOverdraftState | null
 }
 
 export interface AccountCurrencyCost {
@@ -566,6 +601,7 @@ export interface AccountImportSettings {
 
 interface AccountImportParam {
   template?: import('./account-templates').AccountTemplateSelection
+  qualityTemplate?: Pick<import('./quality-ops').QualityRuleTemplate, 'id' | 'revision'>
   templateSettingsOverride?: boolean
   outboundProxyId?: string
   settings?: AccountImportSettings

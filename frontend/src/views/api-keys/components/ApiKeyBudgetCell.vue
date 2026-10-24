@@ -2,6 +2,7 @@
 import type { ApiKey } from '@/api'
 import { computed } from 'vue'
 import BasePopover from '@/components/base/BasePopover.vue'
+import { t } from '@/i18n'
 import { formatDateTime } from '@/utils/date'
 import { formatBudgetAmount } from '../utils/format'
 
@@ -43,7 +44,7 @@ const windows = computed(() => [
         <div class="flex items-baseline justify-between gap-3 text-cp-xs text-cp-text-tertiary">
           <span class="shrink-0">{{ window.reset ? '重置（北京时间）' : '重置' }}</span>
           <time v-if="window.reset" :datetime="window.reset" class="text-right font-mono tabular-nums">{{ formatDateTime(window.reset, '—', 'Asia/Shanghai') }}</time>
-          <span v-else>下次使用时确定</span>
+          <span v-else>{{ t('keys.confirmNextTime') }}</span>
         </div>
       </div>
     </section>

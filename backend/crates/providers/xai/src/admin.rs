@@ -366,14 +366,17 @@ impl ProviderAdmin for XaiAdminProvider {
             attributes: vec![
                 DashboardWireAttribute {
                     label: "客户端标识".to_owned(),
+                    key: "client_identifier",
                     value: profile.client_identifier,
                 },
                 DashboardWireAttribute {
                     label: "运行模式".to_owned(),
+                    key: "client_mode",
                     value: profile.client_mode,
                 },
                 DashboardWireAttribute {
                     label: "Token 认证".to_owned(),
+                    key: "token_auth",
                     value: "xai-grok-cli".to_owned(),
                 },
             ],

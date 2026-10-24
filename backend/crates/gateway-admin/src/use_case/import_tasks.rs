@@ -16,7 +16,7 @@ use gateway_core::{
 use tokio::{sync::Notify, time::Instant};
 use uuid::Uuid;
 
-use super::{openai::OpenAiService, xai::XaiService};
+use super::{openai::OpenAiService, quality_ops::QualityOpsService, xai::XaiService};
 use crate::model::{
     AdminError, AdminErrorKind, MutationActor, MutationContext,
     import_tasks::{
@@ -130,15 +130,21 @@ pub(crate) struct DefaultImportTasksService {
     notify: Notify,
     openai: Arc<dyn OpenAiService>,
     xai: Arc<dyn XaiService>,
+    quality_ops: Option<Arc<QualityOpsService>>,
 }
 
 impl DefaultImportTasksService {
-    pub(crate) fn new(openai: Arc<dyn OpenAiService>, xai: Arc<dyn XaiService>) -> Arc<Self> {
+    pub(crate) fn new_with_quality_ops(
+        openai: Arc<dyn OpenAiService>,
+        xai: Arc<dyn XaiService>,
+        quality_ops: Option<Arc<QualityOpsService>>,
+    ) -> Arc<Self> {
         Arc::new(Self {
             registry: Mutex::default(),
             notify: Notify::new(),
             openai,
             xai,
+            quality_ops,
         })
     }
 
@@ -175,24 +181,64 @@ impl DefaultImportTasksService {
     }
 
     async fn execute(&self, id: Uuid, index: usize, input: ImportTaskInput) {
+        let ImportTaskInput {
+            provider,
+            command,
+            quality_template,
+        } = input;
+        let context = command.context.clone();
         let operation = async {
-            match input.provider.as_str() {
-                "openai" => self.openai.import_document(input.command).await,
-                "xai" => self.xai.import_document(input.command).await,
+            match provider.as_str() {
+                "openai" => self.openai.import_document(command).await,
+                "xai" => self.xai.import_document(command).await,
                 _ => Err(AdminError::invalid("Unsupported import provider")),
             }
         };
         let result = AssertUnwindSafe(operation).catch_unwind().await;
+        let result = match result {
+            Ok(Ok(result)) => {
+                let warning = if let Some(selection) = quality_template {
+                    if let Some(quality_ops) = self.quality_ops.as_ref() {
+                        match quality_ops
+                            .apply_template_to_accounts(
+                                &selection,
+                                &result.credential_ids,
+                                &context,
+                            )
+                            .await
+                        {
+                            Ok(applied) => {
+                                let failed = applied.iter().filter(|item| !item.success).count();
+                                (failed > 0).then(|| {
+                                    format!("账号已导入；监测模板有 {failed} 个账号未应用")
+                                })
+                            }
+                            Err(error) => {
+                                Some(format!("账号已导入；监测模板未应用：{}", error.message()))
+                            }
+                        }
+                    } else {
+                        Some("账号已导入；监测模板服务未配置".to_owned())
+                    }
+                } else {
+                    None
+                };
+                Ok(Ok((result, warning)))
+            }
+            Ok(Err(error)) => Ok(Err(error)),
+            Err(error) => Err(error),
+        };
         let mut registry = self.registry();
         let Some(entry) = registry.tasks.iter_mut().find(|entry| entry.task_id == id) else {
             return;
         };
         let item = &mut entry.items[index];
         match result {
-            Ok(Ok(result)) => {
+            Ok(Ok((result, warning))) => {
                 item.status = ImportItemStatus::Succeeded;
                 item.account_ids = result.credential_ids;
                 item.account_emails = result.credential_emails;
+                item.message = warning;
             }
             Ok(Err(error)) => {
                 // Storage/publication can fail after commit. Never replay a possible RT exchange.

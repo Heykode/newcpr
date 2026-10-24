@@ -180,6 +180,8 @@ pub struct ReloginEnrollment {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub purchase_cost: Option<super::account_purchase::AccountPurchaseUpdate>,
     pub model_access: Option<gateway_core::account::AccountModelAccess>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quality_template: Option<super::quality_ops::QualityTemplateSelection>,
     pub context: super::MutationContext,
 }
 
@@ -222,10 +224,20 @@ impl ReloginEnrollment {
             custom_name: super::accounts::normalize_custom_name(settings.custom_name.as_deref())?,
             purchase_cost: settings.purchase_cost,
             model_access: settings.model_access,
+            quality_template: None,
             context,
         };
         result.settings()?;
         Ok(result)
+    }
+
+    #[must_use]
+    pub fn with_quality_template(
+        mut self,
+        quality_template: Option<super::quality_ops::QualityTemplateSelection>,
+    ) -> Self {
+        self.quality_template = quality_template;
+        self
     }
 
     pub fn settings(&self) -> Result<super::accounts::AccountImportSettings, AdminError> {

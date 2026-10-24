@@ -5,6 +5,7 @@ import { computed, onScopeDispose, ref, shallowRef, watch } from 'vue'
 import { getAccountGroups, getApiKeys } from '@/api'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
+import { t } from '@/i18n'
 
 const props = defineProps<{ kind: 'key' | 'group' }>()
 const model = defineModel<string>({ default: '' })
@@ -94,7 +95,7 @@ onScopeDispose(close)
     </div>
     <div v-if="open" class="absolute right-0 left-0 z-40 mt-1 max-h-64 overflow-auto rounded-cp border border-cp-border bg-cp-bg-elevated p-1 shadow-cp" :aria-label="`${label}候选`">
       <p v-if="loading" class="px-2 text-cp-xs">
-        加载中
+        {{ t('common.status.loading') }}
       </p>
       <p v-else-if="failed" role="alert" class="px-2 text-cp-xs text-cp-error-text">
         查询失败

@@ -423,6 +423,32 @@ impl QualityOpsService {
             .map_err(|error| map_store_error(error, "quality monitoring"))
     }
 
+    pub async fn apply_template_to_accounts(
+        &self,
+        selection: &QualityTemplateSelection,
+        account_ids: &[ProviderAccountId],
+        context: &MutationContext,
+    ) -> Result<Vec<QualityTemplateApplyResult>, AdminError> {
+        let ids = account_ids
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+        let monitoring = self.monitoring(&ids).await?;
+        let targets = ids
+            .into_iter()
+            .map(|account_id| {
+                let current = monitoring.get(&account_id);
+                QualityTemplateTarget {
+                    account_id,
+                    rule_id: current.map(|rule| rule.rule_id.clone()),
+                    revision: current.map(|rule| rule.revision),
+                }
+            })
+            .collect();
+        self.apply_template(&selection.id, selection.revision, targets, context)
+            .await
+    }
+
     pub async fn apply_template(
         &self,
         id: &str,

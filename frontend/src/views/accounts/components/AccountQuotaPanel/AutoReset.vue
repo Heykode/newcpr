@@ -7,6 +7,7 @@ import BaseButton from '@/components/base/BaseButton.vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseNumberInput from '@/components/base/BaseNumberInput.vue'
 import BaseSwitch from '@/components/base/BaseSwitch.vue'
+import { t } from '@/i18n'
 import { formatDateTime } from '@/utils/date'
 
 const props = defineProps<{ accountId: string, native: boolean }>()
@@ -105,10 +106,10 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <section class="grid min-w-0 gap-3 border-t border-cp-border pt-4" aria-label="自动使用重置卡">
+  <section class="grid min-w-0 gap-3 border-t border-cp-border pt-4" :aria-label="t('accounts.quotaReset.automaticallyUseResetCard')">
     <div class="flex items-center justify-between gap-2">
       <h3 class="text-cp-sm font-semibold">
-        自动使用重置卡
+        {{ t('accounts.quotaReset.automaticallyUseResetCard') }}
       </h3>
       <BaseIconButton label="刷新自动重置设置" :disabled="loading || saving" @click="load">
         <RefreshCw class="size-4" :class="loading && 'animate-spin'" />

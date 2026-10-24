@@ -1,9 +1,15 @@
-const integerFormatter = new Intl.NumberFormat('zh-CN')
+import { locale } from '@/i18n'
 
-const localizedCompactFormatter = new Intl.NumberFormat('zh-CN', {
-  notation: 'compact',
-  maximumFractionDigits: 1,
-})
+const formatters = new Map<string, Intl.NumberFormat>()
+function formatter(compact = false) {
+  const key = `${locale.value}:${compact}`
+  let value = formatters.get(key)
+  if (!value) {
+    value = new Intl.NumberFormat(locale.value, compact ? { notation: 'compact', maximumFractionDigits: 1 } : {})
+    formatters.set(key, value)
+  }
+  return value
+}
 
 const metricUnits = [
   ['P', 1_000_000_000_000_000],
@@ -14,11 +20,11 @@ const metricUnits = [
 ] as const
 
 export function formatInteger(value: number) {
-  return integerFormatter.format(value)
+  return formatter().format(value)
 }
 
 export function formatLocalizedCompactNumber(value: number) {
-  return localizedCompactFormatter.format(Number.isFinite(value) ? value : 0)
+  return formatter(true).format(Number.isFinite(value) ? value : 0)
 }
 
 export function formatCompactNumber(value: number) {

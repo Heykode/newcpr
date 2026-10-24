@@ -7,6 +7,7 @@ import BaseEmpty from '@/components/base/BaseEmpty.vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseSelect from '@/components/base/BaseSelect.vue'
 import { cellDisplayValue, columnSortKey } from '@/components/base/BaseTable/columns'
+import { t } from '@/i18n'
 import { derivedAccountStatus } from '../constants'
 import AccountIdentityCell from './AccountIdentityCell.vue'
 
@@ -113,7 +114,7 @@ function changeSort(key: string) {
         </div>
         <div data-account-mobile-footer class="grid min-w-0 grid-cols-[auto_minmax(0,1fr)_32px] items-center gap-x-2">
           <div class="flex min-w-0 items-center gap-1.5 text-xs text-cp-text-secondary">
-            <span>容量</span><slot name="capacity" :row="row" />
+            <span>{{ t('groups.fields.capacity') }}</span><slot name="capacity" :row="row" />
           </div>
           <div class="min-w-0" aria-label="账号分组">
             <slot name="groups" :row="row" />

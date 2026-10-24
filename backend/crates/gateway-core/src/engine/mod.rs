@@ -361,6 +361,9 @@ pub struct RequestAttemptContext {
     provider_route: Arc<std::sync::OnceLock<String>>,
     request_profile: Option<Arc<crate::account::OpaqueProviderData>>,
     disable_fast: bool,
+    codex_quota_overdraft_enabled: bool,
+    codex_quota_overdraft_probe_model: crate::routing::UpstreamModelId,
+    config_revision: crate::routing::ConfigRevision,
     request_location: Option<crate::account::RequestLocation>,
     request_id: ModelRequestId,
     client_api_key_ref: ClientApiKeyId,
@@ -410,6 +413,19 @@ impl RequestAttemptContext {
     }
 
     #[must_use]
+    pub fn with_codex_quota_overdraft(
+        mut self,
+        enabled: bool,
+        probe_model: crate::routing::UpstreamModelId,
+        config_revision: crate::routing::ConfigRevision,
+    ) -> Self {
+        self.codex_quota_overdraft_enabled = enabled;
+        self.codex_quota_overdraft_probe_model = probe_model;
+        self.config_revision = config_revision;
+        self
+    }
+
+    #[must_use]
     pub fn with_request_location(
         mut self,
         location: Option<crate::account::RequestLocation>,
@@ -428,6 +444,11 @@ impl RequestAttemptContext {
             request_id,
             client_api_key_ref,
             disable_fast: false,
+            codex_quota_overdraft_enabled: false,
+            codex_quota_overdraft_probe_model: crate::routing::UpstreamModelId::new("gpt-6-astra")
+                .expect("valid default overdraft probe model"),
+            config_revision: crate::routing::ConfigRevision::new(1)
+                .expect("valid initial config revision"),
             request_location: None,
             request_profile: None,
             timing_started_at: Instant::now(),
@@ -477,6 +498,7 @@ pub struct AttemptContext {
     continuation_attempt: ContinuationAttempt,
     transport: AttemptTransport,
     request_tuning: RequestTuning,
+    codex_quota_overdraft_eligible: bool,
     account_wait_budget: Option<Arc<AccountWaitBudget>>,
     cancellation: CancellationToken,
 }
@@ -523,6 +545,21 @@ impl AttemptContext {
     }
 
     #[must_use]
+    pub const fn codex_quota_overdraft_enabled(&self) -> bool {
+        self.request.codex_quota_overdraft_enabled
+    }
+
+    #[must_use]
+    pub const fn codex_quota_overdraft_probe_model(&self) -> &crate::routing::UpstreamModelId {
+        &self.request.codex_quota_overdraft_probe_model
+    }
+
+    #[must_use]
+    pub const fn config_revision(&self) -> crate::routing::ConfigRevision {
+        self.request.config_revision
+    }
+
+    #[must_use]
     pub fn request_location(&self) -> Option<&crate::account::RequestLocation> {
         self.request.request_location.as_ref()
     }
@@ -558,6 +595,7 @@ impl AttemptContext {
             continuation_attempt,
             transport: AttemptTransport::Default,
             request_tuning: RequestTuning::defaults(),
+            codex_quota_overdraft_eligible: false,
             account_wait_budget: None,
             cancellation,
         }
@@ -593,6 +631,17 @@ impl AttemptContext {
             )));
         }
         self
+    }
+
+    #[must_use]
+    pub const fn with_codex_quota_overdraft_eligibility(mut self, eligible: bool) -> Self {
+        self.codex_quota_overdraft_eligible = eligible;
+        self
+    }
+
+    #[must_use]
+    pub const fn codex_quota_overdraft_eligible(&self) -> bool {
+        self.codex_quota_overdraft_eligible
     }
 
     #[must_use]

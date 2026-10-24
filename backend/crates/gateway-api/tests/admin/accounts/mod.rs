@@ -1748,6 +1748,7 @@ mod response {
             excel_recovery: None,
             purchase_cost: None,
             turn_state: None,
+            codex_quota_overdraft: None,
             effective_concurrency_limit: std::num::NonZeroU32::new(3).expect("concurrency limit"),
             account: AccountRecord {
                 outbound_proxy_enabled: true,
@@ -2396,6 +2397,19 @@ mod actions {
 mod import_settings {
     use gateway_api::admin::accounts::{AccountImportRequest, CompleteAccountAuthorizationRequest};
     use serde_json::json;
+
+    #[test]
+    fn import_request_accepts_a_revision_fenced_quality_template() {
+        let request: AccountImportRequest = serde_json::from_value(json!({
+            "provider": "openai",
+            "data": {},
+            "qualityTemplate": {"id": "quality-template", "revision": 3}
+        }))
+        .unwrap();
+        let selected = request.quality_template.unwrap();
+        assert_eq!(selected.id, "quality-template");
+        assert_eq!(selected.revision, 3);
+    }
 
     #[test]
     fn state_import_setting_is_optional_boolean_and_openai_only() {

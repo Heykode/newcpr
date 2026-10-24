@@ -40,7 +40,7 @@ test('initial expired access recovers through refresh and login waits for its co
   assert.deepEqual(calls, ['refresh', 'login'])
 })
 
-function load(path, dependencies = {}) {
+function load(path, dependencies = {}, globals = {}) {
   const source = readFileSync(new URL(path, import.meta.url), 'utf8')
   const { outputText } = ts.transpileModule(source, {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2024 },
@@ -49,6 +49,9 @@ function load(path, dependencies = {}) {
   runInNewContext(outputText, {
     exports,
     setTimeout,
+    Blob,
+    Response,
+    ...globals,
     require: name => dependencies[name] ?? require(name),
   })
   return exports
@@ -64,7 +67,7 @@ function deferred() {
   return { promise, resolve, reject }
 }
 
-function requestHarness(adapter) {
+function requestHarness(adapter, fetcher) {
   let renewals = 0
   let logouts = 0
   const messages = []
@@ -73,7 +76,7 @@ function requestHarness(adapter) {
     './constants': { API_BASE_URL: '', API_TIMEOUT_MS: 1000 },
     './error': load('../src/api/error.ts'),
     '@/components/base/BaseToast': { toast: { error: message => messages.push(message) } },
-  })
+  }, { fetch: fetcher })
   module.setUnauthorizedHandler(() => {
     logouts += 1
   })
@@ -133,6 +136,48 @@ test('old request failure cannot invalidate a new login generation', async () =>
   assert.equal(app.renewals(), 0)
   assert.equal(app.logouts(), 0)
   assert.equal(app.messages.length, 0)
+})
+
+test('a stale successful response is discarded after a new login', async () => {
+  const gate = deferred()
+  const app = requestHarness(async (config) => {
+    await gate.promise
+    return response(config, 200)
+  })
+  const request = app.module.default({ url: '/api/admin/accounts' })
+  await new Promise(resolve => setTimeout(resolve, 0))
+  app.module.invalidatePendingRequests()
+  gate.resolve()
+  await assert.rejects(request, error => axios.isCancel(error))
+  assert.equal(app.messages.length, 0)
+})
+
+test('ZIP download recognizes expired-session JSON in a Blob and recovers once', async () => {
+  const app = requestHarness(async config => ({
+    ...response(config, config.authRetried ? 200 : 401),
+    data: config.authRetried
+      ? new Blob(['zip'], { type: 'application/zip' })
+      : new Blob([JSON.stringify({ code: 40101, message: 'expired', data: null })], { type: 'application/json' }),
+  }))
+  const blob = await app.module.default({ url: '/api/admin/diagnostics', responseType: 'blob' })
+  assert.equal(await blob.text(), 'zip')
+  assert.equal(app.renewals(), 1)
+})
+
+test('raw streaming POST retries only a definite expired authentication response', async () => {
+  for (const status of [401, 200, 503]) {
+    let calls = 0
+    const app = requestHarness(undefined, async () => {
+      calls += 1
+      return calls === 1 && status === 401
+        ? Response.json({ code: 40101, message: 'expired', data: null }, { status })
+        : new Response('event stream', { status: status === 401 ? 200 : status })
+    })
+    const response = await app.module.sessionFetch('/api/admin/accounts/connection-test', { method: 'POST', body: '{}' })
+    assert.equal(calls, status === 401 ? 2 : 1)
+    assert.equal(app.renewals(), status === 401 ? 1 : 0)
+    await response.body.cancel()
+  }
 })
 
 test('transient renewal failure preserves authentication', async () => {

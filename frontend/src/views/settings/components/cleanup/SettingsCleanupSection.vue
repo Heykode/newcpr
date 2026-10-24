@@ -7,6 +7,7 @@ import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseNumberInput from '@/components/base/BaseNumberInput.vue'
 import BaseSelect from '@/components/base/BaseSelect.vue'
 import BaseSwitch from '@/components/base/BaseSwitch.vue'
+import { t } from '@/i18n'
 import { useLogCleanup } from '../../composables/useLogCleanup'
 import { cleanupBytes, cleanupCategories, cleanupCutoff } from './cleanup'
 import CleanupRetentionInput from './CleanupRetentionInput.vue'
@@ -81,7 +82,7 @@ function date(value: string) {
           <BaseSelect v-model="draft.frequency" :options="frequencies" :disabled="busy || running || !draft.enabled" aria-label="执行频率" class="w-44 max-w-full" />
         </div>
         <div v-if="draft.frequency === 'daily'" class="grid gap-1.5">
-          <span class="text-cp-xs text-cp-text-secondary">执行时间</span>
+          <span class="text-cp-xs text-cp-text-secondary">{{ t('settings.warmup.executionTime') }}</span>
           <div class="flex flex-wrap gap-2">
             <BaseNumberInput v-model="draft.dailyHour" label="执行小时" unit="时" :min="0" :max="23" :disabled="busy || running || !draft.enabled" />
             <BaseNumberInput v-model="draft.dailyMinute" label="执行分钟" unit="分" :min="0" :max="59" :disabled="busy || running || !draft.enabled" />

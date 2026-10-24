@@ -33,6 +33,8 @@ pub mod admin;
 mod health;
 mod image_relay;
 pub mod openai;
+mod time;
+pub use time::{RelativeTimeUnit, RelativeTimeView};
 
 /// API-owned HTTP 与静态资源配置。
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]

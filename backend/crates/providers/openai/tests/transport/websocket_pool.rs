@@ -1018,10 +1018,15 @@ async fn websocket_pool_shutdown_should_cancel_and_join_active_stream() {
             .unwrap();
         let close = timeout(Duration::from_secs(2), websocket.next())
             .await
-            .expect("pool shutdown should close the active websocket")
-            .expect("shutdown should produce a close frame")
-            .expect("close frame should be valid");
-        std::assert_matches!(close, Message::Close(_));
+            .expect("pool shutdown should close the active websocket");
+        // 取消活跃响应直接中止 pump，不依赖关闭握手完成
+        std::assert_matches!(
+            close,
+            None | Some(Ok(Message::Close(_)))
+                | Some(Err(tungstenite::Error::Protocol(
+                    tungstenite::error::ProtocolError::ResetWithoutClosingHandshake
+                )))
+        );
     });
     let pool = Arc::new(CodexWebSocketPool::default());
     let backend = CodexBackendClient::new(

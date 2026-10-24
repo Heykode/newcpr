@@ -1808,6 +1808,43 @@ async fn zero_attempt_failure_is_queryable_without_fabricating_upstream_facts() 
 }
 
 #[tokio::test]
+async fn diagnostic_trace_above_legacy_limit_survives_finalization() {
+    let Some(database) = TestDatabase::create("large_trace").await else {
+        return;
+    };
+    let store = PgExecutionStore::new(database.pool.clone());
+    let request = accepted_request("req_large_trace");
+    store
+        .create_model_request(request.clone())
+        .await
+        .expect("create request");
+    let trace = gateway_core::diagnostics::TraceContext::new(request.id.as_str());
+    for _ in 0..15 {
+        trace.record("upstream.synthetic", json!({"synthetic": "x".repeat(3000)}));
+    }
+    for _ in 0..3 {
+        trace.record_evidence("attempt.failed", json!({"synthetic": "x".repeat(10000)}));
+    }
+    let snapshot = trace.snapshot().expect("trace");
+    let encoded = snapshot.to_string();
+    assert!(encoded.len() > 64 * 1024);
+    assert!(encoded.len() <= gateway_core::diagnostics::MAX_TRACE_SNAPSHOT_BYTES);
+    let mut finalization = early_failure(&request);
+    finalization.diagnostic_trace_json = Some(encoded);
+    ExecutionStore::finalize_model_request(&store, finalization)
+        .await
+        .expect("persist full trace");
+    let stored: Value =
+        sqlx::query_scalar("select diagnostic_trace_json from model_requests where id = $1")
+            .bind(request.id.as_str())
+            .fetch_one(&database.pool)
+            .await
+            .unwrap();
+    assert_eq!(stored, snapshot);
+    database.close().await;
+}
+
+#[tokio::test]
 async fn zero_attempt_finalization_rejects_sent_or_missing_attempt_facts_atomically() {
     let Some(database) = TestDatabase::create("zero_attempt_constraints").await else {
         return;
@@ -1841,7 +1878,8 @@ async fn zero_attempt_finalization_rejects_sent_or_missing_attempt_facts_atomica
     for invalid_trace in [
         "not JSON".to_owned(),
         "[]".to_owned(),
-        json!({"data": "x".repeat(65_536)}).to_string(),
+        json!({"data": "x".repeat(gateway_core::diagnostics::MAX_TRACE_SNAPSHOT_BYTES)})
+            .to_string(),
     ] {
         let mut finalization = early_failure(&request);
         finalization.diagnostic_trace_json = Some(invalid_trace);

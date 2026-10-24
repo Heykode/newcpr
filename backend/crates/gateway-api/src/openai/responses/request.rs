@@ -2,7 +2,7 @@
 
 use std::{borrow::Cow, fmt, net::IpAddr};
 
-use axum::http::HeaderMap;
+use axum::http::{HeaderMap, HeaderName, HeaderValue};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use gateway_core::operation::{GenerateRequest, Operation, ProtocolPayload, ProviderSessionState};
 use gateway_protocol::openai::{
@@ -588,6 +588,20 @@ fn scheduling_session_hint(headers: &HeaderMap) -> Option<OpenAiSchedulingSessio
 }
 
 fn passthrough_headers(headers: &HeaderMap) -> Vec<Value> {
+    passthrough_request_headers(headers, false)
+        .map(|(name, value)| {
+            Value::Array(vec![
+                Value::String(name.as_str().to_owned()),
+                Value::String(STANDARD.encode(value.as_bytes())),
+            ])
+        })
+        .collect()
+}
+
+pub(crate) fn passthrough_request_headers(
+    headers: &HeaderMap,
+    live: bool,
+) -> impl Iterator<Item = (&HeaderName, &HeaderValue)> {
     let connection_headers = headers
         .get_all("connection")
         .iter()
@@ -600,21 +614,15 @@ fn passthrough_headers(headers: &HeaderMap) -> Vec<Value> {
 
     headers
         .iter()
-        .filter(|(name, _)| passthrough_header_name(name.as_str(), &connection_headers))
-        .map(|(name, value)| {
-            Value::Array(vec![
-                Value::String(name.as_str().to_owned()),
-                Value::String(STANDARD.encode(value.as_bytes())),
-            ])
-        })
-        .collect()
+        .filter(move |(name, _)| passthrough_header_name(name.as_str(), &connection_headers, live))
 }
 
-fn passthrough_header_name(name: &str, connection_headers: &[String]) -> bool {
+fn passthrough_header_name(name: &str, connection_headers: &[String], live: bool) -> bool {
     if connection_headers
         .iter()
         .any(|connection_header| connection_header.eq_ignore_ascii_case(name))
-        || is_transport_managed_request_header(name)
+        // Live uses this as a business reference, not a Responses scheduling hint.
+        || (is_transport_managed_request_header(name) && !(live && name == "x-session-id"))
         || name.starts_with("x-grok-")
         || name.starts_with("x-xai-")
         || name.starts_with("x-stainless-")

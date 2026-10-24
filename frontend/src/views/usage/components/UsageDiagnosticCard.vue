@@ -2,14 +2,15 @@
 import type { getUsageRecordInsightsDiagnostics } from '@/api'
 import type { TableColumnSize } from '@/components/base/BaseTable/columns'
 import { ChevronLeft, ChevronRight, CornerDownRight } from '@lucide/vue'
-
 import { computed } from 'vue'
+
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseEmpty from '@/components/base/BaseEmpty.vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseSelect from '@/components/base/BaseSelect.vue'
 import { defineTableColumns } from '@/components/base/BaseTable/columns'
 import BaseTable from '@/components/base/BaseTable/index.vue'
+import { t } from '@/i18n'
 import { formatLocalizedCompactNumber as formatCompactNumber } from '@/utils/number'
 import AccountPlanBadge from '@/views/accounts/components/AccountPlanBadge.vue'
 
@@ -154,14 +155,14 @@ function diagnosticNameDisplay(name: string, key: string) {
 <template>
   <BaseCard
     as="article"
-    title="热点诊断"
+    :title="t('usage.diagnostics.title')"
     :description="`按${selectedDimensionLabel}定位高影响请求`"
     class="h-105 min-h-105 max-h-105 min-w-0 w-full lg:h-full lg:min-h-90 lg:max-h-105"
   >
     <template #actions>
       <BaseSelect
         v-model="dimension"
-        aria-label="诊断维度"
+        :aria-label="t('usage.diagnostics.diagnosticDimension')"
         :options="dimensionOptions"
         :disabled="loading"
         class="w-36 max-w-full"
@@ -178,7 +179,7 @@ function diagnosticNameDisplay(name: string, key: string) {
         density="compact"
         column-layout="content"
         row-key="key"
-        empty-text="暂无诊断数据"
+        :empty-text="t('usage.diagnostics.noDiagnosticDataYet')"
       >
         <template #header-nameDisplay>
           {{ resultDimensionLabel }}
@@ -217,7 +218,7 @@ function diagnosticNameDisplay(name: string, key: string) {
         <template #requestCount="{ row }">
           <span
             class="grid justify-items-end gap-1 font-mono leading-none tabular-nums"
-            :title="`成功 ${formatCompactNumber(row.successCount)}`"
+            :title="t('usage.diagnostics.successful', { count: formatCompactNumber(row.successCount) })"
           >
             <strong class="font-bold text-cp-text">
               {{ formatCompactNumber(row.requestCount) }}
@@ -257,7 +258,7 @@ function diagnosticNameDisplay(name: string, key: string) {
         <template #firstTokenP95Ms="{ row }">
           <div
             class="grid justify-items-end gap-1 font-mono leading-none tabular-nums"
-            :title="`重试率 ${formatPercent(row.retryRate)}`"
+            :title="t('usage.diagnostics.retryRate', { rate: formatPercent(row.retryRate) })"
           >
             <span class="inline-flex items-baseline gap-1.5">
               <small class="text-[10px] font-emphasis text-cp-text-quaternary">TTFT</small>
@@ -268,7 +269,7 @@ function diagnosticNameDisplay(name: string, key: string) {
             <small class="flex items-center gap-2 text-[10px] font-emphasis text-cp-text-quaternary">
               <span>P95 {{ formatDuration(row.latencyP95Ms) }}</span>
               <span :class="row.retryCount > 0 ? 'text-cp-orange-text' : undefined">
-                重试 {{ formatCompactNumber(row.retryCount) }}
+                {{ t('usage.diagnostics.retries', { count: formatCompactNumber(row.retryCount) }) }}
               </span>
             </small>
           </div>

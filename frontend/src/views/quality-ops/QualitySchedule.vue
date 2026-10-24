@@ -3,6 +3,7 @@ import { computed } from 'vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import FormItem from '@/components/base/BaseForm/FormItem.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
+import { t } from '@/i18n'
 import { DEFAULT_QUALITY_INTERVAL_SECONDS, MAX_QUALITY_INTERVAL_SECONDS, MIN_QUALITY_INTERVAL_SECONDS } from './schedule'
 
 defineProps<{ cron?: string, timezone?: string }>()
@@ -27,7 +28,7 @@ const seconds = computed({
       <FormItem label="检测频率" required>
         <BaseInput v-model="seconds" type="number" aria-label="检测频率" inputmode="numeric" :min="MIN_QUALITY_INTERVAL_SECONDS" :max="MAX_QUALITY_INTERVAL_SECONDS" :step="1">
           <template #suffix>
-            秒
+            {{ t('settings.autoDisable.seconds') }}
           </template>
         </BaseInput>
       </FormItem>

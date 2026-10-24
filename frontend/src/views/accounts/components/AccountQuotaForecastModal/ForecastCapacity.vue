@@ -2,6 +2,7 @@
 import type { AccountQuotaForecast } from '@/api'
 import { ArrowRight, Info } from '@lucide/vue'
 import { computed } from 'vue'
+import { t } from '@/i18n'
 
 const props = defineProps<{ forecast: AccountQuotaForecast }>()
 const source = computed(() => props.forecast.source)
@@ -22,10 +23,10 @@ const metrics = computed(() => [
 </script>
 
 <template>
-  <section v-if="source" aria-label="容量预测" class="flex flex-col gap-5 rounded-cp-card bg-cp-fill-tertiary/70 p-4 [html[data-theme=light]_&]:bg-cp-fill-quaternary/70">
+  <section v-if="source" :aria-label="t('accounts.quotaForecast.capacityForecast')" class="flex flex-col gap-5 rounded-cp-card bg-cp-fill-tertiary/70 p-4 [html[data-theme=light]_&]:bg-cp-fill-quaternary/70">
     <div>
       <div class="flex flex-wrap items-center justify-between gap-2">
-        <span class="text-cp-xs text-cp-text-secondary">本周期已用</span>
+        <span class="text-cp-xs text-cp-text-secondary">{{ t('accounts.quotaForecast.usedThisCycle') }}</span>
         <span class="inline-flex items-center gap-1 rounded-cp-sm bg-cp-info-container px-2 py-1 text-cp-xs font-emphasis text-cp-info-on-container">
           <Info class="size-3" aria-hidden="true" />
           {{ forecast.lowSample ? '初步估算 · 仅供参考' : '估算值 · 仅供参考' }}
@@ -33,7 +34,7 @@ const metrics = computed(() => [
       </div>
       <div class="mt-2 flex items-end justify-between gap-4">
         <strong class="font-mono text-3xl font-heavy tabular-nums text-cp-text [html[data-theme=light]_&]:font-emphasis">{{ source.usedPercentDisplay }}</strong>
-        <span class="pb-1 text-cp-xs text-cp-text-secondary">本周期 <span class="font-mono">100%</span></span>
+        <span class="pb-1 text-cp-xs text-cp-text-secondary">{{ t('accounts.quotaForecast.thisCycle') }} <span class="font-mono">100%</span></span>
       </div>
 
       <!-- 实心为已观测比例，虚线为待推算容量，不伪造历史趋势或置信区间。 -->
@@ -52,7 +53,7 @@ const metrics = computed(() => [
 
     <div class="grid gap-2">
       <div class="flex justify-between text-cp-xs text-cp-text-secondary">
-        <span>本周期已记录</span>
+        <span>{{ t('accounts.quotaForecast.alreadyRecordedThisCycle') }}</span>
         <span>{{ forecast.extrapolated ? `${forecast.targetDays}天折算容量` : '本周期预计总量' }}</span>
       </div>
       <div class="grid gap-2">

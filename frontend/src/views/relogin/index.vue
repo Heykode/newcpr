@@ -3,8 +3,8 @@ import type { AccountTemplate } from '@/api/modules/account-templates'
 import type { ReloginBatchResult, ReloginEntry, ReloginPushSelection, ReloginWorkspaceMode } from '@/api/modules/relogin'
 import type { Excel403Action } from '@/utils/excel-settings'
 import { CheckCheck, Download, GripVertical, LayoutTemplate, Pause, Play, RefreshCw, Save, Search, Settings2, Trash2, Upload, X } from '@lucide/vue'
-
 import { useIntervalFn, useNow } from '@vueuse/core'
+
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import {
   configureRelogin,
@@ -39,6 +39,7 @@ import ExcelModelFields from '@/components/ExcelModelFields.vue'
 import ExcelRecoveryFields from '@/components/ExcelRecoveryFields.vue'
 import ReloginCountCell from '@/components/ReloginCountCell.vue'
 import { useDownload } from '@/composables/useDownload'
+import { t } from '@/i18n'
 import { normalizeAccountName } from '@/utils/account-name'
 import { errorMessage } from '@/utils/async'
 import { formatDateTime } from '@/utils/date'
@@ -486,14 +487,14 @@ onBeforeUnmount(() => {
     <header class="flex shrink-0 flex-wrap items-center justify-between gap-3">
       <div class="flex items-center gap-2">
         <h1 class="m-0 text-xl font-bold text-cp-text">
-          失效重登
+          {{ t('navigation.relogin') }}
         </h1>
         <BaseIconButton label="刷新重登列表" :loading="loading" :disabled="busy" @click="reload()">
           <RefreshCw class="size-4" />
         </BaseIconButton>
       </div>
       <div class="flex flex-wrap items-center gap-2">
-        <span class="text-cp-sm text-cp-text-secondary">并发</span>
+        <span class="text-cp-sm text-cp-text-secondary">{{ t('groups.metrics.concurrency') }}</span>
         <BaseInput v-model="concurrency" class="w-18" type="number" min="1" max="8" step="1" aria-label="重登并发" :disabled="busy" />
         <BaseIconButton label="保存并发设置" :disabled="busy || concurrency === String(savedConcurrency)" @click="configure()">
           <Save class="size-4" />
@@ -532,7 +533,7 @@ onBeforeUnmount(() => {
     </div>
     <div class="flex shrink-0 flex-wrap items-center gap-2 border-y border-cp-border py-2">
       <span class="text-cp-sm text-cp-text-secondary">已选 {{ selected.size }} 项</span>
-      <BaseIconButton label="取消选择" :disabled="busy || !selected.size" @click="selected = new Set()">
+      <BaseIconButton :label="t('settings.pricing.deselect')" :disabled="busy || !selected.size" @click="selected = new Set()">
         <X class="size-4" />
       </BaseIconButton>
       <BaseButton :disabled="busy || !selected.size || selected.size > 500" @click="queue([...selected])">
@@ -569,7 +570,7 @@ onBeforeUnmount(() => {
       {{ failure || loadFailure }}
     </div>
     <section class="flex min-h-48 min-w-0 flex-1 flex-col overflow-hidden border-y border-cp-border bg-cp-bg-container">
-      <BaseTable ref="table" class="relogin-table min-h-0 flex-1" :columns="columns" :rows="visible" :selected-row-keys="[...selected]" :loading="loading && !entries.length" column-layout="content" empty-text="暂无匹配账号" @mousedown="onMouseDown">
+      <BaseTable ref="table" class="relogin-table min-h-0 flex-1" :columns="columns" :rows="visible" :selected-row-keys="[...selected]" :loading="loading && !entries.length" column-layout="content" :empty-text="t('appearance.preview.components.noMatchingAccountYet')" @mousedown="onMouseDown">
         <template #header-selection>
           <BaseCheckbox label="全选当前页" :model-value="allSelected" :indeterminate="partialSelected" :disabled="busy" @update:model-value="selectPage" />
         </template>
@@ -665,10 +666,10 @@ onBeforeUnmount(() => {
       </div>
       <template #footer>
         <BaseButton :disabled="busy" @click="retrySettingsOpen = false">
-          取消
+          {{ t('common.actions.cancel') }}
         </BaseButton>
         <BaseButton variant="primary" :loading="busy" @click="saveRetrySettings">
-          保存
+          {{ t('common.actions.save') }}
         </BaseButton>
       </template>
     </BaseModal>

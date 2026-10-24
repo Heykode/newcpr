@@ -1,14 +1,17 @@
 <script setup lang="ts">
 import type { AccountRow } from '../../constants'
 import { RefreshCw, UserRound } from '@lucide/vue'
-
 import { computed, shallowRef } from 'vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
+
+import { t } from '@/i18n'
 import { formatDateTime } from '@/utils/date'
 import { DEFAULT_EXCEL_MODELS } from '@/utils/excel-defaults'
+import { formatRelativeTime } from '@/utils/relative-time'
 import { groupedAccountQuotaWindows, orderedPanelQuotaWindows } from '../../constants'
 import AccountPlanBadge from '../AccountPlanBadge.vue'
 import AccountProfileModal from '../AccountProfileModal/index.vue'
+import AccountQuotaOverdraftStatus from '../AccountQuotaOverdraft/Status.vue'
 import AccountQuotaCredits from './Credits.vue'
 import AccountQuotaPanelEntry from './Entry.vue'
 import AccountResetCredits from './ResetCredits.vue'
@@ -35,7 +38,7 @@ const profileOpen = shallowRef(false)
     <div class="mb-3 flex shrink-0 items-start justify-between gap-3">
       <div class="min-w-0">
         <h3 class="m-0 text-cp-lg font-heavy text-cp-text">
-          账号额度
+          {{ t('accounts.quota.accountLimit') }}
         </h3>
         <p
           class="m-0 mt-1 flex min-w-0 items-center gap-1.5 text-cp-xs font-emphasis text-cp-text-secondary"
@@ -47,13 +50,13 @@ const profileOpen = shallowRef(false)
             <AccountPlanBadge :plan-type="account.planType" :plan-type-display="account.planTypeDisplay" size="sm" />
           </template>
           <span>·</span>
-          <span>最近刷新: {{ account.quota.refreshedAtDisplay }}</span>
+          <span>{{ t('accounts.quota.lastRefreshed', { refreshedAtDisplay: formatRelativeTime(account.quota.refreshedAtRelative, account.quota.refreshedAtDisplay) }) }}</span>
         </p>
       </div>
       <div class="flex shrink-0 items-center gap-0.5">
         <BaseIconButton
           v-if="account.provider === 'openai'"
-          label="查看个人信息"
+          :label="t('accounts.quota.viewPersonalInformation')"
           size="sm"
           variant="ghost"
           :pressed="profileOpen"
@@ -69,7 +72,7 @@ const profileOpen = shallowRef(false)
         <BaseIconButton
           variant="ghost"
           size="sm"
-          label="刷新额度"
+          :label="t('accounts.quotaForecast.refreshQuota')"
           :loading="refreshing"
           :disabled="refreshing"
           @click="emit('refreshQuota', account.id)"
@@ -88,14 +91,19 @@ const profileOpen = shallowRef(false)
         :class="mobile ? 'w-full min-w-0' : 'max-sm:w-[calc(100vw-5.5rem)]'"
         :credits="account.quota.credits"
       />
+      <AccountQuotaOverdraftStatus
+        v-if="account.provider === 'openai' && account.quota.overdraft"
+        :state="account.quota.overdraft"
+      />
       <AccountQuotaPanelEntry
         v-for="entry in quotaEntries"
         :key="entry.key"
         :label="entry.label"
+        :overdraft="account.quota.overdraft"
         :windows="entry.windows"
       />
       <p v-if="quotaEntries.length === 0" class="m-0 text-cp-sm font-emphasis text-cp-text-secondary">
-        额度待观测
+        {{ t('accounts.quota.unobserved') }}
       </p>
     </div>
 
@@ -113,7 +121,7 @@ const profileOpen = shallowRef(false)
         Excel
       </dd>
       <dt class="text-cp-text-tertiary">
-        上游传输
+        {{ t('usage.error.upstreamTransport') }}
       </dt>
       <dd class="m-0 text-right text-cp-text">
         HTTP / SSE

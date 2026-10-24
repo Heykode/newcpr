@@ -29,6 +29,8 @@ use crate::transport::{
 #[derive(Default)]
 struct SocketControl {
     close_started: CancellationToken,
+    write_started: CancellationToken,
+    allow_payload: AtomicBool,
     destroyed: CancellationToken,
     allow_flush: AtomicBool,
     flush_waker: AtomicWaker,
@@ -59,11 +61,12 @@ impl Sink<Message> for ControlledSocket {
     }
 
     fn start_send(self: Pin<&mut Self>, message: Message) -> Result<(), Self::Error> {
-        assert!(
-            matches!(message, Message::Close(_)),
-            "lifecycle tests send no payload"
-        );
-        self.0.close_started.cancel();
+        if matches!(message, Message::Close(_)) {
+            self.0.close_started.cancel();
+        } else {
+            assert!(self.0.allow_payload.load(Ordering::SeqCst));
+            self.0.write_started.cancel();
+        }
         Ok(())
     }
 
@@ -149,6 +152,38 @@ fn connection_with_proxy_permit(
         created_at: tokio::time::Instant::now(),
     };
     (connection, control)
+}
+
+#[tokio::test(start_paused = true)]
+async fn discard_aborts_blocked_data_and_control_writes_before_releasing_capacity() {
+    for message in [
+        Message::Text("synthetic".into()),
+        Message::Ping(vec![1].into()),
+    ] {
+        let pool = pool();
+        let slot_key = key(1);
+        let (connection, control) = connection();
+        control.allow_payload.store(true, Ordering::SeqCst);
+        let (connection, lease) = opening(&pool, &slot_key)
+            .connected_reserved(connection)
+            .await
+            .unwrap_or_else(|_| panic!("owned slot"));
+        let mut sending = Box::pin(connection.websocket.send(message));
+        assert!(futures::poll!(sending.as_mut()).is_pending());
+        control.write_started.cancelled().await;
+        assert!(!control.destroyed.is_cancelled());
+        drop(sending);
+        let observation = connection.websocket.observation();
+        let closing = lease.discard_with_observation(connection.websocket, observation);
+        timeout(Duration::from_millis(50), closing)
+            .await
+            .expect("abort must not wait for graceful timeout")
+            .expect("cleanup task");
+        assert!(control.destroyed.is_cancelled());
+        assert!(!control.close_started.is_cancelled());
+        drop(opening(&pool, &key(2)));
+        pool.shutdown().await;
+    }
 }
 
 #[tokio::test(start_paused = true)]
@@ -257,14 +292,12 @@ async fn discard_retains_capacity_until_the_socket_is_destroyed() {
     let (connection, lease, control) = connected(&pool, &key(1)).await;
     let observation = connection.websocket.observation();
     let closing = lease.discard_with_observation(connection.websocket, observation);
-    control.close_started.cancelled().await;
     assert_closing(&pool, &key(1));
     assert!(!control.destroyed.is_cancelled());
 
     let next_key = key(2);
     let mut waiting = Box::pin(pool.acquire(&next_key, None));
     assert!(futures::poll!(waiting.as_mut()).is_pending());
-    control.release_close();
     let next = timeout(Duration::from_secs(1), waiting)
         .await
         .expect("capacity released");
@@ -301,17 +334,12 @@ async fn permanently_pending_close_is_bounded_and_does_not_block_shutdown() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn cancelled_discard_waiter_leaves_a_bounded_managed_close() {
+async fn cancelled_discard_waiter_leaves_a_managed_abort() {
     let pool = pool();
     let (connection, lease, control) = connected(&pool, &key(1)).await;
     let observation = connection.websocket.observation();
     let closing = lease.discard_with_observation(connection.websocket, observation);
-    let waiter = tokio::spawn(async move {
-        let _ = closing.await;
-    });
-    control.close_started.cancelled().await;
-    waiter.abort();
-    assert!(waiter.await.expect_err("cancelled waiter").is_cancelled());
+    drop(closing);
     assert_closing(&pool, &key(1));
     assert!(!control.destroyed.is_cancelled());
 

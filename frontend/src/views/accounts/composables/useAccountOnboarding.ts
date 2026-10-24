@@ -6,12 +6,14 @@ import {
   createAccountImportTask,
   startAccountOAuth,
 } from '@/api'
+import { applyQualityTemplate } from '@/api/modules/quality-ops'
 import { enrollRelogin } from '@/api/modules/relogin'
 import { toast } from '@/components/base/BaseToast'
 import { useAsyncAction } from '@/composables/useAsyncAction'
+import { errorMessage } from '@/utils/async'
 import { isRecord } from '@/utils/object'
 import { formatProviderLabel, isSupportedProvider } from '@/utils/providers'
-import { accountCreateEgress, accountImportSettings, accountImportTemplate, accountProxyError, emptyAccountCreateForm } from '../components/AccountCreateModal/model'
+import { accountCreateEgress, accountImportQualityTemplate, accountImportSettings, accountImportTemplate, accountProxyError, emptyAccountCreateForm } from '../components/AccountCreateModal/model'
 import { accountImportBatches, splitAccountDocuments } from './account-import-batches'
 
 type AccountRow = Awaited<ReturnType<typeof getAccounts>>['items'][number]
@@ -92,6 +94,7 @@ export function useAccountOnboarding(options: {
             replaceExisting: createForm.value.replaceExisting2fa,
             settings: accountImportSettings(createForm.value, 'openai'),
             outboundProxyId: createForm.value.proxyMode === 'proxy' ? createForm.value.proxyId.trim() : undefined,
+            qualityTemplate: accountImportQualityTemplate(createForm.value),
           })
           enrollmentIds.value = [...new Set([...enrollmentIds.value, ...result.ids])]
           showCreateModal.value = false
@@ -105,6 +108,7 @@ export function useAccountOnboarding(options: {
           provider: entry.provider,
           data: entry.document,
           ...(createForm.value.importTemplate ? { template: accountImportTemplate(createForm.value, entry.provider), templateSettingsOverride: true } : {}),
+          ...(createForm.value.qualityTemplate ? { qualityTemplate: accountImportQualityTemplate(createForm.value) } : {}),
           settings: accountImportSettings(createForm.value, entry.provider),
           outboundProxyId: accountCreateEgress(createForm.value, entry.provider === 'openai').outboundProxyId || undefined,
         }))
@@ -181,18 +185,35 @@ export function useAccountOnboarding(options: {
             ? '请粘贴 OAuth 回调地址、含 code 和 state 的查询字符串或授权码'
             : '请粘贴 OAuth 回调地址')
         }
-        await completeAccountOAuth({
+        const result = await completeAccountOAuth({
           provider: createForm.value.provider,
           flowId: createForm.value.oauthFlowId,
           callbackUrl,
           settings: reauthorizingAccount.value ? undefined : accountImportSettings(createForm.value),
         })
+        let templateWarning = ''
+        if (!reauthorizingAccount.value && createForm.value.qualityTemplate) {
+          try {
+            const template = createForm.value.qualityTemplate
+            const applied = await applyQualityTemplate({
+              id: template.id,
+              revision: template.revision,
+              targets: [{ accountId: result.accountId, ruleId: null, revision: null }],
+            })
+            if (!applied[0]?.success)
+              templateWarning = '账号已添加，但监测模板未应用'
+          }
+          catch (cause) {
+            templateWarning = `账号已添加，但监测模板未应用：${errorMessage(cause)}`
+          }
+        }
         await finishCreate(
           reauthorizingAccount.value
             ? '账号重新授权成功'
             : createForm.value.provider === 'xai'
               ? 'xAI OAuth 账号已添加'
               : 'OpenAI OAuth 账号已添加',
+          templateWarning,
         )
       },
     )
@@ -228,10 +249,13 @@ export function useAccountOnboarding(options: {
     }
   }
 
-  async function finishCreate(message: string) {
+  async function finishCreate(message: string, warning = '') {
     showCreateModal.value = false
     await options.reload()
-    toast.success(message)
+    if (warning)
+      toast.warning(warning)
+    else
+      toast.success(message)
   }
 
   watch(

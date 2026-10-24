@@ -625,6 +625,28 @@ fn fallback_transport_context(request_id: &str) -> AttemptContext {
     context(request_id, CancellationToken::new()).with_transport(AttemptTransport::Fallback)
 }
 
+fn fallback_overdraft_transport_context(request_id: &str) -> AttemptContext {
+    AttemptContext::new(
+        RequestAttemptContext::new(
+            ModelRequestId::new(request_id).expect("request id"),
+            ClientApiKeyId::new("key_openai_contract").expect("client key id"),
+        )
+        .with_codex_quota_overdraft(
+            true,
+            UpstreamModelId::new("gpt-6-astra").expect("probe model"),
+            ConfigRevision::new(1).expect("config revision"),
+        ),
+        NonZeroU32::new(1).expect("attempt"),
+        SystemTime::now() + Duration::from_secs(30),
+        account_policy(),
+        AccountAttemptContext::new(BTreeSet::<ProviderAccountId>::new(), None, None)
+            .with_account_scope(contract_account_scope()),
+        None,
+        CancellationToken::new(),
+    )
+    .with_transport(AttemptTransport::Fallback)
+}
+
 fn diagnostic_context(request_id: &str, account_id: &str) -> AttemptContext {
     AttemptContext::new(
         RequestAttemptContext::new(
@@ -1397,8 +1419,7 @@ async fn image_endpoints_bypass_only_the_text_catalog_and_preserve_the_current_c
         let values = captured_header_values(request, "x-codex-image-turn-id");
         assert_eq!(values.len(), 1);
         let value = std::str::from_utf8(&values[0]).unwrap();
-        uuid::Uuid::parse_str(value).unwrap();
-        assert_ne!(value, "turn_image_contract");
+        assert_eq!(value, "turn_image_contract");
         turns.push(value.to_owned());
     }
     assert_eq!(turns.len(), cases.len());
@@ -2084,16 +2105,13 @@ async fn standalone_search_preserves_wire_and_scopes_turn_metadata_to_the_select
     let metadata_values = captured_header_values(request, "x-codex-turn-metadata");
     assert_eq!(metadata_values.len(), 1);
     let metadata: Value = serde_json::from_slice(&metadata_values[0]).expect("turn metadata JSON");
-    for (field, original) in [
-        ("session_id", "session"),
-        ("thread_id", "thread"),
-        ("turn_id", "turn"),
-    ] {
+    for (field, original) in [("session_id", "session"), ("thread_id", "thread")] {
         let scoped = metadata[field].as_str().unwrap();
         uuid::Uuid::parse_str(scoped).unwrap();
         assert_ne!(scoped, original);
     }
     assert_eq!(metadata.get("future"), Some(&json!(true)));
+    assert_eq!(metadata["turn_id"], "turn");
     assert!(metadata.get("account_id").is_none());
     assert_ne!(
         metadata.get("installation_id"),
@@ -3479,6 +3497,60 @@ async fn fallback_attempt_transport_forces_http_sse_for_a_websocket_request() {
     while let Some(event) = stream.next().await {
         event.expect("fallback HTTP response");
     }
+}
+
+#[tokio::test]
+async fn fallback_attempt_transport_reuses_the_overdraft_injected_wire() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_http_sse_exhausted").await;
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(CAPTURE_COMPLETED_SSE),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let operation = Operation::Generate(GenerateRequest::from_protocol_payload(
+        ProtocolPayload::json_object(
+            "openai",
+            Map::from_iter([
+                ("model".to_owned(), json!("gpt-6-astra")),
+                (
+                    "input".to_owned(),
+                    json!([{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}]),
+                ),
+                ("stream".to_owned(), json!(true)),
+                ("store".to_owned(), json!(false)),
+            ]),
+        )
+        .expect("OpenAI payload")
+        .with_context(Map::from_iter([("use_websocket".into(), json!(true))])),
+    ));
+
+    let mut stream = provider_with_base_url(&store, server.uri())
+        .execute(
+            planned_request("openai", operation),
+            fallback_overdraft_transport_context("req_overdraft_fallback_http"),
+        )
+        .await
+        .expect("prepare overdraft fallback HTTP stream");
+    while let Some(event) = stream.next().await {
+        event.expect("overdraft fallback HTTP response");
+    }
+
+    let requests = server.received_requests().await.expect("captured request");
+    let input = captured_request_body(&requests[0])["input"]
+        .as_array()
+        .expect("input array")
+        .clone();
+    assert_eq!(input.len(), 3);
+    assert_eq!(input[1]["type"], "custom_tool_call");
+    assert_eq!(input[2]["type"], "custom_tool_call_output");
+    assert_eq!(input[1]["call_id"], input[2]["call_id"]);
 }
 
 #[tokio::test]

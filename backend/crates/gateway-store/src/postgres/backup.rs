@@ -237,7 +237,11 @@ impl BackupRepository for PgBackupRepository {
         Ok(result.rows_affected() == 1)
     }
 
-    async fn insert_backup_record(&self, seed: BackupRecordSeed) -> AdminStoreResult<BackupRecord> {
+    async fn insert_backup_record(
+        &self,
+        seed: BackupRecordSeed,
+        context: &MutationContext,
+    ) -> AdminStoreResult<BackupRecord> {
         let mut transaction = self
             .pool
             .begin()
@@ -245,7 +249,18 @@ impl BackupRepository for PgBackupRepository {
             .map_err(|_| store_unavailable("begin backup record insert"))?;
         let result = async {
             let _ = lock_settings_in_transaction(&mut transaction).await?;
-            insert_queued_in_transaction(&mut transaction, &seed).await
+            let record = insert_queued_in_transaction(&mut transaction, &seed).await?;
+            let audit = crate::mutation_audit(
+                context,
+                "backup.created",
+                "backup",
+                &record.id,
+                vec!["status".to_owned()],
+            );
+            append_audit_in_transaction(&mut transaction, audit, None)
+                .await
+                .map_err(map_admin_error)?;
+            Ok(record)
         }
         .await;
         match result {
@@ -507,8 +522,15 @@ impl BackupRepository for PgBackupRepository {
         &self,
         id: &str,
         now: DateTime<Utc>,
+        context: Option<&MutationContext>,
     ) -> AdminStoreResult<Option<BackupRecord>> {
-        sqlx::query(
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| store_unavailable("begin backup deletion"))?;
+        let result: AdminStoreResult<_> = async {
+        let record = sqlx::query(
             "update backup_records
                 set status = 'deleting', updated_at = $1
               where id = $2 and status in ('completed', 'failed')
@@ -518,11 +540,33 @@ impl BackupRepository for PgBackupRepository {
         )
         .bind(now)
         .bind(id)
-        .fetch_optional(&self.pool)
+        .fetch_optional(&mut *transaction)
         .await
         .map_err(|_| store_unavailable("transition backup to deleting"))?
         .map(|row| backup_record_from_row(&row))
-        .transpose()
+        .transpose()?;
+        if record.is_some() && let Some(context) = context {
+            let audit = crate::mutation_audit(context, "backup.delete_requested", "backup", id, vec!["status".to_owned()]);
+            append_audit_in_transaction(&mut transaction, audit, None).await.map_err(map_admin_error)?;
+        }
+        Ok(record)
+        }.await;
+        match result {
+            Ok(record) => {
+                transaction
+                    .commit()
+                    .await
+                    .map_err(|_| store_unavailable("commit backup deletion"))?;
+                Ok(record)
+            }
+            Err(error) => {
+                transaction
+                    .rollback()
+                    .await
+                    .map_err(|_| store_unavailable("rollback backup deletion"))?;
+                Err(error)
+            }
+        }
     }
 
     async fn delete_record(&self, id: &str) -> AdminStoreResult<()> {

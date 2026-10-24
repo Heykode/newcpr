@@ -2,10 +2,11 @@
 import type { CodexDesktopWindowsDownloads } from '@/api'
 import { MonitorUp, PackageOpen, TerminalSquare } from '@lucide/vue'
 import { shallowRef } from 'vue'
-
 import BaseButton from '@/components/base/BaseButton.vue'
+
 import BaseModal from '@/components/base/BaseModal/index.vue'
 import BaseSegmented from '@/components/base/BaseSegmented.vue'
+import { t } from '@/i18n'
 
 import ClientCliInstallPanel from './ClientCliInstallPanel.vue'
 import ClientDesktopInstallPanel from './ClientDesktopInstallPanel.vue'
@@ -43,8 +44,8 @@ const sectionOptions = [
 <template>
   <BaseModal
     v-model="open"
-    title="Codex 客户端升级"
-    description="先选择客户端，再查看对应的安装与升级方式"
+    :title="t('settings.clientVersion.codexClientUpgrade')"
+    :description="t('settings.clientVersion.guideDescription')"
     tone="info"
     size="lg"
   >
@@ -55,7 +56,7 @@ const sectionOptions = [
     <div class="grid gap-4">
       <BaseSegmented
         v-model="activeSection"
-        label="客户端类型"
+        :label="t('settings.clientProfile.clientType')"
         :options="sectionOptions"
         size="lg"
         class="w-full"
@@ -74,7 +75,7 @@ const sectionOptions = [
 
     <template #footer>
       <BaseButton variant="primary" @click="open = false">
-        关闭
+        {{ t('common.actions.close') }}
       </BaseButton>
     </template>
   </BaseModal>

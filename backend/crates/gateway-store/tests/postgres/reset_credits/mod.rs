@@ -44,6 +44,10 @@ async fn reset_history_pages_all_confirmed_batches_and_searches_literal_account_
     assert_eq!(first.items.len(), 10);
     assert!(first.has_more);
     assert_eq!(first.account_names["acct_reset_1"], "100%_fixture");
+    assert_eq!(
+        first.account_emails["acct_reset_1"],
+        "reset-1@example.invalid"
+    );
     let mut added = batch(1);
     added.confirmed = true;
     store.save_preview(added).await.unwrap();
@@ -89,6 +93,7 @@ async fn reset_history_pages_all_confirmed_batches_and_searches_literal_account_
         .unwrap();
     assert_eq!(deleted.items.len(), 10);
     assert!(deleted.account_names.is_empty());
+    assert!(deleted.account_emails.is_empty());
     db.close().await;
 }
 
@@ -104,6 +109,8 @@ async fn seed(db: &TestDatabase) {
         has_refresh_token,credential_observed_at,created_at,updated_at)
         select 'acct_reset_'||n,'openai','Fixture','fixture-user-'||n,'oauth','{}',false,now(),now(),now()
         from generate_series(1,5) n").execute(&db.pool).await.unwrap();
+    sqlx::query("update provider_accounts set email='reset-'||substring(id from '[0-9]+')||'@example.invalid' where id like 'acct_reset_%'")
+        .execute(&db.pool).await.unwrap();
 }
 fn command(card: &str) -> ConsumeProviderResetCredit {
     ConsumeProviderResetCredit {

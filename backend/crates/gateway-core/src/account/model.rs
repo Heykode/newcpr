@@ -689,6 +689,7 @@ pub struct ProviderAccount {
     model_access: super::AccountModelAccess,
     credential_state: CredentialState,
     quota: QuotaState,
+    codex_quota_overdraft_passed: bool,
     last_error_reason: Option<AccountErrorReason>,
     last_error_message: Option<String>,
     access_token_expires_at: Option<SystemTime>,
@@ -734,6 +735,7 @@ impl ProviderAccount {
             model_access: super::AccountModelAccess::all(),
             credential_state: CredentialState::Unknown,
             quota: QuotaState::unknown(),
+            codex_quota_overdraft_passed: false,
             last_error_reason: None,
             last_error_message: None,
             access_token_expires_at,
@@ -1005,6 +1007,17 @@ impl ProviderAccount {
     #[must_use]
     pub const fn quota(&self) -> QuotaState {
         self.quota
+    }
+
+    #[must_use]
+    pub const fn with_codex_quota_overdraft_passed(mut self, passed: bool) -> Self {
+        self.codex_quota_overdraft_passed = passed;
+        self
+    }
+
+    #[must_use]
+    pub const fn codex_quota_overdraft_passed(&self) -> bool {
+        self.codex_quota_overdraft_passed
     }
 
     #[must_use]

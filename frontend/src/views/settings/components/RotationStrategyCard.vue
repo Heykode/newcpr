@@ -8,6 +8,7 @@ import BaseCard from '@/components/base/BaseCard.vue'
 import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseSwitch from '@/components/base/BaseSwitch.vue'
+import { t } from '@/i18n'
 
 type RotationOption = (typeof rotationOptions)[number]
 type RotationStrategy = RotationOption['value']
@@ -34,7 +35,7 @@ function setWeight(key: typeof weights[number]['key'], value: string) {
 
 <template>
   <BaseCard
-    title="调度策略"
+    :title="t('settings.rotation.title')"
     description="决定每次请求如何调度账号池"
   >
     <div class="grid max-w-6xl gap-3 lg:grid-cols-4">
@@ -73,11 +74,11 @@ function setWeight(key: typeof weights[number]['key'], value: string) {
         <h3 class="m-0 text-sm font-medium">
           智能调度参数
         </h3>
-        <BaseButton :disabled="disabled" title="恢复默认" @click="smart = defaultSmartScheduling()">
+        <BaseButton :disabled="disabled" :title="t('appearance.settings.restoreDefault')" @click="smart = defaultSmartScheduling()">
           <template #icon>
             <RotateCcw class="size-4" />
           </template>
-          恢复默认
+          {{ t('appearance.settings.restoreDefault') }}
         </BaseButton>
       </div>
       <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">

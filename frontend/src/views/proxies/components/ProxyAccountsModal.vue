@@ -11,6 +11,7 @@ import BaseTablePagination from '@/components/base/BaseTable/BaseTablePagination
 import { defineTableColumns } from '@/components/base/BaseTable/columns'
 import BaseTable from '@/components/base/BaseTable/index.vue'
 import ProviderIconGroup from '@/components/ProviderIconGroup.vue'
+import { t } from '@/i18n'
 import AccountPlanBadge from '@/views/accounts/components/AccountPlanBadge.vue'
 import { stablePresetVisualToneClass } from '@/views/accounts/utils/visualTone'
 import { useProxyAccounts } from '../composables/useProxyAccounts'
@@ -82,9 +83,9 @@ function clearRemove() {
 </script>
 
 <template>
-  <BaseModal v-model="open" title="关联账号" :description="description" size="lg" :dismissible="!removing">
+  <BaseModal v-model="open" :title="t('proxies.accounts.linkAccount')" :description="description" size="lg" :dismissible="!removing">
     <div class="flex min-h-0 flex-col">
-      <BaseInput v-model="search" class="mb-4 shrink-0 sm:w-80" :disabled="removing" aria-label="搜索关联账号" placeholder="搜索账号名称或邮箱">
+      <BaseInput v-model="search" class="mb-4 shrink-0 sm:w-80" :disabled="removing" :aria-label="t('proxies.accounts.searchAssociatedAccounts')" :placeholder="t('proxies.accounts.searchAccountNameOrEmail')">
         <template #prefix>
           <Search class="size-4.5 text-cp-text-tertiary" />
         </template>
@@ -120,7 +121,7 @@ function clearRemove() {
         <template #actions="{ row }">
           <BaseIconButton
             size="sm"
-            label="从当前代理移除账号"
+            :label="t('proxies.accounts.removeAction')"
             :disabled="removing"
             :loading="removing && pendingRemove?.id === row.id"
             @click="requestRemove(row)"
@@ -132,7 +133,7 @@ function clearRemove() {
       <BaseTablePagination :pagination="pagination" :loading="loading || removing" @page-change="setPage" @page-size-change="setPageSize" />
     </div>
   </BaseModal>
-  <BaseConfirmModal v-model="showRemove" title="移除关联账号" confirm-text="移除" :loading="removing" @confirm="confirmRemove" @after-leave="clearRemove">
+  <BaseConfirmModal v-model="showRemove" :title="t('proxies.accounts.removeAssociatedAccount')" :confirm-text="t('proxies.accounts.remove')" :loading="removing" @confirm="confirmRemove" @after-leave="clearRemove">
     <p class="m-0 break-words">
       将“{{ pendingRemove?.name }}”从“{{ displayProxy?.name }}”移除后，该账号将改为直连。
     </p>

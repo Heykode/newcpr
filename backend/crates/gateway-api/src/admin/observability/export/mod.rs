@@ -15,6 +15,7 @@ use super::{
 };
 use gateway_core::time::DeploymentTimeZone;
 
+mod archive;
 mod privacy;
 
 #[derive(Deserialize)]
@@ -64,17 +65,17 @@ where
     }
     let time = state.deployment_timezone();
     let document = privacy::redact(document(bundle, time));
-    let body = serde_json::to_vec_pretty(&document).map_err(|_| {
+    let body = archive::build(&document).map_err(|_| {
         map_service_error(gateway_admin::model::AdminError::internal(
             "诊断文件生成失败",
         ))
     })?;
     Ok((
         [
-            (header::CONTENT_TYPE, "application/json; charset=utf-8"),
+            (header::CONTENT_TYPE, "application/zip"),
             (
                 header::CONTENT_DISPOSITION,
-                "attachment; filename=diagnostics.json",
+                "attachment; filename=diagnostics.zip",
             ),
             (header::CACHE_CONTROL, "private, no-store"),
             (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),

@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { Copy } from '@lucide/vue'
-
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
+
+import { t } from '@/i18n'
 
 defineProps<{
   prefix: string
@@ -21,7 +22,7 @@ const emit = defineEmits<{
     <BaseIconButton
       variant="ghost"
       size="sm"
-      label="复制完整密钥"
+      :label="t('keys.fields.copyFullKey')"
       :loading="revealing"
       :disabled="revealing"
       @click="emit('copy')"

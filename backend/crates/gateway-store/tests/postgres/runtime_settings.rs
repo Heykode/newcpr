@@ -34,11 +34,17 @@ async fn preferred_affinity_upgrade_preserves_existing_rows_and_defaults() {
                 .unwrap();
         super::TEST_MIGRATOR.run(&database.pool).await.unwrap();
         super::TEST_MIGRATOR.run(&database.pool).await.unwrap();
-        let after: Value =
+        let mut after: Value =
             sqlx::query_scalar("select to_jsonb(s) from runtime_settings s where id = 1")
                 .fetch_one(&database.pool)
                 .await
                 .unwrap();
+        for (field, default) in [
+            ("codex_quota_overdraft_enabled", json!(false)),
+            ("codex_quota_overdraft_probe_model", json!("gpt-6-astra")),
+        ] {
+            assert_eq!(after.as_object_mut().unwrap().remove(field), Some(default));
+        }
         assert_eq!(before, after);
         sqlx::query(
             "update runtime_settings set openai_account_affinity = 'preferred' where id = 1",
@@ -198,6 +204,8 @@ fn settings_with_margin(refresh_margin_seconds: u64) -> RuntimeSettingsUpdate {
         account_warmup_enabled: false,
         account_warmup_schedule_time: "03:00".to_owned(),
         account_warmup_model: None,
+        codex_quota_overdraft_enabled: false,
+        codex_quota_overdraft_probe_model: "gpt-6-astra".to_owned(),
         request_interval_ms: 50,
         rotation_strategy: "smart".to_owned(),
         model_mappings: BTreeMap::from([

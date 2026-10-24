@@ -1,7 +1,6 @@
 /* eslint-disable test/no-import-node-test -- these regressions use Node's built-in runner. */
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { createRequire } from 'node:module'
 import { test } from 'node:test'
 import { runInNewContext } from 'node:vm'
 import axios from 'axios'
@@ -9,6 +8,7 @@ import ts from 'typescript'
 import * as vue from 'vue'
 import { compileScript, parse } from 'vue/compiler-sfc'
 import { renderToString } from 'vue/server-renderer'
+import { createTestRequire as createRequire } from './helpers/i18n.mjs'
 
 const require = createRequire(import.meta.url)
 const source = path => new URL(`../src/${path}`, import.meta.url)
@@ -23,6 +23,7 @@ function loadText(text, dependencies = {}, globals = {}) {
     exports,
     require: name => dependencies[name] ?? (name === '@/utils/excel-defaults' ? load('utils/excel-defaults.ts') : require(name)),
     AbortController,
+    Blob,
     setTimeout,
     ...globals,
   })

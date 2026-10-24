@@ -19,6 +19,7 @@ import BaseSelect from '@/components/base/BaseSelect.vue'
 import BaseSwitch from '@/components/base/BaseSwitch.vue'
 import BaseTextarea from '@/components/base/BaseTextarea.vue'
 import { qualityActions as actions, qualityStatusColor as statusColor, qualityVerdictLabel as verdictLabel } from '@/components/quality-ops/presentation'
+import { t } from '@/i18n'
 import { formatDateTime } from '@/utils/date'
 import { newQualityConfig, qualityConfigDraft } from './defaults'
 import { failureActionOptions, failureThreshold, setFailureThreshold, usesFailureThreshold } from './failure-actions'
@@ -649,9 +650,9 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="flex min-w-0 flex-col gap-5">
-    <BasePageHeader title="质量运维" class="quality-header">
+    <BasePageHeader :title="t('navigation.quality')" class="quality-header">
       <template #actions>
-        <BaseIconButton label="刷新" :disabled="loading || historyLoading" @click="refresh">
+        <BaseIconButton :label="t('common.actions.refresh')" :disabled="loading || historyLoading" @click="refresh">
           <RefreshCw class="size-4" />
         </BaseIconButton>
         <BaseButton v-if="activeTab === 'rules'" variant="primary" :disabled="busy" @click="edit(null)">
@@ -784,7 +785,7 @@ onBeforeUnmount(() => {
               <BaseIconButton :label="rule.config.enabled ? '暂停定时检测' : '启用定时检测'" :disabled="busy" @click="toggle(rule)">
                 <Pause v-if="rule.config.enabled" class="size-4" /><ClipboardCheck v-else class="size-4" />
               </BaseIconButton>
-              <BaseIconButton label="编辑规则" :disabled="busy" @click="edit(rule)">
+              <BaseIconButton :label="t('settings.privacy.rules.editRule')" :disabled="busy" @click="edit(rule)">
                 <Pencil class="size-4" />
               </BaseIconButton>
               <BaseIconButton label="另存为规则模板" :disabled="busy" @click="editTemplate(null, rule)">
@@ -887,7 +888,7 @@ onBeforeUnmount(() => {
               </div>
               <div>
                 <dt class="text-cp-text-secondary">
-                  错误
+                  {{ t('accounts.fields.error') }}
                 </dt><dd class="mt-1 font-medium tabular-nums">
                   {{ run.requestErrors }}
                 </dd>
@@ -903,9 +904,9 @@ onBeforeUnmount(() => {
             <thead>
               <tr class="border-b border-cp-border text-cp-text-secondary">
                 <th class="px-3 pb-3 pt-1 font-medium">
-                  时间
+                  {{ t('usage.fields.time') }}
                 </th><th class="px-3 pb-3 pt-1 font-medium">
-                  结果
+                  {{ t('usage.request.result') }}
                 </th><th class="px-3 pb-3 pt-1 font-medium">
                   通过 / 不符
                 </th><th class="px-3 pb-3 pt-1 font-medium">
@@ -985,7 +986,7 @@ onBeforeUnmount(() => {
           <FormItem label="检测模型" required>
             <QualityModelPicker v-model="draft.model" :scope="modelScope" @choices="testModels = $event" />
           </FormItem>
-          <FormItem v-if="!isProbe" label="推理强度">
+          <FormItem v-if="!isProbe" :label="t('usage.fields.reasoningEffort')">
             <BaseSelect v-model="effort" :options="effortOptions" />
           </FormItem>
           <QualitySchedule v-model="draft.intervalSeconds" :cron="draft.cron" :timezone="draft.timezone" />
@@ -1025,7 +1026,7 @@ onBeforeUnmount(() => {
           <h3 class="font-semibold">
             {{ isProbe ? '异常后的处理' : '答错后的处理' }}
           </h3>
-          <FormItem label="处理方式">
+          <FormItem :label="t('settings.privacy.rules.processingMethod')">
             <BaseSelect v-model="draft.failureAction" :options="failureActionOptions(draft.failureAction)" />
           </FormItem>
           <QualityCatalogPicker v-if="draft.failureAction === 'remove_groups'" v-model:selected-values="draft.failureGroupIds" multiple label="处置分组" :load-page="actionGroupPage" />
@@ -1057,10 +1058,10 @@ onBeforeUnmount(() => {
       </form>
       <template #footer>
         <BaseButton :disabled="busy" @click="editorOpen = false">
-          取消
+          {{ t('common.actions.cancel') }}
         </BaseButton>
         <BaseButton form="quality-rule-form" type="submit" :disabled="busy || (groupMode ? !groupName.trim() : templateMode ? !templateName.trim() : editing ? !draft.accountId : !selectedAccounts.length) || (!isProbe && !draft.judgeGroupId) || (draft.failureAction === 'remove_groups' && !draft.failureGroupIds.length) || (draft.failureAction === 'apply_account_template' && !draft.failureTemplate)">
-          <Save class="size-4" />保存
+          <Save class="size-4" />{{ t('common.actions.save') }}
         </BaseButton>
       </template>
     </QualityDrawer>

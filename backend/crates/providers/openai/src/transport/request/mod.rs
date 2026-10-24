@@ -1,6 +1,7 @@
 //! 核心 Generate operation 到 Codex Responses wire request 的严格编码。
 
 pub(crate) mod compatibility;
+pub(crate) mod quota_overdraft;
 mod raw_json;
 pub(crate) mod search_history;
 
@@ -12,7 +13,6 @@ pub(crate) use raw_json::scope_raw_turn_metadata;
 use std::io;
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use chrono::{DateTime, Utc};
 use gateway_core::operation::GenerateRequest;
 use gateway_protocol::openai::{
     WS_REQUEST_HEADER_RESPONSES_LITE_CLIENT_METADATA_KEY, is_transport_managed_request_header,
@@ -233,23 +233,18 @@ fn adapt_codex_responses_body(
         }
     }
     if let Some(location) = location {
-        align_structured_location_fields(body, Utc::now(), location);
+        align_structured_location_fields(body, location);
     }
 }
 
 pub(crate) fn align_structured_location_fields(
     body: &mut Map<String, Value>,
-    now: DateTime<Utc>,
     location: &CodexRequestLocation,
 ) {
-    // 只改写官方生成的环境上下文和 Web Search 地区；用户正文和 epoch 时间戳保持原样。
-    let current_date = now
-        .with_timezone(&location.timezone)
-        .format("%Y-%m-%d")
-        .to_string();
+    // Historical dates describe when client context was created; preserve them.
     if let Some(input) = body.get_mut("input").and_then(Value::as_array_mut) {
         for item in input {
-            align_time_context(item, &current_date, location.timezone.name());
+            align_time_context(item, location.timezone.name());
         }
     }
     if let Some(tools) = body.get_mut("tools").and_then(Value::as_array_mut) {
@@ -259,7 +254,7 @@ pub(crate) fn align_structured_location_fields(
     }
 }
 
-fn align_time_context(item: &mut Value, current_date: &str, timezone: &str) {
+fn align_time_context(item: &mut Value, timezone: &str) {
     let Some(item) = item.as_object_mut() else {
         return;
     };
@@ -301,18 +296,13 @@ fn align_time_context(item: &mut Value, current_date: &str, timezone: &str) {
         let Some(Value::String(text)) = part.get_mut("text") else {
             continue;
         };
-        if let Some(aligned) = aligned_time_context(text, context_tag, current_date, timezone) {
+        if let Some(aligned) = aligned_time_context(text, context_tag, timezone) {
             *text = aligned;
         }
     }
 }
 
-fn aligned_time_context(
-    text: &str,
-    context_tag: &str,
-    current_date: &str,
-    timezone: &str,
-) -> Option<String> {
+fn aligned_time_context(text: &str, context_tag: &str, timezone: &str) -> Option<String> {
     let trimmed = text.trim();
     if !trimmed.starts_with(&format!("<{context_tag}>"))
         || !trimmed.ends_with(&format!("</{context_tag}>"))
@@ -326,15 +316,8 @@ fn aligned_time_context(
     }
     let mut replacements = root
         .children()
-        .filter(|node| node.is_element())
-        .filter_map(|node| {
-            let replacement = match node.tag_name().name() {
-                "current_date" => format!("<current_date>{current_date}</current_date>"),
-                "timezone" => format!("<timezone>{timezone}</timezone>"),
-                _ => return None,
-            };
-            Some((node.range(), replacement))
-        })
+        .filter(|node| node.is_element() && node.has_tag_name("timezone"))
+        .map(|node| (node.range(), format!("<timezone>{timezone}</timezone>")))
         .collect::<Vec<_>>();
     if replacements.is_empty() {
         return None;
@@ -1057,7 +1040,7 @@ pub(crate) fn decode_passthrough_headers(context: &Map<String, Value>) -> Header
     headers
 }
 
-fn provider_managed_header(name: &str) -> bool {
+pub(crate) fn provider_managed_header(name: &str) -> bool {
     is_transport_managed_request_header(name)
         || name.starts_with("x-grok-")
         || name.starts_with("x-xai-")

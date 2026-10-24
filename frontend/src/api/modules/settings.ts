@@ -88,6 +88,8 @@ export interface RuntimeSettings {
   accountWarmupEnabled: boolean
   accountWarmupScheduleTime: string
   accountWarmupModel: string | null
+  codexQuotaOverdraftEnabled?: boolean
+  codexQuotaOverdraftProbeModel?: string | null
   requestIntervalMs: number
   openaiSessionBindingTtlHours: number
   rotationStrategy: RotationStrategy

@@ -2,13 +2,14 @@
 import { LockKeyhole } from '@lucide/vue'
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
-
 import { changeAdminPassword } from '@/api'
+
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
 import FormItem from '@/components/base/BaseForm/FormItem.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import { toast } from '@/components/base/BaseToast'
+import { t } from '@/i18n'
 import { useAuthStore } from '@/stores/modules/auth'
 
 const router = useRouter()
@@ -54,16 +55,16 @@ async function submit() {
 </script>
 
 <template>
-  <BaseCard title="管理员密码">
+  <BaseCard :title="t('settings.password.administratorPassword')">
     <form class="grid max-w-6xl gap-4" @submit.prevent="submit">
       <div class="grid gap-4 md:grid-cols-3">
-        <FormItem label="当前密码" required>
+        <FormItem :label="t('settings.password.currentPassword')" required>
           <BaseInput v-model="currentPassword" type="password" autocomplete="current-password" :disabled="saving" />
         </FormItem>
-        <FormItem label="新密码" required>
+        <FormItem :label="t('settings.password.newPassword')" required>
           <BaseInput v-model="newPassword" type="password" autocomplete="new-password" :disabled="saving" />
         </FormItem>
-        <FormItem label="确认新密码" required :error="error">
+        <FormItem :label="t('settings.password.confirmNewPassword')" required :error="error">
           <BaseInput v-model="confirmation" type="password" autocomplete="new-password" :disabled="saving" />
         </FormItem>
       </div>
@@ -75,7 +76,7 @@ async function submit() {
           <template #icon>
             <LockKeyhole class="size-4" />
           </template>
-          修改密码
+          {{ t('settings.password.changePassword') }}
         </BaseButton>
       </div>
     </form>

@@ -227,7 +227,7 @@ async fn frozen_request_profile_survives_publication_without_reusing_account_ide
             captures[1].1["client_metadata"]["x-codex-installation-id"]
         );
         assert_ne!(captures[0].0["thread-id"], captures[1].0["thread-id"]);
-        assert_ne!(captures[0].1["turn_id"], captures[1].1["turn_id"]);
+        assert_eq!(captures[0].1["turn_id"], captures[1].1["turn_id"]);
         assert_eq!(captures[1].1["turn_id"], captures[2].1["turn_id"]);
         assert_eq!(
             captures[1].1["client_metadata"]["x-codex-installation-id"],
@@ -241,7 +241,7 @@ async fn frozen_request_profile_survives_publication_without_reusing_account_ide
             assert!(!headers.contains_key("x-codex-installation-id"));
             let metadata: Value =
                 serde_json::from_str(headers["x-codex-turn-metadata"].to_str().unwrap()).unwrap();
-            assert_ne!(body["turn_id"], "shared-turn");
+            assert_eq!(body["turn_id"], "shared-turn");
             assert_eq!(metadata["turn_id"], body["turn_id"]);
             assert_eq!(
                 body["input"][0]["internal_chat_message_metadata_passthrough"]["turn_id"],

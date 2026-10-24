@@ -1382,6 +1382,8 @@ impl SettingsStore for StaticSettingsStore {
             account_warmup_enabled: false,
             account_warmup_schedule_time: "08:00".to_owned(),
             account_warmup_model: None,
+            codex_quota_overdraft_enabled: false,
+            codex_quota_overdraft_probe_model: "gpt-6-astra".to_owned(),
             request_interval_ms: 0,
             rotation_strategy: RotationStrategy::Smart,
             openai_account_affinity: Default::default(),
@@ -1808,6 +1810,47 @@ async fn accounts_export_should_pass_store_loaded_timestamps_and_material_to_pro
         ),
         (expected.created_at, expected.updated_at, &document()),
     );
+}
+
+#[tokio::test]
+async fn accounts_export_should_include_matching_valid_relogin_material() {
+    let provider = FakeProviderAdmin::new("openai", events());
+    let store = FakeAccountStore::new("openai", events());
+    let mut account = store.accounts.lock().expect("accounts")[0].clone();
+    account.email = Some("export@example.invalid".to_owned());
+    store.set_accounts(vec![account.clone()]);
+    let relogin = Arc::new(super::relogin::MemoryStore::default());
+    let services = super::AdminHarness::new()
+        .accounts(store)
+        .relogin(relogin)
+        .settings(Arc::new(StaticSettingsStore))
+        .provider(provider)
+        .probe(Arc::new(SuccessfulAccountProbe))
+        .build()
+        .await;
+    services
+        .relogin()
+        .import(
+            "export@example.invalid----secret-password----JBSWY3DPEHPK3PXP",
+            false,
+        )
+        .await
+        .expect("import relogin material");
+
+    let result = services
+        .accounts()
+        .export(
+            &context("export-with-relogin"),
+            vec![ProviderAccountId::new(account.id).unwrap()],
+        )
+        .await
+        .expect("export credentials with relogin material");
+
+    assert_eq!(result.relogin.len(), 1);
+    assert_eq!(result.relogin[0].email, "export@example.invalid");
+    assert_eq!(result.relogin[0].password, "secret-password");
+    assert_eq!(result.relogin[0].mfa_secret, "JBSWY3DPEHPK3PXP");
+    assert!(!format!("{:?}", result.relogin[0]).contains("secret-password"));
 }
 
 #[tokio::test]

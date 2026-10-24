@@ -1,5 +1,12 @@
 # Quality Operations UI
 
+## Account-List Template Application
+
+- Selecting a monitoring template from the account-list menu immediately freezes the
+  selected account IDs, reads current rule revisions and applies the template. Do not
+  add a second confirmation drawer. Partial failures use a bounded toast summary and
+  never auto-repeat an uncertain mutation.
+
 ## Account Menu Switch And Result Badge
 
 ### 1. Scope / Trigger

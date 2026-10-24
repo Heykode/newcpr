@@ -15,7 +15,9 @@ release.
   cumulative account cost, non-streaming routing, and runtime settings.
 - Integrate behavior by narrow, reviewable changes. Do not copy the upstream
   `AGENTS.md`, `.agents/`, agent definitions, or GitHub workflows into this
-  repository.
+  repository wholesale. Useful development skill/agent rules may be distilled
+  into the existing Trellis guides after checking their applicability; never
+  import unavailable plugin tooling or replace local authorization boundaries.
 - Do not import XAI/Grok-specific behavior, unrelated PR work, or a branch that
   has not entered the fixed official baseline.
 
@@ -88,6 +90,20 @@ matrices, or new automation merely to increase confidence; reuse the existing
 checks because this project does not authorize extra CI quota.
 
 ## Upstream Change Compatibility
+
+### Development Guidance Adaptation
+
+The useful review rules from official `abae4a63` are native project guidance:
+
+- Select required specs by both touched files and behavioral impact. Review
+  the final diff again because implementation may expand the ownership scope.
+- Read the actual owner, callers, cancellation and disposal paths before
+  changing a shared API; passing tests do not prove the design is correct.
+- Review performance changes against this implementation, not the upstream
+  label. Already absent copies, plugin-only adapters and middleware are not
+  reasons to add a new native abstraction.
+- Do not write release notes or change versions during ordinary integration;
+  those belong to the separately authorized release stage.
 
 Before porting an upstream change:
 

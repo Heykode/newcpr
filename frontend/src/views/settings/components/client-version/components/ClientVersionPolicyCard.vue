@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { CircleHelp, MonitorUp, TerminalSquare } from '@lucide/vue'
-
 import BaseCard from '@/components/base/BaseCard.vue'
+
 import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
 import BaseForm from '@/components/base/BaseForm/index.vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
+import { t } from '@/i18n'
 
 defineOptions({ name: 'ClientVersionPolicyCard' })
 
@@ -36,9 +37,9 @@ const minCodexCliVersion = defineModel<string>('minCodexCliVersion', { required:
   >
     <template #title>
       <span class="inline-flex items-center gap-1.5">
-        <span>客户端版本限制</span>
+        <span>{{ t('settings.clientVersion.clientVersionRestrictions') }}</span>
         <BaseIconButton
-          label="查看安装与升级说明"
+          :label="t('settings.clientVersion.openGuide')"
           size="sm"
           class="-my-1"
           @click="emit('help')"
@@ -50,13 +51,13 @@ const minCodexCliVersion = defineModel<string>('minCodexCliVersion', { required:
 
     <BaseForm class="max-w-6xl sm:grid-cols-2">
       <BaseFormItem
-        label="Codex Desktop 最低版本"
+        :label="t('settings.clientVersion.codexDesktopMinimumVersion')"
         description="只检查 Desktop 应用版本，例如 26.825.51511"
         :error="desktopError"
       >
         <BaseInput
           v-model="minCodexDesktopVersion"
-          aria-label="Codex Desktop 最低版本"
+          :aria-label="t('settings.clientVersion.codexDesktopMinimumVersion')"
           autocomplete="off"
           spellcheck="false"
           placeholder="不限制"
@@ -69,13 +70,13 @@ const minCodexCliVersion = defineModel<string>('minCodexCliVersion', { required:
       </BaseFormItem>
 
       <BaseFormItem
-        label="Codex CLI 最低版本"
+        :label="t('settings.clientVersion.codexCliMinimumVersion')"
         description="只检查独立 CLI 版本，例如 0.152.0"
         :error="cliError"
       >
         <BaseInput
           v-model="minCodexCliVersion"
-          aria-label="Codex CLI 最低版本"
+          :aria-label="t('settings.clientVersion.codexCliMinimumVersion')"
           autocomplete="off"
           spellcheck="false"
           placeholder="不限制"

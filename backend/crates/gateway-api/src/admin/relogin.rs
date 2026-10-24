@@ -31,6 +31,7 @@ struct EnrollRequest {
     replace_existing: bool,
     settings: super::accounts::AccountImportSettingsRequest,
     outbound_proxy_id: Option<String>,
+    quality_template: Option<gateway_admin::model::quality_ops::QualityTemplateSelection>,
 }
 
 #[derive(Deserialize)]
@@ -159,7 +160,8 @@ where
         request.outbound_proxy_id,
         auth.context().mutation_context(),
     )
-    .map_err(map_admin_service_error)?;
+    .map_err(map_admin_service_error)?
+    .with_quality_template(request.quality_template);
     let ids = state
         .admin_services()
         .relogin()

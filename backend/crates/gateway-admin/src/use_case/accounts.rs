@@ -17,8 +17,9 @@ use crate::{
         AdminError, MutationContext,
         accounts::{
             AccountConnectionTest, AccountConnectionTestEvent, AccountConnectionTestEventStream,
-            AccountListQuery, AccountPageItem, AccountUpdateResult, AccountUsageWindowQuery,
-            AccountsUpdateResult, BatchUpdateAccounts, TurnStateProbeOutcome, UpdateAccount,
+            AccountListQuery, AccountPageItem, AccountUpdateResult, AccountUsage,
+            AccountUsageWindowQuery, AccountsUpdateResult, BatchUpdateAccounts,
+            TurnStateProbeOutcome, UpdateAccount,
         },
         group_monitor_quota::{monitor_learned_windows, monitor_learning_observations},
         observability::TimeRange,
@@ -242,6 +243,7 @@ pub(crate) struct DefaultAccountsService {
     snapshot: Arc<dyn SnapshotControl>,
     probe: Arc<dyn AccountProbe>,
     reset_store: Option<Arc<dyn crate::ports::reset_credits::ResetCreditsStore>>,
+    relogin_store: Option<Arc<dyn crate::ports::relogin::ReloginStore>>,
     reset_credit_locks:
         Arc<futures::lock::Mutex<BTreeMap<ProviderAccountId, Arc<futures::lock::Mutex<()>>>>>,
 }
@@ -270,6 +272,7 @@ impl DefaultAccountsService {
             snapshot,
             probe,
             reset_store: None,
+            relogin_store: None,
             reset_credit_locks: Arc::new(futures::lock::Mutex::new(BTreeMap::new())),
         }
     }
@@ -279,6 +282,14 @@ impl DefaultAccountsService {
         store: Option<Arc<dyn crate::ports::reset_credits::ResetCreditsStore>>,
     ) -> Self {
         self.reset_store = store;
+        self
+    }
+
+    pub(crate) fn with_relogin_store(
+        mut self,
+        store: Option<Arc<dyn crate::ports::relogin::ReloginStore>>,
+    ) -> Self {
+        self.relogin_store = store;
         self
     }
 
@@ -302,6 +313,78 @@ impl DefaultAccountsService {
                 .entry(account_id.clone())
                 .or_insert_with(|| Arc::new(futures::lock::Mutex::new(()))),
         )
+    }
+
+    async fn read_quotas(
+        providers: &ProviderAdminRegistry,
+        items: &[AccountPageItem],
+        rolling_usage: &BTreeMap<String, AccountUsage>,
+    ) -> Vec<ProviderQuota> {
+        let mut groups = BTreeMap::<_, Vec<usize>>::new();
+        for (index, item) in items.iter().enumerate() {
+            groups
+                .entry(&item.account.provider_kind)
+                .or_default()
+                .push(index);
+        }
+        let batches = groups.into_iter().map(|(kind, indices)| async move {
+            let provider = match providers.require(kind) {
+                Ok(provider) => provider,
+                Err(error) => {
+                    tracing::warn!(
+                        provider = %kind,
+                        error = %error,
+                        "account directory provider is not registered; showing empty quota"
+                    );
+                    return Vec::new();
+                }
+            };
+            let requests = indices
+                .iter()
+                .map(|&index| {
+                    let account = &items[index].account;
+                    crate::model::provider_credentials::ProviderQuotaReadRequest {
+                        account,
+                        rolling_usage: rolling_usage.get(&account.id),
+                    }
+                })
+                .collect::<Vec<_>>();
+            let results = provider.read_quotas(&requests).await;
+            if results.len() != indices.len() {
+                tracing::warn!(
+                    provider = %kind,
+                    expected = indices.len(),
+                    actual = results.len(),
+                    "account directory quota batch has invalid length; showing empty quota"
+                );
+                return Vec::new();
+            }
+            indices
+                .into_iter()
+                .zip(results)
+                .map(|(index, result)| {
+                    let quota = result.unwrap_or_else(|error| {
+                        tracing::warn!(
+                            account_id = %items[index].account.id,
+                            error = %error,
+                            "account directory quota projection failed; showing empty quota"
+                        );
+                        empty_quota()
+                    });
+                    (index, quota)
+                })
+                .collect::<Vec<_>>()
+        });
+        // Provider 可独立完成，回填原页顺序并保留未注册或失败账号的位置
+        let mut quotas = vec![empty_quota(); items.len()];
+        for (index, quota) in futures::future::join_all(batches)
+            .await
+            .into_iter()
+            .flatten()
+        {
+            quotas[index] = quota;
+        }
+        quotas
     }
 
     async fn load_account(
@@ -456,6 +539,7 @@ impl DefaultAccountsService {
             mut cumulative_costs,
             mut purchase_costs,
             mut excel_recoveries,
+            mut codex_quota_overdraft,
         ) = futures::try_join!(
             self.accounts.load_account_usage(rolling_range, &ids),
             self.accounts
@@ -463,8 +547,37 @@ impl DefaultAccountsService {
             self.accounts.load_account_cumulative_costs(&ids),
             self.accounts.load_account_purchase_costs(&ids),
             self.accounts.load_excel_recovery(&ids),
+            self.accounts.load_codex_quota_overdraft(&ids),
         )
         .map_err(|error| map_store_error(error, "account usage"))?;
+        let overdraft_windows = codex_quota_overdraft
+            .values()
+            .flat_map(|state| {
+                state.windows.iter().filter_map(|window| {
+                    let start = window.started_at?;
+                    window.active.then(|| AccountUsageWindowQuery {
+                        account_id: state.account_id.clone(),
+                        key: format!("{}:{}", state.account_id, window.window_key),
+                        range: TimeRange { start, end: now },
+                    })
+                })
+            })
+            .collect::<Vec<_>>();
+        let overdraft_usage = self
+            .accounts
+            .load_account_usage_by_windows(&overdraft_windows)
+            .await
+            .map_err(|error| map_store_error(error, "Codex quota overdraft usage"))?
+            .into_iter()
+            .map(|value| (value.key, value.usage))
+            .collect::<BTreeMap<_, _>>();
+        for state in codex_quota_overdraft.values_mut() {
+            for window in &mut state.windows {
+                window.stats = overdraft_usage
+                    .get(&format!("{}:{}", state.account_id, window.window_key))
+                    .cloned();
+            }
+        }
         let rolling_usage = rolling_usage.into_iter().next();
         let health_timeline = health_usage
             .into_iter()
@@ -493,8 +606,37 @@ impl DefaultAccountsService {
         let usage = quota
             .usage_window()
             .and_then(|(window, _)| window.local_usage.clone());
+        let mut overdraft = codex_quota_overdraft.remove(account_id.as_str());
+        if let Some(state) = overdraft.as_mut() {
+            let mut active_windows = Vec::new();
+            for window in &mut state.windows {
+                let label = window.window_key.clone();
+                let seconds = match window.window_key.as_str() {
+                    "5h" => 18_000,
+                    "7d" => 604_800,
+                    _ => continue,
+                };
+                if let Some(projected) = quota
+                    .windows
+                    .iter()
+                    .find(|projected| projected.window_seconds == Some(seconds))
+                {
+                    window.active &= projected.limit_reached;
+                    window.window_key = projected.key.clone();
+                    if window.active {
+                        active_windows.push(label);
+                    }
+                }
+            }
+            state.quota_window = match active_windows.as_slice() {
+                [window] => window.clone(),
+                [_, _, ..] => "multiple".to_owned(),
+                [] => state.quota_window.clone(),
+            };
+        }
         let default_concurrency = self.default_concurrency_limit().await?;
         Ok(AccountDirectoryItem {
+            codex_quota_overdraft: overdraft,
             excel_recovery: excel_recoveries.remove(account_id.as_str()),
             purchase_cost: purchase_costs.remove(account_id.as_str()),
             turn_state: None,
@@ -581,6 +723,7 @@ impl AccountsService for DefaultAccountsService {
             mut cumulative_costs,
             mut purchase_costs,
             mut excel_recoveries,
+            mut codex_quota_overdraft,
         ) = futures::try_join!(
             self.accounts.load_account_usage(rolling_range, &ids),
             self.accounts
@@ -588,8 +731,37 @@ impl AccountsService for DefaultAccountsService {
             self.accounts.load_account_cumulative_costs(&ids),
             self.accounts.load_account_purchase_costs(&ids),
             self.accounts.load_excel_recovery(&ids),
+            self.accounts.load_codex_quota_overdraft(&ids),
         )
         .map_err(|error| map_store_error(error, "account usage"))?;
+        let overdraft_windows = codex_quota_overdraft
+            .values()
+            .flat_map(|state| {
+                state.windows.iter().filter_map(|window| {
+                    let start = window.started_at?;
+                    window.active.then(|| AccountUsageWindowQuery {
+                        account_id: state.account_id.clone(),
+                        key: format!("{}:{}", state.account_id, window.window_key),
+                        range: TimeRange { start, end: now },
+                    })
+                })
+            })
+            .collect::<Vec<_>>();
+        let overdraft_usage = self
+            .accounts
+            .load_account_usage_by_windows(&overdraft_windows)
+            .await
+            .map_err(|error| map_store_error(error, "Codex quota overdraft usage"))?
+            .into_iter()
+            .map(|value| (value.key, value.usage))
+            .collect::<BTreeMap<_, _>>();
+        for state in codex_quota_overdraft.values_mut() {
+            for window in &mut state.windows {
+                window.stats = overdraft_usage
+                    .get(&format!("{}:{}", state.account_id, window.window_key))
+                    .cloned();
+            }
+        }
         let rolling_usage = rolling_usage
             .into_iter()
             .map(|usage| (usage.account_id.clone(), usage))
@@ -598,45 +770,7 @@ impl AccountsService for DefaultAccountsService {
             .into_iter()
             .map(|usage| (usage.account_id.clone(), usage))
             .collect::<BTreeMap<_, _>>();
-        let mut quotas = futures::future::join_all(page.items.iter().map(|item| async {
-            let account = &item.account;
-            let account_id = ProviderAccountId::new(account.id.clone())
-                .map_err(|_| AdminError::invalid("Provider 账号 ID 不合法"))?;
-            // 单个账号的 quota 投影失败（Provider 未注册或 quota 读取失败）不拖垮整页：
-            // 该账号降级为空额度投影，其余账号与页面状态照常返回。
-            let provider = match self.providers.require(&account.provider_kind) {
-                Ok(provider) => provider,
-                Err(error) => {
-                    tracing::warn!(
-                        account_id = %account.id,
-                        error = %error,
-                        "account directory provider is not registered; showing empty quota"
-                    );
-                    return Ok(empty_quota());
-                }
-            };
-            match provider
-                .quota(ProviderQuotaRequest {
-                    account_id,
-                    refresh: false,
-                    rolling_usage: rolling_usage.get(&account.id).cloned(),
-                })
-                .await
-            {
-                Ok(quota) => Ok(quota),
-                Err(error) => {
-                    tracing::warn!(
-                        account_id = %account.id,
-                        error = %error,
-                        "account directory quota projection failed; showing empty quota"
-                    );
-                    Ok(empty_quota())
-                }
-            }
-        }))
-        .await
-        .into_iter()
-        .collect::<Result<Vec<_>, AdminError>>()?;
+        let mut quotas = Self::read_quotas(&self.providers, &page.items, &rolling_usage).await;
         self.attach_quota_local_usage(&page.items, &mut quotas)
             .await?;
         let default_concurrency = self.default_concurrency_limit().await?;
@@ -645,6 +779,34 @@ impl AccountsService for DefaultAccountsService {
             .into_iter()
             .zip(quotas)
             .map(|(mut item, quota)| {
+                let mut overdraft = codex_quota_overdraft.remove(&item.account.id);
+                if let Some(overdraft) = overdraft.as_mut() {
+                    let mut active_windows = Vec::new();
+                    for window in &mut overdraft.windows {
+                        let label = window.window_key.clone();
+                        let seconds = match window.window_key.as_str() {
+                            "5h" => 18_000,
+                            "7d" => 604_800,
+                            _ => continue,
+                        };
+                        if let Some(projected) = quota
+                            .windows
+                            .iter()
+                            .find(|projected| projected.window_seconds == Some(seconds))
+                        {
+                            window.active &= projected.limit_reached;
+                            window.window_key = projected.key.clone();
+                            if window.active {
+                                active_windows.push(label);
+                            }
+                        }
+                    }
+                    overdraft.quota_window = match active_windows.as_slice() {
+                        [window] => window.clone(),
+                        [_, _, ..] => "multiple".to_owned(),
+                        [] => overdraft.quota_window.clone(),
+                    };
+                }
                 let health_timeline = health_usage
                     .get(&item.account.id)
                     .map(|usage| usage.request_buckets.clone())
@@ -653,6 +815,7 @@ impl AccountsService for DefaultAccountsService {
                     .usage_window()
                     .and_then(|(window, _)| window.local_usage.clone());
                 AccountDirectoryItem {
+                    codex_quota_overdraft: overdraft,
                     excel_recovery: excel_recoveries.remove(&item.account.id),
                     purchase_cost: purchase_costs.remove(&item.account.id),
                     turn_state: None,
@@ -695,8 +858,15 @@ impl AccountsService for DefaultAccountsService {
         }
         let exported_ids = account_ids.clone();
         let mut grouped = BTreeMap::<ProviderKind, Vec<ProviderAccountId>>::new();
+        let mut relogin_candidates = Vec::new();
         for account_id in account_ids {
             let account = self.load_account(&account_id).await?;
+            if account.account.provider_kind.as_str() == "openai"
+                && account.account.authentication_kind == "oauth"
+                && let Some(email) = account.account.email.clone()
+            {
+                relogin_candidates.push((account_id.clone(), email));
+            }
             grouped
                 .entry(account.account.provider_kind)
                 .or_default()
@@ -726,6 +896,44 @@ impl AccountsService for DefaultAccountsService {
                     .map_err(|error| map_provider_error(error, "provider account export"))?,
             );
         }
+        let mut relogin = Vec::new();
+        if let Some(store) = self.relogin_store.as_deref() {
+            let entries = store
+                .entries()
+                .await
+                .map_err(|error| map_store_error(error, "account relogin export"))?;
+            let mut audited = Vec::new();
+            for (account_id, email) in relogin_candidates {
+                let Some(entry) = entries
+                    .iter()
+                    .find(|entry| entry.email.eq_ignore_ascii_case(&email))
+                else {
+                    continue;
+                };
+                if entry.validate_totp().is_err() {
+                    continue;
+                }
+                audited.push(entry.id.clone());
+                relogin.push(crate::model::provider_credentials::AccountExportRelogin {
+                    account_id,
+                    email: entry.email.clone(),
+                    password: entry.password.clone(),
+                    mfa_secret: entry.mfa_secret.clone(),
+                });
+            }
+            audited.sort();
+            audited.dedup();
+            if !audited.is_empty() {
+                store
+                    .record_export(
+                        &audited,
+                        crate::model::relogin::ReloginExportFormat::Json,
+                        context,
+                    )
+                    .await
+                    .map_err(|error| map_store_error(error, "account relogin export audit"))?;
+            }
+        }
         self.accounts
             .record_credential_export(&exported_ids, context)
             .await
@@ -733,6 +941,7 @@ impl AccountsService for DefaultAccountsService {
         Ok(AccountExportBundle {
             exported_at: Utc::now(),
             documents,
+            relogin,
         })
     }
 

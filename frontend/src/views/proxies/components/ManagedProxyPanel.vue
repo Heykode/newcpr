@@ -13,6 +13,7 @@ import BaseModal from '@/components/base/BaseModal/index.vue'
 import BaseSelect from '@/components/base/BaseSelect.vue'
 import BaseTablePagination from '@/components/base/BaseTable/BaseTablePagination.vue'
 import { toast } from '@/components/base/BaseToast'
+import { t } from '@/i18n'
 import { errorMessage } from '@/utils/async'
 import { formatDateTime } from '@/utils/date'
 import { batchTargets, checkOutcome, filterNodes, runNodeBatch } from '../mihomoNodes'
@@ -292,15 +293,15 @@ onScopeDispose(() => {
           <thead class="border-b border-cp-border text-cp-text-secondary">
             <tr>
               <th class="p-3">
-                订阅
+                {{ t('accounts.profile.subscription.label') }}
               </th><th class="p-3">
-                状态
+                {{ t('common.fields.status') }}
               </th><th class="p-3">
                 节点
               </th><th class="p-3">
-                更新时间
+                {{ t('common.fields.updatedAt') }}
               </th><th class="p-3">
-                操作
+                {{ t('common.fields.actions') }}
               </th>
             </tr>
           </thead>
@@ -400,7 +401,7 @@ onScopeDispose(() => {
               </th><th class="p-3">
                 检测
               </th><th class="p-3">
-                操作
+                {{ t('common.fields.actions') }}
               </th>
             </tr>
           </thead>
@@ -536,7 +537,7 @@ onScopeDispose(() => {
     </BaseConfirmModal>
     <BaseModal v-model="editOpen" title="编辑订阅">
       <div class="space-y-4">
-        <BaseFormItem label="名称">
+        <BaseFormItem :label="t('common.fields.name')">
           <BaseInput v-model="editName" />
         </BaseFormItem><BaseButton :disabled="busy" @click="execute({ action: 'subscription_rename', target: editing?.id, name: editName })">
           保存名称

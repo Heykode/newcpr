@@ -2,8 +2,9 @@
 import type { CSSProperties } from 'vue'
 import type { ThemeEditorPreview } from '../composables/useThemeEditor'
 import type { ThemeName } from '@/theme'
-
 import BaseSegmented from '@/components/base/BaseSegmented.vue'
+
+import { t } from '@/i18n'
 
 import ThemeComponentPreview from './ThemeComponentPreview.vue'
 import ThemeDashboardPreview from './ThemeDashboardPreview.vue'
@@ -23,13 +24,13 @@ const previewOptions = [
 </script>
 
 <template>
-  <section class="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-3 overflow-hidden" aria-label="主题实时预览">
+  <section class="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-3 overflow-hidden" :aria-label="t('appearance.preview.themeRealTimePreview')">
     <header class="shrink-0 flex flex-wrap items-center justify-between gap-3 rounded-cp-lg bg-cp-bg-container px-3 py-2.5 shadow-cp-tertiary">
       <div>
-        <strong class="block text-cp-sm font-heavy text-cp-text">实时预览</strong>
-        <span class="mt-0.5 block text-[9px] font-emphasis text-cp-text-quaternary">真实组件在影子环境隔离渲染，拖动画板并缩放检查细节</span>
+        <strong class="block text-cp-sm font-heavy text-cp-text">{{ t('appearance.preview.livePreview') }}</strong>
+        <span class="mt-0.5 block text-[9px] font-emphasis text-cp-text-quaternary">{{ t('appearance.preview.description') }}</span>
       </div>
-      <BaseSegmented v-model="preview" label="预览类型" size="sm" :options="previewOptions" />
+      <BaseSegmented v-model="preview" :label="t('appearance.preview.previewType')" size="sm" :options="previewOptions" />
     </header>
 
     <ThemePreviewCanvas

@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { RefreshCw, Search } from '@lucide/vue'
-
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
+
 import BaseInput from '@/components/base/BaseInput.vue'
+import { t } from '@/i18n'
 
 defineProps<{
   refreshing: boolean
@@ -18,7 +19,7 @@ const search = defineModel<string>('search', { required: true })
 </script>
 
 <template>
-  <div class="flex min-w-0 w-full items-center gap-3" role="group" aria-label="使用记录筛选与操作">
+  <div class="flex min-w-0 w-full items-center gap-3" role="group" :aria-label="t('usage.filters.label')">
     <div v-if="!hideSearch" class="min-w-0 flex-1 sm:w-96 sm:flex-none">
       <BaseInput v-model="search" placeholder="请求、Key ID / 可见前缀、账号或模型" aria-label="搜索使用记录：请求、Key ID / 可见前缀、账号或模型" class="w-full">
         <template #prefix>
@@ -32,7 +33,7 @@ const search = defineModel<string>('search', { required: true })
       <BaseIconButton
         variant="ghost"
         size="md"
-        label="刷新使用记录"
+        :label="t('usage.filters.refreshUsageHistory')"
         :loading="refreshing"
         :disabled="loading || refreshing"
         @click="emit('refresh')"

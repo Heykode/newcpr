@@ -137,11 +137,7 @@ const tuningValues = {
           v-model="maxConcurrentPerAccount"
           aria-label="单账号默认最大并发"
           type="number"
-        >
-          <template #prefix>
-            <Gauge class="size-4" />
-          </template>
-        </BaseInput>
+        />
       </BaseFormItem>
 
       <BaseFormItem

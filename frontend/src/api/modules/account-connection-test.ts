@@ -1,5 +1,6 @@
 import { createParser } from 'eventsource-parser'
 import { API_BASE_URL } from '../constants'
+import { assertSessionGeneration, currentSessionGeneration, sessionFetch } from '../request'
 
 export interface AccountConnectionTestRequest {
   accountId: string
@@ -14,7 +15,8 @@ export async function streamAccountConnectionTest(
   signal: AbortSignal,
   onMessage: (data: string) => void,
 ) {
-  const response = await fetch(`${API_BASE_URL}/api/admin/accounts/connection-test`, {
+  const generation = currentSessionGeneration()
+  const response = await sessionFetch(`${API_BASE_URL}/api/admin/accounts/connection-test`, {
     method: 'POST',
     credentials: 'include',
     headers: { 'Content-Type': 'application/json', 'Accept': 'text/event-stream' },
@@ -40,6 +42,7 @@ export async function streamAccountConnectionTest(
   const parser = createParser({
     maxBufferSize: 1024 * 1024,
     onEvent: (event) => {
+      assertSessionGeneration(generation)
       if (!signal.aborted)
         onMessage(event.data)
     },
@@ -51,6 +54,7 @@ export async function streamAccountConnectionTest(
   try {
     while (!signal.aborted) {
       const { done, value } = await reader.read()
+      assertSessionGeneration(generation)
       if (done) {
         parser.feed(decoder.decode())
         break

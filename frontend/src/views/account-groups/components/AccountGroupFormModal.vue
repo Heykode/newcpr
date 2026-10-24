@@ -2,8 +2,8 @@
 import type { AccountGroupFormValue } from '../composables/useAccountGroups'
 import type { AccountGroup } from '@/api'
 import { computed } from 'vue'
-
 import BaseButton from '@/components/base/BaseButton.vue'
+
 import BaseColorPicker from '@/components/base/BaseColorPicker/index.vue'
 import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
 import BaseForm from '@/components/base/BaseForm/index.vue'
@@ -12,6 +12,7 @@ import BaseModal from '@/components/base/BaseModal/index.vue'
 import BaseSelect from '@/components/base/BaseSelect.vue'
 import BaseSwitch from '@/components/base/BaseSwitch.vue'
 import BaseTextarea from '@/components/base/BaseTextarea.vue'
+import { t } from '@/i18n'
 import { ACCOUNT_GROUP_COLOR_PRESETS } from '../constants'
 
 const props = defineProps<{
@@ -38,36 +39,36 @@ const description = computed(() => props.group
     :dismissible="!saving"
   >
     <BaseForm class="grid gap-5">
-      <BaseFormItem label="分组名称" required>
+      <BaseFormItem :label="t('groups.editor.groupName')" required>
         <BaseInput
           v-model="form.name"
-          aria-label="分组名称"
-          placeholder="例如：生产账号"
+          :aria-label="t('groups.editor.groupName')"
+          :placeholder="t('groups.editor.forExampleProductionAccount')"
           :disabled="saving"
         />
       </BaseFormItem>
-      <BaseFormItem label="分组颜色" required>
+      <BaseFormItem :label="t('groups.editor.groupColor')" required>
         <BaseColorPicker
           v-model="form.color"
-          label="选择分组颜色"
+          :label="t('groups.editor.selectGroupColor')"
           :presets="ACCOUNT_GROUP_COLOR_PRESETS"
           :disabled="saving"
         />
       </BaseFormItem>
-      <BaseFormItem label="描述（可选）">
+      <BaseFormItem :label="t('groups.editor.descriptionOptional')">
         <BaseTextarea
           v-model="form.description"
-          aria-label="分组描述"
+          :aria-label="t('groups.editor.groupDescription')"
           :rows="4"
-          placeholder="说明这个分组的用途"
+          :placeholder="t('groups.editor.describePurposeOfThisGroup')"
           :disabled="saving"
         />
       </BaseFormItem>
-      <BaseFormItem label="Fast 模式">
+      <BaseFormItem :label="t('usage.billing.fastMode')">
         <BaseSelect
           v-model="form.fastMode"
           class="w-full"
-          aria-label="Fast 模式"
+          :aria-label="t('usage.billing.fastMode')"
           :options="[
             { value: 'default', label: '默认（跟随客户端）' },
             { value: 'enabled', label: '开启' },
@@ -81,7 +82,7 @@ const description = computed(() => props.group
 
     <template #footer>
       <BaseButton variant="secondary" :disabled="saving" @click="open = false">
-        取消
+        {{ t('common.actions.cancel') }}
       </BaseButton>
       <BaseButton
         variant="primary"
@@ -89,7 +90,7 @@ const description = computed(() => props.group
         :disabled="!form.name.trim()"
         @click="emit('save')"
       >
-        保存分组
+        {{ t('groups.editor.saveGroup') }}
       </BaseButton>
     </template>
   </BaseModal>

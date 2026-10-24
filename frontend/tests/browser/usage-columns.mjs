@@ -176,6 +176,19 @@ function fixtures() {
     },
   }
   return new Map([
+    ['/api/admin/log-cleanup', {
+      revision: 1,
+      config: {
+        enabled: false,
+        frequency: 'daily',
+        dailyHour: 3,
+        dailyMinute: 0,
+        timezone: 'Asia/Shanghai',
+        ...Object.fromEntries(['requests', 'files', 'captures', 'audit'].map(category => [category, { selected: false, retentionDays: 7 }])),
+      },
+      nextRunAt: null,
+      job: null,
+    }],
     ['/api/admin/request-captures/config', {
       config: { enabled: false, globalErrors: false, includeMedia: false, quotaMib: 1024, retentionDays: 7 },
       globalActive: false,

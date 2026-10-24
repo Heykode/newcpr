@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import type { BaseTablePagination, PagerItem } from './pagination'
 import { ChevronLeft, ChevronRight } from '@lucide/vue'
-
 import { computed } from 'vue'
+
+import { t } from '@/i18n'
 import BaseIconButton from '../BaseIconButton.vue'
 import BaseSelect from '../BaseSelect.vue'
 import {
@@ -88,11 +89,11 @@ function paginationPageClass(page: number) {
   >
     <div class="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-center gap-2 @min-[36rem]/pagination:grid-cols-[minmax(0,1fr)_auto_auto] @min-[36rem]/pagination:gap-3">
       <span class="hidden min-w-0 truncate text-cp-sm font-emphasis text-cp-text-secondary @min-[36rem]/pagination:block">
-        共 {{ pagination.total }} 条
+        {{ t('ui.total', { count: pagination.total }) }}
       </span>
       <BaseSelect
         v-model="pageSizeModel"
-        aria-label="每页条数"
+        :aria-label="t('ui.pageSize')"
         :options="pageSizeOptions"
         :disabled="loading"
         size="sm"
@@ -100,14 +101,14 @@ function paginationPageClass(page: number) {
       />
 
       <nav
-        aria-label="分页"
+        :aria-label="t('ui.pagination')"
         class="flex shrink-0 items-center justify-self-end gap-2"
       >
         <BaseIconButton
           variant="secondary"
           size="sm"
           :disabled="loading || currentPage <= 1"
-          label="上一页"
+          :label="t('ui.previous')"
           @click="goToPage(currentPage - 1)"
         >
           <ChevronLeft class="size-4" />
@@ -143,7 +144,7 @@ function paginationPageClass(page: number) {
           variant="secondary"
           size="sm"
           :disabled="loading || currentPage >= totalPages"
-          label="下一页"
+          :label="t('ui.next')"
           @click="goToPage(currentPage + 1)"
         >
           <ChevronRight class="size-4" />

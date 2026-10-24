@@ -1,0 +1,9 @@
+{
+  "from_version": "3.29.0",
+  "to_version": "3.30.0",
+  "from_migrations_tree": "38090a5428757f917d27e6d3f10cbad77b9e170d",
+  "to_migrations_tree": "8495c6ccfa2001131d90aeb5e627eb8ba45dccb6",
+  "added": ["0077_codex_quota_overdraft.sql"],
+  "modified_documentation": ["README.md"],
+  "recovery": "manual"
+}

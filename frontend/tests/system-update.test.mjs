@@ -7,6 +7,7 @@ import { runInNewContext } from 'node:vm'
 import { createPinia, disposePinia } from 'pinia'
 import ts from 'typescript'
 import * as vue from 'vue'
+import * as translations from './helpers/i18n.mjs'
 
 const require = createRequire(import.meta.url)
 const filename = new URL('../src/stores/modules/system-update.ts', import.meta.url)
@@ -61,6 +62,7 @@ function harness(t, initialStatus = status()) {
   }
   const exports = {}
   const dependencies = {
+    '@/i18n': translations,
     vue,
     '@vueuse/core': {
       useEventSource: () => event,

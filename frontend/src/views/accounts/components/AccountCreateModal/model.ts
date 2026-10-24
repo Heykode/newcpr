@@ -1,5 +1,6 @@
 import type { AccountModelAccess } from '@/api'
 import type { AccountTemplate } from '@/api/modules/account-templates'
+import type { QualityRuleTemplate } from '@/api/modules/quality-ops'
 import type { AccountEgressDraft, AccountEgressPatch } from '@/utils/account-egress'
 import type { Excel403Action } from '@/utils/excel-settings'
 import type { RequestProxySource } from '@/utils/request-proxy-source'
@@ -17,6 +18,7 @@ export type AccountImportInputMode = Exclude<AccountImportMode, 'oauth'>
 
 export interface AccountCreateForm {
   importTemplate: AccountTemplate | null
+  qualityTemplate: QualityRuleTemplate | null
   templateEgress?: { draft: AccountEgressDraft, patch: AccountEgressPatch }
   purchaseAmount: string
   purchaseCycleStart: string
@@ -52,6 +54,7 @@ export interface AccountCreateForm {
 export function emptyAccountCreateForm(): AccountCreateForm {
   return {
     importTemplate: null,
+    qualityTemplate: null,
     purchaseAmount: '',
     purchaseCycleStart: '',
     customName: '',
@@ -139,4 +142,9 @@ export function accountImportTemplate(form: AccountCreateForm, provider: string)
   if (provider !== 'openai' && template.config.turnStateInjectionEnabled === true)
     throw new Error('所选模板的 State 设置仅支持 OpenAI 账号')
   return { id: template.id, revision: template.revision }
+}
+
+export function accountImportQualityTemplate(form: AccountCreateForm) {
+  const template = form.qualityTemplate
+  return template ? { id: template.id, revision: template.revision } : undefined
 }

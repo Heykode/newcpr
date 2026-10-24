@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import type { AccountGroup, AccountModelAccess } from '@/api'
 import type { AccountEgressReadState } from '@/utils/account-egress'
-
 import type { Excel403Action } from '@/utils/excel-settings'
+
 import AccountGroupCheckboxGrid from '@/components/AccountGroupCheckboxGrid.vue'
 import BaseCheckbox from '@/components/base/BaseCheckbox.vue'
 import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
@@ -11,6 +11,7 @@ import BaseSwitch from '@/components/base/BaseSwitch.vue'
 import Excel403ActionSelect from '@/components/Excel403ActionSelect.vue'
 import ExcelModelFields from '@/components/ExcelModelFields.vue'
 import ExcelRecoveryFields from '@/components/ExcelRecoveryFields.vue'
+import { t } from '@/i18n'
 import { DEFAULT_EXCEL_MODELS_INPUT } from '@/utils/excel-defaults'
 import AccountModelAccessField from './AccountModelAccessField.vue'
 import AccountOutboundField from './AccountOutboundField.vue'
@@ -83,7 +84,7 @@ const updateProxy = defineModel<boolean>('updateProxy', { default: false })
     </BaseFormItem>
     <div :class="batch ? 'grid gap-2' : 'flex min-h-6 items-center justify-between gap-3'">
       <div class="flex min-w-0 items-center justify-between gap-3">
-        <span class="text-cp leading-none font-medium text-cp-text-secondary">调度</span>
+        <span class="text-cp leading-none font-medium text-cp-text-secondary">{{ t('accounts.scheduling.scheduling') }}</span>
         <BaseCheckbox
           v-if="batch"
           v-model="updateEnabled"
@@ -94,7 +95,7 @@ const updateProxy = defineModel<boolean>('updateProxy', { default: false })
       </div>
       <BaseSwitch
         v-model="enabled"
-        label="切换账号调度"
+        :label="t('accounts.scheduling.switchAccountSchedule')"
         :disabled="disabled || (batch && !updateEnabled)"
       />
     </div>
@@ -188,7 +189,7 @@ const updateProxy = defineModel<boolean>('updateProxy', { default: false })
     </div>
 
     <div class="grid gap-4 sm:grid-cols-2">
-      <BaseFormItem label="并发限制">
+      <BaseFormItem :label="t('accounts.scheduling.concurrencyLimit')">
         <template v-if="batch" #extra>
           <BaseCheckbox
             v-model="updateConcurrencyLimit"
@@ -199,15 +200,15 @@ const updateProxy = defineModel<boolean>('updateProxy', { default: false })
         </template>
         <BaseInput
           v-model="concurrencyLimit"
-          aria-label="账号并发限制"
+          :aria-label="t('accounts.scheduling.accountConcurrencyLimit')"
           type="number"
           min="1"
           max="4294967295"
-          placeholder="留空使用默认值"
+          :placeholder="t('accounts.scheduling.defaultHint')"
           :disabled="disabled || (batch && !updateConcurrencyLimit)"
         />
       </BaseFormItem>
-      <BaseFormItem label="权重">
+      <BaseFormItem :label="t('accounts.scheduling.weight')">
         <template v-if="batch" #extra>
           <BaseCheckbox
             v-model="updateWeight"
@@ -218,7 +219,7 @@ const updateProxy = defineModel<boolean>('updateProxy', { default: false })
         </template>
         <BaseInput
           v-model="weight"
-          aria-label="账号调度权重"
+          :aria-label="t('accounts.scheduling.accountSchedulingWeight')"
           type="number"
           min="1"
           max="100"
@@ -241,7 +242,7 @@ const updateProxy = defineModel<boolean>('updateProxy', { default: false })
       </template>
     </AccountModelAccessField>
 
-    <BaseFormItem label="所属分组">
+    <BaseFormItem :label="t('accounts.scheduling.groupLabel')">
       <template v-if="batch" #extra>
         <BaseCheckbox
           v-model="updateGroups"

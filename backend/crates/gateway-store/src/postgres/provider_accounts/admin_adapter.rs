@@ -842,6 +842,37 @@ impl AccountStore for PgAdminAccountStore {
             .map_err(|error| admin_store_error(ENTITY, error))
     }
 
+    async fn claim_codex_quota_overdraft(
+        &self,
+    ) -> AdminStoreResult<
+        Option<gateway_admin::model::codex_quota_overdraft::CodexQuotaOverdraftClaim>,
+    > {
+        super::quota_overdraft::claim(&self.pool)
+            .await
+            .map_err(|error| admin_store_error(ENTITY, error))
+    }
+
+    async fn finish_codex_quota_overdraft(
+        &self,
+        claim: &gateway_admin::model::codex_quota_overdraft::CodexQuotaOverdraftClaim,
+        outcome: gateway_admin::model::codex_quota_overdraft::CodexQuotaOverdraftOutcome,
+    ) -> AdminStoreResult<bool> {
+        super::quota_overdraft::finish(&self.pool, claim, outcome)
+            .await
+            .map_err(|error| admin_store_error(ENTITY, error))
+    }
+
+    async fn load_codex_quota_overdraft(
+        &self,
+        account_ids: &[String],
+    ) -> AdminStoreResult<
+        BTreeMap<String, gateway_admin::model::codex_quota_overdraft::CodexQuotaOverdraftState>,
+    > {
+        super::quota_overdraft::load(&self.pool, account_ids)
+            .await
+            .map_err(|error| admin_store_error(ENTITY, error))
+    }
+
     async fn load_account_purchase_costs(
         &self,
         account_ids: &[String],

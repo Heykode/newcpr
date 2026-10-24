@@ -72,6 +72,16 @@ impl PgAccountGroupRepository {
         Ok(record)
     }
 
+    async fn committed_record(&self, id: &AccountGroupId) -> Option<AccountGroupRecord> {
+        match self.required_record(id).await {
+            Ok(record) => Some(record),
+            Err(error) => {
+                tracing::warn!(group_id = %id.as_str(), error = %error, "committed account group projection is unavailable");
+                None
+            }
+        }
+    }
+
     async fn mutate<F>(
         &self,
         audit: super::AdminAuditEvent,
@@ -332,7 +342,7 @@ impl AccountGroupStore for PgAccountGroupRepository {
         Ok(AccountGroupMutation {
             config_revision: revision,
             id: id.clone(),
-            record: Some(self.required_record(&id).await?),
+            record: self.committed_record(&id).await,
         })
     }
 
@@ -386,7 +396,7 @@ impl AccountGroupStore for PgAccountGroupRepository {
         Ok(AccountGroupMutation {
             config_revision: revision,
             id: id.clone(),
-            record: Some(self.required_record(&id).await?),
+            record: self.committed_record(&id).await,
         })
     }
 
@@ -421,7 +431,7 @@ impl AccountGroupStore for PgAccountGroupRepository {
         Ok(AccountGroupMutation {
             config_revision: revision,
             id: id.clone(),
-            record: Some(self.required_record(&id).await?),
+            record: self.committed_record(&id).await,
         })
     }
 
@@ -498,6 +508,7 @@ async fn load_member_facts<'e>(
                 account.weight, account.model_access_json, account.credential_state, account.quota_access_state,
                 account.quota_evidence, account.quota_access_observed_at,
                 account.quota_reset_at, account.last_error_reason,
+                coalesce((select status = 'passed' and cycle_key=coalesce(floor(extract(epoch from account.quota_reset_at))::bigint::text,'unknown')||':'||coalesce(floor(extract(epoch from account.quota_access_observed_at))::bigint::text,'unknown') from codex_quota_overdraft_states where account_id=account.id and credential_revision=account.credential_revision and config_revision=settings.config_revision and settings.codex_quota_overdraft_enabled), false) as codex_quota_overdraft_passed,
                 account.last_error_message, account.credential_observed_at,
                 account.created_at, account.updated_at, account.relogin_count, account.last_relogin_at,
                 settings.max_concurrent_per_account

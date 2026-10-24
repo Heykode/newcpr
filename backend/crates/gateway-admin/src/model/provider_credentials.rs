@@ -792,6 +792,11 @@ pub struct ProviderQuotaRequest {
     pub rolling_usage: Option<AccountUsage>,
 }
 
+pub struct ProviderQuotaReadRequest<'a> {
+    pub account: &'a crate::model::accounts::AccountRecord,
+    pub rolling_usage: Option<&'a AccountUsage>,
+}
+
 /// Provider 已解析的 quota 结果及其不透明差异字段。
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProviderQuota {
@@ -1165,6 +1170,7 @@ impl fmt::Debug for ProviderExport {
 #[derive(Debug, Clone, PartialEq)]
 pub struct AccountDirectoryItem {
     pub turn_state: Option<super::accounts::AccountTurnStateStatus>,
+    pub codex_quota_overdraft: Option<super::codex_quota_overdraft::CodexQuotaOverdraftState>,
     pub account: AccountRecord,
     /// 账号覆盖值优先，否则继承本次查询读取的运行时默认值；不回写账号配置。
     pub effective_concurrency_limit: NonZeroU32,
@@ -1200,6 +1206,26 @@ pub struct AccountRefreshResult {
 pub struct AccountExportBundle {
     pub exported_at: DateTime<Utc>,
     pub documents: Vec<ProviderExport>,
+    pub relogin: Vec<AccountExportRelogin>,
+}
+
+pub struct AccountExportRelogin {
+    pub account_id: ProviderAccountId,
+    pub email: String,
+    pub password: String,
+    pub mfa_secret: String,
+}
+
+impl fmt::Debug for AccountExportRelogin {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AccountExportRelogin")
+            .field("account_id", &self.account_id)
+            .field("email", &"<redacted>")
+            .field("password", &"<redacted>")
+            .field("mfa_secret", &"<redacted>")
+            .finish()
+    }
 }
 
 impl fmt::Debug for AccountExportBundle {
@@ -1208,6 +1234,7 @@ impl fmt::Debug for AccountExportBundle {
             .debug_struct("AccountExportBundle")
             .field("exported_at", &self.exported_at)
             .field("document_count", &self.documents.len())
+            .field("relogin_count", &self.relogin.len())
             .finish()
     }
 }

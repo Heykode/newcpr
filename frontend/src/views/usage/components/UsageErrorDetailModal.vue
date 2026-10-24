@@ -3,6 +3,7 @@ import type { UsageViewModel } from '../utils/records'
 import { computed } from 'vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseModal from '@/components/base/BaseModal/index.vue'
+import { t } from '@/i18n'
 import { usageAccountText, usageTransportType } from '../utils/records'
 import RequestDiagnosticsPanel from './RequestDiagnosticsPanel.vue'
 import UsageDetailFieldGrid from './UsageDetailFieldGrid.vue'
@@ -31,7 +32,7 @@ const errorMessage = computed(() => {
 </script>
 
 <template>
-  <BaseModal v-model="open" title="错误详情" tone="danger" size="xl">
+  <BaseModal v-model="open" :title="t('usage.error.errorDetails')" tone="danger" size="xl">
     <div v-if="record" class="grid min-w-0 gap-4">
       <section class="min-w-0 border-l-2 border-cp-error px-3">
         <div class="flex flex-wrap items-center gap-3">
@@ -48,7 +49,7 @@ const errorMessage = computed(() => {
           尝试链路
         </h3>
         <p v-if="record.attemptsComplete === false" class="text-cp-warning-text">
-          尝试记录可能不完整
+          {{ t('usage.error.attemptRecordMayBeIncomplete') }}
         </p>
         <ol class="m-0 grid list-none gap-3 p-0">
           <li v-for="attempt in record.attempts" :key="attempt.id" class="min-w-0 border-b border-cp-border pb-3">
@@ -77,7 +78,7 @@ const errorMessage = computed(() => {
         完整详情
       </BaseButton>
       <BaseButton variant="primary" @click="open = false">
-        关闭
+        {{ t('common.actions.close') }}
       </BaseButton>
     </template>
   </BaseModal>

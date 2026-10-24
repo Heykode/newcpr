@@ -495,6 +495,7 @@ pub struct AccountSelectionContext {
     pub preferred_account_overrides_weight: bool,
     pub round_robin_cursor: u64,
     pub eligibility: AccountEligibilityPolicy,
+    pub allow_codex_quota_overdraft: bool,
     pub account_scope: Option<std::sync::Arc<crate::account::scope::FrozenAccountScope>>,
     /// 本请求独立审批池的上限；0 使用普通账号池，不扣减普通名额。
     pub reserved_concurrency: u32,
@@ -902,7 +903,14 @@ impl AccountSelector {
                         || context.eligibility == AccountEligibilityPolicy::IgnoreQualityPause,
                 )
                 .status;
-            if status != AccountStatus::Normal {
+            let overdraft_allowed = status == AccountStatus::QuotaExhausted
+                && context.allow_codex_quota_overdraft
+                && candidate.account.codex_quota_overdraft_passed()
+                && candidate
+                    .signals
+                    .rate_limited_until
+                    .is_none_or(|until| until <= context.now);
+            if status != AccountStatus::Normal && !overdraft_allowed {
                 return Some(AccountSchedulingBlocker::LocalAvailability);
             }
         }

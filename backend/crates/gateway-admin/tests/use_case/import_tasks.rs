@@ -4,7 +4,7 @@ use gateway_admin::{
     AdminBundle, AdminServices,
     model::{
         AdminErrorKind, MutationActor, MutationContext,
-        import_tasks::{ImportTaskInput, SubmitImportTask},
+        import_tasks::{ImportItemStatus, ImportTaskInput, SubmitImportTask},
         provider_credentials::ImportCredentials,
     },
     ports::provider::ProviderAdminErrorKind,
@@ -33,6 +33,7 @@ fn command(id: Uuid, count: usize) -> SubmitImportTask {
         items: (0..count)
             .map(|_| ImportTaskInput {
                 provider: ProviderKind::new("openai").unwrap(),
+                quality_template: None,
                 command: ImportCredentials {
                     outbound_proxy_id: None,
                     settings: None,
@@ -145,6 +146,36 @@ async fn retry_returns_same_task_but_rejects_changed_content_even_after_stop() {
         services.import_tasks().submit(changed).unwrap_err().kind(),
         AdminErrorKind::Conflict
     );
+}
+
+#[tokio::test]
+async fn post_import_quality_failure_keeps_the_committed_account_successful() {
+    let (mut bundle, _, _) = harness().await;
+    let services = bundle.services();
+    let mut submission = command(Uuid::now_v7(), 1);
+    submission.items[0].quality_template = Some(
+        gateway_admin::model::quality_ops::QualityTemplateSelection {
+            id: "missing-quality-template".to_owned(),
+            revision: 1,
+        },
+    );
+    let task = services.import_tasks().submit(submission).unwrap();
+    let (cancellation, worker) = start(&mut bundle);
+    wait_finished(&services, task.task_id).await;
+    let detail = services
+        .import_tasks()
+        .detail(&context("quality-warning"), task.task_id)
+        .unwrap();
+    assert_eq!(detail.items[0].status, ImportItemStatus::Succeeded);
+    assert_eq!(detail.items[0].account_ids.len(), 1);
+    assert!(
+        detail.items[0]
+            .message
+            .as_deref()
+            .is_some_and(|message| message.contains("监测模板"))
+    );
+    cancellation.cancel();
+    worker.await.unwrap();
 }
 
 #[tokio::test]

@@ -106,6 +106,7 @@ async fn old_weekly_quota_should_outweigh_one_in_flight_title_request() {
             preferred_account_overrides_weight: true,
             round_robin_cursor: cursor,
             eligibility: AccountEligibilityPolicy::Enforce,
+            allow_codex_quota_overdraft: false,
             account_scope: None,
             reserved_concurrency: 0,
         };

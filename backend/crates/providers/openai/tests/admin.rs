@@ -916,7 +916,7 @@ async fn openai_admin_projects_free_plan_from_cached_quota_when_account_claims_o
     let config = valid_config();
     let bundle = provider_openai::initialize(
         config.config.clone(),
-        provider_ports_with(store, Arc::new(TestOAuthPending::default())),
+        provider_ports_with(store.clone(), Arc::new(TestOAuthPending::default())),
     )
     .await
     .expect("OpenAI bundle");
@@ -930,6 +930,39 @@ async fn openai_admin_projects_free_plan_from_cached_quota_when_account_claims_o
         .await
         .expect("read cached free quota");
     assert_eq!(quota.plan_type.as_deref(), Some("free"));
+    let record = account_record(&account);
+    let mut stale = record.clone();
+    stale.credential_revision = Revision::new(record.credential_revision.get() + 1).unwrap();
+    let requests = vec![
+        gateway_admin::model::provider_credentials::ProviderQuotaReadRequest {
+            account: &record,
+            rolling_usage: None,
+        },
+        gateway_admin::model::provider_credentials::ProviderQuotaReadRequest {
+            account: &stale,
+            rolling_usage: None,
+        },
+        gateway_admin::model::provider_credentials::ProviderQuotaReadRequest {
+            account: &record,
+            rolling_usage: None,
+        },
+    ];
+    let reads_before = store.quota_reads();
+    let quotas = admin.read_quotas(&requests).await;
+    assert_eq!(store.quota_reads(), reads_before + 1);
+    assert_eq!(quotas.len(), 3);
+    assert_eq!(
+        quotas[0].as_ref().unwrap().plan_type.as_deref(),
+        Some("free")
+    );
+    assert!(
+        quotas[1].is_err(),
+        "stale revision must not reuse another credential's observation"
+    );
+    assert_eq!(
+        quotas[2].as_ref().unwrap().plan_type.as_deref(),
+        Some("free")
+    );
     assert_eq!(
         admin.plan_type_display(quota.plan_type.as_deref().expect("plan")),
         "Free"

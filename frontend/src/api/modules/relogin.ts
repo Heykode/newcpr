@@ -83,7 +83,7 @@ export function getRelogin(options: RequestOptions = {}) {
 export function importRelogin(text: string, replaceExisting: boolean) {
   return request<{ imported: number }>({ url: '/api/admin/relogin/import', method: 'POST', data: { text, replaceExisting } })
 }
-export function enrollRelogin(data: { text: string, replaceExisting: boolean, settings: import('./accounts').AccountImportSettings, outboundProxyId?: string }) {
+export function enrollRelogin(data: { text: string, replaceExisting: boolean, settings: import('./accounts').AccountImportSettings, outboundProxyId?: string, qualityTemplate?: Pick<import('./quality-ops').QualityRuleTemplate, 'id' | 'revision'> }) {
   return request<{ ids: string[] }>({ url: '/api/admin/relogin/enroll', method: 'POST', data })
 }
 export function exportRelogin(ids: string[], format: 'json' | 'two_fa') {

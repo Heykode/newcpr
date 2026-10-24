@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { Openai, Xai } from '@boxicons/vue'
 import { LayoutGrid } from '@lucide/vue'
+import { t } from '@/i18n'
 
 import { PROVIDER_DISPLAY_NAMES } from '@/utils/providers'
 import BaseSegmented from './base/BaseSegmented.vue'
@@ -26,7 +27,7 @@ const providerOptions = [
 <template>
   <BaseSegmented
     v-model="provider"
-    label="按平台筛选"
+    :label="t('common.providers.filter')"
     :options="providerOptions"
     :disabled="disabled"
     display="icon"

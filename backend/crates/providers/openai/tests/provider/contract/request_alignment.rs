@@ -56,7 +56,11 @@ async fn capture(
             .await;
         (http.uri(), None)
     };
-    let original = body.as_object().unwrap().clone();
+    let mut original = body.as_object().unwrap().clone();
+    let overdraft = original
+        .remove("_cpr_test_overdraft")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false);
     let raw_metadata = r#"{"installation_id":"old-device","workspaces":{"/tmp/\u4e2d\u6587":{"label":"caf\u00e9"}}}"#;
     let operation = Operation::Generate(GenerateRequest::from_protocol_payload(
         ProtocolPayload::json_object("openai", original.clone())
@@ -121,11 +125,19 @@ async fn capture(
         })
         .unwrap(),
     );
+    let mut request_context = RequestAttemptContext::new(
+        ModelRequestId::new("req_alignment").unwrap(),
+        ClientApiKeyId::new("key_openai_contract").unwrap(),
+    );
+    if overdraft {
+        request_context = request_context.with_codex_quota_overdraft(
+            true,
+            UpstreamModelId::new("gpt-6-astra").unwrap(),
+            ConfigRevision::new(1).unwrap(),
+        );
+    }
     let context = AttemptContext::new(
-        RequestAttemptContext::new(
-            ModelRequestId::new("req_alignment").unwrap(),
-            ClientApiKeyId::new("key_openai_contract").unwrap(),
-        ),
+        request_context,
         NonZeroU32::new(1).unwrap(),
         SystemTime::now() + Duration::from_secs(30),
         account_policy(),
@@ -214,6 +226,40 @@ async fn capture(
         body,
         state,
         affinity,
+    }
+}
+
+#[tokio::test]
+async fn enabled_overdraft_injects_the_same_final_pair_for_http_and_websocket() {
+    for websocket in [false, true] {
+        let accounts = Arc::new(MemoryAccountStore::default());
+        create_account(&accounts, "acct_overdraft_wire").await;
+        let captured = capture(
+            &accounts,
+            "acct_overdraft_wire",
+            tempfile::tempdir().unwrap().path(),
+            json!({
+                "_cpr_test_overdraft": true,
+                "model": "gpt-6-astra",
+                "input": [{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}],
+                "stream": true,
+                "store": false
+            }),
+            websocket,
+            true,
+        )
+        .await;
+        let input = captured.body["input"].as_array().unwrap();
+        assert_eq!(input.len(), 3);
+        assert_eq!(input[1]["type"], "custom_tool_call");
+        assert_eq!(input[2]["type"], "custom_tool_call_output");
+        assert_eq!(input[1]["call_id"], input[2]["call_id"]);
+        assert!(
+            input[1]["call_id"]
+                .as_str()
+                .unwrap()
+                .starts_with("call_cpr_overdraft_")
+        );
     }
 }
 

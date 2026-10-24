@@ -48,7 +48,7 @@ async fn cache_fingerprints_are_opt_in_bounded_and_never_retain_prompt_text() {
                 ModelRequestId::new("req_cache_diagnostics").unwrap(),
                 ClientApiKeyId::new("key_openai_contract").unwrap(),
             )
-            .with_trace(trace),
+            .with_trace(trace.clone()),
             NonZeroU32::MIN,
             SystemTime::now() + Duration::from_secs(30),
             account_policy(),
@@ -76,6 +76,37 @@ async fn cache_fingerprints_are_opt_in_bounded_and_never_retain_prompt_text() {
             }
         }
         let summary = summary.unwrap();
+        if index > 0 {
+            let snapshot = trace.snapshot().unwrap();
+            let events = snapshot["events"].as_array().unwrap();
+            for stage in [
+                "provider.request.input",
+                "provider.request.outbound",
+                "provider.response.usage",
+            ] {
+                assert!(
+                    events.iter().any(|event| event["stage"] == stage),
+                    "missing {stage}"
+                );
+            }
+            let outbound = events
+                .iter()
+                .find(|event| event["stage"] == "provider.request.outbound")
+                .unwrap();
+            assert!(outbound["data"]["correlation"]["session-id"]["values"].is_array());
+            for raw in [
+                "synthetic_private_instruction",
+                "synthetic_private_tool",
+                "synthetic_private_prompt",
+            ] {
+                assert!(
+                    !snapshot.to_string().contains(raw),
+                    "diagnostics must not retain {raw}"
+                );
+            }
+        } else {
+            assert!(trace.snapshot().is_none());
+        }
         for raw in [
             "synthetic_private_instruction",
             "synthetic_private_tool",

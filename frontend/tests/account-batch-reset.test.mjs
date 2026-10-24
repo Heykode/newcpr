@@ -5,6 +5,7 @@ import { test } from 'node:test'
 import { runInNewContext } from 'node:vm'
 import ts from 'typescript'
 import * as vue from 'vue'
+import * as translations from './helpers/i18n.mjs'
 
 const tick = () => new Promise(resolve => setImmediate(resolve))
 const copy = value => JSON.parse(JSON.stringify(value))
@@ -193,7 +194,7 @@ test('single-account reopen restores the server pending card, never substitutes 
   }
   const text = readFileSync(new URL('../src/views/accounts/composables/useAccountResetCredits.ts', import.meta.url), 'utf8')
   const { outputText } = ts.transpileModule(text, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } })
-  runInNewContext(outputText, { exports, AbortController, require: name => dependencies[name] })
+  runInNewContext(outputText, { exports, AbortController, require: name => name === '@/i18n' ? translations : dependencies[name] })
   const scope = vue.effectScope()
   try {
     const state = scope.run(() => exports.useAccountResetCredits({ accountId: () => 'acct_pending', onAccountUpdated: () => {} }))

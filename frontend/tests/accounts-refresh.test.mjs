@@ -1,11 +1,12 @@
 /* eslint-disable test/no-import-node-test -- this regression uses Node's built-in runner. */
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { createRequire } from 'node:module'
 import { test } from 'node:test'
 import { runInNewContext } from 'node:vm'
+import { useStorage } from '@vueuse/core'
 import ts from 'typescript'
 import * as vue from 'vue'
+import { createTestRequire as createRequire } from './helpers/i18n.mjs'
 
 const require = createRequire(import.meta.url)
 
@@ -76,6 +77,14 @@ function createHarness(t) {
   })
   const requests = []
   const errors = []
+  const tableSort = loadModule(new URL('../src/composables/useTableSort.ts', import.meta.url), {
+    vue,
+    '@vueuse/core': { useStorage },
+  })
+  const columns = loadModule(new URL('../src/components/base/BaseTable/columns.ts', import.meta.url), {})
+  const constants = loadModule(new URL('../src/views/accounts/constants.ts', import.meta.url), {
+    '@/components/base/BaseTable/columns': columns,
+  })
   const accounts = loadModule(new URL('../src/views/accounts/composables/useAccountsQuery.ts', import.meta.url), {
     'vue': { ...vue, onMounted: callback => mounted.push(callback) },
     '@vueuse/core': vueUse,
@@ -84,6 +93,8 @@ function createHarness(t) {
     },
     '@/components/base/BaseToast': { toast: { error: message => errors.push(message) } },
     '@/composables/usePagedQuery': pagedQuery,
+    '@/composables/useTableSort': tableSort,
+    '../constants': constants,
     '@/utils/async': asyncUtils,
   })
   const scope = vue.effectScope()

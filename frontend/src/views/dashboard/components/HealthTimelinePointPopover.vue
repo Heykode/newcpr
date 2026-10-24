@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import type { HealthTimelinePoint } from '../constants'
-
 import { computed } from 'vue'
+
+import { t } from '@/i18n'
 import { formatHealthCount, healthReliabilityValueClass, healthServiceFailureCount, healthStatusMeta } from '../constants'
 
 const props = defineProps<{
@@ -75,14 +76,14 @@ const metricItems = outcomeMeta
           {{ status.label }}
         </span>
       </div>
-      <span class="shrink-0 text-[10px] leading-none font-emphasis text-cp-text-quaternary"> 15 分钟 </span>
+      <span class="shrink-0 text-[10px] leading-none font-emphasis text-cp-text-quaternary"> {{ t('usage.health.point.minutes') }} </span>
     </header>
 
     <div class="grid gap-3.5 px-3.5 py-3.5">
       <div class="flex items-end justify-between gap-4">
         <div>
           <p class="m-0 text-cp-xs leading-none font-emphasis text-cp-text-quaternary">
-            有效请求可用性
+            {{ t('dashboard.health.description') }}
           </p>
           <strong
             class="mt-2 block font-mono text-[25px] leading-none font-heavy tabular-nums"
@@ -92,7 +93,7 @@ const metricItems = outcomeMeta
           </strong>
         </div>
         <div class="text-right">
-          <span class="block text-[10px] leading-none font-emphasis text-cp-text-quaternary"> 有效请求 </span>
+          <span class="block text-[10px] leading-none font-emphasis text-cp-text-quaternary"> {{ t('usage.health.point.validRequest') }} </span>
           <strong class="mt-2 block font-mono text-cp-xl leading-none font-heavy tabular-nums text-cp-text">
             {{ formatHealthCount(eligibleRequests) }}
           </strong>

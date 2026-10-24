@@ -1,12 +1,13 @@
 import type { rotationOptions } from '../constants'
 import type { AccountAffinity, RequestTuning } from '@/api/modules/settings'
 import { computed, reactive, ref, shallowRef } from 'vue'
-
 import { getSettings, updateSettings } from '@/api'
+
 import { defaultSmartScheduling } from '@/api/modules/settings'
 import { ApiError } from '@/api/request'
 import { toast } from '@/components/base/BaseToast'
 import { useAsyncAction } from '@/composables/useAsyncAction'
+import { t } from '@/i18n'
 import { errorMessage } from '@/utils/async'
 import { DEFAULT_EXCEL_MODELS, DEFAULT_EXCEL_MODELS_INPUT } from '@/utils/excel-defaults'
 import { parseExcelModels } from '@/views/accounts/utils/schedulingForm'
@@ -69,6 +70,8 @@ export function useSettingsForm() {
     accountWarmupEnabled: false,
     accountWarmupScheduleTime: '08:00',
     accountWarmupModel: '',
+    codexQuotaOverdraftEnabled: false,
+    codexQuotaOverdraftProbeModel: 'gpt-6-astra',
     requestIntervalMs: null as number | null,
     openaiSessionBindingTtlHours: null as number | null,
     rotationStrategy: '' as RotationStrategy | '',
@@ -115,7 +118,7 @@ export function useSettingsForm() {
 
   function versionError(value: string): string {
     const normalized = value.trim()
-    return normalized && !isSemver(normalized) ? '请输入标准 SemVer，例如 0.152.0' : ''
+    return normalized && !isSemver(normalized) ? t('settings.form.enterStandardSemverForExample') : ''
   }
 
   function applySettings(data: Awaited<ReturnType<typeof getSettings>>) {
@@ -131,6 +134,8 @@ export function useSettingsForm() {
     form.accountWarmupEnabled = data.accountWarmupEnabled ?? false
     form.accountWarmupScheduleTime = data.accountWarmupScheduleTime ?? '08:00'
     form.accountWarmupModel = data.accountWarmupModel ?? ''
+    form.codexQuotaOverdraftEnabled = data.codexQuotaOverdraftEnabled ?? false
+    form.codexQuotaOverdraftProbeModel = data.codexQuotaOverdraftProbeModel?.trim() || 'gpt-6-astra'
     form.requestIntervalMs = data.requestIntervalMs
     form.openaiSessionBindingTtlHours = data.openaiSessionBindingTtlHours ?? 24
     form.rotationStrategy = data.rotationStrategy
@@ -196,9 +201,9 @@ export function useSettingsForm() {
       const requested = row.requestedModel.trim()
       const upstream = row.upstreamModel.trim()
       if (!requested || !upstream)
-        throw new Error('请完整填写模型映射')
+        throw new Error(t('settings.form.fillInModelMappingCompletely'))
       if (entries[requested])
-        throw new Error(`存在重复的客户端模型：${requested}`)
+        throw new Error(t('settings.form.duplicateClientModel', { requested }))
       entries[requested] = upstream
     }
     return entries
@@ -244,6 +249,16 @@ export function useSettingsForm() {
       toast.warning('预热时间须为 HH:MM，可填写多个逗号分隔时间；启用时必须填写模型')
       return
     }
+    const codexQuotaOverdraftProbeModel = form.codexQuotaOverdraftProbeModel.trim()
+    const hasControlCharacter = [...codexQuotaOverdraftProbeModel]
+      .some(character => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127)
+    if ((form.codexQuotaOverdraftEnabled && !codexQuotaOverdraftProbeModel)
+      || codexQuotaOverdraftProbeModel.length > 128
+      || hasControlCharacter) {
+      toast.warning('透支探测模型须为 1–128 个字符，且不能包含控制字符')
+      return
+    }
+    const effectiveCodexQuotaOverdraftProbeModel = codexQuotaOverdraftProbeModel || 'gpt-6-astra'
     if (minCodexDesktopVersionError.value || minCodexCliVersionError.value) {
       toast.warning('请修正客户端最低版本格式')
       return
@@ -351,6 +366,8 @@ export function useSettingsForm() {
         accountWarmupEnabled: form.accountWarmupEnabled,
         accountWarmupScheduleTime: form.accountWarmupScheduleTime.trim(),
         accountWarmupModel: accountWarmupModel || null,
+        codexQuotaOverdraftEnabled: form.codexQuotaOverdraftEnabled,
+        codexQuotaOverdraftProbeModel: effectiveCodexQuotaOverdraftProbeModel,
         requestIntervalMs,
         openaiSessionBindingTtlHours: ttlHours,
         openaiAccountAffinity: form.openaiAccountAffinity,

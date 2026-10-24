@@ -113,6 +113,57 @@ async fn capture_live_call(
 }
 
 #[tokio::test]
+async fn live_business_session_headers_survive_but_connection_nominated_headers_do_not() {
+    for connection in ["keep-alive", "x-session-id"] {
+        let capture = LiveCapture::new();
+        api_router(Arc::clone(&capture) as Arc<dyn ExecutionService>)
+            .await
+            .oneshot(
+                Request::post("/v1/live")
+                    .header(AUTHORIZATION, format!("Bearer {LIVE_KEY}"))
+                    .header("content-type", "application/json")
+                    .header("connection", connection)
+                    .header("x-session-id", "voice-business")
+                    .header("voice-session-id", "voice-reference")
+                    .header("x-business", "one")
+                    .header(
+                        "x-business",
+                        axum::http::HeaderValue::from_bytes(b"two\xff").unwrap(),
+                    )
+                    .header("cookie", "other-account")
+                    .body(Body::from(r#"{"sdp":"v=0"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let (Operation::ProviderHttp(request), _) = capture.operation().unwrap() else {
+            panic!("expected live provider operation");
+        };
+        let values = |name: &str| {
+            request
+                .headers()
+                .iter()
+                .filter(|header| header.name() == name)
+                .map(|header| header.value())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            values("x-session-id").len(),
+            usize::from(connection != "x-session-id")
+        );
+        assert_eq!(
+            values("voice-session-id"),
+            vec![b"voice-reference".as_slice()]
+        );
+        assert_eq!(
+            values("x-business"),
+            vec![b"one".as_slice(), b"two\xff".as_slice()]
+        );
+        assert!(values("cookie").is_empty());
+    }
+}
+
+#[tokio::test]
 async fn live_call_requires_a_client_key() {
     let response = api_router(ModelsExecution::new())
         .await

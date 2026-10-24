@@ -5,6 +5,7 @@ import { onScopeDispose, ref } from 'vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
 import BaseTextarea from '@/components/base/BaseTextarea.vue'
+import { t } from '@/i18n'
 
 defineProps<{
   label: string
@@ -54,7 +55,7 @@ function updateText(value: string) {
         <template #icon>
           <Upload class="size-3.5" aria-hidden="true" />
         </template>
-        上传文件
+        {{ t('accounts.onboarding.uploadFiles') }}
       </BaseButton>
     </template>
     <BaseTextarea

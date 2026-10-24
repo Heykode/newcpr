@@ -6,6 +6,7 @@ import { runInNewContext } from 'node:vm'
 import ts from 'typescript'
 import * as vue from 'vue'
 import { compileScript, parse } from 'vue/compiler-sfc'
+import * as translations from './helpers/i18n.mjs'
 
 const filename = new URL('../src/views/dashboard/components/WireProfileCard.vue', import.meta.url)
 const { descriptor } = parse(readFileSync(filename, 'utf8'), { filename: filename.pathname })
@@ -38,6 +39,7 @@ function profile(custom = false, status = 'unchecked') {
 
 function harness(profiles) {
   const dependencies = {
+    '@/i18n': translations,
     'vue': vue,
     '@boxicons/vue': { Openai: {}, Xai: {} },
     '@lucide/vue': Object.fromEntries(['Box', 'CheckCircle2', 'Monitor', 'RefreshCw', 'ShieldCheck', 'Terminal', 'TriangleAlert'].map(name => [name, { name }])),

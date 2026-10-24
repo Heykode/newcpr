@@ -281,9 +281,6 @@ impl CodexProvider {
             );
             identity.scope_endpoint_headers(&mut request.passthrough_headers);
             turn_metadata = turn_metadata.and_then(|raw| identity.scope_metadata(&raw));
-            request.image_turn_id = request
-                .image_turn_id
-                .and_then(|raw| identity.field("x-codex-image-turn-id", &raw));
         }
         let session = session_affinity
             .as_ref()
@@ -1063,6 +1060,7 @@ pub(super) fn cold_response_stream_once(response: ColdResponse) -> EventStream {
         // WS 帧由 reducer 以 encode_sse_event(&event, raw) 逐字节内嵌上游原始 JSON
         // （transport/protocol/websocket.rs），push_frames 抽出的 data 即上游原文。
         let mut decoder = CodexCanonicalDecoder::new(upstream_model.as_str())
+            .with_trace(trace.clone())
             .with_reported_model(response.response_metadata.effective_model.as_deref())
             .with_requested_service_tier(request.service_tier())
             .with_request_tool_pricing(upstream_model.as_str(), request.tools())
@@ -1312,21 +1310,32 @@ pub(super) fn cold_response_stream_once(response: ColdResponse) -> EventStream {
                 session_transport_recovery.websocket_succeeded(key);
             }
             if allows_account_state_mutation && (quota_completed || terminal_failure.is_some()) {
+                let started = Instant::now();
                 synchronize_passive_quota(
                     &quota,
                     &active_account,
                     passive_quota_observation.rate_limits(),
-                    if quota_success && terminal_failure.is_none() {
+                    if quota_success
+                        && terminal_failure.is_none()
+                        && !request.quota_overdraft_active()
+                    {
                         crate::credential::QuotaRefreshAuthority::ObserveAccess
                     } else {
                         crate::credential::QuotaRefreshAuthority::PreserveAccess
                     },
                 )
                 .await;
+                context.trace().record("provider.quota_sync", serde_json::json!({
+                    "durationMs": started.elapsed().as_millis(),
+                }));
             }
             if let Some((failure, _)) = terminal_failure.as_ref() {
+                let started = Instant::now();
                 apply_failure(&failure_context, &active_account, failure)
                 .await;
+                context.trace().record("provider.account_failure", serde_json::json!({
+                    "durationMs": started.elapsed().as_millis(),
+                }));
             }
             if request.excel.as_ref().is_some_and(|excel| {
                 excel.replay.as_ref().is_none_or(|replay| !replay.is_persisted())
@@ -1335,6 +1344,7 @@ pub(super) fn cold_response_stream_once(response: ColdResponse) -> EventStream {
             }
             attach_openai_session_update(&mut events, &mut session_capture);
             if allows_account_state_mutation && completed && terminal_failure.is_none() {
+                let started = Instant::now();
                 // 完成事件一旦交给下游，Core 可以立刻停止轮询 Provider stream；
                 // 在此之前持久化亲和关系，保证成功请求不会因流被提前 drop 而丢失绑定。
                 if lease.is_diagnostic() {
@@ -1350,9 +1360,16 @@ pub(super) fn cold_response_stream_once(response: ColdResponse) -> EventStream {
                         )
                         .await;
                 }
+                context.trace().record("provider.account_success", serde_json::json!({
+                    "durationMs": started.elapsed().as_millis(),
+                }));
+                let started = Instant::now();
                 selector
                     .observe_cyber_policy_success(cyber_policy_scope.as_ref())
                     .await;
+                context.trace().record("provider.cyber_policy_success", serde_json::json!({
+                    "durationMs": started.elapsed().as_millis(),
+                }));
             }
             if (rate_limits_changed
                 || response_model_changed
@@ -1455,7 +1472,10 @@ pub(super) fn cold_response_stream_once(response: ColdResponse) -> EventStream {
                 &quota,
                 &active_account,
                 passive_quota_observation.rate_limits(),
-                if quota_success && terminal_failure.is_none() {
+                if quota_success
+                    && terminal_failure.is_none()
+                    && !request.quota_overdraft_active()
+                {
                     crate::credential::QuotaRefreshAuthority::ObserveAccess
                 } else {
                     crate::credential::QuotaRefreshAuthority::PreserveAccess

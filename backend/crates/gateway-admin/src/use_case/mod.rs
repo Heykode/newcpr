@@ -7,6 +7,7 @@ pub mod auth;
 pub mod backup;
 pub mod client_distribution;
 pub mod client_keys;
+pub mod codex_quota_overdraft;
 pub mod egress;
 pub mod group_monitor;
 pub mod import_tasks;

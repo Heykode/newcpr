@@ -595,6 +595,14 @@ impl CodexCredentialSelector {
             .into_iter()
             .filter(|account| self.account_in_scope(account, request))
             .collect::<Vec<_>>();
+        for account in &mut accounts {
+            let eligible_route = request.attempt.codex_quota_overdraft_eligible()
+                && Self::request_upstream(account, request)
+                    == gateway_core::account::ResponsesUpstream::Codex;
+            if !eligible_route {
+                *account = account.clone().with_codex_quota_overdraft_passed(false);
+            }
+        }
         let universe = universe.get_or_insert_with(|| {
             accounts
                 .iter()
@@ -607,13 +615,16 @@ impl CodexCredentialSelector {
         }
         let mut rate_limits = HashMap::with_capacity(accounts.len());
         if !diagnostic {
-            for account in &accounts {
-                let until = self
-                    .quota
-                    .rate_limited_until(account.id())
-                    .await
-                    .unwrap_or(None);
-                rate_limits.insert(account.id().clone(), until);
+            for chunk in accounts.chunks(128) {
+                let reads = chunk.iter().map(|account| async {
+                    let until = self
+                        .quota
+                        .rate_limited_until(account.id())
+                        .await
+                        .unwrap_or(None);
+                    (account.id().clone(), until)
+                });
+                rate_limits.extend(futures::future::join_all(reads).await);
             }
         }
         let account_ids = accounts
@@ -695,6 +706,7 @@ impl CodexCredentialSelector {
                     .and_then(CodexSessionAffinity::guardian_parent_preference_key),
                 &candidates,
                 SystemTime::now(),
+                request.attempt.codex_quota_overdraft_eligible(),
             )
             .await?
         };
@@ -770,6 +782,7 @@ impl CodexCredentialSelector {
                 } else {
                     AccountEligibilityPolicy::Enforce
                 },
+                allow_codex_quota_overdraft: request.attempt.codex_quota_overdraft_eligible(),
                 account_scope: request.attempt.account_scope().cloned(),
                 reserved_concurrency: request.reserved_concurrency(),
             };
@@ -925,6 +938,7 @@ impl CodexCredentialSelector {
                                 effective_binding,
                                 &candidates,
                                 SystemTime::now(),
+                                request.attempt.codex_quota_overdraft_eligible(),
                             );
                             continue;
                         }
@@ -1066,6 +1080,7 @@ impl CodexCredentialSelector {
         }
     }
 
+    #[expect(clippy::too_many_arguments)]
     async fn resolve_session_affinity(
         &self,
         key: Option<&ProviderSessionAffinityKey>,
@@ -1074,12 +1089,16 @@ impl CodexCredentialSelector {
         guardian_parent_preference_key: Option<&ProviderSessionAffinityKey>,
         candidates: &[AccountCandidate],
         now: SystemTime,
+        allow_codex_quota_overdraft: bool,
     ) -> Result<AffinitySelection, CredentialSelectionError> {
         if let Some(key) = key {
             match self.lookup_session_affinity(key).await {
                 SessionAffinityLookup::Bound(binding) => {
                     return Ok(affinity_selection_for_bound_account(
-                        binding, candidates, now,
+                        binding,
+                        candidates,
+                        now,
+                        allow_codex_quota_overdraft,
                     ));
                 }
                 SessionAffinityLookup::Missing => {}
@@ -1090,8 +1109,12 @@ impl CodexCredentialSelector {
         for fallback_key in [root_key, migration_key].into_iter().flatten() {
             match self.lookup_session_affinity(fallback_key).await {
                 SessionAffinityLookup::Bound(binding) => {
-                    let mut inherited =
-                        affinity_selection_for_bound_account(binding, candidates, now);
+                    let mut inherited = affinity_selection_for_bound_account(
+                        binding,
+                        candidates,
+                        now,
+                        allow_codex_quota_overdraft,
+                    );
                     inherited.inherited = true;
                     return Ok(inherited);
                 }
@@ -1103,8 +1126,12 @@ impl CodexCredentialSelector {
         if let Some(parent_key) = guardian_parent_preference_key {
             match self.lookup_session_affinity(parent_key).await {
                 SessionAffinityLookup::Bound(binding) => {
-                    let mut inherited =
-                        affinity_selection_for_bound_account(binding, candidates, now);
+                    let mut inherited = affinity_selection_for_bound_account(
+                        binding,
+                        candidates,
+                        now,
+                        allow_codex_quota_overdraft,
+                    );
                     inherited.inherited = true;
                     return Ok(inherited);
                 }
@@ -1906,6 +1933,7 @@ fn affinity_selection_for_bound_account(
     binding: ProviderSessionAffinityBinding,
     candidates: &[AccountCandidate],
     now: SystemTime,
+    allow_codex_quota_overdraft: bool,
 ) -> AffinitySelection {
     let account_id = binding.account_id().clone();
     let Some(candidate) = candidates
@@ -1914,11 +1942,23 @@ fn affinity_selection_for_bound_account(
     else {
         return AffinitySelection::escaped(binding, AffinityEscapeReason::HardUnavailable);
     };
-    match candidate
+    let status = candidate
         .account
         .status_projection(now, candidate.signals.rate_limited_until)
-        .status
+        .status;
+    let status = if status == AccountStatus::QuotaExhausted
+        && allow_codex_quota_overdraft
+        && candidate.account.codex_quota_overdraft_passed()
+        && candidate
+            .signals
+            .rate_limited_until
+            .is_none_or(|until| until <= now)
     {
+        AccountStatus::Normal
+    } else {
+        status
+    };
+    match status {
         AccountStatus::Normal => AffinitySelection::preferred(binding),
         AccountStatus::QuotaExhausted
         | AccountStatus::RateLimited

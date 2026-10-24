@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseModal from '@/components/base/BaseModal/index.vue'
+import { t } from '@/i18n'
 
 const open = defineModel<boolean>({ default: false })
 </script>
@@ -8,13 +9,13 @@ const open = defineModel<boolean>({ default: false })
 <template>
   <BaseModal
     v-model="open"
-    title="Cloudflare R2 接入指南"
+    :title="t('settings.backup.r2.cloudflareR2OnboardingGuide')"
     size="lg"
   >
     <div class="flex flex-col gap-4 text-cp leading-relaxed text-cp-text-secondary">
       <section class="flex flex-col gap-1.5">
         <h3 class="text-cp-lg font-heavy text-cp-primary-text">
-          1. 创建存储桶
+          {{ t('settings.backup.r2.createBucket') }}
         </h3>
         <p class="m-0">
           在 Cloudflare Dashboard 进入 R2，创建一个私有存储桶（例如
@@ -25,7 +26,7 @@ const open = defineModel<boolean>({ default: false })
 
       <section class="flex flex-col gap-1.5">
         <h3 class="text-cp-lg font-heavy text-cp-primary-text">
-          2. 创建 API Token
+          {{ t('settings.backup.r2.createApiToken') }}
         </h3>
         <p class="m-0">
           在「管理 API Token」创建对象存储专用 Token，只授予目标桶的对象
@@ -39,21 +40,21 @@ const open = defineModel<boolean>({ default: false })
 
       <section class="flex flex-col gap-1.5">
         <h3 class="text-cp-lg font-heavy text-cp-primary-text">
-          3. 填写连接参数
+          {{ t('settings.backup.r2.fillInConnectionParameters') }}
         </h3>
         <ul class="m-0 list-disc space-y-1 pl-5">
           <li>
             Endpoint：<code class="rounded bg-cp-fill-quaternary px-1.5 py-0.5">https://&#123;ACCOUNT_ID&#125;.r2.cloudflarestorage.com</code>
           </li>
           <li>Region：<code class="rounded bg-cp-fill-quaternary px-1.5 py-0.5">auto</code>（R2 固定值）</li>
-          <li>Access Key ID / Secret Access Key：上一步生成的 Token</li>
-          <li>Force Path Style：关闭</li>
+          <li>{{ t('settings.backup.r2.credentialsHelp') }}</li>
+          <li>{{ t('settings.backup.r2.forcePathStyleOff') }}</li>
         </ul>
       </section>
 
       <section class="flex flex-col gap-1.5">
         <h3 class="text-cp-lg font-heavy text-cp-primary-text">
-          4. 完成连接测试
+          {{ t('settings.backup.r2.completeConnectionTest') }}
         </h3>
         <p class="m-0">
           保存配置后点击「测试连接」，系统会写入一个探针对象并校验读写权限。测试通过后
@@ -64,7 +65,7 @@ const open = defineModel<boolean>({ default: false })
 
     <template #footer>
       <BaseButton variant="primary" @click="open = false">
-        知道了
+        {{ t('settings.backup.r2.gotIt') }}
       </BaseButton>
     </template>
   </BaseModal>

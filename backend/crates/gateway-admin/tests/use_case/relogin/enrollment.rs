@@ -19,6 +19,19 @@ fn intent() -> ReloginEnrollment {
 
 const MATERIAL: &str = "test@example.invalid----test-only-password----JBSWY3DPEHPK3PXP";
 
+#[test]
+fn enrollment_persists_the_selected_quality_template_without_secrets() {
+    let intent = intent().with_quality_template(Some(
+        gateway_admin::model::quality_ops::QualityTemplateSelection {
+            id: "quality-template".to_owned(),
+            revision: 3,
+        },
+    ));
+    let restored: ReloginEnrollment =
+        serde_json::from_value(serde_json::to_value(&intent).unwrap()).unwrap();
+    assert_eq!(restored.quality_template.unwrap().id, "quality-template");
+}
+
 async fn expire_wait(h: &Harness, id: &str) {
     let mut row = h.row(id).await;
     let revision = row.revision;

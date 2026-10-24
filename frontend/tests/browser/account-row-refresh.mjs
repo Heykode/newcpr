@@ -28,7 +28,7 @@ async function main() {
     }
     browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_PATH || undefined })
     for (const width of [1440, 390]) {
-      const page = await browser.newPage({ viewport: { width, height: 900 }, reducedMotion: 'reduce' })
+      const page = await browser.newPage({ locale: 'zh-CN', viewport: { width, height: 900 }, reducedMotion: 'reduce' })
       const errors = []
       page.on('pageerror', error => errors.push(error.message))
       const rows = structuredClone(accounts)

@@ -74,6 +74,77 @@ async fn enable_verified_schedule(repository: &PgBackupRepository) -> BackupSett
 }
 
 #[tokio::test]
+async fn backup_mutations_roll_back_if_their_audit_cannot_be_written() {
+    let Some(db) = TestDatabase::create("backup_audit_atomic").await else {
+        return;
+    };
+    let repository = PgBackupRepository::new(db.pool.clone());
+    sqlx::query("alter table admin_audit_events add constraint reject_backup_audit check (action <> 'backup.created')")
+        .execute(&db.pool).await.unwrap();
+    let failed_seed = seed(&"a".repeat(32), BackupTriggerKind::Manual, None);
+    assert!(
+        repository
+            .insert_backup_record(failed_seed.clone(), &context())
+            .await
+            .is_err()
+    );
+    assert!(
+        repository
+            .load_backup_record(&failed_seed.id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    sqlx::query("alter table admin_audit_events drop constraint reject_backup_audit")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    let record = repository
+        .insert_backup_record(failed_seed, &context())
+        .await
+        .unwrap();
+    repository
+        .claim_next_queued(Utc::now())
+        .await
+        .unwrap()
+        .unwrap();
+    repository
+        .transition_status(
+            &record.id,
+            BackupStatus::Dumping,
+            BackupStatus::Failed,
+            StatusTransitionUpdate {
+                error_code: Some("backup.pg_dump_failed".to_owned()),
+                error_message: Some("synthetic failure".to_owned()),
+                completed_at: Some(Utc::now()),
+                ..Default::default()
+            },
+            Utc::now(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    sqlx::query("alter table admin_audit_events add constraint reject_backup_audit check (action <> 'backup.delete_requested')")
+        .execute(&db.pool).await.unwrap();
+    assert!(
+        repository
+            .transition_to_deleting(&record.id, Utc::now(), Some(&context()))
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        repository
+            .load_backup_record(&record.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        BackupStatus::Failed
+    );
+    db.close().await;
+}
+
+#[tokio::test]
 async fn storage_rotation_pauses_schedule_and_rejects_stale_verification() {
     let Some(db) = TestDatabase::create("backup_rotation").await else {
         return;
@@ -164,7 +235,10 @@ async fn backup_lifecycle_transitions_through_deleting_and_hard_delete() {
     let repository = PgBackupRepository::new(db.pool.clone());
 
     let record = repository
-        .insert_backup_record(seed(&"a".repeat(32), BackupTriggerKind::Manual, None))
+        .insert_backup_record(
+            seed(&"a".repeat(32), BackupTriggerKind::Manual, None),
+            &context(),
+        )
         .await
         .expect("insert queued");
     assert_eq!(record.status, BackupStatus::Queued);
@@ -213,7 +287,7 @@ async fn backup_lifecycle_transitions_through_deleting_and_hard_delete() {
     assert!(completed.completed_at.is_some());
 
     let deleting = repository
-        .transition_to_deleting(&record.id, Utc::now())
+        .transition_to_deleting(&record.id, Utc::now(), Some(&context()))
         .await
         .expect("to deleting")
         .expect("transition matched");
@@ -242,11 +316,17 @@ async fn active_task_unique_index_blocks_second_queued() {
     let repository = PgBackupRepository::new(db.pool.clone());
 
     repository
-        .insert_backup_record(seed(&"a".repeat(32), BackupTriggerKind::Manual, None))
+        .insert_backup_record(
+            seed(&"a".repeat(32), BackupTriggerKind::Manual, None),
+            &context(),
+        )
         .await
         .expect("first queued");
     let error = repository
-        .insert_backup_record(seed(&"b".repeat(32), BackupTriggerKind::Manual, None))
+        .insert_backup_record(
+            seed(&"b".repeat(32), BackupTriggerKind::Manual, None),
+            &context(),
+        )
         .await
         .expect_err("second queued must conflict");
     assert_eq!(error.kind(), AdminStoreErrorKind::Conflict);
@@ -273,7 +353,10 @@ async fn active_task_unique_index_blocks_second_queued() {
         .await
         .expect("fail task");
     repository
-        .insert_backup_record(seed(&"c".repeat(32), BackupTriggerKind::Manual, None))
+        .insert_backup_record(
+            seed(&"c".repeat(32), BackupTriggerKind::Manual, None),
+            &context(),
+        )
         .await
         .expect("third queued after terminal");
 
@@ -334,7 +417,10 @@ async fn storage_identity_is_locked_once_records_exist() {
         .expect("endpoint change allowed with no records");
 
     repository
-        .insert_backup_record(seed(&"a".repeat(32), BackupTriggerKind::Manual, None))
+        .insert_backup_record(
+            seed(&"a".repeat(32), BackupTriggerKind::Manual, None),
+            &context(),
+        )
         .await
         .expect("insert queued");
 

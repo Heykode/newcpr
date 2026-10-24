@@ -46,10 +46,34 @@ async fn restart_should_request_process_restart_inside_docker() {
     let shutdown = CancellationToken::new();
     let service = ProcessSystemOperations::new(shutdown.clone(), config);
     service.restart().await.expect("restart accepted");
+    assert_eq!(
+        service
+            .restart()
+            .await
+            .expect_err("duplicate restart rejected")
+            .kind(),
+        SystemOperationErrorKind::Conflict
+    );
+    assert_eq!(
+        service
+            .rollback()
+            .await
+            .expect_err("rollback during restart rejected")
+            .kind(),
+        SystemOperationErrorKind::Conflict
+    );
 
     tokio::time::timeout(Duration::from_secs(2), shutdown.cancelled())
         .await
         .expect("shutdown requested");
+    assert_eq!(
+        service
+            .restart()
+            .await
+            .expect_err("shutdown remains exclusive")
+            .kind(),
+        SystemOperationErrorKind::Conflict
+    );
 }
 
 #[tokio::test]

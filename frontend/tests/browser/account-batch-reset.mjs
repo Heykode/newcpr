@@ -20,7 +20,7 @@ async function main() {
   })
   const output = process.env.QA_OUTPUT_DIR || '/tmp/cpr-batch-reset-qa'
   await mkdir(output, { recursive: true })
-  const page = await browser.newPage({ viewport: { width: 1440, height: 1000 }, reducedMotion: 'reduce' })
+  const page = await browser.newPage({ viewport: { width: 1440, height: 1000 }, reducedMotion: 'reduce', locale: 'zh-CN' })
   const errors = []
   const unexpected = []
   let consumes = 0
@@ -63,7 +63,13 @@ async function main() {
         const page = Number(url.searchParams.get('page'))
         const search = url.searchParams.get('search')
         const items = search === 'missing' ? [] : page === 1 ? batches : []
-        return fulfill(route, { items, accountNames: {}, before: '2026-10-01T01:00:00Z', hasMore: page === 1 && items.length > 0 })
+        return fulfill(route, {
+          items,
+          accountNames: Object.fromEntries(fixtureAccounts.map(account => [account.id, account.name || account.id])),
+          accountEmails: Object.fromEntries(fixtureAccounts.map(account => [account.id, account.email])),
+          before: '2026-10-01T01:00:00Z',
+          hasMore: page === 1 && items.length > 0,
+        })
       }
       case '/api/admin/accounts/reset-credits/refresh':
         inventory = fixtureAccounts.map((a, index) => ({
@@ -108,13 +114,15 @@ async function main() {
     const address = server.httpServer.address()
     await page.goto(`http://127.0.0.1:${address.port}/accounts`)
     await page.locator('tr[data-row-key]').first().waitFor({ timeout: 60000 })
-    await page.getByRole('checkbox', { name: '选择当前页账号', exact: true }).locator('..').click()
-    await page.getByRole('button', { name: '查询可用次数', exact: true }).click()
-    await page.locator('td[data-column-key="resetCredits"]').filter({ hasText: '2 次' }).waitFor()
-    assert.equal(consumes, 0)
+    const accountRows = page.locator('tr[data-row-key]')
+    assert.equal(await accountRows.count(), fixtureAccounts.length)
+    for (let index = 0; index < await accountRows.count(); index++)
+      await accountRows.nth(index).locator('input[type="checkbox"]').first().check({ force: true })
+    assert.equal(await page.getByRole('button', { name: '查询可用次数', exact: true }).count(), 0)
     await page.getByRole('button', { name: '使用重置次数', exact: true }).click()
     const dialog = page.getByRole('dialog')
     await dialog.getByRole('button', { name: '确认使用 1 次', exact: true }).waitFor()
+    assert.equal(previews, 1, '使用重置次数必须通过预览接口刷新所选账号')
     assert.equal(consumes, 0)
     await dialog.getByRole('button', { name: '取消', exact: true }).click()
     assert.equal(consumes, 0)
@@ -135,6 +143,7 @@ async function main() {
     batches.push({ ...batches[0], id: 'older-batch', items: [{ ...batches[0].items[0], message: '较早批次已完成' }] })
     await page.getByRole('button', { name: '重置记录', exact: true }).click()
     await dialog.getByText('额度已重置', { exact: true }).waitFor()
+    await dialog.getByText(fixtureAccounts[0].email, { exact: true }).first().waitFor()
     await dialog.getByText('较早批次已完成', { exact: true }).waitFor()
     for (const width of [1440, 390, 320]) {
       await page.setViewportSize({ width, height: 1000 })
@@ -146,7 +155,7 @@ async function main() {
     await dialog.getByRole('button', { name: '上一页', exact: true }).click()
     await dialog.getByText('较早批次已完成', { exact: true }).waitFor()
     await dialog.getByRole('textbox', { name: '搜索重置记录账号' }).fill('missing')
-    await dialog.getByRole('button', { name: '搜索账号', exact: true }).click()
+    await dialog.getByRole('textbox', { name: '搜索重置记录账号' }).press('Enter')
     await dialog.getByText('暂无匹配的重置记录', { exact: true }).waitFor()
     assert.equal(consumes, 1, 'reload/history must not submit another consumption')
     assert.deepEqual(errors, [])

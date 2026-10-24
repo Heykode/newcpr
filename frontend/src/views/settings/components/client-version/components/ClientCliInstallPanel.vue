@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { ExternalLink, TerminalSquare } from '@lucide/vue'
+import { computed } from 'vue'
+import { t } from '@/i18n'
 
 import ClientInstallCommandList from './ClientInstallCommandList.vue'
 
 defineOptions({ name: 'ClientCliInstallPanel' })
 
-const cliCommands = [
+const cliCommands = computed(() => ([
   {
     label: 'macOS / Linux · 官方安装器',
     command: 'curl -fsSL https://chatgpt.com/codex/install.sh | sh',
@@ -19,14 +21,14 @@ const cliCommands = [
     command: 'npm install -g @openai/codex',
   },
   {
-    label: 'Homebrew · 首次安装',
+    label: t('settings.clientVersion.homebrewFirstTimeInstallation'),
     command: 'brew install --cask codex',
   },
   {
-    label: 'Homebrew · 升级',
+    label: t('settings.clientVersion.homebrewUpgrade'),
     command: 'brew upgrade --cask codex',
   },
-]
+]))
 </script>
 
 <template>
@@ -37,7 +39,7 @@ const cliCommands = [
       </span>
       <div class="min-w-0">
         <h3 id="codex-cli-guide-title" class="m-0 text-cp-lg leading-none font-heavy text-cp-text">
-          安装或升级 Codex CLI
+          {{ t('settings.clientVersion.installOrUpgradeCodexCli') }}
         </h3>
         <p class="mt-1.5 mb-0 text-cp-sm leading-[1.45] font-semibold text-cp-text-secondary">
           按当前安装来源执行一种命令；官方安装器会自动选择当前平台架构。
@@ -47,7 +49,7 @@ const cliCommands = [
 
     <div class="grid gap-3 rounded-cp-card bg-cp-fill-quaternary p-4">
       <p class="m-0 text-cp-sm font-heavy text-cp-text">
-        选择安装来源
+        {{ t('settings.clientVersion.selectInstallationSource') }}
       </p>
       <ClientInstallCommandList :commands="cliCommands" />
     </div>
@@ -60,7 +62,7 @@ const cliCommands = [
         rel="noopener noreferrer"
         class="inline-flex shrink-0 items-center gap-1.5 font-bold text-cp-link transition-colors hover:text-cp-link-hover"
       >
-        查看官方文档
+        {{ t('settings.clientVersion.viewOfficialDocumentation') }}
         <ExternalLink class="size-3.5" />
       </a>
     </div>

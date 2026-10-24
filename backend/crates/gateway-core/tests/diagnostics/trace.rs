@@ -6,6 +6,38 @@ use std::{
 use gateway_core::diagnostics::{TraceContext, body_fingerprint};
 
 #[test]
+fn encoded_snapshot_limit_includes_envelope_and_preserves_evidence() {
+    let trace = TraceContext::new("req_encoded_limit");
+    let stage: &'static str = Box::leak("synthetic_stage_".repeat(220).into_boxed_str());
+    for _ in 0..30 {
+        trace.record(stage, serde_json::json!({"synthetic": "x".repeat(1800)}));
+    }
+    for _ in 0..3 {
+        trace.record_evidence(
+            "attempt.failed",
+            serde_json::json!({"synthetic": "x".repeat(12000)}),
+        );
+    }
+    let snapshot = trace.snapshot().expect("bounded snapshot");
+    assert!(
+        serde_json::to_vec(&snapshot).unwrap().len()
+            <= gateway_core::diagnostics::MAX_TRACE_SNAPSHOT_BYTES
+    );
+    assert!(snapshot["droppedEvents"].as_u64().unwrap() > 0);
+    assert_eq!(snapshot["droppedEvidenceEvents"], 0);
+    assert_eq!(snapshot["stageCounts"][stage], 30);
+    assert_eq!(
+        snapshot["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|event| event["stage"] == "attempt.failed")
+            .count(),
+        3
+    );
+}
+
+#[test]
 fn terminal_cache_counts_survive_metadata_truncation_and_keep_unknown_distinct() {
     for cached in [Some(0), Some(123), None] {
         let trace = TraceContext::new("req_cache_counts");
@@ -73,6 +105,48 @@ fn terminal_business_outcomes_do_not_infer_success_from_http_or_event_name() {
             .unwrap();
         assert_eq!(result["data"]["outcome"], outcome);
     }
+}
+
+#[test]
+fn evidence_has_an_independent_bounded_budget_and_stage_counts() {
+    let trace = TraceContext::new("req_evidence_budget");
+    trace.record_evidence("provider.request.input", json!({"hash": "synthetic"}));
+    for index in 0..1000 {
+        trace.record(
+            "test.event",
+            json!({"index": index, "detail": "x".repeat(2000)}),
+        );
+    }
+    let snapshot = trace.snapshot().unwrap();
+    assert!(
+        snapshot["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|event| event["stage"] == "provider.request.input")
+    );
+    assert_eq!(snapshot["stageCounts"]["test.event"], 1000);
+    for index in 0..100 {
+        trace.record_evidence("provider.response.usage", json!({"index": index}));
+    }
+    let snapshot = trace.snapshot().unwrap();
+    let events = snapshot["events"].as_array().unwrap();
+    assert!(events.len() as u64 <= snapshot["maxEvents"].as_u64().unwrap());
+    assert_eq!(snapshot["droppedEvidenceEvents"], 69);
+    assert!(
+        events
+            .windows(2)
+            .all(|pair| pair[0]["sequence"].as_u64() < pair[1]["sequence"].as_u64())
+    );
+    let kept: u64 = events
+        .iter()
+        .map(|event| event["count"].as_u64().unwrap())
+        .sum();
+    assert_eq!(
+        kept + snapshot["droppedEvents"].as_u64().unwrap(),
+        snapshot["totalEvents"]
+    );
+    assert!(snapshot.to_string().len() < snapshot["maxBufferBytes"].as_u64().unwrap() as usize);
 }
 
 #[test]
@@ -212,7 +286,8 @@ fn a_long_successful_retry_keeps_the_earlier_failure_ahead_of_routine_events() {
     );
     assert!(events.iter().any(|event| event["stage"] == "retry.decided"));
     assert_eq!(events.last().unwrap()["stage"], "request.finished");
-    assert!(events.len() <= 128);
+    assert_eq!(snapshot["maxEvents"], 160);
+    assert!(events.len() <= 160);
 }
 
 #[test]

@@ -167,6 +167,13 @@ pub struct QualityRuleTemplateRef {
     pub name: String,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct QualityTemplateSelection {
+    pub id: String,
+    pub revision: i64,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct QualityRuleTemplate {

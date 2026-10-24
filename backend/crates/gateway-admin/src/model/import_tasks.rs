@@ -13,6 +13,7 @@ pub const MAX_IMPORT_TASK_ITEMS: usize = 200;
 pub struct ImportTaskInput {
     pub provider: ProviderKind,
     pub command: ImportCredentials,
+    pub quality_template: Option<super::quality_ops::QualityTemplateSelection>,
 }
 
 pub struct SubmitImportTask {

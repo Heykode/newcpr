@@ -50,6 +50,8 @@ pub struct RuntimeSettingsView {
     pub account_warmup_enabled: bool,
     pub account_warmup_schedule_time: String,
     pub account_warmup_model: Option<String>,
+    pub codex_quota_overdraft_enabled: bool,
+    pub codex_quota_overdraft_probe_model: String,
     pub request_interval_ms: u64,
     pub rotation_strategy: String,
     pub min_codex_desktop_version: Option<String>,
@@ -86,6 +88,8 @@ pub struct UpdateRuntimeSettingsRequest {
     pub account_warmup_schedule_time: Option<String>,
     #[serde(default, deserialize_with = "deserialize_probe_proxy_selection")]
     pub account_warmup_model: Option<Option<String>>,
+    pub codex_quota_overdraft_enabled: Option<bool>,
+    pub codex_quota_overdraft_probe_model: Option<String>,
     pub request_interval_ms: u64,
     pub rotation_strategy: String,
     pub min_codex_desktop_version: Option<String>,
@@ -187,6 +191,18 @@ impl UpdateRuntimeSettingsRequest {
         {
             return Err(WireValidationError::new("accountWarmup"));
         }
+        if self
+            .codex_quota_overdraft_probe_model
+            .as_deref()
+            .is_some_and(|model| {
+                model.is_empty()
+                    || model.len() > 128
+                    || model != model.trim()
+                    || model.bytes().any(|byte| byte.is_ascii_control())
+            })
+        {
+            return Err(WireValidationError::new("codexQuotaOverdraftProbeModel"));
+        }
         if RotationStrategy::parse(&self.rotation_strategy).is_none() {
             return Err(WireValidationError::new("rotationStrategy"));
         }
@@ -241,6 +257,8 @@ impl UpdateRuntimeSettingsRequest {
             account_warmup_enabled: self.account_warmup_enabled,
             account_warmup_schedule_time: self.account_warmup_schedule_time,
             account_warmup_model: self.account_warmup_model,
+            codex_quota_overdraft_enabled: self.codex_quota_overdraft_enabled,
+            codex_quota_overdraft_probe_model: self.codex_quota_overdraft_probe_model,
             request_interval_ms: self.request_interval_ms,
             rotation_strategy: RotationStrategy::parse(&self.rotation_strategy)
                 .ok_or_else(|| WireValidationError::new("rotationStrategy"))?,
@@ -283,6 +301,8 @@ impl From<RuntimeSettings> for RuntimeSettingsView {
             account_warmup_enabled: settings.account_warmup_enabled,
             account_warmup_schedule_time: settings.account_warmup_schedule_time,
             account_warmup_model: settings.account_warmup_model,
+            codex_quota_overdraft_enabled: settings.codex_quota_overdraft_enabled,
+            codex_quota_overdraft_probe_model: settings.codex_quota_overdraft_probe_model,
             request_interval_ms: settings.request_interval_ms,
             rotation_strategy: settings.rotation_strategy.as_str().to_owned(),
             min_codex_desktop_version: settings.min_codex_desktop_version,

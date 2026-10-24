@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import type { BaseTablePagination as BaseTablePaginationState } from '@/components/base/BaseTable/pagination'
-
 import {
   Bell,
   Check,
@@ -14,9 +13,10 @@ import {
   Trash2,
   TriangleAlert,
 } from '@lucide/vue'
-import { shallowRef } from 'vue'
 
+import { shallowRef } from 'vue'
 import BaseButton from '@/components/base/BaseButton.vue'
+
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseCheckbox from '@/components/base/BaseCheckbox.vue'
 import BaseColorPicker from '@/components/base/BaseColorPicker/index.vue'
@@ -39,6 +39,7 @@ import BaseTablePagination from '@/components/base/BaseTable/BaseTablePagination
 import { defineTableColumns } from '@/components/base/BaseTable/columns'
 import BaseTable from '@/components/base/BaseTable/index.vue'
 import BaseTextarea from '@/components/base/BaseTextarea.vue'
+import { t } from '@/i18n'
 
 interface PreviewTableRow {
   id: string
@@ -129,10 +130,10 @@ function statusClass(status: PreviewTableRow['status']) {
           Component specimen
         </p>
         <h1 class="mt-2 mb-0 text-[30px] leading-none font-extrabold text-cp-text">
-          组件概览
+          {{ t('appearance.preview.components.componentOverview') }}
         </h1>
         <p class="mt-2 mb-0 text-cp font-emphasis text-cp-text-secondary">
-          在同一张校样板中检查控制态、数据密度与浮层关系
+          {{ t('appearance.preview.components.description') }}
         </p>
       </div>
 
@@ -140,7 +141,7 @@ function statusClass(status: PreviewTableRow['status']) {
         <span class="rounded-full bg-cp-primary-container px-3 py-1.5 font-mono text-[10px] font-heavy tracking-wide text-cp-primary-on-container uppercase">
           20 Base Components
         </span>
-        <div class="flex items-center gap-5" aria-label="当前主题语义色">
+        <div class="flex items-center gap-5" :aria-label="t('appearance.preview.components.currentThemeSemanticColor')">
           <div
             v-for="item in themeSwatches"
             :key="item.label"
@@ -153,8 +154,8 @@ function statusClass(status: PreviewTableRow['status']) {
       </div>
     </header>
 
-    <section class="grid min-w-0 grid-cols-12 gap-6" aria-label="基础控制组件">
-      <BaseCard padding="compact" class="col-span-7 h-full min-w-0 bg-cp-fill-quaternary! shadow-none!" title="按钮与动作" description="BaseButton · BaseIconButton · BaseMotionIcon">
+    <section class="grid min-w-0 grid-cols-12 gap-6" :aria-label="t('appearance.preview.components.basicControlComponents')">
+      <BaseCard padding="compact" class="col-span-7 h-full min-w-0 bg-cp-fill-quaternary! shadow-none!" :title="t('appearance.preview.components.buttonsAndActions')" description="BaseButton · BaseIconButton · BaseMotionIcon">
         <template #body>
           <div class="grid flex-1 content-start gap-6">
             <div>
@@ -166,22 +167,22 @@ function statusClass(status: PreviewTableRow['status']) {
                   <template #icon>
                     <Plus class="size-4" />
                   </template>
-                  创建账号
+                  {{ t('appearance.preview.components.createAccount') }}
                 </BaseButton>
                 <BaseButton variant="secondary">
                   <template #icon>
                     <Download class="size-4" />
                   </template>
-                  导出数据
+                  {{ t('appearance.preview.components.exportData') }}
                 </BaseButton>
                 <BaseButton variant="ghost">
-                  稍后处理
+                  {{ t('appearance.preview.components.dealWithItLater') }}
                 </BaseButton>
                 <BaseButton variant="destructive">
                   <template #icon>
                     <Trash2 class="size-4" />
                   </template>
-                  删除
+                  {{ t('keys.actions.deleteKey') }}
                 </BaseButton>
               </div>
             </div>
@@ -189,7 +190,7 @@ function statusClass(status: PreviewTableRow['status']) {
             <div class="grid grid-cols-[1fr_auto] items-end gap-5 rounded-cp-lg bg-cp-fill-quaternary p-4">
               <div>
                 <p class="mt-0 mb-3 text-cp-sm font-heavy text-cp-text-secondary">
-                  尺寸与禁用状态
+                  {{ t('appearance.preview.components.sizeAndDisabledStatus') }}
                 </p>
                 <div class="flex flex-wrap items-center gap-3">
                   <BaseButton size="sm" variant="primary">
@@ -202,23 +203,23 @@ function statusClass(status: PreviewTableRow['status']) {
                     Large
                   </BaseButton>
                   <BaseButton disabled>
-                    不可操作
+                    {{ t('appearance.preview.components.inoperable') }}
                   </BaseButton>
                   <BaseButton loading>
-                    处理中
+                    {{ t('appearance.preview.components.processing') }}
                   </BaseButton>
                 </div>
               </div>
               <div class="flex items-center gap-2">
-                <BaseIconButton label="通知" variant="secondary">
+                <BaseIconButton :label="t('appearance.preview.components.notification')" variant="secondary">
                   <BaseMotionIcon>
                     <Bell />
                   </BaseMotionIcon>
                 </BaseIconButton>
-                <BaseIconButton label="更多操作" variant="secondary">
+                <BaseIconButton :label="t('appearance.preview.components.moreActions')" variant="secondary">
                   <MoreHorizontal />
                 </BaseIconButton>
-                <BaseIconButton label="删除记录" variant="destructive">
+                <BaseIconButton :label="t('appearance.preview.components.deleteRecord')" variant="destructive">
                   <Trash2 />
                 </BaseIconButton>
               </div>
@@ -227,37 +228,37 @@ function statusClass(status: PreviewTableRow['status']) {
         </template>
       </BaseCard>
 
-      <BaseCard padding="compact" class="col-span-5 h-full min-w-0 bg-cp-fill-quaternary! shadow-none!" title="表单与输入" description="BaseInput · BaseSelect · BaseNumberInput · BaseRange · BaseTextarea · BaseColorPicker">
+      <BaseCard padding="compact" class="col-span-5 h-full min-w-0 bg-cp-fill-quaternary! shadow-none!" :title="t('appearance.preview.components.formsAndInput')" description="BaseInput · BaseSelect · BaseNumberInput · BaseRange · BaseTextarea · BaseColorPicker">
         <template #body>
           <BaseForm class="grid-cols-2 gap-3!">
-            <BaseInput v-model="search" aria-label="搜索账号" placeholder="搜索账号">
+            <BaseInput v-model="search" :aria-label="t('appearance.preview.components.searchAccount')" :placeholder="t('appearance.preview.components.searchAccount')">
               <template #prefix>
                 <Search class="size-4" />
               </template>
             </BaseInput>
-            <BaseSelect v-model="provider" aria-label="选择平台" :options="providerOptions" />
-            <BaseInput v-model="invalidKey" aria-label="访问密钥错误示例" aria-invalid="true">
+            <BaseSelect v-model="provider" :aria-label="t('appearance.preview.components.choosePlatform')" :options="providerOptions" />
+            <BaseInput v-model="invalidKey" :aria-label="t('appearance.preview.components.accessKeyErrorExample')" aria-invalid="true">
               <template #prefix>
                 <KeyRound class="size-4" />
               </template>
             </BaseInput>
-            <BaseInput v-model="disabledText" aria-label="禁用输入框" disabled />
-            <FormItem label="品牌颜色" description="BaseColorPicker">
+            <BaseInput v-model="disabledText" :aria-label="t('appearance.preview.components.disableInputBox')" disabled />
+            <FormItem :label="t('appearance.preview.components.brandColors')" description="BaseColorPicker">
               <BaseColorPicker
                 v-model="brandColor"
-                label="编辑品牌颜色"
+                :label="t('appearance.preview.components.editBrandColors')"
                 :allow-alpha="false"
                 :presets="['#5983F4', '#0F766E', '#7C3AED', '#475569']"
               />
             </FormItem>
-            <FormItem label="调度备注" description="BaseTextarea">
-              <BaseTextarea v-model="notes" aria-label="调度备注" :rows="2" />
+            <FormItem :label="t('appearance.preview.components.schedulingNotes')" description="BaseTextarea">
+              <BaseTextarea v-model="notes" :aria-label="t('appearance.preview.components.schedulingNotes')" :rows="2" />
             </FormItem>
-            <FormItem class="col-span-2" label="控件高度" description="BaseNumberInput · BaseRange">
+            <FormItem class="col-span-2" :label="t('appearance.preview.components.controlHeight')" description="BaseNumberInput · BaseRange">
               <div class="flex items-center gap-3">
                 <BaseNumberInput
                   v-model="controlHeight"
-                  label="组件示例控件高度"
+                  :label="t('appearance.preview.components.componentExampleControlHeight')"
                   :min="28"
                   :max="52"
                   unit="px"
@@ -265,7 +266,7 @@ function statusClass(status: PreviewTableRow['status']) {
                 <BaseRange
                   v-model="controlHeight"
                   class="min-w-0 flex-1"
-                  label="组件示例控件高度"
+                  :label="t('appearance.preview.components.componentExampleControlHeight')"
                   :min="28"
                   :max="52"
                   unit="px"
@@ -277,53 +278,53 @@ function statusClass(status: PreviewTableRow['status']) {
       </BaseCard>
     </section>
 
-    <section class="grid min-w-0 grid-cols-12 gap-6" aria-label="选择与反馈组件">
-      <BaseCard padding="compact" class="col-span-4 h-full min-w-0 bg-cp-fill-quaternary! shadow-none!" title="选择与切换" description="BaseSegmented · BaseSwitch · BaseCheckbox · BaseRadio">
+    <section class="grid min-w-0 grid-cols-12 gap-6" :aria-label="t('appearance.preview.components.choiceAndFeedbackComponents')">
+      <BaseCard padding="compact" class="col-span-4 h-full min-w-0 bg-cp-fill-quaternary! shadow-none!" :title="t('appearance.preview.components.selectAndSwitch')" description="BaseSegmented · BaseSwitch · BaseCheckbox · BaseRadio">
         <template #body>
           <div class="grid gap-5">
-            <BaseSegmented v-model="view" label="账号视图" :options="viewOptions" class="w-full" />
+            <BaseSegmented v-model="view" :label="t('appearance.preview.components.accountView')" :options="viewOptions" class="w-full" />
             <div class="flex flex-wrap items-center gap-x-7 gap-y-4">
-              <BaseSwitch v-model="notifications" label="实时通知" show-label />
-              <BaseSwitch v-model="autoRotate" label="自动轮换" show-label />
-              <BaseCheckbox v-model="selected" label="选择当前页" show-label />
-              <BaseCheckbox v-model="partialSelected" label="部分选择" indeterminate show-label />
+              <BaseSwitch v-model="notifications" :label="t('appearance.preview.components.realTimeNotification')" show-label />
+              <BaseSwitch v-model="autoRotate" :label="t('appearance.preview.components.automaticRotation')" show-label />
+              <BaseCheckbox v-model="selected" :label="t('appearance.preview.components.selectCurrentPage')" show-label />
+              <BaseCheckbox v-model="partialSelected" :label="t('appearance.preview.components.partialSelection')" indeterminate show-label />
             </div>
             <div class="flex items-center gap-6">
-              <BaseRadio v-model="strategy" value="balanced" name="strategy" label="均衡" show-label />
+              <BaseRadio v-model="strategy" value="balanced" name="strategy" :label="t('appearance.preview.components.equilibrium')" show-label />
               <BaseRadio v-model="strategy" value="sticky" name="strategy" label="智能粘性调度" show-label />
-              <BaseRadio v-model="strategy" value="manual" name="strategy" label="手动" show-label />
+              <BaseRadio v-model="strategy" value="manual" name="strategy" :label="t('appearance.preview.components.manual')" show-label />
             </div>
           </div>
         </template>
       </BaseCard>
 
-      <BaseCard padding="compact" class="col-span-4 h-full min-w-0 bg-cp-fill-quaternary! shadow-none!" title="反馈语义" description="Success · Warning · Error · Info">
+      <BaseCard padding="compact" class="col-span-4 h-full min-w-0 bg-cp-fill-quaternary! shadow-none!" :title="t('appearance.preview.components.feedbackSemantics')" description="Success · Warning · Error · Info">
         <template #body>
           <div class="grid gap-2.5">
             <div class="flex items-center gap-3 rounded-cp bg-cp-success-container px-3.5 py-3 text-cp-success-on-container">
-              <Check class="size-4 shrink-0" /><strong class="text-cp-sm">主题设置已保存</strong>
+              <Check class="size-4 shrink-0" /><strong class="text-cp-sm">{{ t('appearance.preview.components.themeSettingsSaved') }}</strong>
             </div>
             <div class="flex items-center gap-3 rounded-cp bg-cp-warning-container px-3.5 py-3 text-cp-warning-on-container">
-              <TriangleAlert class="size-4 shrink-0" /><strong class="text-cp-sm">3 个账号额度接近上限</strong>
+              <TriangleAlert class="size-4 shrink-0" /><strong class="text-cp-sm">{{ t('appearance.preview.components.quotaOfAccountsIsCloseToUpper') }}</strong>
             </div>
             <div class="flex items-center gap-3 rounded-cp bg-cp-error-container px-3.5 py-3 text-cp-error-on-container">
-              <CircleAlert class="size-4 shrink-0" /><strong class="text-cp-sm">连接测试未通过</strong>
+              <CircleAlert class="size-4 shrink-0" /><strong class="text-cp-sm">{{ t('appearance.preview.components.connectionTestFailed') }}</strong>
             </div>
             <div class="flex items-center gap-3 rounded-cp bg-cp-info-container px-3.5 py-3 text-cp-info-on-container">
-              <Info class="size-4 shrink-0" /><strong class="text-cp-sm">调度规则将在下次请求生效</strong>
+              <Info class="size-4 shrink-0" /><strong class="text-cp-sm">{{ t('appearance.preview.components.schedulingNotice') }}</strong>
             </div>
           </div>
         </template>
       </BaseCard>
 
-      <BaseCard padding="compact" class="col-span-4 h-full min-w-0 bg-cp-fill-quaternary! shadow-none!" title="状态与进度" description="Alias Token · Progress Token">
+      <BaseCard padding="compact" class="col-span-4 h-full min-w-0 bg-cp-fill-quaternary! shadow-none!" :title="t('appearance.preview.components.statusAndProgress')" description="Alias Token · Progress Token">
         <template #body>
           <div class="grid gap-4">
             <div class="flex flex-wrap gap-2">
-              <span class="rounded-full bg-cp-success-container px-3 py-1.5 text-cp-xs font-heavy text-cp-success-on-container">运行正常</span>
-              <span class="rounded-full bg-cp-warning-container px-3 py-1.5 text-cp-xs font-heavy text-cp-warning-on-container">额度受限</span>
-              <span class="rounded-full bg-cp-error-container px-3 py-1.5 text-cp-xs font-heavy text-cp-error-on-container">需要处理</span>
-              <span class="rounded-full bg-cp-info-container px-3 py-1.5 text-cp-xs font-heavy text-cp-info-on-container">同步中</span>
+              <span class="rounded-full bg-cp-success-container px-3 py-1.5 text-cp-xs font-heavy text-cp-success-on-container">{{ t('appearance.preview.components.runningNormally') }}</span>
+              <span class="rounded-full bg-cp-warning-container px-3 py-1.5 text-cp-xs font-heavy text-cp-warning-on-container">{{ t('appearance.preview.components.quotaLimited') }}</span>
+              <span class="rounded-full bg-cp-error-container px-3 py-1.5 text-cp-xs font-heavy text-cp-error-on-container">{{ t('appearance.preview.components.needToBeProcessed') }}</span>
+              <span class="rounded-full bg-cp-info-container px-3 py-1.5 text-cp-xs font-heavy text-cp-info-on-container">{{ t('appearance.preview.components.synchronizing') }}</span>
             </div>
             <div v-for="item in progressItems" :key="item.label" class="grid gap-2">
               <div class="flex justify-between text-cp-sm font-heavy text-cp-text-secondary">
@@ -338,9 +339,9 @@ function statusClass(status: PreviewTableRow['status']) {
       </BaseCard>
     </section>
 
-    <BaseCard padding="compact" class="h-full min-w-0 bg-cp-fill-quaternary! shadow-none!" title="数据表格" description="BaseTable · BaseScrollbar · BaseTablePagination（标准行高）">
+    <BaseCard padding="compact" class="h-full min-w-0 bg-cp-fill-quaternary! shadow-none!" :title="t('appearance.preview.components.dataTable')" description="BaseTable · BaseScrollbar · BaseTablePagination（标准行高）">
       <template #actions>
-        <BaseInput aria-label="筛选表格" size="sm" placeholder="筛选账号" class="w-64">
+        <BaseInput :aria-label="t('appearance.preview.components.filterForm')" size="sm" :placeholder="t('appearance.preview.components.filterAccounts')" class="w-64">
           <template #prefix>
             <Search class="size-3.5" />
           </template>
@@ -366,20 +367,20 @@ function statusClass(status: PreviewTableRow['status']) {
       </template>
     </BaseCard>
 
-    <section class="grid min-w-0 grid-cols-12 gap-6 overflow-hidden" aria-label="边界状态组件">
-      <BaseCard padding="compact" class="col-span-4 h-full min-w-0 bg-cp-fill-quaternary! shadow-none!" title="空状态" description="BaseEmpty · BaseButton">
+    <section class="grid min-w-0 grid-cols-12 gap-6 overflow-hidden" :aria-label="t('appearance.preview.components.boundaryStateComponent')">
+      <BaseCard padding="compact" class="col-span-4 h-full min-w-0 bg-cp-fill-quaternary! shadow-none!" :title="t('appearance.preview.components.emptyState')" description="BaseEmpty · BaseButton">
         <template #body>
-          <BaseEmpty title="暂无匹配账号" description="调整筛选条件，或添加一个新的上游账号。" class="flex-1">
+          <BaseEmpty :title="t('appearance.preview.components.noMatchingAccountYet')" description="调整筛选条件，或添加一个新的上游账号。" class="flex-1">
             <template #action>
               <BaseButton size="sm" variant="primary">
-                添加账号
+                {{ t('appearance.preview.components.addAccount') }}
               </BaseButton>
             </template>
           </BaseEmpty>
         </template>
       </BaseCard>
 
-      <BaseCard padding="compact" class="col-span-4 h-full min-w-0 bg-cp-fill-quaternary! shadow-none!" title="加载与骨架" description="BaseSkeleton · BaseButton loading">
+      <BaseCard padding="compact" class="col-span-4 h-full min-w-0 bg-cp-fill-quaternary! shadow-none!" :title="t('appearance.preview.components.loadingAndSkeleton')" description="BaseSkeleton · BaseButton loading">
         <template #body>
           <div class="grid flex-1 content-between gap-5 rounded-cp-lg bg-cp-fill-quaternary p-4">
             <div class="grid gap-4">
@@ -396,16 +397,16 @@ function statusClass(status: PreviewTableRow['status']) {
               </div>
             </div>
             <div class="flex items-center justify-between">
-              <span class="text-cp-sm font-emphasis text-cp-text-secondary">正在同步账号状态</span>
+              <span class="text-cp-sm font-emphasis text-cp-text-secondary">{{ t('appearance.preview.components.synchronizingAccountStatus') }}</span>
               <BaseButton size="sm" loading>
-                同步中
+                {{ t('appearance.preview.components.synchronizing') }}
               </BaseButton>
             </div>
           </div>
         </template>
       </BaseCard>
 
-      <BaseCard padding="compact" class="col-span-4 h-full min-w-0 bg-cp-fill-quaternary! shadow-none!" title="浮层与菜单" description="BasePopover · BaseMenuItem · Elevated Surface">
+      <BaseCard padding="compact" class="col-span-4 h-full min-w-0 bg-cp-fill-quaternary! shadow-none!" :title="t('appearance.preview.components.overlaysAndMenus')" description="BasePopover · BaseMenuItem · Elevated Surface">
         <template #body>
           <div class="grid min-w-0 flex-1 grid-rows-[auto_1fr_auto] overflow-hidden rounded-cp-lg bg-cp-bg-container p-4">
             <div class="flex items-center justify-between rounded-cp bg-cp-bg-container px-4 py-3 shadow-cp-tertiary">
@@ -415,15 +416,15 @@ function statusClass(status: PreviewTableRow['status']) {
               </div>
               <BasePopover>
                 <template #trigger>
-                  <BaseIconButton label="账号操作" variant="secondary">
+                  <BaseIconButton :label="t('appearance.preview.components.accountOperation')" variant="secondary">
                     <MoreHorizontal />
                   </BaseIconButton>
                 </template>
                 <div class="w-64 max-w-full p-2">
-                  <BaseMenuItem>编辑账号</BaseMenuItem>
-                  <BaseMenuItem>测试连接</BaseMenuItem>
+                  <BaseMenuItem>{{ t('appearance.preview.components.editAccount') }}</BaseMenuItem>
+                  <BaseMenuItem>{{ t('accounts.connectionTest.title') }}</BaseMenuItem>
                   <BaseMenuItem tone="destructive">
-                    停用账号
+                    {{ t('appearance.preview.components.deactivateAccount') }}
                   </BaseMenuItem>
                 </div>
               </BasePopover>
@@ -434,25 +435,25 @@ function statusClass(status: PreviewTableRow['status']) {
                 <template #icon>
                   <KeyRound class="size-3.5" />
                 </template>
-                编辑账号
+                {{ t('appearance.preview.components.editAccount') }}
               </BaseMenuItem>
               <BaseMenuItem>
                 <template #icon>
                   <Info class="size-3.5" />
                 </template>
-                测试连接
+                {{ t('accounts.connectionTest.title') }}
               </BaseMenuItem>
               <BaseMenuItem tone="destructive">
                 <template #icon>
                   <Trash2 class="size-3.5" />
                 </template>
-                停用账号
+                {{ t('appearance.preview.components.deactivateAccount') }}
               </BaseMenuItem>
             </div>
 
             <div class="flex min-w-0 items-center gap-3 rounded-cp bg-cp-bg-spotlight px-4 py-3 text-cp-text-light-solid shadow-cp-popup">
               <Info class="size-4 shrink-0" />
-              <span class="min-w-0 text-cp-xs font-heavy">浮层始终使用独立 Surface 与 Shadow Token</span>
+              <span class="min-w-0 text-cp-xs font-heavy">{{ t('appearance.preview.components.overlayHelp') }}</span>
             </div>
           </div>
         </template>

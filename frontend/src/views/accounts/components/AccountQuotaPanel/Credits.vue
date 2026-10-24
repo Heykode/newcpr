@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { AccountQuotaCredits } from '@/api'
 import { computed } from 'vue'
+import { t } from '@/i18n'
 
 const props = defineProps<{
   credits: AccountQuotaCredits | null
@@ -43,7 +44,7 @@ const hasBalance = computed(() => !props.credits?.unlimited && balanceDisplay.va
       >
         {{ value }}
       </strong>
-      <span v-if="hasBalance" class="shrink-0 text-cp-text-tertiary" :class="compact ? 'text-[10px]' : 'text-cp-xs'">点</span>
+      <span v-if="hasBalance" class="shrink-0 text-cp-text-tertiary" :class="compact ? 'text-[10px]' : 'text-cp-xs'">{{ t('accounts.quota.point') }}</span>
     </span>
   </div>
 </template>

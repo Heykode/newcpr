@@ -2,6 +2,7 @@
 import type { AccountCreateProvider } from './model'
 import { Openai, Xai } from '@boxicons/vue'
 import { LayoutGrid } from '@lucide/vue'
+import { t } from '@/i18n'
 import { PROVIDER_DISPLAY_NAMES } from '@/utils/providers'
 
 withDefaults(
@@ -38,7 +39,7 @@ const providers = [
 </script>
 
 <template>
-  <div class="grid grid-cols-3 gap-3" role="group" aria-label="选择账号平台">
+  <div class="grid grid-cols-3 gap-3" role="group" :aria-label="t('accounts.onboarding.selectAccountPlatform')">
     <button
       v-for="provider in providers"
       :key="provider.value"

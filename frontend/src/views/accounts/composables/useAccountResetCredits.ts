@@ -1,13 +1,14 @@
 import type { Account, AccountResetCredit } from '@/api'
 import { computed, shallowReactive, shallowRef, watch } from 'vue'
-
 import {
   consumeAccountResetCredit,
   getAccountResetCredits,
   refreshAccountQuota,
 } from '@/api'
+
 import { ApiError } from '@/api/request'
 import { toast } from '@/components/base/BaseToast'
+import { t } from '@/i18n'
 import { errorMessage } from '@/utils/async'
 
 interface PendingResetCreditOperation {
@@ -314,12 +315,12 @@ function isAmbiguousConsumeError(error: unknown) {
 function resetResultMessage(code: string) {
   switch (code) {
     case 'already_redeemed':
-      return '该重置操作已被处理，请先刷新重置卡列表'
+      return t('accounts.quotaReset.alreadyProcessed')
     case 'no_credit':
-      return '当前没有可用的主动重置卡'
+      return t('accounts.quotaReset.noCredits')
     case 'nothing_to_reset':
-      return '当前额度窗口不需要重置'
+      return t('accounts.quotaReset.resetNotNeeded')
     default:
-      return `上游未执行额度重置：${code}`
+      return t('accounts.quotaReset.upstreamDeclined', { code })
   }
 }

@@ -1,0 +1,21 @@
+{
+  "auth": {
+    "signOut": "退出登录",
+    "adminSignIn": "管理员登录",
+    "apiKeySignIn": "API Key 登录",
+    "signingIn": "正在登录",
+    "signIn": "登录",
+    "method": "选择登录方式",
+    "title": "控制台登录",
+    "welcome": "「 欢迎回来，登录以开始您的数据之旅 」",
+    "username": "管理员账号",
+    "usernamePlaceholder": "输入会话账号",
+    "passwordPlaceholder": "输入会话密钥",
+    "apiKeyPlaceholder": "输入 API Key",
+    "pageLabel": "Codex Proxy RS 登录",
+    "password": "密码",
+    "apiKey": "API 密钥",
+    "adminRealm": "管理员",
+    "keyRealm": "API 密钥"
+  }
+}

@@ -2,7 +2,9 @@
 import { storeToRefs } from 'pinia'
 import { computed, shallowRef } from 'vue'
 import { useRouter } from 'vue-router'
+import AppLanguageMenu from '@/components/AppLanguageMenu.vue'
 
+import { t } from '@/i18n'
 import { useAuthStore } from '@/stores/modules/auth'
 import { useThemeStore } from '@/stores/modules/theme'
 
@@ -53,10 +55,13 @@ async function handleSubmit(): Promise<void> {
 <template>
   <main class="login-page relative isolate min-h-dvh overflow-hidden text-(--cp-login-title-color)">
     <LoginBackground />
+    <div class="absolute right-4 top-4 z-10">
+      <AppLanguageMenu />
+    </div>
 
     <section
       class="grid min-h-dvh items-center justify-items-center px-5 py-[clamp(24px,5dvh,64px)] min-[980px]:justify-items-end min-[980px]:pr-[clamp(48px,17.3vw,332px)] max-[560px]:p-4.5"
-      aria-label="Codex Proxy RS 登录"
+      :aria-label="t('auth.pageLabel')"
     >
       <LoginPanel
         v-model:username="username"

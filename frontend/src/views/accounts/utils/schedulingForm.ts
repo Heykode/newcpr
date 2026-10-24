@@ -1,3 +1,5 @@
+import { t } from '@/i18n'
+
 export interface AccountSchedulingValues {
   concurrencyLimit: number | null
   weight: number
@@ -21,12 +23,12 @@ export function parseAccountSchedulingForm(
       || parsedLimit < 1
       || parsedLimit > MAX_ACCOUNT_CONCURRENCY)
   ) {
-    return { valid: false, message: `并发限制必须留空，或为 1 到 ${MAX_ACCOUNT_CONCURRENCY} 的整数` }
+    return { valid: false, message: t('accounts.scheduling.invalidConcurrency', { value: MAX_ACCOUNT_CONCURRENCY }) }
   }
 
   const parsedWeight = Number(weight.trim())
   if (!Number.isSafeInteger(parsedWeight) || parsedWeight < 1 || parsedWeight > 100) {
-    return { valid: false, message: '权重必须是 1 到 100 的整数' }
+    return { valid: false, message: t('accounts.scheduling.weightMustBeIntegerFromTo') }
   }
 
   return {

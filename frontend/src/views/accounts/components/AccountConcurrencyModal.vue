@@ -4,6 +4,7 @@ import { useIntervalFn, useNow } from '@vueuse/core'
 import { ref } from 'vue'
 import BaseModal from '@/components/base/BaseModal/index.vue'
 import BaseSegmented from '@/components/base/BaseSegmented.vue'
+import { t } from '@/i18n'
 import { useAccountConcurrency } from '../composables/useAccountConcurrency'
 
 const props = defineProps<{ accountId: string }>()
@@ -27,7 +28,7 @@ function duration(value: number) {
     </div>
     <div class="h-96 max-h-[60dvh] overflow-auto" :aria-busy="loading">
       <p v-if="loading && !data" role="status">
-        加载中
+        {{ t('common.status.loading') }}
       </p>
       <p v-if="error" role="alert">
         {{ error }}

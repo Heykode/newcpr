@@ -6,6 +6,7 @@ import BasePageHeader from '@/components/base/BasePageHeader.vue'
 import BaseTablePagination from '@/components/base/BaseTable/BaseTablePagination.vue'
 import BaseTable from '@/components/base/BaseTable/index.vue'
 import { usePageSelection } from '@/composables/usePageSelection'
+import { t } from '@/i18n'
 import AccountGroupActions from './components/AccountGroupActions.vue'
 import AccountGroupFilters from './components/AccountGroupFilters.vue'
 import AccountGroupFormModal from './components/AccountGroupFormModal.vue'
@@ -55,9 +56,8 @@ const { allSelected, indeterminate, selectedRowKeys, toggleSelection, toggleAll 
 <template>
   <div class="flex h-full min-h-0 w-full flex-col overflow-hidden">
     <BasePageHeader
-      class="h-17"
-      title="分组管理"
-      description="将账号归类管理，并为每个 API 密钥指定可使用的账号"
+      :title="t('navigation.groups')"
+      :description="t('groups.page.description')"
     />
 
     <BaseCard
@@ -88,14 +88,14 @@ const { allSelected, indeterminate, selectedRowKeys, toggleSelection, toggleAll 
               <BaseCheckbox
                 :model-value="allSelected"
                 :indeterminate="indeterminate"
-                label="选择当前页分组"
+                :label="t('groups.page.selectCurrentPageGroup')"
                 @update:model-value="toggleAll"
               />
             </template>
             <template #selection="{ row }">
               <BaseCheckbox
                 :model-value="selectedIds.has(row.id)"
-                label="选择分组"
+                :label="t('groups.page.selectGroup')"
                 @update:model-value="toggleSelection(row.id)"
               />
             </template>
@@ -115,7 +115,7 @@ const { allSelected, indeterminate, selectedRowKeys, toggleSelection, toggleAll 
                 class="mx-auto block size-4 rounded-sm"
                 :style="{ backgroundColor: row.color }"
                 :title="row.color"
-                :aria-label="`分组颜色 ${row.color}`"
+                :aria-label="t('groups.page.colorLabel', { color: row.color })"
               />
             </template>
 
@@ -126,7 +126,7 @@ const { allSelected, indeterminate, selectedRowKeys, toggleSelection, toggleAll 
                   ? 'bg-cp-success-container text-cp-success-on-container'
                   : 'bg-cp-fill-tertiary text-cp-text-quaternary'"
               >
-                {{ row.enabled ? '已启用' : '已禁用' }}
+                {{ row.enabled ? t('common.status.enabled') : t('common.status.disabled') }}
               </span>
             </template>
 
@@ -185,10 +185,10 @@ const { allSelected, indeterminate, selectedRowKeys, toggleSelection, toggleAll 
 
     <BaseConfirmModal
       v-model="showBatchDeleteModal"
-      title="确认删除"
-      description="删除后这些分组将立即失效，此操作不可撤销"
+      :title="t('common.actions.delete')"
+      :description="t('groups.page.batchDeleteWarning')"
       destructive
-      confirm-text="确认删除"
+      :confirm-text="t('common.actions.delete')"
       :loading="batchDeleting"
       @confirm="confirmBatchDelete"
     >
@@ -199,9 +199,9 @@ const { allSelected, indeterminate, selectedRowKeys, toggleSelection, toggleAll 
 
     <BaseConfirmModal
       v-model="showDisableModal"
-      title="禁用账号分组"
+      :title="t('groups.page.disableAccountGrouping')"
       description="禁用后，使用该分组的 API 密钥将无法再使用其中的账号。"
-      confirm-text="确认禁用"
+      :confirm-text="t('groups.page.confirmDisable')"
       :loading="disabling"
       @confirm="confirmDisable"
       @after-leave="!showDisableModal && (pendingDisableGroup = null)"
@@ -219,10 +219,10 @@ const { allSelected, indeterminate, selectedRowKeys, toggleSelection, toggleAll 
 
     <BaseConfirmModal
       v-model="showDeleteModal"
-      title="删除账号分组"
-      description="删除后该分组将立即失效，此操作不可撤销"
+      :title="t('groups.page.deleteAccountGroup')"
+      :description="t('groups.page.deleteWarning')"
       destructive
-      confirm-text="确认删除"
+      :confirm-text="t('common.actions.delete')"
       :loading="deleting"
       @confirm="confirmDelete"
       @after-leave="!showDeleteModal && (pendingDeleteGroup = null)"

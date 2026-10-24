@@ -18,6 +18,7 @@ import BaseInput from '@/components/base/BaseInput.vue'
 import BaseSelect from '@/components/base/BaseSelect.vue'
 import BaseTextarea from '@/components/base/BaseTextarea.vue'
 import { toast } from '@/components/base/BaseToast'
+import { t } from '@/i18n'
 import { errorMessage } from '@/utils/async'
 import { userAgentClientVersion, withUserAgentClientVersion } from '../composables/userAgentClientVersion'
 import { userAgentOsVersion, withUserAgentOsVersion } from '../composables/userAgentOsVersion'
@@ -278,7 +279,7 @@ useIntervalFn(() => void load(false, true), 30_000)
           @update:model-value="updateClientVersion"
         />
       </BaseFormItem>
-      <BaseFormItem label="系统版本">
+      <BaseFormItem :label="t('settings.clientProfile.systemVersion')">
         <BaseInput
           v-model="osVersion"
           aria-label="OpenAI 出站系统版本"

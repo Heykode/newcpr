@@ -1,8 +1,12 @@
 <script setup lang="ts">
 import type { AccountQuotaWindow } from '../../constants'
-
+import type { CodexQuotaOverdraftState } from '@/api/modules/accounts'
 import { computed } from 'vue'
+
 import { useUiClock } from '@/composables/useUiClock'
+import { t } from '@/i18n'
+import { codexQuotaOverdraftWindow } from '../AccountQuotaOverdraft/presenter'
+import AccountQuotaOverdraftWindowLine from '../AccountQuotaOverdraft/WindowLine.vue'
 import AccountRequestTimeline from '../AccountUsageWindow/AccountRequestTimeline.vue'
 import {
   quotaWindowLocalUsageDisplay,
@@ -13,6 +17,7 @@ import {
 const props = defineProps<{
   label: string | null
   windows: AccountQuotaWindow[]
+  overdraft?: CodexQuotaOverdraftState | null
 }>()
 
 const now = useUiClock()
@@ -46,6 +51,7 @@ const items = computed(() => props.windows.map((window) => {
     percentTextClass: presentation.percentTextClass,
     barClass: presentation.barClass,
     barStyle: presentation.barStyle,
+    overdraft: codexQuotaOverdraftWindow(props.overdraft, window.key),
   }
 }))
 </script>
@@ -65,6 +71,10 @@ const items = computed(() => props.windows.map((window) => {
       :class="grouped ? 'grid-cols-2' : 'grid-cols-1'"
     >
       <div v-for="item in items" :key="item.key" class="grid min-w-0 gap-1.5">
+        <AccountQuotaOverdraftWindowLine
+          v-if="item.overdraft?.active"
+          :window="item.overdraft"
+        />
         <template v-if="item.local">
           <div class="flex min-w-0 items-baseline justify-between gap-2 text-cp-xs leading-3.5">
             <span class="min-w-0 truncate font-bold text-cp-text-quaternary">
@@ -85,7 +95,7 @@ const items = computed(() => props.windows.map((window) => {
           />
 
           <p class="m-0 flex min-w-0 items-center justify-between gap-2 text-[10px] leading-3.5 text-cp-text-tertiary">
-            <span class="shrink-0 font-emphasis">统计范围</span>
+            <span class="shrink-0 font-emphasis">{{ t('accounts.quota.statisticalRange') }}</span>
             <span
               class="min-w-0 truncate font-mono font-emphasis tabular-nums"
               :title="`滚动 ${item.durationDisplay}`"
@@ -133,7 +143,7 @@ const items = computed(() => props.windows.map((window) => {
           </div>
 
           <p class="m-0 flex min-w-0 items-center justify-between gap-2 text-[10px] leading-3.5 text-cp-text-tertiary">
-            <span class="shrink-0 font-emphasis">重置</span>
+            <span class="shrink-0 font-emphasis">{{ t('common.actions.reset') }}</span>
             <span
               class="min-w-0 truncate font-emphasis tabular-nums"
               :class="{ 'text-cp-warning-text': item.reset?.pending }"

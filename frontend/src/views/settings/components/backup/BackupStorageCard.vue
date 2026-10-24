@@ -1,14 +1,15 @@
 <script setup lang="ts">
 import { CircleAlert, CircleCheck, DatabaseZap, Eye, EyeOff, Save } from '@lucide/vue'
 import { computed, shallowRef } from 'vue'
-
 import BaseButton from '@/components/base/BaseButton.vue'
+
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseCheckbox from '@/components/base/BaseCheckbox.vue'
 import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
 import BaseForm from '@/components/base/BaseForm/index.vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
+import { t } from '@/i18n'
 
 interface StorageForm {
   endpoint: string
@@ -51,19 +52,19 @@ function toggleSecretVisible(): void {
 </script>
 
 <template>
-  <BaseCard title="S3 存储配置">
+  <BaseCard :title="t('settings.backup.storage.s3StorageConfiguration')">
     <template #description>
-      <span class="text-cp-text-secondary">
-        配置 S3 兼容存储（支持
-        <button
-          type="button"
-          class="cursor-pointer border-0 bg-transparent p-0 text-cp-link underline underline-offset-2 hover:text-cp-link-hover"
-          @click="emit('openR2Guide')"
-        >
-          Cloudflare R2
-        </button>
-        ）
-      </span>
+      <I18nT keypath="settings.backup.storage.description" tag="span" scope="global" class="text-cp-text-secondary">
+        <template #service>
+          <button
+            type="button"
+            class="cursor-pointer border-0 bg-transparent p-0 text-cp-link underline underline-offset-2 hover:text-cp-link-hover"
+            @click="emit('openR2Guide')"
+          >
+            Cloudflare R2
+          </button>
+        </template>
+      </I18nT>
     </template>
 
     <template #actions>
@@ -92,10 +93,10 @@ function toggleSecretVisible(): void {
 
     <div class="@container">
       <BaseForm class="max-w-6xl @min-[640px]:grid-cols-2">
-        <BaseFormItem label="端点地址" description="S3 兼容服务的 HTTPS 地址">
+        <BaseFormItem :label="t('settings.backup.storage.endpointAddress')" :description="t('settings.backup.storage.endpointHelp')">
           <BaseInput
             v-model="storage.endpoint"
-            aria-label="端点地址"
+            :aria-label="t('settings.backup.storage.endpointAddress')"
             placeholder="https://<account_id>.r2.cloudflarestorage.com"
           >
             <template #prefix>
@@ -104,19 +105,19 @@ function toggleSecretVisible(): void {
           </BaseInput>
         </BaseFormItem>
 
-        <BaseFormItem label="区域" description="R2 使用固定值 auto；其它服务按提供方填写">
-          <BaseInput v-model="storage.region" aria-label="区域" />
+        <BaseFormItem :label="t('settings.backup.storage.region')" description="R2 使用固定值 auto；其它服务按提供方填写">
+          <BaseInput v-model="storage.region" :aria-label="t('settings.backup.storage.region')" />
         </BaseFormItem>
 
-        <BaseFormItem label="存储桶" description="私有存储桶名称">
-          <BaseInput v-model="storage.bucket" aria-label="存储桶" />
+        <BaseFormItem :label="t('settings.backup.storage.bucket')" :description="t('settings.backup.storage.privateBucketName')">
+          <BaseInput v-model="storage.bucket" :aria-label="t('settings.backup.storage.bucket')" />
         </BaseFormItem>
 
         <BaseFormItem label="Key 前缀" description="对象前缀，历史归档已保存完整旧前缀">
           <BaseInput v-model="storage.prefix" aria-label="Key 前缀" />
         </BaseFormItem>
 
-        <BaseFormItem label="Access Key ID" description="对象存储专用凭据">
+        <BaseFormItem label="Access Key ID" :description="t('settings.backup.storage.credentialsLabel')">
           <BaseInput
             v-model="storage.accessKeyId"
             aria-label="Access Key ID"
@@ -138,7 +139,7 @@ function toggleSecretVisible(): void {
           </BaseInput>
         </BaseFormItem>
 
-        <BaseFormItem label="Secret Access Key" description="对象存储专用 Secret">
+        <BaseFormItem label="Secret Access Key" :description="t('settings.backup.storage.objectStorageSpecificSecret')">
           <BaseInput
             v-model="storage.secretAccessKey"
             aria-label="Secret Access Key"

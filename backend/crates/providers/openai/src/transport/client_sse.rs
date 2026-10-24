@@ -321,7 +321,6 @@ impl CodexBackendClient {
         if excel.is_some_and(|prepared| super::excel::images::has_images(&prepared.body)) {
             headers.insert("copilot-vision-request", HeaderValue::from_static("true"));
         }
-        let headers_started_at = Instant::now();
         // 身份投影先完成，再按最终 JSON 大小决定是否使用 zstd。
         // Codex 上游只交付 SSE；即使下游请求 `stream: false`，也要上游流式执行，
         // 再由 API 层收集 canonical events 并返回完整 JSON。不能把下游的传输偏好
@@ -377,6 +376,17 @@ impl CodexBackendClient {
                 .iter()
                 .map(|(name, value)| (name.as_str(), value.as_bytes())),
         );
+        super::evidence::record_request(
+            &trace,
+            "provider.request.outbound",
+            &upstream_body,
+            if excel.is_some() {
+                "excel_http_sse"
+            } else {
+                "http_sse"
+            },
+            Some(&headers),
+        );
         trace.capture("upstream.request.body", &body);
         let compressed = excel.is_none() && body.len() >= HTTP_ZSTD_MIN_BYTES;
         let body = if compressed {
@@ -391,6 +401,7 @@ impl CodexBackendClient {
                 serde_json::json!({"phase":"exchange_started"}),
             );
         }
+        let headers_started_at = Instant::now();
         let response = self
             .send_profiled(&profile, false, |client| {
                 let builder = client.post(endpoint).headers(headers).body(body);
@@ -667,6 +678,13 @@ impl CodexBackendClient {
             });
         }
         websocket_create.connection.outbound_proxy = self.outbound_proxy.clone();
+        super::evidence::record_request(
+            &context.trace.cloned().unwrap_or_default(),
+            "provider.request.outbound",
+            websocket_request.body(),
+            "websocket",
+            Some(&headers),
+        );
         websocket_create.connection.session_proxy = self
             .session_proxy_lease()
             .map(super::session_proxy::SessionProxyHold);

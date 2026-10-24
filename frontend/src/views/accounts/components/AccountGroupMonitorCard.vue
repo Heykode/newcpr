@@ -4,6 +4,7 @@ import { Pin, PinOff, Settings } from '@lucide/vue'
 import { computed } from 'vue'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
+import { t } from '@/i18n'
 import { monitorEta, monitorExpiryHint, monitorMoney, monitorSnapshotExpired } from './group-monitor-presentation'
 
 const props = defineProps<{
@@ -66,7 +67,7 @@ const alerting = computed(() => Boolean(props.snapshot?.activeAlerts?.length))
       </div>
     </dl>
     <div class="monitor-concurrency mt-auto flex items-center gap-2 text-cp-xs" :class="stale ? 'text-cp-text-tertiary' : 'text-cp-text-secondary'">
-      <span>并发</span>
+      <span>{{ t('groups.metrics.concurrency') }}</span>
       <strong class="shrink-0 font-mono font-emphasis">{{ snapshot?.usedSlots ?? '—' }} / {{ snapshot?.usedSlots == null ? '—' : snapshot.totalSlots }}</strong>
       <div
         class="h-1 min-w-3 flex-1 overflow-hidden rounded-sm bg-cp-fill-quaternary"

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { DashboardTrendKind } from '@/api/modules/dashboard'
-import { shallowRef } from 'vue'
+import { computed, shallowRef } from 'vue'
 
 import DashboardContent from '@/views/dashboard/components/DashboardContent.vue'
 import {
@@ -8,10 +8,11 @@ import {
   dashboardTrendView,
 } from '@/views/dashboard/composables/useDashboard'
 
-import { themeDashboardSummary } from '../fixtures/dashboard'
+import { createThemeDashboardSummary } from '../fixtures/dashboard'
 
-const snapshot = dashboardSnapshotView(themeDashboardSummary)
-const trend = dashboardTrendView(themeDashboardSummary.trend)
+const summary = computed(createThemeDashboardSummary)
+const snapshot = computed(() => dashboardSnapshotView(summary.value))
+const trend = computed(() => dashboardTrendView(summary.value.trend))
 const trendKind = shallowRef<DashboardTrendKind>('usage')
 </script>
 

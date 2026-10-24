@@ -2,6 +2,7 @@
 import type { AccountProfileActivityInsights, AccountProfileInvocation } from '@/api'
 import { Package } from '@lucide/vue'
 import { computed } from 'vue'
+import { t } from '@/i18n'
 
 import { formatInteger } from '@/utils/number'
 
@@ -58,7 +59,7 @@ function invocationView(invocation: AccountProfileInvocation) {
   <section class="grid gap-8 sm:grid-cols-2 sm:gap-12" aria-labelledby="profile-activity-insights-title">
     <div>
       <h3 id="profile-activity-insights-title" class="m-0 text-cp-lg font-heavy text-cp-text">
-        活动洞察
+        {{ t('accounts.profile.activity.activityInsights') }}
       </h3>
       <dl class="mt-4 mb-0 grid gap-3.5">
         <div
@@ -78,7 +79,7 @@ function invocationView(invocation: AccountProfileInvocation) {
 
     <div>
       <h3 class="m-0 text-cp-lg font-heavy text-cp-text">
-        最常用的插件与技能
+        {{ t('accounts.profile.activity.pluginsAndSkills') }}
       </h3>
       <ol v-if="invocations.length > 0" class="mt-3 mb-0 grid list-none gap-1.5 p-0">
         <li
@@ -96,7 +97,7 @@ function invocationView(invocation: AccountProfileInvocation) {
         </li>
       </ol>
       <p v-else class="mt-4 mb-0 text-cp-sm font-semibold text-cp-text-quaternary">
-        暂无插件或技能调用记录
+        {{ t('accounts.profile.activity.noToolCalls') }}
       </p>
     </div>
   </section>

@@ -3,6 +3,7 @@ import type { RequestLocation } from '@/api/modules/proxies'
 import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
 import BaseForm from '@/components/base/BaseForm/index.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
+import { t } from '@/i18n'
 
 defineProps<{ disabled?: boolean }>()
 const location = defineModel<RequestLocation>({ required: true })
@@ -10,14 +11,14 @@ const location = defineModel<RequestLocation>({ required: true })
 
 <template>
   <BaseForm class="grid min-w-0 gap-4 sm:grid-cols-2">
-    <BaseFormItem label="国家代码">
-      <BaseInput v-model="location.country" aria-label="国家代码" maxlength="2" :disabled="disabled" />
+    <BaseFormItem :label="t('common.location.countryCode')">
+      <BaseInput v-model="location.country" :aria-label="t('common.location.countryCode')" maxlength="2" :disabled="disabled" />
     </BaseFormItem>
-    <BaseFormItem label="地区">
-      <BaseInput v-model="location.region" aria-label="地区" maxlength="128" :disabled="disabled" />
+    <BaseFormItem :label="t('common.location.region')">
+      <BaseInput v-model="location.region" :aria-label="t('common.location.region')" maxlength="128" :disabled="disabled" />
     </BaseFormItem>
-    <BaseFormItem label="城市">
-      <BaseInput v-model="location.city" aria-label="城市" maxlength="128" :disabled="disabled" />
+    <BaseFormItem :label="t('common.location.city')">
+      <BaseInput v-model="location.city" :aria-label="t('common.location.city')" maxlength="128" :disabled="disabled" />
     </BaseFormItem>
     <BaseFormItem label="时区">
       <BaseInput v-model="location.timezone" aria-label="时区" :disabled="disabled" />

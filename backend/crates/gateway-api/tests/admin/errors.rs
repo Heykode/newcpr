@@ -492,6 +492,7 @@ mod provider {
             excel_recovery: None,
             purchase_cost: None,
             turn_state: None,
+            codex_quota_overdraft: None,
             effective_concurrency_limit: std::num::NonZeroU32::new(3).expect("concurrency limit"),
             account: AccountRecord {
                 outbound_proxy_enabled: true,

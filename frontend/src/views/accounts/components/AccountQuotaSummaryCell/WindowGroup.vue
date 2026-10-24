@@ -1,17 +1,23 @@
 <script setup lang="ts">
 import type { AccountQuotaWindow } from '../../constants'
+import type { CodexQuotaOverdraftState } from '@/api/modules/accounts'
 
 import { computed } from 'vue'
 import { useUiClock } from '@/composables/useUiClock'
+import { t } from '@/i18n'
+import { codexQuotaOverdraftWindow } from '../AccountQuotaOverdraft/presenter'
+import AccountQuotaOverdraftWindowLine from '../AccountQuotaOverdraft/WindowLine.vue'
 import { quotaWindowCode, quotaWindowPresentation, quotaWindowResetPresentation } from '../AccountUsageWindow/presenter'
 
 const props = defineProps<{
   label: string
   windows: AccountQuotaWindow[]
   comfortable?: boolean
+  overdraft?: CodexQuotaOverdraftState | null
 }>()
 
 const now = useUiClock()
+const showLabel = computed(() => props.label !== t('accounts.quota.general'))
 const windowItems = computed(() => props.windows.map(window => ({
   key: window.key,
   code: quotaWindowCode(window.windowSeconds, window.role),
@@ -21,12 +27,13 @@ const windowItems = computed(() => props.windows.map(window => ({
   presentation: quotaWindowPresentation(window, '2px'),
   reset: quotaWindowResetPresentation(window, now.value.getTime()),
   resetAt: window.resetAt,
+  overdraft: codexQuotaOverdraftWindow(props.overdraft, window.key),
 })))
 </script>
 
 <template>
   <div class="grid min-w-0 gap-1.5">
-    <span class="min-w-0 truncate leading-3 font-bold text-cp-text-quaternary" :class="comfortable ? 'text-xs' : 'text-[10px]'" :title="label">
+    <span v-if="showLabel" class="min-w-0 truncate leading-3 font-bold text-cp-text-quaternary" :class="comfortable ? 'text-xs' : 'text-[10px]'" :title="label">
       {{ label }}
     </span>
 
@@ -39,6 +46,11 @@ const windowItems = computed(() => props.windows.map(window => ({
         role="group"
         :aria-label="`${item.labelTooltip}额度周期`"
       >
+        <AccountQuotaOverdraftWindowLine
+          v-if="item.overdraft?.active"
+          class="col-span-full"
+          :window="item.overdraft"
+        />
         <span
           class="min-w-0 rounded-sm bg-cp-fill-quaternary px-0.5 text-center font-mono font-bold break-all text-cp-text-secondary"
           :title="item.labelTooltip"

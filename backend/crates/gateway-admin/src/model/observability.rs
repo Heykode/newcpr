@@ -1051,6 +1051,7 @@ pub struct DashboardWireProfile {
 /// Provider 画像的差异字段；展示层只显示标签和值，不解释 Provider 语义。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DashboardWireAttribute {
+    pub key: &'static str,
     pub label: String,
     pub value: String,
 }

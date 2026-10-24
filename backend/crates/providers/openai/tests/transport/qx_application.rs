@@ -318,7 +318,7 @@ fn correlation_turns_match_headers_history_and_metadata_without_touching_opaque_
     let before = request.body().clone();
     let projected = project_response_request(&request, context());
     let turn = projected.body()["turn_id"].as_str().unwrap();
-    assert_ne!(turn, "turn-root");
+    assert_eq!(turn, "turn-root");
     assert_eq!(projected.body()["turnMetadata"]["root_turn_id"], turn);
     assert_eq!(
         projected.body()["input"][0]["internal_chat_message_metadata_passthrough"]["turn_id"],
@@ -360,13 +360,13 @@ fn correlation_turns_match_headers_history_and_metadata_without_touching_opaque_
     let mut other = context();
     other.account_id = Some("other-account");
     let changed = project_response_request(&request, other);
-    assert_ne!(changed.body()["turn_id"], turn);
+    assert_eq!(changed.body()["turn_id"], turn);
     assert_eq!(
         project_response_request(&projected, other).body(),
         changed.body()
     );
     request.client_api_key_id = Some("key-b".into());
-    assert_ne!(
+    assert_eq!(
         project_response_request(&request, context()).body()["turn_id"],
         turn
     );
@@ -404,6 +404,7 @@ fn correlation_parent_thread_and_desktop_git_references_use_existing_thread_doma
         .unwrap();
     assert!(mapped.contains(parent_thread));
     assert!(mapped.contains("/workspace/project"));
+    assert!(mapped.contains("\"clientUserMessageId\":\"turn-root\""));
     for index in [1, 2] {
         assert_eq!(projected.body()["input"][index]["content"][0]["text"], git);
     }

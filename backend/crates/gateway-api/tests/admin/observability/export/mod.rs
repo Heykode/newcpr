@@ -34,7 +34,17 @@ async fn export(
     let body = to_bytes(response.into_body(), 20 * 1024 * 1024)
         .await
         .unwrap();
-    (status, headers, serde_json::from_slice(&body).unwrap())
+    let document = if status.is_success() {
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(&body)).unwrap();
+        assert_eq!(archive.len(), 3);
+        let mut data = Vec::new();
+        std::io::Read::read_to_end(&mut archive.by_name("diagnostics.json").unwrap(), &mut data)
+            .unwrap();
+        serde_json::from_slice(&data).unwrap()
+    } else {
+        serde_json::from_slice(&body).unwrap()
+    };
+    (status, headers, document)
 }
 
 #[tokio::test]
@@ -108,7 +118,7 @@ async fn diagnostic_export_keeps_retry_evidence_and_original_errors_but_not_cred
     assert_eq!(status, StatusCode::OK, "{file}");
     assert_eq!(
         headers[header::CONTENT_DISPOSITION],
-        "attachment; filename=diagnostics.json"
+        "attachment; filename=diagnostics.zip"
     );
     assert_eq!(headers[header::CACHE_CONTROL], "private, no-store");
     assert_eq!(file["schemaVersion"], 5);

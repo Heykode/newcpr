@@ -20,6 +20,7 @@ import BaseTable from '@/components/base/BaseTable/index.vue'
 import { toast } from '@/components/base/BaseToast'
 import { useAsyncAction } from '@/composables/useAsyncAction'
 import { usePagedQuery } from '@/composables/usePagedQuery'
+import { t } from '@/i18n'
 import { formatDateTime } from '@/utils/date'
 import ManagedProxyPanel from './components/ManagedProxyPanel.vue'
 import ProxyAccountsModal from './components/ProxyAccountsModal.vue'
@@ -271,8 +272,8 @@ onMounted(() => void query.execute())
   <div class="flex h-full min-h-0 w-full flex-col overflow-hidden">
     <BasePageHeader
       class="h-17"
-      title="代理管理"
-      description="管理账号使用的代理，测试连接并查看出口 IP"
+      :title="t('navigation.proxies')"
+      :description="t('proxies.page.description')"
     />
     <nav class="flex shrink-0 gap-5 overflow-x-auto border-b border-cp-border" aria-label="代理管理分类">
       <button v-for="tab in tabs" :key="tab.id" class="whitespace-nowrap border-b-2 px-1 py-3 text-cp-sm" :class="activeTab === tab.id ? 'border-cp-primary font-medium text-cp-primary' : 'border-transparent text-cp-text-secondary'" :aria-current="activeTab === tab.id ? 'page' : undefined" @click="activeTab = tab.id">
@@ -283,7 +284,7 @@ onMounted(() => void query.execute())
     <BaseCard v-else class="mt-5 flex min-h-0 flex-1 flex-col">
       <template #header>
         <div class="flex w-full flex-col gap-3 sm:flex-row sm:items-center">
-          <BaseInput v-model="search" class="sm:w-80" aria-label="搜索代理" placeholder="搜索代理名称">
+          <BaseInput v-model="search" class="sm:w-80" :aria-label="t('proxies.page.searchLabel')" :placeholder="t('proxies.page.searchPlaceholder')">
             <template #prefix>
               <Search class="size-4.5 text-cp-text-tertiary" />
             </template>
@@ -309,7 +310,7 @@ onMounted(() => void query.execute())
               <template #icon>
                 <Plus class="size-4" />
               </template>
-              新增代理
+              {{ t('proxies.editor.createTitle') }}
             </BaseButton>
           </div>
         </div>
@@ -323,7 +324,7 @@ onMounted(() => void query.execute())
           </div>
           <BaseTable class="min-h-0 flex-1" :columns="columns" :rows="proxies" :loading="loading" :empty-text="search.trim() ? '没有找到匹配的代理，请尝试其他名称' : '暂无代理，请点击新增代理添加'">
             <template #header-selection>
-              <BaseCheckbox :model-value="allSelected" :disabled="batchTesting" label="选择当前页代理" @update:model-value="selectPage" />
+              <BaseCheckbox :model-value="allSelected" :disabled="batchTesting" :label="t('proxies.page.selectCurrentPageProxy')" @update:model-value="selectPage" />
             </template>
             <template #selection="{ row }">
               <BaseCheckbox :model-value="selected.has(row.id)" :disabled="batchTesting" :label="`选择 ${row.name}`" @update:model-value="select(row, $event)" />
@@ -352,12 +353,12 @@ onMounted(() => void query.execute())
               <span v-else class="text-cp-text-quaternary">-</span>
             </template>
             <template #latency="{ row }">
-              <span v-if="testingIds.has(row.id)" class="text-cp-text-secondary">测试中</span>
+              <span v-if="testingIds.has(row.id)" class="text-cp-text-secondary">{{ t('proxies.page.underTest') }}</span>
               <span v-else-if="row.lastTest?.success" class="tabular-nums text-cp-success">
                 {{ row.lastTest.latencyMs }} ms
               </span>
-              <span v-else-if="row.lastTest" class="text-cp-error" :title="`${row.lastTest.message}（耗时 ${row.lastTest.latencyMs} ms）`">失败</span>
-              <span v-else class="text-cp-text-quaternary">未测试</span>
+              <span v-else-if="row.lastTest" class="text-cp-error" :title="`${row.lastTest.message}（耗时 ${row.lastTest.latencyMs} ms）`">{{ t('common.status.failed') }}</span>
+              <span v-else class="text-cp-text-quaternary">{{ t('proxies.page.notTested') }}</span>
             </template>
             <template #location="{ row }">
               <div class="grid min-w-0 gap-1">
@@ -379,10 +380,10 @@ onMounted(() => void query.execute())
             </template>
             <template #actions="{ row }">
               <div class="flex items-center gap-0.5">
-                <BaseIconButton size="sm" label="测试代理" :loading="testingIds.has(row.id)" :disabled="batchTesting || testingIds.has(row.id) || updatingIds.has(row.id)" @click="checkProxy(row)">
+                <BaseIconButton size="sm" :label="t('proxies.actions.test')" :loading="testingIds.has(row.id)" :disabled="batchTesting || testingIds.has(row.id) || updatingIds.has(row.id)" @click="checkProxy(row)">
                   <Wifi class="size-3.5 text-cp-link" />
                 </BaseIconButton>
-                <BaseIconButton size="sm" label="编辑代理" :disabled="batchTesting || testingIds.has(row.id) || updatingIds.has(row.id)" @click="openForm(row)">
+                <BaseIconButton size="sm" :label="t('proxies.actions.edit')" :disabled="batchTesting || testingIds.has(row.id) || updatingIds.has(row.id)" @click="openForm(row)">
                   <Pencil class="size-3.5 text-cp-link" />
                 </BaseIconButton>
                 <BasePopover placement="bottom-end">
@@ -403,7 +404,7 @@ onMounted(() => void query.execute())
                         <template #icon>
                           <Trash2 class="size-3.5" />
                         </template>
-                        删除代理
+                        {{ t('proxies.actions.deleteProxy') }}
                       </BaseMenuItem>
                     </div>
                   </template>
@@ -432,13 +433,13 @@ onMounted(() => void query.execute())
       @test="testConnection"
     />
     <ProxyBatchCreateModal v-if="showBatchCreate" v-model="showBatchCreate" @created="query.execute({ silent: true })" />
-    <BaseConfirmModal v-model="showDelete" title="删除代理" destructive :loading="deleting" @confirm="confirmDelete">
+    <BaseConfirmModal v-model="showDelete" :title="t('proxies.actions.deleteProxy')" destructive :loading="deleting" @confirm="confirmDelete">
       <p class="m-0">
         确定删除“{{ pendingDelete?.name }}”吗？
         将自动解除 {{ pendingDelete?.accountCount ?? 0 }} 个账号的代理绑定，原来使用此代理的请求将改为直连。
       </p>
     </BaseConfirmModal>
-    <BaseConfirmModal v-model="showDisable" title="禁用代理" :loading="disabling" @confirm="confirmDisable">
+    <BaseConfirmModal v-model="showDisable" :title="t('proxies.actions.disableProxy')" :loading="disabling" @confirm="confirmDisable">
       <p class="m-0">
         禁用“{{ pendingDisable?.name }}”后保留配置和 {{ pendingDisable?.accountCount ?? 0 }} 个账号的绑定，原来使用此代理的后续请求将改为直连。重新启用后恢复使用。
       </p>
