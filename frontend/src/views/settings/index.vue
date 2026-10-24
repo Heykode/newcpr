@@ -15,6 +15,7 @@ import AdminPasswordCard from './components/AdminPasswordCard.vue'
 import SettingsBackupSection from './components/backup/SettingsBackupSection.vue'
 import SettingsCleanupSection from './components/cleanup/SettingsCleanupSection.vue'
 import ClientVersionSettings from './components/client-version/index.vue'
+import CodexQuotaOverdraftCard from './components/CodexQuotaOverdraftCard.vue'
 import ExcelSettingsCard from './components/ExcelSettingsCard.vue'
 import ModelAliasesCard from './components/ModelAliasesCard.vue'
 import NotificationChannelsCard from './components/NotificationChannelsCard.vue'
@@ -166,6 +167,12 @@ watch(
           v-model:enabled="form.accountWarmupEnabled"
           v-model:schedule-time="form.accountWarmupScheduleTime"
           v-model:model="form.accountWarmupModel"
+          :disabled="loading || saving"
+        />
+
+        <CodexQuotaOverdraftCard
+          v-model:enabled="form.codexQuotaOverdraftEnabled"
+          v-model:probe-model="form.codexQuotaOverdraftProbeModel"
           :disabled="loading || saving"
         />
 

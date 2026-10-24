@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { AccountQuotaWindow } from '../../constants'
+import type { CodexQuotaOverdraftState } from '@/api/modules/accounts'
 import { computed } from 'vue'
 
 import BasePopover from '@/components/base/BasePopover.vue'
@@ -15,6 +16,7 @@ const props = defineProps<{
   label: string | null
   windows: AccountQuotaWindow[]
   comfortable?: boolean
+  overdraft?: CodexQuotaOverdraftState | null
 }>()
 
 const now = useUiClock()
@@ -68,6 +70,7 @@ const hasQuotaWindow = computed(() => detailItems.value.some(item => !item.local
           v-if="hasQuotaWindow"
           :comfortable="comfortable"
           :label="summaryLabel"
+          :overdraft="overdraft"
           :windows="windows"
         />
         <AccountUsageWindow

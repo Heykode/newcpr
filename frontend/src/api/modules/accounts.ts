@@ -56,6 +56,39 @@ export interface AccountQuotaCredits {
   balance: string | null
 }
 
+export type CodexQuotaOverdraftStatus
+  = 'pending' | 'passed' | 'inconclusive' | 'failed' | 'recovered'
+
+export interface CodexQuotaOverdraftStats {
+  requests: number
+  requestsDisplay: string
+  tokens: number
+  tokensDisplay: string
+  costUsd: string
+  costUsdDisplay: string
+}
+
+export interface CodexQuotaOverdraftWindow {
+  windowKey: string
+  active: boolean
+  startedAt: string | null
+  recoverAt: string | null
+  stats: CodexQuotaOverdraftStats | null
+}
+
+export interface CodexQuotaOverdraftState {
+  status: CodexQuotaOverdraftStatus
+  quotaWindow: string | null
+  probeModel: string | null
+  attempts: number
+  attemptLimit: number
+  reasonCode: string | null
+  testedAt: string | null
+  retryAt: string | null
+  recoverAt: string | null
+  windows: CodexQuotaOverdraftWindow[]
+}
+
 export interface AccountQuota {
   refreshedAtDisplay: string
   refreshedAtRelative?: import('../time').RelativeTimeView | null
@@ -64,6 +97,7 @@ export interface AccountQuota {
   rateLimitedUntil: string | null
   windows: AccountQuotaWindow[]
   credits: AccountQuotaCredits | null
+  overdraft?: CodexQuotaOverdraftState | null
 }
 
 export interface AccountCurrencyCost {

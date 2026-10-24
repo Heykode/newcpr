@@ -4,6 +4,7 @@ import type { AccountRow } from '../../constants'
 import { computed } from 'vue'
 import { useUiClock } from '@/composables/useUiClock'
 import { groupedAccountQuotaWindows, visibleSummaryQuotaWindows } from '../../constants'
+import AccountQuotaOverdraftStatus from '../AccountQuotaOverdraft/Status.vue'
 import AccountQuotaCredits from '../AccountQuotaPanel/Credits.vue'
 import AccountUsageWindow from '../AccountUsageWindow/index.vue'
 import AccountQuotaSummaryEntry from './Entry.vue'
@@ -63,12 +64,17 @@ const accountTypeLabel = computed(() => {
         {{ accountTypeLabel }}
       </span>
     </div>
+    <AccountQuotaOverdraftStatus
+      v-if="account.provider === 'openai' && account.quota.overdraft"
+      :state="account.quota.overdraft"
+    />
     <template v-if="summaryEntries.length > 0">
       <div v-if="recentUsageEntry" class="flex min-w-0 items-end gap-2">
         <div class="flex min-w-0 flex-1">
           <AccountQuotaSummaryEntry
             :comfortable="comfortable"
             :label="recentUsageEntry.label"
+            :overdraft="account.quota.overdraft"
             :windows="recentUsageEntry.windows"
           />
         </div>

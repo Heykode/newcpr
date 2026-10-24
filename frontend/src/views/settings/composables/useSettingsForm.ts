@@ -70,6 +70,8 @@ export function useSettingsForm() {
     accountWarmupEnabled: false,
     accountWarmupScheduleTime: '08:00',
     accountWarmupModel: '',
+    codexQuotaOverdraftEnabled: false,
+    codexQuotaOverdraftProbeModel: 'gpt-6-astra',
     requestIntervalMs: null as number | null,
     openaiSessionBindingTtlHours: null as number | null,
     rotationStrategy: '' as RotationStrategy | '',
@@ -132,6 +134,8 @@ export function useSettingsForm() {
     form.accountWarmupEnabled = data.accountWarmupEnabled ?? false
     form.accountWarmupScheduleTime = data.accountWarmupScheduleTime ?? '08:00'
     form.accountWarmupModel = data.accountWarmupModel ?? ''
+    form.codexQuotaOverdraftEnabled = data.codexQuotaOverdraftEnabled ?? false
+    form.codexQuotaOverdraftProbeModel = data.codexQuotaOverdraftProbeModel?.trim() || 'gpt-6-astra'
     form.requestIntervalMs = data.requestIntervalMs
     form.openaiSessionBindingTtlHours = data.openaiSessionBindingTtlHours ?? 24
     form.rotationStrategy = data.rotationStrategy
@@ -245,6 +249,16 @@ export function useSettingsForm() {
       toast.warning('预热时间须为 HH:MM，可填写多个逗号分隔时间；启用时必须填写模型')
       return
     }
+    const codexQuotaOverdraftProbeModel = form.codexQuotaOverdraftProbeModel.trim()
+    const hasControlCharacter = [...codexQuotaOverdraftProbeModel]
+      .some(character => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127)
+    if ((form.codexQuotaOverdraftEnabled && !codexQuotaOverdraftProbeModel)
+      || codexQuotaOverdraftProbeModel.length > 128
+      || hasControlCharacter) {
+      toast.warning('透支探测模型须为 1–128 个字符，且不能包含控制字符')
+      return
+    }
+    const effectiveCodexQuotaOverdraftProbeModel = codexQuotaOverdraftProbeModel || 'gpt-6-astra'
     if (minCodexDesktopVersionError.value || minCodexCliVersionError.value) {
       toast.warning('请修正客户端最低版本格式')
       return
@@ -352,6 +366,8 @@ export function useSettingsForm() {
         accountWarmupEnabled: form.accountWarmupEnabled,
         accountWarmupScheduleTime: form.accountWarmupScheduleTime.trim(),
         accountWarmupModel: accountWarmupModel || null,
+        codexQuotaOverdraftEnabled: form.codexQuotaOverdraftEnabled,
+        codexQuotaOverdraftProbeModel: effectiveCodexQuotaOverdraftProbeModel,
         requestIntervalMs,
         openaiSessionBindingTtlHours: ttlHours,
         openaiAccountAffinity: form.openaiAccountAffinity,

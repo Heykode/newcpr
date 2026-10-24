@@ -11,6 +11,7 @@ import { formatRelativeTime } from '@/utils/relative-time'
 import { groupedAccountQuotaWindows, orderedPanelQuotaWindows } from '../../constants'
 import AccountPlanBadge from '../AccountPlanBadge.vue'
 import AccountProfileModal from '../AccountProfileModal/index.vue'
+import AccountQuotaOverdraftStatus from '../AccountQuotaOverdraft/Status.vue'
 import AccountQuotaCredits from './Credits.vue'
 import AccountQuotaPanelEntry from './Entry.vue'
 import AccountResetCredits from './ResetCredits.vue'
@@ -90,10 +91,15 @@ const profileOpen = shallowRef(false)
         :class="mobile ? 'w-full min-w-0' : 'max-sm:w-[calc(100vw-5.5rem)]'"
         :credits="account.quota.credits"
       />
+      <AccountQuotaOverdraftStatus
+        v-if="account.provider === 'openai' && account.quota.overdraft"
+        :state="account.quota.overdraft"
+      />
       <AccountQuotaPanelEntry
         v-for="entry in quotaEntries"
         :key="entry.key"
         :label="entry.label"
+        :overdraft="account.quota.overdraft"
         :windows="entry.windows"
       />
       <p v-if="quotaEntries.length === 0" class="m-0 text-cp-sm font-emphasis text-cp-text-secondary">

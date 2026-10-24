@@ -157,6 +157,37 @@ test('invalid affinity or binding TTL never submits a settings update', async ()
   finally { query.stop() }
 })
 
+test('Codex quota overdraft defaults off and saves the exact probe model', async () => {
+  const query = mountSettings(settings())
+  try {
+    await query.state.loadSettings()
+    assert.equal(query.state.form.codexQuotaOverdraftEnabled, false)
+    assert.equal(query.state.form.codexQuotaOverdraftProbeModel, 'gpt-6-astra')
+    query.state.form.codexQuotaOverdraftEnabled = true
+    query.state.form.codexQuotaOverdraftProbeModel = '  gpt-6-astra-preview  '
+    await query.state.saveSettings()
+    assert.equal(query.requests.at(-1).codexQuotaOverdraftEnabled, true)
+    assert.equal(query.requests.at(-1).codexQuotaOverdraftProbeModel, 'gpt-6-astra-preview')
+  }
+  finally { query.stop() }
+})
+
+test('Codex quota overdraft rejects empty enabled models, control characters and oversized names', async () => {
+  const warnings = []
+  const query = mountSettings(settings(), message => warnings.push(message))
+  try {
+    await query.state.loadSettings()
+    query.state.form.codexQuotaOverdraftEnabled = true
+    for (const invalid of ['', `gpt-6-astra${String.fromCharCode(10)}other`, 'x'.repeat(129)]) {
+      query.state.form.codexQuotaOverdraftProbeModel = invalid
+      await query.state.saveSettings()
+    }
+    assert.equal(query.requests.length, 0)
+    assert.equal(warnings.length, 3)
+  }
+  finally { query.stop() }
+})
+
 function mountSettings(initial, onWarning = assert.fail) {
   let saved = structuredClone(initial)
   const requests = []

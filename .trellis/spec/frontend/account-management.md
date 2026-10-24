@@ -972,3 +972,60 @@ layouts with synthetic fixtures; never enable production accounts for UI QA.
 - Poll only while the dialog and document are visible. Account/pool changes, dismissal and disposal abort pending reads and invalidate their generation.
 - Publish only a complete refresh; keep the previous snapshot on transient refresh failure. Never turn displayed row counts into scheduling capacity.
 - Test bounded pagination under changing totals, duplicate IDs, stale responses, hidden/closed lifecycle, old-server compatibility and mobile overflow.
+
+## Codex Quota Overdraft Presentation
+
+### 1. Scope / Trigger
+
+The runtime overdraft switch and probe model are administrator settings. Account
+rows may project probe state and per-window overdraft statistics for OpenAI OAuth
+accounts. The UI is display/configuration only and never infers schedulability.
+
+### 2. Signatures
+
+- Runtime settings: codexQuotaOverdraftEnabled?: boolean and
+  codexQuotaOverdraftProbeModel?: string | null.
+- Account quota: optional quota.overdraft with status, probe metadata and
+  window records keyed by the existing AccountQuotaWindow.key.
+- Window statistics carry server-formatted request, token and USD cost strings;
+  the browser preserves those exact displays.
+
+### 3. Contracts
+
+- Missing settings load as disabled with probe model gpt-6-astra.
+- Save the trimmed model exactly; never apply aliases or hidden fallback models.
+- Put the status above the existing quota summary and each active overdraft line
+  above its existing 5h/7d progress row. Do not create a separate account column
+  or large detail card.
+- Keep the native quota percentage unchanged, including 100% while overdraft is active.
+- Hide the feature completely for non-OpenAI accounts and absent/null projections.
+- Detailed timestamps and reasons belong in the native title tooltip; table text
+  stays limited to status, attempt progress, model or retry countdown.
+
+### 4. Validation & Error Matrix
+
+- Enabled with an empty model -> block save with a warning.
+- More than 128 characters or any control character -> block save.
+- Disabled with an empty draft -> persist the default probe model.
+- Unknown reason codes -> show the server code in the tooltip, never invent success.
+- Unknown/absent account state -> render no placeholder and preserve existing layout.
+
+### 5. Good / Base / Bad Cases
+
+- Good: a passed 5h/7d account shows one compact status plus exact per-window stats.
+- Base: an old server omits every new field and the current settings/accounts UI is unchanged.
+- Bad: turn 100% into remaining capacity, show stale state on xAI, or move overdraft
+  into the ordinary account status column.
+
+### 6. Tests Required
+
+- runtime-settings.test.mjs: default, exact roundtrip and invalid model inputs.
+- codex-quota-overdraft.test.mjs: status/reason/countdown and window-key mapping.
+- browser/codex-quota-overdraft.mjs: actual settings page, desktop table,
+  mobile cards, missing state, provider isolation, no external requests and overflow.
+
+### 7. Wrong vs Correct
+
+Wrong: duplicate probe details in a new account card and derive active windows from 100%.
+Correct: render only the server projection inside the existing quota components and
+match window statistics by exact stable window key.
