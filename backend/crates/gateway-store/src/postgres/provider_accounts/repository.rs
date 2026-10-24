@@ -150,7 +150,7 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
             case when excel_models_follow_global then (select excel_default_models from runtime_settings where id = 1) else excel_models end as effective_excel_models, concurrency_limit, weight, model_access_json, credential_state,
                     credential_observed_at, quota_access_state, quota_evidence,
                     quota_access_observed_at, quota_reset_at,
-                    coalesce((select status = 'passed' from codex_quota_overdraft_states where account_id = provider_accounts.id and credential_revision = provider_accounts.credential_revision and config_revision = (select config_revision from runtime_settings where id = 1) and exists(select 1 from runtime_settings where id = 1 and codex_quota_overdraft_enabled)), false) as codex_quota_overdraft_passed,
+                    coalesce((select status = 'passed' and cycle_key=coalesce(floor(extract(epoch from provider_accounts.quota_reset_at))::bigint::text,'unknown')||':'||coalesce(floor(extract(epoch from provider_accounts.quota_access_observed_at))::bigint::text,'unknown') from codex_quota_overdraft_states where account_id = provider_accounts.id and credential_revision = provider_accounts.credential_revision and config_revision = (select config_revision from runtime_settings where id = 1) and exists(select 1 from runtime_settings where id = 1 and codex_quota_overdraft_enabled)), false) as codex_quota_overdraft_passed,
                     quota_observed_at, last_error_reason, last_error_message, created_at, updated_at,
                     relogin_count, last_relogin_at
              from provider_accounts
@@ -472,6 +472,10 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
             .observed_at()
             .map(DateTime::<Utc>::from)
             .ok_or_else(|| invalid("quota access change requires observed_at"))?;
+        let exhausted = state.access() == gateway_core::account::QuotaAccessState::Exhausted;
+        let mut transaction = self.pool.begin().await.map_err(|error| {
+            postgres_unavailable("begin provider quota access update").with_source(error)
+        })?;
         let result = sqlx::query(
             "update provider_accounts
              set quota_access_observed_at = $3, quota_access_state = $4,
@@ -486,10 +490,29 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
         .bind(state.access().as_str())
         .bind(state.evidence().map(QuotaEvidence::as_str))
         .bind(state.reset_at().map(DateTime::<Utc>::from))
-        .execute(&self.pool)
+        .execute(&mut *transaction)
         .await
         .map_err(|error| postgres_unavailable("apply provider quota access").with_source(error))?;
-        Ok(result.rows_affected() == 1)
+        let updated = result.rows_affected() == 1;
+        if updated && exhausted {
+            sqlx::query(
+                "update codex_quota_overdraft_states
+                 set status='pending',generation=generation+1,attempts=0,reason_code=null,tested_at=null,retry_at=null,
+                     owner_token=null,lease_until=now(),updated_at=now()
+                 where account_id=$1 and credential_revision=$2 and status in ('passed','recovered')",
+            )
+            .bind(account_id)
+            .bind(to_i64(expected_revision.get())?)
+            .execute(&mut *transaction)
+            .await
+            .map_err(|error| {
+                postgres_unavailable("invalidate quota overdraft pass").with_source(error)
+            })?;
+        }
+        transaction.commit().await.map_err(|error| {
+            postgres_unavailable("commit provider quota access update").with_source(error)
+        })?;
+        Ok(updated)
     }
 
     async fn touch_provider_quota_observation(

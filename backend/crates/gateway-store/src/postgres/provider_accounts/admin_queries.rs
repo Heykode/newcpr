@@ -74,6 +74,7 @@ pub(crate) async fn load_admin_account_page(
                       where overdraft.account_id=a.id
                         and overdraft.credential_revision=a.credential_revision
                         and overdraft.status='passed'
+                        and overdraft.cycle_key=coalesce(floor(extract(epoch from a.quota_reset_at))::bigint::text,'unknown')||':'||coalesce(floor(extract(epoch from a.quota_access_observed_at))::bigint::text,'unknown')
                     ) then 'normal'
                     when a.quota_access_state = 'exhausted' then 'quota_exhausted'
                     when a.id = any($1::text[]) then 'rate_limited'
@@ -140,7 +141,7 @@ pub(crate) async fn load_admin_account_page(
                 a.concurrency_limit, a.weight, a.model_access_json,
                 a.credential_state, a.quota_access_state, a.quota_evidence,
                 a.quota_access_observed_at, a.quota_reset_at, a.last_error_reason,
-                coalesce((select status = 'passed' from codex_quota_overdraft_states where account_id = a.id and credential_revision = a.credential_revision and config_revision = settings.config_revision and settings.codex_quota_overdraft_enabled), false) as codex_quota_overdraft_passed,
+                coalesce((select status = 'passed' and cycle_key=coalesce(floor(extract(epoch from a.quota_reset_at))::bigint::text,'unknown')||':'||coalesce(floor(extract(epoch from a.quota_access_observed_at))::bigint::text,'unknown') from codex_quota_overdraft_states where account_id = a.id and credential_revision = a.credential_revision and config_revision = settings.config_revision and settings.codex_quota_overdraft_enabled), false) as codex_quota_overdraft_passed,
                 a.last_error_message, a.credential_observed_at, a.created_at, a.updated_at,
                 filtered_total.filtered_total,
                 global_summary.summary_total, global_summary.summary_normal,

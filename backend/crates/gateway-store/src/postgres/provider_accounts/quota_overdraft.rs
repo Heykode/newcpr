@@ -19,7 +19,7 @@ pub(super) async fn load(
         return Ok(Default::default());
     }
     let rows = sqlx::query(
-        "select s.account_id,s.status,s.quota_window,s.probe_model,s.attempts,s.attempt_limit,s.reason_code,
+        "select s.account_id,case when s.status='passed' and s.cycle_key<>coalesce(floor(extract(epoch from a.quota_reset_at))::bigint::text,'unknown')||':'||coalesce(floor(extract(epoch from a.quota_access_observed_at))::bigint::text,'unknown') then 'pending' else s.status end as status,s.quota_window,s.probe_model,s.attempts,s.attempt_limit,s.reason_code,
                 s.tested_at,s.retry_at,s.recover_at,s.five_hour_started_at,s.five_hour_recover_at,
                 s.seven_day_started_at,s.seven_day_recover_at
          from codex_quota_overdraft_states s
@@ -163,7 +163,7 @@ pub(super) async fn claim(pool: &PgPool) -> StoreResult<Option<CodexQuotaOverdra
            and (s.account_id is null
              or s.credential_revision<>a.credential_revision
              or s.config_revision<>$1
-             or s.cycle_key<>coalesce(extract(epoch from a.quota_reset_at)::bigint::text,'unknown')||':'||coalesce(extract(epoch from a.quota_access_observed_at)::bigint::text,'unknown')
+             or s.cycle_key<>coalesce(floor(extract(epoch from a.quota_reset_at))::bigint::text,'unknown')||':'||coalesce(floor(extract(epoch from a.quota_access_observed_at))::bigint::text,'unknown')
              or (s.status='inconclusive' and s.attempts<s.attempt_limit and s.retry_at<=now())
              or (s.status='pending' and s.attempts<s.attempt_limit and s.lease_until<=now()))
            and (s.lease_until is null or s.lease_until<=now())

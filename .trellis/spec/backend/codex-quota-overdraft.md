@@ -32,6 +32,10 @@ egress, affinity, Guardian, concurrency or request-spacing facts.
 - A passed state overrides only QuotaExhausted local availability. All other scheduling
   filters and ranking remain authoritative. Failed/inconclusive states create no second
   long cooldown and keep the original quota state.
+- A new explicit QuotaExhausted / UsageLimitExhausted fact atomically reclaims any
+  passed/recovered state to pending before the account can be selected again. Runtime
+  and admin projections also require the state's cycle key to match the current quota
+  reset/access observation. Ordinary transient 429 cooldowns do not reclaim the pass.
 - reset_at makes exhaustion refresh due; it is never recovery proof. A new explicit
   Allowed observation ends the cycle.
 - Probe claims are fenced by account subject, credential revision, config revision,

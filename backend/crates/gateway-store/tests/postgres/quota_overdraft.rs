@@ -1,7 +1,14 @@
+use std::time::SystemTime;
+
 use chrono::{TimeDelta, Utc};
 use gateway_admin::{
     model::codex_quota_overdraft::CodexQuotaOverdraftOutcome, ports::store::AccountStore,
 };
+use gateway_core::account::{
+    CredentialRevision, ProviderAccountId, ProviderAccountStore, QuotaAccessChange, QuotaEvidence,
+    QuotaState,
+};
+use gateway_store::postgres::PgProviderAccountRepository;
 
 use super::{TestDatabase, admin_account_store};
 
@@ -74,6 +81,51 @@ async fn overdraft_claims_are_single_owner_revision_fenced_and_recover_with_quot
         .await
         .unwrap();
     assert_eq!(states["acct_overdraft_test"].status, "passed");
+
+    let repository = PgProviderAccountRepository::new(database.pool.clone());
+    let previous_generation = second.generation;
+    let observed_at = SystemTime::now();
+    repository
+        .apply_quota_access(QuotaAccessChange {
+            account_id: ProviderAccountId::new("acct_overdraft_test").unwrap(),
+            expected_revision: CredentialRevision::new(1).unwrap(),
+            state: QuotaState::exhausted(
+                QuotaEvidence::UsageLimitReached,
+                observed_at,
+                Some(SystemTime::from(reset_at)),
+            ),
+        })
+        .await
+        .unwrap();
+    let account = repository
+        .get_account(&ProviderAccountId::new("acct_overdraft_test").unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!account.codex_quota_overdraft_passed());
+    let states = store
+        .load_codex_quota_overdraft(&["acct_overdraft_test".to_owned()])
+        .await
+        .unwrap();
+    assert_eq!(states["acct_overdraft_test"].status, "pending");
+    let reclaimed = store
+        .claim_codex_quota_overdraft()
+        .await
+        .unwrap()
+        .expect("quota 429 must start a new probe generation");
+    assert_eq!(reclaimed.attempts, 1);
+    assert!(reclaimed.generation > previous_generation);
+    assert!(
+        store
+            .finish_codex_quota_overdraft(
+                &reclaimed,
+                CodexQuotaOverdraftOutcome::Passed {
+                    tested_at: Utc::now(),
+                },
+            )
+            .await
+            .unwrap()
+    );
 
     sqlx::query(
         "update provider_accounts set quota_access_state='allowed',quota_evidence=null,quota_reset_at=null,quota_access_observed_at=now(),updated_at=now() where id='acct_overdraft_test'",
