@@ -549,6 +549,13 @@ impl Provider for CodexProvider {
             PreviousResponseScope::ExternalUnknown
         };
         let continuation_requested = generate.native_continuation_requested();
+        crate::transport::evidence::record_request(
+            &context.trace(),
+            "provider.request.input",
+            generate.protocol_payload().body(),
+            "provider_input",
+            None,
+        );
         let location = context
             .request_tuning()
             .openai_location_override_enabled
@@ -749,11 +756,25 @@ impl Provider for CodexProvider {
         {
             return Err(continuation_replay_required_error("scope_unavailable"));
         }
+        let trace = context.trace();
+        let before = trace
+            .is_enabled()
+            .then(|| crate::transport::evidence::request_state(&upstream_request));
         scope_request_to_account(
             &mut upstream_request,
             lease.installation_id(),
             account_scope,
         );
+        if let Some(before) = before {
+            trace.record_evidence(
+                "provider.request.account_scope",
+                serde_json::json!({
+                    "accountStateReusable": account_scope.can_reuse_account_state(),
+                    "before": before,
+                    "after": crate::transport::evidence::request_state(&upstream_request),
+                }),
+            );
+        }
         if matches!(
             lease.authentication(),
             crate::credential::CodexRuntimeAuthentication::OAuth(_)
@@ -788,7 +809,6 @@ impl Provider for CodexProvider {
                 .unwrap_or(&self.location);
             crate::transport::request::align_structured_location_fields(
                 upstream_request.body_mut(),
-                chrono::Utc::now(),
                 location,
             );
         }

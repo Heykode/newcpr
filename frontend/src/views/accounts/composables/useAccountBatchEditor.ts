@@ -3,10 +3,11 @@ import type { AccountModelAccess, getAccounts } from '@/api'
 import type { RequestOptions } from '@/api/request'
 import type { Excel403Action } from '@/utils/excel-settings'
 import { computed, ref, shallowRef, watch } from 'vue'
-
 import { batchUpdateAccounts } from '@/api'
+
 import { toast } from '@/components/base/BaseToast'
 import { useAsyncAction } from '@/composables/useAsyncAction'
+import { t } from '@/i18n'
 import { accountEgressPatch } from '@/utils/account-egress'
 import { normalizeAccountName } from '@/utils/account-name'
 import { DEFAULT_EXCEL_MODELS, DEFAULT_EXCEL_MODELS_INPUT } from '@/utils/excel-defaults'
@@ -215,7 +216,7 @@ export function useAccountBatchEditor(options: {
     return [...options.selectedIds.value].map((accountId) => {
       const account = selectedAccountsById.get(accountId)
       if (!account)
-        throw new Error(`账号 ${accountId} 的页面数据已失效，请重新选择`)
+        throw new Error(t('accounts.batchEdit.staleAccount', { accountId }))
       return account
     })
   }

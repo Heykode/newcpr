@@ -17,6 +17,10 @@ export function useApiKeyUse(options: {
 }) {
   const showUseKeyModal = shallowRef(false)
   const selectedUseKey: ShallowRef<ApiKeyRow | null> = shallowRef(null)
+  const showImportModal = shallowRef(false)
+  let pendingImport: { apiKey: string, baseUrl: string, providerName: string } | undefined
+  let disposed = false
+  let requestGeneration = 0
 
   const serviceRootUrl = computed(() => resolveServiceRootUrl())
   const openAiBaseUrl = computed(() => `${serviceRootUrl.value}/v1`)
@@ -44,42 +48,65 @@ export function useApiKeyUse(options: {
     if (!options.createdKey.value)
       return
 
-    window.location.href = buildCodexCcSwitchImportDeeplink({
+    pendingImport = {
       apiKey: options.createdKey.value,
       baseUrl: openAiBaseUrl.value,
       providerName: options.createdKeyName.value || 'codex-proxy-rs',
-    })
+    }
+    showImportModal.value = true
   }
 
   async function openUseKeyModal(apiKey: ApiKeyRow) {
+    const current = ++requestGeneration
     const key = await options.revealPlaintextKey(apiKey)
-    if (!key)
+    if (!key || disposed || current !== requestGeneration)
       return
     selectedUseKey.value = { ...apiKey, key }
     showUseKeyModal.value = true
   }
 
   async function importToCcs(apiKey: ApiKeyRow) {
+    const current = ++requestGeneration
     const key = await options.revealPlaintextKey(apiKey)
-    if (!key)
+    if (!key || disposed || current !== requestGeneration)
       return
-    window.location.href = buildCodexCcSwitchImportDeeplink({
+    pendingImport = {
       apiKey: key,
       baseUrl: openAiBaseUrl.value,
       providerName: apiKey.name || apiKey.prefix || 'codex-proxy-rs',
-    })
+    }
+    showImportModal.value = true
+  }
+
+  function confirmImport() {
+    if (!disposed && pendingImport)
+      window.location.href = buildCodexCcSwitchImportDeeplink(pendingImport)
+    pendingImport = undefined
+  }
+
+  function clearImport() {
+    if (!showImportModal.value)
+      pendingImport = undefined
   }
 
   function clearUseKey() {
-    if (!showUseKeyModal.value)
+    if (!showUseKeyModal.value) {
+      requestGeneration += 1
       selectedUseKey.value = null
+    }
   }
 
   onScopeDispose(() => {
+    disposed = true
+    requestGeneration += 1
     selectedUseKey.value = null
+    pendingImport = undefined
   })
 
   return {
+    showImportModal,
+    confirmImport,
+    clearImport,
     showUseKeyModal,
     clearUseKey,
     selectedUseKey,

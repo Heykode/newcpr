@@ -9,6 +9,7 @@ import ts from 'typescript'
 import * as vue from 'vue'
 import { compileScript, parse } from 'vue/compiler-sfc'
 import { renderToString } from 'vue/server-renderer'
+import * as translations from './helpers/i18n.mjs'
 
 const require = createRequire(import.meta.url)
 const sourceRoot = new URL('../src/', import.meta.url)
@@ -17,6 +18,7 @@ const onboardingPath = 'views/accounts/composables/useAccountOnboarding.ts'
 const taskComponentPath = 'views/accounts/components/AccountImportTasks/'
 
 function loader(dependencies = {}, globals = {}) {
+  dependencies = { '@/i18n': translations, ...dependencies }
   const modules = new Map()
   function load(path) {
     const filename = path instanceof URL ? path : new URL(path, sourceRoot)

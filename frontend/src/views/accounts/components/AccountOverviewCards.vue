@@ -7,6 +7,7 @@ import BaseCard from '@/components/base/BaseCard.vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BasePopover from '@/components/base/BasePopover.vue'
 import BaseScrollbar from '@/components/base/BaseScrollbar.vue'
+import { t } from '@/i18n'
 import { formatInteger } from '@/utils/number'
 import { useGroupMonitor } from '../composables/useGroupMonitor'
 import AccountGroupMonitorCard from './AccountGroupMonitorCard.vue'
@@ -51,7 +52,7 @@ const {
       <div>
         <div class="flex items-center justify-between gap-1">
           <p class="m-0 text-cp-xs font-emphasis text-cp-text-secondary">
-            总账号
+            {{ t('accounts.overview.totalAccounts') }}
           </p>
           <BasePopover v-if="groups.length" trigger="click" placement="bottom-start">
             <template #trigger>
@@ -82,7 +83,7 @@ const {
         <strong class="block font-mono text-[22px] leading-7 font-heavy text-cp-text">{{ formatInteger(summary.total) }}</strong>
       </div>
       <p class="m-0 text-cp-xs text-cp-success-text">
-        正常 <strong class="ml-1 font-mono">{{ formatInteger(summary.normal) }}</strong>
+        {{ t('common.status.healthy') }} <strong class="ml-1 font-mono">{{ formatInteger(summary.normal) }}</strong>
       </p>
       <div class="mt-auto flex flex-wrap items-center justify-between gap-1 border-t border-cp-border-secondary pt-1">
         <span class="text-cp-xs text-cp-text-tertiary">分组 {{ displayedCount ? page + 1 : 0 }}/{{ displayedCount ? totalPages : 0 }}</span>

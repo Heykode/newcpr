@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import type { AccountQuotaWindow } from '../../constants'
-
 import { computed } from 'vue'
 
 import BasePopover from '@/components/base/BasePopover.vue'
+
 import { useUiClock } from '@/composables/useUiClock'
+import { t } from '@/i18n'
 import AccountRequestTimeline from '../AccountUsageWindow/AccountRequestTimeline.vue'
 import AccountUsageWindow from '../AccountUsageWindow/index.vue'
 import { quotaWindowCode, resolveAccountUsageWindowPresentation } from '../AccountUsageWindow/presenter'
@@ -133,13 +134,13 @@ const hasQuotaWindow = computed(() => detailItems.value.some(item => !item.local
           <dl class="mt-2.5 grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1.5 text-[10px] leading-4">
             <template v-if="item.local">
               <dt class="font-emphasis text-cp-text-tertiary">
-                统计方式
+                {{ t('accounts.quota.statisticalMethod') }}
               </dt>
               <dd class="m-0 text-right font-mono font-heavy tabular-nums text-cp-text">
-                滚动窗口
+                {{ t('accounts.quota.rollingWindow') }}
               </dd>
               <dt class="font-emphasis text-cp-text-tertiary">
-                统计范围
+                {{ t('accounts.quota.statisticalRange') }}
               </dt>
               <dd class="m-0 truncate text-right font-mono font-emphasis tabular-nums text-cp-text-secondary">
                 {{ item.durationDisplay }}
@@ -147,7 +148,7 @@ const hasQuotaWindow = computed(() => detailItems.value.some(item => !item.local
             </template>
             <template v-else>
               <dt class="font-emphasis text-cp-text-tertiary">
-                窗口消耗
+                {{ t('accounts.quota.windowConsumption') }}
               </dt>
               <dd class="m-0 text-right font-mono font-heavy tabular-nums text-cp-text">
                 {{ item.localUsageDisplay }}
@@ -165,7 +166,7 @@ const hasQuotaWindow = computed(() => detailItems.value.some(item => !item.local
                 </dd>
               </template>
               <dt class="font-emphasis text-cp-text-tertiary">
-                重置时间
+                {{ t('accounts.quota.resetTime') }}
               </dt>
               <dd class="m-0 truncate text-right font-mono font-emphasis tabular-nums text-cp-text-secondary">
                 {{ item.resetAtDisplay }}

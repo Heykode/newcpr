@@ -316,6 +316,12 @@ async fn forward_websocket_response_stream(state: WebSocketStreamForwardState) {
         let documents = match parse_websocket_event_documents(&raw) {
             Ok(documents) => documents,
             Err(error) => {
+                crate::transport::evidence::record_parse_gap(
+                    &trace,
+                    "invalid_event_json",
+                    Some(raw.as_bytes()),
+                    None,
+                );
                 drop(active_interrupt.take());
                 let observation = connection_observation(&websocket, &error);
                 trace.record(

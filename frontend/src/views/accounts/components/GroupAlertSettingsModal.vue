@@ -11,6 +11,7 @@ import BaseNumberInput from '@/components/base/BaseNumberInput.vue'
 import BaseSelect from '@/components/base/BaseSelect.vue'
 import BaseSwitch from '@/components/base/BaseSwitch.vue'
 import { toast } from '@/components/base/BaseToast'
+import { t } from '@/i18n'
 import { errorMessage } from '@/utils/async'
 import { barkLevelHints, barkLevelOptions } from '@/utils/notification-presentation'
 import { monitorMoney, monitorSnapshotExpired } from './group-monitor-presentation'
@@ -182,7 +183,7 @@ watch([open, () => props.group?.id], ([visible]) => {
             <BaseSwitch v-model="form.emailEnabled" label="启用邮件通知" /><BaseButton size="sm" :disabled="!smtpReady || !recipientsText.trim()" :loading="testing === 'email'" @click="test('email')">
               <template #icon>
                 <Send class="size-3.5" />
-              </template>测试
+              </template>{{ t('settings.backup.storage.test') }}
             </BaseButton>
           </div>
           <FormItem class="mt-2" label="收件地址" description="多个地址用英文逗号分隔">
@@ -197,7 +198,7 @@ watch([open, () => props.group?.id], ([visible]) => {
             <BaseSwitch v-model="form.barkEnabled" label="启用 Bark" /><BaseButton size="sm" :disabled="!barkReady" :loading="testing === 'bark'" @click="test('bark')">
               <template #icon>
                 <Send class="size-3.5" />
-              </template>测试
+              </template>{{ t('settings.backup.storage.test') }}
             </BaseButton>
           </div>
           <button class="mt-2 flex w-full items-center gap-2 text-left text-cp-xs text-cp-text-secondary" :aria-expanded="advancedOpen" @click="advancedOpen = !advancedOpen">
@@ -262,9 +263,9 @@ watch([open, () => props.group?.id], ([visible]) => {
     <template #footer>
       <div class="flex justify-end gap-2">
         <BaseButton @click="open = false">
-          取消
+          {{ t('common.actions.cancel') }}
         </BaseButton><BaseButton variant="primary" :loading="saving" :disabled="loading || !loaded || testing !== null" @click="save">
-          保存
+          {{ t('common.actions.save') }}
         </BaseButton>
       </div>
     </template>

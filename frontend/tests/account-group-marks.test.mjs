@@ -8,6 +8,7 @@ import ts from 'typescript'
 import { createSSRApp, defineComponent, h } from 'vue'
 import { compileScript, parse } from 'vue/compiler-sfc'
 import { renderToString } from 'vue/server-renderer'
+import * as translations from './helpers/i18n.mjs'
 
 const require = createRequire(import.meta.url)
 const layoutExports = {}
@@ -33,6 +34,8 @@ const popover = defineComponent({
 runInNewContext(outputText, {
   exports,
   require: (name) => {
+    if (name === '@/i18n')
+      return translations
     if (name === './account-group-layout')
       return layoutExports
     if (name === '@/components/base/BasePopover.vue')

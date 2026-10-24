@@ -2,6 +2,7 @@
 import type { TableColumnOption } from './useTableColumns'
 import { Columns3, RotateCcw } from '@lucide/vue'
 import { nextTick, shallowRef, useId, useTemplateRef, watch } from 'vue'
+import { t } from '@/i18n'
 import BaseButton from '../BaseButton.vue'
 import BaseCheckbox from '../BaseCheckbox.vue'
 import BaseIconButton from '../BaseIconButton.vue'
@@ -119,7 +120,7 @@ watch(open, async (value) => {
         <div class="flex justify-end px-2 pb-2">
           <BaseButton variant="ghost" size="sm" @click="emit('reset')">
             <RotateCcw class="size-3.5" aria-hidden="true" />
-            恢复默认
+            {{ t('appearance.settings.restoreDefault') }}
           </BaseButton>
         </div>
       </div>

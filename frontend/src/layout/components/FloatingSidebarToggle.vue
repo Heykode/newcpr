@@ -18,6 +18,7 @@ import {
   useTemplateRef,
   watch,
 } from 'vue'
+import { t } from '@/i18n'
 
 interface StoredPosition {
   initialized: boolean
@@ -226,7 +227,7 @@ onScopeDispose(() => {
           ? 'scale-95 cursor-grabbing shadow-[0_14px_28px_-20px_var(--cp-color-shadow)]'
           : 'cursor-grab'
       "
-      aria-label="打开侧边栏"
+      :aria-label="t('navigation.sidebar.open')"
       @pointerdown="handlePointerDown"
       @pointerup="handlePointerUp"
       @click="handleClick"

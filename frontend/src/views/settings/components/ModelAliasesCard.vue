@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { GitBranch, Plus, Trash2 } from '@lucide/vue'
-
 import BaseButton from '@/components/base/BaseButton.vue'
+
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
+import { t } from '@/i18n'
 
 withDefaults(defineProps<{
   mappings: Array<{ requestedModel: string, upstreamModel: string }>
@@ -24,7 +25,7 @@ const emit = defineEmits<{
 
 <template>
   <BaseCard
-    title="模型映射"
+    :title="t('settings.modelMapping')"
     description="配置请求模型与上游模型的映射关系"
   >
     <div class="grid gap-4">
@@ -33,7 +34,7 @@ const emit = defineEmits<{
           <template #icon>
             <Plus class="size-4" />
           </template>
-          添加映射
+          {{ t('settings.addMapping') }}
         </BaseButton>
         <span v-if="error" class="text-xs font-emphasis text-cp-error-text">{{ error }}</span>
       </div>
@@ -63,20 +64,20 @@ const emit = defineEmits<{
         >
           <BaseInput
             :model-value="row.requestedModel"
-            placeholder="请求模型"
-            aria-label="请求模型"
+            :placeholder="t('settings.requestModel')"
+            :aria-label="t('settings.requestModel')"
             @update:model-value="emit('updateMapping', index, 'requestedModel', $event)"
           />
           <span class="text-cp-text-quaternary">→</span>
           <BaseInput
             :model-value="row.upstreamModel"
-            placeholder="上游模型"
-            aria-label="上游模型名称"
+            :placeholder="t('settings.upstreamModel')"
+            :aria-label="t('settings.upstreamModelName')"
             @update:model-value="emit('updateMapping', index, 'upstreamModel', $event)"
           />
           <BaseIconButton
             variant="ghost"
-            label="删除映射"
+            :label="t('settings.deleteMapping')"
             @click="emit('removeMapping', index)"
           >
             <Trash2 class="size-4 text-cp-error" />

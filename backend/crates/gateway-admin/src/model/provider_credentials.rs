@@ -792,6 +792,11 @@ pub struct ProviderQuotaRequest {
     pub rolling_usage: Option<AccountUsage>,
 }
 
+pub struct ProviderQuotaReadRequest<'a> {
+    pub account: &'a crate::model::accounts::AccountRecord,
+    pub rolling_usage: Option<&'a AccountUsage>,
+}
+
 /// Provider 已解析的 quota 结果及其不透明差异字段。
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProviderQuota {

@@ -4,11 +4,12 @@ import { AlertTriangle, RefreshCw, TicketCheck } from '@lucide/vue'
 import dayjs from 'dayjs'
 import utc from 'dayjs/plugin/utc'
 import { computed, shallowRef, watch } from 'vue'
-
 import BaseButton from '@/components/base/BaseButton.vue'
+
 import BaseEmpty from '@/components/base/BaseEmpty.vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseModal from '@/components/base/BaseModal/index.vue'
+import { t } from '@/i18n'
 import { useAccountResetCredits } from '../../composables/useAccountResetCredits'
 import AutoReset from './AutoReset.vue'
 import AccountQuotaCredits from './Credits.vue'
@@ -141,7 +142,7 @@ function handleRequestConsume(creditId: string) {
     <div v-if="confirmation" class="grid gap-3">
       <section class="rounded-cp bg-cp-fill-quaternary px-4 py-3.5">
         <p class="m-0 text-cp-xs font-heavy text-cp-text-quaternary">
-          本次使用
+          {{ t('accounts.quotaReset.thisTimeUse') }}
         </p>
         <p class="mt-1.5 mb-0 text-cp-lg leading-snug font-heavy text-cp-text">
           {{ confirmCreditTitle }}
@@ -165,14 +166,14 @@ function handleRequestConsume(creditId: string) {
         <AlertTriangle class="mt-0.5 size-4 shrink-0 text-cp-warning-on-container" />
         <div class="min-w-0 flex-1">
           <p class="m-0 text-cp-sm font-heavy text-cp-warning-on-container">
-            上次操作结果待确认
+            {{ t('accounts.quotaReset.operationUnconfirmed') }}
           </p>
           <p class="mt-1 mb-0 text-cp-xs leading-normal font-emphasis text-cp-text-secondary">
             请继续确认上次重置结果。
           </p>
         </div>
         <BaseButton size="sm" variant="soft" :disabled="loading || consuming || !canRequestConsume" @click="requestConsume">
-          继续确认
+          {{ t('accounts.quotaReset.continueToConfirm') }}
         </BaseButton>
       </section>
 
@@ -194,7 +195,7 @@ function handleRequestConsume(creditId: string) {
           <BaseIconButton
             variant="ghost"
             size="sm"
-            label="刷新主动重置卡"
+            :label="t('accounts.quotaReset.refreshCredits')"
             :loading="loading"
             :disabled="loading || consuming"
             @click="loadCredits"
@@ -242,7 +243,7 @@ function handleRequestConsume(creditId: string) {
                 :aria-label="`使用重置：${credit.title}，${credit.expiry}`"
                 @click="handleRequestConsume(credit.id)"
               >
-                使用重置
+                {{ t('accounts.quotaReset.useReset') }}
               </BaseButton>
             </li>
           </ul>
@@ -262,7 +263,7 @@ function handleRequestConsume(creditId: string) {
     <template v-if="confirmation || showCountOnlyAction" #footer>
       <template v-if="confirmation">
         <BaseButton variant="secondary" :disabled="consuming" @click="cancelConsume">
-          返回
+          {{ t('common.actions.back') }}
         </BaseButton>
         <BaseButton variant="primary" :loading="consuming" :disabled="loading || !canRequestConsume" @click="confirmConsume">
           {{ confirmation.ambiguous ? '再次确认' : '确认重置' }}
@@ -275,7 +276,7 @@ function handleRequestConsume(creditId: string) {
         :disabled="loading || consuming || ambiguous || !canRequestConsume"
         @click="requestConsume"
       >
-        使用一次重置（由上游选择）
+        {{ t('accounts.quotaReset.useResetSelectedByUpstream') }}
       </BaseButton>
     </template>
   </BaseModal>

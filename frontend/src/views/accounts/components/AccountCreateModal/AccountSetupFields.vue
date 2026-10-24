@@ -3,6 +3,7 @@ import type { AccountCreateForm } from './model'
 import type { AccountGroup } from '@/api'
 import AccountTemplatePicker from '@/components/account-templates/AccountTemplatePicker.vue'
 import BaseCheckbox from '@/components/base/BaseCheckbox.vue'
+import { t } from '@/i18n'
 import AccountPurchaseFields from '../AccountPurchaseFields.vue'
 import AccountSettingsFields from '../AccountSettingsFields.vue'
 import AccountProviderChooser from './AccountProviderChooser.vue'
@@ -21,7 +22,7 @@ const form = defineModel<AccountCreateForm>({ required: true })
   <div class="grid gap-6">
     <fieldset class="m-0 min-w-0 border-0 p-0">
       <legend class="mb-3 p-0 text-cp font-medium text-cp-text-secondary">
-        账号平台
+        {{ t('accounts.onboarding.accountPlatform') }}
       </legend>
       <AccountProviderChooser :selected="form.provider" :disabled="disabled" @select="form.provider = $event" />
     </fieldset>

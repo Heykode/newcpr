@@ -2,13 +2,14 @@
 import type { AccountGroup } from '@/api'
 import { Download, Pencil, Search, Settings2, Trash2, Upload } from '@lucide/vue'
 import { computed } from 'vue'
-
 import BaseButton from '@/components/base/BaseButton.vue'
+
 import BaseCheckbox from '@/components/base/BaseCheckbox.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BasePopover from '@/components/base/BasePopover.vue'
 import BaseSelect from '@/components/base/BaseSelect.vue'
 import ProviderFilterSegmented from '@/components/ProviderFilterSegmented.vue'
+import { t } from '@/i18n'
 import { accountStatusFilterOptions } from '../constants'
 
 const props = defineProps<{
@@ -51,14 +52,14 @@ const groupOptions = computed(() => [
   <div
     class="flex w-full flex-col gap-3 xl:flex-row xl:flex-wrap xl:items-center"
     role="group"
-    aria-label="账号筛选与操作"
+    :aria-label="t('accounts.filters.label')"
   >
     <div
       class="grid w-full min-w-0 grid-cols-2 items-center gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_7.75rem] xl:flex xl:w-auto xl:flex-none xl:flex-wrap xl:gap-3"
     >
       <BaseInput
         v-model="search"
-        placeholder="搜索账号"
+        :placeholder="t('accounts.filters.searchLabel')"
         class="col-span-2 min-w-0 sm:col-span-3 xl:w-80 xl:flex-none"
       >
         <template #prefix>
@@ -69,7 +70,7 @@ const groupOptions = computed(() => [
       <BaseSelect
         v-model="status"
         :options="accountStatusFilterOptions"
-        aria-label="按账号状态筛选"
+        :aria-label="t('accounts.filters.statusLabel')"
         class="w-full min-w-0 xl:w-40 xl:shrink-0"
       />
 
@@ -77,7 +78,7 @@ const groupOptions = computed(() => [
         v-model="group"
         :options="groupOptions"
         :disabled="groupsLoading"
-        aria-label="按账号分组筛选"
+        :aria-label="t('accounts.filters.groupLabel')"
         class="w-full min-w-0 xl:w-40 xl:shrink-0"
       />
 
@@ -128,7 +129,7 @@ const groupOptions = computed(() => [
         @click="emit('editSelected')"
       >
         <Pencil class="size-4 text-cp-link" />
-        批量编辑账号
+        {{ t('accounts.filters.editSelected', { count: selectedCount }) }}
       </BaseButton>
       <BaseButton
         v-if="selectedCount > 0"
@@ -138,7 +139,7 @@ const groupOptions = computed(() => [
         @click="emit('deleteSelected')"
       >
         <Trash2 class="size-4" />
-        删除选中 ({{ selectedCount }})
+        {{ t('accounts.filters.deleteSelected', { count: selectedCount }) }}
       </BaseButton>
       <BaseButton
         v-if="selectedCount > 0"
@@ -159,7 +160,7 @@ const groupOptions = computed(() => [
         @click="emit('create')"
       >
         <Upload class="size-4" />
-        导入账号
+        {{ t('accounts.filters.importAccount') }}
       </BaseButton>
     </div>
   </div>

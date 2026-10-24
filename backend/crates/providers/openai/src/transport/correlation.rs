@@ -93,16 +93,6 @@ impl<'a> AccountCorrelation<'a> {
             | "x-client-request-id"
             | "client_request_id"
             | "prompt_cache_key" => "thread",
-            "turn_id"
-            | "turnId"
-            | "parent_turn_id"
-            | "parentTurnId"
-            | "root_turn_id"
-            | "rootTurnId"
-            | "x-client-turn-id"
-            | "x-codex-turn-id"
-            | "x-codex-image-turn-id"
-            | "clientUserMessageId" => "turn",
             "window_id" | "context_window_id" | "contextWindowId" | "codexWindowId"
             | "x-codex-window-id" => {
                 let (thread, generation) = value
@@ -141,14 +131,8 @@ impl<'a> AccountCorrelation<'a> {
     }
 
     pub(crate) fn scope_turn_headers(self, headers: &mut HeaderMap) {
+        // Turn IDs are protocol references, not account tracking identifiers.
         strip_trace_headers(headers);
-        for name in [
-            "x-client-turn-id",
-            "x-codex-turn-id",
-            "x-codex-image-turn-id",
-        ] {
-            self.scope_header(headers, name);
-        }
     }
 
     fn scope_header(self, headers: &mut HeaderMap, name: &'static str) {
@@ -197,13 +181,6 @@ impl<'a> AccountCorrelation<'a> {
             return;
         };
         for item in items {
-            if let Some(Value::Object(metadata)) =
-                item.get_mut("internal_chat_message_metadata_passthrough")
-                && let Some(Value::String(turn)) = metadata.get_mut("turn_id")
-                && let Some(scoped) = self.field("turn_id", turn)
-            {
-                *turn = scoped;
-            }
             self.scope_git_context(item);
         }
     }
@@ -246,7 +223,7 @@ pub(super) fn strip_trace_headers(headers: &mut HeaderMap) {
     }
 }
 
-// Upstream's bounded XML/JSON edit, restricted to the three Git correlation fields.
+// Upstream's bounded XML/JSON edit, restricted to the two Git correlation fields.
 fn rewrite_git_context(text: &mut String, scope: AccountCorrelation<'_>) -> Option<()> {
     let document = roxmltree::Document::parse_with_options(
         text,
@@ -275,7 +252,7 @@ fn rewrite_git_context(text: &mut String, scope: AccountCorrelation<'_>) -> Opti
         return None;
     };
     let mut changed = false;
-    for name in ["sessionId", "threadId", "clientUserMessageId"] {
+    for name in ["sessionId", "threadId"] {
         if let Some(Value::String(raw)) = value.get_mut(name)
             && let Some(mapped) = scope.field(name, raw)
         {

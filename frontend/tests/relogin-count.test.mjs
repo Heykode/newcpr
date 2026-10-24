@@ -1,13 +1,13 @@
 /* eslint-disable test/no-import-node-test -- this regression uses Node's built-in runner. */
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { createRequire } from 'node:module'
 import { test } from 'node:test'
 import { runInNewContext } from 'node:vm'
 import ts from 'typescript'
 import { createSSRApp } from 'vue'
 import { compileScript, parse } from 'vue/compiler-sfc'
 import { renderToString } from 'vue/server-renderer'
+import { createTestRequire as createRequire } from './helpers/i18n.mjs'
 
 const require = createRequire(import.meta.url)
 function load(filename, dependencies = {}, source = readFileSync(filename, 'utf8')) {

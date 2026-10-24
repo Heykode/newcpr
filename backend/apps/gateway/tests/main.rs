@@ -153,6 +153,21 @@ fn is_audited_private_test(member: &str, relative: &Path, item: &Item) -> bool {
         return false;
     }
     match (member, relative.to_str(), item) {
+        // Server-relative presentation and raw Live handshakes stay private.
+        ("crates/gateway-api", Some("time.rs"), Item::Mod(module)) => {
+            module.ident == "tests"
+                && module.content.is_some()
+                && matches!(module.vis, syn::Visibility::Inherited)
+        }
+        (
+            "crates/providers/openai",
+            Some("transport/websocket/handshake.rs"),
+            Item::Mod(module),
+        ) => {
+            module.ident == "live_header_tests"
+                && module.content.is_some()
+                && matches!(module.vis, syn::Visibility::Inherited)
+        }
         // Driver credential encoding and scheduler clocks stay private to their owners.
         ("crates/gateway-store", Some("config.rs"), Item::Mod(module)) => {
             module.ident == "connection_password_tests"

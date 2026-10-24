@@ -2,6 +2,7 @@
 import type { AccountHealthBucket } from '@/api'
 import { computed, shallowRef } from 'vue'
 import BasePopover from '@/components/base/BasePopover.vue'
+import { t } from '@/i18n'
 
 const props = withDefaults(defineProps<{
   buckets?: AccountHealthBucket[]
@@ -109,7 +110,7 @@ function formatTime(value: Date) {
             </div>
             <dl class="mt-2 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-cp-xs">
               <dt class="text-cp-text-tertiary">
-                成功率
+                {{ t('accounts.usage.successRate') }}
               </dt>
               <dd class="m-0 text-right font-mono tabular-nums text-cp-text">
                 {{ bucket.successRateDisplay }}
@@ -121,25 +122,25 @@ function formatTime(value: Date) {
                 {{ bucket.sampleCount }}
               </dd>
               <dt class="text-cp-text-tertiary">
-                成功
+                {{ t('common.status.success') }}
               </dt>
               <dd class="m-0 text-right font-mono tabular-nums text-cp-success-text">
                 {{ bucket.successCount }}
               </dd>
               <dt class="text-cp-text-tertiary">
-                失败
+                {{ t('common.status.failed') }}
               </dt>
               <dd class="m-0 text-right font-mono tabular-nums text-cp-error-text">
                 {{ bucket.errorCount }}
               </dd>
               <dt class="text-cp-text-tertiary" title="取消或未正常完成的请求，不计入失败">
-                未完成
+                {{ t('usage.health.notCompleted') }}
               </dt>
               <dd class="m-0 text-right font-mono tabular-nums text-cp-orange-text">
                 {{ bucket.nonCompletionCount }}
               </dd>
               <dt class="text-cp-text-tertiary">
-                进行中
+                {{ t('usage.request.inProgress') }}
               </dt>
               <dd class="m-0 text-right font-mono tabular-nums text-cp-info-text">
                 {{ bucket.inFlightCount }}

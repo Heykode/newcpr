@@ -5,6 +5,7 @@ import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
 import BaseForm from '@/components/base/BaseForm/index.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseSwitch from '@/components/base/BaseSwitch.vue'
+import { t } from '@/i18n'
 
 const enabled = defineModel<boolean>('enabled', { required: true })
 const scheduleTime = defineModel<string>('scheduleTime', { required: true })
@@ -41,15 +42,15 @@ const model = defineModel<string>('model', { required: true })
       </BaseFormItem>
 
       <BaseFormItem
-        label="预激活模型"
-        description="启用时必填，请填写账号可用的模型"
+        :label="t('settings.warmup.modelLabel')"
+        :description="t('settings.warmup.modelHelp')"
         :required="enabled"
       >
         <BaseInput
           v-model="model"
           :disabled="!enabled"
-          aria-label="预激活模型"
-          placeholder="请输入模型名称"
+          :aria-label="t('settings.warmup.modelLabel')"
+          :placeholder="t('settings.warmup.modelPlaceholder')"
         >
           <template #prefix>
             <Sparkles class="size-4" />

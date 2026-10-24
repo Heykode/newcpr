@@ -1,13 +1,14 @@
 <script setup lang="ts">
 import type { AccountRow } from '../constants'
-
 import type { AccountGroup, AccountModelAccess } from '@/api'
+
 import type { AccountEgressReadState } from '@/utils/account-egress'
 import type { Excel403Action } from '@/utils/excel-settings'
-
 import BaseButton from '@/components/base/BaseButton.vue'
+
 import BaseModal from '@/components/base/BaseModal/index.vue'
 import ProviderIconGroup from '@/components/ProviderIconGroup.vue'
+import { t } from '@/i18n'
 import { formatDateTime } from '@/utils/date'
 import { DEFAULT_EXCEL_MODELS_INPUT } from '@/utils/excel-defaults'
 import { excelRecoveryResultLabel } from '@/utils/excel-settings'
@@ -54,7 +55,7 @@ const egressMode = defineModel<string>('egressMode', { required: true })
 <template>
   <BaseModal
     v-model="open"
-    title="编辑账号"
+    :title="t('accounts.editor.title')"
     description="查看账号信息，并调整调度与所属分组。"
     size="md"
     :dismissible="!saving"

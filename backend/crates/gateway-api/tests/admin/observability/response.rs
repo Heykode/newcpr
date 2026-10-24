@@ -41,6 +41,7 @@ fn dashboard_wire_profiles_should_keep_provider_specific_attributes() {
         },
         user_agent: "grok-shell/0.2.106 (linux; x86_64)".to_owned(),
         attributes: vec![DashboardWireAttributeView {
+            key: "client_identifier",
             label: "客户端标识".to_owned(),
             value: "grok-shell".to_owned(),
         }],
@@ -76,7 +77,11 @@ fn dashboard_account_usage_should_keep_daily_request_timeline() {
         usage_window: None,
         metric_label: "次数".to_owned(),
         metric_value: "3".to_owned(),
+        metric: "requests",
+        metric_value_raw: Some(3),
         last_used: "刚刚".to_owned(),
+        last_used_at: None,
+        last_used_relative: Some(gateway_api::RelativeTimeView::JustNow),
     })
     .expect("dashboard account usage");
 

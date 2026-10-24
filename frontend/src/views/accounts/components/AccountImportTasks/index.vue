@@ -6,6 +6,7 @@ import BaseButton from '@/components/base/BaseButton.vue'
 import BaseEmpty from '@/components/base/BaseEmpty.vue'
 import BaseModal from '@/components/base/BaseModal/index.vue'
 import BaseSelect from '@/components/base/BaseSelect.vue'
+import { t } from '@/i18n'
 import { taskLabel, taskTime } from './presenter'
 import TaskDetail from './TaskDetail.vue'
 
@@ -28,7 +29,7 @@ const taskOptions = computed(() => props.tasks.map(task => ({
 </script>
 
 <template>
-  <BaseModal v-model="open" title="导入任务" size="lg">
+  <BaseModal v-model="open" :title="t('accounts.filters.importTasks')" size="lg">
     <div v-if="error" role="alert" class="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-cp bg-cp-warning-container p-3 text-xs text-cp-warning-on-container">
       <span class="min-w-0 flex-1 wrap-anywhere">进度暂未更新：{{ error }}</span>
       <BaseButton size="sm" :loading="loading" @click="emit('refresh')">
@@ -46,7 +47,7 @@ const taskOptions = computed(() => props.tasks.map(task => ({
           :model-value="selectedId"
           :options="taskOptions"
           size="sm"
-          aria-label="切换导入任务"
+          :aria-label="t('accounts.importTasks.switchImportTasks')"
           class="w-full min-w-0"
           @update:model-value="emit('select', $event)"
         />
@@ -59,7 +60,7 @@ const taskOptions = computed(() => props.tasks.map(task => ({
     </p>
     <template #footer>
       <BaseButton @click="open = false">
-        关闭
+        {{ t('common.actions.close') }}
       </BaseButton>
     </template>
   </BaseModal>

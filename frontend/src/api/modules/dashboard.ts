@@ -122,7 +122,7 @@ export interface DashboardWireProfile {
     terminal: string
   }
   userAgent: string
-  attributes: Array<{ label: string, value: string }>
+  attributes: Array<{ key?: string, label: string, value: string }>
   verifiedAt?: string
   release?: {
     status: 'unchecked' | 'aligned' | 'review_required' | 'check_failed'
@@ -152,7 +152,11 @@ export interface DashboardAccountUsage {
   usageWindow: AccountQuotaWindow | null
   metricLabel: string
   metricValue: string
+  metric?: 'tokens' | 'requests'
+  metricValueRaw?: number | null
   lastUsed: string
+  lastUsedAt?: string | null
+  lastUsedRelative?: import('../time').RelativeTimeView | null
 }
 
 export interface DashboardPoolSummary {

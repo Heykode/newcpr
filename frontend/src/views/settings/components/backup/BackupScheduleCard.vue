@@ -1,13 +1,14 @@
 <script setup lang="ts">
 import { CalendarClock, Save } from '@lucide/vue'
-
 import BaseButton from '@/components/base/BaseButton.vue'
+
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseCheckbox from '@/components/base/BaseCheckbox.vue'
 import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
 import BaseForm from '@/components/base/BaseForm/index.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseSelect from '@/components/base/BaseSelect.vue'
+import { t } from '@/i18n'
 
 interface ScheduleForm {
   scheduleEnabled: boolean
@@ -58,7 +59,7 @@ const TIMEZONE_OPTIONS = [
           <BaseCheckbox
             v-model="schedule.scheduleEnabled"
             :disabled="!storageReady"
-            label="启用定时备份"
+            :label="t('settings.backup.schedule.enableScheduledBackup')"
             show-label
           />
         </div>
@@ -68,10 +69,10 @@ const TIMEZONE_OPTIONS = [
         </BaseFormItem>
 
         <BaseFormItem
-          label="Cron 表达式"
-          description="5 段格式，例如 0 2 * * * 表示每天凌晨 2 点"
+          :label="t('settings.backup.schedule.cronExpression')"
+          :description="t('settings.backup.schedule.cronHelp')"
         >
-          <BaseInput v-model="schedule.cronExpression" aria-label="Cron 表达式">
+          <BaseInput v-model="schedule.cronExpression" :aria-label="t('settings.backup.schedule.cronExpression')">
             <template #prefix>
               <CalendarClock class="size-4" />
             </template>

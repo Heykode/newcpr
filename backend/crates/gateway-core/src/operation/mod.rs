@@ -735,9 +735,7 @@ impl ProviderHttpRequest {
                     let value = header.value.as_ref();
                     (!name.is_empty()
                         && name.len() <= 128
-                        && name
-                            .iter()
-                            .all(|byte| byte.is_ascii_alphanumeric() || *byte == b'-')
+                        && http::HeaderName::from_bytes(name).is_ok()
                         && value.len() <= 8 * 1024
                         && !value.iter().any(|byte| matches!(byte, b'\r' | b'\n' | 0)))
                     .then_some(())

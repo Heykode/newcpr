@@ -84,16 +84,94 @@ http.interceptors.request.use(async (config) => {
 })
 
 http.interceptors.response.use(
-  (response: AxiosResponse<unknown>) => {
+  async (response: AxiosResponse<unknown>) => {
+    await decodeBlobError(response)
+    assertSessionGeneration((response.config as RequestConfig).sessionGeneration)
     const error = normalizeApiResponseError(response)
     if (error)
       return rejectRequest(error, response.config)
     return response
   },
-  (error: AxiosError<unknown>) => {
+  async (error: AxiosError<unknown>) => {
+    if (error.response)
+      await decodeBlobError(error.response)
     return rejectRequest(normalizeApiError(error), error.config)
   },
 )
+
+export function currentSessionGeneration() {
+  return generation
+}
+
+export function assertSessionGeneration(expected?: number) {
+  if (expected !== undefined && expected !== generation)
+    throw new axios.CanceledError('Session changed')
+}
+
+async function recoverSession(expectedGeneration: number, recoveryCount: number) {
+  assertSessionGeneration(expectedGeneration)
+  if (!sessionRecoveryHandler)
+    return false
+  if (!recovery && recoveryCount === successfulRecoveries) {
+    const pending = sessionRecoveryHandler().then((authenticated) => {
+      if (generation !== expectedGeneration)
+        return false
+      if (authenticated)
+        successfulRecoveries += 1
+      return authenticated
+    }).finally(() => {
+      if (recovery === pending)
+        recovery = undefined
+    })
+    recovery = pending
+  }
+  const authenticated = await (recovery ?? (recoveryCount !== successfulRecoveries))
+  assertSessionGeneration(expectedGeneration)
+  return authenticated
+}
+
+// A rejected authentication check is safe to replay; an accepted streaming POST is not.
+export async function sessionFetch(url: string, init: RequestInit): Promise<Response> {
+  const expected = generation
+  const recoveryCount = successfulRecoveries
+  if (recovery)
+    await recovery
+  assertSessionGeneration(expected)
+  let response = await fetch(url, { ...init, credentials: 'include' })
+  try {
+    assertSessionGeneration(expected)
+    if (response.status === 401) {
+      const body: unknown = await response.clone().json().catch(() => null)
+      if (body && typeof body === 'object' && 'code' in body && body.code === 40101) {
+        if (await recoverSession(expected, recoveryCount)) {
+          await response.body?.cancel()
+          init.signal?.throwIfAborted()
+          response = await fetch(url, { ...init, credentials: 'include' })
+          assertSessionGeneration(expected)
+        }
+        if (response.status === 401)
+          handleUnauthorizedOnce()
+      }
+    }
+    return response
+  }
+  catch (error) {
+    await response.body?.cancel().catch(() => {})
+    throw error
+  }
+}
+
+async function decodeBlobError(response: AxiosResponse<unknown>) {
+  if (response.data instanceof Blob && response.data.size <= 64 * 1024
+    && response.data.type.includes('json')) {
+    try {
+      response.data = JSON.parse(await response.data.text())
+    }
+    catch {
+      // Keep malformed payloads for the normal HTTP error fallback.
+    }
+  }
+}
 
 async function rejectRequest(error: ApiError, config?: RequestConfig): Promise<never | AxiosResponse<unknown>> {
   if (error.kind === 'cancelled' || config?.signal?.aborted)
@@ -104,21 +182,7 @@ async function rejectRequest(error: ApiError, config?: RequestConfig): Promise<n
   const sessionExpired = error.status === 401 && error.code === 40101 && !isAuthenticationRequest(config?.url)
   if (sessionExpired && config && !config.authRetried && sessionRecoveryHandler) {
     try {
-      if (!recovery && config.recoveryCount === successfulRecoveries) {
-        const expectedGeneration = generation
-        const pending = sessionRecoveryHandler().then((authenticated) => {
-          if (generation !== expectedGeneration)
-            return false
-          if (authenticated)
-            successfulRecoveries += 1
-          return authenticated
-        }).finally(() => {
-          if (recovery === pending)
-            recovery = undefined
-        })
-        recovery = pending
-      }
-      const authenticated = await (recovery ?? (config.recoveryCount !== successfulRecoveries))
+      const authenticated = await recoverSession(config.sessionGeneration ?? generation, config.recoveryCount ?? successfulRecoveries)
       if (authenticated && !config.signal?.aborted && config.sessionGeneration === generation)
         return http.request({ ...config, authRetried: true } as RequestConfig)
     }

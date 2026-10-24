@@ -2,6 +2,7 @@
 import { Check, ChevronDown } from '@lucide/vue'
 import { clamp } from 'es-toolkit'
 import { computed, shallowRef, useTemplateRef, watch } from 'vue'
+import { t } from '@/i18n'
 
 import { normalizeHexColor } from '@/utils/color'
 import BaseButton from '../BaseButton.vue'
@@ -402,7 +403,7 @@ function normalizedInputColor() {
           </p>
         </div>
         <BaseButton size="md" variant="secondary" :disabled="!inputValid" @click="confirm">
-          确定
+          {{ t('common.actions.confirm') }}
         </BaseButton>
       </div>
     </div>

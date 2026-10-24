@@ -7,13 +7,14 @@ import BaseButton from '@/components/base/BaseButton.vue'
 import BaseScrollbar from '@/components/base/BaseScrollbar.vue'
 import { useAsyncAction } from '@/composables/useAsyncAction'
 import { useDownload } from '@/composables/useDownload'
+import { t } from '@/i18n'
 import { useRequestDiagnostics } from '../composables/useRequestDiagnostics'
 import RequestCaptureDetails from './RequestCaptureDetails.vue'
 import RequestTransportFailure from './RequestTransportFailure.vue'
 import UsageDetailCodePanel from './UsageDetailCodePanel.vue'
 
 const props = withDefaults(defineProps<{ requestId: string, metadata?: OpsErrorMetadata, errorRecord?: OpsError, active?: boolean }>(), { active: true })
-const { downloadJson } = useDownload()
+const { downloadBlob } = useDownload()
 const { loading: exporting, run: runExport } = useAsyncAction()
 const { selectedId, detail, loading, error, refresh } = useRequestDiagnostics(() => props.requestId, () => props.active)
 const trace = computed(() => detail.value?.trace)
@@ -29,7 +30,7 @@ function download() {
     return
   const id = selectedId.value
   return runExport(
-    async () => downloadJson(await getRequestDiagnosticsBundle({ requestId: id }), `diagnostics-${id.replace(/[^\w-]/g, '_')}.json`),
+    async () => downloadBlob(await getRequestDiagnosticsBundle({ requestId: id }), `diagnostics-${id.replace(/[^\w-]/g, '_')}.zip`),
     { errorText: '导出诊断包失败', minimumMs: 400 },
   )
 }
@@ -49,7 +50,7 @@ function download() {
           <template #icon>
             <RefreshCw :size="14" />
           </template>
-          刷新
+          {{ t('common.actions.refresh') }}
         </BaseButton>
         <BaseButton variant="soft" size="sm" :loading="exporting" :disabled="!canExport" @click="download">
           <template #icon>

@@ -8,6 +8,6 @@ mod selection;
 mod stream;
 mod trace;
 
-pub use capture::{body_fingerprint, diagnostic_headers, diagnostic_json};
+pub use capture::{body_fingerprint, diagnostic_headers, diagnostic_json, json_fingerprint};
 pub use stream::{StreamCapture, StreamFormat};
 pub use trace::TraceContext;

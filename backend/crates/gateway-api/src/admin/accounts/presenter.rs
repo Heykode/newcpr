@@ -358,6 +358,9 @@ pub(super) fn account_quota_view(
     (
         AccountQuotaView {
             refreshed_at_display,
+            refreshed_at_relative: quota
+                .observed_at
+                .map(|at| crate::time::relative_view(at, now, timezone)),
             limit_reached: quota.limit_reached,
             rate_limited_until,
             windows,
@@ -661,20 +664,7 @@ pub(super) fn relative_time_with_timezone(
     now: DateTime<Utc>,
     timezone: DeploymentTimeZone,
 ) -> String {
-    let elapsed = now.signed_duration_since(value);
-    if elapsed.num_seconds() < 0 {
-        return timezone_datetime(&value, timezone);
-    }
-    if elapsed.num_seconds() < 60 {
-        return "刚刚".to_owned();
-    }
-    if elapsed.num_minutes() < 60 {
-        return format!("{} 分钟前", elapsed.num_minutes());
-    }
-    if elapsed.num_hours() < 24 {
-        return format!("{} 小时前", elapsed.num_hours());
-    }
-    format!("{} 天前", elapsed.num_days())
+    crate::time::relative_view(value, now, timezone).legacy_display()
 }
 
 pub(super) fn timezone_rfc3339(value: &DateTime<Utc>, timezone: DeploymentTimeZone) -> String {

@@ -1,13 +1,14 @@
 <script setup lang="ts">
 import type { OpsError } from '@/api'
-
 import { Download } from '@lucide/vue'
+
 import { computed } from 'vue'
 import { getRequestDiagnosticsBundle } from '@/api'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseModal from '@/components/base/BaseModal/index.vue'
 import { useAsyncAction } from '@/composables/useAsyncAction'
 import { useDownload } from '@/composables/useDownload'
+import { t } from '@/i18n'
 import { failureClassText } from '../utils/opsErrorPresentation'
 import RequestDiagnosticsPanel from './RequestDiagnosticsPanel.vue'
 import UsageDetailCodePanel from './UsageDetailCodePanel.vue'
@@ -26,7 +27,7 @@ const props = defineProps<{
 }>()
 
 const open = defineModel<boolean>({ default: false })
-const { downloadJson } = useDownload()
+const { downloadBlob } = useDownload()
 const { loading: exporting, run: runExport } = useAsyncAction()
 
 function download() {
@@ -34,7 +35,7 @@ function download() {
   if (!id || exporting.value)
     return
   return runExport(
-    async () => downloadJson(await getRequestDiagnosticsBundle({ errorId: id }), `diagnostics-${id.replace(/[^\w-]/g, '_')}.json`),
+    async () => downloadBlob(await getRequestDiagnosticsBundle({ errorId: id }), `diagnostics-${id.replace(/[^\w-]/g, '_')}.zip`),
     { errorText: '导出诊断包失败', minimumMs: 400 },
   )
 }
@@ -151,7 +152,7 @@ function visibleFields(items: DetailField[]) {
       <RequestDiagnosticsPanel v-if="record.requestId" class="mb-3" :request-id="record.requestId" :metadata="record.metadata" :error-record="record" :active="open" />
       <section :class="panelClass">
         <h3 :class="panelTitleClass">
-          错误
+          {{ t('usage.filters.error') }}
         </h3>
         <UsageDetailFieldGrid :items="errorFields" />
         <div v-if="record.message" class="mt-3">
@@ -206,7 +207,7 @@ function visibleFields(items: DetailField[]) {
         导出诊断包
       </BaseButton>
       <BaseButton variant="primary" @click="open = false">
-        关闭
+        {{ t('common.actions.close') }}
       </BaseButton>
     </template>
   </BaseModal>

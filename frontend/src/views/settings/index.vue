@@ -2,11 +2,12 @@
 import { Save } from '@lucide/vue'
 import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-
 import BaseButton from '@/components/base/BaseButton.vue'
+
 import BaseConfirmModal from '@/components/base/BaseConfirmModal.vue'
 import BasePageHeader from '@/components/base/BasePageHeader.vue'
 import BaseSegmented from '@/components/base/BaseSegmented.vue'
+import { t } from '@/i18n'
 
 import AccountWarmupCard from './components/AccountWarmupCard.vue'
 import AdminApiKeyCard from './components/AdminApiKeyCard.vue'
@@ -95,12 +96,12 @@ watch(
 
 <template>
   <div class="w-full">
-    <BasePageHeader title="系统设置" description="管理运行参数、管理员凭据与备份配置" />
+    <BasePageHeader :title="t('navigation.settings')" description="管理运行参数、管理员凭据与备份配置" />
 
     <div class="mt-4 flex min-h-cp-control flex-wrap items-center justify-between gap-3">
       <BaseSegmented
         :model-value="section"
-        label="设置分区"
+        :label="t('settings.page.sectionsLabel')"
         class="bg-(--cp-input-bg)!"
         :options="[
           { label: '运行设置', value: 'runtime' },
@@ -191,15 +192,15 @@ watch(
 
         <BaseConfirmModal
           v-model="showDeleteAdminKeyModal"
-          title="删除管理员 API Key"
-          description="删除后外部系统将无法继续使用该 Key 调用管理接口"
+          :title="t('settings.access.deleteAdminApiKey')"
+          :description="t('settings.access.deleteKeyDescription')"
           destructive
-          confirm-text="确认删除"
+          :confirm-text="t('common.actions.delete')"
           :loading="adminKeyDeleting"
           @confirm="handleDeleteAdminApiKey"
         >
           <p class="m-0">
-            确定要删除当前管理员 API Key 吗？此操作会立即生效
+            {{ t('settings.access.areYouSureYouWantToDelete') }}
           </p>
         </BaseConfirmModal>
       </div>

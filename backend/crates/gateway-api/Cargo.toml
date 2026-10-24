@@ -34,6 +34,7 @@ tracing = "0.1.44"
 url = "2.5.8"
 uuid = { version = "1.23.3", features = ["v7", "serde"] }
 zstd = "=0.14.0"
+zip = { version = "9.0.4", default-features = false, features = ["deflate-flate2"] }
 
 [dev-dependencies]
 async-trait = "0.1.89"

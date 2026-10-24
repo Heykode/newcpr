@@ -93,6 +93,7 @@ pub(crate) fn queued_record(seed: &BackupRecordSeed) -> BackupRecord {
 pub(crate) struct FakeBackupRepository {
     settings: Mutex<BackupSettings>,
     records: Mutex<Vec<BackupRecord>>,
+    pub(crate) audits: Mutex<Vec<String>>,
 }
 
 impl FakeBackupRepository {
@@ -100,6 +101,7 @@ impl FakeBackupRepository {
         Self {
             settings: Mutex::new(settings),
             records: Mutex::new(Vec::new()),
+            audits: Mutex::new(Vec::new()),
         }
     }
 
@@ -191,7 +193,11 @@ impl BackupRepository for FakeBackupRepository {
         Ok(true)
     }
 
-    async fn insert_backup_record(&self, seed: BackupRecordSeed) -> AdminStoreResult<BackupRecord> {
+    async fn insert_backup_record(
+        &self,
+        seed: BackupRecordSeed,
+        _context: &MutationContext,
+    ) -> AdminStoreResult<BackupRecord> {
         let mut records = self.records.lock().expect("records");
         if records.iter().any(|record| record.status.is_active()) {
             return Err(AdminStoreError::new(
@@ -202,6 +208,10 @@ impl BackupRepository for FakeBackupRepository {
         }
         let record = queued_record(&seed);
         records.push(record.clone());
+        self.audits
+            .lock()
+            .expect("audits")
+            .push("backup.created".to_owned());
         Ok(record)
     }
 
@@ -366,6 +376,7 @@ impl BackupRepository for FakeBackupRepository {
         &self,
         id: &str,
         now: DateTime<Utc>,
+        context: Option<&MutationContext>,
     ) -> AdminStoreResult<Option<BackupRecord>> {
         let mut records = self.records.lock().expect("records");
         let Some(record) = records
@@ -376,6 +387,12 @@ impl BackupRepository for FakeBackupRepository {
         };
         record.status = BackupStatus::Deleting;
         record.updated_at = now;
+        if context.is_some() {
+            self.audits
+                .lock()
+                .expect("audits")
+                .push("backup.delete_requested".to_owned());
+        }
         Ok(Some(record.clone()))
     }
 

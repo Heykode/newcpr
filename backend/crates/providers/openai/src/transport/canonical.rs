@@ -42,6 +42,7 @@ const CONTENTS_PER_OUTPUT: u32 = 1_024;
 /// 上游 wire 是客户端可见的事实来源；canonical facts 只用于观测、亲和和计费。
 /// 因而未知或形状变化的 JSON event 只能放弃 canonical 投影，不能截断 wire 流。
 pub struct CodexCanonicalDecoder {
+    trace: gateway_core::diagnostics::TraceContext,
     decoder: SseEventDecoder,
     upstream_model: String,
     response_id: Option<String>,
@@ -147,6 +148,7 @@ impl CodexCanonicalDecoder {
     /// 使用路由后最终发往上游的请求模型计价，并在响应缺少模型时用于canonical兜底。
     pub fn new(upstream_model: impl Into<String>) -> Self {
         Self {
+            trace: Default::default(),
             decoder: SseEventDecoder::default(),
             upstream_model: upstream_model.into(),
             response_id: None,
@@ -167,6 +169,11 @@ impl CodexCanonicalDecoder {
             upstream_timing_metrics: ResponseTimingMetrics::default(),
             raw_sse_passthrough: false,
         }
+    }
+
+    pub(crate) fn with_trace(mut self, trace: gateway_core::diagnostics::TraceContext) -> Self {
+        self.trace = trace;
+        self
     }
 
     /// 让 HTTP SSE 上游帧以原始字节随 wire event 向下游传递。
@@ -337,6 +344,12 @@ impl CodexCanonicalDecoder {
         let value = match serde_json::from_str::<Value>(&event.data) {
             Ok(value) => value,
             Err(_) => {
+                super::evidence::record_parse_gap(
+                    &self.trace,
+                    "invalid_event_json",
+                    Some(event.data.as_bytes()),
+                    event.event.as_deref(),
+                );
                 let wire = match raw_sse_frame {
                     Some(RawResponseFrame::Sse(raw)) => {
                         ProtocolWireEvent::raw_sse("openai", raw).ok()
@@ -356,6 +369,11 @@ impl CodexCanonicalDecoder {
             .event
             .as_deref()
             .or_else(|| value.get("type").and_then(Value::as_str));
+        if let Some(kind @ ("response.completed" | "response.incomplete" | "response.failed")) =
+            event_type
+        {
+            super::evidence::record_response_usage(&self.trace, kind, &value);
+        }
         if event_type == Some("codex.rate_limits") {
             // HTTP transport has already projected this control frame into local quota facts.
             // It contributes response timing, but must never become client output.

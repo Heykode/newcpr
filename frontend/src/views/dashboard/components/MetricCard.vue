@@ -1,13 +1,14 @@
 <script setup lang="ts">
 import type { EChartsOption } from 'echarts'
 import type { MetricCardView, MetricTone } from '../composables/useDashboard'
-
 import { computed } from 'vue'
+
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseMotionIcon from '@/components/base/BaseMotionIcon.vue'
-
 import BaseChart from '@/components/charts/BaseChart.vue'
+
 import { useThemeColor } from '@/composables/useThemeColor'
+import { t } from '@/i18n'
 import { metricToneIconClasses, metricToneValueClasses } from '../constants'
 import AnimatedMetricValue from './AnimatedMetricValue.vue'
 
@@ -89,7 +90,7 @@ const sparklineOption = computed<EChartsOption | null>(() => {
       </strong>
       <i
         v-if="metric.trend && metric.trend.direction !== 'flat'"
-        title="较昨日"
+        :title="t('dashboard.comparedWithYesterday')"
         class="mb-1.25 block size-3"
         :class="[
           trendToneClasses[metric.trend.tone],

@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import type { getApiKeys } from '@/api'
 import { MoreHorizontal, Pencil, Power, RotateCcw, Terminal, Trash2, Upload } from '@lucide/vue'
-
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
+
 import BaseMenuItem from '@/components/base/BaseMenuItem.vue'
 import BasePopover from '@/components/base/BasePopover.vue'
+import { t } from '@/i18n'
 
 type ApiKeyRow = Awaited<ReturnType<typeof getApiKeys>>['items'][number]
 
@@ -30,7 +31,7 @@ const emit = defineEmits<{
     <BaseIconButton
       variant="ghost"
       size="sm"
-      label="编辑密钥"
+      :label="t('keys.actions.editKey')"
       @click.stop="emit('edit', apiKey)"
     >
       <Pencil class="size-3.5 text-cp-link" />
@@ -38,7 +39,7 @@ const emit = defineEmits<{
     <BaseIconButton
       variant="ghost"
       size="sm"
-      label="使用密钥"
+      :label="t('keys.configuration.title')"
       :loading="revealing"
       :disabled="revealing"
       @click.stop="emit('use', apiKey)"

@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { RotateCcw } from '@lucide/vue'
-
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
+
 import BaseInput from '@/components/base/BaseInput.vue'
+import { t } from '@/i18n'
 
 defineProps<{
   label: string
@@ -26,7 +27,7 @@ const emit = defineEmits<{
       </div>
       <BaseIconButton
         v-if="overridden"
-        label="恢复派生值"
+        :label="t('appearance.color.restoreDerivedValue')"
         size="sm"
         variant="ghost"
         @click="emit('reset')"

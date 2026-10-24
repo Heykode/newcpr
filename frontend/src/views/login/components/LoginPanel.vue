@@ -1,13 +1,14 @@
 <script setup lang="ts">
 import { Eye, EyeOff, KeyRound, Mail, Moon, Sun } from '@lucide/vue'
 import { computed, shallowRef } from 'vue'
-
 import AppBrandMark from '@/components/AppBrandMark.vue'
+
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseMotionIcon from '@/components/base/BaseMotionIcon.vue'
+import { t } from '@/i18n'
 
 type ThemeName = 'light' | 'dark'
 type PasswordInputType = 'password' | 'text'
@@ -85,21 +86,21 @@ function togglePasswordVisible(): void {
         id="login-title"
         class="m-0 text-[34px] leading-[1.02] font-semibold text-(--cp-login-title-color) max-[560px]:text-[30px]"
       >
-        控制台登录
+        {{ t('auth.title') }}
       </h1>
       <p class="m-0 -ml-2 text-sm leading-[1.45] font-normal text-(--cp-login-description-color) max-[560px]:py-2">
-        「 欢迎回来，登录以开始您的数据之旅 」
+        {{ t('auth.welcome') }}
       </p>
     </section>
 
     <div class="grid gap-3">
       <div class="grid min-w-0 gap-2">
-        <span class="text-cp leading-[1.1] font-bold text-(--cp-login-label-color)">管理员账号</span>
+        <span class="text-cp leading-[1.1] font-bold text-(--cp-login-label-color)">{{ t('auth.username') }}</span>
         <BaseInput
           v-model="username"
           name="username"
-          aria-label="管理员账号"
-          placeholder="输入会话账号"
+          :aria-label="t('auth.username')"
+          :placeholder="t('auth.usernamePlaceholder')"
           autocomplete="username"
         >
           <template #prefix>
@@ -114,7 +115,7 @@ function togglePasswordVisible(): void {
           v-model="password"
           name="password"
           aria-label="访问密钥"
-          placeholder="输入会话密钥"
+          :placeholder="t('auth.passwordPlaceholder')"
           :type="passwordType"
           autocomplete="current-password"
         >

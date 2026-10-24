@@ -8,8 +8,8 @@ import {
   RefreshCw,
   Terminal,
 } from '@lucide/vue'
-
 import { storeToRefs } from 'pinia'
+
 import { computed, nextTick, shallowRef, useTemplateRef, watch } from 'vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseConfirmModal from '@/components/base/BaseConfirmModal.vue'
@@ -17,6 +17,7 @@ import BaseEmpty from '@/components/base/BaseEmpty.vue'
 import BaseModal from '@/components/base/BaseModal/index.vue'
 import BaseScrollbar from '@/components/base/BaseScrollbar.vue'
 import { toast } from '@/components/base/BaseToast'
+import { t } from '@/i18n'
 import { normalizeSystemVersion, useSystemUpdateStore } from '@/stores/modules/system-update'
 import { errorMessage } from '@/utils/async'
 import { formatTime } from '@/utils/date'
@@ -182,8 +183,8 @@ watch(
 <template>
   <BaseModal
     v-model="open"
-    title="系统更新"
-    description="检查版本、查看发布说明并执行在线更新"
+    :title="t('systemUpdate.title')"
+    :description="t('systemUpdate.description')"
     tone="success"
     size="lg"
     :dismissible="!restarting"
@@ -200,7 +201,7 @@ watch(
               Codex Proxy RS
             </p>
             <p class="mt-2 mb-0 text-lg leading-none font-heavy text-cp-text">
-              应用包更新
+              {{ t('systemUpdate.application') }}
             </p>
           </div>
           <span
@@ -233,7 +234,7 @@ watch(
                 rel="noreferrer"
                 class="inline-flex shrink-0 items-center gap-1 text-cp-xs leading-none font-bold text-cp-link transition-colors hover:text-cp-link-hover"
               >
-                发布页
+                {{ t('systemUpdate.releasePage') }}
                 <ExternalLink class="size-3" />
               </a>
             </div>
@@ -260,7 +261,7 @@ watch(
       >
         <div class="flex items-center justify-between gap-3">
           <p class="m-0 text-cp font-heavy text-cp-text">
-            发布说明
+            {{ t('systemUpdate.releaseNotes') }}
           </p>
           <span class="font-mono text-cp-xs font-emphasis text-cp-text-quaternary">
             {{ presentation.releaseVersion }}
@@ -281,7 +282,7 @@ watch(
           <div class="flex min-w-0 items-center gap-2">
             <Terminal class="size-4 shrink-0 text-cp-success" />
             <p class="m-0 text-cp leading-none font-heavy text-cp-text">
-              更新进度
+              {{ t('systemUpdate.progress') }}
             </p>
           </div>
           <span
@@ -339,7 +340,7 @@ watch(
         <template #icon>
           <RefreshCw class="size-3.5" />
         </template>
-        检查更新
+        {{ t('systemUpdate.actions.check') }}
       </BaseButton>
       <BaseButton
         v-if="updateSuccess && needRestart"
@@ -370,9 +371,9 @@ watch(
 
   <BaseConfirmModal
     v-model="updateConfirmOpen"
-    title="发现新的更新版本"
+    :title="t('systemUpdate.confirmation.newerVersion')"
     description="检测到远端 latest 与当前显示的目标版本不一致"
-    confirm-text="确认更新"
+    :confirm-text="t('systemUpdate.confirmation.title')"
     :loading="updating"
     :confirm-disabled="!updateConfirmInfo?.latestVersion"
     @confirm="handleConfirmUpdate"
@@ -395,7 +396,7 @@ watch(
         </div>
       </div>
       <p class="m-0 text-cp-sm leading-relaxed font-emphasis text-cp-text-quaternary">
-        点击确认后弹窗会关闭，并按远端最新目标版本开始更新
+        {{ t('systemUpdate.confirmation.description') }}
       </p>
     </div>
   </BaseConfirmModal>

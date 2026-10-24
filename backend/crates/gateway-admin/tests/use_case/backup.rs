@@ -38,7 +38,10 @@ async fn backup_service_creates_downloads_and_deletes_with_audit() {
     assert_eq!(created.status, BackupStatus::Queued);
     assert!(created.object_key.starts_with("codex/"));
     assert!(
-        auth.audit_actions()
+        repository
+            .audits
+            .lock()
+            .unwrap()
             .iter()
             .any(|action| action == "backup.created")
     );
@@ -65,7 +68,10 @@ async fn backup_service_creates_downloads_and_deletes_with_audit() {
         .expect("delete backup");
     assert_eq!(deleting.status, BackupStatus::Deleting);
     assert!(
-        auth.audit_actions()
+        repository
+            .audits
+            .lock()
+            .unwrap()
             .iter()
             .any(|action| action == "backup.delete_requested")
     );

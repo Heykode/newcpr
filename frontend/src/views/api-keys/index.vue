@@ -1,15 +1,17 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
-
 import BaseCard from '@/components/base/BaseCard.vue'
+
 import BaseCheckbox from '@/components/base/BaseCheckbox.vue'
 import BaseConfirmModal from '@/components/base/BaseConfirmModal.vue'
 import BasePageHeader from '@/components/base/BasePageHeader.vue'
 import BaseTablePagination from '@/components/base/BaseTable/BaseTablePagination.vue'
 import BaseTable from '@/components/base/BaseTable/index.vue'
+import ClientImportModal from '@/components/ClientImportModal.vue'
 import LastUsedAtCell from '@/components/LastUsedAtCell.vue'
 import { useAccountGroupCatalog } from '@/composables/useAccountGroupCatalog'
 import { usePageSelection } from '@/composables/usePageSelection'
+import { t } from '@/i18n'
 import ApiKeyActions from './components/ApiKeyActions.vue'
 import ApiKeyBudgetCell from './components/ApiKeyBudgetCell.vue'
 import ApiKeyBudgetResetModal from './components/ApiKeyBudgetResetModal.vue'
@@ -89,6 +91,9 @@ const { allSelected, indeterminate, selectedRowKeys, toggleSelection, toggleAll 
 
 const {
   showUseKeyModal,
+  showImportModal,
+  confirmImport,
+  clearImport,
   selectedUseKey,
   openAiBaseUrl,
   importCreatedKeyToCcs,
@@ -110,9 +115,8 @@ watch(
 <template>
   <div class="flex h-full min-h-0 w-full flex-col overflow-hidden">
     <BasePageHeader
-      class="h-17"
-      title="API 密钥"
-      description="创建和管理 API 密钥，并设置每个密钥可以使用的账号"
+      :title="t('navigation.apiKeys')"
+      :description="t('keys.page.description')"
     />
 
     <BaseCard
@@ -137,21 +141,21 @@ watch(
             :loading="loading"
             :selected-row-keys="selectedRowKeys"
             :sort="sort"
-            empty-text="暂无 API Key"
+            :empty-text="t('keys.page.noApiKeyYet')"
             @sort-change="handleSortChange"
           >
             <template #header-selection>
               <BaseCheckbox
                 :model-value="allSelected"
                 :indeterminate="indeterminate"
-                label="选择当前页密钥"
+                :label="t('keys.page.selectCurrentPageKey')"
                 @update:model-value="toggleAll"
               />
             </template>
             <template #selection="{ row }">
               <BaseCheckbox
                 :model-value="selectedIds.has(row.id)"
-                label="选择密钥"
+                :label="t('keys.page.selectKey')"
                 @update:model-value="toggleSelection(row.id)"
               />
             </template>
@@ -174,7 +178,7 @@ watch(
             <template #limits="{ row }">
               <dl class="m-0 grid grid-cols-[auto_minmax(0,1fr)] gap-x-2 gap-y-1 text-xs tabular-nums">
                 <dt class="text-cp-text-tertiary">
-                  并发
+                  {{ t('keys.page.concurrency') }}
                 </dt>
                 <dd class="m-0 truncate text-cp-text" :title="String(row.maxConcurrency || '∞')">
                   {{ row.maxConcurrency || '∞' }}
@@ -243,6 +247,8 @@ watch(
       @import-ccs="importCreatedKeyToCcs"
     />
 
+    <ClientImportModal v-model="showImportModal" @select="confirmImport" @after-leave="clearImport" />
+
     <ApiKeyUseModal
       v-model="showUseKeyModal"
       :api-key="selectedUseKey"
@@ -266,10 +272,10 @@ watch(
 
     <BaseConfirmModal
       v-model="showDeleteModal"
-      title="确认删除"
-      description="删除后这些 API Key 将立即失效，此操作不可撤销"
+      :title="t('common.actions.delete')"
+      :description="t('keys.page.batchDeleteWarning')"
       destructive
-      confirm-text="确认删除"
+      :confirm-text="t('common.actions.delete')"
       :loading="batchDeleting"
       @confirm="handleBatchDelete"
     >
@@ -280,10 +286,10 @@ watch(
 
     <BaseConfirmModal
       v-model="showSingleDeleteModal"
-      title="删除 API Key"
-      description="删除后该 API Key 将立即失效，此操作不可撤销"
+      :title="t('keys.page.deleteApiKey')"
+      :description="t('keys.page.deleteWarning')"
       destructive
-      confirm-text="确认删除"
+      :confirm-text="t('common.actions.delete')"
       :loading="deletingKey"
       @confirm="handleDelete"
       @after-leave="!showSingleDeleteModal && (pendingDeleteKey = null)"

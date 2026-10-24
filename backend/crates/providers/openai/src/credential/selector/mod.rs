@@ -607,13 +607,16 @@ impl CodexCredentialSelector {
         }
         let mut rate_limits = HashMap::with_capacity(accounts.len());
         if !diagnostic {
-            for account in &accounts {
-                let until = self
-                    .quota
-                    .rate_limited_until(account.id())
-                    .await
-                    .unwrap_or(None);
-                rate_limits.insert(account.id().clone(), until);
+            for chunk in accounts.chunks(128) {
+                let reads = chunk.iter().map(|account| async {
+                    let until = self
+                        .quota
+                        .rate_limited_until(account.id())
+                        .await
+                        .unwrap_or(None);
+                    (account.id().clone(), until)
+                });
+                rate_limits.extend(futures::future::join_all(reads).await);
             }
         }
         let account_ids = accounts

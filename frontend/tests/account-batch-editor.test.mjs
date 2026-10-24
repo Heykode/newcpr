@@ -1,12 +1,12 @@
 /* eslint-disable test/no-import-node-test -- these regressions use Node's built-in runner. */
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { createRequire } from 'node:module'
 import { test } from 'node:test'
 import { runInNewContext } from 'node:vm'
 import axios from 'axios'
 import ts from 'typescript'
 import * as vue from 'vue'
+import { createTestRequire as createRequire } from './helpers/i18n.mjs'
 
 const require = createRequire(import.meta.url)
 const updateFields = ['updateEnabled', 'updateExcelEnabled', 'updateExcelModels', 'updateConcurrencyLimit', 'updateWeight', 'updateGroups', 'updateProxy', 'updateCustomName', 'updateModelAccess']
@@ -20,6 +20,7 @@ function loadModule(filename, dependencies = {}) {
     exports,
     require: name => dependencies[name] ?? (name === '@/utils/excel-defaults' ? loadModule(new URL('../src/utils/excel-defaults.ts', import.meta.url)) : require(name)),
     TextEncoder,
+    Blob,
   }, { filename: String(filename) })
   return exports
 }

@@ -2,8 +2,8 @@
 import type { AccountRow } from './constants'
 import { ChevronDown, History, ListTodo, RefreshCw, RotateCcw } from '@lucide/vue'
 import { useLocalStorage, useMediaQuery } from '@vueuse/core'
-
 import { computed, onMounted, ref, shallowRef, useTemplateRef, watch } from 'vue'
+
 import { getRelogin } from '@/api/modules/relogin'
 import AccountTemplateMenu from '@/components/account-templates/AccountTemplateMenu.vue'
 import AccountGroupMarks from '@/components/AccountGroupMarks.vue'
@@ -22,6 +22,7 @@ import AccountQualitySetup from '@/components/quality-ops/AccountQualitySetup.vu
 import QualityTemplateApplyMenu from '@/components/quality-ops/QualityTemplateApplyMenu.vue'
 import ReloginCountCell from '@/components/ReloginCountCell.vue'
 import { useAccountGroupCatalog } from '@/composables/useAccountGroupCatalog'
+import { t } from '@/i18n'
 import AccountBatchEditModal from './components/AccountBatchEditModal.vue'
 import AccountCapacityCell from './components/AccountCapacityCell.vue'
 import AccountConnectionTestModal from './components/AccountConnectionTestModal.vue'
@@ -422,8 +423,8 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
   <div class="flex min-h-0 w-full flex-col xl:h-full xl:overflow-hidden">
     <BasePageHeader
       class="[&>div:first-child]:basis-0"
-      title="账号管理"
-      description="维护账号池，查看可用性、配额与使用状态"
+      :title="t('navigation.accounts')"
+      :description="t('accounts.page.description')"
     >
       <template #actions>
         <BaseIconButton
@@ -524,7 +525,7 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
             :selected-row-keys="selectedRowKeys"
             :expanded-row-keys="expandedRowKeys"
             :sort="sort"
-            empty-text="暂无账号数据"
+            :empty-text="t('accounts.page.noAccountDataYet')"
             @sort-change="handleSortChange"
             @mousedown="onMouseDown"
           >
@@ -550,7 +551,7 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
               <BaseCheckbox
                 :model-value="allSelected"
                 :indeterminate="indeterminate"
-                label="选择当前页账号"
+                :label="t('accounts.page.selectAccountOnCurrentPage')"
                 @update:model-value="toggleAll"
               />
             </template>
@@ -558,7 +559,7 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
             <template #selection="{ row }">
               <BaseCheckbox
                 :model-value="selectedIds.has(row.id)"
-                label="选择账号"
+                :label="t('accounts.page.selectAccount')"
                 @update:model-value="toggleSelection(row.id)"
               />
             </template>
@@ -905,9 +906,9 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
 
     <BaseConfirmModal
       v-model="showDeleteModal"
-      title="确认删除"
+      :title="t('common.actions.delete')"
       destructive
-      confirm-text="确认删除"
+      :confirm-text="t('common.actions.delete')"
       :loading="batchDeleting"
       @confirm="handleBatchDelete"
     >
@@ -921,9 +922,9 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
 
     <BaseConfirmModal
       v-model="showSingleDeleteModal"
-      title="删除账号"
+      :title="t('accounts.actions.deleteAccount')"
       destructive
-      confirm-text="确认删除"
+      :confirm-text="t('common.actions.delete')"
       :loading="deletingAccount"
       @confirm="handleDelete"
       @after-leave="!showSingleDeleteModal && (pendingDeleteAccount = null)"

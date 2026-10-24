@@ -181,6 +181,7 @@ impl BackupService for DefaultBackupService {
             context,
             "backup.s3_connection_tested",
             "backup_settings",
+            "1",
             vec![],
         )
         .await?;
@@ -218,11 +219,9 @@ impl BackupService for DefaultBackupService {
         .map_err(map_backup_error)?;
         let record = self
             .repository
-            .insert_backup_record(seed)
+            .insert_backup_record(seed, context)
             .await
             .map_err(|error| map_store_error(error, "backup record"))?;
-        self.append_audit(context, "backup.created", "backup", vec![record.id.clone()])
-            .await?;
         Ok(record)
     }
 
@@ -266,7 +265,8 @@ impl BackupService for DefaultBackupService {
             context,
             "backup.download_url_created",
             "backup",
-            vec![backup_id.to_owned()],
+            backup_id,
+            vec![],
         )
         .await?;
         Ok(DownloadUrlResult {
@@ -290,17 +290,10 @@ impl BackupService for DefaultBackupService {
         let now = Utc::now();
         let deleting = self
             .repository
-            .transition_to_deleting(backup_id, now)
+            .transition_to_deleting(backup_id, now, Some(context))
             .await
             .map_err(|error| map_store_error(error, "backup record"))?
             .ok_or_else(|| AdminError::conflict("备份记录已进入删除流程"))?;
-        self.append_audit(
-            context,
-            "backup.delete_requested",
-            "backup",
-            vec![backup_id.to_owned()],
-        )
-        .await?;
         Ok(deleting)
     }
 }
@@ -318,6 +311,7 @@ impl DefaultBackupService {
         &self,
         context: &MutationContext,
         action: &str,
+        entity_kind: &str,
         entity_ref: &str,
         changed_fields: Vec<String>,
     ) -> Result<(), AdminError> {
@@ -346,7 +340,7 @@ impl DefaultBackupService {
             actor_ref,
             request_id: Some(context.request_id.clone()),
             action: action.to_owned(),
-            entity_kind: "backup".to_owned(),
+            entity_kind: entity_kind.to_owned(),
             entity_ref: entity_ref.to_owned(),
             config_revision: None,
             changed_fields,

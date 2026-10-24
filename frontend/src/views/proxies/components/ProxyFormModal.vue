@@ -12,6 +12,7 @@ import BaseModal from '@/components/base/BaseModal/index.vue'
 import BaseNumberInput from '@/components/base/BaseNumberInput.vue'
 import BaseSwitch from '@/components/base/BaseSwitch.vue'
 import RequestLocationFields from '@/components/RequestLocationFields.vue'
+import { t } from '@/i18n'
 import { proxyLocationMessage } from '../utils/location'
 
 const props = defineProps<{
@@ -46,8 +47,8 @@ watch(open, (isOpen) => {
 <template>
   <BaseModal v-model="open" :title="title" size="md" :dismissible="!busy">
     <BaseForm class="grid gap-5">
-      <BaseFormItem label="代理名称" required>
-        <BaseInput v-model="name" maxlength="100" :disabled="busy" aria-label="代理名称" placeholder="请输入代理名称" />
+      <BaseFormItem :label="t('proxies.editor.nameLabel')" required>
+        <BaseInput v-model="name" maxlength="100" :disabled="busy" :aria-label="t('proxies.editor.nameLabel')" :placeholder="t('proxies.editor.namePlaceholder')" />
       </BaseFormItem>
       <BaseFormItem label="代理 URL" :required="!proxy" :description="connectionDescription">
         <BaseInput
@@ -79,19 +80,19 @@ watch(open, (isOpen) => {
     </BaseForm>
     <template #footer>
       <BaseButton variant="secondary" :disabled="busy" @click="open = false">
-        取消
+        {{ t('common.actions.cancel') }}
       </BaseButton>
       <BaseButton variant="secondary" :loading="testing" :disabled="saving" @click="emit('test')">
         <template #icon>
           <Wifi class="size-4" />
         </template>
-        测试连接
+        {{ t('accounts.connectionTest.title') }}
       </BaseButton>
       <BaseButton variant="primary" :loading="saving" :disabled="testing" @click="emit('save')">
         <template #icon>
           <Save class="size-4" />
         </template>
-        保存代理
+        {{ t('proxies.editor.saveAction') }}
       </BaseButton>
     </template>
   </BaseModal>

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { CodexDesktopWindowsDownloads } from '@/api'
 import { ExternalLink } from '@lucide/vue'
+import { t } from '@/i18n'
 
 import ClientDesktopOfflineDownloads from './ClientDesktopOfflineDownloads.vue'
 import ClientInstallCommandList from './ClientInstallCommandList.vue'
@@ -47,7 +48,7 @@ const desktopCommands = [
       <div class="flex flex-wrap items-start justify-between gap-3">
         <div class="min-w-0">
           <h3 id="codex-desktop-online-title" class="m-0 text-cp-sm font-heavy text-cp-text">
-            在线安装与升级
+            {{ t('settings.clientVersion.onlineInstallationAndUpgrade') }}
           </h3>
           <p class="mt-1.5 mb-0 text-cp-sm leading-[1.45] font-semibold text-cp-text-secondary">
             桌面应用通常会自动更新，也可以从官方渠道重新安装。
@@ -59,7 +60,7 @@ const desktopCommands = [
           rel="noopener noreferrer"
           class="inline-flex h-cp-control shrink-0 items-center gap-2 rounded-cp-sm bg-cp-fill-tertiary px-3.5 text-cp font-bold text-cp-text shadow-cp-tertiary transition-[background-color,transform] hover:bg-cp-bg-text-active motion-safe:active:translate-y-px"
         >
-          官方下载页
+          {{ t('settings.clientVersion.officialDownloadPage') }}
           <ExternalLink class="size-3.5" />
         </a>
       </div>

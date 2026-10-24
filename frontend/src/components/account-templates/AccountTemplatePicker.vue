@@ -10,6 +10,7 @@ import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseSelect from '@/components/base/BaseSelect.vue'
 import { useAccountGroupCatalog } from '@/composables/useAccountGroupCatalog'
 import { useProxyCatalog } from '@/composables/useProxyCatalog'
+import { t } from '@/i18n'
 import { errorMessage } from '@/utils/async'
 import { accountExcel403Action, excel403ActionLabel } from '@/utils/excel-settings'
 import AccountTemplatesModal from './AccountTemplatesModal.vue'
@@ -104,7 +105,7 @@ onScopeDispose(() => controller?.abort())
         <dt>State</dt><dd>{{ selected.config.turnStateInjectionEnabled ? '开启' : '关闭' }}</dd>
       </template>
       <template v-if="selected.config.modelAccess">
-        <dt>模型限制</dt><dd class="min-w-0 break-all">
+        <dt>{{ t('accounts.modelAccess.modelLimitations') }}</dt><dd class="min-w-0 break-all">
           {{ selected.config.modelAccess.mode === 'all' ? '不限制' : `${selected.config.modelAccess.mode === 'allowlist' ? '白名单' : '黑名单'}：${selected.config.modelAccess.models.join(', ')}` }}
         </dd>
       </template>
@@ -121,7 +122,7 @@ onScopeDispose(() => controller?.abort())
         <dd>{{ selected.config.excelRecovery.enabled ? `开启，每 ${selected.config.excelRecovery.intervalMinutes} 分钟` : '关闭' }}</dd>
       </template>
       <dt class="text-cp-text-secondary">
-        调度
+        {{ t('accounts.scheduling.scheduling') }}
       </dt><dd class="m-0">
         {{ selected.config.enabled ? '启用' : '暂停' }}
       </dd>
@@ -151,12 +152,12 @@ onScopeDispose(() => controller?.abort())
         {{ selected.config.concurrencyLimit ?? '默认值' }}
       </dd>
       <dt class="text-cp-text-secondary">
-        权重
+        {{ t('accounts.scheduling.weight') }}
       </dt><dd class="m-0">
         {{ selected.config.weight }}
       </dd>
       <dt class="text-cp-text-secondary">
-        所属分组
+        {{ t('accounts.scheduling.groupLabel') }}
       </dt><dd class="m-0 break-all">
         {{ groupNames }}
       </dd>

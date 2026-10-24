@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { AccountModelAccess } from '@/api'
-
 import { RefreshCw, Search } from '@lucide/vue'
+
 import { computed, ref, watch } from 'vue'
 import { getAccountModels, refreshAccountModels } from '@/api'
 import { getQualityModels } from '@/api/modules/quality-ops'
@@ -13,6 +13,7 @@ import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseSegmented from '@/components/base/BaseSegmented.vue'
 import { useRequestState } from '@/composables/useRequestState'
+import { t } from '@/i18n'
 import { accountModelAccessError, accountModelIdError } from '../utils/modelAccess'
 
 const props = withDefaults(defineProps<{
@@ -142,20 +143,20 @@ watch(search, () => {
 
 <template>
   <div class="grid gap-3">
-    <BaseFormItem label="模型限制">
+    <BaseFormItem :label="t('accounts.modelAccess.modelLimitations')">
       <template #extra>
         <slot name="extra" />
-        <BaseIconButton v-if="restricted && (accountId || useKnownCatalog)" label="刷新模型" size="sm" :loading="loading" :disabled="disabled" @click="load(true)">
+        <BaseIconButton v-if="restricted && (accountId || useKnownCatalog)" :label="t('accounts.modelAccess.refreshModel')" size="sm" :loading="loading" :disabled="disabled" @click="load(true)">
           <template #loading>
             <RefreshCw class="size-3.5 animate-spin motion-reduce:animate-none" />
           </template>
           <RefreshCw class="size-3.5" />
         </BaseIconButton>
       </template>
-      <BaseSegmented v-model="mode" class="w-full" label="模型限制模式" :options="modes" :disabled="disabled" />
+      <BaseSegmented v-model="mode" class="w-full" :label="t('accounts.modelAccess.modelRestrictionMode')" :options="modes" :disabled="disabled" />
     </BaseFormItem>
     <template v-if="restricted">
-      <BaseInput v-model="search" aria-label="搜索或添加模型" placeholder="搜索或输入 ID，回车添加" :disabled="disabled" :aria-invalid="Boolean(inputError)" @keydown.enter.prevent="addModel">
+      <BaseInput v-model="search" :aria-label="t('accounts.modelAccess.searchOrAddModels')" :placeholder="t('accounts.modelAccess.searchOrEnterIdAndPressEnter')" :disabled="disabled" :aria-invalid="Boolean(inputError)" @keydown.enter.prevent="addModel">
         <template #prefix>
           <Search class="size-4" aria-hidden="true" />
         </template>
@@ -166,7 +167,7 @@ watch(search, () => {
       <p v-if="inputError" class="m-0 text-cp-xs text-cp-error-text" role="alert">
         {{ inputError }}
       </p>
-      <div v-if="models.length" class="grid max-h-60 grid-cols-2 gap-2 overflow-y-auto p-1 -m-1 sm:grid-cols-3" role="group" aria-label="选择模型" :aria-busy="loading || undefined">
+      <div v-if="models.length" class="grid max-h-60 grid-cols-2 gap-2 overflow-y-auto p-1 -m-1 sm:grid-cols-3" role="group" :aria-label="t('accounts.modelAccess.selectModel')" :aria-busy="loading || undefined">
         <BaseCheckbox
           v-for="item in models"
           :key="item.id"

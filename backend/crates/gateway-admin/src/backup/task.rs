@@ -619,7 +619,7 @@ impl BackupTask {
         for record in expired {
             let Some(record) = self
                 .repository
-                .transition_to_deleting(&record.id, now)
+                .transition_to_deleting(&record.id, now, None)
                 .await
                 .map_err(repo_error)?
             else {
@@ -643,7 +643,7 @@ impl BackupTask {
         for decision in decisions.into_iter().take(RETENTION_BATCH_SIZE) {
             let Some(record) = self
                 .repository
-                .transition_to_deleting(&decision.record_id, now)
+                .transition_to_deleting(&decision.record_id, now, None)
                 .await
                 .map_err(repo_error)?
             else {

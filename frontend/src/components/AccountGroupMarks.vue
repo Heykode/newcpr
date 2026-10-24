@@ -5,6 +5,7 @@ import { useResizeObserver } from '@vueuse/core'
 import { computed, ref, shallowRef, watch } from 'vue'
 import BasePopover from '@/components/base/BasePopover.vue'
 import { useThemeColor } from '@/composables/useThemeColor'
+import { t } from '@/i18n'
 import { accountGroupLayout } from './account-group-layout'
 
 const props = withDefaults(defineProps<{
@@ -109,7 +110,7 @@ const hiddenCount = computed(() => Math.max(props.groups.length - visibleGroups.
             role="listitem"
           >
             <span class="break-all whitespace-normal">
-              {{ group.name }}<template v-if="!group.enabled">（已禁用）</template>
+              {{ group.name }}<template v-if="!group.enabled">{{ t('accounts.proxy.disabledSuffix') }}</template>
             </span>
           </span>
         </div>

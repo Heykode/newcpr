@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { Copy, KeyRound, Trash2 } from '@lucide/vue'
-
 import BaseButton from '@/components/base/BaseButton.vue'
+
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseMotionIcon from '@/components/base/BaseMotionIcon.vue'
+import { t } from '@/i18n'
 
 interface AdminApiKeyStatus {
   exists: boolean
@@ -26,7 +27,7 @@ const emit = defineEmits<{
 </script>
 
 <template>
-  <BaseCard title="管理员 API Key" description="用于外部系统集成，具有管理员权限">
+  <BaseCard :title="t('settings.adminApiKey.adminApiKey')" :description="t('settings.adminApiKey.description')">
     <template #actions>
       <div class="flex flex-wrap items-center gap-2">
         <BaseButton
@@ -48,7 +49,7 @@ const emit = defineEmits<{
           <template #icon>
             <Trash2 class="size-4" />
           </template>
-          删除
+          {{ t('common.actions.delete') }}
         </BaseButton>
       </div>
     </template>
@@ -63,15 +64,15 @@ const emit = defineEmits<{
           </BaseMotionIcon>
           <div class="min-w-0">
             <p class="m-0 text-cp leading-[1.15] font-bold text-cp-text">
-              {{ status.exists ? '已启用' : '未生成' }}
+              {{ status.exists ? t('common.status.enabled') : t('settings.adminApiKey.notGenerated') }}
             </p>
             <p class="mt-1.5 mb-0 truncate text-cp-sm leading-[1.15] font-emphasis text-cp-text-secondary">
               {{
                 loading
-                  ? '加载中...'
+                  ? t('common.status.loading')
                   : status.exists
-                    ? '管理员 API 访问已启用，完整 Key 仅在生成时回显'
-                    : '外部系统暂时无法通过 API Key 调用管理接口'
+                    ? t('settings.adminApiKey.enabledDescription')
+                    : t('settings.adminApiKey.disabledDescription')
               }}
             </p>
           </div>
@@ -80,7 +81,7 @@ const emit = defineEmits<{
 
       <div v-if="generatedKey" class="grid gap-2">
         <p class="m-0 text-cp leading-[1.15] font-emphasis text-cp-text-secondary">
-          完整 Key 仅显示一次，请立即保存
+          {{ t('settings.adminApiKey.generatedNotice') }}
         </p>
         <div class="flex min-w-0 items-center gap-2">
           <code
@@ -88,7 +89,7 @@ const emit = defineEmits<{
           >
             {{ generatedKey }}
           </code>
-          <BaseIconButton size="md" label="复制" @click="emit('copy')">
+          <BaseIconButton size="md" :label="t('common.actions.copy')" @click="emit('copy')">
             <Copy class="size-4" />
           </BaseIconButton>
         </div>

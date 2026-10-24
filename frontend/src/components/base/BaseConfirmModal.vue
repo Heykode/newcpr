@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t } from '@/i18n'
 import BaseButton from './BaseButton.vue'
 import BaseModal from './BaseModal/index.vue'
 
@@ -14,8 +15,8 @@ const props = withDefaults(
   }>(),
   {
     destructive: false,
-    confirmText: '确认',
-    cancelText: '取消',
+    confirmText: undefined,
+    cancelText: undefined,
     loading: false,
     confirmDisabled: false,
   },
@@ -59,7 +60,7 @@ function handleConfirm() {
 
     <template #footer>
       <BaseButton variant="secondary" :disabled="loading" @click="handleCancel">
-        {{ cancelText }}
+        {{ cancelText ?? t('ui.cancel') }}
       </BaseButton>
       <BaseButton
         :variant="destructive ? 'destructive' : 'primary'"
@@ -67,7 +68,7 @@ function handleConfirm() {
         :disabled="confirmDisabled"
         @click="handleConfirm"
       >
-        {{ confirmText }}
+        {{ confirmText ?? t('ui.confirm') }}
       </BaseButton>
     </template>
   </BaseModal>

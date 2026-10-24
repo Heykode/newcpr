@@ -7,6 +7,7 @@ import BaseEmpty from '@/components/base/BaseEmpty.vue'
 import BaseScrollbar from '@/components/base/BaseScrollbar.vue'
 import BaseSegmented from '@/components/base/BaseSegmented.vue'
 import ProviderIconGroup from '@/components/ProviderIconGroup.vue'
+import { t } from '@/i18n'
 import { itemDescription, itemStates, outcomeOrder, processed, taskLabel, taskTime } from './presenter'
 
 const props = defineProps<{ task: AccountImportTaskDetail, stopping: boolean }>()
@@ -27,7 +28,7 @@ watch(() => props.task.taskId, () => {
 </script>
 
 <template>
-  <section class="min-w-0 space-y-5" aria-label="导入任务详情">
+  <section class="min-w-0 space-y-5" :aria-label="t('accounts.importTasks.importTaskDetails')">
     <div class="flex flex-wrap items-start justify-between gap-3">
       <div>
         <h3 class="text-base font-bold text-cp-text">
@@ -59,13 +60,13 @@ watch(() => props.task.taskId, () => {
 
     <div>
       <div class="mb-2 flex flex-wrap items-baseline justify-between gap-3 text-xs">
-        <span class="text-cp-text-secondary">条目进度 <strong class="font-mono font-medium text-cp-text">{{ processed(task) }} / {{ task.total }}</strong></span>
+        <span class="text-cp-text-secondary">{{ t('accounts.importTasks.entryProgress') }} <strong class="font-mono font-medium text-cp-text">{{ processed(task) }} / {{ task.total }}</strong></span>
         <span class="font-semibold text-cp-text">已入库 {{ task.counts.importedAccounts }} 个账号</span>
       </div>
       <div
         class="flex h-2 overflow-hidden rounded-full bg-cp-fill-alter"
         role="progressbar"
-        aria-label="条目处理进度"
+        :aria-label="t('accounts.importTasks.itemProcessingProgress')"
         :aria-valuenow="processed(task)"
         :aria-valuemax="task.total"
         :aria-valuemin="0"
@@ -86,11 +87,11 @@ watch(() => props.task.taskId, () => {
           <CircleAlert class="mt-0.5 size-3.5 shrink-0" />
           待核对条目可能已入库，凭据也可能已轮换。请先核对账号，不要直接重试原 Token。
         </p>
-        <BaseSegmented v-model="filter" class="ml-auto" label="筛选导入明细" :options="filterOptions" size="sm" />
+        <BaseSegmented v-model="filter" class="ml-auto" :label="t('accounts.importTasks.filterImportDetails')" :options="filterOptions" size="sm" />
       </div>
       <BaseScrollbar :key="`${task.taskId}-${filter}`" max-height="min(18rem, 32dvh)">
-        <BaseEmpty v-if="!visibleItems.length" size="sm" title="暂无需要处理的条目" surface="none" />
-        <ol v-else class="m-0 list-none space-y-1 p-0" aria-label="导入条目结果">
+        <BaseEmpty v-if="!visibleItems.length" size="sm" :title="t('accounts.importTasks.thereAreNoItemsToBeProcessed')" surface="none" />
+        <ol v-else class="m-0 list-none space-y-1 p-0" :aria-label="t('accounts.importTasks.importEntryResults')">
           <li
             v-for="item in visibleItems"
             :key="item.index"

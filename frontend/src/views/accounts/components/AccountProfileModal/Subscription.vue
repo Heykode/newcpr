@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { AccountSubscription } from '@/api'
 import { computed } from 'vue'
+import { t } from '@/i18n'
 import { formatDateTime } from '@/utils/date'
 
 const props = defineProps<{
@@ -29,7 +30,7 @@ const dates = computed(() => [
 </script>
 
 <template>
-  <section class="min-w-0 rounded-cp-lg bg-cp-fill-alter p-4 sm:p-5" aria-label="订阅">
+  <section class="min-w-0 rounded-cp-lg bg-cp-fill-alter p-4 sm:p-5" :aria-label="t('accounts.profile.subscription.label')">
     <dl class="m-0 grid grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-[1.3fr_1.3fr_1fr_1fr]">
       <div v-for="date in dates" :key="date.label" class="min-w-0">
         <dt class="text-cp-xs text-cp-text-secondary">
@@ -37,12 +38,12 @@ const dates = computed(() => [
         </dt>
         <dd class="m-0 mt-1.5 font-mono text-cp-sm leading-relaxed tabular-nums text-cp-text">
           <time v-if="date.value" :datetime="date.value">{{ formatDateTime(date.value, '未知', 'Asia/Shanghai') }}</time>
-          <span v-else>未知</span>
+          <span v-else>{{ t('common.values.unknown') }}</span>
         </dd>
       </div>
       <div class="min-w-0">
         <dt class="text-cp-xs text-cp-text-secondary">
-          续费方式
+          {{ t('accounts.profile.subscription.renewalMethod') }}
         </dt>
         <dd class="m-0 mt-1.5 text-cp-sm leading-relaxed" :class="subscription.willRenew === true ? 'text-cp-success' : 'text-cp-text'">
           {{ renewal }}
@@ -50,7 +51,7 @@ const dates = computed(() => [
       </div>
       <div class="min-w-0">
         <dt class="text-cp-xs text-cp-text-secondary">
-          计费
+          {{ t('accounts.usage.billing') }}
         </dt>
         <dd class="m-0 mt-1.5 text-cp-sm leading-relaxed break-words text-cp-text">
           {{ billing }}

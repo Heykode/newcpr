@@ -2,6 +2,7 @@
 import type { AccountQuotaWindow } from '../../constants'
 import { computed } from 'vue'
 import { useUiClock } from '@/composables/useUiClock'
+import { t } from '@/i18n'
 import { orderedPanelQuotaWindows } from '../../constants'
 import { quotaWindowPresentation, quotaWindowResetPresentation } from '../AccountUsageWindow/presenter'
 
@@ -33,7 +34,7 @@ const items = computed(() => orderedPanelQuotaWindows(props.windows)
 </script>
 
 <template>
-  <section class="overflow-hidden rounded-cp bg-cp-fill-quaternary" aria-label="使用限额">
+  <section class="overflow-hidden rounded-cp bg-cp-fill-quaternary" :aria-label="t('accounts.quota.usageLimit')">
     <div
       v-for="item in items"
       :key="item.key"
@@ -77,7 +78,7 @@ const items = computed(() => orderedPanelQuotaWindows(props.windows)
       </div>
     </div>
     <p v-if="items.length === 0" class="m-0 px-4 py-4 text-cp-sm font-emphasis text-cp-text-secondary">
-      额度待观测
+      {{ t('accounts.quota.unobserved') }}
     </p>
   </section>
 </template>

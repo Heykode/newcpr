@@ -76,6 +76,48 @@ fn terminal_business_outcomes_do_not_infer_success_from_http_or_event_name() {
 }
 
 #[test]
+fn evidence_has_an_independent_bounded_budget_and_stage_counts() {
+    let trace = TraceContext::new("req_evidence_budget");
+    trace.record_evidence("provider.request.input", json!({"hash": "synthetic"}));
+    for index in 0..1000 {
+        trace.record(
+            "test.event",
+            json!({"index": index, "detail": "x".repeat(2000)}),
+        );
+    }
+    let snapshot = trace.snapshot().unwrap();
+    assert!(
+        snapshot["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|event| event["stage"] == "provider.request.input")
+    );
+    assert_eq!(snapshot["stageCounts"]["test.event"], 1000);
+    for index in 0..100 {
+        trace.record_evidence("provider.response.usage", json!({"index": index}));
+    }
+    let snapshot = trace.snapshot().unwrap();
+    let events = snapshot["events"].as_array().unwrap();
+    assert!(events.len() as u64 <= snapshot["maxEvents"].as_u64().unwrap());
+    assert_eq!(snapshot["droppedEvidenceEvents"], 69);
+    assert!(
+        events
+            .windows(2)
+            .all(|pair| pair[0]["sequence"].as_u64() < pair[1]["sequence"].as_u64())
+    );
+    let kept: u64 = events
+        .iter()
+        .map(|event| event["count"].as_u64().unwrap())
+        .sum();
+    assert_eq!(
+        kept + snapshot["droppedEvents"].as_u64().unwrap(),
+        snapshot["totalEvents"]
+    );
+    assert!(snapshot.to_string().len() < snapshot["maxBufferBytes"].as_u64().unwrap() as usize);
+}
+
+#[test]
 fn bounded_history_preserves_start_failure_and_final_result() {
     let trace = TraceContext::new("req_trace");
     trace.record("request.started", json!({}));
@@ -212,7 +254,8 @@ fn a_long_successful_retry_keeps_the_earlier_failure_ahead_of_routine_events() {
     );
     assert!(events.iter().any(|event| event["stage"] == "retry.decided"));
     assert_eq!(events.last().unwrap()["stage"], "request.finished");
-    assert!(events.len() <= 128);
+    assert_eq!(snapshot["maxEvents"], 160);
+    assert!(events.len() <= 160);
 }
 
 #[test]

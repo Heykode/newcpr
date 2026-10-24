@@ -12,6 +12,7 @@ import BaseModal from '@/components/base/BaseModal/index.vue'
 import BaseSegmented from '@/components/base/BaseSegmented.vue'
 import ProviderIconGroup from '@/components/ProviderIconGroup.vue'
 import { useCopyText } from '@/composables/useCopyText'
+import { t } from '@/i18n'
 import { normalizeAccountName } from '@/utils/account-name'
 import { accountModelAccessError } from '../../utils/modelAccess'
 import { parseAccountSchedulingForm } from '../../utils/schedulingForm'
@@ -122,7 +123,7 @@ function continueToImport() {
           <BaseIconButton
             variant="secondary"
             size="sm"
-            label="复制账号"
+            :label="t('accounts.onboarding.copyAccount')"
             :disabled="busy || !accountCopyValue"
             @click="copyWithToast(accountCopyValue, { successText: '账号已复制' })"
           >
@@ -149,7 +150,7 @@ function continueToImport() {
         <BaseSegmented
           v-if="!reauthorizing && !view.isBatch"
           v-model="mode"
-          label="账号添加方式"
+          :label="t('accounts.onboarding.howToAddAccount')"
           :options="view.modeOptions"
           :disabled="busy"
           class="w-full [&_button]:px-0 sm:[&_button]:px-3"
@@ -189,10 +190,10 @@ function continueToImport() {
 
     <template #footer>
       <BaseButton v-if="view.configuring || reauthorizing" variant="secondary" :disabled="busy" @click="open = false">
-        取消
+        {{ t('common.actions.cancel') }}
       </BaseButton>
       <BaseButton v-else class="mr-auto" variant="secondary" :disabled="busy" @click="form.step = 'settings'">
-        上一步
+        {{ t('common.actions.previous') }}
       </BaseButton>
       <BaseButton v-if="view.configuring" variant="primary" :disabled="!form.provider || !scheduling.valid || Boolean(modelError) || Boolean(nameError) || groupsLoading || Boolean(proxyError) || busy" @click="continueToImport">
         继续导入

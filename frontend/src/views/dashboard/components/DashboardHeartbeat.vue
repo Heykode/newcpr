@@ -2,6 +2,7 @@
 import { usePreferredReducedMotion } from '@vueuse/core'
 import { gsap } from 'gsap'
 import { computed, nextTick, onBeforeUnmount, useTemplateRef, watch } from 'vue'
+import { t } from '@/i18n'
 
 const props = withDefaults(
   defineProps<{
@@ -71,6 +72,6 @@ onBeforeUnmount(() => {
       <span ref="heartbeatRing" class="absolute size-2 rounded-full bg-cp-success opacity-0" />
       <span ref="heartbeatDot" class="relative size-1.5 rounded-full bg-cp-success" />
     </span>
-    <span>自动刷新 30s</span>
+    <span>{{ t('dashboard.refresh.interval') }}</span>
   </span>
 </template>

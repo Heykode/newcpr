@@ -8,9 +8,14 @@ import * as vue from 'vue'
 import { compileScript, parse } from 'vue/compiler-sfc'
 import { renderToString } from 'vue/server-renderer'
 import { accounts } from './fixtures/relogin-count-data.mjs'
+import * as translations from './helpers/i18n.mjs'
 
 const components = '../src/views/accounts/components/'
 const stub = { __esModule: true, default: { render: () => null } }
+const relativeTime = {}
+runInNewContext(ts.transpileModule(readFileSync(new URL('../src/utils/relative-time.ts', import.meta.url), 'utf8'), {
+  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+}).outputText, { exports: relativeTime, require: () => translations })
 function component(path, dependencies = {}) {
   const filename = new URL(components + path, import.meta.url)
   const { descriptor } = parse(readFileSync(filename, 'utf8'), { filename: filename.pathname })
@@ -21,12 +26,13 @@ function component(path, dependencies = {}) {
   const exports = {}
   runInNewContext(outputText, {
     exports,
-    require: name => name === 'vue' ? vue : dependencies[name] ?? stub,
+    require: name => name === '@/i18n' ? translations : name === 'vue' ? vue : dependencies[name] ?? stub,
   })
   return { __esModule: true, default: exports.default }
 }
 const credits = component('AccountQuotaPanel/Credits.vue')
 const panel = component('AccountQuotaPanel/index.vue', {
+  '@/utils/relative-time': relativeTime,
   './Credits.vue': credits,
   '../../constants': { groupedAccountQuotaWindows: () => [], orderedPanelQuotaWindows: () => [] },
 })

@@ -65,7 +65,11 @@ pub trait BackupRepository: Send + Sync {
     ) -> AdminStoreResult<bool>;
 
     /// 插入 queued 任务；存在活跃任务时返回 `backup.active_task_conflict`。
-    async fn insert_backup_record(&self, seed: BackupRecordSeed) -> AdminStoreResult<BackupRecord>;
+    async fn insert_backup_record(
+        &self,
+        seed: BackupRecordSeed,
+        context: &MutationContext,
+    ) -> AdminStoreResult<BackupRecord>;
 
     /// 幂等插入 scheduled 任务；同一时间点或活跃冲突时返回 `false`（调用方推进游标即可）。
     async fn insert_scheduled_record(&self, seed: BackupRecordSeed) -> AdminStoreResult<bool>;
@@ -107,6 +111,7 @@ pub trait BackupRepository: Send + Sync {
         &self,
         id: &str,
         now: DateTime<Utc>,
+        context: Option<&MutationContext>,
     ) -> AdminStoreResult<Option<BackupRecord>>;
 
     /// 远端删除成功后硬删除记录行。
@@ -300,6 +305,7 @@ impl BackupRepository for UnavailableBackupRepository {
     async fn insert_backup_record(
         &self,
         _seed: BackupRecordSeed,
+        _context: &MutationContext,
     ) -> AdminStoreResult<BackupRecord> {
         Err(disabled_store())
     }
@@ -344,6 +350,7 @@ impl BackupRepository for UnavailableBackupRepository {
         &self,
         _id: &str,
         _now: DateTime<Utc>,
+        _context: Option<&MutationContext>,
     ) -> AdminStoreResult<Option<BackupRecord>> {
         Err(disabled_store())
     }

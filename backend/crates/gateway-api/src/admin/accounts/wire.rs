@@ -519,6 +519,7 @@ pub struct AccountGroupRefView {
 #[serde(rename_all = "camelCase")]
 pub struct AccountQuotaView {
     pub refreshed_at_display: String,
+    pub refreshed_at_relative: Option<crate::time::RelativeTimeView>,
     pub limit_reached: bool,
     /// 429 临时限流（Redis 冷却）到期时间展示；非限流中为 `null`。
     pub rate_limited_until: Option<String>,

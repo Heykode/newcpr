@@ -3,6 +3,7 @@ import { computed } from 'vue'
 import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
 import BaseSelect from '@/components/base/BaseSelect.vue'
 import { useProxyCatalog } from '@/composables/useProxyCatalog'
+import { t } from '@/i18n'
 
 const props = withDefaults(defineProps<{ accountId?: string, endpoint?: string | null, disabled?: boolean, preserve?: boolean, error?: string }>(), { preserve: true })
 const mode = defineModel<string>('mode', { required: true })
@@ -36,7 +37,7 @@ const selection = computed({
 </script>
 
 <template>
-  <BaseFormItem label="出站隧道" :error="error">
+  <BaseFormItem :label="t('accounts.proxy.outboundTunnel')" :error="error">
     <template v-if="$slots.extra" #extra>
       <slot name="extra" />
     </template>
@@ -47,7 +48,7 @@ const selection = computed({
       class="w-full"
       :options="options"
       :disabled="disabled || loading"
-      aria-label="出站隧道"
+      :aria-label="t('accounts.proxy.outboundTunnel')"
     />
   </BaseFormItem>
 </template>

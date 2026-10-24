@@ -10,6 +10,7 @@ import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseSegmented from '@/components/base/BaseSegmented.vue'
 import BaseSelect from '@/components/base/BaseSelect.vue'
+import { t } from '@/i18n'
 import UsageEntityFilter from './UsageEntityFilter.vue'
 
 const props = defineProps<{ range: UsageTimeRangeParams, errors: boolean, error?: string }>()
@@ -201,18 +202,18 @@ const routeOptions = [all, { label: 'Responses', value: '/v1/responses' }, { lab
       </label>
       <div ref="accountRoot" class="relative min-w-0">
         <label>
-          <span class="mb-1 block text-cp-xs text-cp-text-secondary">账号</span>
-          <BaseInput v-model="accountQuery" placeholder="搜索并选择账号" aria-label="搜索账号" aria-haspopup="listbox" :aria-expanded="accountOpen" @focusin="accountOpen = true" @keydown.esc="closeAccounts" />
+          <span class="mb-1 block text-cp-xs text-cp-text-secondary">{{ t('usage.filters.account') }}</span>
+          <BaseInput v-model="accountQuery" placeholder="搜索并选择账号" :aria-label="t('accounts.filters.searchLabel')" aria-haspopup="listbox" :aria-expanded="accountOpen" @focusin="accountOpen = true" @keydown.esc="closeAccounts" />
         </label>
         <div v-if="accountOpen" class="absolute top-full right-0 left-0 z-40 mt-1 max-h-72 overflow-auto rounded-cp border border-cp-border bg-cp-bg-elevated p-1 shadow-cp" role="listbox" aria-label="账号候选" aria-multiselectable="true">
           <p v-if="accountLoading" class="px-2 text-cp-xs">
-            加载中
+            {{ t('common.status.loading') }}
           </p>
           <p v-else-if="accountError" role="alert" class="px-2 text-cp-xs text-cp-error">
             账号查询失败
           </p>
           <p v-else-if="!accounts.length" class="px-2 text-cp-xs text-cp-text-secondary">
-            暂无匹配账号
+            {{ t('appearance.preview.components.noMatchingAccountYet') }}
           </p>
           <button v-for="account in accounts" :key="account.id" type="button" role="option" :aria-selected="selected.includes(account.id)" class="block w-full rounded-cp-sm border-0 bg-transparent p-2 text-left hover:bg-cp-bg-text-hover" @click="selectAccount(account)" @keydown.esc="closeAccounts">
             <span class="block break-all text-cp-sm" :class="selected.includes(account.id) ? 'font-bold text-cp-primary-text' : 'text-cp-text'">{{ account.email || account.name || account.id }}{{ account.deleted ? '（已删除）' : '' }}</span>
@@ -221,8 +222,8 @@ const routeOptions = [all, { label: 'Responses', value: '/v1/responses' }, { lab
         </div>
       </div>
       <label class="min-w-0">
-        <span class="mb-1 block text-cp-xs text-cp-text-secondary">请求模型</span>
-        <BaseInput :model-value="model.requestedModel || ''" placeholder="精确模型名" aria-label="请求模型" @update:model-value="set('requestedModel', $event)" />
+        <span class="mb-1 block text-cp-xs text-cp-text-secondary">{{ t('usage.error.requestModel') }}</span>
+        <BaseInput :model-value="model.requestedModel || ''" placeholder="精确模型名" :aria-label="t('usage.error.requestModel')" @update:model-value="set('requestedModel', $event)" />
       </label>
       <div class="flex min-w-0 items-end gap-2">
         <label class="min-w-0 flex-1">
@@ -257,9 +258,9 @@ const routeOptions = [all, { label: 'Responses', value: '/v1/responses' }, { lab
         <span class="mb-1 block text-cp-xs text-cp-text-secondary">{{ field.label }}</span>
         <BaseInput :type="field.type || 'text'" :min="field.type === 'number' ? 0 : undefined" :model-value="model[field.key] || ''" :placeholder="field.placeholder" :aria-label="field.label" @update:model-value="set(field.key, $event)" />
       </label>
-      <label class="min-w-0"><span class="mb-1 block text-cp-xs text-cp-text-secondary">上游传输</span><BaseSelect class="w-full" :model-value="model.upstreamTransport || ''" :options="transportOptions" aria-label="上游传输" @update:model-value="set('upstreamTransport', $event)" /></label>
-      <label class="min-w-0"><span class="mb-1 block text-cp-xs text-cp-text-secondary">客户端传输</span><BaseSelect class="w-full" :model-value="model.clientTransport || ''" :options="transportOptions.filter(option => option.value !== 'unknown')" aria-label="客户端传输" @update:model-value="set('clientTransport', $event)" /></label>
-      <label class="min-w-0"><span class="mb-1 block text-cp-xs text-cp-text-secondary">缓存</span><BaseSelect class="w-full" :model-value="model.cacheMatch || ''" :options="cacheOptions" aria-label="缓存筛选" @update:model-value="set('cacheMatch', $event)" /></label>
+      <label class="min-w-0"><span class="mb-1 block text-cp-xs text-cp-text-secondary">{{ t('usage.error.upstreamTransport') }}</span><BaseSelect class="w-full" :model-value="model.upstreamTransport || ''" :options="transportOptions" :aria-label="t('usage.error.upstreamTransport')" @update:model-value="set('upstreamTransport', $event)" /></label>
+      <label class="min-w-0"><span class="mb-1 block text-cp-xs text-cp-text-secondary">{{ t('usage.error.clientTransfer') }}</span><BaseSelect class="w-full" :model-value="model.clientTransport || ''" :options="transportOptions.filter(option => option.value !== 'unknown')" :aria-label="t('usage.error.clientTransfer')" @update:model-value="set('clientTransport', $event)" /></label>
+      <label class="min-w-0"><span class="mb-1 block text-cp-xs text-cp-text-secondary">{{ t('usage.cost.cache') }}</span><BaseSelect class="w-full" :model-value="model.cacheMatch || ''" :options="cacheOptions" aria-label="缓存筛选" @update:model-value="set('cacheMatch', $event)" /></label>
       <template v-if="errors">
         <label v-for="field in errorFields" :key="field.key" class="min-w-0">
           <span class="mb-1 block text-cp-xs text-cp-text-secondary">{{ field.label }}</span>

@@ -16,6 +16,7 @@ import BasePageHeader from '@/components/base/BasePageHeader.vue'
 import BaseSelect from '@/components/base/BaseSelect.vue'
 import BaseSwitch from '@/components/base/BaseSwitch.vue'
 import { useAsyncAction } from '@/composables/useAsyncAction'
+import { t } from '@/i18n'
 import { formatDateTime } from '@/utils/date'
 
 const status = ref<CaptureStatus | null>(null)
@@ -213,7 +214,7 @@ onBeforeUnmount(() => {
     </BaseConfirmModal>
     <BasePageHeader title="请求采集">
       <template #actions>
-        <BaseIconButton label="刷新" :disabled="loading" @click="load">
+        <BaseIconButton :label="t('common.actions.refresh')" :disabled="loading" @click="load">
           <RefreshCw class="size-4" />
         </BaseIconButton>
       </template>
@@ -230,7 +231,7 @@ onBeforeUnmount(() => {
         <span>保留时间</span><BaseNumberInput v-model="config.retentionDays" label="保留时间" unit="天" :min="1" :max="30" />
       </div>
       <BaseButton type="submit" :disabled="action.loading.value">
-        <Save class="size-4" />保存
+        <Save class="size-4" />{{ t('common.actions.save') }}
       </BaseButton>
     </form>
     <form v-if="status?.config.enabled" class="grid items-end gap-3 sm:grid-cols-2 xl:grid-cols-5" @submit.prevent="create">
@@ -270,11 +271,11 @@ onBeforeUnmount(() => {
               <th class="p-3">
                 目标
               </th><th class="p-3">
-                状态
+                {{ t('common.fields.status') }}
               </th><th class="p-3">
                 到期时间
               </th><th class="p-3">
-                操作
+                {{ t('common.fields.actions') }}
               </th>
             </tr>
           </thead>
@@ -325,11 +326,11 @@ onBeforeUnmount(() => {
               </th><th class="p-3">
                 内容
               </th><th class="p-3">
-                大小
+                {{ t('settings.backup.size') }}
               </th><th class="p-3">
-                时间
+                {{ t('usage.fields.time') }}
               </th><th class="p-3">
-                操作
+                {{ t('common.fields.actions') }}
               </th>
             </tr>
           </thead>

@@ -1,5 +1,6 @@
 import type { AccountErrorReason, AccountStatus, getAccounts } from '@/api'
 import { defineTableColumns } from '@/components/base/BaseTable/columns'
+import { t } from '@/i18n'
 
 export type AccountRow = Awaited<ReturnType<typeof getAccounts>>['items'][number]
 export type AccountQuotaWindow = AccountRow['quota']['windows'][number]
@@ -251,7 +252,7 @@ function windowRoleOrder(role: AccountQuotaWindow['role']) {
 
 function quotaLimitLabel(window: AccountQuotaWindow) {
   if (window.limitId === 'codex')
-    return '通用额度'
+    return t('accounts.quota.general')
   return window.limitName
 }
 

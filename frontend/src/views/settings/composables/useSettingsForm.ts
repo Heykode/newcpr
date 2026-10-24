@@ -1,12 +1,13 @@
 import type { rotationOptions } from '../constants'
 import type { AccountAffinity, RequestTuning } from '@/api/modules/settings'
 import { computed, reactive, ref, shallowRef } from 'vue'
-
 import { getSettings, updateSettings } from '@/api'
+
 import { defaultSmartScheduling } from '@/api/modules/settings'
 import { ApiError } from '@/api/request'
 import { toast } from '@/components/base/BaseToast'
 import { useAsyncAction } from '@/composables/useAsyncAction'
+import { t } from '@/i18n'
 import { errorMessage } from '@/utils/async'
 import { DEFAULT_EXCEL_MODELS, DEFAULT_EXCEL_MODELS_INPUT } from '@/utils/excel-defaults'
 import { parseExcelModels } from '@/views/accounts/utils/schedulingForm'
@@ -115,7 +116,7 @@ export function useSettingsForm() {
 
   function versionError(value: string): string {
     const normalized = value.trim()
-    return normalized && !isSemver(normalized) ? '请输入标准 SemVer，例如 0.152.0' : ''
+    return normalized && !isSemver(normalized) ? t('settings.form.enterStandardSemverForExample') : ''
   }
 
   function applySettings(data: Awaited<ReturnType<typeof getSettings>>) {
@@ -196,9 +197,9 @@ export function useSettingsForm() {
       const requested = row.requestedModel.trim()
       const upstream = row.upstreamModel.trim()
       if (!requested || !upstream)
-        throw new Error('请完整填写模型映射')
+        throw new Error(t('settings.form.fillInModelMappingCompletely'))
       if (entries[requested])
-        throw new Error(`存在重复的客户端模型：${requested}`)
+        throw new Error(t('settings.form.duplicateClientModel', { requested }))
       entries[requested] = upstream
     }
     return entries

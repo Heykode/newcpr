@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import type { getUsageRecordSummary } from '@/api'
 import { Activity, Database, FileText, Timer } from '@lucide/vue'
-
 import { computed } from 'vue'
+
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseMotionIcon from '@/components/base/BaseMotionIcon.vue'
+import { t } from '@/i18n'
 
 const props = defineProps<{
   summary: Awaited<ReturnType<typeof getUsageRecordSummary>>
@@ -51,7 +52,7 @@ const items = computed(() => [
 </script>
 
 <template>
-  <section class="mt-5 grid shrink-0 grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4" aria-label="使用概览">
+  <section class="mt-5 grid shrink-0 grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4" :aria-label="t('usage.usageOverview')">
     <BaseCard
       v-for="item in items"
       :key="item.key"

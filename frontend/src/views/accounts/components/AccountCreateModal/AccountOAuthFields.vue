@@ -7,6 +7,7 @@ import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseScrollbar from '@/components/base/BaseScrollbar.vue'
 import BaseTextarea from '@/components/base/BaseTextarea.vue'
 import { useCopyText } from '@/composables/useCopyText'
+import { t } from '@/i18n'
 
 defineProps<{
   authUrl: string
@@ -54,13 +55,13 @@ const copyWithToast = useCopyText()
     </div>
 
     <BaseForm v-if="authUrl">
-      <BaseFormItem label="授权链接">
+      <BaseFormItem :label="t('accounts.onboarding.authorizationLink')">
         <template #extra>
           <BaseIconButton
             variant="secondary"
             size="sm"
-            title="复制链接"
-            label="复制链接"
+            :title="t('accounts.onboarding.copyLink')"
+            :label="t('accounts.onboarding.copyLink')"
             :disabled="disabled"
             @click="copyWithToast(authUrl, { successText: '授权链接已复制' })"
           >

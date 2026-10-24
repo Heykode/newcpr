@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import type { dashboardSnapshotView } from '../composables/useDashboard'
-
 import BaseCard from '@/components/base/BaseCard.vue'
+
+import { t } from '@/i18n'
 import UsageRecordsTable from '@/views/usage/components/UsageRecordsTable.vue'
 import { usageRecordColumns } from '@/views/usage/constants'
 
@@ -17,8 +18,8 @@ const dashboardUsageRecordColumns = usageRecordColumns.filter(column => column.k
 <template>
   <BaseCard
     as="article"
-    title="使用记录"
-    description="最近 10 条成功请求"
+    :title="t('dashboard.recentRequests.title')"
+    :description="t('dashboard.recentRequests.description')"
     class="h-117 w-full"
   >
     <template #body>
@@ -27,7 +28,7 @@ const dashboardUsageRecordColumns = usageRecordColumns.filter(column => column.k
           class="min-w-0 flex-1"
           :columns="dashboardUsageRecordColumns"
           :rows="rows"
-          empty-text="暂无成功记录"
+          :empty-text="t('dashboard.recentRequests.empty')"
         />
       </div>
     </template>

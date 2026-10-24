@@ -12,6 +12,7 @@ pub(crate) use http::responses;
 pub(super) use http::{PendingExecution, request_client_context};
 pub use http::{collect_execution_response, stream_execution_response};
 pub(in crate::openai) use http::{collect_execution_response_as, stream_execution_response_as};
+pub(crate) use request::passthrough_request_headers;
 pub use request::{
     ContinuationIntent, DecodedResponsesRequest, OpenAiRequestHeaders, ResponsesRequestMetadata,
     decode_request_with_headers,

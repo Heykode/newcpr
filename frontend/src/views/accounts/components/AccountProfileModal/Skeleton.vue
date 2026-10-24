@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import BaseSkeleton from '@/components/base/BaseSkeleton.vue'
+import { t } from '@/i18n'
 </script>
 
 <template>
   <div class="grid gap-8 sm:gap-10" role="status" aria-live="polite" aria-busy="true">
-    <span class="sr-only">正在加载累计活动</span>
+    <span class="sr-only">{{ t('accounts.profile.loadingCumulativeActivity') }}</span>
 
     <section class="grid min-w-0 gap-4 overflow-hidden">
       <div class="flex items-center justify-between">

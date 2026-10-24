@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import type { AccountGroup } from '@/api'
-
 import BaseCheckbox from '@/components/base/BaseCheckbox.vue'
+
+import { t } from '@/i18n'
 
 withDefaults(
   defineProps<{
@@ -43,7 +44,7 @@ function updateGroup(groupId: string, selected: boolean) {
           @update:model-value="updateGroup(group.id, $event)"
         />
       </span>
-      <span v-if="!group.enabled" class="shrink-0 text-cp-xs font-emphasis text-cp-text-quaternary"> 已禁用 </span>
+      <span v-if="!group.enabled" class="shrink-0 text-cp-xs font-emphasis text-cp-text-quaternary"> {{ t('common.status.disabled') }} </span>
     </div>
   </div>
   <p v-else class="m-0 rounded-cp bg-cp-fill-quaternary px-3.5 py-3 text-cp-sm font-emphasis text-cp-text-secondary">

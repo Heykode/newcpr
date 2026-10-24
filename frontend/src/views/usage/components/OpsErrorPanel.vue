@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import type { UsageTimeRangeParams } from '../composables/useUsageTimeRange'
 import type { OpsError, UsageFilterParams } from '@/api'
-
 import { Eye, RefreshCw, Search } from '@lucide/vue'
+
 import { shallowRef, toRef } from 'vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
@@ -11,6 +11,7 @@ import BaseTablePagination from '@/components/base/BaseTable/BaseTablePagination
 import BaseTable from '@/components/base/BaseTable/index.vue'
 import { useTableColumns } from '@/components/base/BaseTable/useTableColumns'
 import ProviderIconGroup from '@/components/ProviderIconGroup.vue'
+import { t } from '@/i18n'
 import AccountPlanBadge from '@/views/accounts/components/AccountPlanBadge.vue'
 import { useOpsErrorsTable } from '../composables/useOpsErrorsTable'
 import { opsErrorColumns } from '../constants'
@@ -227,7 +228,7 @@ function upstreamSendStateText(value: string | null | undefined) {
           <BaseIconButton
             variant="ghost"
             size="md"
-            label="查看错误详情"
+            :label="t('usage.page.viewErrorDetails')"
             @click="showDetail(row)"
           >
             <Eye class="size-4.5" />

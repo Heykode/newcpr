@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import type { AccountRow } from '../constants'
-
 import { ChartNoAxesCombined, Sigma } from '@lucide/vue'
+
 import { computed } from 'vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import { defineTableColumns } from '@/components/base/BaseTable/columns'
 import BaseTable from '@/components/base/BaseTable/index.vue'
+import { t } from '@/i18n'
 import { modelSuccessRateTextClass } from '../constants'
 
 const props = defineProps<{
@@ -47,25 +48,25 @@ const modelUsageColumns = defineTableColumns<AccountModelUsage>([
       </div>
       <div class="grid gap-2 xl:min-h-0 xl:flex-1 xl:grid-rows-5">
         <div class="flex items-center justify-between rounded-lg bg-cp-green-container px-3 py-2">
-          <span class="text-cp-sm font-bold text-cp-green-on-container">输入</span>
+          <span class="text-cp-sm font-bold text-cp-green-on-container">{{ t('accounts.usage.input') }}</span>
           <strong class="font-mono text-cp text-cp-text">
             {{ account.usage.inputTokensDisplay }}
           </strong>
         </div>
         <div class="flex items-center justify-between rounded-lg bg-cp-orange-container px-3 py-2">
-          <span class="text-cp-sm font-bold text-cp-orange-on-container">输出</span>
+          <span class="text-cp-sm font-bold text-cp-orange-on-container">{{ t('accounts.usage.output') }}</span>
           <strong class="font-mono text-cp text-cp-text">
             {{ account.usage.outputTokensDisplay }}
           </strong>
         </div>
         <div class="flex items-center justify-between rounded-lg bg-cp-cyan-container px-3 py-2">
-          <span class="text-cp-sm font-bold text-cp-cyan-on-container">缓存</span>
+          <span class="text-cp-sm font-bold text-cp-cyan-on-container">{{ t('accounts.usage.cache') }}</span>
           <strong class="font-mono text-cp text-cp-text">
             {{ account.usage.cachedTokensDisplay }}
           </strong>
         </div>
         <div class="flex items-center justify-between rounded-lg bg-cp-blue-container px-3 py-2">
-          <span class="text-cp-sm font-bold text-cp-blue-on-container">推理</span>
+          <span class="text-cp-sm font-bold text-cp-blue-on-container">{{ t('accounts.usage.reasoning') }}</span>
           <strong class="font-mono text-cp text-cp-text">
             {{ account.usage.reasoningTokensDisplay }}
           </strong>
@@ -86,7 +87,7 @@ const modelUsageColumns = defineTableColumns<AccountModelUsage>([
             模型使用排行
           </h3>
           <BaseIconButton
-            label="预测周/月额度"
+            :label="t('accounts.quota.forecastWeeklyMonthlyQuota')"
             size="sm"
             aria-haspopup="dialog"
             @click="emit('forecastRequested', account)"
@@ -98,15 +99,15 @@ const modelUsageColumns = defineTableColumns<AccountModelUsage>([
         <div class="ml-auto flex items-baseline gap-4">
           <div v-if="hasUsageSummary" class="flex items-baseline gap-1.5 whitespace-nowrap">
             <Sigma class="size-3.5 self-center text-cp-text-tertiary" :stroke-width="1.75" />
-            <span title="总 Token">
+            <span :title="t('accounts.usage.totalTokens')">
               <span class="sr-only">总 Token：</span>
               <span class="font-mono text-cp-sm font-emphasis tabular-nums text-cp-text">
                 {{ account.usage.totalTokensDisplay }}
               </span>
             </span>
             <span class="mx-0.5 text-[10px] leading-none font-emphasis text-cp-text-quaternary"> / </span>
-            <span title="总计费">
-              <span class="sr-only">总计费：</span>
+            <span :title="t('accounts.usage.totalCharge')">
+              <span class="sr-only">{{ t('accounts.usage.totalCharges') }}</span>
               <span class="font-mono text-cp-sm font-heavy tabular-nums text-cp-green-text">
                 {{ totalBillingDisplay }}
               </span>
@@ -122,7 +123,7 @@ const modelUsageColumns = defineTableColumns<AccountModelUsage>([
           :rows="account.usage.models"
           row-key="model"
           density="compact"
-          empty-text="暂无模型用量"
+          :empty-text="t('accounts.usage.noModelUsageYet')"
         >
           <template #successRateDisplay="{ row }">
             <span :class="modelSuccessRateTextClass(row.successRate)">

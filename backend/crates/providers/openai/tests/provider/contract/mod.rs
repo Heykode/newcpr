@@ -1397,8 +1397,7 @@ async fn image_endpoints_bypass_only_the_text_catalog_and_preserve_the_current_c
         let values = captured_header_values(request, "x-codex-image-turn-id");
         assert_eq!(values.len(), 1);
         let value = std::str::from_utf8(&values[0]).unwrap();
-        uuid::Uuid::parse_str(value).unwrap();
-        assert_ne!(value, "turn_image_contract");
+        assert_eq!(value, "turn_image_contract");
         turns.push(value.to_owned());
     }
     assert_eq!(turns.len(), cases.len());
@@ -2084,16 +2083,13 @@ async fn standalone_search_preserves_wire_and_scopes_turn_metadata_to_the_select
     let metadata_values = captured_header_values(request, "x-codex-turn-metadata");
     assert_eq!(metadata_values.len(), 1);
     let metadata: Value = serde_json::from_slice(&metadata_values[0]).expect("turn metadata JSON");
-    for (field, original) in [
-        ("session_id", "session"),
-        ("thread_id", "thread"),
-        ("turn_id", "turn"),
-    ] {
+    for (field, original) in [("session_id", "session"), ("thread_id", "thread")] {
         let scoped = metadata[field].as_str().unwrap();
         uuid::Uuid::parse_str(scoped).unwrap();
         assert_ne!(scoped, original);
     }
     assert_eq!(metadata.get("future"), Some(&json!(true)));
+    assert_eq!(metadata["turn_id"], "turn");
     assert!(metadata.get("account_id").is_none());
     assert_ne!(
         metadata.get("installation_id"),

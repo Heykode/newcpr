@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { RotateCcw } from '@lucide/vue'
-
 import BaseColorPicker from '@/components/base/BaseColorPicker/index.vue'
+
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
+import { t } from '@/i18n'
 
 withDefaults(defineProps<{
   label: string
@@ -29,7 +30,7 @@ const emit = defineEmits<{
       <div class="flex flex-wrap items-center gap-2">
         <strong class="text-cp-sm font-bold text-cp-text">{{ label }}</strong>
         <span v-if="overridden" class="rounded-full bg-cp-primary-container px-1.5 py-0.5 text-[9px] font-heavy text-cp-primary-on-container">
-          已修改
+          {{ t('appearance.color.modified') }}
         </span>
       </div>
       <code class="mt-1 block truncate font-mono text-[10px] text-cp-text-quaternary">{{ token }}</code>
@@ -53,7 +54,7 @@ const emit = defineEmits<{
       <span class="min-w-17 font-mono text-[10px] tabular-nums text-cp-text-secondary">{{ value }}</span>
       <BaseIconButton
         v-if="overridden"
-        label="恢复派生值"
+        :label="t('appearance.color.restoreDerivedValue')"
         size="sm"
         variant="ghost"
         @click="emit('reset')"

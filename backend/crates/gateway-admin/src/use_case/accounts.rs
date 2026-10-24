@@ -17,8 +17,9 @@ use crate::{
         AdminError, MutationContext,
         accounts::{
             AccountConnectionTest, AccountConnectionTestEvent, AccountConnectionTestEventStream,
-            AccountListQuery, AccountPageItem, AccountUpdateResult, AccountUsageWindowQuery,
-            AccountsUpdateResult, BatchUpdateAccounts, TurnStateProbeOutcome, UpdateAccount,
+            AccountListQuery, AccountPageItem, AccountUpdateResult, AccountUsage,
+            AccountUsageWindowQuery, AccountsUpdateResult, BatchUpdateAccounts,
+            TurnStateProbeOutcome, UpdateAccount,
         },
         group_monitor_quota::{monitor_learned_windows, monitor_learning_observations},
         observability::TimeRange,
@@ -302,6 +303,78 @@ impl DefaultAccountsService {
                 .entry(account_id.clone())
                 .or_insert_with(|| Arc::new(futures::lock::Mutex::new(()))),
         )
+    }
+
+    async fn read_quotas(
+        providers: &ProviderAdminRegistry,
+        items: &[AccountPageItem],
+        rolling_usage: &BTreeMap<String, AccountUsage>,
+    ) -> Vec<ProviderQuota> {
+        let mut groups = BTreeMap::<_, Vec<usize>>::new();
+        for (index, item) in items.iter().enumerate() {
+            groups
+                .entry(&item.account.provider_kind)
+                .or_default()
+                .push(index);
+        }
+        let batches = groups.into_iter().map(|(kind, indices)| async move {
+            let provider = match providers.require(kind) {
+                Ok(provider) => provider,
+                Err(error) => {
+                    tracing::warn!(
+                        provider = %kind,
+                        error = %error,
+                        "account directory provider is not registered; showing empty quota"
+                    );
+                    return Vec::new();
+                }
+            };
+            let requests = indices
+                .iter()
+                .map(|&index| {
+                    let account = &items[index].account;
+                    crate::model::provider_credentials::ProviderQuotaReadRequest {
+                        account,
+                        rolling_usage: rolling_usage.get(&account.id),
+                    }
+                })
+                .collect::<Vec<_>>();
+            let results = provider.read_quotas(&requests).await;
+            if results.len() != indices.len() {
+                tracing::warn!(
+                    provider = %kind,
+                    expected = indices.len(),
+                    actual = results.len(),
+                    "account directory quota batch has invalid length; showing empty quota"
+                );
+                return Vec::new();
+            }
+            indices
+                .into_iter()
+                .zip(results)
+                .map(|(index, result)| {
+                    let quota = result.unwrap_or_else(|error| {
+                        tracing::warn!(
+                            account_id = %items[index].account.id,
+                            error = %error,
+                            "account directory quota projection failed; showing empty quota"
+                        );
+                        empty_quota()
+                    });
+                    (index, quota)
+                })
+                .collect::<Vec<_>>()
+        });
+        // Provider 可独立完成，回填原页顺序并保留未注册或失败账号的位置
+        let mut quotas = vec![empty_quota(); items.len()];
+        for (index, quota) in futures::future::join_all(batches)
+            .await
+            .into_iter()
+            .flatten()
+        {
+            quotas[index] = quota;
+        }
+        quotas
     }
 
     async fn load_account(
@@ -598,45 +671,7 @@ impl AccountsService for DefaultAccountsService {
             .into_iter()
             .map(|usage| (usage.account_id.clone(), usage))
             .collect::<BTreeMap<_, _>>();
-        let mut quotas = futures::future::join_all(page.items.iter().map(|item| async {
-            let account = &item.account;
-            let account_id = ProviderAccountId::new(account.id.clone())
-                .map_err(|_| AdminError::invalid("Provider 账号 ID 不合法"))?;
-            // 单个账号的 quota 投影失败（Provider 未注册或 quota 读取失败）不拖垮整页：
-            // 该账号降级为空额度投影，其余账号与页面状态照常返回。
-            let provider = match self.providers.require(&account.provider_kind) {
-                Ok(provider) => provider,
-                Err(error) => {
-                    tracing::warn!(
-                        account_id = %account.id,
-                        error = %error,
-                        "account directory provider is not registered; showing empty quota"
-                    );
-                    return Ok(empty_quota());
-                }
-            };
-            match provider
-                .quota(ProviderQuotaRequest {
-                    account_id,
-                    refresh: false,
-                    rolling_usage: rolling_usage.get(&account.id).cloned(),
-                })
-                .await
-            {
-                Ok(quota) => Ok(quota),
-                Err(error) => {
-                    tracing::warn!(
-                        account_id = %account.id,
-                        error = %error,
-                        "account directory quota projection failed; showing empty quota"
-                    );
-                    Ok(empty_quota())
-                }
-            }
-        }))
-        .await
-        .into_iter()
-        .collect::<Result<Vec<_>, AdminError>>()?;
+        let mut quotas = Self::read_quotas(&self.providers, &page.items, &rolling_usage).await;
         self.attach_quota_local_usage(&page.items, &mut quotas)
             .await?;
         let default_concurrency = self.default_concurrency_limit().await?;

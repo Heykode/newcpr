@@ -2,8 +2,9 @@
 import { storeToRefs } from 'pinia'
 import { nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { RouterView, useRoute } from 'vue-router'
-
 import BaseScrollbar from '@/components/base/BaseScrollbar.vue'
+
+import { t } from '@/i18n'
 import { useSystemUpdateStore } from '@/stores/modules/system-update'
 import { useUiStore } from '@/stores/modules/ui'
 
@@ -94,7 +95,7 @@ watch(
           <button
             type="button"
             class="absolute inset-0 border-0 bg-black/32 backdrop-blur-[1px] cursor-default"
-            aria-label="关闭侧边栏"
+            :aria-label="t('navigation.sidebar.close')"
             @click="closeMobileSidebar"
           />
           <div class="mobile-sidebar-panel absolute inset-y-0 left-0 flex">

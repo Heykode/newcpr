@@ -12,6 +12,7 @@ import BaseNumberInput from '@/components/base/BaseNumberInput.vue'
 import BaseSelect from '@/components/base/BaseSelect.vue'
 import BaseSwitch from '@/components/base/BaseSwitch.vue'
 import BaseTextarea from '@/components/base/BaseTextarea.vue'
+import { t } from '@/i18n'
 import { buildQualityPatch, qualityEditableFields, saveQualityBatch } from './batch-edit'
 import { failureActionOptions, failureThreshold } from './failure-actions'
 import { qualityEffortOptions } from './model-choices'
@@ -194,7 +195,7 @@ onBeforeUnmount(() => {
         <Square class="size-4" />停止后续保存
       </BaseButton>
       <BaseButton v-else @click="open = false">
-        关闭
+        {{ t('common.actions.close') }}
       </BaseButton>
       <BaseButton :disabled="saving || !fields.length || !pending.length" @click="save">
         <Save class="size-4" />{{ results.some(result => !result.success) ? '重试未完成项' : '保存所选字段' }}

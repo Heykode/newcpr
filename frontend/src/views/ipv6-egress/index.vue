@@ -14,6 +14,7 @@ import { defineTableColumns } from '@/components/base/BaseTable/columns'
 import BaseTable from '@/components/base/BaseTable/index.vue'
 import { toast } from '@/components/base/BaseToast'
 import { useAsyncAction } from '@/composables/useAsyncAction'
+import { t } from '@/i18n'
 
 const saved = shallowRef<Ipv6EgressConfig | null>(null)
 const addresses = ref<Ipv6EgressAddress[]>([])
@@ -89,7 +90,7 @@ onMounted(reload)
 
 <template>
   <div class="grid gap-5">
-    <BasePageHeader title="IPv6 出口" description="仅配置 CPR 的本地连接源地址，不修改操作系统网络接口。">
+    <BasePageHeader :title="t('navigation.ipv6')" description="仅配置 CPR 的本地连接源地址，不修改操作系统网络接口。">
       <template #actions>
         <BaseButton :loading="busy" :disabled="!saved" @click="save">
           保存配置
@@ -139,7 +140,7 @@ onMounted(reload)
           </template>
           <template #actions="{ row }">
             <BaseButton variant="secondary" :disabled="busy" @click="addresses = addresses.filter(address => address.id !== row.id)">
-              移除
+              {{ t('proxies.accounts.remove') }}
             </BaseButton>
           </template>
         </BaseTable>
@@ -151,7 +152,7 @@ onMounted(reload)
         />
         <div class="flex justify-end gap-3">
           <BaseButton variant="secondary" :disabled="busy" @click="reload">
-            重新加载
+            {{ t('accounts.quotaForecast.reload') }}
           </BaseButton>
         </div>
       </div>

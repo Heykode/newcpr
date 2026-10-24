@@ -2,9 +2,10 @@
 import type { dashboardSnapshotView, dashboardTrendView } from '../composables/useDashboard'
 import type { DashboardTrendKind } from '@/api/modules/dashboard'
 import { RefreshCw } from '@lucide/vue'
-
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
+
 import BasePageHeader from '@/components/base/BasePageHeader.vue'
+import { t } from '@/i18n'
 
 import AccountOverviewCard from './AccountOverviewCard.vue'
 import DashboardHeartbeat from './DashboardHeartbeat.vue'
@@ -54,16 +55,16 @@ const trendKind = defineModel<DashboardTrendKind>('trendKind', { required: true 
 
 <template>
   <div class="w-full">
-    <BasePageHeader title="系统概览">
+    <BasePageHeader :title="t('dashboard.title')">
       <template #description>
-        <span>当日统计</span>
+        <span>{{ t('dashboard.today') }}</span>
         <DashboardHeartbeat :updated-at="lastRefreshedAt" />
       </template>
       <template #actions>
         <BaseIconButton
           class="text-cp-primary-text"
           size="md"
-          label="刷新概览"
+          :label="t('dashboard.refresh.action')"
           :loading="loading || refreshing"
           :disabled="loading || refreshing"
           @click="emit('refresh')"
@@ -78,7 +79,7 @@ const trendKind = defineModel<DashboardTrendKind>('trendKind', { required: true 
 
     <section
       class="mt-6 grid grid-cols-1 gap-4 md:grid-cols-2 2xl:grid-cols-4 2xl:gap-6"
-      aria-label="核心指标"
+      :aria-label="t('dashboard.metrics.title')"
     >
       <MetricCard v-for="metric in metrics" :key="metric.title" :metric="metric" />
     </section>

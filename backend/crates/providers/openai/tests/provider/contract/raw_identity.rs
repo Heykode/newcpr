@@ -151,7 +151,7 @@ fn assert_scoped_request(request: &wiremock::Request, account: &str) -> String {
         assert_eq!(body["id"], "shared-root");
     }
     assert_ne!(body["conversation_id"], "client-correlation");
-    assert_ne!(body["turn_id"], "shared-turn");
+    assert_eq!(body["turn_id"], "shared-turn");
     assert_eq!(body["turn_metadata"]["turn_id"], body["turn_id"]);
     assert_eq!(body["turn_metadata"]["business"], "unchanged");
     assert!(body["turn_metadata"].get("account_id").is_none());

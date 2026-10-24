@@ -8,6 +8,7 @@ import ts from 'typescript'
 import { createSSRApp, defineComponent, h } from 'vue'
 import { compileScript, parse } from 'vue/compiler-sfc'
 import { renderToString } from 'vue/server-renderer'
+import * as translations from './helpers/i18n.mjs'
 
 const require = createRequire(import.meta.url)
 const filename = new URL('../src/views/accounts/components/AccountHealthTimeline.vue', import.meta.url)
@@ -29,7 +30,7 @@ const popover = defineComponent({
 })
 runInNewContext(outputText, {
   exports,
-  require: name => name === '@/components/base/BasePopover.vue' ? popover : require(name),
+  require: name => name === '@/i18n' ? translations : name === '@/components/base/BasePopover.vue' ? popover : require(name),
 }, { filename: filename.pathname })
 
 function bucket(index, counts = {}) {

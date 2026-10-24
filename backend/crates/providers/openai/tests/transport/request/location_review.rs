@@ -1,6 +1,5 @@
-//! Characterization of current behavior, not approval of the overwrite policy.
+//! Location overrides preserve historical dates and unrelated client context.
 
-use chrono::Utc;
 use provider_openai::transport::{
     CodexRequestContext, profile::CodexRequestLocation, protocol::responses::CodexResponsesRequest,
     qx_application::project_response_request,
@@ -75,7 +74,7 @@ fn desktop_time_context_respects_role_and_content_kind() {
         .unwrap();
     assert!(rewritten.contains("<timezone>America/Los_Angeles</timezone>"));
     assert!(rewritten.contains("<epoch>946684800</epoch>"));
-    assert!(!rewritten.contains("<current_date>2000-01-01</current_date>"));
+    assert!(rewritten.contains("<current_date>2000-01-01</current_date>"));
     assert_eq!(encoded.body()["input"][1], body["input"][1]);
     assert_eq!(encoded.body()["input"][2], body["input"][2]);
 }
@@ -215,16 +214,14 @@ fn unclassified_environment_is_aligned_but_explicit_kinds_remain_positional() {
 }
 
 #[test]
-fn marked_environment_only_rewrites_date_and_timezone_in_valid_user_xml() {
+fn marked_environment_rewrites_timezone_and_preserves_date_in_valid_user_xml() {
     let text = "<environment_context><current_date>2000-01-01</current_date><timezone>UTC</timezone><cwd>/synthetic/work</cwd><epoch>946684800</epoch></environment_context>";
     let mut assistant = environment(text);
     assistant["role"] = json!("assistant");
     let invalid = environment("<environment_context><timezone>UTC</environment_context>");
     let body = json!({"input": [environment(text), assistant, invalid], "epoch": 946684800});
     let location = west_coast();
-    let before = Utc::now().with_timezone(&location.timezone).date_naive();
     let encoded = encode(body.clone(), &location);
-    let after = Utc::now().with_timezone(&location.timezone).date_naive();
     let text = encoded.body()["input"][0]["content"][0]["text"]
         .as_str()
         .unwrap();
@@ -238,11 +235,7 @@ fn marked_environment_only_rewrites_date_and_timezone_in_valid_user_xml() {
             .text()
             .unwrap()
     };
-    assert!(
-        [before.to_string(), after.to_string()]
-            .iter()
-            .any(|date| date == field("current_date"))
-    );
+    assert_eq!(field("current_date"), "2000-01-01");
     assert_eq!(field("timezone"), "America/Los_Angeles");
     assert_eq!(field("cwd"), "/synthetic/work");
     assert_eq!(field("epoch"), "946684800");

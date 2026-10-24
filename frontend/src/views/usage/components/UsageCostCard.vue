@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import type { EChartsOption, LineSeriesOption } from 'echarts'
 import type { getUsageRecordInsightsOverview } from '@/api'
-
 import { computed, shallowRef } from 'vue'
+
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseEmpty from '@/components/base/BaseEmpty.vue'
 import BaseSegmented from '@/components/base/BaseSegmented.vue'
@@ -12,6 +12,7 @@ import {
   zeroInactiveValues,
 } from '@/components/charts/timeSeriesGap'
 import { useChartPalette } from '@/composables/useChartPalette'
+import { t } from '@/i18n'
 import { formatLocalizedCompactNumber as formatCompactNumber } from '@/utils/number'
 
 import {
@@ -113,10 +114,10 @@ const chartOption = computed<EChartsOption>(() => {
 
 function legendNames() {
   if (activeView.value === 'savings')
-    return ['缓存节省']
+    return [t('usage.cost.cacheSavings')]
   if (activeView.value === 'cache')
-    return ['缓存 Token 占比', '命中请求率']
-  return hasNoCacheCost.value ? ['实际费用', '无缓存费用'] : ['实际费用']
+    return [t('usage.cost.cacheTokenProportion'), t('usage.cost.hitRequestRate')]
+  return hasNoCacheCost.value ? [t('usage.cost.actualCost'), t('usage.cost.withoutCacheEstimate')] : [t('usage.cost.actualCost')]
 }
 
 function axisFormatter() {
@@ -132,7 +133,7 @@ function chartSeries(theme: UsageChartPalette): LineSeriesOption[] {
   if (activeView.value === 'savings') {
     return [
       ...usageGapAwareLineSeries(
-        '缓存节省',
+        t('usage.cost.cacheSavings'),
         zeroInactiveValues(
           chartPoints.map(point => decimalDisplayNumber(point.cacheSavings)),
           requestActivity.value,
@@ -146,12 +147,12 @@ function chartSeries(theme: UsageChartPalette): LineSeriesOption[] {
   if (activeView.value === 'cache') {
     return [
       ...usageGapAwareLineSeries(
-        '缓存 Token 占比',
+        t('usage.cost.cacheTokenProportion'),
         chartPoints.map(point => point.cachedTokenRate),
         theme.normal,
       ),
       ...usageGapAwareLineSeries(
-        '命中请求率',
+        t('usage.cost.hitRequestRate'),
         chartPoints.map(point => point.cacheHitRequestRate),
         theme.success,
       ),
@@ -160,7 +161,7 @@ function chartSeries(theme: UsageChartPalette): LineSeriesOption[] {
 
   const series = [
     ...usageGapAwareLineSeries(
-      '实际费用',
+      t('usage.cost.actualCost'),
       zeroInactiveValues(
         chartPoints.map(point => decimalDisplayNumber(point.estimatedCost)),
         requestActivity.value,
@@ -172,7 +173,7 @@ function chartSeries(theme: UsageChartPalette): LineSeriesOption[] {
   if (hasNoCacheCost.value) {
     series.push(
       ...usageGapAwareLineSeries(
-        '无缓存费用',
+        t('usage.cost.withoutCacheEstimate'),
         zeroInactiveValues(
           chartPoints.map(point => decimalDisplayNumber(point.noCacheCost)),
           requestActivity.value,
@@ -195,7 +196,7 @@ function formatTooltip(params: unknown) {
   if (activeView.value === 'savings') {
     return usageTooltipContent(theme, point.label, [
       usageTooltipItem(
-        '缓存节省',
+        t('usage.cost.cacheSavings'),
         formatUsd(costAmount(point.cacheSavings, pointIndex)),
         theme.success,
       ),
@@ -204,21 +205,21 @@ function formatTooltip(params: unknown) {
 
   if (activeView.value === 'cache') {
     return usageTooltipContent(theme, point.label, [
-      usageTooltipItem('缓存 Token 占比', formatPercent(point.cachedTokenRate), theme.normal),
-      usageTooltipItem('命中请求率', formatPercent(point.cacheHitRequestRate), theme.success),
+      usageTooltipItem(t('usage.cost.cacheTokenProportion'), formatPercent(point.cachedTokenRate), theme.normal),
+      usageTooltipItem(t('usage.cost.hitRequestRate'), formatPercent(point.cacheHitRequestRate), theme.success),
     ])
   }
 
   const lines = [
     usageTooltipItem(
-      '实际费用',
+      t('usage.cost.actualCost'),
       formatUsd(costAmount(point.estimatedCost, pointIndex)),
       theme.success,
     ),
   ]
   if (point.noCacheCost != null) {
     lines.push(usageTooltipItem(
-      '无缓存费用',
+      t('usage.cost.withoutCacheEstimate'),
       formatUsd(costAmount(point.noCacheCost, pointIndex)),
       theme.textMuted,
     ))
@@ -234,12 +235,12 @@ function costAmount(value: string | null, pointIndex: number) {
 <template>
   <BaseCard
     as="article"
-    title="成本效率"
+    :title="t('usage.cost.costEfficiency')"
     description="实际费用、缓存节省、服务层溢价与单位成本"
     class="min-h-90 xl:h-full"
   >
     <template #actions>
-      <BaseSegmented v-model="activeView" label="成本视图" :options="viewOptions" :disabled="loading" class="w-50" />
+      <BaseSegmented v-model="activeView" :label="t('usage.cost.costView')" :options="viewOptions" :disabled="loading" class="w-50" />
     </template>
 
     <template #body>
@@ -252,13 +253,13 @@ function costAmount(value: string | null, pointIndex: number) {
             </strong>
           </div>
           <div class="grid min-w-0 gap-1 px-1.5">
-            <span class="truncate text-[10px] font-bold text-cp-text-quaternary">缓存节省</span>
+            <span class="truncate text-[10px] font-bold text-cp-text-quaternary">{{ t('usage.cost.cacheSavings') }}</span>
             <strong class="truncate font-mono text-cp-sm font-heavy tabular-nums text-cp-green-text" :title="formatUsd(cost.cacheSavings)">
               {{ formatUsd(cost.cacheSavings) }}
             </strong>
           </div>
           <div class="grid min-w-0 gap-1 px-1.5">
-            <span class="truncate text-[10px] font-bold text-cp-text-quaternary">层级溢价</span>
+            <span class="truncate text-[10px] font-bold text-cp-text-quaternary">{{ t('usage.cost.tierPremium') }}</span>
             <strong class="truncate font-mono text-cp-sm font-heavy tabular-nums text-cp-orange-text" :title="formatUsd(cost.tierPremium)">
               {{ formatUsd(cost.tierPremium) }}
             </strong>
@@ -270,7 +271,7 @@ function costAmount(value: string | null, pointIndex: number) {
             </strong>
           </div>
           <div class="grid min-w-0 gap-1 px-1.5">
-            <span class="truncate text-[10px] font-bold text-cp-text-quaternary">费用覆盖</span>
+            <span class="truncate text-[10px] font-bold text-cp-text-quaternary">{{ t('usage.cost.costCoverage') }}</span>
             <strong class="truncate font-mono text-cp-sm font-heavy tabular-nums text-cp-text">
               {{ formatPercent(coverageRate) }}
             </strong>

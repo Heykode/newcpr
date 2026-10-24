@@ -2,6 +2,7 @@
 import { AlertCircle, AlertTriangle, CheckCircle2, Info, X } from '@lucide/vue'
 import { useResizeObserver } from '@vueuse/core'
 import { nextTick, onBeforeUnmount, useId, useTemplateRef, watch } from 'vue'
+import { t } from '@/i18n'
 
 import BaseIconButton from '../BaseIconButton.vue'
 import BaseScrollbar from '../BaseScrollbar.vue'
@@ -206,7 +207,7 @@ onBeforeUnmount(() => {
         <button
           type="button"
           tabindex="-1"
-          aria-label="关闭弹窗"
+          :aria-label="t('ui.closeDialog')"
           class="absolute inset-0 cursor-default border-0 bg-cp-bg-mask p-0"
           @click="closeModal"
         />
@@ -257,7 +258,7 @@ onBeforeUnmount(() => {
               </p>
             </div>
             <BaseIconButton
-              label="关闭"
+              :label="t('common.actions.close')"
               size="sm"
               variant="ghost"
               :disabled="!dismissible"

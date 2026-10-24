@@ -1,0 +1,1 @@
+{ "ui": { "confirm": "確認", "cancel": "取消", "closeDialog": "關閉視窗", "empty": "暫無資料", "total": "共 {count} 筆", "pageSize": "每頁筆數", "pagination": "分頁", "previous": "上一頁", "next": "下一頁" } }

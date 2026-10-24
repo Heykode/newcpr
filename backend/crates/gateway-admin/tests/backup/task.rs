@@ -31,7 +31,7 @@ async fn backup_task_runs_full_dump_upload_verify_pipeline() {
         expires_at: None,
     };
     repository
-        .insert_backup_record(seed.clone())
+        .insert_backup_record(seed.clone(), &system_context())
         .await
         .expect("insert queued");
 
@@ -70,7 +70,10 @@ async fn old_queued_backup_does_not_upload_gzip_with_a_custom_archive_name() {
         object_key: "synthetic/legacy.dump".into(),
         expires_at: None,
     };
-    repository.insert_backup_record(seed.clone()).await.unwrap();
+    repository
+        .insert_backup_record(seed.clone(), &system_context())
+        .await
+        .unwrap();
     BackupTask::new(repository.clone(), dump.clone(), objects.clone())
         .run_cycle(&CancellationToken::new())
         .await
@@ -97,7 +100,10 @@ async fn recovered_backups_clean_staging_after_verified_completion() {
             object_key: "codex/2026/10/08/recover-complete.dump".to_owned(),
             expires_at: None,
         };
-        repository.insert_backup_record(seed.clone()).await.unwrap();
+        repository
+            .insert_backup_record(seed.clone(), &system_context())
+            .await
+            .unwrap();
         let cancellation = CancellationToken::new();
         let archive = dump
             .dump(DumpRequest {
@@ -155,7 +161,7 @@ async fn backup_task_marks_failed_when_dump_port_fails() {
         expires_at: None,
     };
     repository
-        .insert_backup_record(seed.clone())
+        .insert_backup_record(seed.clone(), &system_context())
         .await
         .expect("insert queued");
 
@@ -187,7 +193,7 @@ async fn backup_task_marks_failed_with_the_upload_error() {
         expires_at: None,
     };
     repository
-        .insert_backup_record(seed.clone())
+        .insert_backup_record(seed.clone(), &system_context())
         .await
         .expect("insert queued");
 
@@ -217,13 +223,16 @@ async fn upload_failure_keeps_cleanup_failure_without_leaking_details() {
                 .fail_delete(),
         );
         repository
-            .insert_backup_record(BackupRecordSeed {
-                id: backup_id("cleanup-failure"),
-                trigger_kind: BackupTriggerKind::Manual,
-                scheduled_at: None,
-                object_key: "synthetic/cleanup.sql.gz".to_owned(),
-                expires_at: expires.then(|| Utc::now() + chrono::TimeDelta::days(1)),
-            })
+            .insert_backup_record(
+                BackupRecordSeed {
+                    id: backup_id("cleanup-failure"),
+                    trigger_kind: BackupTriggerKind::Manual,
+                    scheduled_at: None,
+                    object_key: "synthetic/cleanup.sql.gz".to_owned(),
+                    expires_at: expires.then(|| Utc::now() + chrono::TimeDelta::days(1)),
+                },
+                &system_context(),
+            )
             .await
             .unwrap();
         BackupTask::new(repository.clone(), dump, object_store)
@@ -261,7 +270,7 @@ async fn backup_task_recovery_marks_failed_with_the_upload_error() {
         expires_at: None,
     };
     repository
-        .insert_backup_record(seed.clone())
+        .insert_backup_record(seed.clone(), &system_context())
         .await
         .expect("insert queued");
     let cancellation = CancellationToken::new();

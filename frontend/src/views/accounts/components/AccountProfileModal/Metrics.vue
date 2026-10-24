@@ -2,6 +2,7 @@
 import type { AccountProfileStatisticsResponse } from '@/api'
 import { computed } from 'vue'
 import BaseSkeleton from '@/components/base/BaseSkeleton.vue'
+import { t } from '@/i18n'
 import { formatCompactNumber, formatInteger } from '@/utils/number'
 
 const props = defineProps<{
@@ -63,7 +64,7 @@ function formatDuration(value: number | null | undefined) {
 </script>
 
 <template>
-  <section class="min-w-0 overflow-x-auto py-1" aria-label="累计活动摘要" :aria-busy="loading">
+  <section class="min-w-0 overflow-x-auto py-1" :aria-label="t('accounts.profile.metrics.cumulativeActivitySummary')" :aria-busy="loading">
     <dl class="grid min-w-130 grid-cols-5">
       <div v-for="metric in metrics" :key="metric.label" class="min-w-0 px-2 text-center sm:px-3">
         <dd class="m-0 font-mono text-cp-lg leading-tight font-heavy tabular-nums text-cp-text" :title="metric.title">

@@ -2,6 +2,7 @@
 import type { Component } from 'vue'
 import { Inbox } from '@lucide/vue'
 import { computed } from 'vue'
+import { t } from '@/i18n'
 
 type EmptySurface = 'subtle' | 'inset' | 'none'
 
@@ -22,7 +23,7 @@ const props = withDefaults(
   },
 )
 
-const resolvedTitle = computed(() => props.title ?? '暂无数据')
+const resolvedTitle = computed(() => props.title ?? t('ui.empty'))
 const resolvedIcon = computed(() => props.icon ?? Inbox)
 
 const surfaceClasses: Record<EmptySurface, string> = {

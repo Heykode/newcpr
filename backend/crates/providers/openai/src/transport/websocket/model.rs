@@ -15,6 +15,7 @@ pub struct CodexWebSocketConnection {
     pub(crate) egress_source: Option<Ipv6Addr>,
     pub(super) endpoint: String,
     pub(super) headers: Vec<(String, String)>,
+    pub(super) live_headers: Option<reqwest::header::HeaderMap>,
 }
 
 impl PartialEq for CodexWebSocketConnection {
@@ -23,6 +24,7 @@ impl PartialEq for CodexWebSocketConnection {
             && self.egress_source == other.egress_source
             && self.endpoint == other.endpoint
             && self.headers == other.headers
+            && self.live_headers == other.live_headers
             && self.outbound_proxy.as_ref().map(|p| p.expose_url())
                 == other.outbound_proxy.as_ref().map(|p| p.expose_url())
     }
@@ -128,13 +130,14 @@ impl CodexWebSocketRequest {
 impl CodexWebSocketConnection {
     pub(crate) fn live(
         endpoint: impl Into<String>,
-        headers: Vec<(String, String)>,
+        headers: reqwest::header::HeaderMap,
         outbound_proxy: Option<gateway_core::account::OutboundProxy>,
         egress_source: Option<Ipv6Addr>,
     ) -> Self {
         Self {
             endpoint: endpoint.into(),
-            headers,
+            headers: crate::transport::headers::websocket_header_pairs(&headers),
+            live_headers: Some(headers),
             outbound_proxy,
             egress_source,
             session_proxy: None,
@@ -146,6 +149,7 @@ impl CodexWebSocketConnection {
         Self {
             endpoint: endpoint.into(),
             headers,
+            live_headers: None,
             outbound_proxy: None,
             egress_source: None,
             session_proxy: None,

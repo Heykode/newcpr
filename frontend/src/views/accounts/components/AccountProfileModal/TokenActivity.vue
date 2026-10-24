@@ -2,9 +2,10 @@
 import type { ProfileActivityLevel, ProfileActivityMode } from '../../utils/accountProfileStatistics'
 import type { AccountProfileDailyUsage } from '@/api'
 import { computed, shallowRef } from 'vue'
-
 import BaseEmpty from '@/components/base/BaseEmpty.vue'
+
 import BaseSegmented from '@/components/base/BaseSegmented.vue'
+import { t } from '@/i18n'
 import { buildProfileActivityGrid, profileActivityCellLabel } from '../../utils/accountProfileStatistics'
 
 const props = defineProps<{
@@ -38,15 +39,15 @@ const monthLabels = computed(() =>
     <div class="mb-4 flex flex-wrap items-end justify-between gap-3">
       <div>
         <h3 id="profile-token-activity-title" class="m-0 text-cp-lg font-heavy text-cp-text">
-          Token 活动
+          {{ t('accounts.profile.activity.tokenActivity') }}
         </h3>
       </div>
-      <BaseSegmented v-model="mode" label="Token 活动统计方式" size="sm" :options="modeOptions" />
+      <BaseSegmented v-model="mode" :label="t('accounts.profile.activity.tokenActivityStatisticsMethod')" size="sm" :options="modeOptions" />
     </div>
 
     <BaseEmpty
       v-if="dailyUsage === null"
-      title="暂无 Token 活动"
+      :title="t('accounts.profile.activity.noTokenActivityYet')"
       description="本次未获取到每日 Token 活动。"
       size="sm"
       surface="none"

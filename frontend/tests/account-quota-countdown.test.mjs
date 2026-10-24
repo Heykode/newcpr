@@ -1,13 +1,13 @@
 /* eslint-disable test/no-import-node-test -- these regressions use Node's built-in runner. */
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { createRequire } from 'node:module'
 import { test } from 'node:test'
 import { runInNewContext } from 'node:vm'
 import ts from 'typescript'
 import { createRenderer, createSSRApp, defineComponent, h, nextTick, ref } from 'vue'
 import { compileScript, parse } from 'vue/compiler-sfc'
 import { renderToString } from 'vue/server-renderer'
+import { createTestRequire as createRequire } from './helpers/i18n.mjs'
 
 const require = createRequire(import.meta.url)
 const now = Date.parse('2026-09-13T02:00:00Z')
@@ -38,6 +38,8 @@ function loadSource(filename) {
   runInNewContext(outputText, {
     exports,
     require(name) {
+      if (name === '@/i18n')
+        return require(name)
       if (name === '@/composables/useUiClock')
         return { useUiClock: () => clock }
       if (name === '@/components/base/BasePopover.vue')

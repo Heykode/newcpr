@@ -4,8 +4,8 @@ import type { UsageDisplayRecord } from './utils/records'
 import type { UsageFilterParams } from '@/api'
 import type { ConfigurableTableColumn } from '@/components/base/BaseTable/useTableColumns'
 import { Eye } from '@lucide/vue'
-
 import { computed, shallowRef, watch } from 'vue'
+
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BasePageHeader from '@/components/base/BasePageHeader.vue'
@@ -15,6 +15,7 @@ import BaseTableColumnSettings from '@/components/base/BaseTable/BaseTableColumn
 import BaseTablePagination from '@/components/base/BaseTable/BaseTablePagination.vue'
 import { useTableColumns } from '@/components/base/BaseTable/useTableColumns'
 import ProviderFilterSegmented from '@/components/ProviderFilterSegmented.vue'
+import { t } from '@/i18n'
 import DetailedCaptureControl from './components/DetailedCaptureControl.vue'
 import OpsErrorPanel from './components/OpsErrorPanel.vue'
 import UsageErrorDetailModal from './components/UsageErrorDetailModal.vue'
@@ -114,7 +115,7 @@ watch(timeRange, () => {
 
 <template>
   <div class="w-full">
-    <BasePageHeader title="使用统计" description="查看请求用量、性能趋势与调用错误记录">
+    <BasePageHeader title="使用统计" :description="t('usage.page.description')">
       <template #actions>
         <BaseSelect v-model="timeRange" :options="usageTimeRangeOptions" class="w-34" />
         <ProviderFilterSegmented
@@ -142,16 +143,16 @@ watch(timeRange, () => {
         <div class="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h2 class="m-0 text-xl leading-[1.15] font-heavy text-cp-text">
-              请求明细
+              {{ t('usage.page.requestDetails') }}
             </h2>
             <p
               class="mt-1.75 mb-0 text-cp leading-[1.15] font-emphasis text-cp-text-secondary"
             >
-              成功请求与失败请求明细
+              {{ t('usage.page.recordsDescription') }}
             </p>
           </div>
           <div class="flex min-w-0 flex-wrap items-center gap-3">
-            <BaseSegmented v-model="recordView" label="请求明细类型" :options="recordViewOptions" class="w-52" />
+            <BaseSegmented v-model="recordView" :label="t('usage.filters.requestDetailType')" :options="recordViewOptions" class="w-52" />
             <DetailedCaptureControl />
           </div>
         </div>
@@ -190,7 +191,7 @@ watch(timeRange, () => {
               :columns="visibleColumns"
               :rows="records"
               :loading="loading"
-              empty-text="暂无使用记录"
+              :empty-text="t('usage.noUsageRecords')"
               @filter="applyFilter"
             >
               <template #actions="{ row }">
@@ -198,7 +199,7 @@ watch(timeRange, () => {
                   <BaseIconButton
                     variant="ghost"
                     size="sm"
-                    label="查看使用记录详情"
+                    :label="t('usage.page.viewUsageRecordDetails')"
                     @click="handleViewDetail(row)"
                   >
                     <Eye class="size-3.5" />

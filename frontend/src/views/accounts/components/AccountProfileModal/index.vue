@@ -2,10 +2,11 @@
 import type { AccountRow } from '../../constants'
 import { RefreshCw, TriangleAlert } from '@lucide/vue'
 import { toRef } from 'vue'
-
 import BaseButton from '@/components/base/BaseButton.vue'
+
 import BaseEmpty from '@/components/base/BaseEmpty.vue'
 import BaseModal from '@/components/base/BaseModal/index.vue'
+import { t } from '@/i18n'
 import { useAccountPersonalInfo } from '../../composables/useAccountPersonalInfo'
 import AccountProfileActivityInsights from './ActivityInsights.vue'
 import AccountProfileMetrics from './Metrics.vue'
@@ -21,7 +22,7 @@ const { profile, subscription, loading, error, load } = useAccountPersonalInfo(a
 </script>
 
 <template>
-  <BaseModal v-model="open" title="个人信息" size="xl">
+  <BaseModal v-model="open" :title="t('accounts.profile.personalInformation')" size="xl">
     <div class="flex min-h-0 min-w-0 flex-col gap-6 pb-2">
       <div class="grid min-w-0 grid-cols-1 gap-4 rounded-cp-lg bg-cp-fill-alter p-4 sm:p-5 lg:grid-cols-[minmax(310px,1.05fr)_minmax(0,1.95fr)] lg:items-center">
         <AccountProfileHero :account="account" :profile="profile" />
@@ -30,7 +31,7 @@ const { profile, subscription, loading, error, load } = useAccountPersonalInfo(a
 
       <section v-if="subscription" class="grid min-w-0 grid-cols-1 gap-4" aria-labelledby="profile-subscription-title">
         <h3 id="profile-subscription-title" class="m-0 text-cp font-heavy text-cp-text">
-          订阅信息
+          {{ t('accounts.profile.subscriptionInformation') }}
         </h3>
         <AccountSubscription :subscription="subscription" />
       </section>
@@ -46,7 +47,7 @@ const { profile, subscription, loading, error, load } = useAccountPersonalInfo(a
       <template v-else-if="profile">
         <BaseEmpty
           v-if="profile.hasStatsError"
-          title="个人统计暂不可用"
+          :title="t('accounts.profile.statisticsUnavailable')"
           description="本次未获取到统计数据，可以点击刷新信息重试。"
           :icon="TriangleAlert"
           surface="none"
@@ -62,13 +63,13 @@ const { profile, subscription, loading, error, load } = useAccountPersonalInfo(a
     </div>
     <template #footer>
       <BaseButton variant="secondary" @click="open = false">
-        关闭
+        {{ t('common.actions.close') }}
       </BaseButton>
       <BaseButton :aria-busy="loading" :aria-disabled="loading" @click="load">
         <template #icon>
           <RefreshCw class="size-4" :class="loading ? 'animate-spin motion-reduce:animate-none' : undefined" />
         </template>
-        刷新信息
+        {{ t('accounts.profile.refreshInformation') }}
       </BaseButton>
     </template>
   </BaseModal>

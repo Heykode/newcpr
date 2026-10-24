@@ -2,10 +2,11 @@
 import type { AccountRow } from '../constants'
 import type { AccountReloginAction } from '@/api/modules/relogin'
 import { ClipboardCheck, Download, KeyRound, MoreHorizontal, Pencil, RefreshCw, RotateCcw, Table2, Trash2, Wifi } from '@lucide/vue'
-
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
+
 import BaseMenuItem from '@/components/base/BaseMenuItem.vue'
 import BasePopover from '@/components/base/BasePopover.vue'
+import { t } from '@/i18n'
 
 defineProps<{
   account: AccountRow
@@ -41,7 +42,7 @@ const emit = defineEmits<{
       variant="ghost"
       :size="comfortable ? 'md' : 'sm'"
       :class="comfortable ? 'size-8!' : undefined"
-      label="编辑账号"
+      :label="t('accounts.editor.title')"
       @click.stop="emit('edit', account)"
     >
       <Pencil class="size-3.5 text-cp-link" />
@@ -51,7 +52,7 @@ const emit = defineEmits<{
       variant="ghost"
       :size="comfortable ? 'md' : 'sm'"
       :class="comfortable ? 'size-8!' : undefined"
-      label="删除账号"
+      :label="t('accounts.actions.deleteAccount')"
       :disabled="deleting"
       @click.stop="emit('delete', account)"
     >
@@ -60,13 +61,13 @@ const emit = defineEmits<{
 
     <BasePopover placement="bottom-end">
       <template #trigger="{ open }">
-        <BaseIconButton variant="ghost" :size="comfortable ? 'md' : 'sm'" :class="comfortable ? 'size-8!' : undefined" label="更多操作" :pressed="open">
+        <BaseIconButton variant="ghost" :size="comfortable ? 'md' : 'sm'" :class="comfortable ? 'size-8!' : undefined" :label="t('accounts.actions.moreActions')" :pressed="open">
           <MoreHorizontal class="size-4" />
         </BaseIconButton>
       </template>
 
       <template #default="{ close }">
-        <div role="group" aria-label="账号操作" class="w-40 p-1.5">
+        <div role="group" :aria-label="t('appearance.preview.components.accountOperation')" class="w-40 p-1.5">
           <BaseMenuItem
             :loading="testing"
             :disabled="testing"
@@ -75,7 +76,7 @@ const emit = defineEmits<{
             <template #icon>
               <Wifi class="size-3.5 text-cp-text-quaternary" />
             </template>
-            测试连接
+            {{ t('accounts.connectionTest.title') }}
           </BaseMenuItem>
           <BaseMenuItem :loading="togglingQuality" :disabled="togglingQuality || qualityDisabled" @click.stop="(close(), emit('toggleQuality', account))">
             <template #icon>
@@ -108,13 +109,13 @@ const emit = defineEmits<{
             <template #icon>
               <RefreshCw class="size-3.5 text-cp-text-quaternary" />
             </template>
-            刷新令牌
+            {{ t('accounts.actions.refreshToken') }}
           </BaseMenuItem>
           <BaseMenuItem @click.stop="(close(), emit('reauthorize', account))">
             <template #icon>
               <KeyRound class="size-3.5 text-cp-text-quaternary" />
             </template>
-            重新授权
+            {{ t('accounts.actions.reauthorize') }}
           </BaseMenuItem>
           <BaseMenuItem
             v-if="relogin"

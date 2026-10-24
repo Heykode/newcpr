@@ -281,9 +281,6 @@ impl CodexProvider {
             );
             identity.scope_endpoint_headers(&mut request.passthrough_headers);
             turn_metadata = turn_metadata.and_then(|raw| identity.scope_metadata(&raw));
-            request.image_turn_id = request
-                .image_turn_id
-                .and_then(|raw| identity.field("x-codex-image-turn-id", &raw));
         }
         let session = session_affinity
             .as_ref()
@@ -1063,6 +1060,7 @@ pub(super) fn cold_response_stream_once(response: ColdResponse) -> EventStream {
         // WS 帧由 reducer 以 encode_sse_event(&event, raw) 逐字节内嵌上游原始 JSON
         // （transport/protocol/websocket.rs），push_frames 抽出的 data 即上游原文。
         let mut decoder = CodexCanonicalDecoder::new(upstream_model.as_str())
+            .with_trace(trace.clone())
             .with_reported_model(response.response_metadata.effective_model.as_deref())
             .with_requested_service_tier(request.service_tier())
             .with_request_tool_pricing(upstream_model.as_str(), request.tools())

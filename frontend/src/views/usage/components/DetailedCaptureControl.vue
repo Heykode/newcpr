@@ -9,6 +9,7 @@ import BaseModal from '@/components/base/BaseModal/index.vue'
 import BaseNumberInput from '@/components/base/BaseNumberInput.vue'
 import BaseSelect from '@/components/base/BaseSelect.vue'
 import BaseSwitch from '@/components/base/BaseSwitch.vue'
+import { t } from '@/i18n'
 import { useCaptureCleanup } from '../composables/useCaptureCleanup'
 
 const settings = ref<CaptureSettings | null>(null)
@@ -141,8 +142,8 @@ onBeforeUnmount(() => {
           </p>
         </div>
         <div class="grid gap-2">
-          <span class="text-cp-sm">保留天数</span>
-          <BaseNumberInput v-model="draft.retentionDays" label="保留天数" unit="天" :min="0" :max="30" :disabled="busy" />
+          <span class="text-cp-sm">{{ t('settings.retentionDays') }}</span>
+          <BaseNumberInput v-model="draft.retentionDays" :label="t('settings.retentionDays')" unit="天" :min="0" :max="30" :disabled="busy" />
           <span class="text-cp-xs text-cp-text-secondary">设为0表示清理全部已结束的采集材料；正在运行的采集任务不受影响。</span>
         </div>
         <BaseSwitch v-model="draft.includeMedia" label="保存媒体正文" show-label :disabled="busy" />
@@ -183,10 +184,10 @@ onBeforeUnmount(() => {
         </p>
         <div class="flex flex-wrap justify-end gap-2">
           <BaseButton variant="soft" :disabled="busy" @click="open = false">
-            关闭
+            {{ t('common.actions.close') }}
           </BaseButton>
           <BaseButton type="submit" :loading="saving" :disabled="!valid || clearing || confirmClear">
-            保存
+            {{ t('common.actions.save') }}
           </BaseButton>
         </div>
       </form>

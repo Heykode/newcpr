@@ -2,6 +2,7 @@
 import type { ApiKey, ApiKeyBudgetPeriod } from '@/api'
 import BaseConfirmModal from '@/components/base/BaseConfirmModal.vue'
 import BaseSegmented from '@/components/base/BaseSegmented.vue'
+import { t } from '@/i18n'
 
 defineProps<{ apiKey: ApiKey | null, loading: boolean }>()
 const emit = defineEmits<{ confirm: [] }>()
@@ -18,7 +19,7 @@ function selectPeriod(value: string) {
     v-model="open"
     title="重置已用额度"
     description="不改变限额和窗口到期时间，历史费用记录保留。重置后完成的请求仍会计费。"
-    confirm-text="确认重置"
+    :confirm-text="t('keys.budgetReset.confirmReset')"
     :loading="loading"
     :confirm-disabled="!apiKey"
     @confirm="emit('confirm')"

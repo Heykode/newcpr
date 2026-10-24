@@ -1,13 +1,14 @@
 import type { Account, AccountModelsResponse } from '@/api'
 import { CheckCircle2, Clock3, Wifi, XCircle } from '@lucide/vue'
-
 import { useLocalStorage } from '@vueuse/core'
+
 import { clamp } from 'es-toolkit'
 import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
 import { getAccountModels, refreshAccountModels } from '@/api'
 import { streamAccountConnectionTest } from '@/api/modules/account-connection-test'
 import { toast } from '@/components/base/BaseToast'
 import { useIdSet } from '@/composables/useIdSet'
+import { t } from '@/i18n'
 import { errorMessage, withMinimumDuration } from '@/utils/async'
 import { formatDateTime, formatTime } from '@/utils/date'
 
@@ -240,8 +241,8 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
     }
     if (connectionTestStatus.value === 'success') {
       return {
-        label: '连接正常',
-        description: '请求已完成，可在下方查看模型、耗时和事件轨迹',
+        label: t('accounts.connectionTest.successTitle'),
+        description: t('accounts.connectionTest.completedDescription'),
         icon: CheckCircle2,
         badge: 'bg-cp-success-container text-cp-success-on-container',
         iconClass: 'text-cp-success',
@@ -249,16 +250,16 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
     }
     if (connectionTestStatus.value === 'error') {
       return {
-        label: '测试失败',
-        description: '请求未完成，请在下方查看失败来源与原始诊断',
+        label: t('accounts.connectionTest.failed'),
+        description: t('accounts.connectionTest.failedDescription'),
         icon: XCircle,
         badge: 'bg-cp-error-container text-cp-error-on-container',
         iconClass: 'text-cp-error',
       }
     }
     return {
-      label: '准备测试',
-      description: '选择模型后，点击“开始测试”发送真实请求',
+      label: t('accounts.connectionTest.readyTitle'),
+      description: t('accounts.connectionTest.readyDescription'),
       icon: Wifi,
       badge: 'bg-cp-fill-quaternary text-cp-text-secondary',
       iconClass: 'text-cp-text-quaternary',

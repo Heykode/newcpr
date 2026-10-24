@@ -891,6 +891,7 @@ pub(crate) fn wire_profile_view(profile: domain::DashboardWireProfile) -> Dashbo
             .attributes
             .into_iter()
             .map(|attribute| DashboardWireAttributeView {
+                key: attribute.key,
                 label: attribute.label,
                 value: attribute.value,
             })
@@ -914,20 +915,7 @@ pub(crate) fn relative_time_with_timezone(
     let Some(value) = value else {
         return "从未使用".to_owned();
     };
-    let elapsed = now.signed_duration_since(value);
-    if elapsed.num_seconds() < 0 {
-        return timezone_datetime(&value, timezone);
-    }
-    if elapsed.num_seconds() < 60 {
-        return "刚刚".to_owned();
-    }
-    if elapsed.num_minutes() < 60 {
-        return format!("{} 分钟前", elapsed.num_minutes());
-    }
-    if elapsed.num_hours() < 24 {
-        return format!("{} 小时前", elapsed.num_hours());
-    }
-    format!("{} 天前", elapsed.num_days())
+    crate::time::relative_view(value, now, timezone).legacy_display()
 }
 
 pub(crate) fn dashboard_view_with_timezone(
@@ -1011,7 +999,17 @@ pub(crate) fn dashboard_view_with_timezone(
             }),
             metric_label,
             metric_value,
+            metric: if local_requests.is_some() {
+                "requests"
+            } else {
+                "tokens"
+            },
+            metric_value_raw: local_requests.or(credential.total_tokens),
             last_used: relative_time_with_timezone(credential.last_used_at, range.end, timezone),
+            last_used_at: credential.last_used_at,
+            last_used_relative: credential
+                .last_used_at
+                .map(|at| crate::time::relative_view(at, range.end, timezone)),
         });
     }
     let unavailable_accounts = provider_accounts

@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import type { UsageDisplayRecord } from '../utils/records'
 import { Archive, ArrowDown, ArrowUp } from '@lucide/vue'
-
 import { computed } from 'vue'
+
+import { t } from '@/i18n'
 import { usageTokenDetails } from '../utils/records'
 import UsageDetailPopover from './UsageDetailPopover.vue'
 
@@ -39,7 +40,7 @@ const tokenItems = computed(() => [
       </span>
     </div>
 
-    <UsageDetailPopover title="Token 明细" trigger-label="查看 Token 明细">
+    <UsageDetailPopover :title="t('usage.tokens.tokenDetails')" trigger-label="查看 Token 明细">
       <div class="grid gap-1.5 text-cp-text-secondary">
         <div v-for="item in tokenItems" :key="item.label" class="flex justify-between gap-4">
           <span class="whitespace-nowrap">{{ item.label }}</span>
@@ -49,7 +50,7 @@ const tokenItems = computed(() => [
         </div>
       </div>
       <div class="mt-1 flex justify-between border-t border-cp-split pt-2">
-        <span class="whitespace-nowrap text-cp-text-secondary">总 Token</span>
+        <span class="whitespace-nowrap text-cp-text-secondary">{{ t('usage.tokens.totalTokens') }}</span>
         <span class="whitespace-nowrap font-mono font-heavy text-cp-info-text">
           {{ tokenDetails.totalTokensDisplay }}
         </span>

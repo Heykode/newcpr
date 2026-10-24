@@ -4,6 +4,7 @@ import { onScopeDispose, ref, shallowRef, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { applyQualityTemplate, getQualityTemplates } from '@/api/modules/quality-ops'
 import BaseButton from '@/components/base/BaseButton.vue'
+import { t } from '@/i18n'
 import { errorMessage } from '@/utils/async'
 import QualityDrawer from '@/views/quality-ops/QualityDrawer.vue'
 import { qualityScheduleSummary } from '@/views/quality-ops/schedule'
@@ -130,7 +131,7 @@ onScopeDispose(() => {
     </div>
     <template #footer>
       <BaseButton :disabled="busy" @click="open = false">
-        取消
+        {{ t('common.actions.cancel') }}
       </BaseButton>
       <BaseButton variant="primary" :disabled="!selected || loading || uncertain" :loading="busy" @click="enable">
         确认开启

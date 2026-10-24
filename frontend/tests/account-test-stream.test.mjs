@@ -16,11 +16,25 @@ const { outputText } = ts.transpileModule(readFileSync(filename, 'utf8'), {
 const payload = { accountId: 'account-a', modelId: 'test-model', interface: 'responses', stream: true, prompt: 'OK' }
 const complete = 'data: {"type":"test_complete","success":true}\n\n'
 
-function loadStream(fetchImpl = fetch, base = '') {
+function loadStream(fetchImpl = fetch, base = '', session = { generation: 0 }) {
   const exports = {}
   runInNewContext(outputText, {
     exports,
-    require: name => name === '../constants' ? { API_BASE_URL: base } : require(name),
+    require: (name) => {
+      if (name === '../constants')
+        return { API_BASE_URL: base }
+      if (name === '../request') {
+        return {
+          sessionFetch: fetchImpl,
+          currentSessionGeneration: () => session.generation,
+          assertSessionGeneration: (expected) => {
+            if (expected !== session.generation)
+              throw new Error('Session changed')
+          },
+        }
+      }
+      return require(name)
+    },
     fetch: fetchImpl,
     TextDecoder,
   }, { filename: String(filename) })
@@ -122,6 +136,27 @@ test('terminal cancellation discards trailing events and releases the response s
       controller.abort()
     },
   )
+  assert.equal(events.length, 1)
+  assert.equal(cancelled, true)
+  assert.equal(body.locked, false)
+})
+
+test('a changed login discards old stream events and releases its reader', async () => {
+  const session = { generation: 0 }
+  let cancelled = false
+  const body = new ReadableStream({
+    start(stream) {
+      stream.enqueue(new TextEncoder().encode(`data: {"type":"content","text":"first"}\n\n${complete}`))
+    },
+    cancel() { cancelled = true },
+  })
+  const events = []
+  await assert.rejects(loadStream(async () => new Response(body, {
+    headers: { 'Content-Type': 'text/event-stream' },
+  }), '', session)(payload, new AbortController().signal, (data) => {
+    events.push(JSON.parse(data))
+    session.generation += 1
+  }), /Session changed/)
   assert.equal(events.length, 1)
   assert.equal(cancelled, true)
   assert.equal(body.locked, false)

@@ -318,6 +318,23 @@ pub trait ProviderAdmin: Send + Sync {
         request: ProviderQuotaRequest,
     ) -> Result<ProviderQuota, ProviderAdminError>;
 
+    async fn read_quotas(
+        &self,
+        requests: &[crate::model::provider_credentials::ProviderQuotaReadRequest<'_>],
+    ) -> Vec<Result<ProviderQuota, ProviderAdminError>> {
+        futures::future::join_all(requests.iter().map(|request| async {
+            let account_id = ProviderAccountId::new(request.account.id.clone())
+                .map_err(|_| ProviderAdminError::new(ProviderAdminErrorKind::Invalid))?;
+            self.quota(ProviderQuotaRequest {
+                account_id,
+                refresh: false,
+                rolling_usage: request.rolling_usage.cloned(),
+            })
+            .await
+        }))
+        .await
+    }
+
     /// 历史观测的协议字段仅由具体 Provider 解释；不支持时保留累计估算。
     fn quota_forecast_observation(
         &self,

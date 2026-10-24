@@ -407,7 +407,11 @@ pub struct DashboardAccountUsageView {
     pub usage_window: Option<crate::admin::accounts::AccountQuotaWindowView>,
     pub metric_label: String,
     pub metric_value: String,
+    pub metric: &'static str,
+    pub metric_value_raw: Option<u64>,
     pub last_used: String,
+    pub last_used_at: Option<DateTime<Utc>>,
+    pub last_used_relative: Option<crate::time::RelativeTimeView>,
 }
 
 /// Dashboard 账号单小时请求数。
@@ -525,6 +529,7 @@ pub struct DashboardWireProfileView {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DashboardWireAttributeView {
+    pub key: &'static str,
     pub label: String,
     pub value: String,
 }

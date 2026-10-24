@@ -17,6 +17,7 @@ import { toast } from '@/components/base/BaseToast'
 import { useAsyncAction } from '@/composables/useAsyncAction'
 import { useDownload } from '@/composables/useDownload'
 import { useIdSet } from '@/composables/useIdSet'
+import { t } from '@/i18n'
 import { errorMessage, withMinimumDuration } from '@/utils/async'
 
 import { useAccountOnboarding } from './useAccountOnboarding'
@@ -319,7 +320,7 @@ export function useAccountMutations(options: {
     for (const id of ids) {
       const account = selectedAccountsById.get(id)
       if (!account)
-        throw new Error(`账号 ${id} 的页面数据已失效，请重新选择`)
+        throw new Error(t('accounts.actions.staleAccount', { id }))
       accounts.push(account)
     }
     return accounts

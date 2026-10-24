@@ -3,6 +3,7 @@ import { X } from '@lucide/vue'
 import { nextTick, onBeforeUnmount, ref, useId, watch } from 'vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import { lockBodyScroll, unlockBodyScroll } from '@/components/base/BaseModal/bodyScrollLock'
+import { t } from '@/i18n'
 
 const props = defineProps<{ title: string, busy?: boolean }>()
 const open = defineModel<boolean>({ default: false })
@@ -74,7 +75,7 @@ onBeforeUnmount(unlock)
             <h2 :id="titleId" class="min-w-0 text-lg font-semibold">
               {{ title }}
             </h2>
-            <BaseIconButton label="关闭" :disabled="busy" @click="open = false">
+            <BaseIconButton :label="t('common.actions.close')" :disabled="busy" @click="open = false">
               <X class="size-4" />
             </BaseIconButton>
           </header>

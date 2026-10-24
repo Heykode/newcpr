@@ -2,6 +2,7 @@ import type { AccountImportTask, AccountImportTaskDetail } from '@/api'
 import { computed, onMounted, onScopeDispose, shallowRef, watch } from 'vue'
 import { getAccountImportTask, getAccountImportTasks, stopAccountImportTask } from '@/api'
 import { useAsyncAction } from '@/composables/useAsyncAction'
+import { t } from '@/i18n'
 import { errorMessage } from '@/utils/async'
 
 export function useAccountImportTasks(options: { reload: () => Promise<unknown> }) {
@@ -67,7 +68,7 @@ export function useAccountImportTasks(options: { reload: () => Promise<unknown> 
     }
     catch (cause) {
       if (!current.signal.aborted)
-        error.value = errorMessage(cause, '进度读取失败，请重试')
+        error.value = errorMessage(cause, t('accounts.importTasks.progressReadingFailedTryAgain'))
     }
     finally {
       if (!current.signal.aborted && !disposed) {

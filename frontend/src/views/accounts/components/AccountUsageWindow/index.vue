@@ -3,6 +3,7 @@ import type { AccountQuotaWindow } from '../../constants'
 import type { AccountUsageWindowVariant } from './presenter'
 import { computed } from 'vue'
 import { useUiClock } from '@/composables/useUiClock'
+import { t } from '@/i18n'
 import AccountRequestTimeline from './AccountRequestTimeline.vue'
 import { resolveAccountUsageWindowPresentation } from './presenter'
 
@@ -134,7 +135,7 @@ const view = computed(() => resolveAccountUsageWindowPresentation({
     </template>
 
     <div v-else :class="view.classes.header">
-      <span class="min-w-0 text-cp-text-secondary">额度待观测</span>
+      <span class="min-w-0 text-cp-text-secondary">{{ t('accounts.quota.unobserved') }}</span>
       <span class="shrink-0 font-mono text-cp-text-quaternary" :class="view.classes.value">—</span>
     </div>
   </div>

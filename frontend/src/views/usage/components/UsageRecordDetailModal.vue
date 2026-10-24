@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import type { EChartsOption } from 'echarts'
 import type { UsageViewModel } from '../utils/records'
-
 import { computed } from 'vue'
+
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseModal from '@/components/base/BaseModal/index.vue'
 import { defineTableColumns } from '@/components/base/BaseTable/columns'
@@ -10,6 +10,7 @@ import BaseTable from '@/components/base/BaseTable/index.vue'
 import BaseChart from '@/components/charts/BaseChart.vue'
 import { chartTooltipStyle } from '@/components/charts/tooltip'
 import { useChartPalette } from '@/composables/useChartPalette'
+import { t } from '@/i18n'
 import { displayValue, fieldLabelClass, fieldValueBaseClass, fieldValueClass } from '../utils/detail'
 import { formatDuration } from '../utils/format'
 import {
@@ -260,7 +261,7 @@ const tokenDonutOption = computed<EChartsOption>(() => {
             }))
           : [
               {
-                name: '暂无',
+                name: t('usage.request.noneYet'),
                 value: 1,
                 itemStyle: { color: palette.value.surfaceMuted },
               },
@@ -275,8 +276,8 @@ const tokenDonutOption = computed<EChartsOption>(() => {
 <template>
   <BaseModal
     v-model="open"
-    title="使用记录详情"
-    description="单次请求的完整链路信息"
+    :title="t('usage.request.usageRecordDetails')"
+    :description="t('usage.request.description')"
     tone="info"
     size="xl"
   >
@@ -287,7 +288,7 @@ const tokenDonutOption = computed<EChartsOption>(() => {
         >
           <div class="col-span-2 min-w-0 lg:col-span-1">
             <dt :class="fieldLabelClass">
-              账号
+              {{ t('usage.filters.account') }}
             </dt>
             <dd
               class="mt-1.5 mb-0 min-w-0 break-all font-mono text-cp-sm leading-snug font-heavy text-cp-text"
@@ -299,7 +300,7 @@ const tokenDonutOption = computed<EChartsOption>(() => {
 
           <div class="min-w-0">
             <dt :class="fieldLabelClass">
-              状态码
+              {{ t('usage.request.statusCode') }}
             </dt>
             <dd :class="fieldValueClass(true)" :title="displayValue(record.statusCode)">
               {{ displayValue(record.statusCode) }}
@@ -308,7 +309,7 @@ const tokenDonutOption = computed<EChartsOption>(() => {
 
           <div class="min-w-0">
             <dt :class="fieldLabelClass">
-              消息
+              {{ t('usage.request.message') }}
             </dt>
             <dd :class="fieldValueClass()" :title="displayValue(record.message)">
               {{ displayValue(record.message) }}
@@ -317,7 +318,7 @@ const tokenDonutOption = computed<EChartsOption>(() => {
 
           <div class="col-span-2 min-w-0 lg:col-span-1">
             <dt :class="fieldLabelClass">
-              时间
+              {{ t('usage.fields.time') }}
             </dt>
             <dd :class="fieldValueClass(true)" :title="displayValue(record.createdAtDisplay)">
               {{ displayValue(record.createdAtDisplay) }}
@@ -342,14 +343,14 @@ const tokenDonutOption = computed<EChartsOption>(() => {
       <section class="grid min-w-0 gap-3 lg:grid-cols-2">
         <section :class="panelClass">
           <h3 :class="panelTitleClass">
-            模型与路由
+            {{ t('usage.request.modelsAndRouting') }}
           </h3>
           <UsageDetailFieldGrid :items="modelRouteItems" />
         </section>
 
         <section :class="panelClass">
           <h3 :class="panelTitleClass">
-            客户端与上游
+            {{ t('usage.request.clientAndUpstream') }}
           </h3>
           <UsageDetailFieldGrid :items="clientUpstreamItems" />
         </section>
@@ -357,7 +358,7 @@ const tokenDonutOption = computed<EChartsOption>(() => {
 
       <section :class="panelClass">
         <h3 :class="panelTitleClass">
-          请求标识
+          {{ t('usage.request.requestId') }}
         </h3>
         <UsageDetailFieldGrid :items="identifierItems" />
       </section>
@@ -375,7 +376,7 @@ const tokenDonutOption = computed<EChartsOption>(() => {
               <div class="pointer-events-none absolute inset-0 flex items-center justify-center">
                 <div class="grid text-center">
                   <span class="text-cp-xs leading-none font-bold text-cp-text-quaternary">
-                    总计
+                    {{ t('usage.request.total') }}
                   </span>
                   <strong
                     class="mt-1 font-mono text-[16px] leading-none font-extrabold tabular-nums text-cp-text"
@@ -408,7 +409,7 @@ const tokenDonutOption = computed<EChartsOption>(() => {
 
         <section :class="panelClass">
           <h3 :class="panelTitleClass">
-            费用
+            {{ t('usage.fields.cost') }}
           </h3>
           <UsageDetailFieldGrid :items="billingItems" />
         </section>
@@ -416,7 +417,7 @@ const tokenDonutOption = computed<EChartsOption>(() => {
 
       <section v-if="attemptRows.length" :class="panelClass">
         <h3 :class="panelTitleClass">
-          尝试链路
+          {{ t('usage.error.attempts') }}
         </h3>
         <BaseTable
           class="attempt-table mt-2.5 h-auto! min-w-0 font-mono tabular-nums"
@@ -456,17 +457,17 @@ const tokenDonutOption = computed<EChartsOption>(() => {
         class="grid min-h-0 grid-cols-1 gap-3 lg:grid-cols-2"
       >
         <div v-if="requestText" class="min-h-0" :class="[panelClass]">
-          <UsageDetailCodePanel title="请求内容" max-height="180px" :content="requestText" />
+          <UsageDetailCodePanel :title="t('usage.request.requestContent')" max-height="180px" :content="requestText" />
         </div>
 
         <div v-if="responseText" class="min-h-0" :class="[panelClass]">
-          <UsageDetailCodePanel title="响应内容" max-height="180px" :content="responseText" />
+          <UsageDetailCodePanel :title="t('usage.error.responseContent')" max-height="180px" :content="responseText" />
         </div>
       </section>
 
       <section v-if="record.providerMetadata" class="min-h-0" :class="[panelClass]">
         <UsageDetailCodePanel
-          title="元数据"
+          :title="t('usage.error.metadata')"
           max-height="min(32dvh, 340px)"
           :content="JSON.stringify(record.providerMetadata, null, 2)"
         />
@@ -477,7 +478,7 @@ const tokenDonutOption = computed<EChartsOption>(() => {
 
     <template #footer>
       <BaseButton variant="primary" @click="open = false">
-        关闭
+        {{ t('common.actions.close') }}
       </BaseButton>
     </template>
   </BaseModal>

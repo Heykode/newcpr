@@ -377,6 +377,17 @@ impl CodexBackendClient {
                 .iter()
                 .map(|(name, value)| (name.as_str(), value.as_bytes())),
         );
+        super::evidence::record_request(
+            &trace,
+            "provider.request.outbound",
+            &upstream_body,
+            if excel.is_some() {
+                "excel_http_sse"
+            } else {
+                "http_sse"
+            },
+            Some(&headers),
+        );
         trace.capture("upstream.request.body", &body);
         let compressed = excel.is_none() && body.len() >= HTTP_ZSTD_MIN_BYTES;
         let body = if compressed {
@@ -667,6 +678,13 @@ impl CodexBackendClient {
             });
         }
         websocket_create.connection.outbound_proxy = self.outbound_proxy.clone();
+        super::evidence::record_request(
+            &context.trace.cloned().unwrap_or_default(),
+            "provider.request.outbound",
+            websocket_request.body(),
+            "websocket",
+            Some(&headers),
+        );
         websocket_create.connection.session_proxy = self
             .session_proxy_lease()
             .map(super::session_proxy::SessionProxyHold);

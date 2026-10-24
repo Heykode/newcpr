@@ -3,14 +3,15 @@ import type { ApiKeyFormValue } from '../composables/useApiKeyMutations'
 import type { AccountGroup } from '@/api'
 import { Copy, DollarSign, KeyRound, Upload } from '@lucide/vue'
 import { computed } from 'vue'
-
 import AccountGroupCheckboxGrid from '@/components/AccountGroupCheckboxGrid.vue'
+
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
 import BaseForm from '@/components/base/BaseForm/index.vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseModal from '@/components/base/BaseModal/index.vue'
+import { t } from '@/i18n'
 
 const props = defineProps<{
   groups: AccountGroup[]
@@ -46,25 +47,25 @@ const title = computed(() => props.editing ? '编辑 API Key' : '创建 API Key'
     </template>
 
     <BaseForm class="grid gap-6">
-      <BaseFormItem label="名称" required>
+      <BaseFormItem :label="t('common.fields.name')" required>
         <BaseInput
           v-model="form.name"
-          aria-label="名称"
-          placeholder="例如：生产环境"
+          :aria-label="t('common.fields.name')"
+          :placeholder="t('keys.editor.namePlaceholder')"
           :disabled="saving"
         />
       </BaseFormItem>
 
-      <BaseFormItem label="标签（可选）">
+      <BaseFormItem :label="t('keys.editor.labelOptional')">
         <BaseInput
           v-model="form.label"
-          aria-label="标签（可选）"
-          placeholder="例如：后端服务"
+          :aria-label="t('keys.editor.labelOptional')"
+          :placeholder="t('keys.editor.forExampleBackendService')"
           :disabled="saving"
         />
       </BaseFormItem>
 
-      <BaseFormItem label="分组">
+      <BaseFormItem :label="t('accounts.fields.accountGrouping')">
         <AccountGroupCheckboxGrid
           v-model="form.groupIds"
           :groups="groups"
@@ -74,7 +75,7 @@ const title = computed(() => props.editing ? '编辑 API Key' : '创建 API Key'
       </BaseFormItem>
 
       <div class="grid gap-6 sm:grid-cols-2">
-        <BaseFormItem label="日限额">
+        <BaseFormItem :label="t('keys.editor.dailyLimit')">
           <BaseInput
             v-model="form.dailyLimitUsd"
             type="number"
@@ -89,7 +90,7 @@ const title = computed(() => props.editing ? '编辑 API Key' : '创建 API Key'
             </template>
           </BaseInput>
         </BaseFormItem>
-        <BaseFormItem label="周限额">
+        <BaseFormItem :label="t('keys.editor.weeklyLimit')">
           <BaseInput
             v-model="form.weeklyLimitUsd"
             type="number"
@@ -107,22 +108,22 @@ const title = computed(() => props.editing ? '编辑 API Key' : '创建 API Key'
       </div>
 
       <div class="grid gap-6 sm:grid-cols-2">
-        <BaseFormItem label="最大并发">
+        <BaseFormItem :label="t('keys.editor.maximumConcurrency')">
           <BaseInput
             v-model="form.maxConcurrency"
             type="number"
-            aria-label="最大并发"
+            :aria-label="t('keys.editor.maximumConcurrency')"
             min="0"
             step="1"
             placeholder="不限制"
             :disabled="saving"
           />
         </BaseFormItem>
-        <BaseFormItem label="每分钟请求数（RPM）">
+        <BaseFormItem :label="t('keys.editor.requestsPerMinuteRpm')">
           <BaseInput
             v-model="form.requestsPerMinute"
             type="number"
-            aria-label="每分钟请求数（RPM）"
+            :aria-label="t('keys.editor.requestsPerMinuteRpm')"
             min="0"
             step="1"
             placeholder="不限制"
@@ -134,7 +135,7 @@ const title = computed(() => props.editing ? '编辑 API Key' : '创建 API Key'
 
     <template #footer>
       <BaseButton variant="secondary" :disabled="saving" @click="open = false">
-        取消
+        {{ t('common.actions.cancel') }}
       </BaseButton>
       <BaseButton
         variant="primary"
@@ -149,7 +150,7 @@ const title = computed(() => props.editing ? '编辑 API Key' : '创建 API Key'
 
   <BaseModal
     v-model="createdOpen"
-    title="API Key 已创建"
+    :title="t('keys.created.apiKeyCreated')"
     description="复制密钥，或直接导入 CCSwitch"
     tone="success"
     size="md"
@@ -158,7 +159,7 @@ const title = computed(() => props.editing ? '编辑 API Key' : '创建 API Key'
     <div class="flex flex-col gap-4">
       <div class="rounded-cp border border-cp-warning-border bg-cp-warning-container px-4 py-3">
         <p class="m-0 text-cp font-semibold text-cp-warning-on-container">
-          该密钥具有网关访问权限，请仅发送给可信调用方
+          {{ t('keys.created.accessNotice') }}
         </p>
       </div>
       <div>
@@ -169,7 +170,7 @@ const title = computed(() => props.editing ? '编辑 API Key' : '创建 API Key'
           <code class="flex-1 rounded-cp bg-cp-fill-quaternary px-3 py-2.5 font-mono text-cp break-all text-cp-text">
             {{ createdKey }}
           </code>
-          <BaseIconButton size="md" label="复制" @click="emit('copy', createdKey)">
+          <BaseIconButton size="md" :label="t('common.actions.copy')" @click="emit('copy', createdKey)">
             <Copy class="size-4" />
           </BaseIconButton>
         </div>
@@ -190,7 +191,7 @@ const title = computed(() => props.editing ? '编辑 API Key' : '创建 API Key'
         导入 CCSwitch
       </BaseButton>
       <BaseButton variant="primary" @click="createdOpen = false">
-        我已保存
+        {{ t('keys.created.iHaveSaved') }}
       </BaseButton>
     </template>
   </BaseModal>

@@ -1,11 +1,11 @@
 /* eslint-disable test/no-import-node-test -- these regressions use Node's built-in runner. */
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { createRequire } from 'node:module'
 import { test } from 'node:test'
 import { runInNewContext } from 'node:vm'
 import ts from 'typescript'
 import * as vue from 'vue'
+import { createTestRequire as createRequire } from './helpers/i18n.mjs'
 
 const require = createRequire(import.meta.url)
 
@@ -16,6 +16,7 @@ function loadModule(filename, dependencies, globals = {}) {
   })
   runInNewContext(outputText, {
     exports,
+    Blob,
     require: name => dependencies[name] ?? require(name),
     ...globals,
   }, { filename: String(filename) })

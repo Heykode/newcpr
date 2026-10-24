@@ -3,6 +3,7 @@ import type {
   getUsageRecordInsightsDiagnostics,
   getUsageRecordInsightsOverview,
 } from '@/api'
+import { t } from '@/i18n'
 
 import UsageCostCard from './UsageCostCard.vue'
 import UsageDiagnosticCard from './UsageDiagnosticCard.vue'
@@ -32,8 +33,8 @@ const diagnosticDimension = defineModel('diagnosticDimension', {
 
 <template>
   <section
-    class="mt-5 grid grid-cols-1 gap-3 xl:auto-rows-97 xl:grid-cols-2"
-    aria-label="使用统计观测"
+    class="mt-5 grid grid-cols-1 gap-3 xl:auto-rows-[minmax(24.25rem,auto)] xl:grid-cols-2"
+    :aria-label="t('usage.insights.useStatisticalObservations')"
   >
     <UsageHealthCard
       :health="overview.health"

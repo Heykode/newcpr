@@ -1,14 +1,15 @@
 <script setup lang="ts">
 import type { EChartsOption } from 'echarts'
 import type { getUsageRecordInsightsOverview } from '@/api'
-
 import { computed, shallowRef } from 'vue'
+
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseEmpty from '@/components/base/BaseEmpty.vue'
 import BaseSegmented from '@/components/base/BaseSegmented.vue'
 import BaseChart from '@/components/charts/BaseChart.vue'
 import { requestActivityByBucket, zeroInactiveValues } from '@/components/charts/timeSeriesGap'
 import { useChartPalette } from '@/composables/useChartPalette'
+import { t } from '@/i18n'
 import { formatLocalizedCompactNumber as formatCompactNumber } from '@/utils/number'
 
 import {
@@ -96,9 +97,9 @@ const summaryMetrics = computed(() => {
   }
   if (activeView.value === 'scheduling') {
     return [
-      { label: '判定覆盖', value: formatPercent(performance.admissionDecisionCoverage) },
-      { label: '选号覆盖', value: formatPercent(performance.accountSelectionWaitCoverage) },
-      { label: '容量覆盖', value: formatPercent(performance.capacityCoverage) },
+      { label: t('usage.performance.decisionCoverage'), value: formatPercent(performance.admissionDecisionCoverage) },
+      { label: t('usage.performance.accountSelectionCoverage'), value: formatPercent(performance.accountSelectionWaitCoverage) },
+      { label: t('usage.performance.capacityCoverage'), value: formatPercent(performance.capacityCoverage) },
     ]
   }
   const prefix = activeView.value === 'firstToken' ? 'firstToken' : 'latency'
@@ -245,7 +246,7 @@ function formatThroughput(value: number | null) {
     class="min-h-90 xl:h-full"
   >
     <template #actions>
-      <BaseSegmented v-model="activeView" label="性能指标" :options="viewOptions" :disabled="loading" class="w-68" />
+      <BaseSegmented v-model="activeView" :label="t('usage.performance.performanceIndicators')" :options="viewOptions" :disabled="loading" class="w-68" />
     </template>
 
     <template #body>
