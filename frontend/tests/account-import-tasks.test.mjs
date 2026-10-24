@@ -99,10 +99,12 @@ function completed(taskId = 'task-a', overrides = {}) {
 function messages() {
   const errors = []
   const successes = []
+  const warnings = []
   return {
     errors,
     successes,
-    toast: { error: text => errors.push(text), success: text => successes.push(text) },
+    warnings,
+    toast: { error: text => errors.push(text), success: text => successes.push(text), warning: text => warnings.push(text) },
   }
 }
 
@@ -113,6 +115,7 @@ function mountOnboarding(t, api = {}, globals = {}) {
   const oauthStarts = []
   const oauthCompletions = []
   const enrollments = []
+  const qualityApplications = []
   let reloads = 0
   const load = loader({
     '@/api': {
@@ -136,6 +139,12 @@ function mountOnboarding(t, api = {}, globals = {}) {
         return api.enroll ? api.enroll(input) : { ids: ['relogin-new'] }
       },
     },
+    '@/api/modules/quality-ops': {
+      async applyQualityTemplate(input) {
+        qualityApplications.push(structuredClone(input))
+        return [{ accountId: input.targets[0].accountId, ruleId: 'quality-rule', success: true, message: null }]
+      },
+    },
     '@/components/base/BaseToast': notifications,
   }, globals)
   const scope = vue.effectScope()
@@ -152,13 +161,14 @@ function mountOnboarding(t, api = {}, globals = {}) {
     if (mode !== 'oauth')
       state.createForm.value.importTexts[mode] = value
   }
-  return { state, input, submissions, created, oauthStarts, oauthCompletions, enrollments, notifications, reloads: () => reloads }
+  return { state, input, submissions, created, oauthStarts, oauthCompletions, enrollments, qualityApplications, notifications, reloads: () => reloads }
 }
 
 test('2FA enrollment submits one durable intent and clears secrets after acceptance', async (t) => {
   const h = mountOnboarding(t)
   h.input('openai', 'two_fa', 'test@example.invalid----test-password----JBSWY3DPEHPK3PXP')
   h.state.createForm.value.importTemplate = { id: 'ignored-template', revision: 1, config: { enabled: false } }
+  h.state.createForm.value.qualityTemplate = { id: 'quality-template', revision: 4, name: '监测模板', config: {} }
   Object.assign(h.state.createForm.value, { applyExcel: true, excelEnabled: true, excel403Action: 'disable_excel', proxyMode: 'proxy', proxyId: 'proxy-fixture', replaceExisting2fa: true })
   await h.state.handleCreate()
   assert.equal(h.submissions.length, 0)
@@ -166,6 +176,7 @@ test('2FA enrollment submits one durable intent and clears secrets after accepta
   assert.equal(h.enrollments[0].outboundProxyId, 'proxy-fixture')
   assert.equal(h.enrollments[0].replaceExisting, true)
   assert.equal('template' in h.enrollments[0], false)
+  assert.deepEqual(h.enrollments[0].qualityTemplate, { id: 'quality-template', revision: 4 })
   assert.equal(h.enrollments[0].settings.enabled, true)
   assert.equal(h.enrollments[0].settings.excel403Action, 'disable_excel')
   assert.equal(h.enrollments[0].settings.excelCacheCreationAsInput, true)
@@ -799,6 +810,7 @@ test('OAuth creation and existing-account relogin keep their original APIs and s
     const h = mountOnboarding(t)
     h.input(provider, 'oauth')
     h.state.createForm.value.importTemplate = { id: 'ignored-template', revision: 1, config: { enabled: false } }
+    h.state.createForm.value.qualityTemplate = { id: 'quality-template', revision: 4, name: '监测模板', config: {} }
     h.state.createForm.value.turnStateInjectionEnabled = true
     h.state.createForm.value.customName = '  OAuth batch  '
     await h.state.handleAuthorizeOAuth()
@@ -806,6 +818,11 @@ test('OAuth creation and existing-account relogin keep their original APIs and s
     await h.state.handleCreate()
     assert.equal(h.submissions.length, 0)
     assert.equal(h.oauthStarts[0].accountId, undefined)
+    assert.deepEqual(h.qualityApplications[0], {
+      id: 'quality-template',
+      revision: 4,
+      targets: [{ accountId: 'account-existing', ruleId: null, revision: null }],
+    })
     assert.deepEqual(h.oauthCompletions[0].settings, {
       clearOutboundProxy: true,
       requestProxySource: 'account',
@@ -826,6 +843,7 @@ test('OAuth creation and existing-account relogin keep their original APIs and s
     h.state.createForm.value.customName = 'Must not rename existing account'
     await h.state.handleCreate()
     assert.equal(h.oauthCompletions[1].settings, undefined)
+    assert.equal(h.qualityApplications.length, 1, 'reauthorization must not reapply an import template')
     assert.equal(h.submissions.length, 0)
     assert.equal(h.reloads(), 2)
   }

@@ -1206,6 +1206,26 @@ pub struct AccountRefreshResult {
 pub struct AccountExportBundle {
     pub exported_at: DateTime<Utc>,
     pub documents: Vec<ProviderExport>,
+    pub relogin: Vec<AccountExportRelogin>,
+}
+
+pub struct AccountExportRelogin {
+    pub account_id: ProviderAccountId,
+    pub email: String,
+    pub password: String,
+    pub mfa_secret: String,
+}
+
+impl fmt::Debug for AccountExportRelogin {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AccountExportRelogin")
+            .field("account_id", &self.account_id)
+            .field("email", &"<redacted>")
+            .field("password", &"<redacted>")
+            .field("mfa_secret", &"<redacted>")
+            .finish()
+    }
 }
 
 impl fmt::Debug for AccountExportBundle {
@@ -1214,6 +1234,7 @@ impl fmt::Debug for AccountExportBundle {
             .debug_struct("AccountExportBundle")
             .field("exported_at", &self.exported_at)
             .field("document_count", &self.documents.len())
+            .field("relogin_count", &self.relogin.len())
             .finish()
     }
 }

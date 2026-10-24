@@ -288,6 +288,14 @@ preserves acquisition mode and targets; push is a separate confirmation.
 
 ## Account Menu and Import Templates
 
+- `ReloginEnrollment` may persist a revision-fenced monitoring-template selection.
+  Apply it only after the account credential commit is confirmed; failure leaves the
+  account synced and records a warning rather than replaying login or pool writes.
+- Explicit selected-account JSON export includes valid matching password/TOTP material
+  in a top-level `relogin` array in the same no-store response. Match only selected
+  OpenAI OAuth account emails, audit the relogin entry export and keep every Debug view
+  redacted. Accounts without valid material produce no synthetic secret fields.
+
 - Library manual acquisition explicitly selects `original` or `highest`; omitted API
   mode and old JSONB rows remain `original`. Highest ignores the stored preferred
   workspace only for this acquisition, freezes same-email targets before login and

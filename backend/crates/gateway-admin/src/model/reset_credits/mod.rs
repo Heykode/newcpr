@@ -92,6 +92,7 @@ impl ResetHistoryQuery {
 pub struct ResetHistoryPage {
     pub items: Vec<ResetBatch>,
     pub account_names: std::collections::BTreeMap<String, String>,
+    pub account_emails: std::collections::BTreeMap<String, String>,
     pub before: DateTime<Utc>,
     pub has_more: bool,
 }

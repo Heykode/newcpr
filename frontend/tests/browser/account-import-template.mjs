@@ -27,7 +27,7 @@ async function main() {
     }
     assert.ok(ready)
     browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_PATH || undefined })
-    const page = await browser.newPage({ viewport: { width: 1440, height: 1000 }, reducedMotion: 'reduce' })
+    const page = await browser.newPage({ viewport: { width: 1440, height: 1000 }, reducedMotion: 'reduce', locale: 'zh-CN' })
     const errors = []
     const submissions = []
     const groupId = 'grp_00000000000000000000000000000001'
@@ -51,6 +51,12 @@ async function main() {
         excel403Action: 'disable_excel',
       },
     }
+    const qualityTemplate = {
+      id: 'quality-template-import',
+      revision: 2,
+      name: '导入监测模板',
+      config: { model: 'gpt-6-astra', enabled: true, detectionMode: 'answer' },
+    }
     const respond = (route, data) => route.fulfill({ json: { code: 200, message: 'ok', data } })
     page.on('pageerror', error => errors.push(error.message))
     page.on('response', (response) => {
@@ -62,6 +68,8 @@ async function main() {
       const path = new URL(request.url()).pathname.replace(/^\/dev/, '')
       if (path === '/api/admin/relogin/templates')
         return respond(route, [template])
+      if (path === '/api/admin/quality-ops/templates')
+        return respond(route, [qualityTemplate])
       if (path === '/api/admin/accounts/reset-credits/cache' || path === '/api/admin/accounts/reset-credits/batches')
         return respond(route, [])
       if (path === '/api/admin/account-groups/monitor')
@@ -82,10 +90,12 @@ async function main() {
     })
     const dialog = page.getByRole('dialog', { name: /^(账号设置|导入账号)$/ })
     await page.goto(`${base}/accounts`)
-    await page.getByRole('button', { name: '导入账号', exact: true }).click()
+    await page.getByRole('button', { name: /^(导入账号|Import)$/ }).click()
     await dialog.getByRole('button', { name: 'OpenAI', exact: true }).click()
     await dialog.getByRole('combobox', { name: '导入账号模板', exact: true }).click()
     await page.getByRole('option', { name: template.config.name, exact: true }).click()
+    await dialog.getByRole('combobox', { name: '导入监测模板', exact: true }).click()
+    await page.getByRole('option', { name: qualityTemplate.name, exact: true }).click()
     assert.equal(await dialog.getByRole('spinbutton', { name: '账号并发限制', exact: true }).inputValue(), '4')
     assert.equal(await dialog.getByRole('spinbutton', { name: '账号调度权重', exact: true }).inputValue(), '9')
     assert.equal(await dialog.getByRole('switch', { name: '切换账号调度', exact: true }).isChecked(), false)
@@ -100,6 +110,7 @@ async function main() {
       for (const width of [1440, 390, 320]) {
         await page.setViewportSize({ width, height: width < 500 ? 844 : 1000 })
         await dialog.getByRole('combobox', { name: '导入账号模板', exact: true }).scrollIntoViewIfNeeded()
+        await dialog.getByRole('combobox', { name: '导入监测模板', exact: true }).scrollIntoViewIfNeeded()
         await page.evaluate(() => document.fonts.ready)
         assert.ok(await dialog.evaluate(element => element.scrollWidth <= element.clientWidth + 1))
         const bounds = await dialog.boundingBox()
@@ -123,6 +134,7 @@ async function main() {
     assert.equal(submissions.length, 1)
     const item = submissions[0].items[0]
     assert.deepEqual(item.template, { id: template.id, revision: 3 })
+    assert.deepEqual(item.qualityTemplate, { id: qualityTemplate.id, revision: 2 })
     assert.equal(item.templateSettingsOverride, true)
     assert.equal(item.settings.weight, 21)
     assert.equal(item.settings.concurrencyLimit, 4)
@@ -134,8 +146,9 @@ async function main() {
     const tasks = page.getByRole('dialog', { name: '导入任务', exact: true })
     await tasks.getByRole('button', { name: '关闭', exact: true }).last().click()
     await tasks.waitFor({ state: 'hidden' })
-    await page.getByRole('button', { name: '导入账号', exact: true }).click()
+    await page.getByRole('button', { name: /^(导入账号|Import)$/ }).click()
     assert.match(await dialog.getByRole('combobox', { name: '导入账号模板', exact: true }).textContent(), /不使用模板/)
+    assert.match(await dialog.getByRole('combobox', { name: '导入监测模板', exact: true }).textContent(), /不使用模板/)
     assert.equal(await dialog.getByRole('spinbutton', { name: '账号调度权重', exact: true }).inputValue(), '1')
     assert.deepEqual(errors, [])
     process.stdout.write('Passed: first-step prefill, final edited payload, back/reopen, six responsive layouts.\n')

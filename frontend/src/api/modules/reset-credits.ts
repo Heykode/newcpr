@@ -67,6 +67,7 @@ export function getResetBatches(options: RequestOptions = {}) {
 export interface ResetHistoryPage {
   items: ResetBatch[]
   accountNames: Record<string, string>
+  accountEmails: Record<string, string>
   before: string
   hasMore: boolean
 }

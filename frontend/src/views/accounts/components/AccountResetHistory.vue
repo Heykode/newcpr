@@ -119,6 +119,9 @@ onBeforeUnmount(() => {
             <div class="break-all font-medium">
               {{ result?.accountNames[item.accountId] || item.accountId }}
             </div>
+            <div v-if="result?.accountEmails[item.accountId]" class="mt-1 break-all text-cp-text-secondary">
+              {{ result.accountEmails[item.accountId] }}
+            </div>
             <div class="mt-1 break-words text-cp-text-secondary">
               {{ item.credit?.title || item.credit?.resetType || '未选卡' }} · 可用次数 {{ item.availableCount ?? '未知' }}
             </div>

@@ -106,6 +106,8 @@ pub struct AccountImportRequest {
     pub template_settings_override: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub template: Option<gateway_admin::model::relogin_templates::ReloginTemplateSelection>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quality_template: Option<gateway_admin::model::quality_ops::QualityTemplateSelection>,
     pub outbound_proxy_id: Option<String>,
     pub settings: Option<AccountImportSettingsRequest>,
     pub provider: String,
@@ -145,7 +147,14 @@ impl AccountImportRequest {
         self,
         context: gateway_admin::model::MutationContext,
         templates: &dyn gateway_admin::AccountTemplatesService,
-    ) -> Result<(AccountProvider, ImportCredentials), AdminError> {
+    ) -> Result<
+        (
+            AccountProvider,
+            ImportCredentials,
+            Option<gateway_admin::model::quality_ops::QualityTemplateSelection>,
+        ),
+        AdminError,
+    > {
         self.validate().map_err(map_wire_error)?;
         let provider = AccountProvider::parse(&self.provider).map_err(map_wire_error)?;
         let mut command = ImportCredentials {
@@ -181,7 +190,7 @@ impl AccountImportRequest {
                 "turnStateInjectionEnabled",
             )));
         }
-        Ok((provider, command))
+        Ok((provider, command, self.quality_template))
     }
 }
 

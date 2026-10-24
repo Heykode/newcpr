@@ -416,6 +416,14 @@ pub async fn initialize_with_timezone(
     ));
     auth.ensure_default_admin(config.default_password.expose())
         .await?;
+    let quality_ops = Arc::new(use_case::quality_ops::QualityOpsService::new(
+        store.quality_ops(),
+        store.accounts(),
+        store.account_groups(),
+        store.account_runtime(),
+        registry.clone(),
+        probe.clone(),
+    ));
 
     let accounts = Arc::new(
         DefaultAccountsService::new(
@@ -426,7 +434,8 @@ pub async fn initialize_with_timezone(
             snapshot.clone(),
             probe.clone(),
         )
-        .with_reset_store(store.reset_credits()),
+        .with_reset_store(store.reset_credits())
+        .with_relogin_store(store.relogin()),
     );
     let reset_credits = Arc::new(use_case::reset_credits::ResetCreditsService {
         accounts: accounts.clone(),
@@ -472,22 +481,26 @@ pub async fn initialize_with_timezone(
             accounts.clone(),
         ),
     );
-    let relogin = Arc::new(use_case::relogin::DefaultReloginService::new(
-        &store,
-        openai,
-        openai_service.clone(),
-        snapshot.clone(),
-        account_templates.clone(),
-    ));
+    let relogin = Arc::new(
+        use_case::relogin::DefaultReloginService::new(
+            &store,
+            openai,
+            openai_service.clone(),
+            snapshot.clone(),
+            account_templates.clone(),
+        )
+        .with_quality_ops(quality_ops.clone()),
+    );
     let xai_service = Arc::new(DefaultXaiService::new(
         xai,
         store.accounts(),
         store.proxies(),
         snapshot.clone(),
     ));
-    let import_tasks = use_case::import_tasks::DefaultImportTasksService::new(
+    let import_tasks = use_case::import_tasks::DefaultImportTasksService::new_with_quality_ops(
         openai_service.clone(),
         xai_service.clone(),
+        Some(quality_ops.clone()),
     );
     let import_task = use_case::import_tasks::ImportTaskWorker(import_tasks.clone());
     let excel_recovery = Arc::new(use_case::excel_recovery::ExcelRecoveryService {
@@ -495,14 +508,6 @@ pub async fn initialize_with_timezone(
         providers: registry.clone(),
         probe: probe.clone(),
     });
-    let quality_ops = Arc::new(use_case::quality_ops::QualityOpsService::new(
-        store.quality_ops(),
-        store.accounts(),
-        store.account_groups(),
-        store.account_runtime(),
-        registry.clone(),
-        probe.clone(),
-    ));
     let codex_quota_overdraft = Arc::new(
         use_case::codex_quota_overdraft::CodexQuotaOverdraftService {
             accounts: store.accounts(),

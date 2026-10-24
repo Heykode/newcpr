@@ -1252,6 +1252,18 @@ impl AccountExportData {
     }
 
     pub(super) fn from_result(bundle: AccountExportBundle) -> Self {
+        let relogin = bundle
+            .relogin
+            .into_iter()
+            .map(|entry| {
+                serde_json::json!({
+                    "accountId": entry.account_id.to_string(),
+                    "email": entry.email,
+                    "password": entry.password,
+                    "mfaSecret": entry.mfa_secret,
+                })
+            })
+            .collect::<Vec<_>>();
         let documents = bundle
             .documents
             .into_iter()
@@ -1265,6 +1277,7 @@ impl AccountExportData {
         Self::new(serde_json::json!({
             "exportedAt": bundle.exported_at.to_rfc3339(),
             "documents": documents,
+            "relogin": relogin,
         }))
     }
 }
@@ -1355,5 +1368,45 @@ impl From<DomainConnectionTestEvent> for AccountConnectionTestEvent {
             }),
         };
         Self { data }
+    }
+}
+
+#[cfg(test)]
+mod account_export_data_tests {
+    use super::*;
+    use gateway_admin::model::provider_credentials::{
+        AccountExportRelogin, ProviderDocument, ProviderExport,
+    };
+    use gateway_core::{
+        account::{OpaqueProviderData, ProviderAccountId},
+        routing::ProviderKind,
+    };
+
+    #[test]
+    fn selected_export_keeps_relogin_material_in_the_same_redacted_document() {
+        let secret = "JBSWY3DPEHPK3PXP";
+        let bundle = AccountExportBundle {
+            exported_at: Utc::now(),
+            documents: vec![ProviderExport {
+                provider_kind: ProviderKind::new("openai").unwrap(),
+                account_ids: vec![ProviderAccountId::new("acct_export").unwrap()],
+                document: ProviderDocument::new(OpaqueProviderData::new(Map::from_iter([(
+                    "sourceFormat".to_owned(),
+                    Value::String("cpr".to_owned()),
+                )]))),
+            }],
+            relogin: vec![AccountExportRelogin {
+                account_id: ProviderAccountId::new("acct_export").unwrap(),
+                email: "export@example.invalid".to_owned(),
+                password: "secret-password".to_owned(),
+                mfa_secret: secret.to_owned(),
+            }],
+        };
+        let data = AccountExportData::from_result(bundle);
+        assert!(!format!("{data:?}").contains(secret));
+        let value = serde_json::to_value(data).unwrap();
+        assert_eq!(value["documents"][0]["provider"], "openai");
+        assert_eq!(value["relogin"][0]["accountId"], "acct_export");
+        assert_eq!(value["relogin"][0]["mfaSecret"], secret);
     }
 }

@@ -234,7 +234,7 @@ async fn import_accounts<S>(
 where
     S: AdminSessionState + Send + Sync,
 {
-    let (provider, command) = request
+    let (provider, command, quality_template) = request
         .into_command(
             auth.context().mutation_context(),
             state.admin_services().account_templates(),
@@ -251,6 +251,17 @@ where
         AccountProvider::Xai => state.admin_services().xai().import_document(command).await,
     }
     .map_err(map_service_error)?;
+    if let Some(selection) = quality_template {
+        let _ = state
+            .admin_services()
+            .quality_ops()
+            .apply_template_to_accounts(
+                &selection,
+                &result.credential_ids,
+                &auth.context().mutation_context(),
+            )
+            .await;
+    }
     Ok(AdminResponse::new(
         StatusCode::CREATED,
         AdminEnvelope::ok(AccountImportData::from_result(result)),

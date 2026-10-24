@@ -3,6 +3,7 @@ import type { AccountCreateForm } from './model'
 import type { AccountGroup } from '@/api'
 import AccountTemplatePicker from '@/components/account-templates/AccountTemplatePicker.vue'
 import BaseCheckbox from '@/components/base/BaseCheckbox.vue'
+import QualityTemplatePicker from '@/components/quality-ops/QualityTemplatePicker.vue'
 import { t } from '@/i18n'
 import AccountPurchaseFields from '../AccountPurchaseFields.vue'
 import AccountSettingsFields from '../AccountSettingsFields.vue'
@@ -26,14 +27,18 @@ const form = defineModel<AccountCreateForm>({ required: true })
       </legend>
       <AccountProviderChooser :selected="form.provider" :disabled="disabled" @select="form.provider = $event" />
     </fieldset>
-    <AccountTemplatePicker
-      :model-value="form.importTemplate"
-      label="导入账号模板"
-      manage
-      :summary="false"
-      :disabled="disabled"
-      @update:model-value="form = prefillAccountTemplate(form, $event)"
-    />
+    <div class="grid min-w-0 gap-4 md:grid-cols-2">
+      <AccountTemplatePicker
+        :model-value="form.importTemplate"
+        label="导入账号模板"
+        manage
+        compact
+        :summary="false"
+        :disabled="disabled"
+        @update:model-value="form = prefillAccountTemplate(form, $event)"
+      />
+      <QualityTemplatePicker v-model="form.qualityTemplate" label="导入监测模板" manage :disabled="disabled" />
+    </div>
     <BaseCheckbox
       v-if="form.provider === 'openai' || form.provider === 'batch'"
       v-model="form.applyExcel"

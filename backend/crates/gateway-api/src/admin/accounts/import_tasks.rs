@@ -155,7 +155,7 @@ where
     let context = auth.context().mutation_context();
     let mut items = Vec::with_capacity(request.items.len());
     for item in request.items {
-        let (provider, command) = item
+        let (provider, command, quality_template) = item
             .into_command(context.clone(), state.admin_services().account_templates())
             .await?;
         let provider = ProviderKind::new(match provider {
@@ -163,7 +163,11 @@ where
             AccountProvider::Xai => "xai",
         })
         .map_err(|_| map_wire_error(WireValidationError::new("provider")))?;
-        items.push(ImportTaskInput { provider, command });
+        items.push(ImportTaskInput {
+            provider,
+            command,
+            quality_template,
+        });
     }
     let task = state
         .admin_services()

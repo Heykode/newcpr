@@ -15,7 +15,7 @@ import { errorMessage } from '@/utils/async'
 import { accountExcel403Action, excel403ActionLabel } from '@/utils/excel-settings'
 import AccountTemplatesModal from './AccountTemplatesModal.vue'
 
-withDefaults(defineProps<{ disabled: boolean, label?: string, manage?: boolean, summary?: boolean }>(), { label: '新增账号模板', manage: false, summary: true })
+const props = withDefaults(defineProps<{ disabled: boolean, label?: string, manage?: boolean, summary?: boolean, compact?: boolean }>(), { label: '新增账号模板', manage: false, summary: true, compact: false })
 const selected = defineModel<AccountTemplate | null>({ required: true })
 const managing = shallowRef(false)
 const rows = shallowRef<AccountTemplate[]>([])
@@ -81,7 +81,7 @@ onScopeDispose(() => controller?.abort())
 </script>
 
 <template>
-  <div class="my-4 min-w-0 border-y border-cp-border py-4">
+  <div :class="props.compact ? 'min-w-0' : 'my-4 min-w-0 border-y border-cp-border py-4'">
     <BaseFormItem :label="label">
       <div class="flex min-w-0 items-center gap-2">
         <BaseSelect v-model="value" class="min-w-0 flex-1" :options="options" :disabled="disabled || loading" :aria-label="label" />

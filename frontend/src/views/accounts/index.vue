@@ -486,10 +486,6 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
           @toggle-column="toggleColumn"
         >
           <template #account-templates>
-            <BaseButton v-if="selectedIds.size" variant="secondary" :disabled="resetBusy" @click="resetCredits.refreshSelected">
-              <RefreshCw class="size-4" />
-              查询可用次数
-            </BaseButton>
             <BaseButton v-if="selectedIds.size" variant="secondary" :disabled="resetBusy" @click="resetCredits.prepare(false)">
               <RotateCcw class="size-4" />
               使用重置次数
@@ -900,7 +896,7 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
       @confirm="confirmExportAccounts"
     >
       <p class="m-0">
-        确定导出选中的 {{ selectedIds.size }} 个账号吗？
+        确定导出选中的 {{ selectedIds.size }} 个账号吗？文件包含访问凭据，以及存在时对应的 2FA 资料。
       </p>
     </BaseConfirmModal>
 

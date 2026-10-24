@@ -8,32 +8,22 @@ import BaseButton from '@/components/base/BaseButton.vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseMenuItem from '@/components/base/BaseMenuItem.vue'
 import BasePopover from '@/components/base/BasePopover.vue'
+import { toast } from '@/components/base/BaseToast'
 import { errorMessage } from '@/utils/async'
-import QualityDrawer from '@/views/quality-ops/QualityDrawer.vue'
-import { qualityScheduleSummary } from '@/views/quality-ops/schedule'
 import { qualityTemplateTargets } from './monitoring'
 
 const props = defineProps<{ accountIds: string[], disabled?: boolean }>()
 const emit = defineEmits<{ applied: [accountIds: string[]], applying: [value: boolean] }>()
 const router = useRouter()
 const open = ref(false)
-const confirming = ref(false)
 const loading = ref(false)
 const preparing = ref(false)
 const applying = ref(false)
 const templates = shallowRef<QualityRuleTemplate[]>([])
 const chosen = shallowRef<QualityRuleTemplate | null>(null)
 const capturedIds = shallowRef<string[]>([])
-const targets = shallowRef<QualityTemplateTarget[]>([])
-const results = shallowRef<QualityTemplateApplyResult[]>([])
 const menuError = ref('')
-const error = ref('')
-const uncertain = ref(false)
-const ready = ref(false)
 const busy = computed(() => applying.value || preparing.value)
-const replacements = computed(() => targets.value.filter(target => target.ruleId !== null).length)
-const successes = computed(() => results.value.filter(result => result.success).length)
-const failures = computed(() => results.value.filter(result => !result.success))
 let catalogController: AbortController | undefined
 let previewController: AbortController | undefined
 let disposed = false
@@ -58,29 +48,42 @@ async function load() {
       loading.value = false
   }
 }
-async function prepare() {
+async function applySelected() {
   if (busy.value || !chosen.value || !capturedIds.value.length)
     return
   previewController?.abort()
   const owner = new AbortController()
   previewController = owner
   preparing.value = true
-  ready.value = false
-  error.value = ''
   try {
     const state = await getQualityMonitoring(capturedIds.value, { silent: true, signal: owner.signal })
-    if (!disposed && !owner.signal.aborted) {
-      targets.value = qualityTemplateTargets(capturedIds.value, state)
-      ready.value = true
-    }
+    if (disposed || owner.signal.aborted)
+      return
+    const targets: QualityTemplateTarget[] = qualityTemplateTargets(capturedIds.value, state)
+    applying.value = true
+    preparing.value = false
+    const result: QualityTemplateApplyResult[] = await applyQualityTemplate({ id: chosen.value.id, revision: chosen.value.revision, targets })
+    if (disposed)
+      return
+    const successes = result.filter(item => item.success).map(item => item.accountId)
+    const failures = result.length - successes.length
+    emit('applied', successes)
+    if (failures)
+      toast.warning(`监测模板已应用 ${successes.length} 个账号，${failures} 个账号未应用`)
+    else
+      toast.success(`监测模板已应用 ${successes.length} 个账号`)
   }
   catch (cause) {
-    if (!disposed && !owner.signal.aborted)
-      error.value = errorMessage(cause)
+    if (!disposed && !owner.signal.aborted) {
+      toast.error(`${errorMessage(cause)}。请刷新账号监测状态核对结果，不会自动重复应用。`)
+      emit('applied', [])
+    }
   }
   finally {
-    if (previewController === owner)
+    if (previewController === owner) {
       preparing.value = false
+      applying.value = false
+    }
   }
 }
 function choose(template: QualityRuleTemplate) {
@@ -88,43 +91,8 @@ function choose(template: QualityRuleTemplate) {
     return
   chosen.value = template
   capturedIds.value = [...props.accountIds]
-  targets.value = []
-  results.value = []
-  error.value = ''
-  uncertain.value = false
   open.value = false
-  confirming.value = true
-  void prepare()
-}
-async function apply() {
-  if (busy.value || !ready.value || !chosen.value)
-    return
-  applying.value = true
-  ready.value = false
-  const selection = { id: chosen.value.id, revision: chosen.value.revision, targets: [...targets.value] }
-  try {
-    const result = await applyQualityTemplate(selection)
-    if (disposed)
-      return
-    results.value = result
-    emit('applied', result.filter(item => item.success).map(item => item.accountId))
-  }
-  catch (cause) {
-    if (!disposed) {
-      error.value = `${errorMessage(cause)}。请刷新账号监测状态核对结果，不会自动重复应用。`
-      uncertain.value = true
-      emit('applied', [])
-    }
-  }
-  finally { applying.value = false }
-}
-function reviewFailures() {
-  if (busy.value || !failures.value.length)
-    return
-  capturedIds.value = failures.value.map(item => item.accountId)
-  results.value = []
-  targets.value = []
-  void prepare()
+  void applySelected()
 }
 watch(busy, value => emit('applying', value), { flush: 'sync' })
 watch(open, (value) => {
@@ -132,12 +100,6 @@ watch(open, (value) => {
     void load()
   else
     catalogController?.abort()
-})
-watch(confirming, (value) => {
-  if (!value) {
-    previewController?.abort()
-    ready.value = false
-  }
 })
 onScopeDispose(() => {
   disposed = true
@@ -185,48 +147,4 @@ onScopeDispose(() => {
       </div>
     </div>
   </BasePopover>
-  <QualityDrawer v-model="confirming" title="应用监测模板" :busy="applying">
-    <div v-if="chosen" class="grid min-w-0 gap-4 text-cp-sm">
-      <h3 class="break-words text-base font-semibold [overflow-wrap:anywhere]">
-        {{ chosen.name }}
-      </h3>
-      <p class="break-all text-cp-text-secondary">
-        {{ chosen.config.model }} · {{ chosen.config.enabled ? '启用定时检测' : '保存为暂停状态' }} · {{ qualityScheduleSummary(chosen.config) }}
-      </p>
-      <p v-if="preparing" role="status">
-        正在读取所选账号的监测规则…
-      </p>
-      <div v-else-if="ready" class="grid gap-3">
-        <p>将为 {{ targets.length - replacements }} 个账号新建规则，替换 {{ replacements }} 个账号的已有规则。</p>
-        <p class="text-cp-text-secondary">
-          已有检测历史保留。按模板计划执行，不立即检测；不修改账号当前的请求出口或调度设置。后续仅在满足规则异常条件时执行配置的处置。
-        </p>
-      </div>
-      <div v-if="results.length" class="grid gap-3" role="status">
-        <p>已应用 {{ successes }} 个账号，{{ failures.length }} 个账号未应用。</p>
-        <div v-if="failures.length" class="max-h-64 divide-y divide-cp-border overflow-y-auto">
-          <p v-for="failure in failures" :key="failure.accountId" class="break-words py-2 text-cp-error [overflow-wrap:anywhere]">
-            {{ failure.accountId }}：{{ failure.message }}
-          </p>
-        </div>
-      </div>
-      <p v-if="error" class="break-words text-cp-error" role="alert">
-        {{ error }}
-      </p>
-    </div>
-    <template #footer>
-      <BaseButton :disabled="applying" @click="confirming = false">
-        {{ results.length || uncertain ? '完成' : '取消' }}
-      </BaseButton>
-      <BaseButton v-if="failures.length && !ready" :disabled="busy" @click="reviewFailures">
-        重新核对未成功项
-      </BaseButton>
-      <BaseButton v-else-if="error && !uncertain && !ready" :disabled="busy" @click="prepare">
-        重新读取
-      </BaseButton>
-      <BaseButton v-else-if="!results.length && !uncertain" variant="primary" :disabled="!ready || busy" :loading="applying" @click="apply">
-        确认应用
-      </BaseButton>
-    </template>
-  </QualityDrawer>
 </template>

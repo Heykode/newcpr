@@ -2399,6 +2399,19 @@ mod import_settings {
     use serde_json::json;
 
     #[test]
+    fn import_request_accepts_a_revision_fenced_quality_template() {
+        let request: AccountImportRequest = serde_json::from_value(json!({
+            "provider": "openai",
+            "data": {},
+            "qualityTemplate": {"id": "quality-template", "revision": 3}
+        }))
+        .unwrap();
+        let selected = request.quality_template.unwrap();
+        assert_eq!(selected.id, "quality-template");
+        assert_eq!(selected.revision, 3);
+    }
+
+    #[test]
     fn state_import_setting_is_optional_boolean_and_openai_only() {
         for state in [None, Some(false), Some(true)] {
             let mut settings =

@@ -601,6 +601,7 @@ export interface AccountImportSettings {
 
 interface AccountImportParam {
   template?: import('./account-templates').AccountTemplateSelection
+  qualityTemplate?: Pick<import('./quality-ops').QualityRuleTemplate, 'id' | 'revision'>
   templateSettingsOverride?: boolean
   outboundProxyId?: string
   settings?: AccountImportSettings

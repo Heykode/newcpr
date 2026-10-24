@@ -243,6 +243,7 @@ pub(crate) struct DefaultAccountsService {
     snapshot: Arc<dyn SnapshotControl>,
     probe: Arc<dyn AccountProbe>,
     reset_store: Option<Arc<dyn crate::ports::reset_credits::ResetCreditsStore>>,
+    relogin_store: Option<Arc<dyn crate::ports::relogin::ReloginStore>>,
     reset_credit_locks:
         Arc<futures::lock::Mutex<BTreeMap<ProviderAccountId, Arc<futures::lock::Mutex<()>>>>>,
 }
@@ -271,6 +272,7 @@ impl DefaultAccountsService {
             snapshot,
             probe,
             reset_store: None,
+            relogin_store: None,
             reset_credit_locks: Arc::new(futures::lock::Mutex::new(BTreeMap::new())),
         }
     }
@@ -280,6 +282,14 @@ impl DefaultAccountsService {
         store: Option<Arc<dyn crate::ports::reset_credits::ResetCreditsStore>>,
     ) -> Self {
         self.reset_store = store;
+        self
+    }
+
+    pub(crate) fn with_relogin_store(
+        mut self,
+        store: Option<Arc<dyn crate::ports::relogin::ReloginStore>>,
+    ) -> Self {
+        self.relogin_store = store;
         self
     }
 
@@ -848,8 +858,15 @@ impl AccountsService for DefaultAccountsService {
         }
         let exported_ids = account_ids.clone();
         let mut grouped = BTreeMap::<ProviderKind, Vec<ProviderAccountId>>::new();
+        let mut relogin_candidates = Vec::new();
         for account_id in account_ids {
             let account = self.load_account(&account_id).await?;
+            if account.account.provider_kind.as_str() == "openai"
+                && account.account.authentication_kind == "oauth"
+                && let Some(email) = account.account.email.clone()
+            {
+                relogin_candidates.push((account_id.clone(), email));
+            }
             grouped
                 .entry(account.account.provider_kind)
                 .or_default()
@@ -879,6 +896,44 @@ impl AccountsService for DefaultAccountsService {
                     .map_err(|error| map_provider_error(error, "provider account export"))?,
             );
         }
+        let mut relogin = Vec::new();
+        if let Some(store) = self.relogin_store.as_deref() {
+            let entries = store
+                .entries()
+                .await
+                .map_err(|error| map_store_error(error, "account relogin export"))?;
+            let mut audited = Vec::new();
+            for (account_id, email) in relogin_candidates {
+                let Some(entry) = entries
+                    .iter()
+                    .find(|entry| entry.email.eq_ignore_ascii_case(&email))
+                else {
+                    continue;
+                };
+                if entry.validate_totp().is_err() {
+                    continue;
+                }
+                audited.push(entry.id.clone());
+                relogin.push(crate::model::provider_credentials::AccountExportRelogin {
+                    account_id,
+                    email: entry.email.clone(),
+                    password: entry.password.clone(),
+                    mfa_secret: entry.mfa_secret.clone(),
+                });
+            }
+            audited.sort();
+            audited.dedup();
+            if !audited.is_empty() {
+                store
+                    .record_export(
+                        &audited,
+                        crate::model::relogin::ReloginExportFormat::Json,
+                        context,
+                    )
+                    .await
+                    .map_err(|error| map_store_error(error, "account relogin export audit"))?;
+            }
+        }
         self.accounts
             .record_credential_export(&exported_ids, context)
             .await
@@ -886,6 +941,7 @@ impl AccountsService for DefaultAccountsService {
         Ok(AccountExportBundle {
             exported_at: Utc::now(),
             documents,
+            relogin,
         })
     }
 

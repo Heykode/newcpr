@@ -64,6 +64,11 @@
 - The template picker belongs to `AccountSetupFields`, before editable settings,
   not the credential-entry step. Selection copies scheduling/groups and present
   optional model/Excel fields; it never replaces account name or purchase metadata.
+- Account and monitoring templates share one responsive first-step row: equal-width
+  controls on desktop and stacked controls on narrow screens. A monitoring selection
+  is revision-fenced and is applied only after the account commit is known. Credential
+  task, OAuth and 2FA enrollment paths preserve successful accounts when this
+  post-import action fails and surface a warning instead of replaying credentials.
 - Preserve partial legacy exits through a draft/patch snapshot until the visible
   exit changes. Do not turn omitted IPv6/source settings into global inheritance.
   Keep proxy IDs distinct from redacted endpoints and reject incompatible provider exits.
@@ -116,6 +121,9 @@ Batch history persists server-side; page disposal aborts only reads, never clear
 Single-account panels restore pending card/request IDs from the server, including after page reload.
 Do not substitute a newly available card when the original operation remains unknown.
 Column preferences migrate to version 5 once and continue respecting subsequent manual hiding.
+The account toolbar has no separate batch query button: opening the consume preview is the
+authoritative refresh. History returns and displays account name plus email independently,
+falling back to the durable account ID after deletion.
 
 ## Complete Account Row Replacement
 

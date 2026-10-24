@@ -210,6 +210,7 @@ pub(crate) struct DefaultReloginService {
     openai: Arc<dyn OpenAiService>,
     snapshot: Arc<dyn SnapshotControl>,
     templates: Arc<dyn super::account_templates::AccountTemplatesService>,
+    quality_ops: Option<Arc<super::quality_ops::QualityOpsService>>,
     proxies: Arc<dyn crate::ports::proxy::ProxyStore>,
     gate: Mutex<Gate>,
 }
@@ -230,9 +231,19 @@ impl DefaultReloginService {
             openai,
             snapshot,
             templates,
+            quality_ops: None,
             proxies: stores.proxies(),
             gate: Mutex::new(Gate::default()),
         }
+    }
+
+    #[must_use]
+    pub(crate) fn with_quality_ops(
+        mut self,
+        quality_ops: Arc<super::quality_ops::QualityOpsService>,
+    ) -> Self {
+        self.quality_ops = Some(quality_ops);
+        self
     }
 
     fn store(&self) -> Result<&dyn ReloginStore, AdminError> {
@@ -526,7 +537,7 @@ impl DefaultReloginService {
             None
         };
         let document = ProviderDocument::new(OpaqueProviderData::new(credential.document.clone()));
-        if let Some(current) = current {
+        let synced_account_id = if let Some(current) = current {
             if entry.synced_at.is_some() {
                 return Ok(());
             }
@@ -547,6 +558,7 @@ impl DefaultReloginService {
             if entry.workspace_mode == ReloginWorkspaceMode::Highest {
                 entry.preferred_workspace_id = Some(credential.workspace_id.clone());
             }
+            result.account_id
         } else {
             let mut settings = if let Some(enrollment) = &entry.enrollment {
                 self.store()?
@@ -619,7 +631,34 @@ impl DefaultReloginService {
                 .map_err(store_error)?
                 .ok_or_else(|| AdminError::conflict("入池后账号已变化"))?;
             entry.target = Some(ReloginTarget::from_account(&current.credential)?);
-        }
+            id.clone()
+        };
+        let quality_selection = entry
+            .enrollment
+            .as_ref()
+            .and_then(|enrollment| enrollment.quality_template.clone());
+        let quality_warning = if let Some(selection) = quality_selection {
+            match self.quality_ops.as_ref() {
+                Some(quality_ops) => match quality_ops
+                    .apply_template_to_accounts(
+                        &selection,
+                        std::slice::from_ref(&synced_account_id),
+                        context,
+                    )
+                    .await
+                {
+                    Ok(result) if result.iter().all(|item| item.success) => None,
+                    Ok(_) => Some("凭据已同步到号池；监测模板未应用".to_owned()),
+                    Err(error) => Some(format!(
+                        "凭据已同步到号池；监测模板未应用：{}",
+                        error.message()
+                    )),
+                },
+                None => Some("凭据已同步到号池；监测模板服务未配置".to_owned()),
+            }
+        } else {
+            None
+        };
         entry.synced_at = Some(Utc::now());
         entry.enrollment = None;
         entry.next_attempt_at = None;
@@ -629,7 +668,7 @@ impl DefaultReloginService {
         entry.status = ReloginStatus::Ready;
         entry.workspace_mode = ReloginWorkspaceMode::Original;
         entry.workspace_targets.clear();
-        entry.message = "凭据已同步到号池".to_owned();
+        entry.message = quality_warning.unwrap_or_else(|| "凭据已同步到号池".to_owned());
         self.save(entry).await
     }
 }
