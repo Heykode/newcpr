@@ -74,4 +74,4 @@ Provider 首轮验收还发现两项旧取消用例仍要求 Close 握手。对�
 
 未执行的显式人工项目：`capture_tls_upgrade_matrix`、`capture_zstd_upgrade_corpus`，以及需官方内核和 Linux network namespace 的 `official_kernel_relays_reloads_rejects_and_stops`。本轮未进行真实 OpenAI 上游压测或生产流量验收，不能将隔离服务器的回环协议回归等同于生产零风险。
 
-本轮修改保留在当前工作分支，未提交、推送、打标签或部署；未修改发布版本及生产配置。
+以上为功能适配完成时的验收记录，发布状态不由此文档推断。后续经用户授权，本地 v3.30.0 发布汇总见 `release/notes.md`，迁移边界见 `deploy/upgrades/v3.30.0.json`；生产切换需要独立确认。
