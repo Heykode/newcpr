@@ -40,8 +40,10 @@ pub(crate) fn eligible(request: &CodexResponsesRequest) -> bool {
     let Some(last) = input.last().and_then(Value::as_object) else {
         return false;
     };
-    if last.get("type").and_then(Value::as_str) != Some("message")
+    let kind = last.get("type");
+    if kind.is_some_and(|kind| kind.as_str() != Some("message"))
         || last.get("role").and_then(Value::as_str) != Some("user")
+        || (kind.is_none() && !last.contains_key("content"))
     {
         return false;
     }
@@ -140,6 +142,38 @@ mod tests {
         )));
         assert!(!eligible(&request(
             json!([{"type":"compaction_trigger"},{"type":"message","role":"user","content":[]}])
+        )));
+    }
+
+    #[test]
+    fn optional_message_type_does_not_admit_other_item_types() {
+        for content in [
+            json!("hello"),
+            json!([{"type":"input_text","text":"hello"}]),
+        ] {
+            assert!(eligible(&request(
+                json!([{"role":"user","content":content}])
+            )));
+        }
+        for kind in [
+            Value::Null,
+            json!(false),
+            json!("function_call_output"),
+            json!("custom_tool_call"),
+            json!("compaction_trigger"),
+        ] {
+            assert!(!eligible(&request(
+                json!([{"type":kind,"role":"user","content":"hello"}])
+            )));
+        }
+        for role in ["assistant", "tool", "system", "developer"] {
+            assert!(!eligible(&request(
+                json!([{"role":role,"content":"hello"}])
+            )));
+        }
+        assert!(!eligible(&request(json!([{"role":"user"}]))));
+        assert!(!eligible(&request(
+            json!([{"role":"user","content":[{"type":"input_image","image_url":"data:image/png;base64,AA"}]}])
         )));
     }
 

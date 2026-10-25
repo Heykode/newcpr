@@ -490,6 +490,13 @@ where
         self.response_control.clone()
     }
 
+    /// Internal probes consume canonical facts, not the protocol-only failure batch.
+    pub(crate) fn pending_provider_error(&self) -> Option<&ProviderError> {
+        self.pending_terminal_failure
+            .as_ref()
+            .map(|pending| pending.error.as_ref())
+    }
+
     /// 读取下一条 canonical event；首条未提交事件会携带 commit 要求。
     ///
     /// # Errors

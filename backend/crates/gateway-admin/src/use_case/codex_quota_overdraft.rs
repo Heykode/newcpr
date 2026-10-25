@@ -3,7 +3,6 @@ use std::{sync::Arc, time::Duration};
 use chrono::{TimeDelta, Utc};
 use gateway_core::{
     engine::probe::{AccountProbe, AccountProbeRequest},
-    error::GatewayErrorKind,
     lifecycle::CancellationToken,
 };
 
@@ -71,48 +70,12 @@ impl CodexQuotaOverdraftService {
                 tested_at,
                 retry_at: tested_at + TimeDelta::minutes(1),
             },
-            Ok(Err(error)) => classify_error(error, tested_at),
+            Ok(Err(error)) => CodexQuotaOverdraftOutcome::from_probe_error(error, tested_at),
         };
         self.accounts
             .finish_codex_quota_overdraft(&claim, outcome)
             .await
             .map_err(|error| map_store_error(error, "Codex quota overdraft"))?;
         Ok(true)
-    }
-}
-
-fn classify_error(
-    error: gateway_core::engine::probe::AccountProbeError,
-    tested_at: chrono::DateTime<Utc>,
-) -> CodexQuotaOverdraftOutcome {
-    let code = error.client_error_code().unwrap_or_default();
-    if matches!(code, "usage_limit_reached" | "quota_exhausted") {
-        return CodexQuotaOverdraftOutcome::Failed {
-            reason_code: "quota_limited".to_owned(),
-            tested_at,
-            recover_at: None,
-        };
-    }
-    if error.kind() == GatewayErrorKind::Unauthorized {
-        return CodexQuotaOverdraftOutcome::Failed {
-            reason_code: "authentication_failed".to_owned(),
-            tested_at,
-            recover_at: None,
-        };
-    }
-    let reason_code = if matches!(
-        error.kind(),
-        GatewayErrorKind::Unsupported | GatewayErrorKind::ModelNotFound
-    ) {
-        "model_unavailable"
-    } else if error.kind() == GatewayErrorKind::Cancelled {
-        "cancelled"
-    } else {
-        "upstream_unavailable"
-    };
-    CodexQuotaOverdraftOutcome::Inconclusive {
-        reason_code: reason_code.to_owned(),
-        tested_at,
-        retry_at: tested_at + TimeDelta::minutes(1),
     }
 }

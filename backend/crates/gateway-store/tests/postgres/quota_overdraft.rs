@@ -79,12 +79,42 @@ async fn overdraft_claims_are_single_owner_revision_fenced_and_recover_with_quot
                 CodexQuotaOverdraftOutcome::Inconclusive {
                     reason_code: "upstream_unavailable".to_owned(),
                     tested_at: Utc::now(),
-                    retry_at: Utc::now() - TimeDelta::seconds(1),
+                    retry_at: Utc::now() + TimeDelta::minutes(1),
                 },
             )
             .await
             .unwrap()
     );
+    let first_cycle = first.cycle_key.clone();
+    let repository = PgProviderAccountRepository::new(database.pool.clone());
+    repository
+        .apply_quota_access(QuotaAccessChange {
+            account_id: first.account_id.clone(),
+            expected_revision: first.credential_revision,
+            state: QuotaState::exhausted(
+                QuotaEvidence::UsageLimitReached,
+                SystemTime::now(),
+                Some(SystemTime::now() + std::time::Duration::from_secs(3601)),
+            ),
+        })
+        .await
+        .unwrap();
+    assert!(store.claim_codex_quota_overdraft().await.unwrap().is_none());
+    let state = sqlx::query_as::<_, (String, i32, i64)>(
+        "select cycle_key,attempts,generation from codex_quota_overdraft_states where account_id='acct_overdraft_test'",
+    )
+    .fetch_one(&database.pool)
+    .await
+    .unwrap();
+    assert_eq!(state.0, first_cycle);
+    assert_eq!(state.1, 1);
+    assert_eq!(state.2, i64::try_from(first.generation).unwrap());
+    sqlx::query(
+        "update codex_quota_overdraft_states set retry_at=now()-interval '1 second' where account_id='acct_overdraft_test'",
+    )
+    .execute(&database.pool)
+    .await
+    .unwrap();
     let second = store
         .claim_codex_quota_overdraft()
         .await
@@ -109,7 +139,6 @@ async fn overdraft_claims_are_single_owner_revision_fenced_and_recover_with_quot
     assert_eq!(states["acct_overdraft_test"].status, "passed");
     assert_account_list_readable(&store).await;
 
-    let repository = PgProviderAccountRepository::new(database.pool.clone());
     let previous_generation = second.generation;
     let observed_at = SystemTime::now();
     repository
@@ -154,13 +183,14 @@ async fn overdraft_claims_are_single_owner_revision_fenced_and_recover_with_quot
             .unwrap()
     );
 
-    sqlx::query(
-        "update provider_accounts set quota_access_state='allowed',quota_evidence=null,quota_reset_at=null,quota_access_observed_at=now(),updated_at=now() where id='acct_overdraft_test'",
-    )
-    .execute(&database.pool)
-    .await
-    .unwrap();
-    assert!(store.claim_codex_quota_overdraft().await.unwrap().is_none());
+    repository
+        .apply_quota_access(QuotaAccessChange {
+            account_id: ProviderAccountId::new("acct_overdraft_test").unwrap(),
+            expected_revision: CredentialRevision::new(1).unwrap(),
+            state: QuotaState::allowed(SystemTime::now()),
+        })
+        .await
+        .unwrap();
     let states = store
         .load_codex_quota_overdraft(&["acct_overdraft_test".to_owned()])
         .await

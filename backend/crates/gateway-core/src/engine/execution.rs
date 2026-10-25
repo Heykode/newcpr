@@ -924,13 +924,16 @@ impl DefaultExecutionService {
                 retest,
             )
             .await
-            .map_err(|error| AccountProbeError::from(gateway_error_from_engine(&error)))?;
+            .map_err(|error| account_probe_error_from_engine(&error))?;
         let result = {
             let collect = async {
                 let mut text = Vec::new();
                 let mut bytes = 0_usize;
                 let mut complete = false;
                 while let Some(event) = session.next_event().await? {
+                    if let Some(error) = session.pending_provider_error() {
+                        return Err(EngineError::Provider(error.clone()));
+                    }
                     let commit = event.commit_requirement()
                         == super::CommitRequirement::CommitBeforeDelivery;
                     for event in event.into_provider_events() {
@@ -979,7 +982,7 @@ impl DefaultExecutionService {
                 "quality response did not complete normally",
             )
             .into()),
-            Ok(Some(Err(error))) => Err(AccountProbeError::from(gateway_error_from_engine(&error))),
+            Ok(Some(Err(error))) => Err(account_probe_error_from_engine(&error)),
             Ok(None) => {
                 Err(GatewayError::new(GatewayErrorKind::Timeout, "quality check timed out").into())
             }
@@ -1885,6 +1888,13 @@ fn attach_continuation_session_state(operation: &mut Operation, pin: &NativeCont
         return;
     }
     operation.set_provider_session_state(state.clone());
+}
+
+fn account_probe_error_from_engine(error: &EngineError) -> AccountProbeError {
+    match error {
+        EngineError::Provider(provider) => AccountProbeError::from_provider(provider),
+        _ => gateway_error_from_engine(error).into(),
+    }
 }
 
 pub fn gateway_error_from_engine(error: &EngineError) -> GatewayError {

@@ -845,6 +845,10 @@ impl Provider for CodexProvider {
                 upstream_request.mark_quota_overdraft_active();
             }
         }
+        if quota_overdraft_probe {
+            upstream_request.force_http_sse = true;
+            upstream_request.use_websocket = false;
+        }
         let requirement = transport_requirement(&upstream_request);
         let requested_transport = selected_transport(&upstream_request);
         let session_http_fallback = requirement.allows_pre_send_http_fallback()

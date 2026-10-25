@@ -61,12 +61,20 @@ async fn capture(
         .remove("_cpr_test_overdraft")
         .and_then(|value| value.as_bool())
         .unwrap_or(false);
+    let overdraft_probe = original
+        .remove("_cpr_test_overdraft_probe")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false);
+    let prefer_websocket = original
+        .remove("_cpr_test_prefer_websocket")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(websocket);
     let raw_metadata = r#"{"installation_id":"old-device","workspaces":{"/tmp/\u4e2d\u6587":{"label":"caf\u00e9"}}}"#;
-    let operation = Operation::Generate(GenerateRequest::from_protocol_payload(
+    let mut generate = GenerateRequest::from_protocol_payload(
         ProtocolPayload::json_object("openai", original.clone())
             .unwrap()
             .with_context(Map::from_iter([
-                ("use_websocket".into(), json!(websocket)),
+                ("use_websocket".into(), json!(prefer_websocket)),
                 ("turn_metadata".into(), json!(raw_metadata)),
                 (
                     "opaque_request_headers".into(),
@@ -83,7 +91,11 @@ async fn capture(
                     ]),
                 ),
             ])),
-    ));
+    );
+    if overdraft_probe {
+        generate = generate.with_codex_quota_overdraft_probe();
+    }
+    let operation = Operation::Generate(generate);
     let ports = crate::admin::provider_ports();
     let ports = ProviderStorePorts::new(
         accounts.clone(),
@@ -232,16 +244,66 @@ async fn capture(
 #[tokio::test]
 async fn enabled_overdraft_injects_the_same_final_pair_for_http_and_websocket() {
     for websocket in [false, true] {
+        for explicit_type in [false, true] {
+            let accounts = Arc::new(MemoryAccountStore::default());
+            create_account(&accounts, "acct_overdraft_wire").await;
+            let mut message =
+                json!({"role":"user","content":[{"type":"input_text","text":"hello"}]});
+            if explicit_type {
+                message["type"] = json!("message");
+            }
+            let captured = capture(
+                &accounts,
+                "acct_overdraft_wire",
+                tempfile::tempdir().unwrap().path(),
+                json!({
+                    "_cpr_test_overdraft": true,
+                    "model": "gpt-6-astra",
+                    "input": [message],
+                    "stream": true,
+                    "store": false
+                }),
+                websocket,
+                true,
+            )
+            .await;
+            let input = captured.body["input"].as_array().unwrap();
+            assert_eq!(input.len(), 3);
+            assert_eq!(input[1]["type"], "custom_tool_call");
+            assert_eq!(input[2]["type"], "custom_tool_call_output");
+            assert_eq!(input[1]["call_id"], input[2]["call_id"]);
+            assert!(
+                input[1]["call_id"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with("call_cpr_overdraft_")
+            );
+            assert_eq!(input[1]["name"], "exec");
+            assert_eq!(
+                input[1]["input"],
+                r#"const r = await tools.exec_command({"cmd":"true","yield_time_ms":1000,"max_output_tokens":1000}); text(r.output);"#
+            );
+            assert_eq!(
+                input[2]["output"],
+                json!([{"type":"input_text","text":"Script completed\nWall time 0.0 seconds\nOutput:\n"}])
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn disabled_overdraft_leaves_http_and_websocket_input_unchanged() {
+    for websocket in [false, true] {
         let accounts = Arc::new(MemoryAccountStore::default());
-        create_account(&accounts, "acct_overdraft_wire").await;
+        create_account(&accounts, "acct_overdraft_disabled_wire").await;
+        let input = json!([{"role":"user","content":"hello"}]);
         let captured = capture(
             &accounts,
-            "acct_overdraft_wire",
+            "acct_overdraft_disabled_wire",
             tempfile::tempdir().unwrap().path(),
             json!({
-                "_cpr_test_overdraft": true,
                 "model": "gpt-6-astra",
-                "input": [{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}],
+                "input": input,
                 "stream": true,
                 "store": false
             }),
@@ -249,18 +311,33 @@ async fn enabled_overdraft_injects_the_same_final_pair_for_http_and_websocket() 
             true,
         )
         .await;
-        let input = captured.body["input"].as_array().unwrap();
-        assert_eq!(input.len(), 3);
-        assert_eq!(input[1]["type"], "custom_tool_call");
-        assert_eq!(input[2]["type"], "custom_tool_call_output");
-        assert_eq!(input[1]["call_id"], input[2]["call_id"]);
-        assert!(
-            input[1]["call_id"]
-                .as_str()
-                .unwrap()
-                .starts_with("call_cpr_overdraft_")
-        );
+        assert_eq!(captured.body["input"], input);
     }
+}
+
+#[tokio::test]
+async fn overdraft_probe_uses_http_sse_and_preserves_the_pair() {
+    let accounts = Arc::new(MemoryAccountStore::default());
+    create_account(&accounts, "acct_overdraft_probe_wire").await;
+    let captured = capture(
+        &accounts,
+        "acct_overdraft_probe_wire",
+        tempfile::tempdir().unwrap().path(),
+        json!({
+            "_cpr_test_overdraft": true,
+            "_cpr_test_overdraft_probe": true,
+            "_cpr_test_prefer_websocket": true,
+            "model":"gpt-6-astra",
+            "input":[{"type":"message","role":"user","content":"hello"}],
+            "stream":true,
+            "store":false
+        }),
+        false,
+        true,
+    )
+    .await;
+    assert_eq!(captured.body["input"].as_array().unwrap().len(), 3);
+    assert_eq!(captured.body["input"][1]["name"], "exec");
 }
 
 fn stable_facts(capture: &Capture) -> Value {

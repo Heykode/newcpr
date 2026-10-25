@@ -11,6 +11,23 @@ use sqlx::{PgPool, Row};
 
 use crate::{StoreError, StoreResult, postgres_unavailable};
 
+pub(super) async fn recover_allowed(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    account_id: &str,
+) -> StoreResult<()> {
+    sqlx::query(
+        "update codex_quota_overdraft_states s
+         set status='recovered',reason_code=null,retry_at=null,owner_token=null,lease_until=null,updated_at=now()
+         from provider_accounts a
+         where a.id=$1 and s.account_id=a.id and a.quota_access_state='allowed' and s.status<>'recovered'",
+    )
+    .bind(account_id)
+    .execute(&mut **tx)
+    .await
+    .map_err(|error| postgres_unavailable("recover quota overdraft cycle").with_source(error))?;
+    Ok(())
+}
+
 pub(super) async fn load(
     pool: &PgPool,
     account_ids: &[String],
@@ -19,12 +36,12 @@ pub(super) async fn load(
         return Ok(Default::default());
     }
     let rows = sqlx::query(
-        "select s.account_id,case when s.status='passed' and s.cycle_key<>coalesce(floor(extract(epoch from a.quota_reset_at))::bigint::text,'unknown')||':'||coalesce(floor(extract(epoch from a.quota_access_observed_at))::bigint::text,'unknown') then 'pending' else s.status end as status,s.quota_window,s.probe_model,s.attempts,s.attempt_limit,s.reason_code,
+        "select s.account_id,s.status,s.quota_window,s.probe_model,s.attempts,s.attempt_limit,s.reason_code,
                 s.tested_at,s.retry_at,s.recover_at,s.five_hour_started_at,s.five_hour_recover_at,
                 s.seven_day_started_at,s.seven_day_recover_at
          from codex_quota_overdraft_states s
          join runtime_settings r on r.id=1 and r.codex_quota_overdraft_enabled and r.config_revision=s.config_revision
-         join provider_accounts a on a.id=s.account_id and a.credential_revision=s.credential_revision
+         join provider_accounts a on a.id=s.account_id and a.credential_revision=s.credential_revision and a.upstream_account_id=s.account_subject
          where s.account_id=any($1::text[])",
     )
     .bind(account_ids)
@@ -122,7 +139,7 @@ pub(super) async fn claim(pool: &PgPool) -> StoreResult<Option<CodexQuotaOverdra
         "update codex_quota_overdraft_states s
          set status='recovered', reason_code=null, retry_at=null, owner_token=null, lease_until=null, updated_at=now()
          from provider_accounts a
-         where a.id=s.account_id and a.quota_access_state<>'exhausted' and s.status<>'recovered'",
+         where a.id=s.account_id and a.quota_access_state='allowed' and s.status<>'recovered'",
     )
     .execute(&mut *tx)
     .await
@@ -152,9 +169,10 @@ pub(super) async fn claim(pool: &PgPool) -> StoreResult<Option<CodexQuotaOverdra
         .map_err(|_| invalid("invalid quota overdraft probe model"))?;
 
     let row = sqlx::query(
-        "select a.id,a.credential_revision,a.upstream_account_id,a.quota_reset_at,a.quota_access_observed_at,
+        "select a.id,a.credential_revision,a.upstream_account_id,a.quota_reset_at,
                 s.status,s.cycle_key,s.generation,s.attempts,s.attempt_limit,s.lease_until,
-                s.config_revision as state_config_revision,s.credential_revision as state_credential_revision
+                s.config_revision as state_config_revision,s.credential_revision as state_credential_revision,
+                s.account_subject as state_account_subject
          from provider_accounts a
          left join codex_quota_overdraft_states s on s.account_id=a.id
          where a.provider_kind='openai' and a.authentication_kind='oauth' and a.enabled
@@ -163,7 +181,8 @@ pub(super) async fn claim(pool: &PgPool) -> StoreResult<Option<CodexQuotaOverdra
            and (s.account_id is null
              or s.credential_revision<>a.credential_revision
              or s.config_revision<>$1
-             or s.cycle_key<>coalesce(floor(extract(epoch from a.quota_reset_at))::bigint::text,'unknown')||':'||coalesce(floor(extract(epoch from a.quota_access_observed_at))::bigint::text,'unknown')
+             or s.account_subject<>a.upstream_account_id
+             or s.status='recovered'
              or (s.status='inconclusive' and s.attempts<s.attempt_limit and s.retry_at<=now())
              or (s.status='pending' and s.attempts<s.attempt_limit and s.lease_until<=now()))
            and (s.lease_until is null or s.lease_until<=now())
@@ -194,18 +213,6 @@ pub(super) async fn claim(pool: &PgPool) -> StoreResult<Option<CodexQuotaOverdra
     let reset_at = row
         .try_get::<Option<DateTime<Utc>>, _>("quota_reset_at")
         .map_err(|_| invalid("invalid quota reset time"))?;
-    let observed_at = row
-        .try_get::<Option<DateTime<Utc>>, _>("quota_access_observed_at")
-        .map_err(|_| invalid("invalid quota observation time"))?;
-    let cycle_key = format!(
-        "{}:{}",
-        reset_at
-            .map(|value| value.timestamp().to_string())
-            .unwrap_or_else(|| "unknown".to_owned()),
-        observed_at
-            .map(|value| value.timestamp().to_string())
-            .unwrap_or_else(|| "unknown".to_owned()),
-    );
     let previous_cycle = row
         .try_get::<Option<String>, _>("cycle_key")
         .unwrap_or(None);
@@ -223,9 +230,25 @@ pub(super) async fn claim(pool: &PgPool) -> StoreResult<Option<CodexQuotaOverdra
     let state_credential_revision = row
         .try_get::<Option<i64>, _>("state_credential_revision")
         .unwrap_or(None);
-    let same_cycle = previous_cycle.as_deref() == Some(cycle_key.as_str())
+    let same_cycle = previous_cycle.is_some()
+        && row
+            .try_get::<Option<String>, _>("status")
+            .unwrap_or(None)
+            .as_deref()
+            != Some("recovered")
+        && row
+            .try_get::<Option<String>, _>("state_account_subject")
+            .unwrap_or(None)
+            .as_deref()
+            == Some(subject.as_str())
         && state_config_revision == Some(config_revision)
         && state_credential_revision == Some(credential_revision);
+    // Observation clocks and reset estimates can change without quota recovery.
+    let cycle_key = if same_cycle {
+        previous_cycle.expect("same cycle has a key")
+    } else {
+        uuid::Uuid::now_v7().to_string()
+    };
     let generation = if same_cycle {
         previous_generation.max(1)
     } else {
@@ -330,7 +353,7 @@ pub(super) async fn finish(
          where account_id=$1 and credential_revision=$2 and config_revision=$3 and cycle_key=$4 and generation=$5 and owner_token=$6
            and account_subject=$12
            and exists(select 1 from runtime_settings where id=1 and config_revision=$3 and codex_quota_overdraft_enabled)
-           and exists(select 1 from provider_accounts where id=$1 and credential_revision=$2 and upstream_account_id=$12)",
+           and exists(select 1 from provider_accounts where id=$1 and credential_revision=$2 and upstream_account_id=$12 and quota_access_state='exhausted')",
     )
     .bind(claim.account_id.as_str())
     .bind(i64::try_from(claim.credential_revision.get()).map_err(|_| invalid("invalid credential revision"))?)
