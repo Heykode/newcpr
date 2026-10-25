@@ -5,7 +5,9 @@ use std::fmt;
 use bytes::Bytes;
 use futures::future::BoxFuture;
 
-use crate::error::{ClientVisibleUpstreamResponse, GatewayError, GatewayErrorKind};
+use crate::error::{
+    ClientVisibleUpstreamResponse, GatewayError, GatewayErrorKind, ProviderError, ProviderErrorKind,
+};
 use crate::identity::ProviderKind;
 use crate::routing::UpstreamModelId;
 use crate::{account::ProviderAccountId, operation::Operation, upstream::UpstreamSendState};
@@ -102,6 +104,7 @@ pub struct AccountProbeError {
     source: AccountProbeErrorSource,
     send_state: Option<UpstreamSendState>,
     upstream_response: Option<Box<AccountProbeUpstreamResponse>>,
+    provider_kind: Option<ProviderErrorKind>,
 }
 
 impl AccountProbeError {
@@ -117,12 +120,36 @@ impl AccountProbeError {
             source,
             send_state,
             upstream_response: upstream_response.map(Box::new),
+            provider_kind: None,
         }
     }
 
     #[must_use]
     pub const fn kind(&self) -> GatewayErrorKind {
         self.gateway.kind()
+    }
+
+    #[must_use]
+    pub fn from_provider(error: &ProviderError) -> Self {
+        let mut probe = Self::new(
+            GatewayError::from_provider(error),
+            if error.send_state() == UpstreamSendState::NotSent {
+                AccountProbeErrorSource::Provider
+            } else {
+                AccountProbeErrorSource::Upstream
+            },
+            Some(error.send_state()),
+            error
+                .client_visible_upstream_response()
+                .map(AccountProbeUpstreamResponse::from_client_response),
+        );
+        probe.provider_kind = Some(error.kind());
+        probe
+    }
+
+    #[must_use]
+    pub const fn provider_error_kind(&self) -> Option<ProviderErrorKind> {
+        self.provider_kind
     }
 
     #[must_use]

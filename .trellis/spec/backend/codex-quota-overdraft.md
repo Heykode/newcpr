@@ -21,8 +21,10 @@ egress, affinity, Guardian, concurrency or request-spacing facts.
 - Invalid JSON and configured decompression limits remain gateway-api responsibilities.
   Do not add the reference implementation's separate 32 MiB business-request limit.
 - Eligibility is decided once from the structured CodexResponsesRequest. The final input
-  item must be a user message; image, compact, Excel, API-key, Live and tool-output-only
-  turns are excluded.
+  item must be a user message. An omitted type with role=user and a present content field
+  is the Responses shorthand for the same message; explicit null, non-message types,
+  missing content, image, compact, Excel, API-key, Live and tool-output-only turns are
+  excluded.
 - Injection occurs after account scoping and compatibility normalization and before
   transport selection. HTTP, SSE, WS and allowed fallback share the same request clone
   and deterministic call ID. Original Operation and replay history remain unchanged.
@@ -33,13 +35,19 @@ egress, affinity, Guardian, concurrency or request-spacing facts.
   filters and ranking remain authoritative. Failed/inconclusive states create no second
   long cooldown and keep the original quota state.
 - A new explicit QuotaExhausted / UsageLimitExhausted fact atomically reclaims any
-  passed/recovered state to pending before the account can be selected again. Runtime
-  and admin projections also require the state's cycle key to match the current quota
-  reset/access observation. Ordinary transient 429 cooldowns do not reclaim the pass.
+  passed/recovered state to pending before the account can be selected again. A cycle key
+  is an opaque exhausted-interval identifier, not a quota observation timestamp or reset
+  estimate. Repeated exhausted observations preserve retry_at, attempts and generation;
+  explicit Allowed recovery, subject replacement, credential replacement or configuration
+  replacement starts a new cycle. Runtime and admin projections require passed status,
+  current exhaustion, matching subject, credential revision and configuration revision.
+  Ordinary transient 429 cooldowns do not reclaim the pass.
 - reset_at makes exhaustion refresh due; it is never recovery proof. A new explicit
   Allowed observation ends the cycle.
 - Probe claims are fenced by account subject, credential revision, config revision,
   cycle, generation and owner token. The exact configured model bypasses global aliases.
+  Only the trusted overdraft probe forces HTTP SSE; ordinary eligible business requests
+  keep their normal HTTP/WS transport selection and receive the same final injection pair.
 - Account totals, Key billing and cumulative costs use the normal completed-request path
   exactly once. Overdraft window statistics query the same facts as a subset.
 
@@ -49,8 +57,11 @@ egress, affinity, Guardian, concurrency or request-spacing facts.
 - Empty, untrimmed, control-character or over-128-byte model -> reject settings update.
 - Model unavailable -> inconclusive/model_unavailable; never choose a fallback model.
 - Completed probe -> passed without changing QuotaState.
-- Explicit quota denial -> failed/quota_limited and original exhaustion remains.
-- Auth failure -> failed/authentication_failed plus existing credential handling.
+- Explicit quota denial -> failed/quota_limited and original exhaustion remains. Preserve
+  the typed ProviderError across protocol-terminal batches; do not flatten it to an
+  incomplete generic probe error.
+- Auth failure -> failed/authentication_failed plus existing credential handling and the
+  same typed error preservation.
 - Timeout, transport, 5xx or incomplete terminal -> inconclusive and bounded retry.
 - Stale config, identity, credential, generation or owner -> ignore result.
 
@@ -69,7 +80,8 @@ egress, affinity, Guardian, concurrency or request-spacing facts.
   above 32 MiB.
 - Core selector test: passed state only overrides quota exhaustion when request-local
   eligibility allows it.
-- PostgreSQL test: migration, single claim, retry, stale fencing, passed and recovered.
+- PostgreSQL test: migration, single claim, retry, repeated exhausted observation without
+  retry reset, stale fencing, passed, explicit denial reclaim and atomic Allowed recovery.
 - API/frontend tests: settings roundtrip, invalid models, state projection, exact window
   keys, desktop/mobile and missing-field compatibility.
 - Isolated integration: HTTP JSON, SSE, native WS, HTTP-to-WS, WS-to-HTTP fallback,

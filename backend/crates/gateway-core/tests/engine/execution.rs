@@ -3292,3 +3292,74 @@ fn quality_overload_code_survives_http_and_stream_failures_in_both_modes() {
         }
     }
 }
+
+#[test]
+fn quality_stream_preserves_terminal_provider_kind() {
+    struct TerminalFailureProvider;
+
+    #[async_trait]
+    impl Provider for TerminalFailureProvider {
+        fn name(&self) -> &'static str {
+            "openai"
+        }
+
+        fn catalog_generation(&self) -> ProviderCatalogGeneration {
+            ProviderCatalogGeneration::default()
+        }
+
+        async fn query_model_capabilities(
+            &self,
+        ) -> Result<Vec<ProviderModelCapabilities>, ProviderError> {
+            Ok(Vec::new())
+        }
+
+        async fn execute(
+            &self,
+            request: ProviderRequest,
+            context: AttemptContext,
+        ) -> Result<ProviderStream, ProviderError> {
+            assert!(context.is_quality_check());
+            let metadata = ProviderCallMetadata::new(
+                request.candidate().provider().clone(),
+                request.candidate().upstream_model().unwrap().clone(),
+                ProviderAccountId::new("acct_start").unwrap(),
+                UpstreamTransport::new("websocket").unwrap(),
+            );
+            Ok(ProviderStream::new(
+                metadata,
+                futures::stream::iter([Err(ProviderError::new(
+                    ProviderErrorKind::QuotaExhausted,
+                    UpstreamSendState::Sent,
+                ))]),
+                (),
+            ))
+        }
+    }
+
+    let scope = account_scope(&ProviderKind::new("openai").unwrap(), "acct_start");
+    let service = DefaultExecutionService::new(
+        RuntimeSnapshotHandle::new(
+            start_snapshot().with_account_directory(Arc::clone(scope.directory())),
+        ),
+        Arc::new(TrackingExecutionStore::default()),
+        ProviderRegistry::new([Arc::new(TerminalFailureProvider) as Arc<dyn Provider>]).unwrap(),
+        Arc::new(UnusedAdmissions),
+        Arc::new(UnusedCircuits),
+        Arc::new(UnusedContinuation),
+        Arc::new(RecordingClientApiKeyUsage::default()),
+    );
+    let error = block_on(service.quality_retest(
+        AccountProbeRequest {
+            account_id: ProviderAccountId::new("acct_start").unwrap(),
+            provider_kind: ProviderKind::new("openai").unwrap(),
+            upstream_model: UpstreamModelId::new("gpt-start").unwrap(),
+            operation: start_operation(),
+        },
+        gateway_core::lifecycle::CancellationToken::new(),
+    ))
+    .unwrap_err();
+    assert_eq!(
+        error.provider_error_kind(),
+        Some(ProviderErrorKind::QuotaExhausted)
+    );
+}
