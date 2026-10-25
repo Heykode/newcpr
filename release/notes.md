@@ -1,3 +1,17 @@
+# v3.30.1
+
+## 更新内容
+
+- 修复 Codex 额度透支最终出站整形：HTTP 与 WebSocket 均保留与参考实现一致的 no-op `custom_tool_call / custom_tool_call_output` 字段、exec 内容及输出文本；WebSocket 只增加协议外层，不简化或改写注入对。合法的 `role=user` Responses 简写现在与显式 `type=message` 一样注入，显式非 message、缺少 content、图片、Compact、Excel 和工具输出续接仍不注入。
+- 透支后台探测固定使用 HTTP SSE，不改变普通业务请求原有的 HTTP/WS 选择。保留流式终态的原始额度和认证错误类型，明确 `usage_limit_reached` 不再误记为“无结论”，普通传输或上游临时故障仍按有界重试处理。
+- 修复额度耗尽账号约每个 worker 周期重复探测的问题：同一耗尽区间使用稳定的内部周期标识，重复额度观测或 reset 估计变化不再重置 attempts、generation 或绕过 retry_at；新的明确额度拒绝仍会原子收回 passed，明确 Allowed 恢复时原子结束周期。
+- 补充关闭开关、HTTP/WS 最终报文、HTTP SSE 探测、流式错误类型、重复额度观测和恢复竞争回归。保留账号身份、UA、代理出口、智能粘性、Guardian、并发、请求间隔、Excel 及既有计费链路。
+
+## 升级边界
+
+- 从 v3.30.0 升级没有新增数据库迁移，也不修改后台默认值或现有透支开关。仅替换应用镜像；关闭透支时请求与 v3.30.0 的普通 Codex 链路一致。
+- 已在 OVH 隔离环境完成 workspace Clippy、Admin 392 项、Core 497 项、Store 透支 PostgreSQL 专项和 OpenAI 1123 项回归；GitHub 后端全 workspace、镜像、Privacy、Security 与架构门禁全部通过。未把探测拒绝描述为透支成功，也不承诺所有账号均可透支。
+
 # v3.30.0
 
 ## 更新内容
