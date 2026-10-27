@@ -62,7 +62,7 @@ url = "2.5.8"
 uuid = { version = "1.23.3", features = ["v4", "v7"] }
 # 官方 Codex app-server 对 /v1/responses 请求体默认做 zstd 压缩（level 3），
 # 并携带 Content-Encoding: zstd；升级须验证相同级别的压缩字节及大小门槛。
-zstd = "=0.14.0"
+zstd = "=0.14.3"
 
 [dev-dependencies]
 http-body-util = "=0.1.5"
