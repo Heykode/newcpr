@@ -1,3 +1,4 @@
+import { escape } from 'es-toolkit'
 import { isRecord } from '@/utils/object'
 
 interface ChartTooltipTheme {
@@ -43,6 +44,11 @@ export function chartTooltipStyle(
       lineStyle: { color: theme.pointer, type: 'dashed' as const, width: 1 },
     },
   }
+}
+
+export function chartTooltipContent(label: string, lines: string[]) {
+  const title = label ? `<span style="font-size:13px;line-height:20px">${escape(label)}</span>` : ''
+  return [title, ...lines].filter(Boolean).join('<br/>')
 }
 
 export function tooltipRows(params: unknown): Record<string, unknown>[] {

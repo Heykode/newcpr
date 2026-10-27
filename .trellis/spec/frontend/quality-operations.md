@@ -187,7 +187,8 @@ Wrong: enforce predefined selection. Correct: suggestions assist the existing st
 - Abort and fence list/detail/catalog reads on replacement/unmount. Preserve
   existing history on read failure and mark it failed rather than resetting to zero.
 - Render answers and judge explanations as escaped text, never raw HTML/Markdown.
-  Keep requested and returned model separate. Capture the round's original prompt
+  Keep the requested model; returned-model tracking was removed with the v3.33.0
+  upstream adaptation. Ignore legacy returned-model JSON fields. Capture the round's original prompt
   and reference so later rule edits do not misrepresent past scores.
 - Browser coverage must include creating through real selectors (not just editing
   text), pause, queue deduplication, delete, failed history refresh, both themes,

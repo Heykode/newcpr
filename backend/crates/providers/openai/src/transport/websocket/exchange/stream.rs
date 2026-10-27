@@ -79,7 +79,6 @@ pub(in crate::transport::websocket) fn stream_websocket_response(
     let rate_limit_updates_for_task = Arc::clone(&rate_limit_updates);
     let response_metadata_updates = Arc::new(Mutex::new(CodexWebSocketResponseMetadataUpdate {
         turn_state: metadata.turn_state.clone(),
-        reported_model: None,
     }));
     let response_metadata_updates_for_task = Arc::clone(&response_metadata_updates);
     let (tx, rx) = mpsc::channel(WEBSOCKET_STREAM_BUFFER);
@@ -407,9 +406,6 @@ async fn forward_websocket_response_stream(state: WebSocketStreamForwardState) {
                 if pending.turn_state.is_none() {
                     pending.turn_state = Some(turn_state);
                 }
-            }
-            if let Some(model) = metadata.response_metadata.effective_model.as_deref() {
-                response_metadata_updates.lock().await.reported_model = Some(model.to_owned());
             }
             let terminal = match reduced.action {
                 ExchangeAction::RateLimits(rate_limits) => {

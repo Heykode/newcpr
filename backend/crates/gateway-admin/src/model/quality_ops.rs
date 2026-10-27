@@ -236,7 +236,6 @@ pub struct QualityAnswer {
     pub verdict: QualityVerdict,
     pub reason: String,
     pub elapsed_ms: u64,
-    pub returned_model: Option<String>,
     pub judge_account_id: Option<String>,
 }
 

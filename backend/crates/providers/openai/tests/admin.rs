@@ -2451,6 +2451,7 @@ pub(super) fn valid_config() -> TestOpenAiConfig {
         arch: "arm64".to_owned(),
         terminal: "xterm-256color".to_owned(),
         residency: None,
+        account_routing_override: None,
         location: Default::default(),
         verified_at: Utc
             .with_ymd_and_hms(2026, 7, 19, 0, 0, 0)
@@ -2878,7 +2879,7 @@ mod errors {
     #[tokio::test]
     async fn manual_refresh_classifies_deactivation_and_401_rejection_without_leaking_details() {
         for (status, kind, message) in [
-            (400, Kind::Invalid, "OpenAI 账号已被停用，请检查账号状态"),
+            (400, Kind::Invalid, "Codex 账号已被停用，请检查账号状态"),
             (401, Kind::Invalid, "刷新令牌已失效，请重新授权"),
         ] {
             let server = MockServer::start().await;

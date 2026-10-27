@@ -22,7 +22,7 @@ export const usageRecordColumns: ConfigurableTableColumn<UsageDisplayRecord>[] =
   },
   { key: 'model', label: '模型', kind: 'custom', size: 'xl' },
   { key: 'outcome', label: '状态', kind: 'status', size: 'sm' },
-  { key: 'reasoningEffort', label: '推理强度', kind: 'status', size: 'lg' },
+  { key: 'reasoningEffort', label: '推理强度', kind: 'status', align: 'center', size: 'lg' },
   { key: 'route', label: '端点', kind: 'mono' },
   { key: 'upstreamTransport', label: '上游', kind: 'status', size: 'md' },
   { key: 'clientTransport', label: '接入', kind: 'status', size: 'md' },

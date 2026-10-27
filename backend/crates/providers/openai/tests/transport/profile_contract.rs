@@ -1,6 +1,5 @@
 use super::*;
 use provider_openai::transport::build_reqwest_client;
-use provider_openai::transport::profile::CodexResidency;
 use uuid::Uuid;
 use wiremock::{Mock, MockServer, ResponseTemplate, matchers::any};
 
@@ -107,9 +106,10 @@ async fn each_core_endpoint_uses_the_current_bundled_release() {
 }
 
 #[test]
-fn residency_is_explicit_and_survives_artifact_updates() {
+fn deployment_routing_survives_artifact_updates_and_profile_selection() {
     let mut initial = test_wire_profile().snapshot();
-    initial.residency = Some(CodexResidency::Us);
+    initial.residency = Some("us".to_owned());
+    initial.account_routing_override = Some("custom-route".to_owned());
     let profile = CodexWireProfileState::new(initial);
     profile.update_bundled_release(&CodexBundledReleaseProfile {
         codex_version: "2.0.0".to_owned(),
@@ -131,6 +131,200 @@ fn residency_is_explicit_and_survives_artifact_updates() {
     )
     .expect("account headers");
     assert_eq!(model["x-openai-internal-codex-residency"], "us");
+    assert_eq!(model["x-openai-account-routing-override"], "custom-route");
     assert_eq!(model["version"], "2.0.0");
     assert!(!account.contains_key("x-openai-internal-codex-residency"));
+    assert!(!account.contains_key("x-openai-account-routing-override"));
+}
+
+#[tokio::test]
+async fn model_transports_apply_configured_routing_and_discard_downstream_values() {
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    use gateway_core::operation::{GenerateRequest, ProtocolPayload};
+
+    const HEADERS: [&str; 2] = [
+        "x-openai-internal-codex-residency",
+        "x-openai-account-routing-override",
+    ];
+    for (document, expected) in [
+        (r#"{}"#, [None, None]),
+        (
+            r#"{"residency":null,"account_routing_override":null}"#,
+            [None, None],
+        ),
+        (
+            r#"{"residency":"us","account_routing_override":"us"}"#,
+            [Some("us"), Some("us")],
+        ),
+        (
+            r#"{"account_routing_override":"us_cr"}"#,
+            [None, Some("us_cr")],
+        ),
+        (
+            r#"{"residency":"custom-region"}"#,
+            [Some("custom-region"), None],
+        ),
+        (
+            r#"{"residency":"","account_routing_override":"custom-route"}"#,
+            [Some(""), Some("custom-route")],
+        ),
+        (
+            r#"{"account_routing_override":"NO_CONSTRAINT"}"#,
+            [None, Some("NO_CONSTRAINT")],
+        ),
+    ] {
+        for websocket in [false, true] {
+            let (base_url, capture): (
+                String,
+                futures::future::BoxFuture<'static, reqwest::header::HeaderMap>,
+            ) = if websocket {
+                let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let base_url = format!("http://{}", listener.local_addr().unwrap());
+                let task = tokio::spawn(async move {
+                    let (stream, _) = listener.accept().await.unwrap();
+                    let mut headers = None;
+                    let mut socket = accept_codex_test_websocket_with(stream, |request, _| {
+                        headers = Some(request.headers().clone());
+                    })
+                    .await;
+                    socket.next().await.unwrap().unwrap();
+                    socket
+                        .send(Message::Text(
+                            completed_websocket_response("resp_routing", 1, 1).into(),
+                        ))
+                        .await
+                        .unwrap();
+                    headers.unwrap()
+                });
+                (base_url, Box::pin(async { task.await.unwrap() }))
+            } else {
+                let server = MockServer::start().await;
+                Mock::given(any())
+                    .respond_with(
+                        ResponseTemplate::new(200)
+                            .insert_header("content-type", "text/event-stream")
+                            .set_body_string(format!(
+                                "event: response.completed\ndata: {}\n\n",
+                                completed_websocket_response("resp_routing", 1, 1),
+                            )),
+                    )
+                    .expect(1)
+                    .mount(&server)
+                    .await;
+                (
+                    server.uri(),
+                    Box::pin(async move {
+                        server.received_requests().await.unwrap()[0].headers.clone()
+                    }),
+                )
+            };
+            let config: Value = serde_json::from_str(document).unwrap();
+            let profile = CodexWireProfileState::new(CodexWireProfile {
+                residency: config["residency"].as_str().map(str::to_owned),
+                account_routing_override: config["account_routing_override"]
+                    .as_str()
+                    .map(str::to_owned),
+                ..test_wire_profile().snapshot()
+            });
+            let client = CodexBackendClient::new(
+                reqwest::Client::builder().no_proxy().build().unwrap(),
+                base_url,
+                profile,
+            );
+            let downstream_headers = HEADERS
+                .into_iter()
+                .flat_map(|name| {
+                    ["downstream-first", "downstream-second"]
+                        .map(|value| json!([name, STANDARD.encode(value)]))
+                })
+                .collect::<Vec<_>>();
+            let payload = ProtocolPayload::json_object(
+                "openai",
+                codex_request_body("gpt-test", "", Vec::new()),
+            )
+            .unwrap()
+            .with_context(Map::from_iter([
+                ("opaque_request_headers".into(), json!(downstream_headers)),
+                ("use_websocket".into(), json!(websocket)),
+            ]));
+            let request = provider_openai::encode_generate_request(
+                &GenerateRequest::from_protocol_payload(payload),
+                "gpt-test",
+                &Default::default(),
+            )
+            .unwrap();
+            client
+                .create_response(&request, request_context("req_routing", Some("account")))
+                .await
+                .expect("model response");
+            let headers = capture.await;
+            for (name, value) in HEADERS.into_iter().zip(expected) {
+                assert_eq!(
+                    headers
+                        .get_all(name)
+                        .iter()
+                        .map(|value| value.to_str().unwrap())
+                        .collect::<Vec<_>>(),
+                    value.into_iter().collect::<Vec<_>>(),
+                    "{document}, websocket={websocket}, {name}",
+                );
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn routing_headers_partition_new_websocket_chains_including_empty_values() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let mut sockets = Vec::new();
+        for expected in [None, Some(""), Some("custom-route")] {
+            let (stream, _) = timeout(Duration::from_secs(5), listener.accept())
+                .await
+                .expect("different route requires a different socket")
+                .unwrap();
+            let mut socket = accept_codex_test_websocket_with(stream, |request, _| {
+                assert_eq!(
+                    request
+                        .headers()
+                        .get("x-openai-account-routing-override")
+                        .map(|value| value.to_str().unwrap()),
+                    expected,
+                );
+            })
+            .await;
+            socket.next().await.unwrap().unwrap();
+            socket
+                .send(Message::Text(
+                    completed_websocket_response("resp_partition", 1, 1).into(),
+                ))
+                .await
+                .unwrap();
+            sockets.push(socket);
+        }
+    });
+    let pool = Arc::new(CodexWebSocketPool::new(Duration::from_secs(60)));
+    for routing in [None, Some(""), Some("custom-route")] {
+        let mut profile = test_wire_profile().snapshot();
+        profile.account_routing_override = routing.map(str::to_owned);
+        let client = CodexBackendClient::new(
+            reqwest::Client::builder().no_proxy().build().unwrap(),
+            format!("http://{addr}"),
+            CodexWireProfileState::new(profile),
+        )
+        .with_websocket_pool(pool.clone());
+        let request = websocket_only_request(pooled_websocket_request("routing-partition"));
+        timeout(
+            Duration::from_secs(5),
+            client.create_response(
+                &request,
+                request_context("req_partition", Some("routing-account")),
+            ),
+        )
+        .await
+        .expect("response deadline")
+        .expect("response");
+    }
+    server.await.unwrap();
 }

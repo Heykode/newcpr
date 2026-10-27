@@ -6,56 +6,6 @@ use provider_openai::transport::canonical::{
 use provider_openai::transport::protocol::websocket::websocket_event_to_sse_frame;
 use serde_json::json;
 
-#[test]
-fn response_model_observation_prefers_reported_headers_without_changing_wire() {
-    for websocket in [false, true] {
-        let mut decoder = CodexCanonicalDecoder::new("requested")
-            .with_reported_model(Some("opening-model"))
-            .with_raw_sse_passthrough();
-        for (value, expected) in [
-            (
-                json!({"type":"response.created","response":{"id":"resp_model","model":"body-model"}}),
-                "opening-model",
-            ),
-            (
-                json!({"type":"codex.response.metadata","headers":{"X-OpenAI-Model":["metadata-model"]}}),
-                "metadata-model",
-            ),
-            (
-                json!({"type":"response.completed","headers":{"openai-model":"top-level"},"response":{"id":"resp_model","model":"final-body-model","headers":{"OpenAI-Model":"terminal-model"}}}),
-                "terminal-model",
-            ),
-        ] {
-            let raw = value.to_string();
-            let frame = if websocket {
-                websocket_event_to_sse_frame(&raw).expect("WS event")
-            } else {
-                format!("data: {raw}\n\n")
-            };
-            let events = decoder
-                .push(frame.as_bytes())
-                .expect("decode model observation");
-            assert_eq!(decoder.response_model(), Some(expected));
-            assert!(
-                events
-                    .iter()
-                    .any(|event| event.wire_event().is_some_and(|wire| wire.data() == &value))
-            );
-        }
-    }
-}
-
-#[test]
-fn response_model_observation_uses_explicit_body_and_never_request_fallback() {
-    let mut decoder = CodexCanonicalDecoder::new("requested");
-    decoder
-        .push(b"data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_model\"}}\n\n")
-        .expect("response model event");
-    assert_eq!(decoder.response_model(), None);
-    decoder.push(b"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_model\",\"model\":\"returned\"}}\n\n").expect("response model event");
-    assert_eq!(decoder.response_model(), Some("returned"));
-}
-
 const METADATA_PREFIX_FIXTURE: &str = include_str!("fixtures/metadata_only_prefix.sse");
 
 #[test]
@@ -322,7 +272,6 @@ fn decoder_should_bill_the_sent_model_independently_of_the_response_model() {
                 _ => None,
             });
         assert_eq!(cost, expected_cost, "{sent} -> {returned:?}");
-        assert_eq!(decoder.response_model(), returned);
         assert!(canonical_facts(&events).into_iter().any(|event| matches!(
             event,
             GatewayEvent::Completed(meta) if meta.model() == Some(returned.unwrap_or(sent))

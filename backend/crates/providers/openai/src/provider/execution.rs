@@ -1061,7 +1061,6 @@ pub(super) fn cold_response_stream_once(response: ColdResponse) -> EventStream {
         // （transport/protocol/websocket.rs），push_frames 抽出的 data 即上游原文。
         let mut decoder = CodexCanonicalDecoder::new(upstream_model.as_str())
             .with_trace(trace.clone())
-            .with_reported_model(response.response_metadata.effective_model.as_deref())
             .with_requested_service_tier(request.service_tier())
             .with_request_tool_pricing(upstream_model.as_str(), request.tools())
             .with_raw_sse_passthrough();
@@ -1155,7 +1154,6 @@ pub(super) fn cold_response_stream_once(response: ColdResponse) -> EventStream {
                         response_metadata_updates.as_ref(),
                         &mut session_capture,
                         &mut observation_state,
-                        &mut decoder,
                     )
                     .await;
                     let observation_event = if rate_limits_changed || metadata_merge.is_some()
@@ -1253,13 +1251,10 @@ pub(super) fn cold_response_stream_once(response: ColdResponse) -> EventStream {
                 response_metadata_updates.as_ref(),
                 &mut session_capture,
                 &mut observation_state,
-                &mut decoder,
             )
             .await;
             let metadata_changed = metadata_merge.unwrap_or(false);
             pre_commit_events.observe_chunk(chunk_len);
-            let response_model_changed = observation_state
-                .observe_upstream_response_model(decoder.response_model());
             let service_tier_changed = observation_state
                 .observe_upstream_service_tier(decoder.response_service_tier());
             let terminal_failure = canonical_failure.map(|(error, semantic_output_seen)| {
@@ -1372,7 +1367,6 @@ pub(super) fn cold_response_stream_once(response: ColdResponse) -> EventStream {
                 }));
             }
             if (rate_limits_changed
-                || response_model_changed
                 || service_tier_changed
                 || timing_changed
                 || metadata_changed
@@ -1445,8 +1439,6 @@ pub(super) fn cold_response_stream_once(response: ColdResponse) -> EventStream {
             )
         });
         let timing_signals = decoder.take_timing_signals();
-        let response_model_changed = observation_state
-            .observe_upstream_response_model(decoder.response_model());
         let service_tier_changed = observation_state
             .observe_upstream_service_tier(decoder.response_service_tier());
         let timing_changed = observation_state
@@ -1491,7 +1483,6 @@ pub(super) fn cold_response_stream_once(response: ColdResponse) -> EventStream {
             response_metadata_updates.as_ref(),
             &mut session_capture,
             &mut observation_state,
-            &mut decoder,
         )
         .await
         .unwrap_or(false);
@@ -1528,8 +1519,7 @@ pub(super) fn cold_response_stream_once(response: ColdResponse) -> EventStream {
                 .observe_cyber_policy_success(cyber_policy_scope.as_ref())
                 .await;
         }
-        if (response_model_changed
-            || service_tier_changed
+        if (service_tier_changed
             || timing_changed
             || rate_limits_changed
             || metadata_changed
@@ -1571,26 +1561,10 @@ async fn merge_response_metadata_updates(
     updates: Option<&CodexResponseMetadataUpdates>,
     session_capture: &mut Option<OpenAiSessionCapture>,
     observation_state: &mut OpenAiResponseObservationState,
-    decoder: &mut CodexCanonicalDecoder,
 ) -> Option<bool> {
-    let updates = updates?;
-    let mut pending = updates.lock().await;
-    let turn_state = pending.turn_state.take();
-    let reported_model = pending.reported_model.clone();
-    drop(pending);
-    if turn_state.is_none() && reported_model.is_none() {
-        return None;
+    let turn_state = updates?.lock().await.turn_state.take()?;
+    if let Some(capture) = session_capture.as_mut() {
+        capture.turn_state = Some(turn_state.clone());
     }
-    let mut changed = false;
-    if let Some(turn_state) = turn_state {
-        if let Some(capture) = session_capture.as_mut() {
-            capture.turn_state = Some(turn_state.clone());
-        }
-        changed |= observation_state.merge_client_header("x-codex-turn-state", &turn_state);
-    }
-    if let Some(model) = reported_model {
-        decoder.observe_reported_model(&model);
-        changed |= observation_state.observe_upstream_response_model(decoder.response_model());
-    }
-    Some(changed)
+    Some(observation_state.merge_client_header("x-codex-turn-state", &turn_state))
 }

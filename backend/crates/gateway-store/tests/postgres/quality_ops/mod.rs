@@ -72,7 +72,6 @@ fn answer(verdict: QualityVerdict) -> QualityAnswer {
         verdict,
         reason: "fixture reason".into(),
         elapsed_ms: 20,
-        returned_model: Some("fixture-model".into()),
         judge_account_id: Some("acct_quality_b".into()),
     }
 }

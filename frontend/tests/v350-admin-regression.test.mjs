@@ -90,6 +90,7 @@ test('API key exit cleanup retains content, removes plaintext after leave and ca
   const scope = vue.effectScope()
   const row = { id: 'key-example', name: 'example', groups: [], maxConcurrency: 2, requestsPerMinute: 3, dailyLimitUsd: '1', weeklyLimitUsd: '5' }
   const module = load('views/api-keys/composables/useApiKeyMutations.ts', {
+    '../utils/formValidation': load('views/api-keys/utils/formValidation.ts'),
     vue,
     '@/api': {},
     '@/components/base/BaseToast': { toast: {} },

@@ -8,6 +8,7 @@ import BaseEmpty from '@/components/base/BaseEmpty.vue'
 import BaseSegmented from '@/components/base/BaseSegmented.vue'
 import BaseChart from '@/components/charts/BaseChart.vue'
 import { requestActivityByBucket, zeroInactiveValues } from '@/components/charts/timeSeriesGap'
+import { chartTooltipContent } from '@/components/charts/tooltip'
 import { useChartPalette } from '@/composables/useChartPalette'
 import { t } from '@/i18n'
 import { formatLocalizedCompactNumber as formatCompactNumber } from '@/utils/number'
@@ -19,7 +20,6 @@ import {
   usageGapAwareLineSeries,
   usageLegend,
   usageTooltip,
-  usageTooltipContent,
   usageTooltipItem,
   usageValueAxis,
 } from '../utils/chart'
@@ -206,7 +206,7 @@ function formatTooltip(params: unknown) {
     return ''
 
   const theme = palette.value
-  return usageTooltipContent(theme, selected.point.label, [
+  return chartTooltipContent(selected.point.label, [
     usageTooltipItem(
       seriesLabels.value[0],
       formatSeriesValue(selected.first, 'first'),

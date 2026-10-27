@@ -53,7 +53,7 @@
       "capacity": "容量"
     },
     "page": {
-      "description": "将账号归类管理，并为每个 API 密钥指定可使用的账号",
+      "description": "将账号归类管理，并为每个 API密钥指定可使用的账号",
       "empty": "暂无分组",
       "selectCurrentPageGroup": "选择当前页分组",
       "selectGroup": "选择分组",
@@ -64,11 +64,11 @@
       "batchDeleteWarning": "删除后这些分组将立即失效，此操作不可撤销",
       "batchDeleteDescription": "确定删除选中的 {count} 个分组吗？账号本身不会被删除",
       "disableAccountGrouping": "禁用账号分组",
-      "disableDescription": "禁用后，使用该分组的 API 密钥将无法再使用其中的账号",
+      "disableDescription": "禁用后，使用该分组的 API密钥将无法再使用其中的账号",
       "confirmDisable": "确认禁用",
       "disable": "确定禁用“{name}”吗？",
-      "affectedApiKeys": "将影响 {count} 个 API 密钥：{value}",
-      "affectedKeys": "将影响 {count} 个 API 密钥",
+      "affectedApiKeys": "将影响 {count} 个 API密钥：{value}",
+      "affectedKeys": "将影响 {count} 个 API密钥",
       "deleteAccountGroup": "删除账号分组",
       "deleteWarning": "删除后该分组将立即失效，此操作不可撤销",
       "unnamedGroup": "该分组",

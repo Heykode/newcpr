@@ -250,7 +250,6 @@ const {
   testingAccount,
   connectionTestStatus,
   connectionTestModel,
-  connectionTestUpstreamResponseModel,
   connectionTestLogs,
   connectionTestError,
   connectionTestStartedAt,
@@ -724,7 +723,6 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
       :refreshing-models="refreshingConnectionTestModels"
       :logs="connectionTestLogs"
       :model="connectionTestModel"
-      :upstream-response-model="connectionTestUpstreamResponseModel"
       :model-options="connectionTestModelOptions"
       :started-at="connectionTestStartedAt"
       :status="connectionTestStatus"

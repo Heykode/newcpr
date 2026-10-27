@@ -148,7 +148,7 @@ const avatarDescription = computed(() => {
         >
           <Table2 class="size-4" aria-hidden="true" />
         </span>
-        <span :title="displayTitle" class="min-w-0 flex-1 truncate text-cp font-heavy text-cp-text">
+        <span :title="displayTitle" class="min-w-0 truncate text-cp font-heavy text-cp-text">
           {{ displayTitle }}
         </span>
         <span

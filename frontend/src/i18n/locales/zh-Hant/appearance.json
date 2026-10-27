@@ -111,7 +111,7 @@
       },
       "dashboard": {
         "justUpdated": "剛剛更新",
-        "demoKey": "演示 Key",
+        "demoKey": "演示 API密鑰",
         "requestHealthTimeline": "請求健康時間線",
         "validRequestAvailability": "有效請求可用性",
         "todaySToken": "今日 Token",

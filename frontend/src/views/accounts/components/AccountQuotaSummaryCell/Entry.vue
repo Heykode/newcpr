@@ -95,7 +95,7 @@ const hasQuotaWindow = computed(() => detailItems.value.some(item => !item.local
         <article v-for="item in detailItems" :key="item.key">
           <div class="grid grid-cols-[32px_minmax(0,1fr)_auto] items-center gap-2.5">
             <span
-              class="grid h-5 w-8 place-items-center rounded-sm bg-cp-blue-container-strong font-mono text-[9px] leading-none font-heavy text-cp-blue-on-container"
+              class="grid h-5 w-8 place-items-center rounded-sm bg-cp-blue-container-strong font-mono uppercase text-[9px] leading-none font-heavy text-cp-blue-on-container"
             >
               {{ item.code }}
             </span>

@@ -23,7 +23,7 @@ concurrency:
 
 jobs:
   changes:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     outputs:
       reused: ${{ steps.reuse.outputs.reused == 'true' }}
@@ -131,7 +131,7 @@ jobs:
   deployment-tools:
     needs: changes
     if: needs.changes.outputs.deployment == 'true' && needs.changes.outputs.reused != 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     steps:
       - name: Checkout
@@ -149,7 +149,7 @@ jobs:
   validated:
     if: always()
     needs: [changes, quality, container, deployment-tools]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - name: Require reuse evidence or successful applicable checks
         env:

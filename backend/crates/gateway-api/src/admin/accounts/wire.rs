@@ -1337,12 +1337,9 @@ impl From<DomainConnectionTestEvent> for AccountConnectionTestEvent {
             DomainConnectionTestEvent::Content { text } => {
                 serde_json::json!({ "type": "content", "text": text })
             }
-            DomainConnectionTestEvent::Completed {
-                upstream_response_model,
-            } => serde_json::json!({
+            DomainConnectionTestEvent::Completed {} => serde_json::json!({
                 "type": "test_complete",
                 "success": true,
-                "upstreamResponseModel": upstream_response_model
             }),
             DomainConnectionTestEvent::Failed {
                 source,

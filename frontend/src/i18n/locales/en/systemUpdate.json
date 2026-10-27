@@ -70,7 +70,8 @@
     "plugins": {
       "title": "Plugin compatibility notice",
       "description": "Keep enabled configurations and try starting each plugin after restarting",
-      "incompatible": "Incompatible plugins"
+      "incompatible": "Incompatible plugins",
+      "requestErrorHelp": "If requests fail even after plugins start successfully, try disabling the relevant plugins and retrying"
     },
     "versionAfterRestart": "Version after restart",
     "confirmation": {

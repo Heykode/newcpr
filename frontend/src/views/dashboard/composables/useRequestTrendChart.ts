@@ -5,7 +5,7 @@ import { usePreferredReducedMotion } from '@vueuse/core'
 import { computed, shallowRef, watch } from 'vue'
 
 import { sampleGapBridgeSeries } from '@/components/charts/timeSeriesGap'
-import { chartTooltipStyle, tooltipIndex } from '@/components/charts/tooltip'
+import { chartTooltipContent, chartTooltipStyle, tooltipIndex } from '@/components/charts/tooltip'
 import { useChartPalette } from '@/composables/useChartPalette'
 
 type TrendKind = ReturnType<typeof normalizeDashboardTrendKind>
@@ -187,8 +187,7 @@ export function useRequestTrendChart(options: {
     const point = points.value[tooltipIndex(rows[0])]
 
     if (activeKind.value === 'usage') {
-      return [
-        title,
+      return chartTooltipContent(title, [
         tooltipItem('输入', point?.inputTokens, trendColor('输入', '--cp-color-blue-solid', '#5983F4')),
         tooltipItem('输出', point?.outputTokens, trendColor('输出', '--cp-color-green-solid', '#12B981')),
         tooltipItem(
@@ -202,9 +201,7 @@ export function useRequestTrendChart(options: {
           trendColor('缓存', '--cp-color-text-tertiary', '#94A3B8'),
         ),
         tooltipItem('请求', point?.requests, palette.value.textSecondary),
-      ]
-        .filter(Boolean)
-        .join('<br/>')
+      ])
     }
 
     const lines = rows.map((row) => {
@@ -213,7 +210,7 @@ export function useRequestTrendChart(options: {
       const marker = tooltipValue(row, 'marker')
       return `${marker}${name}: ${tooltipDisplayValue(point, name, value)}`
     })
-    return [title, ...lines].filter(Boolean).join('<br/>')
+    return chartTooltipContent(title, lines)
   }
 
   function tooltipDisplayValue(point: TrendPoint | undefined, name: string, value: string) {

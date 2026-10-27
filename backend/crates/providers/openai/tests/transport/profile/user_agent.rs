@@ -167,7 +167,7 @@ fn custom_mode_is_explicit_even_when_text_matches_default() {
 #[test]
 fn invalid_custom_save_preserves_current_selection_and_residency() {
     let mut original = wire_profile();
-    original.residency = Some(provider_openai::transport::profile::CodexResidency::Us);
+    original.residency = Some("us".to_owned());
     let state = CodexWireProfileState::new(original);
     state
         .apply_user_agent_override(&ProviderUserAgentOverride::Custom {
@@ -183,10 +183,7 @@ fn invalid_custom_save_preserves_current_selection_and_residency() {
             .is_err()
     );
     assert_eq!(state.snapshot(), before);
-    assert_eq!(
-        state.snapshot().residency,
-        Some(provider_openai::transport::profile::CodexResidency::Us)
-    );
+    assert_eq!(state.snapshot().residency, Some("us".to_owned()));
 }
 
 #[test]
@@ -373,7 +370,7 @@ fn cli_selection_is_explicit_and_survives_default_release_updates() {
 #[test]
 fn blank_custom_and_invalid_save_do_not_change_selection() {
     let mut original = wire_profile();
-    original.residency = Some(provider_openai::transport::profile::CodexResidency::Us);
+    original.residency = Some("us".to_owned());
     let state = CodexWireProfileState::new(original.clone());
     for value in ["", "   "] {
         assert!(

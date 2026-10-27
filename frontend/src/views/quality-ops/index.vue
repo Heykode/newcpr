@@ -1103,9 +1103,6 @@ onBeforeUnmount(() => {
           <div class="mb-2 flex flex-wrap gap-3 text-cp-sm">
             <strong>第 {{ answer.index }} 次</strong><span :class="statusColor(answer.verdict)">{{ answer.verdict === 'overloaded' ? '上游服务器过载' : verdictLabel(answer.verdict, detail.detectionMode) }}</span><span>{{ (answer.elapsedMs / 1000).toFixed(1) }} 秒</span>
           </div>
-          <p v-if="answer.returnedModel" class="mb-2 break-all text-xs text-cp-text-secondary">
-            返回模型 {{ answer.returnedModel }}
-          </p>
           <dl v-if="answer.probe" class="grid gap-2 text-cp-sm">
             <div v-for="(shot, index) in answer.probe.shots" :key="index" class="flex flex-wrap gap-x-3 gap-y-1">
               <dt class="font-medium">

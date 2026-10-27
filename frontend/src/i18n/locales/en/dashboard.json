@@ -30,6 +30,7 @@
     },
     "activeAccounts": {
       "todayTokens": "Tokens",
+      "requestCount": "Requests",
       "title": "Active account usage",
       "sortByRecent": "Sorted by last used",
       "empty": "No recent account requests",

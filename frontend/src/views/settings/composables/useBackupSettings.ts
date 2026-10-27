@@ -1,6 +1,6 @@
 import type { BackupSettingsView, UpdateBackupStoragePayload } from '@/api'
 
-import { reactive, shallowRef } from 'vue'
+import { computed, reactive, shallowRef } from 'vue'
 import {
   getBackupSettings,
   testBackupStorage,
@@ -41,6 +41,12 @@ export function useBackupSettings() {
     retentionCount: '7',
   })
 
+  const savedStorage = shallowRef('')
+  const savedSchedule = shallowRef('')
+  const hasChanges = computed(() => loaded.value && (
+    JSON.stringify(storage) !== savedStorage.value || JSON.stringify(schedule) !== savedSchedule.value
+  ))
+
   async function load(): Promise<void> {
     if (loaded.value)
       return
@@ -60,6 +66,11 @@ export function useBackupSettings() {
   }
 
   function applySettings(data: BackupSettingsView): void {
+    applyStorage(data)
+    applySchedule(data)
+  }
+
+  function applyStorage(data: BackupSettingsView): void {
     storageRevision.value = data.storageRevision
     verified.value = data.verified
     storage.endpoint = data.endpoint ?? ''
@@ -69,11 +80,16 @@ export function useBackupSettings() {
     storage.secretAccessKey = data.secretAccessKey ?? ''
     storage.prefix = data.prefix ?? 'backups/'
     storage.forcePathStyle = data.forcePathStyle
+    savedStorage.value = JSON.stringify(storage)
+  }
+
+  function applySchedule(data: BackupSettingsView): void {
     schedule.scheduleEnabled = data.scheduleEnabled
     schedule.cronExpression = data.cronExpression ?? '0 2 * * *'
     schedule.scheduleTimezone = data.scheduleTimezone ?? 'Asia/Shanghai'
     schedule.retentionDays = String(data.retentionDays)
     schedule.retentionCount = String(data.retentionCount)
+    savedSchedule.value = JSON.stringify(schedule)
   }
 
   function storagePayload(): UpdateBackupStoragePayload {
@@ -92,8 +108,15 @@ export function useBackupSettings() {
     savingStorage.value = true
     try {
       const data = await updateBackupStorage(storagePayload())
-      const schedulePaused = schedule.scheduleEnabled && !data.scheduleEnabled
-      applySettings(data)
+      const storageChanged = storageRevision.value !== data.storageRevision
+      const schedulePaused = storageChanged && schedule.scheduleEnabled && !data.scheduleEnabled
+      applyStorage(data)
+      if (storageChanged) {
+        schedule.scheduleEnabled = data.scheduleEnabled
+        const saved = JSON.parse(savedSchedule.value)
+        saved.scheduleEnabled = data.scheduleEnabled
+        savedSchedule.value = JSON.stringify(saved)
+      }
       toast.success(schedulePaused ? '存储配置已保存，定时备份已暂停，请测试连接后重新启用' : '存储配置已保存')
       return true
     }
@@ -136,7 +159,7 @@ export function useBackupSettings() {
         retentionDays: Number(schedule.retentionDays) || 0,
         retentionCount: Number(schedule.retentionCount) || 0,
       })
-      applySettings(data)
+      applySchedule(data)
       toast.success('调度配置已保存')
       return true
     }
@@ -149,6 +172,7 @@ export function useBackupSettings() {
   }
 
   return {
+    hasChanges,
     loading,
     savingStorage,
     testing,

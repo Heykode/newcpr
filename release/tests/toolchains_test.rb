@@ -41,6 +41,6 @@ class ToolchainsTest < Minitest::Test
   def test_repository_declarations_match
     values = BuildToolchains.read(File.expand_path('../..', __dir__))
     assert_equal '1.99.1', values['rust']
-    assert_equal '26.12.0', values['node']
+    assert_equal '26.12.1', values['node']
   end
 end

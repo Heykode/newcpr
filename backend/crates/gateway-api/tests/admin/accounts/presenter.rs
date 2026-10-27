@@ -33,20 +33,13 @@ fn native_catalog_keeps_unknown_fields_order_and_never_adds_account_data() {
 }
 
 #[test]
-fn returned_model_wire_preserves_absence_and_does_not_replace_requested_model() {
+fn completion_wire_does_not_record_returned_model() {
     use gateway_admin::model::accounts::AccountConnectionTestEvent as DomainEvent;
     use gateway_api::admin::accounts::AccountConnectionTestEvent;
-    for model in [None, Some("declared-model".to_owned())] {
-        let event = AccountConnectionTestEvent::from(DomainEvent::Completed {
-            upstream_response_model: model.clone(),
-        });
-        assert_eq!(
-            event.data["upstreamResponseModel"],
-            serde_json::json!(model)
-        );
-        assert_eq!(event.data["success"], true);
-        assert!(event.data.get("model").is_none());
-    }
+    let event = AccountConnectionTestEvent::from(DomainEvent::Completed {});
+    assert_eq!(event.data["success"], true);
+    assert!(event.data.get("upstreamResponseModel").is_none());
+    assert!(event.data.get("model").is_none());
 }
 
 #[test]

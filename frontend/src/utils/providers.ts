@@ -1,5 +1,5 @@
 export const PROVIDER_DISPLAY_NAMES = {
-  openai: 'OpenAI',
+  openai: 'Codex',
   xai: 'xAI',
 } as const
 

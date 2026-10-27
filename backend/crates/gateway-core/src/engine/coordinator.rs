@@ -746,15 +746,6 @@ where
             .and_then(ProviderResponseObservation::status_code)
     }
 
-    /// The selected attempt's observed model, without a requested-model fallback.
-    #[must_use]
-    pub fn upstream_response_model(&self) -> Option<&str> {
-        self.current
-            .as_ref()
-            .and_then(|current| current.response_observation.as_ref())
-            .and_then(ProviderResponseObservation::upstream_response_model)
-    }
-
     /// 将已完成响应的账号事实与 Provider 私有状态封装为可丢失的亲和记录。
     ///
     /// Core 不读取 `state` 内容；Provider 将在后续同账号 continuation 时自行解释。
@@ -2103,12 +2094,6 @@ where
                 http_version,
                 websocket_pool,
                 service_tier,
-                upstream_response_model: self
-                    .current
-                    .as_ref()
-                    .and_then(|current| current.response_observation.as_ref())
-                    .and_then(ProviderResponseObservation::upstream_response_model)
-                    .map(str::to_owned),
                 provider_metadata_json,
                 diagnostic_trace_json: self.trace.snapshot().map(|value| value.to_string()),
                 error: None,
@@ -2324,12 +2309,6 @@ where
                 http_version,
                 websocket_pool,
                 service_tier,
-                upstream_response_model: self
-                    .current
-                    .as_ref()
-                    .and_then(|current| current.response_observation.as_ref())
-                    .and_then(ProviderResponseObservation::upstream_response_model)
-                    .map(str::to_owned),
                 provider_metadata_json,
                 diagnostic_trace_json: self.trace.snapshot().map(|value| value.to_string()),
                 error_details: finalization.error_details.or_else(|| {

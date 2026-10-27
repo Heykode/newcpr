@@ -1739,7 +1739,7 @@ fn map_credential_admin_error(error: CodexCredentialAdminError) -> ProviderAdmin
                 "OpenAI 返回的 Codex PAT 身份资料不完整或格式无效，请稍后重试",
             ),
         },
-        Error::InvalidInput => (Kind::Invalid, "OpenAI 账号输入格式不合法，请检查导入内容"),
+        Error::InvalidInput => (Kind::Invalid, "Codex 账号输入格式不合法，请检查导入内容"),
         Error::InvalidCredential => (
             Kind::Invalid,
             "OpenAI 凭据不完整或格式无效，请检查凭据或重新授权",
@@ -1757,8 +1757,8 @@ fn map_credential_admin_error(error: CodexCredentialAdminError) -> ProviderAdmin
             Kind::Invalid,
             refresh_rejection_message(code.as_deref()).unwrap_or("刷新令牌已失效，请重新授权"),
         ),
-        Error::AccountBanned { .. } => (Kind::Invalid, "OpenAI 账号已被停用，请检查账号状态"),
-        Error::NotFound => (Kind::NotFound, "OpenAI 账号不存在，请刷新账号列表"),
+        Error::AccountBanned { .. } => (Kind::Invalid, "Codex 账号已被停用，请检查账号状态"),
+        Error::NotFound => (Kind::NotFound, "Codex 账号不存在，请刷新账号列表"),
         Error::RefreshLeaseUnavailable => {
             (Kind::Conflict, "令牌刷新繁忙，请等待当前刷新完成后重试")
         }
@@ -1889,7 +1889,7 @@ fn map_quota_error(error: CodexCredentialQuotaError) -> ProviderAdminError {
             "OpenAI 额度查询凭据无效，请检查账号授权",
             None,
         ),
-        Error::NotFound => (Kind::NotFound, "OpenAI 额度查询账号不存在", None),
+        Error::NotFound => (Kind::NotFound, "Codex 额度查询账号不存在", None),
         Error::RevisionConflict => (
             Kind::Conflict,
             "账号凭据已被更新，请刷新账号列表后重试",

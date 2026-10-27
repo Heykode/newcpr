@@ -103,7 +103,6 @@ export interface QualityAnswer {
   verdict: 'correct' | 'incorrect' | 'unknown' | 'request_error' | 'overloaded'
   reason: string
   elapsedMs: number
-  returnedModel: string | null
   judgeAccountId: string | null
   probe?: {
     verdict: 'healthy' | 'degraded' | 'inconclusive'

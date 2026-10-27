@@ -25,7 +25,7 @@ async function main() {
   })
   const output = process.env.QA_OUTPUT_DIR || '/tmp/cpr-account-native-catalog-qa'
   await mkdir(output, { recursive: true })
-  const page = await browser.newPage({ viewport: { width: 1440, height: 1000 }, reducedMotion: 'reduce' })
+  const page = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1440, height: 1000 }, reducedMotion: 'reduce' })
   const errors = []
   const unexpected = []
   const catalogQueries = []
@@ -51,6 +51,8 @@ async function main() {
         return fulfill(route, { items: [], page: { page: 1, pageSize: 200, total: 0, totalPages: 0 } })
       case '/api/admin/relogin': return fulfill(route, { items: reloginEntries, settings: { concurrency: 1, paused: false } })
       case '/api/admin/relogin/accounts/query': return fulfill(route, [])
+      case '/api/admin/accounts/reset-credits/batches': return fulfill(route, [])
+      case '/api/admin/accounts/reset-credits/cache': return fulfill(route, [])
       case '/api/admin/accounts/import-tasks': return fulfill(route, { items: [] })
       case '/api/admin/accounts/models':
         assert.equal(request.method(), 'GET')
@@ -99,7 +101,8 @@ async function main() {
     const dialog = page.getByRole('dialog')
     await dialog.getByLabel('测试提示词', { exact: true }).fill('Synthetic diagnostic prompt\n第二行')
     await dialog.getByRole('button', { name: '开始测试', exact: true }).click()
-    await dialog.getByText(declaredModel, { exact: true }).waitFor()
+    await dialog.getByText('测试完成', { exact: true }).waitFor()
+    assert.equal(await dialog.getByText(declaredModel, { exact: true }).count(), 0)
     assert.deepEqual(tests, [{
       accountId: 'acct_sample_0',
       modelId: 'requested-model',
@@ -119,14 +122,12 @@ async function main() {
         const bounds = await dialog.boundingBox()
         assert.ok(bounds.x >= 0 && bounds.x + bounds.width <= width + 1)
         assert.ok(await dialog.evaluate(element => element.scrollWidth <= element.clientWidth + 1))
-        const returned = dialog.getByText(declaredModel, { exact: true })
-        assert.ok(await returned.evaluate(element => element.scrollWidth <= element.clientWidth + 1))
-        await returned.scrollIntoViewIfNeeded()
-        await page.screenshot({ path: `${output}/returned-model-${theme}-${width}.png`, fullPage: true })
+        assert.equal(await dialog.getByText('返回模型（上游声明）', { exact: true }).count(), 0)
+        await page.screenshot({ path: `${output}/connection-test-${theme}-${width}.png`, fullPage: true })
       }
     }
     await dialog.getByRole('button', { name: '重新测试', exact: true }).click()
-    await dialog.getByText('未返回', { exact: true }).waitFor()
+    await dialog.getByText('测试完成', { exact: true }).waitFor()
     assert.equal(await dialog.getByText(declaredModel, { exact: true }).count(), 0)
     assert.equal(tests.length, 2)
     assert.equal(catalogQueries.length, 1)

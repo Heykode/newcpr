@@ -1627,9 +1627,7 @@ impl AccountsService for DefaultAccountsService {
                     };
                     text.into_iter()
                         .map(|text| AccountConnectionTestEvent::Content { text })
-                        .chain(std::iter::once(AccountConnectionTestEvent::Completed {
-                            upstream_response_model: result.upstream_response_model,
-                        }))
+                        .chain(std::iter::once(AccountConnectionTestEvent::Completed {}))
                         .collect()
                 }
                 Err(error) => {

@@ -456,10 +456,6 @@ async fn codex_backend_client_should_capture_forwardable_response_metadata() {
         .expect("response should succeed");
 
     assert_eq!(
-        response.response_metadata.effective_model.as_deref(),
-        Some("gpt-5.5-2026-07-01")
-    );
-    assert_eq!(
         response.response_metadata.models_etag.as_deref(),
         Some("models-v2")
     );

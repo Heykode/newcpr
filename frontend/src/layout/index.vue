@@ -12,6 +12,7 @@ import AppAboutModal from './components/AppAboutModal.vue'
 import AppSidebar from './components/AppSidebar.vue'
 import FloatingSidebarToggle from './components/FloatingSidebarToggle.vue'
 import SystemUpdateModal from './components/SystemUpdateModal/index.vue'
+import { useSidebarFocus } from './useSidebarFocus'
 
 const uiStore = useUiStore()
 const systemUpdateStore = useSystemUpdateStore()
@@ -21,6 +22,8 @@ const { toggleSidebar } = uiStore
 const route = useRoute()
 const pageScrollbarRef = ref<InstanceType<typeof BaseScrollbar> | null>(null)
 const mobileSidebarOpen = shallowRef(false)
+const mobileSidebarPanel = ref<HTMLElement | null>(null)
+const { restoreFocus } = useSidebarFocus(mobileSidebarPanel, mobileSidebarOpen)
 const aboutOpen = shallowRef(false)
 const systemUpdateOpen = shallowRef(false)
 const systemUpdateOpening = shallowRef(false)
@@ -74,12 +77,13 @@ watch(
   <div class="relative flex h-dvh overflow-hidden bg-cp-bg-layout">
     <AppSidebar
       :collapsed="sidebarCollapsed"
+      :inert="mobileSidebarOpen"
       @toggle="toggleSidebar"
       @open-about="aboutOpen = true"
       @open-system-update="openSystemUpdate"
     />
-    <FloatingSidebarToggle v-if="!mobileSidebarOpen" @open="openMobileSidebar" />
-    <main class="relative isolate h-dvh min-w-0 flex-1 overflow-hidden">
+    <FloatingSidebarToggle v-show="!mobileSidebarOpen" :inert="mobileSidebarOpen" @open="openMobileSidebar" />
+    <main :inert="mobileSidebarOpen" class="relative isolate h-dvh min-w-0 flex-1 overflow-hidden">
       <BaseScrollbar ref="pageScrollbarRef">
         <div class="flex min-h-full min-w-0 flex-col p-4 min-[961px]:p-6">
           <RouterView v-slot="{ Component }">
@@ -90,21 +94,22 @@ watch(
     </main>
 
     <Teleport to="body">
-      <Transition name="mobile-sidebar">
+      <Transition name="mobile-sidebar" @after-leave="restoreFocus">
         <div v-if="mobileSidebarOpen" class="fixed inset-0 z-50 min-[961px]:hidden">
           <button
             type="button"
             class="absolute inset-0 border-0 bg-black/32 backdrop-blur-[1px] cursor-default"
+            tabindex="-1"
             :aria-label="t('navigation.sidebar.close')"
             @click="closeMobileSidebar"
           />
-          <div class="mobile-sidebar-panel absolute inset-y-0 left-0 flex">
+          <div ref="mobileSidebarPanel" role="dialog" aria-modal="true" :aria-label="t('navigation.mainLabel')" tabindex="-1" class="mobile-sidebar-panel absolute inset-y-0 left-0 flex">
             <AppSidebar
               mobile
               @close="closeMobileSidebar"
               @navigate="closeMobileSidebar"
-              @open-about="aboutOpen = true"
-              @open-system-update="openSystemUpdate"
+              @open-about="closeMobileSidebar(); aboutOpen = true"
+              @open-system-update="closeMobileSidebar(); openSystemUpdate()"
             />
           </div>
         </div>

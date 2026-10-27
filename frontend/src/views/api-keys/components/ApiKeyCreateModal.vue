@@ -2,16 +2,17 @@
 import type { ApiKeyFormValue } from '../composables/useApiKeyMutations'
 import type { AccountGroup } from '@/api'
 import { Copy, DollarSign, KeyRound, Upload } from '@lucide/vue'
-import { computed } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import AccountGroupCheckboxGrid from '@/components/AccountGroupCheckboxGrid.vue'
-
 import BaseButton from '@/components/base/BaseButton.vue'
+
 import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
 import BaseForm from '@/components/base/BaseForm/index.vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseModal from '@/components/base/BaseModal/index.vue'
 import { t } from '@/i18n'
+import { apiKeyFormErrors } from '../utils/formValidation'
 
 const props = defineProps<{
   groups: AccountGroup[]
@@ -31,6 +32,21 @@ const open = defineModel<boolean>({ default: false })
 const createdOpen = defineModel<boolean>('createdOpen', { default: false })
 const form = defineModel<ApiKeyFormValue>('form', { required: true })
 const title = computed(() => props.editing ? '编辑 API Key' : '创建 API Key')
+
+const touched = reactive<Partial<Record<keyof ApiKeyFormValue, boolean>>>({})
+const submitted = ref(false)
+const errors = computed(() => apiKeyFormErrors(form.value))
+const fieldError = (key: keyof ApiKeyFormValue) => submitted.value || touched[key] ? errors.value[key] : undefined
+function save() {
+  submitted.value = true
+  if (!Object.keys(errors.value).length)
+    emit('save')
+}
+watch(open, () => {
+  submitted.value = false
+  for (const key of Object.keys(touched) as Array<keyof ApiKeyFormValue>)
+    delete touched[key]
+})
 </script>
 
 <template>
@@ -47,12 +63,13 @@ const title = computed(() => props.editing ? '编辑 API Key' : '创建 API Key'
     </template>
 
     <BaseForm class="grid gap-6">
-      <BaseFormItem :label="t('common.fields.name')" required>
+      <BaseFormItem :error="fieldError('name')" :label="t('common.fields.name')" required>
         <BaseInput
           v-model="form.name"
           :aria-label="t('common.fields.name')"
           :placeholder="t('keys.editor.namePlaceholder')"
           :disabled="saving"
+          @blur="touched.name = true"
         />
       </BaseFormItem>
 
@@ -75,7 +92,7 @@ const title = computed(() => props.editing ? '编辑 API Key' : '创建 API Key'
       </BaseFormItem>
 
       <div class="grid gap-6 sm:grid-cols-2">
-        <BaseFormItem :label="t('keys.editor.dailyLimit')">
+        <BaseFormItem :error="fieldError('dailyLimitUsd')" :label="t('keys.editor.dailyLimit')">
           <BaseInput
             v-model="form.dailyLimitUsd"
             type="number"
@@ -84,13 +101,14 @@ const title = computed(() => props.editing ? '编辑 API Key' : '创建 API Key'
             aria-label="日限额（美元）"
             placeholder="不限制"
             :disabled="saving"
+            @blur="touched.dailyLimitUsd = true"
           >
             <template #prefix>
               <DollarSign class="size-4" aria-hidden="true" />
             </template>
           </BaseInput>
         </BaseFormItem>
-        <BaseFormItem :label="t('keys.editor.weeklyLimit')">
+        <BaseFormItem :error="fieldError('weeklyLimitUsd')" :label="t('keys.editor.weeklyLimit')">
           <BaseInput
             v-model="form.weeklyLimitUsd"
             type="number"
@@ -99,6 +117,7 @@ const title = computed(() => props.editing ? '编辑 API Key' : '创建 API Key'
             aria-label="周限额（美元）"
             placeholder="不限制"
             :disabled="saving"
+            @blur="touched.weeklyLimitUsd = true"
           >
             <template #prefix>
               <DollarSign class="size-4" aria-hidden="true" />
@@ -108,7 +127,7 @@ const title = computed(() => props.editing ? '编辑 API Key' : '创建 API Key'
       </div>
 
       <div class="grid gap-6 sm:grid-cols-2">
-        <BaseFormItem :label="t('keys.editor.maximumConcurrency')">
+        <BaseFormItem :error="fieldError('maxConcurrency')" :label="t('keys.editor.maximumConcurrency')">
           <BaseInput
             v-model="form.maxConcurrency"
             type="number"
@@ -117,9 +136,10 @@ const title = computed(() => props.editing ? '编辑 API Key' : '创建 API Key'
             step="1"
             placeholder="不限制"
             :disabled="saving"
+            @blur="touched.maxConcurrency = true"
           />
         </BaseFormItem>
-        <BaseFormItem :label="t('keys.editor.requestsPerMinuteRpm')">
+        <BaseFormItem :error="fieldError('requestsPerMinute')" :label="t('keys.editor.requestsPerMinuteRpm')">
           <BaseInput
             v-model="form.requestsPerMinute"
             type="number"
@@ -128,6 +148,7 @@ const title = computed(() => props.editing ? '编辑 API Key' : '创建 API Key'
             step="1"
             placeholder="不限制"
             :disabled="saving"
+            @blur="touched.requestsPerMinute = true"
           />
         </BaseFormItem>
       </div>
@@ -141,7 +162,7 @@ const title = computed(() => props.editing ? '编辑 API Key' : '创建 API Key'
         variant="primary"
         :loading="saving"
         :disabled="!form.name.trim()"
-        @click="emit('save')"
+        @click="save"
       >
         {{ editing ? '保存更改' : '创建' }}
       </BaseButton>

@@ -14,10 +14,7 @@ use gateway_core::event::{
 };
 use gateway_core::metering::Usage;
 use gateway_core::upstream::UpstreamSendState;
-use gateway_protocol::openai::events::{
-    ResponseModelObservation, TokenUsage, billable_usage_is_complete, extract_usage,
-    observed_model_name,
-};
+use gateway_protocol::openai::events::{TokenUsage, billable_usage_is_complete, extract_usage};
 use gateway_protocol::openai::sse::{SseEvent, SseEventDecoder, SseFrame, sse_frame_is_done};
 use serde_json::Value;
 use thiserror::Error;
@@ -56,8 +53,6 @@ pub struct CodexCanonicalDecoder {
     semantic_output_seen: bool,
     requested_service_tier: Option<String>,
     response_service_tier: Option<String>,
-    response_model: ResponseModelObservation,
-    reported_model: Option<String>,
     web_search_pricing: Option<WebSearchPricing>,
     timing_signals: ResponseEventSignals,
     upstream_timing_metrics: ResponseTimingMetrics,
@@ -162,8 +157,6 @@ impl CodexCanonicalDecoder {
             semantic_output_seen: false,
             requested_service_tier: None,
             response_service_tier: None,
-            response_model: ResponseModelObservation::default(),
-            reported_model: None,
             web_search_pricing: None,
             timing_signals: ResponseEventSignals::default(),
             upstream_timing_metrics: ResponseTimingMetrics::default(),
@@ -265,28 +258,6 @@ impl CodexCanonicalDecoder {
     #[must_use]
     pub fn response_service_tier(&self) -> Option<&str> {
         self.response_service_tier.as_deref()
-    }
-
-    /// 真实HTTP响应头提供初始报告；流内请求级报告可覆盖它。
-    #[must_use]
-    pub fn with_reported_model(mut self, model: Option<&str>) -> Self {
-        self.reported_model = model.and_then(observed_model_name).map(str::to_owned);
-        self
-    }
-
-    /// 接收transport已解析的内部metadata报告，内部帧无需交付客户端。
-    pub(crate) fn observe_reported_model(&mut self, model: &str) {
-        if let Some(model) = observed_model_name(model) {
-            self.reported_model = Some(model.to_owned());
-        }
-    }
-
-    /// 官方服务端报告优先；缺少报告时仅使用正文明确声明，不使用请求兜底值。
-    #[must_use]
-    pub fn response_model(&self) -> Option<&str> {
-        self.reported_model
-            .as_deref()
-            .or_else(|| self.response_model.model())
     }
 
     fn decode(&mut self, events: Vec<SseEvent>) -> CodexCanonicalOutcome {
@@ -398,10 +369,6 @@ impl CodexCanonicalDecoder {
                 .merge(ResponseTimingMetrics::from_event(&value));
         }
         self.observe_response_service_tier(&value);
-        self.response_model.observe(event_type, &value);
-        if let Some(model) = super::response_meta::reported_model_from_event(&value) {
-            self.reported_model = Some(model.to_owned());
-        }
         let signals = response_event_signals(event_type, &value);
         self.merge_timing_signals(signals);
         if matches!(event_type, Some("response.failed" | "error")) {
