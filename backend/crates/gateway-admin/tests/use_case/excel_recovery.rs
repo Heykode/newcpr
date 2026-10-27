@@ -68,10 +68,7 @@ impl AccountProbe for RecoveryProbe {
                 "empty" => vec![],
                 _ => vec!["not the expected nonce".into()],
             };
-            Ok(AccountProbeResult {
-                text,
-                upstream_response_model: Some("fixture-model".into()),
-            })
+            Ok(AccountProbeResult { text })
         })
     }
 }

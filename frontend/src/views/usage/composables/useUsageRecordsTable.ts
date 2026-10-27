@@ -386,7 +386,7 @@ function emptyInsights() {
 
 function emptyOverview() {
   const overview: Awaited<ReturnType<typeof getUsageRecordInsightsOverview>> = {
-    granularity: '1d',
+    granularity: '',
     health: {
       totalRequests: 0,
       successRequests: 0,

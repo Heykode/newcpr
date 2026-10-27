@@ -70,7 +70,8 @@
     "plugins": {
       "title": "插件兼容性提醒",
       "description": "重启后保留启用配置，逐个尝试启动插件",
-      "incompatible": "不兼容插件"
+      "incompatible": "不兼容插件",
+      "requestErrorHelp": "插件启动成功后仍可能出现请求错误，可尝试禁用相关插件后重试"
     },
     "versionAfterRestart": "重启后版本",
     "confirmation": {

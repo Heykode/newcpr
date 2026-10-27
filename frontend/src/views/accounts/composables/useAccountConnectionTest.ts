@@ -86,7 +86,6 @@ interface ConnectionTestCompleteEvent {
   type: 'test_complete'
   success: boolean
   error?: string
-  upstreamResponseModel?: string | null
 }
 
 type ConnectionTestFailureSource = 'gateway' | 'provider' | 'upstream'
@@ -194,7 +193,6 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
   const testingAccount = shallowRef<Account | null>(null)
   const connectionTestStatus = shallowRef<ConnectionTestStatus>('idle')
   const connectionTestModel = shallowRef('')
-  const connectionTestUpstreamResponseModel = shallowRef<string | null>(null)
   const connectionTestContent = shallowRef('')
   const connectionTestLogs = ref<ConnectionTestLog[]>([])
   const connectionTestError = shallowRef('')
@@ -280,7 +278,6 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
   function resetConnectionTest() {
     connectionTestStatus.value = 'idle'
     connectionTestModel.value = ''
-    connectionTestUpstreamResponseModel.value = null
     connectionTestContent.value = ''
     connectionTestLogs.value = []
     connectionTestError.value = ''
@@ -411,10 +408,6 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
     }
     if (event.type === 'test_complete') {
       if (event.success) {
-        connectionTestUpstreamResponseModel.value = typeof event.upstreamResponseModel === 'string'
-          && event.upstreamResponseModel.trim()
-          ? event.upstreamResponseModel
-          : null
         if (!connectionTestContent.value) {
           setConnectionTestLog('response', '响应完成', 'success', '上游已完成，没有返回文本内容')
         }
@@ -551,7 +544,6 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
     const generation = connectionTestGeneration
     connectionTestStatus.value = 'running'
     connectionTestModel.value = ''
-    connectionTestUpstreamResponseModel.value = null
     connectionTestContent.value = ''
     connectionTestLogs.value = []
     connectionTestError.value = ''
@@ -625,7 +617,6 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
     testingAccount,
     connectionTestStatus,
     connectionTestModel,
-    connectionTestUpstreamResponseModel,
     connectionTestLogs,
     connectionTestError,
     connectionTestStartedAt,

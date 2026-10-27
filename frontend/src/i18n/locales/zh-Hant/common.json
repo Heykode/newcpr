@@ -28,7 +28,7 @@
       "malformedJson": "請求體不是合法 JSON",
       "invalidTimeRange": "時間範圍不合法",
       "invalidCredentials": "登錄憑據錯誤",
-      "invalidAdminApiKey": "管理 API 密鑰無效",
+      "invalidAdminApiKey": "管理 API密鑰無效",
       "tooManyLoginAttempts": "登錄嘗試過多，請稍後重試",
       "upstreamResultUnknown": "上游執行結果未知，請刷新狀態後再決定是否重試"
     },
@@ -112,7 +112,7 @@
       "name": "名稱",
       "createdAt": "創建時間",
       "baseUrl": "基礎 URL",
-      "apiKey": "API 密鑰",
+      "apiKey": "API密鑰",
       "build": "構建"
     },
     "language": "界面語言",

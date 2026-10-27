@@ -28,6 +28,7 @@ fn client(base_url: &str) -> CodexBackendClient {
             arch: "arm64".to_owned(),
             terminal: "xterm-256color".to_owned(),
             residency: None,
+            account_routing_override: None,
             location: Default::default(),
             verified_at: Utc
                 .with_ymd_and_hms(2026, 8, 20, 0, 0, 0)

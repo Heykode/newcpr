@@ -146,7 +146,7 @@ pub(crate) const USAGE_LIST_RECORD_SELECT: &str =
             account.plan_type as provider_account_plan_type,
             mr.provider_account_authentication_kind_snapshot
               as provider_account_authentication_kind,
-            mr.upstream_model_id, mr.upstream_transport, mr.upstream_response_model, mr.service_tier,
+            mr.upstream_model_id, mr.upstream_transport, mr.service_tier,
             (mr.provider_observation_json #> '{turnState,summary}')::text as turn_state_summary_json,
             mr.input_tokens, mr.output_tokens, mr.cached_tokens, mr.cache_write_tokens,
             mr.reasoning_tokens, mr.image_input_tokens, mr.image_output_tokens,
@@ -175,7 +175,7 @@ pub(crate) const USAGE_RECORD_DETAIL_SELECT: &str =
             mr.provider_account_authentication_kind_snapshot
               as provider_account_authentication_kind,
             mr.upstream_model_id, mr.upstream_transport, mr.http_version, mr.websocket_pool,
-            mr.service_tier, mr.upstream_response_model, mr.provider_observation_json, mr.diagnostic_trace_json,
+            mr.service_tier, mr.provider_observation_json, mr.diagnostic_trace_json,
             mr.attempt_count, mr.upstream_send_state, mr.downstream_committed_at,
             mr.outcome, mr.client_status_code, mr.upstream_status_code,
             mr.client_response_id, mr.upstream_request_id, mr.upstream_response_id,

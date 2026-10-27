@@ -1080,6 +1080,22 @@
     "reason": "Explicit synthetic proxy or local database fixture used by isolated tests, including URL rejection tests."
   },
   {
+    "path": "backend/crates/providers/openai/tests/config.rs",
+    "rule": "non-example-ip",
+    "line": 133,
+    "file_sha256": "d266be7a74b4f2dcb401cc97647fce01b6296bf88a0093a64b2c5d6f58c4de8b",
+    "line_sha256": "c7cce97562dd79d3c5f4aad42f7ef636c045565c6191a42b5df548842e5197f4",
+    "reason": "Synthetic network-policy, forwarding or DNS resolution test; no deployment endpoint."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/config.rs",
+    "rule": "authenticated-url",
+    "line": 135,
+    "file_sha256": "d266be7a74b4f2dcb401cc97647fce01b6296bf88a0093a64b2c5d6f58c4de8b",
+    "line_sha256": "814069861c50b1e716f26a23b5af8033d740a1f95e5c875d570e4a9476b9bbb5",
+    "reason": "Explicit synthetic proxy or local database fixture used by isolated tests, including URL rejection tests."
+  },
+  {
     "path": "backend/crates/providers/openai/tests/credential/native_catalog_local.rs",
     "rule": "authenticated-url",
     "line": 314,

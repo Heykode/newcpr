@@ -14,6 +14,7 @@ import { toast } from '@/components/base/BaseToast'
 import { useAsyncAction } from '@/composables/useAsyncAction'
 import { useCopyText } from '@/composables/useCopyText'
 import { useIdSet } from '@/composables/useIdSet'
+import { apiKeyFormErrors } from '../utils/formValidation'
 
 type ApiKeyRow = Awaited<ReturnType<typeof getApiKeys>>['items'][number]
 
@@ -158,27 +159,10 @@ export function useApiKeyMutations(options: {
   }
 
   function validateForm() {
-    for (const [label, value] of [['日限额', form.value.dailyLimitUsd], ['周限额', form.value.weeklyLimitUsd]]) {
-      if (value.trim() && !/^\d{1,10}(?:\.\d{1,10})?$/.test(value.trim())) {
-        toast.warning(`${label}必须是非负金额，最多 10 位小数`)
-        return false
-      }
-    }
-    if (!form.value.name.trim()) {
-      toast.warning('请输入 API Key 名称')
-      return false
-    }
-    for (const [label, value] of [
-      ['最大并发', form.value.maxConcurrency],
-      ['每分钟请求数', form.value.requestsPerMinute],
-    ] as const) {
-      const parsed = Number(value)
-      if (!Number.isSafeInteger(parsed) || parsed < 0) {
-        toast.warning(`${label}必须是非负整数`)
-        return false
-      }
-    }
-    return true
+    const firstError = Object.values(apiKeyFormErrors(form.value))[0]
+    if (firstError)
+      toast.warning(firstError)
+    return !firstError
   }
 
   function requestDeleteKey(key: ApiKeyRow) {

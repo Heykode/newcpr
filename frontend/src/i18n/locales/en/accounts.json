@@ -44,7 +44,7 @@
       "usageRate": "Usage rate",
       "moreGroups": "{count} more quota groups, expand the account to view them",
       "windows": {
-        "fiveHour": "5 h limit",
+        "fiveHour": "5h limit",
         "daily": "Daily limit",
         "weekly": "Weekly limit",
         "monthly": "Monthly limit",

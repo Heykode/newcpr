@@ -123,7 +123,7 @@ function deriveThemeMap(
   }
 }
 
-function resolveThemeSeedTokens(
+export function resolveThemeSeedTokens(
   theme: ThemeName,
   colorPrimary: string,
   overrides: ThemeSeedOverrides | undefined,

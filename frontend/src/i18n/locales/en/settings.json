@@ -150,7 +150,7 @@
     },
     "scheduling": {
       "roundRobin": "Round robin",
-      "autoReviewSlotsHelp": "Applies to OpenAI accounts only: with a regular concurrency limit of 10 and 3 auto review slots, up to 10 regular requests and 3 auto review requests can run independently",
+      "autoReviewSlotsHelp": "Applies to Codex accounts only: with a regular concurrency limit of 10 and 3 auto review slots, up to 10 regular requests and 3 auto review requests can run independently",
       "autoReviewQueueHelp": "With dedicated slots, auto review uses a separate queue that may exceed account queue capacity, while total queue capacity, queue timeout, and API key limits still apply",
       "weights": {
         "load": "Load weight",
@@ -282,7 +282,7 @@
       "queueTimeoutHelp": "Shared by both queues, 1–120 seconds",
       "autoReview": {
         "label": "Reserved auto review slots",
-        "description": "Extra slots per OpenAI account, 0 shares regular concurrency",
+        "description": "Extra slots per Codex account, 0 shares regular concurrency",
         "helpTitle": "About auto review concurrency"
       },
       "queueTimeoutHelpTitle": "About queue timeout",
@@ -640,6 +640,12 @@
       "description": "Manage scheduling, upstreams, pricing, security, history retention, and backups",
       "sectionsLabel": "Settings sections",
       "undoAllBasicSettingsChanges": "Undo all basic settings changes",
+      "unsavedChanges": {
+        "title": "Unsaved changes",
+        "description": "Your unsaved settings changes will be lost if you leave",
+        "leave": "Discard and leave",
+        "stay": "Keep editing"
+      },
       "saveChanges": "Save",
       "settingsLoadingFailed": "Settings loading failed",
       "reload": "Reload",

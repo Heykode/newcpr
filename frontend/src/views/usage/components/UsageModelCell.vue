@@ -27,8 +27,8 @@ const modelDisplay = computed(() => usageModelDisplay(props.record))
       :title="route.description"
     >
       <CornerDownRight
-        class="size-3.25 shrink-0"
-        :class="route.kind === 'returned' ? 'text-cp-orange-text' : 'text-cp-blue-text'"
+        class="size-3.25 shrink-0 text-cp-blue-text"
+
         stroke-width="2.4"
         aria-hidden="true"
       />

@@ -150,7 +150,7 @@
     },
     "scheduling": {
       "roundRobin": "輪詢",
-      "autoReviewSlotsHelp": "僅對 OpenAI 賬號生效，普通併發爲 10、審批名額爲 3 時，兩類請求分別最多運行 10 個和 3 個，互不佔用名額",
+      "autoReviewSlotsHelp": "僅對 Codex 賬號生效，普通併發爲 10、審批名額爲 3 時，兩類請求分別最多運行 10 個和 3 個，互不佔用名額",
       "autoReviewQueueHelp": "開啓獨立額度後，審批請求單獨排隊，可超過賬號隊列容量，仍受總等待容量、排隊超時與密鑰限額約束",
       "weights": {
         "load": "負載係數",
@@ -232,17 +232,17 @@
       "help": "在設定時間向每個空閒的 Codex OAuth 賬號發送一次請求，不保證額度窗口成功啓動"
     },
     "adminApiKey": {
-      "adminApiKey": "管理員 API Key",
+      "adminApiKey": "管理員 API密鑰",
       "description": "用於外部系統集成，具有管理員權限",
       "regenerate": "重新生成",
       "generate": "生成",
       "notGenerated": "未生成",
-      "enabledDescription": "管理員 API 訪問已啓用，完整 Key 僅在生成時回顯",
-      "disabledDescription": "外部系統暫時無法通過 API Key 調用管理接口",
-      "generatedNotice": "完整 Key 僅顯示一次，請立即保存",
-      "adminApiKeyUpdated": "管理員 API Key 已更新",
-      "generated": "管理員 API Key 已生成",
-      "adminApiKeyDeleted": "管理員 API Key 已刪除"
+      "enabledDescription": "管理員 API 訪問已啓用，完整 API密鑰僅在生成時回顯",
+      "disabledDescription": "外部系統暫時無法通過 API密鑰調用管理接口",
+      "generatedNotice": "完整 API密鑰僅顯示一次，請立即保存",
+      "adminApiKeyUpdated": "管理員 API密鑰已更新",
+      "generated": "管理員 API密鑰已生成",
+      "adminApiKeyDeleted": "管理員 API密鑰已刪除"
     },
     "password": {
       "administratorPassword": "管理員密碼",
@@ -282,7 +282,7 @@
       "queueTimeoutHelp": "兩個隊列共用，1–120 秒",
       "autoReview": {
         "label": "自動審批獨立併發",
-        "description": "每個 OpenAI 賬號的額外名額，0 共用普通併發",
+        "description": "每個 Codex 賬號的額外名額，0 共用普通併發",
         "helpTitle": "自動審批獨立併發說明"
       },
       "queueTimeoutHelpTitle": "排隊超時說明",
@@ -344,9 +344,9 @@
     },
     "access": {
       "accessRestrictions": "訪問限制",
-      "deleteAdminApiKey": "刪除管理員 API Key",
-      "deleteKeyDescription": "刪除後外部系統將無法繼續使用該 Key 調用管理接口",
-      "areYouSureYouWantToDelete": "確定要刪除當前管理員 API Key 嗎？此操作會立即生效"
+      "deleteAdminApiKey": "刪除管理員 API密鑰",
+      "deleteKeyDescription": "刪除後外部系統將無法繼續使用該 API密鑰調用管理接口",
+      "areYouSureYouWantToDelete": "確定要刪除當前管理員 API密鑰嗎？此操作會立即生效"
     },
     "tokenRefresh": {
       "title": "憑據刷新",
@@ -366,7 +366,7 @@
       "exclusions": "不包含請求明細與日誌",
       "backupRecords": "備份記錄",
       "backupScopeDescription": "備份範圍說明",
-      "contents": "保留賬號、Key、設置、插件及已用額度",
+      "contents": "保留賬號、API密鑰、設置、插件及已用額度",
       "usageRetentionHourSummary": "用量保留小時彙總",
       "creating": "創建中",
       "createBackup": "創建備份",
@@ -640,6 +640,12 @@
       "description": "配置網關調度、上游與定價，管理訪問安全、歷史保留與備份",
       "sectionsLabel": "設置分區",
       "undoAllBasicSettingsChanges": "撤銷全部基礎設置更改",
+      "unsavedChanges": {
+        "title": "有未儲存的更改",
+        "description": "離開後，未儲存的設定更改將遺失",
+        "leave": "放棄並離開",
+        "stay": "繼續編輯"
+      },
       "saveChanges": "保存基礎設置",
       "settingsLoadingFailed": "設置加載失敗",
       "reload": "重新加載",

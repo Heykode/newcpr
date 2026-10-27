@@ -44,7 +44,7 @@
       "usageRate": "使用率",
       "moreGroups": "另有 {count} 個額度組，可展開賬號查看",
       "windows": {
-        "fiveHour": "5 h 額度",
+        "fiveHour": "5小時額度",
         "daily": "日額度",
         "weekly": "周額度",
         "monthly": "月額度",
@@ -132,10 +132,10 @@
         "urlLength": "上游 API 地址不能超過 2048 個字符",
         "urlFormat": "請輸入不含認證、查詢參數或片段的 HTTP 或 HTTPS 地址",
         "urlRequired": "請輸入完整的上游 API 地址",
-        "apiKeyFormat": "API Key 不能包含空格或控制字符",
+        "apiKeyFormat": "API密鑰不能包含空格或控制字符",
         "transportRequired": "請選擇傳輸方式"
       },
-      "apiKeyRequired": "請輸入 API Key"
+      "apiKeyRequired": "請輸入 API密鑰"
     },
     "batchEdit": {
       "title": "批量編輯賬號",
@@ -167,7 +167,7 @@
       "loadError": "上游設置讀取失敗",
       "notesHelp": "最多 500 字，留空可清除備註",
       "oauthUnavailable": "該賬號沒有 OAuth 上游設置",
-      "apiKeyUnavailable": "該賬號沒有 API Key 上游設置",
+      "apiKeyUnavailable": "該賬號沒有 API密鑰上游設置",
       "saved": "賬號已更新"
     },
     "filters": {
@@ -347,8 +347,8 @@
       "accountAdded": "賬號已添加",
       "providerRequired": "請選擇賬號平臺",
       "accountPlatformIsNotSupported": "賬號平臺不受支持",
-      "apiKeyUnsupported": "當前平臺不支持 API Key 賬號",
-      "apiKeyAccountAdded": "API Key 賬號已添加",
+      "apiKeyUnsupported": "當前平臺不支持 API密鑰賬號",
+      "apiKeyAccountAdded": "API密鑰賬號已添加",
       "importTasksCreated": "已創建 {submitted} 個導入任務",
       "importTaskCreated": "導入任務已創建",
       "partialSubmission": "部分導入任務已創建，保持輸入不變重試可繼續提交",

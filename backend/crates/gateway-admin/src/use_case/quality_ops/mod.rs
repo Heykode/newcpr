@@ -720,13 +720,11 @@ impl QualityOpsService {
                         reason: String::new(),
                         elapsed_ms: u64::try_from(started.elapsed().as_millis())
                             .unwrap_or(u64::MAX),
-                        returned_model: None,
                         judge_account_id: None,
                     };
                     match result {
                         Ok(result) => {
                             answer.answer = result.text.concat();
-                            answer.returned_model = result.upstream_response_model;
                             answer.verdict = QualityVerdict::Unknown;
                             if answer.answer.trim().is_empty() {
                                 answer.reason = "上游未返回文本，不能确定答案质量".to_owned();
@@ -848,7 +846,6 @@ impl QualityOpsService {
             answer: String::new(),
             reason,
             elapsed_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
-            returned_model: None,
             judge_account_id: None,
         }
     }

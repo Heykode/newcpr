@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
 import { mkdir } from 'node:fs/promises'
 import process from 'node:process'
-import { pathToFileURL } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
+import { createServer } from 'vite'
 import { accounts as fixtures } from '../fixtures/relogin-count-data.mjs'
 
 async function main() {
@@ -10,10 +11,18 @@ async function main() {
     headless: true,
     ...(process.env.CHROME_PATH ? { executablePath: process.env.CHROME_PATH } : {}),
   })
-  const base = process.env.QA_BASE_URL || 'http://127.0.0.1:5245'
+  const server = process.env.QA_BASE_URL
+    ? null
+    : await createServer({
+        root: fileURLToPath(new URL('../..', import.meta.url)),
+        server: { host: '127.0.0.1', port: 0 },
+        plugins: [{ name: 'isolated-model-access', configResolved(config) { config.server.proxy = {} } }],
+      })
+  await server?.listen()
+  const base = process.env.QA_BASE_URL || `http://127.0.0.1:${server.httpServer.address().port}`
   const output = process.env.QA_OUTPUT_DIR || '/tmp/cpr-model-access-qa'
   await mkdir(output, { recursive: true })
-  const page = await browser.newPage({ viewport: { width: 1440, height: 1000 }, reducedMotion: 'reduce' })
+  const page = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1440, height: 1000 }, reducedMotion: 'reduce' })
   const accounts = fixtures.map(account => ({
     ...structuredClone(account),
     turnStateInjectionEnabled: false,
@@ -22,6 +31,7 @@ async function main() {
   const updates = []
   const errors = []
   let catalogFails = false
+  let catalogMissing = false
   let catalogRequests = 0
   page.on('pageerror', error => errors.push(error.message))
   page.on('response', (response) => {
@@ -32,6 +42,8 @@ async function main() {
   await page.route(/\/(?:dev\/)?api\//, async (route) => {
     const request = route.request()
     const path = new URL(request.url()).pathname.replace(/^\/dev(?=\/)/, '')
+    if (!path.startsWith('/api/'))
+      return route.continue()
     let data
     let status = 200
     if (path === '/api/admin/auth/status') {
@@ -46,7 +58,7 @@ async function main() {
     else if (path === '/api/admin/accounts/models' || path === '/api/admin/accounts/models/refresh') {
       catalogRequests += 1
       status = catalogFails ? 503 : 200
-      data = { models: ['model-a', 'model-b', `long-model-${'x'.repeat(100)}`].map(id => ({ id, label: id })) }
+      data = { models: (catalogMissing ? ['model-b'] : ['model-a', 'model-b', `long-model-${'x'.repeat(100)}`]).map(id => ({ id, label: id })) }
     }
     else if (path === '/api/admin/accounts/update' || path === '/api/admin/accounts/batch-update') {
       const body = request.postDataJSON()
@@ -57,7 +69,7 @@ async function main() {
       }
       data = { accountId: body.accountId, accountIds: body.accountIds, configRevision: updates.length + 1 }
     }
-    else if (path === '/api/admin/relogin/accounts/query') {
+    else if (['/api/admin/relogin/accounts/query', '/api/admin/accounts/reset-credits/batches', '/api/admin/accounts/reset-credits/cache', '/api/admin/relogin/templates', '/api/admin/quality-ops/templates'].includes(path)) {
       data = []
     }
     else if (path === '/api/admin/ipv6-egress') {
@@ -102,10 +114,20 @@ async function main() {
     await open()
     assert.equal(await dialog.getByRole('checkbox', { name: 'model-a', exact: true }).isChecked(), true)
     await close()
+    catalogMissing = true
+    await open()
+    const missing = dialog.getByRole('checkbox', { name: 'model-a', exact: true }).locator('..')
+    await dialog.locator('[title="当前目录未返回，仍可保存"]').waitFor()
+    await missing.getAttribute('title').then(title => assert.equal(title, '当前目录未返回，仍可保存'))
+    assert.equal(await dialog.getByRole('checkbox', { name: 'model-a', exact: true }).isChecked(), true)
+    await layouts('missing-model')
+    await close()
+    catalogMissing = false
     catalogFails = true
     await open()
     await dialog.getByRole('alert').filter({ hasText: '模型列表加载失败' }).waitFor()
     assert.equal(await dialog.getByRole('checkbox', { name: 'model-a', exact: true }).isChecked(), true)
+    assert.equal(await dialog.getByRole('checkbox', { name: 'model-a', exact: true }).locator('..').getAttribute('title'), 'model-a')
     const input = dialog.getByRole('textbox', { name: '搜索或添加模型', exact: true })
     await input.fill('model-*')
     await input.press('Enter')
@@ -118,9 +140,14 @@ async function main() {
     await dialog.waitFor({ state: 'hidden' })
     assert.deepEqual(updates[1].modelAccess.models, ['model-a', 'model-manual'])
     catalogFails = false
-    for (const id of ['acct_sample_0', 'acct_sample_1'])
-      await row(id).getByRole('checkbox', { name: '选择账号', exact: true }).locator('..').click()
-    await page.getByRole('button', { name: '批量编辑账号', exact: true }).click()
+    await page.waitForLoadState('networkidle')
+    for (const id of ['acct_sample_0', 'acct_sample_1']) {
+      const checkbox = row(id).getByRole('checkbox', { name: '选择账号', exact: true })
+      await checkbox.focus()
+      await checkbox.press('Space')
+      assert.equal(await checkbox.isChecked(), true)
+    }
+    await page.getByRole('button', { name: '编辑 (2)', exact: true }).click()
     assert.equal(await dialog.getByRole('radio', { name: '白名单', exact: true }).isDisabled(), true)
     await dialog.getByRole('checkbox', { name: '应用模型限制更改', exact: true }).locator('..').click()
     await dialog.getByRole('radio', { name: '黑名单', exact: true }).click()
@@ -135,7 +162,7 @@ async function main() {
     assert.equal(await dialog.getByRole('button', { name: '继续导入', exact: true }).isDisabled(), true)
     await dialog.getByRole('textbox', { name: '搜索或添加模型', exact: true }).fill('model-a')
     await dialog.getByRole('textbox', { name: '搜索或添加模型', exact: true }).press('Enter')
-    await dialog.getByRole('button', { name: 'OpenAI', exact: true }).click()
+    await dialog.getByRole('button', { name: 'Codex', exact: true }).click()
     assert.equal(await dialog.getByRole('button', { name: '继续导入', exact: true }).isEnabled(), true)
     await layouts('import')
     assert.deepEqual(errors, [])
@@ -147,6 +174,7 @@ async function main() {
   }
   finally {
     await browser.close()
+    await server?.close()
   }
 }
 

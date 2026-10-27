@@ -165,6 +165,7 @@ fn wire_profile() -> CodexWireProfileState {
         arch: "x86_64".to_owned(),
         terminal: "provider-contract".to_owned(),
         residency: None,
+        account_routing_override: None,
         location: serde_json::from_value(json!({
             "country": "NZ", "region": "Auckland", "city": "Auckland", "timezone": "Pacific/Auckland"
         })).expect("configured request location"),
@@ -2561,10 +2562,6 @@ async fn websocket_fast_path_miss_uses_http_and_keeps_background_preconnect() {
                     );
                 }
                 assert_eq!(metadata["upstreamStatus"], 200);
-                assert_eq!(
-                    metadata["upstreamReportedModel"],
-                    "gpt-reported-by-upstream"
-                );
                 assert!(metadata["requestSummary"].is_object());
                 assert!(metadata["upstreamTraceHeaders"].is_array());
                 first_decision = metadata

@@ -973,10 +973,7 @@ impl DefaultExecutionService {
             }
         };
         let result = match result {
-            Ok(Some(Ok((text, true)))) => Ok(AccountProbeResult {
-                text,
-                upstream_response_model: session.upstream_response_model().map(str::to_owned),
-            }),
+            Ok(Some(Ok((text, true)))) => Ok(AccountProbeResult { text }),
             Ok(Some(Ok((_, false)))) => Err(GatewayError::new(
                 GatewayErrorKind::UpstreamUnavailable,
                 "quality response did not complete normally",
@@ -1104,14 +1101,12 @@ impl DefaultExecutionService {
                     .await);
             }
         };
-        let upstream_response_model = session.upstream_response_model().map(str::to_owned);
         if let Err(error) = session.commit_downstream(Some(200)).await {
             return Err(self
                 .observe_probe_failure(&observed, started_at, &error)
                 .await);
         }
         Ok(AccountProbeResult {
-            upstream_response_model,
             text: events
                 .into_iter()
                 .flat_map(|event| event.into_parts().0)

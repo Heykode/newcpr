@@ -29,13 +29,12 @@ pub(super) fn build(document: &Value) -> io::Result<Vec<u8>> {
         let detail = &evidence["detail"]["request"];
         writeln!(
             archive,
-            "\n结果：{}；状态码：{}；尝试数：{}\n模型：请求={}，发送={}，上游报告={}\n传输：{} → {}\n时延：{}",
+            "\n结果：{}；状态码：{}；尝试数：{}\n模型：请求={}，发送={}\n传输：{} → {}\n时延：{}",
             detail["logicalOutcome"],
             detail["statusCode"],
             detail["attemptCount"],
             detail["requestedModel"],
             detail["upstreamModel"],
-            detail["upstreamResponseModel"],
             detail["clientTransport"],
             detail["upstreamTransport"],
             detail["latencyDetails"]

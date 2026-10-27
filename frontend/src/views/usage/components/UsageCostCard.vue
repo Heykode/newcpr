@@ -11,6 +11,7 @@ import {
   requestActivityByBucket,
   zeroInactiveValues,
 } from '@/components/charts/timeSeriesGap'
+import { chartTooltipContent } from '@/components/charts/tooltip'
 import { useChartPalette } from '@/composables/useChartPalette'
 import { t } from '@/i18n'
 import { formatLocalizedCompactNumber as formatCompactNumber } from '@/utils/number'
@@ -22,7 +23,6 @@ import {
   usageGapAwareLineSeries,
   usageLegend,
   usageTooltip,
-  usageTooltipContent,
   usageTooltipItem,
   usageValueAxis,
 } from '../utils/chart'
@@ -194,7 +194,7 @@ function formatTooltip(params: unknown) {
   const theme = palette.value
 
   if (activeView.value === 'savings') {
-    return usageTooltipContent(theme, point.label, [
+    return chartTooltipContent(point.label, [
       usageTooltipItem(
         t('usage.cost.cacheSavings'),
         formatUsd(costAmount(point.cacheSavings, pointIndex)),
@@ -204,7 +204,7 @@ function formatTooltip(params: unknown) {
   }
 
   if (activeView.value === 'cache') {
-    return usageTooltipContent(theme, point.label, [
+    return chartTooltipContent(point.label, [
       usageTooltipItem(t('usage.cost.cacheTokenProportion'), formatPercent(point.cachedTokenRate), theme.normal),
       usageTooltipItem(t('usage.cost.hitRequestRate'), formatPercent(point.cacheHitRequestRate), theme.success),
     ])
@@ -224,7 +224,7 @@ function formatTooltip(params: unknown) {
       theme.textMuted,
     ))
   }
-  return usageTooltipContent(theme, point.label, lines)
+  return chartTooltipContent(point.label, lines)
 }
 
 function costAmount(value: string | null, pointIndex: number) {

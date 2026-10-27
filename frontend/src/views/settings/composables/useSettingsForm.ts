@@ -85,6 +85,14 @@ export function useSettingsForm() {
 
   const excelImages = useExcelImageSettings(computed(() => form.requestTuning))
 
+  const savedDraft = shallowRef('')
+  const draftSnapshot = () => JSON.stringify({
+    form,
+    mappings: mappings.value,
+    images: excelImages.fields.map(field => field.input.value),
+  })
+  const hasChanges = computed(() => savedDraft.value !== '' && savedDraft.value !== draftSnapshot())
+
   function numericModel(key: 'refreshMarginSeconds' | 'refreshConcurrency' | 'maxConcurrentPerAccount' | 'requestIntervalMs' | 'openaiGuardianReservedConcurrency' | 'openaiSessionBindingTtlHours') {
     return computed({
       get: () => (form[key] === null ? '' : String(form[key])),
@@ -161,6 +169,7 @@ export function useSettingsForm() {
       requestedModel,
       upstreamModel: String(upstreamModel),
     }))
+    savedDraft.value = draftSnapshot()
   }
 
   async function loadSettings(silent = false) {
@@ -399,6 +408,7 @@ export function useSettingsForm() {
   }
 
   return {
+    hasChanges,
     loading,
     saving,
     error,

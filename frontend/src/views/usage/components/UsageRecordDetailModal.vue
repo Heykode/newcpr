@@ -81,7 +81,6 @@ const modelRouteItems = computed(() => [
     mono: true,
   },
   { label: '存储模型', value: props.record?.model, mono: true },
-  { label: '上游返回模型', value: props.record?.upstreamResponseModel, mono: true },
 ])
 
 const clientUpstreamItems = computed(() => [

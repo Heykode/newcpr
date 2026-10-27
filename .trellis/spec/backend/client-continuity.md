@@ -23,6 +23,21 @@ Apply to OpenAI outbound identity, account import/rotation/deletion, IPv6 policy
 WebSocket pooling, and HTTP fallback. Preserve the unified protocol-specific TLS
 policy, account selection, billing and downstream streaming/buffered delivery.
 
+### Deployment Routing Headers (v3.33.0 Adaptation)
+
+`openai.wire_profile.residency` and `account_routing_override` are optional
+strings. An absent or null value omits its header; an explicit empty string
+remains an explicit value. Preserve existing residency configuration and keep
+the new override unset by default. Downstream callers cannot supply either
+managed header. Custom UA parsing and artifact version refresh preserve both
+deployment values without changing the selected account or its device identity.
+
+HTTP and WS opening requests use the same frozen profile. New WS chains must
+partition by these headers, including absent-versus-empty values. Exact
+continuations retain the existing connection ownership rules; this configuration
+does not replace sticky scheduling, account credentials or proxy selection.
+Regression coverage lives in `providers/openai/tests/transport/profile_contract.rs`.
+
 ### Unified Profile Supersession (Migration 0018)
 
 The approved unified profile supersedes the independent TLS/session choices and

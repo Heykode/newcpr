@@ -8,6 +8,7 @@ import { computed } from 'vue'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseEmpty from '@/components/base/BaseEmpty.vue'
 import BaseChart from '@/components/charts/BaseChart.vue'
+import { chartTooltipContent } from '@/components/charts/tooltip'
 import { useChartPalette } from '@/composables/useChartPalette'
 import { t } from '@/i18n'
 import { formatLocalizedCompactNumber as formatCompactNumber } from '@/utils/number'
@@ -19,7 +20,6 @@ import {
   usageGapAwareLineSeries,
   usageLegend,
   usageTooltip,
-  usageTooltipContent,
   usageTooltipItem,
   usageValueAxis,
 } from '../utils/chart'
@@ -58,6 +58,10 @@ const granularityText = computed(() => {
   }
   return labels[props.granularity] ?? props.granularity
 })
+
+const description = computed(() => props.loading || !granularityText.value
+  ? t('usage.health.description')
+  : t('usage.health.descriptionWithGranularity', { granularityText: granularityText.value }))
 
 const chartOption = computed<EChartsOption>(() => {
   const theme = palette.value
@@ -143,7 +147,7 @@ function formatTooltip(params: unknown) {
   const successRate = serviceSuccessRate(point)
   const theme = palette.value
 
-  return usageTooltipContent(theme, point.label, [
+  return chartTooltipContent(point.label, [
     usageTooltipItem(t('usage.health.requestVolume'), formatCompactNumber(requestCount(point)), theme.textSecondary),
     usageTooltipItem(t('common.status.success'), formatCompactNumber(point.successRequests), theme.success),
     usageTooltipItem(t('usage.health.point.serviceFailed'), formatCompactNumber(point.failedRequests), theme.danger),
@@ -163,7 +167,7 @@ function formatTooltip(params: unknown) {
   <BaseCard
     as="article"
     :title="t('usage.health.title')"
-    :description="t('usage.health.description', { granularityText })"
+    :description="description"
     class="min-h-90 xl:h-full"
   >
     <template #body>

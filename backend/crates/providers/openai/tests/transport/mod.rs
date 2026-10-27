@@ -145,6 +145,7 @@ fn test_wire_profile() -> CodexWireProfileState {
         arch: "x86_64".to_owned(),
         terminal: "transport-test".to_owned(),
         residency: None,
+        account_routing_override: None,
         location: Default::default(),
         verified_at: Utc::now(),
     })
@@ -186,7 +187,6 @@ struct CollectedBackendResponse {
     rate_limit_headers: Vec<(String, String)>,
     websocket_pool_decision: Option<WebSocketPoolDecision>,
     response_metadata: CodexResponseMetadata,
-    reported_model: Option<String>,
     transport_metrics: CodexTransportMetrics,
     connection_local_continuation: bool,
 }
@@ -299,11 +299,9 @@ async fn collect_backend_response(
             rate_limit_headers.extend(rate_limits_to_header_pairs(&update.rate_limits));
         }
     }
-    let mut reported_model = response_metadata.effective_model.clone();
     if let Some(updates) = response_metadata_updates {
         let updates = updates.lock().await;
         turn_state = updates.turn_state.clone().or(turn_state);
-        reported_model = updates.reported_model.clone().or(reported_model);
     }
     let body = String::from_utf8_lossy(&body_bytes).into_owned();
     let usage = if transport == CodexBackendTransport::WebSocket {
@@ -320,7 +318,6 @@ async fn collect_backend_response(
         rate_limit_headers,
         websocket_pool_decision,
         response_metadata,
-        reported_model,
         transport_metrics,
         connection_local_continuation,
     })

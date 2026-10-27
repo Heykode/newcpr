@@ -8,9 +8,7 @@ use serde::Deserialize;
 use url::{Host, Url};
 
 use crate::credential::CodexQuotaRefreshPolicy;
-use crate::transport::profile::{
-    CodexRequestLocation, CodexResidency, CodexWireProfile, CodexWireProfileState,
-};
+use crate::transport::profile::{CodexRequestLocation, CodexWireProfile, CodexWireProfileState};
 use crate::transport::session::{CodexSessionIdentity, CodexSessionIdentityError};
 use crate::transport::websocket::CodexWebSocketPoolConfig;
 use crate::{
@@ -327,7 +325,9 @@ pub struct CodexWireProfileConfig {
     pub arch: String,
     pub terminal: String,
     #[serde(default)]
-    pub residency: Option<CodexResidency>,
+    pub residency: Option<String>,
+    #[serde(default)]
+    pub account_routing_override: Option<String>,
     #[serde(default)]
     pub location: CodexRequestLocation,
     pub verified_at: DateTime<Utc>,
@@ -345,6 +345,7 @@ impl Default for CodexWireProfileConfig {
             arch: "arm64".to_owned(),
             terminal: "unknown".to_owned(),
             residency: None,
+            account_routing_override: None,
             location: CodexRequestLocation::default(),
             // 制品核验于 2026-09-06T03:26:12.084Z；进程启动不构成重新核验。
             verified_at: DateTime::UNIX_EPOCH + chrono::Duration::milliseconds(1_788_665_172_084),
@@ -428,6 +429,7 @@ impl From<CodexWireProfileConfig> for CodexWireProfile {
             arch: value.arch,
             terminal: value.terminal,
             residency: value.residency,
+            account_routing_override: value.account_routing_override,
             location: value.location,
             verified_at: value.verified_at,
         }

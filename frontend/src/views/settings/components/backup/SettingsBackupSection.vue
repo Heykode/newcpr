@@ -18,6 +18,7 @@ const {
   testing,
   savingSchedule,
   loaded,
+  hasChanges,
   verified,
   storage,
   schedule,
@@ -26,6 +27,8 @@ const {
   runTest,
   saveSchedule,
 } = useBackupSettings()
+
+defineExpose({ hasChanges })
 
 const {
   records,

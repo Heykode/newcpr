@@ -44,7 +44,7 @@
       "usageRate": "使用率",
       "moreGroups": "另有 {count} 个额度组，可展开账号查看",
       "windows": {
-        "fiveHour": "5 h 额度",
+        "fiveHour": "5小时额度",
         "daily": "日额度",
         "weekly": "周额度",
         "monthly": "月额度",
@@ -132,10 +132,10 @@
         "urlLength": "上游 API 地址不能超过 2048 个字符",
         "urlFormat": "请输入不含认证、查询参数或片段的 HTTP 或 HTTPS 地址",
         "urlRequired": "请输入完整的上游 API 地址",
-        "apiKeyFormat": "API Key 不能包含空格或控制字符",
+        "apiKeyFormat": "API密钥不能包含空格或控制字符",
         "transportRequired": "请选择传输方式"
       },
-      "apiKeyRequired": "请输入 API Key"
+      "apiKeyRequired": "请输入 API密钥"
     },
     "batchEdit": {
       "title": "批量编辑账号",
@@ -167,7 +167,7 @@
       "loadError": "上游设置读取失败",
       "notesHelp": "最多 500 字，留空可清除备注",
       "oauthUnavailable": "该账号没有 OAuth 上游设置",
-      "apiKeyUnavailable": "该账号没有 API Key 上游设置",
+      "apiKeyUnavailable": "该账号没有 API密钥上游设置",
       "saved": "账号已更新"
     },
     "filters": {
@@ -347,8 +347,8 @@
       "accountAdded": "账号已添加",
       "providerRequired": "请选择账号平台",
       "accountPlatformIsNotSupported": "账号平台不受支持",
-      "apiKeyUnsupported": "当前平台不支持 API Key 账号",
-      "apiKeyAccountAdded": "API Key 账号已添加",
+      "apiKeyUnsupported": "当前平台不支持 API密钥账号",
+      "apiKeyAccountAdded": "API密钥账号已添加",
       "importTasksCreated": "已创建 {submitted} 个导入任务",
       "importTaskCreated": "导入任务已创建",
       "partialSubmission": "部分导入任务已创建，保持输入不变重试可继续提交",

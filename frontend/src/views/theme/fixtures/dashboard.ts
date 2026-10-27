@@ -122,7 +122,6 @@ function previewUsageRecord(options: PreviewUsageRecordOptions): UsageListRecord
     model: options.model,
     requestedModel: options.model,
     upstreamModel: options.model,
-    upstreamResponseModel: null,
     serviceTier: options.provider === 'openai' ? 'priority' : 'standard',
     clientTransport: options.clientTransport,
     upstreamTransport: options.upstreamTransport,

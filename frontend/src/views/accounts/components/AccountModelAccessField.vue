@@ -11,6 +11,7 @@ import BaseEmpty from '@/components/base/BaseEmpty.vue'
 import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
+import BasePopover from '@/components/base/BasePopover.vue'
 import BaseSegmented from '@/components/base/BaseSegmented.vue'
 import { useRequestState } from '@/composables/useRequestState'
 import { t } from '@/i18n'
@@ -26,12 +27,14 @@ const model = defineModel<AccountModelAccess | undefined>({ required: true })
 const catalog = ref<Array<{ id: string, label: string }>>([])
 const nextPage = ref<number | null>(1)
 const partialCatalog = ref(false)
+const catalogLoaded = ref(false)
 const retryAppend = ref(false)
 const useKnownCatalog = computed(() => !props.accountId && props.knownModelCatalog)
 const search = ref('')
 const inputError = ref('')
 const request = useRequestState()
 const { loading, error } = request
+const canIdentifyMissing = computed(() => catalogLoaded.value && !loading.value && !error.value && !partialCatalog.value && (!useKnownCatalog.value || nextPage.value === null))
 const modes = computed(() => [
   ...(props.allowPreserve ? [{ value: 'preserve', label: '保留' }] : []),
   { value: 'all', label: '不限制' },
@@ -55,7 +58,7 @@ const models = computed(() => {
   const entries = new Map(catalog.value.map(item => [item.id, { ...item, unavailable: false }]))
   for (const id of model.value?.models ?? []) {
     if (!entries.has(id))
-      entries.set(id, { id, label: id, unavailable: true })
+      entries.set(id, { id, label: id, unavailable: canIdentifyMissing.value })
   }
   const query = search.value.trim().toLowerCase()
   return [...entries.values()].filter(item => `${item.id} ${item.label}`.toLowerCase().includes(query))
@@ -104,6 +107,7 @@ async function load(refresh = false, append = false) {
         catalog.value = [...entries.values()]
         nextPage.value = result.nextPage
         partialCatalog.value = (append && partialCatalog.value) || result.failedAccounts > 0
+        catalogLoaded.value = true
       }
     }
     else if (accountId) {
@@ -111,8 +115,10 @@ async function load(refresh = false, append = false) {
         { accountId },
         { signal: request.signal, silent: true },
       )
-      if (request.isCurrent(requestId))
+      if (request.isCurrent(requestId)) {
         catalog.value = result.models
+        catalogLoaded.value = true
+      }
     }
   }
   catch (cause) {
@@ -130,6 +136,7 @@ watch([() => props.accountId, () => props.knownModelCatalog, restricted, () => p
   catalog.value = []
   nextPage.value = 1
   partialCatalog.value = false
+  catalogLoaded.value = false
   search.value = ''
   inputError.value = ''
   error.value = ''
@@ -168,18 +175,26 @@ watch(search, () => {
         {{ inputError }}
       </p>
       <div v-if="models.length" class="grid max-h-60 grid-cols-2 gap-2 overflow-y-auto p-1 -m-1 sm:grid-cols-3" role="group" :aria-label="t('accounts.modelAccess.selectModel')" :aria-busy="loading || undefined">
-        <BaseCheckbox
-          v-for="item in models"
-          :key="item.id"
-          class="min-h-11 min-w-0 rounded-cp px-3 py-2.5 wrap-anywhere transition-colors duration-150 motion-reduce:transition-none"
-          :class="model?.models.includes(item.id) ? 'bg-cp-primary-container text-cp-primary-on-container' : 'bg-cp-fill-quaternary text-cp-text-secondary hover:bg-cp-fill-tertiary hover:text-cp-text'"
-          :model-value="model?.models.includes(item.id) ?? false"
-          :label="item.id"
-          :title="item.unavailable && (accountId || useKnownCatalog) ? '当前目录未返回，仍可保存' : undefined"
-          show-label
-          :disabled="disabled"
-          @update:model-value="select(item.id, $event)"
-        />
+        <BasePopover v-for="item in models" :key="item.id" trigger="hover-click" class="min-w-0">
+          <template #trigger>
+            <BaseCheckbox
+              class="min-h-11 w-full min-w-0 rounded-cp px-3 py-2.5 wrap-anywhere"
+              :class="item.unavailable ? 'bg-cp-warning-container text-cp-warning' : model?.models.includes(item.id) ? 'bg-cp-primary-container text-cp-primary-on-container' : 'bg-cp-fill-quaternary text-cp-text-secondary'"
+              :model-value="model?.models.includes(item.id) ?? false"
+              :label="item.id"
+              :title="item.unavailable ? '当前目录未返回，仍可保存' : item.id"
+              show-label
+              :disabled="disabled"
+              @update:model-value="select(item.id, $event)"
+            />
+          </template>
+          <div class="max-w-80 break-all p-3 text-cp-sm">
+            {{ item.id }}
+            <p v-if="item.unavailable" class="mb-0 text-cp-warning">
+              当前目录未返回，仍可保存
+            </p>
+          </div>
+        </BasePopover>
       </div>
       <p v-else-if="loading" class="m-0 py-4 text-center text-cp-sm text-cp-text-tertiary" role="status">
         加载模型中…

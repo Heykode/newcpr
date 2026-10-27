@@ -1649,7 +1649,7 @@ async fn quality_model_suggestions_preserve_exact_account_capabilities_and_bound
 }
 
 #[tokio::test]
-async fn connection_test_preserves_the_returned_model_and_request_settings() {
+async fn connection_test_preserves_request_settings() {
     let provider = FakeProviderAdmin::new("xai", events());
     let store = FakeAccountStore::with_account(account_record("xai"), events());
     let services = accounts_service(provider, store).await;
@@ -1669,11 +1669,10 @@ async fn connection_test_preserves_the_returned_model_and_request_settings() {
     assert!(matches!(&events[1], AccountConnectionTestEvent::Request {
         model, input_text, stream: true, store: false, ..
     } if model == "requested-model" && input_text == "Keep this prompt"));
-    assert!(
-        matches!(events.last(), Some(AccountConnectionTestEvent::Completed {
-        upstream_response_model: Some(model),
-    }) if model == "returned-model")
-    );
+    assert!(matches!(
+        events.last(),
+        Some(AccountConnectionTestEvent::Completed {})
+    ));
 }
 
 #[tokio::test]
@@ -4358,7 +4357,6 @@ impl AccountProbe for SuccessfulAccountProbe {
         Box::pin(async {
             Ok(AccountProbeResult {
                 text: vec!["OK".to_owned()],
-                upstream_response_model: Some("returned-model".to_owned()),
             })
         })
     }

@@ -1157,17 +1157,12 @@ async fn reused_websocket_should_not_leak_turn_state_into_the_next_response() {
         first.turn_state.as_deref(),
         Some("turn-from-first-response")
     );
-    assert_eq!(
-        first.reported_model.as_deref(),
-        Some("model-from-first-response")
-    );
     assert!(
         second
             .websocket_pool_decision
             .is_some_and(WebSocketPoolDecision::is_reuse)
     );
     assert_eq!(second.turn_state, None);
-    assert_eq!(second.reported_model, None);
     assert!(
         second
             .response_metadata

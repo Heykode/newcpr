@@ -211,7 +211,7 @@ test('Excel marker reflects only the saved mode, not scheduling, model scope or 
     })
     assert.match(mark(html, 'excel-mark'), /size-4 shrink-0/)
     assert.ok(html.indexOf('data-account-excel-mark') < html.indexOf(`title="${customName}"`))
-    assert.match(html, /min-w-0 flex-1 truncate/)
+    assert.match(html, /min-w-0 truncate/)
     assert.match(html, /state-sample@example\.invalid/)
   }
   for (const responsesUpstream of [undefined, null, 'codex']) {

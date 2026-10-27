@@ -24,6 +24,7 @@ import RotationStrategyCard from './components/RotationStrategyCard.vue'
 import RuntimeSettingsCard from './components/RuntimeSettingsCard.vue'
 import { useAdminApiKey } from './composables/useAdminApiKey'
 import { useSettingsForm } from './composables/useSettingsForm'
+import { useSettingsLeaveGuard } from './composables/useSettingsLeaveGuard'
 import { rotationOptions } from './constants'
 
 const route = useRoute()
@@ -65,9 +66,14 @@ const {
   openaiSessionBindingTtlHoursValue,
   minCodexDesktopVersionError,
   minCodexCliVersionError,
+  hasChanges,
   saveSettings,
   loadSettings,
 } = useSettingsForm()
+
+const backupSection = ref<InstanceType<typeof SettingsBackupSection> | null>(null)
+const hasUnsavedChanges = computed(() => (section.value === 'runtime' && hasChanges.value) || !!backupSection.value?.hasChanges)
+const { showLeaveConfirm, confirmLeave } = useSettingsLeaveGuard(hasUnsavedChanges)
 
 const {
   loading: adminKeyLoading,
@@ -97,6 +103,14 @@ watch(
 
 <template>
   <div class="w-full">
+    <BaseConfirmModal
+      v-model="showLeaveConfirm"
+      :title="t('settings.page.unsavedChanges.title')"
+      :description="t('settings.page.unsavedChanges.description')"
+      :confirm-text="t('settings.page.unsavedChanges.leave')"
+      :cancel-text="t('settings.page.unsavedChanges.stay')"
+      @confirm="confirmLeave()"
+    />
     <BasePageHeader :title="t('navigation.settings')" description="管理运行参数、管理员凭据与备份配置" />
 
     <div class="mt-4 flex min-h-cp-control flex-wrap items-center justify-between gap-3">
@@ -225,7 +239,7 @@ watch(
       <SettingsCleanupSection />
     </div>
     <div v-else class="mt-5">
-      <SettingsBackupSection :active="section === 'backup'" />
+      <SettingsBackupSection ref="backupSection" :active="section === 'backup'" />
     </div>
   </div>
 </template>

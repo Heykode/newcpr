@@ -53,7 +53,7 @@
       "capacity": "容量"
     },
     "page": {
-      "description": "將賬號歸類管理，併爲每個 API 密鑰指定可使用的賬號",
+      "description": "將賬號歸類管理，併爲每個 API密鑰指定可使用的賬號",
       "empty": "暫無分組",
       "selectCurrentPageGroup": "選擇當前頁分組",
       "selectGroup": "選擇分組",
@@ -64,11 +64,11 @@
       "batchDeleteWarning": "刪除後這些分組將立即失效，此操作不可撤銷",
       "batchDeleteDescription": "確定刪除選中的 {count} 個分組嗎？賬號本身不會被刪除",
       "disableAccountGrouping": "禁用賬號分組",
-      "disableDescription": "禁用後，使用該分組的 API 密鑰將無法再使用其中的賬號",
+      "disableDescription": "禁用後，使用該分組的 API密鑰將無法再使用其中的賬號",
       "confirmDisable": "確認禁用",
       "disable": "確定禁用“{name}”嗎？",
-      "affectedApiKeys": "將影響 {count} 個 API 密鑰：{value}",
-      "affectedKeys": "將影響 {count} 個 API 密鑰",
+      "affectedApiKeys": "將影響 {count} 個 API密鑰：{value}",
+      "affectedKeys": "將影響 {count} 個 API密鑰",
       "deleteAccountGroup": "刪除賬號分組",
       "deleteWarning": "刪除後該分組將立即失效，此操作不可撤銷",
       "unnamedGroup": "該分組",
