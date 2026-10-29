@@ -6,6 +6,7 @@ use gateway_protocol::openai::sse::{
     encode_sse_event_with_metadata, response_failed_sse_data_from_error_event,
 };
 use serde_json::Value;
+use std::collections::BTreeMap;
 
 use super::error::ResponseEncodeError;
 use crate::openai::error::capacity_error_for_client;
@@ -188,6 +189,74 @@ impl OpenAiResponsesEncoder {
             self.wire_failure = true;
         }
     }
+}
+
+/// 仅在非流式出口聚合同一响应的完成项，不让流式转发常驻保存输出内容
+pub(in crate::openai) fn collect_response(
+    events: &[ProviderEvent],
+) -> Result<Value, ResponseEncodeError> {
+    let mut encoder = OpenAiResponsesEncoder::new();
+    let mut response_id = None;
+    let mut items = BTreeMap::new();
+    let mut invalid_items = false;
+    for wire in events.iter().filter_map(openai_wire) {
+        if let Some(id) = wire_response_id(wire) {
+            if response_id.is_some_and(|previous| previous != id) {
+                items.clear();
+                invalid_items = false;
+            }
+            response_id = Some(id);
+        }
+        if !encoder.is_completed()
+            && effective_event_type(wire) == Some("response.output_item.done")
+        {
+            match (
+                wire.data().get("output_index").and_then(Value::as_u64),
+                wire.data().get("item").filter(|item| item.is_object()),
+            ) {
+                (Some(index), Some(item)) => {
+                    if let Some(previous) = items.insert(index, item) {
+                        invalid_items |= previous != item;
+                    }
+                }
+                _ => invalid_items = true,
+            }
+        }
+        encoder.observe_wire(wire);
+    }
+    let mut response = encoder.finish()?;
+    let Some(object) = response.as_object_mut() else {
+        return Ok(response);
+    };
+    // Codex 可只在 output_item.done 交付内容，终态仅保留身份和 usage
+    // 有内容的终态仍是完整快照，不与 earlier done 或 canonical 增量拼接
+    if object
+        .get("output")
+        .is_some_and(|output| !output.as_array().is_some_and(Vec::is_empty))
+        || (items.is_empty() && !invalid_items)
+    {
+        return Ok(response);
+    }
+    if invalid_items
+        || items
+            .keys()
+            .enumerate()
+            .any(|(expected, actual)| expected as u64 != *actual)
+    {
+        return Err(ResponseEncodeError::InvalidOutputItems);
+    }
+    object.insert(
+        "output".to_owned(),
+        Value::Array(items.into_values().cloned().collect()),
+    );
+    Ok(response)
+}
+
+fn wire_response_id(wire: &ProtocolWireEvent) -> Option<&str> {
+    wire.data()
+        .pointer("/response/id")
+        .or_else(|| wire.data().get("response_id"))
+        .and_then(Value::as_str)
 }
 
 fn openai_wire(event: &ProviderEvent) -> Option<&ProtocolWireEvent> {

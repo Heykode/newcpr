@@ -1,7 +1,6 @@
 //! Offline protocol checks: these do not assert real upstream model permissions.
 
 use gateway_core::operation::{Feature, GenerateRequest, Operation, ProtocolPayload};
-use gateway_protocol::openai::chat::{ChatStreamEncoder, decode_chat_request};
 use provider_openai::encode_generate_request;
 use provider_openai::transport::canonical::{CodexCanonicalDecoder, CodexCanonicalOutcome};
 use provider_openai::transport::protocol::websocket::{
@@ -99,24 +98,21 @@ fn websocket_tool_events_retain_image_result_and_search_action_in_sse() {
 }
 
 #[test]
-fn chat_extensions_reach_existing_http_and_websocket_request_encoders() {
-    let decoded = decode_chat_request(json!({
+fn native_extensions_reach_existing_http_and_websocket_request_encoders() {
+    let body = json!({
         "model":"fixture","stream":false,
-        "messages":[
+        "input":[
             {"role":"user","content":"draw and calculate"},
-            {"role":"assistant","content":null,"tool_calls":[
-                {"id":"call_1","type":"function","function":{"name":"code","arguments":"print(1)"}}]},
-            {"role":"tool","tool_call_id":"call_1","content":"1"}
+            {"type":"custom_tool_call","call_id":"call_1","name":"code","input":"print(1)"},
+            {"type":"custom_tool_call_output","call_id":"call_1","output":"1"}
         ],
         "tools":[
             {"type":"image_generation","output_format":"png","quality":"high"},
             {"type":"web_search","filters":{"allowed_domains":["example.test"]}},
-            {"type":"custom","custom":{"name":"code","format":{"type":"grammar",
-                "grammar":{"syntax":"regex","definition":"[a-z]+"}}}}
+            {"type":"custom","name":"code","format":{"type":"grammar",
+                "grammar":{"syntax":"regex","definition":"[a-z]+"}}}
         ]
-    }))
-    .unwrap();
-    let body = Value::Object(decoded.responses);
+    });
     let generate = request(&body);
     assert!(generate.image_generation_requested());
     let encoded = encode_generate_request(&generate, "fixture", &Default::default()).unwrap();
@@ -144,7 +140,7 @@ fn chat_extensions_reach_existing_http_and_websocket_request_encoders() {
 }
 
 #[test]
-fn chat_extensions_survive_real_canonical_http_and_websocket_decoders() {
+fn native_extensions_survive_real_canonical_http_and_websocket_decoders() {
     let fixture: Value = serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../../gateway-api/tests/openai/fixtures/newapi-chat-extensions.json"
@@ -158,8 +154,7 @@ fn chat_extensions_survive_real_canonical_http_and_websocket_decoders() {
     ]);
     for websocket in [false, true] {
         let mut canonical = CodexCanonicalDecoder::new("gpt-test").with_raw_sse_passthrough();
-        let mut chat = ChatStreamEncoder::new(true);
-        let mut chunks = Vec::new();
+        let mut observed = Vec::new();
         let mut canonical_completed = false;
         let mut source_events = vec![
             json!({"type":"codex.response.metadata","headers":{"x-request-id":"fixture"}}),
@@ -192,30 +187,16 @@ fn chat_extensions_survive_real_canonical_http_and_websocket_decoders() {
                     .iter()
                     .any(|fact| matches!(fact, gateway_core::event::GatewayEvent::Completed(_)));
                 if let Some(wire) = event.wire_event().filter(|wire| wire.has_json_data()) {
-                    chunks.extend(chat.push(wire.event_type(), wire.data()).unwrap());
+                    observed.push(wire.data().clone());
                 }
             }
         }
         assert!(canonical_completed);
-        assert!(chat.is_completed());
-        let content: String = chunks
-            .iter()
-            .filter_map(|chunk| chunk["choices"][0]["delta"]["content"].as_str())
-            .collect();
-        assert!(content.is_empty());
-        assert!(chunks.iter().any(|chunk| {
-            chunk["choices"][0]["delta"]["images"][0]["image_url"]["url"]
-                .as_str()
-                .is_some_and(|url| url.starts_with("data:image/png;base64,"))
-        }));
-        assert!(chunks.iter().any(
-            |chunk| chunk["choices"][0]["delta"]["tool_calls"][0]["function"]["arguments"]
-                == "print(1)"
-        ));
+        assert_eq!(observed.last().unwrap()["response"], response);
         assert_eq!(
-            chunks
+            observed
                 .iter()
-                .filter(|chunk| chunk["usage"]["total_tokens"] == 28)
+                .filter(|event| event["type"] == "response.completed")
                 .count(),
             1
         );

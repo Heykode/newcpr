@@ -73,36 +73,14 @@ wire payload; synthetic success is not proof of a particular production 500 caus
   as well as provider tests before publication; provider tests alone cannot catch
   a missing registration.
 
-## Chat Reasoning Aliases
+## Official Chat Request Contract
 
-### Scope / Trigger
-Only Chat decoding; native Responses, scheduling, identity stripping and encoders unchanged.
-
-### Signatures
-decode_chat_request accepts flat reasoning_effort and nested reasoning:{effort,summary}.
-Output uses the existing Responses reasoning object.
-
-### Contracts
-Validate all supplied aliases. Nonempty trimmed nested effort wins; null/empty/missing
-nested effort falls back to valid flat effort. Flat whitespace validation stays strict.
-Accept nonempty future effort strings as upstream-owned values, including
-none/minimal/low/medium/high/xhigh/max. Preserve explicit summary
-(auto/concise/detailed/null); inject no effort or summary defaults.
-
-### Validation & Error Matrix
-Malformed object/effort/summary, unknown nested fields or invalid flat alias -> existing
-invalid-request path, even when the other alias is valid. No fields -> no reasoning.
-
-### Good / Base / Bad
-Good: nested high overrides flat low. Base: valid legacy requests unchanged.
-Bad: ignore an invalid flat alias just because nested effort exists.
-
-### Tests Required
-Alias priority/null/empty/unknown/type tests plus buffered/streaming Chat API forwarding.
-Keep native Responses regression coverage independent.
-
-### Wrong vs Correct
-Wrong: repair JSON in the transport/scheduler. Correct: normalize once at Chat parsing.
+The user authorized replacing CPA Chat conversion with official CPR on 2026-10-29.
+Use the pinned upstream request converter in gateway-api/openai/chat/request.rs.
+Flat reasoning_effort maps to Responses reasoning.effort. Non-null nested reasoning,
+reasoning_content and Responses-only continuation fields are rejected; optional null
+values follow official defaults. Do not restore old aliases or custom tools.
+Keep native Responses request normalization independent.
 
 ## Downstream Environment and WS Error Projection
 
@@ -174,8 +152,8 @@ or multipart image editing. These contracts extend, not replace,
 
 ## Ownership
 
-- `gateway-protocol/openai/chat` owns pure JSON conversions, never networking,
-  account selection, persistence or billing.
+- `gateway-api/openai/chat/{request,response}.rs` owns the copied official JSON
+  conversions, never networking, account selection, persistence or billing.
 - `gateway-api/openai/chat` decodes and calls the existing model-aware Generate
   service. HTTP delivery uses the same pending execution and cancellation driver.
 - `Operation::Compact` is explicit and model-aware. It must not use model-less
@@ -184,25 +162,26 @@ or multipart image editing. These contracts extend, not replace,
 
 ## Delivery
 
-- Chat defaults to buffered delivery. Downstream stream and upstream WebSocket
-  selection are independent. Conversion must not add internal HTTP round trips.
-- Only wire JSON is converted; canonical metering remains the engine's source
-  of truth. Never emit duplicate usage or cost facts from an API encoder.
-- Preserve function IDs, argument strings, parallel indices and result order.
-  Chat streams send deltas immediately. Done/item/terminal snapshots may fill
-  missing suffixes only after matching the emitted prefix's length and SHA-256.
-  Keep no duplicate full-output buffer. Identity or prefix conflicts fail safely.
-- Preserve absent usage as absent/null, not invented zero counters.
-- Image results use CPA-compatible message.images/delta.images, not Markdown
-  in content. Skip empty image payloads; do not decode or validate upstream
-  base64 in the Chat output converter. Shared transport/upload limits remain.
-- Missing terminal, explicit upstream failure, failed commit and interrupted
-  streams must not produce a successful completion. Keep cancellation and
-  finalization active. A real empty terminal is not an EOF and is not rejected
-  by an extra Chat-only empty-output validator.
-- Before commit, Chat errors must be parseable JSON. Preserve upstream error
-  status and safe response headers without forwarding stale content-length.
-- Native Responses keeps its transparent event and error behavior.
+- Chat defaults to buffered delivery. Downstream stream and upstream transport are
+  independent. Conversion must not add internal HTTP round trips.
+- The official converter ignores the old Chat-only use_websocket extension.
+  Native Responses transport controls remain unchanged.
+- Use official ChatIdentity based on the gateway request ID, creation time and
+  requested model; do not switch identity when an upstream response changes.
+- Preserve official text/refusal/function validation, snapshot prefix checks,
+  duplicate identities, argument strings and incomplete reason handling.
+  Do not restore CPA image/custom/reasoning output or digest-based extensions.
+- response.created can emit the initial assistant role chunk. Unknown auxiliary
+  events can be skipped, including after terminal; business events after terminal fail.
+- Before commit, output conversion failures return JSON 502. After commit, return
+  Chat error SSE and DONE. Never emit success finish/usage before the original
+  execution finalizes; verify trailing raw SSE, cancellation and commit failure.
+- Preserve absent usage without invented counters. Canonical accounting stays in
+  the engine. Native Responses keeps its transparent event/error behavior.
+- Chat uses the copied official collect_response helper before projection. Empty
+  terminal output can use only complete, contiguous, nonconflicting done items
+  from the same response. Do not apply legacy delta recovery to Chat.
+  Native Responses keeps its separate existing recovery path.
 
 ## Compaction
 
@@ -302,186 +281,56 @@ or multipart image editing. These contracts extend, not replace,
   and separate approval; mock completion must never be reported as production
   acceptance.
 
-## Chat Extension Contracts
+## Official Chat Parity
 
-### File Input and Public Reasoning History
+### Source and Allowed Adaptation
 
-- User `file` parts map to `input_file` without fetching or decoding the payload.
-  Exactly one nonempty `file_id` or `file_data` is required; optional filename
-  remains intact. Reject unknown fields, mixed sources and non-user file parts.
-  File-ID ownership remains an upstream account constraint, not proven by conversion.
-- Assistant string `reasoning_content` or `reasoning` is ordinary public history
-  (`output_text` in a completed assistant message), never encrypted reasoning
-  or a continuation ID. Conflicting aliases and non-assistant roles are rejected.
-- Do not add one-way legacy `functions` conversion or an extra billing source.
-  Terminal snapshots may supply missing text/tool suffixes only under the
-  digest and identity checks below; previously emitted content is not replayed.
-
-### Scope
-
-Apply to explicit Chat built-in/custom tools, image/search output and pre-delivery
-control frames. Do not change native Responses, Images endpoints, account
-selection, transport retry budgets, identity or canonical billing.
-
-### Signatures
-
-- `decode_chat_request` accepts explicit `image_generation`, `web_search`,
-  nested `{"type":"custom","custom":{...}}` and CPA flat custom declarations.
-- Custom output uses CPA's type:function/function.arguments envelope. Incoming
-  native custom calls and function envelopes matching a validated custom
-  declaration map to custom_tool_call; results map by call ID to
-  custom_tool_call_output. Never JSON-parse or wrap the free-form string.
-- `ExecutionSession::defer_downstream_commit() -> Result<(), EngineError>` is
-  opt-in. Implementations not supporting it reject by default.
-- `chat_response_from_events` accepts an iterator of borrowed
-  `(Option<&str>, &Value)` wire header/body pairs. Buffered Chat scans these
-  using the same event/failure classification as streaming; it must not rely
-  on native Responses' different header precedence or produce transient chunks.
-
-### Contracts
-
-- A no-output Chat preamble must not commit a fake successful HTTP response.
-  Consume the pending nonterminal event and wait within the existing deadline.
-  Deferral cannot discard pending atomic failures, canonical Completed, a
-  collected complete response, or anything after commit/finalization.
-- `response.created` and transport metadata do not emit an empty assistant role.
-  Skip unmapped events and annotations. Prefer JSON event type over the SSE
-  header, with header fallback; explicit failures in either remain failures.
-  Chat completion state must come from its own encoder, not a second Responses
-  encoder interpreting the header differently.
-- Do not auto-inject image tools. Validate size syntax (`auto` or positive
-  `WIDTHxHEIGHT`), leaving model-specific dimension limits to the upstream.
-- Accept New API's empty `function:{"name":""}` placeholder on a nonfunction
-  tool, never a meaningful conflicting function definition.
-- Preserve upstream tool types, names and IDs despite the downstream function
-  envelope. Request-local declarations determine restoration, not heuristics
-  about argument contents. Reject ambiguous names and namespace/MCP/computer
-  approval semantics the converter cannot represent.
-- Keep images separate from content. Stream image previews/item-done results,
-  with per-frame image index zero as in CPA. Compare only the previous raw
-  payload hash for the same nonempty item ID; no ID means no deduplication.
-  A -> B -> A sends all three. Do not retain full images or all historical hashes.
-  Previews never become completion and do not bypass terminal errors.
-- Ignore web_search execution/source metadata and independent annotations.
-  Never generate Sources appendices, citation fields, offsets or cached spans.
-  Model text stays intact; native Responses annotations remain transparent.
-- Chat output has no separate 64 MiB or image-version-count limit. MIME values
-  containing `/` pass through; known short formats map to MIME, others default
-  to PNG. Do not change independent Images upload validation.
-- Streamed text/reasoning/tool argument deltas are sent immediately. Do not
-  retain full text or full arguments to repair done/terminal snapshots.
-  Done snapshots fill only missing suffixes after digest validation; output item done
-  also closes the tool. Later deltas for a closed item are skipped.
-- Resolve tools by item ID and call ID plus output index; reject conflicting known aliases.
-  Terminal item identity takes priority over terminal array position. Only genuinely keyless events
-  may use the current-tool fallback. An explicitly unknown key must not close
-  or append to a different call. This avoids CPA's verified lost done-only-call
-  case without dropping future fields. Conflicting known item identities,
-  tool names and nonempty snapshot prefixes fail rather than mixing outputs.
-- Text messages also resolve item ID and output-index aliases consistently.
-  A terminal message with an ID uses that identity even if the terminal array
-  is reordered; the array position must not steal another message's prefix.
-- Non-streaming conversion keeps recognized text/refusal parts, raw tool input
-  and image entries while ignoring unknown output/parts. Optional malformed
-  wire usage fields are omitted, not grounds to reject an otherwise valid
-  reply. Canonical metering, costs, budget settlement and DB deduplication
-  remain unchanged.
-- Buffered function/custom calls require nonempty string call IDs and names;
-  call IDs must be unique across both tool types within one response. Preserve
-  exact accepted values and raw argument/input strings, including non-JSON input.
-  Do not enforce uniqueness of optional internal item IDs that Chat does not use.
-  Invalid tool identity fails before successful downstream commit via the existing
-  502 delivery-failure lifecycle; native Responses and streamed Chat keep their
-  own rules. Cover invalid output, rejected followup before account execution,
-  and valid custom/image/reasoning roundtrips. Output validation occurs after
-  upstream execution and is not evidence of reduced account risk.
-- Chat streaming must not clone the final Responses object just to observe
-  completion. Before enqueueing successful finish/usage, require the existing
-  execution finalization to succeed, including terminal-first replies.
-- Do not reconstruct output images into subsequent model input automatically.
-  Assistant images is an output-only extension; explicit user/tool image_url
-  input keeps its existing semantics. Never feed generated base64 into text.
+Pinned upstream: zyycn/codex-proxy-rs
+d89db84a77d0143a91770b66bec47ab8f2e57a35 (v3.35.1).
+Copy request.rs and response.rs; only map TokenUsage cached_input_tokens to
+cached_tokens and reasoning_output_tokens to reasoning_tokens. Formatting is
+allowed. NewCPR uses native ExecutionSession instead of upstream plugin middleware;
+this is an executor binding, not permission to change the official codec.
 
 ### Validation Matrix
 
 | Input/state | Required result |
 | --- | --- |
-| Heartbeat/known metadata before text | No commit until a deliverable Chat chunk |
-| Only controls/unknown events then EOF | Error, not empty success |
-| Unknown event then valid text and terminal | Skip unknown, preserve text and completion |
-| Deferral after terminal or commit | InvalidDeliveryState |
-| Explicit valid image result | Independent images entry, content and usage unchanged |
-| Image preview then interruption | Optional preview, then error; no successful finish |
-| Mixed custom/function deltas | Stable function-envelope indices, raw strings and restored upstream types |
-| Argument done after deltas | Validate emitted prefix and send only missing suffix |
-| Delta after output-item done | Skip without failing the request |
-| Distinct explicit key with done but no added | Announce a new tool, do not close another call |
-| Search source metadata and annotations | Ignored without editing model text |
-| Same item image A -> B -> A -> A | Send A, B, A; skip final duplicate |
-| Nonempty unconventional image payload/format | CPA-style image URL, no Chat decoder/size gate |
-| Completed first, execution finalization fails | Error only; no successful finish or usage |
-| JSON format plus search/images | Original JSON content remains valid JSON |
-| No image/search tool requested | No automatic tool declaration |
-| Buffered tool has missing/blank/non-string ID or name, or duplicate call ID | Protocol output error; HTTP 502 `incompatible_upstream_response`, one failure finalization |
-| Buffered valid custom/function identity with raw non-JSON input | Preserve input exactly; next Chat turn restores tool identity |
+| Standard text/image input/function call history | Official Responses conversion |
+| Optional null fields | Official absent-value defaults |
+| Chat custom/search/image-generation tool declarations | Request error before account execution |
+| Chat file or public reasoning-history extensions | Official unsupported request error |
+| Invalid tool ID/name/argument types or conflicting identity | Conversion error, never success |
+| Unknown/missing incomplete reason | Conversion error, never stop |
+| Unknown auxiliary events before/after terminal | Ignore, retain one finish/usage |
+| Business output after terminal or conflicting snapshot | Conversion error |
+| Terminal-first reply followed by finalization failure | No successful finish/usage |
+| Raw SSE split across UTF-8 boundaries | Decode incrementally without corruption |
+| Malformed trailing SSE | Failure, not a successful terminal |
+| Wire failure followed by engine failure | One error and one DONE |
+| Body dropped | Cancel and finalize the original execution |
+| Native Responses custom/search/image tools | Original transparent behavior |
 
-### Good, Base, Bad
+### Required Tests and Limits
 
-- Good: custom input becomes function.arguments and restores using its declaration,
-  preserving `print(1)` exactly and retaining the result ID.
-- Base: ordinary text/function Chat keeps its existing delivery and scheduling.
-- Bad: treat a heartbeat as success, or claim all Responses tools fit Chat.
+Port upstream request/response tests to a native executor fixture. Cover atomic
+delivery batches, eligible pending-commit deferral, auth before decompression,
+headers/context, commit failure, cancellation, keepalive, EOF and single finalization.
+Run native Responses and actual provider HTTP/WS regressions separately.
+Do not preserve obsolete CPA-only acceptance tests as a product contract.
 
-### Required Tests
-
-Exercise Core deferral guards, cancellation, pre-commit rotation and single
-usage/finalization; Chat JSON/SSE image/custom/search cases; actual provider
-HTTP/WS encoders and canonical decoders; native Responses/Images regressions.
-Use real local New API DTO fixture generation and preserve source hashes.
-
-At the verified local New API revision, typed request declarations drop
-additional built-in image options and flat custom declaration fields. Nested
-custom declarations survive. Typed streaming response formatting retains the
-function envelope but drops images. Transparent image relay requires both
-force-format and thinking-to-content paths to remain disabled.
-This is a compatibility condition, not a production setting changed by CPR.
-No fixture assertion proves real account permission or end-to-end live tooling.
-
-The output convergence reference is CPA
-`ac02da6c05e18f465aa7e3ed5b0a65a2f060917d`,
-`internal/translator/codex/openai/chat-completions/codex_openai_response.go`.
-Keep CPR's existing refusal support, complete non-streaming text concatenation,
-Chat ID/usage conventions and public failure lifecycle; convergence does not
-authorize replacing networking, scheduling or accounting with CPA's executors.
-
-### Wrong vs Correct
-
-Wrong: return unusable buffered tool identities as success or tighten all
-extension fields to imitate a narrower upstream converter.
-
-Correct: validate call identity against the next-turn ingress contract in
-`chat_response`, preserving custom input, images, reasoning and native routes.
-
-Wrong: discard an empty encoded first frame then immediately call `next_event`,
-or commit an empty 200 to unlock the session.
-
-Correct: explicitly defer an eligible pending event without resetting attempts,
-metering or deadlines; commit exactly once when actual Chat output is ready.
-
-Wrong: queue a terminal-first success and usage before checking the execution's
-pending cleanup result, or call the same event terminal using two type policies.
-
-Correct: use Chat's terminal classification and hold its finish/usage frames
-until the existing finalization check succeeds.
+A mocked completion does not prove real account permission, cache-hit improvement
+or reduced account risk. Detailed provenance and binding differences are recorded
+in docs/chat-official-parity.md.
 
 ## Buffered Output Recovery
 
 ### Scope and Signatures
 
 `openai::output_recovery::recover_response_output(&mut Value, borrowed_events)`
-owns pure JSON recovery for native Responses and Chat complete-JSON delivery.
-The caller still decides terminal/failure status. Native SSE/WS and Chat stream
-encoders are not recovery consumers.
+owns pure JSON recovery for native Responses complete-JSON delivery.
+The caller still decides terminal/failure status. Native SSE/WS and official Chat
+are not recovery consumers; Chat uses its copied upstream collection contract.
 
 ### Contracts
 
@@ -516,7 +365,8 @@ Bad: replay a different tool's arguments merely because its index is reused.
 
 Required tests cover mixed done/delta, missing IDs/indices, ordering, duplicate
 events, custom/function identity conflicts, absent status, unknown fields,
-Responses/Chat JSON delivery, and unchanged native/Chat streaming.
+native Responses JSON delivery, unchanged native/Chat streaming, and proof that
+official Chat buffering uses its own copied upstream collector instead.
 
 Wrong: enable recovery in a stream encoder or use canonical metering to invent
 client output. Correct: recover only the complete response from borrowed wire

@@ -19,6 +19,7 @@ pub use request::{
 };
 pub(in crate::openai) use request::{decode_object_with_headers, decompress_request_body_limit};
 pub use response::OpenAiResponsesEncoder;
+pub(in crate::openai) use response::collect_response;
 pub(crate) use websocket::responses_websocket;
 pub use websocket::{ResponseCreateFrameError, decode_response_create_with_context};
 

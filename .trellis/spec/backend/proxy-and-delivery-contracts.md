@@ -93,13 +93,16 @@ profiles or random fingerprint generation.
 - `stream=false` must not force HTTP. Preserve transport override, fallback and
   continuation ownership. Both HTTP and WebSocket send streaming upstream copies;
   only the downstream HTTP response is buffered into complete JSON.
+  The official Chat ingress does not accept the legacy Chat-only use_websocket
+  extension; native Responses overrides remain owned by the existing provider.
 - The HTTP omitted-stream default is buffered and must not insert `stream=false`
   into the opaque request body. A downstream WebSocket `response.create` frame
   keeps its existing omitted-stream default of streaming and rejects explicit
   false or non-boolean values.
 - Never mutate the original request's `stream` or copy downstream credentials
   into the selected account's identity. Reuse existing transport projection.
-- Buffered Responses and Chat share `recover_response_output`. Following
+- Native buffered Responses uses `recover_response_output`. Official Chat uses
+  the upstream `collect_response` completion-item contract instead. Following
   Sub2API `7ee00e1897`, a nonempty terminal output with no non-whitespace message
   text is supplemented from received `response.output_text.delta` events: fill
   the first empty message text part, add a part if needed, or append a message

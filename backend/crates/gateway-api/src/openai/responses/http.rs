@@ -175,15 +175,16 @@ pub(in crate::openai) async fn collect_execution_response_as(
         Ok(events) => events,
         Err(error) => {
             let response_headers = session.response_headers().to_vec();
-            let response = engine_error_response_with_headers_as(&error, &response_headers, format);
+            let response =
+                engine_error_response_with_headers_as(&error, &response_headers, &format);
             return execution.record_response_status(response).await;
         }
     };
 
-    let encoded = match encode_collected_events(&events, format) {
+    let encoded = match encode_collected_events(&events, &format) {
         Ok(encoded) => encoded,
         Err(error) => {
-            let response = encoding_error_response(&error, format);
+            let response = encoding_error_response(&error, &format);
             let response = execution.record_response_status(response).await;
             execution.fail_delivery(error.gateway_error()).await;
             return response;
@@ -204,7 +205,7 @@ pub(in crate::openai) async fn collect_execution_response_as(
         .commit_downstream(Some(StatusCode::OK.as_u16()))
         .await
     {
-        let response = engine_error_response_with_headers_as(&error, &response_headers, format);
+        let response = engine_error_response_with_headers_as(&error, &response_headers, &format);
         let response = execution.record_response_status(response).await;
         execution
             .fail_delivery(gateway_error_from_engine(&error))
@@ -228,7 +229,7 @@ pub(in crate::openai) async fn collect_execution_response_as(
 
 fn encode_collected_events(
     events: &[ProviderEvent],
-    format: HttpResponseFormat,
+    format: &HttpResponseFormat,
 ) -> Result<Vec<u8>, HttpEncodeError> {
     let response = HttpResponseEncoder::new(format).finish_collected(events)?;
     serde_json::to_vec(&response)
@@ -267,7 +268,7 @@ fn apply_response_headers(
 fn engine_error_response_with_headers_as(
     error: &EngineError,
     response_headers: &[ProviderResponseHeader],
-    format: HttpResponseFormat,
+    format: &HttpResponseFormat,
 ) -> Response {
     let response = match format {
         HttpResponseFormat::Responses => engine_error_response(error),
@@ -321,10 +322,11 @@ fn engine_error_response_with_headers_as(
     response
 }
 
-fn encoding_error_response(error: &HttpEncodeError, format: HttpResponseFormat) -> Response {
+fn encoding_error_response(error: &HttpEncodeError, format: &HttpResponseFormat) -> Response {
     protocol_error_response(
         match (error, format) {
             (HttpEncodeError::Capacity(_), _) => StatusCode::SERVICE_UNAVAILABLE,
+            (HttpEncodeError::Responses(_), _) => StatusCode::INTERNAL_SERVER_ERROR,
             (_, HttpResponseFormat::Responses) => StatusCode::INTERNAL_SERVER_ERROR,
             (_, HttpResponseFormat::Chat { .. }) => StatusCode::BAD_GATEWAY,
         },
@@ -363,7 +365,7 @@ async fn stream_execution_response_inner(
     format: HttpResponseFormat,
 ) -> Response {
     let mut execution = PendingExecution::new(session);
-    let mut encoder = HttpResponseEncoder::new(format);
+    let mut encoder = HttpResponseEncoder::new(&format);
     let (frames, terminal_frames) = loop {
         let Some(session) = execution.session_mut() else {
             return internal_gateway_response("gateway response session is unavailable");
@@ -383,7 +385,7 @@ async fn stream_execution_response_inner(
             Err(error) => {
                 let response_headers = session.response_headers().to_vec();
                 let response =
-                    engine_error_response_with_headers_as(&error, &response_headers, format);
+                    engine_error_response_with_headers_as(&error, &response_headers, &format);
                 return execution.record_response_status(response).await;
             }
         };
@@ -405,12 +407,15 @@ async fn stream_execution_response_inner(
             match encoder.push_sse(event) {
                 // A Chat finish/usage frame is deliverable only after the
                 // execution confirms success, including in the first batch.
-                Ok(encoded) if encoder.is_chat() && encoder.is_completed() => {
+                Ok(encoded)
+                    if encoder.is_chat()
+                        && (encoder.is_completed() || encoder.has_wire_failure()) =>
+                {
                     terminal_frames.extend(encoded);
                 }
                 Ok(encoded) => frames.extend(encoded),
                 Err(error) => {
-                    let response = encoding_error_response(&error, format);
+                    let response = encoding_error_response(&error, &format);
                     let response = execution.record_response_status(response).await;
                     execution.fail_delivery(error.gateway_error()).await;
                     return response;
@@ -429,7 +434,7 @@ async fn stream_execution_response_inner(
             if let Err(error) = session.defer_downstream_commit() {
                 let response_headers = session.response_headers().to_vec();
                 let response =
-                    engine_error_response_with_headers_as(&error, &response_headers, format);
+                    engine_error_response_with_headers_as(&error, &response_headers, &format);
                 let response = execution.record_response_status(response).await;
                 execution
                     .fail_delivery(gateway_error_from_engine(&error))
@@ -455,7 +460,7 @@ async fn stream_execution_response_inner(
         .commit_downstream(Some(StatusCode::OK.as_u16()))
         .await
     {
-        let response = engine_error_response_with_headers_as(&error, &response_headers, format);
+        let response = engine_error_response_with_headers_as(&error, &response_headers, &format);
         let response = execution.record_response_status(response).await;
         execution
             .fail_delivery(gateway_error_from_engine(&error))
@@ -466,7 +471,8 @@ async fn stream_execution_response_inner(
         return internal_gateway_response("gateway response session is unavailable");
     };
     let mut state = ResponsesStreamState::new(session, encoder, frames, connection_guard);
-    if state.encoder.is_completed() {
+    if state.encoder.is_completed() || (state.encoder.is_chat() && state.encoder.has_wire_failure())
+    {
         state.finish_completed(terminal_frames).await;
     }
     let output = Box::pin(stream::unfold(state, |mut state| async move {
@@ -650,21 +656,24 @@ impl ResponsesStreamState {
                     self.fail_delivery(error.clone()).await;
                     self.finish_with_gateway_error(error);
                 } else {
-                    for event in events {
-                        self.push_event(event).await;
-                        if self.output_finished {
-                            break;
-                        }
-                    }
+                    self.push_events(events).await;
                 }
             }
             Ok(None) => {
+                if let Err(error) = self.encoder.finish_sse() {
+                    let error = error.gateway_error();
+                    self.fail_delivery(error.clone()).await;
+                    self.finish_with_gateway_error(error);
+                    return;
+                }
                 self.execution_terminal = self
                     .session
                     .as_ref()
                     .is_some_and(|session| session.is_finalized());
                 if self.execution_terminal
-                    && (!self.encoder.is_chat() || self.encoder.is_completed())
+                    && (!self.encoder.is_chat()
+                        || self.encoder.is_completed()
+                        || self.encoder.has_wire_failure())
                 {
                     self.pending
                         .push_back(Bytes::from_static(DONE_SSE_FRAME.as_bytes()));
@@ -694,17 +703,29 @@ impl ResponsesStreamState {
         }
     }
 
-    async fn push_event(&mut self, event: ProviderEvent) {
-        let frames = match self.encoder.push_sse(&event) {
-            Ok(frames) => frames,
-            Err(error) => {
-                let error = error.gateway_error();
-                self.fail_delivery(error.clone()).await;
-                self.finish_with_gateway_error(error);
-                return;
+    async fn push_events(&mut self, events: Vec<ProviderEvent>) {
+        let mut frames = Vec::new();
+        for event in events {
+            match self.encoder.push_sse(&event) {
+                Ok(encoded) if !self.encoder.is_chat() => {
+                    if self.encoder.is_completed() {
+                        self.finish_completed(encoded).await;
+                        return;
+                    }
+                    self.pending.extend(encoded);
+                }
+                Ok(encoded) => frames.extend(encoded),
+                Err(error) => {
+                    let error = error.gateway_error();
+                    self.fail_delivery(error.clone()).await;
+                    self.finish_with_gateway_error(error);
+                    return;
+                }
             }
-        };
-        if self.encoder.is_completed() {
+        }
+        if self.encoder.is_completed()
+            || (self.encoder.is_chat() && self.encoder.has_wire_failure())
+        {
             self.finish_completed(frames).await;
         } else {
             self.pending.extend(frames);
@@ -712,52 +733,94 @@ impl ResponsesStreamState {
     }
 
     async fn finish_completed(&mut self, frames: Vec<Bytes>) {
-        let next = match self.session.as_mut() {
-            Some(session) => session.next_event().await,
-            None => {
-                self.finish_with_gateway_error(GatewayError::new(
-                    GatewayErrorKind::Internal,
-                    "gateway response session is unavailable",
-                ));
-                return;
+        loop {
+            let next = match self.session.as_mut() {
+                Some(session) => session.next_event().await,
+                None => {
+                    self.finish_with_gateway_error(GatewayError::new(
+                        GatewayErrorKind::Internal,
+                        "gateway response session is unavailable",
+                    ));
+                    return;
+                }
+            };
+            match next {
+                Ok(None)
+                    if self
+                        .session
+                        .as_ref()
+                        .is_some_and(|session| session.is_finalized()) =>
+                {
+                    if let Err(error) = self.encoder.finish_sse() {
+                        let error = error.gateway_error();
+                        self.fail_delivery(error.clone()).await;
+                        self.finish_with_gateway_error(error);
+                        return;
+                    }
+                    self.pending.extend(frames);
+                    self.execution_terminal = true;
+                    self.pending
+                        .push_back(Bytes::from_static(DONE_SSE_FRAME.as_bytes()));
+                    self.output_finished = true;
+                }
+                Ok(None) => {
+                    let error = GatewayError::new(
+                        GatewayErrorKind::Internal,
+                        "gateway response was not finalized after its terminal event",
+                    );
+                    self.fail_delivery(error.clone()).await;
+                    self.finish_with_gateway_error(error);
+                }
+                Ok(Some(event))
+                    if self.encoder.is_chat()
+                        && event.commit_requirement() == CommitRequirement::AlreadyCommitted =>
+                {
+                    for event in event.into_provider_events() {
+                        match self.encoder.push_sse(&event) {
+                            Ok(encoded) if encoded.is_empty() => {}
+                            result => {
+                                let error = result
+                                    .err()
+                                    .map(|error| error.gateway_error())
+                                    .unwrap_or_else(|| {
+                                        GatewayError::new(
+                                            GatewayErrorKind::UpstreamUnavailable,
+                                            "gateway response continued after its terminal event",
+                                        )
+                                        .with_client_code("invalid_upstream_response")
+                                    });
+                                self.fail_delivery(error.clone()).await;
+                                self.finish_with_gateway_error(error);
+                                return;
+                            }
+                        }
+                    }
+                    continue;
+                }
+                Ok(Some(_)) => {
+                    let error = GatewayError::new(
+                        GatewayErrorKind::Internal,
+                        "gateway response continued after its terminal event",
+                    );
+                    self.fail_delivery(error.clone()).await;
+                    self.finish_with_gateway_error(error);
+                }
+                Err(error) => {
+                    self.execution_terminal = self
+                        .session
+                        .as_ref()
+                        .is_some_and(|session| session.is_finalized());
+                    if self.encoder.has_wire_failure() && self.encoder.finish_sse().is_ok() {
+                        self.pending.extend(frames);
+                        self.pending
+                            .push_back(Bytes::from_static(DONE_SSE_FRAME.as_bytes()));
+                        self.output_finished = true;
+                    } else {
+                        self.finish_with_gateway_error(gateway_error_from_engine(&error));
+                    }
+                }
             }
-        };
-        match next {
-            Ok(None)
-                if self
-                    .session
-                    .as_ref()
-                    .is_some_and(|session| session.is_finalized()) =>
-            {
-                self.pending.extend(frames);
-                self.execution_terminal = true;
-                self.pending
-                    .push_back(Bytes::from_static(DONE_SSE_FRAME.as_bytes()));
-                self.output_finished = true;
-            }
-            Ok(None) => {
-                let error = GatewayError::new(
-                    GatewayErrorKind::Internal,
-                    "gateway response was not finalized after its terminal event",
-                );
-                self.fail_delivery(error.clone()).await;
-                self.finish_with_gateway_error(error);
-            }
-            Ok(Some(_)) => {
-                let error = GatewayError::new(
-                    GatewayErrorKind::Internal,
-                    "gateway response continued after its terminal event",
-                );
-                self.fail_delivery(error.clone()).await;
-                self.finish_with_gateway_error(error);
-            }
-            Err(error) => {
-                self.execution_terminal = self
-                    .session
-                    .as_ref()
-                    .is_some_and(|session| session.is_finalized());
-                self.finish_with_gateway_error(gateway_error_from_engine(&error));
-            }
+            return;
         }
     }
 

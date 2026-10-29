@@ -1,4 +1,3 @@
-mod chat;
 mod codex;
 mod events;
 mod headers;

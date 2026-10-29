@@ -6,41 +6,50 @@ use gateway_core::{
     event::ProviderEvent,
 };
 use gateway_protocol::openai::{
-    chat::{ChatConversionError, ChatStreamEncoder, chat_response_from_events},
     output_recovery::recover_response_output,
-    sse::response_failed_sse_event_with_id_and_param,
+    sse::{SseEventDecoder, response_failed_sse_event_with_id_and_param},
 };
 use serde_json::{Value, json};
 
 use super::{
+    chat::response::{ChatIdentity, ChatStreamEncoder, project_response},
     error::{client_error_code, gateway_error_contract},
     responses::{OpenAiResponsesEncoder, ProtocolError, ProtocolErrorBody, ResponseEncodeError},
 };
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Default)]
 pub(in crate::openai) enum HttpResponseFormat {
     #[default]
     Responses,
     Chat {
         include_usage: bool,
+        identity: ChatIdentity,
     },
 }
 
 pub(in crate::openai) struct HttpResponseEncoder {
     responses: OpenAiResponsesEncoder,
     chat: Option<ChatStreamEncoder>,
+    chat_identity: Option<ChatIdentity>,
+    decoder: SseEventDecoder,
 }
 
 impl HttpResponseEncoder {
-    pub(in crate::openai) fn new(format: HttpResponseFormat) -> Self {
+    pub(in crate::openai) fn new(format: &HttpResponseFormat) -> Self {
         Self {
             responses: OpenAiResponsesEncoder::new(),
             chat: match format {
                 HttpResponseFormat::Responses => None,
-                HttpResponseFormat::Chat { include_usage } => {
-                    Some(ChatStreamEncoder::new(include_usage))
-                }
+                HttpResponseFormat::Chat {
+                    include_usage,
+                    identity,
+                } => Some(ChatStreamEncoder::new(identity.clone(), *include_usage)),
             },
+            chat_identity: match format {
+                HttpResponseFormat::Chat { identity, .. } => Some(identity.clone()),
+                HttpResponseFormat::Responses => None,
+            },
+            decoder: SseEventDecoder::default(),
         }
     }
 
@@ -55,18 +64,22 @@ impl HttpResponseEncoder {
         let Some(chat) = self.chat.as_mut() else {
             return Ok(self.responses.push_sse(event));
         };
-        let Some(wire) = event
-            .wire_event()
-            .filter(|wire| wire.protocol() == "openai" && wire.has_json_data())
-        else {
-            return Ok(Vec::new());
-        };
-        if let Some(error) = chat_capacity_error(event) {
-            return Err(error);
+        let mut output = Vec::new();
+        for bytes in self.responses.push_sse(event) {
+            for event in self
+                .decoder
+                .push(&bytes)
+                .map_err(|_| invalid_chat_response())?
+            {
+                let data =
+                    serde_json::from_str(&event.data).map_err(|_| invalid_chat_response())?;
+                output.extend(
+                    chat.push_event(event.event.as_deref(), &data)
+                        .map_err(HttpEncodeError::Chat)?,
+                );
+            }
         }
-        chat.push(wire.event_type(), wire.data())
-            .map(|chunks| chunks.into_iter().map(chat_sse_frame).collect())
-            .map_err(HttpEncodeError::Chat)
+        Ok(output)
     }
 
     pub(in crate::openai) fn is_completed(&self) -> bool {
@@ -77,25 +90,40 @@ impl HttpResponseEncoder {
     }
 
     pub(in crate::openai) fn has_wire_failure(&self) -> bool {
-        // Chat conversion failures become explicit error frames at the caller.
-        self.chat.is_none() && self.responses.has_wire_failure()
+        self.chat.as_ref().map_or_else(
+            || self.responses.has_wire_failure(),
+            ChatStreamEncoder::has_wire_failure,
+        )
+    }
+
+    pub(in crate::openai) fn finish_sse(&mut self) -> Result<(), HttpEncodeError> {
+        if let Some(chat) = self.chat.as_mut() {
+            for event in self.decoder.finish().map_err(|_| invalid_chat_response())? {
+                let data =
+                    serde_json::from_str(&event.data).map_err(|_| invalid_chat_response())?;
+                if !chat
+                    .push_event(event.event.as_deref(), &data)
+                    .map_err(HttpEncodeError::Chat)?
+                    .is_empty()
+                {
+                    return Err(invalid_chat_response());
+                }
+            }
+        }
+        Ok(())
     }
 
     pub(in crate::openai) fn finish_collected(
         mut self,
         events: &[ProviderEvent],
     ) -> Result<Value, HttpEncodeError> {
-        if self.chat.is_some() {
+        if let Some(identity) = &self.chat_identity {
             if let Some(error) = events.iter().find_map(chat_capacity_error) {
                 return Err(error);
             }
-            return chat_response_from_events(events.iter().filter_map(|event| {
-                let wire = event
-                    .wire_event()
-                    .filter(|wire| wire.protocol() == "openai" && wire.has_json_data())?;
-                Some((wire.event_type(), wire.data()))
-            }))
-            .map_err(HttpEncodeError::Chat);
+            let response =
+                super::responses::collect_response(events).map_err(HttpEncodeError::Responses)?;
+            return project_response(&response, identity).map_err(HttpEncodeError::Chat);
         }
         for event in events {
             self.responses.observe_event(event);
@@ -152,6 +180,17 @@ fn chat_sse_frame(value: Value) -> Bytes {
     Bytes::from(format!("data: {value}\n\n"))
 }
 
+fn invalid_chat_response() -> HttpEncodeError {
+    HttpEncodeError::Chat(ProtocolErrorBody {
+        error: ProtocolError {
+            kind: "server_error",
+            code: "invalid_upstream_response",
+            message: "The gateway could not deliver the Chat response.".to_owned(),
+            param: None,
+        },
+    })
+}
+
 fn chat_capacity_error(event: &ProviderEvent) -> Option<HttpEncodeError> {
     let wire = event
         .wire_event()
@@ -188,7 +227,7 @@ fn chat_capacity_error(event: &ProviderEvent) -> Option<HttpEncodeError> {
 #[derive(Debug)]
 pub(in crate::openai) enum HttpEncodeError {
     Responses(ResponseEncodeError),
-    Chat(ChatConversionError),
+    Chat(ProtocolErrorBody),
     Capacity(ClientVisibleUpstreamError),
 }
 
@@ -204,14 +243,7 @@ impl HttpEncodeError {
                 },
             },
             Self::Responses(error) => error.protocol_body(),
-            Self::Chat(error) => ProtocolErrorBody {
-                error: ProtocolError {
-                    kind: "server_error",
-                    code: "incompatible_upstream_response",
-                    message: error.to_string(),
-                    param: error.param().map(str::to_owned),
-                },
-            },
+            Self::Chat(error) => error.clone(),
         }
     }
 
@@ -227,6 +259,9 @@ impl HttpEncodeError {
             GatewayErrorKind::UpstreamUnavailable,
             "upstream response could not be converted to the requested format",
         )
-        .with_client_code("incompatible_upstream_response")
+        .with_client_code(match self {
+            Self::Chat(error) => error.error.code,
+            _ => "incompatible_upstream_response",
+        })
     }
 }

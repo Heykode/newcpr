@@ -1,7 +1,4 @@
-use gateway_protocol::openai::{
-    chat::{ChatStreamEncoder, chat_response_from_events},
-    output_recovery::recover_response_output,
-};
+use gateway_protocol::openai::output_recovery::recover_response_output;
 use serde_json::{Value, json};
 
 fn terminal(output: Value) -> Value {
@@ -115,28 +112,6 @@ fn buffered_recovery_missing_text_preserves_failure_and_cancellation() {
         recover(&mut response, &[delta.clone(), json!({"type":kind})]);
         assert_eq!(response, original);
     }
-}
-
-#[test]
-fn buffered_chat_restores_empty_terminal_text_without_repeating_stream_deltas() {
-    let events = [
-        json!({"type":"response.created","response":{"id":"resp_recovery","model":"model-a"}}),
-        json!({"type":"response.output_text.delta","delta":"Hello, "}),
-        json!({"type":"response.output_text.delta","delta":"world"}),
-        json!({"type":"response.completed","response":terminal(json!([message("m", "")]))}),
-    ];
-    let response = chat_response_from_events(events.iter().map(|event| (None, event))).unwrap();
-    assert_eq!(response["choices"][0]["message"]["content"], "Hello, world");
-    let mut encoder = ChatStreamEncoder::new(true);
-    let mut text = String::new();
-    for event in &events {
-        for chunk in encoder.push(None, event).unwrap() {
-            if let Some(delta) = chunk["choices"][0]["delta"]["content"].as_str() {
-                text.push_str(delta);
-            }
-        }
-    }
-    assert_eq!(text, "Hello, world");
 }
 
 #[test]
@@ -377,64 +352,4 @@ fn buffered_recovery_does_not_invent_success_or_reject_empty_and_unknown_output(
     ];
     recover(&mut failure, &failure_events);
     assert_eq!(failure["output"], json!([]));
-}
-
-#[test]
-fn buffered_chat_recovers_once_without_rewriting_streamed_text_or_images() {
-    let image = json!({"type":"image_generation_call","id":"img","result":"opaque-image!",
-        "output_format":"png"});
-    let events = vec![
-        json!({"type":"response.created","response":{"id":"resp_recovery","model":"model-a"}}),
-        json!({"type":"response.output_text.delta","item_id":"m","output_index":0,
-            "content_index":0,"delta":"answer"}),
-        done(Some(0), message("m", "answer")),
-        done(Some(1), image),
-        json!({"type":"response.completed","response":terminal(json!([]))}),
-    ];
-    let response = chat_response_from_events(events.iter().map(|event| (None, event))).unwrap();
-    assert_eq!(response["choices"][0]["message"]["content"], "answer");
-    assert_eq!(
-        response["choices"][0]["message"]["images"]
-            .as_array()
-            .unwrap()
-            .len(),
-        1
-    );
-    assert_eq!(response["usage"]["total_tokens"], 5);
-
-    let mut encoder = ChatStreamEncoder::new(true);
-    let chunks: Vec<_> = events
-        .iter()
-        .flat_map(|event| encoder.push(None, event).unwrap())
-        .collect();
-    assert_eq!(
-        chunks
-            .iter()
-            .filter_map(|chunk| chunk["choices"][0]["delta"]["content"].as_str())
-            .collect::<String>(),
-        "answer"
-    );
-    assert_eq!(
-        chunks
-            .iter()
-            .filter(|chunk| chunk["choices"][0]["delta"]["images"].is_array())
-            .count(),
-        1
-    );
-    assert_eq!(
-        chunks
-            .iter()
-            .filter(|chunk| chunk["usage"].is_object())
-            .count(),
-        1
-    );
-    assert!(encoder.is_completed());
-
-    assert!(chat_response_from_events(events[..4].iter().map(|event| (None, event))).is_err());
-    let mut failed = events;
-    failed.insert(
-        4,
-        json!({"type":"response.failed","response":{"status":"failed"}}),
-    );
-    assert!(chat_response_from_events(failed.iter().map(|event| (None, event))).is_err());
 }

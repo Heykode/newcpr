@@ -1,6 +1,5 @@
 mod capacity;
-mod chat;
-mod chat_cpa;
+mod chat_official;
 mod http;
 mod request;
 mod scheduling;

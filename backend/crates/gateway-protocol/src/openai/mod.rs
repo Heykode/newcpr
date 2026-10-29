@@ -9,8 +9,6 @@ pub const WS_REQUEST_HEADER_RESPONSES_LITE_CLIENT_METADATA_KEY: &str =
 /// Codex memory consolidation 请求标记。
 pub const X_OPENAI_MEMGEN_REQUEST_HEADER: &str = "x-openai-memgen-request";
 
-/// Pure Chat Completions / Responses JSON conversion.
-pub mod chat;
 /// OpenAI Responses 请求中携带的 Codex 专属语义。
 pub mod codex;
 /// OpenAI/Codex 事件语义、用量与限流字段编解码。
