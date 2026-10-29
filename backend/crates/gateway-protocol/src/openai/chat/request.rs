@@ -12,58 +12,35 @@ pub struct DecodedChatRequest {
 
 pub fn decode_chat_request(value: Value) -> Result<DecodedChatRequest> {
     let source = object(&value, "request")?;
-    only_keys(
-        source,
-        &[
-            "model",
-            "messages",
-            "stream",
-            "stream_options",
-            "tools",
-            "tool_choice",
-            "parallel_tool_calls",
-            "reasoning_effort",
-            "reasoning",
-            "response_format",
-            "text",
-            "verbosity",
-            "max_tokens",
-            "max_completion_tokens",
-            "temperature",
-            "top_p",
-            "metadata",
-            "store",
-            "service_tier",
-            "user",
-            "safety_identifier",
-            "prompt_cache_key",
-            "prompt_cache_retention",
-            "use_websocket",
-            "web_search_options",
-            "n",
-            "audio",
-            "modalities",
-            "logprobs",
-            "top_logprobs",
-            "logit_bias",
-            "presence_penalty",
-            "frequency_penalty",
-            "stop",
-            "seed",
-            "prediction",
-            "functions",
-            "function_call",
-            "top_k",
-        ],
-        "",
-    )?;
+    // Unknown Chat extensions are not Responses fields and never enter the upstream body.
+    for field in [
+        "input",
+        "previous_response_id",
+        "conversation",
+        "instructions",
+        "include",
+        "background",
+        "max_output_tokens",
+        "reasoning_content",
+    ] {
+        if source.get(field).is_some_and(|value| !value.is_null()) {
+            return Err(Error::unsupported(field));
+        }
+    }
     let model = nonempty(&value["model"], "model")?;
     reject_lossy(source)?;
     let stream = boolean(source, "stream")?.unwrap_or(false);
     let include_usage = match source.get("stream_options").filter(|v| !v.is_null()) {
         Some(options) => {
             let options = object(options, "stream_options")?;
-            only_keys(options, &["include_usage"], "stream_options")?;
+            only_keys(
+                options,
+                &["include_usage", "include_obfuscation"],
+                "stream_options",
+            )?;
+            if boolean(options, "include_obfuscation")? == Some(true) {
+                return Err(Error::unsupported("stream_options.include_obfuscation"));
+            }
             if !stream {
                 return Err(Error::invalid("stream_options"));
             }
@@ -103,21 +80,24 @@ pub fn decode_chat_request(value: Value) -> Result<DecodedChatRequest> {
         "prompt_cache_retention",
     ] {
         if let Some(v) = source.get(key).filter(|v| !v.is_null()) {
-            nonempty(v, key)?;
+            super::string(v, key)?;
             responses.insert(key.into(), v.clone());
         }
     }
     if let Some(metadata) = source.get("metadata").filter(|v| !v.is_null()) {
-        let entries = object(metadata, "metadata")?;
-        if entries.values().any(|v| !v.is_string()) {
-            return Err(Error::invalid("metadata"));
-        }
+        object(metadata, "metadata")?;
         responses.insert("metadata".into(), metadata.clone());
+    }
+    for key in ["prompt_cache_options", "moderation"] {
+        if let Some(value) = source.get(key).filter(|value| !value.is_null()) {
+            object(value, key)?;
+            responses.insert(key.into(), value.clone());
+        }
     }
     let mut limit = None;
     for key in ["max_tokens", "max_completion_tokens"] {
         if let Some(v) = source.get(key).filter(|v| !v.is_null()) {
-            if limit.is_some() || !v.as_u64().is_some_and(|v| v > 0) {
+            if !v.as_u64().is_some_and(|v| v > 0) {
                 return Err(Error::invalid(key));
             }
             limit = Some(v.clone());
@@ -184,7 +164,7 @@ fn reasoning_effort<'a>(value: &'a Value, param: &str, nested: bool) -> Result<O
     if nested && effort.is_empty() {
         return Ok(None);
     }
-    if !["none", "minimal", "low", "medium", "high", "xhigh", "max"].contains(&effort) {
+    if effort.trim().is_empty() {
         return Err(Error::invalid(param));
     }
     Ok(Some(effort))
@@ -199,18 +179,21 @@ fn boolean(source: &Map<String, Value>, key: &str) -> Result<Option<bool>> {
 }
 
 fn reject_lossy(source: &Map<String, Value>) -> Result<()> {
-    for key in [
-        "audio",
-        "seed",
-        "prediction",
-        "functions",
-        "function_call",
-        "top_k",
-        "stop",
-        "logit_bias",
-    ] {
+    for key in ["audio", "seed", "prediction", "function_call", "top_k"] {
         if source.get(key).is_some_and(|v| !v.is_null()) {
             return Err(Error::unsupported(key));
+        }
+    }
+    for key in ["functions", "stop", "logit_bias"] {
+        if let Some(value) = source.get(key).filter(|v| !v.is_null()) {
+            let empty = if key == "logit_bias" {
+                value.as_object().is_some_and(Map::is_empty)
+            } else {
+                value.as_array().is_some_and(Vec::is_empty)
+            };
+            if !empty {
+                return Err(Error::unsupported(key));
+            }
         }
     }
     for key in ["presence_penalty", "frequency_penalty", "top_logprobs"] {

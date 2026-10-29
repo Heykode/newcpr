@@ -280,6 +280,7 @@ pub trait ProviderCircuitPort: Send + Sync {
 }
 
 pub struct DefaultExecutionService {
+    account_error_protection: Option<Arc<dyn crate::provider_ports::ProviderCooldownPort>>,
     client_retry: Option<Arc<dyn super::client_retry::ClientRetryStore>>,
     captures: Option<Arc<dyn crate::diagnostics::request_capture::RequestCaptureFactory>>,
     snapshots: RuntimeSnapshotHandle,
@@ -298,6 +299,16 @@ pub struct DefaultExecutionService {
 
 impl DefaultExecutionService {
     #[must_use]
+    pub fn with_account_error_protection(
+        mut self,
+        store: Arc<dyn crate::provider_ports::ProviderCooldownPort>,
+    ) -> Self {
+        self.account_error_protection = Some(store);
+        self.rebuild_coordinator();
+        self
+    }
+
+    #[must_use]
     pub fn with_client_retry(
         mut self,
         store: Arc<dyn super::client_retry::ClientRetryStore>,
@@ -314,6 +325,9 @@ impl DefaultExecutionService {
         }
         if let Some(store) = &self.client_retry {
             engine = engine.with_client_retry(store.clone());
+        }
+        if let Some(store) = &self.account_error_protection {
+            engine = engine.with_account_error_protection(Arc::clone(store));
         }
         self.coordinator = Arc::new(AttemptCoordinator::new(engine));
     }
@@ -344,6 +358,7 @@ impl DefaultExecutionService {
             client_api_key_usage,
             budget: None,
             client_retry: None,
+            account_error_protection: None,
             captures: None,
         }
     }

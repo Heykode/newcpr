@@ -1745,6 +1745,7 @@ mod response {
         let now = Utc::now();
         let quota = QuotaState::allowed(now.into());
         AccountDirectoryItem {
+            error_protection: None,
             excel_recovery: None,
             purchase_cost: None,
             turn_state: None,

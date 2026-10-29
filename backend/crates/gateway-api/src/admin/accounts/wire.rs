@@ -347,6 +347,7 @@ pub struct AccountSummaryView {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountView {
+    pub error_protection: Option<gateway_admin::model::accounts::AccountProtectionView>,
     pub custom_name: Option<String>,
     pub outbound_proxy_id: Option<String>,
     pub outbound_proxy_endpoint: Option<String>,

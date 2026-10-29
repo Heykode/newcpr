@@ -149,12 +149,31 @@ pub fn chat_response(response: &Value) -> Result<Value> {
     if let Some(usage) = chat_usage(response)? {
         result["usage"] = usage;
     }
-    for key in ["service_tier", "system_fingerprint"] {
+    project_response_fields(response, &mut result)?;
+    Ok(result)
+}
+
+pub(super) fn project_response_fields(response: &Value, result: &mut Value) -> Result<()> {
+    for key in ["service_tier", "system_fingerprint", "metadata"] {
         if let Some(value) = response.get(key) {
             result[key] = value.clone();
         }
     }
-    Ok(result)
+    if let Some(source) = response.get("moderation").filter(|value| !value.is_null()) {
+        let mut moderation = json!({});
+        for side in ["input", "output"] {
+            let value = &source[side];
+            moderation[side] = match value["type"].as_str() {
+                Some("moderation_result") if value["model"].is_string() => json!({
+                    "type":"moderation_results","model":value["model"],"results":[value]
+                }),
+                Some("error") => value.clone(),
+                _ => return Err(Error::output("moderation")),
+            };
+        }
+        result["moderation"] = moderation;
+    }
+    Ok(())
 }
 
 pub(super) fn chat_id(id: &str) -> String {

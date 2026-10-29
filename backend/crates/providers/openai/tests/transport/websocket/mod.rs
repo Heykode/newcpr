@@ -265,6 +265,7 @@ async fn backend_websocket_should_stream_upstream_for_non_streaming_client_reque
         backend.create_response(
             &request,
             CodexRequestContext {
+                response_control: None,
                 installation_id: Some("account-installation"),
                 session_id: Some("account-session"),
                 ..request_context("req_non_streaming_ws", Some("acct-non-streaming"))
@@ -1969,12 +1970,9 @@ async fn codex_backend_client_stream_should_preserve_burst_during_downstream_bac
         let _ = sink.send(Message::Close(None)).await;
         control_frames.abort();
     });
-    let pool = Arc::new(CodexWebSocketPool::with_config(CodexWebSocketPoolConfig {
-        ping_interval: Some(Duration::from_millis(5)),
-        ping_timeout: Duration::from_millis(20),
-        liveness_timeout: None,
-        ..websocket_pool_config_for_tests(None, None, None)
-    }));
+    let pool = Arc::new(CodexWebSocketPool::with_config(
+        websocket_pool_config_for_tests(None),
+    ));
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),
@@ -2312,6 +2310,7 @@ async fn codex_backend_client_should_use_websocket_when_previous_response_id_is_
         .create_response(
             &request,
             CodexRequestContext {
+                response_control: None,
                 trace: None,
                 authorization: "Bearer access-token",
                 account_id: Some("chatgpt-account"),

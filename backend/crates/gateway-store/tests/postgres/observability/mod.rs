@@ -25,6 +25,7 @@ use gateway_store::postgres::{
 };
 use sqlx::PgPool;
 mod backup_export;
+mod concurrency;
 mod dashboard_comparison;
 mod final_error;
 mod quality_isolation;
@@ -1329,10 +1330,53 @@ async fn dashboard_account_metrics_with_cooldowns_should_only_reclassify_eligibl
             + metrics.disabled
             + metrics.error
     );
+    let mut protected = StaticCooldowns::new([]);
+    for (id, revision) in [
+        ("acct_metrics_ready_quota", 1),
+        ("acct_metrics_disabled", 1),
+        ("acct_metrics_expired", 5),
+        ("acct_metrics_active", 99),
+    ] {
+        let account_id = ProviderAccountId::new(id).unwrap();
+        protected.protections.insert(
+            account_id.clone(),
+            gateway_core::provider_ports::AccountProtectionState {
+                account_id,
+                credential_revision: CredentialRevision::new(revision).unwrap(),
+                until: now.into(),
+                generation: "synthetic".into(),
+                requires_probe: true,
+                duration_seconds: 300,
+                probe_model: None,
+                rules: vec![],
+            },
+        );
+    }
+    let protected = PgObservabilityRepository::new(
+        database.pool.clone(),
+        Some(Arc::new(protected)),
+        observability_query_budget(),
+    );
+    let metrics = protected
+        .dashboard_summary(range, now)
+        .await
+        .unwrap()
+        .provider_accounts;
+    assert_eq!(
+        (
+            metrics.normal,
+            metrics.rate_limited,
+            metrics.quota_exhausted,
+            metrics.disabled,
+            metrics.error
+        ),
+        (3, 1, 2, 1, 2)
+    );
     database.close().await;
 }
 
 struct StaticCooldowns {
+    protections: BTreeMap<ProviderAccountId, gateway_core::provider_ports::AccountProtectionState>,
     cooldowns: BTreeMap<ProviderAccountId, ProviderCooldown>,
     reads: std::sync::atomic::AtomicUsize,
     active: std::sync::atomic::AtomicUsize,
@@ -1342,6 +1386,7 @@ struct StaticCooldowns {
 impl StaticCooldowns {
     fn new(cooldowns: impl IntoIterator<Item = ProviderCooldown>) -> Self {
         Self {
+            protections: BTreeMap::new(),
             reads: Default::default(),
             active: Default::default(),
             peak: Default::default(),
@@ -1354,6 +1399,22 @@ impl StaticCooldowns {
 }
 
 impl ProviderCooldownPort for StaticCooldowns {
+    fn read_protection<'a>(
+        &'a self,
+        account: &'a ProviderAccountId,
+        revision: CredentialRevision,
+    ) -> BoxFuture<
+        'a,
+        Result<Option<gateway_core::provider_ports::AccountProtectionState>, ProviderStoreError>,
+    > {
+        Box::pin(async move {
+            Ok(self
+                .protections
+                .get(account)
+                .filter(|state| state.credential_revision == revision)
+                .cloned())
+        })
+    }
     fn put_if_later(
         &self,
         _cooldown: ProviderCooldown,

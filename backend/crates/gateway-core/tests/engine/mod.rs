@@ -14,3 +14,5 @@ use gateway_core::engine::AttemptTrigger;
 fn attempt_trigger_names_should_match_ops_event_contract() {
     assert_eq!(AttemptTrigger::AccountRetry.as_str(), "account_retry");
 }
+
+mod account_protection;

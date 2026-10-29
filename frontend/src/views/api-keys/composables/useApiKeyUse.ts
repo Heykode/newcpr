@@ -13,7 +13,7 @@ type ApiKeyRow = Awaited<ReturnType<typeof getApiKeys>>['items'][number] & { key
 export function useApiKeyUse(options: {
   createdKey: Readonly<Ref<string>>
   createdKeyName: Readonly<Ref<string>>
-  revealPlaintextKey: (apiKey: ApiKeyRow) => Promise<string | undefined>
+  revealPlaintextKey: (apiKey: ApiKeyRow, action?: 'copy' | 'configuration' | 'import') => Promise<string | undefined>
 }) {
   const showUseKeyModal = shallowRef(false)
   const selectedUseKey: ShallowRef<ApiKeyRow | null> = shallowRef(null)
@@ -67,7 +67,7 @@ export function useApiKeyUse(options: {
 
   async function importToCcs(apiKey: ApiKeyRow) {
     const current = ++requestGeneration
-    const key = await options.revealPlaintextKey(apiKey)
+    const key = await options.revealPlaintextKey(apiKey, 'import')
     if (!key || disposed || current !== requestGeneration)
       return
     pendingImport = {

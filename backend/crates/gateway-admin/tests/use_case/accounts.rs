@@ -1357,7 +1357,7 @@ impl AccountStore for FakeAccountStore {
     }
 }
 
-struct StaticSettingsStore;
+pub(super) struct StaticSettingsStore;
 
 #[async_trait]
 impl SettingsStore for StaticSettingsStore {

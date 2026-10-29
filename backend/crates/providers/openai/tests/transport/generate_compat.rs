@@ -211,6 +211,7 @@ const IDENTITY_HEADERS: &[&str] = &[
 
 fn compat_context() -> CodexRequestContext<'static> {
     CodexRequestContext {
+        response_control: None,
         installation_id: Some("installation-compat"),
         session_id: Some("session-compat"),
         ..request_context("req_compat", Some("acct-compat"))

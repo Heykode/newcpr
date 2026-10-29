@@ -32,6 +32,7 @@ pub(super) type SharedMessages = Arc<Mutex<mpsc::Receiver<Result<Message, tungst
 pub(super) struct PumpControl {
     pub(super) tx_command: mpsc::Sender<PumpCommand>,
     pub(super) rx_message: SharedMessages,
+    pub(super) cancellation: tokio_util::sync::CancellationToken,
     pub(super) closed: Arc<AtomicBool>,
     pub(super) compression_threshold: Option<usize>,
 }
@@ -72,7 +73,10 @@ pub(super) async fn send_message(
 #[async_trait]
 impl ResponseControlTransport for PumpControl {
     async fn send(&self, payload: &str) -> Result<(), ResponseControlUnavailable> {
-        tokio::time::timeout(
+        tokio::select! {
+            biased;
+            _ = self.cancellation.cancelled() => Err(ResponseControlUnavailable),
+            result = tokio::time::timeout(
             std::time::Duration::from_secs(5 * 60),
             send_message(
                 &self.tx_command,
@@ -80,16 +84,18 @@ impl ResponseControlTransport for PumpControl {
                 self.compression_threshold,
                 Message::Text(payload.to_owned().into()),
             ),
-        )
-        .await
-        .map_err(|_| ResponseControlUnavailable)?
-        .map_err(|_| ResponseControlUnavailable)
+        ) => result.map_err(|_| ResponseControlUnavailable)?.map_err(|_| ResponseControlUnavailable),
+        }
     }
 
     async fn receive(&self) -> Result<String, ResponseControlUnavailable> {
-        match self.rx_message.lock().await.recv().await {
-            Some(Ok(Message::Text(text))) => Ok(text.to_string()),
-            _ => Err(ResponseControlUnavailable),
+        tokio::select! {
+            biased;
+            _ = self.cancellation.cancelled() => Err(ResponseControlUnavailable),
+            message = async { self.rx_message.lock().await.recv().await } => match message {
+                Some(Ok(Message::Text(text))) => Ok(text.to_string()),
+                _ => Err(ResponseControlUnavailable),
+            },
         }
     }
 }

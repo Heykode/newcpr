@@ -356,6 +356,7 @@ async fn backend_websocket_should_forward_context_headers_and_preserve_payload_f
         .create_response(
             &request,
             CodexRequestContext {
+                response_control: None,
                 trace: None,
                 authorization: "Bearer access-token",
                 account_id: Some("chatgpt-account"),
@@ -464,6 +465,7 @@ async fn backend_http_should_preserve_business_headers_without_downstream_transp
         .create_response(
             &request,
             CodexRequestContext {
+                response_control: None,
                 trace: None,
                 authorization: "Bearer lease-token",
                 account_id: Some("lease-account"),
@@ -622,6 +624,7 @@ async fn backend_websocket_should_preserve_business_headers_without_downstream_t
         .create_response(
             &request,
             CodexRequestContext {
+                response_control: None,
                 trace: None,
                 authorization: "Bearer lease-token",
                 account_id: Some("lease-account"),
@@ -769,6 +772,7 @@ async fn backend_http_should_send_codex_context_without_browser_headers() {
         .create_response(
             &request,
             CodexRequestContext {
+                response_control: None,
                 trace: None,
                 authorization: "Bearer access-token",
                 account_id: Some("chatgpt-account"),
@@ -893,6 +897,7 @@ async fn backend_http_should_ignore_unrepresentable_protocol_headers_without_blo
         .create_response(
             &request,
             CodexRequestContext {
+                response_control: None,
                 trace: None,
                 client_request_id: Some("opaque\nclient-request-id"),
                 session_id: Some("opaque\nsession"),
@@ -1035,6 +1040,7 @@ async fn backend_http_should_force_upstream_sse_for_non_streaming_client_request
         .create_response(
             &request,
             CodexRequestContext {
+                response_control: None,
                 installation_id: Some("account-installation"),
                 session_id: Some("account-session"),
                 ..request_context("req_non_streaming_client", Some("acct-non-streaming"))

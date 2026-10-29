@@ -21,6 +21,8 @@ pub const MAX_RESPONSES_MAX_DECOMPRESSED_BODY_BYTES: u64 =
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RequestTuningOverrides {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub account_error_protection: Option<gateway_core::account::AccountErrorProtection>,
     pub smart_scheduling: Option<gateway_core::account::smart_scheduling::SmartSchedulingConfig>,
     pub max_account_switches: Option<u32>,
     pub max_request_attempts: Option<u32>,
@@ -69,6 +71,7 @@ impl<'de> Deserialize<'de> for RequestTuningOverrides {
         #[derive(Deserialize)]
         #[serde(rename_all = "camelCase", deny_unknown_fields)]
         struct Wire {
+            account_error_protection: Option<gateway_core::account::AccountErrorProtection>,
             smart_scheduling:
                 Option<gateway_core::account::smart_scheduling::SmartSchedulingConfig>,
             max_account_switches: Option<u32>,
@@ -111,6 +114,7 @@ impl<'de> Deserialize<'de> for RequestTuningOverrides {
 
         let wire = Wire::deserialize(deserializer)?;
         Ok(Self {
+            account_error_protection: wire.account_error_protection,
             smart_scheduling: wire.smart_scheduling,
             max_account_switches: wire.max_account_switches,
             max_request_attempts: wire.max_request_attempts,
@@ -165,6 +169,13 @@ impl RequestTuningOverrides {
     pub const MAX_ACCOUNT_BUSY_WAIT_TIMEOUT_SECONDS: u64 = 600;
 
     pub fn validate(&self) -> bool {
+        if self
+            .account_error_protection
+            .as_ref()
+            .is_some_and(|policy| policy.validate().is_err())
+        {
+            return false;
+        }
         use gateway_core::routing::{
             EXCEL_IMAGE_MAX_BYTES, EXCEL_IMAGE_MAX_COUNT, EXCEL_IMAGE_MAX_STORAGE_BYTES,
             EXCEL_IMAGE_MAX_STORAGE_ENTRIES, EXCEL_IMAGE_MAX_TTL_MINUTES,

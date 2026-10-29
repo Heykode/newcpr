@@ -4,6 +4,7 @@ use super::*;
 
 fn context() -> CodexRequestContext<'static> {
     CodexRequestContext {
+        response_control: None,
         installation_id: Some("85c64ae8-4b44-4f82-9696-909adef2144c"),
         session_id: Some("large-request-session"),
         thread_id: Some("large-request-thread"),

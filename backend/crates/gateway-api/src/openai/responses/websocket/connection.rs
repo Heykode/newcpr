@@ -15,7 +15,7 @@ use futures::{Sink, SinkExt, Stream, StreamExt};
 use gateway_core::lifecycle::CancellationToken;
 use thiserror::Error;
 use tokio::{
-    sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot},
+    sync::{Mutex, OwnedSemaphorePermit, Semaphore, mpsc, oneshot, watch},
     task::JoinHandle,
     time::{Instant, timeout},
 };
@@ -25,6 +25,8 @@ const INBOUND_EVENT_BUFFER: usize = 32;
 const DOWNSTREAM_WRITE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const CONNECTION_MAX_AGE: Duration = Duration::from_secs(60 * 60);
 const DOWNSTREAM_PING_INTERVAL: Duration = Duration::from_secs(25);
+const DOWNSTREAM_PONG_TIMEOUT: Duration = Duration::from_secs(30);
+const DOWNSTREAM_PING_WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// WebSocket pump 的写入与生命周期预算。
 #[derive(Clone, Copy)]
@@ -139,6 +141,7 @@ pub enum PumpExitReason {
     WriteError,
     WriteTimeout,
     LifecycleShutdown,
+    PongTimeout,
     ConnectionMaxAge,
     CoordinatorDropped,
     InboundOverload,
@@ -155,6 +158,7 @@ impl PumpExitReason {
             Self::WriteError => "write_error",
             Self::WriteTimeout => "write_timeout",
             Self::LifecycleShutdown => "lifecycle_shutdown",
+            Self::PongTimeout => "pong_timeout",
             Self::ConnectionMaxAge => "connection_max_age",
             Self::CoordinatorDropped => "coordinator_dropped",
             Self::InboundOverload => "inbound_overload",
@@ -223,6 +227,7 @@ impl ConnectionStats {
 
 /// 协调层持有的单 owner WebSocket 连接句柄。
 pub struct ResponsesWebSocketConnection {
+    connection_cancellation: CancellationToken,
     request_trace: gateway_core::diagnostics::TraceContext,
     connection_id: Arc<str>,
     opened_at: Instant,
@@ -238,6 +243,10 @@ pub struct ResponsesWebSocketConnection {
 }
 
 impl ResponsesWebSocketConnection {
+    pub(super) fn cancellation(&self) -> CancellationToken {
+        self.connection_cancellation.clone()
+    }
+
     pub(super) fn set_request_trace(&mut self, trace: gateway_core::diagnostics::TraceContext) {
         self.request_trace = trace;
     }
@@ -471,6 +480,7 @@ impl ResponsesWebSocketConnection {
     }
 
     fn terminate(&mut self, reason: PumpExitReason) {
+        let reason = self.exited.try_recv().unwrap_or(reason);
         self.exit_reason.get_or_insert(reason);
         self.commands.take();
         if let Some(task) = self.pump_task.take() {
@@ -511,6 +521,7 @@ impl ResponsesWebSocketConnection {
 
 impl Drop for ResponsesWebSocketConnection {
     fn drop(&mut self) {
+        self.connection_cancellation.cancel();
         self.commands.take();
         if let Some(task) = self.pump_task.take() {
             task.abort();
@@ -535,6 +546,7 @@ where
     let (command_tx, command_rx) = mpsc::channel(OUTBOUND_COMMAND_BUFFER);
     let (incoming_tx, incoming_rx) = mpsc::channel(INBOUND_EVENT_BUFFER);
     let (exit_tx, exit_rx) = oneshot::channel();
+    let connection_cancellation = CancellationToken::new();
     let pump_task = tokio::spawn(run_pump(
         socket,
         command_rx,
@@ -542,12 +554,14 @@ where
         exit_tx,
         Arc::clone(&connection_id),
         cancellation,
+        connection_cancellation.clone(),
         opened_at,
         Arc::clone(&expired),
         Arc::clone(&stats),
         config,
     ));
     ResponsesWebSocketConnection {
+        connection_cancellation,
         request_trace: Default::default(),
         connection_id,
         opened_at,
@@ -571,6 +585,7 @@ async fn run_pump<S, E>(
     exited: oneshot::Sender<PumpExitReason>,
     connection_id: Arc<str>,
     cancellation: CancellationToken,
+    connection_cancellation: CancellationToken,
     opened_at: Instant,
     expired: Arc<AtomicBool>,
     stats: Arc<ConnectionStats>,
@@ -579,7 +594,16 @@ async fn run_pump<S, E>(
     S: Stream<Item = Result<Message, E>> + Sink<Message, Error = E> + Unpin,
     E: fmt::Display,
 {
-    let (mut writer, mut reader) = socket.split();
+    struct CancelOnDrop(CancellationToken);
+    impl Drop for CancelOnDrop {
+        fn drop(&mut self) {
+            self.0.cancel();
+        }
+    }
+    let _connection_lifetime = CancelOnDrop(connection_cancellation);
+    let (writer, mut reader) = socket.split();
+    let writer = Mutex::new(writer);
+    let (activity, received_activity) = watch::channel(());
     // Both halves belong to this task. A blocked write cannot hide close or cancellation.
     let read = async {
         let event_slots = Arc::new(Semaphore::new(INBOUND_EVENT_BUFFER));
@@ -601,6 +625,9 @@ async fn run_pump<S, E>(
                 message = reader.next() => {
                     if matches!(&message, Some(Ok(_))) {
                         stats.record_read(opened_at);
+                    }
+                    if matches!(&message, Some(Ok(message)) if !matches!(message, Message::Close(_))) {
+                        activity.send_replace(());
                     }
                     let event = match message {
                         Some(Ok(Message::Text(payload))) => Some(ConnectionEvent::Text(payload.to_string())),
@@ -635,37 +662,20 @@ async fn run_pump<S, E>(
         }
     };
     let write = async {
-        let mut heartbeat = tokio::time::interval_at(
-            opened_at + DOWNSTREAM_PING_INTERVAL,
-            DOWNSTREAM_PING_INTERVAL,
-        );
-        heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        let mut ping_sequence = 0_u64;
         loop {
-            let command = tokio::select! {
-                biased;
-                command = commands.recv() => {
-                    let Some(command) = command else {
-                        break PumpExitReason::CoordinatorDropped;
-                    };
-                    Some(command)
-                }
-                _ = heartbeat.tick() => None,
+            let Some(command) = commands.recv().await else {
+                break PumpExitReason::CoordinatorDropped;
             };
-            let (message, acknowledgement) = if let Some(command) = command {
-                (
-                    command.message,
-                    Some((command.context, command.acknowledged)),
-                )
-            } else {
-                ping_sequence = ping_sequence.wrapping_add(1);
-                (
-                    Message::Ping(ping_sequence.to_be_bytes().to_vec().into()),
-                    None,
-                )
-            };
+            let (message, acknowledgement) = (
+                command.message,
+                Some((command.context, command.acknowledged)),
+            );
             let closing = matches!(message, Message::Close(_));
-            let result = match timeout(config.write_timeout, writer.send(message)).await {
+            let result = match timeout(config.write_timeout, async {
+                writer.lock().await.send(message).await
+            })
+            .await
+            {
                 Ok(Ok(())) => {
                     stats.record_write(opened_at);
                     if acknowledgement.is_none() {
@@ -710,6 +720,7 @@ async fn run_pump<S, E>(
         () = cancellation.cancelled() => PumpExitReason::LifecycleShutdown,
         reason = read => reason,
         reason = write => reason,
+        reason = heartbeat_connection(&writer, received_activity, &stats, opened_at) => reason,
     };
     if reason == PumpExitReason::ClientClose {
         // Reading Close queues the acknowledgement. Flush it once, without waiting
@@ -717,7 +728,7 @@ async fn run_pump<S, E>(
         tokio::select! {
             biased;
             () = cancellation.cancelled() => {}
-            result = timeout(Duration::from_secs(1), writer.flush()) => {
+            result = timeout(Duration::from_secs(1), async { writer.lock().await.flush().await }) => {
                 if !matches!(result, Ok(Ok(()))) {
                     tracing::debug!(websocket_connection_id = %connection_id, "Responses WebSocket close acknowledgement could not be flushed");
                 }
@@ -730,6 +741,75 @@ async fn run_pump<S, E>(
         pump_exit_reason = reason.as_str(),
         "Responses WebSocket pump exited"
     );
+}
+
+async fn heartbeat_connection<S, E>(
+    writer: &Mutex<S>,
+    mut activity: watch::Receiver<()>,
+    stats: &ConnectionStats,
+    opened_at: Instant,
+) -> PumpExitReason
+where
+    S: Sink<Message, Error = E> + Unpin,
+    E: fmt::Display,
+{
+    let mut heartbeat = tokio::time::interval_at(
+        opened_at + DOWNSTREAM_PING_INTERVAL,
+        DOWNSTREAM_PING_INTERVAL,
+    );
+    heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut sequence = 0_u64;
+    let pong_deadline = tokio::time::sleep(DOWNSTREAM_PONG_TIMEOUT);
+    tokio::pin!(pong_deadline);
+    let mut pending_ping = false;
+    loop {
+        tokio::select! {
+            biased;
+            changed = activity.changed() => {
+                if changed.is_err() { return PumpExitReason::PumpStopped; }
+                pending_ping = false;
+                continue;
+            }
+            () = &mut pong_deadline, if pending_ping => return PumpExitReason::PongTimeout,
+            _ = heartbeat.tick() => {}
+        }
+        sequence = sequence.wrapping_add(1);
+        let write = timeout(DOWNSTREAM_PING_WRITE_TIMEOUT, async {
+            writer
+                .lock()
+                .await
+                .send(Message::Ping(sequence.to_be_bytes().to_vec().into()))
+                .await
+        });
+        tokio::pin!(write);
+        let mut received_during_write = false;
+        loop {
+            tokio::select! {
+                biased;
+                changed = activity.changed() => {
+                    if changed.is_err() { return PumpExitReason::PumpStopped; }
+                    pending_ping = false;
+                    received_during_write = true;
+                }
+                () = &mut pong_deadline, if pending_ping => return PumpExitReason::PongTimeout,
+                result = &mut write => {
+                    match result {
+                        Ok(Ok(())) => {
+                            stats.record_write(opened_at);
+                            stats.ping_written_count.fetch_add(1, Ordering::Relaxed);
+                            if !pending_ping && !received_during_write {
+                                pong_deadline.as_mut().reset(Instant::now() + DOWNSTREAM_PONG_TIMEOUT);
+                                pending_ping = true;
+                            }
+                        }
+                        Ok(Err(_)) => return PumpExitReason::WriteError,
+                        Err(_) => return PumpExitReason::WriteTimeout,
+                    }
+                    break;
+                }
+            }
+        }
+    }
 }
 
 fn emit_incoming(

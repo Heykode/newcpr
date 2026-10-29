@@ -110,14 +110,46 @@ pub trait ProviderAccountAdminRepository: Send + Sync {
 pub struct PgProviderAccountRepository {
     pub(crate) pool: PgPool,
     pub(crate) device_codecs: DeviceCodecs,
+    protection: Option<std::sync::Arc<dyn gateway_core::provider_ports::ProviderCooldownPort>>,
 }
 
 impl PgProviderAccountRepository {
+    #[must_use]
+    pub fn with_error_protection(
+        mut self,
+        store: std::sync::Arc<dyn gateway_core::provider_ports::ProviderCooldownPort>,
+    ) -> Self {
+        self.protection = Some(store);
+        self
+    }
+
+    pub(super) async fn advance_protection(&self, id: &str, revision: u64) {
+        let Some(store) = &self.protection else {
+            return;
+        };
+        let (Ok(id), Ok(revision)) = (
+            gateway_core::account::ProviderAccountId::new(id.to_owned()),
+            gateway_core::account::CredentialRevision::new(revision),
+        ) else {
+            return;
+        };
+        if !matches!(
+            tokio::time::timeout(
+                std::time::Duration::from_millis(100),
+                store.advance_protection_revision(&id, revision)
+            )
+            .await,
+            Ok(Ok(_))
+        ) {
+            tracing::warn!("account protection credential fence was not persisted");
+        }
+    }
     #[must_use]
     pub fn new(pool: PgPool) -> Self {
         Self {
             pool,
             device_codecs: DeviceCodecs::default(),
+            protection: None,
         }
     }
 }
@@ -303,7 +335,7 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
         })?
         .ok_or(StoreError::Conflict {
             entity: ENTITY,
-            id: update.account_id,
+            id: update.account_id.clone(),
             kind: ConflictKind::StaleRevision,
         })?;
         let revision = Revision::new(to_u64(next)?)?;
@@ -312,6 +344,8 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
         transaction.commit().await.map_err(|error| {
             postgres_unavailable("commit provider credential CAS").with_source(error)
         })?;
+        self.advance_protection(&update.account_id, revision.get())
+            .await;
         Ok(revision)
     }
 
@@ -795,7 +829,15 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
             })
         }
         .await;
-        finish_admin_transaction(transaction, result, "provider account admin import").await
+        let result =
+            finish_admin_transaction(transaction, result, "provider account admin import").await?;
+        for id in &result.account_ids {
+            if let Ok(Some(account)) = self.load_provider_account(id).await {
+                self.advance_protection(id, account.summary.credential_revision.get())
+                    .await;
+            }
+        }
+        Ok(result)
     }
 
     async fn rotate_provider_account(
@@ -817,6 +859,7 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
         command: RotateProviderAccount,
         switch_workspace: bool,
     ) -> StoreResult<ProviderAccountAdminRotation> {
+        let protection_account = command.profile.id.clone();
         command.scope.validate()?;
         require_nonempty(ENTITY, "account_id", &command.profile.id)?;
         require_nonempty(ENTITY, "name", &command.profile.name)?;
@@ -943,7 +986,12 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
             })
         }
         .await;
-        finish_admin_transaction(transaction, result, "provider account admin rotation").await
+        let result =
+            finish_admin_transaction(transaction, result, "provider account admin rotation")
+                .await?;
+        self.advance_protection(&protection_account, result.credential_revision.get())
+            .await;
+        Ok(result)
     }
 
     async fn batch_update_provider_accounts_admin(

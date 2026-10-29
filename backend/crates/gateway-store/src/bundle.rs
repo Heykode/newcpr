@@ -71,11 +71,14 @@ pub async fn initialize(mut config: StoreConfig) -> StoreResult<StoreBundle> {
         .await
         .map_err(|error| redis_unavailable("connect Redis manager").with_source(error))?;
 
-    let provider_accounts = Arc::new(postgres::PgProviderAccountRepository::new(pool.clone()));
     let cooldowns = Arc::new(redis::RedisCredentialCooldownRepository::new(
         redis_connection.clone(),
         REDIS_NAMESPACE,
     )?);
+    let provider_accounts = Arc::new(
+        postgres::PgProviderAccountRepository::new(pool.clone())
+            .with_error_protection(cooldowns.clone()),
+    );
     let account_store: Arc<dyn ProviderAccountStore> = provider_accounts.clone();
 
     let credential_leases =
@@ -220,6 +223,7 @@ pub async fn initialize(mut config: StoreConfig) -> StoreResult<StoreBundle> {
         ),
         Arc::new(client_key_usage),
     )
+    .with_account_error_protection(cooldowns.clone())
     .with_budget(Arc::new(budget))
     .with_client_retry(Arc::new(redis::RedisClientRetryRepository::new(
         redis_connection.clone(),

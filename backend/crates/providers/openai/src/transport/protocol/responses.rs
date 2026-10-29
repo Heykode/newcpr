@@ -1,8 +1,7 @@
 use std::fmt;
 
 use gateway_protocol::openai::{
-    CodexResponsesRequestSemantics as CodexRequestSemantics, OpenAiSchedulingSessionHint,
-    codex_responses_request_semantics_with_turn_metadata, events,
+    CodexResponsesRequestSemantics as CodexRequestSemantics, OpenAiSchedulingSessionHint, events,
 };
 use reqwest::header::HeaderMap;
 use serde::Serialize;
@@ -528,6 +527,7 @@ pub struct ResponsesSseFailure {
     pub message: String,
     /// 上游错误码。
     pub upstream_code: Option<String>,
+    pub upstream_message: Option<String>,
     /// 上游显式错误类型；不从业务码推导。
     pub upstream_type: Option<String>,
     /// 上游显式状态码；不从业务码或错误类型推导。
@@ -564,6 +564,7 @@ impl ResponsesSseFailure {
             event: event.to_string(),
             message: failure_message(value).unwrap_or_else(|| "Codex upstream SSE failed".into()),
             upstream_code: failure_code(value),
+            upstream_message: failure_message(value),
             upstream_type: failure_type(value),
             explicit_status_code: failure_explicit_status_code(value),
             retry_after_seconds: events::retry_after_seconds_from_value(value),
@@ -821,10 +822,16 @@ impl CodexResponsesRequest {
 
     /// 提取 Codex 请求类型、子代理类型、推理预设与压缩语义。
     pub fn semantics(&self) -> CodexRequestSemantics {
-        let mut semantics = codex_responses_request_semantics_with_turn_metadata(
-            self.body(),
-            self.turn_metadata.as_deref(),
-        );
+        self.semantics_with_override(None)
+    }
+
+    pub fn semantics_with_override(&self, previous: Option<&str>) -> CodexRequestSemantics {
+        let mut semantics =
+            gateway_protocol::openai::codex::codex_responses_request_semantics_with_continuation(
+                self.body(),
+                self.turn_metadata.as_deref(),
+                previous,
+            );
         // 官方 generate=false 只准备连接与上下文，不是模型推理。
         // 预热分类参与用量筛选，不能仅凭客户端的 request_kind 提示排除真实推理。
         if !self.generate() {

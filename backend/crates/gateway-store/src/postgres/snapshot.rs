@@ -169,6 +169,13 @@ impl SnapshotStorePort for PgRuntimeSnapshotRepository {
             )
             .with_request_location(data.settings.request_tuning.openai_request_location.clone())
             .with_excel_image_transport(data.settings.request_tuning.excel_image_transport.clone())
+            .with_account_error_protection(
+                data.settings
+                    .request_tuning
+                    .account_error_protection
+                    .clone()
+                    .unwrap_or_default(),
+            )
             .with_request_tuning(to_core_request_tuning(data.settings.request_tuning))
             .with_openai_guardian_reserved_concurrency(
                 data.settings.openai_guardian_reserved_concurrency,

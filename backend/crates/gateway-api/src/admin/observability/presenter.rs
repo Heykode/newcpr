@@ -41,6 +41,17 @@ pub(crate) fn display_rate(value: f64) -> String {
     }
 }
 
+fn load_view(load: &domain::UsageInsightsLoad) -> OverviewLoadView {
+    OverviewLoadView {
+        average_concurrency: load.average_concurrency,
+        peak_concurrency: load.peak_concurrency,
+        admission_decision_p95_ms: load.admission_decision_p95_ms.map(|value| value.as_f64()),
+        account_selection_wait_p95_ms: load
+            .account_selection_wait_p95_ms
+            .map(|value| value.as_f64()),
+    }
+}
+
 fn basis_points_rate(value: u64) -> f64 {
     value as f64 / 10_000.0
 }
@@ -1111,6 +1122,7 @@ pub(crate) fn usage_insights_view(insights: domain::UsageInsights) -> UsageInsig
         .points
         .iter()
         .map(|point| OverviewPerformancePointView {
+            load: load_view(&point.load),
             bucket: point.bucket_start,
             label: china_label(point.bucket_start, "%m-%d %H:%M"),
             latency_p50_ms: point.latency_percentiles.p50_ms.map(|value| value.as_f64()),
@@ -1190,6 +1202,7 @@ pub(crate) fn usage_insights_view(insights: domain::UsageInsights) -> UsageInsig
             points: health_points,
         },
         performance: OverviewPerformanceView {
+            load: load_view(&insights.performance.load),
             latency_p50_ms: insights
                 .performance
                 .latency_percentiles

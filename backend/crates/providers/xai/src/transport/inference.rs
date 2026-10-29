@@ -317,6 +317,7 @@ pub enum GrokInferenceTransportErrorKind {
 /// 稳定分类与受保护的底层诊断分别承载。
 #[derive(Clone)]
 pub struct GrokInferenceTransportError {
+    upstream_fields: Option<Box<gateway_core::upstream::UpstreamFailureFields>>,
     kind: GrokInferenceTransportErrorKind,
     source: Option<gateway_core::error::ErrorSource>,
     raw_upstream_error: Option<Box<gateway_core::error::RawUpstreamError>>,
@@ -334,6 +335,21 @@ pub struct GrokInferenceTransportError {
 }
 
 impl GrokInferenceTransportError {
+    #[must_use]
+    pub fn with_upstream_failure_fields(
+        mut self,
+        fields: gateway_core::upstream::UpstreamFailureFields,
+    ) -> Self {
+        self.upstream_fields = Some(Box::new(fields));
+        self
+    }
+    #[must_use]
+    pub fn upstream_failure_fields(
+        &self,
+    ) -> Option<&gateway_core::upstream::UpstreamFailureFields> {
+        self.upstream_fields.as_deref()
+    }
+
     /// 以 transport 保守判定的发送状态创建已分类错误。
     #[must_use]
     pub const fn new(kind: GrokInferenceTransportErrorKind, send_state: UpstreamSendState) -> Self {
@@ -341,6 +357,7 @@ impl GrokInferenceTransportError {
             kind,
             source: None,
             raw_upstream_error: None,
+            upstream_fields: None,
             diagnostic: None,
             send_state,
             status: None,

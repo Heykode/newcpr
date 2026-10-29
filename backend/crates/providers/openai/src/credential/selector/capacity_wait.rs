@@ -785,7 +785,7 @@ impl CodexCredentialSelector {
         for account in accounts {
             let cooldown = self
                 .quota
-                .rate_limited_until(account.id())
+                .scheduling_cooldown(&account)
                 .await
                 .map_err(|source| CredentialSelectionError::Store(Some(source.into())))?;
             let health = self

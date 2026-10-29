@@ -7,6 +7,7 @@ use provider_openai::transport::qx_application::project_response_request;
 
 fn compression_context() -> CodexRequestContext<'static> {
     CodexRequestContext {
+        response_control: None,
         installation_id: Some("85c64ae8-4b44-4f82-9696-909adef2144c"),
         session_id: Some("original-session"),
         thread_id: Some("original-thread"),

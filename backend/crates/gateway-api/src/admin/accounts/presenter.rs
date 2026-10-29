@@ -68,6 +68,7 @@ pub(super) fn account_view(
     timezone: DeploymentTimeZone,
 ) -> AccountView {
     let AccountDirectoryItem {
+        error_protection,
         turn_state,
         codex_quota_overdraft,
         account,
@@ -96,6 +97,7 @@ pub(super) fn account_view(
     quota.overdraft =
         codex_quota_overdraft.map(|state| codex_quota_overdraft_view(state, timezone));
     AccountView {
+        error_protection,
         purchase_cost,
         excel_recovery,
         id: account.id.clone(),

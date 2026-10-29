@@ -72,3 +72,19 @@ impl fmt::Debug for OpaqueUpstreamValue {
         formatter.write_str("OpaqueUpstreamValue(<redacted-from-Debug>)")
     }
 }
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct UpstreamFailureFields {
+    pub status: Option<u16>,
+    pub code: Option<String>,
+    pub error_type: Option<String>,
+    pub message: Option<String>,
+}
+impl std::fmt::Debug for UpstreamFailureFields {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("UpstreamFailureFields")
+            .field("status", &self.status)
+            .finish_non_exhaustive()
+    }
+}

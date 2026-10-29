@@ -416,3 +416,5 @@ async fn delete_credentials(
 }
 pub(crate) mod excel_recovery;
 pub mod quality_ops;
+
+pub(crate) mod error_protection;

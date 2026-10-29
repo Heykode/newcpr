@@ -79,7 +79,10 @@ pub(super) fn convert(value: &Value, custom_names: &BTreeSet<String>) -> Result<
         if !["system", "developer", "user", "assistant"].contains(&role) {
             return Err(Error::unsupported(format!("{path}.role")));
         }
-        if msg.get("name").is_some_and(|v| !v.is_null()) {
+        if msg
+            .get("name")
+            .is_some_and(|v| !v.is_null() && v.as_str() != Some(""))
+        {
             return Err(Error::unsupported(format!("{path}.name")));
         }
         if msg.contains_key("tool_call_id")
@@ -225,13 +228,13 @@ fn content(value: &Value, role: &str, path: &str) -> Result<Vec<Value>> {
         let raw = object(block, &bp)?;
         match block["type"].as_str() {
             Some("text") => {
-                only_keys(raw, &["type", "text"], &bp)?;
+                only_keys(raw, &["type", "text", "prompt_cache_breakpoint"], &bp)?;
                 result.push(
                     json!({"type":text_type,"text":string(&block["text"], &format!("{bp}.text"))?}),
                 );
             }
             Some("image_url") if role == "user" || role == "tool" => {
-                only_keys(raw, &["type", "image_url"], &bp)?;
+                only_keys(raw, &["type", "image_url", "prompt_cache_breakpoint"], &bp)?;
                 let image = object(&block["image_url"], &format!("{bp}.image_url"))?;
                 only_keys(
                     image,
@@ -279,6 +282,19 @@ fn content(value: &Value, role: &str, path: &str) -> Result<Vec<Value>> {
                 result.push(converted);
             }
             _ => return Err(Error::unsupported(bp)),
+        }
+        if let Some(value) = raw
+            .get("prompt_cache_breakpoint")
+            .filter(|value| !value.is_null())
+        {
+            let path = format!("{bp}.prompt_cache_breakpoint");
+            if role == "assistant" {
+                return Err(Error::unsupported(path));
+            }
+            object(value, &path)?;
+            if let Some(part) = result.last_mut() {
+                part["prompt_cache_breakpoint"] = value.clone();
+            }
         }
     }
     Ok(result)

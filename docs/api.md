@@ -162,8 +162,8 @@ Chat 默认 `stream=false`，使用与 Responses 相同的鉴权、模型范围�
 `file_id` 与 `file_data` 必须且只能提供一个非空字符串，可附加 `filename`。
 网关不下载文件，也不保证所选上游账号有权访问文件 ID。
 助手历史支持字符串 `reasoning_content` 或 `reasoning`，作为普通公开历史文字发送，
-不构造加密推理状态；同时给出不同值时拒绝歧义。旧式 `functions` / `function_call`
-协议仍不接入，避免只有请求转换而没有对应返回语义。
+不构造加密推理状态；同时给出不同值时拒绝歧义。旧式非空 `functions` / `function_call`
+协议仍不接入；空 `functions`、空 `stop`、空 `logit_bias` 可作为无操作字段接受。
 
 支持文本、图片输入、普通 function 工具定义/多轮结果/并行调用、结构化输出、推理配置、
 拒绝信息、网页搜索选项，以及显式 `web_search`、`image_generation`、
@@ -175,7 +175,11 @@ Chat 默认 `stream=false`，使用与 Responses 相同的鉴权、模型范围�
 Provider 会移除 `max_output_tokens` 和 `temperature`，因此不能保证这些控制生效；
 本次保留旧转发行为，不把中间 JSON 存在字段视为上游支持。
 
-无法表达的音频、旧式 functions、多个候选结果、stop 等请求语义明确返回 400。
+无法表达的音频、非空旧式 functions、多个候选结果、非空 stop 等请求语义明确返回 400。
+未知顶层 Chat 扩展忽略，不将它们当作 Responses 字段转发；`input`、`previous_response_id`
+等 Responses 专用语义仍拒绝。`metadata`、`prompt_cache_options`、`moderation` 接受对象，
+`max_completion_tokens` 优先于 `max_tokens`。文本和图片输入上的 `prompt_cache_breakpoint`
+保留，助手输出中的该字段拒绝；`include_obfuscation: false` 接受，`true` 不支持。
 显式画图工具按 CPA 方式通过 `message.images` / `delta.images` 返回独立的
 `image_url` 条目，不向正文插入 Markdown 或图片编码。预览和已完成图片可以流式返回，
 预览不算成功，仍须正常终态。同一图片按 item ID 比较前一次编码内容，相同则跳过；
@@ -193,8 +197,11 @@ Chat 不支持的请求声明仍会拒绝，未映射的返回事件按 CPA 方�
 未开始输出时转换失败返回 JSON 502；
 流式输出开始后发送 `data: {"error":...}`，随后结束，不伪造正常完成或用量。
 流式首包遇到心跳、创建事件、空增量或未知事件时继续等待有效输出，不先发空角色分片。
-正文和工具参数逐段返回，不缓存全文来比对或补发终态快照。工具未发过参数时，
-完成事件可补发整段参数；工具项目结束后的迟到增量忽略，不让整次请求报错。
+正文和工具参数逐段返回，仅保存每段已发内容的长度和 SHA-256 摘要。
+done、item 和终态快照与已发前缀一致时，只补发缺失后缀；终态仅有正文或工具时也能补齐。
+空快照不抹去已发内容；前缀、工具身份或名称冲突返回转换错误，不拼接不同调用。
+工具按 item ID、call ID 及输出索引核对身份；终态数组重排不改变既有工具编号。
+工具项目结束后的迟到增量忽略。推理增量、图片及 custom 工具扩展继续使用既有转换。
 缺少终态、明确失败和内部收尾失败仍不能伪装为正常完成或发送成功用量。
 真实空终态不再被 Chat 自加的空输出校验拒绝；用量、费用及防重仍由原系统处理。
 上游错误正文统一为 Chat 可解析的 JSON，并保留有效错误状态和可转发的重试/诊断头。
@@ -1109,6 +1116,25 @@ Redis 故障拒绝准入，取消正常释放登记；故障或进程退出时�
   和传输要求，不新增正文采集。运行设置仍全量替换，保存时保留其他字段，进行中的请求保持冻结值。
 - 降级到不认识该字段的旧版本前，先备份并从持久化 `requestTuning` 中移除该字段；设为 `0`
   只关闭功能，不会使旧配置解析器认识该字段。
+
+### 可配置错误保护
+
+`requestTuning.accountErrorProtection` 包含 `enabled`、`rules`、`threshold`、
+`windowSeconds`、`durationSeconds`、`probeEnabled` 和可空 `probeModel`。
+默认关闭、无规则；启用前必须配置有效规则。规则内条件为且关系，规则间为或关系，
+同一次上游失败只累计一次。字段支持 `provider/status/code/type/message`，
+操作符为 `equals/contains`，候选值中的 `null` 表示字段缺失，不等于空文本。
+
+保护使用独立 Redis 状态，不改写账号手动启停或普通额度冷却。开启恢复探测时，
+到期仅进入等待探测，成功才解除该项保护；失败按保护时长延期。质量检测和诊断不累计保护失败。
+凭据、规则策略和手动恢复有独立版本栅栏，旧结果不能恢复或重新冻结新状态。
+旧客户端省略该配置会保留已保存值；明确关闭使用 `enabled:false`。
+关闭后停止累计新失败，已有保护到期解除，不继续要求探测。
+
+账号视图的 `errorProtection` 返回到期时间、是否要求探测和命中规则，
+不返回原始上游错误正文。使用统计 `performance.load` 及每个时间点的 `load`
+返回平均并发、峰值并发、准入等待 P95、账号选择等待 P95；
+并发按业务请求生命周期计算，内部质量检测等探测不计入。
 
 Windows 离线包接口固定解析 Microsoft Store Product ID `9PLM9XGG6VKS` 的 Retail 包，不接受调用方提供
 产品 ID、上游地址、ring 或文件名。后端只返回通过包名、架构、Microsoft CDN host/path、scheme 和失效

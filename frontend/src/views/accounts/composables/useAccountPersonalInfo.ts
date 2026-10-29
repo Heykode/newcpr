@@ -3,7 +3,9 @@ import type { AccountPersonalInfoResponse } from '@/api'
 import { computed, shallowRef, watch } from 'vue'
 
 import { getAccountPersonalInfo } from '@/api'
+import { toast } from '@/components/base/BaseToast'
 import { useRequestState } from '@/composables/useRequestState'
+import { t } from '@/i18n'
 
 export function useAccountPersonalInfo(accountId: Ref<string>, open: Ref<boolean>) {
   const info = shallowRef<AccountPersonalInfoResponse | null>(null)
@@ -25,6 +27,8 @@ export function useAccountPersonalInfo(accountId: Ref<string>, open: Ref<boolean
         return
       // 单项失败仍更新其他信息；仅在当前打开周期保留上次可用的统计。
       info.value = { ...result, profile: result.profile ?? info.value?.profile ?? null }
+      if (result.profileError || result.profile?.hasStatsError)
+        toast.error(result.profileError || t('accounts.profile.statisticsUnavailable'))
     }
     catch (cause) {
       request.fail(version, cause)

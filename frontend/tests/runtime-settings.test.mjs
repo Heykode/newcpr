@@ -16,8 +16,10 @@ function loadModule(filename, dependencies = {}) {
   const exports = {}
   runInNewContext(outputText, {
     URL,
+    TextEncoder,
+    structuredClone,
     exports,
-    require: name => dependencies[name] ?? (name === '@/utils/excel-defaults' ? loadModule(new URL('../src/utils/excel-defaults.ts', import.meta.url)) : require(name)),
+    require: name => dependencies[name] ?? (name === '../components/error-protection/form' ? loadModule(new URL('../src/views/settings/components/error-protection/form.ts', import.meta.url)) : name === '@/utils/excel-defaults' ? loadModule(new URL('../src/utils/excel-defaults.ts', import.meta.url)) : require(name)),
   }, { filename: String(filename) })
   return exports
 }
@@ -208,6 +210,18 @@ function mountSettings(initial, onWarning = assert.fail) {
     '@/api': {
       getSettings: async () => saved,
       updateSettings: async (payload) => {
+        function reactivePath(value, path = 'payload') {
+          if (vue.isProxy(value))
+            return path
+          if (value && typeof value === 'object') {
+            for (const [key, child] of Object.entries(value)) {
+              const found = reactivePath(child, `${path}.${key}`)
+              if (found)
+                return found
+            }
+          }
+        }
+        assert.equal(reactivePath(payload), undefined, 'settings submission must be detached from reactive drafts')
         const data = structuredClone(payload)
         requests.push(data)
         saved = { ...data, updatedAt: initial.updatedAt }
@@ -484,6 +498,7 @@ test('inherited runtime defaults never add the removed global WS opening limit',
     await query.state.saveSettings()
     assert.equal(query.requests.length, 1)
     assert.deepEqual(query.requests[0].requestTuning, {
+      accountErrorProtection: { enabled: false, rules: [], threshold: 12, windowSeconds: 600, durationSeconds: 7200, probeEnabled: true, probeModel: null },
       smartScheduling: { loadWeight: 1, quotaWeight: 0.8, healthWeight: 1, latencyWeight: 0.5, resetWeight: 0, queueWeight: 0, preferHigherWeight: false },
       maxAccountSwitches: 31,
       maxRequestAttempts: 32,
@@ -899,7 +914,7 @@ test('editing Excel MiB changes only the intended byte field, not shared or nati
     assert.equal(query.state.form.requestTuning.excelImageMaxBytes, 21495808)
     await query.state.saveSettings()
     const after = query.requests[0].requestTuning
-    assert.deepEqual(after, { ...before, excelImageMaxBytes: 21495808 })
+    assert.deepEqual(after, { ...before, excelImageMaxBytes: 21495808, accountErrorProtection: { enabled: false, rules: [], threshold: 12, windowSeconds: 600, durationSeconds: 7200, probeEnabled: true, probeModel: null } })
     for (const key of ['modelMappings', 'rotationStrategy', 'refreshMarginSeconds', 'refreshConcurrency', 'maxConcurrentPerAccount', 'requestIntervalMs'])
       assert.deepEqual(query.requests[0][key], initial[key])
     await query.state.saveSettings()
@@ -981,6 +996,35 @@ test('Excel image mode toggling preserves draft relay address and does not rewri
     await query.state.loadSettings()
     assert.equal(count.input.value, '20')
     assert.equal(images.errors.value.length, 0)
+  }
+  finally { query.stop() }
+})
+
+test('error protection is opt-in, validates rules, and saves independently from scheduling', async () => {
+  const warnings = []
+  const query = mountSettings(settings(), message => warnings.push(message))
+  try {
+    await query.state.loadSettings()
+    const original = JSON.stringify(query.state.form.requestTuning)
+    assert.equal(query.state.form.accountErrorProtection.enabled, false)
+    query.state.form.accountErrorProtection.enabled = true
+    await query.state.saveSettings()
+    assert.equal(query.requests.length, 0)
+    assert.equal(warnings.length, 1)
+    query.state.form.accountErrorProtection.rules = [{
+      id: 'test',
+      name: 'Synthetic failures',
+      conditions: [{ field: 'status', operator: 'equals', values: ['503'], ignoreCase: false }],
+    }]
+    query.state.form.accountErrorProtection.threshold = 3
+    await query.state.saveSettings()
+    assert.equal(query.requests.length, 1)
+    const policy = query.requests[0].requestTuning.accountErrorProtection
+    assert.equal(policy.enabled, true)
+    assert.equal(policy.threshold, 3)
+    assert.equal(policy.probeModel, null)
+    assert.equal(policy.rules[0].conditions[0].values[0], '503')
+    assert.equal(JSON.stringify(query.state.form.requestTuning), original)
   }
   finally { query.stop() }
 })

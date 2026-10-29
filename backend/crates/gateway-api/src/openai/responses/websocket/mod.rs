@@ -276,6 +276,7 @@ async fn serve_responses_websocket(socket: WebSocket, session: ResponsesWebSocke
         drop(payload);
 
         control = started.session.response_control().unwrap_or_default();
+        control.set_connection_cancellation(connection.cancellation());
         if forward_execution(&mut connection, started, &mut replay).await
             == ForwardOutcome::Disconnect
         {

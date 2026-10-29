@@ -377,7 +377,10 @@ impl CodexCredentialSelector {
                     .plan_type()
                     .is_some_and(|plan| plan.trim().eq_ignore_ascii_case("free")))
             && (!request.requires_oauth
-                || account.authentication_kind() == CODEX_AUTHENTICATION_KIND_OAUTH)
+                || (account.authentication_kind() == CODEX_AUTHENTICATION_KIND_OAUTH
+                    && !account
+                        .plan_type()
+                        .is_some_and(|plan| plan.trim().eq_ignore_ascii_case("free"))))
             && request
                 .attempt
                 .excel_recovery_revision()
@@ -619,7 +622,7 @@ impl CodexCredentialSelector {
                 let reads = chunk.iter().map(|account| async {
                     let until = self
                         .quota
-                        .rate_limited_until(account.id())
+                        .scheduling_cooldown(account)
                         .await
                         .unwrap_or(None);
                     (account.id().clone(), until)

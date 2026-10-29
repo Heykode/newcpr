@@ -59,8 +59,14 @@ impl PgObservabilityRepository {
                 metrics.disabled = metrics.disabled.saturating_add(1);
                 continue;
             }
-            account.facts.rate_limited_until = rate_limited_until.get(&account.id).copied();
-            let projection = gateway_core::account::resolve_account_status(&account.facts, now);
+            let runtime = rate_limited_until.get(&account.id).copied();
+            account.facts.rate_limited_until = runtime.map(|(until, _)| until);
+            let mut projection = gateway_core::account::resolve_account_status(&account.facts, now);
+            if runtime.is_some_and(|(_, protection)| protection)
+                && projection.status != gateway_core::account::AccountStatus::Error
+            {
+                projection.status = gateway_core::account::AccountStatus::RateLimited;
+            }
             match projection.status {
                 gateway_core::account::AccountStatus::Normal => {
                     metrics.normal = metrics.normal.saturating_add(1);
@@ -238,6 +244,22 @@ impl PgAdminObservabilityStore {
 
 #[async_trait]
 impl ObservabilityRepository for PgObservabilityRepository {
+    async fn usage_concurrency(
+        &self,
+        range: ObservabilityRange,
+        filter: UsageRecordFilter,
+    ) -> StoreResult<Vec<admin_observability::UsageConcurrencyPoint>> {
+        self.query_budget
+            .run(
+                &self.pool,
+                "load usage concurrency",
+                |mut connection| async move {
+                    request_concurrency(&mut connection, range, &filter).await
+                },
+            )
+            .await
+    }
+
     async fn dashboard_summary(
         &self,
         range: ObservabilityRange,
@@ -403,6 +425,17 @@ impl ObservabilityRepository for PgObservabilityRepository {
 
 #[async_trait]
 impl AdminObservabilityStore for PgAdminObservabilityStore {
+    async fn usage_concurrency(
+        &self,
+        range: admin_observability::TimeRange,
+        filter: admin_observability::UsageFilter,
+    ) -> AdminStoreResult<Vec<admin_observability::UsageConcurrencyPoint>> {
+        self.repository
+            .usage_concurrency(store_range(range)?, store_usage_filter(filter))
+            .await
+            .map_err(observability_error)
+    }
+
     async fn diagnostic_errors(
         &self,
         target: &gateway_admin::model::diagnostics::DiagnosticTarget,

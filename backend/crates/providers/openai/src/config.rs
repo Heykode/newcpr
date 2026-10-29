@@ -193,12 +193,15 @@ impl CodexApiConfig {
 pub struct CodexWebSocketPoolSettings {
     pub enabled: bool,
     pub max_age_ms: u64,
+    pub idle_timeout_ms: u64,
     pub stream_idle_timeout_ms: u64,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct CodexWebSocketPoolSettingsInput {
+    #[serde(default = "default_websocket_pool_idle_timeout_ms")]
+    idle_timeout_ms: u64,
     enabled: bool,
     max_age_ms: u64,
     stream_idle_timeout_ms: u64,
@@ -211,9 +214,14 @@ impl From<CodexWebSocketPoolSettingsInput> for CodexWebSocketPoolSettings {
         Self {
             enabled: value.enabled,
             max_age_ms: value.max_age_ms,
+            idle_timeout_ms: value.idle_timeout_ms,
             stream_idle_timeout_ms: value.stream_idle_timeout_ms,
         }
     }
+}
+
+const fn default_websocket_pool_idle_timeout_ms() -> u64 {
+    300_000
 }
 
 impl Default for CodexWebSocketPoolSettings {
@@ -221,6 +229,7 @@ impl Default for CodexWebSocketPoolSettings {
         Self {
             enabled: true,
             max_age_ms: 55 * 60 * 1000,
+            idle_timeout_ms: default_websocket_pool_idle_timeout_ms(),
             stream_idle_timeout_ms: 300_000,
         }
     }
@@ -228,7 +237,7 @@ impl Default for CodexWebSocketPoolSettings {
 
 impl CodexWebSocketPoolSettings {
     fn validate(&self) -> Result<(), OpenAiConfigError> {
-        if self.max_age_ms == 0 {
+        if self.max_age_ms == 0 || self.idle_timeout_ms == 0 {
             return Err(OpenAiConfigError::InvalidField("openai.ws_pool"));
         }
         Ok(())
@@ -238,6 +247,7 @@ impl CodexWebSocketPoolSettings {
         CodexWebSocketPoolConfig {
             enabled: self.enabled,
             max_age: Duration::from_millis(self.max_age_ms),
+            idle_timeout: Duration::from_millis(self.idle_timeout_ms),
             stream_idle_timeout: (self.stream_idle_timeout_ms != 0)
                 .then(|| Duration::from_millis(self.stream_idle_timeout_ms)),
             ..CodexWebSocketPoolConfig::default()

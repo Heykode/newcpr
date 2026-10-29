@@ -210,6 +210,10 @@ goals = true
   验证 WebSocket 时直接连接后端，当前 Vite 代理未显式开启 WebSocket 转发。
 
 其他客户端使用 Responses API、`/v1` Base URL 和代理密钥即可，不需要 Actor 标记。
+管理端生成的 Codex 配置同时包含指向同一网关的 `model_catalog_url` 和
+`experimental_realtime_ws_base_url`。修改网关地址时同步检查模型目录和 Live 语音地址，
+避免正文、模型列表与语音请求指向不同服务。
+
 路由与请求格式见 [API 参考](../docs/api.md#3-openai-数据面与模型目录)。
 
 ## 优雅关停

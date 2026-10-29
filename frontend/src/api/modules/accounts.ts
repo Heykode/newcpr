@@ -217,6 +217,7 @@ export interface AccountHealthBucket {
 export type ResponsesUpstream = 'codex' | 'excel'
 
 export interface Account {
+  errorProtection?: { until: string, requiresProbe: boolean, rules: { id: string, name: string }[] } | null
   customName?: string | null
   outboundProxyId?: string | null
   outboundProxyEndpoint: string | null

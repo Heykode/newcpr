@@ -393,7 +393,12 @@ impl Provider for CodexProvider {
         let Ok(encoded) = encode_generate_request(request, "observability", location) else {
             return ProviderRequestObservation::default();
         };
-        let semantics = encoded.semantics();
+        let previous_session = decode_openai_session_state(request);
+        let semantics = encoded.semantics_with_override(
+            previous_session
+                .as_ref()
+                .and_then(|state| state.reasoning_effort_override.as_deref()),
+        );
         let reasoning_effort = semantics.reasoning_effort.clone();
         let previous_response_id = encoded.previous_response_id();
         let continuation = ContinuationRequestObservation {
@@ -876,6 +881,7 @@ impl Provider for CodexProvider {
             })
             .map_err(|_| provider_error(ProviderErrorKind::Protocol, UpstreamSendState::NotSent))?,
         )
+        .with_credential_revision(lease.account().revision())
         .with_selection_observation(ProviderSelectionObservation::new(
             account_selection_wait_ms,
             lease.capacity_snapshot(),
@@ -889,6 +895,13 @@ impl Provider for CodexProvider {
             conversation_id: upstream_request.local_conversation_id.clone(),
             turn_state: upstream_request.turn_state.clone(),
             client_turn_id: upstream_request.client_turn_id.clone(),
+            reasoning_effort_override: upstream_request
+                .semantics_with_override(
+                    previous_session
+                        .as_ref()
+                        .and_then(|state| state.reasoning_effort_override.as_deref()),
+                )
+                .reasoning_effort_override,
             response_store,
             continuation_scope: None,
             client_api_key_id: upstream_request.client_api_key_id.clone(),
@@ -934,7 +947,7 @@ impl Provider for CodexProvider {
         }
         let events = cold_response_stream(ColdResponse {
             encrypted_history: self.encrypted_history.clone(),
-            client: client.with_response_control(context.response_control().cloned()),
+            client,
             response_origin: if excel {
                 Url::parse(crate::transport::excel::RESPONSES_URL).map_err(|_| {
                     provider_error(ProviderErrorKind::Protocol, UpstreamSendState::NotSent)

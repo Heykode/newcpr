@@ -489,6 +489,7 @@ mod provider {
             last_error_message: None,
         };
         AccountDirectoryItem {
+            error_protection: None,
             excel_recovery: None,
             purchase_cost: None,
             turn_state: None,

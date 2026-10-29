@@ -173,3 +173,55 @@ fn object(value: Value) -> Map<String, Value> {
     };
     object
 }
+
+#[test]
+fn reasoning_effort_should_follow_the_latest_configuration_update() {
+    for (input, previous_id, inherited, expected) in [
+        (json!([]), None, None, "medium"),
+        (json!([]), Some("resp_previous"), Some("high"), "high"),
+        (json!([]), None, Some("high"), "medium"),
+        (
+            json!([
+                {"type":"configuration_update","reasoning":{"effort":"high"}},
+                {"type":"message","role":"user","content":"first turn"},
+                {"type":"configuration_update","reasoning":{"effort":"low"}},
+                {"type":"message","role":"user","content":"next turn"}
+            ]),
+            Some("resp_previous"),
+            Some("max"),
+            "low",
+        ),
+        (
+            json!([{"type":"configuration_update","reasoning":{"effort":64}}]),
+            None,
+            None,
+            "64",
+        ),
+        (
+            json!([{"type":"configuration_update","reasoning":{"effort":" future-value "}}]),
+            None,
+            None,
+            "future-value",
+        ),
+        (
+            json!([{"type":"message","role":"user","reasoning":{"effort":"high"},
+                "content":"configuration_update: high"}]),
+            None,
+            None,
+            "medium",
+        ),
+    ] {
+        let body = object(json!({
+            "reasoning":{"effort":"medium"},
+            "input":input,
+            "previous_response_id":previous_id,
+        }));
+        let original = body.clone();
+        let semantics =
+            gateway_protocol::openai::codex::codex_responses_request_semantics_with_continuation(
+                &body, None, inherited,
+            );
+        assert_eq!(semantics.reasoning_effort.as_deref(), Some(expected));
+        assert_eq!(body, original);
+    }
+}

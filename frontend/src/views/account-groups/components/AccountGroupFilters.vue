@@ -3,9 +3,7 @@ import { Plus, Search, Trash2 } from '@lucide/vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 
 import BaseInput from '@/components/base/BaseInput.vue'
-import BaseSelect from '@/components/base/BaseSelect.vue'
 import { t } from '@/i18n'
-import { accountGroupStatusOptions } from '../constants'
 
 defineProps<{
   batchDeleting: boolean
@@ -16,14 +14,13 @@ const emit = defineEmits<{
   deleteSelected: []
 }>()
 const search = defineModel<string>('search', { required: true })
-const status = defineModel<string>('status', { required: true })
 </script>
 
 <template>
-  <div class="flex w-full flex-col gap-3 sm:flex-row sm:items-center">
+  <div class="flex w-full flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
     <BaseInput
       v-model="search"
-      class="sm:w-80"
+      class="min-w-0 sm:w-80 sm:flex-none"
       :aria-label="t('groups.filters.searchAccountGroup')"
       :placeholder="t('groups.filters.searchGroupName')"
     >
@@ -31,13 +28,7 @@ const status = defineModel<string>('status', { required: true })
         <Search class="size-4.5 text-cp-text-tertiary" />
       </template>
     </BaseInput>
-    <BaseSelect
-      v-model="status"
-      :options="accountGroupStatusOptions"
-      :aria-label="t('groups.filters.filterByGroupStatus')"
-      class="w-40"
-    />
-    <div class="flex shrink-0 items-center justify-end gap-2 sm:ml-auto">
+    <div class="flex max-w-full shrink-0 flex-wrap items-center justify-end gap-2 sm:ml-auto">
       <BaseButton
         v-if="selectedCount > 0"
         variant="destructive"

@@ -21,7 +21,9 @@ function loadText(text, dependencies = {}, globals = {}) {
   })
   runInNewContext(outputText, {
     exports,
-    require: name => dependencies[name] ?? (name === '@/utils/excel-defaults' ? load('utils/excel-defaults.ts') : require(name)),
+    TextEncoder,
+    structuredClone,
+    require: name => dependencies[name] ?? (name === '../components/error-protection/form' ? load('views/settings/components/error-protection/form.ts') : name === '@/utils/excel-defaults' ? load('utils/excel-defaults.ts') : require(name)),
     AbortController,
     Blob,
     setTimeout,

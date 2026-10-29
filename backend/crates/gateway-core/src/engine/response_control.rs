@@ -34,6 +34,7 @@ impl ResponseControlBinding {
 
 #[derive(Clone, Default)]
 pub struct ResponseControl {
+    connection_cancellation: Arc<Mutex<Option<CancellationToken>>>,
     active: Arc<Mutex<Weak<InterruptTarget>>>,
     target: Arc<Mutex<Option<Weak<dyn ResponseControlTransport>>>>,
 }
@@ -58,6 +59,21 @@ pub enum ResponseInterruptError {
 }
 
 impl ResponseControl {
+    /// Set before the cold execution starts; shared by this response's attempts.
+    pub fn set_connection_cancellation(&self, cancellation: CancellationToken) {
+        *self
+            .connection_cancellation
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(cancellation);
+    }
+
+    pub fn connection_cancellation(&self) -> Option<CancellationToken> {
+        self.connection_cancellation
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
     pub fn binding(&self) -> Option<ResponseControlBinding> {
         self.target
             .lock()

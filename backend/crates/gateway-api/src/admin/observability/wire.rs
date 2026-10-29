@@ -643,6 +643,7 @@ pub struct OverviewHealthView {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OverviewPerformancePointView {
+    pub load: OverviewLoadView,
     pub bucket: DateTime<Utc>,
     pub label: String,
     pub latency_p50_ms: Option<f64>,
@@ -666,6 +667,7 @@ pub struct OverviewPerformancePointView {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OverviewPerformanceView {
+    pub load: OverviewLoadView,
     pub latency_p50_ms: Option<f64>,
     pub latency_p95_ms: Option<f64>,
     pub latency_p99_ms: Option<f64>,
@@ -687,6 +689,15 @@ pub struct OverviewPerformanceView {
     pub account_selection_wait_coverage: f64,
     pub capacity_coverage: f64,
     pub points: Vec<OverviewPerformancePointView>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OverviewLoadView {
+    pub average_concurrency: f64,
+    pub peak_concurrency: u64,
+    pub admission_decision_p95_ms: Option<f64>,
+    pub account_selection_wait_p95_ms: Option<f64>,
 }
 
 /// 洞察成本趋势点。

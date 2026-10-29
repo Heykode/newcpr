@@ -68,6 +68,9 @@ const {
   deletingCount,
   updatingStatusKeyIds,
   revealingKeyIds,
+  copyingKeyIds,
+  configurationKeyIds,
+  importingKeyIds,
   form,
   openCreate,
   openEdit,
@@ -165,7 +168,7 @@ watch(
             <template #prefix="{ row }">
               <ApiKeyPrefixCell
                 :prefix="row.prefix"
-                :revealing="revealingKeyIds.has(row.id)"
+                :revealing="copyingKeyIds.has(row.id)"
                 @copy="copyApiKey(row)"
               />
             </template>
@@ -200,6 +203,8 @@ watch(
             <template #actions="{ row }">
               <ApiKeyActions
                 :api-key="row"
+                :configuration-loading="configurationKeyIds.has(row.id)"
+                :import-loading="importingKeyIds.has(row.id)"
                 :deleting="deletingKey"
                 :revealing="revealingKeyIds.has(row.id)"
                 :updating-status="updatingStatusKeyIds.has(row.id)"

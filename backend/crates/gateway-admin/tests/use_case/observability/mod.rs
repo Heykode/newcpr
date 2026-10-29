@@ -840,6 +840,16 @@ impl FixtureObservabilityStore {
 
 #[async_trait]
 impl ObservabilityStore for FixtureObservabilityStore {
+    async fn usage_concurrency(
+        &self,
+        _range: gateway_admin::model::observability::TimeRange,
+        _filter: gateway_admin::model::observability::UsageFilter,
+    ) -> gateway_admin::ports::store::AdminStoreResult<
+        Vec<gateway_admin::model::observability::UsageConcurrencyPoint>,
+    > {
+        Ok(Vec::new())
+    }
+
     async fn dashboard_summary(
         &self,
         range: TimeRange,

@@ -73,7 +73,7 @@ fn call_ids_link_interleaved_tools_without_item_or_output_indices() {
     }
     let done = json!({
         "type":"response.output_item.done",
-        "item":{"type":"function_call","call_id":"a","name":"run","arguments":"different full"}
+        "item":{"type":"function_call","call_id":"a","name":"run","arguments":"A"}
     });
     assert!(encoder.push(None, &done).unwrap().is_empty());
     assert!(encoder.push(None, &done).unwrap().is_empty());
@@ -203,7 +203,13 @@ fn malformed_event_containers_do_not_panic() {
                 json!({"type":kind,"response":value,"item":value}),
             ] {
                 let mut encoder = ChatStreamEncoder::new(true);
-                encoder.push(Some(kind), &event).unwrap();
+                let result = encoder.push(Some(kind), &event);
+                if kind == "response.completed" {
+                    assert!(result.is_err());
+                    assert!(!encoder.is_completed());
+                } else {
+                    result.unwrap();
+                }
             }
         }
     }

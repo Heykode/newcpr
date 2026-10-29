@@ -496,6 +496,7 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
         ops_event_retention_days: 31,
         audit_retention_days: 91,
         request_tuning: RequestTuningOverrides {
+            account_error_protection: None,
             excel_image_transport: Some(gateway_core::routing::ExcelImageTransport::Native {}),
             smart_scheduling: None,
             openai_request_location: None,

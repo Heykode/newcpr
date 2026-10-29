@@ -373,11 +373,27 @@ impl GrokAccountSessionSelector {
                 .iter()
                 .map(|account| self.cooldowns.read_scoped(account.id(), &model_scope)),
         );
-        let (account_reads, model_reads) = futures::join!(account_reads, model_reads);
+        let protection_reads = futures::future::join_all(accounts.iter().map(|account| {
+            self.cooldowns
+                .read_protection(account.id(), account.revision())
+        }));
+        let (account_reads, model_reads, protection_reads) =
+            futures::join!(account_reads, model_reads, protection_reads);
         let mut cooled = std::collections::BTreeMap::new();
-        for ((account, account_read), model_read) in
-            accounts.iter().zip(account_reads).zip(model_reads)
+        for (((account, account_read), model_read), protection) in accounts
+            .iter()
+            .zip(account_reads)
+            .zip(model_reads)
+            .zip(protection_reads)
         {
+            if let Ok(Some(protection)) = protection {
+                insert_runtime_cooldown(
+                    &mut cooled,
+                    account.id(),
+                    protection.scheduling_until(now),
+                    RuntimeCooldownScope::Account,
+                );
+            }
             if let Ok(Some(cooldown)) = account_read
                 && cooldown.until() > now
             {

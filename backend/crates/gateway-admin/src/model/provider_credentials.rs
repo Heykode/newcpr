@@ -1169,6 +1169,7 @@ impl fmt::Debug for ProviderExport {
 /// 统一账号目录的一行完整结果。
 #[derive(Debug, Clone, PartialEq)]
 pub struct AccountDirectoryItem {
+    pub error_protection: Option<super::accounts::AccountProtectionView>,
     pub turn_state: Option<super::accounts::AccountTurnStateStatus>,
     pub codex_quota_overdraft: Option<super::codex_quota_overdraft::CodexQuotaOverdraftState>,
     pub account: AccountRecord,

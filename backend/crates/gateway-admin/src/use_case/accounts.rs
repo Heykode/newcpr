@@ -527,6 +527,11 @@ impl DefaultAccountsService {
     ) -> Result<AccountDirectoryItem, AdminError> {
         let (stored, provider) = self.provider_for_account(account_id).await?;
         let account = &stored.account;
+        let mut protections = self
+            .account_runtime
+            .account_protections(&[(account.id.clone(), account.credential_revision)])
+            .await
+            .map_err(|e| map_store_error(e, "account protection"))?;
         let now = Utc::now();
         let rolling_range = TimeRange {
             start: now - Duration::hours(24),
@@ -636,6 +641,7 @@ impl DefaultAccountsService {
         }
         let default_concurrency = self.default_concurrency_limit().await?;
         Ok(AccountDirectoryItem {
+            error_protection: protections.remove(account_id.as_str()).map(Into::into),
             codex_quota_overdraft: overdraft,
             excel_recovery: excel_recoveries.remove(account_id.as_str()),
             purchase_cost: purchase_costs.remove(account_id.as_str()),
@@ -692,6 +698,17 @@ impl AccountsService for DefaultAccountsService {
             .list_accounts(query, runtime)
             .await
             .map_err(|error| map_store_error(error, "account directory"))?;
+        let mut protections = self
+            .account_runtime
+            .account_protections(
+                &page
+                    .items
+                    .iter()
+                    .map(|item| (item.account.id.clone(), item.account.credential_revision))
+                    .collect::<Vec<_>>(),
+            )
+            .await
+            .map_err(|e| map_store_error(e, "account protection"))?;
         let page_ids = page
             .items
             .iter()
@@ -815,6 +832,7 @@ impl AccountsService for DefaultAccountsService {
                     .usage_window()
                     .and_then(|(window, _)| window.local_usage.clone());
                 AccountDirectoryItem {
+                    error_protection: protections.remove(&item.account.id).map(Into::into),
                     codex_quota_overdraft: overdraft,
                     excel_recovery: excel_recoveries.remove(&item.account.id),
                     purchase_cost: purchase_costs.remove(&item.account.id),
@@ -984,6 +1002,10 @@ impl AccountsService for DefaultAccountsService {
     ) -> Result<AccountRefreshResult, AdminError> {
         let (stored, provider) = self.provider_for_account(&account_id).await?;
         let config_revision = if stored.account.enabled {
+            self.account_runtime
+                .clear_protection(account_id.as_str(), stored.account.credential_revision)
+                .await
+                .map_err(|e| map_store_error(e, "clear account protection"))?;
             self.accounts
                 .recover_account(&account_id, context)
                 .await

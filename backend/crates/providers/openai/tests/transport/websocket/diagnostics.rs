@@ -127,7 +127,7 @@ async fn close_observation_preserves_idle_time_since_last_inbound_activity() {
 }
 
 #[tokio::test]
-async fn liveness_exit_preserves_capture_clocks_without_inventing_an_upstream_close() {
+async fn idle_exit_preserves_capture_clocks_without_inventing_an_upstream_close() {
     for reuse in [false, true] {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
@@ -166,8 +166,7 @@ async fn liveness_exit_preserves_capture_clocks_without_inventing_an_upstream_cl
         .with_websocket_pool(Arc::new(CodexWebSocketPool::with_config(
             CodexWebSocketPoolConfig {
                 maintenance_interval: None,
-                ping_interval: None,
-                liveness_timeout: Some(Duration::from_secs(5)),
+                stream_idle_timeout: Some(Duration::from_secs(5)),
                 ..Default::default()
             },
         )));
@@ -190,12 +189,12 @@ async fn liveness_exit_preserves_capture_clocks_without_inventing_an_upstream_cl
         } else {
             None
         };
-        let trace = TraceContext::new("req_liveness_exit");
+        let trace = TraceContext::new("req_idle_exit");
         let attempt = trace.attempt(1);
         let mut response = backend
             .create_response_stream(
                 &request,
-                request_context("req_liveness_exit", Some("chatgpt-account")).with_trace(&attempt),
+                request_context("req_idle_exit", Some("chatgpt-account")).with_trace(&attempt),
             )
             .await
             .unwrap();
@@ -225,7 +224,7 @@ async fn liveness_exit_preserves_capture_clocks_without_inventing_an_upstream_cl
         assert_eq!(updates.lock().await[0].observed_at, captured);
         assert!(error.close_before_terminal().is_none());
         let observation = error.connection_observation().unwrap();
-        assert_eq!(observation.exit_reason(), "liveness_timeout");
+        assert_eq!(observation.exit_reason(), "receive_idle_timeout");
         assert!(observation.age_ms() >= 5_000);
         assert!(observation.idle_ms() >= 5_000);
         let mut cause = &error;
@@ -242,17 +241,8 @@ async fn liveness_exit_preserves_capture_clocks_without_inventing_an_upstream_cl
                 | CodexWebSocketExchangeError::ConnectionObserved { source, .. } => {
                     cause = source;
                 }
-                CodexWebSocketExchangeError::StreamEndedBeforeTerminal {
-                    reason,
-                    timeout,
-                    last_event_type,
-                } => {
-                    assert_eq!(*reason, "liveness_timeout");
-                    assert_eq!(*timeout, Some(Duration::from_secs(5)));
-                    assert_eq!(
-                        last_event_type.as_deref(),
-                        Some("response.output_text.delta")
-                    );
+                CodexWebSocketExchangeError::ReceiveIdleTimeout { timeout } => {
+                    assert_eq!(*timeout, Duration::from_secs(5));
                     break;
                 }
                 error => panic!("unexpected liveness cause: {error}"),
@@ -263,9 +253,9 @@ async fn liveness_exit_preserves_capture_clocks_without_inventing_an_upstream_cl
             .as_array()
             .unwrap()
             .iter()
-            .find(|event| event["stage"] == "upstream.eof")
+            .find(|event| event["stage"] == "upstream.read.failed")
             .unwrap();
-        assert_eq!(eof["data"]["failureReason"], "liveness_timeout");
+        assert_eq!(eof["data"]["failureReason"], "receive_idle_timeout");
         assert!(!snapshot.to_string().contains("private-response-body"));
         assert!(!snapshot.to_string().contains("private-request-body"));
     }

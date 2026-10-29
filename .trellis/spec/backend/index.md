@@ -46,6 +46,7 @@ This directory contains guidelines for backend development. Fill in each file wi
 | [Stable Upstream Adaptation](./stable-upstream-adaptation.md) | Reasoning replay, recovery, cycle forecasts, account notes and background updates | Local integration contracts |
 | [Quota Observation Integrity](./quota-observation-integrity.md) | Passive authority, capture clocks, error quota facts and named buckets | Local/Linux, isolated stores and bounded live HTTP/WS verified |
 | [Codex Quota Overdraft](./codex-quota-overdraft.md) | Final-wire injection, fixed-account probes, quota-state override and accounting | Implementation and isolated verification |
+| [原生保护与 WS](./native-protection-and-ws.md) | 独立错误保护、真实下游绑定、物理容量及负载统计 | OVH 回归合同 |
 
 ---
 

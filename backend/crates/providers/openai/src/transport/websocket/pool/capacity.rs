@@ -100,7 +100,7 @@ impl CodexWebSocketPool {
             .slots
             .iter()
             .filter_map(|(key, slot)| match slot {
-                WebSocketPoolSlot::Idle { connection }
+                WebSocketPoolSlot::Idle { connection, .. }
                     if key.account_id() == account_id && keep != Some(key) =>
                 {
                     Some((key.clone(), connection.created_at))
@@ -109,7 +109,7 @@ impl CodexWebSocketPool {
             })
             .min_by_key(|(_, created_at)| *created_at)
             .map(|(key, _)| key)?;
-        let Some(WebSocketPoolSlot::Idle { connection }) = state.slots.remove(&key) else {
+        let Some(WebSocketPoolSlot::Idle { connection, .. }) = state.slots.remove(&key) else {
             return None;
         };
         Some(Self::retire_connection(

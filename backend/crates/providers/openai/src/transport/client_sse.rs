@@ -58,7 +58,6 @@ impl CodexBackendClient {
             session_proxy: None,
             direct_client: client.clone(),
             default_direct_client: false,
-            response_control: None,
             client,
             websocket_origin_key: websocket_origin_key(&base_url),
             outbound_proxy: None,
@@ -311,6 +310,14 @@ impl CodexBackendClient {
         upstream_request: &CodexResponsesRequest,
         context: CodexRequestContext<'_>,
     ) -> CodexClientResult<CodexBackendStreamingResponse> {
+        if let (Some(pool), Some(connection_id)) = (
+            &self.websocket_pool,
+            upstream_request
+                .downstream_websocket_connection_id
+                .as_deref(),
+        ) {
+            pool.release_downstream_connections(connection_id).await;
+        }
         let profile = self.profile.snapshot();
         let excel = upstream_request.excel.as_ref();
         let mut headers = if excel.is_some() {
@@ -718,7 +725,22 @@ impl CodexBackendClient {
         let pool_key =
             self.websocket_pool_key(request, context, pool_account_id, &connection_profile);
         let pool_log_context = pool_key.as_ref().map(WebSocketPoolLogContext::from_key);
-        let pool = self.websocket_pool.as_deref().zip(pool_key);
+        if pool_key.is_none()
+            && let (Some(pool), Some(connection_id)) = (
+                &self.websocket_pool,
+                request.downstream_websocket_connection_id.as_deref(),
+            )
+        {
+            pool.release_downstream_connections(connection_id).await;
+        }
+        let downstream_cancellation = context
+            .response_control
+            .and_then(|control| control.connection_cancellation());
+        let pool = self
+            .websocket_pool
+            .as_deref()
+            .zip(pool_key)
+            .map(|(pool, key)| (pool, key, downstream_cancellation));
         let fast_path_budget = match requirement {
             TransportRequirement::PersistedContinuation | TransportRequirement::NewChain => {
                 Some(WEBSOCKET_FAST_PATH_BUDGET)
@@ -975,7 +997,7 @@ impl CodexBackendClient {
                 let mut exchange = execute_prepared_response_create_request_stream(
                     &websocket_request,
                     prepared,
-                    self.response_control.clone(),
+                    context.response_control.cloned(),
                     context
                         .trace
                         .cloned()
@@ -1040,7 +1062,14 @@ impl CodexBackendClient {
         connection_profile: &str,
     ) -> Option<CodexWebSocketPoolKey> {
         if let Some(key) = &self.forced_pool_key {
-            return Some(key.clone());
+            return Some(
+                key.clone().with_downstream_connection_id(
+                    request
+                        .downstream_websocket_connection_id
+                        .as_deref()
+                        .unwrap_or_default(),
+                ),
+            );
         }
         let account_id = pool_account_id.or(context.account_id)?;
         let conversation_id = request

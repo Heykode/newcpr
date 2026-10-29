@@ -621,6 +621,7 @@ impl AccountStore for PgAdminAccountStore {
             ));
         }
         let now = Utc::now();
+        let protections = runtime.error_protections;
         let rate_limited_until = runtime
             .rate_limited_until
             .into_iter()
@@ -633,8 +634,14 @@ impl AccountStore for PgAdminAccountStore {
             .filter(|(_, until)| **until > now_system_time)
             .map(|(account_id, _)| account_id.clone())
             .collect::<Vec<_>>();
-        let page =
-            load_admin_account_page(&self.pool, &query, now, active_rate_limited_ids).await?;
+        let page = load_admin_account_page(
+            &self.pool,
+            &query,
+            now,
+            active_rate_limited_ids,
+            &protections,
+        )
+        .await?;
         let item_ids = page
             .accounts
             .iter()
@@ -650,11 +657,30 @@ impl AccountStore for PgAdminAccountStore {
             .into_iter()
             .map(|summary| {
                 let account_id = summary.id.clone();
-                let projection = account_status_projection(
+                let mut projection = account_status_projection(
                     &summary,
                     now.into(),
-                    rate_limited_until.get(&account_id).copied(),
+                    rate_limited_until.get(&account_id).copied().max(
+                        protections
+                            .get(&account_id)
+                            .filter(|state| {
+                                state.credential_revision.get() == summary.credential_revision.get()
+                            })
+                            .map(|state| state.scheduling_until(now.into())),
+                    ),
                 );
+                if summary.enabled
+                    && !matches!(
+                        projection.status,
+                        gateway_core::account::AccountStatus::Error
+                    )
+                    && let Some(state) = protections.get(&account_id).filter(|state| {
+                        state.credential_revision.get() == summary.credential_revision.get()
+                    })
+                {
+                    projection.status = gateway_core::account::AccountStatus::RateLimited;
+                    projection.rate_limited_until = Some(state.scheduling_until(now.into()));
+                }
                 let mut account = admin_account_record(summary)?;
                 account.groups = groups_by_account.remove(&account_id).unwrap_or_default();
                 account.quality_monitoring = monitoring.remove(&account_id);
@@ -694,7 +720,28 @@ impl AccountStore for PgAdminAccountStore {
             .get(account_id)
             .copied()
             .map(Into::into);
-        let projection = account_status_projection(&record.summary, now.into(), rate_limited_until);
+        let protection = runtime
+            .error_protections
+            .get(account_id)
+            .filter(|state| {
+                state.credential_revision.get() == record.summary.credential_revision.get()
+            })
+            .map(|state| state.scheduling_until(now.into()));
+        let mut projection = account_status_projection(
+            &record.summary,
+            now.into(),
+            rate_limited_until.max(protection),
+        );
+        if record.summary.enabled
+            && !matches!(
+                projection.status,
+                gateway_core::account::AccountStatus::Error
+            )
+            && let Some(until) = protection
+        {
+            projection.status = gateway_core::account::AccountStatus::RateLimited;
+            projection.rate_limited_until = Some(until);
+        }
         let account_id = record.summary.id.clone();
         let mut groups = self
             .account_groups_by_account(std::slice::from_ref(&account_id))

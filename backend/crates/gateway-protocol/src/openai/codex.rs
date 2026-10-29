@@ -69,6 +69,8 @@ fn codex_identity_field(
 pub struct CodexResponsesRequestSemantics {
     /// 客户端原始选择的推理强度。
     pub reasoning_effort: Option<String>,
+    /// Latest conversation configuration update, inherited only by native continuation.
+    pub reasoning_effort_override: Option<String>,
     /// Codex turn metadata 中的请求类型。
     pub request_kind: Option<String>,
     /// Codex turn metadata 中的子代理类型。
@@ -97,15 +99,29 @@ pub fn codex_responses_request_semantics_with_turn_metadata(
     body: &Map<String, Value>,
     turn_metadata: Option<&str>,
 ) -> CodexResponsesRequestSemantics {
-    let reasoning_effort = body
-        .get("reasoning")
-        .and_then(Value::as_object)
-        .and_then(|reasoning| reasoning.get("effort"))
-        .and_then(|effort| {
-            non_empty_string(Some(effort))
+    codex_responses_request_semantics_with_continuation(body, turn_metadata, None)
+}
+
+/// Resolve observation-only effort updates without rewriting the wire request.
+#[must_use]
+pub fn codex_responses_request_semantics_with_continuation(
+    body: &Map<String, Value>,
+    turn_metadata: Option<&str>,
+    previous_reasoning_effort_override: Option<&str>,
+) -> CodexResponsesRequestSemantics {
+    let reasoning_effort_override = input_items(body)
+        .iter()
+        .rev()
+        .find(|item| item.get("type").and_then(Value::as_str) == Some("configuration_update"))
+        .map(|item| reasoning_effort(item.get("reasoning")))
+        .unwrap_or_else(|| {
+            previous_reasoning_effort_override
+                .filter(|_| non_empty_string(body.get("previous_response_id")).is_some())
                 .map(ToOwned::to_owned)
-                .or_else(|| effort.as_u64().map(|value| value.to_string()))
         });
+    let reasoning_effort = reasoning_effort_override
+        .clone()
+        .or_else(|| reasoning_effort(body.get("reasoning")));
     let parsed_turn_metadata = turn_metadata
         .or_else(|| request_turn_metadata(body))
         .and_then(|value| serde_json::from_str::<Value>(value).ok());
@@ -130,11 +146,19 @@ pub fn codex_responses_request_semantics_with_turn_metadata(
 
     CodexResponsesRequestSemantics {
         reasoning_effort,
+        reasoning_effort_override,
         request_kind,
         subagent_kind,
         reasoning_preset,
         compact,
     }
+}
+
+fn reasoning_effort(reasoning: Option<&Value>) -> Option<String> {
+    let effort = reasoning?.get("effort")?;
+    non_empty_string(Some(effort))
+        .map(ToOwned::to_owned)
+        .or_else(|| effort.as_u64().map(|value| value.to_string()))
 }
 
 fn request_turn_metadata(body: &Map<String, Value>) -> Option<&str> {

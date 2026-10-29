@@ -1260,3 +1260,5 @@ fn elapsed_quota_reset_does_not_fabricate_recovery() {
 }
 mod fast_mode;
 mod smart_scheduling;
+
+mod error_protection;

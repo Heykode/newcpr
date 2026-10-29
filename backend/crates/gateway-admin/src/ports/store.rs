@@ -366,6 +366,36 @@ pub trait AccountStore: Send + Sync {
 /// 可丢失账号运行态的管理读端口；跨存储编排由 Admin application service 拥有。
 #[async_trait]
 pub trait AccountRuntimeStore: Send + Sync {
+    async fn account_protections(
+        &self,
+        _accounts: &[(String, Revision)],
+    ) -> AdminStoreResult<BTreeMap<String, gateway_core::provider_ports::AccountProtectionState>>
+    {
+        Ok(BTreeMap::new())
+    }
+
+    async fn due_protections(
+        &self,
+    ) -> AdminStoreResult<Vec<gateway_core::provider_ports::AccountProtectionState>> {
+        Ok(Vec::new())
+    }
+
+    async fn finish_protection(
+        &self,
+        _expected: &gateway_core::provider_ports::AccountProtectionState,
+        _postpone: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> AdminStoreResult<bool> {
+        Ok(false)
+    }
+
+    async fn clear_protection(
+        &self,
+        _account: &str,
+        _revision: Revision,
+    ) -> AdminStoreResult<bool> {
+        Ok(false)
+    }
+
     async fn concurrency(
         &self,
         _account_id: &str,
@@ -694,6 +724,12 @@ pub trait ObservabilityStore: Send + Sync {
         range: TimeRange,
         filter: UsageFilter,
     ) -> AdminStoreResult<Vec<RequestMetricPoint>>;
+
+    async fn usage_concurrency(
+        &self,
+        range: TimeRange,
+        filter: UsageFilter,
+    ) -> AdminStoreResult<Vec<crate::model::observability::UsageConcurrencyPoint>>;
 
     /// 流式返回可由 Provider 重新校验的已计算费用事实，不保证顺序。
     /// 查询及解码错误由流返回；调用方应逐条聚合，避免收集整个区间。

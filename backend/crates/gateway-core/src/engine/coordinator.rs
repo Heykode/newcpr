@@ -1028,7 +1028,7 @@ where
                     pinned_account.clone(),
                     self.account_state_owner.clone(),
                 )
-                .with_account_scope(Arc::clone(self.plan.account_scope()))
+                .with_account_scope(Arc::clone(candidate.account_scope()))
                 .with_quality_check(matches!(
                     &self.account_selection,
                     AccountSelection::Quality(_, _)
@@ -1373,6 +1373,20 @@ where
             .await?;
             return Err(EngineError::ContinuationPinMismatch);
         }
+        let stream = if matches!(self.account_selection, AccountSelection::Scheduled(_))
+            && self.plan.account_error_protection().policy().enabled
+            && let Some(store) = &self.engine.account_error_protection
+        {
+            stream
+                .with_account_error_protection(
+                    Arc::clone(store),
+                    self.plan.account_error_protection(),
+                    self.plan.config_revision().get(),
+                )
+                .await
+        } else {
+            stream
+        };
         if self.account_state_owner.is_none() {
             self.account_state_owner = Some(ProviderAccountStateOwner::new(
                 metadata.provider().clone(),

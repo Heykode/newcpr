@@ -110,6 +110,7 @@ fn excel_image_transport_validates_explicit_modes_and_origin() {
 #[test]
 fn request_tuning_overrides_round_trip_all_live_fields() {
     let overrides = RequestTuningOverrides {
+        account_error_protection: None,
         excel_image_transport: Some(gateway_core::routing::ExcelImageTransport::Native {}),
         smart_scheduling: Some(Default::default()),
         openai_request_location: None,

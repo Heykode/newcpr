@@ -156,6 +156,7 @@ fn request_context<'a>(
     account_id: Option<&'a str>,
 ) -> CodexRequestContext<'a> {
     CodexRequestContext {
+        response_control: None,
         trace: None,
         authorization: "Bearer access-token",
         account_id,
@@ -557,16 +558,12 @@ async fn write_empty_http_response(stream: &mut TcpStream) {
 
 fn websocket_pool_config_for_tests(
     maintenance_interval: Option<Duration>,
-    ping_interval: Option<Duration>,
-    liveness_timeout: Option<Duration>,
 ) -> CodexWebSocketPoolConfig {
     CodexWebSocketPoolConfig {
         enabled: true,
         max_age: Duration::from_mins(1),
         maintenance_interval,
-        ping_interval,
-        ping_timeout: Duration::from_secs(1),
-        liveness_timeout,
+        idle_timeout: Duration::from_secs(300),
         stream_idle_timeout: None,
     }
 }

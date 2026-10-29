@@ -41,6 +41,7 @@ pub struct ProviderCallMetadata {
     upstream_request_id: Option<OpaqueUpstreamValue>,
     transport: UpstreamTransport,
     selection_observation: Option<ProviderSelectionObservation>,
+    credential_revision: Option<crate::account::CredentialRevision>,
 }
 
 /// Provider 账号选择阶段输出的中立运行压力事实。
@@ -74,6 +75,19 @@ impl ProviderSelectionObservation {
 }
 
 impl ProviderCallMetadata {
+    #[must_use]
+    pub const fn with_credential_revision(
+        mut self,
+        revision: crate::account::CredentialRevision,
+    ) -> Self {
+        self.credential_revision = Some(revision);
+        self
+    }
+    #[must_use]
+    pub const fn credential_revision(&self) -> Option<crate::account::CredentialRevision> {
+        self.credential_revision
+    }
+
     /// 创建一次调用的不可变事实。
     #[must_use]
     pub const fn new(
@@ -89,6 +103,7 @@ impl ProviderCallMetadata {
             upstream_request_id: None,
             transport,
             selection_observation: None,
+            credential_revision: None,
         }
     }
 
@@ -106,6 +121,7 @@ impl ProviderCallMetadata {
             upstream_request_id: None,
             transport,
             selection_observation: None,
+            credential_revision: None,
         }
     }
 
@@ -186,6 +202,8 @@ pub struct ProviderStream {
     events: EventStream,
     _lease: Box<dyn ResourceLease>,
     account_feedback: Option<ProviderStreamAccountFeedback>,
+    account_protection: Option<super::account_protection::AttemptProtection>,
+    protection_feedback: Option<BoxFuture<'static, Option<Result<ProviderEvent, ProviderError>>>>,
     validator: EventSequenceValidator,
     strict_canonical_seen: bool,
     terminated: bool,
@@ -277,6 +295,23 @@ impl ProviderStreamAccountFeedback {
 }
 
 impl ProviderStream {
+    #[must_use]
+    pub async fn with_account_error_protection(
+        mut self,
+        store: Arc<dyn crate::provider_ports::ProviderCooldownPort>,
+        policy: Arc<crate::account::CompiledAccountErrorProtection>,
+        policy_revision: u64,
+    ) -> Self {
+        self.account_protection = super::account_protection::AttemptProtection::begin(
+            store,
+            policy,
+            policy_revision,
+            &self.metadata,
+        )
+        .await;
+        self
+    }
+
     /// 组装一次、且仅一次可见上游调用。
     #[must_use]
     pub fn new<S>(metadata: ProviderCallMetadata, events: S, lease: impl ResourceLease) -> Self
@@ -288,6 +323,8 @@ impl ProviderStream {
             events: Box::pin(events),
             _lease: Box::new(lease),
             account_feedback: None,
+            account_protection: None,
+            protection_feedback: None,
             validator: EventSequenceValidator::new(),
             strict_canonical_seen: false,
             terminated: false,
@@ -340,6 +377,39 @@ impl Stream for ProviderStream {
 
     fn poll_next(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.get_mut();
+        if let Some(feedback) = this.protection_feedback.as_mut() {
+            return match feedback.as_mut().poll(context) {
+                Poll::Pending => Poll::Pending,
+                Poll::Ready(result) => {
+                    this.protection_feedback = None;
+                    Poll::Ready(result)
+                }
+            };
+        }
+        let result = this.poll_event(context);
+        let terminal = matches!(&result, Poll::Ready(Some(Err(_)) | None))
+            || (matches!(&result, Poll::Ready(Some(Ok(_))))
+                && this
+                    .account_protection
+                    .as_ref()
+                    .is_some_and(super::account_protection::AttemptProtection::is_completed));
+        if terminal
+            && let Some(protection) = this.account_protection.take()
+            && let Poll::Ready(result) = result
+        {
+            this.protection_feedback = Some(protection.complete(result));
+            return Pin::new(this).poll_next(context);
+        }
+        result
+    }
+}
+
+impl ProviderStream {
+    fn poll_event(
+        &mut self,
+        context: &mut Context<'_>,
+    ) -> Poll<Option<Result<ProviderEvent, ProviderError>>> {
+        let this = self;
         if this.terminated {
             return Poll::Ready(None);
         }
@@ -370,6 +440,9 @@ impl Stream for ProviderStream {
                 }
                 if let Some(feedback) = this.account_feedback.as_mut() {
                     feedback.observe(&event);
+                }
+                if let Some(protection) = this.account_protection.as_mut() {
+                    protection.observe(&event);
                 }
                 Poll::Ready(Some(Ok(event)))
             }

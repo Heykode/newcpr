@@ -216,6 +216,7 @@ const MAX_CONTINUATION_TOMBSTONES: usize = 4_096;
 #[derive(Default)]
 pub(super) struct WebSocketPoolState {
     pub(super) slots: HashMap<CodexWebSocketPoolKey, WebSocketPoolSlot>,
+    pub(super) downstream_connections: HashMap<String, gateway_core::lifecycle::CancellationToken>,
     pub(super) egress_config: Option<Arc<ProviderEgressConfig>>,
     continuation_tombstones: VecDeque<WebSocketContinuationTombstone>,
     pub(super) shutting_down: bool,
@@ -314,6 +315,7 @@ impl WebSocketContinuationState {
 pub(super) enum WebSocketPoolSlot {
     Idle {
         connection: Box<PooledWebSocketConnection>,
+        idle_since: Instant,
     },
     Busy(WebSocketPoolReservation),
     Connecting(WebSocketPoolConnecting),

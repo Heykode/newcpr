@@ -83,6 +83,7 @@ fn gpt6_billing_should_preserve_components_tiers_and_context_boundary() {
     // Published USD/1M rates in ten-thousandths: input, cache read, cache write, output.
     for (model, rates) in [
         ("gpt-6.1-sol", [20_000_u128, 1_000, 25_000, 100_000]),
+        ("gpt-6.1-terra", [10_000_u128, 500, 12_500, 50_000]),
         ("gpt-6-sol", [20_000_u128, 2_000, 25_000, 100_000]),
         ("gpt-6-luna", [1_000_u128, 100, 1_250, 5_000]),
     ] {
@@ -489,6 +490,7 @@ async fn fetch_should_use_wham_usage_headers_only() {
 
     let usage = client(&server.uri())
         .fetch_usage(CodexRequestContext {
+            response_control: None,
             trace: None,
             authorization: "Bearer oauth-access",
             account_id: Some("acct_123"),
@@ -826,6 +828,7 @@ fn profile() -> CodexWireProfileState {
 
 fn context() -> CodexRequestContext<'static> {
     CodexRequestContext {
+        response_control: None,
         trace: None,
         authorization: "Bearer oauth-access",
         account_id: Some("acct_123"),
