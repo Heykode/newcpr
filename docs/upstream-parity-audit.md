@@ -21,12 +21,12 @@
 
 | 项目 | 历史来源 | 修复前的行为与影响 | 处理状态 |
 | --- | --- | --- | --- |
-| 严格子线程等待根账号恢复或迁移 | 官方 `74f749f4`，2026-10-06；本地 `d79d8086ba`，2026-10-07，纳入 v3.21.0 | 只保留并发/间隔等待。根账号失效或被本次请求排除时，子线程很快无可用账号失败；未完整保留 follow-only 的终止语义 | 本次修复 |
-| 已知模型的 Provider 归属 | 官方 `2f96c02e`，已包含在 v3.25.0 的官方基线 `d700df8a` | 声明支持模型的 Provider 优先，但未声明支持它的发现型 Provider 仍可作为候选；可能制造无效跨 Provider 请求 | 已确认历史遗漏，尚未修改，建议单独补齐 |
-| 目录获取失败保留最后已知模型事实 | 同为官方 `2f96c02e`，v3.25.0 集成范围 | 单 Provider 目录读取报错时被跳过，编译仍可成功发布缺少旧模型事实的快照，模型列表及路由判断可能退化 | 已确认历史遗漏，尚未修改，建议单独补齐 |
+| 严格子线程等待根账号恢复或迁移 | 官方 `74f749f4`，2026-10-06；本地 `d79d8086ba`，2026-10-07，纳入 v3.21.0 | 只保留并发/间隔等待。根账号失效或被本次请求排除时，子线程很快无可用账号失败；未完整保留 follow-only 的终止语义 | 已提交 `f68ac36f3` |
+| 已知模型的 Provider 归属 | 官方 `2f96c02e`，已包含在 v3.25.0 的官方基线 `d700df8a` | 声明支持模型的 Provider 优先，但未声明支持它的发现型 Provider 仍可作为候选；可能制造无效跨 Provider 请求 | 用户授权后本轮补齐，验证见下 |
+| 目录获取失败保留最后已知模型事实 | 同为官方 `2f96c02e`，v3.25.0 集成范围 | 单 Provider 目录读取报错时被跳过，编译仍可成功发布缺少旧模型事实的快照，模型列表及路由判断可能退化 | 用户授权后本轮补齐，验证见下 |
 
 上述第二、第三项由历史源码控制流确认，本次没有用生产流量复现其发生频率。
-不能把它们描述成已验证导致当前生产错误，也不能描述成已经修复。
+不能把它们描述成已验证导致当前生产错误；本轮代码补齐也不代表已发布到生产。
 
 ### 本次故障的核验依据
 
@@ -37,7 +37,7 @@
 对应失败尝试尚未交付下游、可安全重放，也没有原生续接 owner 屏障。
 真实账号标识、请求正文和凭据不纳入此报告。
 
-### 本次修复的效果和边界
+### 严格子线程修复的效果和边界
 
 1. strict 子线程在根账号暂时失效、冷却、停用、排除或不可选时，进入有界等待。
    普通 Busy 等待开关关闭时仍保留该行为，复用现有 sticky 人数与超时设置。
@@ -67,17 +67,22 @@
 本次同步修正容量等待、历史迁移和官方集成规范，要求以成功、阻塞、恢复、超时行为矩阵
 核对上游；不能用“保留本地架构”作为省略已批准上游行为的理由。
 
-### 其他两项的最小补法
+### 本轮补齐的另外两项
 
-- **Provider 归属**：在现有 snapshot planner 中先确定映射后模型的声明者。
+- **Provider 归属**：按官方 `2f96c02e` 在现有 snapshot planner 中先确定映射后模型的声明者。
   已知模型只路由声明者，未知模型保留唯一合格 Provider 透传；多个发现型 Provider
-  无法确定归属时按官方拒绝歧义。补原生 OAuth 的 Grok 资格防线，单独核对 Excel 边界。
+  无法确定归属时按官方拒绝歧义。即时/等待选择器共同阻止原生 Codex OAuth 接收
+  `grok` / `grok-*`，含大小写与路径前缀变体；按模型解析为 Excel 的路径保留原资格合同。
+  同时保留合法未知原生型号透传、管理员固定账号诊断和质量检测原有的模型政策豁免。
   保留现有账号评分、身份、出口和 scope，不引入插件或上游 API-key 账号。
 - **目录失败回退**：仅在单个 Provider 读取目录失败时复用旧模型、能力、展示和目录账号事实。
   当前账号、权限、禁用和容量必须来自本次新配置；不能回退整个旧快照。
   成功返回空目录必须真正撤回模型，不能用旧缓存掩盖。
-- 必须新增的回归：强制错误 Provider、声明者不可用/越权、共享声明模型、模型映射、
-  未知单/多 Provider、目录失败同时撤销账号、成功空目录、冷启动和目录 generation 变化。
+  现有配置提交仍只复用缓存、不访问远端；后台刷新保留 generation 稳定性校验，
+  以及配置优先发布和取消语义。其他 Provider 的成功更新可正常发布。
+- 新增回归覆盖强制错误 Provider、声明者不可用/越权、共享声明模型、模型映射、
+  未知单/多 Provider、目录失败同时撤销账号、成功空目录、冷启动、目录 generation
+  变化、HTTP/WS 选择器资格，以及管理员诊断和 Excel 准备。保留既有配置抢占回归。
 
 ## 十五版逐项结果
 
@@ -113,13 +118,17 @@ F0、F1、F2 分别指上表的严格等待、Provider 归属、目录失败回�
   覆盖等待开/关、凭据失效/停用恢复、实际根迁移后完成 SSE、失败排除、超时/队满、
   多次迁移同一截止、冻结候选、获取执行槽竞态、绑定消失，以及真实回环401/429。
 - F1：官方 `2f96c02e` 的 Core `routing/snapshot.rs` 与 OpenAI
-  `tests/provider/contract/model_account_eligibility.rs`。本地
+  `tests/provider/contract/model_account_eligibility.rs`。审计基线的
   `backend/crates/gateway-core/src/routing/snapshot.rs::plan` 仍追加未声明模型的候选；
-  `tests/routing/snapshot.rs::known_model_precedes_discovery_fallback_without_losing_passthrough`
-  明确固定旧的 fallback 行为。v3.24.0 到 v3.25.0 对应实现没有更新。
+  原 `known_model_precedes_discovery_fallback_without_losing_passthrough` 测试固定旧行为。
+  v3.24.0 到 v3.25.0 对应实现没有更新。本轮已替换为归属/歧义合同，
+  并新增 `known_model_ownership_survives_mapping_and_owner_restrictions`、
+  `unknown_models_require_one_eligible_discovery_provider` 和 OpenAI 模型资格回归。
 - F2：官方同提交的 `catalog_failure_should_preserve_model_facts_without_restoring_revoked_accounts`。
-  本地 Core `routing/snapshot.rs::compile_runtime_snapshot` 的目录 Err 分支直接跳过；
-  `runtime/mod.rs` 的后台刷新使用实时 compile，已有 cached 模式只服务配置发布，不能替代失败回退。
+  审计基线 Core `routing/snapshot.rs::compile_runtime_snapshot` 的目录 Err 分支直接跳过；
+  已有 cached 模式只服务配置发布，不能替代失败回退。本轮在 `runtime/mod.rs` 后台入口
+  使用 `compile_with_catalog_fallback`；`tests/runtime/catalog_fallback.rs` 覆盖模型事实
+  保留、当前账号/权限/容量、独立更新、成功空目录、冷启动、缓存提交与 generation 变化。
 - 原生恢复：OpenAI `tests/provider/contract/metadata_recovery.rs`、`precommit.rs`、
   `tls_recovery.rs`、`native_encrypted_history.rs`；Core `tests/engine/coordinator.rs`。
 - 身份和 WS：OpenAI `tests/provider/contract/identity_isolation.rs`、
@@ -143,7 +152,9 @@ F0、F1、F2 分别指上表的严格等待、Provider 归属、目录失败回�
 ## 验证记录
 
 所有可执行验证在隔离测试服务器完成，使用合成账号和回环上游；不使用生产账户或生产数据库。
-验证对象为审计基线上的本次未提交修改。本次不发布版本、不部署、不修改线上配置。
+本次不发布版本、不部署、不修改线上配置。以下区分初次严格恢复修复与本轮模型补齐。
+
+### 初次严格恢复修复（已提交 `f68ac36f3`）
 
 - `cargo test -p provider-openai -p gateway-core --locked -- --test-threads=1`：
   最终通过 **1975 项，0 失败，2 忽略**。Core 为 515 项，OpenAI 为 1460 项；
@@ -162,3 +173,22 @@ F0、F1、F2 分别指上表的严格等待、Provider 归属、目录失败回�
   没有将断连或仍在执行的任务当作完成。
 - 本地仅检查源码、Git 差异及文件哈希，`git diff --check` 通过；没有在本机运行构建或测试。
 - 历史十五版为静态审计；本次测试不等于逐个历史二进制重跑，不证明真实上游风控或所有客户端兼容性。
+
+### 本轮模型归属和目录失败补齐
+
+- Core 全套通过 521 项（8 单元 + 513 集成），包含新增的六个场景和原有严格恢复、
+  管理诊断、质量检测、权限及配置抢占回归。
+- OpenAI 首次完整运行：327 单元通过；集成 1135 通过、1 失败、2 忽略。
+  九个新增场景中的三个 Provider 场景全部通过。
+- 唯一失败为未修改的 `compare_legacy_and_upstream_connection_defaults`：
+  专用 `native-h1-legacy` 对照组超出 20 秒；同次 `native-h1-current` 正常。
+  不修改代码或放宽断言，连续三次完整定向复测均通过（各约 2 秒）。
+  该偶发项不能描述成首轮全套通过，也不能据此证明真实网络没有时序问题。
+- 两项忽略仍为手动 TLS / zstd 采样，本轮未执行。
+- API 全套 599 项（2 单元 + 597 集成）通过，含模型列表权限/失败、HTTP/WS 和管理员诊断接口。
+- Store `postgres::snapshot::` 四项通过，使用真实隔离 PostgreSQL 且启用 CI 缺环境即失败约束，
+  不把缺数据库导致的提前返回算作通过。App 架构 14 项通过。
+- `cargo clippy --workspace --all-targets --locked -- -D warnings` 与
+  `cargo fmt --all --check` 最终通过。远端验证进程退出 0，未遗留构建或测试任务。
+- 本地与远端十个 Rust 文件 SHA-256 一致，`git diff --check` 通过。
+- Excel 新增用例验证选择与准备，未发送到真实 Excel 服务；本轮也未进行真实上游风控实验。

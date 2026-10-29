@@ -1288,6 +1288,44 @@ fn account_probe_should_not_write_to_the_persistent_execution_store() {
 }
 
 #[test]
+fn diagnostic_probe_keeps_its_local_model_policy_exemption() {
+    use gateway_core::account::{AccountModelAccess, AccountModelAccessMode};
+    let snapshot = probe_snapshot().with_account_directory(Arc::new(RuntimeAccountDirectory::new(
+        BTreeMap::from([(
+            ProviderAccountId::new("acct_probe").unwrap(),
+            RuntimeAccount::new(ProviderKind::new("openai").unwrap(), BTreeSet::new())
+                .with_model_access(
+                    AccountModelAccess::new(
+                        AccountModelAccessMode::Denylist,
+                        vec!["gpt-probe".to_owned()],
+                    )
+                    .unwrap(),
+                ),
+        )]),
+    )));
+    let providers =
+        ProviderRegistry::new([Arc::new(LocalFailingProvider) as Arc<dyn Provider>]).unwrap();
+    let service = DefaultExecutionService::new(
+        RuntimeSnapshotHandle::new(snapshot),
+        Arc::new(TrackingExecutionStore::default()),
+        providers,
+        Arc::new(UnusedAdmissions),
+        Arc::new(UnusedCircuits),
+        Arc::new(UnusedContinuation),
+        Arc::new(RecordingClientApiKeyUsage::default()),
+    );
+    let error = block_on(service.probe(AccountProbeRequest {
+        account_id: ProviderAccountId::new("acct_probe").unwrap(),
+        provider_kind: ProviderKind::new("openai").unwrap(),
+        upstream_model: UpstreamModelId::new("gpt-probe").unwrap(),
+        operation: probe_operation(),
+    }))
+    .expect_err("provider fixture rejects after planning");
+    assert_eq!(error.source(), AccountProbeErrorSource::Provider);
+    assert_eq!(error.send_state(), Some(UpstreamSendState::NotSent));
+}
+
+#[test]
 fn quality_check_uses_normal_fixed_account_and_persists_without_client_charges() {
     use gateway_core::account::{AccountModelAccess, AccountModelAccessMode};
 

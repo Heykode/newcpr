@@ -382,6 +382,16 @@ impl CodexCredentialSelector {
     ) -> bool {
         let upstream = Self::request_upstream(account, request);
         account.provider() == &self.provider_kind
+            // Model-resolved Excel routes retain their own eligibility contract.
+            && !(upstream == gateway_core::account::ResponsesUpstream::Codex
+                && account.authentication_kind() == CODEX_AUTHENTICATION_KIND_OAUTH
+                && request.upstream_model.is_some_and(|model| {
+                    let model = model.rsplit('/').next().unwrap_or(model);
+                    model.eq_ignore_ascii_case("grok")
+                        || model
+                            .get(..5)
+                            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("grok-"))
+                }))
             && (!request.image_request
                 || upstream == gateway_core::account::ResponsesUpstream::Excel
                 || account.authentication_kind() != CODEX_AUTHENTICATION_KIND_OAUTH

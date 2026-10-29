@@ -58,7 +58,10 @@ enum TestCatalog {
     Discovery,
 }
 
-struct MixedCatalog;
+enum MixedCatalog {
+    Available,
+    Unavailable,
+}
 
 impl ProviderCatalogPort for MixedCatalog {
     fn catalog_generations(&self) -> BTreeMap<ProviderKind, ProviderCatalogGeneration> {
@@ -81,6 +84,9 @@ impl ProviderCatalogPort for MixedCatalog {
         &self,
         provider: &ProviderKind,
     ) -> BoxFuture<'_, Result<Vec<ProviderModelCapabilities>, ProviderCatalogUnavailable>> {
+        if matches!(self, Self::Unavailable) {
+            return Box::pin(async { Err(ProviderCatalogUnavailable) });
+        }
         let model = match provider.as_str() {
             "openai" => "gpt-5.5",
             "xai" => "grok-4.7",
@@ -101,6 +107,10 @@ impl ProviderCatalogPort for MixedCatalog {
 }
 
 fn mixed_catalog_snapshot() -> gateway_core::routing::RuntimeSnapshot {
+    mixed_catalog_snapshot_with(MixedCatalog::Available)
+}
+
+fn mixed_catalog_snapshot_with(catalog: MixedCatalog) -> gateway_core::routing::RuntimeSnapshot {
     let facts = SnapshotFacts::new(
         revision(1),
         revision(1),
@@ -121,7 +131,7 @@ fn mixed_catalog_snapshot() -> gateway_core::routing::RuntimeSnapshot {
     block_on(
         RuntimeSnapshotCompiler::new(
             Arc::new(TestSnapshotStore::new(Ok(facts))),
-            Arc::new(MixedCatalog),
+            Arc::new(catalog),
         )
         .compile(),
     )
@@ -467,11 +477,17 @@ fn compiler_should_preserve_passthrough_when_provider_catalog_is_unavailable() {
 
 #[test]
 fn discovery_catalog_does_not_reject_an_unlisted_or_mapped_model() {
+    use gateway_core::routing::{RuntimeAccount, RuntimeAccountDirectory};
     let compiler = RuntimeSnapshotCompiler::new(
         Arc::new(TestSnapshotStore::new(Ok(facts(3, 3)))),
         Arc::new(TestCatalog::Discovery),
     );
-    let snapshot = block_on(compiler.compile()).unwrap();
+    let snapshot = block_on(compiler.compile())
+        .unwrap()
+        .with_account_directory(Arc::new(RuntimeAccountDirectory::new(BTreeMap::from([(
+            ProviderAccountId::new("acct_alpha").unwrap(),
+            RuntimeAccount::new(ProviderKind::new("alpha").unwrap(), Default::default()),
+        )]))));
     let provider = ProviderKind::new("alpha").unwrap();
     for name in ["unlisted-model", "public-model"] {
         let model = PublicModelId::new(name).unwrap();
@@ -505,10 +521,10 @@ fn discovery_catalog_does_not_reject_an_unlisted_or_mapped_model() {
 }
 
 #[test]
-fn known_model_precedes_discovery_fallback_without_losing_passthrough() {
+fn known_models_keep_declared_ownership_and_unique_unknown_passthrough() {
     let snapshot = mixed_catalog_snapshot();
     for (model, expected) in [
-        ("grok-4.7", vec!["xai", "openai"]),
+        ("grok-4.7", vec!["xai"]),
         ("shared-model", vec!["openai", "xai"]),
         ("unlisted-model", vec!["openai"]),
     ] {
@@ -529,7 +545,7 @@ fn known_model_precedes_discovery_fallback_without_losing_passthrough() {
         );
     }
 
-    let plan = snapshot
+    let error = snapshot
         .plan(
             &PublicModelId::new("grok-4.7").unwrap(),
             &super::operation(),
@@ -539,9 +555,183 @@ fn known_model_precedes_discovery_fallback_without_losing_passthrough() {
                 ..Default::default()
             },
         )
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        gateway_core::error::RoutingError::NoCapableProvider { .. }
+    ));
+}
+
+#[test]
+fn known_model_ownership_survives_mapping_and_owner_restrictions() {
+    use gateway_core::account::{AccountModelAccess, AccountModelAccessMode};
+    use gateway_core::routing::{
+        ClientRoutingScope, FrozenAccountScope, RoutingContext, RuntimeAccount,
+        RuntimeAccountDirectory,
+    };
+    let snapshot = mixed_catalog_snapshot().with_model_mappings(BTreeMap::from([
+        ("public-model".to_owned(), "middle-model".to_owned()),
+        ("middle-model".to_owned(), "grok-4.7".to_owned()),
+    ]));
+    let model = PublicModelId::new("public-model").unwrap();
+    let xai = ProviderKind::new("xai").unwrap();
+    let openai = ProviderKind::new("openai").unwrap();
+    assert!(snapshot.contains_public_model_for_provider(&model, &xai));
+    assert!(!snapshot.contains_public_model_for_provider(&model, &openai));
+    let plan = snapshot
+        .plan(
+            &model,
+            &super::operation(),
+            snapshot.all_account_scope(),
+            &Default::default(),
+        )
         .unwrap();
     assert_eq!(plan.candidates().len(), 1);
-    assert_eq!(plan.candidates()[0].provider().as_str(), "openai");
+    assert_eq!(plan.candidates()[0].provider(), &xai);
+    assert_eq!(
+        plan.candidates()[0].upstream_model().unwrap().as_str(),
+        "grok-4.7"
+    );
+
+    for (operation, context) in [
+        (
+            super::operation(),
+            RoutingContext {
+                blocked_providers: [xai.clone()].into(),
+                ..Default::default()
+            },
+        ),
+        (super::image_operation(), RoutingContext::default()),
+    ] {
+        assert!(matches!(
+            snapshot.plan(&model, &operation, snapshot.all_account_scope(), &context),
+            Err(gateway_core::error::RoutingError::NoCapableProvider { .. })
+        ));
+    }
+    for deny_owner in [false, true] {
+        let mut accounts = BTreeMap::from([(
+            ProviderAccountId::new("acct_openai").unwrap(),
+            RuntimeAccount::new(openai.clone(), Default::default()),
+        )]);
+        if deny_owner {
+            accounts.insert(
+                ProviderAccountId::new("acct_xai").unwrap(),
+                RuntimeAccount::new(xai.clone(), Default::default()).with_model_access(
+                    AccountModelAccess::new(
+                        AccountModelAccessMode::Denylist,
+                        vec!["grok-4.7".to_owned()],
+                    )
+                    .unwrap(),
+                ),
+            );
+        }
+        let scope = Arc::new(FrozenAccountScope::new(
+            Arc::new(RuntimeAccountDirectory::new(accounts)),
+            ClientRoutingScope::all_accounts(),
+        ));
+        assert!(!snapshot.contains_public_model_for_scope(&model, &scope));
+        for required_provider in [None, Some(xai.clone()), Some(openai.clone())] {
+            assert!(matches!(
+                snapshot.plan(
+                    &model,
+                    &super::operation(),
+                    scope.clone(),
+                    &RoutingContext {
+                        required_provider,
+                        ..Default::default()
+                    }
+                ),
+                Err(gateway_core::error::RoutingError::NoCapableProvider { .. })
+            ));
+        }
+    }
+}
+
+#[test]
+fn unknown_models_require_one_eligible_discovery_provider() {
+    use gateway_core::account::{AccountModelAccess, AccountModelAccessMode};
+    use gateway_core::routing::{
+        ClientRoutingScope, FrozenAccountScope, RoutingContext, RuntimeAccount,
+        RuntimeAccountDirectory,
+    };
+    let snapshot = mixed_catalog_snapshot_with(MixedCatalog::Unavailable);
+    for provider in ["openai", "xai"] {
+        assert!(
+            snapshot
+                .public_models_for_provider(&ProviderKind::new(provider).unwrap())
+                .is_empty()
+        );
+    }
+    let model = PublicModelId::new("future-model").unwrap();
+    assert!(matches!(
+        snapshot.plan(
+            &model,
+            &super::operation(),
+            snapshot.all_account_scope(),
+            &Default::default()
+        ),
+        Err(gateway_core::error::RoutingError::NoCapableProvider { .. })
+    ));
+    for provider in ["openai", "xai"] {
+        let provider = ProviderKind::new(provider).unwrap();
+        let plan = snapshot
+            .plan(
+                &model,
+                &super::operation(),
+                snapshot.all_account_scope(),
+                &RoutingContext {
+                    required_provider: Some(provider.clone()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(plan.candidates().len(), 1);
+        assert_eq!(plan.candidates()[0].provider(), &provider);
+    }
+    let openai = ProviderKind::new("openai").unwrap();
+    let scope = Arc::new(FrozenAccountScope::new(
+        Arc::new(RuntimeAccountDirectory::new(BTreeMap::from([
+            (
+                ProviderAccountId::new("acct_openai").unwrap(),
+                RuntimeAccount::new(openai.clone(), Default::default()),
+            ),
+            (
+                ProviderAccountId::new("acct_xai").unwrap(),
+                RuntimeAccount::new(ProviderKind::new("xai").unwrap(), Default::default())
+                    .with_model_access(
+                        AccountModelAccess::new(
+                            AccountModelAccessMode::Denylist,
+                            vec!["future-model".to_owned()],
+                        )
+                        .unwrap(),
+                    ),
+            ),
+        ]))),
+        ClientRoutingScope::all_accounts(),
+    ));
+    let plan = snapshot
+        .plan(
+            &model,
+            &super::operation(),
+            scope.clone(),
+            &Default::default(),
+        )
+        .unwrap();
+    assert_eq!(plan.candidates().len(), 1);
+    assert_eq!(plan.candidates()[0].provider(), &openai);
+    assert!(
+        snapshot
+            .plan(
+                &model,
+                &super::operation(),
+                scope,
+                &RoutingContext {
+                    required_provider: Some(ProviderKind::new("xai").unwrap()),
+                    ..Default::default()
+                }
+            )
+            .is_err()
+    );
 }
 
 #[test]

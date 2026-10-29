@@ -366,9 +366,16 @@ impl RuntimeSnapshotPublisher {
     ) -> Result<ConfigRevision, RuntimeSnapshotCompileError> {
         let concurrency = &self.request_tuning.account_concurrency;
         let fence = Arc::clone(&read_unpoisoned(&concurrency.state).fence);
+        let previous = read_unpoisoned(&self.snapshots.state).current.clone();
         let compiled = if let Some(cancellation) = cancellation {
             let cancelled = cancellation.cancelled().fuse();
-            let compiled = self.compiler.compile().fuse();
+            let compiled = async {
+                match previous {
+                    Some(previous) => self.compiler.compile_with_catalog_fallback(&previous).await,
+                    None => self.compiler.compile().await,
+                }
+            }
+            .fuse();
             pin_mut!(cancelled, compiled);
             // Preemption is not a load failure and must not suspend published capacity.
             select_biased! {
@@ -376,7 +383,6 @@ impl RuntimeSnapshotPublisher {
                 result = compiled => result,
             }
         } else {
-            let previous = read_unpoisoned(&self.snapshots.state).current.clone();
             match previous {
                 Some(previous) => self.compiler.compile_with_cached_catalog(&previous).await,
                 None => self.compiler.compile().await,

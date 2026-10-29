@@ -413,7 +413,7 @@ impl RuntimeSnapshotCompiler {
 
     /// 读取一个 revision，并为已注册 Provider 查询实时模型目录。
     pub async fn compile(&self) -> Result<RuntimeSnapshot, RuntimeSnapshotCompileError> {
-        self.compile_inner(None).await
+        self.compile_inner(None, true).await
     }
 
     /// Publish committed configuration without querying remote model catalogs.
@@ -421,12 +421,21 @@ impl RuntimeSnapshotCompiler {
         &self,
         previous: &RuntimeSnapshot,
     ) -> Result<RuntimeSnapshot, RuntimeSnapshotCompileError> {
-        self.compile_inner(Some(previous)).await
+        self.compile_inner(Some(previous), false).await
+    }
+
+    /// Refresh each catalog, retaining only its last known model facts on failure.
+    pub(crate) async fn compile_with_catalog_fallback(
+        &self,
+        previous: &RuntimeSnapshot,
+    ) -> Result<RuntimeSnapshot, RuntimeSnapshotCompileError> {
+        self.compile_inner(Some(previous), true).await
     }
 
     async fn compile_inner(
         &self,
         previous: Option<&RuntimeSnapshot>,
+        refresh_catalog: bool,
     ) -> Result<RuntimeSnapshot, RuntimeSnapshotCompileError> {
         for _ in 0..MAXIMUM_CATALOG_STABILITY_ATTEMPTS {
             let catalog_generations = self.catalogs.catalog_generations();
@@ -439,10 +448,15 @@ impl RuntimeSnapshotCompiler {
                 return Err(RuntimeSnapshotCompileError::RevisionChanged);
             }
             let provider_kinds = catalog_generations.keys().cloned().collect();
-            let snapshot =
-                compile_runtime_snapshot(facts, self.catalogs.as_ref(), provider_kinds, previous)
-                    .await?;
-            if previous.is_some() {
+            let snapshot = compile_runtime_snapshot(
+                facts,
+                self.catalogs.as_ref(),
+                provider_kinds,
+                previous,
+                refresh_catalog,
+            )
+            .await?;
+            if previous.is_some() && !refresh_catalog {
                 // An empty generation map keeps catalog reconciliation pending.
                 return Ok(snapshot);
             }
@@ -460,15 +474,21 @@ async fn compile_runtime_snapshot(
     catalogs: &dyn ProviderCatalogPort,
     provider_kinds: Vec<ProviderKind>,
     previous: Option<&RuntimeSnapshot>,
+    refresh_catalog: bool,
 ) -> Result<RuntimeSnapshot, RuntimeSnapshotCompileError> {
     let registered_providers = provider_kinds.iter().cloned().collect::<BTreeSet<_>>();
 
-    // Discovery catalogs cannot prove that a new upstream model is unavailable.
+    // Only read failures retain model facts; a successful empty catalog withdraws them.
     let mut provider_models = Vec::new();
     let mut catalog_accounts = BTreeMap::new();
     let mut exhaustive_provider_catalogs = BTreeSet::new();
     for provider in &provider_kinds {
-        if let Some(previous) = previous {
+        let models = if refresh_catalog || previous.is_none() {
+            catalogs.query_model_capabilities(provider).await.ok()
+        } else {
+            None
+        };
+        if let Some(previous) = previous.filter(|_| models.is_none()) {
             if let Some(accounts) = previous.model_catalog_accounts.get(provider) {
                 catalog_accounts.insert(provider.clone(), accounts.clone());
             }
@@ -491,7 +511,7 @@ async fn compile_runtime_snapshot(
             }
             continue;
         }
-        let Ok(models) = catalogs.query_model_capabilities(provider).await else {
+        let Some(models) = models else {
             continue;
         };
         if catalogs.model_catalog_is_exhaustive(provider) {
@@ -1145,7 +1165,7 @@ impl RuntimeSnapshot {
             .collect()
     }
 
-    /// 完整目录按映射后的模型判定；发现型或不可用目录交由上游验证。
+    /// 已知模型只属于声明者；未知模型仍可由非完整目录透传。
     #[must_use]
     pub fn contains_public_model_for_provider(
         &self,
@@ -1155,14 +1175,22 @@ impl RuntimeSnapshot {
         if !self.providers.contains(provider) {
             return false;
         }
-        if !self.exhaustive_provider_catalogs.contains(provider) {
-            return true;
-        }
-        let upstream_model = self.mapped_model(public_model.as_str());
-        match self.provider_models.get(provider) {
-            Some(models) => models.keys().any(|model| model.as_str() == upstream_model),
-            None => !self.exhaustive_provider_catalogs.contains(provider),
-        }
+        let Ok(upstream_model) =
+            UpstreamModelId::from_client_wire(self.mapped_model(public_model.as_str()))
+        else {
+            return false;
+        };
+        self.provider_models
+            .get(provider)
+            .is_some_and(|models| models.contains_key(&upstream_model))
+            || (!self.exhaustive_provider_catalogs.contains(provider)
+                && !self.is_known_upstream_model(&upstream_model))
+    }
+
+    fn is_known_upstream_model(&self, upstream_model: &UpstreamModelId) -> bool {
+        self.provider_models
+            .values()
+            .any(|models| models.contains_key(upstream_model))
     }
 
     #[must_use]
@@ -1233,13 +1261,50 @@ impl RuntimeSnapshot {
         account_scope: Arc<FrozenAccountScope>,
         context: &RoutingContext,
     ) -> Result<RoutingPlan, RoutingError> {
+        self.plan_inner(public_model, operation, account_scope, context, true)
+    }
+
+    /// Fixed-account administration keeps its existing local model-policy exemption.
+    pub(crate) fn plan_diagnostic(
+        &self,
+        public_model: &PublicModelId,
+        operation: &Operation,
+        context: &RoutingContext,
+    ) -> Result<RoutingPlan, RoutingError> {
+        self.plan_inner(
+            public_model,
+            operation,
+            self.all_account_scope(),
+            context,
+            false,
+        )
+    }
+
+    fn plan_inner(
+        &self,
+        public_model: &PublicModelId,
+        operation: &Operation,
+        account_scope: Arc<FrozenAccountScope>,
+        context: &RoutingContext,
+        enforce_account_model_policy: bool,
+    ) -> Result<RoutingPlan, RoutingError> {
         let requirements = operation.capability_requirements();
         let mut candidates = Vec::new();
-        let mut unlisted_candidates = Vec::new();
 
         if context.required_provider.is_none() && account_scope.provider_kinds().is_empty() {
             return Err(RoutingError::EmptyAccountScope);
         }
+
+        let requested_model = public_model.as_str();
+        let mapped_model = self.mapped_model(requested_model);
+        let upstream_model = if self.model_mappings.contains_key(requested_model) {
+            UpstreamModelId::new(mapped_model)
+        } else {
+            UpstreamModelId::from_client_wire(mapped_model)
+        }
+        .map_err(|_| RoutingError::InvalidIdentifier)?;
+        // Ownership is global; filtering the owner cannot turn a known model into passthrough.
+        let known_model = self.is_known_upstream_model(&upstream_model);
 
         let providers = context.required_provider.as_ref().map_or_else(
             || account_scope.provider_kinds().clone(),
@@ -1257,14 +1322,11 @@ impl RuntimeSnapshot {
             {
                 continue;
             }
-            let requested_model = public_model.as_str();
-            let mapped_model = self.mapped_model(requested_model);
-            let upstream_model = if self.model_mappings.contains_key(requested_model) {
-                UpstreamModelId::new(mapped_model)
-            } else {
-                UpstreamModelId::from_client_wire(mapped_model)
+            if enforce_account_model_policy
+                && !account_scope.allows_provider_model(provider, upstream_model.as_str())
+            {
+                continue;
             }
-            .map_err(|_| RoutingError::InvalidIdentifier)?;
             let capabilities = self
                 .provider_models
                 .get(provider)
@@ -1276,27 +1338,29 @@ impl RuntimeSnapshot {
                     };
                     emulated
                 }
-                None if self.exhaustive_provider_catalogs.contains(provider) => continue,
+                None if known_model || self.exhaustive_provider_catalogs.contains(provider) => {
+                    continue;
+                }
                 None => BTreeSet::new(),
             };
-            let candidate = ProviderCandidate {
+            candidates.push(ProviderCandidate {
                 provider: provider.clone(),
                 model_presentation: self
                     .provider_model_presentations
                     .get(provider)
                     .and_then(|models| models.get(&upstream_model))
                     .cloned(),
-                upstream_model: Some(upstream_model),
+                upstream_model: Some(upstream_model.clone()),
                 emulated_features,
                 account_scope: Arc::clone(&account_scope),
-            };
-            if capabilities.is_some() {
-                candidates.push(candidate);
-            } else {
-                unlisted_candidates.push(candidate);
-            }
+            });
         }
-        candidates.extend(unlisted_candidates);
+
+        if !known_model && candidates.len() > 1 {
+            return Err(RoutingError::NoCapableProvider {
+                model: public_model.as_str().to_owned(),
+            });
+        }
 
         if candidates.is_empty() {
             // 模型存在性必须包含被熔断的 Provider；目录未知时不能断言模型不存在。

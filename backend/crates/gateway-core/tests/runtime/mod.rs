@@ -33,6 +33,7 @@ use gateway_core::task::{
 type ReadGate<T> = Arc<Mutex<Option<oneshot::Receiver<Result<T, SnapshotStoreError>>>>>;
 
 mod account_concurrency;
+mod catalog_fallback;
 mod publication;
 
 #[derive(Clone)]

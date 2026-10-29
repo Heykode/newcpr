@@ -80,6 +80,7 @@ mod guardian;
 mod identity_isolation;
 mod image_account_eligibility;
 mod metadata_recovery;
+mod model_account_eligibility;
 mod native_encrypted_history;
 mod precommit;
 mod quota_continuation;

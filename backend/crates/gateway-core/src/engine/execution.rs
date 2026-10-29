@@ -1045,12 +1045,7 @@ impl DefaultExecutionService {
             ..RoutingContext::default()
         };
         let plan = snapshot
-            .plan(
-                &public_model,
-                &operation,
-                snapshot.all_account_scope(),
-                &routing_context,
-            )
+            .plan_diagnostic(&public_model, &operation, &routing_context)
             .map_err(map_routing_error)?;
         let started_at = SystemTime::now();
         let deadline_at = started_at.checked_add(DIAGNOSTIC_TIMEOUT).ok_or_else(|| {
