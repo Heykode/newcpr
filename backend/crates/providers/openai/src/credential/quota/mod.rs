@@ -1550,6 +1550,21 @@ impl CodexCredentialQuotaService {
     }
 
     /// 读取账号当前是否处于临时限流（429）冷却，及到期时间。
+    pub async fn scheduling_cooldown(
+        &self,
+        account: &ProviderAccount,
+    ) -> Result<Option<SystemTime>, CodexCredentialQuotaError> {
+        let cooldown = self.rate_limited_until(account.id()).await?;
+        let protection = self
+            .cooldowns
+            .read_protection(account.id(), account.revision())
+            .await
+            .map_err(|error| CodexCredentialQuotaError::Store {
+                detail: error.to_string(),
+            })?;
+        Ok(cooldown.max(protection.map(|state| state.scheduling_until(SystemTime::now()))))
+    }
+
     pub async fn rate_limited_until(
         &self,
         account_id: &ProviderAccountId,

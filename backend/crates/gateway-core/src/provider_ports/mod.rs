@@ -1192,7 +1192,95 @@ impl ProviderScopedCooldown {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountProtectionGuard {
+    pub account_id: ProviderAccountId,
+    pub credential_revision: CredentialRevision,
+    pub policy_generation: String,
+    pub reset_generation: String,
+    pub evidence_version: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountProtectionState {
+    pub account_id: ProviderAccountId,
+    pub credential_revision: CredentialRevision,
+    pub until: SystemTime,
+    pub generation: String,
+    pub requires_probe: bool,
+    pub duration_seconds: u64,
+    pub probe_model: Option<String>,
+    pub rules: Vec<crate::account::AccountProtectionMatch>,
+}
+
+impl AccountProtectionState {
+    /// A due probe remains unavailable until successful recovery is committed.
+    #[must_use]
+    pub fn scheduling_until(&self, now: SystemTime) -> SystemTime {
+        if self.requires_probe {
+            self.until.max(now + std::time::Duration::from_secs(30))
+        } else {
+            self.until
+        }
+    }
+}
+
 pub trait ProviderCooldownPort: Send + Sync {
+    fn read_protection<'a>(
+        &'a self,
+        _account_id: &'a ProviderAccountId,
+        _revision: CredentialRevision,
+    ) -> BoxFuture<'a, Result<Option<AccountProtectionState>, ProviderStoreError>> {
+        Box::pin(async { Ok(None) })
+    }
+
+    /// 由配置发布边界调用，只有保护配置变化才推进策略代次
+    fn publish_protection_policy<'a>(
+        &'a self,
+        _policy: &'a crate::account::AccountErrorProtection,
+        _revision: crate::routing::ConfigRevision,
+    ) -> futures::future::BoxFuture<'a, Result<(), ProviderStoreError>> {
+        Box::pin(async { Ok(()) })
+    }
+
+    fn begin_protection<'a>(
+        &'a self,
+        _account_id: &'a ProviderAccountId,
+        _revision: CredentialRevision,
+        _fingerprint: &'a str,
+        _snapshot_revision: crate::routing::ConfigRevision,
+    ) -> futures::future::BoxFuture<'a, Result<Option<AccountProtectionGuard>, ProviderStoreError>>
+    {
+        Box::pin(async { Ok(None) })
+    }
+
+    /// 凭据提交后只使旧凭据保护反馈失效，保留账号与模型限流
+    fn advance_protection_revision<'a>(
+        &'a self,
+        _account_id: &'a ProviderAccountId,
+        _revision: CredentialRevision,
+    ) -> futures::future::BoxFuture<'a, Result<bool, ProviderStoreError>> {
+        Box::pin(async { Ok(false) })
+    }
+
+    /// 同一原子操作内递增窗口计数并冻结，活动冻结不被迟到反馈顺延
+    fn record_protection_failure<'a>(
+        &'a self,
+        _guard: &'a AccountProtectionGuard,
+        _policy: &'a crate::account::AccountErrorProtection,
+        _matched: &'a [crate::account::AccountProtectionMatch],
+    ) -> futures::future::BoxFuture<'a, Result<bool, ProviderStoreError>> {
+        Box::pin(async { Ok(false) })
+    }
+
+    /// 只清除开始时所见的未冻结证据，不解除冻结或清除较新的失败
+    fn record_protection_success<'a>(
+        &'a self,
+        _guard: &'a AccountProtectionGuard,
+    ) -> futures::future::BoxFuture<'a, Result<bool, ProviderStoreError>> {
+        Box::pin(async { Ok(false) })
+    }
+
     /// Clear only the exact cooldown observed before a recovery request.
     fn clear_if_observed<'a>(
         &'a self,

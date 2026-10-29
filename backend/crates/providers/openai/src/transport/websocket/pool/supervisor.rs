@@ -90,9 +90,7 @@ impl CodexWebSocketPool {
 
     /// 维护池 slot：清扫已死亡或超龄的 idle 连接，以及异常残留的 Busy reservation。
     ///
-    /// 保活（ping/pong）与失活检测已下沉到每条连接的 pump 任务内部，此处不再做
-    /// 同步 ping 探活，只负责把「后台已标记 closed」或「超过 max_age」的 idle
-    /// 连接从池中摘除并关闭，避免它们占用 slot。
+    /// 回收已关闭、超龄或未绑定活跃下游的闲置连接；生成中的连接仅标记归池后回收。
     pub async fn maintain_idle_connections(&self) {
         let close = self.take_expired_slots().await;
         self.close_retired_connections(close).await;
@@ -173,8 +171,13 @@ impl CodexWebSocketPool {
             .slots
             .iter()
             .filter_map(|(key, slot)| match slot {
-                WebSocketPoolSlot::Idle { connection, .. }
-                    if should_close_idle_connection(connection, now, self.max_age()) =>
+                WebSocketPoolSlot::Idle {
+                    connection,
+                    idle_since,
+                } if should_close_idle_connection(connection, now, self.max_age())
+                    || (!state.has_downstream_binding(key)
+                        && now.duration_since(*idle_since) >= self.config.idle_timeout)
+                    || state.downstream_closed(key) =>
                 {
                     Some(key.clone())
                 }
@@ -196,17 +199,28 @@ impl CodexWebSocketPool {
             .collect::<Vec<_>>();
         for key in keys {
             match state.slots.remove(&key) {
-                Some(WebSocketPoolSlot::Idle { connection, .. }) => {
+                Some(WebSocketPoolSlot::Idle {
+                    connection,
+                    idle_since,
+                }) => {
                     let observation = if connection.websocket.is_closed() {
                         connection.websocket.observation()
                     } else {
-                        connection
-                            .websocket
-                            .observation()
-                            .with_exit_reason("max_age_expired")
+                        let reason = if state.downstream_closed(&key) {
+                            "downstream_connection_closed"
+                        } else if !state.has_downstream_binding(&key)
+                            && now.duration_since(idle_since) >= self.config.idle_timeout
+                        {
+                            "idle_timeout_expired"
+                        } else {
+                            "max_age_expired"
+                        };
+                        connection.websocket.observation().with_exit_reason(reason)
                     };
                     let reason = match observation.exit_reason() {
                         "max_age_expired" => Some("max_age_expired"),
+                        "idle_timeout_expired" => Some("idle_timeout_expired"),
+                        "downstream_connection_closed" => Some("downstream_connection_closed"),
                         _ => None,
                     };
                     close.push(Self::retire_connection(
@@ -257,7 +271,7 @@ fn take_retired_slots(
     let mut idle_connections = Vec::new();
     for (key, local_egress) in keys {
         match state.slots.remove(&key) {
-            Some(WebSocketPoolSlot::Idle { connection }) => {
+            Some(WebSocketPoolSlot::Idle { connection, .. }) => {
                 idle_connections.push(CodexWebSocketPool::retire_connection(
                     state,
                     key,

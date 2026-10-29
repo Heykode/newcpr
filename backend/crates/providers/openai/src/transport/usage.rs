@@ -241,6 +241,17 @@ struct PricingRule {
 // 档位也统一按常规价计算。
 // 按官方固定增量 8621e24e 清理已关闭型号；仅弃用但尚未关闭的型号继续保留。
 const PRICING_RULES: &[PricingRule] = &[
+    // Official CPR 18c75132: standard, Flex, Priority and long-context rates.
+    PricingRule {
+        model: "gpt-6.1-terra",
+        pricing: ModelPricing::new(10_000, 50_000, 500)
+            .with_cache_write(125)
+            .with_flex(5_000, 25_000, 250)
+            .with_fast(20_000, 100_000, 1_000)
+            .with_long(20_000, 75_000, 1_000)
+            .with_long_flex(10_000, 37_500, 500)
+            .with_long_fast(40_000, 150_000, 2_000),
+    },
     // 对齐上游 71c3b03878；2026-09-30 核验官方模型页的缓存、档位及长上下文价格：
     // https://developers.openai.com/api/docs/models/gpt-6.1-sol
     PricingRule {
@@ -713,7 +724,7 @@ fn reasoning_model(model: &str) -> bool {
     model.starts_with("gpt-5")
         || matches!(
             model,
-            "gpt-6-astra" | "gpt-6-sol" | "gpt-6-luna" | "gpt-6.1-sol"
+            "gpt-6-astra" | "gpt-6-sol" | "gpt-6-luna" | "gpt-6.1-sol" | "gpt-6.1-terra"
         )
         || model.starts_with("o1")
         || model.starts_with("o3")

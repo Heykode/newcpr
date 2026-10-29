@@ -741,6 +741,7 @@ impl<'a> CodexAccountSelectionTelemetry<'a> {
 /// 单次 Codex 上游请求的上下文。
 #[derive(Clone, Copy)]
 pub struct CodexRequestContext<'a> {
+    pub response_control: Option<&'a gateway_core::engine::response_control::ResponseControl>,
     /// 显式传递的请求诊断上下文，跨连接任务共享。
     pub trace: Option<&'a gateway_core::diagnostics::TraceContext>,
     /// Provider 已构造并脱敏持有的完整 Authorization 值。
@@ -788,6 +789,7 @@ impl<'a> CodexRequestContext<'a> {
         installation_id: Option<&'a str>,
     ) -> Self {
         Self {
+            response_control: None,
             trace: None,
             authorization,
             account_id,
@@ -807,6 +809,15 @@ impl<'a> CodexRequestContext<'a> {
             turn_id: None,
             account_selection: CodexAccountSelectionTelemetry::NONE,
         }
+    }
+
+    #[must_use]
+    pub const fn with_response_control(
+        mut self,
+        control: Option<&'a gateway_core::engine::response_control::ResponseControl>,
+    ) -> Self {
+        self.response_control = control;
+        self
     }
 
     #[must_use]
@@ -960,7 +971,6 @@ pub struct CodexBackendClient {
     pub(super) connection_budget: Option<gateway_core::engine::connection::ConnectionBudget>,
     pub(super) session_proxy:
         Option<Arc<dyn gateway_core::provider_ports::session_proxy::SessionProxyLease>>,
-    pub(super) response_control: Option<gateway_core::engine::response_control::ResponseControl>,
     pub(super) client: Client,
     pub(super) direct_client: Client,
     pub(super) default_direct_client: bool,
@@ -1035,14 +1045,6 @@ impl CodexBackendClient {
             "profile": self.request_profile().map_err(|_| StateProbeReason::MissingEvidence)?.into_inner(),
             "egress": egress,
         }))
-    }
-
-    pub(crate) fn with_response_control(
-        mut self,
-        control: Option<gateway_core::engine::response_control::ResponseControl>,
-    ) -> Self {
-        self.response_control = control;
-        self
     }
 
     pub(crate) fn request_profile(

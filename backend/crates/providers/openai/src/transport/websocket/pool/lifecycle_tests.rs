@@ -23,7 +23,7 @@ use super::{
 };
 use crate::transport::{
     egress::CodexEgressError,
-    websocket::pump::{PumpKeepalive, PumpLogContext, PumpedWebSocket, WEBSOCKET_CLOSE_TIMEOUT},
+    websocket::pump::{PumpLogContext, PumpedWebSocket, WEBSOCKET_CLOSE_TIMEOUT},
 };
 
 #[derive(Default)]
@@ -134,7 +134,6 @@ fn connection_with_proxy_permit(
     let connection = PooledWebSocketConnection {
         websocket: PumpedWebSocket::new(
             Box::new(ControlledSocket(Arc::clone(&control))),
-            PumpKeepalive::disabled(),
             PumpLogContext::new(None, None),
             None,
             permit,
@@ -189,7 +188,7 @@ async fn discard_aborts_blocked_data_and_control_writes_before_releasing_capacit
 #[tokio::test(start_paused = true)]
 async fn proxy_capacity_waits_for_actual_socket_destruction() {
     let proxy = gateway_core::account::OutboundProxy::parse(&format!(
-        "http://{}:test@127.0.0.1:8080",
+        "http://proxy-{}.invalid:8080",
         uuid::Uuid::new_v4()
     ))
     .unwrap()
@@ -221,7 +220,7 @@ async fn proxy_capacity_waits_for_actual_socket_destruction() {
 async fn proxy_capacity_does_not_evict_busy_or_downstream_bound_connections() {
     for bound in [false, true] {
         let proxy = gateway_core::account::OutboundProxy::parse(&format!(
-            "http://{}:test@127.0.0.1:8080",
+            "http://proxy-{}.invalid:8080",
             uuid::Uuid::new_v4()
         ))
         .unwrap()
@@ -616,5 +615,172 @@ async fn repeated_retirement_preserves_the_original_local_opening_failure() {
     );
     assert_eq!(pool.lock_state().slots.len(), 1);
     drop(connecting);
+    pool.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn downstream_cancellation_closes_idle_socket_without_releasing_capacity_early() {
+    let pool = pool();
+    let key = key(1).with_downstream_connection_id("downstream-a");
+    let cancellation = gateway_core::lifecycle::CancellationToken::new();
+    pool.register_downstream(&key, &cancellation);
+    let (connection, lease, control) = connected(&pool, &key).await;
+    lease.put(connection).await;
+    cancellation.cancel();
+    control.close_started.cancelled().await;
+    assert_closing(&pool, &key);
+    assert!(!control.destroyed.is_cancelled());
+    control.release_close();
+    control.destroyed.cancelled().await;
+    pool.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn cancelled_busy_downstream_retires_only_on_return() {
+    let pool = pool();
+    let key = key(1).with_downstream_connection_id("downstream-a");
+    let cancellation = gateway_core::lifecycle::CancellationToken::new();
+    pool.register_downstream(&key, &cancellation);
+    let (connection, lease, control) = connected(&pool, &key).await;
+    cancellation.cancel();
+    tokio::task::yield_now().await;
+    assert!(!control.close_started.is_cancelled());
+    assert_eq!(
+        CodexWebSocketPool::account_slots(&pool.lock_state(), "account"),
+        1
+    );
+    let returning = tokio::spawn(async move {
+        lease.put(connection).await;
+    });
+    control.close_started.cancelled().await;
+    assert_closing(&pool, &key);
+    control.release_close();
+    returning.await.unwrap();
+    pool.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn exact_continuation_moves_binding_and_old_cancellation_cannot_close_new_owner() {
+    let pool = pool();
+    let old = key(1).with_downstream_connection_id("downstream-a");
+    let new = key(1).with_downstream_connection_id("downstream-b");
+    let old_cancel = gateway_core::lifecycle::CancellationToken::new();
+    let new_cancel = gateway_core::lifecycle::CancellationToken::new();
+    pool.register_downstream(&old, &old_cancel);
+    pool.register_downstream(&new, &new_cancel);
+    let (mut connection, lease, control) = connected(&pool, &old).await;
+    connection
+        .continuation
+        .record_completed("response-owned".to_owned());
+    let id = connection.websocket.connection_id();
+    lease.put(connection).await;
+    let WebSocketPoolAcquire::Reused { connection, lease } =
+        pool.acquire(&new, Some("response-owned")).await
+    else {
+        panic!("exact continuation should transfer the existing socket");
+    };
+    assert_eq!(connection.websocket.connection_id(), id);
+    old_cancel.cancel();
+    tokio::task::yield_now().await;
+    assert!(!control.close_started.is_cancelled());
+    lease.put(*connection).await;
+    assert!(!control.close_started.is_cancelled());
+    new_cancel.cancel();
+    control.close_started.cancelled().await;
+    assert_closing(&pool, &new);
+    control.release_close();
+    pool.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn explicit_http_fallback_releases_only_its_downstream_idle_connections() {
+    let pool = pool_with_limit(2);
+    let first = key(1).with_downstream_connection_id("downstream-a");
+    let second = key(2).with_downstream_connection_id("downstream-b");
+    let first_cancel = gateway_core::lifecycle::CancellationToken::new();
+    let second_cancel = gateway_core::lifecycle::CancellationToken::new();
+    pool.register_downstream(&first, &first_cancel);
+    pool.register_downstream(&second, &second_cancel);
+    let (connection, lease, first_control) = connected(&pool, &first).await;
+    lease.put(connection).await;
+    let (connection, lease, second_control) = connected(&pool, &second).await;
+    lease.put(connection).await;
+    first_control.release_close();
+    pool.release_downstream_connections("downstream-a").await;
+    assert!(first_control.destroyed.is_cancelled());
+    assert!(!second_control.close_started.is_cancelled());
+    second_control.release_close();
+    pool.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn registered_downstream_rebinding_retires_its_previous_chain() {
+    let pool = pool_with_limit(2);
+    let first = key(1).with_downstream_connection_id("downstream-a");
+    let second = key(2).with_downstream_connection_id("downstream-a");
+    let cancellation = gateway_core::lifecycle::CancellationToken::new();
+    pool.register_downstream(&first, &cancellation);
+    let (connection, lease, control) = connected(&pool, &first).await;
+    lease.put(connection).await;
+    control.release_close();
+    let replacement = pool.acquire(&second, None).await;
+    assert!(matches!(replacement, WebSocketPoolAcquire::Connect(_)));
+    control.destroyed.cancelled().await;
+    assert!(!pool.lock_state().slots.contains_key(&first));
+    drop(replacement);
+    pool.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn replacing_control_revokes_pending_reader_and_preserves_the_next_owner() {
+    use gateway_core::engine::response_control::ResponseControl;
+    let pool = pool();
+    let (mut connection, lease, socket) = connected(&pool, &key(1)).await;
+    let old = ResponseControl::default();
+    connection.websocket.bind_control(Some(&old));
+    let mut receiving = Box::pin(old.receive());
+    assert!(futures::poll!(receiving.as_mut()).is_pending());
+    let next = ResponseControl::default();
+    connection.websocket.bind_control(Some(&next));
+    assert!(
+        timeout(Duration::from_secs(1), receiving)
+            .await
+            .unwrap()
+            .is_err()
+    );
+    assert!(old.send("{}").await.is_err());
+    let mut next_receiving = Box::pin(next.receive());
+    assert!(futures::poll!(next_receiving.as_mut()).is_pending());
+    connection.websocket.revoke_control();
+    assert!(
+        timeout(Duration::from_secs(1), next_receiving)
+            .await
+            .unwrap()
+            .is_err()
+    );
+    socket.release_close();
+    lease.put(connection).await;
+    pool.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn bound_idle_socket_survives_idle_timeout_until_downstream_closes() {
+    let mut pool = pool();
+    pool.config.max_age = Duration::from_secs(3600);
+    let bound = key(1).with_downstream_connection_id("active-downstream");
+    let cancellation = gateway_core::lifecycle::CancellationToken::new();
+    pool.register_downstream(&bound, &cancellation);
+    let (connection, lease, socket) = connected(&pool, &bound).await;
+    lease.put(connection).await;
+    tokio::time::advance(Duration::from_secs(301)).await;
+    pool.maintain_idle_connections().await;
+    assert!(!socket.close_started.is_cancelled());
+    assert_eq!(
+        CodexWebSocketPool::account_slots(&pool.lock_state(), "account"),
+        1
+    );
+    cancellation.cancel();
+    socket.close_started.cancelled().await;
+    socket.release_close();
     pool.shutdown().await;
 }

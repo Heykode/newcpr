@@ -4,6 +4,7 @@ mod accounts;
 mod auth;
 mod backup;
 mod client_keys;
+mod error_protection;
 mod excel_recovery;
 mod import_tasks;
 mod notifications;
@@ -649,6 +650,20 @@ impl ClientKeyStore for UnavailableStore {
 
 #[async_trait]
 impl ObservabilityStore for UnavailableStore {
+    async fn usage_concurrency(
+        &self,
+        _range: gateway_admin::model::observability::TimeRange,
+        _filter: gateway_admin::model::observability::UsageFilter,
+    ) -> gateway_admin::ports::store::AdminStoreResult<
+        Vec<gateway_admin::model::observability::UsageConcurrencyPoint>,
+    > {
+        Err(AdminStoreError::new(
+            AdminStoreErrorKind::Unavailable,
+            "observability",
+            "unavailable",
+        ))
+    }
+
     async fn dashboard_summary(
         &self,
         _: TimeRange,

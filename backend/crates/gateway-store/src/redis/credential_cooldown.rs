@@ -112,8 +112,9 @@ pub trait CredentialCooldownRepository: Send + Sync {
 
 #[derive(Clone)]
 pub struct RedisCredentialCooldownRepository {
-    connection: ConnectionManager,
-    namespace: String,
+    pub(super) connection: ConnectionManager,
+    pub(super) namespace: String,
+    pub(super) protection_enabled: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 struct StoredCooldown {
@@ -127,6 +128,7 @@ impl RedisCredentialCooldownRepository {
         Ok(Self {
             connection,
             namespace: namespace(key_namespace)?,
+            protection_enabled: Default::default(),
         })
     }
 
@@ -279,6 +281,7 @@ impl RedisCredentialCooldownRepository {
             rate_limited_until.insert(pair[0].clone(), until);
         }
         Ok(AccountRuntimeSnapshot {
+            error_protections: Default::default(),
             rate_limited_until,
             in_flight: None,
         })
@@ -350,7 +353,11 @@ impl CredentialCooldownRepository for RedisCredentialCooldownRepository {
         // 用 SCAN 精确匹配命名空间内该账号前缀，避免 KEYS 阻塞。
         let mut connection = self.connection.clone();
         let account_key = self.key(provider_account_id)?;
-        let mut keys = vec![account_key.clone()];
+        let mut keys = vec![
+            account_key.clone(),
+            self.protection_key(provider_account_id)?,
+            self.protection_state_key(provider_account_id)?,
+        ];
         let pattern = format!(
             "{}:account:{}:cooldown:*",
             self.namespace,
@@ -393,11 +400,94 @@ impl CredentialCooldownRepository for RedisCredentialCooldownRepository {
             .map_err(|error| {
                 redis_unavailable("remove active account cooldown").with_source(error)
             })?;
+        let _: i64 = redis::cmd("ZREM")
+            .arg(self.protection_index_key())
+            .arg(provider_account_id)
+            .query_async(&mut connection)
+            .await
+            .map_err(|error| redis_unavailable("remove protection index").with_source(error))?;
         Ok(removed > 0 || index_removed > 0)
     }
 }
 
 impl ProviderCooldownPort for RedisCredentialCooldownRepository {
+    fn publish_protection_policy<'a>(
+        &'a self,
+        policy: &'a gateway_core::account::AccountErrorProtection,
+        revision: gateway_core::routing::ConfigRevision,
+    ) -> futures::future::BoxFuture<'a, Result<(), ProviderStoreError>> {
+        Box::pin(async move {
+            self.publish_policy(policy, revision)
+                .await
+                .map_err(|error| provider_unavailable("publish protection").with_source(error))
+        })
+    }
+    fn begin_protection<'a>(
+        &'a self,
+        account: &'a ProviderAccountId,
+        revision: CredentialRevision,
+        fingerprint: &'a str,
+        snapshot_revision: gateway_core::routing::ConfigRevision,
+    ) -> futures::future::BoxFuture<
+        'a,
+        Result<Option<gateway_core::provider_ports::AccountProtectionGuard>, ProviderStoreError>,
+    > {
+        Box::pin(async move {
+            self.begin_account_protection(account, revision, fingerprint, snapshot_revision)
+                .await
+                .map_err(|error| provider_unavailable("begin protection").with_source(error))
+        })
+    }
+    fn advance_protection_revision<'a>(
+        &'a self,
+        account: &'a ProviderAccountId,
+        revision: CredentialRevision,
+    ) -> futures::future::BoxFuture<'a, Result<bool, ProviderStoreError>> {
+        Box::pin(async move {
+            self.advance_account_protection_revision(account, revision)
+                .await
+                .map_err(|error| provider_unavailable("advance protection").with_source(error))
+        })
+    }
+    fn record_protection_failure<'a>(
+        &'a self,
+        guard: &'a gateway_core::provider_ports::AccountProtectionGuard,
+        policy: &'a gateway_core::account::AccountErrorProtection,
+        matched: &'a [gateway_core::account::AccountProtectionMatch],
+    ) -> futures::future::BoxFuture<'a, Result<bool, ProviderStoreError>> {
+        Box::pin(async move {
+            self.protection_failure(guard, policy, matched)
+                .await
+                .map_err(|error| {
+                    provider_unavailable("record protection failure").with_source(error)
+                })
+        })
+    }
+    fn record_protection_success<'a>(
+        &'a self,
+        guard: &'a gateway_core::provider_ports::AccountProtectionGuard,
+    ) -> futures::future::BoxFuture<'a, Result<bool, ProviderStoreError>> {
+        Box::pin(async move {
+            self.protection_success(guard).await.map_err(|error| {
+                provider_unavailable("record protection success").with_source(error)
+            })
+        })
+    }
+    fn read_protection<'a>(
+        &'a self,
+        account: &'a ProviderAccountId,
+        revision: CredentialRevision,
+    ) -> futures::future::BoxFuture<
+        'a,
+        Result<Option<gateway_core::provider_ports::AccountProtectionState>, ProviderStoreError>,
+    > {
+        Box::pin(async move {
+            self.read_account_protection(account.as_str(), Some(revision))
+                .await
+                .map_err(|error| provider_unavailable("read protection").with_source(error))
+        })
+    }
+
     fn clear_if_observed<'a>(
         &'a self,
         observed: &'a ProviderCooldown,
@@ -571,7 +661,7 @@ impl ProviderCooldownPort for RedisCredentialCooldownRepository {
     }
 }
 
-fn invalid(message: &str) -> StoreError {
+pub(super) fn invalid(message: &str) -> StoreError {
     StoreError::InvalidData {
         entity: "credential cooldown",
         message: message.to_owned(),

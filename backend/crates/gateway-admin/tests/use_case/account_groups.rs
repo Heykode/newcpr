@@ -524,6 +524,7 @@ impl AccountRuntimeStore for FakeRuntimeStore {
             return Err(unused());
         }
         Ok(AccountRuntimeSnapshot {
+            error_protections: Default::default(),
             rate_limited_until: BTreeMap::from([(
                 "acct_limited".to_owned(),
                 Utc::now() + Duration::minutes(5),

@@ -47,6 +47,9 @@ export function useApiKeyMutations(options: {
   const batchDeletingAction = useAsyncAction()
   const updatingStatusKeys = useIdSet<string>()
   const revealingKeys = useIdSet<string>()
+  const copyingKeys = useIdSet<string>()
+  const configurationKeys = useIdSet<string>()
+  const importingKeys = useIdSet<string>()
   const savingKey = savingKeyAction.loading
   const deletingKey = deletingKeyAction.loading
   const batchDeleting = batchDeletingAction.loading
@@ -230,9 +233,10 @@ export function useApiKeyMutations(options: {
     await copyText(text, { successText: '已复制到剪贴板', emptyErrorText: '复制失败' })
   }
 
-  async function revealPlaintextKey(apiKey: ApiKeyRow) {
+  async function revealPlaintextKey(apiKey: ApiKeyRow, action: 'copy' | 'configuration' | 'import' = 'configuration') {
     try {
-      const result = await revealingKeys.run(apiKey.id, () => revealApiKey({ id: apiKey.id }))
+      const actions = action === 'copy' ? copyingKeys : action === 'import' ? importingKeys : configurationKeys
+      const result = await revealingKeys.run(apiKey.id, () => actions.run(apiKey.id, () => revealApiKey({ id: apiKey.id })))
       if (!result)
         return undefined
       if (!result.plaintextKey) {
@@ -247,7 +251,7 @@ export function useApiKeyMutations(options: {
   }
 
   async function copyApiKey(apiKey: ApiKeyRow) {
-    const key = await revealPlaintextKey(apiKey)
+    const key = await revealPlaintextKey(apiKey, 'copy')
     if (key)
       await copyToClipboard(key)
   }
@@ -294,6 +298,9 @@ export function useApiKeyMutations(options: {
     batchDeleting,
     updatingStatusKeyIds,
     revealingKeyIds,
+    copyingKeyIds: copyingKeys.ids,
+    configurationKeyIds: configurationKeys.ids,
+    importingKeyIds: importingKeys.ids,
     form,
     openCreate,
     openEdit,

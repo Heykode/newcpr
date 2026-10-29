@@ -1135,6 +1135,7 @@ async fn disabled_accounts_are_exclusive_in_status_filters_counts_and_sorting() 
         .execute(&database.pool).await.unwrap();
     let store = admin_account_store(&database.pool);
     let runtime = AccountRuntimeSnapshot {
+        error_protections: Default::default(),
         rate_limited_until: ["acct_limited", "acct_paused_limited"]
             .into_iter()
             .map(|id| (id.to_owned(), now + TimeDelta::minutes(5)))
@@ -1601,6 +1602,7 @@ async fn terminal_admin_list_filters_and_sorts_before_pagination_with_retained_u
                 sort: None,
             },
             AccountRuntimeSnapshot {
+                error_protections: Default::default(),
                 rate_limited_until: BTreeMap::from([(
                     "acct_alpha".to_owned(),
                     now + TimeDelta::minutes(5),
@@ -1616,7 +1618,7 @@ async fn terminal_admin_list_filters_and_sorts_before_pagination_with_retained_u
     assert_eq!(rate_limited.summary.normal, 0);
     assert_eq!(rate_limited.summary.disabled, 1);
 
-    let no_contains_compatibility = store
+    let contains_search = store
         .list_accounts(
             AccountListQuery {
                 page: 1,
@@ -1631,8 +1633,27 @@ async fn terminal_admin_list_filters_and_sorts_before_pagination_with_retained_u
             Default::default(),
         )
         .await
-        .expect("use structured account prefix search");
-    assert_eq!(no_contains_compatibility.total, 0);
+        .expect("search an email substring");
+    assert_eq!(contains_search.total, 6);
+    for search in ["%", "alpha_", "example\\\\"] {
+        let literal = store
+            .list_accounts(
+                AccountListQuery {
+                    page: 1,
+                    page_size: PageSize::new(10).unwrap(),
+                    provider_kind: None,
+                    group_filter: None,
+                    search: Some(search.to_owned()),
+                    status: None,
+                    plan_type: None,
+                    sort: None,
+                },
+                Default::default(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(literal.total, 0, "search characters are literal");
+    }
 
     let error_accounts = store
         .list_accounts(

@@ -105,6 +105,7 @@ fn select_profile(profile: &CodexWireProfileState, qx: bool) {
 
 fn identity_context(request_id: &str) -> CodexRequestContext<'_> {
     CodexRequestContext {
+        response_control: None,
         installation_id: Some(INSTALLATION_ID),
         session_id: Some("existing-session"),
         thread_id: Some("existing-thread"),

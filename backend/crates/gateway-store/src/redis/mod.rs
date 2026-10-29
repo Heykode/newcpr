@@ -343,3 +343,5 @@ pub(crate) fn namespace(value: &str) -> StoreResult<String> {
 }
 /// Bound account-state read fan-out, independently of model execution capacity.
 pub(crate) const ACCOUNT_STATE_READ_CONCURRENCY: usize = 128;
+
+mod account_error_protection;

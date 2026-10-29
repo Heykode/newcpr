@@ -454,3 +454,307 @@ async fn namespace_keys(connection: &mut ConnectionManager, namespace: &str) -> 
         .await
         .expect("list isolated cooldown keys")
 }
+
+fn protection_policy() -> gateway_core::account::AccountErrorProtection {
+    use gateway_core::account::*;
+    AccountErrorProtection {
+        enabled: true,
+        threshold: 2,
+        duration_seconds: 300,
+        rules: vec![AccountErrorRule {
+            id: "busy".into(),
+            name: "Busy upstream".into(),
+            conditions: vec![AccountErrorCondition {
+                field: AccountErrorField::Code,
+                operator: AccountErrorOperator::Equals,
+                values: vec![Some("busy".into())],
+                ignore_case: false,
+            }],
+        }],
+        ..Default::default()
+    }
+}
+
+async fn protection_guard(
+    repository: &RedisCredentialCooldownRepository,
+    account: &ProviderAccountId,
+    revision: u64,
+    policy: &gateway_core::account::AccountErrorProtection,
+    config: u64,
+) -> gateway_core::provider_ports::AccountProtectionGuard {
+    repository
+        .begin_protection(
+            account,
+            CredentialRevision::new(revision).unwrap(),
+            &policy.fingerprint(),
+            gateway_core::routing::ConfigRevision::new(config).unwrap(),
+        )
+        .await
+        .unwrap()
+        .unwrap()
+}
+
+fn protection_runtime(
+    repository: RedisCredentialCooldownRepository,
+    connection: ConnectionManager,
+    namespace: &str,
+) -> gateway_store::redis::RedisAdminAccountRuntimeStore {
+    use gateway_store::redis::*;
+    RedisAdminAccountRuntimeStore::new(
+        repository,
+        RedisCredentialLeaseRepository::new(connection.clone(), namespace).unwrap(),
+        RedisClientAdmissionRepository::new(connection, namespace).unwrap(),
+    )
+}
+
+fn protection_matches() -> Vec<gateway_core::account::AccountProtectionMatch> {
+    vec![gateway_core::account::AccountProtectionMatch {
+        id: "busy".into(),
+        name: "Busy upstream".into(),
+    }]
+}
+
+#[tokio::test]
+async fn protection_survives_unrelated_policy_publish_and_recovery_preserves_quota_cooldown() {
+    use gateway_admin::ports::store::AccountRuntimeStore;
+    let Some((repository, connection, namespace)) = repository().await else {
+        return;
+    };
+    let runtime = protection_runtime(repository.clone(), connection, &namespace);
+    let account = ProviderAccountId::new("acct_protected_account").unwrap();
+    let revision = CredentialRevision::new(1).unwrap();
+    let policy = protection_policy();
+    let config = gateway_core::routing::ConfigRevision::new(5).unwrap();
+    repository
+        .publish_protection_policy(&policy, config)
+        .await
+        .unwrap();
+    let guard = protection_guard(&repository, &account, 1, &policy, 5).await;
+    assert!(
+        !repository
+            .record_protection_failure(&guard, &policy, &protection_matches())
+            .await
+            .unwrap()
+    );
+    repository
+        .publish_protection_policy(
+            &policy,
+            gateway_core::routing::ConfigRevision::new(6).unwrap(),
+        )
+        .await
+        .unwrap();
+    let next = protection_guard(&repository, &account, 1, &policy, 5).await;
+    assert_eq!(guard.policy_generation, next.policy_generation);
+    assert!(
+        repository
+            .record_protection_failure(&next, &policy, &protection_matches())
+            .await
+            .unwrap()
+    );
+    let frozen = repository
+        .read_protection(&account, revision)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(frozen.requires_probe);
+    assert!(!repository.record_protection_success(&guard).await.unwrap());
+    repository
+        .cache_credential_cooldown(&cooldown(account.as_str(), 1, 3600))
+        .await
+        .unwrap();
+    assert!(runtime.finish_protection(&frozen, None).await.unwrap());
+    assert!(
+        repository
+            .read_protection(&account, revision)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        ProviderCooldownPort::read(&repository, &account)
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        !repository
+            .record_protection_failure(&guard, &policy, &protection_matches())
+            .await
+            .unwrap()
+    );
+}
+
+#[tokio::test]
+async fn protection_credential_change_and_manual_clear_reject_late_feedback() {
+    use gateway_admin::ports::store::AccountRuntimeStore;
+    let Some((repository, connection, namespace)) = repository().await else {
+        return;
+    };
+    let runtime = protection_runtime(repository.clone(), connection, &namespace);
+    let policy = protection_policy();
+    let account = ProviderAccountId::new("acct_protected_relogin").unwrap();
+    repository
+        .publish_protection_policy(
+            &policy,
+            gateway_core::routing::ConfigRevision::new(1).unwrap(),
+        )
+        .await
+        .unwrap();
+    let old = protection_guard(&repository, &account, 1, &policy, 1).await;
+    assert!(
+        repository
+            .advance_protection_revision(&account, CredentialRevision::new(2).unwrap())
+            .await
+            .unwrap()
+    );
+    assert!(
+        !repository
+            .record_protection_failure(&old, &policy, &protection_matches())
+            .await
+            .unwrap()
+    );
+    assert!(
+        repository
+            .begin_protection(
+                &account,
+                CredentialRevision::new(1).unwrap(),
+                &policy.fingerprint(),
+                gateway_core::routing::ConfigRevision::new(1).unwrap()
+            )
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let current = protection_guard(&repository, &account, 2, &policy, 1).await;
+    runtime
+        .clear_protection(
+            account.as_str(),
+            gateway_admin::model::Revision::new(2).unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(
+        !repository
+            .record_protection_failure(&current, &policy, &protection_matches())
+            .await
+            .unwrap()
+    );
+    assert!(
+        repository
+            .read_protection(&account, CredentialRevision::new(2).unwrap())
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn protection_due_probe_remains_blocked_and_old_recovery_cannot_clear_postponed_generation() {
+    use gateway_admin::ports::store::AccountRuntimeStore;
+    let Some((repository, connection, namespace)) = repository().await else {
+        return;
+    };
+    let runtime = protection_runtime(repository.clone(), connection.clone(), &namespace);
+    let account = ProviderAccountId::new("acct_protected_probe").unwrap();
+    let policy = protection_policy();
+    repository
+        .publish_protection_policy(
+            &policy,
+            gateway_core::routing::ConfigRevision::new(1).unwrap(),
+        )
+        .await
+        .unwrap();
+    let guard = protection_guard(&repository, &account, 1, &policy, 1).await;
+    for _ in 0..2 {
+        repository
+            .record_protection_failure(&guard, &policy, &protection_matches())
+            .await
+            .unwrap();
+    }
+    let mut conn = connection;
+    let key = namespace_keys(&mut conn, &namespace)
+        .await
+        .into_iter()
+        .find(|key| key.ends_with(":error-protection"))
+        .unwrap();
+    let _: () = redis::cmd("HSET")
+        .arg(&key)
+        .arg("until_ms")
+        .arg(Utc::now().timestamp_millis() - 1000)
+        .query_async(&mut conn)
+        .await
+        .unwrap();
+    let _: () = redis::cmd("ZADD")
+        .arg(format!("{namespace}:account:active-protections"))
+        .arg(0)
+        .arg(account.as_str())
+        .query_async(&mut conn)
+        .await
+        .unwrap();
+    let state = repository
+        .read_protection(&account, CredentialRevision::new(1).unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(state.scheduling_until(SystemTime::now()) > SystemTime::now());
+    let _: () = redis::cmd("ZADD")
+        .arg(format!("{namespace}:account:active-protections"))
+        .arg(-1)
+        .arg("acct_removed")
+        .query_async(&mut conn)
+        .await
+        .unwrap();
+    assert_eq!(runtime.due_protections().await.unwrap().len(), 1);
+    assert!(runtime.due_protections().await.unwrap().is_empty());
+    assert!(
+        runtime
+            .finish_protection(&state, Some(Utc::now() + Duration::minutes(5)))
+            .await
+            .unwrap()
+    );
+    assert!(!runtime.finish_protection(&state, None).await.unwrap());
+    assert!(
+        repository
+            .read_protection(&account, CredentialRevision::new(1).unwrap())
+            .await
+            .unwrap()
+            .is_some()
+    );
+}
+
+#[tokio::test]
+async fn protection_stale_disabled_publish_cannot_disable_a_newer_policy() {
+    let Some((repository, _, _)) = repository().await else {
+        return;
+    };
+    let policy = protection_policy();
+    let account = ProviderAccountId::new("acct_protected_policy").unwrap();
+    repository
+        .publish_protection_policy(
+            &policy,
+            gateway_core::routing::ConfigRevision::new(3).unwrap(),
+        )
+        .await
+        .unwrap();
+    repository
+        .publish_protection_policy(
+            &Default::default(),
+            gateway_core::routing::ConfigRevision::new(2).unwrap(),
+        )
+        .await
+        .unwrap();
+    let guard = protection_guard(&repository, &account, 1, &policy, 3).await;
+    for _ in 0..2 {
+        repository
+            .record_protection_failure(&guard, &policy, &protection_matches())
+            .await
+            .unwrap();
+    }
+    assert!(
+        repository
+            .read_protection(&account, CredentialRevision::new(1).unwrap())
+            .await
+            .unwrap()
+            .is_some()
+    );
+}

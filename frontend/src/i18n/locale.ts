@@ -36,9 +36,9 @@ export function readInitialLocale(): Locale {
       return saved
   }
   catch {
-    // 存储不可用时继续使用浏览器语言
+    // 存储不可用时使用默认语言
   }
-  return normalizeLocale(navigator.language)
+  return 'zh-Hans'
 }
 
 export function applyLocale(value: string): void {

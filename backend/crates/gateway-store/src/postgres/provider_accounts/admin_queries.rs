@@ -1,6 +1,7 @@
 //! 管理账号目录的数据库分页 read model。
 
 use super::*;
+use std::collections::BTreeMap;
 
 pub(crate) struct AdminAccountPageRows {
     pub(crate) config_revision: AdminRevision,
@@ -14,6 +15,7 @@ pub(crate) async fn load_admin_account_page(
     query: &AdminAccountListQuery,
     now: DateTime<Utc>,
     active_rate_limited_ids: Vec<String>,
+    protections: &BTreeMap<String, gateway_core::provider_ports::AccountProtectionState>,
 ) -> AdminStoreResult<AdminAccountPageRows> {
     validate_group_filter(pool, query.group_filter.as_ref()).await?;
 
@@ -21,7 +23,7 @@ pub(crate) async fn load_admin_account_page(
         .provider_kind
         .as_ref()
         .map(|provider| provider.as_str().to_owned());
-    let search_prefix = query.search.as_deref().map(literal_prefix_pattern);
+    let search_prefix = query.search.as_deref().map(literal_contains_pattern);
     let status = query.status.map(|status| status.as_str().to_owned());
     let plan_type = query.plan_type.as_deref();
     let (group_mode, group_id) = match query.group_filter.as_ref() {
@@ -59,6 +61,17 @@ pub(crate) async fn load_admin_account_page(
         String::new()
     };
 
+    let protection_revisions = serde_json::Value::Object(
+        protections
+            .iter()
+            .map(|(id, state)| {
+                (
+                    id.clone(),
+                    serde_json::json!(state.credential_revision.get()),
+                )
+            })
+            .collect(),
+    );
     let statement = format!(
         "with account_statuses as (
            select a.id, a.enabled,
@@ -66,6 +79,7 @@ pub(crate) async fn load_admin_account_page(
                     when not a.enabled then 'disabled'
                     when a.credential_state <> 'ready'
                       or a.access_token_expires_at <= $2 then 'error'
+                    when ($11::jsonb ->> a.id)::bigint = a.credential_revision then 'rate_limited'
                     when a.quota_access_state = 'exhausted' and exists(
                       select 1 from codex_quota_overdraft_states overdraft
                       join runtime_settings settings on settings.id=1
@@ -177,6 +191,7 @@ pub(crate) async fn load_admin_account_page(
         .bind(group_id)
         .bind(page_size)
         .bind(offset)
+        .bind(protection_revisions)
         .fetch_all(pool)
         .await
         .map_err(|_| admin_store_error(ENTITY, postgres_unavailable("load admin account page")))?;
@@ -269,8 +284,9 @@ fn admin_account_order(sort: Option<AdminAccountSort>) -> String {
     }
 }
 
-fn literal_prefix_pattern(value: &str) -> String {
-    let mut escaped = String::with_capacity(value.len().saturating_add(1));
+fn literal_contains_pattern(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len().saturating_add(2));
+    escaped.push('%');
     for character in value.to_lowercase().chars() {
         if matches!(character, '\\' | '%' | '_') {
             escaped.push('\\');

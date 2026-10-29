@@ -154,6 +154,39 @@ async fn client_scope_isolates_live_sockets_but_keeps_same_client_exact_owner() 
 }
 
 #[tokio::test]
+async fn lane_only_continuation_keeps_both_existing_physical_owners() {
+    let (pool, _) = pool(2);
+    let first = key(1).with_downstream_connection_id("lane-a");
+    let second = key(1).with_downstream_connection_id("lane-b");
+    let (mut first_connection, first_lease, _first_peer) = connected(&pool, &first).await;
+    let first_id = first_connection.websocket.connection_id();
+    first_connection
+        .continuation
+        .record_completed("response-a".to_owned());
+    first_lease.put(first_connection).await;
+    let (mut second_connection, second_lease, _second_peer) = connected(&pool, &second).await;
+    let second_id = second_connection.websocket.connection_id();
+    second_connection
+        .continuation
+        .record_completed("response-b".to_owned());
+    second_lease.put(second_connection).await;
+    for (response, expected) in [("response-a", first_id), ("response-b", second_id)] {
+        let WebSocketPoolAcquire::Reused { connection, lease } = timeout(
+            Duration::from_secs(1),
+            pool.acquire(&second, Some(response)),
+        )
+        .await
+        .expect("lane collision must not wait for an unrelated owner") else {
+            panic!("each continuation must retain its physical owner");
+        };
+        assert_eq!(connection.websocket.connection_id(), expected);
+        lease.put(*connection).await;
+    }
+    assert_eq!(pool.lock_state().slots.len(), 2);
+    pool.shutdown().await;
+}
+
+#[tokio::test]
 async fn client_scope_isolates_tombstones_and_preserves_same_client_reconnect_lookup() {
     let (pool, _) = pool(1);
     let owner = key(1)
@@ -237,7 +270,6 @@ async fn connected_with_buffer(
     let connection = PooledWebSocketConnection {
         websocket: PumpedWebSocket::new(
             Box::new(socket),
-            PumpKeepalive::disabled(),
             PumpLogContext::new(None, None),
             None,
             None,

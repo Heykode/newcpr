@@ -1,5 +1,5 @@
 import type { Component } from 'vue'
-import type { AccountErrorReason, AccountStatus } from '@/api'
+import type { Account, AccountErrorReason, AccountStatus } from '@/api'
 import { AlertTriangle, CircleCheck, Gauge, Power, Timer } from '@lucide/vue'
 
 import { formatDateTime, parseTimestamp } from '@/utils/date'
@@ -40,6 +40,7 @@ export interface AccountStatusPresentation {
 }
 
 export interface AccountStatusPresentationInput {
+  errorProtection?: Account['errorProtection']
   status: AccountStatus
   errorReason: AccountErrorReason | null
   errorMessage: string | null
@@ -133,6 +134,26 @@ const errorRecoveryHints: Record<AccountErrorReason, string> = {
 export function resolveAccountStatusPresentation(
   input: AccountStatusPresentationInput,
 ): AccountStatusPresentation {
+  if (input.errorProtection && input.status !== 'error') {
+    const state = input.errorProtection
+    const pending = state.requiresProbe && Date.parse(state.until) <= input.now
+    const description = state.rules.map(rule => rule.name).join('、')
+    const label = input.status === 'disabled' ? '已暂停 · 错误保护' : pending ? '等待恢复探测' : '错误保护'
+    return {
+      mode: input.status,
+      statusStyle: statusStyles.warning,
+      label,
+      title: label,
+      description: description || '匹配错误规则，暂时停止调度',
+      recoveryHint: state.requiresProbe ? '冷却到期后探测成功才解除保护；其他暂停与额度状态独立保留。' : '冷却到期解除保护；其他暂停与额度状态独立保留。',
+      icon: Timer,
+      hasDetail: true,
+      errorText: null,
+      nextRefreshDisplay: null,
+      rateLimitRecovery: pending ? '等待探测' : remainingTime(state.until, input.now),
+      triggerLabel: label,
+    }
+  }
   const nextRefreshTimestamp = input.nextRefreshAt === null
     ? null
     : parseTimestamp(input.nextRefreshAt)

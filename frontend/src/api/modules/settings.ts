@@ -1,5 +1,6 @@
 import type { RequestOptions } from '../request'
 import type { RequestLocation } from './proxies'
+import type { AccountErrorProtection } from './settings/protection'
 import request from '../request'
 
 export type RotationStrategy = 'smart' | 'quota_reset_priority' | 'round_robin' | 'sticky'
@@ -65,7 +66,7 @@ export interface RequestTuning {
   accountBusyWaitFallbackTimeoutSeconds: number
 }
 
-export type RequestTuningOverrides = {
+export type RequestTuningOverrides = { accountErrorProtection?: AccountErrorProtection | null } & {
   [Key in keyof RequestTuning]?: RequestTuning[Key] | null
 }
 

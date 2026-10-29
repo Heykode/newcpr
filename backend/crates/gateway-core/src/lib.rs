@@ -47,6 +47,7 @@ use task::{WorkerContribution, WorkerDefinitionError};
 /// Store 提供给数据面 Core 的封闭能力集合。
 #[derive(Clone)]
 pub struct CoreStorePorts {
+    account_error_protection: Option<Arc<dyn provider_ports::ProviderCooldownPort>>,
     client_retry: Option<Arc<dyn engine::client_retry::ClientRetryStore>>,
     execution: Arc<dyn ExecutionStore>,
     admissions: Arc<dyn ClientAdmissionPort>,
@@ -61,6 +62,15 @@ pub struct CoreStorePorts {
 }
 
 impl CoreStorePorts {
+    #[must_use]
+    pub fn with_account_error_protection(
+        mut self,
+        store: Arc<dyn provider_ports::ProviderCooldownPort>,
+    ) -> Self {
+        self.account_error_protection = Some(store);
+        self
+    }
+
     #[must_use]
     pub fn with_client_retry(
         mut self,
@@ -96,6 +106,7 @@ impl CoreStorePorts {
             budget: None,
             captures: None,
             client_retry: None,
+            account_error_protection: None,
         }
     }
 
@@ -187,13 +198,24 @@ pub async fn initialize_with_request_tuning(
     request_tuning.publish(initial.request_tuning());
     request_tuning.publish_excel_image_transport(initial.excel_image_transport().cloned());
     request_tuning.publish_openai_turn_state_policy(initial.openai_turn_state_policy().clone());
+    if let Some(store) = &ports.account_error_protection {
+        store
+            .publish_protection_policy(
+                initial.account_error_protection().policy(),
+                initial.revision(),
+            )
+            .await
+            .map_err(|_| CoreError::SnapshotUnavailable)?;
+    }
     let snapshots = RuntimeSnapshotHandle::new(initial);
-    let publisher = Arc::new(RuntimeSnapshotPublisher::new_with_request_tuning(
+    let publisher = RuntimeSnapshotPublisher::new_with_request_tuning(
         compiler,
         snapshots.clone(),
         request_tuning,
         Arc::clone(&ports.snapshot_subscriptions),
-    ));
+    )
+    .with_account_error_protection(ports.account_error_protection.clone());
+    let publisher = Arc::new(publisher);
     let worker_contributions = publisher.worker_contributions()?;
     let mut service = DefaultExecutionService::new(
         snapshots.clone(),
@@ -212,6 +234,9 @@ pub async fn initialize_with_request_tuning(
     }
     if let Some(store) = ports.client_retry {
         service = service.with_client_retry(store);
+    }
+    if let Some(store) = ports.account_error_protection {
+        service = service.with_account_error_protection(store);
     }
     let service = Arc::new(service);
     let execution: Arc<dyn ExecutionService> = service.clone();

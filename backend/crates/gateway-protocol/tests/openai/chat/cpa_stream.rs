@@ -86,19 +86,12 @@ fn cpa_metadata_never_emits_and_text_and_refusal_are_delivered_one_event_at_a_ti
         json!({"role":"assistant","refusal":"comply"}),
     );
     for event in [
-        json!({"type":"response.refusal.done","refusal":"changed snapshot"}),
-        json!({"type":"response.output_text.done","text":"changed snapshot"}),
-        json!({"type":"response.content_part.added","part":{"type":"output_text","text":"snapshot"}}),
-        json!({"type":"response.content_part.done","part":{"type":"output_text","text":"snapshot"}}),
-        json!({"type":"response.output_item.done","item":message("snapshot")}),
+        json!({"type":"response.refusal.done","refusal":"cannot comply"}),
+        json!({"type":"response.output_text.done","item_id":"unannounced","text":"AA\u{4e2d}\n"}),
     ] {
         assert!(push(&mut encoder, event).is_empty());
     }
-    finish(
-        &mut encoder,
-        json!([message("unrelated terminal text")]),
-        "stop",
-    );
+    finish(&mut encoder, json!([]), "stop");
 }
 
 #[test]
@@ -226,7 +219,6 @@ fn cpa_unknown_controls_and_unmapped_items_never_turn_eof_into_completion() {
         json!({"type":"response.output_item.added","item":{"type":"future","payload":"ignored"}}),
         json!({"type":"response.output_item.added","item":{"type":"image_generation_call","id":"img","result":"not a done item"}}),
         json!({"type":"response.output_item.done","item":{"type":"future","payload":"ignored"}}),
-        json!({"type":"response.output_text.done","text":"not a delta"}),
         json!({"type":"response.image_generation_call.completed","result":"not a done item"}),
         json!({"future_envelope":true}),
     ] {
@@ -311,7 +303,7 @@ fn cpa_interleaved_item_ids_without_output_indices_keep_sequential_tool_indices(
     expect_delta(
         &mut encoder,
         json!({
-            "type":"response.output_item.added","item":function("a", "lookup", "ignored initial arguments")
+            "type":"response.output_item.added","item":function("a", "lookup", "")
         }),
         json!({"role":"assistant","tool_calls":[{
             "index":0,"id":"a","type":"function","function":{"name":"lookup","arguments":""}
@@ -321,7 +313,7 @@ fn cpa_interleaved_item_ids_without_output_indices_keep_sequential_tool_indices(
         &mut encoder,
         json!({
             "type":"response.output_item.added","item":{
-                "type":"custom_tool_call","id":"ct_b","call_id":"b","name":"code","input":"ignored"
+                "type":"custom_tool_call","id":"ct_b","call_id":"b","name":"code","input":""
             }
         }),
         json!({"role":"assistant","tool_calls":[{
@@ -352,9 +344,15 @@ fn cpa_interleaved_item_ids_without_output_indices_keep_sequential_tool_indices(
             arguments(index, delta),
         );
     }
-    assert!(push(&mut encoder, json!({
-        "type":"response.output_item.done","item":function("a", "changed", "different full arguments")
-    })).is_empty());
+    assert!(
+        push(
+            &mut encoder,
+            json!({
+                "type":"response.output_item.done","item":function("a", "lookup", "{\"x\":1}")
+            })
+        )
+        .is_empty()
+    );
     assert!(push(&mut encoder, json!({
         "type":"response.function_call_arguments.delta","item_id":"fc_a","delta":"ignored after item.done"
     })).is_empty());
@@ -367,13 +365,13 @@ fn cpa_interleaved_item_ids_without_output_indices_keep_sequential_tool_indices(
     );
     finish(
         &mut encoder,
-        json!([function("a", "lookup", "terminal snapshot")]),
+        json!([function("a", "lookup", "{\"x\":1}")]),
         "tool_calls",
     );
 }
 
 #[test]
-fn cpa_tool_lookup_prefers_item_ids_then_output_index_and_only_keyless_current_fallback() {
+fn cpa_tool_lookup_accepts_consistent_aliases_and_only_keyless_current_fallback() {
     let mut encoder = ChatStreamEncoder::new(false);
     created(&mut encoder);
     for (index, id, alias) in [(8, "a", "alias_a"), (2, "b", "alias_b")] {
@@ -387,11 +385,11 @@ fn cpa_tool_lookup_prefers_item_ids_then_output_index_and_only_keyless_current_f
     }
     for (event, expected_index, delta) in [
         (
-            json!({"item_id":"alias_a","output_index":2}),
+            json!({"item_id":"alias_a","output_index":8}),
             0,
             "event alias",
         ),
-        (json!({"item_id":"fc_a","output_index":2}), 0, "item id"),
+        (json!({"item_id":"fc_a","output_index":8}), 0, "item id"),
         (
             json!({"item_id":"unrecognized","output_index":8}),
             0,
@@ -413,13 +411,13 @@ fn cpa_tool_lookup_prefers_item_ids_then_output_index_and_only_keyless_current_f
         event["delta"] = json!("must not enter another tool");
         assert!(push(&mut encoder, event).is_empty());
     }
-    // Event item_id wins over the nested done item's conflicting ID.
+    // Consistent event aliases and output indices still close only their own tool.
     assert!(
         push(
             &mut encoder,
             json!({
-                "type":"response.output_item.done","item_id":"alias_a","output_index":2,
-                "item":function("b", "run", "no replay")
+                "type":"response.output_item.done","item_id":"alias_a","output_index":8,
+                "item":function("a", "run", "event aliasitem idoutput index")
             })
         )
         .is_empty()
@@ -444,7 +442,7 @@ fn cpa_tool_lookup_prefers_item_ids_then_output_index_and_only_keyless_current_f
 }
 
 #[test]
-fn cpa_argument_done_fallback_emits_once_does_not_close_and_never_compares_suffixes() {
+fn argument_snapshots_deduplicate_then_accept_missing_suffixes() {
     for (kind, field, prefix) in [
         (
             "function_call",
@@ -475,7 +473,7 @@ fn cpa_argument_done_fallback_emits_once_does_not_close_and_never_compares_suffi
             push(
                 &mut encoder,
                 json!({
-                    "type":format!("{prefix}.done"),"item_id":"item",field:"conflicting replacement"
+                    "type":format!("{prefix}.done"),"item_id":"item",field:"full raw \n{not-json"
                 })
             )
             .is_empty()
@@ -489,7 +487,7 @@ fn cpa_argument_done_fallback_emits_once_does_not_close_and_never_compares_suffi
         );
         assert!(push(&mut encoder, json!({
             "type":"response.output_item.done",
-            "item":{"type":kind,"id":"item","call_id":"changed","name":"changed",field:"unrelated"}
+            "item":{"type":kind,"id":"item","call_id":"call","name":"run",field:"full raw \n{not-jsonlate raw"}
         })).is_empty());
         for ending in ["delta", "done"] {
             assert!(
@@ -508,7 +506,7 @@ fn cpa_argument_done_fallback_emits_once_does_not_close_and_never_compares_suffi
 }
 
 #[test]
-fn cpa_empty_argument_done_marks_fallback_emitted_but_empty_deltas_do_not() {
+fn empty_argument_snapshots_do_not_hide_later_final_arguments() {
     for done_first in [false, true] {
         let mut encoder = ChatStreamEncoder::new(false);
         created(&mut encoder);
@@ -528,14 +526,7 @@ fn cpa_empty_argument_done_marks_fallback_emitted_but_empty_deltas_do_not() {
                 "type":"response.output_item.done","item":function("a", "run", "fallback")
             }),
         );
-        assert_eq!(
-            chunks,
-            if done_first {
-                vec![]
-            } else {
-                vec![chunk(arguments(0, "fallback"))]
-            }
-        );
+        assert_eq!(chunks, vec![chunk(arguments(0, "fallback"))]);
         assert!(
             push(
                 &mut encoder,
@@ -571,7 +562,7 @@ fn cpa_output_item_done_emits_arguments_only_after_announcement_or_a_whole_unann
                         "type":"response.output_item.added","item":item
                     }),
                     json!({"role":"assistant","tool_calls":[{
-                        "index":0,"id":"call","type":"function","function":{"name":"run","arguments":""}
+                        "index":0,"id":"call","type":"function","function":{"name":"run","arguments":"raw final\n{"}
                     }]}),
                 );
             }
@@ -583,7 +574,11 @@ fn cpa_output_item_done_emits_arguments_only_after_announcement_or_a_whole_unann
                     "index":0,"id":"call","type":"function","function":{"name":"run","arguments":"raw final\n{"}
                 }]})
             };
-            expect_delta(&mut encoder, event.clone(), expected);
+            if announced {
+                assert!(push(&mut encoder, event.clone()).is_empty());
+            } else {
+                expect_delta(&mut encoder, event.clone(), expected);
+            }
             assert!(push(&mut encoder, event).is_empty());
             finish(&mut encoder, json!([]), "tool_calls");
         }
@@ -742,11 +737,7 @@ fn cpa_search_annotations_images_and_unknown_controls_do_not_edit_json_model_tex
             }),
         ));
     }
-    finish(
-        &mut encoder,
-        json!([message("replacement snapshot")]),
-        "stop",
-    );
+    finish(&mut encoder, json!([message(&parts.concat())]), "stop");
     let emitted = text(&chunks, "content");
     assert_eq!(emitted, parts.concat());
     assert_eq!(
@@ -781,12 +772,12 @@ fn cpa_incomplete_reasons_and_usage_absence_are_preserved_without_snapshot_repla
                 &mut encoder,
                 json!({"type":"response.incomplete","response":terminal}),
             );
-            assert_eq!(chunks.len(), if include_usage { 2 } else { 1 });
-            assert_eq!(chunks[0]["choices"][0]["finish_reason"], expected);
-            assert_eq!(text(&chunks, "content"), "");
+            assert_eq!(chunks.len(), if include_usage { 3 } else { 2 });
+            assert_eq!(chunks[1]["choices"][0]["finish_reason"], expected);
+            assert_eq!(text(&chunks, "content"), "terminal only");
             if include_usage {
-                assert_eq!(chunks[1]["choices"], json!([]));
-                assert_eq!(chunks[1].get("usage"), Some(&Value::Null));
+                assert_eq!(chunks[2]["choices"], json!([]));
+                assert_eq!(chunks[2].get("usage"), Some(&Value::Null));
             } else {
                 assert!(chunks[0].get("usage").is_none());
             }

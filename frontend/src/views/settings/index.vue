@@ -16,6 +16,7 @@ import SettingsBackupSection from './components/backup/SettingsBackupSection.vue
 import SettingsCleanupSection from './components/cleanup/SettingsCleanupSection.vue'
 import ClientVersionSettings from './components/client-version/index.vue'
 import CodexQuotaOverdraftCard from './components/CodexQuotaOverdraftCard.vue'
+import AccountErrorProtectionCard from './components/error-protection/AccountErrorProtectionCard.vue'
 import ExcelSettingsCard from './components/ExcelSettingsCard.vue'
 import ModelAliasesCard from './components/ModelAliasesCard.vue'
 import NotificationChannelsCard from './components/NotificationChannelsCard.vue'
@@ -176,6 +177,8 @@ watch(
           v-model:request-tuning="form.requestTuning"
           :disabled="loading || saving"
         />
+
+        <AccountErrorProtectionCard v-model="form.accountErrorProtection" :disabled="loading || saving" />
 
         <AccountWarmupCard
           v-model:enabled="form.accountWarmupEnabled"

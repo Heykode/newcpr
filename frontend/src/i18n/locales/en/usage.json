@@ -69,13 +69,19 @@
       "accountSelectionCoverage": "Selection coverage",
       "capacityCoverage": "Capacity coverage",
       "title": "Performance",
-      "description": "Latency, throughput, scheduling",
+      "description": "Total latency, TTFT, rate, and load",
       "performanceIndicators": "Performance indicators",
       "loading": "Loading performance",
       "noTtftSamples": "No TTFT samples in this range",
       "noThroughput": "No throughput samples in this range",
       "noScheduling": "No scheduling or capacity samples in this range",
-      "noLatency": "No latency samples in this range"
+      "noLatency": "No latency samples in this range",
+      "concurrency": "Concurrency",
+      "averageConcurrency": "Average concurrency",
+      "peakConcurrency": "Peak concurrency",
+      "load": "Load",
+      "waitTime": "Duration",
+      "noLoad": "No load data in this range"
     },
     "reasoning": {
       "subagentRequest": "Subagent request",

@@ -85,7 +85,8 @@ Output uses the existing Responses reasoning object.
 ### Contracts
 Validate all supplied aliases. Nonempty trimmed nested effort wins; null/empty/missing
 nested effort falls back to valid flat effort. Flat whitespace validation stays strict.
-Accept none/minimal/low/medium/high/xhigh/max. Preserve explicit summary
+Accept nonempty future effort strings as upstream-owned values, including
+none/minimal/low/medium/high/xhigh/max. Preserve explicit summary
 (auto/concise/detailed/null); inject no effort or summary defaults.
 
 ### Validation & Error Matrix
@@ -188,8 +189,9 @@ or multipart image editing. These contracts extend, not replace,
 - Only wire JSON is converted; canonical metering remains the engine's source
   of truth. Never emit duplicate usage or cost facts from an API encoder.
 - Preserve function IDs, argument strings, parallel indices and result order.
-  Chat streams use CPA-style deltas and tool done fallback, not terminal/text
-  snapshot reconstruction or full-response prefix comparisons.
+  Chat streams send deltas immediately. Done/item/terminal snapshots may fill
+  missing suffixes only after matching the emitted prefix's length and SHA-256.
+  Keep no duplicate full-output buffer. Identity or prefix conflicts fail safely.
 - Preserve absent usage as absent/null, not invented zero counters.
 - Image results use CPA-compatible message.images/delta.images, not Markdown
   in content. Skip empty image payloads; do not decode or validate upstream
@@ -311,8 +313,9 @@ or multipart image editing. These contracts extend, not replace,
 - Assistant string `reasoning_content` or `reasoning` is ordinary public history
   (`output_text` in a completed assistant message), never encrypted reasoning
   or a continuation ID. Conflicting aliases and non-assistant roles are rejected.
-- Do not add one-way legacy `functions` conversion, terminal replay or an extra
-  billing source under this compatibility change.
+- Do not add one-way legacy `functions` conversion or an extra billing source.
+  Terminal snapshots may supply missing text/tool suffixes only under the
+  digest and identity checks below; previously emitted content is not replayed.
 
 ### Scope
 
@@ -367,12 +370,17 @@ selection, transport retry budgets, identity or canonical billing.
   to PNG. Do not change independent Images upload validation.
 - Streamed text/reasoning/tool argument deltas are sent immediately. Do not
   retain full text or full arguments to repair done/terminal snapshots.
-  Tool argument done fills only if no arguments were emitted; output item done
+  Done snapshots fill only missing suffixes after digest validation; output item done
   also closes the tool. Later deltas for a closed item are skipped.
-- Resolve tools by item ID, then output index, then call ID. Only genuinely keyless events
+- Resolve tools by item ID and call ID plus output index; reject conflicting known aliases.
+  Terminal item identity takes priority over terminal array position. Only genuinely keyless events
   may use the current-tool fallback. An explicitly unknown key must not close
   or append to a different call. This avoids CPA's verified lost done-only-call
-  case without bringing back strict field/snapshot rejection.
+  case without dropping future fields. Conflicting known item identities,
+  tool names and nonempty snapshot prefixes fail rather than mixing outputs.
+- Text messages also resolve item ID and output-index aliases consistently.
+  A terminal message with an ID uses that identity even if the terminal array
+  is reordered; the array position must not steal another message's prefix.
 - Non-streaming conversion keeps recognized text/refusal parts, raw tool input
   and image entries while ignoring unknown output/parts. Optional malformed
   wire usage fields are omitted, not grounds to reject an otherwise valid
@@ -396,7 +404,7 @@ selection, transport retry budgets, identity or canonical billing.
 | Explicit valid image result | Independent images entry, content and usage unchanged |
 | Image preview then interruption | Optional preview, then error; no successful finish |
 | Mixed custom/function deltas | Stable function-envelope indices, raw strings and restored upstream types |
-| Argument done after deltas | Skip full snapshot, never replay arguments |
+| Argument done after deltas | Validate emitted prefix and send only missing suffix |
 | Delta after output-item done | Skip without failing the request |
 | Distinct explicit key with done but no added | Announce a new tool, do not close another call |
 | Search source metadata and annotations | Ignored without editing model text |

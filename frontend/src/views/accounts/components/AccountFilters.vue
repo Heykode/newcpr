@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import type { AccountGroup } from '@/api'
-import { Download, Pencil, Search, Settings2, Trash2, Upload } from '@lucide/vue'
+import { Download, MoreHorizontal, Pencil, Search, Settings2, Trash2, Upload } from '@lucide/vue'
 import { computed } from 'vue'
 import BaseButton from '@/components/base/BaseButton.vue'
-
 import BaseCheckbox from '@/components/base/BaseCheckbox.vue'
+import BaseIconButton from '@/components/base/BaseIconButton.vue'
+
 import BaseInput from '@/components/base/BaseInput.vue'
+import BaseMenuItem from '@/components/base/BaseMenuItem.vue'
 import BasePopover from '@/components/base/BasePopover.vue'
 import BaseSelect from '@/components/base/BaseSelect.vue'
 import ProviderFilterSegmented from '@/components/ProviderFilterSegmented.vue'
@@ -118,45 +120,41 @@ const groupOptions = computed(() => [
     </div>
 
     <div
-      class="grid w-full min-w-0 max-w-full grid-cols-2 gap-2 xl:flex xl:w-auto xl:flex-wrap xl:shrink-0 xl:self-end xl:items-center xl:justify-end xl:ml-auto"
+      class="flex w-full min-w-0 max-w-full flex-wrap items-center justify-end gap-2 xl:ml-auto xl:w-auto xl:shrink-0 xl:self-end"
     >
       <slot name="account-templates" />
-      <BaseButton
-        v-if="selectedCount > 0"
-        variant="secondary"
-        class="w-full whitespace-nowrap xl:w-auto"
-        :disabled="templateApplying"
-        @click="emit('editSelected')"
-      >
-        <Pencil class="size-4 text-cp-link" />
-        {{ t('accounts.filters.editSelected', { count: selectedCount }) }}
-      </BaseButton>
-      <BaseButton
-        v-if="selectedCount > 0"
-        variant="destructive"
-        class="w-full whitespace-nowrap xl:w-auto"
-        :disabled="batchDeleting || templateApplying"
-        @click="emit('deleteSelected')"
-      >
-        <Trash2 class="size-4" />
-        {{ t('accounts.filters.deleteSelected', { count: selectedCount }) }}
-      </BaseButton>
-      <BaseButton
-        v-if="selectedCount > 0"
-        variant="secondary"
-        class="w-full whitespace-nowrap xl:w-auto"
-        :loading="exportingAccounts"
-        @click="emit('exportSelected')"
-      >
-        <template #icon>
-          <Download class="size-4" />
+      <BasePopover v-if="selectedCount > 0" placement="bottom-end">
+        <template #trigger="{ open }">
+          <BaseIconButton label="批量操作" variant="ghost" :aria-expanded="open">
+            <MoreHorizontal class="size-4.5" />
+          </BaseIconButton>
         </template>
-        导出选中 ({{ selectedCount }})
-      </BaseButton>
+        <template #default="{ close }">
+          <div class="w-44 p-1">
+            <BaseMenuItem :disabled="templateApplying" @click="(close(), emit('editSelected'))">
+              <template #icon>
+                <Pencil class="size-3.5" />
+              </template>
+              {{ t('accounts.filters.editSelected', { count: selectedCount }) }}
+            </BaseMenuItem>
+            <BaseMenuItem :loading="exportingAccounts" @click="(close(), emit('exportSelected'))">
+              <template #icon>
+                <Download class="size-3.5" />
+              </template>
+              导出选中 ({{ selectedCount }})
+            </BaseMenuItem>
+            <BaseMenuItem tone="destructive" :disabled="templateApplying" :loading="batchDeleting" @click="(close(), emit('deleteSelected'))">
+              <template #icon>
+                <Trash2 class="size-3.5" />
+              </template>
+              {{ t('accounts.filters.deleteSelected', { count: selectedCount }) }}
+            </BaseMenuItem>
+          </div>
+        </template>
+      </BasePopover>
       <BaseButton
         variant="primary"
         class="whitespace-nowrap xl:w-auto"
-        :class="selectedCount > 0 ? 'col-span-2 w-full' : 'col-span-2 justify-self-end'"
         @click="emit('create')"
       >
         <Upload class="size-4" />

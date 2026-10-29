@@ -939,6 +939,23 @@ fn upstream_event_error(value: &Value) -> ProviderError {
         .with_raw_upstream_error(gateway_core::error::RawUpstreamError::new(
             value.to_string(),
         ));
+    error = error.with_upstream_failure_fields(gateway_core::upstream::UpstreamFailureFields {
+        status: value
+            .get("status")
+            .or_else(|| value.get("status_code"))
+            .or_else(|| value.pointer("/error/status"))
+            .or_else(|| value.pointer("/response/error/status"))
+            .and_then(Value::as_u64)
+            .and_then(|v| u16::try_from(v).ok())
+            .filter(|v| (400..=599).contains(v)),
+        code: code.map(str::to_owned),
+        error_type: value
+            .pointer("/error/type")
+            .or_else(|| value.pointer("/response/error/type"))
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        message: message.map(str::to_owned),
+    });
     if let Some(code) = code {
         error = error.with_upstream_code(OpaqueUpstreamValue::new(code.to_owned()));
     }

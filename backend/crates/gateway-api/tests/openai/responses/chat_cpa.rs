@@ -800,14 +800,14 @@ async fn actual_empty_completed_output_is_not_an_extra_converter_error() {
 }
 
 #[tokio::test]
-async fn text_done_content_and_terminal_snapshots_are_not_reconstructed() {
+async fn conflicting_text_snapshots_fail_without_replaying_or_completing() {
     let events = vec![
         created(),
         wire(
             "response.content_part.added",
             json!({
                 "type":"response.content_part.added","item_id":"msg_1","output_index":0,"content_index":0,
-                "part":{"type":"output_text","text":"added snapshot","annotations":[]}
+                "part":{"type":"output_text","text":"","annotations":[]}
             }),
         ),
         text_delta("direct "),
@@ -841,7 +841,43 @@ async fn text_done_content_and_terminal_snapshots_are_not_reconstructed() {
     let body = read_text(response).await;
     assert_eq!(streamed_content(&chunks(&body)), "direct delta");
     assert!(!body.contains("snapshot"));
+    assert!(body.contains("\"error\""), "{body}");
+    assert!(!body.contains("\"finish_reason\":\"stop\""));
+    assert!(!body.contains("\"total_tokens\""));
+    assert_eq!(execution.trace.delivery_errors().len(), 1);
+}
+
+#[tokio::test]
+async fn consistent_text_snapshots_fill_only_missing_suffixes_and_commit_once() {
+    let execution = scripted(Script::new(vec![
+        created(),
+        text_delta("direct"),
+        wire(
+            "response.output_text.done",
+            json!({"type":"response.output_text.done","item_id":"msg_1",
+                "output_index":0,"content_index":0,"text":"direct delta"}),
+        ),
+        wire(
+            "response.output_item.done",
+            json!({"type":"response.output_item.done","output_index":0,
+                "item":message("direct delta complete")}),
+        ),
+        completed(json!([message("direct delta complete")])),
+    ]));
+    let response = request(Arc::clone(&execution), text_request(true)).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = read_text(response).await;
+    assert_eq!(streamed_content(&chunks(&body)), "direct delta complete");
     assert_finished_once(&body);
+    assert_eq!(
+        execution
+            .trace
+            .snapshot()
+            .iter()
+            .filter(|event| **event == "commit")
+            .count(),
+        1
+    );
     assert!(!execution.trace.is_cancelled());
 }
 
@@ -1110,7 +1146,7 @@ async fn first_atomic_chat_batch_holds_only_terminal_frames_until_execution_succ
 }
 
 #[tokio::test]
-async fn completed_snapshot_only_is_available_to_buffered_chat_but_not_replayed_in_stream() {
+async fn terminal_only_text_is_recovered_for_chat_while_image_stream_contract_is_preserved() {
     let output = json!([
         message("snapshot-only text"),
         {"type":"image_generation_call","id":"img_1","result":"snapshot-image!",
@@ -1122,8 +1158,7 @@ async fn completed_snapshot_only_is_available_to_buffered_chat_but_not_replayed_
         assert_eq!(response.status(), StatusCode::OK);
         let body = read_text(response).await;
         if streaming {
-            assert_eq!(streamed_content(&chunks(&body)), "");
-            assert!(!body.contains("snapshot-only"));
+            assert_eq!(streamed_content(&chunks(&body)), "snapshot-only text");
             assert!(!body.contains("snapshot-image"));
             assert!(!body.contains("\"images\""));
             assert_finished_once(&body);

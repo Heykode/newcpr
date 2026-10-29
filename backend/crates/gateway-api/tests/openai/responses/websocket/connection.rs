@@ -488,7 +488,7 @@ async fn outbound_commands_are_written_in_acknowledged_order() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn stalled_write_times_out_at_three_hundred_seconds_and_aborts_the_pump() {
+async fn blocked_business_write_does_not_delay_independent_heartbeat_timeout() {
     let PumpHarness {
         mut connection,
         incoming: _incoming,
@@ -497,6 +497,7 @@ async fn stalled_write_times_out_at_three_hundred_seconds_and_aborts_the_pump() 
         ..
     } = test_connection(true);
     let request_id = Arc::<str>::from("req_test");
+    let started = tokio::time::Instant::now();
 
     let error = connection
         .send_text(
@@ -507,9 +508,11 @@ async fn stalled_write_times_out_at_three_hundred_seconds_and_aborts_the_pump() 
         .expect_err("stalled write must time out");
     tokio::task::yield_now().await;
 
-    assert!(
-        matches!(error, ConnectionWriteError::Timeout { timeout } if timeout == Duration::from_secs(300))
-            && dropped.load(Ordering::Acquire)
+    assert!(matches!(error, ConnectionWriteError::Closed) && dropped.load(Ordering::Acquire));
+    assert_eq!(started.elapsed(), Duration::from_secs(30));
+    assert_eq!(
+        connection.wait_for_exit().await,
+        PumpExitReason::WriteTimeout
     );
 }
 
@@ -551,17 +554,28 @@ async fn stalled_write_still_observes_peer_close_and_lifecycle_cancellation() {
 async fn pump_marks_the_connection_expired_at_sixty_minutes() {
     let PumpHarness {
         mut connection,
-        incoming: _incoming,
-        written: _written,
+        incoming,
+        mut written,
         ..
     } = test_connection(false);
-
+    let responder = tokio::spawn(async move {
+        while let Some(message) = written.recv().await {
+            if let Message::Ping(payload) = message
+                && incoming.send(Ok(Message::Pong(payload))).is_err()
+            {
+                break;
+            }
+        }
+    });
+    let started = tokio::time::Instant::now();
     let event = connection
         .next_event()
         .await
         .expect("deadline must emit an event");
-
     assert!(matches!(event, ConnectionEvent::Expired) && connection.is_expired());
+    assert_eq!(started.elapsed(), Duration::from_secs(3600));
+    drop(connection);
+    responder.await.unwrap();
 }
 
 #[tokio::test]
@@ -1026,7 +1040,7 @@ async fn client_close_should_cancel_active_execution_without_starting_queued_req
 async fn idle_pump_sends_heartbeat_without_bursting_after_a_delay() {
     let PumpHarness {
         connection,
-        incoming: _incoming,
+        incoming,
         mut written,
         ..
     } = test_connection(false);
@@ -1035,7 +1049,11 @@ async fn idle_pump_sends_heartbeat_without_bursting_after_a_delay() {
 
     tokio::time::advance(Duration::from_secs(25)).await;
     let first = written.recv().await.expect("first heartbeat");
-    assert!(matches!(first, Message::Ping(_)));
+    let Message::Ping(payload) = &first else {
+        panic!("expected heartbeat")
+    };
+    incoming.send(Ok(Message::Pong(payload.clone()))).unwrap();
+    tokio::task::yield_now().await;
 
     tokio::time::advance(Duration::from_secs(120)).await;
     let second = written.recv().await.expect("heartbeat after delay");
@@ -1047,7 +1065,28 @@ async fn idle_pump_sends_heartbeat_without_bursting_after_a_delay() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn missing_pongs_do_not_cancel_the_connection_or_block_business_frames() {
+async fn missing_inbound_activity_expires_without_repeated_pings_extending_the_deadline() {
+    let PumpHarness {
+        mut connection,
+        incoming: _incoming,
+        mut written,
+        dropped,
+        ..
+    } = test_connection(false);
+    let started = tokio::time::Instant::now();
+    assert!(matches!(written.recv().await, Some(Message::Ping(_))));
+    assert!(matches!(written.recv().await, Some(Message::Ping(_))));
+    assert_eq!(
+        connection.wait_for_exit().await,
+        PumpExitReason::PongTimeout
+    );
+    assert_eq!(started.elapsed(), Duration::from_secs(55));
+    assert!(dropped.load(Ordering::Acquire));
+    assert!(written.recv().await.is_none());
+}
+
+#[tokio::test(start_paused = true)]
+async fn inbound_business_activity_keeps_a_connection_alive_without_explicit_pongs() {
     let PumpHarness {
         mut connection,
         incoming,
@@ -1055,23 +1094,16 @@ async fn missing_pongs_do_not_cancel_the_connection_or_block_business_frames() {
         ..
     } = test_connection(false);
     for _ in 0..13 {
-        tokio::time::advance(Duration::from_secs(25)).await;
         assert!(matches!(written.recv().await, Some(Message::Ping(_))));
+        incoming.send(Ok(Message::Text("active".into()))).unwrap();
+        assert!(matches!(connection.next_event().await,
+            Some(ConnectionEvent::Text(text)) if text == "active"));
     }
-
-    incoming
-        .send(Ok(Message::Text("still connected".into())))
-        .expect("send business frame after 325 seconds without Pong");
-    assert!(matches!(
-        connection.next_event().await,
-        Some(ConnectionEvent::Text(text)) if text == "still connected"
-    ));
-    incoming.send(Ok(Message::Close(None))).expect("close peer");
+    incoming.send(Ok(Message::Close(None))).unwrap();
     assert_eq!(
         connection.wait_for_exit().await,
         PumpExitReason::ClientClose
     );
-    tokio::time::advance(Duration::from_secs(25)).await;
     assert!(written.recv().await.is_none());
 }
 
@@ -1095,7 +1127,7 @@ async fn stalled_heartbeat_can_be_cancelled_without_waiting_for_write_timeout() 
 }
 
 #[tokio::test(start_paused = true)]
-async fn stalled_heartbeat_obeys_the_existing_write_timeout() {
+async fn stalled_heartbeat_has_a_five_second_write_budget() {
     let PumpHarness {
         mut connection,
         incoming: _incoming,
@@ -1108,7 +1140,7 @@ async fn stalled_heartbeat_obeys_the_existing_write_timeout() {
         connection.wait_for_exit().await,
         PumpExitReason::WriteTimeout
     );
-    assert_eq!(started.elapsed(), Duration::from_secs(25 + 300));
+    assert_eq!(started.elapsed(), Duration::from_secs(25 + 5));
     assert!(dropped.load(Ordering::Acquire));
 }
 

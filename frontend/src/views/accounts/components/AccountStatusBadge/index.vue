@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { AccountErrorReason, AccountStatus } from '@/api'
+import type { Account, AccountErrorReason, AccountStatus } from '@/api'
 import { computed } from 'vue'
 import BasePopover from '@/components/base/BasePopover.vue'
 
@@ -10,6 +10,7 @@ import { resolveAccountStatusPresentation } from './presenter'
 
 const props = withDefaults(
   defineProps<{
+    errorProtection?: Account['errorProtection']
     status: AccountStatus
     errorReason?: AccountErrorReason | null
     errorMessage?: string | null
@@ -19,6 +20,7 @@ const props = withDefaults(
     align?: 'left' | 'center'
   }>(),
   {
+    errorProtection: null,
     errorReason: null,
     errorMessage: null,
     rateLimitedUntil: null,
@@ -31,6 +33,7 @@ const props = withDefaults(
 const now = useUiClock()
 const presentation = computed(() =>
   resolveAccountStatusPresentation({
+    errorProtection: props.errorProtection,
     status: props.status,
     errorReason: props.errorReason,
     errorMessage: props.errorMessage,

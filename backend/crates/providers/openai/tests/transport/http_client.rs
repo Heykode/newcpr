@@ -147,6 +147,7 @@ async fn codex_backend_client_should_preserve_oversized_error_response() {
         .create_response(
             &request,
             CodexRequestContext {
+                response_control: None,
                 trace: None,
                 authorization: "Bearer access-token",
                 account_id: Some("chatgpt-account"),
@@ -247,6 +248,7 @@ async fn codex_backend_client_should_parse_retry_after_from_rate_limit_error_bod
         .create_response(
             &request,
             CodexRequestContext {
+                response_control: None,
                 trace: None,
                 authorization: "Bearer access-token",
                 account_id: Some("chatgpt-account"),
@@ -432,6 +434,7 @@ async fn codex_backend_client_should_capture_forwardable_response_metadata() {
         .create_response(
             &request,
             CodexRequestContext {
+                response_control: None,
                 trace: None,
                 authorization: "Bearer access-token",
                 account_id: Some("chatgpt-account"),

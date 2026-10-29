@@ -118,6 +118,7 @@ pub enum CodexFailureCategory {
 
 /// 一次已分类的上游拒绝及其可持久化事实。
 pub struct CodexUpstreamFailure {
+    pub(crate) upstream_fields: gateway_core::upstream::UpstreamFailureFields,
     pub(crate) status: Option<StatusCode>,
     pub(crate) code: Option<String>,
     pub(crate) client_message: Option<String>,
@@ -154,7 +155,8 @@ impl CodexUpstreamFailure {
         rate_limit_headers: &[(String, String)],
         send_phase: CodexUpstreamSendPhase,
     ) -> Self {
-        let fields = ParsedUpstreamError::from_http_response(body);
+        let mut fields = ParsedUpstreamError::from_http_response(body);
+        fields.upstream_fields.status = Some(status.as_u16());
         let category = classify_upstream_failure(
             UpstreamFailureSource::HttpResponse,
             Some(status),
@@ -165,6 +167,7 @@ impl CodexUpstreamFailure {
         );
         Self {
             status: Some(status),
+            upstream_fields: fields.upstream_fields,
             code: fields.code.clone(),
             client_message: fields.client_message,
             client_code: fields.code,
@@ -195,6 +198,12 @@ impl CodexUpstreamFailure {
     ) -> Self {
         let parsed = ParsedUpstreamError::from_http_response(failure.raw_body());
         let fields = ParsedUpstreamError {
+            upstream_fields: gateway_core::upstream::UpstreamFailureFields {
+                status: failure.explicit_status_code,
+                code: failure.upstream_code.clone(),
+                error_type: failure.upstream_type.clone(),
+                message: failure.upstream_message.clone(),
+            },
             code: failure.upstream_code.clone(),
             param: parsed.param,
             error_type: failure.upstream_type.clone(),
@@ -215,6 +224,7 @@ impl CodexUpstreamFailure {
         );
         Self {
             status,
+            upstream_fields: fields.upstream_fields,
             code: fields.code.clone(),
             client_message: Some(fields.message),
             client_code: fields.code,
@@ -309,6 +319,7 @@ impl CodexUpstreamFailure {
 }
 
 struct ParsedUpstreamError {
+    upstream_fields: gateway_core::upstream::UpstreamFailureFields,
     code: Option<String>,
     param: Option<String>,
     error_type: Option<String>,
@@ -321,6 +332,12 @@ impl ParsedUpstreamError {
     fn from_http_response(body: &str) -> Self {
         let Ok(value) = serde_json::from_str::<Value>(body) else {
             return Self {
+                upstream_fields: gateway_core::upstream::UpstreamFailureFields {
+                    status: None,
+                    code: None,
+                    error_type: None,
+                    message: None,
+                },
                 code: None,
                 param: None,
                 error_type: None,
@@ -335,6 +352,20 @@ impl ParsedUpstreamError {
             .or_else(|| value.get("detail"))
             .unwrap_or(&value);
         let code_value = error.get("code").or_else(|| value.get("code"));
+        let upstream_fields = gateway_core::upstream::UpstreamFailureFields {
+            status: None,
+            code: code_value.and_then(Value::as_str).map(str::to_owned),
+            error_type: error
+                .get("type")
+                .or_else(|| value.get("type"))
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            message: error
+                .get("message")
+                .or_else(|| value.get("message"))
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+        };
         let error_type = error
             .get("type")
             .or_else(|| value.get("type"))
@@ -362,6 +393,7 @@ impl ParsedUpstreamError {
                     .filter(|seconds| DateTime::<Utc>::from_timestamp(*seconds, 0).is_some())
             });
         Self {
+            upstream_fields,
             code,
             param: error
                 .get("param")

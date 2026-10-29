@@ -17,10 +17,12 @@ model = "${CODEX_DEFAULT_MODEL}"
 review_model = "${CODEX_DEFAULT_MODEL}"
 model_reasoning_effort = "max"
 service_tier = "default"
+experimental_realtime_ws_base_url = ${JSON.stringify(baseUrl)}
 
 [model_providers.OpenAI]
 name = "OpenAI"
 base_url = ${JSON.stringify(baseUrl)}
+model_catalog_url = ${JSON.stringify(`${baseUrl}/models`)}
 wire_api = "responses"
 supports_websockets = ${websocketEnabled}
 requires_openai_auth = false

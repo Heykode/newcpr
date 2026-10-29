@@ -669,6 +669,7 @@ async fn request_tuning_overrides_should_round_trip() {
     let repository = PgRuntimeSettingsRepository::new(database.pool.clone());
     let mut update = settings_with_margin(3_600);
     update.request_tuning = RequestTuningOverrides {
+        account_error_protection: None,
         excel_image_transport: Some(gateway_core::routing::ExcelImageTransport::Relay {
             public_url: "https://images.example.com".into(),
         }),
@@ -1028,4 +1029,59 @@ async fn account_refresh_facts(pool: &sqlx::PgPool, account_id: &str) -> Account
 
 fn timestamp_micros(value: DateTime<Utc>) -> DateTime<Utc> {
     DateTime::from_timestamp_micros(value.timestamp_micros()).expect("valid test timestamp")
+}
+
+#[tokio::test]
+async fn protection_policy_persists_old_client_omission_and_explicit_disable() {
+    let Some(database) = TestDatabase::create("protection_settings").await else {
+        return;
+    };
+    let repository = PgRuntimeSettingsRepository::new(database.pool.clone());
+    let policy: gateway_core::account::AccountErrorProtection = serde_json::from_value(json!({
+        "enabled":true,"threshold":3,"windowSeconds":600,"durationSeconds":300,
+        "probeEnabled":true,"probeModel":"fixture-model",
+        "rules":[{"id":"rule","name":"Synthetic failures","conditions":[
+            {"field":"status","operator":"equals","values":["503"],"ignoreCase":false}
+        ]}]
+    }))
+    .unwrap();
+    let mut update = settings_with_margin(300);
+    update.request_tuning.account_error_protection = Some(policy.clone());
+    repository.update_runtime_settings(update).await.unwrap();
+    repository
+        .update_runtime_settings(settings_with_margin(300))
+        .await
+        .unwrap();
+    assert_eq!(
+        repository
+            .load_runtime_settings()
+            .await
+            .unwrap()
+            .request_tuning
+            .account_error_protection,
+        Some(policy.clone())
+    );
+    let snapshot = PgRuntimeSnapshotRepository::new(database.pool.clone())
+        .load_runtime_snapshot()
+        .await
+        .unwrap();
+    assert_eq!(
+        snapshot.settings.request_tuning.account_error_protection,
+        Some(policy.clone())
+    );
+    let mut disabled = policy;
+    disabled.enabled = false;
+    let mut update = settings_with_margin(300);
+    update.request_tuning.account_error_protection = Some(disabled.clone());
+    repository.update_runtime_settings(update).await.unwrap();
+    assert_eq!(
+        repository
+            .load_runtime_settings()
+            .await
+            .unwrap()
+            .request_tuning
+            .account_error_protection,
+        Some(disabled)
+    );
+    database.close().await;
 }

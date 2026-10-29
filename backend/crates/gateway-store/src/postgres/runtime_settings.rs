@@ -372,6 +372,9 @@ pub(crate) async fn update_runtime_settings_in_transaction(
     .map_err(|_| postgres_unavailable("lock image policy settings"))?;
     let previous = previous.map(|value| value.0).unwrap_or_default();
     let mut tuning = update.request_tuning.clone();
+    tuning.account_error_protection = tuning
+        .account_error_protection
+        .or(previous.account_error_protection);
     tuning.excel_image_limit_policy = tuning
         .excel_image_limit_policy
         .or(previous.excel_image_limit_policy);

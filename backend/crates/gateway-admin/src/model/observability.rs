@@ -1118,9 +1118,26 @@ pub struct UsageInsightsHealth {
     pub points: Vec<UsageInsightsHealthPoint>,
 }
 
+/// Logical request concurrency, weighted by the duration of each bucket.
+#[derive(Debug, Clone, PartialEq)]
+pub struct UsageConcurrencyPoint {
+    pub bucket_start: DateTime<Utc>,
+    pub average_concurrency: f64,
+    pub peak_concurrency: u64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct UsageInsightsLoad {
+    pub average_concurrency: f64,
+    pub peak_concurrency: u64,
+    pub admission_decision_p95_ms: Option<PercentileMilliseconds>,
+    pub account_selection_wait_p95_ms: Option<PercentileMilliseconds>,
+}
+
 /// 洞察性能时间点。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct UsageInsightsPerformancePoint {
+    pub load: UsageInsightsLoad,
     pub bucket_start: DateTime<Utc>,
     pub latency_percentiles: LatencyPercentiles,
     pub first_token_latency_percentiles: LatencyPercentiles,
@@ -1136,6 +1153,7 @@ pub struct UsageInsightsPerformancePoint {
 /// 洞察性能汇总与可观测覆盖率。
 #[derive(Debug, Clone, PartialEq)]
 pub struct UsageInsightsPerformance {
+    pub load: UsageInsightsLoad,
     pub latency_percentiles: LatencyPercentiles,
     pub first_token_latency_percentiles: LatencyPercentiles,
     pub latency_coverage: f64,

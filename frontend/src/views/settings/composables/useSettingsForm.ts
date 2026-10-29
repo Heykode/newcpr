@@ -1,9 +1,10 @@
+import type { ProtectionDraft } from '../components/error-protection/form'
 import type { rotationOptions } from '../constants'
 import type { AccountAffinity, RequestTuning } from '@/api/modules/settings'
 import { computed, reactive, ref, shallowRef } from 'vue'
 import { getSettings, updateSettings } from '@/api'
-
 import { defaultSmartScheduling } from '@/api/modules/settings'
+
 import { ApiError } from '@/api/request'
 import { toast } from '@/components/base/BaseToast'
 import { useAsyncAction } from '@/composables/useAsyncAction'
@@ -11,7 +12,20 @@ import { t } from '@/i18n'
 import { errorMessage } from '@/utils/async'
 import { DEFAULT_EXCEL_MODELS, DEFAULT_EXCEL_MODELS_INPUT } from '@/utils/excel-defaults'
 import { parseExcelModels } from '@/views/accounts/utils/schedulingForm'
+import { cloneProtectionRules, protectionSettingsError, trimProtectionText } from '../components/error-protection/form'
 import { useExcelImageSettings } from './useExcelImageSettings'
+
+function defaultProtection(): ProtectionDraft {
+  return {
+    enabled: false,
+    rules: [],
+    threshold: 12,
+    windowSeconds: 600,
+    durationSeconds: 7200,
+    probeEnabled: true,
+    probeModel: '',
+  }
+}
 
 type RotationStrategy = (typeof rotationOptions)[number]['value']
 
@@ -59,6 +73,7 @@ export function useSettingsForm() {
   const error = shallowRef('')
   const mappings = ref<Array<{ requestedModel: string, upstreamModel: string }>>([])
   const form = reactive({
+    accountErrorProtection: defaultProtection(),
     excelDefaultModels: DEFAULT_EXCEL_MODELS_INPUT,
     disableFast: false,
     responsesMaxDecompressedBodyBytes: 64 * 1024 * 1024,
@@ -153,6 +168,7 @@ export function useSettingsForm() {
     form.opsEventRetentionDays = data.opsEventRetentionDays
     form.auditRetentionDays = data.auditRetentionDays
     const tuning = data.requestTuning ?? {}
+    form.accountErrorProtection = { ...defaultProtection(), ...tuning.accountErrorProtection, probeModel: tuning.accountErrorProtection?.probeModel ?? '', rules: cloneProtectionRules(tuning.accountErrorProtection?.rules ?? []) }
     const defaults = data.requestTuningDefaults ?? {}
     Object.assign(
       form.requestTuning,
@@ -272,6 +288,11 @@ export function useSettingsForm() {
       toast.warning('请修正客户端最低版本格式')
       return
     }
+    const protectionError = protectionSettingsError(form.accountErrorProtection)
+    if (protectionError) {
+      toast.warning(protectionError)
+      return
+    }
     const tuning = form.requestTuning
     if (!['off', 'auto_compact', 'warn'].includes(tuning.excelImageLimitPolicy)
       || !Number.isInteger(tuning.excelImageWarningRemaining) || tuning.excelImageWarningRemaining < 1 || tuning.excelImageWarningRemaining > 65536
@@ -388,6 +409,7 @@ export function useSettingsForm() {
         auditRetentionDays: form.auditRetentionDays,
         requestTuning: {
           ...form.requestTuning,
+          accountErrorProtection: { ...form.accountErrorProtection, rules: cloneProtectionRules(form.accountErrorProtection.rules), threshold: form.accountErrorProtection.threshold!, windowSeconds: form.accountErrorProtection.windowSeconds!, durationSeconds: form.accountErrorProtection.durationSeconds!, probeModel: trimProtectionText(form.accountErrorProtection.probeModel) || null },
           excelImageTransport: form.requestTuning.excelImageTransport
             ? { ...form.requestTuning.excelImageTransport }
             : null,

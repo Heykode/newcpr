@@ -27,3 +27,6 @@ pub use store::ProviderAccountStore;
 mod location;
 pub use location::RequestLocation;
 pub mod smart_scheduling;
+
+mod error_protection;
+pub use error_protection::*;

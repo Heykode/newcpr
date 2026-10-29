@@ -292,6 +292,7 @@ impl Drop for BackgroundRefreshGuard {
 /// 配置提交后的本进程快照发布与跨进程失效通知。
 #[derive(Clone)]
 pub struct RuntimeSnapshotPublisher {
+    account_error_protection: Option<Arc<dyn crate::provider_ports::ProviderCooldownPort>>,
     compiler: Arc<RuntimeSnapshotCompiler>,
     snapshots: RuntimeSnapshotHandle,
     request_tuning: RequestTuningHandle,
@@ -301,6 +302,15 @@ pub struct RuntimeSnapshotPublisher {
 }
 
 impl RuntimeSnapshotPublisher {
+    #[must_use]
+    pub fn with_account_error_protection(
+        mut self,
+        store: Option<Arc<dyn crate::provider_ports::ProviderCooldownPort>>,
+    ) -> Self {
+        self.account_error_protection = store;
+        self
+    }
+
     #[must_use]
     pub fn new(
         compiler: Arc<RuntimeSnapshotCompiler>,
@@ -323,6 +333,7 @@ impl RuntimeSnapshotPublisher {
         subscriptions: Arc<dyn SnapshotSubscriptionPort>,
     ) -> Self {
         Self {
+            account_error_protection: None,
             compiler,
             snapshots,
             request_tuning,
@@ -370,6 +381,26 @@ impl RuntimeSnapshotPublisher {
                 Some(previous) => self.compiler.compile_with_cached_catalog(&previous).await,
                 None => self.compiler.compile().await,
             }
+        };
+        let compiled = match compiled {
+            Ok(snapshot) => {
+                if let Some(store) = &self.account_error_protection {
+                    let protection = snapshot.account_error_protection();
+                    let publication = store
+                        .publish_protection_policy(protection.policy(), snapshot.revision())
+                        .fuse();
+                    let timeout = Delay::new(Duration::from_secs(1)).fuse();
+                    pin_mut!(publication, timeout);
+                    select_biased! {
+                        result = publication => result.map(|()| snapshot.clone())
+                            .map_err(|_| RuntimeSnapshotCompileError::RevisionChanged),
+                        _ = timeout => Err(RuntimeSnapshotCompileError::RevisionChanged),
+                    }
+                } else {
+                    Ok(snapshot)
+                }
+            }
+            Err(error) => Err(error),
         };
         // Keep publication and explicit suspension ordered without holding a sync lock over I/O.
         let mut state = write_unpoisoned(&concurrency.state);

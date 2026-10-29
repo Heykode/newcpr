@@ -28,6 +28,7 @@ const MAXIMUM_CATALOG_STABILITY_ATTEMPTS: usize = 4;
 /// Store 在一个一致性读取中提供的调度设置事实。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SnapshotSettingsFacts {
+    account_error_protection: crate::account::AccountErrorProtection,
     excel_image_transport: Option<super::ExcelImageTransport>,
     disable_fast: bool,
     responses_max_decompressed_body_bytes: u64,
@@ -51,6 +52,15 @@ pub struct SnapshotSettingsFacts {
 }
 
 impl SnapshotSettingsFacts {
+    #[must_use]
+    pub fn with_account_error_protection(
+        mut self,
+        policy: crate::account::AccountErrorProtection,
+    ) -> Self {
+        self.account_error_protection = policy;
+        self
+    }
+
     #[must_use]
     pub fn with_excel_image_transport(
         mut self,
@@ -91,6 +101,7 @@ impl SnapshotSettingsFacts {
         min_codex_cli_version: Option<String>,
     ) -> Self {
         Self {
+            account_error_protection: Default::default(),
             disable_fast: false,
             excel_image_transport: None,
             responses_max_decompressed_body_bytes:
@@ -712,6 +723,7 @@ async fn compile_runtime_snapshot(
             .with_exhaustive_provider_catalogs(exhaustive_provider_catalogs)
             .with_model_catalog_accounts(catalog_accounts)
             .with_min_codex_client_versions(min_client_versions)
+            .with_account_error_protection(facts.settings.account_error_protection)
             .with_request_tuning(request_tuning)
             .with_excel_image_transport(facts.settings.excel_image_transport)
             .with_openai_turn_state_policy(turn_state_policy)
@@ -729,6 +741,7 @@ type ModelCatalogAccounts = BTreeMap<ProviderKind, BTreeMap<String, BTreeSet<Pro
 /// 数据面使用的不可变配置快照。
 #[derive(Debug, Clone)]
 pub struct RuntimeSnapshot {
+    account_error_protection: Arc<crate::account::CompiledAccountErrorProtection>,
     excel_image_transport: Option<super::ExcelImageTransport>,
     disable_fast: bool,
     codex_quota_overdraft_enabled: bool,
@@ -754,6 +767,19 @@ pub struct RuntimeSnapshot {
 }
 
 impl RuntimeSnapshot {
+    #[must_use]
+    pub fn with_account_error_protection(
+        mut self,
+        policy: crate::account::AccountErrorProtection,
+    ) -> Self {
+        self.account_error_protection = Arc::new(policy.compile());
+        self
+    }
+    #[must_use]
+    pub fn account_error_protection(&self) -> Arc<crate::account::CompiledAccountErrorProtection> {
+        Arc::clone(&self.account_error_protection)
+    }
+
     #[must_use]
     pub fn excel_image_transport(&self) -> Option<&super::ExcelImageTransport> {
         self.excel_image_transport.as_ref()
@@ -891,6 +917,9 @@ impl RuntimeSnapshot {
         client_policy_map.retain(|_, policy| policy.enabled());
 
         Ok(Self {
+            account_error_protection: Arc::new(
+                crate::account::AccountErrorProtection::default().compile(),
+            ),
             disable_fast: false,
             excel_image_transport: None,
             codex_quota_overdraft_enabled: false,
@@ -1289,6 +1318,7 @@ impl RuntimeSnapshot {
         }
 
         Ok(RoutingPlan {
+            account_error_protection: Arc::clone(&self.account_error_protection),
             disable_fast: self.disable_fast || account_scope.disable_fast(),
             codex_quota_overdraft_enabled: self.codex_quota_overdraft_enabled,
             codex_quota_overdraft_probe_model: self.codex_quota_overdraft_probe_model.clone(),
@@ -1336,6 +1366,7 @@ impl RuntimeSnapshot {
             account_scope: Arc::clone(&account_scope),
         };
         Ok(RoutingPlan {
+            account_error_protection: Arc::clone(&self.account_error_protection),
             disable_fast: self.disable_fast || account_scope.disable_fast(),
             codex_quota_overdraft_enabled: self.codex_quota_overdraft_enabled,
             codex_quota_overdraft_probe_model: self.codex_quota_overdraft_probe_model.clone(),

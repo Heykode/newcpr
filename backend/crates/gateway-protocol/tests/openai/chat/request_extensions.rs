@@ -1324,7 +1324,6 @@ fn unsupported_tool_types_and_namespaces_remain_explicit_errors() {
     }
     let mut input = request();
     input["unknown_secret_field"] = json!("secret-body");
-    let error = decode_chat_request(input).unwrap_err();
-    assert_eq!(error.param(), Some("request"));
-    assert_eq!(error.code(), "unsupported_parameter");
+    let decoded = decode_chat_request(input).unwrap();
+    assert!(!decoded.responses.contains_key("unknown_secret_field"));
 }

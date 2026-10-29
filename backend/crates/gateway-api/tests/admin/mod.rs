@@ -1192,6 +1192,7 @@ impl AccountStore for UnusedStore {
 impl AccountRuntimeStore for UnusedStore {
     async fn active_rate_limits(&self) -> AdminStoreResult<AccountRuntimeSnapshot> {
         Ok(AccountRuntimeSnapshot {
+            error_protections: Default::default(),
             rate_limited_until: BTreeMap::new(),
             in_flight: Some(BTreeMap::new()),
         })
@@ -1199,6 +1200,7 @@ impl AccountRuntimeStore for UnusedStore {
 
     async fn account_runtime(&self, _: &[String]) -> AdminStoreResult<AccountRuntimeSnapshot> {
         Ok(AccountRuntimeSnapshot {
+            error_protections: Default::default(),
             rate_limited_until: BTreeMap::new(),
             in_flight: Some(BTreeMap::new()),
         })
@@ -1207,6 +1209,16 @@ impl AccountRuntimeStore for UnusedStore {
 
 #[async_trait]
 impl ObservabilityStore for UnusedStore {
+    async fn usage_concurrency(
+        &self,
+        _range: gateway_admin::model::observability::TimeRange,
+        _filter: gateway_admin::model::observability::UsageFilter,
+    ) -> gateway_admin::ports::store::AdminStoreResult<
+        Vec<gateway_admin::model::observability::UsageConcurrencyPoint>,
+    > {
+        unreachable!()
+    }
+
     async fn diagnostic_errors(
         &self,
         target: &gateway_admin::model::diagnostics::DiagnosticTarget,

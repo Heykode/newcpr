@@ -362,42 +362,38 @@ export interface UsageOverviewHealth {
   points: UsageOverviewHealthPoint[]
 }
 
-export interface UsageOverviewPerformancePoint {
-  bucket: string
-  label: string
-  latencyP50Ms: number | null
-  latencyP95Ms: number | null
-  latencyP99Ms: number | null
-  firstTokenP50Ms: number | null
-  firstTokenP95Ms: number | null
-  firstTokenP99Ms: number | null
-  admissionDecisionP50Ms: number | null
+export interface UsageOverviewLoad {
+  averageConcurrency: number
+  peakConcurrency: number
   admissionDecisionP95Ms: number | null
-  accountSelectionWaitP50Ms: number | null
   accountSelectionWaitP95Ms: number | null
-  outputThroughputP10: number | null
-  outputThroughputP50: number | null
-  outputThroughputP90: number | null
-  capacityUtilization: number | null
-  capacityUtilizationP95: number | null
 }
 
-export interface UsageOverviewPerformance {
+export interface UsageOverviewPerformanceMetrics {
+  admissionDecisionP50Ms: number | null
+  admissionDecisionP95Ms: number | null
+  accountSelectionWaitP50Ms: number | null
+  accountSelectionWaitP95Ms: number | null
+  capacityUtilization: number | null
+  capacityUtilizationP95: number | null
   latencyP50Ms: number | null
   latencyP95Ms: number | null
   latencyP99Ms: number | null
   firstTokenP50Ms: number | null
   firstTokenP95Ms: number | null
   firstTokenP99Ms: number | null
-  admissionDecisionP50Ms: number | null
-  admissionDecisionP95Ms: number | null
-  accountSelectionWaitP50Ms: number | null
-  accountSelectionWaitP95Ms: number | null
   outputThroughputP10: number | null
   outputThroughputP50: number | null
   outputThroughputP90: number | null
-  capacityUtilization: number | null
-  capacityUtilizationP95: number | null
+  load: UsageOverviewLoad
+}
+
+export interface UsageOverviewPerformancePoint extends UsageOverviewPerformanceMetrics {
+  bucket: string
+  label: string
+}
+
+export interface UsageOverviewPerformance extends UsageOverviewPerformanceMetrics {
   latencyCoverage: number
   firstTokenCoverage: number
   admissionDecisionCoverage: number

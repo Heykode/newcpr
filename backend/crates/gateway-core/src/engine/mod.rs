@@ -1061,6 +1061,7 @@ pub enum EngineError {
 
 /// Engine 只组合 Store 与 Provider Registry；重试算法完全位于 coordinator。
 pub struct GatewayEngine<S: ?Sized> {
+    account_error_protection: Option<Arc<dyn crate::provider_ports::ProviderCooldownPort>>,
     store: Arc<S>,
     providers: provider::ProviderRegistry,
     captures: Option<Arc<dyn crate::diagnostics::request_capture::RequestCaptureFactory>>,
@@ -1068,6 +1069,15 @@ pub struct GatewayEngine<S: ?Sized> {
 }
 
 impl<S: ?Sized> GatewayEngine<S> {
+    #[must_use]
+    pub fn with_account_error_protection(
+        mut self,
+        store: Arc<dyn crate::provider_ports::ProviderCooldownPort>,
+    ) -> Self {
+        self.account_error_protection = Some(store);
+        self
+    }
+
     #[must_use]
     pub fn with_client_retry(mut self, store: Arc<dyn client_retry::ClientRetryStore>) -> Self {
         self.client_retry = Some(store);
@@ -1078,6 +1088,7 @@ impl<S: ?Sized> GatewayEngine<S> {
     pub const fn new(store: Arc<S>, providers: provider::ProviderRegistry) -> Self {
         Self {
             store,
+            account_error_protection: None,
             providers,
             captures: None,
             client_retry: None,
@@ -1103,3 +1114,5 @@ impl<S: ?Sized> GatewayEngine<S> {
         &self.providers
     }
 }
+
+mod account_protection;

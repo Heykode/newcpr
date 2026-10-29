@@ -29,7 +29,7 @@ use super::{
     error::CodexWebSocketExchangeError,
     model::{CodexWebSocketConnection, CodexWebSocketRequest, WebSocketContinuationRequirement},
     pool::CodexWebSocketConnectionMetadata,
-    pump::{PumpKeepalive, PumpLogContext, PumpedWebSocket, RawWsStream},
+    pump::{PumpLogContext, PumpedWebSocket, RawWsStream},
 };
 
 const WEBSOCKET_EXTENSIONS: &str = "permessage-deflate; client_max_window_bits";
@@ -105,7 +105,6 @@ pub(super) async fn connect_sideband_websocket(
 
 pub(super) async fn connect_pumped_websocket(
     connection: &CodexWebSocketConnection,
-    keepalive: PumpKeepalive,
     context: PumpLogContext,
     connection_budget: Option<&gateway_core::engine::connection::ConnectionBudget>,
     proxy_permit: Option<super::pool::proxy_capacity::ProxyConnectionPermit>,
@@ -113,7 +112,7 @@ pub(super) async fn connect_pumped_websocket(
     let (raw, response) = connect_websocket(connection, connection_budget).await?;
     let compression_threshold = negotiated_compression_threshold(&response);
     Ok((
-        PumpedWebSocket::new(raw, keepalive, context, compression_threshold, proxy_permit),
+        PumpedWebSocket::new(raw, context, compression_threshold, proxy_permit),
         response,
     ))
 }

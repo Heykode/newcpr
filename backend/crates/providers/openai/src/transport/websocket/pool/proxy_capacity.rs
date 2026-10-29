@@ -88,7 +88,7 @@ pub(crate) async fn acquire(
                     .slots
                     .iter()
                     .filter_map(|(candidate, slot)| match slot {
-                        WebSocketPoolSlot::Idle { connection }
+                        WebSocketPoolSlot::Idle { connection, .. }
                             if candidate.proxy_capacity_key == key
                                 && candidate.downstream_connection_id.is_empty() =>
                         {
@@ -99,7 +99,8 @@ pub(crate) async fn acquire(
                     .min_by_key(|(_, since)| *since)
                     .map(|(key, _)| key);
                 oldest.and_then(|key| {
-                    let WebSocketPoolSlot::Idle { connection } = state.slots.remove(&key)? else {
+                    let WebSocketPoolSlot::Idle { connection, .. } = state.slots.remove(&key)?
+                    else {
                         return None;
                     };
                     Some(CodexWebSocketPool::retire_connection(

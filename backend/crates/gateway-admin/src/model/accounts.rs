@@ -137,9 +137,29 @@ pub struct AccountListQuery {
 /// Admin query service 从运行态存储取得的当前账号冷却快照。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AccountRuntimeSnapshot {
+    pub error_protections: BTreeMap<String, gateway_core::provider_ports::AccountProtectionState>,
     pub rate_limited_until: BTreeMap<String, DateTime<Utc>>,
     /// `None` 表示实时 lease 存储不可用；`Some` 中未出现的账号当前使用量为零。
     pub in_flight: Option<BTreeMap<String, u64>>,
+}
+
+/// Safe protection reason; credentials, error bodies and Redis fence tokens are excluded.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountProtectionView {
+    pub until: DateTime<Utc>,
+    pub requires_probe: bool,
+    pub rules: Vec<gateway_core::account::AccountProtectionMatch>,
+}
+
+impl From<gateway_core::provider_ports::AccountProtectionState> for AccountProtectionView {
+    fn from(state: gateway_core::provider_ports::AccountProtectionState) -> Self {
+        Self {
+            until: state.until.into(),
+            requires_probe: state.requires_probe,
+            rules: state.rules,
+        }
+    }
 }
 
 /// Optional account membership filter.

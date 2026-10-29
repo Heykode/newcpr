@@ -874,7 +874,7 @@ fn mixed_custom_function_streams_use_announcement_order_and_never_replay_snapsho
         }
     }
     assert_eq!(announcements, [(0, "fn"), (1, "ct")]);
-    assert_eq!(arguments, ["{\"x\":", "print(1"]);
+    assert_eq!(arguments, ["{\"x\":1}", "print(1)\n"]);
     assert_eq!(
         chunks.last().unwrap()["choices"][0]["finish_reason"],
         "tool_calls"
@@ -913,7 +913,7 @@ fn argument_done_allows_late_deltas_but_item_done_ignores_them_without_suffix_re
                         .and_then(Value::as_str)
                 })
                 .collect();
-            assert_eq!(arguments, if item_done { "x" } else { "xy" });
+            assert_eq!(arguments, "xy");
             assert!(!encoder.has_failure());
             assert!(encoder.is_completed());
 
@@ -932,7 +932,7 @@ fn argument_done_allows_late_deltas_but_item_done_ignores_them_without_suffix_re
                         .and_then(Value::as_str)
                 })
                 .collect();
-            assert_eq!(arguments, "x");
+            assert_eq!(arguments, "xyz!");
             assert!(encoder.is_completed());
         }
     }

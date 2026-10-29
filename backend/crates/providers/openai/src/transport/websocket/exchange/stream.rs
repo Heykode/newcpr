@@ -162,6 +162,9 @@ async fn forward_websocket_response_stream(state: WebSocketStreamForwardState) {
         response_metadata_updates,
         tx,
     } = state;
+    let downstream_cancellation = response_control
+        .as_ref()
+        .and_then(ResponseControl::connection_cancellation);
     let mut pool_return = pool_return;
     let mut continuation = pool_return
         .as_mut()
@@ -178,6 +181,15 @@ async fn forward_websocket_response_stream(state: WebSocketStreamForwardState) {
     loop {
         let message = tokio::select! {
             biased;
+            () = async { match &downstream_cancellation {
+                Some(token) => token.cancelled().await,
+                None => std::future::pending().await,
+            }} => {
+                drop(active_interrupt.take());
+                trace.record("upstream.cancelled", json!({"reason": "downstream_connection_closed"}));
+                discard_stream_websocket(websocket, pool_return, StreamWebSocketDiscardReason::ClientCancelled).await;
+                return;
+            }
             // 客户端断开下游 SSE 流：立即退休连接，有界关闭完成后再释放池 slot。
             () = tx.closed() => {
                 drop(active_interrupt.take());
@@ -513,10 +525,7 @@ async fn forward_websocket_response_stream(state: WebSocketStreamForwardState) {
         reason => CodexWebSocketExchangeError::StreamEndedBeforeTerminal {
             reason: reason.map_or("stream_eof", PumpExitReason::as_str),
             timeout: match reason {
-                Some(
-                    PumpExitReason::PongTimeout { timeout }
-                    | PumpExitReason::LivenessTimeout { timeout },
-                ) => Some(*timeout),
+                Some(PumpExitReason::PongWriteTimeout { timeout }) => Some(*timeout),
                 _ => None,
             },
             last_event_type,

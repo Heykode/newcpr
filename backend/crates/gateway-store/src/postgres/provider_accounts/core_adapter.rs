@@ -285,6 +285,10 @@ impl ProviderAccountStore for PgProviderAccountRepository {
             .commit()
             .await
             .map_err(|error| CoreStoreError::caused_by(CoreStoreErrorKind::Unavailable, error))?;
+        if let Some(next) = next {
+            self.advance_protection(&account_id, to_u64(next).map_err(core_store_error)?)
+                .await;
+        }
         match next {
             Some(next) => Ok(CredentialCasOutcome::Updated(
                 CoreCredentialRevision::new(to_u64(next).map_err(core_store_error)?)

@@ -56,7 +56,16 @@ fn reasoning_aliases_preserve_effective_effort_and_explicit_summary() {
         assert!(!decoded.responses.contains_key("reasoning_effort"));
         assert_eq!(decoded.responses["input"][0]["content"][0]["text"], "hello");
     }
-    for effort in ["none", "minimal", "low", "medium", "high", "xhigh", "max"] {
+    for effort in [
+        "none",
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+        "future-effort",
+    ] {
         let flat = decode_chat_request(with_options(json!({"reasoning_effort":effort}))).unwrap();
         let nested =
             decode_chat_request(with_options(json!({"reasoning":{"effort":effort}}))).unwrap();
@@ -87,10 +96,6 @@ fn reasoning_rejects_malformed_fields_without_silently_dropping_them() {
         (json!({"reasoning":[]}), "reasoning"),
         (json!({"reasoning":"high"}), "reasoning"),
         (json!({"reasoning":{"effort":true}}), "reasoning.effort"),
-        (
-            json!({"reasoning":{"effort":"unknown"}}),
-            "reasoning.effort",
-        ),
         (
             json!({"reasoning":{"summary":"secret-value"}}),
             "reasoning.summary",

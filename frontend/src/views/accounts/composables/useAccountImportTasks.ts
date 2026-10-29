@@ -1,6 +1,7 @@
 import type { AccountImportTask, AccountImportTaskDetail } from '@/api'
 import { computed, onMounted, onScopeDispose, shallowRef, watch } from 'vue'
 import { getAccountImportTask, getAccountImportTasks, stopAccountImportTask } from '@/api'
+import { toast } from '@/components/base/BaseToast'
 import { useAsyncAction } from '@/composables/useAsyncAction'
 import { t } from '@/i18n'
 import { errorMessage } from '@/utils/async'
@@ -67,8 +68,12 @@ export function useAccountImportTasks(options: { reload: () => Promise<unknown> 
         error.value = ''
     }
     catch (cause) {
-      if (!current.signal.aborted)
-        error.value = errorMessage(cause, t('accounts.importTasks.progressReadingFailedTryAgain'))
+      if (!current.signal.aborted) {
+        const message = errorMessage(cause, t('accounts.importTasks.progressReadingFailedTryAgain'))
+        if (open.value && (!background || error.value !== message))
+          toast.error(message)
+        error.value = message
+      }
     }
     finally {
       if (!current.signal.aborted && !disposed) {

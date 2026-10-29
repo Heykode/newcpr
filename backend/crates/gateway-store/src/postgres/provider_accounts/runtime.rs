@@ -40,7 +40,7 @@ pub(crate) async fn load_rate_limited_until(
     cooldowns: Option<&dyn ProviderCooldownPort>,
     accounts: &[ProviderAccountStatus],
     now: SystemTime,
-) -> BTreeMap<String, SystemTime> {
+) -> BTreeMap<String, (SystemTime, bool)> {
     let Some(cooldowns) = cooldowns else {
         return BTreeMap::new();
     };
@@ -48,8 +48,22 @@ pub(crate) async fn load_rate_limited_until(
     for batch in accounts.chunks(crate::redis::ACCOUNT_STATE_READ_CONCURRENCY) {
         let reads = batch.iter().map(|account| async move {
             let account_id = ProviderAccountId::new(account.id.clone()).ok()?;
-            let cooldown = cooldowns.read(&account_id).await.ok().flatten()?;
-            (cooldown.until() > now).then(|| (account.id.clone(), cooldown.until()))
+            let cooldown = cooldowns
+                .read(&account_id)
+                .await
+                .ok()
+                .flatten()
+                .map(|state| state.until());
+            let protection = cooldowns
+                .read_protection(&account_id, account.revision)
+                .await
+                .ok()
+                .flatten()
+                .map(|state| state.scheduling_until(now));
+            cooldown
+                .max(protection)
+                .filter(|until| *until > now)
+                .map(|until| (account.id.clone(), (until, protection.is_some())))
         });
         result.extend(join_all(reads).await.into_iter().flatten());
     }
@@ -58,6 +72,7 @@ pub(crate) async fn load_rate_limited_until(
 
 /// Dashboard does not need identity documents, model lists or proxy locations.
 pub(crate) struct ProviderAccountStatus {
+    pub revision: gateway_core::account::CredentialRevision,
     pub id: String,
     pub concurrency_limit: Option<gateway_core::account::AccountConcurrencyLimit>,
     pub facts: AccountStatusFacts,
@@ -68,7 +83,7 @@ pub(crate) async fn load_account_statuses<'e>(
 ) -> crate::StoreResult<Vec<ProviderAccountStatus>> {
     use super::rows::{account_status_facts_from_row, get};
     let rows = sqlx::query(
-        "select id, enabled, concurrency_limit, credential_state, access_token_expires_at,
+        "select id, credential_revision, enabled, concurrency_limit, credential_state, access_token_expires_at,
                 quota_access_state, quota_evidence, quota_access_observed_at, quota_reset_at,
                 last_error_reason, last_error_message
          from provider_accounts",
@@ -87,6 +102,11 @@ pub(crate) async fn load_account_statuses<'e>(
                 })
                 .transpose()?;
             Ok(ProviderAccountStatus {
+                revision: gateway_core::account::CredentialRevision::new(super::to_u64(get(
+                    row,
+                    "credential_revision",
+                )?)?)
+                .map_err(|_| super::invalid("invalid credential revision"))?,
                 id: get(row, "id")?,
                 concurrency_limit,
                 facts: account_status_facts_from_row(row)?,

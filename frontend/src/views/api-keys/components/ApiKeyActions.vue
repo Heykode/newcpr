@@ -14,6 +14,8 @@ defineProps<{
   deleting: boolean
   updatingStatus: boolean
   revealing: boolean
+  configurationLoading?: boolean
+  importLoading?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -40,7 +42,7 @@ const emit = defineEmits<{
       variant="ghost"
       size="sm"
       :label="t('keys.configuration.title')"
-      :loading="revealing"
+      :loading="configurationLoading"
       :disabled="revealing"
       @click.stop="emit('use', apiKey)"
     >
@@ -55,7 +57,7 @@ const emit = defineEmits<{
       </template>
       <template #default="{ close }">
         <div class="w-44 p-1">
-          <BaseMenuItem :disabled="revealing" @click.stop="(close(), emit('importCcs', apiKey))">
+          <BaseMenuItem :disabled="revealing" :loading="importLoading" @click.stop="(close(), emit('importCcs', apiKey))">
             <template #icon>
               <Upload class="size-3.5" />
             </template>

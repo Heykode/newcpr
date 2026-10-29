@@ -1467,7 +1467,8 @@ pub(super) fn map_upstream_failure(
     } else {
         provider_error_kind(category)
     };
-    let mut error = provider_error(error_kind, send_state);
+    let mut error = provider_error(error_kind, send_state)
+        .with_upstream_failure_fields(failure.upstream_fields.clone());
     let replay_safe = failure.replay_is_safe() || cyber_policy_failure;
     let upgrade_required = failure.send_phase == CodexUpstreamSendPhase::BeforePayload
         && failure.status == Some(reqwest::StatusCode::UPGRADE_REQUIRED);

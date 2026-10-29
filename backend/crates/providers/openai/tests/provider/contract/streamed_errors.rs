@@ -6,13 +6,12 @@ const MISSING_ITEM: &str = "Item with id 'rs_missing_fixture' not found. \
     Items are not persisted when `store` is set to false.";
 
 #[tokio::test]
-async fn websocket_pong_exit_diagnosis_preserves_ambiguous_send_and_account_health() {
+async fn websocket_idle_exit_diagnosis_preserves_ambiguous_send_and_account_health() {
     for reuse in [false, true] {
         let store = Arc::new(MemoryAccountStore::default());
         create_account(&store, ACCOUNT_ID).await;
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base_url = format!("http://{}", listener.local_addr().unwrap());
-        let (ping_seen_tx, ping_seen_rx) = oneshot::channel();
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
             let mut websocket = accept_codex_test_websocket(stream).await;
@@ -38,12 +37,6 @@ async fn websocket_pong_exit_diagnosis_preserves_ambiguous_send_and_account_heal
                     .await
                     .unwrap();
             }
-            assert!(matches!(
-                websocket.next().await.unwrap().unwrap(),
-                Message::Ping(_)
-            ));
-            ping_seen_tx.send(()).unwrap();
-            // Do not poll again: tungstenite would flush its automatic Pong.
             futures::future::pending::<()>().await;
         });
         let operation = Operation::Generate(websocket_fixture_request(
@@ -67,15 +60,14 @@ async fn websocket_pong_exit_diagnosis_preserves_ambiguous_send_and_account_heal
                 event.unwrap();
             }
         }
-        // This test advances 56 seconds of keepalive time. Its request deadline
-        // must not race the Pong timeout whose classification is under test.
+        // The request deadline must outlive the transport receive deadline.
         let keepalive_context = AttemptContext::new(
             RequestAttemptContext::new(
                 ModelRequestId::new("req_pong_exit").unwrap(),
                 ClientApiKeyId::new("key_openai_contract").unwrap(),
             ),
             NonZeroU32::new(1).unwrap(),
-            SystemTime::now() + Duration::from_secs(120),
+            SystemTime::now() + Duration::from_secs(600),
             account_policy(),
             AccountAttemptContext::new(BTreeSet::new(), None, None)
                 .with_account_scope(contract_account_scope()),
@@ -105,15 +97,7 @@ async fn websocket_pong_exit_diagnosis_preserves_ambiguous_send_and_account_heal
             })
         );
         tokio::time::pause();
-        tokio::time::advance(Duration::from_secs(25)).await;
-        // A real I/O barrier must not auto-advance the paused keepalive clock.
-        tokio::time::resume();
-        timeout(Duration::from_secs(5), ping_seen_rx)
-            .await
-            .expect("server observes Ping")
-            .unwrap();
-        tokio::time::pause();
-        tokio::time::advance(Duration::from_secs(31)).await;
+        tokio::time::advance(Duration::from_secs(301)).await;
         let error = loop {
             match stream.next().await {
                 Some(Ok(_)) => {}
@@ -136,14 +120,14 @@ async fn websocket_pong_exit_diagnosis_preserves_ambiguous_send_and_account_heal
         assert_eq!(error.kind(), ProviderErrorKind::Transport);
         assert_eq!(
             error.connection_observation().unwrap().exit_reason(),
-            "pong_timeout"
+            "receive_idle_timeout"
         );
         let diagnostic = error.diagnostic().unwrap();
         assert_eq!(diagnostic.stage(), Some("receive"));
-        assert_eq!(diagnostic.code(), Some("pong_timeout"));
+        assert_eq!(diagnostic.code(), Some("receive_idle_timeout"));
         assert_eq!(
             diagnostic.as_str(),
-            "OpenAI WebSocket stream ended before a terminal response (pong_timeout); local keepalive timeout after 30s; last event type: response.output_text.delta"
+            "OpenAI WebSocket receive idle timeout after 300s"
         );
         assert!(error.raw_upstream_error().is_none());
         assert!(error.client_visible_upstream_error().is_none());
@@ -264,6 +248,13 @@ async fn repeated_streamed_404_errors_do_not_invalidate_accounts() {
                 assert!(!provider_openai::openai_failure_affects_account_score(
                     &error
                 ));
+                let facts = error
+                    .upstream_failure_fields()
+                    .expect("raw protection facts");
+                assert_eq!(facts.status, Some(404));
+                assert_eq!(facts.error_type.as_deref(), Some("invalid_request_error"));
+                assert_eq!(facts.code, None);
+                assert_eq!(facts.message.as_deref(), Some(MISSING_ITEM));
                 let visible = error.client_visible_upstream_error().unwrap();
                 assert_eq!(visible.error_type(), Some("invalid_request_error"));
                 assert_eq!(visible.code(), None);

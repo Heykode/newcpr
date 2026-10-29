@@ -568,6 +568,7 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
                 <div :class="isMobile ? 'flex min-w-0 flex-wrap items-center gap-1.5' : 'contents'">
                   <AccountPlanBadge v-if="isMobile" data-account-plan-mark :plan-type="row.planType" :plan-type-display="row.planTypeDisplay" size="sm" />
                   <AccountStatusBadge
+                    :error-protection="row.errorProtection"
                     align="center"
                     :status="derivedAccountStatus(row)"
                     :error-reason="row.errorReason"

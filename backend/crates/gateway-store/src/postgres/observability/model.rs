@@ -816,6 +816,11 @@ pub trait ObservabilityRepository: Send + Sync {
         range: ObservabilityRange,
         filter: UsageRecordFilter,
     ) -> StoreResult<Vec<RequestMetricPoint>>;
+    async fn usage_concurrency(
+        &self,
+        range: ObservabilityRange,
+        filter: UsageRecordFilter,
+    ) -> StoreResult<Vec<admin_observability::UsageConcurrencyPoint>>;
     fn usage_calculated_billing_facts(
         &self,
         range: ObservabilityRange,

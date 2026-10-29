@@ -359,10 +359,11 @@ impl ObservabilityService for DefaultObservabilityService {
             futures::try_join!(
                 self.store.usage_summary(range, filter.clone()),
                 self.store.usage_trend(range, filter.clone()),
+                self.store.usage_concurrency(range, filter.clone()),
             )
             .map_err(|error| map_store_error(error, "usage insights"))
         };
-        let ((overview, trend), standard_costs) = futures::try_join!(
+        let ((overview, trend, concurrency), standard_costs) = futures::try_join!(
             aggregates,
             recover_standard_costs(
                 &self.providers,
@@ -370,7 +371,7 @@ impl ObservabilityService for DefaultObservabilityService {
                     .usage_calculated_billing_facts(range, filter.clone()),
             ),
         )?;
-        build_usage_insights(overview, trend, standard_costs)
+        build_usage_insights(overview, trend, standard_costs, range, concurrency)
     }
 
     async fn diagnostics(
@@ -471,6 +472,8 @@ fn build_usage_insights(
     overview: UsageOverview,
     trend: Vec<RequestMetricPoint>,
     standard_costs: UsageCostScenarios,
+    range: TimeRange,
+    concurrency: Vec<crate::model::observability::UsageConcurrencyPoint>,
 ) -> Result<UsageInsights, AdminError> {
     let granularity = trend.first().map_or(
         crate::model::observability::Granularity::FifteenMinutes,
@@ -518,7 +521,34 @@ fn build_usage_insights(
             })
             .collect(),
     };
+    let mut weighted_concurrency = 0.0;
+    let mut peak_concurrency = 0;
+    for (index, point) in concurrency.iter().enumerate() {
+        let start = point.bucket_start.max(range.start);
+        let end = concurrency
+            .get(index + 1)
+            .map_or(range.end, |next| next.bucket_start)
+            .min(range.end);
+        let duration = end.signed_duration_since(start).num_milliseconds().max(0) as f64;
+        weighted_concurrency += point.average_concurrency * duration;
+        peak_concurrency = peak_concurrency.max(point.peak_concurrency);
+    }
+    let duration = range
+        .end
+        .signed_duration_since(range.start)
+        .num_milliseconds()
+        .max(1) as f64;
+    let concurrency: std::collections::BTreeMap<_, _> = concurrency
+        .into_iter()
+        .map(|point| (point.bucket_start, point))
+        .collect();
     let performance = UsageInsightsPerformance {
+        load: crate::model::observability::UsageInsightsLoad {
+            average_concurrency: weighted_concurrency / duration,
+            peak_concurrency,
+            admission_decision_p95_ms: requests.admission_decision_percentiles.p95_ms,
+            account_selection_wait_p95_ms: requests.account_selection_wait_percentiles.p95_ms,
+        },
         latency_percentiles: requests.latency_percentiles,
         first_token_latency_percentiles: requests.first_token_latency_percentiles,
         latency_coverage: rate_or_zero(requests.latency_count, requests.request_count),
@@ -545,6 +575,19 @@ fn build_usage_insights(
         points: trend
             .iter()
             .map(|point| UsageInsightsPerformancePoint {
+                load: crate::model::observability::UsageInsightsLoad {
+                    average_concurrency: concurrency
+                        .get(&point.bucket_start)
+                        .map_or(0.0, |point| point.average_concurrency),
+                    peak_concurrency: concurrency
+                        .get(&point.bucket_start)
+                        .map_or(0, |point| point.peak_concurrency),
+                    admission_decision_p95_ms: point.metrics.admission_decision_percentiles.p95_ms,
+                    account_selection_wait_p95_ms: point
+                        .metrics
+                        .account_selection_wait_percentiles
+                        .p95_ms,
+                },
                 bucket_start: point.bucket_start,
                 latency_percentiles: point.metrics.latency_percentiles,
                 first_token_latency_percentiles: point.metrics.first_token_latency_percentiles,

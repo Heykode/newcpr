@@ -503,6 +503,13 @@ pub async fn initialize_with_timezone(
         Some(quality_ops.clone()),
     );
     let import_task = use_case::import_tasks::ImportTaskWorker(import_tasks.clone());
+    let error_protection = Arc::new(use_case::error_protection::ErrorProtectionRecoveryService {
+        accounts: store.accounts(),
+        runtime: store.account_runtime(),
+        settings: store.settings(),
+        providers: registry.clone(),
+        probe: probe.clone(),
+    });
     let excel_recovery = Arc::new(use_case::excel_recovery::ExcelRecoveryService {
         accounts: store.accounts(),
         providers: registry.clone(),
@@ -596,6 +603,7 @@ pub async fn initialize_with_timezone(
     worker_contributions.push(workers::codex_quota_overdraft::contribution(
         codex_quota_overdraft,
     )?);
+    worker_contributions.push(workers::error_protection::contribution(error_protection)?);
     worker_contributions.push(workers::excel_recovery::contribution(excel_recovery)?);
     worker_contributions.push(workers::reset_credits::contribution(reset_credits)?);
     worker_contributions.push(workers::notifications::contribution(notifications)?);

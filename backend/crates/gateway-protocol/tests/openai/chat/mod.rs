@@ -277,7 +277,7 @@ fn request_rejects_malformed_common_parameters_and_ambiguous_mapping() {
         ("max_tokens", json!(0)),
         ("max_completion_tokens", json!("512")),
         ("parallel_tool_calls", json!("false")),
-        ("reasoning_effort", json!("unknown")),
+        ("reasoning_effort", json!(true)),
         (
             "tool_choice",
             json!({"type":"function","function":{"name":"missing"}}),
@@ -296,8 +296,8 @@ fn request_rejects_malformed_common_parameters_and_ambiguous_mapping() {
     input["max_tokens"] = json!(10);
     input["max_completion_tokens"] = json!(10);
     assert_eq!(
-        decode_chat_request(input).unwrap_err().param(),
-        Some("max_completion_tokens")
+        decode_chat_request(input).unwrap().responses["max_output_tokens"],
+        10
     );
 }
 
@@ -411,7 +411,7 @@ fn stream_structural_events_update_metadata_without_emitting_role_or_usage() {
 }
 
 #[test]
-fn stream_text_is_immediate_and_done_and_terminal_never_replay_snapshots() {
+fn stream_text_is_immediate_and_snapshots_fill_missing_suffixes_once() {
     let mut encoder = ChatStreamEncoder::new(true);
     let mut chunks = created(&mut encoder);
     chunks.extend(push(
@@ -425,12 +425,17 @@ fn stream_text_is_immediate_and_done_and_terminal_never_replay_snapshots() {
     );
     assert_eq!(text(&delta, "content"), "hel");
     chunks.extend(delta);
-    assert!(push(&mut encoder, json!({"type":"response.output_text.done","output_index":0,"content_index":0,"text":"hello"})).is_empty());
+    let done = push(
+        &mut encoder,
+        json!({"type":"response.output_text.done","output_index":0,"content_index":0,"text":"hello"}),
+    );
+    assert_eq!(text(&done, "content"), "lo");
+    chunks.extend(done);
     chunks.extend(push(
         &mut encoder,
         json!({"type":"response.completed","response":response(json!([message("hello!")]))}),
     ));
-    assert_eq!(text(&chunks, "content"), "hel");
+    assert_eq!(text(&chunks, "content"), "hello!");
     assert!(encoder.is_completed());
     assert!(!encoder.has_failure());
     assert_eq!(chunks.last().unwrap()["choices"], json!([]));
@@ -482,7 +487,7 @@ fn stream_parallel_function_arguments_have_stable_indices_and_ids() {
 }
 
 #[test]
-fn stream_arguments_before_identity_are_dropped_and_terminal_does_not_replay_tools() {
+fn stream_arguments_before_identity_wait_for_terminal_tool_identity() {
     let mut encoder = ChatStreamEncoder::new(false);
     created(&mut encoder);
     assert!(push(&mut encoder, json!({"type":"response.function_call_arguments.delta","output_index":0,"delta":"{\"x\":"})).is_empty());
@@ -490,14 +495,13 @@ fn stream_arguments_before_identity_are_dropped_and_terminal_does_not_replay_too
         &mut encoder,
         json!({"type":"response.completed","response":response(json!([function("a","run","{\"x\":1}")]))}),
     );
-    assert!(
-        chunks
-            .iter()
-            .all(|chunk| chunk.pointer("/choices/0/delta/tool_calls").is_none())
+    assert_eq!(
+        chunks[0]["choices"][0]["delta"]["tool_calls"][0]["function"]["arguments"],
+        "{\"x\":1}"
     );
     assert_eq!(
         chunks.last().unwrap()["choices"][0]["finish_reason"],
-        "stop"
+        "tool_calls"
     );
     assert!(encoder.is_completed());
 }
@@ -527,13 +531,13 @@ fn stream_refusal_and_reasoning_deltas_are_preserved_without_terminal_replay() {
         json!({"type":"response.completed","response":response(output)}),
     ));
     assert_eq!(text(&chunks, "reasoning_content"), "think\n\n");
-    assert_eq!(text(&chunks, "refusal"), "no");
+    assert_eq!(text(&chunks, "refusal"), "not possible");
     let mut encoder = ChatStreamEncoder::new(false);
     let chunks = push(
         &mut encoder,
         json!({"type":"response.completed","response":response(json!([message("only terminal")]))}),
     );
-    assert_eq!(text(&chunks, "content"), "");
+    assert_eq!(text(&chunks, "content"), "only terminal");
     assert_eq!(
         chunks.last().unwrap()["choices"][0]["finish_reason"],
         "stop"
@@ -592,32 +596,21 @@ fn stream_missing_terminal_cannot_report_success_and_failures_are_latched() {
 }
 
 #[test]
-fn stream_ignores_conflicting_or_missing_terminal_text_but_retains_failure_safety() {
-    for output in [json!([message("changed")]), json!([])] {
-        let mut encoder = ChatStreamEncoder::new(false);
-        created(&mut encoder);
-        push(
-            &mut encoder,
-            json!({"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":"original"}),
-        );
-        let chunks = push(
-            &mut encoder,
-            json!({"type":"response.completed","response":response(output)}),
-        );
-        assert_eq!(text(&chunks, "content"), "");
-        assert_eq!(
-            chunks.last().unwrap()["choices"][0]["finish_reason"],
-            "stop"
-        );
-        assert!(encoder.is_completed());
-        assert!(!encoder.has_failure());
-    }
+fn stream_rejects_conflicting_snapshot_without_reporting_success() {
     let mut encoder = ChatStreamEncoder::new(false);
-    assert!(
-        encoder
-            .push(Some("response.created"), &json!({"type":"response.failed"}))
-            .is_err()
+    push(
+        &mut encoder,
+        json!({"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":"original"}),
     );
+    let error = encoder
+        .push(
+            None,
+            &json!({"type":"response.completed","response":response(json!([message("changed")]))}),
+        )
+        .unwrap_err();
+    assert_eq!(error.code(), "invalid_upstream_response");
+    assert!(encoder.has_failure());
+    assert!(!encoder.is_completed());
 }
 
 #[test]
@@ -760,7 +753,7 @@ fn stream_tool_lookup_falls_back_to_output_index_and_ignores_terminal_content_ch
             &mut encoder,
             json!({"type":"response.completed","response":response(json!([replacement,message("other")]))}),
         );
-        assert_eq!(text(&chunks, "content"), "");
+        assert_eq!(text(&chunks, "content"), "other");
         assert!(encoder.is_completed());
     }
 }
@@ -807,7 +800,7 @@ fn stream_done_item_and_content_part_do_not_duplicate_text_or_arguments() {
                 .and_then(Value::as_str)
         })
         .collect();
-    assert_eq!(args, "{");
+    assert_eq!(args, "{}");
 }
 
 #[test]
@@ -877,10 +870,11 @@ fn stream_accepts_explicit_empty_completion_without_treating_preamble_as_complet
 
 #[test]
 fn buffered_empty_text_does_not_hide_content_but_stream_terminal_does_not_replay_it() {
-    for output in [
+    for mut output in [
         json!([message("answer"), message("")]),
         json!([message(""), message("answer")]),
     ] {
+        output[1]["id"] = json!("msg_2");
         let complete = chat_response(&response(output.clone())).unwrap();
         assert_eq!(complete["choices"][0]["message"]["content"], "answer");
         let mut encoder = ChatStreamEncoder::new(false);
@@ -888,7 +882,7 @@ fn buffered_empty_text_does_not_hide_content_but_stream_terminal_does_not_replay
             &mut encoder,
             json!({"type":"response.completed","response":response(output)}),
         );
-        assert_eq!(text(&chunks, "content"), "");
+        assert_eq!(text(&chunks, "content"), "answer");
         assert!(encoder.is_completed());
     }
     let output = json!([message(""), function("call_1", "run", "{}")]);
@@ -902,12 +896,12 @@ fn buffered_empty_text_does_not_hide_content_but_stream_terminal_does_not_replay
     );
     assert_eq!(
         chunks.last().unwrap()["choices"][0]["finish_reason"],
-        "stop"
+        "tool_calls"
     );
     assert!(
         chunks
             .iter()
-            .all(|chunk| chunk.pointer("/choices/0/delta/tool_calls").is_none())
+            .any(|chunk| chunk.pointer("/choices/0/delta/tool_calls").is_some())
     );
     assert!(encoder.is_completed());
 
@@ -953,3 +947,5 @@ mod newapi_extensions;
 mod output_extensions;
 mod reasoning;
 mod request_extensions;
+
+mod upstream;

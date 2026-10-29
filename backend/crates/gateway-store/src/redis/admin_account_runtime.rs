@@ -40,6 +40,68 @@ impl RedisAdminAccountRuntimeStore {
 
 #[async_trait]
 impl AccountRuntimeStore for RedisAdminAccountRuntimeStore {
+    async fn account_protections(
+        &self,
+        accounts: &[(String, gateway_admin::model::Revision)],
+    ) -> AdminStoreResult<BTreeMap<String, gateway_core::provider_ports::AccountProtectionState>>
+    {
+        let mut result = BTreeMap::new();
+        for chunk in accounts.chunks(super::ACCOUNT_STATE_READ_CONCURRENCY) {
+            let reads = chunk.iter().map(|(id, revision)| async {
+                let revision = gateway_core::account::CredentialRevision::new(revision.get())
+                    .map_err(|_| {
+                        crate::admin_store_error(
+                            "account protection",
+                            super::credential_cooldown::invalid("revision"),
+                        )
+                    })?;
+                self.cooldowns
+                    .read_account_protection(id, Some(revision))
+                    .await
+                    .map_err(|e| crate::admin_store_error("account protection", e))
+            });
+            for state in join_all(reads).await {
+                if let Some(state) = state? {
+                    result.insert(state.account_id.to_string(), state);
+                }
+            }
+        }
+        Ok(result)
+    }
+
+    async fn due_protections(
+        &self,
+    ) -> AdminStoreResult<Vec<gateway_core::provider_ports::AccountProtectionState>> {
+        self.cooldowns
+            .due_account_protections()
+            .await
+            .map_err(|e| crate::admin_store_error("claim protection", e))
+    }
+
+    async fn finish_protection(
+        &self,
+        expected: &gateway_core::provider_ports::AccountProtectionState,
+        postpone: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> AdminStoreResult<bool> {
+        self.cooldowns
+            .finish_protection(expected.account_id.as_str(), expected, postpone)
+            .await
+            .map_err(|e| crate::admin_store_error("finish protection", e))
+    }
+
+    async fn clear_protection(
+        &self,
+        account: &str,
+        revision: gateway_admin::model::Revision,
+    ) -> AdminStoreResult<bool> {
+        let revision = crate::Revision::new(revision.get())
+            .map_err(|e| crate::admin_store_error("protection revision", e))?;
+        self.cooldowns
+            .clear_protection(account, revision)
+            .await
+            .map_err(|e| crate::admin_store_error("clear protection", e))
+    }
+
     async fn concurrency(
         &self,
         account_id: &str,
@@ -62,10 +124,17 @@ impl AccountRuntimeStore for RedisAdminAccountRuntimeStore {
     }
 
     async fn active_rate_limits(&self) -> AdminStoreResult<AccountRuntimeSnapshot> {
-        self.cooldowns
+        let mut runtime = self
+            .cooldowns
             .active_cooldowns()
             .await
-            .map_err(|error| crate::admin_store_error("account runtime", error))
+            .map_err(|error| crate::admin_store_error("account runtime", error))?;
+        runtime.error_protections = self
+            .cooldowns
+            .active_protections()
+            .await
+            .map_err(|error| crate::admin_store_error("account protection", error))?;
+        Ok(runtime)
     }
 
     async fn account_runtime(
@@ -101,7 +170,24 @@ impl AccountRuntimeStore for RedisAdminAccountRuntimeStore {
                     .map(|signal| (signal.resource_id, u64::from(signal.in_flight)))
                     .collect()
             });
+        let mut error_protections = BTreeMap::new();
+        for chunk in account_ids.chunks(super::ACCOUNT_STATE_READ_CONCURRENCY) {
+            for read in join_all(
+                chunk
+                    .iter()
+                    .map(|id| self.cooldowns.read_account_protection(id, None)),
+            )
+            .await
+            {
+                if let Some(state) =
+                    read.map_err(|error| crate::admin_store_error("account protection", error))?
+                {
+                    error_protections.insert(state.account_id.to_string(), state);
+                }
+            }
+        }
         Ok(AccountRuntimeSnapshot {
+            error_protections,
             rate_limited_until,
             in_flight,
         })

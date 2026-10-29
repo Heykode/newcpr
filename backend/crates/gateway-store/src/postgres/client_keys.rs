@@ -1218,7 +1218,7 @@ async fn count_client_api_keys(pool: &PgPool, search: Option<&str>) -> StoreResu
 
 fn push_client_key_search(statement: &mut QueryBuilder<Postgres>, search: Option<&str>) {
     if let Some(search) = search {
-        let prefix = literal_prefix_pattern(search);
+        let prefix = literal_contains_pattern(search);
         statement.push(" and (lower(name) like ");
         statement.push_bind(prefix.clone());
         statement.push(" escape '\\'");
@@ -1324,8 +1324,9 @@ async fn load_client_key_memberships(
     Ok(())
 }
 
-fn literal_prefix_pattern(value: &str) -> String {
-    let mut escaped = String::with_capacity(value.len().saturating_add(1));
+fn literal_contains_pattern(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len().saturating_add(2));
+    escaped.push('%');
     for character in value.to_lowercase().chars() {
         if matches!(character, '\\' | '%' | '_') {
             escaped.push('\\');
