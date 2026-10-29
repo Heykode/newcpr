@@ -20,7 +20,7 @@ pub(crate) fn extract_release(
     temp_dir: &Path,
 ) -> Result<ExtractedRelease, OperationError> {
     let file = fs::File::open(archive_path)
-        .map_err(|error| internal(format!("failed to open release archive: {error}")))?;
+        .map_err(|error| internal("无法打开更新包").with_source(error))?;
     let decoder = flate2::read::GzDecoder::new(file);
     let mut archive = tar::Archive::new(decoder);
     let binary_path = temp_dir.join(APP_BINARY_NAME);
@@ -32,16 +32,16 @@ pub(crate) fn extract_release(
 
     for entry in archive
         .entries()
-        .map_err(|error| internal(format!("failed to read release archive: {error}")))?
+        .map_err(|error| internal("无法读取更新包").with_source(error))?
     {
         let mut entry =
-            entry.map_err(|error| internal(format!("invalid archive entry: {error}")))?;
+            entry.map_err(|error| internal("更新包内容损坏，请重新下载").with_source(error))?;
         let path = entry
             .path()
-            .map_err(|error| internal(format!("invalid archive path: {error}")))?
+            .map_err(|error| internal("更新包中的文件路径无效").with_source(error))?
             .into_owned();
         if unsafe_archive_path(&path) {
-            return Err(invalid("release archive contains an unsafe path"));
+            return Err(invalid("更新包包含不安全的文件路径，已停止更新"));
         }
         if !entry.header().entry_type().is_file() {
             continue;
@@ -49,16 +49,16 @@ pub(crate) fn extract_release(
         file_count = file_count.saturating_add(1);
         extracted_size = extracted_size.saturating_add(entry.header().size().unwrap_or(u64::MAX));
         if file_count > MAX_ARCHIVE_FILES || extracted_size > MAX_EXTRACTED_SIZE {
-            return Err(invalid("release archive expands beyond safety limits"));
+            return Err(invalid("更新包解压后的大小或文件数量超出限制"));
         }
 
         if path.file_name().is_some_and(|name| name == APP_BINARY_NAME) {
             if found_binary {
-                return Err(invalid("release archive contains duplicate binaries"));
+                return Err(invalid("更新包包含重复的程序文件"));
             }
             entry
                 .unpack(&binary_path)
-                .map_err(|error| internal(format!("failed to extract binary: {error}")))?;
+                .map_err(|error| internal("无法解压程序文件").with_source(error))?;
             found_binary = true;
             continue;
         }
@@ -68,24 +68,23 @@ pub(crate) fn extract_release(
             }
             let target = web_dist_dir.join(relative);
             if let Some(parent) = target.parent() {
-                fs::create_dir_all(parent).map_err(|error| {
-                    internal(format!("failed to create web asset dir: {error}"))
-                })?;
+                fs::create_dir_all(parent)
+                    .map_err(|error| internal("无法创建管理页面目录").with_source(error))?;
             }
             entry
                 .unpack(&target)
-                .map_err(|error| internal(format!("failed to extract web asset: {error}")))?;
+                .map_err(|error| internal("无法解压管理页面文件").with_source(error))?;
             found_web = true;
         }
     }
     if !found_binary {
-        return Err(invalid("release archive does not contain codex-proxy-rs"));
+        return Err(invalid("更新包缺少网关程序文件"));
     }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
         fs::set_permissions(&binary_path, fs::Permissions::from_mode(0o755))
-            .map_err(|error| internal(format!("failed to chmod binary: {error}")))?;
+            .map_err(|error| internal("无法设置程序执行权限").with_source(error))?;
     }
     Ok(ExtractedRelease {
         binary_path,

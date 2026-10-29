@@ -2346,6 +2346,121 @@ async fn capacity_select(
         .await
 }
 
+#[tokio::test(start_paused = true)]
+async fn binding_storage_deadlines_cover_direct_and_wait_admission() {
+    for wait in [false, true] {
+        for operation in ["load_binding", "claim", "renew"] {
+            for delay in [250, 750] {
+                let store = Arc::new(MemoryAccountStore::default());
+                create_account(&store, "acct_primary", "at-primary");
+                let leases = Arc::new(TestLeaseCoordinator::default());
+                leases
+                    .capacity
+                    .enabled
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+                leases.capacity.set_load("acct_primary", 0);
+                let affinity = Arc::new(MemorySessionAffinity::with_delayed_operation(
+                    operation,
+                    Duration::from_millis(delay),
+                ));
+                let key = ProviderSessionAffinityKey::try_new("binding-deadline").unwrap();
+                if operation == "renew" {
+                    affinity.seed_binding(
+                        &ProviderKind::new("openai").unwrap(),
+                        key.expose_to_store(),
+                        ProviderAccountId::new("acct_primary").unwrap(),
+                    );
+                }
+                let selector =
+                    selector_with_affinity(&store, Arc::clone(&leases), Arc::clone(&affinity))
+                        .with_account_concurrency(capacity_handle(&["acct_primary"], 1));
+                let attempt = attempt(BTreeSet::new()).with_request_tuning(
+                    gateway_core::routing::RequestTuning {
+                        account_busy_wait_enabled: wait,
+                        ..Default::default()
+                    },
+                );
+                let result = capacity_select(&selector, &attempt, Some(&key)).await;
+                if delay == 250 {
+                    drop(result.expect("500ms budget permits storage jitter"));
+                } else {
+                    assert!(
+                        matches!(result, Err(CredentialSelectionError::SessionBound(_))),
+                        "wait={wait}, operation={operation}: {result:?}"
+                    );
+                    assert_eq!(affinity.binding_count(), usize::from(operation == "renew"));
+                }
+                assert_eq!(
+                    leases.capacity.signals.lock().unwrap()
+                        [&ProviderAccountId::new("acct_primary").unwrap()]
+                        .in_flight,
+                    0
+                );
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn binding_renewal_race_reloads_the_winner_on_both_admission_paths() {
+    for wait in [false, true] {
+        let store = Arc::new(MemoryAccountStore::default());
+        create_account(&store, "acct_primary", "at-primary");
+        create_account(&store, "acct_other", "at-winner");
+        let leases = Arc::new(TestLeaseCoordinator::default());
+        leases
+            .capacity
+            .enabled
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        leases.capacity.set_load("acct_primary", 0);
+        leases.capacity.set_load("acct_other", 0);
+        let affinity = Arc::new(MemorySessionAffinity::default());
+        let key = ProviderSessionAffinityKey::try_new("binding-race").unwrap();
+        let provider = ProviderKind::new("openai").unwrap();
+        affinity.seed_binding(
+            &provider,
+            key.expose_to_store(),
+            ProviderAccountId::new("acct_primary").unwrap(),
+        );
+        *leases.capacity.after_acquire.lock().unwrap() = Some(Box::new({
+            let affinity = Arc::clone(&affinity);
+            let key = key.clone();
+            move || {
+                affinity.seed_binding(
+                    &provider,
+                    key.expose_to_store(),
+                    ProviderAccountId::new("acct_other").unwrap(),
+                )
+            }
+        }));
+        let selector = selector_with_affinity(&store, Arc::clone(&leases), Arc::clone(&affinity))
+            .with_account_concurrency(capacity_handle(&["acct_primary", "acct_other"], 1));
+        let attempt =
+            attempt(BTreeSet::new()).with_request_tuning(gateway_core::routing::RequestTuning {
+                account_busy_wait_enabled: wait,
+                ..Default::default()
+            });
+        let selected = capacity_select(&selector, &attempt, Some(&key))
+            .await
+            .expect("binding race must reselect the current winner");
+        assert_eq!(
+            selected.account().id().as_str(),
+            "acct_other",
+            "wait={wait}"
+        );
+        drop(selected);
+        assert!(
+            leases
+                .capacity
+                .signals
+                .lock()
+                .unwrap()
+                .values()
+                .all(|signal| signal.in_flight == 0)
+        );
+    }
+}
+
 async fn corrupt_credential(store: &MemoryAccountStore, id: &str) {
     use gateway_core::account::{NewProviderAccount, PlaintextCredential};
 

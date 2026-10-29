@@ -1,5 +1,33 @@
 # Protocol Compatibility Contracts
 
+## Native Compatibility Ownership
+
+Pure Codex compatibility now lives under `providers/openai/src/compat/`.
+Move the exact private-test owner entries in `apps/gateway/tests/main.rs` with
+the source; never leave a deleted owner or widen the inline-test allowlist.
+This module cannot acquire account, egress, session or socket ownership.
+
+## Native Error Boundaries
+
+- Follow upstream 958e13c3: administrator-owned errors use actionable Chinese;
+  locally generated model API errors use English. Preserve genuine upstream
+  status, body, code, type, param and message rather than replacing them with
+  a generic local message. Unknown internal failures stay safe.
+- Minimum-client-version rejection is 400 with its existing machine codes and
+  version fields. Axum missing-upgrade rejection is still 426; these are distinct
+  boundaries and tests must not replace all 426 expectations indiscriminately.
+- WS close 1009 keeps a nonempty upstream reason, falling back only when absent.
+  Retain 413, no replay and no account health penalty. SSE delimiter acceleration
+  cannot change LF/CRLF selection, partial-frame retention or terminal semantics.
+- Local Live transport errors and system update errors may contain private URLs.
+  Public messages must be safe, while internal diagnostics retain controlled
+  source chains/redaction facts. Diagnostic storage failure is best effort and
+  cannot replace the original result. Do not change deployment algorithms as a
+  side effect of aligning diagnostics.
+- Port field-specific validation only for fields supported by the local API.
+  Unsupported official extensions remain rejected by the existing JSON schema;
+  do not invent an accepted field or leave an unreachable error branch for it.
+
 ## Native Search History
 
 Upstream #478 applies only to OAuth native Responses with complete history.

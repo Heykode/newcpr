@@ -107,6 +107,8 @@ function removeRule(id: string) {
             <ZPopover trigger="hover-click" placement="top-start" :hover-delay="240">
               <template #trigger="{ open }">
                 <ZIconButton
+                  variant="link"
+                  :show-tooltip="false"
                   size="sm"
                   :label="t('settings.errorProtection.matchingHelpTitle')"
                   :aria-expanded="open"

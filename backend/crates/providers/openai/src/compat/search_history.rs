@@ -1,4 +1,4 @@
-//! Codex OAuth 搜索历史缺少工具声明时的临时兼容
+//! Native Codex search history compatibility.
 
 use serde_json::{Map, Value, json};
 

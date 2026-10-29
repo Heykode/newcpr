@@ -623,8 +623,6 @@ fn passthrough_header_name(name: &str, connection_headers: &[String], live: bool
         .any(|connection_header| connection_header.eq_ignore_ascii_case(name))
         // Live uses this as a business reference, not a Responses scheduling hint.
         || (is_transport_managed_request_header(name) && !(live && name == "x-session-id"))
-        || name.starts_with("x-grok-")
-        || name.starts_with("x-xai-")
         || name.starts_with("x-stainless-")
         || name.starts_with("sec-ch-ua")
         || name.starts_with("sec-fetch-")

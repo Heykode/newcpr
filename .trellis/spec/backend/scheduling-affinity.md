@@ -63,7 +63,7 @@ do not replace transport identity, account authorization or billing contracts.
 | New key absent, old account eligible | Claim new key with old account preference |
 | Old account disabled/outside scope/excluded/exhausted/busy | Normal authorized selection |
 | New key already bound | No legacy read or rewrite |
-| Store load unavailable | Original fail-open selection, not migration |
+| Binding store unavailable or over 500 ms | SessionBound failure before send; no selection bypass or retry |
 | Ordinary retry with state owner | Retain hint routing/recovery key |
 | Native continuation with conflicting hint | Original exact owner wins |
 | Account changes during full replay | Original account-state stripping still applies |
@@ -91,6 +91,17 @@ do not replace transport identity, account authorization or billing contracts.
   regressions. Synthetic fallback experiments are not runtime acceptance.
 - Require canonical completion in fixtures used to assert successful affinity
   renewal; a wire event alone does not prove that success was recorded.
+- Direct-selector CAS and lease-release fixtures must enable the simulated
+  capacity coordinator; otherwise the after-acquire hook never runs and the
+  guard is a no-op. Assert the winning account and released lease on both paths.
+- Allow only the timer's millisecond rounding when checking paused-time storage
+  deadlines; do not loosen a 100 ms policy budget to the 500 ms affinity budget.
+- Align upstream 5877b0cb with a 500 ms budget for binding reads, initial claims,
+  renewal and turn aliases; cyber-policy hints retain their independent 100 ms
+  budget. Do not treat an unavailable binding store as a missing key. Cover
+  direct and queued admission with 250 ms success and 750 ms rejection, no
+  outbound send, prohibited retry and released capacity. Optional guardian
+  parent preferences and post-completion observations remain best effort.
 
 ## 7. Wrong vs Correct
 

@@ -191,11 +191,7 @@ fn is_audited_private_test(member: &str, relative: &Path, item: &Item) -> bool {
                 && module.content.is_some()
                 && matches!(module.vis, syn::Visibility::Inherited)
         }
-        (
-            "crates/providers/openai",
-            Some("transport/request/search_history.rs"),
-            Item::Mod(module),
-        ) => {
+        ("crates/providers/openai", Some("compat/search_history.rs"), Item::Mod(module)) => {
             module.ident == "tests"
                 && module.content.is_some()
                 && matches!(module.vis, syn::Visibility::Inherited)
@@ -257,7 +253,7 @@ fn is_audited_private_test(member: &str, relative: &Path, item: &Item) -> bool {
         // private owner details, not public production test APIs.
         (
             "crates/providers/openai",
-            Some("provider/encrypted_history.rs" | "transport/request/compatibility.rs"),
+            Some("provider/encrypted_history.rs" | "compat/compatibility.rs"),
             Item::Mod(module),
         ) => {
             module.ident == "tests"
@@ -550,10 +546,7 @@ fn private_test_allowlist_requires_exact_owner_name_and_test_only_gate() {
 fn native_recovery_private_tests_require_exact_owner_and_test_only_gate() {
     let owner = "crates/providers/openai";
     let item: Item = syn::parse_str("#[cfg(test)] mod tests {}").unwrap();
-    for relative in [
-        "provider/encrypted_history.rs",
-        "transport/request/compatibility.rs",
-    ] {
+    for relative in ["provider/encrypted_history.rs", "compat/compatibility.rs"] {
         let path = Path::new(relative);
         assert!(is_audited_private_test(owner, path, &item));
         assert!(!is_audited_private_test("crates/gateway-core", path, &item));

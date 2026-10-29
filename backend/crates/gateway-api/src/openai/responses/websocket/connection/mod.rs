@@ -10,7 +10,7 @@ use std::{
     time::Duration,
 };
 
-use axum::extract::ws::{CloseFrame, Message, WebSocket, close_code};
+use axum::extract::ws::{CloseFrame, Message, close_code};
 use futures::{Sink, SinkExt, Stream, StreamExt};
 use gateway_core::lifecycle::CancellationToken;
 use thiserror::Error;
@@ -19,6 +19,10 @@ use tokio::{
     task::JoinHandle,
     time::{Instant, timeout},
 };
+
+mod transport;
+pub(super) use transport::Socket;
+pub(crate) use transport::Upgrade;
 
 const OUTBOUND_COMMAND_BUFFER: usize = 32;
 const INBOUND_EVENT_BUFFER: usize = 32;
@@ -192,18 +196,10 @@ struct ConnectionStats {
     ping_received_count: AtomicU64,
     ping_written_count: AtomicU64,
     pong_received_count: AtomicU64,
-    last_read_ms: AtomicU64,
     last_write_ms: AtomicU64,
 }
 
 impl ConnectionStats {
-    fn record_read(&self, opened_at: Instant) {
-        self.last_read_ms.store(
-            u64::try_from(opened_at.elapsed().as_millis()).unwrap_or(u64::MAX),
-            Ordering::Relaxed,
-        );
-    }
-
     fn record_write(&self, opened_at: Instant) {
         self.last_write_ms.store(
             u64::try_from(opened_at.elapsed().as_millis()).unwrap_or(u64::MAX),
@@ -238,6 +234,7 @@ pub struct ResponsesWebSocketConnection {
     exited: oneshot::Receiver<PumpExitReason>,
     pump_task: Option<JoinHandle<()>>,
     stats: Arc<ConnectionStats>,
+    activity: watch::Sender<Instant>,
     config: ConnectionConfig,
     exit_reason: Option<PumpExitReason>,
 }
@@ -251,11 +248,12 @@ impl ResponsesWebSocketConnection {
         self.request_trace = trace;
     }
     pub(super) fn new(
-        socket: WebSocket,
+        socket: Socket,
         connection_id: String,
         cancellation: CancellationToken,
     ) -> Self {
         spawn_connection(
+            socket.activity.clone(),
             socket,
             Arc::<str>::from(connection_id),
             cancellation,
@@ -490,8 +488,7 @@ impl ResponsesWebSocketConnection {
 
     pub(super) fn log_summary(&self, request_count: u64) {
         let connection_age_ms = self.age().as_millis();
-        let read_idle_ms = connection_age_ms
-            .saturating_sub(u128::from(self.stats.last_read_ms.load(Ordering::Relaxed)));
+        let read_idle_ms = self.activity.borrow().elapsed().as_millis();
         let write_idle_ms = connection_age_ms
             .saturating_sub(u128::from(self.stats.last_write_ms.load(Ordering::Relaxed)));
         tracing::info!(
@@ -530,7 +527,9 @@ impl Drop for ResponsesWebSocketConnection {
 }
 
 /// 为一个 socket 启动单 owner pump，并返回协调层句柄。
+/// activity 仅由实际入站字节或完整消息更新，不能由出站写入刷新。
 pub fn spawn_connection<S, E>(
+    activity: watch::Sender<Instant>,
     socket: S,
     connection_id: Arc<str>,
     cancellation: CancellationToken,
@@ -549,6 +548,7 @@ where
     let connection_cancellation = CancellationToken::new();
     let pump_task = tokio::spawn(run_pump(
         socket,
+        activity.clone(),
         command_rx,
         incoming_tx,
         exit_tx,
@@ -572,6 +572,7 @@ where
         exited: exit_rx,
         pump_task: Some(pump_task),
         stats,
+        activity,
         config,
         exit_reason: None,
     }
@@ -580,6 +581,7 @@ where
 #[expect(clippy::too_many_arguments)]
 async fn run_pump<S, E>(
     socket: S,
+    activity: watch::Sender<Instant>,
     mut commands: mpsc::Receiver<ConnectionCommand>,
     incoming: mpsc::Sender<PendingConnectionEvent>,
     exited: oneshot::Sender<PumpExitReason>,
@@ -603,7 +605,7 @@ async fn run_pump<S, E>(
     let _connection_lifetime = CancelOnDrop(connection_cancellation);
     let (writer, mut reader) = socket.split();
     let writer = Mutex::new(writer);
-    let (activity, received_activity) = watch::channel(());
+    let received_activity = activity.subscribe();
     // Both halves belong to this task. A blocked write cannot hide close or cancellation.
     let read = async {
         let event_slots = Arc::new(Semaphore::new(INBOUND_EVENT_BUFFER));
@@ -624,10 +626,7 @@ async fn run_pump<S, E>(
                 }
                 message = reader.next() => {
                     if matches!(&message, Some(Ok(_))) {
-                        stats.record_read(opened_at);
-                    }
-                    if matches!(&message, Some(Ok(message)) if !matches!(message, Message::Close(_))) {
-                        activity.send_replace(());
+                        activity.send_replace(Instant::now());
                     }
                     let event = match message {
                         Some(Ok(Message::Text(payload))) => Some(ConnectionEvent::Text(payload.to_string())),
@@ -745,7 +744,7 @@ async fn run_pump<S, E>(
 
 async fn heartbeat_connection<S, E>(
     writer: &Mutex<S>,
-    mut activity: watch::Receiver<()>,
+    mut activity: watch::Receiver<Instant>,
     stats: &ConnectionStats,
     opened_at: Instant,
 ) -> PumpExitReason

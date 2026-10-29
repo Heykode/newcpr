@@ -42,7 +42,7 @@ impl KeyWaitQueue {
         if state.total >= 1024 || state.queues.get(key).map_or(0, VecDeque::len) >= limit as usize {
             return Err(GatewayError::new(
                 GatewayErrorKind::ConcurrencyQueueFull,
-                "client key concurrency wait queue is full",
+                "Request queue is full.",
             ));
         }
         let marker = Arc::new(AtomicWaker::new());
@@ -126,7 +126,7 @@ impl Drop for KeyWaitTicket {
 pub(super) fn timeout() -> GatewayError {
     GatewayError::new(
         GatewayErrorKind::ConcurrencyQueueTimeout,
-        "client key concurrency wait deadline elapsed",
+        "Request queue wait timed out.",
     )
 }
 

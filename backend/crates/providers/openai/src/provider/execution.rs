@@ -25,7 +25,11 @@ impl CodexProvider {
             .selector
             .lookup_session_alias(alias_key)
             .await
-            .map_err(|()| map_selection_error(CredentialSelectionError::Coordinator(None)))?
+            .map_err(|()| {
+                map_selection_error(CredentialSelectionError::SessionBound(Box::new(
+                    CredentialSelectionError::Coordinator(None),
+                )))
+            })?
         else {
             return Ok(Some(affinity));
         };

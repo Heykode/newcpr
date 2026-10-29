@@ -2,6 +2,7 @@
 
 mod admin;
 mod admin_user_agent;
+mod compat;
 pub mod config;
 mod jitter;
 mod provider;

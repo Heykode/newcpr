@@ -1,6 +1,145 @@
 use super::*;
 
 #[tokio::test]
+async fn hosted_search_errors_preserve_wire_details_without_replay_on_http_and_ws() {
+    const MESSAGE: &str = "Hosted tool 'web_search' requires authorization and metering that are not supported by rustponsesapi.";
+    for websocket in [false, true] {
+        for semantic_output in [false, true] {
+            let original = json!({"type":"error","status":400,"error":{
+                "type":"invalid_request_error","code":"unsupported_parameter",
+                "message":MESSAGE,"param":"tools"
+            }});
+            let mut events =
+                vec![json!({"type":"response.created","response":{"id":"resp_hosted"}})];
+            if semantic_output {
+                events.push(json!({"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":"hello"}));
+            }
+            events.push(original.clone());
+            let http = MockServer::start().await;
+            let (url, server) = if websocket {
+                let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let url = format!("http://{}", listener.local_addr().unwrap());
+                let server = tokio::spawn(async move {
+                    let (stream, _) = listener.accept().await.unwrap();
+                    let mut socket = accept_codex_test_websocket(stream).await;
+                    let request = socket.next().await.unwrap().unwrap();
+                    let body: Value = serde_json::from_str(request.to_text().unwrap()).unwrap();
+                    assert_eq!(body["tools"][0]["type"], "web_search");
+                    for event in events {
+                        socket
+                            .send(Message::Text(event.to_string().into()))
+                            .await
+                            .unwrap();
+                    }
+                    assert!(
+                        timeout(Duration::from_millis(150), listener.accept())
+                            .await
+                            .is_err(),
+                        "a hosted tool error must not reconnect"
+                    );
+                });
+                (url, Some(server))
+            } else {
+                let body = events
+                    .iter()
+                    .map(|event| {
+                        format!(
+                            "event: {}\ndata: {event}\n\n",
+                            event["type"].as_str().unwrap()
+                        )
+                    })
+                    .collect::<String>();
+                Mock::given(method("POST"))
+                    .and(path("/codex/responses"))
+                    .respond_with(
+                        ResponseTemplate::new(200).set_body_raw(body, "text/event-stream"),
+                    )
+                    .expect(1)
+                    .mount(&http)
+                    .await;
+                (http.uri(), None)
+            };
+            let store = Arc::new(MemoryAccountStore::default());
+            create_account(&store, "acct_provider_contract").await;
+            let provider = provider_with_base_url_and_retry_budget(&store, url, 1);
+            let operation = Operation::Generate(GenerateRequest::from_protocol_payload(
+                ProtocolPayload::json_object(
+                    "openai",
+                    json!({"model":"gpt-5.4","input":"hello","tools":[{"type":"web_search"}]})
+                        .as_object()
+                        .unwrap()
+                        .clone(),
+                )
+                .unwrap()
+                .with_context(Map::from_iter([(
+                    "use_websocket".to_owned(),
+                    json!(websocket),
+                )])),
+            ));
+            let mut stream = provider
+                .execute(
+                    planned_request("openai", operation),
+                    context("req_hosted_search", CancellationToken::new()),
+                )
+                .await
+                .unwrap();
+            let mut client_events = Vec::new();
+            let mut error = loop {
+                match timeout(Duration::from_secs(5), stream.next())
+                    .await
+                    .unwrap()
+                {
+                    Some(Ok(event)) => {
+                        if event.has_client_event() {
+                            client_events.push(event);
+                        }
+                    }
+                    Some(Err(error)) => break error,
+                    None => panic!("hosted tool error must fail the request"),
+                }
+            };
+            assert_eq!(error.kind(), ProviderErrorKind::InvalidRequest);
+            assert_eq!(error.upstream_status(), Some(400));
+            assert!(!error.replay_is_safe());
+            assert!(!error.allows_pre_delivery_retry());
+            assert!(error.continuation_recovery_disposition().is_none());
+            assert!(!provider_openai::openai_failure_affects_account_score(
+                &error
+            ));
+            let visible = error.client_visible_upstream_error().unwrap();
+            assert_eq!(visible.code(), Some("unsupported_parameter"));
+            assert_eq!(visible.error_type(), Some("invalid_request_error"));
+            assert_eq!(visible.message(), MESSAGE);
+            let raw: Value =
+                serde_json::from_str(error.raw_upstream_error().unwrap().as_str()).unwrap();
+            assert_eq!(raw, original);
+            client_events.extend(error.take_atomic_client_events());
+            let wire = client_events
+                .last()
+                .and_then(|event| event.wire_event())
+                .expect("original hosted search failure event");
+            assert_eq!(wire.data(), &original);
+            assert_eq!(wire.data()["error"]["param"], "tools");
+            assert_eq!(
+                store
+                    .account("acct_provider_contract")
+                    .unwrap()
+                    .credential_state(),
+                CredentialState::Ready
+            );
+            if let Some(server) = server {
+                server.await.unwrap();
+            } else {
+                let requests = http.received_requests().await.unwrap();
+                assert_eq!(requests.len(), 1);
+                let body: Value = requests[0].body_json().unwrap();
+                assert_eq!(body["tools"][0]["type"], "web_search");
+            }
+        }
+    }
+}
+
+#[tokio::test]
 async fn streamed_parameter_errors_are_request_scoped_for_http_and_ws() {
     for (code, param, message) in [
         (

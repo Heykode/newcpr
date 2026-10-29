@@ -240,7 +240,17 @@ fn content_fallback_normalizes_text_formats_and_preserves_explicit_affinity() {
 #[tokio::test]
 async fn message_too_big_close_before_first_event_is_request_scoped_on_new_and_reused_sockets() {
     const ACCOUNT: &str = "acct_provider_contract";
-    for reused in [false, true] {
+    for (reused, reason) in [
+        (false, "opaque upstream size detail"),
+        (true, "opaque upstream size detail"),
+        (false, ""),
+        (true, ""),
+    ] {
+        let expected_message = if reason.is_empty() {
+            "The upstream WebSocket message is too large."
+        } else {
+            reason
+        };
         let store = Arc::new(MemoryAccountStore::default());
         create_account(&store, ACCOUNT).await;
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -257,7 +267,7 @@ async fn message_too_big_close_before_first_event_is_request_scoped_on_new_and_r
             socket
                 .close(Some(CloseFrame {
                     code: CloseCode::Size,
-                    reason: "opaque upstream size detail".into(),
+                    reason: reason.into(),
                 }))
                 .await
                 .unwrap();
@@ -332,7 +342,7 @@ async fn message_too_big_close_before_first_event_is_request_scoped_on_new_and_r
         let detail = error.client_visible_upstream_error().unwrap();
         assert_eq!(detail.code(), Some("message_too_big"));
         assert_eq!(detail.error_type(), Some("invalid_request_error"));
-        assert_eq!(detail.message(), "upstream websocket message too big");
+        assert_eq!(detail.message(), expected_message);
         let response = error.client_visible_upstream_response().unwrap();
         assert_eq!(response.status(), 413);
         assert_eq!(
@@ -342,7 +352,7 @@ async fn message_too_big_close_before_first_event_is_request_scoped_on_new_and_r
         assert_eq!(
             serde_json::from_slice::<Value>(response.body()).unwrap(),
             json!({"error":{
-                "message":"upstream websocket message too big",
+                "message":expected_message,
                 "code":"message_too_big",
                 "type":"invalid_request_error"
             }})
@@ -350,7 +360,7 @@ async fn message_too_big_close_before_first_event_is_request_scoped_on_new_and_r
         let raw: Value =
             serde_json::from_str(error.raw_upstream_error().unwrap().as_str()).unwrap();
         assert_eq!(raw["code"], 1009);
-        assert_eq!(raw["reason"], "opaque upstream size detail");
+        assert_eq!(raw["reason"], reason);
         assert!(!format!("{error:?}").contains("opaque upstream size detail"));
         assert!(stream.next().await.is_none());
         drop(stream);

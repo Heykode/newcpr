@@ -866,7 +866,7 @@ async fn core_adapter_persists_raw_upstream_error_verbatim() {
     finalization.upstream_status_code = Some(500);
     finalization.error = Some(GatewayError::new(
         GatewayErrorKind::UpstreamUnavailable,
-        "upstream service is unavailable",
+        "Upstream service is unavailable.",
     ));
     finalization.raw_upstream_error = Some(raw.to_owned());
 
@@ -993,7 +993,7 @@ async fn core_adapter_persists_continuation_connection_failure_observation() {
     finalization.client_status_code = Some(400);
     finalization.error = Some(GatewayError::new(
         GatewayErrorKind::InvalidRequest,
-        "conversation continuation must be rebuilt",
+        "Previous response unavailable. Resend the full conversation history.",
     ));
     finalization.failure_observation = ModelRequestFailureObservation {
         continuation_unavailable_reason: Some("reused_connection_lost".to_owned()),
@@ -1920,7 +1920,7 @@ async fn zero_attempt_duplicate_create_and_finalization_never_overwrite_terminal
     late.outcome = ExecutionOutcome::Cancelled;
     late.error = Some(GatewayError::new(
         GatewayErrorKind::Cancelled,
-        "request was cancelled",
+        "Request was cancelled.",
     ));
     late.diagnostic_trace_json = None;
     late.completed_at += StdDuration::from_secs(1);

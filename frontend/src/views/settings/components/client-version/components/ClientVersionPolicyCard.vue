@@ -39,6 +39,8 @@ const minCodexCliVersion = defineModel<string>('minCodexCliVersion', { required:
       <span class="inline-flex items-center gap-1.5">
         <span>{{ t('settings.clientVersion.clientVersionRestrictions') }}</span>
         <BaseIconButton
+          variant="link"
+          :show-tooltip="false"
           :label="t('settings.clientVersion.openGuide')"
           size="sm"
           class="-my-1"

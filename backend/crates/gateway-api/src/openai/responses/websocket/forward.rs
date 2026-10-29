@@ -431,7 +431,7 @@ async fn next_active_input(
                         let Some(control) = control.as_ref() else {
                             if send_gateway_error(connection, &GatewayError::new(
                                 GatewayErrorKind::InvalidRequest,
-                                "No upstream WebSocket connection is available for control messages",
+                                "No upstream WebSocket connection is available for control messages.",
                             ), request_id).await == ForwardOutcome::Disconnect {
                                 return ActiveInput::Disconnect;
                             }
@@ -644,7 +644,7 @@ pub(super) async fn send_control(
             connection,
             &GatewayError::new(
                 GatewayErrorKind::InvalidRequest,
-                "No upstream WebSocket connection is available for control messages",
+                "No upstream WebSocket connection is available for control messages.",
             ),
             request_id,
         )

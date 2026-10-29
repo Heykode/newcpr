@@ -907,13 +907,26 @@ fn mutation_response(
 }
 
 fn map_wire_error(error: WireValidationError) -> AdminError {
-    match error.field() {
-        "cursor" => AdminError::bad_request("Client API Key 游标不合法"),
+    let message = match error.field() {
+        "cursor" => "API Key 分页游标不合法",
         "clientKeyRevealNotFound" | "clientKeyMutationNotFound" => {
-            AdminError::not_found("Client API Key 不存在")
+            return AdminError::not_found("API Key 不存在");
         }
-        _ => AdminError::bad_request("Client API Key 请求不合法"),
-    }
+        "id" => "API Key ID 不能为空",
+        "name" => "API Key 名称不能为空",
+        "label" => "API Key 标签不能为空",
+        "groupIds" => "账号分组无效、重复或数量超限",
+        "maxConcurrency" => "并发请求上限超出支持范围",
+        "requestsPerMinute" => "每分钟请求上限超出支持范围",
+        "dailyLimitUsd" => "每日美元限额须非负，整数和小数各最多 10 位",
+        "weeklyLimitUsd" => "每周美元限额须非负，整数和小数各最多 10 位",
+        "limit" => "每页数量须为 1 至 65535",
+        "search" => "搜索内容过长或包含控制字符",
+        "sortBy" => "排序字段不受支持",
+        "sortDirection" => "排序方向必须为 asc（升序）或 desc（降序）",
+        _ => "API Key 请求参数不合法",
+    };
+    AdminError::bad_request(message)
 }
 
 fn map_service_error(error: gateway_admin::model::AdminError) -> AdminError {

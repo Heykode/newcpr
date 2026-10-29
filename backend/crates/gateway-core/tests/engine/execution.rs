@@ -2076,7 +2076,7 @@ fn known_catalog_should_reject_a_model_that_the_provider_did_not_publish() {
         (error.kind(), error.client_message()),
         (
             GatewayErrorKind::ModelNotFound,
-            "the requested model was not found in the provider catalogs available to this API key; check the model name",
+            "Model unavailable for this API key. Check the model name.",
         )
     );
 }

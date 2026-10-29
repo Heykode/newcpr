@@ -422,12 +422,25 @@ async fn scheduling_hint_lookup_error_does_not_read_a_legacy_candidate() {
     let server = local_server().await;
     let provider = provider_with_affinity_and_base_url(&store, Arc::clone(&affinity), server.uri());
     affinity.fail_next_lookup();
-    prepare(
-        &provider,
-        generation(Some("session"), "hello"),
-        context("req_error", CancellationToken::new()),
-    )
-    .await;
+    let error = provider
+        .execute(
+            planned_request(
+                "openai",
+                Operation::Generate(generation(Some("session"), "hello")),
+            ),
+            context("req_error", CancellationToken::new()),
+        )
+        .await
+        .err()
+        .expect("unavailable binding must stop admission");
+    assert_eq!(
+        error.kind(),
+        ProviderErrorKind::ProviderInfrastructureUnavailable
+    );
+    assert_eq!(error.send_state(), UpstreamSendState::NotSent);
+    assert!(error.retry_is_prohibited());
+    assert_eq!(affinity.binding_count(), 0);
+    assert!(server.received_requests().await.unwrap().is_empty());
     assert_eq!(
         affinity.lookup_keys().len(),
         1,
@@ -1292,6 +1305,51 @@ async fn all_session_policy_exclusions_report_session_restriction_in_both_select
         .unwrap();
     assert_eq!(error.kind(), ProviderErrorKind::SessionPolicyRestricted);
     assert!(server.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn waiting_policy_storage_keeps_its_independent_100ms_budget() {
+    use std::sync::atomic::Ordering;
+
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_scope_old").await;
+    let leases = Arc::new(TestLeaseCoordinator::default());
+    leases.capacity.set_load("acct_scope_old", 0);
+    let exclusions = Arc::new(MemorySessionExclusions::with_read_delay(
+        Duration::from_millis(250),
+    ));
+    let server = local_server().await;
+    let provider =
+        waiting_provider_with_exclusions(&store, leases.clone(), server.uri(), exclusions);
+    let attempt = waiting_attempt(context("req_policy_budget", CancellationToken::new()));
+    tokio::time::pause();
+    let start = tokio::time::Instant::now();
+    let result = provider
+        .execute(
+            planned_request(
+                "openai",
+                Operation::Generate(generate_with_session_context("policy-budget", None, None)),
+            ),
+            attempt,
+        )
+        .await;
+    let elapsed = start.elapsed();
+    tokio::time::resume();
+    let error = result
+        .err()
+        .expect("queued policy storage timeout must reject before send");
+    // Tokio rounds timer deadlines to millisecond ticks.
+    assert!(
+        (Duration::from_millis(100)..=Duration::from_millis(102)).contains(&elapsed),
+        "policy storage exceeded its 100ms timer budget: {elapsed:?}"
+    );
+    assert_eq!(
+        error.kind(),
+        ProviderErrorKind::ProviderInfrastructureUnavailable
+    );
+    assert_eq!(error.send_state(), UpstreamSendState::NotSent);
+    assert!(server.received_requests().await.unwrap().is_empty());
+    assert_eq!(leases.capacity.waiting.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test]

@@ -37,7 +37,7 @@ impl CodexBackendClient {
                 // This Live business reference is a local-only hint in Responses.
                 || (name != "x-session-id"
                     && (is_transport_managed_request_header(name.as_str())
-                        || super::request::provider_managed_header(name.as_str())))
+                        || crate::compat::provider_managed_header(name.as_str())))
                 || matches!(
                     name.as_str(),
                     "x-codex-routing-hint" | "x-codex-turn-state" | "x-codex-turn-id"

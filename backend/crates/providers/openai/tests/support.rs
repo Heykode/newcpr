@@ -65,6 +65,14 @@ pub(crate) struct MemoryAccountStore {
 }
 
 impl MemoryAccountStore {
+    pub(crate) fn set_outbound_proxy(&self, id: &str, proxy: gateway_core::account::OutboundProxy) {
+        let mut accounts = self.accounts.lock().unwrap();
+        let stored = accounts
+            .get_mut(&ProviderAccountId::new(id).unwrap())
+            .unwrap();
+        stored.account = stored.account.clone().with_outbound_proxy(Some(proxy));
+    }
+
     pub(crate) fn set_request_location(
         &self,
         id: &str,
@@ -993,6 +1001,8 @@ impl ProviderLeasePort for TestLeaseCoordinator {
 
 #[derive(Default)]
 pub(crate) struct MemorySessionAffinity {
+    operation_delay: Duration,
+    delayed_operation: Option<&'static str>,
     bindings: Mutex<BTreeMap<(String, String), ProviderSessionAffinityBinding>>,
     aliases: Mutex<BTreeMap<(String, String), ProviderSessionAlias>>,
     lookups: Mutex<Vec<String>>,
@@ -1004,6 +1014,31 @@ pub(crate) struct MemorySessionAffinity {
 }
 
 impl MemorySessionAffinity {
+    pub(crate) fn with_operation_delay(operation_delay: Duration) -> Self {
+        Self {
+            operation_delay,
+            ..Self::default()
+        }
+    }
+
+    pub(crate) fn with_delayed_operation(operation: &'static str, delay: Duration) -> Self {
+        Self {
+            operation_delay: delay,
+            delayed_operation: Some(operation),
+            ..Self::default()
+        }
+    }
+
+    async fn delay_operation(&self, operation: &str) {
+        if !self.operation_delay.is_zero()
+            && self
+                .delayed_operation
+                .is_none_or(|selected| selected == operation)
+        {
+            tokio::time::sleep(self.operation_delay).await;
+        }
+    }
+
     pub(crate) fn bind_keys(&self) -> Vec<String> {
         self.bind_keys.lock().expect("affinity bind lock").clone()
     }
@@ -1183,6 +1218,7 @@ impl ProviderSessionAffinityPort for MemorySessionAffinity {
         key: &'a ProviderSessionAffinityKey,
     ) -> BoxFuture<'a, Result<Option<ProviderSessionAffinityBinding>, ProviderStoreError>> {
         Box::pin(async move {
+            self.delay_operation("load_binding").await;
             self.lookups
                 .lock()
                 .expect("session affinity lookup lock")
@@ -1211,6 +1247,7 @@ impl ProviderSessionAffinityPort for MemorySessionAffinity {
         alias: &'a ProviderSessionAffinityKey,
     ) -> BoxFuture<'a, Result<Option<ProviderSessionAlias>, ProviderStoreError>> {
         Box::pin(async move {
+            self.delay_operation("load_alias").await;
             Ok(self
                 .aliases
                 .lock()
@@ -1231,6 +1268,7 @@ impl ProviderSessionAffinityPort for MemorySessionAffinity {
         ttl: Duration,
     ) -> BoxFuture<'a, Result<bool, ProviderStoreError>> {
         Box::pin(async move {
+            self.delay_operation("bind_alias").await;
             let alias_key = (
                 provider_kind.as_str().to_owned(),
                 alias.expose_to_store().to_owned(),
@@ -1260,6 +1298,7 @@ impl ProviderSessionAffinityPort for MemorySessionAffinity {
         ttl: Duration,
     ) -> BoxFuture<'a, Result<ProviderSessionAffinityBinding, ProviderStoreError>> {
         Box::pin(async move {
+            self.delay_operation("claim").await;
             if let Some(barrier) = &self.claim_barrier {
                 barrier.wait().await;
             }
@@ -1283,6 +1322,7 @@ impl ProviderSessionAffinityPort for MemorySessionAffinity {
         ttl: Duration,
     ) -> BoxFuture<'a, Result<bool, ProviderStoreError>> {
         Box::pin(async move {
+            self.delay_operation("renew").await;
             let bindings = self.bindings.lock().unwrap();
             let matches = bindings.get(&(
                 provider_kind.as_str().to_owned(),
@@ -1304,6 +1344,7 @@ impl ProviderSessionAffinityPort for MemorySessionAffinity {
         ttl: Duration,
     ) -> BoxFuture<'a, Result<ProviderSessionAffinityBinding, ProviderStoreError>> {
         Box::pin(async move {
+            self.delay_operation("compare_and_bind").await;
             let binding_key = (
                 provider_kind.as_str().to_owned(),
                 key.expose_to_store().to_owned(),
@@ -1350,10 +1391,20 @@ impl ProviderSessionAffinityPort for MemorySessionAffinity {
 
 #[derive(Default)]
 pub(crate) struct MemorySessionExclusions {
+    read_delay: Duration,
     states: Mutex<BTreeMap<(String, String), ProviderSessionExclusions>>,
     revision: AtomicUsize,
     pub(crate) lookups: Mutex<Vec<ProviderSessionAffinityKey>>,
     pub(crate) fail_reads: AtomicBool,
+}
+
+impl MemorySessionExclusions {
+    pub(crate) fn with_read_delay(read_delay: Duration) -> Self {
+        Self {
+            read_delay,
+            ..Self::default()
+        }
+    }
 }
 
 impl ProviderSessionExclusionPort for MemorySessionExclusions {
@@ -1364,6 +1415,9 @@ impl ProviderSessionExclusionPort for MemorySessionExclusions {
     ) -> BoxFuture<'a, Result<Option<ProviderSessionExclusions>, ProviderStoreError>> {
         Box::pin(async move {
             self.lookups.lock().unwrap().push(key.clone());
+            if !self.read_delay.is_zero() {
+                tokio::time::sleep(self.read_delay).await;
+            }
             if self.fail_reads.load(Ordering::SeqCst) {
                 return Err(ProviderStoreError::new(
                     gateway_core::provider_ports::ProviderStoreErrorKind::Unavailable,

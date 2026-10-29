@@ -1,9 +1,7 @@
 //! 核心 Generate operation 到 Codex Responses wire request 的严格编码。
 
-pub(crate) mod compatibility;
 pub(crate) mod quota_overdraft;
 mod raw_json;
-pub(crate) mod search_history;
 
 pub(crate) use raw_json::scope_raw_correlations;
 pub use raw_json::scope_raw_json_to_account;
@@ -14,9 +12,7 @@ use std::io;
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use gateway_core::operation::GenerateRequest;
-use gateway_protocol::openai::{
-    WS_REQUEST_HEADER_RESPONSES_LITE_CLIENT_METADATA_KEY, is_transport_managed_request_header,
-};
+use gateway_protocol::openai::WS_REQUEST_HEADER_RESPONSES_LITE_CLIENT_METADATA_KEY;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use roxmltree::Document;
 use serde::Serialize as _;
@@ -34,8 +30,6 @@ const THREAD_SPAWN_SUBAGENT_KIND: &str = "thread_spawn";
 const THREAD_SPAWN_CONVERSATION_PREFIX: &str = "thread-spawn:";
 const ENVIRONMENT_CONTEXT_CONTENT_KIND: &str = "environments.environment_context";
 const DESKTOP_TIME_CONTEXT_CONTENT_KIND: &str = "additional_content.codex_apps_client_time_context";
-const UNSUPPORTED_CODEX_RESPONSES_FIELDS: &[&str] =
-    &["max_output_tokens", "temperature", "prompt_cache_retention"];
 
 const CROSS_ACCOUNT_IDENTITY_KEYS: &[&str] = &[
     "authorization",
@@ -139,99 +133,13 @@ pub(crate) fn encode_responses_body(
     encoded
 }
 
-/// Normalize only rejected reasoning replay fields on the selected OAuth copy.
-pub(crate) fn normalize_reasoning_replay(body: &mut Map<String, Value>) {
-    let stateless = body.get("store") != Some(&Value::Bool(true));
-    let Some(input) = body.get_mut("input").and_then(Value::as_array_mut) else {
-        return;
-    };
-    let mut id_counts = std::collections::BTreeMap::<String, usize>::new();
-    for item in input.iter() {
-        if let Some(id) = item.get("id").and_then(Value::as_str) {
-            *id_counts.entry(id.to_owned()).or_default() += 1;
-        }
-    }
-    input.retain_mut(|item| {
-        let Some(item) = item.as_object_mut() else {
-            return true;
-        };
-        if item.get("type").and_then(Value::as_str) != Some("reasoning") {
-            return true;
-        }
-        // A stateless rs_ reference without replayable content cannot be resolved upstream.
-        if stateless
-            && item
-                .get("id")
-                .and_then(Value::as_str)
-                .is_some_and(|id| id.starts_with("rs_"))
-            && item
-                .get("encrypted_content")
-                .and_then(Value::as_str)
-                .is_none_or(|content| content.trim().is_empty())
-            && item.get("content").is_none_or(|content| {
-                content.is_null() || content.as_array().is_some_and(Vec::is_empty)
-            })
-        {
-            return false;
-        }
-        item.shift_remove("status");
-        // Referenced IDs must remain resolvable; opaque and nonempty summaries stay untouched.
-        if item
-            .get("id")
-            .and_then(Value::as_str)
-            .is_none_or(|id| id_counts.get(id) == Some(&1))
-        {
-            compatibility::normalize_plaintext_reasoning(item, stateless);
-        }
-        // Only encrypted replay makes any remaining plaintext redundant.
-        if item
-            .get("encrypted_content")
-            .and_then(Value::as_str)
-            .is_some_and(|content| !content.trim().is_empty())
-            && item
-                .get("content")
-                .and_then(Value::as_array)
-                .is_some_and(|content| !content.is_empty())
-        {
-            item.shift_remove("content");
-        }
-        true
-    });
-}
-
 fn adapt_codex_responses_body(
     body: &mut Map<String, Value>,
     upstream_model: &str,
     location: Option<&CodexRequestLocation>,
 ) {
     body.insert("model".to_owned(), Value::String(upstream_model.to_owned()));
-    body.entry("store").or_insert(Value::Bool(false));
-    if let Some(input @ Value::String(_)) = body.get_mut("input") {
-        let text = std::mem::take(input);
-        *input = serde_json::json!([{
-            "type": "message",
-            "role": "user",
-            "content": [{"type": "input_text", "text": text}]
-        }]);
-    }
-    // Codex uses developer for explicit instruction messages; nested content is opaque.
-    if let Some(input) = body.get_mut("input").and_then(Value::as_array_mut) {
-        for item in input {
-            let Some(item) = item.as_object_mut() else {
-                continue;
-            };
-            if item.get("type").and_then(Value::as_str) == Some("message")
-                && item.get("role").and_then(Value::as_str) == Some("system")
-            {
-                item.insert("role".to_owned(), Value::String("developer".to_owned()));
-            }
-        }
-    }
-    for field in UNSUPPORTED_CODEX_RESPONSES_FIELDS {
-        if body.remove(*field).is_some() {
-            tracing::debug!(field = *field, "Unsupported Codex Generate option omitted");
-        }
-    }
+    crate::compat::normalize_codex_request_body(body);
     if let Some(location) = location {
         align_structured_location_fields(body, location);
     }
@@ -1023,7 +931,7 @@ pub(crate) fn decode_passthrough_headers(context: &Map<String, Value>) -> Header
         let Ok(name) = HeaderName::from_bytes(name.as_bytes()) else {
             continue;
         };
-        if provider_managed_header(name.as_str()) {
+        if crate::compat::provider_managed_header(name.as_str()) {
             continue;
         }
         let Some(encoded) = entry.get(1).and_then(Value::as_str) else {
@@ -1038,35 +946,6 @@ pub(crate) fn decode_passthrough_headers(context: &Map<String, Value>) -> Header
         headers.append(name, value);
     }
     headers
-}
-
-pub(crate) fn provider_managed_header(name: &str) -> bool {
-    is_transport_managed_request_header(name)
-        || name.starts_with("x-grok-")
-        || name.starts_with("x-xai-")
-        || name.starts_with("x-stainless-")
-        || name.starts_with("sec-ch-ua")
-        || name.starts_with("sec-fetch-")
-        || matches!(
-            name,
-            "authorization"
-                | "x-api-key"
-                | "x-openai-actor-authorization"
-                | "x-authenticateresponse"
-                | "cookie"
-                | "cookie2"
-                | "chatgpt-account-id"
-                | "chatgpt-project-id"
-                | "openai-organization"
-                | "openai-project"
-                | "x-openai-account-routing-override"
-                | "x-openai-fedramp"
-                | "x-codex-installation-id"
-                | "origin"
-                | "referer"
-                // The semantic alias is already decoded; the lease projects upstream IDs.
-                | "session_id"
-        )
 }
 
 fn context_string(context: &Map<String, Value>, field: &str) -> Option<String> {

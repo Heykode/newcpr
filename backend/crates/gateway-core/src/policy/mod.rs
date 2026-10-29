@@ -153,7 +153,7 @@ impl ClientPolicy {
             Ok(())
         } else {
             Err(PolicyError::Denied {
-                reason: "client API key is disabled",
+                reason: "Client API key is disabled.",
             })
         }
     }

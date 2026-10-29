@@ -885,8 +885,12 @@ pub(super) fn map_selection_error(error: CredentialSelectionError) -> ProviderEr
         error => error,
     };
     let mapped = match &error {
-        CredentialSelectionError::SessionBound(_) => unreachable!("session-bound selection was unwrapped"),
-        CredentialSelectionError::PinnedAccount { .. } => unreachable!("pinned selection was unwrapped"),
+        CredentialSelectionError::SessionBound(_) => {
+            unreachable!("session-bound selection was unwrapped")
+        }
+        CredentialSelectionError::PinnedAccount { .. } => {
+            unreachable!("pinned selection was unwrapped")
+        }
         CredentialSelectionError::Cancelled => {
             provider_error(ProviderErrorKind::Cancelled, UpstreamSendState::NotSent)
         }
@@ -919,7 +923,7 @@ pub(super) fn map_selection_error(error: CredentialSelectionError) -> ProviderEr
         )
         .with_retry_prohibited()
         .with_client_visible_upstream_error(ClientVisibleUpstreamError::new(
-            "No account is available for this session because of an earlier upstream cyber_policy rejection. Do not repeatedly retry this session. This does not indicate an account ban or a service-wide outage.",
+            "No account is available for this session after an upstream cyber policy rejection.",
             Some("cyber_policy".to_owned()),
             Some("invalid_request_error".to_owned()),
         )),
@@ -932,7 +936,7 @@ pub(super) fn map_selection_error(error: CredentialSelectionError) -> ProviderEr
             UpstreamSendState::NotSent,
         )
         .with_client_visible_upstream_error(ClientVisibleUpstreamError::new(
-            "All eligible accounts have exhausted their quota. Retry after quota resets or add an available account.",
+            "All eligible accounts have exhausted their quota.",
             Some("usage_limit_reached".to_owned()),
             Some("usage_limit_reached".to_owned()),
         )),

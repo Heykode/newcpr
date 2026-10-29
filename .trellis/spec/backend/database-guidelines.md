@@ -119,6 +119,11 @@ rate. The database implementation remains SQLx/PostgreSQL.
   match NewCPR's existing delivered-usage predicate.
 - Integration tests require isolated `CPR_TEST_DATABASE_URL`; do not treat a
   missing variable and skipped database tests as successful database validation.
+- Enable CI mode and preflight both PostgreSQL and Redis authentication. Backup
+  restore and StoreConfig fixtures require nonempty passwords in both test URLs,
+  even when an isolated PostgreSQL instance explicitly uses trust authentication.
+  Use test-only credentials satisfying StoreConfig limits, with matching-major
+  pg_dump/psql; never change production credentials to satisfy a test harness.
 
 ### 4. Validation & Error Matrix
 
