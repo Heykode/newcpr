@@ -1533,6 +1533,13 @@ where
         // 均只接触已剥离的稳定错误字段。
         record_trace_error(&self.trace.attempt(self.attempts), &error);
         let mut atomic_client_events = error.take_atomic_client_events();
+        // Capture diagnostics before discarding this attempt, without consuming
+        // the batch's metering or attributing a restored previous batch to it.
+        for event in &atomic_client_events {
+            if let Some(observation) = event.response_observation() {
+                self.observe_response(observation.clone());
+            }
+        }
         // Selection/lease waiting can consume the window after the retry was
         // scheduled. Keep the actual connection failure, not the local stop marker.
         if std::error::Error::source(&error)

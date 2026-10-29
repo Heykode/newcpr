@@ -624,7 +624,7 @@ impl AttemptContext {
         self.account_selection_policy = self
             .account_selection_policy
             .with_smart_scheduling(request_tuning.smart_scheduling);
-        if request_tuning.account_busy_wait_enabled && self.account_wait_budget.is_none() {
+        if self.account_wait_budget.is_none() {
             self.account_wait_budget = Some(Arc::new(AccountWaitBudget::new(
                 self.deadline,
                 request_tuning,

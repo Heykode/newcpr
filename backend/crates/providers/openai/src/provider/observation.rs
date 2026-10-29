@@ -870,6 +870,9 @@ pub(super) fn map_request_error(error: CodexRequestEncodeError) -> ProviderError
 
 pub(super) fn map_selection_error(error: CredentialSelectionError) -> ProviderError {
     let error = match error {
+        CredentialSelectionError::SessionBound(source) => {
+            return map_selection_error(*source).with_retry_prohibited();
+        }
         CredentialSelectionError::PinnedAccount { source, owner_lost } => {
             return map_selection_error(*source).with_continuation_recovery_disposition(
                 if owner_lost {
@@ -882,6 +885,7 @@ pub(super) fn map_selection_error(error: CredentialSelectionError) -> ProviderEr
         error => error,
     };
     let mapped = match &error {
+        CredentialSelectionError::SessionBound(_) => unreachable!("session-bound selection was unwrapped"),
         CredentialSelectionError::PinnedAccount { .. } => unreachable!("pinned selection was unwrapped"),
         CredentialSelectionError::Cancelled => {
             provider_error(ProviderErrorKind::Cancelled, UpstreamSendState::NotSent)

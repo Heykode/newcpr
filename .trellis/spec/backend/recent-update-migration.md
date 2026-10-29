@@ -15,6 +15,13 @@ jobs, cost accounting, log cleanup and existing template catalog.
   binding; `relaxed` allows an independent child binding without rewriting the
   root. Neither mode permits transferring native encrypted state to another
   account or bypassing model permissions, quota, exclusions or concurrency.
+- Preserve official follow-only waiting, including temporarily unavailable,
+  cooling, disabled or excluded root owners. Strict children use the existing
+  bounded sticky queue even when optional busy waiting is disabled; root
+  migration reloads the full frozen pool without restarting the shared clock.
+  Same-request exclusions remain effective after re-login. Queue/selection
+  failure is terminal for follow-only routing, not an escape to another provider.
+  Explicit/native owners retain their separate continuation recovery contract.
 - Guardian parent preference supplements the existing top-level
   `openaiGuardianReservedConcurrency`; do not introduce a duplicate tuning field.
   The existing default remains zero.

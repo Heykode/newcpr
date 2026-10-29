@@ -12,7 +12,8 @@
 - API 字段为 `modelAccess`，账号响应始终返回有效政策。
 - `0035_account_model_access.sql` 新增 `provider_accounts.model_access_json`。
 - `FrozenAccountScope::allows_model(account_id, upstream_model)` 筛选候选；
-  `allows_provider_model` 在整个授权池判断目录可见性。
+  `allows_provider_model` 在整个授权池判断目录可见性与普通路由候选资格，
+  先过滤模型权限再判断未知模型是否有唯一候选；强制 Provider 不扩大授权。
 
 ## 3. 合同
 

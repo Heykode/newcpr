@@ -40,6 +40,56 @@ pub(super) struct Script {
 }
 
 #[tokio::test]
+async fn chat_buffered_invalid_tool_identity_fails_before_commit_once() {
+    for output in [
+        json!([{"type":"function_call","name":"lookup","arguments":"{}"}]),
+        json!([{"type":"custom_tool_call","call_id":"call_one","name":" ","input":"raw"}]),
+        json!([
+            {"type":"function_call","call_id":"call_one","name":"lookup","arguments":"{}"},
+            {"type":"custom_tool_call","call_id":"call_one","name":"code","input":"raw"}
+        ]),
+    ] {
+        let execution = scripted(Script::new(vec![created(), completed(output)]));
+        let response = request(Arc::clone(&execution), body_for(false)).await;
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+        let body: Value = serde_json::from_str(&read_text(response).await).unwrap();
+        assert_eq!(body["error"]["code"], "incompatible_upstream_response");
+        assert!(body.get("choices").is_none());
+        assert!(body.get("usage").is_none());
+        assert_eq!(execution.captured.lock().unwrap().len(), 1);
+        assert_eq!(execution.trace.client_statuses(), [502]);
+        assert_eq!(execution.trace.delivery_errors().len(), 1);
+        assert!(execution.trace.is_cancelled());
+        assert_eq!(execution.trace.snapshot().last(), Some(&"delivery_failed"));
+    }
+}
+
+#[tokio::test]
+async fn chat_invalid_tool_followup_never_reaches_account_execution() {
+    for calls in [
+        json!([{"id":"","type":"function","function":{"name":"lookup","arguments":"{}"}}]),
+        json!([
+            {"id":"call_one","type":"function","function":{"name":"lookup","arguments":"{}"}},
+            {"id":"call_one","type":"function","function":{"name":"other","arguments":"{}"}}
+        ]),
+    ] {
+        for stream in [false, true] {
+            let execution = ChatExecution::new(Scenario::Text);
+            let response = request(
+                Arc::clone(&execution),
+                json!({
+                    "model":"model-a","stream":stream,
+                    "messages":[{"role":"assistant","tool_calls":calls}]
+                }),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+            assert!(execution.captured.lock().unwrap().is_empty());
+        }
+    }
+}
+
+#[tokio::test]
 async fn chat_capacity_failure_is_retryable_before_and_after_output() {
     for code in ["server_is_overloaded", "slow_down"] {
         for (stream, after_content) in [(false, false), (true, false), (true, true)] {

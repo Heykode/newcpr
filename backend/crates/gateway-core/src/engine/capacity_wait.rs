@@ -130,6 +130,20 @@ impl AccountWaitBudget {
         if !self.tuning.account_busy_wait_enabled {
             return Err(AccountWaitBudgetError::Disabled);
         }
+        self.enter_window(mode, now)
+    }
+
+    /// Strict descendants must follow their session owner even when optional
+    /// capacity waiting is disabled. Reuse the same bounded sticky window.
+    pub fn enter_session_affinity(&self) -> Result<AccountWaitDeadline, AccountWaitBudgetError> {
+        self.enter_window(AccountWaitMode::Sticky, Instant::now())
+    }
+
+    fn enter_window(
+        &self,
+        mode: AccountWaitMode,
+        now: Instant,
+    ) -> Result<AccountWaitDeadline, AccountWaitBudgetError> {
         if self.tuning.account_busy_wait_sticky_max_waiting == 0
             || self.tuning.account_busy_wait_fallback_max_waiting == 0
             || self.tuning.account_busy_wait_sticky_timeout_seconds == 0
@@ -196,15 +210,17 @@ impl AccountWaitBudget {
 
     #[must_use]
     pub fn is_exhausted_at(&self, now: Instant) -> bool {
-        self.tuning.account_busy_wait_enabled
+        let windows = self
+            .windows
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        // A preceding Key queue alone must not enable disabled account waiting.
+        // With optional waiting disabled, only strict affinity can enter sticky.
+        (self.tuning.account_busy_wait_enabled || windows.sticky.is_some())
             && (self
                 .request_deadline
                 .is_some_and(|deadline| now >= deadline)
-                || self
-                    .windows
-                    .lock()
-                    .unwrap_or_else(|error| error.into_inner())
-                    .expired_at(now))
+                || windows.expired_at(now))
     }
 
     pub fn expire(&self) {
@@ -218,6 +234,50 @@ impl AccountWaitBudget {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn required_session_wait_is_bounded_when_optional_capacity_wait_is_disabled() {
+        let budget = AccountWaitBudget::new(Deadline::default(), RequestTuning::default());
+        assert_eq!(
+            budget.enter(AccountWaitMode::Sticky),
+            Err(AccountWaitBudgetError::Disabled)
+        );
+        let first = budget.enter_session_affinity().unwrap();
+        assert_eq!(budget.enter_session_affinity().unwrap(), first);
+        assert!(budget.is_exhausted_at(first.monotonic_deadline()));
+        budget.expire();
+        assert!(budget.is_exhausted());
+        assert_eq!(
+            budget.enter_session_affinity(),
+            Err(AccountWaitBudgetError::Expired)
+        );
+    }
+
+    #[test]
+    fn key_queue_alone_does_not_enable_disabled_account_waiting() {
+        let now = Instant::now();
+        let budget = AccountWaitBudget::new_at(
+            Deadline::default(),
+            RequestTuning::default(),
+            SystemTime::now(),
+            now,
+        );
+        let deadline = now + Duration::from_secs(30);
+        budget.constrain_deadline(deadline);
+        assert!(!budget.is_exhausted_at(deadline));
+        assert_eq!(
+            budget.enter(AccountWaitMode::Sticky),
+            Err(AccountWaitBudgetError::Disabled)
+        );
+        assert_eq!(
+            budget
+                .enter_session_affinity()
+                .unwrap()
+                .monotonic_deadline(),
+            deadline
+        );
+        assert!(budget.is_exhausted_at(deadline));
+    }
 
     #[test]
     fn key_queue_deadline_caps_later_sticky_and_fallback_waits() {
