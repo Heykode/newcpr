@@ -3,9 +3,7 @@ use bytes::Bytes;
 use futures::StreamExt;
 use serde_json::{Value, json};
 
-use crate::transport::request::compatibility::{
-    default_missing_format_name, normalize_custom_history_ids,
-};
+use crate::compat::{default_missing_format_name, normalize_custom_history_ids};
 
 #[test]
 fn only_valid_schema_with_absent_name_gets_default() {

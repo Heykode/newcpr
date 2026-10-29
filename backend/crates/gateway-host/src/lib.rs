@@ -186,6 +186,7 @@ impl HostBundle {
         &self,
         diagnostics: Arc<dyn gateway_core::diagnostics::OperationalDiagnostics>,
     ) {
+        self.system.set_diagnostics(Arc::clone(&diagnostics));
         self.workers.set_operational_diagnostics(diagnostics);
     }
 

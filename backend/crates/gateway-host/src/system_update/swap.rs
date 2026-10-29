@@ -1,9 +1,11 @@
 //! 二进制与 Web 制品的交易式替换、跨文件系统移动与回滚。
 
-use std::fmt;
+use std::error::Error;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+
+use gateway_core::error::ErrorSource;
 
 use super::archive::ExtractedRelease;
 use super::{OperationError, SystemUpdateConfig, conflict, internal};
@@ -33,11 +35,7 @@ pub(crate) fn replace_release_files(
                 restore_dir(web_dist, &web_backup),
             );
         }
-        return Err(error_with_rollback(
-            "failed to remove old binary backup",
-            error,
-            rollback,
-        ));
+        return Err(error_with_rollback("无法移除旧的程序备份", error, rollback));
     }
     if let Err(error) = move_file(executable, &binary_backup) {
         let mut rollback = Vec::new();
@@ -48,7 +46,7 @@ pub(crate) fn replace_release_files(
                 restore_dir(web_dist, &web_backup),
             );
         }
-        return Err(error_with_rollback("binary backup failed", error, rollback));
+        return Err(error_with_rollback("无法备份程序文件", error, rollback));
     }
     if let Err(error) = move_file(&extracted.binary_path, executable) {
         let mut rollback = Vec::new();
@@ -71,11 +69,7 @@ pub(crate) fn replace_release_files(
                 restore_dir(web_dist, &web_backup),
             );
         }
-        return Err(error_with_rollback(
-            "binary replace failed",
-            error,
-            rollback,
-        ));
+        return Err(error_with_rollback("无法替换程序文件", error, rollback));
     }
     Ok(())
 }
@@ -85,10 +79,10 @@ pub(crate) fn rollback_release(config: &SystemUpdateConfig) -> Result<(), Operat
     let executable = config.executable_path()?;
     let binary_backup = backup_path_for(&executable);
     if !binary_backup.exists() {
-        return Err(conflict("no binary backup found for rollback"));
+        return Err(conflict("没有可用于回滚的程序备份"));
     }
     swap_file(&executable, &binary_backup)
-        .map_err(|error| internal(format!("binary rollback failed: {error}")))?;
+        .map_err(|error| internal("程序文件回滚失败").with_source(error))?;
 
     let web_backup = backup_path_for(web_dist);
     if web_backup.exists()
@@ -100,7 +94,7 @@ pub(crate) fn rollback_release(config: &SystemUpdateConfig) -> Result<(), Operat
             "restore binary after web rollback failure",
             swap_file(&executable, &binary_backup),
         );
-        return Err(error_with_rollback("web rollback failed", error, rollback));
+        return Err(error_with_rollback("管理页面文件回滚失败", error, rollback));
     }
     Ok(())
 }
@@ -108,11 +102,11 @@ pub(crate) fn rollback_release(config: &SystemUpdateConfig) -> Result<(), Operat
 fn replace_dir(current: &Path, backup: &Path, replacement: &Path) -> Result<(), OperationError> {
     if backup.exists() {
         fs::remove_dir_all(backup)
-            .map_err(|error| internal(format!("failed to remove old web backup: {error}")))?;
+            .map_err(|error| internal("无法移除旧的管理页面文件备份").with_source(error))?;
     }
     if current.exists() {
         move_dir(current, backup)
-            .map_err(|error| internal(format!("failed to backup web assets: {error}")))?;
+            .map_err(|error| internal("无法备份管理页面文件").with_source(error))?;
     }
     if let Err(error) = move_dir(replacement, current) {
         let mut rollback = Vec::new();
@@ -123,11 +117,7 @@ fn replace_dir(current: &Path, backup: &Path, replacement: &Path) -> Result<(), 
                 restore_dir(current, backup),
             );
         }
-        return Err(error_with_rollback(
-            "failed to replace web assets",
-            error,
-            rollback,
-        ));
+        return Err(error_with_rollback("无法替换管理页面文件", error, rollback));
     }
     Ok(())
 }
@@ -239,14 +229,13 @@ fn collect_rollback_error(errors: &mut Vec<String>, action: &'static str, result
 
 fn error_with_rollback(
     context: &'static str,
-    error: impl fmt::Display,
+    error: impl Error + Send + Sync + 'static,
     rollback_errors: Vec<String>,
 ) -> OperationError {
     if rollback_errors.is_empty() {
-        return internal(format!("{context}: {error}"));
+        return internal(context).with_source(error);
     }
-    internal(format!(
-        "{context}: {error}; rollback failed: {}",
-        rollback_errors.join("; ")
-    ))
+    internal(format!("{context}，且无法恢复原文件")).with_source(
+        ErrorSource::new(error).with_cleanup(io::Error::other(rollback_errors.join("; "))),
+    )
 }

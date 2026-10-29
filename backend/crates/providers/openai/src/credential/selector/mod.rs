@@ -50,7 +50,9 @@ const CLOUDFLARE_CHALLENGE_BACKOFF: [Duration; 4] = [
     Duration::from_secs(120),
 ];
 const CLOUDFLARE_PATH_BLOCK_THRESHOLD: u32 = 3;
-const SESSION_AFFINITY_TIMEOUT: Duration = Duration::from_millis(100);
+// Binding must succeed before sending; tolerate brief storage jitter separately from policy hints.
+const SESSION_AFFINITY_TIMEOUT: Duration = Duration::from_millis(500);
+const CYBER_POLICY_TIMEOUT: Duration = Duration::from_millis(100);
 const CYBER_POLICY_SESSION_TTL: Duration = Duration::from_secs(60 * 60);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -963,12 +965,14 @@ impl CodexCredentialSelector {
                         && observed_affinity_account.is_none()
                         && let Some(key) = request.session_affinity_key
                     {
-                        self.claim_initial_session_affinity(
-                            key,
-                            account.id(),
-                            policy.openai_session_binding_ttl(),
+                        Some(
+                            self.claim_initial_session_affinity(
+                                key,
+                                account.id(),
+                                policy.openai_session_binding_ttl(),
+                            )
+                            .await?,
                         )
-                        .await
                     } else {
                         None
                     };
@@ -1061,10 +1065,10 @@ impl CodexCredentialSelector {
                         && let Some(observation) = request.session_affinity_observation
                         && !self
                             .remember_turn_alias(observation, policy.openai_session_binding_ttl())
-                            .await
+                            .await?
                     {
                         drop(guard);
-                        return Err(CredentialSelectionError::NoEligibleCredential);
+                        return Err(binding_unavailable());
                     }
                     if !diagnostic
                         && renew_existing_binding
@@ -1078,12 +1082,9 @@ impl CodexCredentialSelector {
                                 &affinity_expected_binding,
                                 policy.openai_session_binding_ttl(),
                             )
-                            .await;
-                        if !renewed
-                            && pinned_account.is_none()
-                            && affinity_observation.is_some_and(CodexSessionAffinity::follow_only)
-                        {
-                            return Err(CredentialSelectionError::NoEligibleCredential);
+                            .await?;
+                        if !renewed && pinned_account.is_none() {
+                            return Err(CredentialSelectionError::AccountSnapshotChanged);
                         }
                     }
                     if !diagnostic && self.excel_auth_block(&account).is_some() {
@@ -1149,7 +1150,7 @@ impl CodexCredentialSelector {
                     ));
                 }
                 SessionAffinityLookup::Missing => {}
-                SessionAffinityLookup::Unavailable => return Ok(AffinitySelection::default()),
+                SessionAffinityLookup::Unavailable => return Err(binding_unavailable()),
             }
         }
 
@@ -1165,7 +1166,7 @@ impl CodexCredentialSelector {
                     inherited.inherited = true;
                     return Ok(inherited);
                 }
-                SessionAffinityLookup::Unavailable => return Ok(AffinitySelection::default()),
+                SessionAffinityLookup::Unavailable => return Err(binding_unavailable()),
                 SessionAffinityLookup::Missing => {}
             }
         }
@@ -1227,7 +1228,7 @@ impl CodexCredentialSelector {
                 // atomically claim a missing binding while preserving any winning owner.
                 SessionAffinityLookup::Missing => {}
                 SessionAffinityLookup::Unavailable => {
-                    return Err(CredentialSelectionError::Coordinator(None));
+                    return Err(binding_unavailable());
                 }
             }
         }
@@ -1238,12 +1239,12 @@ impl CodexCredentialSelector {
         &self,
         affinity: &CodexSessionAffinity,
         session_binding_ttl: Duration,
-    ) -> bool {
+    ) -> Result<bool, CredentialSelectionError> {
         let Some(alias_key) = affinity.turn_alias_key() else {
-            return true;
+            return Ok(true);
         };
         let Some(alias) = affinity.alias_record() else {
-            return true;
+            return Ok(true);
         };
         let recorded = match tokio::time::timeout(
             SESSION_AFFINITY_TIMEOUT,
@@ -1259,19 +1260,19 @@ impl CodexCredentialSelector {
             Ok(Ok(bound)) => bound,
             Ok(Err(error)) => {
                 tracing::warn!(error = %error, "OpenAI turn alias write failed");
-                false
+                return Err(binding_store_error(error));
             }
             Err(_) => {
                 tracing::warn!(
                     timeout_ms = SESSION_AFFINITY_TIMEOUT.as_millis(),
                     "OpenAI turn alias write timed out"
                 );
-                false
+                return Err(binding_unavailable());
             }
         };
         // Exact continuation ownership outranks this routing hint. Keep a conflicting
         // alias unchanged, but do not reject its independently authorized owner.
-        recorded || !affinity.turn_alias_required()
+        Ok(recorded || !affinity.turn_alias_required())
     }
 
     async fn lookup_session_affinity(
@@ -1287,7 +1288,7 @@ impl CodexCredentialSelector {
             Ok(Ok(Some(binding))) => SessionAffinityLookup::Bound(binding),
             Ok(Ok(None)) => SessionAffinityLookup::Missing,
             Ok(Err(error)) => {
-                tracing::warn!(error = %error, "OpenAI session affinity read failed open");
+                tracing::warn!(error = %error, "OpenAI session affinity read failed");
                 SessionAffinityLookup::Unavailable
             }
             Err(_) => {
@@ -1307,7 +1308,7 @@ impl CodexCredentialSelector {
     ) -> Result<(), CredentialSelectionError> {
         match self.lookup_session_affinity(key).await {
             SessionAffinityLookup::Bound(current) if &current == expected => Ok(()),
-            SessionAffinityLookup::Unavailable => Err(CredentialSelectionError::Coordinator(None)),
+            SessionAffinityLookup::Unavailable => Err(binding_unavailable()),
             SessionAffinityLookup::Bound(_) | SessionAffinityLookup::Missing => {
                 Err(CredentialSelectionError::CapacityUnavailable {
                     retry_after: Some(Duration::from_millis(100)),
@@ -1321,7 +1322,7 @@ impl CodexCredentialSelector {
         key: &ProviderSessionAffinityKey,
         selected_account_id: &ProviderAccountId,
         session_binding_ttl: Duration,
-    ) -> Option<ProviderSessionAffinityBinding> {
+    ) -> Result<ProviderSessionAffinityBinding, CredentialSelectionError> {
         let candidate = ProviderSessionAffinityBinding::new(
             selected_account_id.clone(),
             BindingToken::generate(),
@@ -1337,22 +1338,22 @@ impl CodexCredentialSelector {
         )
         .await
         {
-            Ok(Ok(binding)) => Some(binding),
+            Ok(Ok(binding)) => Ok(binding),
             Ok(Err(error)) => {
                 tracing::warn!(
                     account_id = %selected_account_id,
                     error = %error,
-                    "OpenAI initial session affinity claim failed open"
+                    "OpenAI initial session affinity claim failed"
                 );
-                None
+                Err(binding_store_error(error))
             }
-            Err(_) => {
+            Err(error) => {
                 tracing::warn!(
                     account_id = %selected_account_id,
                     timeout_ms = SESSION_AFFINITY_TIMEOUT.as_millis(),
                     "OpenAI initial session affinity claim timed out"
                 );
-                None
+                Err(binding_store_error(error))
             }
         }
     }
@@ -1363,7 +1364,7 @@ impl CodexCredentialSelector {
     ) -> Option<CodexCyberPolicyScope> {
         let key = key?.clone();
         let state = match tokio::time::timeout(
-            SESSION_AFFINITY_TIMEOUT,
+            CYBER_POLICY_TIMEOUT,
             self.session_exclusions.load(&self.provider_kind, &key),
         )
         .await
@@ -1375,7 +1376,7 @@ impl CodexCredentialSelector {
             }
             Err(_) => {
                 tracing::warn!(
-                    timeout_ms = SESSION_AFFINITY_TIMEOUT.as_millis(),
+                    timeout_ms = CYBER_POLICY_TIMEOUT.as_millis(),
                     "OpenAI cyber policy state read timed out"
                 );
                 None
@@ -1393,7 +1394,7 @@ impl CodexCredentialSelector {
             return;
         };
         match tokio::time::timeout(
-            SESSION_AFFINITY_TIMEOUT,
+            CYBER_POLICY_TIMEOUT,
             self.session_exclusions.record_failure(
                 &self.provider_kind,
                 &scope.key,
@@ -1414,7 +1415,7 @@ impl CodexCredentialSelector {
             Err(_) => {
                 tracing::warn!(
                     account_id = %account.id(),
-                    timeout_ms = SESSION_AFFINITY_TIMEOUT.as_millis(),
+                    timeout_ms = CYBER_POLICY_TIMEOUT.as_millis(),
                     "OpenAI cyber policy exclusion write timed out"
                 );
             }
@@ -1429,7 +1430,7 @@ impl CodexCredentialSelector {
             return;
         };
         match tokio::time::timeout(
-            SESSION_AFFINITY_TIMEOUT,
+            CYBER_POLICY_TIMEOUT,
             self.session_exclusions
                 .clear(&self.provider_kind, &scope.key, state.revision()),
         )
@@ -1441,7 +1442,7 @@ impl CodexCredentialSelector {
             }
             Err(_) => {
                 tracing::warn!(
-                    timeout_ms = SESSION_AFFINITY_TIMEOUT.as_millis(),
+                    timeout_ms = CYBER_POLICY_TIMEOUT.as_millis(),
                     "OpenAI cyber policy exclusion clear timed out"
                 );
             }
@@ -1704,7 +1705,7 @@ impl CodexCredentialSelector {
         key: &ProviderSessionAffinityKey,
         expected: &ProviderSessionAffinityBinding,
         ttl: Duration,
-    ) -> bool {
+    ) -> Result<bool, CredentialSelectionError> {
         match tokio::time::timeout(
             SESSION_AFFINITY_TIMEOUT,
             self.session_affinity
@@ -1712,14 +1713,14 @@ impl CodexCredentialSelector {
         )
         .await
         {
-            Ok(Ok(renewed)) => renewed,
+            Ok(Ok(renewed)) => Ok(renewed),
             Ok(Err(error)) => {
                 tracing::warn!(error = %error, "OpenAI session affinity renewal failed");
-                false
+                Err(binding_store_error(error))
             }
-            Err(_) => {
+            Err(error) => {
                 tracing::warn!("OpenAI session affinity renewal timed out");
-                false
+                Err(binding_store_error(error))
             }
         }
     }
@@ -2171,9 +2172,21 @@ impl fmt::Debug for CodexCredentialLease {
     }
 }
 
+fn binding_store_error(
+    source: impl std::error::Error + Send + Sync + 'static,
+) -> CredentialSelectionError {
+    CredentialSelectionError::SessionBound(Box::new(CredentialSelectionError::Store(Some(
+        gateway_core::error::ErrorSource::new(source),
+    ))))
+}
+
+fn binding_unavailable() -> CredentialSelectionError {
+    CredentialSelectionError::SessionBound(Box::new(CredentialSelectionError::Coordinator(None)))
+}
+
 #[derive(Debug, Error)]
 pub enum CredentialSelectionError {
-    #[error("Codex descendant must follow its session account: {0}")]
+    #[error("session account binding cannot be bypassed: {0}")]
     SessionBound(#[source] Box<CredentialSelectionError>),
     #[error("Codex account wait unavailable: {0}")]
     AccountWait(AccountWaitFailure),

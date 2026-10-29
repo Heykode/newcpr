@@ -70,7 +70,7 @@ pub trait SnapshotSubscriptionPort: Send + Sync {
 
 /// 请求级冻结失败；此状态必须 fail closed。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-#[error("runtime snapshot is unavailable")]
+#[error("Gateway configuration is unavailable.")]
 pub struct RuntimeSnapshotUnavailable;
 
 /// RuntimeSnapshot 原子发布和请求级冻结句柄。

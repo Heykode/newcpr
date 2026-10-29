@@ -1041,13 +1041,13 @@ pub enum EngineError {
     ContinuationPinMismatch,
     #[error("provider did not use the account required by this execution")]
     RequiredAccountMismatch,
-    #[error("provider selected an account outside the frozen client scope")]
+    #[error("Provider selected an account outside the frozen client scope.")]
     AccountOutsideClientScope,
     #[error("provider execution failed")]
     Provider(ProviderError),
-    #[error("request was cancelled")]
+    #[error("Request was cancelled.")]
     Cancelled,
-    #[error("request deadline elapsed")]
+    #[error("Request deadline elapsed.")]
     Deadline,
     #[error("routing plan has no candidate")]
     EmptyRoutingPlan,

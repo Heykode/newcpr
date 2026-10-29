@@ -2,7 +2,7 @@
 import { LoaderCircle } from '@lucide/vue'
 import { computed } from 'vue'
 
-type IconButtonVariant = 'primary' | 'secondary' | 'success' | 'ghost' | 'destructive'
+type IconButtonVariant = 'primary' | 'secondary' | 'success' | 'ghost' | 'link' | 'destructive'
 type IconButtonSize = 'sm' | 'md' | 'lg'
 
 const props = withDefaults(
@@ -13,6 +13,7 @@ const props = withDefaults(
     loading?: boolean
     disabled?: boolean
     pressed?: boolean
+    showTooltip?: boolean
     type?: 'button' | 'submit' | 'reset'
   }>(),
   {
@@ -21,6 +22,7 @@ const props = withDefaults(
     loading: false,
     disabled: false,
     pressed: false,
+    showTooltip: true,
     type: 'button',
   },
 )
@@ -39,6 +41,8 @@ const variantClasses: Record<IconButtonVariant, string> = {
     'bg-cp-success-container text-cp-success-on-container shadow-none hover:bg-cp-success-container-hover active:bg-cp-success-container-active',
   ghost:
     'bg-transparent text-cp-text-secondary shadow-none hover:bg-cp-fill-quaternary hover:text-cp-text active:bg-cp-fill-tertiary',
+  link:
+    'bg-transparent text-cp-text-secondary shadow-none hover:bg-transparent hover:text-cp-text active:bg-transparent active:text-cp-text',
   destructive: 'bg-transparent text-cp-error-text shadow-none hover:bg-cp-error-container-hover hover:text-cp-error-on-container active:bg-cp-error-container-active active:text-cp-error-on-container',
 }
 
@@ -72,7 +76,7 @@ const classes = computed(() => [
     :aria-label="label"
     :aria-pressed="pressed || undefined"
     :aria-busy="loading || undefined"
-    :title="label"
+    :title="showTooltip ? label : undefined"
   >
     <span
       v-if="loading"

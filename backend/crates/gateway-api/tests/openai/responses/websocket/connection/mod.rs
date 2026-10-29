@@ -1,3 +1,5 @@
+mod transport;
+
 use std::{
     fmt,
     pin::Pin,
@@ -296,6 +298,7 @@ fn test_connection(stall_writes: bool) -> PumpHarness {
         dropped: Arc::clone(&dropped),
     };
     let connection = spawn_connection(
+        tokio::sync::watch::channel(tokio::time::Instant::now()).0,
         socket,
         Arc::from("ws_test"),
         cancellation.clone(),

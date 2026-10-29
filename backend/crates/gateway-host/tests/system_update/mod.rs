@@ -25,6 +25,146 @@ const TARGET_VERSION: &str = "1.9.9";
 const CROSS_MAJOR_VERSION: &str = "2.0.0";
 
 #[tokio::test]
+async fn download_failure_should_not_publish_download_url_in_events_or_status() {
+    for diagnostics_result in [None, Some(false), Some(true)] {
+        let server = MockServer::start().await;
+        let fixture = Fixture::new();
+        fixture
+            .mount_custom_release(
+                &server,
+                &format!("{}/archive?token=private-download-sentinel", server.uri()),
+                None,
+            )
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/archive"))
+            .respond_with(
+                ResponseTemplate::new(302)
+                    .insert_header("location", "https://untrusted.example/archive"),
+            )
+            .mount(&server)
+            .await;
+        let service = fixture.service(&server);
+        let diagnostics = Arc::new(RecordingDiagnostics {
+            reject: diagnostics_result == Some(true),
+            ..RecordingDiagnostics::default()
+        });
+        if diagnostics_result.is_some() {
+            service.set_diagnostics(diagnostics.clone());
+        }
+        let events = service.update_events();
+        let status = complete_update(&service, TARGET_VERSION).await;
+        assert_eq!(status.operation.status, SystemOperationStatus::Failed);
+        assert_eq!(status.operation.error.as_deref(), Some("更新包下载失败"));
+        let events = events.collect::<Vec<_>>().await;
+        let terminal = events.last().expect("terminal event");
+        assert!(terminal.terminal);
+        assert_eq!(
+            Some(terminal.message.as_str()),
+            status.operation.error.as_deref()
+        );
+        assert!(
+            events
+                .iter()
+                .all(|event| !event.message.contains("private-download-sentinel"))
+        );
+        assert!(
+            !fs::read_to_string(fixture.state())
+                .expect("persisted state")
+                .contains("private-download-sentinel")
+        );
+        if diagnostics_result.is_some() {
+            let failures = diagnostics.failures.lock().expect("diagnostic failures");
+            assert_eq!(failures.len(), 1);
+            let failure = &failures[0];
+            assert_eq!(failure.operation, "install");
+            assert_eq!(failure.correlation_id, status.operation.operation_id);
+            let details = failure.details.as_ref().expect("download failure details");
+            assert!(!details.as_str().contains("private-download-sentinel"));
+            assert!(!details.as_str().contains(&server.uri()));
+            let details: serde_json::Value =
+                serde_json::from_str(details.as_str()).expect("details JSON");
+            assert_eq!(details["redacted"], true);
+            assert!(
+                details["causes"]["messages"]
+                    .as_array()
+                    .is_some_and(|messages| !messages.is_empty())
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn update_detail_should_record_decode_failure_while_returning_safe_warning() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/repos/owner/repository/releases/latest"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("not release JSON"))
+        .mount(&server)
+        .await;
+    let fixture = Fixture::new();
+    let service = fixture.service(&server);
+    let diagnostics = Arc::new(RecordingDiagnostics::default());
+    service.set_diagnostics(diagnostics.clone());
+
+    let detail = service.update_detail(true).await.expect("failure detail");
+    assert_eq!(detail.warning.as_deref(), Some("GitHub 发行信息格式无效"));
+    let failures = diagnostics.failures.lock().expect("diagnostic failures");
+    assert_eq!(failures.len(), 1);
+    assert_eq!(failures[0].operation, "check_release");
+    let details = failures[0].details.as_ref().expect("decoding details");
+    assert!(details.as_str().contains("expected ident"));
+    assert!(!details.as_str().contains(&server.uri()));
+}
+
+#[tokio::test]
+async fn invalid_update_state_should_keep_raw_details_out_of_public_error() {
+    use std::error::Error as _;
+
+    let fixture = Fixture::new();
+    fs::write(
+        fixture.state(),
+        r#"{"operation":{"status":"private-state-sentinel"}}"#,
+    )
+    .expect("invalid state");
+    let service = fixture.service_for_url("http://127.0.0.1:1/repos");
+    let error = service.update_status().await.expect_err("invalid state");
+
+    assert_eq!(error.kind(), SystemOperationErrorKind::Internal);
+    assert_eq!(error.message(), "系统更新状态文件损坏");
+    assert!(!format!("{error} {error:?}").contains("private-state-sentinel"));
+    let source = error.source().expect("state decoding error");
+    assert!(source.is::<serde_json::Error>());
+    assert!(source.to_string().contains("private-state-sentinel"));
+}
+
+#[derive(Default)]
+struct RecordingDiagnostics {
+    failures: std::sync::Mutex<Vec<gateway_core::diagnostics::OperationalFailure>>,
+    reject: bool,
+}
+
+#[async_trait::async_trait]
+impl gateway_core::diagnostics::OperationalDiagnostics for RecordingDiagnostics {
+    async fn record_failure(
+        &self,
+        failure: gateway_core::diagnostics::OperationalFailure,
+    ) -> Result<(), gateway_core::error::StoreError> {
+        self.failures
+            .lock()
+            .expect("diagnostic failures")
+            .push(failure);
+        if self.reject {
+            Err(gateway_core::error::StoreError::new(
+                gateway_core::error::StoreErrorKind::Unavailable,
+            ))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[tokio::test]
 async fn restart_should_not_shutdown_when_replacement_spawn_fails() {
     let fixture = Fixture::new();
     let mut config = fixture.config("http://127.0.0.1:1/repos");

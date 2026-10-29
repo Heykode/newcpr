@@ -93,15 +93,17 @@ fn map_provider_error(
         ProviderAdminErrorKind::Internal => AdminErrorKind::Internal,
     };
     tracing::warn!(resource, error_kind = ?error.kind(), "admin provider operation failed");
-    let message = match kind {
-        AdminErrorKind::Invalid => "Provider 请求不合法",
-        AdminErrorKind::NotFound => "Provider 资源不存在",
-        AdminErrorKind::Conflict => "Provider 资源状态冲突，请刷新后重试",
-        AdminErrorKind::BadGateway => "上游服务请求失败",
-        AdminErrorKind::UpstreamResultUnknown => "上游执行结果未知，请刷新状态后再决定是否重试",
-        AdminErrorKind::Unavailable => "Provider 服务暂不可用",
-        AdminErrorKind::Internal => "服务内部错误",
-        _ => "Provider 操作失败",
+    let message = match error.kind() {
+        ProviderAdminErrorKind::Invalid => "服务商请求参数不合法",
+        ProviderAdminErrorKind::Unsupported => "该服务商不支持此操作",
+        ProviderAdminErrorKind::NotFound => "服务商资源不存在",
+        ProviderAdminErrorKind::Conflict => "服务商资源状态冲突，请刷新后重试",
+        ProviderAdminErrorKind::BadGateway => "上游服务请求失败",
+        ProviderAdminErrorKind::Ambiguous => "上游执行结果未知，请刷新状态后再决定是否重试",
+        ProviderAdminErrorKind::Unavailable | ProviderAdminErrorKind::CredentialRefreshRequired => {
+            "服务商暂不可用"
+        }
+        ProviderAdminErrorKind::Internal => "服务内部错误",
     };
     AdminError::new(kind, error.public_message().unwrap_or(message)).with_source(error)
 }
@@ -126,7 +128,7 @@ async fn required_credential(
         .credential_details(provider_kind, account_id)
         .await
         .map_err(|error| map_store_error(error, resource))?
-        .ok_or_else(|| AdminError::not_found("Provider 凭据不存在"))
+        .ok_or_else(|| AdminError::not_found("服务商凭据不存在"))
 }
 
 async fn import_proxy_binding(
@@ -208,7 +210,7 @@ fn validate_prepared_import(
             .iter()
             .any(|credential| credential.provider_kind != *provider_kind)
     {
-        return Err(AdminError::conflict("Provider 准备结果与请求范围不一致"));
+        return Err(AdminError::conflict("服务商返回的凭据与请求范围不符"));
     }
     Ok(())
 }
@@ -222,7 +224,7 @@ fn validate_prepared_rotation(
     if facts.account_id.as_str() != account.id.as_str()
         || facts.provider_kind != account.provider_kind
     {
-        return Err(AdminError::conflict("Provider 准备结果与当前凭据不一致"));
+        return Err(AdminError::conflict("凭据处理结果与当前凭据不符"));
     }
     Ok(())
 }

@@ -11,11 +11,7 @@ use std::{
 };
 
 use axum::{
-    extract::{
-        Extension, State,
-        connect_info::ConnectInfo,
-        ws::{WebSocket, WebSocketUpgrade},
-    },
+    extract::{Extension, State, connect_info::ConnectInfo},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
@@ -35,7 +31,9 @@ use crate::{
 };
 
 use super::{http::request_client_context, request::OpenAiRequestHeaders};
-use connection::{ConnectionEvent, FramePhase, ResponsesWebSocketConnection, WriteContext};
+use connection::{
+    ConnectionEvent, FramePhase, ResponsesWebSocketConnection, Socket, Upgrade, WriteContext,
+};
 use forward::{
     ConnectionReplaySnapshot, ForwardOutcome, forward_control_event, forward_execution,
     send_control, send_gateway_error, send_protocol_error,
@@ -43,7 +41,7 @@ use forward::{
 use protocol::connection_limit_event;
 pub use protocol::{ResponseCreateFrameError, decode_response_create_with_context};
 
-const TEXT_FRAMES_ONLY: &str = "Responses WebSocket accepts text frames only";
+const TEXT_FRAMES_ONLY: &str = "Responses WebSocket accepts text frames only.";
 const CONNECTION_LIMIT_CLOSE_REASON: &str = "Responses websocket connection limit reached";
 
 /// 将已认证的 `GET /v1/responses` 升级为 Responses WebSocket。
@@ -51,7 +49,7 @@ pub(crate) async fn responses_websocket(
     State(state): State<ApiState>,
     connect_info: Option<Extension<ConnectInfo<SocketAddr>>>,
     headers: HeaderMap,
-    websocket: WebSocketUpgrade,
+    websocket: Upgrade,
 ) -> Response {
     let service = state.openai().clone();
     let client = match authenticate_client(&service, &headers) {
@@ -88,7 +86,7 @@ impl ResponsesWebSocketAdapter {
 
     fn upgrade_with_client_context(
         &self,
-        websocket: WebSocketUpgrade,
+        websocket: Upgrade,
         client: AuthenticatedClient,
         client_ip: Option<IpAddr>,
         user_agent: Option<String>,
@@ -117,14 +115,9 @@ impl ResponsesWebSocketAdapter {
             lifecycle: self.service.lifecycle(),
             connection_guard,
         };
-        websocket
-            // 覆盖 axum/tungstenite 的私有 64 MiB message 与 16 MiB frame 默认值。
-            // Responses JSON 的协议可接受性由上游决定，代理不另设 wire 长度上限。
-            .max_message_size(usize::MAX)
-            .max_frame_size(usize::MAX)
-            .on_upgrade(move |socket| async move {
-                serve_responses_websocket(socket, session).await;
-            })
+        websocket.on_upgrade(move |socket| async move {
+            serve_responses_websocket(socket, session).await;
+        })
     }
 }
 
@@ -139,7 +132,7 @@ struct ResponsesWebSocketSession {
     connection_guard: Box<dyn ConnectionGuard>,
 }
 
-async fn serve_responses_websocket(socket: WebSocket, session: ResponsesWebSocketSession) {
+async fn serve_responses_websocket(socket: Socket, session: ResponsesWebSocketSession) {
     let ResponsesWebSocketSession {
         service,
         client,

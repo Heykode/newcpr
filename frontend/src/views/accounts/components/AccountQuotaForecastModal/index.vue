@@ -115,7 +115,7 @@ function handleExplanationKeydown(event: KeyboardEvent) {
         <BasePopover v-model="explanationOpen" trigger="hover-click" placement="top-start" :hover-delay="240">
           <template #trigger>
             <BaseButton
-              variant="ghost"
+              variant="link"
               size="sm"
               :aria-expanded="explanationOpen"
               :aria-describedby="explanationOpen ? explanationId : undefined"

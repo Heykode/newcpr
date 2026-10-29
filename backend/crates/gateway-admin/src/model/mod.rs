@@ -53,6 +53,7 @@ pub enum AdminErrorKind {
 #[error("{message}")]
 pub struct AdminError {
     source: Option<gateway_core::error::ErrorSource>,
+    sensitive_context_redacted: bool,
     kind: AdminErrorKind,
     message: String,
 }
@@ -74,13 +75,24 @@ impl AdminError {
     }
 
     #[must_use]
+    pub fn redact_sensitive_context(mut self) -> Self {
+        self.sensitive_context_redacted = true;
+        self
+    }
+
+    #[must_use]
     pub fn error_details(&self) -> Option<gateway_core::error::ErrorDetails> {
-        gateway_core::error::ErrorDetails::capture(self.source.as_ref(), None, false)
+        gateway_core::error::ErrorDetails::capture(
+            self.source.as_ref(),
+            None,
+            self.sensitive_context_redacted,
+        )
     }
     #[must_use]
     pub fn new(kind: AdminErrorKind, message: impl Into<String>) -> Self {
         Self {
             source: None,
+            sensitive_context_redacted: false,
             kind,
             message: message.into(),
         }

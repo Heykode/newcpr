@@ -2390,7 +2390,7 @@ async fn websocket_close_after_delivery_preserves_details_and_reconnects_through
     let detail = error
         .client_visible_upstream_error()
         .expect("WebSocket close detail");
-    assert_eq!(detail.message(), "upstream websocket message too big");
+    assert_eq!(detail.message(), "message too big");
     assert_eq!(detail.code(), Some("message_too_big"));
     assert_eq!(detail.error_type(), Some("invalid_request_error"));
     assert_eq!(

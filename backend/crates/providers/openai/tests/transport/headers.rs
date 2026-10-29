@@ -32,12 +32,15 @@ const DOWNSTREAM_TRANSPORT_HEADERS: &[(&str, &str)] = &[
     ("sec-ch-ua-platform", "synthetic-platform"),
     ("Sec-Fetch-Site", "cross-site"),
     ("sec-fetch-future-field", "synthetic-context"),
+    ("X-AuthenticateResponse", "synthetic-authentication"),
+    ("x-authenticateresponse", "duplicate-value"),
+];
+
+const OPAQUE_BUSINESS_HEADERS: &[(&str, &str)] = &[
     ("X-Grok-Model-Override", "synthetic-model"),
     ("x-grok-session-id", "synthetic-session"),
     ("X-XAI-Token-Auth", "synthetic-token-auth"),
     ("x-xai-future-field", "synthetic-extension"),
-    ("X-AuthenticateResponse", "synthetic-authentication"),
-    ("x-authenticateresponse", "duplicate-value"),
 ];
 
 const ORGANIZATION_EXTENSION_HEADERS: &[&str] = &[
@@ -117,6 +120,7 @@ fn request_with_opaque_headers(use_websocket: bool) -> CodexResponsesRequest {
         .extend(
             DOWNSTREAM_TRANSPORT_HEADERS
                 .iter()
+                .chain(OPAQUE_BUSINESS_HEADERS)
                 .map(|(name, value)| json!([name, STANDARD.encode(value.as_bytes())])),
         );
     let entries = context["opaque_request_headers"].as_array_mut().unwrap();
@@ -486,6 +490,12 @@ async fn backend_http_should_preserve_business_headers_without_downstream_transp
         );
     }
     let sessions = raw_header_values(&raw, "session-id");
+    for (name, value) in OPAQUE_BUSINESS_HEADERS {
+        assert_eq!(
+            raw_header_values(&raw, name),
+            vec![value.as_bytes().to_vec()]
+        );
+    }
     assert_eq!(
         sessions.len(),
         1,
@@ -648,6 +658,9 @@ async fn backend_websocket_should_preserve_business_headers_without_downstream_t
 
     for (name, _) in DOWNSTREAM_TRANSPORT_HEADERS {
         assert!(values(name).is_empty(), "unexpected {name}");
+    }
+    for (name, value) in OPAQUE_BUSINESS_HEADERS {
+        assert_eq!(values(name), vec![value.as_bytes().to_vec()]);
     }
     assert!(
         received

@@ -1151,7 +1151,7 @@ pub(super) fn map_client_error(
 }
 
 /// 在消费 transport 错误前提取可持久化事实，不能使用可能携带 URL/凭据的 Display。
-fn client_diagnostic(error: &CodexClientError) -> Option<ProviderDiagnostic> {
+pub(super) fn client_diagnostic(error: &CodexClientError) -> Option<ProviderDiagnostic> {
     let (stage, code, message) = match error {
         CodexClientError::ConnectionBudgetExhausted => (
             "connect",
@@ -1427,21 +1427,39 @@ pub(super) fn websocket_client_visible_error(
         ));
     }
     let close = error.close_before_terminal()?;
-    if close.code() == Some(1009) {
-        return Some(ClientVisibleUpstreamError::new(
-            "upstream websocket message too big".to_owned(),
-            Some("message_too_big".to_owned()),
-            Some("invalid_request_error".to_owned()),
-        ));
-    }
+    let message_too_big = close.code() == Some(1009);
     let message = close
         .reason()
         .filter(|reason| !reason.is_empty())
-        .map_or_else(|| close.to_string(), str::to_owned);
+        .map_or_else(
+            || {
+                if message_too_big {
+                    "The upstream WebSocket message is too large.".to_owned()
+                } else if let Some(code) = close.code() {
+                    format!(
+                        "The upstream WebSocket closed before the response completed (code {code})."
+                    )
+                } else {
+                    "The upstream WebSocket closed before the response completed.".to_owned()
+                }
+            },
+            str::to_owned,
+        );
     Some(ClientVisibleUpstreamError::new(
         message,
-        close.code().map(|code| code.to_string()),
-        Some("websocket_close_error".to_owned()),
+        if message_too_big {
+            Some("message_too_big".to_owned())
+        } else {
+            close.code().map(|code| code.to_string())
+        },
+        Some(
+            if message_too_big {
+                "invalid_request_error"
+            } else {
+                "websocket_close_error"
+            }
+            .to_owned(),
+        ),
     ))
 }
 

@@ -292,10 +292,12 @@ impl CodexCredentialSelector {
                 match cyber_policy_key {
                     Some(key) => Ok(Some(CodexCyberPolicyScope {
                         key: key.clone(),
-                        state: self
-                            .session_exclusions
-                            .load(&self.provider_kind, key)
-                            .await?,
+                        state: tokio::time::timeout(
+                            CYBER_POLICY_TIMEOUT,
+                            self.session_exclusions.load(&self.provider_kind, key),
+                        )
+                        .await
+                        .map_err(|source| CredentialSelectionError::Store(Some(source.into())))??,
                     })),
                     None => Ok(None),
                 }
@@ -395,7 +397,7 @@ impl CodexCredentialSelector {
                     .await?;
             }
             reload = true;
-            if state.follows_root
+            if (state.follows_root || (scan > 1 && state.pinned.is_none()))
                 && let Some(key) = request.session_affinity_key
             {
                 match control
@@ -403,8 +405,10 @@ impl CodexCredentialSelector {
                     .await?
                 {
                     SessionAffinityLookup::Bound(binding) => {
-                        state.pinned = Some(binding.account_id().clone());
-                        state.observed_affinity = state.pinned.clone();
+                        if state.follows_root {
+                            state.pinned = Some(binding.account_id().clone());
+                        }
+                        state.observed_affinity = Some(binding.account_id().clone());
                         state.observed_affinity_binding = Some(binding.clone());
                         state.affinity = affinity_selection_for_bound_account(
                             binding,
@@ -414,7 +418,7 @@ impl CodexCredentialSelector {
                         );
                     }
                     SessionAffinityLookup::Unavailable => {
-                        return Err(CredentialSelectionError::Coordinator(None));
+                        return Err(binding_unavailable());
                     }
                     SessionAffinityLookup::Missing => {
                         state.pinned = None;
@@ -851,10 +855,13 @@ impl CodexCredentialSelector {
             .excluded_accounts
             .extend(state.invalid_credentials.iter().cloned());
         if let Some(scope) = state.cyber_policy_scope.as_mut() {
-            scope.state = self
-                .session_exclusions
-                .load(&self.provider_kind, &scope.key)
-                .await?;
+            scope.state = tokio::time::timeout(
+                CYBER_POLICY_TIMEOUT,
+                self.session_exclusions
+                    .load(&self.provider_kind, &scope.key),
+            )
+            .await
+            .map_err(|source| CredentialSelectionError::Store(Some(source.into())))??;
             if let Some(current) = scope.state.as_ref() {
                 state
                     .context
@@ -1131,7 +1138,7 @@ impl CodexCredentialSelector {
                                 return Ok(WaitOutcome::RootChanged);
                             }
                             SessionAffinityLookup::Unavailable => {
-                                return Err(CredentialSelectionError::Coordinator(None));
+                                return Err(binding_unavailable());
                             }
                         }
                     }
@@ -1406,7 +1413,8 @@ impl CodexCredentialSelector {
                     == gateway_core::account::AccountAffinity::Preferred);
         if state.observed_affinity.is_none()
             && let Some(key) = request.session_affinity_key
-            && let Some(effective) = self
+        {
+            let effective = self
                 .claim_initial_session_affinity(
                     key,
                     id,
@@ -1415,17 +1423,17 @@ impl CodexCredentialSelector {
                         .account_selection_policy()
                         .openai_session_binding_ttl(),
                 )
-                .await
-            && state.pinned.is_none()
-        {
-            state.observed_affinity_binding = Some(effective.clone());
-            state.observed_affinity = Some(effective.account_id().clone());
-            if effective.account_id() != id {
-                drop(guard);
-                state.affinity = AffinitySelection::preferred(effective);
-                return Ok(None);
+                .await?;
+            if state.pinned.is_none() {
+                state.observed_affinity_binding = Some(effective.clone());
+                state.observed_affinity = Some(effective.account_id().clone());
+                if effective.account_id() != id {
+                    drop(guard);
+                    state.affinity = AffinitySelection::preferred(effective);
+                    return Ok(None);
+                }
+                expected = effective;
             }
-            expected = effective;
         }
         if state.follows_root
             && let Some(key) = request.session_affinity_key
@@ -1446,9 +1454,9 @@ impl CodexCredentialSelector {
                         .account_selection_policy()
                         .openai_session_binding_ttl(),
                 )
-                .await
+                .await?
         {
-            return Err(CredentialSelectionError::Coordinator(None));
+            return Err(binding_unavailable());
         }
         if renew_existing_binding && let Some(key) = request.session_affinity_key {
             let renewed = self
@@ -1463,8 +1471,8 @@ impl CodexCredentialSelector {
                         .account_selection_policy()
                         .openai_session_binding_ttl(),
                 )
-                .await;
-            if !renewed && state.follows_root {
+                .await?;
+            if !renewed && (state.follows_root || state.pinned.is_none()) {
                 drop(guard);
                 return Ok(None);
             }

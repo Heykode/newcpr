@@ -32,6 +32,19 @@ Managed by Trellis. Edits outside this block are preserved; edits inside may be 
 - This target clarification does not authorize deployment or unfreeze excluded
   development branches.
 
+## Upstream Integration Verification
+
+- For upstream merges or parity claims, follow `docs/upstream-integration-checklist.md`.
+  Pin the official commit and record every affected entry point, helper, caller,
+  error boundary, test and intentional exclusion. Matching converter files alone
+  does not establish endpoint equivalence.
+- Keep a reviewed difference ledger. Any extra precheck, fallback or error mapping
+  needs an explicit source and behavioral justification; do not retain it merely
+  because it already exists locally. Verify defects with failing-before and
+  passing-after regressions on the user-approved validation host.
+- Report remaining runtime adaptations and untested cases. Do not describe a
+  partial adaptation as a byte-identical service or promise zero defects.
+
 ## Privacy Before Writing
 
 Read `tools/privacy/README.md` before writing operational notes, fixtures,

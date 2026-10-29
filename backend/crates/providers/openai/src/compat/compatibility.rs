@@ -1,4 +1,6 @@
-//! Narrow repairs for rejected OAuth wire formats, only on the selected send copy.
+//! Native Codex field and history compatibility.
+
+use crate::transport::protocol::responses::CodexResponsesRequest;
 
 use std::collections::BTreeMap;
 
@@ -8,7 +10,7 @@ use serde_json::{Map, Value};
 struct LocalSchema;
 
 /// Sub2API compatibility alias, applied only to the selected native OAuth request.
-pub(crate) fn normalize_minimal_effort(request: &mut super::CodexResponsesRequest) {
+pub(crate) fn normalize_minimal_effort(request: &mut CodexResponsesRequest) {
     let Some(reasoning) = request
         .body_mut()
         .get_mut("reasoning")
@@ -264,8 +266,7 @@ mod tests {
             let body = json!({"model": model, "input": "test", "reasoning": {
                 "effort": " minimal ", "summary": "auto", "future_field": true
             }});
-            let mut request =
-                super::super::CodexResponsesRequest::from_body(body.as_object().unwrap().clone());
+            let mut request = CodexResponsesRequest::from_body(body.as_object().unwrap().clone());
             normalize_minimal_effort(&mut request);
             assert_eq!(
                 request.body()["reasoning"],
@@ -300,7 +301,7 @@ mod tests {
             json!({"effort": "max"}),
             json!({"effort": "future-effort"}),
         ] {
-            let mut request = super::super::CodexResponsesRequest::from_body(
+            let mut request = CodexResponsesRequest::from_body(
                 json!({"model": "synthetic", "reasoning": reasoning})
                     .as_object()
                     .unwrap()
@@ -310,7 +311,7 @@ mod tests {
             assert_eq!(request.body()["reasoning"], reasoning);
             assert!(request.requested_reasoning_effort.is_none());
         }
-        let mut request = super::super::CodexResponsesRequest::from_body(Map::new());
+        let mut request = CodexResponsesRequest::from_body(Map::new());
         normalize_minimal_effort(&mut request);
         assert!(request.body().is_empty());
     }

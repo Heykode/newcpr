@@ -293,7 +293,6 @@ fn engine_error_response_with_headers(
 fn encoding_error_response(error: &HttpEncodeError, format: &HttpResponseFormat) -> Response {
     protocol_error_response(
         match (error, format) {
-            (HttpEncodeError::Capacity(_), _) => StatusCode::SERVICE_UNAVAILABLE,
             (HttpEncodeError::Responses(_), _) => StatusCode::INTERNAL_SERVER_ERROR,
             (_, HttpResponseFormat::Responses) => StatusCode::INTERNAL_SERVER_ERROR,
             (_, HttpResponseFormat::Chat { .. }) => StatusCode::BAD_GATEWAY,
@@ -650,10 +649,14 @@ impl ResponsesStreamState {
                         .push_back(Bytes::from_static(DONE_SSE_FRAME.as_bytes()));
                     self.output_finished = true;
                 } else {
-                    let error = GatewayError::new(
-                        GatewayErrorKind::Internal,
-                        "gateway response ended without a complete response and finalized execution",
-                    );
+                    let error = if self.encoder.is_chat() {
+                        HttpEncodeError::ChatDelivery.gateway_error()
+                    } else {
+                        GatewayError::new(
+                            GatewayErrorKind::Internal,
+                            "gateway response ended without a complete response and finalized execution",
+                        )
+                    };
                     self.fail_delivery(error.clone()).await;
                     self.finish_with_gateway_error(error);
                 }

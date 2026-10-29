@@ -794,24 +794,16 @@ impl Provider for CodexProvider {
             lease.authentication(),
             crate::credential::CodexRuntimeAuthentication::OAuth(_)
         ) {
-            crate::transport::request::compatibility::default_missing_format_name(
-                upstream_request.body_mut(),
-            );
-            crate::transport::request::compatibility::normalize_custom_history_ids(
-                upstream_request.body_mut(),
-            );
-            crate::transport::request::compatibility::normalize_message_history_ids(
-                upstream_request.body_mut(),
-            );
-            crate::transport::request::normalize_reasoning_replay(upstream_request.body_mut());
+            crate::compat::default_missing_format_name(upstream_request.body_mut());
+            crate::compat::normalize_custom_history_ids(upstream_request.body_mut());
+            crate::compat::normalize_message_history_ids(upstream_request.body_mut());
+            crate::compat::normalize_reasoning_replay(upstream_request.body_mut());
             if !excel {
-                crate::transport::request::search_history::normalize_search_history(
+                crate::compat::normalize_search_history(
                     &mut upstream_request,
                     context.request_id().as_str(),
                 );
-                crate::transport::request::compatibility::normalize_minimal_effort(
-                    &mut upstream_request,
-                );
+                crate::compat::normalize_minimal_effort(&mut upstream_request);
             }
         }
         // Preserve the established identity/affinity inputs above. Only the

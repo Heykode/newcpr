@@ -634,11 +634,11 @@ fn validate_optional_client_version(
 
 fn map_wire_error(error: WireValidationError) -> AdminError {
     let message = match error.field() {
-        "settingsRefreshConcurrencyOverflow" => "refreshConcurrency 不合法".to_owned(),
-        "settingsMaxConcurrencyOverflow" => "maxConcurrentPerAccount 不合法".to_owned(),
-        "settingsUsageRetentionOverflow" => "usageRetentionDays 不合法".to_owned(),
-        "settingsOpsRetentionOverflow" => "opsEventRetentionDays 不合法".to_owned(),
-        "settingsAuditRetentionOverflow" => "auditRetentionDays 不合法".to_owned(),
+        "settingsRefreshConcurrencyOverflow" => "刷新并发数不合法".to_owned(),
+        "settingsMaxConcurrencyOverflow" => "单账号并发上限不合法".to_owned(),
+        "settingsUsageRetentionOverflow" => "用量记录保留天数不合法".to_owned(),
+        "settingsOpsRetentionOverflow" => "运维事件保留天数不合法".to_owned(),
+        "settingsAuditRetentionOverflow" => "审计记录保留天数不合法".to_owned(),
         "minCodexDesktopVersion" => "Codex Desktop 最低版本格式不合法".to_owned(),
         "minCodexCliVersion" => "Codex CLI 最低版本格式不合法".to_owned(),
         field => format!("{field} 字段不合法"),

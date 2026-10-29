@@ -79,7 +79,7 @@ pub fn protocol_error_response(status: StatusCode, body: ProtocolErrorBody) -> R
 pub fn missing_client_api_key_response() -> (StatusCode, Json<Value>) {
     openai_error_response(
         StatusCode::UNAUTHORIZED,
-        "Missing or invalid API key",
+        "Missing or invalid API key.",
         "invalid_request_error",
         "invalid_api_key",
     )
@@ -89,7 +89,7 @@ pub fn missing_client_api_key_response() -> (StatusCode, Json<Value>) {
 pub fn runtime_unavailable_response() -> (StatusCode, Json<Value>) {
     openai_error_response(
         StatusCode::SERVICE_UNAVAILABLE,
-        "Gateway runtime configuration is temporarily unavailable",
+        "Gateway configuration is temporarily unavailable.",
         "server_error",
         "runtime_configuration_unavailable",
     )
@@ -106,7 +106,7 @@ pub fn client_version_rejection_response(
     let (message, code, current_version) = match rejection.current() {
         Some(current) => (
             format!(
-                "{client_label} {current} is below the minimum required version {}. Upgrade {client_label} and retry.",
+                "{client_label} {current} is outdated. Upgrade to {} or later.",
                 rejection.min()
             ),
             "client_version_too_old",
@@ -114,15 +114,15 @@ pub fn client_version_rejection_response(
         ),
         None => (
             format!(
-                "A valid {client_label} version is required. Upgrade to version {} or newer and retry.",
-                rejection.min()
+                "Cannot read the {client_label} version. Check the User-Agent and version headers."
             ),
             "client_version_unavailable",
             None,
         ),
     };
+    // Codex 将 400 视为不可重试的请求错误，426 则会触发 WS 回退和 HTTP 重试
     (
-        StatusCode::UPGRADE_REQUIRED,
+        StatusCode::BAD_REQUEST,
         Json(json!({
             "error": {
                 "message": message,
@@ -140,7 +140,7 @@ pub fn client_version_rejection_response(
 pub fn model_not_found_response() -> (StatusCode, Json<Value>) {
     openai_error_response(
         StatusCode::NOT_FOUND,
-        "The requested model does not exist or is not available",
+        "The requested model does not exist or is not available.",
         "invalid_request_error",
         "model_not_found",
     )
@@ -152,7 +152,7 @@ pub fn gateway_error_from_engine(error: &EngineError) -> GatewayError {
     match error {
         EngineError::Provider(error) => GatewayError::from_provider(error),
         EngineError::Cancelled => {
-            GatewayError::new(GatewayErrorKind::Cancelled, "request was cancelled")
+            GatewayError::new(GatewayErrorKind::Cancelled, "Request was cancelled.")
         }
         EngineError::Deadline => {
             GatewayError::new(GatewayErrorKind::Timeout, "gateway request timed out")
@@ -160,7 +160,7 @@ pub fn gateway_error_from_engine(error: &EngineError) -> GatewayError {
         EngineError::ProviderNotRegistered { .. } | EngineError::EmptyRoutingPlan => {
             GatewayError::new(
                 GatewayErrorKind::NoAvailableProvider,
-                "no upstream provider is currently available for this request",
+                "No upstream provider is currently available for this request.",
             )
         }
         EngineError::Store(_)

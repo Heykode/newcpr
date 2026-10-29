@@ -108,9 +108,9 @@ impl fmt::Debug for AuthenticatedClient {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum ClientAuthenticationError {
-    #[error("client API key is invalid")]
+    #[error("Client API key is invalid.")]
     InvalidKey,
-    #[error("runtime snapshot is unavailable")]
+    #[error("Gateway configuration is unavailable.")]
     SnapshotUnavailable,
 }
 
@@ -427,11 +427,11 @@ impl DefaultExecutionService {
             .authenticate(request.client.policy.plaintext_key().expose_for_auth())
             .map_err(|error| match error {
                 ClientAuthenticationError::InvalidKey => {
-                    GatewayError::new(GatewayErrorKind::Unauthorized, "client API key is invalid")
+                    GatewayError::new(GatewayErrorKind::Unauthorized, "Client API key is invalid.")
                 }
                 ClientAuthenticationError::SnapshotUnavailable => GatewayError::new(
                     GatewayErrorKind::Internal,
-                    "runtime snapshot is unavailable",
+                    "Gateway configuration is unavailable.",
                 ),
             })?;
         let started_at = SystemTime::now();
@@ -446,7 +446,7 @@ impl DefaultExecutionService {
         {
             return Err(GatewayError::new(
                 GatewayErrorKind::PolicyDenied,
-                "Image generation is not allowed by the API key's account groups",
+                "Image generation is not allowed by the API key's account groups.",
             )
             .with_client_code("image_generation_disabled"));
         }
@@ -496,7 +496,7 @@ impl DefaultExecutionService {
                         {
                             return Err(GatewayError::new(
                                 GatewayErrorKind::PolicyDenied,
-                                "continuation does not belong to this client API key",
+                                "Continuation does not belong to this client API key.",
                             ));
                         }
                         Err(error) => {
@@ -507,7 +507,7 @@ impl DefaultExecutionService {
                             );
                             return Err(GatewayError::new(
                                 GatewayErrorKind::Internal,
-                                "continuation state is invalid",
+                                "Continuation state is invalid.",
                             ));
                         }
                     },
@@ -517,13 +517,13 @@ impl DefaultExecutionService {
                     Some(pin) if !pin.matches_client(request.client.policy.key_id()) => {
                         return Err(GatewayError::new(
                             GatewayErrorKind::PolicyDenied,
-                            "continuation does not belong to this client API key",
+                            "Continuation does not belong to this client API key.",
                         ));
                     }
                     Some(pin) if !request.client.policy.account_scope().allows(pin.account()) => {
                         return Err(GatewayError::new(
                             GatewayErrorKind::PolicyDenied,
-                            "continuation account is outside the client account scope",
+                            "Continuation account is outside the client account scope.",
                         ));
                     }
                     Some(pin)
@@ -534,7 +534,7 @@ impl DefaultExecutionService {
                     {
                         return Err(GatewayError::new(
                             GatewayErrorKind::NoAvailableProvider,
-                            "continuation provider is not available",
+                            "Continuation provider is not available.",
                         ));
                     }
                     Some(pin) => {
@@ -714,7 +714,7 @@ impl DefaultExecutionService {
                 return Err(if ticket.is_some() {
                     super::key_wait::timeout()
                 } else {
-                    GatewayError::new(GatewayErrorKind::Timeout, "request deadline elapsed")
+                    GatewayError::new(GatewayErrorKind::Timeout, "Request deadline elapsed.")
                 });
             }
             // Arm before sending, including cancellation while Redis's reply is in flight.
@@ -735,12 +735,12 @@ impl DefaultExecutionService {
             let cancelled = cancellation.cancelled().fuse();
             pin_mut!(acquire, timeout, cancelled);
             let decision = select_biased! {
-                () = cancelled => return Err(GatewayError::new(GatewayErrorKind::Cancelled, "request admission was cancelled")),
+                () = cancelled => return Err(GatewayError::new(GatewayErrorKind::Cancelled, "Request admission was cancelled.")),
                 result = acquire => result.map_err(|source| GatewayError::new(
-                    GatewayErrorKind::NoAvailableProvider, "request admission is temporarily unavailable",
+                    GatewayErrorKind::NoAvailableProvider, "Request admission is temporarily unavailable.",
                 ).with_source(source))?,
                 _ = timeout => return Err(if ticket.is_some() { super::key_wait::timeout() } else {
-                    GatewayError::new(GatewayErrorKind::Timeout, "request deadline elapsed")
+                    GatewayError::new(GatewayErrorKind::Timeout, "Request deadline elapsed.")
                 }),
             };
             match decision {
@@ -760,7 +760,7 @@ impl DefaultExecutionService {
                     {
                         return Err(GatewayError::new(
                             GatewayErrorKind::RateLimited,
-                            "request exceeds client API key limits",
+                            "Request exceeds client API key limits.",
                         ));
                     }
                     if ticket.is_none() {
@@ -784,7 +784,7 @@ impl DefaultExecutionService {
                         let cancelled = cancellation.cancelled().fuse();
                         pin_mut!(retry, cancelled);
                         select_biased! {
-                            () = cancelled => return Err(GatewayError::new(GatewayErrorKind::Cancelled, "request admission was cancelled")),
+                            () = cancelled => return Err(GatewayError::new(GatewayErrorKind::Cancelled, "Request admission was cancelled.")),
                             result = retry => result?,
                         }
                     }
@@ -858,7 +858,7 @@ impl DefaultExecutionService {
         let snapshot = self.snapshots.acquire().map_err(|_| {
             GatewayError::new(
                 GatewayErrorKind::Internal,
-                "runtime snapshot is unavailable",
+                "Gateway configuration is unavailable.",
             )
         })?;
         if recovery_config_revision.is_some_and(|revision| snapshot.revision().get() != revision) {
@@ -1033,12 +1033,12 @@ impl DefaultExecutionService {
         let snapshot = self.snapshots.acquire().map_err(|_| {
             GatewayError::new(
                 GatewayErrorKind::Internal,
-                "runtime snapshot is unavailable",
+                "Gateway configuration is unavailable.",
             )
         })?;
         let public_model =
             PublicModelId::new(upstream_model.as_str().to_owned()).map_err(|_| {
-                GatewayError::new(GatewayErrorKind::Unsupported, "requested model is invalid")
+                GatewayError::new(GatewayErrorKind::Unsupported, "Requested model is invalid.")
             })?;
         let routing_context = RoutingContext {
             required_provider: Some(provider_kind),
@@ -1049,11 +1049,11 @@ impl DefaultExecutionService {
             .map_err(map_routing_error)?;
         let started_at = SystemTime::now();
         let deadline_at = started_at.checked_add(DIAGNOSTIC_TIMEOUT).ok_or_else(|| {
-            GatewayError::new(GatewayErrorKind::Internal, "system clock is invalid")
+            GatewayError::new(GatewayErrorKind::Internal, "System clock is invalid.")
         })?;
         let request_id = new_request_id()?;
         let actor = ClientApiKeyId::new("admin_connection_test")
-            .map_err(|_| GatewayError::new(GatewayErrorKind::Internal, "invalid admin actor"))?;
+            .map_err(|_| GatewayError::new(GatewayErrorKind::Internal, "Invalid admin actor."))?;
         let new_request = NewModelRequest {
             id: request_id,
             client_api_key_id: None,
@@ -1853,8 +1853,9 @@ fn duration_ms(duration: Duration) -> u64 {
 }
 
 fn new_request_id() -> Result<ModelRequestId, GatewayError> {
-    ModelRequestId::new(format!("req_{}", Uuid::now_v7().simple()))
-        .map_err(|_| GatewayError::new(GatewayErrorKind::Internal, "failed to allocate request ID"))
+    ModelRequestId::new(format!("req_{}", Uuid::now_v7().simple())).map_err(|_| {
+        GatewayError::new(GatewayErrorKind::Internal, "Failed to allocate request ID.")
+    })
 }
 
 fn map_routing_error(error: crate::validation::RoutingError) -> GatewayError {
@@ -1865,20 +1866,20 @@ fn map_routing_error(error: crate::validation::RoutingError) -> GatewayError {
         } => GatewayError::new(
             GatewayErrorKind::ModelNotFound,
             if model == mapped_model {
-                "the requested model was not found in the provider catalogs available to this API key; check the model name"
+                "Model unavailable for this API key. Check the model name."
             } else {
-                "the requested model maps to an upstream model that was not found in the provider catalogs available to this API key; check the configured model mapping"
+                "Mapped model unavailable for this API key. Check the model mapping."
             },
         ),
         crate::validation::RoutingError::NoCapableProvider { .. }
         | crate::validation::RoutingError::NoCapableProviderEndpoint { .. }
         | crate::validation::RoutingError::EmptyAccountScope => GatewayError::new(
             GatewayErrorKind::NoAvailableProvider,
-            "no provider can execute this request",
+            "No provider can execute this request.",
         ),
         _ => GatewayError::new(
             GatewayErrorKind::Internal,
-            "runtime routing configuration is invalid",
+            "Runtime routing configuration is invalid.",
         ),
     }
 }
@@ -1905,23 +1906,23 @@ fn account_probe_error_from_engine(error: &EngineError) -> AccountProbeError {
 pub fn gateway_error_from_engine(error: &EngineError) -> GatewayError {
     match error {
         EngineError::Cancelled => {
-            GatewayError::new(GatewayErrorKind::Cancelled, "request was cancelled")
+            GatewayError::new(GatewayErrorKind::Cancelled, "Request was cancelled.")
         }
         EngineError::Deadline => {
-            GatewayError::new(GatewayErrorKind::Timeout, "request deadline elapsed")
+            GatewayError::new(GatewayErrorKind::Timeout, "Request deadline elapsed.")
         }
         EngineError::Provider(provider) => GatewayError::from_provider(provider),
         EngineError::Store(source) => {
-            GatewayError::new(GatewayErrorKind::Internal, "request execution failed")
+            GatewayError::new(GatewayErrorKind::Internal, "Request execution failed.")
                 .with_source(source.clone())
         }
         EngineError::EmptyRoutingPlan | EngineError::ProviderNotRegistered { .. } => {
             GatewayError::new(
                 GatewayErrorKind::NoAvailableProvider,
-                "no provider is available",
+                "No provider is available.",
             )
         }
-        _ => GatewayError::new(GatewayErrorKind::Internal, "request execution failed"),
+        _ => GatewayError::new(GatewayErrorKind::Internal, "Request execution failed."),
     }
 }
 

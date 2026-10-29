@@ -862,7 +862,7 @@ async fn subagent_header_should_not_replace_non_object_client_metadata() {
 }
 
 #[tokio::test]
-async fn xai_private_headers_should_not_enter_openai_request_facts() {
+async fn xai_headers_pass_through_without_becoming_codex_session_facts() {
     let peer = "192.0.2.10:443".parse().expect("peer address");
     let mut headers = HeaderMap::new();
     headers.insert("x-grok-turn-idx", "7".parse().expect("header"));
@@ -870,7 +870,14 @@ async fn xai_private_headers_should_not_enter_openai_request_facts() {
 
     let captured = captured_client_context(headers, peer).await;
 
-    assert!(captured.protocol_context.is_none());
+    let context = captured.protocol_context.as_ref().unwrap();
+    let entries = context["opaque_request_headers"].as_array().unwrap();
+    assert_eq!(entries.len(), 2);
+    for name in ["x-grok-turn-idx", "x-grok-conv-id"] {
+        assert!(entries.iter().any(|entry| entry[0] == name));
+    }
+    assert!(context.get("session_id").is_none());
+    assert!(context.get("conversation_id").is_none());
     assert!(captured.prompt_cache_key.is_none());
 }
 
@@ -1982,7 +1989,7 @@ async fn atomic_uncommitted_upstream_failure_batch_should_be_forwarded_once() {
     assert_eq!(body.matches("event: response.failed").count(), 1);
     assert!(body.contains(std::str::from_utf8(&raw_created).expect("created frame")));
     assert!(body.contains(std::str::from_utf8(&raw_failure).expect("failure frame")));
-    assert!(!body.contains("upstream capacity is temporarily unavailable"));
+    assert!(!body.contains("Upstream capacity is temporarily unavailable."));
     assert!(body.ends_with("data: [DONE]\n\n"));
     assert_eq!(trace.snapshot(), vec!["next_event", "commit", "next_error"]);
 }

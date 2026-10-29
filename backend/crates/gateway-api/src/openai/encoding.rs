@@ -2,7 +2,7 @@
 
 use bytes::Bytes;
 use gateway_core::{
-    error::{ClientVisibleUpstreamError, GatewayError, GatewayErrorKind},
+    error::{GatewayError, GatewayErrorKind},
     event::ProviderEvent,
 };
 use gateway_protocol::openai::{
@@ -16,6 +16,11 @@ use super::{
     error::{client_error_code, gateway_error_contract},
     responses::{OpenAiResponsesEncoder, ProtocolError, ProtocolErrorBody, ResponseEncodeError},
 };
+
+// Official chat_completions/delivery.rs distinguishes projection from framing failures.
+const CHAT_PROJECTION_ERROR: &str =
+    "The gateway could not project the upstream response to Chat Completions.";
+const CHAT_DELIVERY_ERROR: &str = "The gateway could not deliver the Chat response.";
 
 #[derive(Clone, Default)]
 pub(in crate::openai) enum HttpResponseFormat {
@@ -118,9 +123,6 @@ impl HttpResponseEncoder {
         events: &[ProviderEvent],
     ) -> Result<Value, HttpEncodeError> {
         if let Some(identity) = &self.chat_identity {
-            if let Some(error) = events.iter().find_map(chat_capacity_error) {
-                return Err(error);
-            }
             let response =
                 super::responses::collect_response(events).map_err(HttpEncodeError::Responses)?;
             return project_response(&response, identity).map_err(HttpEncodeError::Chat);
@@ -181,87 +183,48 @@ fn chat_sse_frame(value: Value) -> Bytes {
 }
 
 fn invalid_chat_response() -> HttpEncodeError {
-    HttpEncodeError::Chat(ProtocolErrorBody {
-        error: ProtocolError {
-            kind: "server_error",
-            code: "invalid_upstream_response",
-            message: "The gateway could not deliver the Chat response.".to_owned(),
-            param: None,
-        },
-    })
-}
-
-fn chat_capacity_error(event: &ProviderEvent) -> Option<HttpEncodeError> {
-    let wire = event
-        .wire_event()
-        .filter(|wire| wire.protocol() == "openai")?;
-    if ![
-        wire.event_type(),
-        wire.data().get("type").and_then(Value::as_str),
-    ]
-    .into_iter()
-    .any(|kind| matches!(kind, Some("error" | "response.failed")))
-    {
-        return None;
-    }
-    let error = ["/response/error", "/error"]
-        .into_iter()
-        .filter_map(|path| wire.data().pointer(path))
-        .find(|error| {
-            error
-                .get("code")
-                .and_then(Value::as_str)
-                .is_some_and(|code| client_error_code(code) != code)
-        })?;
-    let message = error
-        .get("message")
-        .and_then(Value::as_str)
-        .unwrap_or("upstream capacity is temporarily unavailable");
-    Some(HttpEncodeError::Capacity(ClientVisibleUpstreamError::new(
-        message,
-        error.get("code").and_then(Value::as_str).map(str::to_owned),
-        error.get("type").and_then(Value::as_str).map(str::to_owned),
-    )))
+    HttpEncodeError::ChatDelivery
 }
 
 #[derive(Debug)]
 pub(in crate::openai) enum HttpEncodeError {
     Responses(ResponseEncodeError),
     Chat(ProtocolErrorBody),
-    Capacity(ClientVisibleUpstreamError),
+    ChatDelivery,
 }
 
 impl HttpEncodeError {
     pub(in crate::openai) fn protocol_body(&self) -> ProtocolErrorBody {
         match self {
-            Self::Capacity(error) => ProtocolErrorBody {
+            Self::Responses(error) => error.protocol_body(),
+            Self::Chat(error) => ProtocolErrorBody {
                 error: ProtocolError {
                     kind: "server_error",
-                    code: "server_error",
-                    message: error.message().to_owned(),
+                    code: error.error.code,
+                    message: CHAT_PROJECTION_ERROR.to_owned(),
                     param: None,
                 },
             },
-            Self::Responses(error) => error.protocol_body(),
-            Self::Chat(error) => error.clone(),
+            Self::ChatDelivery => ProtocolErrorBody {
+                error: ProtocolError {
+                    kind: "server_error",
+                    code: "invalid_upstream_response",
+                    message: CHAT_DELIVERY_ERROR.to_owned(),
+                    param: None,
+                },
+            },
         }
     }
 
     pub(in crate::openai) fn gateway_error(&self) -> GatewayError {
-        if let Self::Capacity(error) = self {
-            return GatewayError::new(
-                GatewayErrorKind::UpstreamUnavailable,
-                "upstream capacity is temporarily unavailable",
-            )
-            .with_client_visible_upstream_error(error.clone());
-        }
-        GatewayError::new(
-            GatewayErrorKind::UpstreamUnavailable,
-            "upstream response could not be converted to the requested format",
-        )
-        .with_client_code(match self {
-            Self::Chat(error) => error.error.code,
-            _ => "incompatible_upstream_response",
-        })
+        let (message, code) = match self {
+            Self::Chat(error) => (CHAT_PROJECTION_ERROR, error.error.code),
+            Self::ChatDelivery => (CHAT_DELIVERY_ERROR, "invalid_upstream_response"),
+            Self::Responses(_) => (
+                "upstream response could not be converted to the requested format",
+                "incompatible_upstream_response",
+            ),
+        };
+        GatewayError::new(GatewayErrorKind::UpstreamUnavailable, message).with_client_code(code)
     }
 }
