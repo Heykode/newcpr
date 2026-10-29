@@ -95,7 +95,7 @@ Chat 入口不再透传旧 `use_websocket` 扩展。直接使用原生 Responses
 | --- | --- |
 | 新增交付专项 | 7 项通过；旧生产代码下 6 项失败、1 项准入控制通过，已复现遗漏 |
 | API 全量 | 599 项集成测试和 2 项单元测试通过，含原生 Responses/WS 回归 |
-| App 完整测试目标 | 命令通过；62 项中 59 项实际执行，3 项 PostgreSQL/Redis 用例因未配置环境提前返回，不计为验证通过 |
+| App 完整测试目标 | 后续补齐独立 PostgreSQL/Redis 配置并设置 `CI=true`，62 项全部实际执行通过，无跳过 |
 | 工作区所有目标编译 | `cargo check --workspace --all-targets --locked --offline` 通过 |
 | API Clippy | 所有目标和特性通过，`-D warnings` |
 | 格式检查 | `cargo fmt --all --check` 通过 |
@@ -105,5 +105,19 @@ Chat 入口不再透传旧 `use_websocket` 扩展。直接使用原生 Responses
 首次全量因新增测试文件未登记而失败，补登记后重新跑完整 API 套件通过。
 本轮未修改协议库或 Provider，因此不将首次替换的传输测试声称为本轮重跑。
 
+首次 App 执行漏配数据库环境，3 项账号身份用例提前返回；这属于验证遗漏。
+交付补齐已提交为 `b0898a74f` 后，在指定远端建立临时隔离 PostgreSQL/Redis，
+启用独立密码和 `CI=true`（缺少数据库配置直接失败），重新执行完整 App 目标。
+3 项用例分别验证以下规则，均通过真实测试数据库完成，测试服务已清理：
+
+| 用例 | 验证内容 |
+| --- | --- |
+| `manual_rotation_commits_same_principal_and_rejects_conflict_or_unknown_without_pg_changes` | 合法更新凭据保留设备身份；账号主体冲突或无法确认时拒绝写库 |
+| `same_principal_reimport_uses_real_codec_and_keeps_the_persisted_device` | 重复导入同一账号更新凭据，保留原账号和设备身份，不新增重复账号 |
+| `loopback_reauthorization_rejects_wrong_or_unknown_principals_without_pg_changes` | 模拟 OAuth 重登返回其他账号或无法确认身份时，拒绝覆盖原账号数据 |
+
+上述用例属于账号身份与持久化集成，不是 Chat 文本、工具或流式转换功能。
+补测没有修改生产代码或数据库结构，也没有接触生产数据库。
+
 这些是协议与模拟传输验证，未使用真实上游账号发起请求，不能证明账号风控或真实
-上游成功率。交付补齐修改尚未提交、推送、发布或部署。
+上游成功率。交付补齐已本地提交，尚未推送、发布或部署。
