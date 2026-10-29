@@ -175,8 +175,7 @@ pub(in crate::openai) async fn collect_execution_response_as(
         Ok(events) => events,
         Err(error) => {
             let response_headers = session.response_headers().to_vec();
-            let response =
-                engine_error_response_with_headers_as(&error, &response_headers, &format);
+            let response = engine_error_response_with_headers(&error, &response_headers);
             return execution.record_response_status(response).await;
         }
     };
@@ -205,7 +204,7 @@ pub(in crate::openai) async fn collect_execution_response_as(
         .commit_downstream(Some(StatusCode::OK.as_u16()))
         .await
     {
-        let response = engine_error_response_with_headers_as(&error, &response_headers, &format);
+        let response = engine_error_response_with_headers(&error, &response_headers);
         let response = execution.record_response_status(response).await;
         execution
             .fail_delivery(gateway_error_from_engine(&error))
@@ -265,42 +264,11 @@ fn apply_response_headers(
     response
 }
 
-fn engine_error_response_with_headers_as(
+fn engine_error_response_with_headers(
     error: &EngineError,
     response_headers: &[ProviderResponseHeader],
-    format: &HttpResponseFormat,
 ) -> Response {
-    let response = match format {
-        HttpResponseFormat::Responses => engine_error_response(error),
-        HttpResponseFormat::Chat { .. } => {
-            let gateway = gateway_error_from_engine(error);
-            let capacity_unavailable = matches!(error, EngineError::Provider(provider)
-                if provider.kind() == gateway_core::error::ProviderErrorKind::UpstreamCapacityUnavailable)
-                || gateway
-                    .client_error_code()
-                    .is_some_and(|code| super::super::error::client_error_code(code) != code);
-            let mut response = gateway_error_response(&gateway);
-            if let EngineError::Provider(error) = error
-                && let Some(upstream) = error.client_visible_upstream_response()
-            {
-                if let Ok(status) = StatusCode::from_u16(upstream.status())
-                    && (status.is_client_error() || status.is_server_error())
-                {
-                    *response.status_mut() = status;
-                }
-                response = apply_response_headers(response, upstream.headers());
-            } else if let EngineError::Provider(error) = error
-                && let Some(request_id) = error.upstream_request_id()
-                && let Ok(value) = HeaderValue::from_str(request_id.as_str())
-            {
-                response.headers_mut().insert("x-request-id", value);
-            }
-            if capacity_unavailable {
-                *response.status_mut() = StatusCode::SERVICE_UNAVAILABLE;
-            }
-            response
-        }
-    };
+    let response = engine_error_response(error);
     let failure_request_ids: Vec<_> = ["x-request-id", "x-oai-request-id"]
         .into_iter()
         .flat_map(|name| {
@@ -347,15 +315,20 @@ pub(in crate::openai) async fn stream_execution_response_as(
     connection_guard: Option<Box<dyn ConnectionGuard>>,
     format: HttpResponseFormat,
 ) -> Response {
+    let commit = session.response_commit();
     if matches!(format, HttpResponseFormat::Responses) {
-        let commit = session.response_commit();
         super::keepalive::response(
             stream_execution_response_inner(session, connection_guard, format),
             commit,
         )
         .await
     } else {
-        stream_execution_response_inner(session, connection_guard, format).await
+        super::keepalive::response_with_encoder(
+            stream_execution_response_inner(session, connection_guard, format),
+            commit,
+            Some(crate::openai::chat::chat_error_frame),
+        )
+        .await
     }
 }
 
@@ -384,8 +357,7 @@ async fn stream_execution_response_inner(
             }
             Err(error) => {
                 let response_headers = session.response_headers().to_vec();
-                let response =
-                    engine_error_response_with_headers_as(&error, &response_headers, &format);
+                let response = engine_error_response_with_headers(&error, &response_headers);
                 return execution.record_response_status(response).await;
             }
         };
@@ -433,8 +405,7 @@ async fn stream_execution_response_inner(
             };
             if let Err(error) = session.defer_downstream_commit() {
                 let response_headers = session.response_headers().to_vec();
-                let response =
-                    engine_error_response_with_headers_as(&error, &response_headers, &format);
+                let response = engine_error_response_with_headers(&error, &response_headers);
                 let response = execution.record_response_status(response).await;
                 execution
                     .fail_delivery(gateway_error_from_engine(&error))
@@ -460,7 +431,7 @@ async fn stream_execution_response_inner(
         .commit_downstream(Some(StatusCode::OK.as_u16()))
         .await
     {
-        let response = engine_error_response_with_headers_as(&error, &response_headers, &format);
+        let response = engine_error_response_with_headers(&error, &response_headers);
         let response = execution.record_response_status(response).await;
         execution
             .fail_delivery(gateway_error_from_engine(&error))

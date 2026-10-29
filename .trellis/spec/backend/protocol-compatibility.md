@@ -182,6 +182,24 @@ or multipart image editing. These contracts extend, not replace,
   terminal output can use only complete, contiguous, nonconflicting done items
   from the same response. Do not apply legacy delta recovery to Chat.
   Native Responses keeps its separate existing recovery path.
+- Source equality of the request/response codec is not endpoint parity. Audit
+  admission, first-event waits, upstream HTTP failures and finalization separately.
+  After successful admission, Chat uses the official 15-second initial keepalive
+  and optional Chat error encoder while native Responses keeps the default encoder.
+  Poll the same pending future without restarting it; a heartbeat records HTTP
+  status but must not commit business delivery or synthesize a successful result.
+- Before HTTP commitment, preserve client-visible upstream bytes, content type,
+  status and forwardable headers through engine_error_response. Do not rebuild a
+  Chat-only generic error and discard recovery fields. Keep existing capacity
+  projection and failure-request-ID precedence over opening IDs.
+- After initial keepalive, use the copied official chat_error_frame for Chat
+  errors, preserve recovery fields and Retry-After, then emit exactly one DONE.
+  Do not send response.failed to Chat. Admission rejection still returns its
+  original HTTP error, and native Responses retains its existing SSE contract.
+- Regress a four-minute first-event wait, both early and late errors, JSON and
+  non-JSON bodies, capacity projection, cancellation and admission rejection at
+  the endpoint. Exercise native Responses alongside Chat; codec-only tests do not
+  cover these integration boundaries.
 
 ## Compaction
 

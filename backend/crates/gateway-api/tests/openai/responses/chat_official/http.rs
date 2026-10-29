@@ -4,7 +4,7 @@ use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, AtomicUsize, Ordering},
 };
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use axum::{
     Router,
@@ -18,7 +18,7 @@ use axum::{
 use futures::future::BoxFuture;
 use gateway_core::engine::execution::{
     AuthenticatedClient, ClientAuthenticationError, ExecutionService, ExecutionSession,
-    StartExecution, StartProviderExecution, StartedExecution,
+    ResponseCommit, StartExecution, StartProviderExecution, StartedExecution,
 };
 use gateway_core::engine::{CommitRequirement, CoordinatedEvent, EngineError, ModelRequestId};
 use gateway_core::error::GatewayError;
@@ -133,6 +133,8 @@ pub(super) struct Captured {
 pub(super) struct Execution {
     pub client: AuthenticatedClient,
     pub captured: Mutex<Option<Captured>>,
+    pub start_delay: Option<Duration>,
+    pub start_error: Option<GatewayError>,
     session: Mutex<Option<Session>>,
     trace: Arc<Trace>,
 }
@@ -142,6 +144,8 @@ impl Execution {
         Self {
             client: authenticated_client_for_provider(KEY, "openai"),
             captured: Mutex::new(None),
+            start_delay: None,
+            start_error: None,
             session: Mutex::new(Some(session)),
             trace: Arc::new(Trace::default()),
         }
@@ -171,6 +175,12 @@ impl ExecutionService for Execution {
         request: StartExecution,
     ) -> BoxFuture<'_, Result<StartedExecution, GatewayError>> {
         Box::pin(async move {
+            if let Some(delay) = self.start_delay {
+                tokio::time::sleep(delay).await;
+            }
+            if let Some(error) = &self.start_error {
+                return Err(error.clone());
+            }
             let Operation::Generate(generation) = &request.operation else {
                 panic!("Chat must use the existing Generate operation");
             };
@@ -288,6 +298,10 @@ impl ChatSession {
 }
 
 impl ExecutionSession for ChatSession {
+    fn response_commit(&self) -> ResponseCommit {
+        self.inner.response_commit()
+    }
+
     fn next_event(&mut self) -> BoxFuture<'_, Result<Option<CoordinatedEvent>, EngineError>> {
         Box::pin(async move {
             let cancelled = self.cancelled.load(Ordering::Acquire);

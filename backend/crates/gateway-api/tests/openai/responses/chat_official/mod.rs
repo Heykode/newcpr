@@ -1,5 +1,6 @@
 //! Chat Completions 的请求转换、输出投影与 HTTP 生命周期测试
 
+mod delivery_parity;
 mod http;
 mod lifecycle;
 mod request;
