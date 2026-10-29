@@ -138,27 +138,30 @@ fn reasoning_accepts_summary_and_content_and_skips_unmapped_parts() {
 }
 
 #[test]
-fn tools_preserve_raw_inputs_order_duplicates_and_optional_identity() {
+fn tools_preserve_raw_inputs_order_and_optional_internal_item_identity() {
     let arguments = "  {\"x\":1, \"unfinished\": \n";
     let custom_input = "*** Begin Patch\n+print(\"raw \\\\ input\")\n*** End Patch";
     let native = completed(vec![
-        json!({"type":"function_call","call_id":"same","name":"lookup",
+        json!({"type":"function_call","call_id":"call_one","name":"lookup","id":"same",
             "namespace":{"unknown":true},"arguments":arguments}),
-        json!({"type":"custom_tool_call","call_id":"same","name":"code",
+        json!({"type":"custom_tool_call","call_id":"call_two","name":"code","id":"same",
             "namespace":"custom","input":custom_input}),
-        json!({"type":"function_call"}),
+        json!({"type":"function_call","call_id":"call_three","name":"lookup"}),
     ]);
     let output = chat_response(&native).unwrap();
     let tools = output["choices"][0]["message"]["tool_calls"]
         .as_array()
         .unwrap();
     assert_eq!(tools.len(), 3);
-    assert_eq!(tools[0]["id"], "same");
+    assert_eq!(tools[0]["id"], "call_one");
     assert_eq!(tools[0]["function"]["arguments"], arguments);
-    assert_eq!(tools[1]["id"], "same");
+    assert_eq!(tools[1]["id"], "call_two");
     assert_eq!(tools[1]["function"]["arguments"], custom_input);
-    assert_eq!(tools[2]["id"], "");
-    assert_eq!(tools[2]["function"], json!({"name":"","arguments":""}));
+    assert_eq!(tools[2]["id"], "call_three");
+    assert_eq!(
+        tools[2]["function"],
+        json!({"name":"lookup","arguments":""})
+    );
     assert!(tools.iter().all(|tool| tool["type"] == "function"));
     assert!(tools.iter().all(|tool| tool.get("custom").is_none()));
     assert!(output["choices"][0]["message"]["content"].is_null());
@@ -183,8 +186,8 @@ fn tolerant_string_fields_keep_numbers_exact_and_do_not_parse_raw_strings() {
     ] {
         let mut native = completed(vec![
             json!({"type":"message","content":[{"type":"output_text","text":value}]}),
-            json!({"type":"function_call","call_id":value,"name":value,"arguments":value}),
-            json!({"type":"custom_tool_call","call_id":value,"name":value,"input":value}),
+            json!({"type":"function_call","call_id":"call_one","name":"lookup","arguments":value}),
+            json!({"type":"custom_tool_call","call_id":"call_two","name":"code","input":value}),
         ]);
         native["id"] = value.clone();
         native["model"] = value;
@@ -197,9 +200,12 @@ fn tolerant_string_fields_keep_numbers_exact_and_do_not_parse_raw_strings() {
         } else {
             assert_eq!(message["content"], expected);
         }
-        for tool in message["tool_calls"].as_array().unwrap() {
-            assert_eq!(tool["id"], expected);
-            assert_eq!(tool["function"]["name"], expected);
+        for (tool, id, name) in [
+            (&message["tool_calls"][0], "call_one", "lookup"),
+            (&message["tool_calls"][1], "call_two", "code"),
+        ] {
+            assert_eq!(tool["id"], id);
+            assert_eq!(tool["function"]["name"], name);
             assert_eq!(tool["function"]["arguments"], expected);
         }
     }

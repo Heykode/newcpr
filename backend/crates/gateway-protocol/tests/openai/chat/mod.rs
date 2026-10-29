@@ -948,4 +948,5 @@ mod output_extensions;
 mod reasoning;
 mod request_extensions;
 
+mod buffered_tool_identity;
 mod upstream;

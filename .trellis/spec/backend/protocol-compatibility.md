@@ -386,6 +386,15 @@ selection, transport retry budgets, identity or canonical billing.
   wire usage fields are omitted, not grounds to reject an otherwise valid
   reply. Canonical metering, costs, budget settlement and DB deduplication
   remain unchanged.
+- Buffered function/custom calls require nonempty string call IDs and names;
+  call IDs must be unique across both tool types within one response. Preserve
+  exact accepted values and raw argument/input strings, including non-JSON input.
+  Do not enforce uniqueness of optional internal item IDs that Chat does not use.
+  Invalid tool identity fails before successful downstream commit via the existing
+  502 delivery-failure lifecycle; native Responses and streamed Chat keep their
+  own rules. Cover invalid output, rejected followup before account execution,
+  and valid custom/image/reasoning roundtrips. Output validation occurs after
+  upstream execution and is not evidence of reduced account risk.
 - Chat streaming must not clone the final Responses object just to observe
   completion. Before enqueueing successful finish/usage, require the existing
   execution finalization to succeed, including terminal-first replies.
@@ -413,6 +422,8 @@ selection, transport retry budgets, identity or canonical billing.
 | Completed first, execution finalization fails | Error only; no successful finish or usage |
 | JSON format plus search/images | Original JSON content remains valid JSON |
 | No image/search tool requested | No automatic tool declaration |
+| Buffered tool has missing/blank/non-string ID or name, or duplicate call ID | Protocol output error; HTTP 502 `incompatible_upstream_response`, one failure finalization |
+| Buffered valid custom/function identity with raw non-JSON input | Preserve input exactly; next Chat turn restores tool identity |
 
 ### Good, Base, Bad
 
@@ -444,6 +455,12 @@ Chat ID/usage conventions and public failure lifecycle; convergence does not
 authorize replacing networking, scheduling or accounting with CPA's executors.
 
 ### Wrong vs Correct
+
+Wrong: return unusable buffered tool identities as success or tighten all
+extension fields to imitate a narrower upstream converter.
+
+Correct: validate call identity against the next-turn ingress contract in
+`chat_response`, preserving custom input, images, reasoning and native routes.
 
 Wrong: discard an empty encoded first frame then immediately call `next_event`,
 or commit an empty 200 to unlock the session.

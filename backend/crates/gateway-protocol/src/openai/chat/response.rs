@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::collections::BTreeSet;
 
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -67,6 +68,7 @@ pub fn chat_response(response: &Value) -> Result<Value> {
     let mut refusal = String::new();
     let mut reasoning = String::new();
     let mut tools = Vec::new();
+    let mut tool_ids = BTreeSet::new();
     let mut images = Vec::new();
     for item in response["output"].as_array().into_iter().flatten() {
         match item["type"].as_str() {
@@ -93,16 +95,27 @@ pub fn chat_response(response: &Value) -> Result<Value> {
                 }
             }
             Some("function_call" | "custom_tool_call") => {
+                let call_id = item["call_id"]
+                    .as_str()
+                    .filter(|id| !id.trim().is_empty())
+                    .ok_or_else(|| Error::output("output.call_id"))?;
+                let name = item["name"]
+                    .as_str()
+                    .filter(|name| !name.trim().is_empty())
+                    .ok_or_else(|| Error::output("output.name"))?;
+                if !tool_ids.insert(call_id) {
+                    return Err(Error::output("output.call_id"));
+                }
                 let input_field = if item["type"] == "custom_tool_call" {
                     "input"
                 } else {
                     "arguments"
                 };
                 tools.push(json!({
-                    "id":string_value(&item["call_id"]),
+                    "id":call_id,
                     "type":"function",
                     "function":{
-                        "name":string_value(&item["name"]),
+                        "name":name,
                         "arguments":string_value(&item[input_field])
                     }
                 }));

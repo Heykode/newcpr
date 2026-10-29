@@ -2125,6 +2125,20 @@ fn unknown_wire_event_before_response_identity_is_discarded_with_retried_attempt
 
 #[test]
 fn discarded_attempt_observation_does_not_leak_into_retry_result() {
+    check_discarded_attempt_observation(false, true);
+}
+
+#[test]
+fn atomic_failure_observation_does_not_leak_into_retry_result() {
+    check_discarded_attempt_observation(true, true);
+}
+
+#[test]
+fn atomic_failure_observation_fills_missing_error_identity_and_status() {
+    check_discarded_attempt_observation(true, false);
+}
+
+fn check_discarded_attempt_observation(atomic: bool, explicit_error_identity: bool) {
     let operation = generate_operation();
     let route_plan = plan(&operation);
     let first_observation = ProviderResponseObservation::new(
@@ -2153,24 +2167,29 @@ fn discarded_attempt_observation_does_not_leak_into_retry_result() {
             .into_iter()
             .map(canonical_provider_event),
     );
+    let observation_event = ProviderEvent::observation(first_observation);
+    let mut failure = ProviderError::new(ProviderErrorKind::Unavailable, UpstreamSendState::Sent)
+        .with_replay_safe()
+        .with_diagnostic(
+            gateway_core::error::ProviderDiagnostic::new("response event idle timeout after 300s")
+                .with_classification("receive", "receive_idle_timeout"),
+        );
+    if explicit_error_identity {
+        failure = failure
+            .with_status(504)
+            .with_upstream_request_id(OpaqueUpstreamValue::new("discarded-error"));
+    }
+    let first_items = if atomic {
+        vec![Err(
+            failure.with_atomic_client_events(vec![observation_event])
+        )]
+    } else {
+        vec![Ok(observation_event), Err(failure)]
+    };
     let (coordinator, store, _) = coordinator(vec![
         Script::ObservedStream {
             account_id: "acct_first",
-            items: vec![
-                Ok(ProviderEvent::observation(first_observation)),
-                Err(
-                    ProviderError::new(ProviderErrorKind::Unavailable, UpstreamSendState::Sent)
-                        .with_status(504)
-                        .with_upstream_request_id(OpaqueUpstreamValue::new("discarded-error"))
-                        .with_replay_safe()
-                        .with_diagnostic(
-                            gateway_core::error::ProviderDiagnostic::new(
-                                "response event idle timeout after 300s",
-                            )
-                            .with_classification("receive", "receive_idle_timeout"),
-                        ),
-                ),
-            ],
+            items: first_items,
         },
         Script::ObservedStream {
             account_id: "acct_second",
@@ -2233,10 +2252,20 @@ fn discarded_attempt_observation_does_not_leak_into_retry_result() {
             .first_event_ms
             .is_some_and(|elapsed| elapsed < 987_654)
     );
-    assert_eq!(state.intermediate_status_codes, vec![Some(504)]);
+    assert_eq!(
+        state.intermediate_status_codes,
+        vec![Some(if explicit_error_identity { 504 } else { 503 })]
+    );
     assert_eq!(
         state.intermediate_request_ids,
-        vec![Some("discarded-error".to_owned())]
+        vec![Some(
+            if explicit_error_identity {
+                "discarded-error"
+            } else {
+                "discarded-request"
+            }
+            .to_owned()
+        )]
     );
 }
 
@@ -3989,13 +4018,20 @@ fn explicit_429_after_structural_event_should_retry_before_commit() {
 fn atomic_response_failed_should_rotate_account_before_stream_commit() {
     let operation = generate_operation();
     let route_plan = plan(&operation);
+    let mut failure = atomic_response_failed("response-first-failed", "first account failure");
+    let mut events = failure.take_atomic_client_events();
+    events.insert(
+        0,
+        ProviderEvent::observation(
+            ProviderResponseObservation::new(UpstreamTransport::new("http_sse").unwrap())
+                .with_status_code(200)
+                .with_request_id(OpaqueUpstreamValue::new("upstream-failed-attempt")),
+        ),
+    );
     let (coordinator, store, provider) = coordinator(vec![
         Script::ObservedStream {
             account_id: "acct_first",
-            items: vec![Err(atomic_response_failed(
-                "response-first-failed",
-                "first account failure",
-            ))],
+            items: vec![Err(failure.with_atomic_client_events(events))],
         },
         Script::Stream {
             account_id: "acct_second",
@@ -4038,6 +4074,15 @@ fn atomic_response_failed_should_rotate_account_before_stream_commit() {
     let state = store.state.lock().expect("store lock");
     assert_eq!(state.commits, 1);
     assert_eq!(state.intermediate_failures, 1);
+    assert_eq!(
+        state.intermediate_request_ids,
+        [Some("upstream-failed-attempt".to_owned())]
+    );
+    assert_eq!(state.intermediate_status_codes, [Some(429)]);
+    assert_eq!(
+        state.finalizations[0].upstream_request_id.as_deref(),
+        Some("upstream-request")
+    );
     assert_eq!(state.finalizations[0].outcome, ExecutionOutcome::Succeeded);
 }
 
@@ -4172,6 +4217,13 @@ fn empty_selection_after_atomic_failure_should_deliver_the_last_upstream_wire() 
     let route_plan = plan(&operation);
     let mut failure = bare_atomic_response_failed("response-only-failed");
     let mut events = failure.take_atomic_client_events();
+    events.insert(
+        0,
+        ProviderEvent::observation(
+            ProviderResponseObservation::new(UpstreamTransport::new("http_sse").unwrap())
+                .with_request_id(OpaqueUpstreamValue::new("restored-failure-request")),
+        ),
+    );
     events.push(ProviderEvent::canonical(GatewayEvent::ProviderCost(
         ProviderReportedCost::from_usd_ticks(500).unwrap(),
     )));
@@ -4227,6 +4279,13 @@ fn empty_selection_after_atomic_failure_should_deliver_the_last_upstream_wire() 
     let state = store.state.lock().expect("store lock");
     assert_eq!(state.attempts.len(), 1);
     assert_eq!(state.intermediate_failures, 1);
+    assert_eq!(
+        state.intermediate_request_ids,
+        [Some("restored-failure-request".to_owned())]
+    );
+    // No attempt is active after selection exhaustion; its diagnostics belong
+    // to the recorded intermediate attempt, not a synthetic new account.
+    assert_eq!(state.finalizations[0].upstream_request_id, None);
     assert_eq!(state.finalizations[0].outcome, ExecutionOutcome::Incomplete);
     assert_eq!(
         state.finalizations[0].client_response_id.as_deref(),

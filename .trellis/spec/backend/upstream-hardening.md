@@ -90,6 +90,19 @@ new chain. Keep the separate Excel replay contract.
 
 ## 4. Validation Matrix
 
+### Atomic Failure Observations
+
+- Read response observations attached to a failure batch before taking the
+  current attempt or restoring a previous batch. Follow upstream `b8479b59`.
+- Only observe diagnostics here; never consume metering or canonical facts
+  ahead of the existing retry/terminal owners. Explicit error identity/status
+  wins over observed fallback. Reset discarded observations before the next
+  account and preserve transport compatibility checks.
+- Test missing error ID/status fallback, explicit-value precedence, successful
+  account isolation and retained terminal delivery without duplicate charges.
+  No-active-attempt finalization must not fabricate a new account identity;
+  previous attempt diagnostics remain in its intermediate failure record.
+
 ### v3.29.6 建连恢复
 
 - WS origin breaker 只统计真实 opening 结果；前台快速回退不是建连失败。

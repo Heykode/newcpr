@@ -59,7 +59,7 @@ pub(super) enum Scenario {
 
 pub(super) struct ChatExecution {
     client: AuthenticatedClient,
-    captured: Mutex<Vec<Value>>,
+    pub(super) captured: Mutex<Vec<Value>>,
     pub(super) trace: Arc<Trace>,
     scenario: Scenario,
     pub(super) script: Mutex<Option<Script>>,
