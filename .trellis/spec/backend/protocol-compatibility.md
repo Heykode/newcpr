@@ -182,6 +182,20 @@ or multipart image editing. These contracts extend, not replace,
   terminal output can use only complete, contiguous, nonconflicting done items
   from the same response. Do not apply legacy delta recovery to Chat.
   Native Responses keeps its separate existing recovery path.
+- Do not scan buffered Chat events for capacity failures before that collector.
+  A collected wire failure without a terminal returns the official collection
+  error (500, invalid_upstream_response), whereas an actual provider HTTP capacity
+  failure still uses engine_error_response's official 503 projection. A valid
+  terminal must not be overridden by a separate scan. Cover both error and
+  response.failed with slow_down/server_is_overloaded, plus a noncapacity control.
+  The delivery_parity buffered_wire_failure, buffered_terminal and streamed_capacity
+  tests own these assertions; assert body, status, headers and one-time finalization.
+- Match official delivery.rs projection_error and invalid_response messages, not
+  just the presence of an error. Projection uses the official projection message
+  and converter code; framing/EOF uses the official delivery message and
+  invalid_upstream_response. Before commitment return JSON 502; after commitment
+  send error SSE without successful finish/usage. Missing stream terminals must
+  not fall through to the native Responses internal_error branch.
 - Source equality of the request/response codec is not endpoint parity. Audit
   admission, first-event waits, upstream HTTP failures and finalization separately.
   After successful admission, Chat uses the official 15-second initial keepalive
@@ -200,6 +214,11 @@ or multipart image editing. These contracts extend, not replace,
   non-JSON bodies, capacity projection, cancellation and admission rejection at
   the endpoint. Exercise native Responses alongside Chat; codec-only tests do not
   cover these integration boundaries.
+- For future upstream synchronization use docs/upstream-integration-checklist.md
+  and update docs/chat-official-parity.md with the pinned source and remaining
+  runtime differences. A matching helper cannot prove equivalence when a caller
+  short-circuits before it. Do not label the native connection-draining 503 as
+  identical to the official middleware-fault 502; neither changes Chat conversion.
 
 ## Compaction
 

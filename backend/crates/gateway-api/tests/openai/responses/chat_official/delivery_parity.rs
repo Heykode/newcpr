@@ -21,10 +21,11 @@ use tower::ServiceExt;
 
 use super::super::http::{NextStep, delivery_provider};
 use super::{
-    chat_request, completed,
+    chat_request, completed, created,
     http::{Execution, Fixture, KEY, Session, json_body},
     message,
     response::sse_body,
+    wire,
 };
 
 fn upstream_failure(kind: ProviderErrorKind, status: u16, body: Bytes) -> EngineError {
@@ -43,6 +44,157 @@ fn upstream_failure(kind: ProviderErrorKind, status: u16, body: Bytes) -> Engine
             ]),
         ),
     )
+}
+
+fn capacity_event(kind: &str, code: &str) -> gateway_core::event::ProviderEvent {
+    let error = json!({"type":"server_error","code":code,"message":"synthetic capacity failure"});
+    wire(
+        kind,
+        if kind == "response.failed" {
+            json!({"response":{"id":"resp_chat_test","status":"failed","error":error}})
+        } else {
+            json!({"error":error})
+        },
+    )
+}
+
+// Pinned official buffered delivery collects the terminal before projecting Chat.
+// A failed wire event is not the same boundary as an upstream HTTP failure.
+#[tokio::test]
+async fn buffered_wire_failure_uses_official_collection_error() {
+    for kind in ["error", "response.failed"] {
+        for code in ["slow_down", "server_is_overloaded", "rate_limit_exceeded"] {
+            let fixture = Fixture::new(Session::new(vec![capacity_event(kind, code)])).await;
+            let response = fixture.post(chat_request(false)).await;
+            assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+            assert_eq!(response.headers()["content-type"], "application/json");
+            assert!(!response.headers().contains_key("retry-after"));
+            assert_eq!(
+                json_body(response).await,
+                json!({"error":{
+                    "type":"server_error",
+                    "code":"invalid_upstream_response",
+                    "message":"The gateway could not forward the upstream response."
+                }})
+            );
+            assert_eq!(fixture.trace.commits.load(Ordering::SeqCst), 0);
+            assert_eq!(fixture.trace.calls.client_statuses(), vec![500]);
+            assert_eq!(
+                fixture
+                    .trace
+                    .calls
+                    .snapshot()
+                    .iter()
+                    .filter(|call| **call == "delivery_failed")
+                    .count(),
+                1
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn buffered_terminal_is_not_overridden_by_a_separate_capacity_scan() {
+    for kind in ["error", "response.failed"] {
+        for code in ["slow_down", "server_is_overloaded"] {
+            let fixture = Fixture::new(Session::new(vec![
+                capacity_event(kind, code),
+                completed(json!([message("completed result")])),
+            ]))
+            .await;
+            let response = fixture.post(chat_request(false)).await;
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(response.headers()["content-type"], "application/json");
+            assert!(!response.headers().contains_key("retry-after"));
+            let body = json_body(response).await;
+            assert_eq!(body["choices"][0]["message"]["content"], "completed result");
+            assert_eq!(body["choices"][0]["finish_reason"], "stop");
+            assert_eq!(body["usage"]["total_tokens"], 18);
+            assert!(body.get("error").is_none());
+            assert_eq!(fixture.trace.commits.load(Ordering::SeqCst), 1);
+        }
+    }
+}
+
+#[tokio::test]
+async fn streamed_capacity_failure_keeps_official_error_projection() {
+    for kind in ["error", "response.failed"] {
+        for code in ["slow_down", "server_is_overloaded"] {
+            let fixture = Fixture::new(Session::new(vec![capacity_event(kind, code)])).await;
+            let response = fixture.post(chat_request(true)).await;
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(response.headers()["content-type"], "text/event-stream");
+            let (text, chunks) = sse_body(response).await;
+            assert_eq!(
+                chunks,
+                vec![json!({"error":{
+                    "type":"server_error", "code":"server_error", "message":"synthetic capacity failure"
+                }})]
+            );
+            assert_eq!(text.matches("data: [DONE]").count(), 1);
+            assert!(!text.contains("response.failed"));
+            assert_eq!(fixture.trace.commits.load(Ordering::SeqCst), 1);
+        }
+    }
+}
+
+#[tokio::test]
+async fn missing_stream_terminal_uses_official_delivery_error() {
+    let fixture = Fixture::new(Session::new(vec![created()])).await;
+    let (_, chunks) = sse_body(fixture.post(chat_request(true)).await).await;
+    let errors: Vec<_> = chunks
+        .iter()
+        .filter(|chunk| chunk.get("error").is_some())
+        .collect();
+    assert_eq!(
+        errors,
+        vec![&json!({"error":{
+            "type":"server_error", "code":"invalid_upstream_response",
+            "message":"The gateway could not deliver the Chat response."
+        }})]
+    );
+    assert!(!chunks.iter().any(
+        |chunk| chunk["usage"].is_object() || chunk["choices"][0]["finish_reason"].is_string()
+    ));
+    assert_eq!(fixture.trace.commits.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn conversion_failure_uses_official_projection_error_before_and_after_commit() {
+    let expected = json!({"error":{
+        "type":"server_error", "code":"invalid_upstream_response",
+        "message":"The gateway could not project the upstream response to Chat Completions."
+    }});
+    for mode in 0..3 {
+        let mut events = Vec::new();
+        if mode == 2 {
+            events.push(created());
+        }
+        events.push(completed(
+            json!([{"type":"function_call","arguments":"{}"}]),
+        ));
+        let fixture = Fixture::new(Session::new(events)).await;
+        let response = fixture.post(chat_request(mode != 0)).await;
+        if mode == 2 {
+            let (_, chunks) = sse_body(response).await;
+            let errors: Vec<_> = chunks
+                .iter()
+                .filter(|chunk| chunk.get("error").is_some())
+                .collect();
+            assert_eq!(errors, vec![&expected]);
+            assert!(!chunks.iter().any(|chunk| chunk["usage"].is_object()
+                || chunk["choices"][0]["finish_reason"].is_string()));
+        } else {
+            assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+            assert_eq!(response.headers()["content-type"], "application/json");
+            assert_eq!(json_body(response).await, expected);
+        }
+        assert_eq!(
+            fixture.trace.commits.load(Ordering::SeqCst),
+            usize::from(mode == 2)
+        );
+        assert_eq!(fixture.trace.calls.delivery_errors().len(), 1);
+    }
 }
 
 #[tokio::test(start_paused = true)]
