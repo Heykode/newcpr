@@ -185,6 +185,73 @@ class ArtifactTests(unittest.TestCase):
     def test_exact_member(self):
         self.assertEqual(self.download([("manifest.json", "{}")]), "{}")
 
+    def test_timeout_retries_from_a_clean_archive(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / "source.zip"
+            with zipfile.ZipFile(source, "w") as bundle:
+                bundle.writestr("manifest.json", "{}")
+            artifact = {
+                "id": 1, "expired": False, "size_in_bytes": source.stat().st_size,
+                "digest": "sha256:" + images.sha256(source),
+            }
+            attempts = 0
+
+            def run(args, stdout, **kwargs):
+                nonlocal attempts
+                attempts += 1
+                self.assertEqual(kwargs["timeout"], images.ARTIFACT_DOWNLOAD_TIMEOUT)
+                if attempts == 1:
+                    stdout.write(b"incomplete")
+                    raise subprocess.TimeoutExpired(args, kwargs["timeout"])
+                stdout.write(source.read_bytes())
+                return subprocess.CompletedProcess(args, 0)
+
+            destination = Path(temporary) / "manifest.json"
+            with patch.object(images.subprocess, "run", side_effect=run):
+                images.artifact_file(REPOSITORY, artifact, "manifest.json", destination)
+            self.assertEqual(attempts, 2)
+            self.assertEqual(destination.read_text(), "{}")
+
+    def test_retry_exhaustion_fails_before_extracting(self):
+        artifact = {
+            "id": 1, "expired": False, "size_in_bytes": 1,
+            "digest": "sha256:" + "0" * 64,
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            destination = Path(temporary) / "manifest.json"
+            error = subprocess.TimeoutExpired(["gh"], images.ARTIFACT_DOWNLOAD_TIMEOUT)
+            with patch.object(images.subprocess, "run", side_effect=error) as run, \
+                    self.assertRaisesRegex(images.Unavailable, "repeated attempts"):
+                images.artifact_file(REPOSITORY, artifact, "manifest.json", destination)
+            self.assertEqual(run.call_count, images.ARTIFACT_DOWNLOAD_ATTEMPTS)
+            self.assertFalse(destination.exists())
+
+    def test_retry_keeps_artifact_digest_check(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / "source.zip"
+            with zipfile.ZipFile(source, "w") as bundle:
+                bundle.writestr("manifest.json", "{}")
+            artifact = {
+                "id": 1, "expired": False, "size_in_bytes": source.stat().st_size,
+                "digest": "sha256:" + "0" * 64,
+            }
+            attempts = 0
+
+            def run(args, stdout, **kwargs):
+                nonlocal attempts
+                attempts += 1
+                if attempts == 1:
+                    raise subprocess.CalledProcessError(1, args)
+                stdout.write(source.read_bytes())
+                return subprocess.CompletedProcess(args, 0)
+
+            destination = Path(temporary) / "manifest.json"
+            with patch.object(images.subprocess, "run", side_effect=run), \
+                    self.assertRaisesRegex(images.Unavailable, "digest mismatch"):
+                images.artifact_file(REPOSITORY, artifact, "manifest.json", destination)
+            self.assertEqual(attempts, 2)
+            self.assertFalse(destination.exists())
+
     def test_reject_digest_mismatch(self):
         with self.assertRaises(images.Unavailable):
             self.download([("manifest.json", "{}")], wrong_digest=True)
