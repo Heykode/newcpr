@@ -22,8 +22,8 @@
 | 项目 | 历史来源 | 修复前的行为与影响 | 处理状态 |
 | --- | --- | --- | --- |
 | 严格子线程等待根账号恢复或迁移 | 官方 `74f749f4`，2026-10-06；本地 `d79d8086ba`，2026-10-07，纳入 v3.21.0 | 只保留并发/间隔等待。根账号失效或被本次请求排除时，子线程很快无可用账号失败；未完整保留 follow-only 的终止语义 | 已提交 `f68ac36f3` |
-| 已知模型的 Provider 归属 | 官方 `2f96c02e`，已包含在 v3.25.0 的官方基线 `d700df8a` | 声明支持模型的 Provider 优先，但未声明支持它的发现型 Provider 仍可作为候选；可能制造无效跨 Provider 请求 | 用户授权后本轮补齐，验证见下 |
-| 目录获取失败保留最后已知模型事实 | 同为官方 `2f96c02e`，v3.25.0 集成范围 | 单 Provider 目录读取报错时被跳过，编译仍可成功发布缺少旧模型事实的快照，模型列表及路由判断可能退化 | 用户授权后本轮补齐，验证见下 |
+| 已知模型的 Provider 归属 | 官方 `2f96c02e`，已包含在 v3.25.0 的官方基线 `d700df8a` | 声明支持模型的 Provider 优先，但未声明支持它的发现型 Provider 仍可作为候选；可能制造无效跨 Provider 请求 | 已提交 `8a31e2b66`，验证见下 |
+| 目录获取失败保留最后已知模型事实 | 同为官方 `2f96c02e`，v3.25.0 集成范围 | 单 Provider 目录读取报错时被跳过，编译仍可成功发布缺少旧模型事实的快照，模型列表及路由判断可能退化 | 已提交 `8a31e2b66`，验证见下 |
 
 上述第二、第三项由历史源码控制流确认，本次没有用生产流量复现其发生频率。
 不能把它们描述成已验证导致当前生产错误；本轮代码补齐也不代表已发布到生产。
@@ -148,6 +148,54 @@ F0、F1、F2 分别指上表的严格等待、Provider 归属、目录失败回�
   已滞后，本次修正文档，运行时代码本身不回退。
 - 进程内物理 WS 容量、Redis 业务租约、智能评分及本地预算窗口属于有记录的架构适配。
   是否等价必须检查实际入口与负面测试，不能按模块名称不同判断为弱化。
+
+## 提交后补查覆盖范围
+
+补查基线为 `8a31e2b66`，官方范围仍截止 `80f7d530`。本轮重新检查官方历史提交的
+实际 diff 与本地入口，重点补查此前十五版表格没有单列的合同；没有重新执行历史
+二进制、浏览器验收、数据库故障注入或真实上游流量。本节源码检查不冒充新增测试通过。
+
+| 官方来源 | 本轮补查内容 | 本地结果与证据入口 |
+| --- | --- | --- |
+| `be5b6d19` | 官方客户端识别、版本门禁、SemVer build 元数据 | 已有：API `openai/auth.rs::identify_codex_client` 包含官方产品名，Core `policy/client_version.rs` 使用 `cmp_precedence`；已有未知产品兼容与真实 HTTP/WS 门禁测试 |
+| `286031a4` | 管理员访问与刷新凭据分离、并发刷新与重放 | 已有：Admin `use_case/auth/session.rs` 区分 `a2`/`r2`、CAS 轮换和有界旧凭据重放；API `admin/auth.rs` 使用两个 cookie，前端 auth store 合并并发刷新；测试 `refresh_credentials_are_separated_and_replay_outside_grace_revokes_session` 覆盖主要边界 |
+| `3ef4743e` | 前导/心跳已经交付后，仍允许安全重试落库 | 已有：Store `postgres/execution.rs::begin_model_request_attempt` 只要求运行态和连续序号，保留交付事实和发送水位；Core 决定能否重放，不由存储层一概拒绝 |
+| `a82bcdb8` | 选号耗尽后保留真实上游失败、区分会话策略排除 | 已有：Core `engine/coordinator.rs` 保留 `last_retryable_failure`，OpenAI `provider/observation.rs` 独立映射 `SessionPolicyRestricted`；本地另有明确的账号认证 401 不能冒充下游鉴权错误处理 |
+| `b2dab66a` | 单条坏导入记录不能拖累其他账号 | 已有：前端 `account-import-batches.ts::splitAccountDocuments` 拆分 OpenAI 条目，`useAccountOnboarding.ts` 按独立条目创建持久导入任务；保留 xAI 去重、模板、2FA 和批次幂等，本轮未重新做浏览器导入验收 |
+| `f7f59103` 的账号分组部分 | 保存分组成功后，读取展示资料失败不能把保存报告为失败 | 已有：Admin `account_groups.rs` 先发布已提交配置，展示失败清空可选 record；Store `account_groups/mod.rs::committed_record` 不回滚已完成的变更 |
+| `b8479b59` 的共享性能部分 | 共享不可变响应元数据和响应头，避免每个事件深拷贝 | 已有：Core `event.rs` 使用 `Arc<str>` 和 `Arc<[ProviderResponseHeader]>`；同提交的错误附带观测兜底另见下文，不能因标题是插件就整项排除 |
+| `005466bc` | Chat 非流式工具身份校验 | 已再次确认是既有公共兼容差异：官方拒绝重复或缺失工具身份，本地 `chat/response.rs` 与 `cpa_response.rs` 明确保留；未证明当前生产故障，也没有将其改成更严格的规则 |
+
+### 新确认的共享层分支差异，尚未补齐
+
+官方 `b8479b59` 在 Core `begin_stream_failure` 取走当前 attempt 之前，遍历
+`atomic_client_events` 并读取其中的 `response_observation`。相应官方用例
+`atomic_response_failed_should_rotate_account_before_stream_commit` 给失败事件附上
+请求 ID，要求换号后的中间失败记录仍保存该 ID。
+
+本地对应路径在可重试分支只读取 `canonical_facts`，终止交付时才由
+`observe_atomic_terminal_events` 读取附带观测。因而若一个 Provider 只通过失败事件
+附带观测，换号前的中间记录可能缺少该观测中的请求 ID 或状态。共享层这段兜底确实
+没有移入，上一轮未单独列出。
+
+影响必须区分：当前 OpenAI 原生和 Excel 复用的 `provider/execution.rs` 会先独立
+yield `ProviderEvent::observation`，然后才返回失败；xAI 同样独立发送观测，且没有
+该种原子失败事件生产路径。本轮全源码搜索没有发现原生 Provider 使用
+`attach_observation` 把观测只藏在失败批次内。因此这不是已经证实的当前 Codex
+丢诊断或重试故障，也不能据此解释生产错误。
+
+建议保留为单独补强项：先移植上述官方用例在隔离环境验证，再决定补齐共享层读取，
+同时检查不得重复累计 usage、计费或混入下一账号的观测。本轮仅记录，未修改实现，
+未执行该新增用例，不计入上面的三项已修复。
+
+### 仍未穷尽的范围
+
+- 已完成最近十五版所列重要原生请求行为的静态回查，并补查上述八组合同；并非全部
+  官方提交的每一行都做了等价证明。尤其不能把有意保留的兼容差异称为逐行 1:1。
+- 全部 UI、构建发布脚本、备份恢复和多实例高负载尚未全量验收；真实 Live 音视频、
+  credits 消费、全部客户端和真实上游风控未实测。不存在测试结果的部分不声明通过。
+- 共享层失败观测兜底与 Chat 非流式严格校验继续列为明确差异。除此之外，补查的
+  上述合同未新增确认当前原生路径的功能遗漏；这不是整个项目不存在其他问题的保证。
 
 ## 验证记录
 
