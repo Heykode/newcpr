@@ -455,12 +455,18 @@ async fn soft_affinity_can_use_an_eligible_model_account_without_moving_the_root
     let strict = provider
         .execute(
             generate("root", Some("strict-child"), None),
-            scoped(AccountAffinity::Strict),
+            scoped(AccountAffinity::Strict).with_request_tuning(
+                gateway_core::routing::RequestTuning {
+                    account_busy_wait_sticky_timeout_seconds: 1,
+                    ..Default::default()
+                },
+            ),
         )
         .await
         .err()
         .unwrap();
-    assert_eq!(strict.kind(), ProviderErrorKind::NoEligibleAccount);
+    assert_eq!(strict.kind(), ProviderErrorKind::AccountCapacityUnavailable);
+    assert!(strict.retry_is_prohibited());
     let preferred = provider
         .execute(
             generate("root", Some("preferred-child"), None),
@@ -600,15 +606,29 @@ async fn legacy_strict_child_turn_stays_on_root_in_relaxed_mode() {
         .lock()
         .unwrap()
         .insert(ProviderAccountId::new("acct_subagent_a").unwrap());
+    leases.capacity.set_load("acct_subagent_a", 3);
     let error = provider
         .execute(
             generate("root", Some("child"), Some("turn-legacy")),
-            mode_context(AccountAffinity::Relaxed),
+            mode_context(AccountAffinity::Relaxed).with_request_tuning(
+                gateway_core::routing::RequestTuning {
+                    account_busy_wait_sticky_timeout_seconds: 1,
+                    ..Default::default()
+                },
+            ),
         )
         .await
         .err()
         .unwrap();
     assert_eq!(error.kind(), ProviderErrorKind::AccountCapacityUnavailable);
+    assert!(error.retry_is_prohibited());
+    assert_eq!(
+        leases
+            .capacity
+            .waiting
+            .load(std::sync::atomic::Ordering::SeqCst),
+        0
+    );
     assert!(upstream.received_requests().await.unwrap().is_empty());
 }
 

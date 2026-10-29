@@ -130,6 +130,18 @@ struct CredentialSelectionInput<'a> {
 }
 
 impl CredentialSelectionInput<'_> {
+    fn follows_root(&self) -> bool {
+        !self.attempt.is_diagnostic_required_account()
+            && self.attempt.required_account().is_none()
+            && matches!(
+                self.attempt.continuation_attempt(),
+                ContinuationAttempt::None | ContinuationAttempt::ReplayAny
+            )
+            && self
+                .session_affinity_observation
+                .is_some_and(CodexSessionAffinity::follow_only)
+    }
+
     fn reserved_concurrency(&self) -> u32 {
         if self.guardian
             && !self.attempt.is_quality_check()
@@ -507,16 +519,25 @@ impl CodexCredentialSelector {
         request: &CredentialSelectionInput<'_>,
         cyber_policy_session_key: Option<&ProviderSessionAffinityKey>,
     ) -> Result<CodexCredentialLease, CredentialSelectionError> {
-        let lease = self
+        let result = self
             .select_unfrozen(request, cyber_policy_session_key)
-            .await?;
-        if !request
-            .attempt
-            .freeze_provider_route(Self::request_upstream(lease.account(), request).as_str())
-        {
-            return Err(CredentialSelectionError::NoEligibleCredential);
-        }
-        Ok(lease)
+            .await
+            .and_then(|lease| {
+                if request.attempt.freeze_provider_route(
+                    Self::request_upstream(lease.account(), request).as_str(),
+                ) {
+                    Ok(lease)
+                } else {
+                    Err(CredentialSelectionError::NoEligibleCredential)
+                }
+            });
+        result.map_err(|error| {
+            if request.follows_root() {
+                CredentialSelectionError::SessionBound(Box::new(error))
+            } else {
+                error
+            }
+        })
     }
 
     async fn select_unfrozen(
@@ -530,7 +551,7 @@ impl CodexCredentialSelector {
             && !diagnostic
         {
             return self
-                .select_with_capacity_wait(request, cyber_policy_session_key)
+                .select_with_capacity_wait(request, cyber_policy_session_key, None)
                 .await;
         }
         let mut universe = None;
@@ -538,6 +559,19 @@ impl CodexCredentialSelector {
             let result = self
                 .select_snapshot(request, cyber_policy_session_key, &mut universe)
                 .await;
+            if request.follows_root()
+                && matches!(
+                    result,
+                    Err(CredentialSelectionError::NoEligibleCredential
+                        | CredentialSelectionError::QuotaExhausted
+                        | CredentialSelectionError::SessionPolicyRestricted
+                        | CredentialSelectionError::CapacityUnavailable { .. })
+                )
+            {
+                return self
+                    .select_with_capacity_wait(request, cyber_policy_session_key, universe.as_ref())
+                    .await;
+            }
             if !matches!(
                 result,
                 Err(CredentialSelectionError::AccountSnapshotChanged)
@@ -2129,6 +2163,8 @@ impl fmt::Debug for CodexCredentialLease {
 
 #[derive(Debug, Error)]
 pub enum CredentialSelectionError {
+    #[error("Codex descendant must follow its session account: {0}")]
+    SessionBound(#[source] Box<CredentialSelectionError>),
     #[error("Codex account wait unavailable: {0}")]
     AccountWait(AccountWaitFailure),
     #[error("Codex account selection cancelled")]

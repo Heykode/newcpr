@@ -1,4 +1,4 @@
-//! Opt-in account admission. Store owns leases; Core owns ordering and the shared clock.
+//! Capacity and strict-affinity admission. Store owns leases; Core owns ordering and the shared clock.
 
 use std::collections::BTreeSet;
 use std::future::Future;
@@ -38,10 +38,14 @@ impl AccountWaitFailure {
 struct WaitControl<'a> {
     attempt: &'a AttemptContext,
     deadline: Option<tokio::time::Instant>,
+    follows_root: bool,
 }
 
 impl<'a> WaitControl<'a> {
-    fn new(attempt: &'a AttemptContext) -> Result<Self, CredentialSelectionError> {
+    fn new(
+        attempt: &'a AttemptContext,
+        follows_root: bool,
+    ) -> Result<Self, CredentialSelectionError> {
         let budget = attempt
             .account_wait_budget()
             .ok_or(CredentialSelectionError::Coordinator(None))?;
@@ -52,6 +56,7 @@ impl<'a> WaitControl<'a> {
         }
         Ok(Self {
             attempt,
+            follows_root,
             deadline: attempt
                 .deadline()
                 .remaining()
@@ -67,7 +72,12 @@ impl<'a> WaitControl<'a> {
             .attempt
             .account_wait_budget()
             .ok_or(CredentialSelectionError::Coordinator(None))?;
-        let deadline = budget.enter(mode).map_err(|error| match error {
+        let deadline = if self.follows_root {
+            budget.enter_session_affinity()
+        } else {
+            budget.enter(mode)
+        }
+        .map_err(|error| match error {
             gateway_core::engine::AccountWaitBudgetError::Expired => {
                 CredentialSelectionError::AccountWait(AccountWaitFailure::Timeout)
             }
@@ -121,6 +131,7 @@ enum WaitOutcome {
     Full,
     Changed,
     Retry,
+    RootChanged,
     // Local corrupt credentials consume a candidate, not a facts/publication rescan.
     Skipped,
 }
@@ -165,13 +176,16 @@ impl CodexCredentialSelector {
         &self,
         request: &CredentialSelectionInput<'_>,
         cyber_policy_key: Option<&ProviderSessionAffinityKey>,
+        universe: Option<&BTreeSet<ProviderAccountId>>,
     ) -> Result<CodexCredentialLease, CredentialSelectionError> {
         let pinned = request.attempt.required_account().is_some()
             || matches!(
                 request.attempt.continuation_attempt(),
                 ContinuationAttempt::Native | ContinuationAttempt::ReplayOwner
             );
-        let result = self.select_waiting_inner(request, cyber_policy_key).await;
+        let result = self
+            .select_waiting_inner(request, cyber_policy_key, universe)
+            .await;
         result.map_err(|source| {
             if pinned {
                 let owner_lost = matches!(source, CredentialSelectionError::NoEligibleCredential);
@@ -189,9 +203,13 @@ impl CodexCredentialSelector {
         &self,
         request: &CredentialSelectionInput<'_>,
         cyber_policy_key: Option<&ProviderSessionAffinityKey>,
+        initial_universe: Option<&BTreeSet<ProviderAccountId>>,
     ) -> Result<CodexCredentialLease, CredentialSelectionError> {
-        let mut control = WaitControl::new(request.attempt)?;
-        let accounts = control.run(self.wait_accounts(request)).await?;
+        let mut control = WaitControl::new(request.attempt, request.follows_root())?;
+        let mut accounts = control.run(self.wait_accounts(request)).await?;
+        if let Some(universe) = initial_universe {
+            accounts.retain(|account| universe.contains(account.id()));
+        }
         let ids = accounts
             .iter()
             .map(|account| account.id().clone())
@@ -298,9 +316,34 @@ impl CodexCredentialSelector {
         let observed_affinity = observed_affinity_binding
             .as_ref()
             .map(|binding| binding.account_id().clone());
+        let mut universe: BTreeSet<_> = initial_universe
+            .cloned()
+            .unwrap_or_else(|| ids.into_iter().collect());
+        if follows_root
+            && let Some(owner) = pinned.as_ref()
+            && !universe.contains(owner)
+        {
+            // Enabled-account listing omits a disabled root. Admit only this
+            // already-bound, existing, authorized ID to the initial frozen set.
+            let account = control
+                .run(async {
+                    self.repository
+                        .store()
+                        .get_account(owner)
+                        .await
+                        .map_err(|error| CredentialSelectionError::Store(Some(error.into())))
+                })
+                .await?;
+            if account
+                .as_ref()
+                .is_some_and(|account| self.account_in_scope(account, request))
+            {
+                universe.insert(owner.clone());
+            }
+        }
         let mut state = WaitingSelection {
             follows_root,
-            universe: ids.into_iter().collect(),
+            universe,
             invalid_credentials: BTreeSet::new(),
             context: AccountSelectionContext {
                 waiting_counts: Default::default(),
@@ -339,11 +382,26 @@ impl CodexCredentialSelector {
         let mut sticky_tried = BTreeSet::new();
 
         // A changed account/credential/publication gets a bounded fresh selection, never an upstream retry.
-        'rescan: for scan in 0..3 {
+        let mut scan = 0;
+        let mut reload = false;
+        'rescan: loop {
+            if scan == 3 {
+                return Err(CredentialSelectionError::Coordinator(None));
+            }
+            scan += 1;
+            if reload {
+                candidates = control
+                    .run(self.reload_wait_pool(request, &state.universe))
+                    .await?;
+            }
+            reload = true;
             if state.follows_root
                 && let Some(key) = request.session_affinity_key
             {
-                match self.lookup_session_affinity(key).await {
+                match control
+                    .run(async { Ok(self.lookup_session_affinity(key).await) })
+                    .await?
+                {
                     SessionAffinityLookup::Bound(binding) => {
                         state.pinned = Some(binding.account_id().clone());
                         state.observed_affinity = state.pinned.clone();
@@ -358,17 +416,17 @@ impl CodexCredentialSelector {
                     SessionAffinityLookup::Unavailable => {
                         return Err(CredentialSelectionError::Coordinator(None));
                     }
-                    SessionAffinityLookup::Missing => {}
+                    SessionAffinityLookup::Missing => {
+                        state.pinned = None;
+                        state.observed_affinity = None;
+                        state.observed_affinity_binding = None;
+                        state.affinity = AffinitySelection::default();
+                    }
                 }
             }
             control
                 .run(self.reload_wait_exclusions(&mut state, request))
                 .await?;
-            if scan != 0 {
-                candidates = control
-                    .run(self.reload_wait_pool(request, &state.universe))
-                    .await?;
-            }
             if let Some(pin) = &state.pinned {
                 candidates.retain(|candidate| candidate.account.id() == pin);
             }
@@ -377,6 +435,44 @@ impl CodexCredentialSelector {
                 .pinned
                 .clone()
                 .or_else(|| state.affinity.preferred_account().cloned());
+            if state.follows_root
+                && let Some(owner) = state.pinned.clone()
+            {
+                let limits = self.wait_limits()?;
+                let selection =
+                    AccountSelector.select_with_live_capacity(&candidates, &state.context, &limits);
+                request.attempt.trace().account_selection(
+                    &candidates,
+                    &state.context,
+                    selection.as_ref(),
+                );
+                match self
+                    .wait_for_account(
+                        &owner,
+                        AccountWaitMode::Sticky,
+                        &mut control,
+                        request,
+                        &mut state,
+                    )
+                    .await?
+                {
+                    WaitOutcome::Acquired(lease) => return Ok(*lease),
+                    WaitOutcome::Full => {
+                        return Err(CredentialSelectionError::AccountWait(
+                            AccountWaitFailure::QueueFull,
+                        ));
+                    }
+                    WaitOutcome::RootChanged => {
+                        // Root migrations are bounded by the shared wait deadline, not
+                        // the snapshot-conflict retry count. Reload the full frozen pool.
+                        scan = 0;
+                        continue 'rescan;
+                    }
+                    WaitOutcome::Retry | WaitOutcome::Changed | WaitOutcome::Skipped => {
+                        continue 'rescan;
+                    }
+                }
+            }
             let limits = self.wait_limits()?;
             let original = state
                 .pinned
@@ -431,7 +527,7 @@ impl CodexCredentialSelector {
                     .await?
                 {
                     WaitOutcome::Acquired(lease) => return Ok(*lease),
-                    WaitOutcome::Retry => continue 'rescan,
+                    WaitOutcome::Retry | WaitOutcome::RootChanged => continue 'rescan,
                     WaitOutcome::Skipped => {}
                     WaitOutcome::Changed => {
                         if state.pinned.is_some() {
@@ -593,7 +689,7 @@ impl CodexCredentialSelector {
                                 .await?
                             {
                                 WaitOutcome::Acquired(lease) => return Ok(*lease),
-                                WaitOutcome::Retry => continue 'rescan,
+                                WaitOutcome::Retry | WaitOutcome::RootChanged => continue 'rescan,
                                 WaitOutcome::Skipped => continue,
                                 WaitOutcome::Changed => {
                                     if state.pinned.is_some() {
@@ -702,7 +798,7 @@ impl CodexCredentialSelector {
                     .await?
                 {
                     WaitOutcome::Acquired(lease) => return Ok(*lease),
-                    WaitOutcome::Retry => continue 'rescan,
+                    WaitOutcome::Retry | WaitOutcome::RootChanged => continue 'rescan,
                     WaitOutcome::Skipped => continue,
                     WaitOutcome::Full => saw_full = true,
                     WaitOutcome::Changed => {
@@ -714,7 +810,6 @@ impl CodexCredentialSelector {
                 }
             }
         }
-        Err(CredentialSelectionError::Coordinator(None))
     }
 
     fn wait_limits(&self) -> Result<Arc<AccountConcurrencySnapshot>, CredentialSelectionError> {
@@ -893,8 +988,10 @@ impl CodexCredentialSelector {
         request: &CredentialSelectionInput<'_>,
         state: &mut WaitingSelection,
     ) -> Result<WaitOutcome, CredentialSelectionError> {
-        let Some(candidate) = control.run(self.reload_wait_target(id, request)).await? else {
-            return Ok(WaitOutcome::Changed);
+        let candidate = if state.universe.contains(id) {
+            control.run(self.reload_wait_target(id, request)).await?
+        } else {
+            None
         };
         state.context.now = SystemTime::now();
         control
@@ -902,14 +999,19 @@ impl CodexCredentialSelector {
             .await?;
         let limits = self.wait_limits()?;
         let retain_on_contention = state.pinned.is_some() || mode == AccountWaitMode::Fallback;
-        let interval_end =
-            interval_wait_deadline(&candidate, &state.context, &limits, retain_on_contention);
-        match AccountSelector.availability(&candidate, &state.context, &limits) {
-            AccountSchedulingAvailability::Blocked(AccountSchedulingBlocker::RequestInterval)
-                if interval_end.is_some() => {}
-            AccountSchedulingAvailability::Blocked(_) => return Ok(WaitOutcome::Changed),
-            AccountSchedulingAvailability::Busy => {}
-            AccountSchedulingAvailability::Ready => {
+        let interval_end = candidate.as_ref().and_then(|candidate| {
+            interval_wait_deadline(candidate, &state.context, &limits, retain_on_contention)
+        });
+        match candidate
+            .as_ref()
+            .map(|candidate| AccountSelector.availability(candidate, &state.context, &limits))
+        {
+            Some(AccountSchedulingAvailability::Blocked(
+                AccountSchedulingBlocker::RequestInterval,
+            )) if interval_end.is_some() => {}
+            Some(AccountSchedulingAvailability::Busy) => {}
+            Some(AccountSchedulingAvailability::Ready) => {
+                let candidate = candidate.as_ref().expect("ready candidate");
                 let acquired = control
                     .run(async {
                         self.leases
@@ -941,7 +1043,11 @@ impl CodexCredentialSelector {
                     );
                 }
                 let Some(current) = control.run(self.reload_wait_target(id, request)).await? else {
-                    return Ok(WaitOutcome::Changed);
+                    return if state.follows_root {
+                        Ok(WaitOutcome::Retry)
+                    } else {
+                        Ok(WaitOutcome::Changed)
+                    };
                 };
                 state.context.now = SystemTime::now();
                 control
@@ -951,16 +1057,21 @@ impl CodexCredentialSelector {
                 if matches!(
                     AccountSelector.availability(&current, &state.context, &limits),
                     AccountSchedulingAvailability::Blocked(_)
-                ) && !(mode == AccountWaitMode::Fallback
-                    && interval_wait_deadline(&current, &state.context, &limits, true).is_some())
+                ) && !state.follows_root
+                    && !(mode == AccountWaitMode::Fallback
+                        && interval_wait_deadline(&current, &state.context, &limits, true)
+                            .is_some())
                 {
                     return Ok(WaitOutcome::Changed);
                 }
             }
+            _ if state.follows_root => {}
+            _ => return Ok(WaitOutcome::Changed),
         }
         let tuning = request.attempt.request_tuning();
         // A skipped interval must not start a new sticky window for later retries.
         if mode == AccountWaitMode::Sticky
+            && !state.follows_root
             && interval_end.is_some_and(|end| {
                 request
                     .attempt
@@ -975,6 +1086,7 @@ impl CodexCredentialSelector {
         }
         let deadline = control.enter(mode)?;
         if mode == AccountWaitMode::Sticky
+            && !state.follows_root
             && interval_end.is_some_and(|end| end >= deadline.deadline())
         {
             return Ok(WaitOutcome::Changed);
@@ -1015,13 +1127,25 @@ impl CodexCredentialSelector {
                         match self.lookup_session_affinity(key).await {
                             SessionAffinityLookup::Bound(binding)
                                 if Some(&binding) == state.observed_affinity_binding.as_ref() => {}
-                            SessionAffinityLookup::Bound(_) => return Ok(WaitOutcome::Retry),
-                            SessionAffinityLookup::Missing | SessionAffinityLookup::Unavailable => {
+                            SessionAffinityLookup::Bound(_) | SessionAffinityLookup::Missing => {
+                                return Ok(WaitOutcome::RootChanged);
+                            }
+                            SessionAffinityLookup::Unavailable => {
                                 return Err(CredentialSelectionError::Coordinator(None));
                             }
                         }
                     }
-                    let Some(candidate) = self.reload_wait_target(id, request).await? else {
+                    let candidate = if state.universe.contains(id) {
+                        self.reload_wait_target(id, request).await?
+                    } else {
+                        None
+                    };
+                    let Some(candidate) = candidate else {
+                        if state.follows_root {
+                            tokio::time::sleep(poll).await;
+                            poll = (poll * 2).min(Duration::from_secs(1));
+                            continue;
+                        }
                         return Ok(WaitOutcome::Changed);
                     };
                     let limits = self.wait_limits()?;
@@ -1052,6 +1176,13 @@ impl CodexCredentialSelector {
                             continue;
                         }
                         AccountSchedulingAvailability::Blocked(_) => {
+                            if state.follows_root {
+                                // Authentication, cooldown and exclusions cannot grant a
+                                // lease. Keep waiting for recovery or a root migration.
+                                tokio::time::sleep(poll).await;
+                                poll = (poll * 2).min(Duration::from_secs(1));
+                                continue;
+                            }
                             return Ok(WaitOutcome::Changed);
                         }
                         AccountSchedulingAvailability::Busy
@@ -1298,8 +1429,13 @@ impl CodexCredentialSelector {
         }
         if state.follows_root
             && let Some(key) = request.session_affinity_key
+            && let Err(error) = self.verify_followed_root(key, &expected).await
         {
-            self.verify_followed_root(key, &expected).await?;
+            if matches!(error, CredentialSelectionError::CapacityUnavailable { .. }) {
+                drop(guard);
+                return Ok(None);
+            }
+            return Err(error);
         }
         if let Some(affinity) = request.session_affinity_observation
             && !self
@@ -1329,7 +1465,8 @@ impl CodexCredentialSelector {
                 )
                 .await;
             if !renewed && state.follows_root {
-                return Err(CredentialSelectionError::NoEligibleCredential);
+                drop(guard);
+                return Ok(None);
             }
         }
         if !request.attempt.is_quality_retest()

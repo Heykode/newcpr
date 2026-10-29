@@ -70,6 +70,7 @@ const OFFICIAL_FIXTURE: &[u8] =
 
 mod affinity;
 mod affinity_modes;
+mod affinity_recovery;
 mod cache_diagnostics;
 mod compact;
 mod excel_encrypted_content;
@@ -296,16 +297,25 @@ fn provider_and_quota_with_profile(
         Arc::new(MemoryCooldownPort::new()),
     ));
     let account_feedback = Arc::new(AccountFeedbackStats::default());
-    let selector = Arc::new(CodexCredentialSelector::new(
-        ProviderKind::new("openai").expect("provider"),
-        store.repository(),
-        leases,
-        session_affinity,
-        Arc::new(MemorySessionExclusions::default()),
-        Arc::clone(&quota),
-        Arc::clone(&account_feedback),
-        CodexCookiePolicy::official().expect("cookie policy"),
-    ));
+    let selector = Arc::new(
+        CodexCredentialSelector::new(
+            ProviderKind::new("openai").expect("provider"),
+            store.repository(),
+            leases,
+            session_affinity,
+            Arc::new(MemorySessionExclusions::default()),
+            Arc::clone(&quota),
+            Arc::clone(&account_feedback),
+            CodexCookiePolicy::official().expect("cookie policy"),
+        )
+        .with_account_concurrency(gateway_core::runtime::AccountConcurrencyHandle::new(
+            ConfigRevision::new(1).unwrap(),
+            ["acct_subagent_a", "acct_subagent_b"]
+                .into_iter()
+                .map(|id| (id.to_owned(), NonZeroU32::new(3).unwrap()))
+                .collect(),
+        )),
+    );
 
     let provider = CodexProvider::new(
         selector,

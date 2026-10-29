@@ -10,9 +10,18 @@ release.
   The v3.4.1 integration used `5205c07d`; the v3.5 integration uses
   `b98c2f01a572da42531b34b4bc57299caabf702e`. Do not use a moving branch,
   an unmerged feature branch, or a Dependabot branch as a compatibility baseline.
-- Preserve local QX contracts: smart sticky scheduling, account continuity,
+- Preserve native NewCPR contracts: smart sticky scheduling, account continuity,
   outbound proxy and IPv6 control, device identity, outbound user agent,
   cumulative account cost, non-streaming routing, and runtime settings.
+- Preserving native architecture does not authorize weakening an approved
+  upstream behavior. Record a before/after behavior matrix for successful,
+  blocked, recovery and timeout paths; map each upstream branch to native code
+  and tests. If an existing spec contradicts the requested behavior, resolve and
+  update it explicitly instead of treating the old behavior as the acceptance
+  criterion. Carry over the upstream negative cases, not just the happy path.
+- Classify historical comparisons as verified equivalent, missing, deliberately
+  excluded, fixed in a later release, or not yet verified. New upstream commits
+  after the recorded integration baseline are not past integration omissions.
 - Integrate behavior by narrow, reviewable changes. Do not copy the upstream
   `AGENTS.md`, `.agents/`, agent definitions, or GitHub workflows into this
   repository wholesale. Useful development skill/agent rules may be distilled

@@ -182,15 +182,29 @@ async fn image_turn_alias_only_keeps_the_root_account_when_busy() {
         .lock()
         .unwrap()
         .insert(ProviderAccountId::new("acct_subagent_a").unwrap());
+    leases.capacity.set_load("acct_subagent_a", 3);
     let error = provider
         .execute(
             planned_provider_endpoint_request("openai", image(None)),
-            context("req_image_alias_busy", CancellationToken::new()),
+            context("req_image_alias_busy", CancellationToken::new()).with_request_tuning(
+                gateway_core::routing::RequestTuning {
+                    account_busy_wait_sticky_timeout_seconds: 1,
+                    ..Default::default()
+                },
+            ),
         )
         .await
         .err()
         .expect("child must not escape to B");
     assert_eq!(error.kind(), ProviderErrorKind::AccountCapacityUnavailable);
+    assert!(error.retry_is_prohibited());
+    assert_eq!(
+        leases
+            .capacity
+            .waiting
+            .load(std::sync::atomic::Ordering::SeqCst),
+        0
+    );
     assert_eq!(affinity.binding_count(), 1);
     assert!(upstream.received_requests().await.unwrap().is_empty());
 }
@@ -243,6 +257,7 @@ async fn live_turn_alias_only_keeps_the_root_account_when_busy() {
         .lock()
         .unwrap()
         .insert(ProviderAccountId::new("acct_subagent_a").unwrap());
+    leases.capacity.set_load("acct_subagent_a", 3);
     let operation = Operation::ProviderHttp(
         ProviderHttpRequest::new(
             "realtime-calls",
@@ -281,12 +296,25 @@ async fn live_turn_alias_only_keeps_the_root_account_when_busy() {
     let error = provider
         .execute(
             ProviderRequest::new(operation, plan.candidates()[0].clone()),
-            context("req_live_alias_busy", CancellationToken::new()),
+            context("req_live_alias_busy", CancellationToken::new()).with_request_tuning(
+                gateway_core::routing::RequestTuning {
+                    account_busy_wait_sticky_timeout_seconds: 1,
+                    ..Default::default()
+                },
+            ),
         )
         .await
         .err()
         .expect("Live child must not escape to B");
     assert_eq!(error.kind(), ProviderErrorKind::AccountCapacityUnavailable);
+    assert!(error.retry_is_prohibited());
+    assert_eq!(
+        leases
+            .capacity
+            .waiting
+            .load(std::sync::atomic::Ordering::SeqCst),
+        0
+    );
     assert_eq!(affinity.binding_count(), 1);
     assert!(upstream.received_requests().await.unwrap().is_empty());
 }
