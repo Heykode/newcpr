@@ -154,66 +154,45 @@ OpenAI Provider 沿用既有 WebSocket/HTTP 选择，将上游请求副本规范
 
 ### Chat 兼容边界
 
-Chat 默认 `stream=false`，使用与 Responses 相同的鉴权、模型范围、账号选择、并发、
-粘性、代理身份、WS/HTTP 策略及结算；不调用本机 HTTP，也不另建调度或会话数据库。
-`use_websocket` 仍只控制上游传输，`stream_options.include_usage` 只控制下游用量分片。
+Chat 请求、非流式结果和流式结果转换采用官方 CPR v3.35.1 的实现，固定上游
+`d89db84a77d0143a91770b66bec47ab8f2e57a35`。旧 CPA Chat 转换已移除。
 
-用户消息支持 `{"type":"file","file":{...}}`，转换为 Responses `input_file`；
-`file_id` 与 `file_data` 必须且只能提供一个非空字符串，可附加 `filename`。
-网关不下载文件，也不保证所选上游账号有权访问文件 ID。
-助手历史支持字符串 `reasoning_content` 或 `reasoning`，作为普通公开历史文字发送，
-不构造加密推理状态；同时给出不同值时拒绝歧义。旧式非空 `functions` / `function_call`
-协议仍不接入；空 `functions`、空 `stop`、空 `logit_bias` 可作为无操作字段接受。
+链路为：`/v1/chat/completions` -> Responses 正文 -> 现有 Generate 执行器 ->
+账号调度与身份处理 -> Provider 选择 WS 或 HTTP SSE -> 转回 Chat JSON/SSE。
+Chat 默认 `stream=false`，只决定下游是否聚合；不强制上游 HTTP，也不保证每次必走 WS。
+原鉴权、模型范围、账号选择、并发、粘性、代理身份和结算继续由公共执行链路负责。
+Chat 不再识别旧扩展 `use_websocket`；`stream_options.include_usage` 只决定下游用量分片。
 
-支持文本、图片输入、普通 function 工具定义/多轮结果/并行调用、结构化输出、推理配置、
-拒绝信息、网页搜索选项，以及显式 `web_search`、`image_generation`、
-嵌套或 CPA 扁平形式的 `custom` 工具定义和多轮调用结果。custom 输出按 CPA 方式使用
-`type:function` 和 `function.arguments` 外壳，内容仍是原始自由文本，不保证是 JSON。
-后续请求必须携带对应 custom 工具声明，才能按名称及调用 ID 还原为上游 custom 调用和结果；
-不根据参数内容猜测工具类型，歧义名称明确拒绝。保持名称、调用 ID、原始字符串、缓存和推理用量；
-缺失的用量不填假零。输出 Token 上限与 temperature 在纯协议层可映射，但既有 Codex
-Provider 会移除 `max_output_tokens` 和 `temperature`，因此不能保证这些控制生效；
-本次保留旧转发行为，不把中间 JSON 存在字段视为上游支持。
+支持文本和图片输入、标准 function 工具定义及多轮工具结果、并行调用、结构化输出、
+平铺 `reasoning_effort`、拒绝信息、缓存和推理用量。可选 null 字段按未提供处理。
+`max_completion_tokens` 优先于 `max_tokens`；具体长度、采样参数是否被上游接受仍由
+既有 Provider 处理，不能把协议字段映射当作上游支持。未知顶层扩展忽略，不转发到上游。
+`metadata`、`prompt_cache_options` 和 `moderation` 接受对象。
 
-无法表达的音频、非空旧式 functions、多个候选结果、非空 stop 等请求语义明确返回 400。
-未知顶层 Chat 扩展忽略，不将它们当作 Responses 字段转发；`input`、`previous_response_id`
-等 Responses 专用语义仍拒绝。`metadata`、`prompt_cache_options`、`moderation` 接受对象，
-`max_completion_tokens` 优先于 `max_tokens`。文本和图片输入上的 `prompt_cache_breakpoint`
-保留，助手输出中的该字段拒绝；`include_obfuscation: false` 接受，`true` 不支持。
-显式画图工具按 CPA 方式通过 `message.images` / `delta.images` 返回独立的
-`image_url` 条目，不向正文插入 Markdown 或图片编码。预览和已完成图片可以流式返回，
-预览不算成功，仍须正常终态。同一图片按 item ID 比较前一次编码内容，相同则跳过；
-不同内容仍发送，不缓存全部图片历史。流式每个图片分片的 `index` 从零开始。
-Chat 输出层不再单独解码/检查 base64，也没有额外的 64 MiB 或图片版本数量限制；
-未知短格式默认 PNG，含 `/` 的 MIME 按上游值使用。传输层和图片上传限制不变。
-图片尺寸只校验 `auto` 或正整数 `宽x高`，具体模型支持哪些尺寸仍由上游决定。
-搜索执行记录、来源列表及独立引用字段不转换、不追加到正文，只保留模型原文。
-原生 Responses 的引用字段仍然透明转发。
-因此 JSON 格式的正文不因搜索或图片而改变。不会自动重建历史图片：
-assistant 的 `images` 是仅输出扩展，需要继续带图时由客户端明确发送图片输入。
+按官方范围，不再接受旧 Chat 的 custom、web_search、image_generation 工具声明、
+文件输入、公开推理历史别名、嵌套 `reasoning` 和 `web_search_options`。
+音频、多候选、非空 stop、非空旧式 functions 和 Responses 专用续接字段也返回 400。
+完整工具、加密推理和专用续接语义使用原生 `/v1/responses`，该接口不受此替换影响。
 
-namespace、MCP/电脑操作审批等需要完整专用语义的调用仍应使用原生 `/v1/responses`；
-Chat 不支持的请求声明仍会拒绝，未映射的返回事件按 CPA 方式跳过。
-未开始输出时转换失败返回 JSON 502；
-流式输出开始后发送 `data: {"error":...}`，随后结束，不伪造正常完成或用量。
-流式首包遇到心跳、创建事件、空增量或未知事件时继续等待有效输出，不先发空角色分片。
-正文和工具参数逐段返回，仅保存每段已发内容的长度和 SHA-256 摘要。
-done、item 和终态快照与已发前缀一致时，只补发缺失后缀；终态仅有正文或工具时也能补齐。
-空快照不抹去已发内容；前缀、工具身份或名称冲突返回转换错误，不拼接不同调用。
-工具按 item ID、call ID 及输出索引核对身份；终态数组重排不改变既有工具编号。
-工具项目结束后的迟到增量忽略。推理增量、图片及 custom 工具扩展继续使用既有转换。
-缺少终态、明确失败和内部收尾失败仍不能伪装为正常完成或发送成功用量。
-真实空终态不再被 Chat 自加的空输出校验拒绝；用量、费用及防重仍由原系统处理。
-上游错误正文统一为 Chat 可解析的 JSON，并保留有效错误状态和可转发的重试/诊断头。
+输出只投影官方支持的文本、拒绝及普通 function 调用；不再返回旧 `images`、
+custom 函数外壳或 `reasoning_content` 扩展。未知辅助事件可忽略，无法表达的业务输出
+明确失败。工具 ID、名称、字符串参数、重复身份、正文结构、快照前缀和结束原因
+使用官方校验规则。`incomplete` 只把 `max_output_tokens` 映射为 `length`、
+`content_filter` 映射为同名结束原因；其他原因不能伪装成正常完成。
 
-New API 的 Chat 转换只在后续发布验收后对 CPR 渠道停用。本次不修改其源码或在线配置。
-New API Messages 转 Chat 的步骤仍由 New API 完成，CPR 不新增 Messages 或输入 Token
-预计算入口。任何已经在 New API 转换时丢失的字段，CPR 无法恢复。
-本地 New API `5e384f16` 的真实 DTO 往返验证确认：custom 的 function 外壳
-可保留；类型化请求重整会丢失图片工具的附加选项及扁平 custom 声明字段，嵌套 custom
-声明可保留。类型化响应重整会丢失 `images`，图片需使用透明转发，避免开启“强制格式化”
-或“思考转正文”。这只是接入条件说明，本次没有修改线上渠道。客户端能否显示 `images`、
-真实账号是否获准使用相应工具，需要另行验收，不能用本地模拟结果代替。
+Chat ID、创建时间和模型来自网关请求，整段响应固定，不随上游 response ID 改变。
+`response.created` 可以先输出 assistant 角色分片。正文、拒绝和工具参数增量按官方逻辑
+去重；终态后的辅助事件可忽略，继续产生业务输出则报错。私密推理不转换成公开正文。
+缺少完整用量时不填造计费数据，用量结算仍由原执行器完成。
+
+提交前转换失败返回 JSON 502；流式提交后失败发送 Chat error 分片和 `[DONE]`。
+成功 finish 和 usage 要等原执行会话确认完成后才交付，取消、提交失败、缺失终态、
+损坏 SSE 和收尾失败不能伪造成功。Chat 的非流式汇总也采用官方实现：终态缺少输出时，
+只使用同一响应中索引连续、无冲突的完成项补齐；非空终态保持权威，不拼接旧增量。
+完成项不完整或冲突时沿官方公共汇总错误返回 500。原生 Responses 的原有恢复策略不变。
+
+本次不修改 New API 的源码或线上渠道。下游若依赖旧 Chat 扩展，需要改用官方支持的
+Chat 参数或原生 Responses。验证范围和源文件差异见 `docs/chat-official-parity.md`。
 
 ### 显式上下文压缩
 

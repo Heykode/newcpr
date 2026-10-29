@@ -200,9 +200,12 @@ async fn review(mode: &str, concurrency: usize) {
                         if h2 {
                             hyper::server::conn::http2::Builder::new(TokioExecutor::new())
                                 .serve_connection(TokioIo::new(stream), service).await.unwrap();
-                        } else {
-                            hyper::server::conn::http1::Builder::new()
-                                .serve_connection(TokioIo::new(stream), service).await.unwrap();
+                        } else if let Err(error) = hyper::server::conn::http1::Builder::new()
+                            .serve_connection(TokioIo::new(stream), service).await
+                        {
+                            // Idle-pool eviction can close TLS before close_notify is written.
+                            // Every response body and reuse assertion is still checked by the client.
+                            assert!(error.is_shutdown(), "HTTP/1 fixture failed: {error:?}");
                         }
                     });
                 }

@@ -13,6 +13,8 @@ import tempfile
 import zipfile
 
 MAX_AGE = timedelta(days=7)
+ARTIFACT_DOWNLOAD_TIMEOUT = 1800
+ARTIFACT_DOWNLOAD_ATTEMPTS = 3
 SHA = re.compile(r"[0-9a-f]{40}")
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 REPOSITORY = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*")
@@ -114,10 +116,18 @@ def artifact_file(repository, artifact, member, destination):
     destination = Path(destination)
     with tempfile.TemporaryDirectory(prefix="cpr-artifact-") as temporary:
         archive = Path(temporary) / "artifact.zip"
-        with archive.open("wb") as output:
-            subprocess.run([
-                "gh", "api", f"repos/{repository}/actions/artifacts/{artifact['id']}/zip",
-            ], stdout=output, check=True, timeout=600)
+        for attempt in range(1, ARTIFACT_DOWNLOAD_ATTEMPTS + 1):
+            try:
+                # Opening with wb truncates any incomplete archive from the previous attempt.
+                with archive.open("wb") as output:
+                    subprocess.run([
+                        "gh", "api", f"repos/{repository}/actions/artifacts/{artifact['id']}/zip",
+                    ], stdout=output, check=True, timeout=ARTIFACT_DOWNLOAD_TIMEOUT)
+                break
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+                if attempt == ARTIFACT_DOWNLOAD_ATTEMPTS:
+                    raise Unavailable("Unable to download CI artifact after repeated attempts") from error
+                print("CI artifact download failed; retrying from the beginning.", flush=True)
         if "sha256:" + sha256(archive) != artifact["digest"]:
             raise Unavailable("GitHub artifact digest mismatch")
         with zipfile.ZipFile(archive) as bundle:

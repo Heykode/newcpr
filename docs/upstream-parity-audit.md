@@ -194,6 +194,9 @@ yield `ProviderEvent::observation`，然后才返回失败；xAI 同样独立发
 
 ### Chat 工具校验专项及账号风险核验
 
+本节是替换前的历史审计。2026-10-29 用户明确改为整套采用官方 Chat 转换，
+下表中保留 CPA 扩展的决定已被取代；当前实现和验证见 `docs/chat-official-parity.md`。
+
 固定来源为官方 `005466bcb0f5154f36f495cd8cd34ac267ceaf31`（PR #542）。
 官方提交的生产改动位于 API 协议转换和交付，未修改 Core、Provider、Store。
 本地 `gateway-api/src/openai/chat/http.rs` 先解码请求，再调用原 Generate 服务；
