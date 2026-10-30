@@ -187,8 +187,9 @@ editing prior entries.
 - Fresh/random policies never authorize post-payload replay. A safe pre-send
   fallback uses the selected account, IPv6 source and frozen profile.
 - Explicit IPv6 source binding must never silently become IPv4. Ordinary
-  `unchanged` direct HTTP and WS now use IPv4 only; account proxies retain their
-  own dual-stack dial and State probes retain their independent egress.
+  `unchanged` direct HTTP and WS use the upstream dual-stack connector, without
+  forcing IPv4 (official parity, 2026-10-30). Account proxies retain their own
+  dual-stack dial and State probes retain their independent egress.
   HTTP and WS use their existing protocol-specific TLS/ALPN. This changes TCP
   address selection, not account scheduling, identity or continuation ownership.
   WS connector errors must retain the underlying I/O kind while redacting

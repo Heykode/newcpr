@@ -272,8 +272,8 @@ pub(crate) async fn resolve_proxy_selection(
             Ok((Some(id), Some(proxy.clone())))
         }
         AccountProxySelection::Saved(id) => {
-            let (value, tested, enabled) = sqlx::query_as::<_, (String, Option<bool>, bool)>(
-                "select proxy_url, last_test_success, enabled from outbound_proxies where id = $1 for share",
+            let (value, enabled, limit) = sqlx::query_as::<_, (String, bool, i64)>(
+                "select proxy_url, enabled, max_websocket_connections from outbound_proxies where id = $1 for share",
             )
             .bind(id)
             .fetch_optional(&mut **transaction)
@@ -283,12 +283,18 @@ pub(crate) async fn resolve_proxy_selection(
                 entity: ENTITY,
                 id: id.clone(),
             })?;
-            if !enabled || tested != Some(true) {
+            if !enabled {
                 return Err(conflict(id));
             }
             Ok((
                 Some(id.clone()),
-                Some(OutboundProxy::parse(&value).map_err(|_| invalid())?),
+                Some(
+                    OutboundProxy::parse(&value)
+                        .map_err(|_| invalid())?
+                        .with_max_websocket_connections(
+                            u32::try_from(limit).map_err(|_| invalid())?,
+                        ),
+                ),
             ))
         }
     }
@@ -492,11 +498,7 @@ impl ProxyStore for PgProxyRepository {
             return Err(store_error(conflict(id)));
         }
         let record = match self.get(id).await {
-            Ok(record)
-                if record.enabled && record.last_test.as_ref().is_some_and(|test| test.success) =>
-            {
-                record
-            }
+            Ok(record) if record.enabled => record,
             result => {
                 // Complete the unlock before callers can retry a proxy mutation.
                 sqlx::query("select pg_advisory_unlock_shared(hashtextextended($1, 739219))")
@@ -726,6 +728,7 @@ impl ProxyStore for PgProxyRepository {
                 "request_location",
                 "auto_location",
                 "enabled",
+                "max_websocket_connections",
             ],
             revision,
         )

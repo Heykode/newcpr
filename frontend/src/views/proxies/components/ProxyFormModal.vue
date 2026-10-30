@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { OutboundProxyRecord } from '@/api'
 import type { RequestLocation } from '@/api/modules/proxies'
-import { Eye, EyeOff, Save, Wifi } from '@lucide/vue'
+import { Eye, EyeOff, MapPin, Save, Wifi } from '@lucide/vue'
 import { computed, shallowRef, watch } from 'vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
@@ -23,6 +23,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   save: []
   test: []
+  detectLocation: []
 }>()
 const open = defineModel<boolean>({ required: true })
 const name = defineModel<string>('name', { required: true })
@@ -77,6 +78,12 @@ watch(open, (isOpen) => {
       </p>
       <BaseSwitch v-model="locationEnabled" label="手动独立地区（地区总开关开启时生效）" show-label :disabled="busy || autoLocation" />
       <RequestLocationFields v-if="locationEnabled" v-model="location" :disabled="busy || autoLocation" />
+      <BaseButton variant="secondary" :disabled="busy" @click="emit('detectLocation')">
+        <template #icon>
+          <MapPin class="size-4" />
+        </template>
+        解析出口地区
+      </BaseButton>
     </BaseForm>
     <template #footer>
       <BaseButton variant="secondary" :disabled="busy" @click="open = false">

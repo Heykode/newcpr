@@ -14,7 +14,6 @@ const refreshed = { country: 'AU', region: 'New South Wales', city: 'Sydney', ti
 const failedMessage = '模拟地区查询失败'
 const conflictMessage = 'IPv4 与 IPv6 出口时区不同，自动地区不可用'
 const revisionMessage = '代理配置已变更，请刷新后重试'
-const unsavedModeMessage = '请先保存自动出口地区设置，再测试连接'
 const timestamp = '2026-09-24T00:00:00Z'
 const fields = { country: '国家代码', region: '地区', city: '城市', timezone: '时区' }
 
@@ -123,6 +122,25 @@ function fixture() {
           assert.equal(typeof body.detectLocation, 'boolean')
           return ok(probeResult(body.detectLocation ? { status: 'detected', location: refreshed } : { status: 'notRequested' }))
         }
+        if (path === `${endpoint}/create-batch` && method === 'POST') {
+          return ok(body.map((input) => {
+            const url = new URL(input.proxyUrl)
+            url.username = ''
+            url.password = ''
+            const item = record(`created-${++nextId}`, input.name, { endpoint: url.toString(), autoLocation: false })
+            records.push(item)
+            return { status: 'succeeded', data: { record: item, configRevision: ++configRevision } }
+          }))
+        }
+        if (path === `${endpoint}/test-batch` && method === 'POST') {
+          assert.ok(body.every(item => item.detectLocation === true))
+          return ok(body.map((input) => {
+            const item = records.find(item => item.id === input.id)
+            assert.equal(input.revision, item.revision)
+            item.lastTest = probeResult({ status: 'detected', location: refreshed })
+            return { status: 'succeeded', data: item }
+          }))
+        }
         if (path === `${endpoint}/create` && method === 'POST') {
           assert.deepEqual(Object.keys(body).sort(), ['autoLocation', 'maxWebsocketConnections', 'name', 'proxyUrl', 'requestLocation'])
           const item = record(`created-${++nextId}`, body.name, {
@@ -145,10 +163,10 @@ function fixture() {
           if (body.revision !== previous.revision)
             return conflict()
           if (path.endsWith('/test')) {
-            assert.deepEqual(Object.keys(body).sort(), ['id', 'revision'])
+            assert.deepEqual(Object.keys(body).sort(), ['detectLocation', 'id', 'revision'])
             if (heldTest)
               await heldTest
-            const result = probeResult(previous.autoLocation
+            const result = probeResult(previous.autoLocation || body.detectLocation
               ? structuredClone(state.nextLocation)
               : { status: 'notRequested' })
             // Match the backend's same-egress failure retention and conflict invalidation.
@@ -326,19 +344,14 @@ async function runViewport(page, state, base, output, width) {
     assert.equal(response.status(), 200)
     await dialog.waitFor({ state: 'hidden' })
   }
-  const rejectUnsavedModeTest = async (phase) => {
-    const recordsBefore = structuredClone(state.records)
-    const mutationsBefore = state.calls.filter(call => call.method === 'POST')
-    await test.click()
-    const notice = page.getByRole('status').filter({ hasText: unsavedModeMessage })
-    await notice.getByText('警告', { exact: true }).waitFor()
-    await notice.getByText(unsavedModeMessage, { exact: true }).waitFor()
+  const testUnsavedMode = async (phase) => {
+    const savedModes = state.records.map(item => item.autoLocation)
+    assert.equal((await post(page, 'test', test)).status(), 200)
+    await test.waitFor({ state: 'visible' })
+    await page.waitForFunction(() => !document.querySelector('button[aria-label="保存代理"]')?.disabled)
     assert.equal(await url.inputValue(), '')
-    assert.equal(await test.isDisabled(), false)
-    assert.equal(await save.isDisabled(), false)
     await snapshot(phase)
-    assert.deepEqual(state.calls.filter(call => call.method === 'POST'), mutationsBefore, 'unsaved mode plus empty URL cannot test, probe or publish')
-    assert.deepEqual(state.records, recordsBefore, 'guard cannot mutate the saved proxy')
+    assert.deepEqual(state.records.map(item => item.autoLocation), savedModes, 'manual tests must not save the auto-location draft')
     await clearNotices(page)
   }
 
@@ -349,20 +362,20 @@ async function runViewport(page, state, base, output, width) {
   assert.equal(await manualSwitch.isChecked(), true)
   await assertLocation(dialog, manual, false)
   await setSwitch(auto, true)
-  await rejectUnsavedModeTest('unsaved-enable-blocked')
+  await testUnsavedMode('unsaved-enable-test')
   await assertLocation(dialog, manual, true)
   const legacyBeforeProbe = structuredClone(state.records)
   await url.fill('http://127.0.0.1:8098')
   assert.equal((await post(page, 'probe', test)).status(), 200)
-  assert.deepEqual(state.mutations('probe').at(-1).body, { proxyUrl: 'http://127.0.0.1:8098', detectLocation: true })
-  assert.equal(state.mutations('test').length, 0, 'new URL uses the enabled draft instead of the saved manual mode')
+  assert.deepEqual(state.mutations('probe').at(-1).body, { proxyUrl: 'http://127.0.0.1:8098', detectLocation: false })
+  assert.equal(state.mutations('test').length, 1, 'new URL does not test the saved endpoint')
   assert.deepEqual(state.records, legacyBeforeProbe)
   await url.fill('')
   await setSwitch(auto, false)
   await clearNotices(page)
   assert.equal((await post(page, 'test', test)).status(), 200)
   await page.getByRole('status').filter({ hasText: 'Legacy manual fixture：连接成功' }).waitFor()
-  assert.deepEqual(state.mutations('test').at(-1).body, { id: 'legacy-manual', revision: 3 })
+  assert.deepEqual(state.mutations('test').at(-1).body, { id: 'legacy-manual', revision: 4, detectLocation: false })
   await assertLocation(dialog, manual, false)
   await snapshot('restored-manual-test')
   await cancel.click()
@@ -398,7 +411,7 @@ async function runViewport(page, state, base, output, width) {
     assert.equal(await manualSwitch.isDisabled(), enabled)
     const previousRecords = structuredClone(state.records)
     assert.equal((await post(page, 'probe', test)).status(), 200)
-    assert.deepEqual(state.mutations('probe').at(-1).body, { proxyUrl: 'http://127.0.0.1:8082', detectLocation: enabled })
+    assert.deepEqual(state.mutations('probe').at(-1).body, { proxyUrl: 'http://127.0.0.1:8082', detectLocation: false })
     assert.deepEqual(state.records, previousRecords, 'URL probe cannot publish or replace saved records')
     await assertLocation(dialog, manual, enabled)
     await clearNotices(page)
@@ -415,19 +428,19 @@ async function runViewport(page, state, base, output, width) {
   })
   await locationCell('created-2').getByText('Tokyo · Asia/Tokyo', { exact: true }).waitFor()
   assert.equal(state.mutations('probe').length, 4)
-  assert.equal(state.mutations('test').length, 1)
+  assert.equal(state.mutations('test').length, 2)
 
   await edit('existing-auto')
   assert.equal(await auto.isChecked(), true)
   assert.equal(await url.inputValue(), '', 'editing must not expose or resend saved authentication')
   await assertLocation(dialog, manual, true)
   await setSwitch(auto, false)
-  await rejectUnsavedModeTest('unsaved-disable-blocked')
+  await testUnsavedMode('unsaved-disable-test')
   const automaticBeforeProbe = structuredClone(state.records)
   await url.fill('http://127.0.0.1:8097')
   assert.equal((await post(page, 'probe', test)).status(), 200)
   assert.deepEqual(state.mutations('probe').at(-1).body, { proxyUrl: 'http://127.0.0.1:8097', detectLocation: false })
-  assert.equal(state.mutations('test').length, 1, 'new URL uses the disabled draft instead of the saved automatic mode')
+  assert.equal(state.mutations('test').length, 3, 'new URL does not test the saved endpoint')
   assert.deepEqual(state.records, automaticBeforeProbe)
   await url.fill('')
   await clearNotices(page)
@@ -437,8 +450,8 @@ async function runViewport(page, state, base, output, width) {
   await assertLocation(dialog, manualDraft, true)
   await url.fill('http://127.0.0.1:8099')
   await post(page, 'probe', test)
-  assert.deepEqual(state.mutations('probe').at(-1).body, { proxyUrl: 'http://127.0.0.1:8099', detectLocation: true })
-  assert.equal(state.mutations('test').length, 1, 'entered URL must not test the old saved endpoint')
+  assert.deepEqual(state.mutations('probe').at(-1).body, { proxyUrl: 'http://127.0.0.1:8099', detectLocation: false })
+  assert.equal(state.mutations('test').length, 3, 'entered URL must not test the old saved endpoint')
   await url.fill('')
   const release = state.pauseTest()
   try {
@@ -451,21 +464,21 @@ async function runViewport(page, state, base, output, width) {
     assert.equal(await url.isDisabled(), true)
     assert.equal(await save.isDisabled(), true)
     assert.equal(await cancel.isDisabled(), true)
-    assert.equal(state.records.find(item => item.id === 'existing-auto').revision, 7)
+    assert.equal(state.records.find(item => item.id === 'existing-auto').revision, 8)
   }
   finally {
     release()
   }
   await dialog.getByText('Sydney · Australia/Sydney', { exact: true }).waitFor()
   await locationCell('existing-auto').getByText('Sydney · Australia/Sydney', { exact: true }).waitFor()
-  assert.deepEqual(state.mutations('test').at(-1).body, { id: 'existing-auto', revision: 7 })
+  assert.deepEqual(state.mutations('test').at(-1).body, { id: 'existing-auto', revision: 8, detectLocation: false })
   assert.equal(await name.inputValue(), 'Edited auto fixture')
   await assertLocation(dialog, manualDraft, true)
   await snapshot('tested-revision')
   await saveAndClose('update')
   assert.deepEqual(state.mutations('update').at(-1).body, {
     id: 'existing-auto',
-    revision: 8,
+    revision: 9,
     name: 'Edited auto fixture',
     maxWebsocketConnections: 0,
     autoLocation: true,
@@ -485,7 +498,7 @@ async function runViewport(page, state, base, output, width) {
   await saveAndClose('update')
   assert.deepEqual(state.mutations('update').at(-1).body, {
     id: 'existing-auto',
-    revision: 9,
+    revision: 10,
     name: 'Edited auto fixture',
     maxWebsocketConnections: 0,
     autoLocation: false,
@@ -543,7 +556,7 @@ async function runViewport(page, state, base, output, width) {
   assert.deepEqual(state.errors, [])
   assert.equal(state.mutations('create').length, 2)
   assert.equal(state.mutations('probe').length, 6)
-  assert.equal(state.mutations('test').length, 4)
+  assert.equal(state.mutations('test').length, 6)
   assert.equal(state.mutations('update').length, 3)
   state.rejectUpdate = false
   const target = state.records.find(item => item.id === 'existing-auto')
@@ -580,6 +593,33 @@ async function runViewport(page, state, base, output, width) {
   await post(page, 'delete', confirmation.getByRole('button', { name: '确认', exact: true }))
   await row(target.id).waitFor({ state: 'hidden' })
   assert.equal(state.mutations('delete').length, 1)
+  state.nextLocation = { status: 'detected', location: refreshed }
+  await edit('legacy-manual')
+  const savedManual = structuredClone(state.records.find(item => item.id === 'legacy-manual').requestLocation)
+  const updatesBeforeDetection = state.mutations('update').length
+  await post(page, 'test', dialog.getByRole('button', { name: '解析出口地区', exact: true }))
+  await page.waitForFunction(() => document.querySelector('input[aria-label="国家代码"]')?.value === 'AU')
+  await assertLocation(dialog, refreshed, false)
+  assert.equal(await auto.isChecked(), false)
+  assert.equal(state.mutations('test').at(-1).body.detectLocation, true)
+  assert.deepEqual(state.records.find(item => item.id === 'legacy-manual').requestLocation, savedManual)
+  assert.equal(state.mutations('update').length, updatesBeforeDetection)
+  await snapshot('manual-location-draft')
+  await cancel.click()
+  await dialog.waitFor({ state: 'hidden' })
+
+  await page.getByRole('button', { name: '批量新增', exact: true }).click()
+  await dialog.getByRole('textbox', { name: '代理地址，每行一条', exact: true }).fill('proxy.example:8080:fixture-user:fixture-password\n[2001:db8::1]:1080\ninvalid')
+  assert.equal((await dialog.getByLabel('代理预览').textContent()).includes('fixture-password'), false)
+  await snapshot('batch-preview')
+  await dialog.getByRole('button', { name: '创建并测试', exact: true }).click()
+  await dialog.getByRole('button', { name: '测试已创建代理', exact: true }).waitFor()
+  assert.equal(state.mutations('create-batch').at(-1).body.length, 2)
+  assert.equal(state.mutations('test-batch').at(-1).body.length, 2)
+  assert.equal((await dialog.textContent()).includes('fixture-password'), false)
+  await snapshot('batch-results')
+  await dialog.getByRole('button', { name: '修改失败项', exact: true }).click()
+  assert.equal(await dialog.getByRole('textbox', { name: '代理地址，每行一条', exact: true }).inputValue(), 'invalid')
   assert.deepEqual(state.errors, [])
   assert.deepEqual(state.layoutErrors, [], `${width}px layout violations after completed lifecycle`)
 }

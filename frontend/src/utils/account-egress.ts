@@ -45,7 +45,7 @@ export function accountEgressFromAccount(account: {
     return undefined
   const mode = config.accountOverrides[account.id]
   if (mode == null)
-    return { ...draft, proxyMode: 'inherit' }
+    return { ...draft, proxyMode: 'ipv6', egressMode: 'inherit' }
   if (mode === 'unchanged')
     return { ...draft, proxyMode: 'direct' }
   if (accountIpv6Modes.includes(mode))
@@ -70,8 +70,8 @@ export function accountEgressPatch(draft: AccountEgressDraft, openai: boolean): 
   if (proxyMode === 'mihomo' || proxyMode === 'proxy_pool')
     return { requestProxySource: proxyMode }
   if (proxyMode === 'proxy' && !proxyId.trim())
-    throw new Error('请选择已通过测试的代理')
-  if (proxyMode === 'ipv6' && !accountIpv6Modes.includes(egressMode))
+    throw new Error('请选择代理')
+  if (proxyMode === 'ipv6' && egressMode !== 'inherit' && !accountIpv6Modes.includes(egressMode))
     throw new Error('请选择 IPv6 出口策略')
   if (!['inherit', 'direct', 'proxy', 'ipv6'].includes(proxyMode))
     throw new Error('请选择出站隧道')
@@ -80,7 +80,7 @@ export function accountEgressPatch(draft: AccountEgressDraft, openai: boolean): 
     outboundProxyId: proxyMode === 'proxy' ? proxyId.trim() : '',
     ...(openai
       ? {
-          egressMode: proxyMode === 'inherit' ? null : proxyMode === 'ipv6' ? egressMode : 'unchanged',
+          egressMode: proxyMode === 'inherit' || (proxyMode === 'ipv6' && egressMode === 'inherit') ? null : proxyMode === 'ipv6' ? egressMode : 'unchanged',
         }
       : {}),
   }

@@ -26,6 +26,7 @@ import ManagedProxyPanel from './components/ManagedProxyPanel.vue'
 import ProxyAccountsModal from './components/ProxyAccountsModal.vue'
 import ProxyBatchCreateModal from './components/ProxyBatchCreateModal.vue'
 import ProxyFormModal from './components/ProxyFormModal.vue'
+import { useProxyBatchTesting } from './composables/useProxyBatchTesting'
 import { proxyLocationMessage, proxyTestFeedback } from './utils/location'
 
 const search = shallowRef('')
@@ -68,8 +69,12 @@ const showAccounts = shallowRef(false)
 const inspected = shallowRef<OutboundProxyRecord | null>(null)
 const showBatchCreate = ref(false)
 const selected = ref(new Map<string, OutboundProxyRecord>())
-const batchTesting = ref(false)
-const batchResults = ref<string[]>([])
+const batch = useProxyBatchTesting({
+  test: (proxies, options, detectLocation) => testProxyBatch(proxies.map(({ id, revision }) => ({ id, revision, detectLocation })), options),
+  reload: () => query.execute({ silent: true }),
+})
+const batchTesting = batch.busy
+const batchResults = computed(() => batch.tests.items.value.map(item => `${item.name}：${item.message || item.status}`))
 const allSelected = computed(() => proxies.value.length > 0 && proxies.value.every(proxy => selected.value.has(proxy.id)))
 watch(proxies, (items) => {
   for (const item of items) {
@@ -90,28 +95,7 @@ function selectPage(value: boolean) {
 async function testSelected() {
   if (batchTesting.value || !selected.value.size)
     return
-  if (selected.value.size > 100) {
-    toast.warning('一次最多测试 100 条代理')
-    return
-  }
-  const targets = [...selected.value.values()]
-  batchTesting.value = true
-  batchResults.value = []
-  try {
-    const results = await testProxyBatch(targets.map(({ id, revision }) => ({ id, revision })))
-    batchResults.value = results.map((result, index) => {
-      if (result.status === 'succeeded') {
-        selected.value.set(result.data.id, result.data)
-        return `${targets[index]?.name}：${result.data.lastTest?.success ? '连接成功' : result.data.lastTest?.message || '测试失败'}`
-      }
-      return `${targets[index]?.name}：${result.status === 'failed' ? result.message : '未执行'}`
-    })
-  }
-  catch { batchResults.value = ['批量测试结果未确认，请刷新列表查看'] }
-  finally {
-    batchTesting.value = false
-    await query.execute({ silent: true })
-  }
+  await batch.start([...selected.value.keys()])
 }
 
 function openForm(proxy: OutboundProxyRecord | null = null) {
@@ -125,13 +109,13 @@ function openForm(proxy: OutboundProxyRecord | null = null) {
   showForm.value = true
 }
 
-async function checkProxy(proxy: OutboundProxyRecord) {
+async function checkProxy(proxy: OutboundProxyRecord, detectLocation = true) {
   if (batchTesting.value || testingIds.value.has(proxy.id) || updatingIds.value.has(proxy.id))
     return
   testingIds.value.add(proxy.id)
   try {
-    const result = await testProxy({ id: proxy.id, revision: proxy.revision })
-    if (editing.value?.id === result.id)
+    const result = await testProxy({ id: proxy.id, revision: proxy.revision, detectLocation })
+    if (editing.value?.id === result.id && editing.value.revision === proxy.revision)
       editing.value = result
     if (result.lastTest) {
       const feedback = proxyTestFeedback(result.lastTest)
@@ -153,11 +137,7 @@ async function testConnection() {
     return
   const proxyUrl = form.proxyUrl.trim()
   if (!proxyUrl && editing.value) {
-    if (form.autoLocation !== (editing.value.autoLocation ?? false)) {
-      toast.warning('请先保存自动出口地区设置，再测试连接')
-      return
-    }
-    await checkProxy(editing.value)
+    await formTestAction.run(() => checkProxy(editing.value!, false))
     return
   }
   if (!proxyUrl) {
@@ -165,9 +145,42 @@ async function testConnection() {
     return
   }
   await formTestAction.run(async () => {
-    const result = await probeProxy({ proxyUrl, detectLocation: form.autoLocation })
+    const result = await probeProxy({ proxyUrl, detectLocation: false })
     const feedback = proxyTestFeedback(result)
     toast[feedback.tone](feedback.message)
+  })
+}
+
+async function detectLocation() {
+  if (saving.value || testingForm.value)
+    return
+  const proxyUrl = form.proxyUrl.trim()
+  const proxy = editing.value
+  if (!proxyUrl && !proxy) {
+    toast.warning('请填写代理连接地址')
+    return
+  }
+  await formTestAction.run(async () => {
+    let result
+    if (proxyUrl) {
+      result = await probeProxy({ proxyUrl, detectLocation: true })
+    }
+    else {
+      const updated = await testProxy({ id: proxy!.id, revision: proxy!.revision, detectLocation: true })
+      if (editing.value?.id === updated.id && editing.value.revision === proxy!.revision)
+        editing.value = updated
+      result = updated.lastTest
+      await query.execute({ silent: true })
+    }
+    if (result?.success && result.location?.status === 'detected') {
+      form.location = { ...result.location.location }
+      form.locationEnabled = true
+      toast.success('已填入出口地区')
+    }
+    else if (result) {
+      const feedback = proxyTestFeedback(result)
+      toast[feedback.tone === 'success' ? 'warning' : feedback.tone](feedback.tone === 'success' ? '未获得出口地区' : feedback.message)
+    }
   })
 }
 
@@ -294,6 +307,9 @@ onMounted(() => void query.execute())
               <template #icon>
                 <Wifi class="size-4" />
               </template>测试所选 ({{ selected.size }})
+            </BaseButton>
+            <BaseButton v-if="batch.tests.running.value" :disabled="batch.tests.stopping.value" @click="batch.tests.stop">
+              停止后续测试
             </BaseButton>
             <BaseIconButton v-if="selected.size" label="清除代理选择" :disabled="batchTesting" @click="selected.clear()">
               <X class="size-4" />
@@ -431,6 +447,7 @@ onMounted(() => void query.execute())
       @after-leave="clearForm"
       @save="save"
       @test="testConnection"
+      @detect-location="detectLocation"
     />
     <ProxyBatchCreateModal v-if="showBatchCreate" v-model="showBatchCreate" @created="query.execute({ silent: true })" />
     <BaseConfirmModal v-model="showDelete" :title="t('proxies.actions.deleteProxy')" destructive :loading="deleting" @confirm="confirmDelete">

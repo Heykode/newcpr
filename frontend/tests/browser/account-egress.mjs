@@ -53,6 +53,8 @@ async function main() {
         { id: 'proxy-fixture', enabled: true, name: '测试代理', endpoint: 'http://proxy.example:8080', lastTest: { success: true } },
         { id: 'proxy-same-endpoint', enabled: true, name: '同地址不同认证代理', endpoint: 'http://proxy.example:8080', lastTest: { success: true } },
         { id: 'proxy-disabled', enabled: false, name: '停用出口', endpoint: 'http://proxy.example:8081', lastTest: { success: true } },
+        { id: 'proxy-untested', enabled: true, name: '未测出口', endpoint: 'http://proxy.example:8082', lastTest: null },
+        { id: 'proxy-failed', enabled: true, name: '失败出口', endpoint: 'http://proxy.example:8083', lastTest: { success: false } },
       ], page: { page: 1, pageSize: 200, total: 3, totalPages: 1 } }
     }
     else if (path.endsWith('/proxies/mihomo')) {
@@ -65,6 +67,9 @@ async function main() {
         return
       }
       data = egress
+    }
+    else if (path === '/api/admin/quality-ops/templates') {
+      data = []
     }
     else if (path.endsWith('/relogin/templates')) {
       data = templates
@@ -80,8 +85,10 @@ async function main() {
         const account = accounts.find(item => item.id === id)
         if (body.requestProxySource !== undefined)
           account.requestProxySource = body.requestProxySource
-        if (body.outboundProxyId !== undefined)
+        if (body.outboundProxyId !== undefined) {
+          account.outboundProxyId = body.outboundProxyId || null
           account.outboundProxyEndpoint = body.outboundProxyId ? 'http://proxy.example:8080' : null
+        }
         if (Object.hasOwn(body, 'egressMode'))
           egress.accountOverrides[id] = body.egressMode
       }
@@ -103,7 +110,7 @@ async function main() {
   async function choose(label) {
     await tunnel().click()
     assert.equal(await page.getByRole('option', { name: '普通代理池', exact: true }).count(), 0)
-    await page.getByRole('option', { name: label, exact: true }).click()
+    await page.getByRole('option', { name: new RegExp(`^${label}`) }).click()
   }
   async function ipv6(label) {
     await dialog.getByRole('combobox', { name: 'IPv6 出口策略', exact: true }).click()
@@ -137,7 +144,8 @@ async function main() {
     assert.match(await tunnel().textContent(), /Mihomo 会话代理池/)
     assert.equal(await dialog.getByText(/当前出口：/).count(), 0)
     await tunnel().click()
-    assert.equal(await page.getByRole('option', { name: '保持原设置', exact: true }).count(), 0)
+    assert.equal(await page.getByRole('option', { name: '保持当前', exact: true }).count(), 0)
+    assert.equal(await page.getByRole('option', { name: '跟随全局策略', exact: true }).count(), 0)
     await page.getByRole('option', { name: 'Mihomo 会话代理池', exact: true }).click()
     assert.equal(await dialog.getByRole('button', { name: /独立保存/ }).count(), 0)
     await choose('IPv6 地址池')
@@ -150,11 +158,13 @@ async function main() {
     await first().getByRole('button', { name: '编辑账号', exact: true }).click()
     await choose('Mihomo 会话代理池')
     await dialog.getByText('Mihomo 运行中 · 1 个节点', { exact: true }).waitFor()
-    await choose('指定代理')
-    assert.match(await dialog.getByRole('combobox', { name: '指定代理', exact: true }).textContent(), /选择已保存的代理/)
+    await choose('测试代理')
+    assert.match(await tunnel().textContent(), /测试代理/)
     assert.equal(await dialog.getByRole('combobox', { name: 'IPv6 出口策略', exact: true }).count(), 0)
-    await dialog.getByRole('combobox', { name: '指定代理', exact: true }).click()
+    await tunnel().click()
     assert.equal(await page.getByRole('option', { name: /停用出口（已禁用）/ }).isDisabled(), true)
+    assert.equal(await page.getByRole('option', { name: /未测出口（未测试）/ }).isDisabled(), false)
+    assert.equal(await page.getByRole('option', { name: /失败出口（测试失败）/ }).isDisabled(), false)
     await page.getByRole('option', { name: /测试代理/ }).click()
     await choose('IPv6 地址池')
     await ipv6('轮询 IPv6 · 新建连接')
@@ -200,13 +210,11 @@ async function main() {
       await dialog.waitFor({ state: 'hidden' })
     }
 
-    for (const [mode, label] of [['direct', '服务器默认直连'], ['inherit', '跟随全局策略'], ['proxy', '指定代理']]) {
+    for (const [mode, label] of [['direct', '直连'], ['inherit', 'IPv6 地址池'], ['proxy', '同地址不同认证代理']]) {
       await first().getByRole('button', { name: '编辑账号', exact: true }).click()
       await choose(label)
-      if (mode === 'proxy') {
-        await dialog.getByRole('combobox', { name: '指定代理', exact: true }).click()
-        await page.getByRole('option', { name: /同地址不同认证代理/ }).click()
-      }
+      if (mode === 'inherit')
+        await ipv6('跟随全局策略')
       await dialog.getByRole('button', { name: '保存账号设置', exact: true }).click()
       await dialog.waitFor({ state: 'hidden' })
       if (mode === 'inherit') {
@@ -218,7 +226,7 @@ async function main() {
       await page.waitForFunction(text => document.querySelector('[aria-label="出站隧道"]')?.textContent.includes(text), label)
       assert.equal(await dialog.getByText(/当前出口：/).count(), 0)
       if (mode === 'proxy') {
-        assert.match(await dialog.getByRole('combobox', { name: '指定代理', exact: true }).textContent(), /已绑定代理 · http:\/\/proxy.example:8080/)
+        assert.match(await tunnel().textContent(), /同地址不同认证代理/)
         assert.equal(writes.at(-1).body.outboundProxyId, 'proxy-same-endpoint')
       }
       await dialog.getByRole('button', { name: '保存账号设置', exact: true }).click()
@@ -243,9 +251,7 @@ async function main() {
 
     // Only an explicit saved-proxy selection replaces the historical pool.
     await first().getByRole('button', { name: '编辑账号', exact: true }).click()
-    await choose('指定代理')
-    await dialog.getByRole('combobox', { name: '指定代理', exact: true }).click()
-    await page.getByRole('option', { name: /测试代理/ }).click()
+    await choose('测试代理')
     await layout('edit-specified-proxy')
     await dialog.getByRole('button', { name: '保存账号设置', exact: true }).click()
     await dialog.waitFor({ state: 'hidden' })
@@ -255,6 +261,7 @@ async function main() {
 
     // A read failure leaves unknown routing blank and cannot turn it into direct/IPv6.
     accounts[0].outboundProxyEndpoint = null
+    accounts[0].outboundProxyId = null
     egress.accountOverrides.acct_sample_0 = null
     failEgress = true
     await page.reload()
@@ -269,13 +276,14 @@ async function main() {
       assert.equal(key in writes.at(-1).body, false)
     failEgress = false
     await first().getByRole('button', { name: '编辑账号', exact: true }).click()
-    await page.waitForFunction(() => document.querySelector('[aria-label="出站隧道"]')?.textContent.includes('跟随全局策略'))
+    await page.waitForFunction(() => document.querySelector('[aria-label="IPv6 出口策略"]')?.textContent.includes('跟随全局策略'))
     await dialog.getByRole('button', { name: '取消未保存更改', exact: true }).click()
     await dialog.waitFor({ state: 'hidden' })
 
     for (const id of ['acct_sample_0', 'acct_sample_1'])
       await page.locator(`tr[data-row-key="${id}"]`).getByRole('checkbox', { name: '选择账号', exact: true }).locator('..').click()
-    await page.getByRole('button', { name: '批量编辑账号', exact: true }).click()
+    await page.getByRole('button', { name: '批量操作', exact: true }).click()
+    await page.getByRole('button', { name: '编辑 (2)', exact: true }).click()
     const optIn = dialog.getByRole('checkbox', { name: '应用出站隧道更改', exact: true })
     assert.equal(await optIn.isChecked(), false)
     assert.equal(await tunnel().isDisabled(), true)
@@ -291,15 +299,16 @@ async function main() {
     await page.getByRole('button', { name: '管理模板', exact: true }).click()
     await dialog.getByRole('button', { name: '新建模板', exact: true }).click()
     await dialog.getByRole('textbox', { name: '模板名称', exact: true }).fill('统一出口测试')
-    assert.match(await tunnel().textContent(), /保持原设置/)
-    await choose('跟随全局策略')
+    assert.match(await tunnel().textContent(), /保持当前/)
+    await choose('IPv6 地址池')
+    await ipv6('跟随全局策略')
     await layout('template-global')
     await dialog.getByRole('button', { name: '保存模板', exact: true }).click()
     await dialog.getByText('统一出口测试', { exact: true }).waitFor()
     assert.equal(templates[0].config.egressMode, null)
     assert.equal(templates[0].config.preserveOutboundProxy, false)
     await dialog.getByRole('button', { name: '编辑模板', exact: true }).click()
-    await choose('保持原设置')
+    await choose('保持当前')
     await dialog.getByRole('button', { name: '保存模板', exact: true }).click()
     await dialog.getByText('统一出口测试', { exact: true }).waitFor()
     assert.equal(templates[0].config.preserveOutboundProxy, true)
@@ -308,8 +317,9 @@ async function main() {
     await dialog.waitFor({ state: 'hidden' })
 
     await page.getByRole('button', { name: '导入账号', exact: true }).click()
-    await dialog.getByRole('button', { name: 'OpenAI', exact: true }).click()
-    assert.match(await tunnel().textContent(), /跟随全局策略/)
+    await dialog.getByRole('button', { name: 'Codex', exact: true }).click()
+    assert.match(await tunnel().textContent(), /IPv6 地址池/)
+    assert.match(await dialog.getByRole('combobox', { name: 'IPv6 出口策略', exact: true }).textContent(), /跟随全局策略/)
     await choose('IPv6 地址池')
     await ipv6('固定 IPv6 · 复用连接')
     await layout('import-ipv6')
@@ -332,8 +342,8 @@ async function main() {
       accounts[0].outboundProxyEndpoint = 'http://proxy.example:8080'
       await page.reload()
       await first().getByRole('button', { name: '编辑账号', exact: true }).click()
-      const selected = dialog.getByRole('combobox', { name: '指定代理', exact: true })
-      await page.waitForFunction(expected => document.querySelector('[aria-label="指定代理"]')?.textContent.includes(expected), label)
+      const selected = tunnel()
+      await page.waitForFunction(expected => document.querySelector('[aria-label="出站隧道"]')?.textContent.includes(expected), label)
       assert.match(await selected.textContent(), new RegExp(label.replace(/[()]/g, '\\$&')))
       await layout(`bound-${id}`)
       await dialog.getByRole('button', { name: '保存账号设置', exact: true }).click()

@@ -105,6 +105,10 @@ interface ProxyIdParam {
   revision: number
 }
 
+interface ProxyTestParam extends ProxyIdParam {
+  detectLocation?: boolean
+}
+
 interface ProxyUpdateParam extends ProxyIdParam, Omit<ProxyCreateParam, 'proxyUrl'> {
   enabled?: boolean
   proxyUrl?: string
@@ -141,14 +145,14 @@ interface ProxyMutation extends ProxyMutationResponse {
   record: OutboundProxyRecord
 }
 
-export type ProxyBatchResult<T> = { status: 'succeeded', data: T } | { status: 'failed', message: string } | { status: 'skipped' }
+export type ProxyBatchResult<T> = { status: 'succeeded', data: T } | { status: 'failed', message: string, httpStatus: number, code: number } | { status: 'skipped' }
 
-export function createProxyBatch(data: Pick<ProxyCreateParam, 'name' | 'proxyUrl'>[]) {
-  return request<ProxyBatchResult<ProxyMutation>[]>({ url: '/api/admin/proxies/create-batch', method: 'POST', data, timeout: 0 })
+export function createProxyBatch(data: ProxyCreateParam[], options: RequestOptions = {}) {
+  return request<ProxyBatchResult<ProxyMutation>[]>({ url: '/api/admin/proxies/create-batch', method: 'POST', data, timeout: 0, ...options })
 }
 
-export function testProxyBatch(data: ProxyIdParam[]) {
-  return request<ProxyBatchResult<OutboundProxyRecord>[]>({ url: '/api/admin/proxies/test-batch', method: 'POST', data, timeout: 0 })
+export function testProxyBatch(data: ProxyTestParam[], options: RequestOptions = {}) {
+  return request<ProxyBatchResult<OutboundProxyRecord>[]>({ url: '/api/admin/proxies/test-batch', method: 'POST', data, timeout: 0, ...options })
 }
 
 export function getProxies(data: ProxyListParams, options: RequestOptions = {}) {
@@ -189,7 +193,7 @@ export function deleteProxy(data: ProxyIdParam, options: RequestOptions = {}) {
   })
 }
 
-export function testProxy(data: ProxyIdParam, options: RequestOptions = {}) {
+export function testProxy(data: ProxyTestParam, options: RequestOptions = {}) {
   return request<OutboundProxyRecord>({
     url: '/api/admin/proxies/test',
     method: 'POST',

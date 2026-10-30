@@ -156,7 +156,7 @@ export function useAccountBatchEditor(options: {
       return
     }
     if (updateProxy.value && proxyMode.value === 'proxy' && !proxyId.value.trim()) {
-      toast.warning('请选择已通过测试的代理')
+      toast.warning('请选择代理')
       return
     }
     if (!scheduling.valid) {

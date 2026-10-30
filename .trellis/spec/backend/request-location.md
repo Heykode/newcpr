@@ -46,5 +46,8 @@
 - All provider-account projections use the same effective proxy location.
   Preserve the existing total switch, global fallback and identity seed.
   A test response refreshes the open editor's revision before the next save.
-  With a blank connection draft, changed automatic-mode settings must be saved
-  before a saved-record test; never silently test the old mode as the new draft.
+  Connection tests use the saved automatic-mode setting without saving the draft.
+  Explicit `detectLocation:true` forces one-shot lookup even when auto mode is off.
+  The form's location action fills only the manual draft; saving remains explicit.
+  New URL connectivity tests do not look up location; the separate location action
+  probes the new URL without changing a saved proxy or account binding.

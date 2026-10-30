@@ -36,14 +36,25 @@ const mihomo = shallowRef<MihomoStatus>()
 const mihomoError = shallowRef(false)
 let mihomoController: AbortController | undefined
 let controller: AbortController | undefined
-const ipv6Options = ipv6EgressModes.filter(item => item.value !== 'unchanged').map(({ value, label }) => ({ value, label }))
+const ipv6Options = [{ value: 'inherit', label: '跟随全局策略' }, ...ipv6EgressModes.filter(item => item.value !== 'unchanged').map(({ value, label }) => ({ value, label }))]
+const proxyOptions = computed(() => [
+  ...(props.egressReadState && props.endpoint && (!props.currentSource || props.currentSource === 'account') && !proxies.value.some(proxy => proxy.id === props.currentProxyId)
+    ? [{ value: props.currentProxyId ?? '', label: `已绑定代理 · ${props.endpoint}`, disabled: true }]
+    : []),
+  ...proxies.value.map(proxy => ({
+    value: proxy.id,
+    label: `${proxy.name.trim() || proxy.endpoint}${!proxy.enabled ? '（已禁用）' : proxy.lastTest?.success ? '' : proxy.lastTest ? '（测试失败）' : '（未测试）'}`,
+    description: proxy.endpoint,
+    disabled: !proxy.enabled,
+  })),
+])
+const globalLabel = computed(() => ipv6EgressModes.find(item => item.value === config.value?.defaultMode)?.label)
 const options = computed(() => [
   ...(mode.value === 'legacy' ? [{ value: 'legacy', label: '保持模板原出口配置' }] : []),
   ...(mode.value === 'proxy_pool' ? [{ value: 'proxy_pool', label: '普通代理池（原设置）', disabled: true }] : []),
-  ...(props.preserve ? [{ value: 'preserve', label: '保持原设置' }] : []),
-  ...(props.openai ? [{ value: 'inherit', label: '跟随全局策略' }] : []),
-  { value: 'direct', label: '服务器默认直连' },
-  { value: 'proxy', label: '指定代理' },
+  ...(props.preserve ? [{ value: 'preserve', label: '保持当前' }] : []),
+  { value: 'direct', label: '直连', description: '不使用代理' },
+  ...proxyOptions.value,
   ...(props.openai
     ? [
         { value: 'mihomo', label: 'Mihomo 会话代理池' },
@@ -51,18 +62,6 @@ const options = computed(() => [
       ]
     : []),
 ])
-const proxyOptions = computed(() => [
-  ...(props.egressReadState && props.endpoint && (!props.currentSource || props.currentSource === 'account') && !proxies.value.some(proxy => proxy.id === props.currentProxyId)
-    ? [{ value: props.currentProxyId ?? '', label: `已绑定代理 · ${props.endpoint}`, disabled: true }]
-    : []),
-  ...proxies.value.map(proxy => ({
-    value: proxy.id,
-    label: `${proxy.name}${!proxy.enabled ? '（已禁用）' : proxy.lastTest?.success ? '' : proxy.lastTest ? '（测试失败）' : '（未测试）'}`,
-    description: proxy.endpoint,
-    disabled: !proxy.enabled || proxy.lastTest?.success !== true,
-  })),
-])
-const globalLabel = computed(() => ipv6EgressModes.find(item => item.value === config.value?.defaultMode)?.label)
 const currentLabel = computed(() => {
   if (props.currentSource === 'mihomo')
     return 'Mihomo 会话代理池'
@@ -71,7 +70,7 @@ const currentLabel = computed(() => {
   if (props.currentProxyId || props.endpoint)
     return proxies.value.find(proxy => proxy.id === props.currentProxyId)?.name || props.endpoint || '已绑定代理'
   if (!props.openai)
-    return '服务器默认直连'
+    return '直连'
   const override = props.accountId && config.value?.accountOverrides[props.accountId]
   return override ? ipv6EgressModes.find(item => item.value === override)?.label : `跟随全局策略（${globalLabel.value ?? '加载中'}）`
 })
@@ -119,11 +118,25 @@ onScopeDispose(() => {
   mihomoController?.abort()
 })
 
-function selectMode(value: string) {
-  mode.value = value
-  if (value === 'ipv6' && !ipv6Options.some(item => item.value === egressMode.value))
-    egressMode.value = 'fixed_ipv6_reuse'
-}
+const selection = computed({
+  get: () => mode.value === 'proxy' ? proxyId.value : mode.value === 'inherit' ? 'ipv6' : mode.value,
+  set: (value: string) => {
+    const nextMode = ['preserve', 'direct', 'ipv6', 'mihomo', 'proxy_pool', 'legacy'].includes(value) ? value : 'proxy'
+    mode.value = nextMode
+    if (nextMode === 'proxy')
+      proxyId.value = value
+    if (value === 'ipv6' && !ipv6Options.some(item => item.value === egressMode.value))
+      egressMode.value = 'inherit'
+  },
+})
+// Legacy templates keep their stored shape until the user changes this selector.
+const ipv6Selection = computed({
+  get: () => mode.value === 'inherit' ? 'inherit' : egressMode.value,
+  set: (value: string) => {
+    mode.value = 'ipv6'
+    egressMode.value = value
+  },
+})
 </script>
 
 <template>
@@ -134,28 +147,24 @@ function selectMode(value: string) {
       </template>
       <BaseSelect
         :key="fieldDisabled ? 'disabled' : 'enabled'"
+        v-model="selection"
         class="w-full"
-        :model-value="mode"
         :options="options"
-        :disabled="fieldDisabled"
+        :disabled="fieldDisabled || loading"
         :placeholder="unresolved ? (egressReadState?.loading ? '正在读取出口…' : '出口读取失败') : '请选择'"
         :aria-label="t('accounts.proxy.outboundTunnel')"
-        @update:model-value="selectMode"
       />
     </BaseFormItem>
     <p v-if="unresolved && configError" role="alert" class="m-0 text-cp-xs text-cp-error-text">
       出口配置读取失败，请关闭后重新打开。保存其他设置不会修改出口。
     </p>
-    <BaseFormItem v-if="mode === 'proxy'" label="指定代理">
-      <BaseSelect v-model="proxyId" class="w-full" :options="proxyOptions" :disabled="disabled || loading" placeholder="选择已保存的代理" aria-label="指定代理" />
-    </BaseFormItem>
-    <BaseFormItem v-if="mode === 'ipv6' && openai" label="IPv6 出口策略">
-      <BaseSelect v-model="egressMode" class="w-full" :options="ipv6Options" :disabled="disabled" aria-label="IPv6 出口策略" />
+    <BaseFormItem v-if="(mode === 'ipv6' || mode === 'inherit') && openai" label="IPv6 出口策略">
+      <BaseSelect v-model="ipv6Selection" class="w-full" :options="ipv6Options" :disabled="disabled" aria-label="IPv6 出口策略" />
     </BaseFormItem>
     <p v-if="mode === 'preserve' && accountId" class="m-0 break-all text-cp-xs text-cp-text-secondary">
       当前出口：{{ configError && openai && !endpoint && (!currentSource || currentSource === 'account') ? '策略读取失败，原设置保持不变' : currentLabel }}
     </p>
-    <p v-if="mode === 'inherit'" class="m-0 text-cp-xs text-cp-text-secondary">
+    <p v-if="mode === 'inherit' || (mode === 'ipv6' && egressMode === 'inherit')" class="m-0 text-cp-xs text-cp-text-secondary">
       全局策略：{{ configError ? '读取失败' : globalLabel ?? '加载中' }}
     </p>
     <p v-if="mode === 'mihomo'" class="m-0 text-cp-xs text-cp-text-secondary">
