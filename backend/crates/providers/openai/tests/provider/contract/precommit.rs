@@ -494,7 +494,7 @@ async fn zero_prefetch_immediate_ws_rejection_preserves_pre_delivery_retry() {
 }
 
 #[tokio::test]
-async fn forwarded_ws_prelude_preserves_retry_budget_without_adding_fallback() {
+async fn forwarded_ws_prelude_preserves_retry_budget_then_allows_http_fallback() {
     for (budget, used, should_retry) in [(0, 0, false), (1, 0, true), (1, 1, false), (3, 3, false)]
     {
         let store = Arc::new(MemoryAccountStore::default());
@@ -523,7 +523,6 @@ async fn forwarded_ws_prelude_preserves_retry_budget_without_adding_fallback() {
         let mut attempt = traced_context(&trace, 60 * 1024).with_request_tuning(RequestTuning {
             stream_prefetch_bytes: 60 * 1024,
             websocket_max_retries: budget,
-            websocket_http_fallback_enabled: false,
             ..RequestTuning::default()
         });
         if let Some(index) = NonZeroU32::new(used) {
@@ -552,7 +551,10 @@ async fn forwarded_ws_prelude_preserves_retry_budget_without_adding_fallback() {
                 matches!(error.pre_delivery_retry(), Some(PreDeliveryRetry::SameAccountTransportRetry { retry_index, .. }) if retry_index.get() == 1)
             );
         } else {
-            assert_eq!(error.pre_delivery_retry(), None);
+            assert_eq!(
+                error.pre_delivery_retry(),
+                Some(PreDeliveryRetry::SameAccountTransportFallback)
+            );
         }
         assert!(releases(&trace).is_empty());
         server.await.unwrap();

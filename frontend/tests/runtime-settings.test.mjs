@@ -512,7 +512,7 @@ test('runtime settings load and save without a global WS opening limit', async (
       assert.equal(Object.hasOwn(query.state.form.requestTuning, 'websocketMaxConnecting'), false)
       await query.state.loadSettings()
       assert.equal(query.state.form.requestTuning.maxRequestAttempts, 8)
-      assert.equal(query.state.form.requestTuning.websocketHttpFallbackEnabled, false)
+      assert.equal(Object.hasOwn(query.state.form.requestTuning, 'websocketHttpFallbackEnabled'), false)
       assert.equal(query.state.form.requestTuning.websocketMaxAgeMs, 60_000)
       assert.equal(query.state.form.requestTuning.websocketMaxRetries, 5)
       assert.equal(Object.hasOwn(query.state.form.requestTuning, 'websocketMaxConnecting'), false)
@@ -521,6 +521,7 @@ test('runtime settings load and save without a global WS opening limit', async (
       await query.state.saveSettings()
       assert.equal(query.requests.length, 1)
       assert.equal(Object.hasOwn(query.requests[0].requestTuning, 'websocketMaxConnecting'), false)
+      assert.equal(Object.hasOwn(query.requests[0].requestTuning, 'websocketHttpFallbackEnabled'), false)
       assert.equal(query.requests[0].requestTuning.websocketMaxRetries, 2)
       assert.equal(query.requests[0].maxConcurrentPerAccount, 5)
       assert.deepEqual(query.requests[0].modelMappings, initial.modelMappings)
@@ -548,7 +549,6 @@ test('inherited runtime defaults never add the removed global WS opening limit',
       maxAccountSwitches: 31,
       maxRequestAttempts: 32,
       websocketMaxRetries: 5,
-      websocketHttpFallbackEnabled: true,
       websocketLargeRequestThresholdBytes: 15 * 1024 * 1024,
       streamPrefetchBytes: 128 * 1024,
       websocketMaxAgeMs: 55 * 60 * 1_000,
@@ -897,7 +897,8 @@ test('settings controls and API type no longer expose the global WS opening limi
   assert.doesNotMatch(component, /websocketMaxConnecting/)
   assert.doesNotMatch(api, /websocketMaxConnecting/)
   assert.match(component, /v-model="maxConcurrentPerAccount"/)
-  assert.match(component, /v-model="requestTuning\.websocketHttpFallbackEnabled"/)
+  assert.doesNotMatch(component, /websocketHttpFallbackEnabled/)
+  assert.doesNotMatch(api, /websocketHttpFallbackEnabled/)
 })
 
 test('Excel controls are isolated and shared retries remain in the common configuration', () => {
@@ -944,7 +945,6 @@ test('editing Excel MiB changes only the intended byte field, not shared or nati
     maxAccountSwitches: 4,
     maxRequestAttempts: 9,
     rateLimitCooldownSeconds: 37,
-    websocketHttpFallbackEnabled: false,
     websocketLargeRequestThresholdBytes: 1234567,
     websocketMaxAgeMs: 123456,
     openaiLocationOverrideEnabled: false,

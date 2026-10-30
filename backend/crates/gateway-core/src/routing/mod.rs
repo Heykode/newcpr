@@ -120,7 +120,6 @@ pub struct RequestTuning {
     pub max_account_switches: u32,
     pub max_request_attempts: u32,
     pub websocket_max_retries: u32,
-    pub websocket_http_fallback_enabled: bool,
     #[serde(default = "default_websocket_large_request_threshold_bytes")]
     pub websocket_large_request_threshold_bytes: u64,
     /// 提交前原始上游字节缓冲阈值；零关闭额外缓冲，不限制请求大小。
@@ -247,7 +246,6 @@ impl RequestTuning {
             max_account_switches: DEFAULT_MAX_REQUEST_ATTEMPTS - 1,
             max_request_attempts: DEFAULT_MAX_REQUEST_ATTEMPTS,
             websocket_max_retries: 5,
-            websocket_http_fallback_enabled: true,
             websocket_large_request_threshold_bytes:
                 default_websocket_large_request_threshold_bytes(),
             stream_prefetch_bytes: default_stream_prefetch_bytes(),

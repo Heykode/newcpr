@@ -133,7 +133,7 @@ async fn exchange(
 }
 
 #[tokio::test]
-async fn final_utf8_payload_threshold_and_switches_select_transport_before_opening() {
+async fn final_utf8_payload_threshold_selects_transport_before_opening() {
     let request = request(json!("\u{4f60}\u{597d}".repeat(2000)));
     let (_, websocket) = exchange(
         &request,
@@ -151,18 +151,16 @@ async fn final_utf8_payload_threshold_and_switches_select_transport_before_openi
             .chars()
             .count() as u64
     );
-    for (threshold, enabled, expected) in [
-        (size - 1, true, CodexBackendTransport::HttpSse),
-        (size, true, CodexBackendTransport::HttpSse),
-        (size + 1, true, CodexBackendTransport::WebSocket),
-        (0, true, CodexBackendTransport::WebSocket),
-        (1, false, CodexBackendTransport::WebSocket),
+    for (threshold, expected) in [
+        (size - 1, CodexBackendTransport::HttpSse),
+        (size, CodexBackendTransport::HttpSse),
+        (size + 1, CodexBackendTransport::WebSocket),
+        (0, CodexBackendTransport::WebSocket),
     ] {
         let (response, observed) = exchange(
             &request,
             RequestTuning {
                 websocket_large_request_threshold_bytes: threshold,
-                websocket_http_fallback_enabled: enabled,
                 ..RequestTuning::default()
             },
             expected,

@@ -195,7 +195,6 @@ async fn runtime_snapshot_compiles_account_busy_wait_defaults_overrides_and_froz
         account_busy_wait_fallback_max_waiting: 111,
         account_busy_wait_fallback_timeout_seconds: 33,
         max_request_attempts: 8,
-        websocket_http_fallback_enabled: false,
         websocket_large_request_threshold_bytes: 4096,
         stream_prefetch_bytes: 256 * 1024,
         ..RequestTuning::default()
@@ -227,7 +226,6 @@ async fn runtime_snapshot_compiles_account_busy_wait_defaults_overrides_and_froz
             expected.account_busy_wait_fallback_timeout_seconds,
         ),
         max_request_attempts: Some(expected.max_request_attempts),
-        websocket_http_fallback_enabled: Some(expected.websocket_http_fallback_enabled),
         websocket_large_request_threshold_bytes: Some(
             expected.websocket_large_request_threshold_bytes,
         ),

@@ -238,7 +238,7 @@ fn content_fallback_normalizes_text_formats_and_preserves_explicit_affinity() {
 }
 
 #[tokio::test]
-async fn message_too_big_without_retries_or_fallback_is_request_scoped() {
+async fn message_too_big_on_required_websocket_without_retries_is_request_scoped() {
     const ACCOUNT: &str = "acct_provider_contract";
     for (reused, reason) in [
         (false, "opaque upstream size detail"),
@@ -285,12 +285,12 @@ async fn message_too_big_without_retries_or_fallback_is_request_scoped() {
         });
         let provider = provider_with_base_url_and_retry_budget(&store, base_url, 0);
         let generate = || {
-            generate_with_persisted_session_context(
+            websocket_fixture_request(generate_with_persisted_session_context(
                 ACCOUNT,
                 "conversation-size",
                 "session-size",
                 "thread-size",
-            )
+            ))
         };
         if reused {
             let mut seed = provider
@@ -307,12 +307,7 @@ async fn message_too_big_without_retries_or_fallback_is_request_scoped() {
         let mut stream = provider
             .execute(
                 planned_request("openai", Operation::Generate(generate())),
-                context("req_size", CancellationToken::new()).with_request_tuning(
-                    gateway_core::routing::RequestTuning {
-                        websocket_http_fallback_enabled: false,
-                        ..Default::default()
-                    },
-                ),
+                context("req_size", CancellationToken::new()),
             )
             .await
             .unwrap();

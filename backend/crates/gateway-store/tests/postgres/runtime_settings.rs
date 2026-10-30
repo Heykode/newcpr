@@ -849,7 +849,6 @@ async fn request_tuning_overrides_should_round_trip() {
         max_account_switches: Some(7),
         max_request_attempts: Some(8),
         websocket_max_retries: Some(9),
-        websocket_http_fallback_enabled: Some(false),
         websocket_large_request_threshold_bytes: Some(4096),
         stream_prefetch_bytes: Some(256 * 1024),
         websocket_max_age_ms: Some(60_000),
@@ -935,6 +934,9 @@ async fn legacy_request_tuning_should_load_in_settings_and_snapshot_and_disappea
         json!({"websocketMaxConnecting": 4}),
         json!({"websocketMaxConnecting": null}),
         json!({"websocketMaxConnecting": 4, "maxRequestAttempts": 8}),
+        json!({"websocketHttpFallbackEnabled": false, "maxRequestAttempts": 8}),
+        json!({"websocketHttpFallbackEnabled": true, "maxRequestAttempts": 8}),
+        json!({"websocketHttpFallbackEnabled": null}),
         json!({
             "accountBusyWaitEnabled": null,
             "accountBusyWaitStickyMaxWaiting": null,
@@ -981,6 +983,7 @@ async fn legacy_request_tuning_should_load_in_settings_and_snapshot_and_disappea
             serde_json::to_value(&expected).expect("serialize live overrides")
         );
         assert!(persisted.0.get("websocketMaxConnecting").is_none());
+        assert!(persisted.0.get("websocketHttpFallbackEnabled").is_none());
         assert_eq!(
             repository
                 .load_runtime_settings()

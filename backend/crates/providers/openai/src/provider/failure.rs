@@ -593,7 +593,6 @@ pub(super) struct WebSocketRecoveryContext<'a> {
     pub(super) policy: WebSocketFailurePolicy,
     pub(super) replay_boundary: ReplayBoundary,
     pub(super) requirement: TransportRequirement,
-    pub(super) allow_http_fallback: bool,
     pub(super) retry_count: u32,
     pub(super) max_retries: u32,
     pub(super) request_id: &'a str,
@@ -723,7 +722,7 @@ pub(super) fn apply_websocket_recovery_policy(
         return;
     }
 
-    if !context.allow_http_fallback || !context.requirement.allows_pre_send_http_fallback() {
+    if !context.requirement.allows_pre_send_http_fallback() {
         return;
     }
     failure.error.set_pre_delivery_transport_fallback();

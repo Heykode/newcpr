@@ -177,12 +177,14 @@ profiles or random fingerprint generation.
   request error, with its raw event/status preserved and no credential mutation
   or replay permission. Keep explicit auth/ban evidence ahead of generic status
   rules and preserve the existing actual-empty-HTTP behavior.
-- Before any WS opening, optional `NewChain` requests at or above
+- Before any WS opening, independent `NewChain` / `WebSocketNewChain` requests at or above
   `websocket_large_request_threshold_bytes` use the existing HTTP transport.
-  Default is 15 MiB; zero or disabled `websocket_http_fallback_enabled` disables
-  size selection. Measure the final projected WS JSON UTF-8 bytes before
-  compression. Native connection-local first turns, warmup and every previous
-  response scope retain their existing transport contract. Keep the frozen
+  Default is 15 MiB; a zero threshold disables size selection. The retired
+  HTTP fallback override is ignored. Measure the final projected WS JSON UTF-8 bytes before
+  compression. Warmup and every previous response scope retain their existing
+  transport contract; oversized exact continuations fail without reconstructing
+  history. This pre-send choice does not authorize native WS fallback after a
+  failed send. Keep the frozen
   attempt client, selected account, identity, proxy and original input.
   Do not persist size selection as a session failure or permanent HTTP mode.
 

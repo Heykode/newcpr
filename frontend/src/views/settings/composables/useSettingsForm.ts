@@ -34,7 +34,6 @@ const requestTuningFallbacks: RequestTuning = {
   maxAccountSwitches: 31,
   maxRequestAttempts: 32,
   websocketMaxRetries: 5,
-  websocketHttpFallbackEnabled: true,
   websocketLargeRequestThresholdBytes: 15 * 1024 * 1024,
   streamPrefetchBytes: 128 * 1024,
   websocketMaxAgeMs: 55 * 60 * 1_000,

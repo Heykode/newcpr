@@ -117,7 +117,6 @@ fn request_tuning_overrides_round_trip_all_live_fields() {
         max_account_switches: Some(7),
         max_request_attempts: Some(8),
         websocket_max_retries: Some(9),
-        websocket_http_fallback_enabled: Some(false),
         websocket_large_request_threshold_bytes: Some(4096),
         stream_prefetch_bytes: Some(256 * 1024),
         websocket_max_age_ms: Some(60_000),
@@ -160,7 +159,6 @@ fn request_tuning_overrides_round_trip_all_live_fields() {
             "maxAccountSwitches": 7,
             "maxRequestAttempts": 8,
             "websocketMaxRetries": 9,
-            "websocketHttpFallbackEnabled": false,
             "websocketLargeRequestThresholdBytes": 4096,
             "streamPrefetchBytes": 262144,
             "websocketMaxAgeMs": 60000,
@@ -429,7 +427,6 @@ fn account_busy_wait_overrides_validate_each_integer_range_even_when_disabled() 
 fn request_tuning_overrides_discard_only_the_legacy_global_opening_limit() {
     let expected = RequestTuningOverrides {
         max_account_switches: Some(7),
-        websocket_http_fallback_enabled: Some(false),
         ..Default::default()
     };
     let serialized = serde_json::to_value(&expected).expect("serialize live overrides");
@@ -449,6 +446,21 @@ fn request_tuning_overrides_discard_only_the_legacy_global_opening_limit() {
         assert_eq!(
             serde_json::to_value(decoded).expect("serialize decoded overrides"),
             serialized
+        );
+    }
+}
+
+#[test]
+fn retired_http_fallback_switch_is_accepted_but_cannot_disable_official_recovery() {
+    for legacy in [json!(false), json!(true), json!(null)] {
+        let value = json!({"websocketHttpFallbackEnabled": legacy, "websocketMaxRetries": 3});
+        let decoded: RequestTuningOverrides = serde_json::from_value(value).unwrap();
+        assert_eq!(decoded.websocket_max_retries, Some(3));
+        assert!(
+            serde_json::to_value(decoded)
+                .unwrap()
+                .get("websocketHttpFallbackEnabled")
+                .is_none()
         );
     }
 }

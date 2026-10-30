@@ -94,7 +94,9 @@ Official `12771aca` alignment admits a bounded same-account transport directive
 for typed `MessageTooBig` before semantic output even when the send state is
 `Ambiguous`. Keep that factual state and `replay_is_safe` unchanged. This exception
 does not authorize account rotation, exact-connection replay, late-output replay,
-or ordinary ambiguous errors. Preserve the configured HTTP fallback switch.
+or ordinary ambiguous errors. HTTP fallback follows the transport requirement;
+the retired administrator override cannot disable recovery. Accept historical
+boolean/null overrides on load, but never serialize or apply them.
 See `docs/ws-size-recovery-and-settings-audit.md` for the scoped difference ledger.
 
 ## Quota Error Contract

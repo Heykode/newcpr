@@ -34,7 +34,6 @@ export interface RequestTuning {
   maxAccountSwitches: number
   maxRequestAttempts: number
   websocketMaxRetries: number
-  websocketHttpFallbackEnabled: boolean
   websocketLargeRequestThresholdBytes: number
   streamPrefetchBytes: number
   websocketMaxAgeMs: number

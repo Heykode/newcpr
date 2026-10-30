@@ -140,7 +140,7 @@ async fn cold_websocket_should_fall_back_without_recording_a_successful_connect(
 }
 
 #[tokio::test]
-async fn disabled_http_fallback_should_not_escape_through_the_opening_budget() {
+async fn required_websocket_new_chain_does_not_escape_through_the_opening_budget() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
@@ -148,7 +148,7 @@ async fn disabled_http_fallback_should_not_escape_through_the_opening_budget() {
         tokio::select! {
             () = tokio::time::sleep(Duration::from_millis(1100)) => {}
             unexpected = listener.accept() => {
-                panic!("disabled HTTP fallback opened another connection: {}", unexpected.is_ok());
+                panic!("required WebSocket opened another connection: {}", unexpected.is_ok());
             }
         }
         let mut websocket = accept_codex_test_websocket(stream).await;
@@ -166,17 +166,13 @@ async fn disabled_http_fallback_should_not_escape_through_the_opening_budget() {
         format!("http://{addr}"),
         test_wire_profile(),
     )
-    .with_websocket_pool(Arc::clone(&pool))
-    .with_request_tuning(gateway_core::runtime::RequestTuningHandle::new(
-        gateway_core::routing::RequestTuning {
-            websocket_http_fallback_enabled: false,
-            ..gateway_core::routing::RequestTuning::defaults()
-        },
-    ));
+    .with_websocket_pool(Arc::clone(&pool));
+    let mut request = new_chain_request("conversation-no-http-fallback");
+    request.downstream_websocket_connection_id = Some("required-ws".to_owned());
     let response = timeout(
         Duration::from_secs(10),
         backend.create_response(
-            &new_chain_request("conversation-no-http-fallback"),
+            &request,
             request_context("req_no_http_fallback", Some("chatgpt-account")),
         ),
     )

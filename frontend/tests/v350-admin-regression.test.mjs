@@ -324,7 +324,7 @@ test('runtime save keeps custom parameters and silently rereads server state aft
   await tick()
   assert.equal(updates[0].requestTuning.maxRequestAttempts, 32)
   assert.equal(Object.hasOwn(updates[0].requestTuning, 'websocketMaxConnecting'), false)
-  assert.equal(updates[0].requestTuning.websocketHttpFallbackEnabled, false)
+  assert.equal(Object.hasOwn(updates[0].requestTuning, 'websocketHttpFallbackEnabled'), false)
   assert.equal(loads.at(-1).silent, true)
   assert.equal(state.form.requestTuning.maxRequestAttempts, 24)
   assert.equal(Object.hasOwn(state.form.requestTuning, 'websocketMaxConnecting'), false)
