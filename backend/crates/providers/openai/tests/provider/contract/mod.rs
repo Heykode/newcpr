@@ -95,6 +95,7 @@ mod timing;
 mod tls_recovery;
 mod turn_affinity;
 mod ws_message_compatibility;
+mod ws_size_recovery;
 const CAPTURE_COMPLETED_SSE: &str = concat!(
     "event: response.completed\n",
     "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_scope_capture\",\"model\":\"gpt-5.4\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}}\n\n"
@@ -2380,7 +2381,7 @@ async fn websocket_close_after_delivery_preserves_details_and_reconnects_through
 
     assert!(!format!("{error:?}").contains("message too big"));
     assert!(!error.to_string().contains("message too big"));
-    assert_eq!(error.kind(), ProviderErrorKind::InvalidRequest);
+    assert_eq!(error.kind(), ProviderErrorKind::MessageTooBig);
     assert_eq!(error.upstream_status(), Some(413));
     assert_eq!(error.send_state(), UpstreamSendState::Ambiguous);
     assert!(

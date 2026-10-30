@@ -3971,6 +3971,100 @@ fn explicit_429_with_ambiguous_send_state_is_not_retried() {
 }
 
 #[test]
+fn size_recovery_preserves_same_account_and_ambiguous_send_fact() {
+    let operation = generate_operation();
+    let route_plan = plan(&operation);
+    let size_error = || {
+        ProviderError::new(
+            ProviderErrorKind::MessageTooBig,
+            UpstreamSendState::Ambiguous,
+        )
+    };
+    let (coordinator, store, provider) = coordinator(vec![
+        Script::Stream {
+            account_id: "acct_first",
+            items: vec![Err(size_error().with_pre_delivery_transport_retry(
+                NonZeroU32::new(1).unwrap(),
+                Duration::ZERO,
+            ))],
+        },
+        Script::Stream {
+            account_id: "acct_first",
+            items: vec![Err(size_error().with_pre_delivery_transport_fallback())],
+        },
+        Script::Stream {
+            account_id: "acct_first",
+            items: complete_stream(None),
+        },
+    ]);
+    let mut session = block_on(coordinator.start(
+        model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
+        operation,
+        route_plan,
+        None,
+        None,
+        CancellationToken::new(),
+    ))
+    .unwrap();
+    block_on(session.collect_uncommitted()).unwrap();
+    block_on(session.commit_downstream(Some(200))).unwrap();
+    let contexts = provider.contexts.lock().unwrap();
+    assert_eq!(contexts.len(), 3);
+    assert_eq!(
+        contexts[1].transport(),
+        AttemptTransport::Retry(NonZeroU32::new(1).unwrap())
+    );
+    assert_eq!(contexts[2].transport(), AttemptTransport::Fallback);
+    for attempt in &contexts[1..] {
+        assert_eq!(
+            attempt.required_account(),
+            Some(&ProviderAccountId::new("acct_first").unwrap())
+        );
+    }
+    let state = store.state.lock().unwrap();
+    assert_eq!(state.finalizations[0].outcome, ExecutionOutcome::Succeeded);
+    assert_eq!(state.finalizations[0].attempt_count, 3);
+}
+
+#[test]
+fn size_error_without_transport_directive_does_not_authorize_replay() {
+    let (store, provider) = terminal_non_idempotent_failure(
+        vec![Err(ProviderError::new(
+            ProviderErrorKind::MessageTooBig,
+            UpstreamSendState::Ambiguous,
+        ))],
+        None,
+    );
+    assert_eq!(provider.contexts.lock().unwrap().len(), 1);
+    let state = store.state.lock().unwrap();
+    assert_eq!(
+        state.finalizations[0].send_state,
+        UpstreamSendState::Ambiguous
+    );
+    assert_eq!(state.intermediate_failures, 0);
+}
+
+#[test]
+fn size_recovery_directive_cannot_replay_after_semantic_output() {
+    let (store, provider) = terminal_non_idempotent_failure(
+        vec![
+            Ok(GatewayEvent::TextDelta(gateway_core::event::TextDelta {
+                content_index: 0,
+                text: "already delivered".into(),
+            })),
+            Err(ProviderError::new(
+                ProviderErrorKind::MessageTooBig,
+                UpstreamSendState::Ambiguous,
+            )
+            .with_pre_delivery_transport_fallback()),
+        ],
+        None,
+    );
+    assert_eq!(provider.contexts.lock().unwrap().len(), 1);
+    assert_eq!(store.state.lock().unwrap().intermediate_failures, 0);
+}
+
+#[test]
 fn explicit_429_after_structural_event_should_retry_before_commit() {
     let operation = generate_operation();
     let route_plan = plan(&operation);
@@ -4924,6 +5018,11 @@ fn explicit_retry_prohibition_overrides_rotation_transient_and_transport_recover
         transient_rejection(),
         transient_rejection().with_pre_delivery_transport_fallback(),
         transient_rejection().with_pre_delivery_retry(),
+        ProviderError::new(
+            ProviderErrorKind::MessageTooBig,
+            UpstreamSendState::Ambiguous,
+        )
+        .with_pre_delivery_transport_fallback(),
     ] {
         let operation = generate_operation();
         let route_plan = plan(&operation);

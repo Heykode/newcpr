@@ -88,6 +88,15 @@ Wrong: removing only Provider buffering leaves transport waiting before the
 Provider sees the event. Correct: remove native waiting at both layers and keep
 replay eligibility independent from physical response commitment.
 
+## WS Size-Recovery Exception
+
+Official `12771aca` alignment admits a bounded same-account transport directive
+for typed `MessageTooBig` before semantic output even when the send state is
+`Ambiguous`. Keep that factual state and `replay_is_safe` unchanged. This exception
+does not authorize account rotation, exact-connection replay, late-output replay,
+or ordinary ambiguous errors. Preserve the configured HTTP fallback switch.
+See `docs/ws-size-recovery-and-settings-audit.md` for the scoped difference ledger.
+
 ## Quota Error Contract
 
 Preserve optional HTTP status and a bounded ASCII error code. Map known states

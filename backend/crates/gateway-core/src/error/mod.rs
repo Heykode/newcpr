@@ -25,6 +25,8 @@ pub use crate::validation::{
 pub enum ProviderErrorKind {
     /// 请求语义错误。
     InvalidRequest,
+    /// 上游拒绝当前传输的消息大小，不代表账号或会话不可用。
+    MessageTooBig,
     /// previous-response 续接状态已不可用，需要客户端重建请求链。
     ContinuationRecoveryRequired,
     /// Provider 不支持所需能力。
@@ -67,6 +69,7 @@ impl ProviderErrorKind {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::InvalidRequest => "invalid_request",
+            Self::MessageTooBig => "message_too_big",
             Self::ContinuationRecoveryRequired => "continuation_recovery_required",
             Self::Unsupported => "unsupported",
             Self::Unauthorized => "unauthorized",
@@ -1065,6 +1068,8 @@ pub enum GatewayErrorKind {
     ConcurrencyQueueTimeout,
     /// 请求无效。
     InvalidRequest,
+    /// 消息超过上游传输允许的大小。
+    MessageTooBig,
     /// 请求能力不支持。
     Unsupported,
     /// 下游认证失败。
@@ -1099,6 +1104,7 @@ impl GatewayErrorKind {
             Self::ConcurrencyQueueFull => "concurrency_queue_full",
             Self::ConcurrencyQueueTimeout => "concurrency_queue_timeout",
             Self::InvalidRequest => "invalid_request",
+            Self::MessageTooBig => "message_too_big",
             Self::Unsupported => "unsupported",
             Self::Unauthorized => "unauthorized",
             Self::PolicyDenied => "policy_denied",
@@ -1191,6 +1197,10 @@ impl GatewayError {
             ProviderErrorKind::InvalidRequest => Self::new(
                 GatewayErrorKind::InvalidRequest,
                 "Invalid upstream request.",
+            ),
+            ProviderErrorKind::MessageTooBig => Self::new(
+                GatewayErrorKind::MessageTooBig,
+                "The upstream WebSocket message is too large.",
             ),
             ProviderErrorKind::ContinuationRecoveryRequired => Self::new(
                 GatewayErrorKind::InvalidRequest,

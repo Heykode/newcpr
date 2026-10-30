@@ -283,6 +283,11 @@ pub const fn gateway_error_contract(
             "invalid_request_error",
             "invalid_request",
         ),
+        GatewayErrorKind::MessageTooBig => (
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "invalid_request_error",
+            "message_too_big",
+        ),
         GatewayErrorKind::Unsupported => (
             StatusCode::BAD_REQUEST,
             "invalid_request_error",

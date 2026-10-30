@@ -1597,6 +1597,10 @@ where
             error.pre_delivery_retry(),
             Some(crate::error::PreDeliveryRetry::SameAccountConnectionRetry { .. })
         );
+        // Honor the provider's bounded size-recovery directive without changing
+        // the observed send state or permitting account rotation.
+        let transport_send_allows_recovery = attempt_send_state != UpstreamSendState::Ambiguous
+            || error.kind() == ProviderErrorKind::MessageTooBig;
         let transport_recovery = match error.pre_delivery_retry() {
             Some(crate::error::PreDeliveryRetry::SameAccountConnectionRetry { transport })
                 if !self.replay_barrier_reached
@@ -1616,14 +1620,14 @@ where
                 delay,
             }) if !self.replay_barrier_reached
                 && !self.delivery_pending
-                && attempt_send_state != UpstreamSendState::Ambiguous =>
+                && transport_send_allows_recovery =>
             {
                 Some((AttemptTransport::Retry(retry_index), delay))
             }
             Some(crate::error::PreDeliveryRetry::SameAccountTransportFallback)
                 if !self.replay_barrier_reached
                     && !self.delivery_pending
-                    && attempt_send_state != UpstreamSendState::Ambiguous =>
+                    && transport_send_allows_recovery =>
             {
                 Some((
                     AttemptTransport::Fallback,

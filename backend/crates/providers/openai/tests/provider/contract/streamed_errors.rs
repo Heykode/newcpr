@@ -191,7 +191,14 @@ async fn websocket_close_diagnosis_requires_an_actual_close_frame() {
             .unwrap();
         assert_eq!(error.send_state(), UpstreamSendState::Ambiguous);
         assert!(!error.replay_is_safe());
-        assert_eq!(error.pre_delivery_retry(), None);
+        if code == Some(CloseCode::Size) {
+            assert!(matches!(
+                error.pre_delivery_retry(),
+                Some(PreDeliveryRetry::SameAccountTransportRetry { .. })
+            ));
+        } else {
+            assert_eq!(error.pre_delivery_retry(), None);
+        }
         let diagnostic = error.diagnostic().unwrap();
         assert_eq!(diagnostic.stage(), Some("receive"));
         assert_eq!(

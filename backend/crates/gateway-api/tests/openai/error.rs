@@ -143,6 +143,23 @@ fn invalid_request_error_should_map_to_openai_bad_request() {
 }
 
 #[test]
+fn message_too_big_error_should_map_to_openai_payload_too_large() {
+    let error = ProviderError::new(
+        ProviderErrorKind::MessageTooBig,
+        UpstreamSendState::Ambiguous,
+    );
+    let gateway = GatewayError::from_provider(&error);
+    assert_eq!(
+        gateway_error_contract(gateway.kind()),
+        (
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "invalid_request_error",
+            "message_too_big",
+        )
+    );
+}
+
+#[test]
 fn unsupported_error_should_map_to_openai_bad_request() {
     assert_eq!(
         gateway_error_contract(GatewayErrorKind::Unsupported),
