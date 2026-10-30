@@ -725,9 +725,8 @@ fn settings_request_requires_a_positive_config_revision() {
     for invalid in [json!(null), json!(0), json!(-1), json!(1.5), json!("7")] {
         let mut body = update_body();
         body["configRevision"] = invalid;
-        match serde_json::from_value::<UpdateRuntimeSettingsRequest>(body) {
-            Ok(request) => assert_eq!(request.validate().unwrap_err().field(), "configRevision"),
-            Err(_) => {}
+        if let Ok(request) = serde_json::from_value::<UpdateRuntimeSettingsRequest>(body) {
+            assert_eq!(request.validate().unwrap_err().field(), "configRevision");
         }
     }
 }
