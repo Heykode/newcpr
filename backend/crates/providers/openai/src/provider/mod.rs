@@ -101,6 +101,7 @@ mod encrypted_history;
 mod excel;
 mod execution;
 mod failure;
+mod guardian;
 mod live;
 mod observation;
 mod quality_probe;
@@ -151,6 +152,7 @@ pub struct CodexProvider {
     live_calls_url: Url,
     session_identity: Option<CodexSessionIdentity>,
     session_transport_recovery: CodexSessionTransportRecovery,
+    guardian_routing: guardian::GuardianRouting,
     encrypted_history: encrypted_history::InvalidEncryptedHistory,
     stream_max_retries: u32,
     request_tuning: Option<gateway_core::runtime::RequestTuningHandle>,
@@ -264,6 +266,7 @@ impl CodexProvider {
             live_calls_url,
             session_identity: None,
             session_transport_recovery: CodexSessionTransportRecovery::default(),
+            guardian_routing: guardian::GuardianRouting::default(),
             encrypted_history: encrypted_history::InvalidEncryptedHistory::default(),
             stream_max_retries: _stream_max_retries,
             request_tuning: None,
@@ -762,16 +765,55 @@ impl Provider for CodexProvider {
         let before = trace
             .is_enabled()
             .then(|| crate::transport::evidence::request_state(&upstream_request));
+        let guardian_parent = (!excel
+            && !state_owner_cross_account
+            && upstream_request.is_guardian()
+            && matches!(
+                lease.authentication(),
+                crate::credential::CodexRuntimeAuthentication::OAuth(_)
+            ))
+        .then(|| {
+            upstream_request
+                .client_metadata()?
+                .get("parent_response_id")?
+                .as_str()
+        })
+        .flatten()
+        .and_then(|response_id| {
+            self.guardian_routing
+                .get(
+                    context.client_api_key_ref(),
+                    lease.account_id(),
+                    response_id,
+                )
+                .map(|affinity| (response_id.to_owned(), affinity))
+        });
+        // A sticky account hit does not prove ownership of a Guardian parent response.
+        let request_state_scope =
+            if !excel && upstream_request.is_guardian() && !has_explicit_state_owner {
+                RequestAccountScope::Unknown
+            } else {
+                account_scope
+            };
         scope_request_to_account(
             &mut upstream_request,
             lease.installation_id(),
-            account_scope,
+            request_state_scope,
         );
+        if let Some((response_id, _)) = &guardian_parent
+            && let Some(Value::Object(metadata)) =
+                upstream_request.body_mut().get_mut("client_metadata")
+        {
+            metadata.insert(
+                "parent_response_id".to_owned(),
+                Value::String(response_id.clone()),
+            );
+        }
         if let Some(before) = before {
             trace.record_evidence(
                 "provider.request.account_scope",
                 serde_json::json!({
-                    "accountStateReusable": account_scope.can_reuse_account_state(),
+                    "accountStateReusable": request_state_scope.can_reuse_account_state(),
                     "before": before,
                     "after": crate::transport::evidence::request_state(&upstream_request),
                 }),
@@ -912,7 +954,9 @@ impl Provider for CodexProvider {
                     .get("session_id")
                     .and_then(Value::as_str)
             });
-        let client = self.account_exit_client(&context, lease.account(), excel, session)?;
+        let client = self
+            .account_exit_client(&context, lease.account(), excel, session)?
+            .with_routing_affinity(guardian_parent.map(|(_, affinity)| affinity));
         let client = if !excel && context.continuation_attempt() == ContinuationAttempt::None {
             client.with_connection_budget(context.connection_budget().clone())
         } else {
@@ -943,6 +987,7 @@ impl Provider for CodexProvider {
             session_affinity_key_hash,
             transport_affinity_key,
             session_transport_recovery: self.session_transport_recovery.clone(),
+            guardian_routing: self.guardian_routing.clone(),
             websocket_retry_count,
             stream_max_retries: if self.request_tuning.is_some() {
                 request_tuning.websocket_max_retries

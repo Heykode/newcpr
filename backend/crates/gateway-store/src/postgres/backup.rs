@@ -603,6 +603,7 @@ impl BackupRepository for PgBackupRepository {
 
     async fn list_scheduled_completed_desc(
         &self,
+        offset: u64,
         limit: u32,
     ) -> AdminStoreResult<Vec<BackupRecord>> {
         let limit = limit.clamp(1, 10000);
@@ -613,9 +614,10 @@ impl BackupRepository for PgBackupRepository {
                from backup_records
               where trigger_kind = 'scheduled' and status = 'completed'
               order by completed_at desc, id desc
-              limit $1",
+              limit $1 offset $2",
         )
         .bind(i64::from(limit))
+        .bind(i64::try_from(offset).map_err(|_| store_invalid("page offset"))?)
         .fetch_all(&self.pool)
         .await
         .map_err(|_| store_unavailable("list scheduled completed backups"))?;

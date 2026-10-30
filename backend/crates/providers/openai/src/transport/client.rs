@@ -903,6 +903,7 @@ pub type CodexResponseMetadataUpdates = CodexWebSocketResponseMetadataUpdates;
 
 /// Codex Responses 上游 live SSE 响应。
 pub struct CodexBackendStreamingResponse {
+    pub(crate) routing_affinity: Option<super::routing_affinity::ChatGptRoutingAffinity>,
     /// 上游 SSE 字节流。
     pub body: CodexBackendSseStream,
     /// 实际使用的上游传输。
@@ -965,6 +966,7 @@ pub(super) struct RecoveryAttemptRoute {
 /// Codex HTTP/SSE 上游客户端。
 #[derive(Clone)]
 pub struct CodexBackendClient {
+    pub(super) routing_affinity: Option<super::routing_affinity::ChatGptRoutingAffinity>,
     pub(super) connection_budget: Option<gateway_core::engine::connection::ConnectionBudget>,
     pub(super) session_proxy:
         Option<Arc<dyn gateway_core::provider_ports::session_proxy::SessionProxyLease>>,
@@ -989,6 +991,14 @@ pub struct CodexBackendClient {
 }
 
 impl CodexBackendClient {
+    pub(crate) fn with_routing_affinity(
+        mut self,
+        affinity: Option<super::routing_affinity::ChatGptRoutingAffinity>,
+    ) -> Self {
+        self.routing_affinity = affinity;
+        self
+    }
+
     pub(crate) fn with_default_http_client(mut self) -> Self {
         self.default_direct_client = true;
         self

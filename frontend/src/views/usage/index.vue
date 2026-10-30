@@ -65,12 +65,15 @@ const {
   providerQuery,
   usagePagination,
   loading,
-  analyticsLoading,
-  diagnosticLoading,
   error: tableError,
   records,
   summary,
-  insights,
+  health,
+  performance,
+  cost,
+  diagnostics,
+  performanceMetric,
+  costMetric,
   refreshingList,
   diagnosticDimension,
   loadUsageRecords,
@@ -126,13 +129,15 @@ watch(timeRange, () => {
       </template>
     </BasePageHeader>
 
-    <UsageSummaryCards :summary="summary" />
+    <UsageSummaryCards :summary="summary.data" :loading="summary.loading" :error="summary.error" />
     <UsageInsightsGrid
       v-model:diagnostic-dimension="diagnosticDimension"
-      :overview="insights.overview"
-      :diagnostics="insights.diagnostics"
-      :loading="analyticsLoading"
-      :diagnostic-loading="diagnosticLoading"
+      v-model:performance-metric="performanceMetric"
+      v-model:cost-metric="costMetric"
+      :health="health"
+      :performance="performance"
+      :cost="cost"
+      :diagnostics="diagnostics"
       @diagnostic-page-change="handleDiagnosticPageChange"
     />
 

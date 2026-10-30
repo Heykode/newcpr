@@ -35,7 +35,7 @@ pub struct RequestSearchQuery {
 }
 
 // Flattened URL fields are buffered as strings by serde; JSON tests use numbers.
-fn query_number<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+pub(super) fn query_number<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
 where
     D: serde::Deserializer<'de>,
     T: Deserialize<'de> + std::str::FromStr,

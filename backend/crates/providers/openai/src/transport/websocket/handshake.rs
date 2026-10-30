@@ -157,9 +157,14 @@ pub(super) async fn send_websocket_request(
 }
 
 pub(super) fn websocket_connection_metadata(
+    connection: &CodexWebSocketConnection,
     response: &WsResponse<Option<Vec<u8>>>,
 ) -> CodexWebSocketConnectionMetadata {
     CodexWebSocketConnectionMetadata {
+        routing_affinity: crate::transport::routing_affinity::ChatGptRoutingAffinity::from_response(
+            &connection.endpoint,
+            response.headers(),
+        ),
         session_proxy: None,
         turn_state: response_meta::turn_state(response.headers()),
         set_cookie_headers: response_meta::set_cookie_headers(response.headers()),

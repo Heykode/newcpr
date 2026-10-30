@@ -233,6 +233,9 @@ function fixtures() {
       averageLatencyMs: '1234 ms',
     }],
     ['/api/admin/usage/insights/overview', overview],
+    ['/api/admin/usage/insights/health', { metric: 'health', granularity: '1d', data: overview.health }],
+    ['/api/admin/usage/insights/performance', { metric: 'latency', granularity: '1d', data: { summary: { p50Ms: 10, p95Ms: 20, p99Ms: 30 }, points: [] } }],
+    ['/api/admin/usage/insights/cost', { metric: 'cost', granularity: '1d', data: { summary: overview.cost, points: [] } }],
     ['/api/admin/usage/insights/diagnostics', { dimension: 'model', items: [] }],
   ])
 }

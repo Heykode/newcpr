@@ -105,6 +105,9 @@ pub(super) struct AdminTestFixture {
     pub account: Arc<Mutex<Option<AccountDirectoryItem>>>,
     pub usage_records: Arc<Mutex<Vec<UsageListRecord>>>,
     pub usage_detail: Arc<Mutex<Option<UsageDetail>>>,
+    pub metric_observation:
+        Arc<Mutex<Option<gateway_admin::model::observability::UsageInsightsObservation>>>,
+    pub metric_query: Arc<Mutex<Option<(TimeRange, UsageFilter)>>>,
     pub diagnostics: Arc<Mutex<Vec<DiagnosticObservation>>>,
     pub ops_errors: Arc<Mutex<Vec<OpsError>>>,
     pub dashboard_observation: Arc<Mutex<Option<DashboardObservation>>>,
@@ -136,6 +139,8 @@ impl AdminTestFixture {
         let account_groups = Arc::new(MemoryAccountGroupStore::new());
         let usage_records = Arc::new(Mutex::new(Vec::new()));
         let usage_detail = Arc::new(Mutex::new(None));
+        let metric_observation = Arc::new(Mutex::new(None));
+        let metric_query = Arc::new(Mutex::new(None));
         let diagnostics = Arc::new(Mutex::new(Vec::new()));
         let ops_errors = Arc::new(Mutex::new(Vec::new()));
         let dashboard_observation = Arc::new(Mutex::new(None));
@@ -146,6 +151,8 @@ impl AdminTestFixture {
             account: Arc::clone(&account),
             usage_records: Arc::clone(&usage_records),
             usage_detail: Arc::clone(&usage_detail),
+            metric_observation: Arc::clone(&metric_observation),
+            metric_query: Arc::clone(&metric_query),
             diagnostics: Arc::clone(&diagnostics),
             ops_errors: Arc::clone(&ops_errors),
             dashboard_observation: Arc::clone(&dashboard_observation),
@@ -206,6 +213,8 @@ impl AdminTestFixture {
             account,
             usage_records,
             usage_detail,
+            metric_observation,
+            metric_query,
             diagnostics,
             ops_errors,
             dashboard_observation,
@@ -959,6 +968,9 @@ struct UnusedStore {
     account: Arc<Mutex<Option<AccountDirectoryItem>>>,
     usage_records: Arc<Mutex<Vec<UsageListRecord>>>,
     usage_detail: Arc<Mutex<Option<UsageDetail>>>,
+    metric_observation:
+        Arc<Mutex<Option<gateway_admin::model::observability::UsageInsightsObservation>>>,
+    metric_query: Arc<Mutex<Option<(TimeRange, UsageFilter)>>>,
     diagnostics: Arc<Mutex<Vec<DiagnosticObservation>>>,
     ops_errors: Arc<Mutex<Vec<OpsError>>>,
     dashboard_observation: Arc<Mutex<Option<DashboardObservation>>>,
@@ -1216,6 +1228,25 @@ impl AccountRuntimeStore for UnusedStore {
 
 #[async_trait]
 impl ObservabilityStore for UnusedStore {
+    async fn usage_metric_observation(
+        &self,
+        range: TimeRange,
+        filter: UsageFilter,
+        metric: gateway_admin::model::observability::UsageInsightMetric,
+    ) -> AdminStoreResult<gateway_admin::model::observability::UsageInsightsObservation> {
+        *self.metric_query.lock().unwrap() = Some((range, filter));
+        let mut value = self
+            .metric_observation
+            .lock()
+            .unwrap()
+            .clone()
+            .ok_or_else(|| unavailable("usage metric"))?;
+        if metric != gateway_admin::model::observability::UsageInsightMetric::Load {
+            value.concurrency.clear();
+        }
+        Ok(value)
+    }
+
     async fn usage_concurrency(
         &self,
         _range: gateway_admin::model::observability::TimeRange,
@@ -1292,9 +1323,13 @@ impl ObservabilityStore for UnusedStore {
         _: TimeRange,
         _: UsageFilter,
     ) -> gateway_admin::ports::store::UsageCalculatedBillingStream<'_> {
-        Box::pin(futures::stream::once(async {
-            Err(unavailable("usage billing facts"))
-        }))
+        if self.metric_observation.lock().unwrap().is_some() {
+            Box::pin(futures::stream::empty())
+        } else {
+            Box::pin(futures::stream::once(async {
+                Err(unavailable("usage billing facts"))
+            }))
+        }
     }
 
     async fn list_usage_records(&self, query: UsageQuery) -> AdminStoreResult<UsagePage> {

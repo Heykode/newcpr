@@ -2342,5 +2342,29 @@
     "file_sha256": "0032369f8dc5b4edc27b0e4c3e56418fa489518edea49e73d81a2f0f05e24294",
     "line_sha256": "be871b5bb1fb717424afe768be0a94bd16324aa95d478d8be07e11d0ed234c75",
     "reason": "Re-reviewed unchanged loopback URL rejection fixture after adding managed-password acceptance coverage; embedded is synthetic parser input, not a connection credential."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/transport/tls.rs",
+    "rule": "gitleaks:cpr-api-key",
+    "line": 138,
+    "file_sha256": "96bc27f652cc1884ec903e33b95af2ff19c40c3effd06dac5cb9e3de4b84219d",
+    "line_sha256": "0c9d5d94fc2f00276883de931fc26f0ced43e5e9a0b7730407fc6b6c869b1e4e",
+    "reason": "Manually re-reviewed unchanged Rust test function identifier after removal of manual capture tests; not a credential."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/transport/tls.rs",
+    "rule": "authenticated-url",
+    "line": 241,
+    "file_sha256": "96bc27f652cc1884ec903e33b95af2ff19c40c3effd06dac5cb9e3de4b84219d",
+    "line_sha256": "9aa104ea897354d3eb1e73d00d4b556f8ca5fb140acba2afb88e290615cc59ac",
+    "reason": "Manually re-reviewed unchanged localhost TLS proxy fixture after removal of manual capture tests; user/pass are synthetic isolated-test inputs."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/transport/tls.rs",
+    "rule": "gitleaks:cpr-api-key",
+    "line": 339,
+    "file_sha256": "96bc27f652cc1884ec903e33b95af2ff19c40c3effd06dac5cb9e3de4b84219d",
+    "line_sha256": "1a58dbbe57cd503aa12612f4280a27ea49f813090650ceaf6490c90504084620",
+    "reason": "Manually re-reviewed unchanged Rust test function identifier after removal of manual capture tests; not a credential."
   }
 ]

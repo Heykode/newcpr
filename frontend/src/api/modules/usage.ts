@@ -510,7 +510,7 @@ export interface UsageFilterParams {
   endTime?: string
 }
 
-interface UsageRangeQuery extends UsageFilterParams {
+export interface UsageRangeQuery extends UsageFilterParams {
   startTime: string
   endTime: string
   provider?: string
@@ -622,6 +622,67 @@ export function getUsageRecordInsightsOverview(data: UsageRangeQuery, options: R
 export function getUsageRecordInsightsDiagnostics(data: UsageDiagnosticsQuery, options: RequestOptions = {}) {
   return request<UsageDiagnosticsResponse>({
     url: '/api/admin/usage/insights/diagnostics',
+    timeout: OBSERVABILITY_TIMEOUT_MS,
+    method: 'GET',
+    params: data,
+    ...options,
+  })
+}
+export type UsagePerformanceMetric = 'latency' | 'firstToken' | 'throughput' | 'load' | 'scheduling'
+export type UsageCostMetric = 'cost' | 'savings' | 'cache'
+
+export interface UsageMetricSeries<S, P = S> {
+  summary: S
+  points: { bucket: string, label: string, requestCount: number, value: P }[]
+}
+
+interface UsageLatencyPercentiles {
+  p50Ms: number | null
+  p95Ms: number | null
+  p99Ms: number | null
+}
+
+type UsageCostSummary = Pick<UsageOverviewCost, 'estimatedCost' | 'cacheSavings' | 'tierPremium' | 'costPerSuccessfulRequest' | 'coverage'>
+
+interface UsageMetricData {
+  health: UsageOverviewHealth
+  latency: UsageMetricSeries<UsageLatencyPercentiles>
+  firstToken: UsageMetricSeries<UsageLatencyPercentiles>
+  throughput: UsageMetricSeries<{ p10: number | null, p50: number | null, p90: number | null }>
+  scheduling: UsageOverviewPerformance
+  load: UsageMetricSeries<UsageOverviewLoad>
+  cost: UsageMetricSeries<UsageCostSummary, { estimatedCost: string | null, noCacheCost: string | null }>
+  savings: UsageMetricSeries<UsageCostSummary, string | null>
+  cache: UsageMetricSeries<UsageCostSummary, { inputTokens: number, cachedTokenRate: number, cacheHitRequestRate: number | null }>
+}
+
+export type UsageMetricResponse<M extends keyof UsageMetricData> = {
+  [K in M]: { granularity: string, metric: K, data: UsageMetricData[K] }
+}[M]
+
+export function getUsageHealth(data: UsageRangeQuery, options: RequestOptions = {}) {
+  return request<UsageMetricResponse<'health'>>({
+    url: '/api/admin/usage/insights/health',
+    timeout: OBSERVABILITY_TIMEOUT_MS,
+    method: 'GET',
+    params: data,
+    ...options,
+  })
+}
+
+export function getUsagePerformance<M extends UsagePerformanceMetric>(data: UsageRangeQuery & { metric: M }, options: RequestOptions = {}) {
+  return request<UsageMetricResponse<M>>({
+    url: '/api/admin/usage/insights/performance',
+    timeout: OBSERVABILITY_TIMEOUT_MS,
+    method: 'GET',
+    params: data,
+    ...options,
+  })
+}
+
+export function getUsageCost<M extends UsageCostMetric>(data: UsageRangeQuery & { metric: M }, options: RequestOptions = {}) {
+  return request<UsageMetricResponse<M>>({
+    url: '/api/admin/usage/insights/cost',
     timeout: OBSERVABILITY_TIMEOUT_MS,
     method: 'GET',
     params: data,

@@ -1106,3 +1106,26 @@ test('error protection is opt-in, validates rules, and saves independently from 
   }
   finally { query.stop() }
 })
+
+for (const status of [400, 403, 409, 422]) {
+  test(`structured settings rejection ${status} preserves the draft without reloading`, async () => {
+    let reads = 0
+    const query = mountSettings(settings(), assert.fail, {
+      getSettings: async () => {
+        reads += 1
+        return settings()
+      },
+      updateSettings: async () => { throw new apiErrors.ApiError('Rejected', status, status * 100) },
+    })
+    try {
+      await query.state.loadSettings()
+      query.state.form.requestIntervalMs = 123
+      await query.state.saveSettings()
+      await vue.nextTick()
+      assert.equal(reads, 1)
+      assert.equal(query.state.form.requestIntervalMs, 123)
+      assert.equal(query.state.hasChanges.value, true)
+    }
+    finally { query.stop() }
+  })
+}

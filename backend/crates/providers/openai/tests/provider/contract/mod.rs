@@ -77,6 +77,7 @@ mod excel_encrypted_content;
 mod fast_mode;
 mod generate_compat;
 mod guardian;
+mod guardian_routing;
 mod identity_isolation;
 mod image_account_eligibility;
 mod metadata_recovery;

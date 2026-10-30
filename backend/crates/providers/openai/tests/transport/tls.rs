@@ -6,7 +6,7 @@ use super::*;
 
 // CPR HTTP uses the linked platform native-tls backend; CPR WebSocket retains its
 // captured Rustls contract. QX stays on the independently selected OpenSSL transport.
-#[derive(Debug, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, PartialEq, Eq)]
 struct ClientHello {
     cipher_suites: Vec<u16>,
     extensions: Vec<u16>,
@@ -14,15 +14,6 @@ struct ClientHello {
     signature_algorithms: Vec<u16>,
     key_shares: Vec<(u16, usize)>,
     alpn: Vec<String>,
-}
-
-#[derive(Debug, serde::Serialize)]
-struct CapturedClientHello {
-    normalized: ClientHello,
-    extension_order: Vec<u16>,
-    stable_extension_payloads: BTreeMap<u16, String>,
-    record_version: u16,
-    record_length: usize,
 }
 
 #[test]
@@ -345,89 +336,6 @@ async fn native_and_rustls_helpers_verify_both_https_proxy_tls_layers() {
 }
 
 #[tokio::test]
-#[ignore = "explicit loopback-only TLS upgrade evidence; emits JSON to stdout"]
-async fn capture_tls_upgrade_matrix() {
-    provider_openai::ensure_rustls_provider();
-    println!(
-        "TLS_ENV {}",
-        json!({
-            "os": std::env::consts::OS,
-            "arch": std::env::consts::ARCH,
-            "openssl": openssl::version::version(),
-        })
-    );
-    for route in [
-        "cpr_http",
-        "cpr_websocket",
-        "cpr_https_proxy",
-        "native_https_proxy",
-    ] {
-        for sample in 0..10 {
-            let capture = timeout(Duration::from_secs(10), capture_route(route))
-                .await
-                .expect("loopback capture within deadline");
-            println!(
-                "TLS_CAPTURE {}",
-                json!({"route": route, "sample": sample, "capture": capture})
-            );
-        }
-    }
-}
-
-async fn capture_route(route: &str) -> CapturedClientHello {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let port = listener.local_addr().unwrap().port();
-    let url = format!("https://localhost:{port}/");
-    let send = async {
-        match route {
-            "cpr_http" => {
-                let client = provider_openai::transport::build_reqwest_client().unwrap();
-                assert!(client.get(&url).send().await.is_err());
-            }
-            "cpr_websocket" => {
-                let connector =
-                    provider_openai::transport::tls::maybe_build_rustls_client_config_with_custom_ca()
-                        .unwrap()
-                        .map(tokio_tungstenite::Connector::Rustls);
-                assert!(
-                    tokio_tungstenite::connect_async_tls_with_config(
-                        format!("wss://localhost:{port}/"),
-                        None,
-                        false,
-                        connector,
-                    )
-                    .await
-                    .is_err()
-                );
-            }
-            "native_https_proxy" => {
-                let client =
-                    provider_openai::transport::tls::build_reqwest_native_client_with_custom_ca(
-                        reqwest::Client::builder()
-                            .no_proxy()
-                            .proxy(reqwest::Proxy::all(&url).unwrap()),
-                    )
-                    .unwrap();
-                assert!(client.get("http://origin.invalid/").send().await.is_err());
-            }
-            "cpr_https_proxy" => {
-                let client = provider_openai::build_reqwest_client_with_custom_ca(
-                    reqwest::Client::builder()
-                        .use_rustls_tls()
-                        .no_proxy()
-                        .proxy(reqwest::Proxy::all(&url).unwrap()),
-                )
-                .unwrap();
-                assert!(client.get("http://origin.invalid/").send().await.is_err());
-            }
-            _ => unreachable!("fixed capture route"),
-        }
-    };
-    let (capture, ()) = tokio::join!(read_client_hello_capture(listener), send);
-    capture
-}
-
-#[tokio::test]
 async fn cpr_tls_http_and_websocket_verify_certificates_and_exchange_data() {
     use std::{pin::Pin, sync::Arc};
 
@@ -698,15 +606,6 @@ fn official_websocket_hello() -> ClientHello {
 }
 
 async fn read_client_hello(listener: TcpListener) -> ClientHello {
-    let capture = read_client_hello_capture(listener).await;
-    // Native/QX assertions retain wire order; only evidence samples normalize it.
-    ClientHello {
-        extensions: capture.extension_order,
-        ..capture.normalized
-    }
-}
-
-async fn read_client_hello_capture(listener: TcpListener) -> CapturedClientHello {
     let (mut stream, _) = listener.accept().await.unwrap();
     let mut header = [0; 5];
     stream.read_exact(&mut header).await.unwrap();
@@ -733,13 +632,6 @@ async fn read_client_hello_capture(listener: TcpListener) -> CapturedClientHello
         extension_order.push(kind);
         assert!(values.insert(kind, take_vector(&mut extensions)).is_none());
     }
-    // Key-share bytes are ephemeral; compare their group and length below.
-    let stable_extension_payloads = values
-        .iter()
-        .filter(|(kind, _)| **kind != 51)
-        .map(|(kind, value)| (*kind, hex::encode(value)))
-        .collect();
-
     let groups = values
         .get(&10)
         .map(|value| {
@@ -774,19 +666,13 @@ async fn read_client_hello_capture(listener: TcpListener) -> CapturedClientHello
             alpn.push(String::from_utf8(protocols.split_to(length).to_vec()).unwrap());
         }
     }
-    CapturedClientHello {
-        normalized: ClientHello {
-            cipher_suites,
-            extensions: values.into_keys().collect(),
-            groups,
-            signature_algorithms,
-            key_shares,
-            alpn,
-        },
-        extension_order,
-        stable_extension_payloads,
-        record_version: u16::from_be_bytes([header[1], header[2]]),
-        record_length: length,
+    ClientHello {
+        cipher_suites,
+        extensions: extension_order,
+        groups,
+        signature_algorithms,
+        key_shares,
+        alpn,
     }
 }
 

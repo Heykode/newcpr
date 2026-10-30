@@ -2,7 +2,7 @@ use std::io;
 use std::time::Duration;
 
 use chrono::Utc;
-use gateway_admin::model::backup::{BackupObjectMetadata, BackupStorageConfig};
+use gateway_admin::model::backup::{BackupObjectMetadata, BackupStorageConfig, code};
 use gateway_admin::ports::backup::{BackupObjectStorePort, UploadObjectRequest};
 use gateway_core::lifecycle::CancellationToken;
 use gateway_store::backup::s3::S3ObjectStoreAdapter;
@@ -61,6 +61,86 @@ async fn upload_file_sends_full_part_beyond_tokio_default_buffer_limit() {
         .expect("serve multipart probe");
 
     assert_eq!(uploaded_len, PART_SIZE_ABOVE_TOKIO_DEFAULT);
+}
+
+#[tokio::test]
+async fn connection_probe_attempts_cleanup_after_an_interrupted_get_body() {
+    for delete_allowed in [true, false] {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let storage = BackupStorageConfig {
+            storage_revision: 1,
+            endpoint: format!("http://{}", listener.local_addr().unwrap()),
+            region: "auto".into(),
+            bucket: "backup-bucket".into(),
+            access_key_id: "test-access-key".into(),
+            secret_access_key: SecretString::from("test-secret-key"),
+            prefix: "backups".into(),
+            force_path_style: true,
+        };
+        let mut probe =
+            tokio::spawn(
+                async move { S3ObjectStoreAdapter::new().test_connection(&storage).await },
+            );
+        let (mut put, request, body) = accept_request(&listener).await;
+        assert!(request.starts_with("PUT "));
+        let object_path = request
+            .lines()
+            .next()
+            .unwrap()
+            .split_whitespace()
+            .nth(1)
+            .unwrap()
+            .split('?')
+            .next()
+            .unwrap()
+            .to_owned();
+        respond(&mut put, &xml_response("")).await;
+        let (mut head, request, _) = accept_request(&listener).await;
+        assert!(request.starts_with("HEAD "));
+        respond(&mut head, "HTTP/1.1 200 OK\r\ncontent-length: 64\r\nx-amz-meta-probe: backup-connection-test\r\nconnection: close\r\n\r\n").await;
+        let (mut get, request, _) = accept_request(&listener).await;
+        assert!(request.starts_with("GET "));
+        get.write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 64\r\nconnection: close\r\n\r\n")
+            .await
+            .unwrap();
+        get.write_all(&body[..32]).await.unwrap();
+        get.shutdown().await.unwrap();
+        drop(get);
+        let (mut delete, request, _) = tokio::select! {
+            result = &mut probe => panic!("probe returned before cleaning up the uploaded object: {result:?}"),
+            request = accept_request(&listener) => request,
+        };
+        assert!(request.starts_with("DELETE "));
+        let delete_path = request
+            .lines()
+            .next()
+            .unwrap()
+            .split_whitespace()
+            .nth(1)
+            .unwrap()
+            .split('?')
+            .next()
+            .unwrap();
+        assert_eq!(delete_path, object_path);
+        respond(
+            &mut delete,
+            &if delete_allowed {
+                xml_response("")
+            } else {
+                error_response("403 Forbidden", "AccessDenied")
+            },
+        )
+        .await;
+        let result = tokio::time::timeout(Duration::from_secs(3), probe)
+            .await
+            .unwrap()
+            .unwrap()
+            .expect("body failure is a staged connection test result");
+        assert!(!result.ok);
+        assert_eq!(result.stage, "getObject");
+        assert_eq!(result.code, Some(code::UPSTREAM_FAILURE));
+        assert_eq!(result.message, "读取探针对象响应失败");
+    }
 }
 
 #[tokio::test]
@@ -300,6 +380,30 @@ async fn read_http_request(stream: &mut TcpStream) -> io::Result<(String, Vec<u8
 fn xml_response(body: &str) -> String {
     format!(
         "HTTP/1.1 200 OK\r\ncontent-type: application/xml\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+        body.len()
+    )
+}
+async fn accept_request(listener: &TcpListener) -> (TcpStream, String, Vec<u8>) {
+    tokio::time::timeout(Duration::from_secs(3), async {
+        let (mut stream, _) = listener.accept().await.expect("accept S3 request");
+        let (request, body) = read_http_request(&mut stream)
+            .await
+            .expect("read S3 request");
+        (stream, request, body)
+    })
+    .await
+    .expect("expected S3 request arrives without waiting for another part")
+}
+
+async fn respond(stream: &mut TcpStream, response: &str) {
+    stream.write_all(response.as_bytes()).await.unwrap();
+    stream.shutdown().await.unwrap();
+}
+
+fn error_response(status: &str, code: &str) -> String {
+    let body = format!("<Error><Code>{code}</Code><Message>probe error</Message></Error>");
+    format!(
+        "HTTP/1.1 {status}\r\ncontent-type: application/xml\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
         body.len()
     )
 }

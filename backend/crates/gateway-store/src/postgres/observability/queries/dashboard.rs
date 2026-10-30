@@ -7,88 +7,21 @@ pub(crate) async fn request_metrics(
     range: ObservabilityRange,
     filter: &UsageRecordFilter,
 ) -> StoreResult<RequestMetrics> {
+    request_metrics_selected(connection, range, filter, None).await
+}
+
+pub(crate) async fn request_metrics_selected(
+    connection: &mut PgConnection,
+    range: ObservabilityRange,
+    filter: &UsageRecordFilter,
+    metric: Option<admin_observability::UsageInsightMetric>,
+) -> StoreResult<RequestMetrics> {
     filter.validate()?;
     // 结果计数覆盖范围内业务请求（成功率/失败率的分母分子）；用量、缓存、
     // 延迟与成本聚合仅统计用量事实（已完整交付客户端的成功响应）。
-    let fact = completed_usage_fact_predicate("mr");
     let mut query = QueryBuilder::<Postgres>::new(format!(
-        "select count(*)::bigint as request_count,
-                count(*) filter (where outcome = 'succeeded')::bigint as success_count,
-                count(*) filter (where outcome = 'failed')::bigint as failure_count,
-                count(*) filter (where outcome = 'cancelled')::bigint as cancelled_count,
-                count(*) filter (where outcome = 'incomplete')::bigint as incomplete_count,
-                count(*) filter (where client_status_code between 400 and 499)::bigint
-                  as caller_error_count,
-                coalesce(sum(input_tokens) filter (where {fact}), 0)::bigint as input_tokens,
-                coalesce(sum(output_tokens) filter (where {fact}), 0)::bigint as output_tokens,
-                coalesce(sum(cached_tokens) filter (where {fact}), 0)::bigint as cached_tokens,
-                coalesce(sum(cache_write_tokens) filter (where {fact}), 0)::bigint
-                  as cache_write_tokens,
-                coalesce(sum(reasoning_tokens) filter (where {fact}), 0)::bigint
-                  as reasoning_tokens,
-                coalesce(sum(total_tokens) filter (where {fact}), 0)::bigint as total_tokens,
-                coalesce(sum(first_token_ms) filter (where {fact}), 0)::bigint
-                  as first_token_latency_sum,
-                count(first_token_ms) filter (where {fact})::bigint as first_token_latency_count,
-                coalesce(sum(latency_ms) filter (where {fact}), 0)::bigint as latency_sum,
-                count(latency_ms) filter (where {fact})::bigint as latency_count,
-                max(latency_ms) filter (where {fact})::bigint as max_latency_ms,
-                min(latency_ms) filter (where {fact})::bigint as min_latency_ms,
-                count(*) filter (where {fact} and input_tokens is not null)::bigint
-                  as cache_eligible_request_count,
-                count(*) filter (where {fact} and input_tokens is not null
-                                   and cached_tokens > 0)::bigint
-                  as cache_hit_request_count,
-                percentile_cont(0.50) within group (order by latency_ms)
-                  filter (where {fact}) as latency_p50_ms,
-                percentile_cont(0.95) within group (order by latency_ms)
-                  filter (where {fact}) as latency_p95_ms,
-                percentile_cont(0.99) within group (order by latency_ms)
-                  filter (where {fact}) as latency_p99_ms,
-                percentile_cont(0.50) within group (order by first_token_ms)
-                  filter (where {fact}) as first_token_p50_ms,
-                percentile_cont(0.95) within group (order by first_token_ms)
-                  filter (where {fact}) as first_token_p95_ms,
-                percentile_cont(0.99) within group (order by first_token_ms)
-                  filter (where {fact}) as first_token_p99_ms,
-                count(admission_decision_ms)::bigint as admission_decision_count,
-                percentile_cont(0.50) within group (order by admission_decision_ms)
-                  as admission_decision_p50_ms,
-                percentile_cont(0.95) within group (order by admission_decision_ms)
-                  as admission_decision_p95_ms,
-                percentile_cont(0.99) within group (order by admission_decision_ms)
-                  as admission_decision_p99_ms,
-                count(account_selection_wait_ms)::bigint as account_selection_wait_count,
-                percentile_cont(0.50) within group (order by account_selection_wait_ms)
-                  as account_selection_wait_p50_ms,
-                percentile_cont(0.95) within group (order by account_selection_wait_ms)
-                  as account_selection_wait_p95_ms,
-                percentile_cont(0.99) within group (order by account_selection_wait_ms)
-                  as account_selection_wait_p99_ms,
-                round((percentile_cont(0.10) within group (
-                  order by output_tokens::double precision * 1000.0
-                    / nullif(latency_ms, 0)
-                ) filter (where {fact} and output_tokens > 0
-                          and latency_ms > 0)))::bigint as output_throughput_p10,
-                round((percentile_cont(0.50) within group (
-                  order by output_tokens::double precision * 1000.0
-                    / nullif(latency_ms, 0)
-                ) filter (where {fact} and output_tokens > 0
-                          and latency_ms > 0)))::bigint as output_throughput_p50,
-                round((percentile_cont(0.90) within group (
-                  order by output_tokens::double precision * 1000.0
-                    / nullif(latency_ms, 0)
-                ) filter (where {fact} and output_tokens > 0
-                          and latency_ms > 0)))::bigint as output_throughput_p90,
-                count(capacity_total_slots)::bigint as capacity_sample_count,
-                round(avg(capacity_used_slots::double precision
-                          / nullif(capacity_total_slots, 0)) * 10000)::bigint
-                  as capacity_utilization_avg_basis_points,
-                round(percentile_cont(0.95) within group (
-                  order by capacity_used_slots::double precision
-                    / nullif(capacity_total_slots, 0)
-                ) * 10000)::bigint as capacity_utilization_p95_basis_points
-         from model_requests mr where mr.started_at >= "
+        "select {} from model_requests mr where mr.started_at >= ",
+        metric_projection(metric)
     ));
     query.push_bind(range.start);
     query.push(" and mr.started_at < ");
@@ -186,7 +119,7 @@ pub(crate) async fn request_metric_series(
     range: ObservabilityRange,
     filter: &UsageRecordFilter,
 ) -> StoreResult<Vec<RequestMetricPoint>> {
-    request_metric_series_inner(connection, range, filter, true).await
+    request_metric_series_selected(connection, range, filter, true, None).await
 }
 
 pub(crate) async fn dashboard_request_metric_series(
@@ -194,107 +127,25 @@ pub(crate) async fn dashboard_request_metric_series(
     range: ObservabilityRange,
     filter: &UsageRecordFilter,
 ) -> StoreResult<Vec<RequestMetricPoint>> {
-    request_metric_series_inner(connection, range, filter, false).await
+    request_metric_series_selected(connection, range, filter, false, None).await
 }
 
-async fn request_metric_series_inner(
+pub(crate) async fn request_metric_series_selected(
     connection: &mut PgConnection,
     range: ObservabilityRange,
     filter: &UsageRecordFilter,
     load_costs: bool,
+    metric: Option<admin_observability::UsageInsightMetric>,
 ) -> StoreResult<Vec<RequestMetricPoint>> {
     filter.validate()?;
     let granularity = granularity_for(range);
     // 与 request_metrics 同一契约：结果计数覆盖业务请求，用量/延迟/成本
     // 聚合仅统计用量事实。
-    let fact = completed_usage_fact_predicate("mr");
     let mut query = QueryBuilder::<Postgres>::new("select date_bin(");
     query.push_bind(granularity.sql_interval());
     query.push(format!(
-        "::interval, mr.started_at, timestamptz '1970-01-01 00:00:00+00') as bucket_start,
-                count(*)::bigint as request_count,
-                count(*) filter (where outcome = 'succeeded')::bigint as success_count,
-                count(*) filter (where outcome = 'failed')::bigint as failure_count,
-                count(*) filter (where outcome = 'cancelled')::bigint as cancelled_count,
-                count(*) filter (where outcome = 'incomplete')::bigint as incomplete_count,
-                count(*) filter (where client_status_code between 400 and 499)::bigint
-                  as caller_error_count,
-                coalesce(sum(input_tokens) filter (where {fact}), 0)::bigint as input_tokens,
-                coalesce(sum(output_tokens) filter (where {fact}), 0)::bigint as output_tokens,
-                coalesce(sum(cached_tokens) filter (where {fact}), 0)::bigint as cached_tokens,
-                coalesce(sum(cache_write_tokens) filter (where {fact}), 0)::bigint
-                  as cache_write_tokens,
-                coalesce(sum(reasoning_tokens) filter (where {fact}), 0)::bigint
-                  as reasoning_tokens,
-                coalesce(sum(total_tokens) filter (where {fact}), 0)::bigint as total_tokens,
-                coalesce(sum(first_token_ms) filter (where {fact}), 0)::bigint
-                  as first_token_latency_sum,
-                count(first_token_ms) filter (where {fact})::bigint as first_token_latency_count,
-                coalesce(sum(latency_ms) filter (where {fact}), 0)::bigint as latency_sum,
-                count(latency_ms) filter (where {fact})::bigint as latency_count,
-                max(latency_ms) filter (where {fact})::bigint as max_latency_ms,
-                min(latency_ms) filter (where {fact})::bigint as min_latency_ms,
-                count(*) filter (where {fact} and input_tokens is not null)::bigint
-                  as cache_eligible_request_count,
-                count(*) filter (where {fact} and input_tokens is not null
-                                   and cached_tokens > 0)::bigint
-                  as cache_hit_request_count,
-                percentile_cont(0.50) within group (order by latency_ms)
-                  filter (where {fact}) as latency_p50_ms,
-                percentile_cont(0.95) within group (order by latency_ms)
-                  filter (where {fact}) as latency_p95_ms,
-                percentile_cont(0.99) within group (order by latency_ms)
-                  filter (where {fact}) as latency_p99_ms,
-                percentile_cont(0.50) within group (order by first_token_ms)
-                  filter (where {fact}) as first_token_p50_ms,
-                percentile_cont(0.95) within group (order by first_token_ms)
-                  filter (where {fact}) as first_token_p95_ms,
-                percentile_cont(0.99) within group (order by first_token_ms)
-                  filter (where {fact}) as first_token_p99_ms,
-                count(admission_decision_ms)::bigint as admission_decision_count,
-                percentile_cont(0.50) within group (order by admission_decision_ms)
-                  as admission_decision_p50_ms,
-                percentile_cont(0.95) within group (order by admission_decision_ms)
-                  as admission_decision_p95_ms,
-                percentile_cont(0.99) within group (order by admission_decision_ms)
-                  as admission_decision_p99_ms,
-                count(account_selection_wait_ms)::bigint as account_selection_wait_count,
-                percentile_cont(0.50) within group (order by account_selection_wait_ms)
-                  as account_selection_wait_p50_ms,
-                percentile_cont(0.95) within group (order by account_selection_wait_ms)
-                  as account_selection_wait_p95_ms,
-                percentile_cont(0.99) within group (order by account_selection_wait_ms)
-                  as account_selection_wait_p99_ms,
-                round((percentile_cont(0.10) within group (
-                  order by output_tokens::double precision * 1000.0
-                    / nullif(latency_ms, 0)
-                ) filter (where {fact} and output_tokens > 0
-                          and latency_ms > 0)))::bigint as output_throughput_p10,
-                round((percentile_cont(0.50) within group (
-                  order by output_tokens::double precision * 1000.0
-                    / nullif(latency_ms, 0)
-                ) filter (where {fact} and output_tokens > 0
-                          and latency_ms > 0)))::bigint as output_throughput_p50,
-                round((percentile_cont(0.90) within group (
-                  order by output_tokens::double precision * 1000.0
-                    / nullif(latency_ms, 0)
-                ) filter (where {fact} and output_tokens > 0
-                          and latency_ms > 0)))::bigint as output_throughput_p90,
-                count(capacity_total_slots)::bigint as capacity_sample_count,
-                round(avg(capacity_used_slots::double precision
-                          / nullif(capacity_total_slots, 0)) * 10000)::bigint
-                  as capacity_utilization_avg_basis_points,
-                round(percentile_cont(0.95) within group (
-                  order by capacity_used_slots::double precision
-                    / nullif(capacity_total_slots, 0)
-                ) * 10000)::bigint as capacity_utilization_p95_basis_points,
-                count(*) filter (where {fact} and cost_source = 'provider_reported')::bigint
-                  as provider_reported_count,
-                count(*) filter (where {fact} and cost_source = 'calculated')::bigint
-                  as calculated_count,
-                count(*) filter (where {fact} and cost_source = 'unavailable')::bigint
-                  as unavailable_count
-         from model_requests mr where mr.started_at >= "
+        "::interval, mr.started_at, timestamptz '1970-01-01 00:00:00+00') as bucket_start, {} from model_requests mr where mr.started_at >= ",
+        metric_projection(metric)
     ));
     query.push_bind(range.start);
     query.push(" and mr.started_at < ");
@@ -726,4 +577,313 @@ pub(crate) fn fill_metric_gaps(
             .ok_or_else(|| invalid("metric range exceeds supported timestamps"))?;
     }
     Ok(result)
+}
+
+fn metric_projection(metric: Option<admin_observability::UsageInsightMetric>) -> String {
+    use admin_observability::UsageInsightMetric as M;
+    let fact = completed_usage_fact_predicate("mr");
+    let mut fields = vec!["count(*)::bigint as request_count".to_owned()];
+    fields.push(
+        if metric.is_none_or(|metric| matches!(metric, M::Health | M::Cost | M::Savings | M::Cache))
+        {
+            "count(*) filter (where outcome = 'succeeded')::bigint as success_count".to_owned()
+        } else {
+            "0::bigint as success_count".to_owned()
+        },
+    );
+    fields.push(if metric.is_none_or(|metric| metric == M::Health) {
+        "count(*) filter (where outcome = 'failed')::bigint as failure_count".to_owned()
+    } else {
+        "0::bigint as failure_count".to_owned()
+    });
+    fields.push(if metric.is_none_or(|metric| metric == M::Health) {
+        "count(*) filter (where outcome = 'cancelled')::bigint as cancelled_count".to_owned()
+    } else {
+        "0::bigint as cancelled_count".to_owned()
+    });
+    fields.push(if metric.is_none_or(|metric| metric == M::Health) {
+        "count(*) filter (where outcome = 'incomplete')::bigint as incomplete_count".to_owned()
+    } else {
+        "0::bigint as incomplete_count".to_owned()
+    });
+    fields.push(if metric.is_none_or(|metric| metric == M::Health) {
+        "count(*) filter (where client_status_code between 400 and 499)::bigint
+                  as caller_error_count"
+            .to_owned()
+    } else {
+        "0::bigint as caller_error_count".to_owned()
+    });
+    fields.push(if metric.is_none_or(|metric| metric == M::Cache) {
+        format!("coalesce(sum(input_tokens) filter (where {fact}), 0)::bigint as input_tokens")
+    } else {
+        "0::bigint as input_tokens".to_owned()
+    });
+    fields.push(if metric.is_none_or(|metric| metric == M::Cache) {
+        format!("coalesce(sum(output_tokens) filter (where {fact}), 0)::bigint as output_tokens")
+    } else {
+        "0::bigint as output_tokens".to_owned()
+    });
+    fields.push(if metric.is_none_or(|metric| metric == M::Cache) {
+        format!("coalesce(sum(cached_tokens) filter (where {fact}), 0)::bigint as cached_tokens")
+    } else {
+        "0::bigint as cached_tokens".to_owned()
+    });
+    fields.push(if metric.is_none_or(|metric| metric == M::Cache) {
+        format!(
+            "coalesce(sum(cache_write_tokens) filter (where {fact}), 0)::bigint
+                  as cache_write_tokens"
+        )
+    } else {
+        "0::bigint as cache_write_tokens".to_owned()
+    });
+    fields.push(if metric.is_none_or(|metric| metric == M::Cache) {
+        format!(
+            "coalesce(sum(reasoning_tokens) filter (where {fact}), 0)::bigint
+                  as reasoning_tokens"
+        )
+    } else {
+        "0::bigint as reasoning_tokens".to_owned()
+    });
+    fields.push(if metric.is_none_or(|metric| metric == M::Cache) {
+        format!("coalesce(sum(total_tokens) filter (where {fact}), 0)::bigint as total_tokens")
+    } else {
+        "0::bigint as total_tokens".to_owned()
+    });
+    fields.push(if metric.is_none_or(|metric| metric == M::FirstToken) {
+        format!(
+            "coalesce(sum(first_token_ms) filter (where {fact}), 0)::bigint
+                  as first_token_latency_sum"
+        )
+    } else {
+        "0::bigint as first_token_latency_sum".to_owned()
+    });
+    fields.push(if metric.is_none_or(|metric| metric == M::FirstToken) {
+        format!("count(first_token_ms) filter (where {fact})::bigint as first_token_latency_count")
+    } else {
+        "0::bigint as first_token_latency_count".to_owned()
+    });
+    fields.push(if metric.is_none_or(|metric| metric == M::Latency) {
+        format!("coalesce(sum(latency_ms) filter (where {fact}), 0)::bigint as latency_sum")
+    } else {
+        "0::bigint as latency_sum".to_owned()
+    });
+    fields.push(if metric.is_none_or(|metric| metric == M::Latency) {
+        format!("count(latency_ms) filter (where {fact})::bigint as latency_count")
+    } else {
+        "0::bigint as latency_count".to_owned()
+    });
+    fields.push(if metric.is_none_or(|metric| metric == M::Latency) {
+        format!("max(latency_ms) filter (where {fact})::bigint as max_latency_ms")
+    } else {
+        "null::bigint as max_latency_ms".to_owned()
+    });
+    fields.push(if metric.is_none_or(|metric| metric == M::Latency) {
+        format!("min(latency_ms) filter (where {fact})::bigint as min_latency_ms")
+    } else {
+        "null::bigint as min_latency_ms".to_owned()
+    });
+    fields.push(if metric.is_none_or(|metric| metric == M::Cache) {
+        format!(
+            "count(*) filter (where {fact} and input_tokens is not null)::bigint
+                  as cache_eligible_request_count"
+        )
+    } else {
+        "0::bigint as cache_eligible_request_count".to_owned()
+    });
+    fields.push(if metric.is_none_or(|metric| metric == M::Cache) {
+        format!(
+            "count(*) filter (where {fact} and input_tokens is not null
+                                   and cached_tokens > 0)::bigint
+                  as cache_hit_request_count"
+        )
+    } else {
+        "0::bigint as cache_hit_request_count".to_owned()
+    });
+    fields.push(if metric.is_none_or(|metric| metric == M::Latency) {
+        format!(
+            "percentile_cont(0.50) within group (order by latency_ms)
+                  filter (where {fact}) as latency_p50_ms"
+        )
+    } else {
+        "null::double precision as latency_p50_ms".to_owned()
+    });
+    fields.push(if metric.is_none_or(|metric| metric == M::Latency) {
+        format!(
+            "percentile_cont(0.95) within group (order by latency_ms)
+                  filter (where {fact}) as latency_p95_ms"
+        )
+    } else {
+        "null::double precision as latency_p95_ms".to_owned()
+    });
+    fields.push(if metric.is_none_or(|metric| metric == M::Latency) {
+        format!(
+            "percentile_cont(0.99) within group (order by latency_ms)
+                  filter (where {fact}) as latency_p99_ms"
+        )
+    } else {
+        "null::double precision as latency_p99_ms".to_owned()
+    });
+    fields.push(if metric.is_none_or(|metric| metric == M::FirstToken) {
+        format!(
+            "percentile_cont(0.50) within group (order by first_token_ms)
+                  filter (where {fact}) as first_token_p50_ms"
+        )
+    } else {
+        "null::double precision as first_token_p50_ms".to_owned()
+    });
+    fields.push(if metric.is_none_or(|metric| metric == M::FirstToken) {
+        format!(
+            "percentile_cont(0.95) within group (order by first_token_ms)
+                  filter (where {fact}) as first_token_p95_ms"
+        )
+    } else {
+        "null::double precision as first_token_p95_ms".to_owned()
+    });
+    fields.push(if metric.is_none_or(|metric| metric == M::FirstToken) {
+        format!(
+            "percentile_cont(0.99) within group (order by first_token_ms)
+                  filter (where {fact}) as first_token_p99_ms"
+        )
+    } else {
+        "null::double precision as first_token_p99_ms".to_owned()
+    });
+    fields.push(
+        if metric.is_none_or(|metric| matches!(metric, M::Load | M::Scheduling)) {
+            "count(admission_decision_ms)::bigint as admission_decision_count".to_owned()
+        } else {
+            "0::bigint as admission_decision_count".to_owned()
+        },
+    );
+    fields.push(
+        if metric.is_none_or(|metric| matches!(metric, M::Load | M::Scheduling)) {
+            "percentile_cont(0.50) within group (order by admission_decision_ms)
+                  as admission_decision_p50_ms"
+                .to_owned()
+        } else {
+            "null::double precision as admission_decision_p50_ms".to_owned()
+        },
+    );
+    fields.push(
+        if metric.is_none_or(|metric| matches!(metric, M::Load | M::Scheduling)) {
+            "percentile_cont(0.95) within group (order by admission_decision_ms)
+                  as admission_decision_p95_ms"
+                .to_owned()
+        } else {
+            "null::double precision as admission_decision_p95_ms".to_owned()
+        },
+    );
+    fields.push(
+        if metric.is_none_or(|metric| matches!(metric, M::Load | M::Scheduling)) {
+            "percentile_cont(0.99) within group (order by admission_decision_ms)
+                  as admission_decision_p99_ms"
+                .to_owned()
+        } else {
+            "null::double precision as admission_decision_p99_ms".to_owned()
+        },
+    );
+    fields.push(
+        if metric.is_none_or(|metric| matches!(metric, M::Load | M::Scheduling)) {
+            "count(account_selection_wait_ms)::bigint as account_selection_wait_count".to_owned()
+        } else {
+            "0::bigint as account_selection_wait_count".to_owned()
+        },
+    );
+    fields.push(
+        if metric.is_none_or(|metric| matches!(metric, M::Load | M::Scheduling)) {
+            "percentile_cont(0.50) within group (order by account_selection_wait_ms)
+                  as account_selection_wait_p50_ms"
+                .to_owned()
+        } else {
+            "null::double precision as account_selection_wait_p50_ms".to_owned()
+        },
+    );
+    fields.push(
+        if metric.is_none_or(|metric| matches!(metric, M::Load | M::Scheduling)) {
+            "percentile_cont(0.95) within group (order by account_selection_wait_ms)
+                  as account_selection_wait_p95_ms"
+                .to_owned()
+        } else {
+            "null::double precision as account_selection_wait_p95_ms".to_owned()
+        },
+    );
+    fields.push(
+        if metric.is_none_or(|metric| matches!(metric, M::Load | M::Scheduling)) {
+            "percentile_cont(0.99) within group (order by account_selection_wait_ms)
+                  as account_selection_wait_p99_ms"
+                .to_owned()
+        } else {
+            "null::double precision as account_selection_wait_p99_ms".to_owned()
+        },
+    );
+    fields.push(if metric.is_none_or(|metric| metric == M::Throughput) {
+        format!(
+            "round((percentile_cont(0.10) within group (
+                  order by output_tokens::double precision * 1000.0
+                    / nullif(latency_ms, 0)
+                ) filter (where {fact} and output_tokens > 0
+                          and latency_ms > 0)))::bigint as output_throughput_p10"
+        )
+    } else {
+        "null::bigint as output_throughput_p10".to_owned()
+    });
+    fields.push(if metric.is_none_or(|metric| metric == M::Throughput) {
+        format!(
+            "round((percentile_cont(0.50) within group (
+                  order by output_tokens::double precision * 1000.0
+                    / nullif(latency_ms, 0)
+                ) filter (where {fact} and output_tokens > 0
+                          and latency_ms > 0)))::bigint as output_throughput_p50"
+        )
+    } else {
+        "null::bigint as output_throughput_p50".to_owned()
+    });
+    fields.push(if metric.is_none_or(|metric| metric == M::Throughput) {
+        format!(
+            "round((percentile_cont(0.90) within group (
+                  order by output_tokens::double precision * 1000.0
+                    / nullif(latency_ms, 0)
+                ) filter (where {fact} and output_tokens > 0
+                          and latency_ms > 0)))::bigint as output_throughput_p90"
+        )
+    } else {
+        "null::bigint as output_throughput_p90".to_owned()
+    });
+    fields.push(if metric.is_none_or(|metric| metric == M::Scheduling) {
+        "count(capacity_total_slots)::bigint as capacity_sample_count".to_owned()
+    } else {
+        "0::bigint as capacity_sample_count".to_owned()
+    });
+    fields.push(if metric.is_none_or(|metric| metric == M::Scheduling) {
+        "round(avg(capacity_used_slots::double precision
+                          / nullif(capacity_total_slots, 0)) * 10000)::bigint
+                  as capacity_utilization_avg_basis_points"
+            .to_owned()
+    } else {
+        "null::bigint as capacity_utilization_avg_basis_points".to_owned()
+    });
+    fields.push(if metric.is_none_or(|metric| metric == M::Scheduling) {
+        "round(percentile_cont(0.95) within group (
+                  order by capacity_used_slots::double precision
+                    / nullif(capacity_total_slots, 0)
+                ) * 10000)::bigint as capacity_utilization_p95_basis_points"
+            .to_owned()
+    } else {
+        "null::bigint as capacity_utilization_p95_basis_points".to_owned()
+    });
+    fields.push(if metric.is_none_or(|metric| matches!(metric, M::Cost | M::Savings | M::Cache)) {
+        format!("count(*) filter (where {fact} and cost_source = 'provider_reported')::bigint as provider_reported_count")
+    } else {
+        "0::bigint as provider_reported_count".to_owned()
+    });
+    fields.push(if metric.is_none_or(|metric| matches!(metric, M::Cost | M::Savings | M::Cache)) {
+        format!("count(*) filter (where {fact} and cost_source = 'calculated')::bigint as calculated_count")
+    } else {
+        "0::bigint as calculated_count".to_owned()
+    });
+    fields.push(if metric.is_none_or(|metric| matches!(metric, M::Cost | M::Savings | M::Cache)) {
+        format!("count(*) filter (where {fact} and cost_source = 'unavailable')::bigint as unavailable_count")
+    } else {
+        "0::bigint as unavailable_count".to_owned()
+    });
+    fields.join(", ")
 }

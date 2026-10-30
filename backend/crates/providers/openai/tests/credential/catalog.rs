@@ -1036,3 +1036,41 @@ fn invalid_response_etag_is_rejected_without_touching_the_catalog() {
     assert!(service.cached().expect("cache read").is_none());
     assert_eq!(service.catalog_generation().get(), 0);
 }
+
+#[tokio::test]
+async fn client_catalog_byte_budget_evicts_completed_entries_without_rejecting_large_catalogs() {
+    let store = Arc::new(MemoryAccountStore::default());
+    let account = seed_account(&store, "acct_catalog_bytes").await;
+    let scope = client_scope(&[account]);
+    let server = MockServer::start().await;
+    for (version, bytes, calls) in [
+        ("small", 1024, 1),
+        ("large", 17 * 1024 * 1024, 2),
+        ("other", 17 * 1024 * 1024, 1),
+        ("oversized", 33 * 1024 * 1024, 2),
+    ] {
+        Mock::given(method("GET")).and(path("/codex/models"))
+            .and(query_param("client_version", version))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"models":[{
+                "slug":"gpt-large", "display_name":"Large", "base_instructions":"x".repeat(bytes)
+            }]}))).expect(calls).mount(&server).await;
+    }
+    let service = service_with_catalog_cache(&store, server.uri(), catalog_cache());
+    for version in [
+        "large",
+        "other",
+        "other",
+        "large",
+        "small",
+        "oversized",
+        "oversized",
+        "small",
+    ] {
+        let models = service
+            .client_model_catalog(&scope, version)
+            .await
+            .expect("large catalog delivered");
+        assert_eq!(models.len(), 1);
+    }
+    server.verify().await;
+}

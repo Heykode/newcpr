@@ -805,3 +805,13 @@ derive from the additional turn fields.
 
 This contract reduces shared correlation identifiers; it does not establish a
 measured reduction in upstream risk controls, account bans or rate limits.
+
+## Guardian Parent Routing Snapshot
+
+官方 `aa0ce5203` 的父响应路由快照以 Key、选中账号、原始 response ID 隔离。
+仅保留父 WS 握手的 `__oailb` / `__cflb`，复用原 Cookie jar 过期时间；
+HTTP 和 WS 仅在同 origin/path 应用，不持久化或写入日志。快照 ID 隔离 WS 复用池。
+普通粘性选号命中不证明 Guardian 父响应所有权：无显式 owner 的 Guardian 先清理
+不可信引用，再恢复查到的父响应。普通请求的 scope 及调度规则不因此变更。
+回归包括不同 Key、不同账号、未知父响应、重复 Cookie、过期和错误路径、
+已建立连接可继续使用但新连接不得把过期 Cookie 重新续期。

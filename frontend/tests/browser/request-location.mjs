@@ -74,7 +74,11 @@ async function main() {
         }
         else if (path === '/api/admin/proxies/probe-direct') {
           data = {
-            success: true, latencyMs: 1, exitIp: '192.0.2.1', exitIpv4: '192.0.2.1', exitIpv6: null,
+            success: true,
+            latencyMs: 1,
+            exitIp: '192.0.2.1',
+            exitIpv4: '192.0.2.1',
+            exitIpv6: null,
             message: 'Synthetic probe',
             location: { status: 'detected', location: { country: 'JP', region: 'Tokyo', city: 'Tokyo', timezone: 'Asia/Tokyo' } },
           }

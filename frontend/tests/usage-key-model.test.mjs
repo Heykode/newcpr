@@ -14,7 +14,9 @@ const calls = []
 const api = {
   getUsageRecords: async () => ({ items: [], currentPage: 1, pageSize: 10, total: 0 }),
   getUsageRecordSummary: async () => ({}),
-  getUsageRecordInsightsOverview: async () => ({}),
+  getUsageHealth: async () => ({}),
+  getUsagePerformance: async () => ({}),
+  getUsageCost: async () => ({}),
   getUsageRecordInsightsDiagnostics: (query, options) =>
     new Promise((resolve, reject) => calls.push({ query, ...options, resolve, reject })),
 }
@@ -70,6 +72,8 @@ function loadSource(filename) {
     require(name) {
       if (name === '@/i18n')
         return require(name)
+      if (name === '@/api/request')
+        return { ApiError: class ApiError extends Error {} }
       if (name === '@/api')
         return api
       if (name === 'vue')
@@ -79,7 +83,7 @@ function loadSource(filename) {
       if (name === '@lucide/vue')
         return { ChevronLeft: icon, ChevronRight: icon, CornerDownRight: icon }
       if (name === '@/utils/async')
-        return { withMinimumDuration: action => action() }
+        return { withMinimumDuration: action => action(), errorMessage: error => error.message }
       if (name === '@/utils/providers')
         return { formatProviderLabel: value => value }
       if (name === '@/components/base/BaseCard.vue')
@@ -138,11 +142,11 @@ test('Key/model uses bounded next/previous pages without reloading other analyti
     assert.equal(calls[0].query.pageSize, 20)
     calls[0].resolve(page(1, true))
     await flush()
-    assert.equal(state.diagnosticLoading.value, false)
+    assert.equal(state.diagnostics.value.loading, false)
     state.handleDiagnosticPageChange(2)
     await flush()
     assert.equal(calls[1].query.currentPage, 2)
-    assert.equal(state.diagnosticLoading.value, true)
+    assert.equal(state.diagnostics.value.loading, true)
     state.handleDiagnosticPageChange(3)
     assert.equal(calls.length, 2, 'no concurrent page action while loading')
     calls[1].resolve(page(2))
@@ -155,7 +159,7 @@ test('Key/model uses bounded next/previous pages without reloading other analyti
     await flush()
     calls[2].resolve(page(1, true))
     await flush()
-    assert.equal(state.insights.value.diagnostics.currentPage, 1)
+    assert.equal(state.diagnostics.value.data.currentPage, 1)
   }
   finally {
     scope.stop()
@@ -177,8 +181,8 @@ test('dimension changes cancel stale pages and only Key/model sends pagination',
     await flush()
     old.resolve(page(4, true))
     await flush()
-    assert.equal(state.insights.value.diagnostics.dimension, 'account')
-    assert.equal(state.diagnosticLoading.value, false)
+    assert.equal(state.diagnostics.value.data.dimension, 'account')
+    assert.equal(state.diagnostics.value.loading, false)
     state.diagnosticDimension.value = 'keyModel'
     await flush()
     assert.equal(calls[2].query.currentPage, 1)
@@ -186,7 +190,7 @@ test('dimension changes cancel stale pages and only Key/model sends pagination',
     assert.equal(calls[2].signal.aborted, true)
     calls[2].resolve(page(1))
     await flush()
-    assert.equal(state.insights.value.diagnostics.dimension, 'account')
+    assert.equal(state.diagnostics.value.data, null, 'unmounted request cannot restore prior data')
   }
   finally {
     scope.stop()
@@ -213,19 +217,19 @@ test('time/provider refresh resets page and owns loading after replacing a pendi
     await refresh
     pending.resolve(page(2))
     await flush()
-    assert.equal(state.insights.value.diagnostics.currentPage, 1)
-    assert.equal(state.diagnosticLoading.value, false)
-    assert.equal(state.analyticsLoading.value, false)
+    assert.equal(state.diagnostics.value.data.currentPage, 1)
+    assert.equal(state.diagnostics.value.loading, false)
+    assert.equal(state.summary.value.loading, false)
     state.handleDiagnosticPageChange(2)
     await flush()
     calls[3].reject(new Error('synthetic error'))
     await flush()
-    assert.equal(state.diagnosticLoading.value, false)
+    assert.equal(state.diagnostics.value.loading, false)
     state.providerQuery.value = 'openai'
     await flush()
     assert.equal(calls[4].query.currentPage, 1)
     assert.equal(calls[4].query.provider, 'openai')
-    assert.equal(state.diagnosticLoading.value, true)
+    assert.equal(state.diagnostics.value.loading, true)
     state.handleDiagnosticPageChange(2)
     assert.equal(calls.length, 5, 'old pagination stays disabled during background filter refresh')
     calls[4].resolve(page(1))
@@ -250,7 +254,7 @@ for (const filter of ['provider', 'time']) {
         calls.at(-1).resolve(page(next, true))
         await flush()
       }
-      assert.equal(state.insights.value.diagnostics.currentPage, 3)
+      assert.equal(state.diagnostics.value.data.currentPage, 3)
       if (filter === 'provider') {
         state.providerQuery.value = 'openai'
       }
@@ -267,12 +271,9 @@ for (const filter of ['provider', 'time']) {
       calls[3].reject(new Error('synthetic filter refresh failure'))
       await refresh
       await flush()
-      assert.equal(state.diagnosticLoading.value, false)
-      const diagnostics = state.insights.value.diagnostics
-      assert.equal(diagnostics.dimension, 'keyModel')
-      assert.equal(diagnostics.currentPage, 1)
-      assert.equal(diagnostics.hasMore, false)
-      assert.equal(diagnostics.items.length, 0)
+      assert.equal(state.diagnostics.value.loading, false)
+      const diagnostics = state.diagnostics.value.data
+      assert.equal(diagnostics, null, 'failed filters must not show old pages')
       for (const next of [2, 3, 4])
         state.handleDiagnosticPageChange(next)
       assert.equal(calls.length, 4, 'failed first page leaves no old next/previous page')

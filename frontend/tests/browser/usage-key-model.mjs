@@ -65,7 +65,7 @@ function fixture() {
     measurements: [],
     lifecyclePassed: false,
     closedViteFallbacks: 0,
-    failNext: false,
+    failNext: 0,
     held: null,
     holdNext() {
       let release
@@ -110,7 +110,7 @@ function fixture() {
         }
         try {
           if (state.failNext) {
-            state.failNext = false
+            state.failNext -= 1
             return await route.fulfill({ status: 503, json: { code: 503, message: failureMessage, data: null } })
           }
           return await route.fulfill({ json: { code: 200, message: 'ok', data: diagnosticPage(query) } })
@@ -132,7 +132,9 @@ function apiCounts(state) {
   return Object.fromEntries([
     '/api/admin/usage/records',
     '/api/admin/usage/records/summary',
-    '/api/admin/usage/insights/overview',
+    '/api/admin/usage/insights/health',
+    '/api/admin/usage/insights/performance',
+    '/api/admin/usage/insights/cost',
   ].map(path => [path, state.calls.filter(call => call.path === path).length]))
 }
 
@@ -312,22 +314,22 @@ async function runViewport(page, state, base, output, width) {
   query = { ...query, currentPage: '1' }
   await assertPage(card, query)
   const beforeFailure = diagnosticsCalls(state).length
-  state.failNext = true
+  state.failNext = 2
   assert.equal((await requestFrom(page, () => next.click())).status(), 503)
-  await page.getByRole('alert').filter({ hasText: failureMessage }).waitFor()
+  await page.getByRole('alert').filter({ hasText: failureMessage }).first().waitFor()
   await assertPage(card, query)
   assert.equal(await dimension.isDisabled(), false)
-  assert.equal(diagnosticsCalls(state).length, beforeFailure + 1, 'failed reads wait for an explicit retry')
+  assert.equal(diagnosticsCalls(state).length, beforeFailure + 2, 'one transient retry is followed by an explicit retry')
   await capture('failure-retry-ready')
   await clearNotices(page)
   await requestFrom(page, () => next.click())
   query = { ...query, currentPage: '2' }
   await assertPage(card, query)
-  assert.equal(diagnosticsCalls(state).length, beforeFailure + 2)
+  assert.equal(diagnosticsCalls(state).length, beforeFailure + 3)
   assert.deepEqual(apiCounts(state), baseline, 'page retry remains local to diagnostics')
   await capture('retry-succeeded')
 
-  await requestFrom(page, () => provider.getByRole('radio', { name: 'OpenAI', exact: true }).click())
+  await requestFrom(page, () => provider.getByRole('radio', { name: 'Codex', exact: true }).click())
   query = { ...query, currentPage: '1', provider: 'openai' }
   assert.deepEqual(diagnosticsCalls(state).at(-1).query, query)
   await assertPage(card, query)
@@ -395,14 +397,14 @@ async function runViewport(page, state, base, output, width) {
     }
     const callsBefore = diagnosticsCalls(state).length
     const analyticsBefore = apiCounts(state)
-    state.failNext = true
+    state.failNext = 2
     const failure = await requestFrom(page, () => filter === 'provider'
-      ? provider.getByRole('radio', { name: 'OpenAI', exact: true }).click()
+      ? provider.getByRole('radio', { name: 'Codex', exact: true }).click()
       : choose(page, timeRange, '最近 30 天'))
     assert.equal(failure.status(), 503)
     assert.deepEqual(diagnosticsCalls(state).at(-1).query, expectedQuery, `${filter} change requests the new first page`)
-    await page.getByRole('alert').filter({ hasText: failureMessage }).waitFor()
-    await card.getByText('暂无诊断数据', { exact: true }).waitFor()
+    await page.getByRole('alert').filter({ hasText: failureMessage }).first().waitFor()
+    await card.getByText(failureMessage, { exact: true }).waitFor()
     await nav.getByText('第 1 页', { exact: true }).waitFor()
     assert.equal(await card.locator('tbody tr[data-row-key]').count(), 0, `${filter} failure clears old results`)
     assert.equal(await previous.isDisabled(), true, `${filter} failure clears the old previous page`)
@@ -412,7 +414,7 @@ async function runViewport(page, state, base, output, width) {
     await previous.click({ force: true })
     await next.click({ force: true })
     await capture(`${filter}-first-page-failed`)
-    assert.equal(diagnosticsCalls(state).length, callsBefore + 1, 'disabled old pagination cannot request or retry')
+    assert.equal(diagnosticsCalls(state).length, callsBefore + 2, 'disabled old pagination cannot request beyond the transient retry')
     assert.deepEqual(apiCounts(state), Object.fromEntries(Object.entries(analyticsBefore).map(([key, value]) => [key, value + 1])))
     await clearNotices(page)
 
@@ -429,7 +431,7 @@ async function runViewport(page, state, base, output, width) {
     query = expectedQuery
     assert.deepEqual(diagnosticsCalls(state).at(-1).query, query)
     await assertPage(card, query)
-    assert.equal(diagnosticsCalls(state).length, callsBefore + 3)
+    assert.equal(diagnosticsCalls(state).length, callsBefore + 4)
     assert.deepEqual(apiCounts(state), beforeRequery, 'dimension requery stays local to diagnostics')
     await capture(`${filter}-explicit-requery`)
 
@@ -437,7 +439,7 @@ async function runViewport(page, state, base, output, width) {
     query = { ...query, currentPage: '2' }
     assert.deepEqual(diagnosticsCalls(state).at(-1).query, query)
     await assertPage(card, query)
-    assert.equal(diagnosticsCalls(state).length, callsBefore + 4)
+    assert.equal(diagnosticsCalls(state).length, callsBefore + 5)
     assert.deepEqual(apiCounts(state), beforeRequery)
     await capture(`${filter}-requery-next-page`)
   }

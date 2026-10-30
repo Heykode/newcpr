@@ -1117,56 +1117,6 @@ pub(crate) fn usage_insights_view(insights: domain::UsageInsights) -> UsageInsig
             error_rate: point.error_rate,
         })
         .collect();
-    let performance_points = insights
-        .performance
-        .points
-        .iter()
-        .map(|point| OverviewPerformancePointView {
-            load: load_view(&point.load),
-            bucket: point.bucket_start,
-            label: china_label(point.bucket_start, "%m-%d %H:%M"),
-            latency_p50_ms: point.latency_percentiles.p50_ms.map(|value| value.as_f64()),
-            latency_p95_ms: point.latency_percentiles.p95_ms.map(|value| value.as_f64()),
-            latency_p99_ms: point.latency_percentiles.p99_ms.map(|value| value.as_f64()),
-            first_token_p50_ms: point
-                .first_token_latency_percentiles
-                .p50_ms
-                .map(|value| value.as_f64()),
-            first_token_p95_ms: point
-                .first_token_latency_percentiles
-                .p95_ms
-                .map(|value| value.as_f64()),
-            first_token_p99_ms: point
-                .first_token_latency_percentiles
-                .p99_ms
-                .map(|value| value.as_f64()),
-            admission_decision_p50_ms: point
-                .admission_decision_percentiles
-                .p50_ms
-                .map(|value| value.as_f64()),
-            admission_decision_p95_ms: point
-                .admission_decision_percentiles
-                .p95_ms
-                .map(|value| value.as_f64()),
-            account_selection_wait_p50_ms: point
-                .account_selection_wait_percentiles
-                .p50_ms
-                .map(|value| value.as_f64()),
-            account_selection_wait_p95_ms: point
-                .account_selection_wait_percentiles
-                .p95_ms
-                .map(|value| value.as_f64()),
-            output_throughput_p10: point.output_throughput_p10,
-            output_throughput_p50: point.output_throughput_p50,
-            output_throughput_p90: point.output_throughput_p90,
-            capacity_utilization: point
-                .capacity_utilization_avg_basis_points
-                .map(basis_points_rate),
-            capacity_utilization_p95: point
-                .capacity_utilization_p95_basis_points
-                .map(basis_points_rate),
-        })
-        .collect();
     let cost_points = insights
         .cost
         .points
@@ -1201,76 +1151,10 @@ pub(crate) fn usage_insights_view(insights: domain::UsageInsights) -> UsageInsig
             success_rate_change: None,
             points: health_points,
         },
-        performance: OverviewPerformanceView {
-            load: load_view(&insights.performance.load),
-            latency_p50_ms: insights
-                .performance
-                .latency_percentiles
-                .p50_ms
-                .map(|value| value.as_f64()),
-            latency_p95_ms: insights
-                .performance
-                .latency_percentiles
-                .p95_ms
-                .map(|value| value.as_f64()),
-            latency_p99_ms: insights
-                .performance
-                .latency_percentiles
-                .p99_ms
-                .map(|value| value.as_f64()),
-            first_token_p50_ms: insights
-                .performance
-                .first_token_latency_percentiles
-                .p50_ms
-                .map(|value| value.as_f64()),
-            first_token_p95_ms: insights
-                .performance
-                .first_token_latency_percentiles
-                .p95_ms
-                .map(|value| value.as_f64()),
-            first_token_p99_ms: insights
-                .performance
-                .first_token_latency_percentiles
-                .p99_ms
-                .map(|value| value.as_f64()),
-            admission_decision_p50_ms: insights
-                .performance
-                .admission_decision_percentiles
-                .p50_ms
-                .map(|value| value.as_f64()),
-            admission_decision_p95_ms: insights
-                .performance
-                .admission_decision_percentiles
-                .p95_ms
-                .map(|value| value.as_f64()),
-            account_selection_wait_p50_ms: insights
-                .performance
-                .account_selection_wait_percentiles
-                .p50_ms
-                .map(|value| value.as_f64()),
-            account_selection_wait_p95_ms: insights
-                .performance
-                .account_selection_wait_percentiles
-                .p95_ms
-                .map(|value| value.as_f64()),
-            output_throughput_p10: insights.performance.output_throughput_p10,
-            output_throughput_p50: insights.performance.output_throughput_p50,
-            output_throughput_p90: insights.performance.output_throughput_p90,
-            capacity_utilization: insights
-                .performance
-                .capacity_utilization_avg_basis_points
-                .map(basis_points_rate),
-            capacity_utilization_p95: insights
-                .performance
-                .capacity_utilization_p95_basis_points
-                .map(basis_points_rate),
-            latency_coverage: insights.performance.latency_coverage,
-            first_token_coverage: insights.performance.first_token_coverage,
-            admission_decision_coverage: insights.performance.admission_decision_coverage,
-            account_selection_wait_coverage: insights.performance.account_selection_wait_coverage,
-            capacity_coverage: insights.performance.capacity_coverage,
-            points: performance_points,
-        },
+        performance: performance_view(
+            &insights.performance,
+            gateway_core::time::DeploymentTimeZone::default(),
+        ),
         cost: OverviewCostView {
             estimated_cost: insights
                 .cost
@@ -1400,4 +1284,272 @@ pub(crate) fn map_wire_error(error: WireValidationError) -> AdminError {
 
 pub(crate) fn map_service_error(error: gateway_admin::model::AdminError) -> AdminError {
     map_admin_service_error(error)
+}
+
+pub(crate) fn usage_metric_view(
+    insight: domain::UsageInsight,
+    time: gateway_core::time::DeploymentTimeZone,
+) -> UsageMetricView {
+    use domain::UsageInsightData;
+    let data = match insight.data {
+        UsageInsightData::Health(health) => {
+            UsageMetricDataView::Health(overview_health_view(&health, time))
+        }
+        UsageInsightData::Latency(series) => UsageMetricDataView::Latency(metric_series_view(
+            series,
+            time,
+            metric_latency_view,
+            metric_latency_view,
+        )),
+        UsageInsightData::FirstToken(series) => UsageMetricDataView::FirstToken(
+            metric_series_view(series, time, metric_latency_view, metric_latency_view),
+        ),
+        UsageInsightData::Throughput(series) => UsageMetricDataView::Throughput(
+            metric_series_view(series, time, metric_throughput_view, metric_throughput_view),
+        ),
+        UsageInsightData::Load(series) => UsageMetricDataView::Load(metric_series_view(
+            series,
+            time,
+            |value| load_view(&value),
+            |value| load_view(&value),
+        )),
+        UsageInsightData::Scheduling(performance) => {
+            UsageMetricDataView::Scheduling(Box::new(performance_view(&performance, time)))
+        }
+        UsageInsightData::Cost(series) => UsageMetricDataView::Cost(metric_series_view(
+            series,
+            time,
+            metric_cost_summary_view,
+            |value| UsageCostComparisonView {
+                estimated_cost: value.estimated_cost.as_ref().map(ToString::to_string),
+                no_cache_cost: value.no_cache_cost.as_ref().map(ToString::to_string),
+            },
+        )),
+        UsageInsightData::Savings(series) => UsageMetricDataView::Savings(metric_series_view(
+            series,
+            time,
+            metric_cost_summary_view,
+            |value| value.as_ref().map(ToString::to_string),
+        )),
+        UsageInsightData::Cache(series) => UsageMetricDataView::Cache(metric_series_view(
+            series,
+            time,
+            metric_cost_summary_view,
+            |value| UsageCacheView {
+                input_tokens: value.input_tokens,
+                cached_token_rate: value.cached_token_rate,
+                cache_hit_request_rate: value.cache_hit_request_rate,
+            },
+        )),
+    };
+    UsageMetricView {
+        granularity: granularity_name(insight.granularity).to_owned(),
+        data,
+    }
+}
+
+fn metric_series_view<S, P, SV, PV>(
+    series: domain::UsageMetricSeries<S, P>,
+    time: gateway_core::time::DeploymentTimeZone,
+    summary: impl FnOnce(S) -> SV,
+    point: impl Fn(P) -> PV,
+) -> UsageMetricSeriesView<SV, PV> {
+    UsageMetricSeriesView {
+        summary: summary(series.summary),
+        points: series
+            .points
+            .into_iter()
+            .map(|value| UsageMetricPointView {
+                bucket: value.bucket_start,
+                label: time
+                    .local(value.bucket_start)
+                    .format("%m-%d %H:%M")
+                    .to_string(),
+                request_count: value.request_count,
+                value: point(value.value),
+            })
+            .collect(),
+    }
+}
+
+fn metric_latency_view(value: domain::LatencyPercentiles) -> UsageLatencyView {
+    UsageLatencyView {
+        p50_ms: value.p50_ms.map(|value| value.as_f64()),
+        p95_ms: value.p95_ms.map(|value| value.as_f64()),
+        p99_ms: value.p99_ms.map(|value| value.as_f64()),
+    }
+}
+
+fn metric_throughput_view(value: domain::UsageThroughputPercentiles) -> UsageThroughputView {
+    UsageThroughputView {
+        p10: value.p10,
+        p50: value.p50,
+        p90: value.p90,
+    }
+}
+
+fn metric_cost_summary_view(value: domain::UsageCostSummary) -> UsageCostSummaryView {
+    UsageCostSummaryView {
+        estimated_cost: value.estimated_cost.as_ref().map(ToString::to_string),
+        cache_savings: value.cache_savings.as_ref().map(ToString::to_string),
+        tier_premium: value.tier_premium.as_ref().map(ToString::to_string),
+        cost_per_successful_request: value
+            .cost_per_successful_request
+            .as_ref()
+            .map(ToString::to_string),
+        coverage: cost_coverage_view(&value.coverage),
+    }
+}
+
+fn overview_health_view(
+    health: &domain::UsageInsightsHealth,
+    time: gateway_core::time::DeploymentTimeZone,
+) -> OverviewHealthView {
+    let health_points = health
+        .points
+        .iter()
+        .map(|point| OverviewHealthPointView {
+            bucket: point.bucket_start,
+            label: time
+                .local(point.bucket_start)
+                .format("%m-%d %H:%M")
+                .to_string(),
+            total_requests: point.total_requests,
+            success_requests: point.success_requests,
+            failed_requests: point.failed_requests,
+            cancelled_requests: point.cancelled_requests,
+            incomplete_requests: point.incomplete_requests,
+            caller_error_requests: point.caller_error_requests,
+            error_rate: point.error_rate,
+        })
+        .collect();
+    OverviewHealthView {
+        total_requests: health.total_requests,
+        success_requests: health.success_requests,
+        failed_requests: health.failed_requests,
+        cancelled_requests: health.cancelled_requests,
+        incomplete_requests: health.incomplete_requests,
+        caller_error_requests: health.caller_error_requests,
+        success_rate: health.success_rate,
+        completion_rate: health.completion_rate,
+        request_change_rate: None,
+        success_rate_change: None,
+        points: health_points,
+    }
+}
+
+fn performance_view(
+    performance: &domain::UsageInsightsPerformance,
+    time: gateway_core::time::DeploymentTimeZone,
+) -> OverviewPerformanceView {
+    let performance_points = performance
+        .points
+        .iter()
+        .map(|point| OverviewPerformancePointView {
+            load: load_view(&point.load),
+            bucket: point.bucket_start,
+            label: time
+                .local(point.bucket_start)
+                .format("%m-%d %H:%M")
+                .to_string(),
+            latency_p50_ms: point.latency_percentiles.p50_ms.map(|value| value.as_f64()),
+            latency_p95_ms: point.latency_percentiles.p95_ms.map(|value| value.as_f64()),
+            latency_p99_ms: point.latency_percentiles.p99_ms.map(|value| value.as_f64()),
+            first_token_p50_ms: point
+                .first_token_latency_percentiles
+                .p50_ms
+                .map(|value| value.as_f64()),
+            first_token_p95_ms: point
+                .first_token_latency_percentiles
+                .p95_ms
+                .map(|value| value.as_f64()),
+            first_token_p99_ms: point
+                .first_token_latency_percentiles
+                .p99_ms
+                .map(|value| value.as_f64()),
+            admission_decision_p50_ms: point
+                .admission_decision_percentiles
+                .p50_ms
+                .map(|value| value.as_f64()),
+            admission_decision_p95_ms: point
+                .admission_decision_percentiles
+                .p95_ms
+                .map(|value| value.as_f64()),
+            account_selection_wait_p50_ms: point
+                .account_selection_wait_percentiles
+                .p50_ms
+                .map(|value| value.as_f64()),
+            account_selection_wait_p95_ms: point
+                .account_selection_wait_percentiles
+                .p95_ms
+                .map(|value| value.as_f64()),
+            output_throughput_p10: point.output_throughput_p10,
+            output_throughput_p50: point.output_throughput_p50,
+            output_throughput_p90: point.output_throughput_p90,
+            capacity_utilization: point
+                .capacity_utilization_avg_basis_points
+                .map(basis_points_rate),
+            capacity_utilization_p95: point
+                .capacity_utilization_p95_basis_points
+                .map(basis_points_rate),
+        })
+        .collect();
+    OverviewPerformanceView {
+        load: load_view(&performance.load),
+        latency_p50_ms: performance
+            .latency_percentiles
+            .p50_ms
+            .map(|value| value.as_f64()),
+        latency_p95_ms: performance
+            .latency_percentiles
+            .p95_ms
+            .map(|value| value.as_f64()),
+        latency_p99_ms: performance
+            .latency_percentiles
+            .p99_ms
+            .map(|value| value.as_f64()),
+        first_token_p50_ms: performance
+            .first_token_latency_percentiles
+            .p50_ms
+            .map(|value| value.as_f64()),
+        first_token_p95_ms: performance
+            .first_token_latency_percentiles
+            .p95_ms
+            .map(|value| value.as_f64()),
+        first_token_p99_ms: performance
+            .first_token_latency_percentiles
+            .p99_ms
+            .map(|value| value.as_f64()),
+        admission_decision_p50_ms: performance
+            .admission_decision_percentiles
+            .p50_ms
+            .map(|value| value.as_f64()),
+        admission_decision_p95_ms: performance
+            .admission_decision_percentiles
+            .p95_ms
+            .map(|value| value.as_f64()),
+        account_selection_wait_p50_ms: performance
+            .account_selection_wait_percentiles
+            .p50_ms
+            .map(|value| value.as_f64()),
+        account_selection_wait_p95_ms: performance
+            .account_selection_wait_percentiles
+            .p95_ms
+            .map(|value| value.as_f64()),
+        output_throughput_p10: performance.output_throughput_p10,
+        output_throughput_p50: performance.output_throughput_p50,
+        output_throughput_p90: performance.output_throughput_p90,
+        capacity_utilization: performance
+            .capacity_utilization_avg_basis_points
+            .map(basis_points_rate),
+        capacity_utilization_p95: performance
+            .capacity_utilization_p95_basis_points
+            .map(basis_points_rate),
+        latency_coverage: performance.latency_coverage,
+        first_token_coverage: performance.first_token_coverage,
+        admission_decision_coverage: performance.admission_decision_coverage,
+        account_selection_wait_coverage: performance.account_selection_wait_coverage,
+        capacity_coverage: performance.capacity_coverage,
+        points: performance_points,
+    }
 }

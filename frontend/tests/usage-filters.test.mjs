@@ -18,7 +18,9 @@ function harness() {
   const api = Object.fromEntries([
     'getUsageRecords',
     'getUsageRecordSummary',
-    'getUsageRecordInsightsOverview',
+    'getUsageHealth',
+    'getUsagePerformance',
+    'getUsageCost',
     'getUsageRecordInsightsDiagnostics',
     'getOpsErrors',
   ].map(name => [name, (query, options) => new Promise((resolve, reject) => calls.push({ name, query, ...options, resolve, reject }))]))
@@ -34,6 +36,8 @@ function harness() {
       exports,
       AbortController,
       require(name) {
+        if (name === '@/api/request')
+          return { ApiError: class ApiError extends Error {} }
         if (name === '@/api')
           return api
         if (name === 'vue')
@@ -43,7 +47,7 @@ function harness() {
         if (name === '@vueuse/core')
           return { watchDebounced: (source, fn) => vue.watch(source, fn, { flush: 'post' }) }
         if (name === '@/utils/async')
-          return { withMinimumDuration: action => action() }
+          return { withMinimumDuration: action => action(), errorMessage: error => error.message }
         if (name.startsWith('@/') || name.startsWith('.')) {
           return load(name.startsWith('@/')
             ? new URL(`../src/${name.slice(2)}.ts`, import.meta.url)
@@ -146,7 +150,7 @@ test('table/summary/overview/diagnostics use one frozen range and filter snapsho
   }))
   try {
     const pending = state.loadUsageRecords()
-    assert.equal(calls.length, 4)
+    assert.equal(calls.length, 6)
     assert.equal(new Set(calls.map(call => call.query.endTime)).size, 1)
     for (const call of calls) {
       assert.equal(call.query.accountIds, 'acct-a')
@@ -164,8 +168,8 @@ test('table/summary/overview/diagnostics use one frozen range and filter snapsho
     assert.equal(stale.signal.aborted, true)
     assert.equal(state.records.value.length, 0)
     await flush()
-    const fresh = calls.slice(5)
-    assert.equal(fresh.length, 4)
+    const fresh = calls.slice(7)
+    assert.equal(fresh.length, 6)
     assert.equal(new Set(fresh.map(call => call.query.endTime)).size, 1)
     for (const call of fresh) {
       assert.equal(call.query.accountIds, 'acct-b')

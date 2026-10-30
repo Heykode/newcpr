@@ -80,6 +80,10 @@ impl Drop for ObservabilityConnection {
 }
 
 impl ObservabilityQueryBudget {
+    pub(crate) fn query_timeout(&self) -> Duration {
+        self.query_timeout
+    }
+
     /// 预算表示观测类 SQL 最多可同时占用的连接数。
     pub fn try_new(max_connections: u32, wait_timeout: Duration) -> StoreResult<Self> {
         Self::try_new_with_timeout(max_connections, wait_timeout, DEFAULT_EXECUTION_TIMEOUT)
