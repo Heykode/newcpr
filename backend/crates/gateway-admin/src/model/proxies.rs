@@ -130,6 +130,7 @@ pub enum ProxyBatchResult<T> {
 pub struct TestProxy {
     pub id: String,
     pub revision: Revision,
+    pub detect_location: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]

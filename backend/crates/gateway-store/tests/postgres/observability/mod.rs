@@ -28,6 +28,7 @@ mod backup_export;
 mod concurrency;
 mod dashboard_comparison;
 mod final_error;
+mod metric;
 mod quality_isolation;
 mod search;
 mod usage_history;

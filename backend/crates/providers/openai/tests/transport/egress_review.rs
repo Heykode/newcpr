@@ -117,7 +117,7 @@ async fn dual_loopback_pair_retries_a_port_already_reserved_on_ipv6() {
 }
 
 #[tokio::test]
-async fn default_ipv4_and_explicit_ipv6_switch_real_http_and_ws_connections() {
+async fn default_dual_stack_and_explicit_ipv6_switch_real_http_and_ws_connections() {
     for websocket in [false, true] {
         let (ipv4, ipv6) = bind_dual_loopback_pair(TcpListener::bind("127.0.0.1:0").await.unwrap())
             .await
@@ -202,7 +202,10 @@ async fn default_ipv4_and_explicit_ipv6_switch_real_http_and_ws_connections() {
                 .await
                 .unwrap()
                 .unwrap();
-            assert_eq!(peer.is_ipv4(), mode == EgressMode::Unchanged);
+            assert!(peer.is_loopback());
+            if mode != EgressMode::Unchanged {
+                assert!(peer.is_ipv6());
+            }
         }
         pool.shutdown().await;
         for server in servers {
@@ -213,31 +216,38 @@ async fn default_ipv4_and_explicit_ipv6_switch_real_http_and_ws_connections() {
 }
 
 #[tokio::test]
-async fn default_websocket_egress_rejects_implicit_ipv6() {
+async fn default_websocket_egress_connects_to_ipv6_without_an_address_pool() {
     let listener = TcpListener::bind("[::1]:0").await.unwrap();
     let (backend, _, _, pool) = fixture(
         &format!("http://{}", listener.local_addr().unwrap()),
         EgressMode::Unchanged,
     )
     .await;
+    let server = tokio::spawn(async move {
+        let (stream, peer) = listener.accept().await.unwrap();
+        assert!(peer.is_ipv6());
+        let mut socket = accept_codex_test_websocket(stream).await;
+        assert!(matches!(socket.next().await, Some(Ok(Message::Text(_)))));
+        socket
+            .send(Message::Text(
+                completed_websocket_response("resp_dual_stack", 1, 1).into(),
+            ))
+            .await
+            .unwrap();
+    });
     let mut request = codex_request("gpt-test", "fixture", Vec::new());
     request.use_websocket = true;
-    request.set_previous_response_id(Some("resp_ipv4_only".to_owned()));
+    request.set_previous_response_id(Some("resp_dual_stack".to_owned()));
     request.previous_response_scope = Some(PreviousResponseScope::Persisted);
-    assert!(
-        timeout(
-            Duration::from_secs(5),
-            backend.create_response(&request, request_context("ipv4-only", Some("review")))
-        )
-        .await
-        .unwrap()
-        .is_err()
-    );
-    assert!(
-        timeout(Duration::from_millis(50), listener.accept())
-            .await
-            .is_err()
-    );
+    let response = timeout(
+        Duration::from_secs(5),
+        backend.create_response(&request, request_context("dual-stack", Some("review"))),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(response.transport, CodexBackendTransport::WebSocket);
+    server.await.unwrap();
     pool.shutdown().await;
 }
 

@@ -157,9 +157,14 @@ pub(super) async fn send_websocket_request(
 }
 
 pub(super) fn websocket_connection_metadata(
+    connection: &CodexWebSocketConnection,
     response: &WsResponse<Option<Vec<u8>>>,
 ) -> CodexWebSocketConnectionMetadata {
     CodexWebSocketConnectionMetadata {
+        routing_affinity: crate::transport::routing_affinity::ChatGptRoutingAffinity::from_response(
+            &connection.endpoint,
+            response.headers(),
+        ),
         session_proxy: None,
         turn_state: response_meta::turn_state(response.headers()),
         set_cookie_headers: response_meta::set_cookie_headers(response.headers()),
@@ -198,7 +203,7 @@ async fn connect_websocket(
         remaining.min(WEBSOCKET_CONNECT_TIMEOUT)
     });
     let result = timeout(connect_timeout, async {
-        // All paths retain the same TLS/WS handshake; only direct TCP is IPv4-only.
+        // All paths retain the same TLS/WS handshake and explicit egress policy.
         let stream = dial_account(connection).await?;
         match stream {
             MaybeTlsStream::Plain(tcp) => {
@@ -274,9 +279,7 @@ async fn dial_account(
                     .map_err(|error| tungstenite::Error::Io(std::io::Error::other(error)))?,
             ));
         }
-        return Ok(MaybeTlsStream::Plain(
-            connect_tcp(&dns_host, port, true).await?,
-        ));
+        return Ok(MaybeTlsStream::Plain(connect_tcp(&dns_host, port).await?));
     };
     if connection.egress_source.is_some() {
         return Err(tungstenite::Error::Io(std::io::Error::other(
@@ -297,7 +300,7 @@ async fn dial_account(
         Some(url::Host::Ipv6(ip)) => ip.to_string(),
         _ => config.host.clone(),
     };
-    let tcp = connect_tcp(&proxy_host, config.port, false).await?;
+    let tcp = connect_tcp(&proxy_host, config.port).await?;
     let stream = if tls_proxy {
         let tls = tls::account_proxy_tls_config().map_err(|_| invalid())?;
         let name = rustls_pki_types::ServerName::try_from(proxy_host).map_err(|_| invalid())?;
@@ -328,11 +331,7 @@ async fn dial_account(
         .map_err(|_| invalid())
 }
 
-async fn connect_tcp(
-    host: &str,
-    port: u16,
-    ipv4_only: bool,
-) -> Result<tokio::net::TcpStream, tungstenite::Error> {
+async fn connect_tcp(host: &str, port: u16) -> Result<tokio::net::TcpStream, tungstenite::Error> {
     use hyper_util::client::legacy::connect::HttpConnector;
     use tower_service::Service;
 
@@ -345,9 +344,6 @@ async fn connect_tcp(
         .parse::<hyper::Uri>()
         .map_err(|_| tungstenite::Error::Io(std::io::Error::other("invalid egress endpoint")))?;
     let mut connector = HttpConnector::new();
-    if ipv4_only {
-        connector.set_local_address(Some(std::net::Ipv4Addr::UNSPECIFIED.into()));
-    }
     connector
         .call(uri)
         .await

@@ -117,7 +117,8 @@ profiles or random fingerprint generation.
   do not broaden the existing parameter removals. Body and routing tier hint
   must agree without changing the original request's affinity inputs.
 - Account `outboundProxyId`: omitted preserves, empty string selects direct,
-  nonempty selects a saved and successfully tested proxy. Do not send a redacted
+  nonempty selects a saved, enabled proxy. Untested and failed last tests do not
+  block explicit selection (official parity, 2026-10-30). Do not send a redacted
   display endpoint back as a connection URL when toggling account status.
 - Single-account updates carry the same nullable `egress_mode` as bulk updates and
   commit it with proxy changes, scheduling and audit through the existing transaction.
@@ -153,6 +154,18 @@ profiles or random fingerprint generation.
   publish a revision, or update account bindings. Cancellation releases a slot.
 - Editing a proxy with an empty URL keeps its saved credentials. The form can
   test that saved proxy by ID; a new URL is probed before an explicit save.
+- Saved proxy selection and import reservation require enabled, not successful
+  last-test status. Attach the saved WS capacity immediately when resolving a
+  selection. Disabled proxies keep existing bindings but reject new selection.
+- Ordinary proxy batches follow official `3a2ccbc5`: create groups of ten, test
+  groups of two, stop on systemic/uncertain failures and permit editing only known
+  failed/unstarted rows. Batch errors retain HTTP status and stable code. Strip
+  successful credentials immediately and all retained credentials on disposal.
+- Proxy input parsing follows the fixed official algorithm (four schemes, bracketed
+  IPv6, encoded credentials, duplicate lines, 100 rows and 512 KiB). Full URLs still
+  receive authoritative backend validation; display only redacted endpoints.
+- Location normalization validates raw control characters before trimming city and
+  region. Manual one-shot detection does not toggle saved automatic-location mode.
 - When local account scheduling ends with no eligible account or no capacity,
   that terminal scheduling error takes precedence over a stale retryable
   account-authentication failure for client delivery. The earlier failure

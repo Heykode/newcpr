@@ -30,7 +30,9 @@ pub struct UsageQuery {
     pub record_status: Option<String>,
     #[serde(flatten)]
     pub details: RequestSearchQuery,
+    #[serde(default, deserialize_with = "super::search::query_number")]
     pub current_page: Option<u32>,
+    #[serde(default, deserialize_with = "super::search::query_number")]
     pub page_size: Option<u16>,
     pub kind: Option<String>,
     pub outcome: Option<String>,
@@ -40,8 +42,10 @@ pub struct UsageQuery {
     pub account_id: Option<String>,
     pub route: Option<String>,
     pub model: Option<String>,
+    #[serde(default, deserialize_with = "super::search::query_number")]
     pub status_code: Option<i64>,
     pub transport: Option<String>,
+    #[serde(default, deserialize_with = "super::search::query_number")]
     pub attempt_index: Option<i64>,
     pub response_id: Option<String>,
     pub upstream_request_id: Option<String>,
@@ -420,4 +424,71 @@ pub(crate) fn non_empty(value: Option<String>) -> Option<String> {
     value
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty())
+}
+/// 卡片内的指标选择与时间、Provider 范围
+#[derive(Clone)]
+pub struct UsageMetricQuery<T> {
+    pub metric: T,
+    pub query: UsageQuery,
+}
+
+impl<'de, T: Deserialize<'de>> Deserialize<'de> for UsageMetricQuery<T> {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // 双层 flatten 与 deny_unknown_fields 会把合法筛选判作未知字段。
+        let mut fields = serde_json::Map::<String, Value>::deserialize(deserializer)?;
+        let metric = fields
+            .remove("metric")
+            .ok_or_else(|| serde::de::Error::missing_field("metric"))?;
+        Ok(Self {
+            metric: T::deserialize(metric).map_err(serde::de::Error::custom)?,
+            query: UsageQuery::deserialize(Value::Object(fields))
+                .map_err(serde::de::Error::custom)?,
+        })
+    }
+}
+
+impl<T> UsageMetricQuery<T> {
+    pub fn into_parts(self) -> (UsageQuery, T) {
+        (self.query, self.metric)
+    }
+}
+
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum UsagePerformanceMetricKind {
+    Scheduling,
+    Latency,
+    FirstToken,
+    Throughput,
+    Load,
+}
+
+impl From<UsagePerformanceMetricKind> for domain::UsageInsightMetric {
+    fn from(value: UsagePerformanceMetricKind) -> Self {
+        match value {
+            UsagePerformanceMetricKind::Scheduling => Self::Scheduling,
+            UsagePerformanceMetricKind::Latency => Self::Latency,
+            UsagePerformanceMetricKind::FirstToken => Self::FirstToken,
+            UsagePerformanceMetricKind::Throughput => Self::Throughput,
+            UsagePerformanceMetricKind::Load => Self::Load,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum UsageCostMetricKind {
+    Cost,
+    Savings,
+    Cache,
+}
+
+impl From<UsageCostMetricKind> for domain::UsageInsightMetric {
+    fn from(value: UsageCostMetricKind) -> Self {
+        match value {
+            UsageCostMetricKind::Cost => Self::Cost,
+            UsageCostMetricKind::Savings => Self::Savings,
+            UsageCostMetricKind::Cache => Self::Cache,
+        }
+    }
 }

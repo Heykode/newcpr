@@ -768,6 +768,10 @@ struct FixtureObservabilityStore {
     usage_records: Mutex<Vec<UsageListRecord>>,
     dashboard_delay: Mutex<StdDuration>,
     dashboard_summary_calls: AtomicUsize,
+    metric_summary_calls: AtomicUsize,
+    metric_concurrency_calls: AtomicUsize,
+    metric_delay: Mutex<StdDuration>,
+    metric_timeout: StdDuration,
 }
 
 impl FixtureObservabilityStore {
@@ -789,6 +793,10 @@ impl FixtureObservabilityStore {
             usage_records: Mutex::new(Vec::new()),
             dashboard_delay: Mutex::new(StdDuration::ZERO),
             dashboard_summary_calls: AtomicUsize::new(0),
+            metric_summary_calls: AtomicUsize::new(0),
+            metric_concurrency_calls: AtomicUsize::new(0),
+            metric_delay: Mutex::new(StdDuration::ZERO),
+            metric_timeout: StdDuration::from_secs(120),
         }
     }
 
@@ -840,6 +848,10 @@ impl FixtureObservabilityStore {
 
 #[async_trait]
 impl ObservabilityStore for FixtureObservabilityStore {
+    fn query_timeout(&self) -> StdDuration {
+        self.metric_timeout
+    }
+
     async fn usage_concurrency(
         &self,
         _range: gateway_admin::model::observability::TimeRange,
@@ -847,6 +859,8 @@ impl ObservabilityStore for FixtureObservabilityStore {
     ) -> gateway_admin::ports::store::AdminStoreResult<
         Vec<gateway_admin::model::observability::UsageConcurrencyPoint>,
     > {
+        self.metric_concurrency_calls
+            .fetch_add(1, Ordering::Relaxed);
         Ok(Vec::new())
     }
 
@@ -936,6 +950,11 @@ impl ObservabilityStore for FixtureObservabilityStore {
     }
 
     async fn usage_summary(&self, _: TimeRange, _: UsageFilter) -> AdminStoreResult<UsageOverview> {
+        self.metric_summary_calls.fetch_add(1, Ordering::Relaxed);
+        let delay = *self.metric_delay.lock().unwrap();
+        if !delay.is_zero() {
+            tokio::time::sleep(delay).await;
+        }
         Ok(self.overview.lock().expect("overview").clone())
     }
 
@@ -1177,4 +1196,96 @@ fn diagnostic(name: &str, request_count: u64) -> DiagnosticObservation {
 fn quarter_hour_start(value: DateTime<Utc>) -> DateTime<Utc> {
     let elapsed = value.timestamp().rem_euclid(15 * 60);
     value - Duration::seconds(elapsed) - Duration::nanoseconds(i64::from(value.nanosecond()))
+}
+
+#[tokio::test]
+async fn usage_metric_reads_only_load_concurrency_and_caches_by_metric_and_full_filter() {
+    use gateway_admin::model::observability::{UsageInsightData, UsageInsightMetric as M};
+    let range = observation_range(Utc::now());
+    let store = Arc::new(FixtureObservabilityStore::new(range));
+    store.billing_stream_fails.store(true, Ordering::Relaxed);
+    let services = observability_services_with_calculated_billing(Arc::clone(&store)).await;
+    let service = services.observability();
+    let first = service.usage_metric(range, UsageFilter::default(), M::Latency);
+    let second = service.usage_metric(range, UsageFilter::default(), M::Latency);
+    let (first, second) = tokio::join!(first, second);
+    assert_eq!(first.unwrap(), second.unwrap());
+    assert_eq!(store.metric_summary_calls.load(Ordering::Relaxed), 1);
+    for metric in [M::Health, M::FirstToken, M::Throughput, M::Scheduling] {
+        service
+            .usage_metric(range, UsageFilter::default(), metric)
+            .await
+            .unwrap();
+    }
+    assert_eq!(store.metric_concurrency_calls.load(Ordering::Relaxed), 0);
+    let load = service
+        .usage_metric(range, UsageFilter::default(), M::Load)
+        .await
+        .unwrap();
+    assert!(matches!(load.data, UsageInsightData::Load(_)));
+    assert_eq!(store.metric_concurrency_calls.load(Ordering::Relaxed), 1);
+    let calls = store.metric_summary_calls.load(Ordering::Relaxed);
+    for filter in [
+        UsageFilter {
+            provider_kind: Some("openai".to_owned()),
+            ..Default::default()
+        },
+        UsageFilter {
+            provider_account_ref: Some("account".to_owned()),
+            ..Default::default()
+        },
+        UsageFilter {
+            search: Some("needle".to_owned()),
+            ..Default::default()
+        },
+    ] {
+        service
+            .usage_metric(range, filter, M::Latency)
+            .await
+            .unwrap();
+    }
+    assert_eq!(
+        store.metric_summary_calls.load(Ordering::Relaxed),
+        calls + 3
+    );
+    assert!(
+        service
+            .usage_metric(range, UsageFilter::default(), M::Cost)
+            .await
+            .is_err(),
+        "cost view must report billing failure rather than fabricate savings"
+    );
+    store.billing_stream_fails.store(false, Ordering::Relaxed);
+    service
+        .usage_metric(range, UsageFilter::default(), M::Cost)
+        .await
+        .expect("a failed calculation must not poison the metric cache");
+}
+
+#[tokio::test]
+async fn usage_metric_budget_includes_waiting_for_the_same_cache_slot() {
+    use gateway_admin::model::{AdminErrorKind, observability::UsageInsightMetric as M};
+    let range = observation_range(Utc::now());
+    let mut fixture = FixtureObservabilityStore::new(range);
+    fixture.metric_timeout = StdDuration::from_millis(50);
+    *fixture.metric_delay.lock().unwrap() = StdDuration::from_secs(5);
+    let store = Arc::new(fixture);
+    let services = observability_services_with_calculated_billing(Arc::clone(&store)).await;
+    let service = services.observability();
+    let results = tokio::time::timeout(
+        StdDuration::from_secs(1),
+        futures::future::join_all(
+            (0..8).map(|_| service.usage_metric(range, UsageFilter::default(), M::Latency)),
+        ),
+    )
+    .await
+    .expect("same-key waiters must not accumulate sequential query budgets");
+    for result in results {
+        assert_eq!(result.unwrap_err().kind(), AdminErrorKind::Unavailable);
+    }
+    *store.metric_delay.lock().unwrap() = StdDuration::ZERO;
+    service
+        .usage_metric(range, UsageFilter::default(), M::Latency)
+        .await
+        .expect("timeout must release the cache initializer for the next request");
 }

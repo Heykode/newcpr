@@ -33,9 +33,11 @@ const props = withDefaults(
     health: Health
     granularity: string
     loading?: boolean
+    error?: string
   }>(),
   {
     loading: false,
+    error: '',
   },
 )
 
@@ -197,7 +199,7 @@ function formatTooltip(params: unknown) {
           v-else
           size="sm"
           surface="none"
-          :title="loading ? '正在加载请求健康数据' : '暂无请求健康数据'"
+          :title="error || (loading ? '正在加载请求健康数据' : '暂无请求健康数据')"
           description="当前范围没有可绘制的请求记录"
           class="h-full place-content-center"
         />

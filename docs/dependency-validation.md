@@ -116,6 +116,10 @@ Vite 关联更新包括 `rolldown` 1.2.8、`@oxc-project/types` 0.149.0，
 
 ## 复验方法
 
+原先两项额外的 TLS/ZSTD 升级采样工具已于 2026-10-30 按用户要求移除。
+上文保留历史验证结果，日常 TLS/压缩功能回归继续保留。
+删除后在 OVH 隔离环境复验，8 项 TLS 和 2 项压缩测试全部通过，均无忽略项。
+
 使用仓库固定工具链，并配置实际 PostgreSQL/Redis 测试连接：
 
 ```sh
@@ -123,8 +127,6 @@ cd backend
 cargo fmt --check
 cargo clippy --all-targets --all-features --locked -- -D warnings
 cargo test --workspace --lib --test main --locked
-cargo test --workspace --lib --test main --locked capture_tls_upgrade_matrix -- --ignored --nocapture
-cargo test --workspace --lib --test main --locked capture_zstd_upgrade_corpus -- --ignored --nocapture
 ```
 
 前端使用 pnpm 11.7.0：

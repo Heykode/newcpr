@@ -1320,3 +1320,213 @@ async fn usage_route_should_expose_table_facts_without_detail_payload() {
         "$0.007"
     );
 }
+#[tokio::test]
+async fn usage_card_routes_return_only_the_selected_metric_and_validate_options() {
+    use crate::admin::{AdminTestFixture, AdminTestState};
+    use axum::{
+        body::{Body, to_bytes},
+        http::{Request, StatusCode, header},
+    };
+    use chrono::Duration;
+    use gateway_admin::model::observability::{
+        AttemptMetrics, CurrencyCost, Granularity, LatencyPercentiles, PercentileMilliseconds,
+        RequestMetricPoint, RequestMetrics, TimeRange, UsageConcurrencyPoint, UsageOverview,
+    };
+    use gateway_api::admin::observability;
+    use tower::ServiceExt as _;
+
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.insert_session("valid-session");
+    let now = Utc::now();
+    let range = TimeRange::new(now - Duration::minutes(15), now).unwrap();
+    let metrics = RequestMetrics {
+        request_count: 10,
+        success_count: 8,
+        failure_count: 2,
+        latency_percentiles: LatencyPercentiles {
+            p95_ms: Some(PercentileMilliseconds::new(43.5).unwrap()),
+            ..Default::default()
+        },
+        first_token_latency_percentiles: LatencyPercentiles {
+            p95_ms: Some(PercentileMilliseconds::new(17.25).unwrap()),
+            ..Default::default()
+        },
+        output_throughput_p50: Some(22),
+        ..Default::default()
+    };
+    {
+        let overview = UsageOverview {
+            range,
+            requests: metrics.clone(),
+            attempts: AttemptMetrics {
+                costs: vec![CurrencyCost {
+                    currency: "USD".into(),
+                    amount: "12.5".parse().unwrap(),
+                }],
+                ..Default::default()
+            },
+            providers: Vec::new(),
+        };
+        let trend = vec![RequestMetricPoint {
+            bucket_start: range.start,
+            granularity: Granularity::FifteenMinutes,
+            metrics,
+            cost_coverage: Default::default(),
+            costs: Vec::new(),
+        }];
+        let concurrency = vec![UsageConcurrencyPoint {
+            bucket_start: range.start,
+            average_concurrency: 1.25,
+            peak_concurrency: 3,
+        }];
+        *fixture.metric_observation.lock().unwrap() = Some(
+            gateway_admin::model::observability::UsageInsightsObservation {
+                overview,
+                trend,
+                concurrency,
+            },
+        );
+    }
+    let router = observability::router::<AdminTestState>().with_state(fixture.state());
+    for (path, metric, field, expected) in [
+        ("health", "health", "totalRequests", json!(10)),
+        (
+            "performance?metric=latency",
+            "latency",
+            "p95Ms",
+            json!(43.5),
+        ),
+        (
+            "performance?metric=firstToken",
+            "firstToken",
+            "p95Ms",
+            json!(17.25),
+        ),
+        (
+            "performance?metric=throughput",
+            "throughput",
+            "p50",
+            json!(22),
+        ),
+        (
+            "performance?metric=load",
+            "load",
+            "peakConcurrency",
+            json!(3),
+        ),
+        ("cost?metric=cost", "cost", "estimatedCost", json!("12.5")),
+        (
+            "cost?metric=savings",
+            "savings",
+            "estimatedCost",
+            json!("12.5"),
+        ),
+        ("cost?metric=cache", "cache", "estimatedCost", json!("12.5")),
+    ] {
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/admin/usage/insights/{path}"))
+                    .header(header::COOKIE, "cpr_admin_session=valid-session")
+                    .header("x-request-id", "req_usage_card_metric")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(status, StatusCode::OK, "{path}: {value}");
+        let result = &value["data"];
+        assert_eq!(result["metric"], metric);
+        assert_eq!(result.as_object().unwrap().len(), 3);
+        let data = &result["data"];
+        if metric == "health" {
+            assert_eq!(data[field], expected);
+        } else {
+            assert_eq!(data["summary"][field], expected, "{path}");
+            assert_eq!(data["points"][0]["requestCount"], 10);
+            assert_eq!(data.as_object().unwrap().len(), 2);
+        }
+    }
+    for path in [
+        "health",
+        "performance?metric=latency",
+        "performance?metric=scheduling",
+        "cost?metric=cost",
+    ] {
+        let separator = if path.contains('?') { '&' } else { '?' };
+        let start = range
+            .start
+            .to_rfc3339_opts(chrono::SecondsFormat::Nanos, true);
+        let end = range
+            .end
+            .to_rfc3339_opts(chrono::SecondsFormat::Nanos, true);
+        let uri: axum::http::Uri = format!("/api/admin/usage/insights/{path}{separator}provider=openai&accountId=acct-metric&clientApiKeyId=key-metric&accountIds=a,b&upstreamMode=codex&clientStatusCode=200&statusCode=200&attemptIndex=1&minLatencyMs=12&startTime={start}&endTime={end}")
+            .parse().unwrap();
+        if path.starts_with("performance") {
+            axum::extract::Query::<
+                observability::UsageMetricQuery<observability::UsagePerformanceMetricKind>,
+            >::try_from_uri(&uri)
+            .unwrap_or_else(|error| panic!("metric query: {error}"));
+        }
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(uri)
+                    .header(header::COOKIE, "cpr_admin_session=valid-session")
+                    .header("x-request-id", "req_usage_card_filters")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "{path}: {}",
+            String::from_utf8_lossy(&body)
+        );
+        let (observed_range, filter) = fixture.metric_query.lock().unwrap().clone().unwrap();
+        assert_eq!(observed_range, range);
+        assert_eq!(filter.provider_kind.as_deref(), Some("openai"));
+        assert_eq!(filter.provider_account_ref.as_deref(), Some("acct-metric"));
+        assert_eq!(filter.client_api_key_ref.as_deref(), Some("key-metric"));
+        assert_eq!(filter.details.account_ids, ["a", "b"]);
+        assert_eq!(filter.details.client_status_code, Some(200));
+        assert_eq!(filter.details.min_latency_ms, Some(12));
+        assert_eq!(filter.status_code, Some(200));
+        assert_eq!(filter.attempt_index, Some(1));
+    }
+    for path in [
+        "performance",
+        "cost",
+        "performance?metric=cost",
+        "cost?metric=load",
+        "health?metric=load",
+        "performance?metric=unknown",
+        "cost?metric=cache&status=error",
+        "performance?metric=latency&statusCode=oops",
+        "performance?metric=latency&attemptIndex=0",
+        "performance?metric=load&minLatencyMs=-1",
+    ] {
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/admin/usage/insights/{path}"))
+                    .header(header::COOKIE, "cpr_admin_session=valid-session")
+                    .header("x-request-id", "req_usage_card_metric")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{path}");
+    }
+}

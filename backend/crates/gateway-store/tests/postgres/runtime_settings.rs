@@ -566,9 +566,10 @@ async fn legacy_probe_proxy_is_preserved_but_never_resolved_by_runtime_snapshot(
             .is_none()
     );
     sqlx::query(
-        "insert into outbound_proxies (id, name, proxy_url, last_test_success)
-         values ('probe-proxy', 'Probe proxy', 'http://127.0.0.1:18080', true),
-                ('untested-proxy', 'Untested', 'http://127.0.0.1:18081', null)",
+        "insert into outbound_proxies (id, name, proxy_url, last_test_success, enabled)
+         values ('probe-proxy', 'Probe proxy', 'http://127.0.0.1:18080', true, true),
+                ('untested-proxy', 'Untested', 'http://127.0.0.1:18081', null, true),
+                ('disabled-proxy', 'Disabled', 'http://127.0.0.1:18082', true, false)",
     )
     .execute(&database.pool)
     .await
@@ -578,7 +579,7 @@ async fn legacy_probe_proxy_is_preserved_but_never_resolved_by_runtime_snapshot(
         .await
         .unwrap()
         .config_revision;
-    for id in ["missing-proxy", "untested-proxy"] {
+    for id in ["missing-proxy", "disabled-proxy"] {
         let mut update = settings_with_margin(3_600);
         update.turn_state_probe_proxy_id = Some(Some(id.to_owned()));
         assert!(repository.update_runtime_settings(update).await.is_err());
@@ -591,6 +592,18 @@ async fn legacy_probe_proxy_is_preserved_but_never_resolved_by_runtime_snapshot(
             before
         );
     }
+    let mut update = settings_with_margin(3_600);
+    update.turn_state_probe_proxy_id = Some(Some("untested-proxy".to_owned()));
+    repository.update_runtime_settings(update).await.unwrap();
+    assert_eq!(
+        repository
+            .load_runtime_settings()
+            .await
+            .unwrap()
+            .turn_state_probe_proxy_id
+            .as_deref(),
+        Some("untested-proxy")
+    );
     let mut update = settings_with_margin(3_600);
     update.turn_state_probe_proxy_id = Some(Some("probe-proxy".to_owned()));
     repository.update_runtime_settings(update).await.unwrap();

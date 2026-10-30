@@ -27,15 +27,21 @@ const plain = value => JSON.parse(JSON.stringify(value))
 const draft = (proxyMode, egressMode = 'random_ipv6_reuse') => ({ proxyMode, egressMode, proxyId: ' old-proxy ' })
 const settleReads = () => new Promise(resolve => setImmediate(resolve))
 
+test('nested IPv6 inheritance retains the legacy storage contract', () => {
+  assert.deepEqual(plain(accountEgressPatch(draft('ipv6', 'inherit'), true)), plain(accountEgressPatch(draft('inherit'), true)))
+  assert.throws(() => accountEgressPatch(draft('ipv6', 'inherit'), false))
+})
+
 test('saved egress projection preserves pool, proxy, override and global precedence', () => {
   const account = { id: 'acct_test', provider: 'openai' }
   const config = { defaultMode: 'random_ipv6_reuse', accountOverrides: {} }
   assert.equal(accountEgressFromAccount(account), undefined)
-  assert.equal(accountEgressFromAccount(account, config).proxyMode, 'inherit')
+  assert.equal(accountEgressFromAccount(account, config).proxyMode, 'ipv6')
+  assert.equal(accountEgressFromAccount(account, config).egressMode, 'inherit')
   for (const mode of [null, 'unchanged', ...accountIpv6Modes]) {
     config.accountOverrides.acct_test = mode
     const saved = accountEgressFromAccount(account, config)
-    assert.equal(saved.proxyMode, mode === null ? 'inherit' : mode === 'unchanged' ? 'direct' : 'ipv6')
+    assert.equal(saved.proxyMode, mode === 'unchanged' ? 'direct' : 'ipv6')
     if (mode && mode !== 'unchanged')
       assert.equal(saved.egressMode, mode)
     const proxied = { ...account, outboundProxyEndpoint: 'http://proxy.example:8080' }
@@ -164,7 +170,7 @@ test('all saved modes reopen correctly and unchanged or reverted egress is omitt
     const { editor, accounts, requests, errors } = editorHarness(t, overrides, async () => config)
     editor.open(accounts.value[0])
     await settleReads()
-    const expected = mode === null ? 'inherit' : mode === 'unchanged' ? 'direct' : accountIpv6Modes.includes(mode) ? 'ipv6' : mode
+    const expected = mode === null ? 'ipv6' : mode === 'unchanged' ? 'direct' : accountIpv6Modes.includes(mode) ? 'ipv6' : mode
     assert.equal(editor.proxyMode.value, expected)
     const savedMode = editor.egressMode.value
     editor.proxyMode.value = 'direct'
@@ -265,7 +271,8 @@ test('account switches, close/reopen and disposal abort and fence late reads', a
   assert.equal(editor.proxyMode.value, '')
   results[3].resolve({ accountOverrides: { acct_other: null } })
   await settleReads()
-  assert.equal(editor.proxyMode.value, 'inherit')
+  assert.equal(editor.proxyMode.value, 'ipv6')
+  assert.equal(editor.egressMode.value, 'inherit')
   editor.open(other)
   scope.stop()
   assert.equal(reads[4].signal.aborted, true)

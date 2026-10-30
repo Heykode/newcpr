@@ -9,9 +9,6 @@ use gateway_core::routing::{ModelServiceTier, UpstreamModelId};
 use reqwest::header::{ETAG, HeaderMap};
 use serde::Deserialize;
 
-/// 单次 Codex 模型目录响应允许的最大字节数。
-pub const MAX_CODEX_MODEL_CATALOG_BYTES: usize = 1024 * 1024;
-
 const MAX_CATALOG_MODELS: usize = 2_048;
 const MAX_DISPLAY_NAME_BYTES: usize = 256;
 const MAX_DESCRIPTION_BYTES: usize = 4 * 1024;
@@ -253,9 +250,6 @@ impl CodexModelCatalogSnapshot {
 /// Codex 模型目录不满足完整快照约束。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum CodexModelCatalogError {
-    /// 响应超过硬上限。
-    #[error("Codex model catalog response exceeds the byte limit")]
-    ResponseTooLarge,
     /// 顶层不是唯一受支持的 `{models:[...]}` wire。
     #[error("Codex model catalog response violates the official wire contract")]
     InvalidWire,
@@ -340,9 +334,6 @@ pub fn parse_codex_model_catalog(
     body: &[u8],
     etag: Option<&str>,
 ) -> Result<CodexModelCatalogSnapshot, CodexModelCatalogError> {
-    if body.len() > MAX_CODEX_MODEL_CATALOG_BYTES {
-        return Err(CodexModelCatalogError::ResponseTooLarge);
-    }
     let wire: CodexModelsWire =
         serde_json::from_slice(body).map_err(|_| CodexModelCatalogError::InvalidWire)?;
     if wire.models.is_empty() {

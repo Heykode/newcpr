@@ -80,6 +80,15 @@ struct IdRequest {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct TestRequest {
+    id: String,
+    revision: u64,
+    #[serde(default)]
+    detect_location: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ProbeRequest {
     #[serde(default)]
     detect_location: bool,
@@ -224,8 +233,15 @@ where
 #[derive(Serialize)]
 #[serde(tag = "status", rename_all = "camelCase")]
 enum BatchView<T> {
-    Succeeded { data: T },
-    Failed { message: String },
+    Succeeded {
+        data: T,
+    },
+    Failed {
+        #[serde(rename = "httpStatus")]
+        http_status: u16,
+        #[serde(flatten)]
+        error: super::wire::AdminErrorBody,
+    },
     Skipped,
 }
 
@@ -245,9 +261,10 @@ fn batch_response<T, V: Serialize>(
             ProxyBatchResult::Completed(Ok(value)) => BatchView::Succeeded {
                 data: project(value),
             },
-            ProxyBatchResult::Completed(Err(error)) => BatchView::Failed {
-                message: error.message().to_owned(),
-            },
+            ProxyBatchResult::Completed(Err(error)) => {
+                let (http_status, error) = map_error(error).into_batch_error();
+                BatchView::Failed { http_status, error }
+            }
             ProxyBatchResult::Skipped => BatchView::Skipped,
         })
         .collect();
@@ -310,7 +327,7 @@ where
     let commands = values
         .into_iter()
         .map(|value| {
-            let request: IdRequest = serde_json::from_value(value)
+            let request: TestRequest = serde_json::from_value(value)
                 .map_err(|_| gateway_admin::model::AdminError::invalid("代理参数格式不正确"))?;
             let revision = if request.revision <= i64::MAX as u64 {
                 Revision::new(request.revision).ok()
@@ -321,6 +338,7 @@ where
             Ok(TestProxy {
                 id: request.id,
                 revision,
+                detect_location: request.detect_location,
             })
         })
         .collect();
@@ -589,7 +607,7 @@ where
 async fn test<S>(
     auth: AdminAuth,
     State(state): State<S>,
-    AdminJson(request): AdminJson<IdRequest>,
+    AdminJson(request): AdminJson<TestRequest>,
 ) -> Result<impl IntoResponse, AdminError>
 where
     S: AdminSessionState + Send + Sync,
@@ -600,6 +618,7 @@ where
         .test(
             &request.id,
             revision(request.revision)?,
+            request.detect_location,
             &auth.context().mutation_context(),
         )
         .await

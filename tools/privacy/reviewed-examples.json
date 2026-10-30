@@ -56,6 +56,62 @@
     "reason": "Manually re-reviewed existing synthetic proxy.example credentials in the in-memory admin API and probe fixtures after batch API tests shifted their lines; no production endpoint or credential."
   },
   {
+    "path": "backend/crates/gateway-api/tests/admin/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 35,
+    "file_sha256": "4901d50008d9eb2cbb8037ca8a031dbd00adeabebfa8d212333460b21b75f279",
+    "line_sha256": "67a2d50bb2845a354154b03afae3748669dd1152f0c944342ec3c3bef3ce984f",
+    "reason": "Manually reviewed batch-create redaction fixture: reserved proxy.example domain and explicit credential-marker, handled by MemoryProxies without a network connection."
+  },
+  {
+    "path": "backend/crates/gateway-api/tests/admin/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 381,
+    "file_sha256": "4901d50008d9eb2cbb8037ca8a031dbd00adeabebfa8d212333460b21b75f279",
+    "line_sha256": "a64a4ebd4745816bca847998941cb69d613488075fddc35523e9618944445362",
+    "reason": "Manually re-reviewed existing synthetic proxy.example credentials in the in-memory admin API and probe fixtures after batch API tests shifted their lines; no production endpoint or credential."
+  },
+  {
+    "path": "backend/crates/gateway-api/tests/admin/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 441,
+    "file_sha256": "4901d50008d9eb2cbb8037ca8a031dbd00adeabebfa8d212333460b21b75f279",
+    "line_sha256": "68c0f9074b2a4b0317d8586a6524a6153303a423e298086c96185772796837d3",
+    "reason": "Manually re-reviewed existing synthetic proxy.example credentials in the in-memory admin API and probe fixtures after batch API tests shifted their lines; no production endpoint or credential."
+  },
+  {
+    "path": "backend/crates/gateway-api/tests/admin/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 640,
+    "file_sha256": "4901d50008d9eb2cbb8037ca8a031dbd00adeabebfa8d212333460b21b75f279",
+    "line_sha256": "b2d2a8562a4ed48e58c93460d8667865b9a7e1df7b2416d42095ce76b8078f54",
+    "reason": "Manually re-reviewed existing synthetic proxy.example credentials in the in-memory admin API and probe fixtures after batch API tests shifted their lines; no production endpoint or credential."
+  },
+  {
+    "path": "backend/crates/gateway-api/tests/admin/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 681,
+    "file_sha256": "4901d50008d9eb2cbb8037ca8a031dbd00adeabebfa8d212333460b21b75f279",
+    "line_sha256": "b2d2a8562a4ed48e58c93460d8667865b9a7e1df7b2416d42095ce76b8078f54",
+    "reason": "Manually re-reviewed existing synthetic proxy.example credentials in the in-memory admin API and probe fixtures after batch API tests shifted their lines; no production endpoint or credential."
+  },
+  {
+    "path": "backend/crates/gateway-api/tests/admin/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 787,
+    "file_sha256": "4901d50008d9eb2cbb8037ca8a031dbd00adeabebfa8d212333460b21b75f279",
+    "line_sha256": "6ca8102fb3d417f5b9c43b2b86187c41e05688ea3a984cfa48578f057c3e4d93",
+    "reason": "Manually re-reviewed existing synthetic proxy.example credentials in the in-memory admin API and probe fixtures after batch API tests shifted their lines; no production endpoint or credential."
+  },
+  {
+    "path": "backend/crates/gateway-api/tests/admin/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 905,
+    "file_sha256": "4901d50008d9eb2cbb8037ca8a031dbd00adeabebfa8d212333460b21b75f279",
+    "line_sha256": "c36a0dbdd71274dfb45379085d8b6535806e84789a7edb39c1c60e508b0a311b",
+    "reason": "Manually re-reviewed existing synthetic proxy.example credentials in the in-memory admin API and probe fixtures after batch API tests shifted their lines; no production endpoint or credential."
+  },
+  {
     "path": "backend/crates/gateway-host/tests/proxy_probe.rs",
     "rule": "authenticated-url",
     "line": 54,
@@ -2342,5 +2398,29 @@
     "file_sha256": "0032369f8dc5b4edc27b0e4c3e56418fa489518edea49e73d81a2f0f05e24294",
     "line_sha256": "be871b5bb1fb717424afe768be0a94bd16324aa95d478d8be07e11d0ed234c75",
     "reason": "Re-reviewed unchanged loopback URL rejection fixture after adding managed-password acceptance coverage; embedded is synthetic parser input, not a connection credential."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/transport/tls.rs",
+    "rule": "gitleaks:cpr-api-key",
+    "line": 138,
+    "file_sha256": "96bc27f652cc1884ec903e33b95af2ff19c40c3effd06dac5cb9e3de4b84219d",
+    "line_sha256": "0c9d5d94fc2f00276883de931fc26f0ced43e5e9a0b7730407fc6b6c869b1e4e",
+    "reason": "Manually re-reviewed unchanged Rust test function identifier after removal of manual capture tests; not a credential."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/transport/tls.rs",
+    "rule": "authenticated-url",
+    "line": 241,
+    "file_sha256": "96bc27f652cc1884ec903e33b95af2ff19c40c3effd06dac5cb9e3de4b84219d",
+    "line_sha256": "9aa104ea897354d3eb1e73d00d4b556f8ca5fb140acba2afb88e290615cc59ac",
+    "reason": "Manually re-reviewed unchanged localhost TLS proxy fixture after removal of manual capture tests; user/pass are synthetic isolated-test inputs."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/transport/tls.rs",
+    "rule": "gitleaks:cpr-api-key",
+    "line": 339,
+    "file_sha256": "96bc27f652cc1884ec903e33b95af2ff19c40c3effd06dac5cb9e3de4b84219d",
+    "line_sha256": "1a58dbbe57cd503aa12612f4280a27ea49f813090650ceaf6490c90504084620",
+    "reason": "Manually re-reviewed unchanged Rust test function identifier after removal of manual capture tests; not a credential."
   }
 ]

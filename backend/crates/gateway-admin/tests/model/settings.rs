@@ -511,3 +511,36 @@ fn request_tuning_overrides_keep_unknown_and_malformed_live_fields_strict() {
         .is_err()
     );
 }
+#[test]
+fn global_location_switch_only_projects_enabled_saved_location() {
+    use gateway_admin::model::settings::RequestTuningOverrides;
+    use gateway_core::account::RequestLocation;
+    let saved = RequestLocation {
+        country: "JP".into(),
+        region: " Tokyo ".into(),
+        city: " Tokyo ".into(),
+        timezone: chrono_tz::Asia::Tokyo,
+    };
+    for enabled in [None, Some(false), Some(true)] {
+        let settings = RequestTuningOverrides {
+            openai_location_override_enabled: enabled,
+            openai_request_location: Some(saved.clone()),
+            ..Default::default()
+        };
+        let projected = settings.effective_request_location();
+        assert_eq!(projected.is_some(), enabled == Some(true));
+        if let Some(location) = projected {
+            assert_eq!(location.city, "Tokyo");
+            assert_eq!(location.region, "Tokyo");
+        }
+        assert_eq!(settings.openai_request_location.as_ref(), Some(&saved));
+    }
+    let legacy_empty = RequestTuningOverrides {
+        openai_location_override_enabled: Some(true),
+        ..Default::default()
+    };
+    assert_eq!(
+        legacy_empty.effective_request_location(),
+        Some(RequestLocation::default())
+    );
+}

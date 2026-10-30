@@ -179,6 +179,7 @@ async fn runtime_snapshot_compiles_account_busy_wait_defaults_overrides_and_froz
     assert_eq!(defaults.request_location(), None);
     let location = gateway_core::account::RequestLocation::default();
     let expected = RequestTuning {
+        openai_location_override_enabled: true,
         excel_image_relay_bytes: 128 * 1024 * 1024,
         excel_image_max_bytes: 8 * 1024 * 1024,
         excel_image_total_bytes: 16 * 1024 * 1024,
@@ -214,6 +215,7 @@ async fn runtime_snapshot_compiles_account_busy_wait_defaults_overrides_and_froz
         excel_image_relay_downloads: Some(expected.excel_image_relay_downloads),
         excel_image_relay_entries: Some(expected.excel_image_relay_entries),
         openai_request_location: Some(location.clone()),
+        openai_location_override_enabled: Some(true),
         account_busy_wait_enabled: Some(expected.account_busy_wait_enabled),
         account_busy_wait_sticky_max_waiting: Some(expected.account_busy_wait_sticky_max_waiting),
         account_busy_wait_sticky_timeout_seconds: Some(
@@ -255,7 +257,7 @@ async fn runtime_snapshot_compiles_account_busy_wait_defaults_overrides_and_froz
         "update runtime_settings set request_tuning_json = $1, config_revision = config_revision + 1 where id = 1",
     )
     .bind(sqlx::types::Json(RequestTuningOverrides {
-        openai_request_location: None,
+        openai_location_override_enabled: Some(false),
         account_busy_wait_enabled: Some(false),
         websocket_large_request_threshold_bytes: Some(0),
         stream_prefetch_bytes: Some(0),
@@ -271,6 +273,7 @@ async fn runtime_snapshot_compiles_account_busy_wait_defaults_overrides_and_froz
     assert_eq!(
         disabled.request_tuning(),
         RequestTuning {
+            openai_location_override_enabled: false,
             account_busy_wait_enabled: false,
             websocket_large_request_threshold_bytes: 0,
             stream_prefetch_bytes: 0,
@@ -280,6 +283,20 @@ async fn runtime_snapshot_compiles_account_busy_wait_defaults_overrides_and_froz
     assert_eq!(enabled.request_tuning(), expected);
     assert_eq!(disabled.request_location(), None);
     assert_eq!(enabled.request_location(), Some(&location));
+    let saved: sqlx::types::Json<RequestTuningOverrides> =
+        sqlx::query_scalar("select request_tuning_json from runtime_settings where id = 1")
+            .fetch_one(&database.pool)
+            .await
+            .unwrap();
+    assert_eq!(saved.0.openai_request_location, Some(location.clone()));
+    sqlx::query("update runtime_settings set request_tuning_json = $1, config_revision = config_revision + 1 where id = 1")
+        .bind(sqlx::types::Json(json!({"openaiLocationOverrideEnabled":true,"openaiRequestLocation":null})))
+        .execute(&database.pool).await.unwrap();
+    let legacy = compiler.compile().await.unwrap();
+    assert_eq!(
+        legacy.request_location(),
+        Some(&gateway_core::account::RequestLocation::default())
+    );
     assert_eq!(defaults.request_tuning(), RequestTuning::default());
 
     for inherited in [

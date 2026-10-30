@@ -140,7 +140,7 @@
     "batchEdit": {
       "title": "批量編輯賬號",
       "selectionTitle": "編輯 {count} 個賬號",
-      "proxyRequired": "請選擇已通過測試的代理",
+      "proxyRequired": "請選擇代理",
       "saved": "已更新 {count} 個賬號",
       "staleAccount": "賬號 {accountId} 的頁面數據已失效，請重新選擇"
     },

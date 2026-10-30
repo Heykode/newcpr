@@ -8,11 +8,13 @@ import BaseMotionIcon from '@/components/base/BaseMotionIcon.vue'
 import { t } from '@/i18n'
 
 const props = defineProps<{
-  summary: Awaited<ReturnType<typeof getUsageRecordSummary>>
+  summary: Awaited<ReturnType<typeof getUsageRecordSummary>> | null
+  loading?: boolean
+  error?: string
 }>()
 
-function averageLatencyDisplay(value: string) {
-  return !value || value === '—' || value === '-' ? '0 ms' : value
+function averageLatencyDisplay(value: string | undefined) {
+  return value == null ? '—' : !value || value === '—' || value === '-' ? '0 ms' : value
 }
 
 const items = computed(() => [
@@ -20,7 +22,7 @@ const items = computed(() => [
     key: 'requests',
     label: '成功请求',
     icon: Activity,
-    value: props.summary.totalRequests,
+    value: props.summary?.totalRequests ?? '—',
     detail: '筛选范围内',
     tone: 'bg-cp-blue-container text-cp-blue-on-container',
   },
@@ -28,15 +30,15 @@ const items = computed(() => [
     key: 'tokens',
     label: '总 Token',
     icon: FileText,
-    value: props.summary.totalTokens,
-    detail: `输入 ${props.summary.inputTokens} / 输出 ${props.summary.outputTokens}`,
+    value: props.summary?.totalTokens ?? '—',
+    detail: props.summary ? `输入 ${props.summary.inputTokens} / 输出 ${props.summary.outputTokens}` : (props.error || (props.loading ? '加载中' : '—')),
     tone: 'bg-cp-green-container text-cp-green-on-container',
   },
   {
     key: 'cached',
     label: '缓存 Token',
     icon: Database,
-    value: props.summary.cachedTokens,
+    value: props.summary?.cachedTokens ?? '—',
     detail: '缓存读取命中',
     tone: 'bg-cp-orange-container text-cp-orange-on-container',
   },
@@ -44,7 +46,7 @@ const items = computed(() => [
     key: 'latency',
     label: '平均耗时',
     icon: Timer,
-    value: averageLatencyDisplay(props.summary.averageLatencyMs),
+    value: averageLatencyDisplay(props.summary?.averageLatencyMs),
     detail: '成功请求平均值',
     tone: 'bg-cp-cyan-container text-cp-cyan-on-container',
   },

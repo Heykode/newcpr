@@ -36,6 +36,9 @@ use crate::{
 
 use super::{map_provider_error, map_store_error};
 mod export;
+mod metrics;
+use crate::model::observability::{UsageInsight, UsageInsightMetric};
+use metrics::UsageMetricCache;
 
 const HEALTH_TIMELINE_SLOT_MINUTES: i64 = 15;
 const HEALTH_TIMELINE_SLOTS: i64 = 24 * 4;
@@ -126,6 +129,12 @@ pub trait ObservabilityService: Send + Sync {
         range: TimeRange,
         filter: UsageFilter,
     ) -> Result<UsageInsights, AdminError>;
+    async fn usage_metric(
+        &self,
+        range: TimeRange,
+        filter: UsageFilter,
+        metric: UsageInsightMetric,
+    ) -> Result<UsageInsight, AdminError>;
     async fn diagnostics(
         &self,
         range: TimeRange,
@@ -142,6 +151,7 @@ pub(crate) struct DefaultObservabilityService {
     settings: Arc<dyn SettingsStore>,
     providers: ProviderAdminRegistry,
     dashboard_queries: DashboardQueryCache,
+    metric_queries: UsageMetricCache,
     timezone: DeploymentTimeZone,
 }
 
@@ -160,6 +170,7 @@ impl DefaultObservabilityService {
             settings,
             providers,
             dashboard_queries: DashboardQueryCache::default(),
+            metric_queries: UsageMetricCache::default(),
             timezone,
         }
     }
@@ -372,6 +383,15 @@ impl ObservabilityService for DefaultObservabilityService {
             ),
         )?;
         build_usage_insights(overview, trend, standard_costs, range, concurrency)
+    }
+
+    async fn usage_metric(
+        &self,
+        range: TimeRange,
+        filter: UsageFilter,
+        metric: UsageInsightMetric,
+    ) -> Result<UsageInsight, AdminError> {
+        self.load_usage_metric(range, filter, metric).await
     }
 
     async fn diagnostics(

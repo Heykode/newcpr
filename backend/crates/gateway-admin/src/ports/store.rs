@@ -643,6 +643,33 @@ pub type UsageCalculatedBillingStream<'a> =
 /// 用量、趋势、诊断与运维错误的只读能力。
 #[async_trait]
 pub trait ObservabilityStore: Send + Sync {
+    fn query_timeout(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(120)
+    }
+
+    async fn usage_metric_observation(
+        &self,
+        range: TimeRange,
+        filter: UsageFilter,
+        metric: crate::model::observability::UsageInsightMetric,
+    ) -> AdminStoreResult<crate::model::observability::UsageInsightsObservation> {
+        use crate::model::observability::{UsageInsightMetric, UsageInsightsObservation};
+        let (overview, trend) = futures::try_join!(
+            self.usage_summary(range, filter.clone()),
+            self.usage_trend(range, filter.clone()),
+        )?;
+        let concurrency = if metric == UsageInsightMetric::Load {
+            self.usage_concurrency(range, filter).await?
+        } else {
+            Vec::new()
+        };
+        Ok(UsageInsightsObservation {
+            overview,
+            trend,
+            concurrency,
+        })
+    }
+
     async fn diagnostic_errors(
         &self,
         target: &crate::model::diagnostics::DiagnosticTarget,

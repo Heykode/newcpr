@@ -28,6 +28,7 @@ pub struct CodexWebSocketPoolKey {
     client_scope: String,
     conversation_id: String,
     connection_profile: String,
+    routing_affinity_id: Option<Uuid>,
     pub(super) downstream_connection_id: String,
     pub(super) proxy_capacity_key: String,
     egress_key: String,
@@ -49,6 +50,7 @@ impl PartialEq for CodexWebSocketPoolKey {
             && self.account_id == other.account_id
             && self.client_scope == other.client_scope
             && self.conversation_id == other.conversation_id
+            && self.routing_affinity_id == other.routing_affinity_id
             && self.connection_profile == other.connection_profile
             && self.downstream_connection_id == other.downstream_connection_id
             && self.egress_key == other.egress_key
@@ -65,6 +67,7 @@ impl Hash for CodexWebSocketPoolKey {
         self.connection_profile.hash(state);
         self.downstream_connection_id.hash(state);
         self.egress_key.hash(state);
+        self.routing_affinity_id.hash(state);
         if !self.client_scope.is_empty() {
             self.client_scope.hash(state);
         }
@@ -91,6 +94,7 @@ impl CodexWebSocketPoolKey {
             client_scope: String::new(),
             conversation_id: conversation_id.into(),
             connection_profile: String::new(),
+            routing_affinity_id: None,
             downstream_connection_id: String::new(),
             proxy_capacity_key: String::new(),
             egress_key: String::new(),
@@ -130,6 +134,11 @@ impl CodexWebSocketPoolKey {
         &self.account_id
     }
 
+    pub(crate) fn with_routing_affinity(mut self, id: Option<Uuid>) -> Self {
+        self.routing_affinity_id = id;
+        self
+    }
+
     pub(crate) fn with_egress_key(mut self, key: &str) -> Self {
         self.egress_key = key.to_owned();
         self
@@ -147,6 +156,7 @@ impl CodexWebSocketPoolKey {
             && self.account_id == other.account_id
             && self.client_scope == other.client_scope
             && self.conversation_id == other.conversation_id
+            && self.routing_affinity_id == other.routing_affinity_id
             && self
                 .routing
                 .as_ref()
@@ -186,6 +196,7 @@ impl CodexWebSocketPoolKey {
     }
 
     pub(crate) fn stable_hash(&self) -> String {
+        let routing_affinity = self.routing_affinity_id.map(|id| id.to_string());
         let parts = [
             self.base_url.as_str(),
             self.account_id.as_str(),
@@ -197,7 +208,8 @@ impl CodexWebSocketPoolKey {
         short_sha256(
             parts
                 .into_iter()
-                .chain((!self.client_scope.is_empty()).then_some(self.client_scope.as_str())),
+                .chain((!self.client_scope.is_empty()).then_some(self.client_scope.as_str()))
+                .chain(routing_affinity.as_deref()),
         )
     }
 
@@ -206,6 +218,7 @@ impl CodexWebSocketPoolKey {
             && self.account_id == other.account_id
             && self.client_scope == other.client_scope
             && self.conversation_id == other.conversation_id
+            && self.routing_affinity_id == other.routing_affinity_id
             && self.egress_key == other.egress_key
     }
 }
@@ -280,6 +293,7 @@ impl WebSocketPoolState {
 
 #[derive(Clone)]
 pub(crate) struct CodexWebSocketConnectionMetadata {
+    pub(crate) routing_affinity: Option<crate::transport::routing_affinity::ChatGptRoutingAffinity>,
     pub(crate) session_proxy: Option<crate::transport::session_proxy::SessionProxyHold>,
     pub(crate) turn_state: Option<String>,
     pub(crate) set_cookie_headers: Vec<String>,

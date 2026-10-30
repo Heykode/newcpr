@@ -50,6 +50,19 @@
 正确：沿用 NewCPR 的 `DashboardResult.today/yesterday`、认证修订与 cookie 过渡保护。
 请求顺序使用有序移除；被动专项计时仍用于本项目诊断，不随官方删除。
 
+## 独立统计卡片
+
+官方 #556：summary、health、performance、cost、diagnostics 独立加载和失败，
+切换指标仅查询所属卡片。只有 load 查询并发；保留本地 scheduling 图与 Key × 模型分页。
+独立 scheduling 响应未包含请求活动数，空样本保留 null，不能按空 activity 数组补为零。
+API、SQL 与缓存键都必须接收完整筛选，不能只传时间与 Provider。
+带 metric 的 API 不得双层 flatten 严格查询结构；先取出指标，再用原筛选结构解析。
+数字字段复用 query_number，路由测试必须带 Provider、账号、状态码和尝试次数，不能只测空筛选。
+本地使用即时查询和恢复小时基线，缓存 2 秒/64 项，不移植不存在的 rollup 代次字段。
+同键初始化等待、数据库及费用恢复共用 store 的查询总时限，失败不可缓存成成功。
+更换筛选取消并清空旧数据；同筛选翻页失败保留旧页并显示错误。浏览器测试必须考虑
+既有 GET 一次瞬时重试，测试信封必须包含 code/message/data，使用当前界面按钮名。
+
 ## 三语与管理会话适配
 
 - 范围：v3.30.2 管理端适配；自有动态中文文案尚未全部翻译，不宣称全站覆盖。

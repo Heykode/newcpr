@@ -920,6 +920,10 @@ impl CodexResponsesRequest {
         Self::consistent_value(&parent_thread_ids)
     }
 
+    pub fn is_guardian(&self) -> bool {
+        self.subagent_kind().as_deref() == Some("guardian")
+    }
+
     /// 设置 / 合并 client metadata。
     pub fn set_client_metadata(&mut self, client_metadata: Option<Value>) {
         match client_metadata {

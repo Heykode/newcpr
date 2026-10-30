@@ -208,6 +208,9 @@ async fn proxy_disable_projects_direct_and_reenable_restores_unchanged_accounts(
         );
         let reservation = proxies.reserve_import(&saved.id).await;
         assert_eq!(reservation.is_ok(), enabled);
+        if let Ok(reservation) = &reservation {
+            assert_eq!(reservation.binding.proxy.max_websocket_connections(), 7);
+        }
         drop(reservation);
         if !enabled {
             assert_eq!(
@@ -857,6 +860,11 @@ async fn rejected_import_reservations_release_proxy_lock_before_returning() {
         .await
         .unwrap()
         .record;
+    sqlx::query("update outbound_proxies set enabled = false where id = $1")
+        .bind(&saved.id)
+        .execute(&database.pool)
+        .await
+        .unwrap();
     for _ in 0..64 {
         let error = store.reserve_import(&saved.id).await.err().unwrap();
         assert_eq!(error.kind(), AdminStoreErrorKind::Conflict);
@@ -923,7 +931,7 @@ async fn import_reservation_blocks_proxy_mutations_until_rotated_credentials_are
         .await
         .unwrap()
         .record;
-    assert!(store.reserve_import(&saved.id).await.is_err());
+    assert!(store.reserve_import(&saved.id).await.is_ok());
     store
         .record_test(&saved.id, saved.revision, success(), &context)
         .await
@@ -1061,12 +1069,6 @@ async fn managed_proxies_persist_bind_update_all_accounts_and_protect_stale_test
             .is_err()
     );
     let selection = AccountProxySelection::Saved(created.id.clone());
-    assert!(
-        admin
-            .update_account(update("acct_one", selection.clone()), &context)
-            .await
-            .is_err()
-    );
     let read = || async {
         sqlx::query_as::<_, (String, Option<String>, Option<String>, i64)>("select id, outbound_proxy_id, outbound_proxy_url, credential_revision from provider_accounts order by id")
             .fetch_all(&database.pool).await.unwrap()
@@ -1077,6 +1079,27 @@ async fn managed_proxies_persist_bind_update_all_accounts_and_protect_stale_test
             .iter()
             .all(|row| row.1.is_none() && row.2.is_none() && row.3 == 1)
     );
+    admin
+        .update_account(update("acct_one", selection.clone()), &context)
+        .await
+        .unwrap();
+    store
+        .record_test(
+            &created.id,
+            created.revision,
+            ProxyTestResult {
+                success: false,
+                ..success()
+            },
+            &context,
+        )
+        .await
+        .unwrap();
+    admin
+        .update_account(update("acct_two", selection.clone()), &context)
+        .await
+        .unwrap();
+    assert!(store.reserve_import(&created.id).await.is_ok());
     let tested = store
         .record_test(&created.id, created.revision, success(), &context)
         .await

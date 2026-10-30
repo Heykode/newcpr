@@ -72,6 +72,17 @@ async function main() {
         else if (path === '/api/admin/settings') {
           data = settings
         }
+        else if (path === '/api/admin/proxies/probe-direct') {
+          data = {
+            success: true,
+            latencyMs: 1,
+            exitIp: '192.0.2.1',
+            exitIpv4: '192.0.2.1',
+            exitIpv6: null,
+            message: 'Synthetic probe',
+            location: { status: 'detected', location: { country: 'JP', region: 'Tokyo', city: 'Tokyo', timezone: 'Asia/Tokyo' } },
+          }
+        }
         else if (path === '/api/admin/settings/admin-api-key') {
           data = { exists: false }
         }
@@ -111,29 +122,52 @@ async function main() {
         return route.fulfill({ json: { code: 200, message: 'ok', data } })
       })
       await page.goto(`${base}/settings`)
-      const enabled = page.getByRole('switch', { name: 'OpenAI 搜索地区与时区覆盖', exact: true })
+      const enabled = page.getByRole('switch', { name: '启用位置覆盖', exact: true })
       await enabled.waitFor()
       assert.equal(await enabled.isChecked(), false)
       await enabled.setChecked(true, { force: true })
-      await page.getByRole('switch', { name: '自定义全局地区（关闭时沿用启动配置）' }).setChecked(true, { force: true })
       await page.getByRole('textbox', { name: '城市', exact: true }).fill('Los Angeles')
       await page.getByRole('textbox', { name: '时区', exact: true }).fill('America/Los_Angeles')
       await page.getByRole('textbox', { name: '地区', exact: true }).fill('California')
       await Promise.all([
         page.waitForResponse(response => response.url().endsWith('/api/admin/settings/update')),
-        page.getByRole('button', { name: '保存', exact: true }).click(),
+        page.getByRole('button', { name: '保存全部设置', exact: true }).click(),
       ])
       assert.equal(writes.at(-1).requestTuning.openaiRequestLocation.city, 'Los Angeles')
+      await page.getByRole('textbox', { name: '城市', exact: true }).fill('')
+      await enabled.setChecked(false, { force: true })
+      assert.equal(await page.getByRole('textbox', { name: '城市', exact: true }).isDisabled(), true)
+      await Promise.all([
+        page.waitForResponse(response => response.url().endsWith('/api/admin/settings/update')),
+        page.getByRole('button', { name: '保存全部设置', exact: true }).click(),
+      ])
+      assert.equal(writes.at(-1).requestTuning.openaiLocationOverrideEnabled, false)
+      assert.equal(writes.at(-1).requestTuning.openaiRequestLocation.city, 'Los Angeles')
+      await page.reload()
+      await enabled.waitFor()
+      await enabled.setChecked(true, { force: true })
+      assert.equal(await page.getByRole('textbox', { name: '城市', exact: true }).inputValue(), 'Los Angeles')
       await page.getByRole('textbox', { name: '城市', exact: true }).scrollIntoViewIfNeeded()
       await page.screenshot({ path: `${output}/settings-${width}.png` })
       assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth))
+      await enabled.setChecked(false, { force: true })
+      await page.getByRole('button', { name: '检测直连出口位置', exact: true }).click()
+      await page.getByRole('status').filter({ hasText: '已填入检测结果' }).waitFor()
+      assert.equal(await enabled.isChecked(), true)
+      assert.equal(await page.getByRole('textbox', { name: '城市', exact: true }).inputValue(), 'Tokyo')
+      assert.equal(settings.requestTuning.openaiRequestLocation.city, 'Los Angeles')
+      await Promise.all([
+        page.waitForResponse(response => response.url().endsWith('/api/admin/settings/update')),
+        page.getByRole('button', { name: '保存全部设置', exact: true }).click(),
+      ])
+      assert.equal(settings.requestTuning.openaiRequestLocation.city, 'Tokyo')
 
       await page.goto(`${base}/proxies`)
       await page.getByRole('button', { name: '新增代理', exact: true }).click()
       await page.getByRole('textbox', { name: '代理名称' }).fill('Location fixture')
       await page.getByLabel('代理 URL', { exact: true }).fill('http://127.0.0.1:8080')
-      await page.getByText('手动独立地区（地区总开关开启时生效）', { exact: true }).click()
-      assert.equal(await page.getByRole('switch', { name: '手动独立地区（地区总开关开启时生效）' }).isChecked(), true)
+      await page.getByText('手动独立地区', { exact: true }).click()
+      assert.equal(await page.getByRole('switch', { name: '手动独立地区' }).isChecked(), true)
       await page.getByRole('textbox', { name: '城市', exact: true }).fill('Tokyo')
       await page.screenshot({ path: `${output}/proxy-${width}.png` })
       assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth))

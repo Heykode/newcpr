@@ -1,7 +1,7 @@
 use super::*;
 
 #[tokio::test]
-async fn default_http_egress_uses_ipv4_and_rejects_ipv6() {
+async fn default_http_egress_supports_both_ip_families() {
     let server = wiremock::MockServer::start().await;
     wiremock::Mock::given(wiremock::matchers::method("GET"))
         .respond_with(wiremock::ResponseTemplate::new(200))
@@ -19,11 +19,23 @@ async fn default_http_egress_uses_ipv4_and_rejects_ipv6() {
     assert!(response.remote_addr().unwrap().is_ipv4());
 
     let ipv6 = TcpListener::bind("[::1]:0").await.unwrap();
+    let address = ipv6.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        use tokio::io::AsyncWriteExt;
+        let (mut socket, _) = ipv6.accept().await.unwrap();
+        read_http_request(&mut socket).await;
+        socket
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+            .await
+            .unwrap();
+    });
     let result = client
-        .get(format!("http://{}/", ipv6.local_addr().unwrap()))
+        .get(format!("http://{address}/"))
+        .timeout(Duration::from_secs(5))
         .send()
         .await;
-    assert!(result.unwrap_err().is_connect());
+    assert!(result.unwrap().remote_addr().unwrap().is_ipv6());
+    server.await.unwrap();
 }
 
 #[test]

@@ -22,9 +22,11 @@ const props = withDefaults(
   defineProps<{
     diagnostics: Diagnostics
     loading?: boolean
+    error?: string
   }>(),
   {
     loading: false,
+    error: '',
   },
 )
 
@@ -170,6 +172,9 @@ function diagnosticNameDisplay(name: string, key: string) {
     </template>
 
     <template #body>
+      <p v-if="error && hasData" role="alert" class="shrink-0 text-cp-sm text-cp-error-text">
+        {{ error }}
+      </p>
       <BaseTable
         v-if="hasData"
         :key="resultDimension"
@@ -289,7 +294,7 @@ function diagnosticNameDisplay(name: string, key: string) {
         v-else
         size="sm"
         surface="none"
-        :title="loading ? '正在加载热点诊断数据' : '暂无诊断数据'"
+        :title="error || (loading ? '正在加载热点诊断数据' : '暂无诊断数据')"
         description="当前范围没有可诊断的请求记录"
         class="min-h-0 flex-1 place-content-center"
       />

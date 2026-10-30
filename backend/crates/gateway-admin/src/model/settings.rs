@@ -155,6 +155,18 @@ impl<'de> Deserialize<'de> for RequestTuningOverrides {
 }
 
 impl RequestTuningOverrides {
+    /// The global switch does not control an account proxy's independent location.
+    pub fn effective_request_location(&self) -> Option<gateway_core::account::RequestLocation> {
+        self.openai_location_override_enabled
+            .unwrap_or(false)
+            .then(|| {
+                let mut location = self.openai_request_location.clone().unwrap_or_default();
+                location.region = location.region.trim().to_owned();
+                location.city = location.city.trim().to_owned();
+                location
+            })
+    }
+
     pub const MAX_ACCOUNT_SWITCHES: u32 = 31;
     pub const MAX_REQUEST_ATTEMPTS: u32 = 32;
     pub const MAX_WEBSOCKET_RETRIES: u32 = 100;

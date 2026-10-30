@@ -30,6 +30,12 @@ where
             "/api/admin/usage/insights/overview",
             get(usage_insights_overview::<S>),
         )
+        .route("/api/admin/usage/insights/health", get(usage_health::<S>))
+        .route(
+            "/api/admin/usage/insights/performance",
+            get(usage_performance::<S>),
+        )
+        .route("/api/admin/usage/insights/cost", get(usage_cost::<S>))
         .route(
             "/api/admin/usage/insights/diagnostics",
             get(usage_insights_diagnostics::<S>),
@@ -237,6 +243,65 @@ where
     Ok(AdminResponse::new(
         StatusCode::OK,
         AdminEnvelope::ok(usage_insights_view(result)),
+    ))
+}
+
+pub(crate) async fn usage_health<S>(
+    _auth: AdminAuth,
+    State(state): State<S>,
+    AdminQuery(query): AdminQuery<UsageQuery>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: AdminSessionState + Send + Sync,
+{
+    usage_metric_response(state, query, domain::UsageInsightMetric::Health).await
+}
+
+pub(crate) async fn usage_performance<S>(
+    _auth: AdminAuth,
+    State(state): State<S>,
+    AdminQuery(query): AdminQuery<UsageMetricQuery<UsagePerformanceMetricKind>>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: AdminSessionState + Send + Sync,
+{
+    let (range, metric) = query.into_parts();
+    usage_metric_response(state, range, metric.into()).await
+}
+
+pub(crate) async fn usage_cost<S>(
+    _auth: AdminAuth,
+    State(state): State<S>,
+    AdminQuery(query): AdminQuery<UsageMetricQuery<UsageCostMetricKind>>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: AdminSessionState + Send + Sync,
+{
+    let (range, metric) = query.into_parts();
+    usage_metric_response(state, range, metric.into()).await
+}
+
+async fn usage_metric_response<S>(
+    state: S,
+    query: UsageQuery,
+    metric: domain::UsageInsightMetric,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: AdminSessionState + Send + Sync,
+{
+    let time = state.deployment_timezone();
+    let range = usage_range(query.start_time.as_deref(), query.end_time.as_deref())
+        .map_err(map_wire_error)?;
+    let filter = usage_filter(&query).map_err(map_wire_error)?;
+    let result = state
+        .admin_services()
+        .observability()
+        .usage_metric(range, filter, metric)
+        .await
+        .map_err(map_service_error)?;
+    Ok(AdminResponse::new(
+        StatusCode::OK,
+        AdminEnvelope::ok(usage_metric_view(result, time)),
     ))
 }
 

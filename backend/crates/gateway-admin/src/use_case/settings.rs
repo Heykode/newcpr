@@ -65,9 +65,13 @@ impl SettingsService for DefaultSettingsService {
     async fn replace(
         &self,
         context: &MutationContext,
-        command: ReplaceRuntimeSettings,
+        mut command: ReplaceRuntimeSettings,
     ) -> Result<RuntimeSettings, AdminError> {
         validate_settings(&command)?;
+        if let Some(location) = command.request_tuning.openai_request_location.as_mut() {
+            location.region = location.region.trim().to_owned();
+            location.city = location.city.trim().to_owned();
+        }
         let settings = self
             .store
             .replace_runtime_settings(command, context)

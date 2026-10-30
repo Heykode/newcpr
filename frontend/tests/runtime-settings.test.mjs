@@ -201,6 +201,10 @@ function mountSettings(initial, onWarning = assert.fail, apiOverrides = {}) {
     '@/utils/async': asyncUtils,
   })
   const dependencies = {
+    '@/api/modules/proxies': loadModule(new URL('../src/api/modules/proxies.ts', import.meta.url), {
+      '../request': () => { throw new Error('unexpected real API request') },
+    }),
+    '@/utils/location': loadModule(new URL('../src/utils/location.ts', import.meta.url)),
     './useExcelImageSettings': loadModule(new URL('../src/views/settings/composables/useExcelImageSettings.ts', import.meta.url), { vue }),
     '@/api/modules/settings': loadModule(new URL('../src/api/modules/settings.ts', import.meta.url), {
       '../request': () => { throw new Error('unexpected real API request') },
@@ -360,7 +364,7 @@ test('location remains opt-in and custom location round trips without changing o
   try {
     await query.state.loadSettings()
     assert.equal(query.state.form.requestTuning.openaiLocationOverrideEnabled, false)
-    assert.equal(query.state.form.requestTuning.openaiRequestLocation, null)
+    assert.equal(query.state.form.requestTuning.openaiRequestLocation.city, 'Piketon')
     const location = { country: 'JP', region: 'Tokyo', city: 'Tokyo', timezone: 'Asia/Tokyo' }
     query.state.form.requestTuning.openaiRequestLocation = location
     query.state.form.requestTuning.openaiLocationOverrideEnabled = true
@@ -373,11 +377,40 @@ test('location remains opt-in and custom location round trips without changing o
     assert.equal(query.requests.at(-1).rotationStrategy, 'smart')
     query.state.form.requestTuning.openaiRequestLocation = null
     await query.state.saveSettings()
-    assert.equal(query.requests.at(-1).requestTuning.openaiRequestLocation, null)
+    assert.deepEqual(query.requests.at(-1).requestTuning.openaiRequestLocation, location)
   }
   finally {
     query.stop()
   }
+})
+
+test('location normalizes enabled input and ignores incomplete disabled drafts', async () => {
+  const warnings = []
+  const query = mountSettings(settings(), message => warnings.push(message))
+  try {
+    await query.state.loadSettings()
+    query.state.form.requestTuning.openaiLocationOverrideEnabled = true
+    query.state.form.requestTuning.openaiRequestLocation = {
+      country: ' jp ',
+      region: ' Tokyo ',
+      city: ' Tokyo ',
+      timezone: ' Asia/Tokyo ',
+    }
+    await query.state.saveSettings()
+    const saved = { country: 'JP', region: 'Tokyo', city: 'Tokyo', timezone: 'Asia/Tokyo' }
+    assert.deepEqual(query.requests.at(-1).requestTuning.openaiRequestLocation, saved)
+    query.state.form.requestTuning.openaiRequestLocation.city = ''
+    await query.state.saveSettings()
+    assert.equal(warnings.length, 1)
+    assert.equal(query.requests.length, 1)
+    query.state.form.requestTuning.openaiLocationOverrideEnabled = false
+    await query.state.saveSettings()
+    assert.deepEqual(query.requests.at(-1).requestTuning.openaiRequestLocation, saved)
+    await query.state.loadSettings()
+    query.state.form.requestTuning.openaiLocationOverrideEnabled = true
+    assert.deepEqual({ ...query.state.form.requestTuning.openaiRequestLocation }, saved)
+  }
+  finally { query.stop() }
 })
 
 test('stream prefetch inherits defaults and round trips zero and exact custom bytes', async () => {
@@ -570,7 +603,7 @@ test('inherited runtime defaults never add the removed global WS opening limit',
       excelImageRelayTtlMinutes: 30,
       excelImageTransport: null,
       openaiLocationOverrideEnabled: false,
-      openaiRequestLocation: null,
+      openaiRequestLocation: { country: 'US', region: 'Ohio', city: 'Piketon', timezone: 'America/New_York' },
       maxWaitingPerKey: 0,
       keyConcurrencyWaitTimeoutSeconds: 30,
       accountBusyWaitEnabled: false,
@@ -1073,3 +1106,26 @@ test('error protection is opt-in, validates rules, and saves independently from 
   }
   finally { query.stop() }
 })
+
+for (const status of [400, 403, 409, 422]) {
+  test(`structured settings rejection ${status} preserves the draft without reloading`, async () => {
+    let reads = 0
+    const query = mountSettings(settings(), assert.fail, {
+      getSettings: async () => {
+        reads += 1
+        return settings()
+      },
+      updateSettings: async () => { throw new apiErrors.ApiError('Rejected', status, status * 100) },
+    })
+    try {
+      await query.state.loadSettings()
+      query.state.form.requestIntervalMs = 123
+      await query.state.saveSettings()
+      await vue.nextTick()
+      assert.equal(reads, 1)
+      assert.equal(query.state.form.requestIntervalMs, 123)
+      assert.equal(query.state.hasChanges.value, true)
+    }
+    finally { query.stop() }
+  })
+}

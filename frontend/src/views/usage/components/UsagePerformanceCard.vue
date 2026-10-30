@@ -2,7 +2,7 @@
 import type { EChartsOption } from 'echarts'
 
 import type { getUsageRecordInsightsOverview } from '@/api'
-import { computed, shallowRef } from 'vue'
+import { computed } from 'vue'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseEmpty from '@/components/base/BaseEmpty.vue'
 
@@ -31,9 +31,11 @@ const props = withDefaults(
     performance: Performance
     activity: Activity
     loading?: boolean
+    error?: string
   }>(),
   {
     loading: false,
+    error: '',
   },
 )
 
@@ -52,7 +54,7 @@ interface PerformanceSeries {
 
 type Activity = Awaited<ReturnType<typeof getUsageRecordInsightsOverview>>['health']['points']
 
-const activeView = shallowRef('total')
+const activeView = defineModel<string>('view', { default: 'total' })
 const { palette } = useChartPalette()
 const performancePoints = computed<PerformancePoint[]>(() => props.performance.points)
 const requestActivity = computed(() => requestActivityByBucket(
@@ -173,8 +175,8 @@ const selectedSeries = computed(() => seriesDefinitions.value.map((series) => {
   const values = performancePoints.value.map(series.value)
   return {
     ...series,
-    // 并发包含之前时间桶开始的请求，不按本桶新请求数补零
-    values: series.field === 'averageConcurrency' || series.field === 'peakConcurrency'
+    // 独立调度查询未携带请求数；并发也可能来自前桶，不能把缺失样本补成零。
+    values: activeView.value === 'scheduling' || series.field === 'averageConcurrency' || series.field === 'peakConcurrency'
       ? values
       : zeroInactiveValues(values, requestActivity.value),
   }
@@ -317,7 +319,7 @@ function formatThroughput(value: number | null) {
           size="sm"
           surface="none"
           :title="
-            loading
+            error || (loading
               ? t('usage.performance.loading')
               : activeView === 'load'
                 ? t('usage.performance.noLoad')
@@ -327,7 +329,7 @@ function formatThroughput(value: number | null) {
                     ? t('usage.performance.noThroughput')
                     : activeView === 'scheduling'
                       ? t('usage.performance.noScheduling')
-                      : t('usage.performance.noLatency')
+                      : t('usage.performance.noLatency'))
           "
           class="h-52.5 place-content-center"
         />

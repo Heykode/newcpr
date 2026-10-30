@@ -425,6 +425,85 @@ impl ObservabilityRepository for PgObservabilityRepository {
 
 #[async_trait]
 impl AdminObservabilityStore for PgAdminObservabilityStore {
+    fn query_timeout(&self) -> std::time::Duration {
+        self.repository.query_budget.query_timeout()
+    }
+
+    async fn usage_metric_observation(
+        &self,
+        range: admin_observability::TimeRange,
+        filter: admin_observability::UsageFilter,
+        metric: admin_observability::UsageInsightMetric,
+    ) -> AdminStoreResult<admin_observability::UsageInsightsObservation> {
+        use admin_observability::UsageInsightMetric as M;
+        use sqlx::Connection as _;
+        let range = store_range(range)?;
+        let filter = store_usage_filter(filter);
+        self.repository
+            .query_budget
+            .run(
+                &self.repository.pool,
+                "load selected usage metric",
+                |mut connection| async move {
+                    let mut tx = connection.begin().await.map_err(|error| {
+                        postgres_unavailable("begin usage snapshot").with_source(error)
+                    })?;
+                    sqlx::query("set transaction isolation level repeatable read, read only")
+                        .execute(&mut *tx)
+                        .await
+                        .map_err(|error| {
+                            postgres_unavailable("set usage snapshot").with_source(error)
+                        })?;
+                    let costs = matches!(metric, M::Cost | M::Savings | M::Cache);
+                    let requests =
+                        request_metrics_selected(&mut tx, range, &filter, Some(metric)).await?;
+                    let trend = request_metric_series_selected(
+                        &mut tx,
+                        range,
+                        &filter,
+                        costs,
+                        Some(metric),
+                    )
+                    .await?;
+                    let attempts = if costs {
+                        attempt_metrics(&mut tx, range, &filter).await?
+                    } else {
+                        AttemptMetrics::default()
+                    };
+                    let concurrency = if metric == M::Load {
+                        request_concurrency(&mut tx, range, &filter).await?
+                    } else {
+                        Vec::new()
+                    };
+                    tx.commit().await.map_err(|error| {
+                        postgres_unavailable("finish usage snapshot").with_source(error)
+                    })?;
+                    Ok((
+                        UsageOverview {
+                            range,
+                            requests,
+                            attempts,
+                            providers: Vec::new(),
+                        },
+                        trend,
+                        concurrency,
+                    ))
+                },
+            )
+            .await
+            .map_err(observability_error)
+            .and_then(|(overview, trend, concurrency)| {
+                Ok(admin_observability::UsageInsightsObservation {
+                    overview: admin_usage_overview(overview)?,
+                    trend: trend
+                        .into_iter()
+                        .map(admin_request_metric_point)
+                        .collect::<AdminStoreResult<_>>()?,
+                    concurrency,
+                })
+            })
+    }
+
     async fn usage_concurrency(
         &self,
         range: admin_observability::TimeRange,

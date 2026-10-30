@@ -54,6 +54,8 @@ async fn proxy_batches_keep_partial_results_and_never_echo_credentials() {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(response["data"][0]["status"], "failed");
+    assert_eq!(response["data"][0]["httpStatus"], 400);
+    assert!(response["data"][0]["code"].is_number());
     assert_eq!(response["data"][1]["status"], "succeeded");
     assert_eq!(
         response["data"][1]["data"]["record"]["maxWebsocketConnections"],
@@ -783,7 +785,7 @@ async fn automatic_proxy_location_preserves_manual_values_and_fences_saved_tests
         Some(json!({
             "name":"Location test",
             "proxyUrl":"http://test-user:private-password@proxy.example:8080",
-            "requestLocation":manual
+            "requestLocation":{"country":"JP","region":" Tokyo ","city":" Tokyo ","timezone":"Asia/Tokyo"}
         })),
         true,
     )
@@ -795,6 +797,21 @@ async fn automatic_proxy_location_preserves_manual_values_and_fences_saved_tests
     assert!(
         record["lastTest"].is_null(),
         "default-off creation must not probe"
+    );
+
+    let (status, manual_detection) = request(
+        &fixture,
+        "/api/admin/proxies/test",
+        Some(json!({"id":"proxy_test","revision":1,"detectLocation":true})),
+        true,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(manual_detection["data"]["autoLocation"], false);
+    assert_eq!(manual_detection["data"]["effectiveLocation"], manual);
+    assert_eq!(
+        manual_detection["data"]["lastTest"]["location"]["status"],
+        "detected"
     );
 
     let (status, enabled) = request(

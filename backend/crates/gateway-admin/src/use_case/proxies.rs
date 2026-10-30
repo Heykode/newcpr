@@ -72,7 +72,15 @@ pub trait ProxiesService: Send + Sync {
                         return ProxyBatchResult::Skipped;
                     }
                     let result = match command {
-                        Ok(command) => self.test(&command.id, command.revision, context).await,
+                        Ok(command) => {
+                            self.test(
+                                &command.id,
+                                command.revision,
+                                command.detect_location,
+                                context,
+                            )
+                            .await
+                        }
                         Err(error) => Err(error),
                     };
                     if result.as_ref().is_err_and(batch_should_stop) {
@@ -120,6 +128,7 @@ pub trait ProxiesService: Send + Sync {
         &self,
         id: &str,
         revision: Revision,
+        detect_location: bool,
         context: &MutationContext,
     ) -> Result<ProxyRecord, AdminError>;
     async fn probe(
@@ -275,7 +284,7 @@ impl ProxiesService for DefaultProxiesService {
         context: &MutationContext,
     ) -> Result<ProxyMutation, AdminError> {
         command.name = validate_name(&command.name)?;
-        validate_location(command.request_location.as_ref())?;
+        command.request_location = normalize_location(command.request_location)?;
         command.test = if command.auto_location {
             Some(self.probe(&command.proxy, true).await?)
         } else {
@@ -296,7 +305,10 @@ impl ProxiesService for DefaultProxiesService {
         context: &MutationContext,
     ) -> Result<ProxyMutation, AdminError> {
         command.name = validate_name(&command.name)?;
-        validate_location(command.request_location.as_ref().and_then(Option::as_ref))?;
+        command.request_location = command
+            .request_location
+            .map(normalize_location)
+            .transpose()?;
         command.test = None;
         if command.auto_location.is_some() || command.proxy.is_some() {
             let current = self
@@ -342,6 +354,7 @@ impl ProxiesService for DefaultProxiesService {
         &self,
         id: &str,
         revision: Revision,
+        detect_location: bool,
         context: &MutationContext,
     ) -> Result<ProxyRecord, AdminError> {
         let _permit = self.test_slots.try_acquire().map_err(|_| {
@@ -355,7 +368,10 @@ impl ProxiesService for DefaultProxiesService {
         if record.revision != revision {
             return Err(AdminError::conflict("代理已被修改，请刷新后重新测试"));
         }
-        let result = self.probe.test(&record.proxy, record.auto_location).await;
+        let result = self
+            .probe
+            .test(&record.proxy, record.auto_location || detect_location)
+            .await;
         let mutation = self
             .store
             .record_test(id, revision, result, context)
@@ -387,11 +403,15 @@ fn validate_name(value: &str) -> Result<String, AdminError> {
     Ok(value.to_owned())
 }
 
-fn validate_location(
-    location: Option<&gateway_core::account::RequestLocation>,
-) -> Result<(), AdminError> {
-    if location.is_some_and(|value| !value.validate()) {
+fn normalize_location(
+    mut location: Option<gateway_core::account::RequestLocation>,
+) -> Result<Option<gateway_core::account::RequestLocation>, AdminError> {
+    if location.as_ref().is_some_and(|value| !value.validate()) {
         return Err(AdminError::invalid("请求地区格式不合法"));
     }
-    Ok(())
+    if let Some(value) = location.as_mut() {
+        value.region = value.region.trim().to_owned();
+        value.city = value.city.trim().to_owned();
+    }
+    Ok(location)
 }

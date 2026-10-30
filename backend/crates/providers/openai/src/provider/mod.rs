@@ -71,7 +71,7 @@ use crate::transport::diagnostics::{
     CodexFailureCategory, CodexUpstreamFailure, CodexUpstreamSendPhase,
 };
 use crate::transport::profile::{
-    APPCAST_POLL_INTERVAL, CodexDesktopReleaseService, CodexRequestLocation, CodexWireProfileState,
+    APPCAST_POLL_INTERVAL, CodexDesktopReleaseService, CodexWireProfileState,
 };
 use crate::transport::protocol::responses::{
     CodexResponsesRequest, PREVIOUS_RESPONSE_NOT_FOUND_CODE, PREVIOUS_RESPONSE_NOT_FOUND_MESSAGE,
@@ -101,6 +101,7 @@ mod encrypted_history;
 mod excel;
 mod execution;
 mod failure;
+mod guardian;
 mod live;
 mod observation;
 mod quality_probe;
@@ -143,7 +144,6 @@ pub struct CodexProvider {
     quota: Arc<CodexCredentialQuotaService>,
     account_feedback: Arc<AccountFeedbackStats>,
     client: CodexBackendClient,
-    location: CodexRequestLocation,
     responses_url: Url,
     compact_url: Url,
     image_generations_url: Url,
@@ -152,6 +152,7 @@ pub struct CodexProvider {
     live_calls_url: Url,
     session_identity: Option<CodexSessionIdentity>,
     session_transport_recovery: CodexSessionTransportRecovery,
+    guardian_routing: guardian::GuardianRouting,
     encrypted_history: encrypted_history::InvalidEncryptedHistory,
     stream_max_retries: u32,
     request_tuning: Option<gateway_core::runtime::RequestTuningHandle>,
@@ -247,7 +248,6 @@ impl CodexProvider {
             .map_err(|_| CodexProviderConfigError::InvalidBaseUrl)?;
         let live_calls_url = Url::parse(&endpoint_url(&base_url, CODEX_REALTIME_CALLS_PATH))
             .map_err(|_| CodexProviderConfigError::InvalidBaseUrl)?;
-        let location = profile.snapshot().location;
         let client = CodexBackendClient::new(http, base_url, profile)
             .with_websocket_pool(websocket_pool)
             .with_timezone(timezone);
@@ -258,7 +258,6 @@ impl CodexProvider {
             quota,
             account_feedback,
             client,
-            location,
             responses_url,
             compact_url,
             image_generations_url,
@@ -267,6 +266,7 @@ impl CodexProvider {
             live_calls_url,
             session_identity: None,
             session_transport_recovery: CodexSessionTransportRecovery::default(),
+            guardian_routing: guardian::GuardianRouting::default(),
             encrypted_history: encrypted_history::InvalidEncryptedHistory::default(),
             stream_max_retries: _stream_max_retries,
             request_tuning: None,
@@ -385,12 +385,7 @@ impl Provider for CodexProvider {
                 ..Default::default()
             };
         };
-        let location = self
-            .request_tuning
-            .as_ref()
-            .is_some_and(|tuning| tuning.load().openai_location_override_enabled)
-            .then_some(&self.location);
-        let Ok(encoded) = encode_generate_request(request, "observability", location) else {
+        let Ok(encoded) = encode_generate_request(request, "observability", None) else {
             return ProviderRequestObservation::default();
         };
         let previous_session = decode_openai_session_state(request);
@@ -562,13 +557,8 @@ impl Provider for CodexProvider {
             "provider_input",
             None,
         );
-        let location = context
-            .request_tuning()
-            .openai_location_override_enabled
-            .then_some(&self.location);
-        let mut upstream_request =
-            encode_generate_request(generate, upstream_model.as_str(), location)
-                .map_err(map_request_error)?;
+        let mut upstream_request = encode_generate_request(generate, upstream_model.as_str(), None)
+            .map_err(map_request_error)?;
         upstream_request.quality_probe = generate.quality_probe().cloned();
         upstream_request.excel_recovery_nonce = generate.excel_recovery_nonce().map(str::to_owned);
         quality_probe::initialize(
@@ -775,16 +765,55 @@ impl Provider for CodexProvider {
         let before = trace
             .is_enabled()
             .then(|| crate::transport::evidence::request_state(&upstream_request));
+        let guardian_parent = (!excel
+            && !state_owner_cross_account
+            && upstream_request.is_guardian()
+            && matches!(
+                lease.authentication(),
+                crate::credential::CodexRuntimeAuthentication::OAuth(_)
+            ))
+        .then(|| {
+            upstream_request
+                .client_metadata()?
+                .get("parent_response_id")?
+                .as_str()
+        })
+        .flatten()
+        .and_then(|response_id| {
+            self.guardian_routing
+                .get(
+                    context.client_api_key_ref(),
+                    lease.account_id(),
+                    response_id,
+                )
+                .map(|affinity| (response_id.to_owned(), affinity))
+        });
+        // A sticky account hit does not prove ownership of a Guardian parent response.
+        let request_state_scope =
+            if !excel && upstream_request.is_guardian() && !has_explicit_state_owner {
+                RequestAccountScope::Unknown
+            } else {
+                account_scope
+            };
         scope_request_to_account(
             &mut upstream_request,
             lease.installation_id(),
-            account_scope,
+            request_state_scope,
         );
+        if let Some((response_id, _)) = &guardian_parent
+            && let Some(Value::Object(metadata)) =
+                upstream_request.body_mut().get_mut("client_metadata")
+        {
+            metadata.insert(
+                "parent_response_id".to_owned(),
+                Value::String(response_id.clone()),
+            );
+        }
         if let Some(before) = before {
             trace.record_evidence(
                 "provider.request.account_scope",
                 serde_json::json!({
-                    "accountStateReusable": account_scope.can_reuse_account_state(),
+                    "accountStateReusable": request_state_scope.can_reuse_account_state(),
                     "before": before,
                     "after": crate::transport::evidence::request_state(&upstream_request),
                 }),
@@ -806,14 +835,11 @@ impl Provider for CodexProvider {
                 crate::compat::normalize_minimal_effort(&mut upstream_request);
             }
         }
-        // Preserve the established identity/affinity inputs above. Only the
-        // selected account's outbound copy receives the effective location.
-        if context.request_tuning().openai_location_override_enabled {
-            let location = lease
-                .account()
-                .request_location()
-                .or(context.request_location())
-                .unwrap_or(&self.location);
+        if let Some(location) = lease
+            .account()
+            .request_location()
+            .or(context.request_location())
+        {
             crate::transport::request::align_structured_location_fields(
                 upstream_request.body_mut(),
                 location,
@@ -928,7 +954,9 @@ impl Provider for CodexProvider {
                     .get("session_id")
                     .and_then(Value::as_str)
             });
-        let client = self.account_exit_client(&context, lease.account(), excel, session)?;
+        let client = self
+            .account_exit_client(&context, lease.account(), excel, session)?
+            .with_routing_affinity(guardian_parent.map(|(_, affinity)| affinity));
         let client = if !excel && context.continuation_attempt() == ContinuationAttempt::None {
             client.with_connection_budget(context.connection_budget().clone())
         } else {
@@ -959,6 +987,7 @@ impl Provider for CodexProvider {
             session_affinity_key_hash,
             transport_affinity_key,
             session_transport_recovery: self.session_transport_recovery.clone(),
+            guardian_routing: self.guardian_routing.clone(),
             websocket_retry_count,
             stream_max_retries: if self.request_tuning.is_some() {
                 request_tuning.websocket_max_retries

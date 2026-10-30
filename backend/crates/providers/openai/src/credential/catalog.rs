@@ -34,6 +34,7 @@ const PLAN_CATALOG_CACHE_TTL: Duration = Duration::from_secs(5 * 60);
 const MAX_CATALOG_FETCH_ATTEMPTS: usize = 3;
 const MAX_PLAN_CATALOG_MODELS: usize = 2_048;
 const MAX_CLIENT_CATALOGS: usize = 32;
+const MAX_CLIENT_CATALOG_CACHE_BYTES: usize = 32 * 1024 * 1024;
 const CLIENT_CATALOG_TIMEOUT: Duration = Duration::from_secs(15);
 const CLIENT_CATALOG_ERROR_TTL: Duration = Duration::from_secs(5);
 
@@ -227,6 +228,14 @@ struct CachedClientCatalog {
     // Start negative-cache backoff after completion, including slow failures.
     completed_at: Instant,
     result: ClientCatalogResult,
+}
+
+impl CachedClientCatalog {
+    fn native_bytes(&self) -> usize {
+        self.result.as_ref().map_or(0, |models| {
+            models.iter().map(|model| model.payload.body().len()).sum()
+        })
+    }
 }
 
 struct ClientCatalogEntry {
@@ -450,6 +459,32 @@ impl CodexCredentialCatalogService {
                     }
                 })
                 .await;
+            // 完成中的 OnceCell 仍由并发读者持有；移出缓存只影响后续查询，不丢弃本次成功结果
+            let mut cache = self
+                .client_catalogs
+                .lock()
+                .map_err(|_| CodexCredentialCatalogError::Cache)?;
+            if result.native_bytes() > MAX_CLIENT_CATALOG_CACHE_BYTES {
+                cache.retain(|entry| !Arc::ptr_eq(&entry.value, &value));
+            } else {
+                let mut bytes: usize = cache
+                    .iter()
+                    .filter_map(|entry| entry.value.get())
+                    .map(CachedClientCatalog::native_bytes)
+                    .sum();
+                while bytes > MAX_CLIENT_CATALOG_CACHE_BYTES {
+                    let Some(index) = cache.iter().position(|entry| entry.value.initialized())
+                    else {
+                        break;
+                    };
+                    let entry = cache.remove(index);
+                    bytes -= entry
+                        .value
+                        .get()
+                        .map_or(0, CachedClientCatalog::native_bytes);
+                }
+            }
+            drop(cache);
             match &result.result {
                 Ok(models) => {
                     return excel_catalog_capabilities(models, &excel_models);

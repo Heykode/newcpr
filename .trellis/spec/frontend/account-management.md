@@ -179,7 +179,7 @@ Never infer principal identity from email or erase usage while editing a price.
 ## Unified Account Egress
 
 - `AccountOutboundField` is shared by editing, bulk editing, onboarding and templates.
-  It selects one of global inheritance, server direct, saved proxy, Mihomo pool
+  It selects direct, a saved proxy by name, Mihomo pool
   or IPv6 pool. Excel selects the upstream, independently of egress.
 - Ordinary proxy-pool allocation is no longer offered in either egress selector.
   A saved `proxy_pool` value remains visible as a disabled current-setting option
@@ -190,6 +190,11 @@ Never infer principal identity from email or erase usage while editing a price.
   restore the account route and disable OpenAI IPv6 overrides. IPv6/global selections
   clear an old saved proxy explicitly. Hidden draft fields never select another exit.
 - IPv6 has fixed/round-robin and reused/fresh connection options. Keep the existing
+  global inheritance choice inside the IPv6 secondary selector, serialized as null.
+  Legacy top-level `inherit` drafts remain readable without an automatic write.
+  Direct is labeled `直连`; ordinary proxies appear by name in the primary selector.
+  Only disabled proxies are unselectable; last-test failures remain advisory.
+  Keep the existing
   global rotation and historical fixed bindings. Single-account editing has one atomic
   save; there is no independent IPv6 write. Cancellation sends no mutation.
 - Bulk edits use only `updateProxy` for the entire egress selection, unchecked/reset on

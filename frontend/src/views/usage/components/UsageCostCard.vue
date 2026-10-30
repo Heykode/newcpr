@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { EChartsOption, LineSeriesOption } from 'echarts'
 import type { getUsageRecordInsightsOverview } from '@/api'
-import { computed, shallowRef } from 'vue'
+import { computed } from 'vue'
 
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseEmpty from '@/components/base/BaseEmpty.vue'
@@ -42,13 +42,15 @@ const props = withDefaults(
     cost: Cost
     activity: Activity
     loading?: boolean
+    error?: string
   }>(),
   {
     loading: false,
+    error: '',
   },
 )
 
-const activeView = shallowRef('cost')
+const activeView = defineModel<string>('view', { default: 'cost' })
 const { palette } = useChartPalette()
 const points = computed(() => props.cost.points)
 const requestActivity = computed(() => requestActivityByBucket(
@@ -282,7 +284,7 @@ function costAmount(value: string | null, pointIndex: number) {
           v-else
           size="sm"
           surface="none"
-          :title="loading ? '正在加载成本数据' : '暂无成本效率数据'"
+          :title="error || (loading ? '正在加载成本数据' : '暂无成本效率数据')"
           description="当前范围没有可绘制的费用或缓存收益数据"
           class="h-52.5 place-content-center"
         />

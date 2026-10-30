@@ -24,12 +24,6 @@ const openaiSessionBindingTtlHours = defineModel<string>('openaiSessionBindingTt
 const openaiAccountAffinity = defineModel<string>('openaiAccountAffinity', { required: true })
 const requestTuning = defineModel<RequestTuning>('requestTuning', { required: true })
 const advancedOpen = ref(false)
-const customLocation = computed({
-  get: () => requestTuning.value.openaiRequestLocation !== null,
-  set: (enabled: boolean) => {
-    requestTuning.value.openaiRequestLocation = enabled ? defaultRequestLocation() : null
-  },
-})
 const location = computed({
   get: () => requestTuning.value.openaiRequestLocation ?? defaultRequestLocation(),
   set: (value) => { requestTuning.value.openaiRequestLocation = value },
@@ -56,6 +50,7 @@ async function detectLocation() {
         return
       }
       location.value = result.location.location
+      requestTuning.value.openaiLocationOverrideEnabled = true
       locationMessage.value = '已填入检测结果，保存设置后生效'
     }
     else {
@@ -238,13 +233,15 @@ const tuningValues = {
     <div class="mt-5 border-t border-(--cp-border-color) pt-4">
       <div class="flex items-center justify-between gap-3">
         <h3 class="text-sm font-medium text-cp-text-secondary">
-          OpenAI 搜索地区与时区覆盖
+          请求位置覆盖
         </h3>
-        <BaseSwitch v-model="requestTuning.openaiLocationOverrideEnabled" label="OpenAI 搜索地区与时区覆盖" />
+        <BaseSwitch v-model="requestTuning.openaiLocationOverrideEnabled" label="启用位置覆盖" show-label :disabled="disabled" />
       </div>
-      <div v-if="requestTuning.openaiLocationOverrideEnabled" class="mt-4 grid gap-4">
-        <BaseSwitch v-model="customLocation" label="自定义全局地区（关闭时沿用启动配置）" show-label />
-        <RequestLocationFields v-if="customLocation" v-model="location" />
+      <p class="mt-2 text-cp-xs text-cp-text-tertiary">
+        覆盖 Codex 请求中的时区与位置字段，账号出站代理的自定义位置优先
+      </p>
+      <div class="mt-4 grid gap-4">
+        <RequestLocationFields v-model="location" :disabled="disabled || !requestTuning.openaiLocationOverrideEnabled" />
         <div>
           <BaseButton size="sm" :loading="detectingLocation" :disabled="disabled" @click="detectLocation">
             <template #icon>

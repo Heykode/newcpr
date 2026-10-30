@@ -354,9 +354,6 @@ fn build_account_http_client_with_timeout(
             reqwest::Proxy::all(proxy.expose_url())
                 .map_err(|_| CustomCaError::ProxyConfiguration)?,
         );
-    } else {
-        // Explicit IPv6 and probe clients are built separately.
-        builder = builder.local_address(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED));
     }
     let client = build_reqwest_native_client_with_custom_ca(builder)?;
     let mut clients = reqwest_clients()
@@ -906,6 +903,7 @@ pub type CodexResponseMetadataUpdates = CodexWebSocketResponseMetadataUpdates;
 
 /// Codex Responses 上游 live SSE 响应。
 pub struct CodexBackendStreamingResponse {
+    pub(crate) routing_affinity: Option<super::routing_affinity::ChatGptRoutingAffinity>,
     /// 上游 SSE 字节流。
     pub body: CodexBackendSseStream,
     /// 实际使用的上游传输。
@@ -968,6 +966,7 @@ pub(super) struct RecoveryAttemptRoute {
 /// Codex HTTP/SSE 上游客户端。
 #[derive(Clone)]
 pub struct CodexBackendClient {
+    pub(super) routing_affinity: Option<super::routing_affinity::ChatGptRoutingAffinity>,
     pub(super) connection_budget: Option<gateway_core::engine::connection::ConnectionBudget>,
     pub(super) session_proxy:
         Option<Arc<dyn gateway_core::provider_ports::session_proxy::SessionProxyLease>>,
@@ -992,6 +991,14 @@ pub struct CodexBackendClient {
 }
 
 impl CodexBackendClient {
+    pub(crate) fn with_routing_affinity(
+        mut self,
+        affinity: Option<super::routing_affinity::ChatGptRoutingAffinity>,
+    ) -> Self {
+        self.routing_affinity = affinity;
+        self
+    }
+
     pub(crate) fn with_default_http_client(mut self) -> Self {
         self.default_direct_client = true;
         self

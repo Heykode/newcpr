@@ -117,6 +117,7 @@ pub(in crate::transport::websocket) fn stream_websocket_response(
     });
 
     CodexWebSocketStreamingExchange {
+        routing_affinity: response_metadata.routing_affinity,
         websocket_connection_id,
         body: Box::pin(body),
         turn_state: response_metadata.turn_state,
