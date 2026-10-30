@@ -1561,10 +1561,12 @@ async fn codex_backend_client_should_timeout_when_upstream_is_silent() {
 }
 
 #[tokio::test]
-async fn websocket_stream_should_allow_silence_below_idle_timeout() {
+async fn websocket_stream_should_keep_alive_without_requiring_pong_below_idle_timeout() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let (created_tx, created_rx) = tokio::sync::oneshot::channel();
+    let (ping_tx, ping_rx) = tokio::sync::oneshot::channel();
+    let (finish_tx, finish_rx) = tokio::sync::oneshot::channel();
     let server = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
         let mut websocket = accept_codex_test_websocket(stream).await;
@@ -1581,7 +1583,10 @@ async fn websocket_stream_should_allow_silence_below_idle_timeout() {
             .await
             .unwrap();
         created_tx.send(()).unwrap();
-        tokio::time::sleep(Duration::from_secs(30)).await;
+        std::assert_matches!(websocket.next().await.unwrap().unwrap(), Message::Ping(_));
+        ping_tx.send(()).unwrap();
+        // 暂停读取和 flush，避免 tungstenite 自动回复 Pong
+        finish_rx.await.unwrap();
         websocket
             .send(Message::Text(
                 completed_websocket_response("resp_structural", 3, 1).into(),
@@ -1597,7 +1602,21 @@ async fn websocket_stream_should_allow_silence_below_idle_timeout() {
     created_rx.await.unwrap();
     tokio::task::yield_now().await;
     tokio::time::pause();
-    tokio::time::advance(Duration::from_secs(30)).await;
+    tokio::time::advance(Duration::from_secs(26)).await;
+    tokio::time::resume();
+    timeout(Duration::from_secs(2), ping_rx)
+        .await
+        .unwrap()
+        .unwrap();
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(60)).await;
+    tokio::time::resume();
+    tokio::task::yield_now().await;
+    assert!(
+        !response_task.is_finished(),
+        "missing Pong must not end the response"
+    );
+    finish_tx.send(()).unwrap();
     let response = response_task
         .await
         .expect("websocket task should finish")
@@ -1796,6 +1815,12 @@ async fn codex_backend_client_stream_should_keep_socket_after_structural_activit
             .await
             .unwrap();
         first_websocket.close(None).await.unwrap();
+        // 完成关闭握手，避免未读的保活 Ping 导致 TCP reset 丢失已发送的响应
+        while let Some(Ok(message)) = first_websocket.next().await {
+            if matches!(message, Message::Close(_)) {
+                break;
+            }
+        }
     });
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
@@ -1815,7 +1840,9 @@ async fn codex_backend_client_stream_should_keep_socket_after_structural_activit
     let mut stream = response.body;
     let mut body = String::new();
     while let Some(chunk) = stream.next().await {
-        let chunk = chunk.expect("delayed websocket stream chunk should be valid");
+        let chunk = chunk.unwrap_or_else(|error| {
+            panic!("delayed websocket stream chunk should be valid: {error}")
+        });
         body.push_str(std::str::from_utf8(&chunk).unwrap());
     }
     server.await.unwrap();
@@ -2158,10 +2185,11 @@ async fn codex_backend_client_stream_should_wait_for_terminal_after_active_webso
 }
 
 #[tokio::test]
-async fn codex_backend_client_stream_should_timeout_when_active_websocket_stalls() {
+async fn codex_backend_client_stream_should_timeout_when_active_websocket_stalls_despite_pong() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let (check_extra_connection_tx, check_extra_connection_rx) = tokio::sync::oneshot::channel();
+    let (pong_tx, mut pong_rx) = tokio::sync::mpsc::channel(1);
     let server = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
         let mut websocket = accept_codex_test_websocket(stream).await;
@@ -2181,17 +2209,25 @@ async fn codex_backend_client_stream_should_timeout_when_active_websocket_stalls
             ))
             .await
             .unwrap();
-        tokio::select! {
-            Ok(()) = check_extra_connection_rx => {
-                assert!(
-                    timeout(Duration::from_millis(100), listener.accept())
-                        .await
-                        .is_err(),
-                    "an active WebSocket timeout must not open a duplicate connection"
-                );
+        while let Some(Ok(message)) = websocket.next().await {
+            match message {
+                Message::Ping(_) => {
+                    websocket.flush().await.unwrap();
+                    if pong_tx.send(()).await.is_err() {
+                        break;
+                    }
+                }
+                Message::Close(_) => break,
+                other => panic!("unexpected frame during stalled response: {other:?}"),
             }
-            () = futures::future::pending::<()>() => {}
         }
+        check_extra_connection_rx.await.unwrap();
+        assert!(
+            timeout(Duration::from_millis(100), listener.accept())
+                .await
+                .is_err(),
+            "an active WebSocket timeout must not open a duplicate connection"
+        );
     });
     let mut request = codex_request("gpt-5.5", "be brief", Vec::new());
     request.set_previous_response_id(Some("resp_previous".to_string()));
@@ -2217,10 +2253,18 @@ async fn codex_backend_client_stream_should_timeout_when_active_websocket_stalls
         .expect("stream should yield partial frame")
         .expect("partial frame should be valid");
     assert!(std::str::from_utf8(&first).unwrap().contains("partial"));
-    // Complete the real network handshake and first frame before switching
-    // to virtual time, otherwise paused timers can race OS socket progress.
+    for _ in 0..11 {
+        tokio::time::pause();
+        tokio::time::advance(Duration::from_secs(25)).await;
+        tokio::time::resume();
+        timeout(Duration::from_secs(2), pong_rx.recv())
+            .await
+            .expect("gateway should send keepalive Ping")
+            .expect("upstream should reply with Pong");
+    }
     tokio::time::pause();
-    tokio::time::advance(Duration::from_secs(5 * 60)).await;
+    tokio::time::advance(Duration::from_secs(25)).await;
+    tokio::time::resume();
     tokio::task::yield_now().await;
     let error = response
         .body
@@ -2228,7 +2272,6 @@ async fn codex_backend_client_stream_should_timeout_when_active_websocket_stalls
         .await
         .expect("stream should yield idle timeout after active stall")
         .expect_err("active stall should time out");
-    tokio::time::resume();
     check_extra_connection_tx
         .send(())
         .expect("server should check for duplicate connections");

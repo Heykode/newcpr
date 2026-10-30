@@ -258,6 +258,10 @@ Responses WebSocket 仅接受文本 `response.create`，同一连接串行执行
 这对齐 Codex 客户端 `stream_request` 持锁至本轮结束的串行行为，不表示支持额外控制消息类型。
 接收队列容量为 32 个事件，超载仍关闭连接；Ping/Pong、客户端关闭和服务关闭不等待队列中的请求执行。
 
+上游 WS 每 25 秒发送 Ping 保活并回复上游 Ping，Ping/Pong 写入最多等待 5 秒，不设等待 Pong 的断开期限。
+入站背压期间暂停主动 Ping，恢复后跳过错过的 tick；心跳不刷新业务空闲或连接池回收时间。
+下游 WS 独立探活；Ping/Pong 不跨段转发，也不转换为 SSE 事件。
+
 下游 WS 无法消费的裸 `error` 会依据已有响应快照包装为 `response.failed`；
 带非成功 `status`/`status_code` 的错误，以及 `websocket_connection_limit_reached`、
 `previous_response_not_found` 控制错误仍保留原样。包装不增加重试、不生成成功用量，
@@ -341,11 +345,16 @@ OpenAI 明确返回 `server_is_overloaded`、`slow_down` 或模型容量不足�
 | `GET` | `/api/admin/accounts/personal-info` | `accountId` | 按需汇聚 OpenAI/Codex 官方个人资料、累计活动与订阅信息，不更新额度或 credential |
 | `GET` | `/api/admin/accounts/reset-credits` | `accountId` | 查询 OpenAI 上游主动额度重置卡，不读取本地库存 |
 | `POST` | `/api/admin/accounts/reset-credits` | `{ accountId, creditId?, redeemRequestId }` | 使用 UUIDv4 幂等键消费一张 OpenAI 上游重置卡 |
-| `GET` | `/api/admin/accounts/models` | `accountId` | 优先读取该 Provider + 套餐的模型 cache，缺失时有限实时拉取 |
-| `POST` | `/api/admin/accounts/models/refresh` | `{ accountId }` | 强制拉取最新模型并覆盖 cache |
+| `GET` | `/api/admin/accounts/models` | `accountId` | 优先读取 Provider 模型目录缓存，缺失时有限实时拉取；返回 `{ models, observedAt, observedAtDisplay }` |
+| `POST` | `/api/admin/accounts/models/refresh` | `{ accountId }` | 强制拉取最新模型并覆盖缓存，响应结构与模型目录查询相同 |
 | `GET` | `/api/admin/accounts/connection-test` | `accountId`、`modelId` | 通过 SSE 返回实时连接测试事件，不作为业务 Responses 用量记录 |
 | `POST` | `/api/admin/accounts/oauth/start` | `{ provider, name, accountId?, outboundProxyId?, outboundProxyUrl? }` | 创建 OpenAI 或 xAI OAuth flow；`accountId` 表示重新授权 |
 | `POST` | `/api/admin/accounts/oauth/complete` | `{ provider, flowId, callbackUrl, settings? }` | 消费 OAuth callback；首次授权可附带账号设置，重新授权保留原设置 |
+
+模型目录查询和刷新响应中的 `observedAt` 表示 Provider 最近一次成功获取目录的时间，
+`observedAtDisplay` 按部署时区格式化；Provider 未提供观察时间时分别返回 `null` 和 `—`。
+`models` 只表示上游目录返回了这些模型 ID，不表示所有端点均已验证可用。
+连接测试仅验证所选模型在 Provider 测试路径上的请求；目录观察时间不改变路由或账号能力判断。
 
 账号列表支持以下稳定值：
 

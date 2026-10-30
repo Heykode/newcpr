@@ -835,6 +835,12 @@ async fn openai_admin_provider_projects_cached_quota_models_and_canonical_export
         .await
         .expect("cached models");
     assert_eq!(models.models[0].id.as_str(), "gpt-5.4");
+    assert!(models.observed_at.is_some(), "catalog keeps its fetch time");
+    let cached_models = admin
+        .models(&account_id, false)
+        .await
+        .expect("cached models");
+    assert_eq!(cached_models.observed_at, models.observed_at);
     let loaded = store
         .load_credential(account.id(), account.revision())
         .await

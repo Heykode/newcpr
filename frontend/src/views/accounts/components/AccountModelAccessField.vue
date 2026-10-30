@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import type { AccountModelAccess } from '@/api'
-import { RefreshCw, Search } from '@lucide/vue'
+import { CircleAlert, RefreshCw, Search } from '@lucide/vue'
 
-import { computed, ref, watch } from 'vue'
+import { computed, ref, useId, watch } from 'vue'
 import { getAccountModels, refreshAccountModels } from '@/api'
 import { getQualityModels } from '@/api/modules/quality-ops'
 import BaseButton from '@/components/base/BaseButton.vue'
@@ -25,6 +25,9 @@ const props = withDefaults(defineProps<{
 }>(), { disabled: false, allowPreserve: false, knownModelCatalog: false })
 const model = defineModel<AccountModelAccess | undefined>({ required: true })
 const catalog = ref<Array<{ id: string, label: string }>>([])
+const catalogObservedAtDisplay = ref<string>()
+const catalogHelpOpen = ref(false)
+const catalogHelpId = useId()
 const nextPage = ref<number | null>(1)
 const partialCatalog = ref(false)
 const catalogLoaded = ref(false)
@@ -89,6 +92,15 @@ function addModel() {
     search.value = ''
 }
 
+function handleCatalogHelpKeydown(event: KeyboardEvent, close: () => void) {
+  if (event.key === 'Escape' && catalogHelpOpen.value) {
+    // 先关闭说明浮层，避免同一次按键也关闭编辑弹窗。
+    event.preventDefault()
+    event.stopPropagation()
+    close()
+  }
+}
+
 async function load(refresh = false, append = false) {
   const accountId = props.accountId
   if ((!accountId && !useKnownCatalog.value) || !restricted.value || props.disabled || loading.value)
@@ -117,6 +129,7 @@ async function load(refresh = false, append = false) {
       )
       if (request.isCurrent(requestId)) {
         catalog.value = result.models
+        catalogObservedAtDisplay.value = result.observedAt ? result.observedAtDisplay : undefined
         catalogLoaded.value = true
       }
     }
@@ -134,6 +147,8 @@ async function load(refresh = false, append = false) {
 watch([() => props.accountId, () => props.knownModelCatalog, restricted, () => props.disabled], () => {
   request.invalidate()
   catalog.value = []
+  catalogObservedAtDisplay.value = undefined
+  catalogHelpOpen.value = false
   nextPage.value = 1
   partialCatalog.value = false
   catalogLoaded.value = false
@@ -150,8 +165,38 @@ watch(search, () => {
 
 <template>
   <div class="grid gap-3">
-    <BaseFormItem :label="t('accounts.modelAccess.modelLimitations')">
+    <BaseFormItem>
+      <template #label>
+        <span class="inline-flex flex-wrap items-end gap-x-2 gap-y-1">
+          <span>{{ t('accounts.modelAccess.modelCatalog') }}</span>
+          <span v-if="restricted && catalogObservedAtDisplay" class="text-cp-xs leading-none font-normal text-cp-text-tertiary tabular-nums">
+            {{ catalogObservedAtDisplay }}
+          </span>
+        </span>
+      </template>
       <template #extra>
+        <BasePopover v-if="restricted" v-model="catalogHelpOpen" trigger="hover-click" placement="top-start">
+          <template #trigger="{ close }">
+            <BaseIconButton
+              :label="t('accounts.modelAccess.catalogHelpTitle')"
+              size="sm"
+              :show-tooltip="false"
+              :aria-describedby="catalogHelpOpen ? catalogHelpId : undefined"
+              :aria-expanded="catalogHelpOpen"
+              @keydown="handleCatalogHelpKeydown($event, close)"
+            >
+              <CircleAlert class="size-3.5" aria-hidden="true" />
+            </BaseIconButton>
+          </template>
+          <div :id="catalogHelpId" role="tooltip" class="max-w-72 space-y-2 px-3 py-2 text-cp-sm leading-relaxed text-cp-text-secondary">
+            <p class="m-0">
+              {{ t('accounts.modelAccess.catalogObservedAtHelp') }}
+            </p>
+            <p class="m-0">
+              {{ t('accounts.modelAccess.catalogDescription') }}
+            </p>
+          </div>
+        </BasePopover>
         <slot name="extra" />
         <BaseIconButton v-if="restricted && (accountId || useKnownCatalog)" :label="t('accounts.modelAccess.refreshModel')" size="sm" :loading="loading" :disabled="disabled" @click="load(true)">
           <template #loading>

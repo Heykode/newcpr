@@ -663,7 +663,7 @@ where
         .models(&account_id, false)
         .await
         .map_err(map_service_error)?;
-    let data = account_models_data(result);
+    let data = account_models_data(result, state.deployment_timezone());
     Ok(AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(data)))
 }
 
@@ -706,7 +706,7 @@ where
         .models(&account_id, true)
         .await
         .map_err(map_service_error)?;
-    let data = account_models_data(result);
+    let data = account_models_data(result, state.deployment_timezone());
     Ok(AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(data)))
 }
 

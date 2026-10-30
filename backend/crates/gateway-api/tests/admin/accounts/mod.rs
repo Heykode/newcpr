@@ -1741,6 +1741,68 @@ mod response {
         }
     }
 
+    #[tokio::test]
+    async fn account_model_reads_and_refreshes_preserve_provider_observation_time() {
+        use chrono::{DateTime, Utc};
+        use gateway_admin::model::provider_credentials::{ProviderModel, ProviderModels};
+        use gateway_core::routing::UpstreamModelId;
+        use serde_json::json;
+
+        let fixture = AdminTestFixture::new().await;
+        fixture.auth.insert_session("valid-session");
+        let observed_at: DateTime<Utc> = "2026-09-12T08:00:00Z".parse().unwrap();
+        *fixture.account.lock().unwrap() = Some(account_fixture());
+        let router =
+            gateway_api::admin::accounts::router::<AdminTestState>().with_state(fixture.state());
+        for observed_at in [Some(observed_at), None] {
+            *fixture.provider_models.lock().unwrap() = Some(ProviderModels {
+                models: vec![ProviderModel {
+                    id: UpstreamModelId::new("model-a").unwrap(),
+                    name: "Model A".to_owned(),
+                }],
+                observed_at,
+            });
+            for (method, uri, body) in [
+                ("GET", "/api/admin/accounts/models?accountId=acct_cost", ""),
+                (
+                    "POST",
+                    "/api/admin/accounts/models/refresh",
+                    r#"{"accountId":"acct_cost"}"#,
+                ),
+            ] {
+                let response = router
+                    .clone()
+                    .oneshot(
+                        Request::builder()
+                            .method(method)
+                            .uri(uri)
+                            .header("x-request-id", "req_model_catalog")
+                            .header(header::COOKIE, "cpr_admin_session=valid-session")
+                            .header(header::CONTENT_TYPE, "application/json")
+                            .body(Body::from(body))
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::OK, "{method} {uri}");
+                let body = to_bytes(response.into_body(), 8192).await.unwrap();
+                let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+                assert_eq!(
+                    value["data"]["models"],
+                    json!([{ "id": "model-a", "label": "model-a" }])
+                );
+                assert_eq!(
+                    value["data"]["observedAt"],
+                    json!(observed_at.map(|_| "2026-09-12T16:00:00+08:00"))
+                );
+                assert_eq!(
+                    value["data"]["observedAtDisplay"],
+                    observed_at.map_or("—", |_| "2026-09-12 16:00:00")
+                );
+            }
+        }
+    }
+
     fn account_fixture() -> AccountDirectoryItem {
         let now = Utc::now();
         let quota = QuotaState::allowed(now.into());
