@@ -5,8 +5,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { createServer } from 'vite'
 
 const endpoint = '/api/admin/proxies'
-const autoLabel = '自动出口地区（地区总开关开启时生效）'
-const manualLabel = '手动独立地区（地区总开关开启时生效）'
+const autoLabel = '自动出口地区'
+const manualLabel = '手动独立地区'
 const manual = { country: 'FR', region: 'Ile-de-France', city: 'Paris', timezone: 'Europe/Paris' }
 const manualDraft = { country: 'FR', region: 'Auvergne-Rhone-Alpes', city: 'Lyon', timezone: 'Europe/Paris' }
 const detected = { country: 'JP', region: 'Tokyo', city: 'Tokyo', timezone: 'Asia/Tokyo' }

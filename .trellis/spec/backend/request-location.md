@@ -1,17 +1,28 @@
 # Request Location Contract
 
-- Reuse `openai_location_override_enabled`; default remains false. Disabled means
-  no proxy or runtime location projection.
+- Align official `fdd124e7`: `openai_location_override_enabled` controls only the
+  global location and defaults false. Proxy locations remain independent.
 - Persist optional global location in the existing request-tuning JSON. Freeze it
   through SnapshotSettingsFacts, RuntimeSnapshot, RoutingPlan and AttemptContext.
   Do not load mutable global configuration midway through a request.
 - Proxy location is metadata on the saved proxy, loaded with account facts.
+  Match the official account builder: changing or removing the proxy clears its
+  previous location; an account accepts a location only after a proxy is bound.
   Omitted proxy updates preserve it, explicit null clears it. Location-only edits
   must leave account credentials, account revisions, enabled state, scheduling
   and URLs untouched. The proxy/config revision still advances.
-- Keep the existing startup-location encoding for identity/affinity compatibility.
-  After selecting the lease, rewrite only the outbound body with proxy > runtime
-  > startup location. Do not recalculate the identity seed or clear continuation.
+- Both observation and pre-selection encoding pass no location. After selecting
+  the lease, use proxy > enabled global location; absent both, preserve the client
+  payload. Never fall back to the wire-profile startup location. Keep the original
+  request for affinity/cache identity and apply the official helper only to the
+  outbound copy. Do not clear continuation or change account/device identity.
+- Retain existing JSON field names for stored-settings compatibility. Compile
+  the enabled switch into an optional frozen global location. Legacy null global
+  values use the official RequestLocation default, not startup configuration.
+- The admin editor uses one global switch. Disabled saves keep the last saved
+  location, ignoring incomplete unsaved drafts. Successful explicit detection
+  fills the draft and enables global overlay; saving remains required. Normalize
+  enabled form values; validate raw backend input before trimming city/region.
 - Test actual HTTP and WS payloads, unmarked cache keys, disabled overrides,
   configuration round trips and PostgreSQL account-query projections.
 - Keep location validation tests in `gateway-core/tests/account/location.rs`;
@@ -21,8 +32,9 @@
   classification is absent. If `content_item_kinds` is an array, each exact
   content index is authoritative; null/unknown/missing slots stay unchanged.
   Do not filter entries before indexing or rewrite all parts because one matches.
-  Keep quoted XML, malformed XML and non-user items unchanged. Only direct root
-  date/timezone fields are replaced; preserve nested fields and metadata.
+  Keep quoted XML, malformed XML and unrelated messages unchanged. Handle user
+  environment_context and developer codex_apps_client_time_context; replace only
+  direct timezone fields. Preserve historical dates, nested fields and metadata.
 
 ## Opt-in Automatic Proxy Location
 
@@ -44,7 +56,7 @@
   publish the global revision only when effective location changes.
   Lock settings before proxy rows and explicitly finish stale-test rollback.
 - All provider-account projections use the same effective proxy location.
-  Preserve the existing total switch, global fallback and identity seed.
+  Proxy locations are independent of the global switch; preserve the identity seed.
   A test response refreshes the open editor's revision before the next save.
   Connection tests use the saved automatic-mode setting without saving the draft.
   Explicit `detectLocation:true` forces one-shot lookup even when auto mode is off.

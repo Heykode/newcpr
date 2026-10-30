@@ -3,6 +3,7 @@ import type { rotationOptions } from '../constants'
 import type { AccountAffinity, RequestTuning } from '@/api/modules/settings'
 import { computed, reactive, ref, shallowRef } from 'vue'
 import { getSettings, updateSettings } from '@/api'
+import { defaultRequestLocation } from '@/api/modules/proxies'
 import { defaultSmartScheduling } from '@/api/modules/settings'
 
 import { ApiError } from '@/api/request'
@@ -11,6 +12,7 @@ import { useAsyncAction } from '@/composables/useAsyncAction'
 import { t } from '@/i18n'
 import { errorMessage } from '@/utils/async'
 import { DEFAULT_EXCEL_MODELS, DEFAULT_EXCEL_MODELS_INPUT } from '@/utils/excel-defaults'
+import { normalizeRequestLocation, requestLocationError } from '@/utils/location'
 import { parseExcelModels } from '@/views/accounts/utils/schedulingForm'
 import { cloneProtectionRules, protectionSettingsError, trimProtectionText } from '../components/error-protection/form'
 import { useExcelImageSettings } from './useExcelImageSettings'
@@ -101,6 +103,7 @@ export function useSettingsForm() {
   const excelImages = useExcelImageSettings(computed(() => form.requestTuning))
 
   const savedDraft = shallowRef('')
+  const savedLocation = shallowRef(defaultRequestLocation())
   const draftSnapshot = () => JSON.stringify({
     form,
     mappings: mappings.value,
@@ -181,6 +184,10 @@ export function useSettingsForm() {
       ),
     )
     form.requestTuning.smartScheduling = { ...form.requestTuning.smartScheduling }
+    form.requestTuning.openaiRequestLocation = {
+      ...(tuning.openaiRequestLocation ?? defaultRequestLocation()),
+    }
+    savedLocation.value = { ...form.requestTuning.openaiRequestLocation }
     excelImages.resetDrafts()
     mappings.value = Object.entries(data.modelMappings || {}).map(([requestedModel, upstreamModel]) => ({
       requestedModel,
@@ -384,6 +391,15 @@ export function useSettingsForm() {
       toast.warning('OpenAI 账号忙时等待人数须为 1–1000 的整数，等待秒数须为 1–600 的整数')
       return
     }
+    // Disabled overlays retain the saved value, not an unfinished editor draft.
+    const requestLocation = tuning.openaiLocationOverrideEnabled
+      ? normalizeRequestLocation(tuning.openaiRequestLocation ?? defaultRequestLocation())
+      : savedLocation.value
+    const locationError = requestLocationError(requestLocation)
+    if (locationError) {
+      toast.warning(locationError)
+      return
+    }
     await saveAction.run(async () => {
       const result = await updateSettings({
         configRevision: configRevision.value,
@@ -416,9 +432,7 @@ export function useSettingsForm() {
             ? { ...form.requestTuning.excelImageTransport }
             : null,
           smartScheduling: { ...form.requestTuning.smartScheduling },
-          openaiRequestLocation: form.requestTuning.openaiRequestLocation
-            ? { ...form.requestTuning.openaiRequestLocation }
-            : null,
+          openaiRequestLocation: { ...requestLocation },
         },
       })
       applySettings(result)

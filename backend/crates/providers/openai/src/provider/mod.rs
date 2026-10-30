@@ -71,7 +71,7 @@ use crate::transport::diagnostics::{
     CodexFailureCategory, CodexUpstreamFailure, CodexUpstreamSendPhase,
 };
 use crate::transport::profile::{
-    APPCAST_POLL_INTERVAL, CodexDesktopReleaseService, CodexRequestLocation, CodexWireProfileState,
+    APPCAST_POLL_INTERVAL, CodexDesktopReleaseService, CodexWireProfileState,
 };
 use crate::transport::protocol::responses::{
     CodexResponsesRequest, PREVIOUS_RESPONSE_NOT_FOUND_CODE, PREVIOUS_RESPONSE_NOT_FOUND_MESSAGE,
@@ -143,7 +143,6 @@ pub struct CodexProvider {
     quota: Arc<CodexCredentialQuotaService>,
     account_feedback: Arc<AccountFeedbackStats>,
     client: CodexBackendClient,
-    location: CodexRequestLocation,
     responses_url: Url,
     compact_url: Url,
     image_generations_url: Url,
@@ -247,7 +246,6 @@ impl CodexProvider {
             .map_err(|_| CodexProviderConfigError::InvalidBaseUrl)?;
         let live_calls_url = Url::parse(&endpoint_url(&base_url, CODEX_REALTIME_CALLS_PATH))
             .map_err(|_| CodexProviderConfigError::InvalidBaseUrl)?;
-        let location = profile.snapshot().location;
         let client = CodexBackendClient::new(http, base_url, profile)
             .with_websocket_pool(websocket_pool)
             .with_timezone(timezone);
@@ -258,7 +256,6 @@ impl CodexProvider {
             quota,
             account_feedback,
             client,
-            location,
             responses_url,
             compact_url,
             image_generations_url,
@@ -385,12 +382,7 @@ impl Provider for CodexProvider {
                 ..Default::default()
             };
         };
-        let location = self
-            .request_tuning
-            .as_ref()
-            .is_some_and(|tuning| tuning.load().openai_location_override_enabled)
-            .then_some(&self.location);
-        let Ok(encoded) = encode_generate_request(request, "observability", location) else {
+        let Ok(encoded) = encode_generate_request(request, "observability", None) else {
             return ProviderRequestObservation::default();
         };
         let previous_session = decode_openai_session_state(request);
@@ -562,13 +554,8 @@ impl Provider for CodexProvider {
             "provider_input",
             None,
         );
-        let location = context
-            .request_tuning()
-            .openai_location_override_enabled
-            .then_some(&self.location);
-        let mut upstream_request =
-            encode_generate_request(generate, upstream_model.as_str(), location)
-                .map_err(map_request_error)?;
+        let mut upstream_request = encode_generate_request(generate, upstream_model.as_str(), None)
+            .map_err(map_request_error)?;
         upstream_request.quality_probe = generate.quality_probe().cloned();
         upstream_request.excel_recovery_nonce = generate.excel_recovery_nonce().map(str::to_owned);
         quality_probe::initialize(
@@ -806,14 +793,11 @@ impl Provider for CodexProvider {
                 crate::compat::normalize_minimal_effort(&mut upstream_request);
             }
         }
-        // Preserve the established identity/affinity inputs above. Only the
-        // selected account's outbound copy receives the effective location.
-        if context.request_tuning().openai_location_override_enabled {
-            let location = lease
-                .account()
-                .request_location()
-                .or(context.request_location())
-                .unwrap_or(&self.location);
+        if let Some(location) = lease
+            .account()
+            .request_location()
+            .or(context.request_location())
+        {
             crate::transport::request::align_structured_location_fields(
                 upstream_request.body_mut(),
                 location,

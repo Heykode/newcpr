@@ -71,12 +71,12 @@ watch(open, (isOpen) => {
       <p v-if="proxy?.accountCount && proxyUrl.trim()" class="m-0 text-cp-sm text-cp-warning-text">
         将更新 {{ proxy.accountCount }} 个关联账号的出口。
       </p>
-      <BaseSwitch v-model="autoLocation" label="自动出口地区（地区总开关开启时生效）" show-label :disabled="busy" />
+      <BaseSwitch v-model="autoLocation" label="自动出口地区" show-label :disabled="busy" />
       <BaseNumberInput v-model="maxWebsocketConnections" label="代理 WebSocket 总连接上限（0 不限）" :min="0" :max="4294967295" :step="1" :disabled="busy" />
       <p v-if="autoLocation && proxy?.autoLocation" class="m-0 break-words text-cp-sm text-cp-text-secondary">
         {{ proxyLocationMessage(proxy) }}
       </p>
-      <BaseSwitch v-model="locationEnabled" label="手动独立地区（地区总开关开启时生效）" show-label :disabled="busy || autoLocation" />
+      <BaseSwitch v-model="locationEnabled" label="手动独立地区" show-label :disabled="busy || autoLocation" />
       <RequestLocationFields v-if="locationEnabled" v-model="location" :disabled="busy || autoLocation" />
       <BaseButton variant="secondary" :disabled="busy" @click="emit('detectLocation')">
         <template #icon>

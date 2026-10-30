@@ -300,6 +300,8 @@ test('runtime save keeps custom parameters and silently rereads server state aft
   const settings = load('views/settings/composables/useSettingsForm.ts', {
     './useExcelImageSettings': load('views/settings/composables/useExcelImageSettings.ts', { vue }),
     '@/api/modules/settings': load('api/modules/settings.ts', { '../request': () => {} }),
+    '@/api/modules/proxies': load('api/modules/proxies.ts', { '../request': () => { throw new Error('unexpected real API request') } }),
+    '@/utils/location': load('utils/location.ts'),
     '@/views/accounts/utils/schedulingForm': load('views/accounts/utils/schedulingForm.ts'),
     vue,
     '@/api': {

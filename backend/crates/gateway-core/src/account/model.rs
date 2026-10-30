@@ -772,6 +772,8 @@ impl ProviderAccount {
 
     #[must_use]
     pub fn with_outbound_proxy(mut self, proxy: Option<super::OutboundProxy>) -> Self {
+        // An outbound binding must be installed before projecting its location.
+        self.request_location = None;
         self.outbound_proxy = proxy;
         self
     }
@@ -783,7 +785,7 @@ impl ProviderAccount {
 
     #[must_use]
     pub fn with_request_location(mut self, location: Option<super::RequestLocation>) -> Self {
-        self.request_location = location;
+        self.request_location = self.outbound_proxy.as_ref().and(location);
         self
     }
 

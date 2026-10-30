@@ -167,7 +167,7 @@ impl SnapshotStorePort for PgRuntimeSnapshotRepository {
             .with_responses_max_decompressed_body_bytes(
                 data.settings.responses_max_decompressed_body_bytes,
             )
-            .with_request_location(data.settings.request_tuning.openai_request_location.clone())
+            .with_request_location(data.settings.request_tuning.effective_request_location())
             .with_excel_image_transport(data.settings.request_tuning.excel_image_transport.clone())
             .with_account_error_protection(
                 data.settings

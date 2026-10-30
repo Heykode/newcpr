@@ -92,12 +92,23 @@ fn scoped_context_with_profile(
     account: &str,
     profile: Option<Arc<OpaqueProviderData>>,
 ) -> AttemptContext {
+    scoped_context_with_location(request_id, client_key, account, profile, None)
+}
+
+fn scoped_context_with_location(
+    request_id: &str,
+    client_key: &str,
+    account: &str,
+    profile: Option<Arc<OpaqueProviderData>>,
+    location: Option<gateway_core::account::RequestLocation>,
+) -> AttemptContext {
     AttemptContext::new(
         RequestAttemptContext::new(
             ModelRequestId::new(format!("req_{request_id}")).unwrap(),
             ClientApiKeyId::new(client_key).unwrap(),
         )
-        .with_request_profile(profile),
+        .with_request_profile(profile)
+        .with_request_location(location),
         NonZeroU32::new(1).unwrap(),
         SystemTime::now() + Duration::from_secs(30),
         account_policy(),
@@ -281,12 +292,12 @@ async fn proxy_location_precedence_preserves_fallback_identity_on_http_and_ws() 
         create_account(&store, ACCOUNT).await;
         let mut identities = Vec::new();
         for (enabled, proxy_location, global_location, expected) in [
-            (false, Some(proxy.clone()), Some(global.clone()), "London"),
-            (true, None, None, "Auckland"),
+            (false, Some(proxy.clone()), Some(global.clone()), "Tokyo"),
+            (false, None, Some(global.clone()), "London"),
+            (true, None, None, "London"),
             (true, None, Some(global.clone()), "Los Angeles"),
             (true, Some(proxy.clone()), Some(global.clone()), "Tokyo"),
         ] {
-            store.set_request_location(ACCOUNT, proxy_location);
             let http = MockServer::start().await;
             let (url, ws_server) = if websocket {
                 let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -313,6 +324,12 @@ async fn proxy_location_precedence_preserves_fallback_identity_on_http_and_ws() 
                     .await;
                 (http.uri(), None)
             };
+            let (proxy_url, proxy_task) = location_test_proxy(&url).await;
+            store.set_outbound_proxy(
+                ACCOUNT,
+                gateway_core::account::OutboundProxy::parse(&proxy_url).unwrap(),
+            );
+            store.set_request_location(ACCOUNT, proxy_location);
             // No explicit thread/cache key: exercise CPR's content fallback.
             let body = json!({
                 "model":"gpt-5.4", "input":"same unmarked question",
@@ -328,7 +345,7 @@ async fn proxy_location_precedence_preserves_fallback_identity_on_http_and_ws() 
                 ModelRequestId::new("req_proxy_location").unwrap(),
                 ClientApiKeyId::new("key-proxy-location").unwrap(),
             )
-            .with_request_location(global_location);
+            .with_request_location(global_location.filter(|_| enabled));
             let context = AttemptContext::new(
                 request_context,
                 NonZeroU32::new(1).unwrap(),
@@ -371,12 +388,11 @@ async fn proxy_location_precedence_preserves_fallback_identity_on_http_and_ws() 
             assert!(captured.get("prompt_cache_retention").is_none());
             assert!(captured["client_metadata"]["x-codex-installation-id"].is_string());
             assert!(captured["client_metadata"].get("installation_id").is_none());
-            if enabled {
-                identities.push(captured["prompt_cache_key"].clone());
-            }
+            identities.push(captured["prompt_cache_key"].clone());
+            proxy_task.abort();
+            let _ = proxy_task.await;
         }
-        // Enabling the pre-existing overwrite policy may change an unmarked key;
-        // new runtime and proxy overrides must not introduce further changes.
+        // Official overlays are applied after identity selection, including when toggled.
         assert!(identities.windows(2).all(|pair| pair[0] == pair[1]));
     }
 }
@@ -392,6 +408,36 @@ pub(super) fn qx_provider(store: &Arc<MemoryAccountStore>, url: String) -> Codex
         CodexWireProfileState::new(selected),
     )
     .0
+}
+
+async fn location_test_proxy(target: &str) -> (String, tokio::task::JoinHandle<()>) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let target = url::Url::parse(target).unwrap();
+    let address = (
+        target.host_str().unwrap().to_owned(),
+        target.port().unwrap(),
+    );
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let task = tokio::spawn(async move {
+        let (mut downstream, _) = listener.accept().await.unwrap();
+        let mut head = Vec::new();
+        while !head.ends_with(b"\r\n\r\n") {
+            assert!(head.len() < 65536);
+            head.push(downstream.read_u8().await.unwrap());
+        }
+        let mut upstream = tokio::net::TcpStream::connect(address).await.unwrap();
+        if head.starts_with(b"CONNECT ") {
+            downstream
+                .write_all(b"HTTP/1.1 200 Connection established\r\n\r\n")
+                .await
+                .unwrap();
+        } else {
+            upstream.write_all(&head).await.unwrap();
+        }
+        let _ = tokio::io::copy_bidirectional(&mut downstream, &mut upstream).await;
+    });
+    (url, task)
 }
 
 #[tokio::test]
@@ -449,11 +495,12 @@ async fn location_switch_controls_actual_http_and_ws_payloads_without_changing_i
             consume_identity_request(
                 &qx_provider(&store, url),
                 request,
-                scoped_context("location-switch", "key-location", ACCOUNT).with_request_tuning(
-                    gateway_core::routing::RequestTuning {
-                        openai_location_override_enabled: enabled,
-                        ..Default::default()
-                    },
+                scoped_context_with_location(
+                    "location-switch",
+                    "key-location",
+                    ACCOUNT,
+                    None,
+                    enabled.then(|| wire_profile().snapshot().location),
                 ),
             )
             .await;
@@ -829,11 +876,12 @@ async fn qx_saved_seed_survives_location_change_without_accepting_a_foreign_key(
     let state = consume_identity_request(
         &first_provider,
         request(),
-        scoped_context("location-first", "key-a", ACCOUNT).with_request_tuning(
-            gateway_core::routing::RequestTuning {
-                openai_location_override_enabled: true,
-                ..Default::default()
-            },
+        scoped_context_with_location(
+            "location-first",
+            "key-a",
+            ACCOUNT,
+            None,
+            Some(wire_profile().snapshot().location),
         ),
     )
     .await
@@ -854,11 +902,12 @@ async fn qx_saved_seed_survives_location_change_without_accepting_a_foreign_key(
     consume_identity_request(
         &next_provider,
         followup,
-        scoped_context("location-next", "key-a", ACCOUNT).with_request_tuning(
-            gateway_core::routing::RequestTuning {
-                openai_location_override_enabled: true,
-                ..Default::default()
-            },
+        scoped_context_with_location(
+            "location-next",
+            "key-a",
+            ACCOUNT,
+            None,
+            Some(Default::default()),
         ),
     )
     .await;

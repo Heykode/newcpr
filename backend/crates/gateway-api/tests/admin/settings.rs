@@ -973,11 +973,8 @@ async fn location_and_key_wait_settings_round_trip_without_changing_account_wait
     for (enabled, waiting, timeout) in [(true, 8, 45), (false, 0, 45)] {
         let mut body = with_current_revision(&fixture, update_body()).await;
         body["requestTuning"]["openaiLocationOverrideEnabled"] = json!(enabled);
-        body["requestTuning"]["openaiRequestLocation"] = if enabled {
-            json!({"country":"JP","region":"Tokyo","city":"Tokyo","timezone":"Asia/Tokyo"})
-        } else {
-            serde_json::Value::Null
-        };
+        body["requestTuning"]["openaiRequestLocation"] =
+            json!({"country":"JP","region":" Tokyo ","city":" Tokyo ","timezone":"Asia/Tokyo"});
         body["requestTuning"]["maxWaitingPerKey"] = json!(waiting);
         body["requestTuning"]["keyConcurrencyWaitTimeoutSeconds"] = json!(timeout);
         let response = app(fixture.state())
@@ -994,6 +991,8 @@ async fn location_and_key_wait_settings_round_trip_without_changing_account_wait
             .await
             .unwrap();
         let data = response_json(response).await["data"].clone();
+        body["requestTuning"]["openaiRequestLocation"]["region"] = json!("Tokyo");
+        body["requestTuning"]["openaiRequestLocation"]["city"] = json!("Tokyo");
         assert_eq!(data["requestTuning"], body["requestTuning"]);
         assert_eq!(data["rotationStrategy"], body["rotationStrategy"]);
     }

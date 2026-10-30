@@ -149,7 +149,6 @@ pub(crate) fn align_structured_location_fields(
     body: &mut Map<String, Value>,
     location: &CodexRequestLocation,
 ) {
-    // Historical dates describe when client context was created; preserve them.
     if let Some(input) = body.get_mut("input").and_then(Value::as_array_mut) {
         for item in input {
             align_time_context(item, location.timezone.name());
@@ -166,6 +165,7 @@ fn align_time_context(item: &mut Value, timezone: &str) {
     let Some(item) = item.as_object_mut() else {
         return;
     };
+    // Desktop 将客户端时间放入独立 developer 上下文，不能只覆盖执行环境的 user 消息
     let (context_tag, content_kind) = match item.get("role").and_then(Value::as_str) {
         Some("user") => ("environment_context", ENVIRONMENT_CONTEXT_CONTENT_KIND),
         Some("developer") => (
@@ -185,11 +185,12 @@ fn align_time_context(item: &mut Value, timezone: &str) {
                 .map(|kind| kind.as_str().map(str::to_owned))
                 .collect::<Vec<_>>()
         });
-    let Some(parts) = item.get_mut("content").and_then(Value::as_array_mut) else {
+    let Some(content) = item.get_mut("content").and_then(Value::as_array_mut) else {
         return;
     };
-    for (index, part) in parts.iter_mut().enumerate() {
-        // An explicit classification is authoritative for this exact content slot.
+    for (index, part) in content.iter_mut().enumerate() {
+        // 官方自定义 Provider 会移除内容分类，缺省时仍按角色与完整上下文识别
+        // 已有分类保持权威，不能覆盖显式标为普通文本或其他上下文的内容
         if let Some(kinds) = &content_kinds
             && kinds.get(index).and_then(Option::as_deref) != Some(content_kind)
         {
@@ -222,9 +223,11 @@ fn aligned_time_context(text: &str, context_tag: &str, timezone: &str) -> Option
     if !root.has_tag_name(context_tag) {
         return None;
     }
+    // 日期属于客户端生成该条上下文时的事实，不能用当前时间刷新历史并改变缓存前缀
+    // 仅有日期无法确定跨时区换算所需的时间点，因此位置覆盖只改时区
     let mut replacements = root
         .children()
-        .filter(|node| node.is_element() && node.has_tag_name("timezone"))
+        .filter(|node| node.is_element() && node.tag_name().name() == "timezone")
         .map(|node| (node.range(), format!("<timezone>{timezone}</timezone>")))
         .collect::<Vec<_>>();
     if replacements.is_empty() {

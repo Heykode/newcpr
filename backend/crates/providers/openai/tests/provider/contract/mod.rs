@@ -828,6 +828,16 @@ async fn capture_scoped_http_request_with_policy(
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, selected_account_id).await;
     let server = MockServer::start().await;
+    if tuning.openai_location_override_enabled {
+        store.set_outbound_proxy(
+            selected_account_id,
+            gateway_core::account::OutboundProxy::parse(&server.uri()).unwrap(),
+        );
+        store.set_request_location(
+            selected_account_id,
+            Some(wire_profile().snapshot().location),
+        );
+    }
     Mock::given(method("POST"))
         .and(path("/codex/responses"))
         .respond_with(
