@@ -64,6 +64,7 @@ async fn settings_should_reject_invalid_margin_or_probe_concurrency_before_store
                     request_id: "request-settings".to_owned(),
                 },
                 ReplaceRuntimeSettings {
+                    expected_revision: gateway_admin::model::Revision::new(7).unwrap(),
                     openai_account_affinity: None,
                     openai_session_binding_ttl_hours: None,
                     turn_state_probe_proxy_id: None,
@@ -144,6 +145,7 @@ async fn settings_should_reject_invalid_account_busy_wait_before_store_call() {
                         request_id: "request-account-busy-wait-settings".to_owned(),
                     },
                     ReplaceRuntimeSettings {
+                        expected_revision: gateway_admin::model::Revision::new(7).unwrap(),
                         openai_account_affinity: None,
                         openai_session_binding_ttl_hours: None,
                         turn_state_probe_proxy_id: None,

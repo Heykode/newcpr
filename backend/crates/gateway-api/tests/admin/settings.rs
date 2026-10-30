@@ -37,6 +37,7 @@ async fn response_json(response: axum::response::Response) -> Value {
 
 fn update_body() -> Value {
     let mut body = json!({
+        "configRevision": 7,
         "excelDefaultModels": ["gpt-5.6-sol", "gpt-6-astra"],
         "disableFast": false,
         "turnStateInjectionEnabled": false,
@@ -62,7 +63,6 @@ fn update_body() -> Value {
             "maxAccountSwitches": 7,
             "maxRequestAttempts": 8,
             "websocketMaxRetries": 9,
-            "websocketHttpFallbackEnabled": false,
             "websocketLargeRequestThresholdBytes": 4096,
             "streamPrefetchBytes": 262144,
             "websocketMaxAgeMs": 60000,
@@ -99,6 +99,20 @@ fn update_body() -> Value {
     body["requestTuning"]["excelImageMaxBytes"] = Value::Null;
     body["requestTuning"]["excelImageTotalBytes"] = Value::Null;
     body["requestTuning"]["excelImageMaxCount"] = Value::Null;
+    body
+}
+
+async fn with_current_revision(fixture: &AdminTestFixture, mut body: Value) -> Value {
+    body["configRevision"] = json!(
+        fixture
+            .services
+            .settings()
+            .load()
+            .await
+            .unwrap()
+            .config_revision
+            .get()
+    );
     body
 }
 
@@ -160,6 +174,7 @@ async fn account_affinity_saves_and_old_api_clients_keep_the_saved_mode() {
         .unwrap()
         .remove("openaiAccountAffinity");
     for body in [body, old_body] {
+        let body = with_current_revision(&fixture, body).await;
         let saved = router
             .clone()
             .oneshot(request(
@@ -228,7 +243,7 @@ async fn probe_proxy_selection_preserves_omitted_and_clears_explicit_null() {
         (None, json!("proxy-test")),
         (Some(Value::Null), Value::Null),
     ] {
-        let mut body = update_body();
+        let mut body = with_current_revision(&fixture, update_body()).await;
         if let Some(value) = value {
             body["turnStateProbeProxyId"] = value;
         } else {
@@ -288,7 +303,7 @@ async fn probe_concurrency_round_trips_and_omission_preserves_the_saved_value() 
         (None, 10),
         (Some(3), 3),
     ] {
-        let mut body = update_body();
+        let mut body = with_current_revision(&fixture, update_body()).await;
         if let Some(value) = value {
             body["turnStateProbeConcurrency"] = json!(value);
         } else {
@@ -378,7 +393,7 @@ async fn disable_fast_settings_updates_preserve_omitted_values() {
     fixture.auth.insert_session("valid-session");
     let app = app(fixture.state());
     for (value, expected) in [(Some(true), true), (None, true), (Some(false), false)] {
-        let mut body = update_body();
+        let mut body = with_current_revision(&fixture, update_body()).await;
         if let Some(value) = value {
             body["disableFast"] = json!(value);
         } else {
@@ -503,7 +518,6 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
             max_account_switches: Some(7),
             max_request_attempts: Some(8),
             websocket_max_retries: Some(9),
-            websocket_http_fallback_enabled: Some(false),
             websocket_large_request_threshold_bytes: Some(4096),
             stream_prefetch_bytes: Some(256 * 1024),
             websocket_max_age_ms: Some(60_000),
@@ -565,7 +579,6 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
             "maxAccountSwitches": 7,
             "maxRequestAttempts": 8,
             "websocketMaxRetries": 9,
-            "websocketHttpFallbackEnabled": false,
             "websocketLargeRequestThresholdBytes": 4096,
             "streamPrefetchBytes": 262144,
             "websocketMaxAgeMs": 60000,
@@ -586,6 +599,7 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
         },
         "updatedAt": "2026-08-02T10:30:00Z"
     });
+    expected["configRevision"] = json!(7);
     expected["openaiAccountAffinity"] = json!("strict");
     expected["openaiSessionBindingTtlHours"] = json!(24);
     expected["openaiGuardianReservedConcurrency"] = json!(0);
@@ -704,6 +718,73 @@ fn settings_request_should_reject_unknown_revision_field() {
 }
 
 #[test]
+fn settings_request_requires_a_positive_config_revision() {
+    let mut missing = update_body();
+    missing.as_object_mut().unwrap().remove("configRevision");
+    assert!(serde_json::from_value::<UpdateRuntimeSettingsRequest>(missing).is_err());
+    for invalid in [json!(null), json!(0), json!(-1), json!(1.5), json!("7")] {
+        let mut body = update_body();
+        body["configRevision"] = invalid;
+        if let Ok(request) = serde_json::from_value::<UpdateRuntimeSettingsRequest>(body) {
+            assert_eq!(request.validate().unwrap_err().field(), "configRevision");
+        }
+    }
+}
+
+#[tokio::test]
+async fn settings_stale_revision_returns_conflict_without_overwriting_saved_values() {
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.insert_session("valid-session");
+    let router = app(fixture.state());
+    let mut body = update_body();
+    body["requestIntervalMs"] = json!(111);
+    let response = router
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/admin/settings/update",
+            Some(body.clone()),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let saved = response_json(response).await["data"].clone();
+    assert_eq!(saved["configRevision"], 8);
+
+    body["requestIntervalMs"] = json!(222);
+    let response = router
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/admin/settings/update",
+            Some(body.clone()),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let response = router
+        .clone()
+        .oneshot(request(Method::GET, "/api/admin/settings", None))
+        .await
+        .unwrap();
+    assert_eq!(response_json(response).await["data"], saved);
+
+    body["configRevision"] = saved["configRevision"].clone();
+    let response = router
+        .oneshot(request(
+            Method::POST,
+            "/api/admin/settings/update",
+            Some(body),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let updated = response_json(response).await;
+    assert_eq!(updated["data"]["configRevision"], 9);
+    assert_eq!(updated["data"]["requestIntervalMs"], 222);
+}
+
+#[test]
 fn settings_request_should_reject_removed_bucket_retention() {
     let mut body = update_body();
     body["bucketRetentionDays"] = json!(365);
@@ -745,7 +826,7 @@ async fn settings_post_should_replace_global_model_mappings() {
         .expect("settings update response");
     let data = response_json(response).await["data"].clone();
 
-    assert!(data.get("configRevision").is_none());
+    assert_eq!(data["configRevision"], 8);
     assert_eq!(data["modelMappings"]["gpt-5.4"], "gpt-5.5");
     assert_eq!(data["modelMappings"]["grok-latest"], "grok-4.5");
 }
@@ -759,6 +840,7 @@ async fn settings_post_and_reload_should_omit_legacy_global_opening_limit() {
     legacy_body["requestTuning"]["websocketMaxConnecting"] = json!(4);
 
     for body in [legacy_body, update_body()] {
+        let body = with_current_revision(&fixture, body).await;
         let response = app(fixture.state())
             .oneshot(request(
                 Method::POST,
@@ -790,7 +872,7 @@ async fn excel_image_settings_round_trip_and_reject_invalid_origin_without_mutat
         json!({"mode":"native"}),
         Value::Null,
     ] {
-        let mut body = update_body();
+        let mut body = with_current_revision(&fixture, update_body()).await;
         body["requestTuning"]["excelImageTransport"] = policy.clone();
         let response = app(fixture.state())
             .oneshot(request(
@@ -846,7 +928,7 @@ async fn large_request_threshold_round_trips_and_rejects_out_of_range_settings()
     let fixture = AdminTestFixture::new().await;
     fixture.auth.insert_session("valid-session");
     for value in [json!(null), json!(0), json!(4096), json!(64 * 1024 * 1024)] {
-        let mut body = update_body();
+        let mut body = with_current_revision(&fixture, update_body()).await;
         body["requestTuning"]["websocketLargeRequestThresholdBytes"] = value;
         let response = app(fixture.state())
             .oneshot(request(
@@ -889,7 +971,7 @@ async fn location_and_key_wait_settings_round_trip_without_changing_account_wait
     let fixture = AdminTestFixture::new().await;
     fixture.auth.insert_session("valid-session");
     for (enabled, waiting, timeout) in [(true, 8, 45), (false, 0, 45)] {
-        let mut body = update_body();
+        let mut body = with_current_revision(&fixture, update_body()).await;
         body["requestTuning"]["openaiLocationOverrideEnabled"] = json!(enabled);
         body["requestTuning"]["openaiRequestLocation"] = if enabled {
             json!({"country":"JP","region":"Tokyo","city":"Tokyo","timezone":"Asia/Tokyo"})
@@ -978,6 +1060,7 @@ async fn account_busy_wait_settings_should_round_trip_enabled_disabled_and_inher
         .expect("settings object")
         .remove("requestTuning");
     for body in [update_body(), disabled, inherited, legacy] {
+        let body = with_current_revision(&fixture, body).await;
         let decoded: UpdateRuntimeSettingsRequest =
             serde_json::from_value(body.clone()).expect("decode settings");
         let expected = serde_json::to_value(decoded.request_tuning).expect("serialize overrides");

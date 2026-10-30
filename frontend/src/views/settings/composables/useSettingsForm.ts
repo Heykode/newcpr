@@ -34,7 +34,6 @@ const requestTuningFallbacks: RequestTuning = {
   maxAccountSwitches: 31,
   maxRequestAttempts: 32,
   websocketMaxRetries: 5,
-  websocketHttpFallbackEnabled: true,
   websocketLargeRequestThresholdBytes: 15 * 1024 * 1024,
   streamPrefetchBytes: 128 * 1024,
   websocketMaxAgeMs: 55 * 60 * 1_000,
@@ -71,6 +70,7 @@ export function useSettingsForm() {
   const saveAction = useAsyncAction()
   const saving = saveAction.loading
   const error = shallowRef('')
+  const configRevision = shallowRef(0)
   const mappings = ref<Array<{ requestedModel: string, upstreamModel: string }>>([])
   const form = reactive({
     accountErrorProtection: defaultProtection(),
@@ -145,6 +145,7 @@ export function useSettingsForm() {
   }
 
   function applySettings(data: Awaited<ReturnType<typeof getSettings>>) {
+    configRevision.value = data.configRevision
     form.excelDefaultModels = (data.excelDefaultModels ?? DEFAULT_EXCEL_MODELS).join(', ')
     form.disableFast = data.disableFast ?? false
     form.responsesMaxDecompressedBodyBytes
@@ -385,6 +386,7 @@ export function useSettingsForm() {
     }
     await saveAction.run(async () => {
       const result = await updateSettings({
+        configRevision: configRevision.value,
         excelDefaultModels,
         disableFast: form.disableFast,
         responsesMaxDecompressedBodyBytes: form.responsesMaxDecompressedBodyBytes,
@@ -423,7 +425,7 @@ export function useSettingsForm() {
       toast.success('设置已保存')
     }, {
       onError: (cause) => {
-        if (cause instanceof ApiError)
+        if (cause instanceof ApiError && cause.status !== 409)
           void loadSettings(true)
       },
     })

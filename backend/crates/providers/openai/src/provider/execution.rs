@@ -942,9 +942,6 @@ pub(super) fn cold_response_stream_once(response: ColdResponse) -> EventStream {
                             policy,
                             replay_boundary: ReplayBoundary::BeforeSemanticOutput,
                             requirement: request_transport_requirement,
-                            allow_http_fallback: context
-                                .request_tuning()
-                                .websocket_http_fallback_enabled,
                             retry_count: websocket_retry_count,
                             max_retries: stream_max_retries,
                             request_id: context.request_id().as_str(),
@@ -1184,9 +1181,6 @@ pub(super) fn cold_response_stream_once(response: ColdResponse) -> EventStream {
                                 policy: WebSocketFailurePolicy::Budgeted,
                                 replay_boundary: ReplayBoundary::from_semantic_output(pre_commit_events.is_committed()),
                                 requirement: request_transport_requirement,
-                                allow_http_fallback: context
-                                    .request_tuning()
-                                    .websocket_http_fallback_enabled,
                                 retry_count: websocket_retry_count,
                                 max_retries: stream_max_retries,
                                 request_id: context.request_id().as_str(),

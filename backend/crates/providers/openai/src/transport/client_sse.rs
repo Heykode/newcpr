@@ -645,8 +645,7 @@ impl CodexBackendClient {
         .map_err(CodexClientError::WebSocketEncode)?;
         let tuning = self.request_tuning();
         let payload_bytes = websocket_create.payload_text().len() as u64;
-        let oversized = tuning.websocket_http_fallback_enabled
-            && tuning.websocket_large_request_threshold_bytes != 0
+        let oversized = tuning.websocket_large_request_threshold_bytes != 0
             && payload_bytes >= tuning.websocket_large_request_threshold_bytes;
         if oversized && requirement == TransportRequirement::ExactWebSocketContinuation {
             return Err(CodexClientError::WebSocket(
@@ -751,8 +750,6 @@ impl CodexBackendClient {
             | TransportRequirement::ExternalUnknown => None,
             TransportRequirement::HttpRequired => None,
         };
-        let fast_path_budget =
-            fast_path_budget.filter(|_| self.request_tuning().websocket_http_fallback_enabled);
         let prepare_started_at = Instant::now();
         let prepared = prepare_response_create_request_with_pool(
             &websocket_create,
@@ -795,8 +792,7 @@ impl CodexBackendClient {
                 });
             }
             Err(error)
-                if self.request_tuning().websocket_http_fallback_enabled
-                    && requirement.allows_pre_send_http_fallback()
+                if requirement.allows_pre_send_http_fallback()
                     && let Some(decision) = local_http_fallback_decision(&error) =>
             {
                 let wait_ms = elapsed_duration_millis(prepare_started_at.elapsed());

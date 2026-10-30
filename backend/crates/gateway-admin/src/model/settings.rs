@@ -27,7 +27,6 @@ pub struct RequestTuningOverrides {
     pub max_account_switches: Option<u32>,
     pub max_request_attempts: Option<u32>,
     pub websocket_max_retries: Option<u32>,
-    pub websocket_http_fallback_enabled: Option<bool>,
     pub websocket_large_request_threshold_bytes: Option<u64>,
     pub stream_prefetch_bytes: Option<u64>,
     pub websocket_max_age_ms: Option<u64>,
@@ -77,7 +76,9 @@ impl<'de> Deserialize<'de> for RequestTuningOverrides {
             max_account_switches: Option<u32>,
             max_request_attempts: Option<u32>,
             websocket_max_retries: Option<u32>,
-            websocket_http_fallback_enabled: Option<bool>,
+            // Retired override: recovery follows the transport contract unconditionally.
+            #[serde(rename = "websocketHttpFallbackEnabled")]
+            _legacy_websocket_http_fallback_enabled: Option<bool>,
             websocket_large_request_threshold_bytes: Option<u64>,
             stream_prefetch_bytes: Option<u64>,
             websocket_max_age_ms: Option<u64>,
@@ -119,7 +120,6 @@ impl<'de> Deserialize<'de> for RequestTuningOverrides {
             max_account_switches: wire.max_account_switches,
             max_request_attempts: wire.max_request_attempts,
             websocket_max_retries: wire.websocket_max_retries,
-            websocket_http_fallback_enabled: wire.websocket_http_fallback_enabled,
             websocket_large_request_threshold_bytes: wire.websocket_large_request_threshold_bytes,
             stream_prefetch_bytes: wire.stream_prefetch_bytes,
             websocket_max_age_ms: wire.websocket_max_age_ms,
@@ -338,6 +338,7 @@ pub struct RuntimeSettings {
 /// 原子替换运行设置的命令。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReplaceRuntimeSettings {
+    pub expected_revision: Revision,
     pub disable_fast: Option<bool>,
     pub turn_state_injection_enabled: Option<bool>,
     pub turn_state_models: Option<Vec<UpstreamModelId>>,

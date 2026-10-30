@@ -593,7 +593,6 @@ pub(super) struct WebSocketRecoveryContext<'a> {
     pub(super) policy: WebSocketFailurePolicy,
     pub(super) replay_boundary: ReplayBoundary,
     pub(super) requirement: TransportRequirement,
-    pub(super) allow_http_fallback: bool,
     pub(super) retry_count: u32,
     pub(super) max_retries: u32,
     pub(super) request_id: &'a str,
@@ -616,14 +615,13 @@ pub(super) fn websocket_client_failure_policy(
             Some(WebSocketFailurePolicy::ImmediateFallback)
         }
         CodexClientError::WebSocket(error)
-            if !error.is_message_too_big()
-                && !matches!(
-                    error.classified(),
-                    CodexWebSocketExchangeError::InvalidRequest(_)
-                        | CodexWebSocketExchangeError::ContinuationUnavailable { .. }
-                        | CodexWebSocketExchangeError::OriginCircuitOpen
-                        | CodexWebSocketExchangeError::OriginHalfOpenBusy
-                ) =>
+            if !matches!(
+                error.classified(),
+                CodexWebSocketExchangeError::InvalidRequest(_)
+                    | CodexWebSocketExchangeError::ContinuationUnavailable { .. }
+                    | CodexWebSocketExchangeError::OriginCircuitOpen
+                    | CodexWebSocketExchangeError::OriginHalfOpenBusy
+            ) =>
         {
             Some(WebSocketFailurePolicy::Budgeted)
         }
@@ -663,15 +661,19 @@ pub(super) fn apply_websocket_recovery_policy(
         );
         return;
     }
-    let session_budget_exhausted = context.session_affinity_key.is_some_and(|key| {
-        context
-            .session_transport_recovery
-            .record_websocket_failure(key, context.max_retries)
-    });
+    // A size rejection belongs to this request, not the session failure budget.
+    let message_too_big = failure.error.kind() == ProviderErrorKind::MessageTooBig;
+    let session_budget_exhausted = !message_too_big
+        && context.session_affinity_key.is_some_and(|key| {
+            context
+                .session_transport_recovery
+                .record_websocket_failure(key, context.max_retries)
+        });
     if matches!(context.replay_boundary, ReplayBoundary::AfterSemanticOutput)
-        || failure.error.send_state() == UpstreamSendState::Ambiguous
-        || (failure.error.send_state() == UpstreamSendState::Sent
-            && !failure.error.replay_is_safe())
+        || (!message_too_big
+            && (failure.error.send_state() == UpstreamSendState::Ambiguous
+                || (failure.error.send_state() == UpstreamSendState::Sent
+                    && !failure.error.replay_is_safe())))
     {
         return;
     }
@@ -720,7 +722,7 @@ pub(super) fn apply_websocket_recovery_policy(
         return;
     }
 
-    if !context.allow_http_fallback || !context.requirement.allows_pre_send_http_fallback() {
+    if !context.requirement.allows_pre_send_http_fallback() {
         return;
     }
     failure.error.set_pre_delivery_transport_fallback();
@@ -869,15 +871,12 @@ pub(super) fn stream_transport_allows_pre_delivery_retry(error: &CodexClientErro
         | CodexClientError::HttpJson(_)
         | CodexClientError::ErrorBodyRead { .. }
         | CodexClientError::StreamIdleTimeout { .. } => true,
-        CodexClientError::WebSocket(error) => {
-            !error.is_message_too_big()
-                && !matches!(
-                    error.classified(),
-                    CodexWebSocketExchangeError::InvalidRequest(_)
-                        | CodexWebSocketExchangeError::Upstream(_)
-                        | CodexWebSocketExchangeError::ContinuationUnavailable { .. }
-                )
-        }
+        CodexClientError::WebSocket(error) => !matches!(
+            error.classified(),
+            CodexWebSocketExchangeError::InvalidRequest(_)
+                | CodexWebSocketExchangeError::Upstream(_)
+                | CodexWebSocketExchangeError::ContinuationUnavailable { .. }
+        ),
         _ => false,
     }
 }
@@ -1729,7 +1728,7 @@ pub(super) fn websocket_send_state(error: &CodexWebSocketExchangeError) -> Upstr
 
 pub(super) fn websocket_error_kind(error: &CodexWebSocketExchangeError) -> ProviderErrorKind {
     if error.is_message_too_big() {
-        return ProviderErrorKind::InvalidRequest;
+        return ProviderErrorKind::MessageTooBig;
     }
     match error.classified() {
         CodexWebSocketExchangeError::InvalidRequest(_)

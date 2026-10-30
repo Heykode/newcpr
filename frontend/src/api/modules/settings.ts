@@ -34,7 +34,6 @@ export interface RequestTuning {
   maxAccountSwitches: number
   maxRequestAttempts: number
   websocketMaxRetries: number
-  websocketHttpFallbackEnabled: boolean
   websocketLargeRequestThresholdBytes: number
   streamPrefetchBytes: number
   websocketMaxAgeMs: number
@@ -73,6 +72,7 @@ export type RequestTuningOverrides = { accountErrorProtection?: AccountErrorProt
 export type AccountAffinity = 'strict' | 'preferred' | 'relaxed'
 
 export interface RuntimeSettings {
+  configRevision: number
   excelDefaultModels?: string[]
   disableFast?: boolean
   turnStateInjectionEnabled?: boolean

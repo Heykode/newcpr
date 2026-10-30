@@ -449,6 +449,13 @@ impl SettingsStore for MemorySettingsStore {
         _: &MutationContext,
     ) -> AdminStoreResult<RuntimeSettings> {
         let mut settings = self.settings.lock().expect("settings");
+        if command.expected_revision != settings.config_revision {
+            return Err(AdminStoreError::new(
+                AdminStoreErrorKind::StaleRevision,
+                "runtime settings",
+                "stale settings revision",
+            ));
+        }
         let updated = RuntimeSettings {
             openai_account_affinity: command
                 .openai_account_affinity

@@ -361,9 +361,6 @@ const tuningValues = {
         <h3 class="mb-0 mt-3 text-sm font-medium text-cp-text-secondary sm:col-span-2">
           原生 Codex 上游连接
         </h3>
-        <BaseFormItem label="允许 WebSocket 自动切换 HTTP">
-          <BaseSwitch v-model="requestTuning.websocketHttpFallbackEnabled" label="允许回退" show-label />
-        </BaseFormItem>
         <BaseFormItem label="大请求 HTTP 阈值（字节）">
           <BaseInput v-model="tuningValues.websocketLargeRequestThresholdBytes.value" aria-label="大请求 HTTP 阈值（字节）" type="number" min="0" max="67108864" step="1" />
         </BaseFormItem>

@@ -445,6 +445,7 @@ async function main() {
       excelRecovery: { enabled: false, intervalMinutes: 60 },
     })
     let settings = {
+      configRevision: 1,
       excelDefaultModels: ['gpt-5.6-sol', 'gpt-6-astra'],
       modelMappings: {},
       refreshMarginSeconds: 1800,
@@ -460,7 +461,9 @@ async function main() {
     }
     await page.route('**/dev/api/admin/settings', route => fulfill(route, settings))
     await page.route('**/dev/api/admin/settings/update', (route) => {
-      settings = route.request().postDataJSON()
+      const body = route.request().postDataJSON()
+      assert.equal(body.configRevision, settings.configRevision)
+      settings = { ...body, configRevision: settings.configRevision + 1 }
       return fulfill(route, settings)
     })
     await page.route('**/dev/api/admin/settings/admin-api-key', route => fulfill(route, { exists: false }))

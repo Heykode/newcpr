@@ -33,6 +33,7 @@ pub type ModelMappings = BTreeMap<String, String>;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeSettingsView {
+    pub config_revision: u64,
     pub disable_fast: bool,
     pub turn_state_injection_enabled: bool,
     pub turn_state_models: Vec<String>,
@@ -67,6 +68,7 @@ pub struct RuntimeSettingsView {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UpdateRuntimeSettingsRequest {
+    pub config_revision: u64,
     pub disable_fast: Option<bool>,
     pub turn_state_injection_enabled: Option<bool>,
     pub turn_state_models: Option<Vec<String>>,
@@ -120,6 +122,8 @@ where
 impl UpdateRuntimeSettingsRequest {
     /// 校验公共运行参数。
     pub fn validate(&self) -> Result<(), WireValidationError> {
+        gateway_admin::model::Revision::new(self.config_revision)
+            .map_err(|_| WireValidationError::new("configRevision"))?;
         if self.turn_state_probe_concurrency.is_some_and(|value| {
             !(1..=gateway_core::routing::MAX_TURN_STATE_PROBE_CONCURRENCY).contains(&value)
         }) {
@@ -223,6 +227,8 @@ impl UpdateRuntimeSettingsRequest {
     fn into_command(self) -> Result<ReplaceRuntimeSettings, WireValidationError> {
         self.validate()?;
         Ok(ReplaceRuntimeSettings {
+            expected_revision: gateway_admin::model::Revision::new(self.config_revision)
+                .map_err(|_| WireValidationError::new("configRevision"))?,
             disable_fast: self.disable_fast,
             excel_default_models: self.excel_default_models,
             turn_state_injection_enabled: self.turn_state_injection_enabled,
@@ -278,6 +284,7 @@ impl UpdateRuntimeSettingsRequest {
 impl From<RuntimeSettings> for RuntimeSettingsView {
     fn from(settings: RuntimeSettings) -> Self {
         Self {
+            config_revision: settings.config_revision.get(),
             disable_fast: settings.disable_fast,
             excel_default_models: settings.excel_default_models,
             turn_state_injection_enabled: settings.turn_state_injection_enabled,

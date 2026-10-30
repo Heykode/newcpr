@@ -238,7 +238,7 @@ fn content_fallback_normalizes_text_formats_and_preserves_explicit_affinity() {
 }
 
 #[tokio::test]
-async fn message_too_big_close_before_first_event_is_request_scoped_on_new_and_reused_sockets() {
+async fn message_too_big_on_required_websocket_without_retries_is_request_scoped() {
     const ACCOUNT: &str = "acct_provider_contract";
     for (reused, reason) in [
         (false, "opaque upstream size detail"),
@@ -283,22 +283,19 @@ async fn message_too_big_close_before_first_event_is_request_scoped_on_new_and_r
             socket.next().await.unwrap().unwrap();
             send_completion(&mut socket, "resp_next_request").await;
         });
-        let provider = provider_with_base_url_and_retry_budget(&store, base_url, 1);
+        let provider = provider_with_base_url_and_retry_budget(&store, base_url, 0);
         let generate = || {
-            generate_with_persisted_session_context(
+            websocket_fixture_request(generate_with_persisted_session_context(
                 ACCOUNT,
                 "conversation-size",
                 "session-size",
                 "thread-size",
-            )
+            ))
         };
         if reused {
             let mut seed = provider
                 .execute(
-                    planned_request(
-                        "openai",
-                        Operation::Generate(websocket_fixture_request(generate())),
-                    ),
+                    planned_request("openai", Operation::Generate(generate())),
                     context("req_size_seed", CancellationToken::new()),
                 )
                 .await
@@ -309,10 +306,7 @@ async fn message_too_big_close_before_first_event_is_request_scoped_on_new_and_r
         }
         let mut stream = provider
             .execute(
-                planned_request(
-                    "openai",
-                    Operation::Generate(websocket_fixture_request(generate())),
-                ),
+                planned_request("openai", Operation::Generate(generate())),
                 context("req_size", CancellationToken::new()),
             )
             .await
@@ -327,7 +321,7 @@ async fn message_too_big_close_before_first_event_is_request_scoped_on_new_and_r
                 None => panic!("remote 1009 must fail this request"),
             }
         };
-        assert_eq!(error.kind(), ProviderErrorKind::InvalidRequest);
+        assert_eq!(error.kind(), ProviderErrorKind::MessageTooBig);
         assert_eq!(error.upstream_status(), Some(413));
         assert_eq!(error.send_state(), UpstreamSendState::Ambiguous);
         assert!(!error.replay_is_safe());

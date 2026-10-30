@@ -190,7 +190,7 @@ test('Codex quota overdraft rejects empty enabled models, control characters and
   finally { query.stop() }
 })
 
-function mountSettings(initial, onWarning = assert.fail) {
+function mountSettings(initial, onWarning = assert.fail, apiOverrides = {}) {
   let saved = structuredClone(initial)
   const requests = []
   const notifications = { toast: { success: () => {}, warning: onWarning, error: assert.fail } }
@@ -224,9 +224,10 @@ function mountSettings(initial, onWarning = assert.fail) {
         assert.equal(reactivePath(payload), undefined, 'settings submission must be detached from reactive drafts')
         const data = structuredClone(payload)
         requests.push(data)
-        saved = { ...data, updatedAt: initial.updatedAt }
+        saved = { ...data, configRevision: saved.configRevision + 1, updatedAt: initial.updatedAt }
         return saved
       },
+      ...apiOverrides,
     },
     '@/api/request': apiErrors,
     '@/components/base/BaseToast': notifications,
@@ -241,6 +242,7 @@ function mountSettings(initial, onWarning = assert.fail) {
 
 function settings() {
   return {
+    configRevision: 7,
     modelMappings: { 'client-model': 'upstream-model' },
     refreshMarginSeconds: 1800,
     refreshConcurrency: 4,
@@ -255,6 +257,49 @@ function settings() {
     updatedAt: '2026-09-12T00:00:00Z',
   }
 }
+
+test('settings saves use the loaded revision and advance only after successful saves', async () => {
+  const query = mountSettings(settings())
+  try {
+    await query.state.loadSettings()
+    await query.state.saveSettings()
+    assert.equal(query.requests[0].configRevision, 7)
+    await query.state.saveSettings()
+    assert.equal(query.requests[1].configRevision, 8)
+  }
+  finally { query.stop() }
+})
+
+test('settings conflict preserves the draft and never retries using a newer revision', async () => {
+  let reads = 0
+  const writes = []
+  const query = mountSettings(settings(), assert.fail, {
+    getSettings: async () => {
+      reads += 1
+      return { ...settings(), configRevision: reads === 1 ? 7 : 8 }
+    },
+    updateSettings: async (payload) => {
+      writes.push(payload)
+      throw new apiErrors.ApiError('Settings changed; reload before saving.', 409, 40901)
+    },
+  })
+  try {
+    await query.state.loadSettings()
+    query.state.form.requestIntervalMs = 123
+    await query.state.saveSettings()
+    await vue.nextTick()
+    assert.equal(reads, 1, 'conflict must not reload and discard unsaved edits')
+    assert.equal(writes.length, 1, 'conflict must not automatically retry')
+    assert.equal(query.state.form.requestIntervalMs, 123)
+    assert.equal(query.state.hasChanges.value, true)
+    await query.state.saveSettings()
+    assert.equal(writes[1].configRevision, 7, 'another click remains stale until explicit reload')
+    await query.state.loadSettings()
+    await query.state.saveSettings()
+    assert.equal(writes[2].configRevision, 8)
+  }
+  finally { query.stop() }
+})
 
 test('smart defaults and drafts are isolated; validation and save reload preserve configured values', async () => {
   const warnings = []
@@ -467,7 +512,7 @@ test('runtime settings load and save without a global WS opening limit', async (
       assert.equal(Object.hasOwn(query.state.form.requestTuning, 'websocketMaxConnecting'), false)
       await query.state.loadSettings()
       assert.equal(query.state.form.requestTuning.maxRequestAttempts, 8)
-      assert.equal(query.state.form.requestTuning.websocketHttpFallbackEnabled, false)
+      assert.equal(Object.hasOwn(query.state.form.requestTuning, 'websocketHttpFallbackEnabled'), false)
       assert.equal(query.state.form.requestTuning.websocketMaxAgeMs, 60_000)
       assert.equal(query.state.form.requestTuning.websocketMaxRetries, 5)
       assert.equal(Object.hasOwn(query.state.form.requestTuning, 'websocketMaxConnecting'), false)
@@ -476,6 +521,7 @@ test('runtime settings load and save without a global WS opening limit', async (
       await query.state.saveSettings()
       assert.equal(query.requests.length, 1)
       assert.equal(Object.hasOwn(query.requests[0].requestTuning, 'websocketMaxConnecting'), false)
+      assert.equal(Object.hasOwn(query.requests[0].requestTuning, 'websocketHttpFallbackEnabled'), false)
       assert.equal(query.requests[0].requestTuning.websocketMaxRetries, 2)
       assert.equal(query.requests[0].maxConcurrentPerAccount, 5)
       assert.deepEqual(query.requests[0].modelMappings, initial.modelMappings)
@@ -483,7 +529,7 @@ test('runtime settings load and save without a global WS opening limit', async (
       await query.state.loadSettings()
       await query.state.saveSettings()
       assert.equal(query.requests.length, 2)
-      assert.deepEqual(query.requests[1], query.requests[0])
+      assert.deepEqual(query.requests[1], { ...query.requests[0], configRevision: 8 })
     }
     finally {
       query.stop()
@@ -503,7 +549,6 @@ test('inherited runtime defaults never add the removed global WS opening limit',
       maxAccountSwitches: 31,
       maxRequestAttempts: 32,
       websocketMaxRetries: 5,
-      websocketHttpFallbackEnabled: true,
       websocketLargeRequestThresholdBytes: 15 * 1024 * 1024,
       streamPrefetchBytes: 128 * 1024,
       websocketMaxAgeMs: 55 * 60 * 1_000,
@@ -701,7 +746,7 @@ test('account busy wait loads saved values and round trips edited settings', asy
     assert.deepEqual(busyWaitValues(query.state.form.requestTuning), editedWait)
     await query.state.saveSettings()
     assert.equal(query.requests.length, 2)
-    assert.deepEqual(query.requests[1], query.requests[0])
+    assert.deepEqual(query.requests[1], { ...query.requests[0], configRevision: 8 })
   }
   finally {
     query.stop()
@@ -852,7 +897,8 @@ test('settings controls and API type no longer expose the global WS opening limi
   assert.doesNotMatch(component, /websocketMaxConnecting/)
   assert.doesNotMatch(api, /websocketMaxConnecting/)
   assert.match(component, /v-model="maxConcurrentPerAccount"/)
-  assert.match(component, /v-model="requestTuning\.websocketHttpFallbackEnabled"/)
+  assert.doesNotMatch(component, /websocketHttpFallbackEnabled/)
+  assert.doesNotMatch(api, /websocketHttpFallbackEnabled/)
 })
 
 test('Excel controls are isolated and shared retries remain in the common configuration', () => {
@@ -899,7 +945,6 @@ test('editing Excel MiB changes only the intended byte field, not shared or nati
     maxAccountSwitches: 4,
     maxRequestAttempts: 9,
     rateLimitCooldownSeconds: 37,
-    websocketHttpFallbackEnabled: false,
     websocketLargeRequestThresholdBytes: 1234567,
     websocketMaxAgeMs: 123456,
     openaiLocationOverrideEnabled: false,
@@ -918,7 +963,7 @@ test('editing Excel MiB changes only the intended byte field, not shared or nati
     for (const key of ['modelMappings', 'rotationStrategy', 'refreshMarginSeconds', 'refreshConcurrency', 'maxConcurrentPerAccount', 'requestIntervalMs'])
       assert.deepEqual(query.requests[0][key], initial[key])
     await query.state.saveSettings()
-    assert.deepEqual(query.requests[1], query.requests[0])
+    assert.deepEqual(query.requests[1], { ...query.requests[0], configRevision: 8 })
   }
   finally { query.stop() }
 })

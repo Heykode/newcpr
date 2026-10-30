@@ -1002,6 +1002,7 @@ HTTP 返回 `429`，`error.code` 为 `key_daily_budget_exceeded` 或 `key_weekly
 设置更新字段包括：
 
 ```text
+configRevision
 modelMappings
 refreshMarginSeconds
 refreshConcurrency
@@ -1018,6 +1019,12 @@ opsEventRetentionDays
 auditRetentionDays
 requestTuning
 ```
+
+`configRevision` 必须使用读取设置时返回的正整数版本号，保存成功返回新的版本号。
+数据库在同一事务中锁定配置行并校验版本；过期版本返回 HTTP 409，不写设置或审计。
+前端遇到 409 保留当前草稿，不自动刷新或重试覆盖；重新加载后再编辑保存。
+账号、代理等其他推进全局配置版本的变更也可能使旧表单过期，与官方全局版本合同一致。
+缺少版本号的旧页面或脚本需要重新读取设置并携带该字段，不能以服务端当前值代填绕过保护。
 
 `rotationStrategy` 可取 `smart`、`quota_reset_priority`、`round_robin`、`sticky`。
 两个 `minCodex*Version` 字段为 `string | null`，只设置最低版本，不存在最大版本字段。
@@ -1084,17 +1091,23 @@ Redis 故障拒绝准入，取消正常释放登记；故障或进程退出时�
 `requestTuning.websocketLargeRequestThresholdBytes` 控制 OpenAI 普通新链的大请求发送前 HTTP 选择：
 
 - 默认 `15728640`（15 MiB），允许整数 `0..67108864`；`0` 关闭大小分流，缺失或 `null` 继承默认。
-- 仅当 `websocketHttpFallbackEnabled=true` 且传输要求为 `new_chain` 时生效。
+- 仅当传输要求为独立新链 `new_chain` 或 `websocket_new_chain` 时生效。
   比较的是身份投影、协议归一化后的最终 WS JSON UTF-8 字节数，达到阈值即走现有 HTTP/SSE 通道，
   不建立 WS、不尝试先发送失败再重放。HTTP 沿用选定账号、设备画像、出口与下游交付偏好。
-- 原生 WS 的 `store=false` 首轮、预热及所有已有 `previous_response_id` 的续链不参与大小分流。
+- 原生 WS 独立首轮可在发送前选择 HTTP；预热及已有响应续链不参与这种分流，
+  精确 WS 续接超过阈值返回续接不可用，不拼接成新 HTTP 请求。
   不拼接历史，不自动压缩会话，不将该决定写成会话永久 HTTP 状态；后续独立小请求仍按原策略选择。
 - 这是保守路由阈值，不是上游硬限额或 HTTP 无限大小保证。WS 压缩不改变此字节计算。
-  已发送后的 WS 1000/1009 仍沿用发送状态与禁止不确定重放的既有规则。
+  已发送后的 WS 1009 在有效输出前允许有界同账号重试和符合传输条件的 HTTP 回退；
+  不允许换号、精确续接重放或有效输出后重放，其他发送状态不明错误保留原有保护。
 - 诊断 `transport.fallback` 记录 `decision=http_large_request`、`payloadBytes`、`thresholdBytes`
   和传输要求，不新增正文采集。运行设置仍全量替换，保存时保留其他字段，进行中的请求保持冻结值。
 - 降级到不认识该字段的旧版本前，先备份并从持久化 `requestTuning` 中移除该字段；设为 `0`
   只关闭功能，不会使旧配置解析器认识该字段。
+
+`websocketHttpFallbackEnabled` 已退役：兼容读取历史 boolean/null 值，但不再生效、展示或
+保存。故障后的 HTTP 回退按传输要求、错误分类和恢复预算自动判断；必须使用 WS
+恢复的请求仍不得在失败后回退，与发送前的大请求传输选择不同。
 
 ### 可配置错误保护
 

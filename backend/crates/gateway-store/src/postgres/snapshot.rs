@@ -274,9 +274,6 @@ fn to_core_request_tuning(
         websocket_max_retries: overrides
             .websocket_max_retries
             .unwrap_or(defaults.websocket_max_retries),
-        websocket_http_fallback_enabled: overrides
-            .websocket_http_fallback_enabled
-            .unwrap_or(defaults.websocket_http_fallback_enabled),
         websocket_large_request_threshold_bytes: overrides
             .websocket_large_request_threshold_bytes
             .unwrap_or(defaults.websocket_large_request_threshold_bytes),
