@@ -32,6 +32,8 @@ async function main() {
   const errors = []
   let catalogFails = false
   let catalogMissing = false
+  let observedAt = '2026-10-01T16:00:00+08:00'
+  let observedAtDisplay = '2026-10-01 16:00:00'
   let catalogRequests = 0
   page.on('pageerror', error => errors.push(error.message))
   page.on('response', (response) => {
@@ -58,7 +60,7 @@ async function main() {
     else if (path === '/api/admin/accounts/models' || path === '/api/admin/accounts/models/refresh') {
       catalogRequests += 1
       status = catalogFails ? 503 : 200
-      data = { models: (catalogMissing ? ['model-b'] : ['model-a', 'model-b', `long-model-${'x'.repeat(100)}`]).map(id => ({ id, label: id })) }
+      data = { models: (catalogMissing ? ['model-b'] : ['model-a', 'model-b', `long-model-${'x'.repeat(100)}`]).map(id => ({ id, label: id })), observedAt, observedAtDisplay }
     }
     else if (path === '/api/admin/accounts/update' || path === '/api/admin/accounts/batch-update') {
       const body = request.postDataJSON()
@@ -95,6 +97,17 @@ async function main() {
     for (const width of [1440, 390, 320]) {
       await page.setViewportSize({ width, height: width < 500 ? 844 : 1000 })
       assert.ok(await dialog.evaluate(element => element.scrollWidth <= element.clientWidth + 1))
+      if (label === 'catalog-help') {
+        const help = dialog.getByRole('button', { name: '模型目录说明', exact: true })
+        await help.scrollIntoViewIfNeeded()
+        await help.focus()
+        if (await help.getAttribute('aria-expanded') !== 'true')
+          await help.click()
+        const tooltip = page.getByRole('tooltip').filter({ hasText: '目录仅提供模型 ID' })
+        await tooltip.waitFor()
+        const bounds = await tooltip.boundingBox()
+        assert.ok(bounds.x >= 0 && bounds.x + bounds.width <= width + 1)
+      }
       await page.evaluate(() => document.fonts.ready)
       await page.screenshot({ path: `${output}/${label}-${width}.png`, fullPage: true })
     }
@@ -107,6 +120,31 @@ async function main() {
     assert.equal(catalogRequests, 0, 'unrestricted editing needs no catalog request')
     await dialog.getByRole('radio', { name: '白名单', exact: true }).click()
     await dialog.getByRole('checkbox', { name: 'model-a', exact: true }).locator('..').click()
+    await dialog.getByText(observedAtDisplay, { exact: true }).waitFor()
+    const help = dialog.getByRole('button', { name: '模型目录说明', exact: true })
+    await help.click()
+    await page.getByRole('tooltip').filter({ hasText: '目录仅提供模型 ID' }).waitFor()
+    await layouts('catalog-help')
+    await help.focus()
+    if (await help.getAttribute('aria-expanded') !== 'true')
+      await help.click()
+    await page.getByRole('tooltip').filter({ hasText: '目录仅提供模型 ID' }).waitFor()
+    await help.press('Escape')
+    await page.waitForTimeout(450)
+    assert.equal(await help.getAttribute('aria-expanded'), 'false')
+    assert.equal(await dialog.isVisible(), true, 'Escape must not close the account editor')
+    observedAt = '2026-10-02T16:00:00+08:00'
+    observedAtDisplay = '2026-10-02 16:00:00'
+    await dialog.getByRole('button', { name: '刷新模型', exact: true }).click()
+    await dialog.getByText(observedAtDisplay, { exact: true }).waitFor()
+    catalogFails = true
+    await dialog.getByRole('button', { name: '刷新模型', exact: true }).click()
+    await dialog.getByRole('alert').filter({ hasText: '模型列表加载失败' }).waitFor()
+    assert.equal(await dialog.getByText(observedAtDisplay, { exact: true }).isVisible(), true, 'failed refresh preserves the last successful observation')
+    assert.equal(await dialog.getByRole('checkbox', { name: 'model-a', exact: true }).isChecked(), true)
+    catalogFails = false
+    await dialog.getByRole('button', { name: '刷新模型', exact: true }).click()
+    await dialog.getByRole('alert').filter({ hasText: '模型列表加载失败' }).waitFor({ state: 'hidden' })
     await layouts('edit-allowlist')
     await dialog.getByRole('button', { name: '保存账号设置', exact: true }).click()
     await dialog.waitFor({ state: 'hidden' })
@@ -126,6 +164,7 @@ async function main() {
     catalogFails = true
     await open()
     await dialog.getByRole('alert').filter({ hasText: '模型列表加载失败' }).waitFor()
+    assert.equal(await dialog.getByText(observedAtDisplay, { exact: true }).count(), 0, 'failed initial load must not reuse the previous editor timestamp')
     assert.equal(await dialog.getByRole('checkbox', { name: 'model-a', exact: true }).isChecked(), true)
     assert.equal(await dialog.getByRole('checkbox', { name: 'model-a', exact: true }).locator('..').getAttribute('title'), 'model-a')
     const input = dialog.getByRole('textbox', { name: '搜索或添加模型', exact: true })
@@ -140,6 +179,12 @@ async function main() {
     await dialog.waitFor({ state: 'hidden' })
     assert.deepEqual(updates[1].modelAccess.models, ['model-a', 'model-manual'])
     catalogFails = false
+    observedAt = null
+    observedAtDisplay = '—'
+    await open()
+    await dialog.getByRole('checkbox', { name: 'model-b', exact: true }).waitFor()
+    assert.equal(await dialog.locator('label').filter({ hasText: '模型目录' }).getByText('—', { exact: true }).count(), 0, 'unknown observation time must stay hidden')
+    await close()
     await page.waitForLoadState('networkidle')
     for (const id of ['acct_sample_0', 'acct_sample_1']) {
       const checkbox = row(id).getByRole('checkbox', { name: '选择账号', exact: true })
@@ -147,6 +192,7 @@ async function main() {
       await checkbox.press('Space')
       assert.equal(await checkbox.isChecked(), true)
     }
+    await page.getByRole('button', { name: '批量操作', exact: true }).click()
     await page.getByRole('button', { name: '编辑 (2)', exact: true }).click()
     assert.equal(await dialog.getByRole('radio', { name: '白名单', exact: true }).isDisabled(), true)
     await dialog.getByRole('checkbox', { name: '应用模型限制更改', exact: true }).locator('..').click()

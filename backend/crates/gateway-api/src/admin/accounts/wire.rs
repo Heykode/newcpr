@@ -963,8 +963,11 @@ pub struct AccountModelView {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AccountModelsData {
     pub models: Vec<AccountModelView>,
+    pub observed_at: Option<String>,
+    pub observed_at_display: String,
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -940,6 +940,18 @@ Never add active identification, extra model calls or automatic reconnects.
 Single/batch save success closes promptly; account/group reloads cannot make a
 committed mutation appear failed or retain the saving state.
 
+Account model reads and refreshes expose `observedAt` / `observedAtDisplay` from
+the last successful provider fetch. Show the timestamp only with a non-null
+observation, beside the model catalog label, and clear it on account/context
+changes. Failed refreshes preserve the last successful observation within the
+same editor; stale completions cannot overwrite another account. Aggregated
+known-model pages do not invent a per-account observation time. Catalog help
+clarifies that listed model IDs do not prove support on every endpoint; Escape
+closes the help before the account editor. Keep pagination and manual model entry.
+Responsive browser checks must re-establish an open popover before testing Escape:
+viewport changes can legitimately trigger hover-leave. Close through the popover's
+own callback so delayed hover timers cannot reopen it after keyboard dismissal.
+
 ### Validation & Error Matrix
 
 - Native request failure: error, no fallback file and no account mutation.

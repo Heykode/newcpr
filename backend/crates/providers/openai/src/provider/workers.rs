@@ -16,37 +16,6 @@ pub(super) const MODEL_CATALOG_WORKER_OWNER: &str = "openai-model-catalog";
 pub(super) const WARMUP_WORKER_OWNER: &str = "openai-account-warmup";
 pub(super) const WARMUP_CHECK_INTERVAL: Duration = Duration::from_secs(30);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct EtagRefreshBackoff {
-    initial: Duration,
-    current: Duration,
-    maximum: Duration,
-}
-
-impl EtagRefreshBackoff {
-    const fn new(initial: Duration, maximum: Duration) -> Self {
-        Self {
-            initial,
-            current: initial,
-            maximum,
-        }
-    }
-
-    fn take_delay(&mut self) -> Duration {
-        let delay = self.current;
-        self.current = self
-            .current
-            .checked_mul(2)
-            .unwrap_or(self.maximum)
-            .min(self.maximum);
-        delay
-    }
-
-    const fn reset(&mut self) {
-        self.current = self.initial;
-    }
-}
-
 pub(crate) fn worker_contributions(
     refresh: Arc<CodexCredentialRefreshService>,
     quota: Arc<CodexCredentialQuotaService>,
@@ -448,9 +417,6 @@ impl DaemonTask for OpenAiCatalogEtagTask {
         context: gateway_core::task::WorkerDaemonContext,
     ) -> BoxFuture<'_, Result<(), WorkerTaskError>> {
         Box::pin(async move {
-            let mut backoff =
-                EtagRefreshBackoff::new(WORKER_INITIAL_BACKOFF, WORKER_MAXIMUM_BACKOFF);
-            let mut consecutive_failures = 0_u32;
             let cancellation = context.cancellation();
             loop {
                 tokio::select! {
@@ -461,33 +427,11 @@ impl DaemonTask for OpenAiCatalogEtagTask {
                     () = cancellation.cancelled() => return Ok(()),
                     result = self.catalog.refresh() => result.map(|_| ()),
                 };
-                match result {
-                    Ok(()) => {
-                        if consecutive_failures > 0 {
-                            tracing::info!(
-                                failures = consecutive_failures,
-                                "OpenAI model catalog ETag refresh recovered"
-                            );
-                        }
-                        consecutive_failures = 0;
-                        backoff.reset();
-                        context.succeeded();
-                    }
-                    Err(error) => {
-                        consecutive_failures = consecutive_failures.saturating_add(1);
-                        let delay = backoff.take_delay();
-                        tracing::warn!(
-                            error = %error,
-                            failures = consecutive_failures,
-                            retry_after_ms = u64::try_from(delay.as_millis()).unwrap_or(u64::MAX),
-                            "OpenAI model catalog ETag refresh failed; retrying after backoff"
-                        );
-                        tokio::select! {
-                            () = cancellation.cancelled() => return Ok(()),
-                            () = tokio::time::sleep(delay) => {},
-                        }
-                    }
-                }
+                // 失败的 ETag 已重新入队，交回 Host 退避后再领取，避免立即重试
+                result.map_err(|error| {
+                    WorkerTaskError::safe("OpenAI 模型目录 ETag 刷新失败").with_source(error)
+                })?;
+                context.succeeded();
             }
         })
     }

@@ -1,9 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU32;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant, SystemTime};
+use std::sync::Arc;
+use std::time::{Duration, SystemTime};
 
+use chrono::Utc;
 use futures::StreamExt;
 use gateway_core::account::ProviderAccountId;
 use gateway_core::engine::provider::ProviderRequest;
@@ -18,70 +18,15 @@ use gateway_core::routing::{
     ProviderModel, PublicModelId, RoutingContext, RuntimeAccount, RuntimeAccountDirectory,
     RuntimeSnapshot, UpstreamModelId,
 };
-use gateway_core::task::{WorkerContribution, WorkerRunnable};
+use gateway_core::task::{WorkerContribution, WorkerDaemonContext, WorkerRunnable};
 use provider_openai::credential::ImportCodexOAuthCredential;
 use serde_json::{Map, json};
 use tokio::time::timeout;
 use wiremock::matchers::{method, path};
-use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use crate::admin::{provider_ports_with_accounts, valid_config};
 use crate::support::{MemoryAccountStore, account_policy, profile, secret};
-
-const COMPLETED_SSE: &str = concat!(
-    "event: response.completed\n",
-    "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_etag_worker\",\"model\":\"gpt-5.4\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}}\n\n"
-);
-
-struct ResponseEtagResponder {
-    calls: Arc<AtomicUsize>,
-}
-
-impl Respond for ResponseEtagResponder {
-    fn respond(&self, _: &Request) -> ResponseTemplate {
-        let version = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
-        ResponseTemplate::new(200)
-            .insert_header("content-type", "text/event-stream")
-            .insert_header("x-models-etag", format!("models-v{version}"))
-            .set_body_string(COMPLETED_SSE)
-    }
-}
-
-struct CatalogBackoffResponder {
-    calls: Arc<AtomicUsize>,
-    attempts: Arc<Mutex<Vec<Instant>>>,
-}
-
-impl Respond for CatalogBackoffResponder {
-    fn respond(&self, _: &Request) -> ResponseTemplate {
-        let attempt = self.calls.fetch_add(1, Ordering::SeqCst);
-        self.attempts
-            .lock()
-            .expect("catalog attempt lock")
-            .push(Instant::now());
-        if matches!(attempt, 2 | 4) {
-            ResponseTemplate::new(200)
-                .insert_header("content-type", "application/json")
-                .set_body_json(json!({
-                    "models": [{"slug": "gpt-5.4", "display_name": "GPT-5.4"}]
-                }))
-        } else {
-            ResponseTemplate::new(401)
-                .insert_header("content-type", "application/json")
-                .set_body_json(json!({"detail": "Unauthorized"}))
-        }
-    }
-}
-
-async fn wait_for_calls(calls: &AtomicUsize, expected: usize) {
-    timeout(Duration::from_secs(8), async {
-        while calls.load(Ordering::SeqCst) < expected {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .unwrap_or_else(|_| panic!("catalog attempt {expected} did not start"));
-}
 
 fn request(account_id: &str) -> ProviderRequest {
     let provider = ProviderKind::new("openai").expect("provider");
@@ -145,113 +90,125 @@ fn account_scope(account_id: &str) -> Arc<FrozenAccountScope> {
     ))
 }
 
-async fn execute_response(
-    provider: &Arc<dyn gateway_core::engine::provider::Provider>,
-    account_id: &str,
-    request_id: &str,
-) {
-    let mut stream = provider
-        .execute(request(account_id), attempt(request_id, account_id))
-        .await
-        .expect("prepare provider stream");
-    while let Some(event) = stream.next().await {
-        event.expect("complete provider stream");
-    }
-}
-
 #[tokio::test]
-async fn model_etag_daemon_backs_off_and_resets_after_success() {
-    let account_id = "acct_etag_backoff";
+async fn catalog_etag_failure_returns_to_supervisor_and_recovers_pending_refresh() {
+    let account_id = "acct_catalog_etag_worker";
     let store = Arc::new(MemoryAccountStore::default());
     store
         .seed_oauth_credential(ImportCodexOAuthCredential {
             account_id: account_id.to_owned(),
             name: account_id.to_owned(),
-            secret: secret("at-etag-backoff"),
-            verified_account: profile("chatgpt-etag-backoff"),
-            next_refresh_at: None,
+            secret: secret("at-catalog-etag-worker"),
+            verified_account: profile("chatgpt-catalog-etag-worker"),
+            next_refresh_at: Some(Utc::now() + chrono::Duration::minutes(30)),
             enabled: true,
         })
         .await;
-
-    let response_calls = Arc::new(AtomicUsize::new(0));
-    let catalog_calls = Arc::new(AtomicUsize::new(0));
-    let catalog_attempts = Arc::new(Mutex::new(Vec::new()));
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/codex/responses"))
-        .respond_with(ResponseEtagResponder {
-            calls: Arc::clone(&response_calls),
-        })
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .insert_header("x-models-etag", "models-worker-v2")
+                .set_body_string(concat!(
+                    "event: response.completed\n",
+                    "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_etag\",\"model\":\"gpt-5.4\",\"status\":\"completed\",\"output\":[]}}\n\n"
+                )),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/codex/models"))
+        .respond_with(ResponseTemplate::new(503))
+        .with_priority(1)
+        .up_to_n_times(2)
         .expect(2)
         .mount(&server)
         .await;
     Mock::given(method("GET"))
         .and(path("/codex/models"))
-        .respond_with(CatalogBackoffResponder {
-            calls: Arc::clone(&catalog_calls),
-            attempts: Arc::clone(&catalog_attempts),
-        })
-        .expect(5)
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            include_bytes!("../transport/fixtures/official_models_snapshot.json"),
+            "application/json",
+        ))
+        .with_priority(2)
+        .expect(1)
         .mount(&server)
         .await;
-
     let mut config = valid_config();
     config.config.api.base_url = server.uri();
     let mut bundle =
-        provider_openai::initialize(config.config.clone(), provider_ports_with_accounts(store))
+        provider_openai::initialize(config.config, provider_ports_with_accounts(store))
             .await
-            .expect("initialize OpenAI provider");
+            .unwrap();
     let provider = bundle.core_provider();
-    let daemon = bundle
+    let mut stream = provider
+        .execute(
+            request(account_id),
+            attempt("req_catalog_etag_worker", account_id),
+        )
+        .await
+        .expect("provider stream");
+    while let Some(event) = stream.next().await {
+        event.expect("response carrying catalog ETag");
+    }
+    let worker = bundle
         .take_worker_contributions()
         .into_iter()
         .find_map(|contribution| match contribution {
             WorkerContribution::Registration(registration)
                 if registration.id.owner() == "openai-model-etag" =>
             {
-                match registration.runnable {
-                    WorkerRunnable::Daemon { task, .. } => Some(task),
-                    WorkerRunnable::Scheduled { .. } => panic!("ETag worker must be a daemon"),
-                }
+                Some(registration)
             }
-            WorkerContribution::Registration(_) | WorkerContribution::Disabled { .. } => None,
+            _ => None,
         })
-        .expect("ETag daemon contribution");
-    let cancellation = CancellationToken::new();
-    let run_cancellation = cancellation.clone();
-    let daemon_handle = tokio::spawn(async move { daemon.run(run_cancellation.into()).await });
+        .expect("catalog ETag worker");
+    let WorkerRunnable::Daemon { task, .. } = worker.runnable else {
+        panic!("catalog ETag worker must be a daemon");
+    };
 
-    execute_response(&provider, account_id, "req_etag_backoff_first").await;
-    wait_for_calls(&catalog_calls, 1).await;
-    tokio::time::sleep(Duration::from_millis(900)).await;
-    assert_eq!(catalog_calls.load(Ordering::SeqCst), 1);
-    wait_for_calls(&catalog_calls, 2).await;
-    wait_for_calls(&catalog_calls, 3).await;
+    for expected_requests in 1..=2 {
+        let context = WorkerDaemonContext::new(CancellationToken::new());
+        let result = timeout(Duration::from_secs(2), task.run(context.clone())).await;
+        let requests = server.received_requests().await.unwrap();
+        let paths: Vec<_> = requests.iter().map(|request| request.url.path()).collect();
+        assert!(
+            result.is_ok(),
+            "failed refresh must return control to the supervisor: {paths:?}, completed={}",
+            context.completed_cycles()
+        );
+        let error = result.unwrap().expect_err("catalog unavailable");
+        assert!(
+            error.error_details().is_some(),
+            "preserve the failure cause"
+        );
+        assert_eq!(context.completed_cycles(), 0);
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|request| request.url.path() == "/codex/models")
+                .count(),
+            expected_requests,
+            "each run must perform only one failed refresh"
+        );
+    }
 
-    execute_response(&provider, account_id, "req_etag_backoff_second").await;
-    wait_for_calls(&catalog_calls, 4).await;
-    tokio::time::sleep(Duration::from_millis(900)).await;
-    assert_eq!(catalog_calls.load(Ordering::SeqCst), 4);
-    wait_for_calls(&catalog_calls, 5).await;
-
-    let attempts = catalog_attempts
-        .lock()
-        .expect("catalog attempt lock")
-        .clone();
-    assert!(attempts[1].duration_since(attempts[0]) >= Duration::from_millis(900));
-    assert!(attempts[2].duration_since(attempts[1]) >= Duration::from_millis(1_900));
-    let reset_delay = attempts[4].duration_since(attempts[3]);
-    assert!(reset_delay >= Duration::from_millis(900));
-    assert!(reset_delay < Duration::from_secs(3));
-
-    cancellation.cancel();
-    assert!(
-        timeout(Duration::from_secs(1), daemon_handle)
-            .await
-            .expect("ETag daemon cancels promptly")
-            .expect("join ETag daemon")
-            .is_ok()
-    );
-    server.verify().await;
+    let context = WorkerDaemonContext::new(CancellationToken::new());
+    let run = task.run(context.clone());
+    tokio::pin!(run);
+    tokio::select! {
+        result = &mut run => panic!("daemon exited before recovery: {result:?}"),
+        result = timeout(Duration::from_secs(2), context.progress_since(0)) => {
+            result.expect("pending ETag must survive failed runs");
+        }
+    }
+    assert_eq!(context.completed_cycles(), 1);
+    context.cancellation().cancel();
+    timeout(Duration::from_secs(2), run)
+        .await
+        .expect("idle worker must stop on cancellation")
+        .expect("cancelled worker");
 }
