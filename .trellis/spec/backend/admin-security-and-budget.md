@@ -1,5 +1,15 @@
 # 管理安全与预算
 
+## 运行设置保存冲突
+
+- 对齐官方 `12771aca`：GET 和保存成功响应携带 `configRevision`；POST 必须带读取时的版本。
+- API、Admin command、Store adapter 将该版本传到 `ControlPlaneReplacement.expected_revision`；
+  PostgreSQL 在配置行 `FOR UPDATE` 锁内比较，过期返回冲突，设置与审计均不得写入。
+- 复用全局 revision，不新建设置版本字段；其他推进全局版本的管理变更同样使旧表单过期。
+- 409 保留前端草稿和原版本，不自动重新加载或用新版本静默重发。旧客户端缺字段必须重载升级。
+- 保留 targeted mutations、可选字段继承、请求快照和账号身份合同；无需数据库迁移。
+- 验证真实数据库的同版本并发单赢家、过期无写入、审计失败回滚及其他配置写入使旧表单过期。
+
 - 管理密码通过现有 Admin AuthService 修改，不引入客户端 Key 登录或第二套后台鉴权。
 - 改密验证现有会话、当前密码与新密码强度；尝试额度按管理员聚合在 Redis 中原子计数。
 - PostgreSQL 原密码哈希 CAS 和审计写入必须同事务提交。Redis 会话仅保存加盐哈希的摘要；

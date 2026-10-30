@@ -12,6 +12,7 @@ async function main() {
   const now = new Date().toISOString()
   const originalUa = 'codex_cli_rs/0.146.0 (Linux 6.8.0; x86_64) unknown'
   let settings = {
+    configRevision: 1,
     modelMappings: {},
     refreshMarginSeconds: 300,
     refreshConcurrency: 4,
@@ -59,8 +60,9 @@ async function main() {
       }
       else if (path === '/api/admin/settings/update') {
         const body = request.postDataJSON()
+        assert.equal(body.configRevision, settings.configRevision)
         writes.push(body)
-        settings = { ...body, updatedAt: now }
+        settings = { ...body, configRevision: settings.configRevision + 1, updatedAt: now }
         data = settings
       }
       else if (path === '/api/admin/settings/admin-api-key') {

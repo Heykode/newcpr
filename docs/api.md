@@ -1002,6 +1002,7 @@ HTTP 返回 `429`，`error.code` 为 `key_daily_budget_exceeded` 或 `key_weekly
 设置更新字段包括：
 
 ```text
+configRevision
 modelMappings
 refreshMarginSeconds
 refreshConcurrency
@@ -1018,6 +1019,12 @@ opsEventRetentionDays
 auditRetentionDays
 requestTuning
 ```
+
+`configRevision` 必须使用读取设置时返回的正整数版本号，保存成功返回新的版本号。
+数据库在同一事务中锁定配置行并校验版本；过期版本返回 HTTP 409，不写设置或审计。
+前端遇到 409 保留当前草稿，不自动刷新或重试覆盖；重新加载后再编辑保存。
+账号、代理等其他推进全局配置版本的变更也可能使旧表单过期，与官方全局版本合同一致。
+缺少版本号的旧页面或脚本需要重新读取设置并携带该字段，不能以服务端当前值代填绕过保护。
 
 `rotationStrategy` 可取 `smart`、`quota_reset_priority`、`round_robin`、`sticky`。
 两个 `minCodex*Version` 字段为 `string | null`，只设置最低版本，不存在最大版本字段。

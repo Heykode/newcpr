@@ -91,6 +91,7 @@ impl SettingsStore for AdminSettingsStoreAdapter {
             .await
             .map_err(|error| admin_store_error("runtime settings", error))?;
         let replacement = postgres::ControlPlaneReplacement {
+            expected_revision: store_revision(command.expected_revision)?,
             settings: postgres::RuntimeSettingsUpdate {
                 openai_account_affinity: command.openai_account_affinity,
                 admin_api_key: current.settings.admin_api_key,

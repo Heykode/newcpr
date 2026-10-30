@@ -7,6 +7,7 @@ import { createServer } from 'vite'
 
 const root = fileURLToPath(new URL('../..', import.meta.url))
 const initial = {
+  configRevision: 1,
   excelDefaultModels: ['synthetic-model'],
   modelMappings: { 'client-model': 'upstream-model' },
   refreshMarginSeconds: 1800,
@@ -29,8 +30,9 @@ window.settingsQa = { writes: [] };
 export async function getSettings() { return structuredClone(saved); }
 export async function updateSettings(payload) {
   const data = structuredClone(payload);
+  if (data.configRevision !== saved.configRevision) throw new Error('Stale settings revision');
   window.settingsQa.writes.push(data);
-  saved = { ...data, updatedAt: ${JSON.stringify(initial.updatedAt)} };
+  saved = { ...data, configRevision: saved.configRevision + 1, updatedAt: ${JSON.stringify(initial.updatedAt)} };
   return structuredClone(saved);
 }
 export async function getAdminApiKeyStatus() { return { exists: false }; }

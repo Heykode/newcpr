@@ -280,11 +280,12 @@ test('outbound UA automatic refresh remains silent while manual reload errors re
   }
 })
 
-test('runtime save keeps custom parameters and silently rereads server state after a rejected mutation', async () => {
+test('runtime save keeps custom parameters and silently rereads server state after a non-conflict failure', async () => {
   const api = requestHarness()
   const loads = []
   const updates = []
   const server = {
+    configRevision: 7,
     refreshMarginSeconds: 60,
     refreshConcurrency: 8,
     maxConcurrentPerAccount: 20,
@@ -308,7 +309,7 @@ test('runtime save keeps custom parameters and silently rereads server state aft
       },
       updateSettings: async (payload) => {
         updates.push(payload)
-        throw new api.ApiError('conflict', 409)
+        throw new api.ApiError('unavailable', 503)
       },
     },
     '@/api/request': api,

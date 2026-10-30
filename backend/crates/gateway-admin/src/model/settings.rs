@@ -338,6 +338,7 @@ pub struct RuntimeSettings {
 /// 原子替换运行设置的命令。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReplaceRuntimeSettings {
+    pub expected_revision: Revision,
     pub disable_fast: Option<bool>,
     pub turn_state_injection_enabled: Option<bool>,
     pub turn_state_models: Option<Vec<UpstreamModelId>>,

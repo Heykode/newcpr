@@ -30,6 +30,7 @@ async function main() {
       const errors = []
       const writes = []
       let settings = {
+        configRevision: 1,
         modelMappings: {},
         refreshMarginSeconds: 1800,
         refreshConcurrency: 4,
@@ -55,7 +56,9 @@ async function main() {
           return route.continue()
         let data
         if (path === '/api/admin/settings/update') {
-          settings = { ...settings, ...request.postDataJSON() }
+          const body = request.postDataJSON()
+          assert.equal(body.configRevision, settings.configRevision)
+          settings = { ...settings, ...body, configRevision: settings.configRevision + 1 }
           writes.push(settings)
           data = settings
         }

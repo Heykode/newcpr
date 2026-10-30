@@ -3,12 +3,174 @@ use std::collections::BTreeMap;
 use chrono::{DateTime, TimeDelta, Utc};
 use gateway_admin::model::settings::RequestTuningOverrides;
 use gateway_store::postgres::{
-    PgRuntimeSettingsRepository, PgRuntimeSnapshotRepository, RuntimeSettingsRepository,
-    RuntimeSettingsUpdate, RuntimeSnapshotRepository,
+    AdminAuditActorKind, AdminAuditEvent, ControlPlaneReplacement, ControlPlaneRepository,
+    PgControlPlaneRepository, PgRuntimeSettingsRepository, PgRuntimeSnapshotRepository,
+    RuntimeSettingsRepository, RuntimeSettingsUpdate, RuntimeSnapshotRepository,
 };
 use serde_json::{Value, json};
 
 use super::TestDatabase;
+
+fn settings_replacement(
+    revision: gateway_store::Revision,
+    id: &str,
+    margin: u64,
+) -> ControlPlaneReplacement {
+    ControlPlaneReplacement {
+        expected_revision: revision,
+        settings: settings_with_margin(margin),
+        audit: AdminAuditEvent {
+            id: id.to_owned(),
+            actor_kind: AdminAuditActorKind::System,
+            actor_admin_user_id: None,
+            actor_ref: "settings-test".to_owned(),
+            admin_request_id: None,
+            action: "settings.replace".to_owned(),
+            entity_kind: "runtime_settings".to_owned(),
+            entity_ref: "1".to_owned(),
+            config_revision: None,
+            changed_fields: vec!["refresh_margin_seconds".to_owned()],
+            created_at: Utc::now(),
+        },
+    }
+}
+
+#[tokio::test]
+async fn settings_revision_rejects_stale_forms_without_writes_or_audit() {
+    let Some(database) = TestDatabase::create("settings_revision_stale").await else {
+        return;
+    };
+    let repository = PgControlPlaneRepository::new(database.pool.clone());
+    let initial = repository.load_control_plane().await.unwrap();
+    let first = repository
+        .replace_control_plane(settings_replacement(
+            initial.settings.config_revision,
+            "settings-first",
+            700,
+        ))
+        .await
+        .unwrap();
+    let error = repository
+        .replace_control_plane(settings_replacement(
+            initial.settings.config_revision,
+            "settings-stale",
+            800,
+        ))
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        gateway_store::StoreError::Conflict {
+            kind: gateway_store::ConflictKind::StaleRevision,
+            ..
+        }
+    ));
+    assert_eq!(repository.load_control_plane().await.unwrap(), first);
+    let audits: i64 = sqlx::query_scalar("select count(*) from admin_audit_events")
+        .fetch_one(&database.pool)
+        .await
+        .unwrap();
+    assert_eq!(audits, 1);
+    let reloaded = repository
+        .replace_control_plane(settings_replacement(
+            first.settings.config_revision,
+            "settings-reloaded",
+            800,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(reloaded.settings.refresh_margin_seconds, 800);
+    assert_eq!(
+        reloaded.settings.config_revision.get(),
+        first.settings.config_revision.get() + 1
+    );
+    database.close().await;
+}
+
+#[tokio::test]
+async fn settings_revision_concurrent_saves_have_one_winner() {
+    let Some(database) = TestDatabase::create("settings_revision_race").await else {
+        return;
+    };
+    let repository = PgControlPlaneRepository::new(database.pool.clone());
+    let initial = repository.load_control_plane().await.unwrap();
+    let revision = initial.settings.config_revision;
+    let (first, second) = tokio::join!(
+        repository.replace_control_plane(settings_replacement(revision, "settings-race-a", 700)),
+        repository.replace_control_plane(settings_replacement(revision, "settings-race-b", 800)),
+    );
+    let (winner, loser) = match (first, second) {
+        (Ok(winner), Err(loser)) | (Err(loser), Ok(winner)) => (winner, loser),
+        other => panic!("exactly one save must succeed: {other:?}"),
+    };
+    assert!(matches!(
+        loser,
+        gateway_store::StoreError::Conflict {
+            kind: gateway_store::ConflictKind::StaleRevision,
+            ..
+        }
+    ));
+    assert_eq!(repository.load_control_plane().await.unwrap(), winner);
+    assert_eq!(winner.settings.config_revision.get(), revision.get() + 1);
+    let audits: i64 = sqlx::query_scalar("select count(*) from admin_audit_events")
+        .fetch_one(&database.pool)
+        .await
+        .unwrap();
+    assert_eq!(audits, 1);
+    database.close().await;
+}
+
+#[tokio::test]
+async fn settings_revision_audit_failure_rolls_back_and_targeted_writes_invalidate_forms() {
+    let Some(database) = TestDatabase::create("settings_revision_atomic").await else {
+        return;
+    };
+    let repository = PgControlPlaneRepository::new(database.pool.clone());
+    let initial = repository.load_control_plane().await.unwrap();
+    let first = repository
+        .replace_control_plane(settings_replacement(
+            initial.settings.config_revision,
+            "settings-duplicate-audit",
+            700,
+        ))
+        .await
+        .unwrap();
+    assert!(
+        repository
+            .replace_control_plane(settings_replacement(
+                first.settings.config_revision,
+                "settings-duplicate-audit",
+                800,
+            ))
+            .await
+            .is_err()
+    );
+    assert_eq!(repository.load_control_plane().await.unwrap(), first);
+
+    let audit =
+        settings_replacement(first.settings.config_revision, "settings-key-change", 800).audit;
+    repository
+        .replace_admin_api_key(Some("synthetic-settings-key".to_owned()), audit)
+        .await
+        .unwrap();
+    let changed = repository.load_control_plane().await.unwrap();
+    assert!(
+        repository
+            .replace_control_plane(settings_replacement(
+                first.settings.config_revision,
+                "settings-stale-after-key",
+                800,
+            ))
+            .await
+            .is_err()
+    );
+    assert_eq!(repository.load_control_plane().await.unwrap(), changed);
+    assert_eq!(
+        changed.settings.admin_api_key.as_deref(),
+        Some("synthetic-settings-key")
+    );
+    database.close().await;
+}
 
 #[tokio::test]
 async fn preferred_affinity_upgrade_preserves_existing_rows_and_defaults() {
