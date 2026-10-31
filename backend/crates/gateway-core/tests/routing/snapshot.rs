@@ -900,21 +900,15 @@ fn decompression_limit_is_frozen_and_rejects_zero_or_oversized_values() {
 }
 
 #[test]
-fn disable_fast_uses_bound_groups_and_global_policy_without_changing_scope() {
+fn fast_policy_uses_bound_groups_without_changing_scope() {
     let group_id =
         gateway_core::routing::AccountGroupId::new("grp_00000000000000000000000000000001").unwrap();
     let account_id = ProviderAccountId::new("acct_fast").unwrap();
-    for (global, group, expected) in [
-        (false, false, false),
-        (true, false, true),
-        (false, true, true),
-        (true, true, true),
-    ] {
+    for (group, expected) in [(false, false), (true, true)] {
         let facts = SnapshotFacts::new(
             revision(1),
             revision(1),
-            SnapshotSettingsFacts::new(3, 0, "smart", BTreeMap::new(), None, None)
-                .with_disable_fast(global),
+            SnapshotSettingsFacts::new(3, 0, "smart", BTreeMap::new(), None, None),
             vec![SnapshotClientPolicyFacts::new(
                 ClientApiKeyId::new("key_fast").unwrap(),
                 PlaintextClientApiKey::new("sk_fast").unwrap(),
@@ -952,7 +946,7 @@ fn disable_fast_uses_bound_groups_and_global_policy_without_changing_scope() {
                 &gateway_core::routing::RoutingContext::default(),
             )
             .expect("routing plan");
-        assert_eq!(plan.disable_fast(), expected);
+        assert_eq!(plan.account_scope().disable_fast(), expected);
     }
 }
 
@@ -999,66 +993,66 @@ fn image_generation_policy_includes_disabled_groups_without_expanding_account_sc
 }
 
 #[test]
-fn fast_modes_merge_without_overriding_global_disable_or_account_scope() {
+fn fast_modes_merge_without_changing_account_scope() {
     use gateway_core::account::FastMode;
     let group_id =
         gateway_core::routing::AccountGroupId::new("grp_00000000000000000000000000000001").unwrap();
     let second_group =
         gateway_core::routing::AccountGroupId::new("grp_00000000000000000000000000000002").unwrap();
     let account_id = ProviderAccountId::new("acct_fast").unwrap();
-    for global in [false, true] {
-        for mode in [FastMode::Default, FastMode::Enabled, FastMode::Disabled] {
-            let facts = SnapshotFacts::new(
-                revision(1),
-                revision(1),
-                SnapshotSettingsFacts::new(3, 0, "smart", BTreeMap::new(), None, None)
-                    .with_disable_fast(global),
-                vec![SnapshotClientPolicyFacts::new(
-                    ClientApiKeyId::new("key_fast").unwrap(),
-                    PlaintextClientApiKey::new("sk_fast").unwrap(),
-                    vec![group_id.clone(), second_group.clone()],
-                    RateLimits::unlimited(),
-                )],
-                vec![
-                    SnapshotAccountGroupFacts::new(group_id.clone(), "Fast".to_owned(), true)
-                        .with_fast_mode(FastMode::Enabled),
-                    SnapshotAccountGroupFacts::new(
-                        second_group.clone(),
-                        "Policy only".to_owned(),
-                        false,
-                    )
-                    .with_fast_mode(mode),
-                ],
-                vec![SnapshotProviderAccountFacts::new(
-                    account_id.clone(),
-                    "alpha",
-                )],
-                vec![SnapshotAccountGroupMemberFacts::new(
-                    group_id.clone(),
-                    account_id.clone(),
-                )],
-            );
-            let snapshot = block_on(
-                RuntimeSnapshotCompiler::new(
-                    Arc::new(TestSnapshotStore::new(Ok(facts))),
-                    Arc::new(TestCatalog::Unavailable),
+    for mode in [FastMode::Default, FastMode::Enabled, FastMode::Disabled] {
+        let facts = SnapshotFacts::new(
+            revision(1),
+            revision(1),
+            SnapshotSettingsFacts::new(3, 0, "smart", BTreeMap::new(), None, None),
+            vec![SnapshotClientPolicyFacts::new(
+                ClientApiKeyId::new("key_fast").unwrap(),
+                PlaintextClientApiKey::new("sk_fast").unwrap(),
+                vec![group_id.clone(), second_group.clone()],
+                RateLimits::unlimited(),
+            )],
+            vec![
+                SnapshotAccountGroupFacts::new(group_id.clone(), "Fast".to_owned(), true)
+                    .with_fast_mode(FastMode::Enabled),
+                SnapshotAccountGroupFacts::new(
+                    second_group.clone(),
+                    "Policy only".to_owned(),
+                    false,
                 )
-                .compile(),
+                .with_fast_mode(mode),
+            ],
+            vec![SnapshotProviderAccountFacts::new(
+                account_id.clone(),
+                "alpha",
+            )],
+            vec![SnapshotAccountGroupMemberFacts::new(
+                group_id.clone(),
+                account_id.clone(),
+            )],
+        );
+        let snapshot = block_on(
+            RuntimeSnapshotCompiler::new(
+                Arc::new(TestSnapshotStore::new(Ok(facts))),
+                Arc::new(TestCatalog::Unavailable),
+            )
+            .compile(),
+        )
+        .unwrap();
+        let scope = snapshot.client_policies().next().unwrap().account_scope();
+        assert!(scope.allows(&account_id));
+        assert_eq!(scope.fast_mode(), FastMode::Enabled.merge(mode));
+        let plan = snapshot
+            .plan(
+                &PublicModelId::new("unlisted-model").unwrap(),
+                &super::operation(),
+                Arc::clone(scope),
+                &gateway_core::routing::RoutingContext::default(),
             )
             .unwrap();
-            let scope = snapshot.client_policies().next().unwrap().account_scope();
-            assert!(scope.allows(&account_id));
-            assert_eq!(scope.fast_mode(), FastMode::Enabled.merge(mode));
-            let plan = snapshot
-                .plan(
-                    &PublicModelId::new("unlisted-model").unwrap(),
-                    &super::operation(),
-                    Arc::clone(scope),
-                    &gateway_core::routing::RoutingContext::default(),
-                )
-                .unwrap();
-            assert_eq!(plan.disable_fast(), global || mode == FastMode::Disabled);
-        }
+        assert_eq!(
+            plan.account_scope().fast_mode(),
+            FastMode::Enabled.merge(mode)
+        );
     }
 }
 

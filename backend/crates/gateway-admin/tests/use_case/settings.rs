@@ -69,7 +69,6 @@ async fn settings_should_reject_invalid_margin_or_probe_concurrency_before_store
                     openai_session_binding_ttl_hours: None,
                     turn_state_probe_proxy_id: None,
                     turn_state_probe_concurrency,
-                    disable_fast: None,
                     turn_state_injection_enabled: None,
                     excel_default_models: Default::default(),
                     turn_state_models: Some(vec![
@@ -150,7 +149,6 @@ async fn settings_should_reject_invalid_account_busy_wait_before_store_call() {
                         openai_session_binding_ttl_hours: None,
                         turn_state_probe_proxy_id: None,
                         turn_state_probe_concurrency: None,
-                        disable_fast: None,
                         turn_state_injection_enabled: None,
                         excel_default_models: Default::default(),
                         turn_state_models: Some(vec![

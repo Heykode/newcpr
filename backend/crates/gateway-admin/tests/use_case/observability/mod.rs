@@ -999,7 +999,6 @@ impl SettingsStore for FixtureSettingsStore {
             turn_state_probe_proxy_id: None,
             turn_state_probe_concurrency: 3,
             config_revision: Revision::new(1).expect("revision"),
-            disable_fast: false,
             turn_state_injection_enabled: false,
             excel_default_models: Default::default(),
             turn_state_models: vec![

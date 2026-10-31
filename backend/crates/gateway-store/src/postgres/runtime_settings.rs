@@ -24,7 +24,6 @@ pub struct RuntimeSettings {
     pub openai_session_binding_ttl_hours: u32,
     pub config_revision: Revision,
     pub admin_api_key: Option<String>,
-    pub disable_fast: bool,
     pub turn_state_injection_enabled: bool,
     pub turn_state_models: Vec<String>,
     pub excel_default_models: gateway_core::account::ExcelModels,
@@ -61,7 +60,6 @@ impl fmt::Debug for RuntimeSettings {
                 "admin_api_key",
                 &self.admin_api_key.as_ref().map(|_| "[REDACTED]"),
             )
-            .field("disable_fast", &self.disable_fast)
             .field(
                 "turn_state_injection_enabled",
                 &self.turn_state_injection_enabled,
@@ -107,7 +105,6 @@ pub struct RuntimeSettingsUpdate {
     pub openai_account_affinity: Option<gateway_core::account::AccountAffinity>,
     pub openai_session_binding_ttl_hours: Option<u32>,
     pub admin_api_key: Option<String>,
-    pub disable_fast: Option<bool>,
     pub turn_state_injection_enabled: Option<bool>,
     pub turn_state_models: Vec<String>,
     pub excel_default_models: gateway_core::account::ExcelModels,
@@ -142,7 +139,6 @@ impl fmt::Debug for RuntimeSettingsUpdate {
                 "admin_api_key",
                 &self.admin_api_key.as_ref().map(|_| "[REDACTED]"),
             )
-            .field("disable_fast", &self.disable_fast)
             .field(
                 "turn_state_injection_enabled",
                 &self.turn_state_injection_enabled,
@@ -244,7 +240,7 @@ impl RuntimeSettingsRepository for PgRuntimeSettingsRepository {
 
 pub(crate) async fn load_runtime_settings_from_pool(pool: &PgPool) -> StoreResult<RuntimeSettings> {
     let row = sqlx::query_as::<_, RuntimeSettingsRow>(
-            "select config_revision, admin_api_key, disable_fast, turn_state_injection_enabled, excel_default_models, turn_state_models, turn_state_probe_proxy_id, responses_max_decompressed_body_bytes, refresh_margin_seconds,
+            "select config_revision, admin_api_key, turn_state_injection_enabled, excel_default_models, turn_state_models, turn_state_probe_proxy_id, responses_max_decompressed_body_bytes, refresh_margin_seconds,
                     refresh_concurrency, max_concurrent_per_account, request_interval_ms,
                     rotation_strategy, model_mappings_json, usage_retention_days, ops_event_retention_days,
                     audit_retention_days, min_codex_desktop_version,
@@ -340,7 +336,7 @@ pub(crate) async fn load_runtime_settings_in_transaction(
     transaction: &mut Transaction<'_, Postgres>,
 ) -> StoreResult<RuntimeSettings> {
     let row = sqlx::query_as::<_, RuntimeSettingsRow>(
-        "select config_revision, admin_api_key, disable_fast, turn_state_injection_enabled, excel_default_models, turn_state_models, turn_state_probe_proxy_id, responses_max_decompressed_body_bytes, refresh_margin_seconds,
+        "select config_revision, admin_api_key, turn_state_injection_enabled, excel_default_models, turn_state_models, turn_state_probe_proxy_id, responses_max_decompressed_body_bytes, refresh_margin_seconds,
                 refresh_concurrency, max_concurrent_per_account, request_interval_ms,
                 rotation_strategy, model_mappings_json, usage_retention_days, ops_event_retention_days,
                 audit_retention_days, min_codex_desktop_version,
@@ -421,20 +417,19 @@ pub(crate) async fn update_runtime_settings_in_transaction(
 	                 min_codex_cli_version = $12,
 	                 request_tuning_json = $13,
 	                 responses_max_decompressed_body_bytes = $14,
-	                 disable_fast = coalesce($15, disable_fast),
-	                 turn_state_injection_enabled = coalesce($16, turn_state_injection_enabled),
-	                 turn_state_models = $17,
-	                 turn_state_probe_proxy_id = case when $18 then $19 else turn_state_probe_proxy_id end,
-	                 turn_state_probe_concurrency = coalesce($20, turn_state_probe_concurrency),
-                 excel_default_models = $21,
-                 openai_guardian_reserved_concurrency = $22,
-                 account_warmup_enabled = $23,
-                 account_warmup_schedule_time = $24,
-                 account_warmup_model = $25,
-                 codex_quota_overdraft_enabled = $26,
-                 codex_quota_overdraft_probe_model = $27,
-                 openai_session_binding_ttl_hours = coalesce($28, openai_session_binding_ttl_hours),
-                 openai_account_affinity = coalesce($29, openai_account_affinity),
+	                 turn_state_injection_enabled = coalesce($15, turn_state_injection_enabled),
+	                 turn_state_models = $16,
+	                 turn_state_probe_proxy_id = case when $17 then $18 else turn_state_probe_proxy_id end,
+	                 turn_state_probe_concurrency = coalesce($19, turn_state_probe_concurrency),
+                 excel_default_models = $20,
+                 openai_guardian_reserved_concurrency = $21,
+                 account_warmup_enabled = $22,
+                 account_warmup_schedule_time = $23,
+                 account_warmup_model = $24,
+                 codex_quota_overdraft_enabled = $25,
+                 codex_quota_overdraft_probe_model = $26,
+                 openai_session_binding_ttl_hours = coalesce($27, openai_session_binding_ttl_hours),
+                 openai_account_affinity = coalesce($28, openai_account_affinity),
                  updated_at = now()
 	             where id = 1
 	             returning config_revision",
@@ -456,7 +451,6 @@ pub(crate) async fn update_runtime_settings_in_transaction(
         i64::try_from(update.responses_max_decompressed_body_bytes)
             .map_err(|_| invalid_numeric())?,
     )
-    .bind(update.disable_fast)
     .bind(update.turn_state_injection_enabled)
     .bind(&update.turn_state_models)
     .bind(update.turn_state_probe_proxy_id.is_some())
@@ -526,7 +520,6 @@ pub(crate) async fn update_admin_api_key_in_transaction(
 struct RuntimeSettingsRow {
     config_revision: i64,
     admin_api_key: Option<String>,
-    disable_fast: bool,
     turn_state_injection_enabled: bool,
     turn_state_models: Vec<String>,
     excel_default_models: Vec<String>,
@@ -567,7 +560,6 @@ fn runtime_settings_from_row(row: RuntimeSettingsRow) -> StoreResult<RuntimeSett
         })?,
         config_revision: Revision::new(to_u64(row.config_revision)?)?,
         admin_api_key: row.admin_api_key,
-        disable_fast: row.disable_fast,
         turn_state_injection_enabled: row.turn_state_injection_enabled,
         turn_state_models: row.turn_state_models,
         excel_default_models: gateway_core::account::ExcelModels::try_from(

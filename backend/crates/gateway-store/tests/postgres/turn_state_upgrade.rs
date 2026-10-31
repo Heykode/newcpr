@@ -279,6 +279,11 @@ async fn encrypted_omission_upgrade_preserves_accounts_and_unrelated_settings() 
     }
     let previous = settings_before.as_object_mut().unwrap();
     assert_eq!(
+        previous.remove("disable_fast"),
+        Some(serde_json::json!(false))
+    );
+    assert!(!settings.contains_key("disable_fast"));
+    assert_eq!(
         previous.remove("refresh_margin_seconds"),
         Some(serde_json::json!(3600))
     );

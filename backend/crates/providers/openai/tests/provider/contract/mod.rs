@@ -463,16 +463,28 @@ fn planned_request_with_model(
     operation: Operation,
     model: &str,
 ) -> ProviderRequest {
+    planned_request_with_fast_policy(provider_name, operation, model, false)
+}
+
+fn planned_request_with_fast_policy(
+    provider_name: &str,
+    operation: Operation,
+    model: &str,
+    disable_fast: bool,
+) -> ProviderRequest {
     let provider = ProviderKind::new(provider_name).expect("provider");
     let upstream_model = UpstreamModelId::new(model).expect("upstream model");
     let public_model = PublicModelId::new(upstream_model.as_str()).expect("public model");
-    let account_scope = Arc::new(FrozenAccountScope::new(
-        Arc::new(RuntimeAccountDirectory::new(BTreeMap::from([(
-            ProviderAccountId::new("acct_provider_contract").expect("account"),
-            RuntimeAccount::new(provider.clone(), BTreeSet::new()),
-        )]))),
-        ClientRoutingScope::all_accounts(),
-    ));
+    let account_scope = Arc::new(
+        FrozenAccountScope::new(
+            Arc::new(RuntimeAccountDirectory::new(BTreeMap::from([(
+                ProviderAccountId::new("acct_provider_contract").expect("account"),
+                RuntimeAccount::new(provider.clone(), BTreeSet::new()),
+            )]))),
+            ClientRoutingScope::all_accounts(),
+        )
+        .with_disable_fast(disable_fast),
+    );
     let snapshot = RuntimeSnapshot::new(
         ConfigRevision::new(1).expect("revision"),
         account_policy(),
@@ -857,8 +869,8 @@ async fn capture_scoped_http_request_with_policy(
     ));
     let mut stream = provider_with_base_url(&store, server.uri())
         .execute(
-            planned_request("openai", operation),
-            context_with_state_owner_and_fast_policy(request_id, owner_account_id, disable_fast)
+            planned_request_with_fast_policy("openai", operation, "gpt-5.4", disable_fast),
+            context_with_state_owner_and_fast_policy(request_id, owner_account_id)
                 .with_request_tuning(tuning),
         )
         .await
@@ -877,7 +889,6 @@ async fn capture_scoped_http_request_with_policy(
 fn context_with_state_owner_and_fast_policy(
     request_id: &str,
     owner_account_id: &str,
-    disable_fast: bool,
 ) -> AttemptContext {
     let owner = ProviderAccountStateOwner::new(
         ProviderKind::new("openai").expect("provider"),
@@ -887,8 +898,7 @@ fn context_with_state_owner_and_fast_policy(
         RequestAttemptContext::new(
             ModelRequestId::new(request_id).expect("request id"),
             ClientApiKeyId::new("key_openai_contract").expect("client key id"),
-        )
-        .with_disable_fast(disable_fast),
+        ),
         NonZeroU32::new(1).expect("attempt"),
         SystemTime::now() + Duration::from_secs(30),
         account_policy(),

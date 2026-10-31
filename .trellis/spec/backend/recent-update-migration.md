@@ -54,7 +54,7 @@ jobs, cost accounting, log cleanup and existing template catalog.
 ## Data And Administration
 
 - Fast group policy is `default`, `enabled` or `disabled`. Disabled wins across
-  groups; global disable wins. Keep legacy `disableFast` synchronized and accept
+  groups; global runtime disable is removed. Keep group legacy `disableFast` synchronized and accept
   old requests. Explicit new-mode updates take precedence; omission preserves.
 - Import templates reuse the existing catalog and freeze the selected revision.
   Selected templates apply to both inserted and updated accounts. Omission keeps

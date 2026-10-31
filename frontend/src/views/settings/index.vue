@@ -62,8 +62,7 @@ const {
   refreshConcurrencyValue,
   maxConcurrentPerAccountValue,
   openaiGuardianReservedConcurrencyValue,
-  requestIntervalMsValue,
-  responsesMaxDecompressedBodyBytesValue,
+  unitFields,
   openaiSessionBindingTtlHoursValue,
   minCodexDesktopVersionError,
   minCodexCliVersionError,
@@ -171,10 +170,8 @@ watch(
           v-model:openai-guardian-reserved-concurrency="openaiGuardianReservedConcurrencyValue"
           v-model:refresh-margin-seconds="refreshMarginSecondsValue"
           v-model:refresh-concurrency="refreshConcurrencyValue"
-          v-model:request-interval-ms="requestIntervalMsValue"
-          v-model:responses-max-decompressed-body-bytes="responsesMaxDecompressedBodyBytesValue"
-          v-model:disable-fast="form.disableFast"
           v-model:request-tuning="form.requestTuning"
+          :units="unitFields"
           :disabled="loading || saving"
         />
 
@@ -233,6 +230,7 @@ watch(
           v-model:models="form.excelDefaultModels"
           v-model:request-tuning="form.requestTuning"
           :images="excelImages"
+          :units="unitFields"
           :disabled="loading || saving"
         />
       </div>

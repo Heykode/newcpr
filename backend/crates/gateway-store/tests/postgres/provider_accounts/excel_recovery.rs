@@ -187,7 +187,7 @@ async fn recovery_failures_and_stale_results_never_enable_accounts() {
         "update provider_accounts set credential_revision=credential_revision+1 where id='acct_fence'",
         "update account_excel_recovery set enabled=false,generation=generation+1 where account_id='acct_fence'",
         "update provider_accounts set responses_upstream='codex' where id='acct_fence'",
-        "update runtime_settings set disable_fast=not disable_fast where id=1",
+        "update runtime_settings set refresh_concurrency=refresh_concurrency+1 where id=1",
         "update provider_accounts set credential_state='invalid' where id='acct_fence'",
     ] {
         sqlx::query("update provider_accounts set responses_upstream='excel',credential_state='ready' where id='acct_fence'").execute(&db.pool).await.unwrap();

@@ -39,7 +39,6 @@ fn update_body() -> Value {
     let mut body = json!({
         "configRevision": 7,
         "excelDefaultModels": ["gpt-5.6-sol", "gpt-6-astra"],
-        "disableFast": false,
         "turnStateInjectionEnabled": false,
         "turnStateModels": ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra"],
         "turnStateProbeProxyId": null,
@@ -387,40 +386,6 @@ fn decompression_setting_should_reject_zero_and_values_above_the_safety_limit() 
     }
 }
 
-#[tokio::test]
-async fn disable_fast_settings_updates_preserve_omitted_values() {
-    let fixture = AdminTestFixture::new().await;
-    fixture.auth.insert_session("valid-session");
-    let app = app(fixture.state());
-    for (value, expected) in [(Some(true), true), (None, true), (Some(false), false)] {
-        let mut body = with_current_revision(&fixture, update_body()).await;
-        if let Some(value) = value {
-            body["disableFast"] = json!(value);
-        } else {
-            body.as_object_mut().unwrap().remove("disableFast");
-        }
-        let response = app
-            .clone()
-            .oneshot(request(
-                Method::POST,
-                "/api/admin/settings/update",
-                Some(body),
-            ))
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-        let response = app
-            .clone()
-            .oneshot(request(Method::GET, "/api/admin/settings", None))
-            .await
-            .unwrap();
-        assert_eq!(
-            response_json(response).await["data"]["disableFast"],
-            expected
-        );
-    }
-}
-
 #[test]
 fn settings_request_should_reject_unknown_request_tuning_field() {
     for field in [
@@ -434,6 +399,13 @@ fn settings_request_should_reject_unknown_request_tuning_field() {
 
         assert!(serde_json::from_value::<UpdateRuntimeSettingsRequest>(body).is_err());
     }
+}
+
+#[test]
+fn global_fast_is_no_longer_a_runtime_setting() {
+    let mut body = update_body();
+    body["disableFast"] = json!(true);
+    assert!(serde_json::from_value::<UpdateRuntimeSettingsRequest>(body).is_err());
 }
 
 #[test]
@@ -475,7 +447,6 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
         openai_account_affinity: Default::default(),
         openai_session_binding_ttl_hours: 24,
         config_revision: Revision::new(7).expect("revision"),
-        disable_fast: false,
         turn_state_injection_enabled: false,
         excel_default_models: Default::default(),
         turn_state_models: vec![
@@ -554,7 +525,6 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
 
     let value = serde_json::to_value(RuntimeSettingsView::from(settings)).expect("serialize view");
     let mut expected = json!({
-        "disableFast": false,
         "excelDefaultModels": ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra"],
         "turnStateInjectionEnabled": false,
         "turnStateModels": ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra"],
@@ -650,7 +620,6 @@ fn settings_request_and_response_fields_should_stay_in_lockstep() {
         config_revision: Revision::new(7).expect("revision"),
         turn_state_probe_proxy_id: request.turn_state_probe_proxy_id.clone().flatten(),
         turn_state_probe_concurrency: request.turn_state_probe_concurrency.unwrap_or(3),
-        disable_fast: request.disable_fast.unwrap_or(false),
         turn_state_injection_enabled: request.turn_state_injection_enabled.unwrap_or(false),
         excel_default_models: Default::default(),
         turn_state_models: request

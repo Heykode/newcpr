@@ -27,6 +27,57 @@ function loadModule(filename, dependencies = {}) {
 const apiErrors = loadModule(new URL('../src/api/error.ts', import.meta.url))
 const asyncUtils = loadModule(new URL('../src/utils/async.ts', import.meta.url))
 
+test('runtime display units preserve saved bytes and milliseconds without a global Fast field', async () => {
+  const initial = settings()
+  initial.requestIntervalMs = 50
+  initial.responsesMaxDecompressedBodyBytes = 64 * 1024 * 1024 + 1
+  initial.disableFast = true
+  const query = mountSettings(initial)
+  try {
+    await query.state.loadSettings()
+    const units = query.state.unitFields
+    assert.equal(units.intervalSeconds.input.value, '0.05')
+    assert.equal(units.bodyMiB.input.value, String(initial.responsesMaxDecompressedBodyBytes / 1048576))
+    assert.equal(units.largeRequestMiB.input.value, '15')
+    assert.equal(units.maxAgeSeconds.input.value, '3300')
+    await query.state.saveSettings()
+    assert.equal(query.requests.at(-1).responsesMaxDecompressedBodyBytes, initial.responsesMaxDecompressedBodyBytes)
+    assert.equal(query.requests.at(-1).requestIntervalMs, 50)
+    assert.equal(Object.hasOwn(query.requests.at(-1), 'disableFast'), false)
+    units.intervalSeconds.input.value = '1.001'
+    units.bodyMiB.input.value = '1.5'
+    units.largeRequestMiB.input.value = '0'
+    units.prefetchKiB.input.value = '0.5'
+    units.idleSeconds.input.value = '10.001'
+    await query.state.saveSettings()
+    const saved = query.requests.at(-1)
+    assert.equal(saved.requestIntervalMs, 1001)
+    assert.equal(saved.responsesMaxDecompressedBodyBytes, 1572864)
+    assert.equal(saved.requestTuning.websocketLargeRequestThresholdBytes, 0)
+    assert.equal(saved.requestTuning.streamPrefetchBytes, 512)
+    assert.equal(saved.requestTuning.websocketStreamIdleTimeoutMs, 10001)
+  }
+  finally { query.stop() }
+})
+
+test('unit drafts reject empty and sub-byte or sub-millisecond inputs instead of saving stale values', async () => {
+  const warnings = []
+  const query = mountSettings(settings(), warning => warnings.push(warning))
+  try {
+    await query.state.loadSettings()
+    for (const [key, raw] of [['bodyMiB', ''], ['largeRequestMiB', '0.00000001'], ['intervalSeconds', '0.0001'], ['maxAgeSeconds', 'NaN'], ['prefetchKiB', '0.0001']]) {
+      query.state.unitFields[key].input.value = raw
+      await query.state.saveSettings()
+      assert.equal(query.requests.length, 0)
+      assert.equal(query.state.hasChanges.value, true)
+      await query.state.loadSettings()
+      assert.equal(query.state.unitFields[key].invalid.value, false)
+    }
+    assert.equal(warnings.length, 5)
+  }
+  finally { query.stop() }
+})
+
 test('Excel image policy defaults off and roundtrips without changing scheduling', async () => {
   for (const mode of ['off', 'auto_compact', 'warn']) {
     const initial = settings()
@@ -205,6 +256,7 @@ function mountSettings(initial, onWarning = assert.fail, apiOverrides = {}) {
       '../request': () => { throw new Error('unexpected real API request') },
     }),
     '@/utils/location': loadModule(new URL('../src/utils/location.ts', import.meta.url)),
+    './useRuntimeUnits': loadModule(new URL('../src/views/settings/composables/useRuntimeUnits.ts', import.meta.url), { vue }),
     './useExcelImageSettings': loadModule(new URL('../src/views/settings/composables/useExcelImageSettings.ts', import.meta.url), { vue }),
     '@/api/modules/settings': loadModule(new URL('../src/api/modules/settings.ts', import.meta.url), {
       '../request': () => { throw new Error('unexpected real API request') },
@@ -446,9 +498,8 @@ test('stream prefetch rejects only invalid or inexact byte numbers before saving
     }
     assert.equal(query.requests.length, 0)
     assert.equal(warnings.length, 5)
-    const component = readFileSync(new URL('../src/views/settings/components/RuntimeSettingsCard.vue', import.meta.url), 'utf8')
-    assert.match(component, /tuningNumber\('streamPrefetchBytes', 1024\)/)
-    assert.match(component, /v-model="tuningValues\.streamPrefetchKiB\.value"[^>]+step="any"/)
+    const component = readFileSync(new URL('../src/views/settings/components/ExcelSettingsCard.vue', import.meta.url), 'utf8')
+    assert.match(component, /model-value="units\.prefetchKiB\.input\.value"[^>]+step="any"/)
   }
   finally { query.stop() }
 })
@@ -489,7 +540,7 @@ test('large request threshold rejects invalid byte counts before saving', async 
     assert.equal(query.requests.length, 0)
     assert.equal(warnings.length, 5)
     const component = readFileSync(new URL('../src/views/settings/components/RuntimeSettingsCard.vue', import.meta.url), 'utf8')
-    assert.match(component, /v-model="tuningValues\.websocketLargeRequestThresholdBytes\.value"/)
+    assert.match(component, /model-value="units\.largeRequestMiB\.input\.value"/)
   }
   finally {
     query.stop()

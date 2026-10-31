@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { RuntimeUnitFields } from '../composables/useRuntimeUnits'
 import type { RequestTuning } from '@/api/modules/settings'
 import { ChevronDown, Gauge, LocateFixed, Timer, Zap } from '@lucide/vue'
 import { computed, onScopeDispose, ref } from 'vue'
@@ -12,14 +13,11 @@ import BaseSegmented from '@/components/base/BaseSegmented.vue'
 import BaseSwitch from '@/components/base/BaseSwitch.vue'
 import RequestLocationFields from '@/components/RequestLocationFields.vue'
 
-defineProps<{ disabled?: boolean }>()
+defineProps<{ disabled?: boolean, units: RuntimeUnitFields }>()
 const maxConcurrentPerAccount = defineModel<string>('maxConcurrentPerAccount', { required: true })
 const openaiGuardianReservedConcurrency = defineModel<string>('openaiGuardianReservedConcurrency', { required: true })
 const refreshMarginSeconds = defineModel<string>('refreshMarginSeconds', { required: true })
 const refreshConcurrency = defineModel<string>('refreshConcurrency', { required: true })
-const requestIntervalMs = defineModel<string>('requestIntervalMs', { required: true })
-const responsesMaxDecompressedBodyBytes = defineModel<string>('responsesMaxDecompressedBodyBytes', { required: true })
-const disableFast = defineModel<boolean>('disableFast', { required: true })
 const openaiSessionBindingTtlHours = defineModel<string>('openaiSessionBindingTtlHours', { required: true })
 const openaiAccountAffinity = defineModel<string>('openaiAccountAffinity', { required: true })
 const requestTuning = defineModel<RequestTuning>('requestTuning', { required: true })
@@ -86,13 +84,7 @@ const tuningValues = {
   maxAccountSwitches: tuningNumber('maxAccountSwitches'),
   maxRequestAttempts: tuningNumber('maxRequestAttempts'),
   websocketMaxRetries: tuningNumber('websocketMaxRetries'),
-  websocketLargeRequestThresholdBytes: tuningNumber('websocketLargeRequestThresholdBytes'),
-  streamPrefetchKiB: tuningNumber('streamPrefetchBytes', 1024),
-  websocketMaxAgeMs: tuningNumber('websocketMaxAgeMs'),
-  websocketStreamIdleTimeoutMs: tuningNumber('websocketStreamIdleTimeoutMs'),
   websocketFailureThreshold: tuningNumber('websocketFailureThreshold'),
-  websocketFailureWindowMs: tuningNumber('websocketFailureWindowMs'),
-  websocketFailureOpenDurationMs: tuningNumber('websocketFailureOpenDurationMs'),
   rateLimitCooldownSeconds: tuningNumber('rateLimitCooldownSeconds'),
   accountBusyWaitStickyMaxWaiting: tuningNumber('accountBusyWaitStickyMaxWaiting'),
   accountBusyWaitStickyTimeoutSeconds: tuningNumber('accountBusyWaitStickyTimeoutSeconds'),
@@ -183,13 +175,14 @@ const tuningValues = {
       </BaseFormItem>
 
       <BaseFormItem
-        label="请求间隔 ms"
+        label="请求间隔（秒）"
         description="控制同一账号两次调度之间的最小等待时间"
       >
         <BaseInput
-          v-model="requestIntervalMs"
-          aria-label="请求间隔 ms"
+          :model-value="units.intervalSeconds.input.value" aria-label="请求间隔（秒）"
+          step="any"
           type="number"
+          @update:model-value="units.intervalSeconds.setInput"
         >
           <template #prefix>
             <Timer class="size-4" />
@@ -198,16 +191,16 @@ const tuningValues = {
       </BaseFormItem>
 
       <BaseFormItem
-        label="请求解压上限（字节）"
-        description="gzip、deflate、zstd 展开后的最大正文，范围 1–268435456"
+        label="请求解压上限（MiB）"
+        description="gzip、deflate、zstd 展开后的最大正文，范围 1 字节–256 MiB"
       >
         <BaseInput
-          v-model="responsesMaxDecompressedBodyBytes"
-          aria-label="请求解压上限（字节）"
+          :model-value="units.bodyMiB.input.value" aria-label="请求解压上限（MiB）"
           type="number"
-          min="1"
-          max="268435456"
-          step="1"
+          min="0.00000095367431640625"
+          max="256"
+          step="any"
+          @update:model-value="units.bodyMiB.setInput"
         >
           <template #prefix>
             <Gauge class="size-4" />
@@ -215,20 +208,6 @@ const tuningValues = {
         </BaseInput>
       </BaseFormItem>
     </BaseForm>
-
-    <div class="mt-5 border-t border-(--cp-border-color) pt-4">
-      <div class="flex items-center justify-between gap-3">
-        <div>
-          <h3 class="m-0 text-sm font-medium text-cp-text-secondary">
-            全局关闭 Fast 档位
-          </h3>
-          <p class="mt-1 mb-0 text-cp-xs text-cp-text-tertiary">
-            把顶层 priority/fast 收敛为 default，默认关闭
-          </p>
-        </div>
-        <BaseSwitch v-model="disableFast" label="全局关闭 Fast 档位" />
-      </div>
-    </div>
 
     <div class="mt-5 border-t border-(--cp-border-color) pt-4">
       <div class="flex items-center justify-between gap-3">
@@ -340,9 +319,6 @@ const tuningValues = {
         <h3 class="m-0 text-sm font-medium text-cp-text-secondary sm:col-span-2">
           共享重试与限流（Codex / Excel）
         </h3>
-        <BaseFormItem label="Excel 提交前缓冲阈值（KiB）" description="仅影响 Excel，默认 128 KiB；0 关闭额外缓冲，非零时前导事件最多等待 2.5 秒，文字、工具输出和终态立即放行。原生 Codex 事件解析后立即下发，不受此项影响。">
-          <BaseInput v-model="tuningValues.streamPrefetchKiB.value" aria-label="Excel 提交前缓冲阈值（KiB）" type="number" min="0" step="any" />
-        </BaseFormItem>
         <BaseFormItem label="同账号传输失败重试次数" description="用于 WS 传输恢复和 Excel 可安全重试的首包前错误（含接口 429），范围 0–100；Excel 还受总路由尝试次数限制">
           <BaseInput v-model="tuningValues.websocketMaxRetries.value" aria-label="同账号传输失败重试次数" type="number" />
         </BaseFormItem>
@@ -358,23 +334,23 @@ const tuningValues = {
         <h3 class="mb-0 mt-3 text-sm font-medium text-cp-text-secondary sm:col-span-2">
           原生 Codex 上游连接
         </h3>
-        <BaseFormItem label="大请求 HTTP 阈值（字节）">
-          <BaseInput v-model="tuningValues.websocketLargeRequestThresholdBytes.value" aria-label="大请求 HTTP 阈值（字节）" type="number" min="0" max="67108864" step="1" />
+        <BaseFormItem label="大请求 HTTP 阈值（MiB）">
+          <BaseInput :model-value="units.largeRequestMiB.input.value" aria-label="大请求 HTTP 阈值（MiB）" type="number" min="0" max="64" step="any" @update:model-value="units.largeRequestMiB.setInput" />
         </BaseFormItem>
-        <BaseFormItem label="WebSocket 连接最长寿命" description="单位：毫秒">
-          <BaseInput v-model="tuningValues.websocketMaxAgeMs.value" aria-label="WebSocket 连接最长寿命" type="number" />
+        <BaseFormItem label="WebSocket 连接最长寿命" description="单位：秒">
+          <BaseInput :model-value="units.maxAgeSeconds.input.value" step="any" aria-label="WebSocket 连接最长寿命" type="number" @update:model-value="units.maxAgeSeconds.setInput" />
         </BaseFormItem>
-        <BaseFormItem label="WebSocket 无数据等待时间" description="单位：毫秒">
-          <BaseInput v-model="tuningValues.websocketStreamIdleTimeoutMs.value" aria-label="WebSocket 无数据等待时间" type="number" />
+        <BaseFormItem label="WebSocket 无数据等待时间" description="单位：秒">
+          <BaseInput :model-value="units.idleSeconds.input.value" step="any" aria-label="WebSocket 无数据等待时间" type="number" @update:model-value="units.idleSeconds.setInput" />
         </BaseFormItem>
         <BaseFormItem label="WebSocket 失败保护阈值" description="窗口内连续失败达到此次数后暂停，默认 3 次">
           <BaseInput v-model="tuningValues.websocketFailureThreshold.value" aria-label="WebSocket 失败保护阈值" type="number" />
         </BaseFormItem>
-        <BaseFormItem label="WebSocket 失败统计窗口" description="单位：毫秒">
-          <BaseInput v-model="tuningValues.websocketFailureWindowMs.value" aria-label="WebSocket 失败统计窗口" type="number" />
+        <BaseFormItem label="WebSocket 失败统计窗口" description="单位：秒">
+          <BaseInput :model-value="units.failureWindowSeconds.input.value" step="any" aria-label="WebSocket 失败统计窗口" type="number" @update:model-value="units.failureWindowSeconds.setInput" />
         </BaseFormItem>
-        <BaseFormItem label="WebSocket 暂停时长" description="触发失败保护后暂停多久，单位：毫秒">
-          <BaseInput v-model="tuningValues.websocketFailureOpenDurationMs.value" aria-label="WebSocket 暂停时长" type="number" />
+        <BaseFormItem label="WebSocket 暂停时长" description="触发失败保护后暂停多久，单位：秒">
+          <BaseInput :model-value="units.failureOpenSeconds.input.value" step="any" aria-label="WebSocket 暂停时长" type="number" @update:model-value="units.failureOpenSeconds.setInput" />
         </BaseFormItem>
       </BaseForm>
     </div>

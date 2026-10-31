@@ -582,11 +582,7 @@ impl Provider for CodexProvider {
                 .iter()
                 .any(|tier| tier.id() == "priority")
         });
-        let fast_mode = if context.disable_fast() {
-            gateway_core::account::FastMode::Disabled
-        } else {
-            candidate.account_scope().fast_mode()
-        };
+        let fast_mode = candidate.account_scope().fast_mode();
         upstream_request.apply_fast_policy(fast_mode, supports_priority);
         let client_key_id = context.client_api_key_ref().as_str();
         if previous_session

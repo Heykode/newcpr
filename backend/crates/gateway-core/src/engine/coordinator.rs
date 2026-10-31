@@ -1091,7 +1091,6 @@ where
                         .cloned()
                         .flatten(),
                 )
-                .with_disable_fast(self.plan.disable_fast())
                 .with_codex_quota_overdraft(
                     self.plan.codex_quota_overdraft_enabled(),
                     self.plan.codex_quota_overdraft_probe_model().clone(),

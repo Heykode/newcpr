@@ -39,6 +39,10 @@ Strict/Relaxed 设置和 Strict 默认值，不改账号、身份、出口或调
 
 ## 本地测试库
 
+0081_remove_global_fast.sql 删除废弃的全局 disable_fast 列，分组 fast_mode 与
+其兼容列保留。运行配置和上游请求只使用分组策略；该迁移不修改其他已保存参数。
+旧二进制依赖已删除列，升级后不可直接回滚旧镜像，需使用迁移感知的部署流程。
+
 0078_concurrency_defaults.sql 对齐初始化并发/排队策略，保留已保存和自定义设置。
 0079_account_plan_snapshots.sql 为新请求和错误事件保存历史套餐，旧记录保持未知。
 0080_account_name_bytes.sql 将 custom_name 上限对齐为 512 个 UTF-8 字节，

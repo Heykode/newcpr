@@ -16,6 +16,7 @@ import { normalizeRequestLocation, requestLocationError } from '@/utils/location
 import { parseExcelModels } from '@/views/accounts/utils/schedulingForm'
 import { cloneProtectionRules, protectionSettingsError, trimProtectionText } from '../components/error-protection/form'
 import { useExcelImageSettings } from './useExcelImageSettings'
+import { useRuntimeUnits } from './useRuntimeUnits'
 
 function defaultProtection(): ProtectionDraft {
   return {
@@ -77,7 +78,6 @@ export function useSettingsForm() {
   const form = reactive({
     accountErrorProtection: defaultProtection(),
     excelDefaultModels: DEFAULT_EXCEL_MODELS_INPUT,
-    disableFast: false,
     responsesMaxDecompressedBodyBytes: 64 * 1024 * 1024,
     openaiAccountAffinity: 'strict' as AccountAffinity,
     refreshMarginSeconds: null as number | null,
@@ -100,6 +100,8 @@ export function useSettingsForm() {
     requestTuning: { ...requestTuningFallbacks, smartScheduling: defaultSmartScheduling() },
   })
 
+  const runtimeUnits = useRuntimeUnits(form)
+  const unitFields = runtimeUnits.fields
   const excelImages = useExcelImageSettings(computed(() => form.requestTuning))
 
   const savedDraft = shallowRef('')
@@ -107,6 +109,7 @@ export function useSettingsForm() {
   const draftSnapshot = () => JSON.stringify({
     form,
     mappings: mappings.value,
+    units: runtimeUnits.snapshot(),
     images: excelImages.fields.map(field => field.input.value),
   })
   const hasChanges = computed(() => savedDraft.value !== '' && savedDraft.value !== draftSnapshot())
@@ -150,7 +153,6 @@ export function useSettingsForm() {
   function applySettings(data: Awaited<ReturnType<typeof getSettings>>) {
     configRevision.value = data.configRevision
     form.excelDefaultModels = (data.excelDefaultModels ?? DEFAULT_EXCEL_MODELS).join(', ')
-    form.disableFast = data.disableFast ?? false
     form.responsesMaxDecompressedBodyBytes
       = data.responsesMaxDecompressedBodyBytes ?? 64 * 1024 * 1024
     form.openaiAccountAffinity = data.openaiAccountAffinity ?? 'strict'
@@ -189,6 +191,7 @@ export function useSettingsForm() {
     }
     savedLocation.value = { ...form.requestTuning.openaiRequestLocation }
     excelImages.resetDrafts()
+    runtimeUnits.reset()
     mappings.value = Object.entries(data.modelMappings || {}).map(([requestedModel, upstreamModel]) => ({
       requestedModel,
       upstreamModel: String(upstreamModel),
@@ -301,6 +304,10 @@ export function useSettingsForm() {
       toast.warning(protectionError)
       return
     }
+    if (runtimeUnits.invalid.value) {
+      toast.warning('请填写有效数值，换算后须为整数的字节数或毫秒数')
+      return
+    }
     const tuning = form.requestTuning
     if (!['off', 'auto_compact', 'warn'].includes(tuning.excelImageLimitPolicy)
       || !Number.isInteger(tuning.excelImageWarningRemaining) || tuning.excelImageWarningRemaining < 1 || tuning.excelImageWarningRemaining > 65536
@@ -404,7 +411,6 @@ export function useSettingsForm() {
       const result = await updateSettings({
         configRevision: configRevision.value,
         excelDefaultModels,
-        disableFast: form.disableFast,
         responsesMaxDecompressedBodyBytes: form.responsesMaxDecompressedBodyBytes,
         modelMappings: mappingPayload(),
         refreshMarginSeconds,
@@ -463,6 +469,7 @@ export function useSettingsForm() {
     refreshConcurrencyValue,
     maxConcurrentPerAccountValue,
     openaiGuardianReservedConcurrencyValue,
+    unitFields,
     requestIntervalMsValue,
     responsesMaxDecompressedBodyBytesValue,
     openaiSessionBindingTtlHoursValue,

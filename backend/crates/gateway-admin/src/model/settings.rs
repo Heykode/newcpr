@@ -319,7 +319,6 @@ pub struct RuntimeSettings {
     pub openai_account_affinity: gateway_core::account::AccountAffinity,
     pub openai_session_binding_ttl_hours: u32,
     pub config_revision: Revision,
-    pub disable_fast: bool,
     pub turn_state_injection_enabled: bool,
     pub turn_state_models: Vec<UpstreamModelId>,
     pub excel_default_models: gateway_core::account::ExcelModels,
@@ -351,7 +350,6 @@ pub struct RuntimeSettings {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReplaceRuntimeSettings {
     pub expected_revision: Revision,
-    pub disable_fast: Option<bool>,
     pub turn_state_injection_enabled: Option<bool>,
     pub turn_state_models: Option<Vec<UpstreamModelId>>,
     pub excel_default_models: Option<gateway_core::account::ExcelModels>,

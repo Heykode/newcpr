@@ -298,6 +298,7 @@ test('runtime save keeps custom parameters and silently rereads server state aft
     requestTuning: { maxRequestAttempts: 24, websocketHttpFallbackEnabled: false },
   }
   const settings = load('views/settings/composables/useSettingsForm.ts', {
+    './useRuntimeUnits': load('views/settings/composables/useRuntimeUnits.ts', { vue }),
     './useExcelImageSettings': load('views/settings/composables/useExcelImageSettings.ts', { vue }),
     '@/api/modules/settings': load('api/modules/settings.ts', { '../request': () => {} }),
     '@/api/modules/proxies': load('api/modules/proxies.ts', { '../request': () => { throw new Error('unexpected real API request') } }),

@@ -87,11 +87,12 @@ async fn upstream_concurrency_defaults_preserve_saved_and_customized_settings() 
         .execute(&database.pool)
         .await
         .unwrap();
-        let before: Value =
-            sqlx::query_scalar("select to_jsonb(s) from runtime_settings s where id=1")
-                .fetch_one(&database.pool)
-                .await
-                .unwrap();
+        let before: Value = sqlx::query_scalar(
+            "select to_jsonb(s) - 'disable_fast' from runtime_settings s where id=1",
+        )
+        .fetch_one(&database.pool)
+        .await
+        .unwrap();
         super::TEST_MIGRATOR.run(&database.pool).await.unwrap();
         let after: Value =
             sqlx::query_scalar("select to_jsonb(s) from runtime_settings s where id=1")
@@ -341,7 +342,7 @@ async fn preferred_affinity_upgrade_preserves_existing_rows_and_defaults() {
             return;
         };
         sqlx::query("update runtime_settings set openai_account_affinity = $1, rotation_strategy = 'sticky', openai_guardian_reserved_concurrency = 2 where id = 1").bind(mode).execute(&database.pool).await.unwrap();
-        let before: Value =
+        let mut before: Value =
             sqlx::query_scalar("select to_jsonb(s) from runtime_settings s where id = 1")
                 .fetch_one(&database.pool)
                 .await
@@ -359,6 +360,11 @@ async fn preferred_affinity_upgrade_preserves_existing_rows_and_defaults() {
         ] {
             assert_eq!(after.as_object_mut().unwrap().remove(field), Some(default));
         }
+        assert_eq!(
+            before.as_object_mut().unwrap().remove("disable_fast"),
+            Some(json!(false))
+        );
+        assert!(after.get("disable_fast").is_none());
         assert_eq!(before, after);
         sqlx::query(
             "update runtime_settings set openai_account_affinity = 'preferred' where id = 1",
@@ -427,7 +433,7 @@ async fn refresh_margin_migration_updates_only_historical_default_and_preserves_
         for (field, value) in before.as_object().unwrap() {
             if matches!(
                 field.as_str(),
-                "refresh_margin_seconds" | "config_revision" | "updated_at"
+                "refresh_margin_seconds" | "config_revision" | "updated_at" | "disable_fast"
             ) {
                 continue;
             }
@@ -436,6 +442,7 @@ async fn refresh_margin_migration_updates_only_historical_default_and_preserves_
                 "migration changed unrelated setting {field}"
             );
         }
+        assert!(after.get("disable_fast").is_none());
         database.close().await;
     }
 }
@@ -502,7 +509,6 @@ fn settings_with_margin(refresh_margin_seconds: u64) -> RuntimeSettingsUpdate {
         openai_account_affinity: None,
         openai_session_binding_ttl_hours: None,
         admin_api_key: None,
-        disable_fast: None,
         turn_state_injection_enabled: None,
         excel_default_models: Default::default(),
         turn_state_models: vec![
@@ -1228,55 +1234,63 @@ async fn decompression_limit_round_trips_to_settings_and_snapshot() {
 }
 
 #[tokio::test]
-async fn disable_fast_persists_and_omitted_updates_preserve_the_policy() {
-    let Some(database) = TestDatabase::create("disable_fast_settings").await else {
-        return;
+async fn removing_global_fast_preserves_all_other_runtime_settings_and_group_policy() {
+    let old = sqlx::migrate::Migrator {
+        migrations: super::TEST_MIGRATOR
+            .iter()
+            .filter(|migration| migration.version < 81)
+            .cloned()
+            .collect::<Vec<_>>()
+            .into(),
+        ..sqlx::migrate::Migrator::DEFAULT
     };
-    let repository = PgRuntimeSettingsRepository::new(database.pool.clone());
-    assert!(
-        !repository
-            .load_runtime_settings()
+    for enabled in [false, true] {
+        let Some(database) = TestDatabase::create_with_migrator("remove_global_fast", &old).await
+        else {
+            return;
+        };
+        sqlx::query("update runtime_settings set disable_fast=$1 where id=1")
+            .bind(enabled)
+            .execute(&database.pool)
             .await
-            .unwrap()
-            .disable_fast
-    );
-
-    let mut update = settings_with_margin(3_600);
-    update.disable_fast = Some(true);
-    repository
-        .update_runtime_settings(update)
+            .unwrap();
+        sqlx::query("insert into account_groups (id,name,color,enabled,disable_fast,fast_mode,created_at,updated_at) values ('grp_00000000000000000000000000000001','Fast policy','#2563EBFF',true,true,'disabled',now(),now())")
+            .execute(&database.pool).await.unwrap();
+        let before: Value = sqlx::query_scalar(
+            "select to_jsonb(s) - 'disable_fast' from runtime_settings s where id=1",
+        )
+        .fetch_one(&database.pool)
         .await
-        .expect("enable disable-fast");
-    assert!(
-        repository
+        .unwrap();
+        let groups_before: Vec<Value> =
+            sqlx::query_scalar("select to_jsonb(g) from account_groups g order by id")
+                .fetch_all(&database.pool)
+                .await
+                .unwrap();
+        super::TEST_MIGRATOR.run(&database.pool).await.unwrap();
+        super::TEST_MIGRATOR.run(&database.pool).await.unwrap();
+        let after: Value =
+            sqlx::query_scalar("select to_jsonb(s) from runtime_settings s where id=1")
+                .fetch_one(&database.pool)
+                .await
+                .unwrap();
+        let groups_after: Vec<Value> =
+            sqlx::query_scalar("select to_jsonb(g) from account_groups g order by id")
+                .fetch_all(&database.pool)
+                .await
+                .unwrap();
+        assert_eq!(before, after);
+        assert_eq!(groups_before, groups_after);
+        PgRuntimeSettingsRepository::new(database.pool.clone())
             .load_runtime_settings()
             .await
-            .unwrap()
-            .disable_fast
-    );
-
-    let mut update = settings_with_margin(3_600);
-    update.disable_fast = None;
-    repository
-        .update_runtime_settings(update)
-        .await
-        .expect("preserve disable-fast");
-    assert!(
-        repository
-            .load_runtime_settings()
-            .await
-            .unwrap()
-            .disable_fast
-    );
-    assert!(
+            .unwrap();
         PgRuntimeSnapshotRepository::new(database.pool.clone())
             .load_runtime_snapshot()
             .await
-            .unwrap()
-            .settings
-            .disable_fast
-    );
-    database.close().await;
+            .unwrap();
+        database.close().await;
+    }
 }
 
 #[tokio::test]

@@ -44,6 +44,7 @@ import { createApp, h } from 'vue';
 import { createPinia } from 'pinia';
 import { createRouter, createMemoryHistory, RouterView } from 'vue-router';
 import SettingsView from '/src/views/settings/index.vue';
+import { i18n, setLocale } from '/src/i18n';
 import { applyResolvedTheme, DEFAULT_CUSTOM_THEME_COLOR, DEFAULT_THEME_COLOR, resolveTheme } from '/src/theme';
 import '@fontsource-variable/inter';
 import '@fontsource-variable/jetbrains-mono';
@@ -51,8 +52,10 @@ import '/src/styles/index.css';
 const theme = new URLSearchParams(location.search).get('theme') === 'dark' ? 'dark' : 'light';
 applyResolvedTheme(document.documentElement, resolveTheme(theme, DEFAULT_THEME_COLOR, DEFAULT_CUSTOM_THEME_COLOR, {}));
 const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/settings', name: 'settings', component: SettingsView }] });
+await setLocale('zh-Hans');
 const app = createApp({ render: () => h('main', { style: 'max-width:1200px;margin:auto;padding:16px;min-width:0' }, [h(RouterView)]) });
 app.use(createPinia());
+app.use(i18n);
 app.use(router);
 await router.push('/settings');
 await router.isReady();
@@ -139,6 +142,14 @@ async function main() {
         const common = page.getByRole('region', { name: '通用与 Codex 配置', exact: true })
         const excel = page.getByRole('region', { name: 'Excel 配置', exact: true })
         await common.waitFor({ state: 'visible' })
+        assert.equal(await page.getByRole('switch', { name: '全局关闭 Fast 档位', exact: true }).count(), 0)
+        assert.equal(await common.getByRole('spinbutton', { name: 'Excel 提交前缓冲阈值（KiB）', exact: true }).count(), 0)
+        const interval = common.getByRole('spinbutton', { name: '请求间隔（秒）', exact: true })
+        const bodyLimit = common.getByRole('spinbutton', { name: '请求解压上限（MiB）', exact: true })
+        assert.equal(await interval.inputValue(), '0.025')
+        assert.equal(await bodyLimit.inputValue(), '64')
+        await interval.fill('1.001')
+        await bodyLimit.fill('64.5')
         const affinity = common.getByRole('radiogroup', { name: 'OpenAI 账号亲和模式', exact: true })
         assert.equal(await affinity.getByRole('radio', { name: '严格', exact: true }).isChecked(), true)
         await affinity.getByRole('radio', { name: '优先', exact: true }).click()
@@ -151,6 +162,9 @@ async function main() {
           await page.screenshot({ path: join(output, `common-${viewport.width}-${theme}.png`), fullPage: true })
         await page.getByRole('radio', { name: 'Excel 配置', exact: true }).click()
         await excel.waitFor({ state: 'visible' })
+        const prefetch = excel.getByRole('spinbutton', { name: 'Excel 提交前缓冲阈值（KiB）', exact: true })
+        assert.equal(await prefetch.inputValue(), '128')
+        await prefetch.fill('15')
         assert.equal(await common.isVisible(), false)
         const size = page.getByRole('spinbutton', { name: '单张图片上限（MiB）', exact: true })
         assert.equal(await size.inputValue(), '20')
@@ -180,6 +194,10 @@ async function main() {
         await page.getByRole('button', { name: '保存全部设置', exact: true }).click()
         await page.waitForFunction(() => window.settingsQa.writes.length === 1)
         const saved = await page.evaluate(() => window.settingsQa.writes[0])
+        assert.equal(saved.requestIntervalMs, 1001)
+        assert.equal(saved.responsesMaxDecompressedBodyBytes, 64.5 * 1048576)
+        assert.equal(saved.requestTuning.streamPrefetchBytes, 15 * 1024)
+        assert.equal(Object.hasOwn(saved, 'disableFast'), false)
         assert.equal(saved.requestTuning.excelImageMaxBytes, 21495808)
         assert.equal(saved.requestTuning.websocketMaxRetries, 6)
         assert.equal(saved.requestTuning.maxAccountSwitches, 4)

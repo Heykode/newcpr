@@ -815,7 +815,6 @@ impl ProviderCandidate {
 #[derive(Debug, Clone)]
 pub struct RoutingPlan {
     account_error_protection: Arc<crate::account::CompiledAccountErrorProtection>,
-    disable_fast: bool,
     codex_quota_overdraft_enabled: bool,
     codex_quota_overdraft_probe_model: UpstreamModelId,
     request_location: Option<crate::account::RequestLocation>,
@@ -832,11 +831,6 @@ impl RoutingPlan {
     #[must_use]
     pub fn account_error_protection(&self) -> Arc<crate::account::CompiledAccountErrorProtection> {
         Arc::clone(&self.account_error_protection)
-    }
-
-    #[must_use]
-    pub const fn disable_fast(&self) -> bool {
-        self.disable_fast
     }
 
     #[must_use]

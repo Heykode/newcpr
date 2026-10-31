@@ -74,7 +74,6 @@ export type AccountAffinity = 'strict' | 'preferred' | 'relaxed'
 export interface RuntimeSettings {
   configRevision: number
   excelDefaultModels?: string[]
-  disableFast?: boolean
   turnStateInjectionEnabled?: boolean
   turnStateModels?: string[]
   turnStateProbeProxyId?: string | null
