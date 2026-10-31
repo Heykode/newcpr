@@ -3,6 +3,8 @@ use gateway_core::provider_ports::{
     ProviderSessionAffinityKey, ProviderSessionAffinityPort, ProviderSessionAlias,
 };
 
+mod quality_wait;
+
 #[tokio::test]
 async fn retired_state_flags_do_not_gate_either_selector_or_bypass_model_restrictions() {
     use gateway_core::routing::OpenAiTurnStatePolicy;

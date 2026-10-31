@@ -292,6 +292,9 @@ scope, cached_account_models for aggregate scopes.
   consume a business wait-queue slot, switch accounts or inherit the ordinary hard-pin
   interval rejection. Redis lease races recheck the same account and interval; they
   must not turn a just-started parallel sample into `NoEligibleCredential`.
+  Guard the common business-wait entry, including sticky, fallback and lease-race
+  callers: quality work skips admission and returns to direct interval selection.
+  Redis must continue rejecting promotion from business waiting to quality execution.
   Quality lease requests use a separate Redis active key in the same account hash
   slot, sharing interval/fence keys but never business active/waiting counts. Keep
   cancellation-safe ownership, deadlines and cleanup; never merely subtract in UI.
@@ -427,7 +430,10 @@ scope, cached_account_models for aggregate scopes.
 ## State Probe Mode
 
 - `detectionMode` defaults to `answer` for legacy rules. `state_probe` is one round
-  of at most two serial HTTP SSE quality requests, 45 seconds per request, with no judge.
+  of at most two serial HTTP SSE quality requests, 60 seconds per request, with no judge.
+  Each shot shares one absolute deadline across interval waiting, preparation and
+  response collection; completion of selection must not start another timeout window.
+  Excel recovery keeps 45 seconds and answer checks keep 120 seconds.
   It uses the ordinary coordinator, fixed account, credentials, request identity, quota,
   request interval and safety gates while bypassing the business concurrency cap.
   No direct upstream client or

@@ -1546,6 +1546,23 @@ fn quality_check_uses_normal_fixed_account_and_persists_without_client_charges()
         let requests = store.requests.lock().unwrap();
         let expected = if probe && complete { 2 } else { 1 };
         assert_eq!(requests.len(), expected);
+        for request in requests.iter() {
+            assert_eq!(
+                request
+                    .deadline_at
+                    .at()
+                    .unwrap()
+                    .duration_since(request.started_at)
+                    .unwrap(),
+                Duration::from_secs(if probe {
+                    60
+                } else if recovery {
+                    45
+                } else {
+                    120
+                }),
+            );
+        }
         assert!(requests[0].client_api_key_id.is_none());
         assert_eq!(
             requests[0].request_kind.as_deref(),

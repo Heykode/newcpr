@@ -850,7 +850,9 @@ impl DefaultExecutionService {
     ) -> Result<AccountProbeResult, AccountProbeError> {
         let state_probe = matches!(&request.operation, Operation::Generate(generate) if generate.quality_probe().is_some());
         let excel_recovery = matches!(&request.operation, Operation::Generate(generate) if generate.excel_recovery_revision().is_some());
-        let timeout_duration = std::time::Duration::from_secs(if state_probe || excel_recovery {
+        let timeout_duration = std::time::Duration::from_secs(if state_probe {
+            60
+        } else if excel_recovery {
             45
         } else {
             120
@@ -978,7 +980,12 @@ impl DefaultExecutionService {
                 Ok((text, complete))
             }
             .fuse();
-            let timeout = Delay::new(timeout_duration).fuse();
+            let timeout = Delay::new(
+                deadline_at
+                    .duration_since(SystemTime::now())
+                    .unwrap_or_default(),
+            )
+            .fuse();
             let cancelled = cancellation.cancelled().fuse();
             pin_mut!(collect, timeout, cancelled);
             futures::select! {
