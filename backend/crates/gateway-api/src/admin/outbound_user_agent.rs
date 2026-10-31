@@ -19,9 +19,16 @@ use super::{
 
 #[derive(Debug, Clone)]
 pub enum UpdateOutboundUserAgentRequest {
+    Configuration {
+        document: gateway_core::account::OpaqueProviderData,
+    },
     Default,
-    Custom { user_agent: String },
-    CustomAutoVersion { user_agent: String },
+    Custom {
+        user_agent: String,
+    },
+    CustomAutoVersion {
+        user_agent: String,
+    },
 }
 
 impl<'de> Deserialize<'de> for UpdateOutboundUserAgentRequest {
@@ -37,12 +44,24 @@ impl<'de> Deserialize<'de> for UpdateOutboundUserAgentRequest {
             deny_unknown_fields
         )]
         enum Wire {
-            Default { user_agent: Option<String> },
-            Custom { user_agent: String },
-            CustomAutoVersion { user_agent: String },
+            Configuration {
+                configuration: serde_json::Map<String, serde_json::Value>,
+            },
+            Default {
+                user_agent: Option<String>,
+            },
+            Custom {
+                user_agent: String,
+            },
+            CustomAutoVersion {
+                user_agent: String,
+            },
         }
 
         match Wire::deserialize(deserializer)? {
+            Wire::Configuration { configuration } => Ok(Self::Configuration {
+                document: gateway_core::account::OpaqueProviderData::new(configuration),
+            }),
             Wire::Default { user_agent: None } => Ok(Self::Default),
             Wire::Custom { user_agent } => Ok(Self::Custom { user_agent }),
             Wire::CustomAutoVersion { user_agent } => Ok(Self::CustomAutoVersion { user_agent }),
@@ -58,6 +77,9 @@ impl<'de> Deserialize<'de> for UpdateOutboundUserAgentRequest {
 impl From<UpdateOutboundUserAgentRequest> for ProviderUserAgentOverride {
     fn from(request: UpdateOutboundUserAgentRequest) -> Self {
         match request {
+            UpdateOutboundUserAgentRequest::Configuration { document } => {
+                Self::Configuration { document }
+            }
             UpdateOutboundUserAgentRequest::Default => Self::Default,
             UpdateOutboundUserAgentRequest::Custom { user_agent } => Self::Custom { user_agent },
             UpdateOutboundUserAgentRequest::CustomAutoVersion { user_agent } => {
@@ -70,6 +92,9 @@ impl From<UpdateOutboundUserAgentRequest> for ProviderUserAgentOverride {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OutboundUserAgentSettingsView {
+    configuration: Option<serde_json::Value>,
+    profile_options: Option<serde_json::Value>,
+    profile_preview: Option<serde_json::Value>,
     mode: &'static str,
     custom_user_agent: Option<String>,
     default_user_agent: String,
@@ -87,7 +112,14 @@ pub struct OutboundUserAgentSettingsView {
 
 impl From<OutboundUserAgentView> for OutboundUserAgentSettingsView {
     fn from(view: OutboundUserAgentView) -> Self {
+        let configuration = match &view.selection {
+            ProviderUserAgentOverride::Configuration { document } => Some(
+                serde_json::Value::Object(document.expose_to_provider().clone()),
+            ),
+            _ => None,
+        };
         let (mode, custom_user_agent) = match view.selection {
+            ProviderUserAgentOverride::Configuration { .. } => ("configuration", None),
             ProviderUserAgentOverride::Default => ("default", None),
             ProviderUserAgentOverride::Custom { user_agent } => ("custom", Some(user_agent)),
             ProviderUserAgentOverride::CustomAutoVersion { user_agent } => {
@@ -95,6 +127,13 @@ impl From<OutboundUserAgentView> for OutboundUserAgentSettingsView {
             }
         };
         Self {
+            configuration,
+            profile_options: view
+                .profile_options
+                .map(|value| serde_json::Value::Object(value.expose_to_provider().clone())),
+            profile_preview: view
+                .profile_preview
+                .map(|value| serde_json::Value::Object(value.expose_to_provider().clone())),
             mode,
             custom_user_agent,
             default_user_agent: view.default_user_agent,

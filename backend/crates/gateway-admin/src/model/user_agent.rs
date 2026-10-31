@@ -3,8 +3,10 @@
 use chrono::{DateTime, Utc};
 pub use gateway_core::provider_ports::ProviderUserAgentOverride;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct OutboundUserAgentView {
+    pub profile_options: Option<gateway_core::account::OpaqueProviderData>,
+    pub profile_preview: Option<gateway_core::account::OpaqueProviderData>,
     pub selection: ProviderUserAgentOverride,
     pub default_user_agent: String,
     pub effective_user_agent: String,

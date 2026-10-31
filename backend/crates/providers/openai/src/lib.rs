@@ -127,9 +127,6 @@ async fn initialize_with_request_tuning_mode(
         .load_user_agent_override(&provider_kind)
         .await
         .map_err(|_| OpenAiInitializeError::RuntimePolicy)?;
-    profile
-        .apply_user_agent_override(&user_agent_override)
-        .map_err(|_| OpenAiInitializeError::UserAgent)?;
     let artifact_cache =
         CodexArtifactProfileCache::new(provider_kind.clone(), ports.artifact_profiles());
     let configured_build = profile.default_snapshot().desktop_build.parse::<u64>().ok();
@@ -161,6 +158,27 @@ async fn initialize_with_request_tuning_mode(
         verified_profile,
     ));
     let desktop_release_status = desktop_release.status();
+    let platform_releases =
+        transport::profile::platform_release::PlatformDesktopReleaseService::new(
+            provider_kind.clone(),
+            profile.clone(),
+            ports.artifact_profiles(),
+            Arc::new(
+                transport::profile::platform_release::OfficialDesktopArtifactTransport::new()
+                    .map_err(|_| OpenAiInitializeError::Transport)?,
+            ),
+        );
+    let cli_releases = transport::profile::cli_release::CliReleaseService::new(
+        provider_kind.clone(),
+        profile.clone(),
+        ports.artifact_profiles(),
+    )
+    .map_err(|_| OpenAiInitializeError::Transport)?;
+    platform_releases.restore().await;
+    cli_releases.restore().await;
+    profile
+        .apply_user_agent_override(&user_agent_override)
+        .map_err(|_| OpenAiInitializeError::UserAgent)?;
     let repository = CodexCredentialRepository::new(Arc::clone(&accounts));
     let websocket_pool = Arc::new({
         let pool = CodexWebSocketPool::with_config(config.websocket_pool_config());
@@ -316,6 +334,10 @@ async fn initialize_with_request_tuning_mode(
     .map_err(|_| OpenAiInitializeError::Worker)?;
     worker_contributions.push(
         provider::cli_version_worker(cli_version).map_err(|_| OpenAiInitializeError::Worker)?,
+    );
+    worker_contributions.push(
+        provider::profile_release_worker(platform_releases, cli_releases)
+            .map_err(|_| OpenAiInitializeError::Worker)?,
     );
 
     Ok(ProviderBundle {

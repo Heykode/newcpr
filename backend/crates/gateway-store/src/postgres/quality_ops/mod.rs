@@ -173,7 +173,7 @@ async fn action_scope(
          a.upstream_user_id,a.upstream_account_id,
          a.excel_models_follow_global,
          case when a.excel_models_follow_global then s.excel_default_models else a.excel_models end,
-         a.outbound_proxy_id,p.revision,a.model_access_json,u.mode,u.custom_user_agent,
+         a.outbound_proxy_id,p.revision,a.model_access_json,u.mode,u.custom_user_agent,u.configuration_json,
          (select max(config_revision) from admin_audit_events
           where entity_kind='provider_account' and entity_ref=a.id),
          case when a.outbound_proxy_id is null then coalesce(o.mode,e.default_mode) else null end)

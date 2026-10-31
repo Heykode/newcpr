@@ -254,9 +254,7 @@ test('outbound UA automatic refresh remains silent while manual reload errors re
     '@/utils/async': { errorMessage: error => error.message },
     '../composables/userAgentOsVersion': load('views/settings/composables/userAgentOsVersion.ts'),
     '../composables/userAgentClientVersion': load('views/settings/composables/userAgentClientVersion.ts'),
-    './outbound-user-agent-samples': load('views/settings/components/outbound-user-agent-samples.ts', {
-      './outbound-user-agent-samples.json': JSON.parse(readFileSync(source('views/settings/components/outbound-user-agent-samples.json'), 'utf8')),
-    }),
+    './ClientProfileFields.vue': {},
   })
   const scope = vue.effectScope()
   try {

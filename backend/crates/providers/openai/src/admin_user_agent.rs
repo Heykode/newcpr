@@ -9,7 +9,12 @@ use crate::transport::profile::{
 };
 
 pub(crate) fn current(profile: &CodexWireProfileState) -> OutboundUserAgentView {
-    view(profile.settings_snapshot())
+    let mut result = view(profile.settings_snapshot());
+    result.profile_options = profile.selection_options().ok();
+    if let ProviderUserAgentOverride::Configuration { document } = &result.selection {
+        result.profile_preview = profile.preview_selection(document).ok();
+    }
+    result
 }
 
 pub(crate) fn preview(
@@ -17,6 +22,28 @@ pub(crate) fn preview(
     selection: &ProviderUserAgentOverride,
 ) -> Result<OutboundUserAgentView, ProviderAdminError> {
     let candidate = profile.frozen();
+    if let ProviderUserAgentOverride::Configuration { document } = selection {
+        candidate.preview_selection(document).map_err(|error| {
+            use crate::transport::profile::selection::ClientProfileError;
+            ProviderAdminError::new(ProviderAdminErrorKind::Invalid).with_public_message(
+                match error {
+                    ClientProfileError::Invalid => "客户端身份字段或版本组合不合法",
+                    ClientProfileError::InvalidUserAgent => {
+                        "User-Agent 必须是 1 至 4096 字节的单行 ASCII 文本，且首尾不能含空白"
+                    }
+                    ClientProfileError::CompanionHeadersRequired => {
+                        "无法识别 User-Agent，请补充 originator 和有效的 Core version"
+                    }
+                    ClientProfileError::CompanionHeadersConflict => {
+                        "originator 或 Core version 与 User-Agent 不一致"
+                    }
+                    ClientProfileError::ReleaseUnavailable => {
+                        "此客户端、平台与架构尚无已核验发布版本，请选择固定版本或稍后重试"
+                    }
+                },
+            )
+        })?;
+    }
     candidate
         .apply_user_agent_override(selection)
         .map_err(map_error)?;
@@ -35,6 +62,9 @@ pub(crate) fn apply(
 
 fn view(settings: CodexWireProfileSettings) -> OutboundUserAgentView {
     let selection = match settings.mode {
+        CodexWireProfileOverride::Configuration { document, .. } => {
+            ProviderUserAgentOverride::Configuration { document }
+        }
         CodexWireProfileOverride::Default => ProviderUserAgentOverride::Default,
         CodexWireProfileOverride::Custom(profile) => ProviderUserAgentOverride::Custom {
             user_agent: profile.user_agent(),
@@ -47,6 +77,8 @@ fn view(settings: CodexWireProfileSettings) -> OutboundUserAgentView {
     };
     let profile = settings.effective_profile;
     OutboundUserAgentView {
+        profile_options: None,
+        profile_preview: None,
         verified: matches!(selection, ProviderUserAgentOverride::Default),
         selection,
         default_user_agent: settings.default_user_agent,

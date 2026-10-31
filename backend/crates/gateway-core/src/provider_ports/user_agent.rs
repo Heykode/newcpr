@@ -1,7 +1,7 @@
 //! Explicit outbound UA policy, separate from transport and transient sessions.
 
 /// A user-agent override is explicit even when it equals the current default.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub enum ProviderUserAgentOverride {
     #[default]
     Default,
@@ -11,13 +11,16 @@ pub enum ProviderUserAgentOverride {
     CustomAutoVersion {
         user_agent: String,
     },
+    Configuration {
+        document: crate::account::OpaqueProviderData,
+    },
 }
 
 impl ProviderUserAgentOverride {
     #[must_use]
     pub fn custom_user_agent(&self) -> Option<&str> {
         match self {
-            Self::Default => None,
+            Self::Default | Self::Configuration { .. } => None,
             Self::Custom { user_agent } | Self::CustomAutoVersion { user_agent } => {
                 Some(user_agent)
             }

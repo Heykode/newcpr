@@ -302,11 +302,21 @@ impl ProviderAdmin for OpenAiAdminProvider {
 
     fn dashboard_wire_profile(&self) -> Option<DashboardWireProfile> {
         let selection = self.profile.settings_snapshot();
+        let configured = match &selection.mode {
+            crate::transport::profile::CodexWireProfileOverride::Configuration {
+                document, ..
+            } => crate::transport::profile::identity::RequestProfileSelection::parse(document).ok(),
+            _ => None,
+        };
+        let follows_release = configured.as_ref().is_some_and(|value| {
+            value.version_mode() == crate::transport::profile::selection::VersionMode::Latest
+        });
         let profile = selection.effective_profile;
         let verified = matches!(
             selection.mode,
             crate::transport::profile::CodexWireProfileOverride::Default
-        );
+        ) || (follows_release
+            && profile.verified_at != chrono::DateTime::UNIX_EPOCH);
         let release = self.desktop_release.snapshot();
         let user_agent = profile.user_agent();
         let client_identity = format!("{}; {}", profile.originator, profile.desktop_version);
@@ -332,7 +342,9 @@ impl ProviderAdmin for OpenAiAdminProvider {
                 DashboardWireAttribute {
                     label: "版本策略".to_owned(),
                     key: "version_policy",
-                    value: if verified {
+                    value: if follows_release {
+                        "跟随官方平台发布"
+                    } else if verified {
                         "跟随官方"
                     } else if matches!(
                         selection.mode,

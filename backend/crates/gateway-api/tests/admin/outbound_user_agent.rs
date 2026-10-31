@@ -10,6 +10,27 @@ use tower::ServiceExt;
 use super::{AdminTestFixture, AdminTestState};
 
 #[test]
+fn structured_ua_wire_preserves_provider_document_and_rejects_non_objects() {
+    let document = json!({"client":"cli","platform":"linux","versionMode":"latest","cliEntry":"exec","versionLag":2});
+    let request: UpdateOutboundUserAgentRequest =
+        serde_json::from_value(json!({"mode":"configuration","configuration":document})).unwrap();
+    let ProviderUserAgentOverride::Configuration { document: actual } =
+        ProviderUserAgentOverride::from(request)
+    else {
+        panic!("configuration mode");
+    };
+    assert_eq!(actual.expose_to_provider(), document.as_object().unwrap());
+    for configuration in [json!(null), json!("not an object"), json!([])] {
+        assert!(
+            serde_json::from_value::<UpdateOutboundUserAgentRequest>(
+                json!({"mode":"configuration","configuration":configuration})
+            )
+            .is_err()
+        );
+    }
+}
+
+#[test]
 fn outbound_ua_wire_requires_explicit_mode_and_rejects_unknown_fields() {
     for value in [
         json!({}),
@@ -77,6 +98,8 @@ fn client_version_sync_is_an_explicit_custom_policy() {
 fn custom_view_does_not_emit_retired_transport_choices() {
     for user_agent in ["custom-cli".to_owned(), "custom-desktop".to_owned()] {
         let view = OutboundUserAgentView {
+            profile_options: None,
+            profile_preview: None,
             selection: ProviderUserAgentOverride::Custom {
                 user_agent: user_agent.clone(),
             },
@@ -176,6 +199,8 @@ fn independent_wire_is_no_longer_a_live_configuration_mode() {
 fn default_and_custom_views_keep_explicit_ua_selection() {
     for user_agent in [None, Some("desktop-ua".to_owned())] {
         let view = OutboundUserAgentView {
+            profile_options: None,
+            profile_preview: None,
             selection: user_agent
                 .clone()
                 .map_or(ProviderUserAgentOverride::Default, |user_agent| {

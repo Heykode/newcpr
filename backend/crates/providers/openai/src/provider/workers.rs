@@ -135,6 +135,61 @@ struct OpenAiCliVersionTask {
     service: crate::transport::profile::cli_version::CodexCliVersionService,
 }
 
+pub(crate) fn profile_release_worker(
+    desktop: crate::transport::profile::platform_release::PlatformDesktopReleaseService,
+    cli: crate::transport::profile::cli_release::CliReleaseService,
+) -> Result<WorkerContribution, WorkerDefinitionError> {
+    let schedule = WorkerSchedule::try_new(
+        Duration::from_secs(60),
+        WORKER_INITIAL_BACKOFF,
+        WORKER_MAXIMUM_BACKOFF,
+        WORKER_LEASE_TTL,
+        WORKER_LEASE_RENEWAL,
+    )?;
+    Ok(WorkerContribution::Registration(
+        WorkerRegistration::try_new(
+            WorkerId::try_new(WorkerKind::QuotaCatalogHealth, "openai-platform-releases")?,
+            WorkerRunnable::Scheduled {
+                schedule,
+                lease: None,
+                task: Box::new(ProfileReleaseTask {
+                    desktop,
+                    cli,
+                    last_check: tokio::sync::Mutex::new(None),
+                }),
+            },
+        )?,
+    ))
+}
+
+struct ProfileReleaseTask {
+    desktop: crate::transport::profile::platform_release::PlatformDesktopReleaseService,
+    cli: crate::transport::profile::cli_release::CliReleaseService,
+    last_check: tokio::sync::Mutex<Option<std::time::Instant>>,
+}
+
+impl ScheduledTask for ProfileReleaseTask {
+    fn run_cycle(&self, context: WorkerCycleContext) -> BoxFuture<'_, Result<(), WorkerTaskError>> {
+        Box::pin(async move {
+            tokio::select! {
+                () = context.cancellation().cancelled() => {},
+                () = async {
+                    self.desktop.restore().await;
+                    self.cli.restore().await;
+                    let mut last = self.last_check.lock().await;
+                    if last.is_some_and(|last| last.elapsed() < Duration::from_secs(6 * 60 * 60)) { return; }
+                    *last = Some(std::time::Instant::now());
+                    self.desktop.refresh().await;
+                    if let Err(error) = self.cli.refresh().await {
+                        tracing::warn!(%error, "OpenAI CLI release check failed");
+                    }
+                } => {},
+            }
+            Ok(())
+        })
+    }
+}
+
 impl ScheduledTask for OpenAiCliVersionTask {
     fn run_cycle(&self, context: WorkerCycleContext) -> BoxFuture<'_, Result<(), WorkerTaskError>> {
         Box::pin(async move {

@@ -61,7 +61,7 @@ async fn scope(
     sqlx::query_scalar("select jsonb_build_array(e.revision,a.credential_revision,a.enabled,a.responses_upstream,
         a.upstream_user_id,a.upstream_account_id,a.excel_403_action,a.excel_auto_disabled_at,
         a.excel_models_follow_global,case when a.excel_models_follow_global then s.excel_default_models else a.excel_models end,
-        a.request_proxy_source,a.outbound_proxy_id,p.revision,a.model_access_json,u.mode,u.custom_user_agent,u.updated_at,
+        a.request_proxy_source,a.outbound_proxy_id,p.revision,a.model_access_json,u.mode,u.custom_user_agent,u.configuration_json,u.updated_at,
         a.excel_cache_creation_as_input,a.excel_ignore_encrypted_content,a.quality_pause_owner,
         (select max(config_revision) from admin_audit_events where entity_kind='provider_account' and entity_ref=a.id),
         case when a.outbound_proxy_id is null then coalesce(o.mode,e.default_mode) else null end)

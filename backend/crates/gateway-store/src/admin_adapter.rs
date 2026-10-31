@@ -60,7 +60,11 @@ impl SettingsStore for AdminSettingsStoreAdapter {
                     "outbound_user_agent.replace",
                     "provider_outbound_user_agents",
                     provider_kind.as_str(),
-                    vec!["mode".to_owned(), "custom_user_agent".to_owned()],
+                    vec![
+                        "mode".to_owned(),
+                        "custom_user_agent".to_owned(),
+                        "configuration_json".to_owned(),
+                    ],
                 ),
             )
             .await

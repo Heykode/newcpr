@@ -16,7 +16,11 @@ use provider_openai::transport::profile::{
     CodexWireProfile, CodexWireProfileOverride, CodexWireProfileState, parse_desktop_release,
 };
 
+mod cli_release;
 mod desktop_artifact;
+mod identity;
+mod platform_release;
+mod selection;
 mod user_agent;
 
 struct ReleaseTransport {

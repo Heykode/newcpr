@@ -115,7 +115,7 @@ use execution::*;
 pub use failure::openai_failure_affects_account_score;
 use failure::*;
 use observation::*;
-pub(crate) use workers::{cli_version_worker, worker_contributions};
+pub(crate) use workers::{cli_version_worker, profile_release_worker, worker_contributions};
 
 const PROVIDER_NAME: &str = "openai";
 const HTTP_SSE_TRANSPORT: &str = "http_sse";

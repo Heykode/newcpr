@@ -120,6 +120,8 @@ impl IdentityProvider {
 
     fn view(selection: ProviderUserAgentOverride) -> OutboundUserAgentView {
         OutboundUserAgentView {
+            profile_options: None,
+            profile_preview: None,
             effective_user_agent: selection
                 .custom_user_agent()
                 .unwrap_or("fixture")

@@ -20,8 +20,14 @@ use url::Url;
 
 use self::desktop_artifact::{CodexDesktopArtifactError, fetch_codex_core_version};
 
+pub mod cli_release;
 pub mod cli_version;
 pub mod desktop_artifact;
+pub mod identity;
+pub mod platform_release;
+mod releases;
+pub mod selection;
+use releases::{ReleaseObservation, release_cache_kind};
 pub mod qx;
 
 /// Codex Desktop 官方 appcast 地址。
@@ -249,15 +255,22 @@ fn valid_architecture(os_type: &str, arch: &str) -> bool {
 }
 
 /// Explicitly selected outbound UA behavior.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum CodexWireProfileOverride {
     Default,
     Custom(Box<CodexWireProfile>),
     CustomAutoVersion(Box<CodexWireProfile>),
+    Configuration {
+        #[serde(with = "configuration_document")]
+        document: OpaqueProviderData,
+        fallback: Box<CodexWireProfile>,
+    },
 }
 
+mod configuration_document;
+
 /// Settings and previews needed by the admin UI.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct CodexWireProfileSettings {
     pub mode: CodexWireProfileOverride,
     pub default_user_agent: String,
@@ -280,11 +293,23 @@ struct CodexWireProfileSelection {
     mode: CodexWireProfileOverride,
     #[serde(default)]
     cli_version: Option<String>,
+    #[serde(default)]
+    releases: std::collections::BTreeMap<String, ReleaseObservation>,
 }
 
 impl CodexWireProfileSelection {
     fn effective(&self) -> CodexWireProfile {
         match &self.mode {
+            CodexWireProfileOverride::Configuration { document, fallback } => {
+                let mut frozen = self.clone();
+                frozen.mode = CodexWireProfileOverride::Default;
+                let state = CodexWireProfileState {
+                    selection: Arc::new(RwLock::new(frozen)),
+                };
+                identity::RequestProfileSelection::parse(document)
+                    .and_then(|selection| selection.resolve(&state))
+                    .unwrap_or_else(|_| *fallback.clone())
+            }
             CodexWireProfileOverride::Default => self.default_profile.clone(),
             CodexWireProfileOverride::Custom(profile) => *profile.clone(),
             CodexWireProfileOverride::CustomAutoVersion(profile) => {
@@ -314,6 +339,26 @@ impl CodexWireProfileSelection {
 
     fn desktop(&self) -> CodexWireProfile {
         match &self.mode {
+            CodexWireProfileOverride::Configuration { document, .. } => {
+                let effective = self.effective();
+                let is_desktop = identity::RequestProfileSelection::parse(document)
+                    .ok()
+                    .and_then(|selection| {
+                        selection
+                            .preset()
+                            .map(|preset| preset.client == selection::ClientKind::Desktop)
+                    })
+                    .unwrap_or(
+                        effective.originator == "Codex Desktop"
+                            && !effective.desktop_version.is_empty()
+                            && !effective.os_type.is_empty(),
+                    );
+                if is_desktop {
+                    effective
+                } else {
+                    self.default_profile.clone()
+                }
+            }
             CodexWireProfileOverride::Custom(profile)
             | CodexWireProfileOverride::CustomAutoVersion(profile)
                 if profile.originator == "Codex Desktop" =>
@@ -354,13 +399,18 @@ impl CodexWireProfileState {
 
     /// 从启动画像创建运行时状态。
     pub fn new(profile: CodexWireProfile) -> Self {
-        Self {
+        let state = Self {
             selection: Arc::new(RwLock::new(CodexWireProfileSelection {
                 default_profile: profile,
                 mode: CodexWireProfileOverride::Default,
                 cli_version: None,
+                releases: Default::default(),
             })),
-        }
+        };
+        state.seed_default_release();
+        cli_release::seed_releases(&state);
+        platform_release::seed_releases(&state);
+        state
     }
 
     /// 返回当前画像的独立快照，避免持锁执行网络请求。
@@ -425,11 +475,28 @@ impl CodexWireProfileState {
         &self,
         selection: &ProviderUserAgentOverride,
     ) -> Result<(), CodexWireProfileError> {
+        if let ProviderUserAgentOverride::Configuration { document } = selection {
+            let frozen = self.frozen();
+            let profile = identity::RequestProfileSelection::parse(document)
+                .and_then(|selection| selection.resolve(&frozen))
+                .map_err(|_| CodexWireProfileError::Incoherent)?;
+            self.selection
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .mode = CodexWireProfileOverride::Configuration {
+                document: document.clone(),
+                fallback: Box::new(profile),
+            };
+            return Ok(());
+        }
         let mut current = self
             .selection
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mode = match selection {
+            ProviderUserAgentOverride::Configuration { .. } => {
+                unreachable!("configuration handled above")
+            }
             ProviderUserAgentOverride::Default => CodexWireProfileOverride::Default,
             ProviderUserAgentOverride::Custom { user_agent }
             | ProviderUserAgentOverride::CustomAutoVersion { user_agent } => {
@@ -457,6 +524,9 @@ impl CodexWireProfileState {
         mode: CodexWireProfileOverride,
     ) -> Result<(), CodexWireProfileError> {
         let selection = match mode {
+            CodexWireProfileOverride::Configuration { document, .. } => {
+                ProviderUserAgentOverride::Configuration { document }
+            }
             CodexWireProfileOverride::Default => ProviderUserAgentOverride::Default,
             CodexWireProfileOverride::Custom(profile) => ProviderUserAgentOverride::Custom {
                 user_agent: profile.user_agent(),
@@ -507,6 +577,17 @@ impl CodexWireProfileState {
         profile.desktop_version.clone_from(&release.desktop_version);
         profile.desktop_build.clone_from(&release.desktop_build);
         profile.verified_at = release.verified_at;
+        let observation = selection
+            .releases
+            .entry("Desktop-Macos-arm64".to_owned())
+            .or_default();
+        let release = selection::ClientRelease {
+            codex_version: release.codex_version.clone(),
+            desktop_version: Some(release.desktop_version.clone()),
+            desktop_build: Some(release.desktop_build.clone()),
+            verified_at: Some(release.verified_at),
+        };
+        observation.observe(release);
     }
 }
 
