@@ -132,7 +132,7 @@ enum WaitOutcome {
     Changed,
     Retry,
     RootChanged,
-    // Local corrupt credentials consume a candidate, not a facts/publication rescan.
+    // No business wait: quality uses direct selection; corrupt credentials skip this candidate.
     Skipped,
 }
 
@@ -803,6 +803,12 @@ impl CodexCredentialSelector {
                 {
                     WaitOutcome::Acquired(lease) => return Ok(*lease),
                     WaitOutcome::Retry | WaitOutcome::RootChanged => continue 'rescan,
+                    WaitOutcome::Skipped if request.attempt.is_quality_check() => {
+                        // A refreshed interval belongs to direct quality waiting, not
+                        // the bounded credential/publication conflict retry budget.
+                        scan = 0;
+                        continue 'rescan;
+                    }
                     WaitOutcome::Skipped => continue,
                     WaitOutcome::Full => saw_full = true,
                     WaitOutcome::Changed => {
@@ -995,6 +1001,11 @@ impl CodexCredentialSelector {
         request: &CredentialSelectionInput<'_>,
         state: &mut WaitingSelection,
     ) -> Result<WaitOutcome, CredentialSelectionError> {
+        // Quality leases have separate ownership and cannot promote a business waiter.
+        // Keep all callers on the direct-selection interval loop and its request deadline.
+        if request.attempt.is_quality_check() {
+            return Ok(WaitOutcome::Skipped);
+        }
         let candidate = if state.universe.contains(id) {
             control.run(self.reload_wait_target(id, request)).await?
         } else {
