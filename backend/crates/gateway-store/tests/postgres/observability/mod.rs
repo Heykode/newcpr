@@ -29,6 +29,7 @@ mod concurrency;
 mod dashboard_comparison;
 mod final_error;
 mod metric;
+mod plan_snapshots;
 mod quality_isolation;
 mod search;
 mod usage_history;
@@ -156,6 +157,7 @@ async fn zero_attempt_errors_remain_filterable_without_inventing_upstream_or_usa
          provider_account_id = null, provider_account_ref = null,
          provider_account_name_snapshot = null, provider_account_email_snapshot = null,
          provider_account_authentication_kind_snapshot = null,
+         provider_account_plan_type_snapshot = null,
          upstream_model_id = null, upstream_transport = null, upstream_status_code = null,
          upstream_request_id = null, client_status_code = 503, error_kind = 'no_eligible_account',
          error_message = 'No eligible account', input_tokens = null, cached_tokens = null,
@@ -219,7 +221,7 @@ async fn zero_attempt_errors_remain_filterable_without_inventing_upstream_or_usa
 }
 
 #[tokio::test]
-async fn ops_errors_show_current_plan_but_preserve_historical_account_labels() {
+async fn ops_errors_preserve_historical_plan_and_account_labels() {
     let Some(database) = TestDatabase::create("ops_current_plan").await else {
         return;
     };
@@ -249,7 +251,7 @@ async fn ops_errors_show_current_plan_but_preserve_historical_account_labels() {
             .unwrap();
         assert!(!errors.items.is_empty());
         for error in errors.items {
-            assert_eq!(error.provider_account_plan_type.as_deref(), plan);
+            assert_eq!(error.provider_account_plan_type.as_deref(), Some("pro"));
             assert_eq!(error.provider_account_name.as_deref(), Some("primary"));
             assert_eq!(
                 error.provider_account_email.as_deref(),
@@ -316,6 +318,7 @@ async fn usage_list_should_resolve_current_custom_names_by_account_id() {
     sqlx::query(
         "update model_requests
          set provider_account_id = 'acct_team', provider_account_ref = 'acct_team',
+             provider_account_plan_type_snapshot = 'team',
              downstream_committed_at = completed_at
          where id = 'req_observe_uncommitted'",
     )
@@ -414,7 +417,10 @@ async fn usage_list_should_resolve_current_custom_names_by_account_id() {
         Some("account@example.invalid")
     );
     assert_eq!(page.items[0].provider_account_custom_name, None);
-    assert_eq!(page.items[0].provider_account_plan_type, None);
+    assert_eq!(
+        page.items[0].provider_account_plan_type.as_deref(),
+        Some("team")
+    );
     database.close().await;
 }
 
@@ -2361,6 +2367,23 @@ async fn observability_queries_preserve_request_account_cost_and_diagnostic_fact
 }
 
 async fn seed_observability_facts(
+    pool: &PgPool,
+    now: chrono::DateTime<Utc>,
+) -> Result<(), sqlx::Error> {
+    seed_legacy_observability_facts(pool, now).await?;
+    sqlx::query("update model_requests set provider_account_plan_type_snapshot='pro'
+                 where id in ('req_observe_uncommitted','req_observe_success','req_observe_failed')")
+        .execute(pool).await?;
+    sqlx::query(
+        "update ops_events set provider_account_plan_type_snapshot='pro'
+                 where id='ops_observe_retry'",
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+async fn seed_legacy_observability_facts(
     pool: &PgPool,
     now: chrono::DateTime<Utc>,
 ) -> Result<(), sqlx::Error> {

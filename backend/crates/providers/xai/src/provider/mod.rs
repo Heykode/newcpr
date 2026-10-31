@@ -606,6 +606,7 @@ fn grok_model_presentation(model: &GrokCatalogModel) -> ModelPresentation {
         .map(std::num::NonZeroU64::get)
         .or(known_grok_4_5.then_some(500_000));
     let tool_evidence = model.capabilities().streaming_tool_calls();
+    let reasoning_summary = reasoning_efforts.iter().any(|effort| effort != "none");
 
     ModelPresentation::new(
         model
@@ -622,6 +623,7 @@ fn grok_model_presentation(model: &GrokCatalogModel) -> ModelPresentation {
             }),
     )
     .with_reasoning(default_reasoning, reasoning_efforts)
+    .with_reasoning_summary(reasoning_summary)
     .with_context_window_tokens(context_window_tokens)
     // Grok 目录只声明一个窗口，保留原有的最大窗口输出。
     .with_max_context_window_tokens(context_window_tokens)

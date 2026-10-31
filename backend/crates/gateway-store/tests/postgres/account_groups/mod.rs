@@ -403,7 +403,7 @@ async fn groups_aggregate_cross_provider_members_and_key_bindings_without_multip
     assert_eq!(members.len(), 2);
     assert_eq!(
         members.iter().map(|member| member.total_slots).sum::<u64>(),
-        9
+        7
     );
     assert_eq!(page.total, 2);
     let by_id = page

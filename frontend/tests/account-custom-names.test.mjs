@@ -29,13 +29,15 @@ const creation = load('../src/views/accounts/components/AccountCreateModal/model
   '@/utils/account-name': names,
 })
 
-test('names trim, clear, count Unicode characters and reject control characters', () => {
+test('names validate raw UTF-8 bytes before trimming and reject control characters', () => {
   for (const input of [undefined, null, '', '   '])
     assert.equal(names.normalizeAccountName(input), null)
   assert.equal(names.normalizeAccountName('  Batch A  '), 'Batch A')
   assert.equal(names.normalizeAccountName('名'.repeat(128)), '名'.repeat(128))
   assert.equal(names.normalizeAccountName('\u{1F511}'.repeat(128)), '\u{1F511}'.repeat(128))
-  for (const value of ['a'.repeat(129), 'bad\nname', '\tname', 'name\u007F'])
+  assert.equal(names.normalizeAccountName('a'.repeat(512)), 'a'.repeat(512))
+  assert.equal(names.normalizeAccountName('名'.repeat(170)), '名'.repeat(170))
+  for (const value of ['a'.repeat(513), '名'.repeat(171), '\u{1F511}'.repeat(129), ` ${'a'.repeat(512)}`, ' '.repeat(513), 'bad\nname', '\tname', 'name\u007F'])
     assert.throws(() => names.normalizeAccountName(value))
 })
 

@@ -14,6 +14,7 @@ function accountRows() {
     row.id = `acct_overdraft_${index}`
     row.status = 'normal'
     row.enabled = true
+    row.usage.requestCount = 0
     row.inFlight = index === 0 ? 2 : 0
     row.effectiveConcurrencyLimit = 8
     row.quota.windows = row.quota.windows.map((window, windowIndex) => ({
@@ -181,6 +182,8 @@ async function main() {
         assert.equal(await page.getByText('通用额度', { exact: true }).count(), 0)
         assert.equal(await page.getByText('透支中', { exact: true }).count(), 2)
         assert.equal(await page.getByText('28 次 · 321K · $1.46', { exact: true }).count(), 1)
+        assert.ok(await page.getByRole('progressbar').count() > 0, 'native quota stays visible with no local requests')
+        assert.ok(await page.locator('[role="progressbar"][aria-valuenow="100"]').count() > 0)
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1), true)
         assert.deepEqual(errors, [])
         assert.deepEqual(unexpected, [])

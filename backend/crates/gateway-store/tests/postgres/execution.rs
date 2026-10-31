@@ -164,7 +164,7 @@ async fn merged_model_less_first_attempt_should_match_sequential_semantics() {
            has_refresh_token, access_token_expires_at, enabled, credential_state,
            credential_observed_at, created_at, updated_at
          ) values (
-           'acct_merged', 'openai', 'merged', null, 'user-merged', null, null, 'oauth',
+           'acct_merged', 'openai', 'merged', null, 'user-merged', null, 'pro', 'oauth',
            '{}'::jsonb, 1, false, $1 + interval '1 day', true, 'ready', $1, $1, $1
          )",
     )
@@ -217,6 +217,14 @@ async fn merged_model_less_first_attempt_should_match_sequential_semantics() {
         .await
         .expect("merged insert");
 
+    let plan: Option<String> = sqlx::query_scalar(
+        "select provider_account_plan_type_snapshot from model_requests where id='req_merged'",
+    )
+    .fetch_one(&database.pool)
+    .await
+    .unwrap();
+    assert_eq!(plan.as_deref(), Some("pro"));
+
     let (attempt_count, send_state, provider_kind, outcome, requested_model, upstream_model): (
         i32,
         String,
@@ -252,6 +260,10 @@ async fn merged_model_less_first_attempt_should_match_sequential_semantics() {
         )
         .await
         .expect("mark sent before retry");
+    sqlx::query("update provider_accounts set plan_type='free' where id='acct_merged'")
+        .execute(&database.pool)
+        .await
+        .unwrap();
     let second = repository
         .begin_model_request_attempt(ModelRequestAttemptStart {
             account_selection_wait_ms: None,
@@ -269,6 +281,13 @@ async fn merged_model_less_first_attempt_should_match_sequential_semantics() {
         .await
         .expect("second attempt");
     assert_eq!(second, 2);
+    let plan: Option<String> = sqlx::query_scalar(
+        "select provider_account_plan_type_snapshot from model_requests where id='req_merged'",
+    )
+    .fetch_one(&database.pool)
+    .await
+    .unwrap();
+    assert_eq!(plan.as_deref(), Some("free"));
     let send_state: String = sqlx::query_scalar(
         "select upstream_send_state from model_requests where id = 'req_merged'",
     )
@@ -458,6 +477,7 @@ async fn billing_snapshot_upgrade_preserves_legacy_request_and_cumulative_totals
     let after: Value = sqlx::query_scalar(
         "select to_jsonb(mr) - 'billing_snapshot_json' - 'purchase_identity_id'
                                - 'client_api_key_name_snapshot'
+                               - 'provider_account_plan_type_snapshot'
          from model_requests mr",
     )
     .fetch_one(&database.pool)
@@ -1682,6 +1702,7 @@ async fn zero_attempt_failure_is_queryable_without_fabricating_upstream_facts() 
         "provider_account_name_snapshot",
         "provider_account_email_snapshot",
         "provider_account_authentication_kind_snapshot",
+        "provider_account_plan_type_snapshot",
         "upstream_model_id",
         "upstream_transport",
         "http_version",

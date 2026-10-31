@@ -1174,6 +1174,7 @@ fn health_metric_point(bucket_start: DateTime<Utc>, metrics: RequestMetrics) -> 
 fn diagnostic(name: &str, request_count: u64) -> DiagnosticObservation {
     DiagnosticObservation {
         account_provider_kind: None,
+        account_authentication_kind: None,
         account_plan_type: None,
         retried_request_count: 0,
         first_token_p95_ms: None,

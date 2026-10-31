@@ -39,6 +39,12 @@ Strict/Relaxed 设置和 Strict 默认值，不改账号、身份、出口或调
 
 ## 本地测试库
 
+0078_concurrency_defaults.sql 对齐初始化并发/排队策略，保留已保存和自定义设置。
+0079_account_plan_snapshots.sql 为新请求和错误事件保存历史套餐，旧记录保持未知。
+0080_account_name_bytes.sql 将 custom_name 上限对齐为 512 个 UTF-8 字节，
+兼容全部原有合法名称；旧前端可能无法编辑超过其 128 字符限制的新名称。
+三项均为新增迁移，不修改历史 checksum，不更改账号身份和出口。
+
 0077_codex_quota_overdraft.sql 增加默认关闭的 Codex OAuth 额度透支设置与
 多实例探测状态表。状态表不替代 quota_access_state，探测失败仍由原额度耗尽和
 quota_reset_at 控制调度；只有当前配置、凭据和额度周期均匹配的 passed 状态

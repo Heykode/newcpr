@@ -176,6 +176,8 @@ async fn custom_names_are_atomic_searchable_and_preserve_account_identity() {
         None,
         Some(None),
         Some(Some("Renamed".into())),
+        Some(Some("a".repeat(512))),
+        Some(Some("名".repeat(170))),
         Some(Some("   ".into())),
     ] {
         store
@@ -193,7 +195,7 @@ async fn custom_names_are_atomic_searchable_and_preserve_account_identity() {
             .unwrap();
         let expected = match name {
             None => Some("Local batch"),
-            Some(Some(ref value)) if !value.trim().is_empty() => Some("Renamed"),
+            Some(Some(ref value)) if !value.trim().is_empty() => Some(value.trim()),
             _ => None,
         };
         assert_eq!(

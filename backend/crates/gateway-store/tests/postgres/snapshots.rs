@@ -350,6 +350,14 @@ async fn ops_errors_should_keep_request_and_event_snapshots_after_account_deleti
         started_at,
     )
     .await;
+    sqlx::query("update provider_accounts set plan_type = 'pro' where id = 'acct_snap_a'")
+        .execute(&database.pool)
+        .await
+        .expect("set request account plan");
+    sqlx::query("update provider_accounts set plan_type = 'free' where id = 'acct_snap_c'")
+        .execute(&database.pool)
+        .await
+        .expect("set event account plan");
     let store = PgExecutionStore::new(database.pool.clone());
     store
         .insert_model_request_with_first_attempt(
@@ -433,6 +441,10 @@ async fn ops_errors_should_keep_request_and_event_snapshots_after_account_deleti
     );
     assert_eq!(request_error.endpoint.as_deref(), Some("/v1/responses"));
     assert_eq!(
+        request_error.provider_account_plan_type.as_deref(),
+        Some("pro")
+    );
+    assert_eq!(
         request_error.raw_upstream_error.as_deref(),
         Some(r#"{"error":{"message":"raw request failure"}}"#)
     );
@@ -454,6 +466,10 @@ async fn ops_errors_should_keep_request_and_event_snapshots_after_account_deleti
         )
     );
     assert_eq!(probe_error.endpoint, None);
+    assert_eq!(
+        probe_error.provider_account_plan_type.as_deref(),
+        Some("free")
+    );
     assert_eq!(
         probe_error.raw_upstream_error.as_deref(),
         Some(r#"{"error":"raw probe failure"}"#)
@@ -608,7 +624,7 @@ async fn diagnostics_should_fallback_to_name_then_ref_for_missing_snapshots() {
 }
 
 #[tokio::test]
-async fn diagnostics_should_prefer_the_latest_non_null_email_snapshot() {
+async fn diagnostics_should_keep_labels_from_the_same_latest_snapshot() {
     let Some(database) = TestDatabase::create("snapshot_diagnostics_latest_email").await else {
         return;
     };
@@ -664,7 +680,7 @@ async fn diagnostics_should_prefer_the_latest_non_null_email_snapshot() {
 
     assert_eq!(diagnostics.len(), 1);
     assert_eq!(diagnostics[0].key, "acct_snapshot_history");
-    assert_eq!(diagnostics[0].name, "history@example.invalid");
+    assert_eq!(diagnostics[0].name, "Newer Name");
     assert_eq!(diagnostics[0].request_count, 2);
     database.close().await;
 }

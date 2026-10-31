@@ -36,6 +36,158 @@ fn settings_replacement(
 }
 
 #[tokio::test]
+async fn upstream_concurrency_defaults_preserve_saved_and_customized_settings() {
+    let old = sqlx::migrate::Migrator {
+        migrations: super::TEST_MIGRATOR
+            .iter()
+            .filter(|migration| migration.version < 78)
+            .cloned()
+            .collect::<Vec<_>>()
+            .into(),
+        ..sqlx::migrate::Migrator::DEFAULT
+    };
+    for (revision, limit, guardian, tuning, change) in [
+        (1_i64, 5_i64, 0_i64, Value::Null, true),
+        (2, 5, 0, Value::Null, false),
+        (1, 7, 0, Value::Null, false),
+        (1, 5, 2, Value::Null, false),
+        (1, 5, 0, json!({"accountBusyWaitEnabled":true}), false),
+        (1, 5, 0, json!({"maxWaitingPerKey":12}), false),
+        (
+            1,
+            5,
+            0,
+            json!({"accountBusyWaitStickyTimeoutSeconds":60}),
+            false,
+        ),
+        (
+            1,
+            5,
+            0,
+            json!({"maxWaitingPerKey":0,"keyConcurrencyWaitTimeoutSeconds":30,"websocketMaxRetries":7}),
+            true,
+        ),
+    ] {
+        let Some(database) = TestDatabase::create_with_migrator("concurrency_defaults", &old).await
+        else {
+            return;
+        };
+        sqlx::query(
+            "update runtime_settings set config_revision=$1,max_concurrent_per_account=$2,
+                    openai_guardian_reserved_concurrency=$3,request_tuning_json=$4 where id=1",
+        )
+        .bind(revision)
+        .bind(limit)
+        .bind(guardian)
+        .bind(if tuning.is_null() {
+            None
+        } else {
+            Some(tuning.clone())
+        })
+        .execute(&database.pool)
+        .await
+        .unwrap();
+        let before: Value =
+            sqlx::query_scalar("select to_jsonb(s) from runtime_settings s where id=1")
+                .fetch_one(&database.pool)
+                .await
+                .unwrap();
+        super::TEST_MIGRATOR.run(&database.pool).await.unwrap();
+        let after: Value =
+            sqlx::query_scalar("select to_jsonb(s) from runtime_settings s where id=1")
+                .fetch_one(&database.pool)
+                .await
+                .unwrap();
+        if change {
+            assert_eq!(after["max_concurrent_per_account"], 3);
+            assert_eq!(after["openai_guardian_reserved_concurrency"], 5);
+            assert_eq!(after["request_tuning_json"]["maxWaitingPerKey"], 10);
+            assert_eq!(
+                after["request_tuning_json"]["accountBusyWaitStickyMaxWaiting"],
+                10
+            );
+            assert_eq!(
+                after["request_tuning_json"]["accountBusyWaitFallbackMaxWaiting"],
+                10
+            );
+            assert_eq!(after["request_tuning_json"]["accountBusyWaitEnabled"], true);
+            assert_eq!(
+                after["request_tuning_json"]["accountBusyWaitStickyTimeoutSeconds"],
+                30
+            );
+            assert_eq!(
+                after["request_tuning_json"]["accountBusyWaitFallbackTimeoutSeconds"],
+                30
+            );
+            for (key, value) in before.as_object().unwrap() {
+                if ![
+                    "max_concurrent_per_account",
+                    "openai_guardian_reserved_concurrency",
+                    "request_tuning_json",
+                ]
+                .contains(&key.as_str())
+                {
+                    assert_eq!(&after[key], value, "unrelated setting {key}");
+                }
+            }
+            if tuning.get("websocketMaxRetries").is_some() {
+                assert_eq!(after["request_tuning_json"]["websocketMaxRetries"], 7);
+            }
+        } else {
+            assert_eq!(before, after);
+        }
+        database.close().await;
+    }
+}
+
+#[tokio::test]
+async fn fresh_concurrency_defaults_reach_runtime_snapshot() {
+    let Some(database) = TestDatabase::create("fresh_concurrency_defaults").await else {
+        return;
+    };
+    let settings = PgRuntimeSettingsRepository::new(database.pool.clone())
+        .load_runtime_settings()
+        .await
+        .unwrap();
+    assert_eq!(settings.max_concurrent_per_account, 3);
+    assert_eq!(settings.openai_guardian_reserved_concurrency, 5);
+    let snapshot = PgRuntimeSnapshotRepository::new(database.pool.clone())
+        .load_runtime_snapshot()
+        .await
+        .unwrap();
+    assert_eq!(
+        snapshot.settings.request_tuning.max_waiting_per_key,
+        Some(10)
+    );
+    assert_eq!(
+        snapshot.settings.request_tuning.account_busy_wait_enabled,
+        Some(true)
+    );
+    assert_eq!(
+        snapshot
+            .settings
+            .request_tuning
+            .account_busy_wait_sticky_max_waiting,
+        Some(10)
+    );
+    assert_eq!(
+        snapshot
+            .settings
+            .request_tuning
+            .account_busy_wait_fallback_max_waiting,
+        Some(10)
+    );
+    assert_eq!(
+        snapshot
+            .settings
+            .request_tuning
+            .key_concurrency_wait_timeout_seconds,
+        Some(30)
+    );
+    database.close().await;
+}
+
+#[tokio::test]
 async fn settings_revision_rejects_stale_forms_without_writes_or_audit() {
     let Some(database) = TestDatabase::create("settings_revision_stale").await else {
         return;

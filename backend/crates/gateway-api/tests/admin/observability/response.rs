@@ -796,6 +796,7 @@ async fn diagnostics_should_keep_stable_key_and_display_name_contract() {
             key: "acct_diag".to_owned(),
             name: "diag@example.invalid".to_owned(),
             account_provider_kind: Some("openai".to_owned()),
+            account_authentication_kind: Some("oauth".to_owned()),
             account_plan_type: Some("pro".to_owned()),
             retried_request_count: 0,
             request_count: 2,
@@ -846,6 +847,7 @@ async fn diagnostics_should_keep_stable_key_and_display_name_contract() {
     assert_eq!(value["data"]["pageSize"], 100);
     assert_eq!(value["data"]["hasMore"], false);
     assert_eq!(value["data"]["items"][0]["accountPlanType"], "pro");
+    assert_eq!(value["data"]["items"][0]["authenticationKind"], "oauth");
     assert_eq!(value["data"]["items"][0]["accountPlanTypeDisplay"], "Pro");
 }
 
@@ -870,6 +872,7 @@ async fn key_model_diagnostics_require_admin_and_project_pagination_and_cost_cov
             key: serde_json::json!(["key_synthetic", format!("model-{index}")]).to_string(),
             name: format!("Named Key → model-{index}"),
             account_provider_kind: None,
+            account_authentication_kind: None,
             account_plan_type: None,
             retried_request_count: 0,
             request_count: 3 - index,

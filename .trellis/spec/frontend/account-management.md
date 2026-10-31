@@ -319,8 +319,9 @@ Never infer principal identity from email or erase usage while editing a price.
 - Relogin push confirmation resets the independent batch name on every open and
   shows it only when new accounts are included. Existing-only pushes omit it.
   Mixed pushes may send it but only the backend create-only branch applies it.
-- Mirror Admin name validation: trim, max 128 Unicode characters, no control
-  characters. Block invalid names before leaving import settings. Verify unset,
+- Mirror Admin name validation: validate raw input at most 512 UTF-8 bytes with
+  TextEncoder and no control characters, then trim. Block invalid names before
+  leaving import settings. Verify unset,
   explicit clear, import/OAuth, reauthorization preservation, mixed pushes and
   template preservation with synthetic-only tests and mobile/light/dark screenshots.
 

@@ -174,8 +174,18 @@ async fn runtime_snapshot_compiles_account_busy_wait_defaults_overrides_and_froz
     let providers = ProviderRegistry::new([Arc::new(SnapshotTestProvider) as Arc<dyn Provider>])
         .expect("provider registry");
     let compiler = RuntimeSnapshotCompiler::new(repository, Arc::new(providers));
-    let defaults = compiler.compile().await.expect("compile old settings");
-    assert_eq!(defaults.request_tuning(), RequestTuning::default());
+    let initial = RequestTuning {
+        max_waiting_per_key: 10,
+        key_concurrency_wait_timeout_seconds: 30,
+        account_busy_wait_enabled: true,
+        account_busy_wait_sticky_max_waiting: 10,
+        account_busy_wait_sticky_timeout_seconds: 30,
+        account_busy_wait_fallback_max_waiting: 10,
+        account_busy_wait_fallback_timeout_seconds: 30,
+        ..RequestTuning::default()
+    };
+    let defaults = compiler.compile().await.expect("compile fresh settings");
+    assert_eq!(defaults.request_tuning(), initial);
     assert_eq!(defaults.request_location(), None);
     let location = gateway_core::account::RequestLocation::default();
     let expected = RequestTuning {
@@ -297,7 +307,7 @@ async fn runtime_snapshot_compiles_account_busy_wait_defaults_overrides_and_froz
         legacy.request_location(),
         Some(&gateway_core::account::RequestLocation::default())
     );
-    assert_eq!(defaults.request_tuning(), RequestTuning::default());
+    assert_eq!(defaults.request_tuning(), initial);
 
     for inherited in [
         json!({}),

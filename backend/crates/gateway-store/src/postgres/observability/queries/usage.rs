@@ -143,7 +143,7 @@ pub(crate) const USAGE_LIST_RECORD_SELECT: &str =
             mr.provider_account_name_snapshot as provider_account_name,
             mr.provider_account_email_snapshot as provider_account_email,
             account.custom_name as provider_account_custom_name,
-            account.plan_type as provider_account_plan_type,
+            mr.provider_account_plan_type_snapshot as provider_account_plan_type,
             mr.provider_account_authentication_kind_snapshot
               as provider_account_authentication_kind,
             mr.upstream_model_id, mr.upstream_transport, mr.service_tier,
@@ -655,14 +655,25 @@ pub(crate) async fn usage_diagnostics(
     statement.push(
         ")
          select aggregated.*, selected.total_request_count,
-                account.provider_kind as account_provider_kind, account.plan_type as account_plan_type
+                coalesce(historical.provider_account_email_snapshot,
+                         historical.provider_account_name_snapshot, aggregated.dimension_name) as display_name,
+                historical.provider_kind as account_provider_kind,
+                historical.provider_account_authentication_kind_snapshot as account_authentication_kind,
+                historical.provider_account_plan_type_snapshot as account_plan_type
            from aggregated
            join selected_dimensions selected using (dimension_name)
-           left join provider_accounts account on account.id = aggregated.dimension_name and ",
+           left join lateral (
+             select provider_kind, provider_account_authentication_kind_snapshot,
+                    provider_account_plan_type_snapshot, provider_account_email_snapshot,
+                    provider_account_name_snapshot
+             from model_requests
+             where provider_account_ref = aggregated.dimension_name and ",
     );
     statement.push_bind(dimension == DiagnosticDimension::Account);
-    statement
-        .push(" order by selected.sort_position, currency_grouping desc, cost_currency nulls last");
+    statement.push(
+        " order by started_at desc, id desc limit 1) historical on true
+                order by selected.sort_position, currency_grouping desc, cost_currency nulls last",
+    );
     let rows = statement
         .build()
         .fetch_all(&mut *connection)
@@ -679,8 +690,9 @@ pub(crate) async fn usage_diagnostics(
         match get::<i32>(row, "currency_grouping")? {
             1 => observations.push(DiagnosticObservation {
                 key: get(row, "dimension_name")?,
-                name: get(row, "dimension_name")?,
+                name: get(row, "display_name")?,
                 account_provider_kind: get(row, "account_provider_kind")?,
+                account_authentication_kind: get(row, "account_authentication_kind")?,
                 account_plan_type: get(row, "account_plan_type")?,
                 request_count: unsigned(row, "request_count")?,
                 success_count: unsigned(row, "success_count")?,
@@ -711,16 +723,6 @@ pub(crate) async fn usage_diagnostics(
     let has_more = page.is_some() && observations.len() > page_size as usize;
     observations.truncate(page_size as usize);
     let mut display_names = match dimension {
-        DiagnosticDimension::Account => {
-            diagnostic_account_display_names(
-                connection,
-                &observations
-                    .iter()
-                    .map(|item| item.key.clone())
-                    .collect::<Vec<_>>(),
-            )
-            .await?
-        }
         DiagnosticDimension::ApiKey => {
             diagnostic_api_key_display_names(
                 connection,
@@ -768,52 +770,6 @@ pub(crate) async fn usage_diagnostics(
         page_size: page.map_or(DIAGNOSTIC_LIMIT as u16, |page| page.page_size),
         has_more,
     })
-}
-
-pub(crate) async fn diagnostic_account_display_names(
-    connection: &mut PgConnection,
-    account_ids: &[String],
-) -> StoreResult<HashMap<String, String>> {
-    if account_ids.is_empty() {
-        return Ok(HashMap::new());
-    }
-    let rows = sqlx::query(
-        "select requested.account_id as provider_account_ref,
-                coalesce(
-                  (
-                    select request.provider_account_email_snapshot
-                    from model_requests request
-                    where request.provider_account_ref = requested.account_id
-                      and request.provider_account_email_snapshot is not null
-                    order by request.started_at desc, request.id desc
-                    limit 1
-                  ),
-                  (
-                    select request.provider_account_name_snapshot
-                    from model_requests request
-                    where request.provider_account_ref = requested.account_id
-                      and request.provider_account_name_snapshot is not null
-                    order by request.started_at desc, request.id desc
-                    limit 1
-                  ),
-                  requested.account_id
-                ) as display_name
-         from unnest($1::text[]) as requested(account_id)",
-    )
-    .bind(account_ids)
-    .fetch_all(&mut *connection)
-    .await
-    .map_err(|error| {
-        postgres_unavailable("load diagnostic account display names").with_source(error)
-    })?;
-    let mut display_names = HashMap::with_capacity(rows.len());
-    for row in rows {
-        display_names.insert(
-            get(&row, "provider_account_ref")?,
-            get(&row, "display_name")?,
-        );
-    }
-    Ok(display_names)
 }
 
 pub(crate) async fn diagnostic_api_key_display_names(

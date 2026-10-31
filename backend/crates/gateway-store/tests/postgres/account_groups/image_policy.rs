@@ -93,6 +93,6 @@ async fn image_permission_roundtrips_and_legacy_update_preserves_it() {
             .fetch_one(&db.pool)
             .await
             .unwrap();
-    assert_eq!(initial, 5);
+    assert_eq!(initial, 3);
     db.close().await;
 }

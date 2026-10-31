@@ -432,7 +432,9 @@ async fn history_upgrade_backfills_available_names_without_rewriting_billing_or_
     .execute(&database.pool)
     .await
     .unwrap();
-    seed_observability_facts(&database.pool, now).await.unwrap();
+    seed_legacy_observability_facts(&database.pool, now)
+        .await
+        .unwrap();
     sqlx::query("update model_requests set client_api_key_ref = 'deleted_key' where id = 'req_observe_failed'")
         .execute(&database.pool).await.unwrap();
     let accounts: Vec<serde_json::Value> =
@@ -446,6 +448,13 @@ async fn history_upgrade_backfills_available_names_without_rewriting_billing_or_
         .run(&database.pool)
         .await
         .unwrap();
+    let known_plans: i64 = sqlx::query_scalar(
+        "select count(*) from model_requests where provider_account_plan_type_snapshot is not null",
+    )
+    .fetch_one(&database.pool)
+    .await
+    .unwrap();
+    assert_eq!(known_plans, 0, "legacy plans must not be invented");
     assert_eq!(sqlx::query_scalar::<_, Option<String>>("select client_api_key_name_snapshot from model_requests where id = 'req_observe_success'")
         .fetch_one(&database.pool).await.unwrap().as_deref(), Some("Legacy name"));
     assert_eq!(sqlx::query_scalar::<_, Option<String>>("select client_api_key_name_snapshot from model_requests where id = 'req_observe_failed'")

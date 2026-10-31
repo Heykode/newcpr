@@ -534,7 +534,12 @@ mod batch_update {
             assert!(request.custom_name.is_some());
             assert!(request.validate().is_ok());
         }
-        for value in [json!("bad\nname"), json!("x".repeat(129))] {
+        for value in [
+            json!("bad\nname"),
+            json!("x".repeat(513)),
+            json!("名".repeat(171)),
+            json!(format!(" {}", "x".repeat(512))),
+        ] {
             let request: BatchUpdateAccountsRequest = serde_json::from_value(json!({
                 "accountIds": ["acct_test"], "customName": value
             }))
@@ -2530,7 +2535,7 @@ mod import_settings {
     #[test]
     fn import_and_oauth_apply_the_same_settings_validation() {
         for (field, value) in [
-            ("customName", json!("x".repeat(129))),
+            ("customName", json!("x".repeat(513))),
             ("customName", json!("bad\nname")),
             ("concurrencyLimit", json!(0)),
             ("concurrencyLimit", json!(4_294_967_296_u64)),

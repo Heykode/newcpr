@@ -708,7 +708,7 @@ async fn relogin_new_batch_name_is_optional_and_independent_of_templates() {
                 std::slice::from_ref(&id),
                 &BTreeMap::from([(id.clone(), before.revision)]),
                 None,
-                Some("x".repeat(129)),
+                Some("x".repeat(513)),
                 &context("invalid-name"),
             )
             .await
