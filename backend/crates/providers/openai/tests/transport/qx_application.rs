@@ -304,9 +304,12 @@ fn correlation_turns_match_headers_history_and_metadata_without_touching_opaque_
     let mut body = request.body().clone();
     body.insert("turn_id".into(), json!("turn-root"));
     body.insert("traceparent".into(), json!("client-trace"));
+    body.insert("sentry-trace".into(), json!("client-trace"));
+    body.insert("baggage".into(), json!("sentry-environment=synthetic"));
     body.insert(
         "turnMetadata".into(),
-        json!({"turn_id":"turn-root", "root_turn_id":"turn-root", "traceparent":"trace"}),
+        json!({"turn_id":"turn-root", "root_turn_id":"turn-root", "traceparent":"trace",
+            "sentry-trace":"client-trace", "baggage":"sentry-environment=synthetic"}),
     );
     body.insert("input".into(), json!([
         {"role":"user","content":"turn-root", "internal_chat_message_metadata_passthrough":{"turn_id":"turn-root","other":"turn-root"}},
@@ -333,6 +336,10 @@ fn correlation_turns_match_headers_history_and_metadata_without_touching_opaque_
     assert_eq!(projected.body()["input"][2], before["input"][2]);
     assert_eq!(projected.body()["previous_response_id"], "resp-original");
     assert!(!projected.body().contains_key("traceparent"));
+    for name in ["sentry-trace", "baggage"] {
+        assert!(!projected.body().contains_key(name));
+        assert!(projected.body()["turnMetadata"].get(name).is_none());
+    }
     assert!(
         projected.body()["turnMetadata"]
             .get("traceparent")
@@ -342,9 +349,21 @@ fn correlation_turns_match_headers_history_and_metadata_without_touching_opaque_
     headers.insert("x-client-turn-id", HeaderValue::from_static("turn-root"));
     headers.insert(
         "x-codex-turn-metadata",
-        HeaderValue::from_static("{\"turn_id\":\"turn-root\",\"tracestate\":\"trace\"}"),
+        HeaderValue::from_static("{\"turn_id\":\"turn-root\",\"tracestate\":\"trace\",\"sentry-trace\":\"trace\",\"baggage\":\"synthetic\"}"),
     );
     headers.insert("traceparent", HeaderValue::from_static("client-trace"));
+    headers.insert(
+        reqwest::header::HeaderName::from_bytes(b"Sentry-Trace").unwrap(),
+        HeaderValue::from_static("client-trace"),
+    );
+    headers.append(
+        "baggage",
+        HeaderValue::from_static("sentry-environment=synthetic"),
+    );
+    headers.append(
+        "baggage",
+        HeaderValue::from_static("sentry-release=synthetic"),
+    );
     apply_response_headers(&mut headers, &projected, context()).unwrap();
     assert_eq!(headers["x-client-turn-id"], turn);
     let metadata: serde_json::Value =
@@ -352,6 +371,10 @@ fn correlation_turns_match_headers_history_and_metadata_without_touching_opaque_
     assert_eq!(metadata["turn_id"], turn);
     assert!(metadata.get("tracestate").is_none());
     assert!(!headers.contains_key("traceparent"));
+    for name in ["sentry-trace", "baggage"] {
+        assert!(metadata.get(name).is_none());
+        assert!(!headers.contains_key(name));
+    }
     assert_eq!(request.body(), &before);
     assert_eq!(
         project_response_request(&projected, context()).body(),

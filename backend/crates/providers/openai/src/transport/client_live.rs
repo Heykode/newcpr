@@ -348,6 +348,9 @@ mod tests {
                     ProviderHttpHeader::new("voice-session-id", Bytes::from_static(b"voice-ref")),
                     ProviderHttpHeader::new("session-id", Bytes::from_static(b"tracking")),
                     ProviderHttpHeader::new("traceparent", Bytes::from_static(b"trace")),
+                    ProviderHttpHeader::new("Sentry-Trace", Bytes::from_static(b"trace")),
+                    ProviderHttpHeader::new("baggage", Bytes::from_static(b"synthetic-one")),
+                    ProviderHttpHeader::new("baggage", Bytes::from_static(b"synthetic-two")),
                     ProviderHttpHeader::new("x-codex-turn-state", Bytes::from_static(b"old-state")),
                     ProviderHttpHeader::new("x-business", Bytes::from_static(b"one")),
                     ProviderHttpHeader::new("x-business", Bytes::from_static(b"two\xff")),
@@ -364,6 +367,8 @@ mod tests {
         assert_eq!(headers["voice-session-id"], "voice-ref");
         assert_ne!(headers["session-id"], "tracking");
         assert!(!headers.contains_key("traceparent"));
+        assert!(!headers.contains_key("sentry-trace"));
+        assert!(!headers.contains_key("baggage"));
         assert!(!headers.contains_key("x-codex-turn-state"));
         assert_eq!(
             headers
