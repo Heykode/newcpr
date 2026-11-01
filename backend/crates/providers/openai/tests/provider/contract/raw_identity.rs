@@ -20,8 +20,8 @@ const CLEAN_BODY: &[u8] = br#" {
 const IDENTITY_BODY: &[u8] = br#" {
   "model":"gpt-5.4", "input":[{"type":"compaction","encrypted_content":"opaque"}],
   "id":"shared-root", "id":"shared-root", "session_id":"shared-root", "conversation_id":"client-correlation",
-  "turn_id":"shared-turn", "traceparent":"discard-me",
-  "turn_metadata":{"turn_id":"shared-turn","account_id":"discard-me","tracestate":"discard-me","business":"unchanged"},
+  "turn_id":"shared-turn", "traceparent":"discard-me", "sentry-trace":"discard-me", "baggage":"discard-me",
+  "turn_metadata":{"turn_id":"shared-turn","account_id":"discard-me","tracestate":"discard-me","sentry-trace":"discard-me","baggage":"discard-me","business":"unchanged"},
   "prompt":"literal \u4e2d text", "commands":{"search_query":[{"q":"test","account_id":"business"}]},
   "images":[{"image_url":"data:image/png;base64,c3ludGhldGlj"}],
   "metadata":{"account_id":"business"}, "future":9007199254740993,
@@ -31,12 +31,13 @@ const IDENTITY_BODY: &[u8] = br#" {
   "turnState":"discard-me", "installation_id":"discard-me", "installation_id":"discard-me",
   "installationId":null, "x-codex-installation-id":"discard-me",
   "client_metadata":{
+    "ws_request_header_sentry-trace":"discard-me", "ws_request_header_baggage":"discard-me",
     "account_id":"discard-me", "account_id":"discard-me", "response_id":"discard-me",
     "x-codex-turn-state":"discard-me", "installation_id":"discard-me",
     "installationId":"discard-me", "x-codex-installation-id":"discard-me",
     "future_meta":9007199254740993, "future_meta":1.23456789012345678901234567890
   },
-  "turnMetadata":"{\"account_id\":\"discard-me\",\"installation_id\":\"discard-me\",\"future_turn\":1,\"future_turn\":2}"
+  "turnMetadata":"{\"account_id\":\"discard-me\",\"installation_id\":\"discard-me\",\"sentry-trace\":\"discard-me\",\"baggage\":\"discard-me\",\"future_turn\":1,\"future_turn\":2}"
 } "#;
 
 fn raw_operation(endpoint: &str, body: Bytes) -> Operation {

@@ -8,8 +8,12 @@ use std::{cell::RefCell, collections::BTreeMap};
 const TRACE_FIELDS: &[&str] = &[
     "traceparent",
     "tracestate",
+    "sentry-trace",
+    "baggage",
     "ws_request_header_traceparent",
     "ws_request_header_tracestate",
+    "ws_request_header_sentry-trace",
+    "ws_request_header_baggage",
 ];
 
 #[derive(Clone, Copy)]

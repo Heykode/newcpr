@@ -812,6 +812,13 @@ derive from the additional turn fields.
 - Remove known client trace propagation fields. Handle object and JSON-string
   turn metadata; retain header-safe ASCII encoding. Preserve opaque response IDs,
   tool call IDs, encrypted contents and normal user/tool text.
+  Official `c57af9b0` extends the shared `TRACE_FIELDS` with `sentry-trace`,
+  `baggage` and their `ws_request_header_*` copies, alongside traceparent/tracestate.
+  Strip mixed-case and repeated HTTP headers before computing the WS connection
+  profile. Trace-only changes must reuse the owning socket and preserve cache/session
+  identities; meaningful identity/profile changes still isolate ordinary requests,
+  while exact continuation retains its physical owner. Do not add configurable
+  privacy policies to implement this fixed cleanup.
 - Only recognized complete Desktop Git context is edited, with XML node/byte
   bounds and explicit content classification respected. Map only sessionId and
   threadId; leave turnId, workspace paths and other content intact. Historical

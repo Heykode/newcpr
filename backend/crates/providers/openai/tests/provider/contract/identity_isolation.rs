@@ -135,6 +135,7 @@ async fn frozen_request_profile_survives_publication_without_reusing_account_ide
             let url = format!("http://{}", listener.local_addr().unwrap());
             let server = tokio::spawn(async move {
                 let mut captures = Vec::new();
+                let mut sockets = Vec::new();
                 for _ in 0..3 {
                     let (socket, _) = listener.accept().await.unwrap();
                     let headers = Arc::new(Mutex::new(None));
@@ -154,6 +155,8 @@ async fn frozen_request_profile_survives_publication_without_reusing_account_ide
                     let body: Value = serde_json::from_str(frame.to_text().unwrap()).unwrap();
                     super::generate_compat::send_completion(&mut socket, "resp_profile").await;
                     captures.push((headers.lock().unwrap().take().unwrap(), body));
+                    // Keep earlier connections alive to prove identity/profile pool isolation.
+                    sockets.push(socket);
                 }
                 captures
             });
@@ -229,6 +232,11 @@ async fn frozen_request_profile_survives_publication_without_reusing_account_ide
         assert_eq!(captures[0].0["user-agent"], old_ua);
         assert_eq!(captures[1].0["user-agent"], old_ua);
         assert_eq!(captures[2].0["user-agent"], state.snapshot().user_agent());
+        assert_eq!(captures[1].0["session-id"], captures[2].0["session-id"]);
+        assert_eq!(
+            captures[1].1["prompt_cache_key"],
+            captures[2].1["prompt_cache_key"]
+        );
         assert_ne!(
             captures[0].0["authorization"],
             captures[1].0["authorization"]
@@ -250,8 +258,39 @@ async fn frozen_request_profile_survives_publication_without_reusing_account_ide
             "acct_profile_second",
         ]) {
             assert!(!headers.contains_key("x-codex-installation-id"));
+            for name in ["traceparent", "tracestate", "sentry-trace", "baggage"] {
+                assert!(!headers.contains_key(name), "outbound header {name}");
+            }
+            for name in [
+                "sentry-trace",
+                "baggage",
+                "ws_request_header_sentry-trace",
+                "ws_request_header_baggage",
+            ] {
+                assert!(body.get(name).is_none(), "root field {name}");
+                assert!(
+                    body["client_metadata"].get(name).is_none(),
+                    "metadata {name}"
+                );
+                assert!(
+                    body["turnMetadata"].get(name).is_none(),
+                    "turn metadata {name}"
+                );
+            }
             let metadata: Value =
                 serde_json::from_str(headers["x-codex-turn-metadata"].to_str().unwrap()).unwrap();
+            let nested: Value = serde_json::from_str(
+                body["client_metadata"]["x-codex-turn-metadata"]
+                    .as_str()
+                    .unwrap(),
+            )
+            .unwrap();
+            for fields in [&metadata, &nested] {
+                assert!(fields.get("sentry-trace").is_none());
+                assert!(fields.get("baggage").is_none());
+                assert_eq!(fields["turn_id"], "shared-turn");
+                assert_eq!(fields["keep"], "business");
+            }
             assert_eq!(body["turn_id"], "shared-turn");
             assert_eq!(metadata["turn_id"], body["turn_id"]);
             assert_eq!(
@@ -653,12 +692,29 @@ async fn generate_compatibility_matches_wire_and_session_facts_in_both_profiles_
 }
 
 fn correlation_request(websocket: bool) -> GenerateRequest {
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    let metadata = json!({"turn_id":"shared-turn", "keep":"business",
+        "sentry-trace":"synthetic-trace", "baggage":"sentry-environment=synthetic"});
     GenerateRequest::from_protocol_payload(ProtocolPayload::json_object("openai", json!({
         "model":"gpt-5.4", "instructions":"stable", "session_id":"raw-session", "thread_id":"raw-thread", "turn_id":"shared-turn",
+        "sentry-trace":"synthetic-trace", "baggage":"sentry-environment=synthetic",
+        "turnMetadata":metadata,
+        "client_metadata": {
+            "x-codex-turn-metadata":metadata.to_string(),
+            "ws_request_header_sentry-trace":"synthetic-trace",
+            "ws_request_header_baggage":"sentry-environment=synthetic"
+        },
         "input":[{"role":"user", "content":"hello", "internal_chat_message_metadata_passthrough":{"turn_id":"shared-turn"}}]
     }).as_object().unwrap().clone()).unwrap().with_context(Map::from_iter([
         ("use_websocket".to_owned(), json!(websocket)),
-        ("turn_metadata".to_owned(), json!("{\"turn_id\":\"shared-turn\"}")),
+        ("turn_metadata".to_owned(), json!(metadata.to_string())),
+        ("opaque_request_headers".to_owned(), json!([
+            ["traceparent", STANDARD.encode("synthetic-trace")],
+            ["tracestate", STANDARD.encode("vendor=synthetic")],
+            ["Sentry-Trace", STANDARD.encode("synthetic-trace")],
+            ["baggage", STANDARD.encode("sentry-environment=synthetic")],
+            ["baggage", STANDARD.encode("sentry-release=synthetic")]
+        ])),
     ])))
 }
 
@@ -934,6 +990,7 @@ async fn qx_saved_seed_survives_location_change_without_accepting_a_foreign_key(
 
 #[tokio::test]
 async fn provider_websocket_pool_isolates_keys_in_native_and_qx_policies() {
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
     const ACCOUNT: &str = "acct_scope_same";
     for qx in [false, true] {
         let store = Arc::new(MemoryAccountStore::default());
@@ -983,10 +1040,26 @@ async fn provider_websocket_pool_isolates_keys_in_native_and_qx_policies() {
                     json!({})
                 }
             });
+            let mut request_context = Map::from_iter([("use_websocket".into(), json!(true))]);
+            if index < 2 {
+                request_context.insert(
+                    "opaque_request_headers".into(),
+                    json!([
+                        [
+                            "Sentry-Trace",
+                            STANDARD.encode(format!("synthetic-trace-{index}"))
+                        ],
+                        [
+                            "baggage",
+                            STANDARD.encode(format!("sentry-trace_id=synthetic-{index}"))
+                        ]
+                    ]),
+                );
+            }
             let generate = GenerateRequest::from_protocol_payload(
                 ProtocolPayload::json_object("openai", body.as_object().unwrap().clone())
                     .unwrap()
-                    .with_context(Map::from_iter([("use_websocket".into(), json!(true))])),
+                    .with_context(request_context),
             )
             .with_provider_session_state(
                 ProviderSessionState::new(
@@ -1019,7 +1092,7 @@ async fn provider_websocket_pool_isolates_keys_in_native_and_qx_policies() {
         assert_eq!(
             frames.len(),
             2,
-            "removing the legacy alias must reuse the owning socket"
+            "trace-only changes and removing the legacy alias must reuse the owning socket"
         );
         assert_eq!(
             frames[0]["client_metadata"]["installation_id"],
@@ -1032,6 +1105,8 @@ async fn provider_websocket_pool_isolates_keys_in_native_and_qx_policies() {
             .unwrap();
         for (headers, bodies) in &captures {
             assert!(!headers.contains_key("x-codex-installation-id"));
+            assert!(!headers.contains_key("sentry-trace"));
+            assert!(!headers.contains_key("baggage"));
             for body in bodies {
                 assert_eq!(
                     body["client_metadata"]["x-codex-installation-id"],
