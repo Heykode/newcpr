@@ -1,6 +1,8 @@
 @import 'tailwindcss';
 @import './tokens.css';
 @import './base.css';
+@import './transitions.css';
+@import './markdown-alert.css';
 
 @theme inline {
   /* 基础 */

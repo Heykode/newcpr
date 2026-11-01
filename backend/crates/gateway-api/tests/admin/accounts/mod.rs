@@ -2100,6 +2100,24 @@ mod actions {
     }
 
     #[test]
+    fn oauth_authorization_should_accept_optional_name_and_reject_invalid_names() {
+        for name in ["", "   ", "My account"] {
+            let request: StartAccountAuthorizationRequest = serde_json::from_value(json!({
+                "provider": "openai", "name": name
+            }))
+            .expect("decode authorization");
+            assert!(request.validate().is_ok(), "{name:?}");
+        }
+        for name in ["\n".to_owned(), "a\u{0000}".to_owned(), "x".repeat(513)] {
+            let request: StartAccountAuthorizationRequest = serde_json::from_value(json!({
+                "provider": "openai", "name": name
+            }))
+            .expect("decode authorization");
+            assert!(request.validate().is_err());
+        }
+    }
+
+    #[test]
     fn credential_recovery_requests_should_not_accept_client_revision_fences() {
         let authorization: StartAccountAuthorizationRequest = serde_json::from_value(json!({
             "provider": "openai",

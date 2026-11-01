@@ -35,6 +35,7 @@ const props = withDefaults(
     anchorElement?: HTMLElement | null
     hoverElement?: HTMLElement | null
     animatePosition?: boolean
+    transition?: string
     /** 箭头贴合不同内容边缘时使用的表面类；字符串表示所有边缘共用。 */
     arrowSurfaceClass?: PopoverArrowSurfaceClass
   }>(),
@@ -47,6 +48,7 @@ const props = withDefaults(
     anchorElement: null,
     hoverElement: null,
     animatePosition: false,
+    transition: 'cp-fade',
   },
 )
 
@@ -389,12 +391,7 @@ onBeforeUnmount(() => {
 
     <Teleport to="body">
       <Transition
-        enter-active-class="transition-[opacity,transform] duration-150 ease-out motion-reduce:transition-none"
-        enter-from-class="-translate-y-1 opacity-0"
-        enter-to-class="translate-y-0 opacity-100"
-        leave-active-class="transition-opacity duration-150 ease-in motion-reduce:transition-none"
-        leave-from-class="opacity-100"
-        leave-to-class="opacity-0"
+        :name="transition"
       >
         <div
           v-if="open"

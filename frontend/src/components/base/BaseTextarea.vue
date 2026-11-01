@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, inject, useAttrs } from 'vue'
-import { formFieldKey } from './BaseForm/context'
+import { computed, useAttrs } from 'vue'
+import { useFormField } from './BaseForm/composables/useFormField'
 
 type TextareaSize = 'sm' | 'md' | 'lg'
 
@@ -23,16 +23,8 @@ const props = withDefaults(
 
 const model = defineModel<string>({ default: '' })
 const attrs = useAttrs()
-const field = inject(formFieldKey, null)
+const { controlId, invalid, describedBy, required, ariaRequired, validate } = useFormField(attrs)
 
-const controlId = computed(() => typeof attrs.id === 'string' ? attrs.id : field?.controlId.value)
-const invalid = computed(() => Boolean(
-  field?.invalid.value || attrs['aria-invalid'] === true || attrs['aria-invalid'] === 'true',
-))
-const describedBy = computed(() => [
-  typeof attrs['aria-describedby'] === 'string' ? attrs['aria-describedby'] : undefined,
-  field?.describedBy.value,
-].filter(Boolean).join(' ') || undefined)
 const rootAttrs = computed(() => ({ class: attrs.class, style: attrs.style }))
 const controlAttrs = computed(() => Object.fromEntries(
   Object.entries(attrs).filter(([key]) => ![
@@ -73,10 +65,12 @@ const textareaClasses = computed(() => [
       :rows="rows"
       :placeholder="placeholder"
       :disabled="disabled"
-      :required="field?.required.value || undefined"
+      :required="required || undefined"
       :aria-describedby="describedBy"
       :aria-invalid="invalid || undefined"
-      :aria-required="field?.required.value || undefined"
+      :aria-required="ariaRequired"
+      @input="validate('change')"
+      @blur="validate('blur')"
     />
   </div>
 </template>

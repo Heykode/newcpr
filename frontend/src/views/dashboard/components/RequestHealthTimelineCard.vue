@@ -23,6 +23,7 @@ const popoverAnchor = useTemplateRef<HTMLElement>('popoverAnchor')
 const pointPopover = useTemplateRef<InstanceType<typeof BasePopover>>('pointPopover')
 const preferredMotion = usePreferredReducedMotion()
 const points = computed(() => props.timeline.points)
+const pointCount = computed(() => points.value.length || 96)
 
 const activePoint = shallowRef<HealthTimelinePoint>()
 const popoverOpen = shallowRef(false)
@@ -263,7 +264,12 @@ onBeforeUnmount(() => {
     <template #body>
       <div class="relative flex flex-col">
         <span ref="popoverAnchor" aria-hidden="true" class="pointer-events-none absolute top-0 left-0 h-5 w-px opacity-0" />
-        <div ref="timelineGrid" class="grid w-full grid-cols-48 items-end gap-x-0.5 gap-y-1 sm:grid-cols-96">
+        <div ref="timelineGrid" class="grid w-full grid-cols-[repeat(var(--timeline-columns),minmax(0,1fr))] items-end gap-x-0.5 gap-y-1 sm:grid-cols-[repeat(var(--timeline-columns-wide),minmax(0,1fr))]" :style="{ '--timeline-columns': Math.ceil(pointCount / 2), '--timeline-columns-wide': pointCount }" :role="points.length ? undefined : 'img'" :aria-label="points.length ? undefined : '暂无请求数据'">
+          <template v-if="!points.length">
+            <span v-for="index in pointCount" :key="index" aria-hidden="true" class="flex h-5 items-center">
+              <span class="block h-3.5 w-full rounded-xs" :class="healthStatusMeta.no_data.cellClass" />
+            </span>
+          </template>
           <button
             v-for="(point, pointIndex) in points"
             :key="point.time"

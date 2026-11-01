@@ -98,6 +98,9 @@
       "off": "关闭"
     },
     "form": {
+      "required": "必填",
+      "requiredMessage": "此项不能为空",
+      "invalidMessage": "输入值无效",
       "inputPlaceholder": "输入内容",
       "useForm": "使用表单",
       "fieldHelp": "{label}说明",

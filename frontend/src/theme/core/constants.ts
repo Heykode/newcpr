@@ -147,6 +147,9 @@ export const EDITABLE_COLOR_TOKEN_NAMES = new Set<ThemeTokenName>([
   '--cp-button-primary-bg',
   '--cp-button-primary-hover-bg',
   '--cp-button-primary-active-bg',
+  '--cp-button-secondary-bg',
+  '--cp-button-secondary-hover-bg',
+  '--cp-button-secondary-active-bg',
   '--cp-card-bg',
   '--cp-modal-bg',
   '--cp-popover-header-bg',
@@ -168,3 +171,13 @@ export const EDITABLE_SHADOW_TOKEN_NAMES = new Set<ThemeTokenName>([
   '--cp-card-shadow',
   '--cp-layout-sider-shadow',
 ])
+
+/** 只有控件填充允许透出宿主背景；容器与固定表格单元格保持实色。 */
+export const ALPHA_COLOR_TOKEN_NAMES = new Set<string>([
+  '--cp-input-bg',
+  '--cp-input-hover-bg',
+  '--cp-input-active-bg',
+  '--cp-button-secondary-bg',
+  '--cp-button-secondary-hover-bg',
+  '--cp-button-secondary-active-bg',
+] satisfies ThemeTokenName[])

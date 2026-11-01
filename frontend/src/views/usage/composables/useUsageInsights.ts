@@ -17,7 +17,7 @@ export function useUsageInsights(scopedParams: () => UsageRange) {
   const costMetric = shallowRef<UsageCostMetric>('cost')
   const diagnosticDimension = shallowRef('model')
   const diagnosticPage = shallowRef(1)
-  const summary = useUsageQuery(getUsageRecordSummary)
+  const summary = useUsageQuery(getUsageRecordSummary, { keepPreviousData: true })
   const health = useUsageQuery(getUsageHealth)
   const performance = useUsageQuery((params, options) => getUsagePerformance({ ...params, metric: performanceMetric.value }, options))
   const cost = useUsageQuery((params, options) => getUsageCost({ ...params, metric: costMetric.value }, options))
@@ -72,14 +72,14 @@ export function useUsageInsights(scopedParams: () => UsageRange) {
   }
 }
 
-function useUsageQuery<T>(fetch: (params: UsageRange, options: RequestOptions) => Promise<T>) {
+function useUsageQuery<T>(fetch: (params: UsageRange, options: RequestOptions) => Promise<T>, options: { keepPreviousData?: boolean } = {}) {
   const data = shallowRef<T | null>(null)
   const request = useRequestState()
   const state = computed<UsageQueryState<T>>(() => ({ data: data.value, loading: request.loading.value, error: request.error.value }))
 
   async function load(params: UsageRange, preserveData = false) {
     const id = request.start()
-    if (!preserveData)
+    if (!preserveData && !options.keepPreviousData)
       data.value = null
     try {
       const result = await fetch(params, { signal: request.signal })
@@ -87,6 +87,8 @@ function useUsageQuery<T>(fetch: (params: UsageRange, options: RequestOptions) =
         data.value = result
     }
     catch (cause) {
+      if (request.isCurrent(id) && options.keepPreviousData)
+        data.value = null
       request.fail(id, cause)
     }
     finally {

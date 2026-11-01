@@ -98,6 +98,9 @@
       "off": "Off"
     },
     "form": {
+      "required": "Required",
+      "requiredMessage": "This field is required",
+      "invalidMessage": "Invalid value",
       "inputPlaceholder": "Enter a value",
       "useForm": "Use form",
       "fieldHelp": "About {label}",

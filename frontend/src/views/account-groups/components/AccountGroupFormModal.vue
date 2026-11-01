@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import type { AccountGroupFormValue } from '../composables/useAccountGroups'
 import type { AccountGroup } from '@/api'
-import { computed } from 'vue'
+import type { FormRules } from '@/components/base/BaseForm/types'
+import { computed, useTemplateRef, watch } from 'vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 
 import BaseColorPicker from '@/components/base/BaseColorPicker/index.vue'
@@ -24,6 +25,16 @@ const emit = defineEmits<{
 }>()
 const open = defineModel<boolean>({ required: true })
 const form = defineModel<AccountGroupFormValue>('form', { required: true })
+const formRef = useTemplateRef<InstanceType<typeof BaseForm>>('formElement')
+const rules: FormRules = {
+  name: { required: true, whitespace: true, trigger: ['blur', 'change'], message: '请输入分组名称' },
+  color: { pattern: /^#[\da-f]{6}(?:[\da-f]{2})?$/i, required: true, trigger: 'change', message: '请选择有效的分组颜色' },
+}
+watch(open, () => formRef.value?.clearValidate())
+async function requestSave() {
+  if (!props.saving && await formRef.value?.validate().catch(() => false))
+    emit('save')
+}
 const title = computed(() => props.group ? '编辑分组' : '创建分组')
 const description = computed(() => props.group
   ? '修改分组名称和用途说明。'
@@ -38,8 +49,8 @@ const description = computed(() => props.group
     size="md"
     :dismissible="!saving"
   >
-    <BaseForm class="grid gap-5">
-      <BaseFormItem :label="t('groups.editor.groupName')" required>
+    <BaseForm ref="formElement" :model="form" :rules="rules" scroll-to-error focus-on-error novalidate class="grid gap-5" @submit="requestSave">
+      <BaseFormItem prop="name" :label="t('groups.editor.groupName')" required>
         <BaseInput
           v-model="form.name"
           :aria-label="t('groups.editor.groupName')"
@@ -47,7 +58,7 @@ const description = computed(() => props.group
           :disabled="saving"
         />
       </BaseFormItem>
-      <BaseFormItem :label="t('groups.editor.groupColor')" required>
+      <BaseFormItem prop="color" :label="t('groups.editor.groupColor')" required>
         <BaseColorPicker
           v-model="form.color"
           :label="t('groups.editor.selectGroupColor')"
@@ -87,8 +98,7 @@ const description = computed(() => props.group
       <BaseButton
         variant="primary"
         :loading="saving"
-        :disabled="!form.name.trim()"
-        @click="emit('save')"
+        @click="requestSave"
       >
         {{ t('groups.editor.saveGroup') }}
       </BaseButton>

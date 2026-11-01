@@ -800,10 +800,11 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
                     },
                 )
                 .await?;
-                if let Some(name) = gateway_admin::model::accounts::normalize_custom_name(
-                    settings.custom_name.as_deref(),
-                )
-                .map_err(|_| invalid("invalid custom account name"))?
+                if command.accounts.len() == 1
+                    && let Some(name) = gateway_admin::model::accounts::normalize_custom_name(
+                        settings.custom_name.as_deref(),
+                    )
+                    .map_err(|_| invalid("invalid custom account name"))?
                 {
                     update_custom_name_in_transaction(
                         &mut transaction,

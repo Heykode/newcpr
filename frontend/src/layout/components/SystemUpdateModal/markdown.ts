@@ -1,11 +1,12 @@
 import DOMPurify from 'dompurify'
 import { Marked } from 'marked'
+import markedAlert from 'marked-alert'
 
 const marked = new Marked({
   async: false,
   breaks: false,
   gfm: true,
-})
+}).use(markedAlert())
 
 export function renderReleaseNotes(source?: string | null) {
   const value = source?.trim()

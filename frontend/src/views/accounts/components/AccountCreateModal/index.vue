@@ -4,7 +4,7 @@ import type { AccountCreateForm, AccountImportMode } from './model'
 import type { AccountGroup } from '@/api'
 import { Openai, Xai } from '@boxicons/vue'
 import { Copy, LayoutGrid, Settings2 } from '@lucide/vue'
-import { computed } from 'vue'
+import { computed, useTemplateRef } from 'vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCheckbox from '@/components/base/BaseCheckbox.vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
@@ -78,7 +78,10 @@ const importText = computed({
   },
 })
 
-function continueToImport() {
+const setupFields = useTemplateRef<InstanceType<typeof AccountSetupFields>>('setupFields')
+async function continueToImport() {
+  if (!await setupFields.value?.validate())
+    return
   if (form.value.provider && scheduling.value.valid && !modelError.value && !nameError.value && !props.groupsLoading && !proxyError.value && !busy.value)
     form.value.step = 'import'
 }
@@ -134,6 +137,7 @@ function continueToImport() {
 
       <AccountSetupFields
         v-if="view.configuring"
+        ref="setupFields"
         v-model="form"
         :disabled="busy"
         :groups="groups"
@@ -195,7 +199,7 @@ function continueToImport() {
       <BaseButton v-else class="mr-auto" variant="secondary" :disabled="busy" @click="form.step = 'settings'">
         {{ t('common.actions.previous') }}
       </BaseButton>
-      <BaseButton v-if="view.configuring" variant="primary" :disabled="!form.provider || !scheduling.valid || Boolean(modelError) || Boolean(nameError) || groupsLoading || Boolean(proxyError) || busy" @click="continueToImport">
+      <BaseButton v-if="view.configuring" variant="primary" :disabled="!form.provider || groupsLoading || busy" @click="continueToImport">
         继续导入
       </BaseButton>
       <BaseButton v-else variant="primary" :loading="saving || oauthLoading" :disabled="!view.canSubmit" @click="emit('create')">

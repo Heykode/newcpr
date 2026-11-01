@@ -237,7 +237,6 @@ impl NewProviderAccount {
     pub fn validate(&self) -> StoreResult<()> {
         require_nonempty(ENTITY, "id", &self.id)?;
         require_nonempty(ENTITY, "provider_kind", &self.provider_kind)?;
-        require_nonempty(ENTITY, "name", &self.name)?;
         if let Some(upstream_user_id) = &self.upstream_user_id {
             require_nonempty(ENTITY, "upstream_user_id", upstream_user_id)?;
         }

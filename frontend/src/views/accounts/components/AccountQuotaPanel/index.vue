@@ -44,12 +44,10 @@ const profileOpen = shallowRef(false)
           class="m-0 mt-1 flex min-w-0 items-center gap-1.5 text-cp-xs font-emphasis text-cp-text-secondary"
           :class="mobile ? 'flex-wrap break-all' : undefined"
         >
-          <span>{{ account.provider === 'xai' ? 'xAI 用量窗口' : 'Codex 额度' }}</span>
-          <template v-if="account.provider === 'openai'">
-            <span>·</span>
+          <template v-if="account.planType">
             <AccountPlanBadge :plan-type="account.planType" :plan-type-display="account.planTypeDisplay" size="sm" />
+            <span>·</span>
           </template>
-          <span>·</span>
           <span>{{ t('accounts.quota.lastRefreshed', { refreshedAtDisplay: formatRelativeTime(account.quota.refreshedAtRelative, account.quota.refreshedAtDisplay) }) }}</span>
         </p>
       </div>

@@ -26,6 +26,7 @@ const model = defineModel<string>('model', { required: true })
       />
 
       <BaseFormItem
+        prop="accountWarmupScheduleTime"
         label="执行时间（部署时区）"
         description="HH:MM；多个时间用英文逗号分隔"
       >
@@ -42,6 +43,7 @@ const model = defineModel<string>('model', { required: true })
       </BaseFormItem>
 
       <BaseFormItem
+        prop="accountWarmupModel"
         :label="t('settings.warmup.modelLabel')"
         :description="t('settings.warmup.modelHelp')"
         :required="enabled"

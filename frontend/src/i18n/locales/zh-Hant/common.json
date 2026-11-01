@@ -98,6 +98,9 @@
       "off": "關閉"
     },
     "form": {
+      "required": "必填",
+      "requiredMessage": "此項不能為空",
+      "invalidMessage": "輸入值無效",
       "inputPlaceholder": "輸入內容",
       "useForm": "使用表單",
       "fieldHelp": "{label}說明",

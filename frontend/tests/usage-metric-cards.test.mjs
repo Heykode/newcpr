@@ -114,3 +114,30 @@ test('metric and filter changes cancel old requests and reject late results and 
   }
   finally { h.stop() }
 })
+
+test('summary keeps values while refreshing, clears current failures and ignores stale failures', async () => {
+  const h = harness()
+  try {
+    const first = h.state.loadUsageAnalytics()
+    for (const call of h.calls) call.resolve({ totalRequests: '7' })
+    await first
+    const old = h.state.loadUsageAnalytics()
+    const oldCalls = h.calls.slice(-5)
+    assert.equal(h.state.summary.value.data.totalRequests, '7')
+    assert.equal(h.state.summary.value.loading, true)
+    const fresh = h.state.loadUsageAnalytics()
+    const freshCalls = h.calls.slice(-5)
+    for (const call of freshCalls) call.resolve({ totalRequests: '9' })
+    await fresh
+    for (const call of oldCalls) call.reject(new Error('old failure'))
+    await old
+    assert.equal(h.state.summary.value.data.totalRequests, '9')
+    assert.equal(h.state.summary.value.error, '')
+    const failed = h.state.loadUsageAnalytics()
+    for (const call of h.calls.slice(-5)) call.reject(new Error('current failure'))
+    await failed
+    assert.equal(h.state.summary.value.data, null)
+    assert.equal(h.state.summary.value.error, 'current failure')
+  }
+  finally { h.stop() }
+})

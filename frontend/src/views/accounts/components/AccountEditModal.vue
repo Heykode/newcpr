@@ -4,6 +4,7 @@ import type { AccountGroup, AccountModelAccess } from '@/api'
 
 import type { AccountEgressReadState } from '@/utils/account-egress'
 import type { Excel403Action } from '@/utils/excel-settings'
+import { useTemplateRef } from 'vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 
 import BaseModal from '@/components/base/BaseModal/index.vue'
@@ -50,6 +51,11 @@ const proxyMode = defineModel<string>('proxyMode', { required: true })
 const proxyId = defineModel<string>('proxyId', { required: true })
 const selectedGroupIds = defineModel<string[]>('selectedGroupIds', { required: true })
 const egressMode = defineModel<string>('egressMode', { required: true })
+const settingsRef = useTemplateRef<InstanceType<typeof AccountSettingsFields>>('settingsFields')
+async function requestSave() {
+  if (await settingsRef.value?.validate())
+    emit('save')
+}
 </script>
 
 <template>
@@ -79,6 +85,7 @@ const egressMode = defineModel<string>('egressMode', { required: true })
       </div>
 
       <AccountSettingsFields
+        ref="settingsFields"
         v-model:custom-name="customName"
         v-model:enabled="enabled"
         v-model:excel-enabled="excelEnabled"
@@ -127,7 +134,7 @@ const egressMode = defineModel<string>('egressMode', { required: true })
         variant="primary"
         :loading="saving"
         :disabled="!account || groupsLoading"
-        @click="emit('save')"
+        @click="requestSave"
       >
         保存账号设置
       </BaseButton>

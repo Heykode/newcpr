@@ -58,6 +58,115 @@ mod purchase_costs;
 mod timestamps;
 
 #[tokio::test]
+async fn optional_oauth_names_persist_and_bulk_import_preserves_individual_names() {
+    use gateway_admin::model::accounts::AccountImportSettings;
+    let Some(database) = TestDatabase::create("optional_oauth_names").await else {
+        return;
+    };
+    let repository = PgProviderAccountRepository::new(database.pool.clone());
+    let mut unnamed = account("acct_unnamed", "owner-unnamed");
+    unnamed.name = String::new();
+    repository
+        .insert_provider_account(unnamed.clone())
+        .await
+        .unwrap();
+    assert_eq!(
+        repository
+            .load_provider_account("acct_unnamed")
+            .await
+            .unwrap()
+            .unwrap()
+            .summary
+            .name,
+        ""
+    );
+    sqlx::query(
+        "update provider_accounts set custom_name='Keep individual' where id='acct_unnamed'",
+    )
+    .execute(&database.pool)
+    .await
+    .unwrap();
+    let settings = AccountImportSettings {
+        template_proxy_mode: None,
+        excel_recovery: None,
+        purchase_cost: None,
+        clear_outbound_proxy: false,
+        egress_mode: None,
+        model_access: None,
+        custom_name: Some("Single only".into()),
+        enabled: true,
+        turn_state_injection_enabled: None,
+        responses_upstream: None,
+        excel_models_follow_global: None,
+        excel_cache_creation_as_input: None,
+        excel_ignore_encrypted_content: None,
+        request_proxy_source: None,
+        excel_auto_disable_on_403: None,
+        excel_403_action: None,
+        excel_models: None,
+        concurrency_limit: None,
+        weight: gateway_core::account::AccountWeight::DEFAULT,
+        group_ids: vec![],
+    };
+    let scope = ProviderAccountAdminScope {
+        provider_kind: "openai".into(),
+    };
+    repository
+        .import_provider_accounts(ImportProviderAccounts {
+            settings: Some(settings.clone()),
+            outbound_proxy: None,
+            scope: scope.clone(),
+            accounts: vec![unnamed.clone(), account("acct_bulk_second", "owner-second")],
+            audit: audit("audit_bulk_optional_name", "import", "acct_unnamed"),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        repository
+            .load_provider_account("acct_unnamed")
+            .await
+            .unwrap()
+            .unwrap()
+            .summary
+            .custom_name
+            .as_deref(),
+        Some("Keep individual")
+    );
+    assert!(
+        repository
+            .load_provider_account("acct_bulk_second")
+            .await
+            .unwrap()
+            .unwrap()
+            .summary
+            .custom_name
+            .is_none()
+    );
+    repository
+        .import_provider_accounts(ImportProviderAccounts {
+            settings: Some(settings),
+            outbound_proxy: None,
+            scope,
+            accounts: vec![unnamed],
+            audit: audit("audit_single_optional_name", "import", "acct_unnamed"),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        repository
+            .load_provider_account("acct_unnamed")
+            .await
+            .unwrap()
+            .unwrap()
+            .summary
+            .custom_name
+            .as_deref(),
+        Some("Single only")
+    );
+    database.close().await;
+}
+
+#[tokio::test]
 async fn custom_names_are_atomic_searchable_and_preserve_account_identity() {
     let Some(database) = TestDatabase::create("custom_names").await else {
         return;

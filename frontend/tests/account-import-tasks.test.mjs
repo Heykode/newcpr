@@ -243,7 +243,7 @@ test('credential imports freeze template revision while submitting the final edi
     assert.equal(item.templateSettingsOverride, true)
     assert.equal(item.settings.weight, 31)
     assert.equal('overwrite' in item, false)
-    assert.equal(item.settings.customName, 'Batch name')
+    assert.equal(item.settings.customName, undefined)
   }
   template.revision = 8
   assert.equal(h.submissions[0].items[0].template.revision, 7)
@@ -500,7 +500,7 @@ for (const mode of ['access_token', 'refresh_token']) {
     assert.deepEqual(body.items, ['synthetic-a', 'synthetic-b', 'synthetic-a'].map(value => ({
       provider: 'openai',
       data: { accounts: [{ [key]: value }] },
-      settings: { customName: 'Import batch', enabled: false, concurrencyLimit: 7, weight: 23, groupIds: ['group-a', 'group-b'], requestProxySource: 'account', egressMode: 'unchanged' },
+      settings: { enabled: false, concurrencyLimit: 7, weight: 23, groupIds: ['group-a', 'group-b'], requestProxySource: 'account', egressMode: 'unchanged' },
       outboundProxyId: 'proxy-a',
     })))
     assert.equal(h.created.length, 1)
@@ -818,6 +818,7 @@ test('OAuth creation and existing-account relogin keep their original APIs and s
     await h.state.handleCreate()
     assert.equal(h.submissions.length, 0)
     assert.equal(h.oauthStarts[0].accountId, undefined)
+    assert.equal(h.oauthStarts[0].name, provider === 'openai' ? '' : 'xai OAuth')
     assert.deepEqual(h.qualityApplications[0], {
       id: 'quality-template',
       revision: 4,

@@ -154,6 +154,13 @@ fn id_token(payload: serde_json::Value) -> String {
 async fn complete(
     id_token: String,
 ) -> Result<(CompletedCodexOAuthCredential, String, String), CodexOAuthAdminError> {
+    complete_with_mutation(id_token, mutation()).await
+}
+
+async fn complete_with_mutation(
+    id_token: String,
+    mutation: PendingAuthorizationMutation,
+) -> Result<(CompletedCodexOAuthCredential, String, String), CodexOAuthAdminError> {
     let pending_store = Arc::new(PendingStore::default());
     let service = CodexOAuthAdminService::new(
         pending_store.clone(),
@@ -163,9 +170,7 @@ async fn complete(
         profile(),
     );
     let started = service
-        .start_authorization(StartCodexOAuthAuthorization {
-            mutation: mutation(),
-        })
+        .start_authorization(StartCodexOAuthAuthorization { mutation })
         .await
         .expect("start OAuth authorization");
     let outer = Url::parse(&started.authorization_url).expect("authorization URL");
@@ -198,6 +203,26 @@ async fn complete(
         })
         .await?;
     Ok((completed.credential, installation_id, surface_stable_id))
+}
+
+#[tokio::test]
+async fn empty_oauth_name_should_survive_authorization_and_token_exchange() {
+    let context = MutationContext {
+        actor: MutationActor::System,
+        request_id: "unnamed-oauth".into(),
+    };
+    let mutation = PendingAuthorizationMutation::new(
+        ProviderKind::new("openai").unwrap(),
+        AuthorizationMutationTarget::Create {
+            name: String::new(),
+        },
+        AuthorizationOwnerBinding::from_context(&context),
+    );
+    let token = id_token(serde_json::json!({
+        "email": "unnamed@example.invalid",
+        "https://api.openai.com/auth": {"chatgpt_account_id": "account-unnamed", "chatgpt_user_id": "user-unnamed"}
+    }));
+    assert!(complete_with_mutation(token, mutation).await.is_ok());
 }
 
 #[tokio::test]

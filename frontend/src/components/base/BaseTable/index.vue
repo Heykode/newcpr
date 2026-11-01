@@ -18,6 +18,7 @@ import {
   stickyStyle,
   tableStyle,
 } from './columns'
+import { useTableExpandMotion } from './useTableExpandMotion'
 
 const props = withDefaults(defineProps<BaseTableProps<Row>>(), {
   rowKey: 'id',
@@ -30,10 +31,10 @@ const props = withDefaults(defineProps<BaseTableProps<Row>>(), {
   sort: undefined,
   columnLayout: 'proportional',
 })
-
 const emit = defineEmits<{
   sortChange: [sort: BaseTableSort | undefined]
 }>()
+const expandMotion = useTableExpandMotion()
 const slots = useSlots()
 const computedColumns = computed(() => resolveColumns(props.columns))
 const resolvedTableStyle = computed(() => tableStyle(computedColumns.value))
@@ -307,15 +308,19 @@ defineExpose({
                   </div>
                 </td>
               </tr>
-              <tr v-if="isRowExpanded(row, index)">
-                <td
-                  :colspan="computedColumns.length"
-                  class="rounded-cp border-y-transparent bg-cp-fill-quaternary bg-clip-padding p-0"
-                  :class="bodyCellFrameClass"
-                >
-                  <slot name="expanded" :row="row" :index="index" />
-                </td>
-              </tr>
+              <Transition :css="false" @enter="expandMotion.enter" @leave="expandMotion.leave">
+                <tr v-if="isRowExpanded(row, index)">
+                  <td
+                    :colspan="computedColumns.length"
+                    class="rounded-cp border-y-transparent bg-cp-fill-quaternary bg-clip-padding p-0"
+                    :class="bodyCellFrameClass"
+                  >
+                    <div data-expanded-content>
+                      <slot name="expanded" :row="row" :index="index" />
+                    </div>
+                  </td>
+                </tr>
+              </Transition>
             </template>
           </tbody>
         </table>

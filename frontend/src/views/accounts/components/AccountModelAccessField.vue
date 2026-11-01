@@ -19,6 +19,7 @@ import { accountModelAccessError, accountModelIdError } from '../utils/modelAcce
 
 const props = withDefaults(defineProps<{
   accountId?: string
+  formProp?: string
   knownModelCatalog?: boolean
   disabled?: boolean
   allowPreserve?: boolean
@@ -165,7 +166,7 @@ watch(search, () => {
 
 <template>
   <div class="grid gap-3">
-    <BaseFormItem>
+    <BaseFormItem :prop="formProp">
       <template #label>
         <span class="inline-flex flex-wrap items-end gap-x-2 gap-y-1">
           <span>{{ t('accounts.modelAccess.modelCatalog') }}</span>

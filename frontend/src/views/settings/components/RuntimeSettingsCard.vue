@@ -97,14 +97,14 @@ const tuningValues = {
     description="请求节奏、并发、重试和账号切换为共用参数，Excel 请求继续遵循；原生 Codex 连接参数另列。"
   >
     <BaseForm class="max-w-6xl sm:grid-cols-2">
-      <BaseFormItem label="OpenAI 账号亲和模式">
+      <BaseFormItem prop="openaiAccountAffinity" label="OpenAI 账号亲和模式">
         <BaseSegmented
           v-model="openaiAccountAffinity"
           label="OpenAI 账号亲和模式"
           :options="[{ label: '严格', value: 'strict' }, { label: '优先', value: 'preferred' }, { label: '宽松', value: 'relaxed' }]"
         />
       </BaseFormItem>
-      <BaseFormItem label="OpenAI 会话账号绑定时长（小时）">
+      <BaseFormItem prop="openaiSessionBindingTtlHours" label="OpenAI 会话账号绑定时长（小时）">
         <BaseInput
           v-model="openaiSessionBindingTtlHours"
           aria-label="OpenAI 会话账号绑定时长（小时）"
@@ -115,7 +115,7 @@ const tuningValues = {
         />
       </BaseFormItem>
       <BaseFormItem
-        label="单账号默认最大并发"
+        prop="maxConcurrentPerAccount" label="单账号默认最大并发"
         description="账号未单独设置时使用的并发上限"
       >
         <BaseInput
@@ -126,7 +126,7 @@ const tuningValues = {
       </BaseFormItem>
 
       <BaseFormItem
-        label="Guardian 独立并发"
+        prop="openaiGuardianReservedConcurrency" label="Guardian 独立并发"
         description="每个账号额外的审批名额，不占普通并发；0 为共用普通并发"
       >
         <BaseInput
@@ -143,7 +143,7 @@ const tuningValues = {
       </BaseFormItem>
 
       <BaseFormItem
-        label="提前刷新秒数"
+        prop="refreshMarginSeconds" label="提前刷新秒数"
         description="Token 过期前多少秒触发刷新"
       >
         <BaseInput
@@ -158,7 +158,7 @@ const tuningValues = {
       </BaseFormItem>
 
       <BaseFormItem
-        label="刷新并发数"
+        prop="refreshConcurrency" label="刷新并发数"
         description="同时刷新 Token 的最大请求数，减小可避免限流"
       >
         <BaseInput
@@ -173,7 +173,7 @@ const tuningValues = {
       </BaseFormItem>
 
       <BaseFormItem
-        label="请求间隔（秒）"
+        prop="requestIntervalMs" label="请求间隔（秒）"
         description="控制同一账号两次调度之间的最小等待时间"
       >
         <BaseInput
@@ -189,7 +189,7 @@ const tuningValues = {
       </BaseFormItem>
 
       <BaseFormItem
-        label="请求解压上限（MiB）"
+        prop="responsesMaxDecompressedBodyBytes" label="请求解压上限（MiB）"
         description="gzip、deflate、zstd 展开后的最大正文，范围 1 字节–256 MiB"
       >
         <BaseInput
@@ -218,7 +218,7 @@ const tuningValues = {
         覆盖 Codex 请求中的时区与位置字段，账号出站代理的自定义位置优先
       </p>
       <div class="mt-4 grid gap-4">
-        <RequestLocationFields v-model="location" :disabled="disabled || !requestTuning.openaiLocationOverrideEnabled" />
+        <RequestLocationFields v-model="location" :form-prop="requestTuning.openaiLocationOverrideEnabled ? 'requestTuning.openaiRequestLocation' : undefined" :disabled="disabled || !requestTuning.openaiLocationOverrideEnabled" />
         <div>
           <BaseButton size="sm" :loading="detectingLocation" :disabled="disabled" @click="detectLocation">
             <template #icon>
@@ -238,10 +238,10 @@ const tuningValues = {
         下游 Key 并发排队
       </h3>
       <BaseForm class="mt-4 max-w-6xl sm:grid-cols-2">
-        <BaseFormItem label="Key 最大等待人数（0 为关闭）">
+        <BaseFormItem prop="requestTuning.maxWaitingPerKey" label="Key 最大等待人数（0 为关闭）">
           <BaseInput v-model="tuningValues.maxWaitingPerKey.value" aria-label="Key 最大等待人数" type="number" min="0" max="1024" step="1" />
         </BaseFormItem>
-        <BaseFormItem label="Key 并发等待秒数">
+        <BaseFormItem prop="requestTuning.keyConcurrencyWaitTimeoutSeconds" label="Key 并发等待秒数">
           <BaseInput v-model="tuningValues.keyConcurrencyWaitTimeoutSeconds.value" aria-label="Key 并发等待秒数" type="number" min="1" max="600" step="1" :disabled="requestTuning.maxWaitingPerKey === 0" />
         </BaseFormItem>
       </BaseForm>
@@ -255,7 +255,7 @@ const tuningValues = {
         <BaseSwitch v-model="requestTuning.accountBusyWaitEnabled" label="OpenAI 账号忙时等待" />
       </div>
       <BaseForm class="mt-4 max-w-6xl sm:grid-cols-2">
-        <BaseFormItem label="每账号等待请求数上限">
+        <BaseFormItem prop="requestTuning.maxWaitingPerAccount" label="每账号等待请求数上限">
           <BaseInput
             v-model="tuningValues.maxWaitingPerAccount.value"
             aria-label="每账号等待请求数上限"
@@ -266,7 +266,7 @@ const tuningValues = {
             :disabled="!requestTuning.accountBusyWaitEnabled"
           />
         </BaseFormItem>
-        <BaseFormItem label="账号最长等待（秒）">
+        <BaseFormItem prop="requestTuning.accountConcurrencyWaitTimeoutSeconds" label="账号最长等待（秒）">
           <BaseInput
             v-model="tuningValues.accountConcurrencyWaitTimeoutSeconds.value"
             aria-label="账号最长等待（秒）"
@@ -295,13 +295,13 @@ const tuningValues = {
         <h3 class="m-0 text-sm font-medium text-cp-text-secondary sm:col-span-2">
           共享重试与限流（Codex / Excel）
         </h3>
-        <BaseFormItem label="同账号传输失败重试次数" description="用于 WS 传输恢复和 Excel 可安全重试的首包前错误（含接口 429），范围 0–100；Excel 还受总路由尝试次数限制">
+        <BaseFormItem prop="requestTuning.websocketMaxRetries" label="同账号传输失败重试次数" description="用于 WS 传输恢复和 Excel 可安全重试的首包前错误（含接口 429），范围 0–100；Excel 还受总路由尝试次数限制">
           <BaseInput v-model="tuningValues.websocketMaxRetries.value" aria-label="同账号传输失败重试次数" type="number" />
         </BaseFormItem>
-        <BaseFormItem label="单个请求最多切换账号次数" description="本次请求失败后最多切换到其他账号的次数，范围 0–31">
+        <BaseFormItem prop="requestTuning.maxAccountSwitches" label="单个请求最多切换账号次数" description="本次请求失败后最多切换到其他账号的次数，范围 0–31">
           <BaseInput v-model="tuningValues.maxAccountSwitches.value" aria-label="单个请求最多切换账号次数" type="number" />
         </BaseFormItem>
-        <BaseFormItem label="单个请求最多路由尝试次数" description="本次请求最多尝试的账号总次数，范围 1–32">
+        <BaseFormItem prop="requestTuning.maxRequestAttempts" label="单个请求最多路由尝试次数" description="本次请求最多尝试的账号总次数，范围 1–32">
           <BaseInput v-model="tuningValues.maxRequestAttempts.value" aria-label="单个请求最多路由尝试次数" type="number" />
         </BaseFormItem>
         <BaseFormItem label="真实限流冷却时间" description="收到真实限流后等待多久，单位：秒">

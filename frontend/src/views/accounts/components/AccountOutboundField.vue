@@ -20,6 +20,7 @@ const props = withDefaults(defineProps<{
   disabled?: boolean
   preserve?: boolean
   error?: string
+  formProp?: string
   egressReadState?: AccountEgressReadState
 }>(), { preserve: true })
 const mode = defineModel<string>('mode', { required: true })
@@ -141,7 +142,7 @@ const ipv6Selection = computed({
 
 <template>
   <div class="grid gap-3">
-    <BaseFormItem :label="t('accounts.proxy.outboundTunnel')" :error="error">
+    <BaseFormItem :prop="formProp" :label="t('accounts.proxy.outboundTunnel')" :error="error">
       <template v-if="$slots.extra" #extra>
         <slot name="extra" />
       </template>

@@ -31,7 +31,7 @@ import {
 
 const FULL_COMPONENT_APPEARANCE_DISTANCE = 0.02
 
-type SurfaceComponentMap = Omit<ThemeComponentMap, 'buttonPrimaryColor' | 'buttonPrimaryBg' | 'buttonPrimaryHoverBg' | 'buttonPrimaryActiveBg'>
+type SurfaceComponentMap = Omit<ThemeComponentMap, `buttonPrimary${string}` | `buttonSecondary${string}`>
 
 type ComponentMapDeriver = (
   surfaces: ThemeSurfaceMap,
@@ -141,6 +141,9 @@ export function deriveThemeComponentMap(
     : components.inputActiveShadow
   return {
     ...components,
+    buttonSecondaryBg: surfaces.colorFillTertiary,
+    buttonSecondaryHoverBg: surfaces.colorBgTextActive,
+    buttonSecondaryActiveBg: surfaces.colorBgTextActive,
     inputHoverBg: inputInteractionBg,
     inputActiveBg: inputInteractionBg,
     inputHoverShadow: inputInteractionShadow,
