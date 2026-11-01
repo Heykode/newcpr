@@ -1,0 +1,16 @@
+{
+  "from_version": "3.35.0",
+  "to_version": "3.36.1",
+  "from_migrations_tree": "8495c6ccfa2001131d90aeb5e627eb8ba45dccb6",
+  "to_migrations_tree": "57f4e4278ad56da81d864f0e039119521200925c",
+  "added": [
+    "0078_concurrency_defaults.sql",
+    "0079_account_plan_snapshots.sql",
+    "0080_account_name_bytes.sql",
+    "0081_remove_global_fast.sql",
+    "0082_outbound_client_profile.sql",
+    "0083_shared_account_wait.sql"
+  ],
+  "modified_documentation": ["README.md"],
+  "recovery": "manual"
+}
