@@ -207,7 +207,12 @@ pub struct StartAccountAuthorizationRequest {
 impl StartAccountAuthorizationRequest {
     pub fn validate(&self) -> Result<(), WireValidationError> {
         AccountProvider::parse(&self.provider)?;
-        require_text(&self.name, MAX_NAME_BYTES, "name")?;
+        if !self.name.trim().is_empty() {
+            require_text(&self.name, MAX_NAME_BYTES, "name")?;
+        }
+        if self.name.len() > MAX_NAME_BYTES || self.name.chars().any(char::is_control) {
+            return Err(WireValidationError::new("name"));
+        }
         if let Some(account_id) = self.account_id.as_deref() {
             require_account_id(account_id, "accountId")?;
         }
@@ -229,7 +234,7 @@ impl StartAccountAuthorizationRequest {
             provider,
             StartAuthorization {
                 context,
-                name: self.name,
+                name: self.name.trim().to_owned(),
                 reauthorization,
                 outbound_proxy: super::wire::proxy_selection(
                     self.outbound_proxy_id,

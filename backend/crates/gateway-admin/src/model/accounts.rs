@@ -87,10 +87,12 @@ pub fn normalize_custom_name(value: Option<&str>) -> Result<Option<String>, supe
     if value.chars().any(char::is_control) {
         return Err(super::AdminError::invalid("账号名称不能包含控制字符"));
     }
-    let value = value.trim();
-    if value.chars().count() > 128 {
-        return Err(super::AdminError::invalid("账号名称不能超过 128 个字符"));
+    if value.len() > 512 {
+        return Err(super::AdminError::invalid(
+            "账号名称不能超过 512 个 UTF-8 字节",
+        ));
     }
+    let value = value.trim();
     Ok((!value.is_empty()).then(|| value.to_owned()))
 }
 

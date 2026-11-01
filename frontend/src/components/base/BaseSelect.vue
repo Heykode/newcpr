@@ -4,8 +4,8 @@ import type { CSSProperties } from 'vue'
 import { Check, ChevronDown } from '@lucide/vue'
 import { onClickOutside, useEventListener, useThrottleFn, whenever } from '@vueuse/core'
 import { clamp } from 'es-toolkit'
-import { computed, inject, nextTick, ref, useAttrs, useId, watch } from 'vue'
-import { formFieldKey } from './BaseForm/context'
+import { computed, nextTick, ref, useAttrs, useId, watch } from 'vue'
+import { useFormField } from './BaseForm/composables/useFormField'
 
 type SelectSize = 'sm' | 'md' | 'lg'
 
@@ -38,7 +38,7 @@ const props = withDefaults(
 
 const model = defineModel<string>({ required: true })
 const attrs = useAttrs()
-const field = inject(formFieldKey, null)
+const { controlId, invalid, describedBy, ariaRequired, validate } = useFormField(attrs)
 
 const rootRef = ref<HTMLElement | null>(null)
 const triggerRef = ref<HTMLButtonElement | null>(null)
@@ -47,16 +47,6 @@ const open = ref(false)
 const activeIndex = ref(-1)
 const popoverStyle = ref<CSSProperties>({})
 const selectId = `base-select-${useId()}`
-const controlId = computed(() => (typeof attrs.id === 'string' ? attrs.id : (field?.controlId.value ?? selectId)))
-const invalid = computed(() =>
-  Boolean(field?.invalid.value || attrs['aria-invalid'] === true || attrs['aria-invalid'] === 'true'),
-)
-const describedBy = computed(
-  () =>
-    [typeof attrs['aria-describedby'] === 'string' ? attrs['aria-describedby'] : undefined, field?.describedBy.value]
-      .filter(Boolean)
-      .join(' ') || undefined,
-)
 const rootAttrs = computed(() => ({ class: attrs.class, style: attrs.style }))
 const triggerAttrs = computed(() =>
   Object.fromEntries(
@@ -201,6 +191,7 @@ function chooseOption(option: SelectOption, index: number) {
     return
 
   model.value = option.value
+  void validate('change')
   activeIndex.value = index
   closeMenu()
 }
@@ -300,9 +291,10 @@ useEventListener(window, 'scroll', updatePopoverPositionThrottled, { capture: tr
       :aria-activedescendant="open && activeIndex >= 0 ? optionId(activeIndex) : undefined"
       :aria-describedby="describedBy"
       :aria-invalid="invalid || undefined"
-      :aria-required="field?.required.value || undefined"
+      :aria-required="ariaRequired"
       @click="toggleMenu"
       @keydown="handleTriggerKeydown"
+      @blur="validate('blur')"
     >
       <span class="min-w-0 truncate" :class="selectedOption?.description ? 'max-w-1/2 shrink-0' : 'flex-1'">
         {{ selectedOption?.label ?? placeholder }}

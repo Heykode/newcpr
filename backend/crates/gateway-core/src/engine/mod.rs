@@ -360,7 +360,6 @@ pub struct RequestAttemptContext {
     response_control: Option<response_control::ResponseControl>,
     provider_route: Arc<std::sync::OnceLock<String>>,
     request_profile: Option<Arc<crate::account::OpaqueProviderData>>,
-    disable_fast: bool,
     codex_quota_overdraft_enabled: bool,
     codex_quota_overdraft_probe_model: crate::routing::UpstreamModelId,
     config_revision: crate::routing::ConfigRevision,
@@ -407,12 +406,6 @@ impl RequestAttemptContext {
     }
 
     #[must_use]
-    pub const fn with_disable_fast(mut self, disable_fast: bool) -> Self {
-        self.disable_fast = disable_fast;
-        self
-    }
-
-    #[must_use]
     pub fn with_codex_quota_overdraft(
         mut self,
         enabled: bool,
@@ -443,7 +436,6 @@ impl RequestAttemptContext {
             response_control: None,
             request_id,
             client_api_key_ref,
-            disable_fast: false,
             codex_quota_overdraft_enabled: false,
             codex_quota_overdraft_probe_model: crate::routing::UpstreamModelId::new("gpt-6-astra")
                 .expect("valid default overdraft probe model"),
@@ -537,11 +529,6 @@ impl AttemptContext {
     #[must_use]
     pub fn request_profile(&self) -> Option<&crate::account::OpaqueProviderData> {
         self.request.request_profile.as_deref()
-    }
-
-    #[must_use]
-    pub const fn disable_fast(&self) -> bool {
-        self.request.disable_fast
     }
 
     #[must_use]

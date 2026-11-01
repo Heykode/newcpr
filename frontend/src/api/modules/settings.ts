@@ -59,10 +59,8 @@ export interface RequestTuning {
   maxWaitingPerKey: number
   keyConcurrencyWaitTimeoutSeconds: number
   accountBusyWaitEnabled: boolean
-  accountBusyWaitStickyMaxWaiting: number
-  accountBusyWaitStickyTimeoutSeconds: number
-  accountBusyWaitFallbackMaxWaiting: number
-  accountBusyWaitFallbackTimeoutSeconds: number
+  maxWaitingPerAccount: number
+  accountConcurrencyWaitTimeoutSeconds: number
 }
 
 export type RequestTuningOverrides = { accountErrorProtection?: AccountErrorProtection | null } & {
@@ -74,7 +72,6 @@ export type AccountAffinity = 'strict' | 'preferred' | 'relaxed'
 export interface RuntimeSettings {
   configRevision: number
   excelDefaultModels?: string[]
-  disableFast?: boolean
   turnStateInjectionEnabled?: boolean
   turnStateModels?: string[]
   turnStateProbeProxyId?: string | null

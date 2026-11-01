@@ -5,10 +5,16 @@
 `views/settings/index.vue` keeps one runtime form and save action. Common/Codex and Excel scopes use `v-show` so switching does not reset drafts. Backup routing is unchanged.
 
 - Common retries (`websocketMaxRetries`), account switches, routing attempts and cooldown stay in `RuntimeSettingsCard`, even when Excel also consumes them. Do not duplicate or introduce Excel-only copies.
-- `ExcelSettingsCard` owns only Excel models and image controls. Account/template policy stays account-scoped.
+- `ExcelSettingsCard` owns Excel models, image controls and the Excel-only precommit threshold. Account/template policy stays account-scoped.
 - `useExcelImageSettings` handles display units and invalid drafts, not backend behavior. MiB converts to existing integer byte fields without rounding existing values. Empty or invalid drafts block saves; loading saved state clears drafts.
 - Keep native-attachment image limits visible; only relay-specific resources are conditional. Inherited transport remains `null`, not an implicit mode change.
 - Use existing controls and the same settings API; never alter scheduling, fingerprints, egress, limits or defaults as a UI cleanup.
+
+Runtime byte limits display MiB; millisecond settings display seconds with decimals;
+Excel precommit remains KiB. Existing API and database units stay unchanged.
+`useRuntimeUnits` preserves incomplete drafts and blocks invalid saves, using exact
+decimal conversion to avoid rounding 1.001 seconds. Reading old values must not round
+or trigger an automatic save. Unit fields expose setters so child controls do not mutate props.
 
 ## Reference Capacity Bounds
 

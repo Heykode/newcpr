@@ -1,8 +1,9 @@
 // @env browser
 
 import type { ResolvedTheme } from '../types'
+import { createThemeVars, themePrefix } from '../namespace'
 
-const RUNTIME_THEME_STYLE_ID = 'cp-runtime-theme'
+const RUNTIME_THEME_STYLE_ID = `${themePrefix}-runtime-theme`
 
 export function applyResolvedTheme(root: HTMLElement, theme: ResolvedTheme): void {
   root.dataset.theme = theme.name
@@ -28,7 +29,8 @@ function ensureRuntimeThemeStyle(document: Document): HTMLStyleElement {
 }
 
 function serializeTheme(theme: ResolvedTheme): string {
-  const declarations = Object.entries(theme.tokens)
+  const semanticTokens = Object.fromEntries(Object.entries(theme.tokens).map(([name, value]) => [name.slice('--cp-'.length), value]))
+  const declarations = Object.entries(createThemeVars(semanticTokens))
     .map(([name, value]) => `  ${name}: ${value};`)
     .join('\n')
 

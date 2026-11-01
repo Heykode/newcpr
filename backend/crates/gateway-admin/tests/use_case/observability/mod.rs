@@ -999,7 +999,6 @@ impl SettingsStore for FixtureSettingsStore {
             turn_state_probe_proxy_id: None,
             turn_state_probe_concurrency: 3,
             config_revision: Revision::new(1).expect("revision"),
-            disable_fast: false,
             turn_state_injection_enabled: false,
             excel_default_models: Default::default(),
             turn_state_models: vec![
@@ -1174,6 +1173,7 @@ fn health_metric_point(bucket_start: DateTime<Utc>, metrics: RequestMetrics) -> 
 fn diagnostic(name: &str, request_count: u64) -> DiagnosticObservation {
     DiagnosticObservation {
         account_provider_kind: None,
+        account_authentication_kind: None,
         account_plan_type: None,
         retried_request_count: 0,
         first_token_p95_ms: None,

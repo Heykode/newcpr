@@ -1,0 +1,52 @@
+/* Vue Transition 的公共名称，供组件与消费方复用 */
+.cp-fade-enter-active,
+.cp-fade-leave-active {
+  transition: opacity 150ms ease;
+}
+
+.cp-slide-fade-enter-active {
+  transition:
+    opacity 150ms ease-out,
+    translate 150ms ease-out;
+}
+
+.cp-slide-fade-leave-active {
+  transition: opacity 150ms ease-in;
+}
+
+.cp-zoom-in-top-enter-active,
+.cp-zoom-in-top-leave-active {
+  transform-origin: center top;
+  transition:
+    opacity 150ms ease,
+    scale 150ms ease;
+}
+
+.cp-fade-enter-from,
+.cp-fade-leave-to,
+.cp-slide-fade-enter-from,
+.cp-slide-fade-leave-to,
+.cp-zoom-in-top-enter-from,
+.cp-zoom-in-top-leave-to {
+  opacity: 0;
+}
+
+.cp-slide-fade-enter-from {
+  translate: 0 calc(-1 * var(--cp-size-unit, 4px));
+}
+
+.cp-zoom-in-top-enter-from,
+.cp-zoom-in-top-leave-to {
+  scale: 1 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cp-fade-enter-active,
+  .cp-fade-leave-active,
+  .cp-slide-fade-enter-active,
+  .cp-slide-fade-leave-active,
+  .cp-zoom-in-top-enter-active,
+  .cp-zoom-in-top-leave-active {
+    transition: none;
+  }
+}

@@ -426,6 +426,7 @@ impl ObservabilityService for DefaultObservabilityService {
                 DiagnosticsItem {
                     key: item.key,
                     name: item.name,
+                    account_authentication_kind: item.account_authentication_kind,
                     account_plan_type_display: item.account_provider_kind.as_deref().and_then(
                         |provider| {
                             self.providers

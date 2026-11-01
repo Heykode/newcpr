@@ -927,7 +927,9 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
       <p class="m-0">
         确定要删除
         {{
-          pendingDeleteAccount?.email
+          pendingDeleteAccount?.customName?.trim()
+            || pendingDeleteAccount?.email
+            || pendingDeleteAccount?.name
             || pendingDeleteAccount?.accountId
             || pendingDeleteAccount?.id
             || '该账号'

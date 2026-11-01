@@ -34,18 +34,21 @@ Redis key；WS pool 不兼任账号调度器。不新建配置表、第二套粘
 | JSON 字段 | 默认值 | 校验 |
 | --- | --- | --- |
 | `accountBusyWaitEnabled` | `false` | boolean |
-| `accountBusyWaitStickyMaxWaiting` | `3` | 整数，`1..=1000` |
-| `accountBusyWaitStickyTimeoutSeconds` | `120` | 整数，`1..=600` |
-| `accountBusyWaitFallbackMaxWaiting` | `100` | 整数，`1..=1000` |
-| `accountBusyWaitFallbackTimeoutSeconds` | `30` | 整数，`1..=600` |
+| `maxWaitingPerAccount` | `10` | 整数，`1..=1000` |
+| `accountConcurrencyWaitTimeoutSeconds` | `30` | 整数，`1..=600` |
+
+2026-11-01 用户批准统一为两项：sticky、fallback 和 strict follow-only 等待读取
+同一份人数上限和时限；跨模式、跨 attempt 不得重开共享截止。
+迁移0083将旧四项统一到10/30，保留已经保存的新两项及其他所有设置。
+Web只展示两个账号等待输入，Key队列仍独立。旧四项仅接受后丢弃，不参与新运行快照。
 
 - 旧配置缺字段或 override 为 `null` 时继承默认；显式 `false` 不能被默认合并覆盖。
-  零不表示无限；关闭后保留四个数值，服务端仍校验范围，未知字段仍拒绝。
+  零不表示无限；关闭后保留两个数值，服务端仍校验范围，未知字段仍拒绝。
 - 发布必须在提交后。开关、人数、秒数沿 `attempt.request_tuning()` 冻结；
   轮询不能重读 live tuning 给旧请求续时。关闭使普通新请求走原路径；strict 子线程
   仍使用同一 sticky 人数上限、超时和共享预算等待其根绑定。
 - 本功能复用 JSONB，不需要改历史迁移。关闭开关不等于可直接降级旧二进制：
-  旧解析器可能拒绝新增字段；降级前须备份并定向处理五个 key，不能清空全部设置。
+  旧解析器可能拒绝新增字段；降级须定向恢复旧版字段，不能清空全部设置。
 
 ## 4. 冻结 Universe 与 Live 事实
 

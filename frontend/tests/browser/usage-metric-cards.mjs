@@ -101,6 +101,14 @@ async function main() {
         failPerformance = true
         await performance.getByRole('radio', { name: 'TTFT', exact: true }).click()
         await performance.getByText('模拟性能卡失败', { exact: true }).waitFor()
+        const empty = performance.locator('.place-content-center')
+        const centered = await empty.evaluate((element) => {
+          const bounds = element.getBoundingClientRect()
+          const parent = element.parentElement.getBoundingClientRect()
+          return Math.abs((bounds.top + bounds.bottom - parent.top - parent.bottom) / 2) < 2
+        })
+        assert.equal(centered, true, 'error/empty content fills and centers within the card body')
+        await page.screenshot({ path: `${output}/empty-${width}.png`, fullPage: true })
         assert(await cost.locator('canvas').count() > 0)
         failPerformance = false
         await performance.getByRole('radio', { name: '输出速率', exact: true }).click()

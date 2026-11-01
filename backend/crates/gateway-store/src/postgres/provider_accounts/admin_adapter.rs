@@ -338,7 +338,7 @@ impl PgAdminAccountStore {
             if settings.request_proxy_source.is_some() {
                 changed_fields.push("request_proxy_source".to_owned());
             }
-            if settings.custom_name.is_some() {
+            if accounts.len() == 1 && settings.custom_name.is_some() {
                 changed_fields.push("custom_name".to_owned());
             }
         }

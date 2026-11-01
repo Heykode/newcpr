@@ -1097,7 +1097,7 @@ impl CodexCredentialSelector {
                     .at()
                     .is_some_and(|deadline| end >= deadline)
                     || end.duration_since(SystemTime::now()).unwrap_or_default()
-                        >= Duration::from_secs(tuning.account_busy_wait_sticky_timeout_seconds)
+                        >= Duration::from_secs(tuning.account_concurrency_wait_timeout_seconds)
             })
         {
             return Ok(WaitOutcome::Changed);
@@ -1109,11 +1109,8 @@ impl CodexCredentialSelector {
         {
             return Ok(WaitOutcome::Changed);
         }
-        let max_waiting = NonZeroU32::new(match mode {
-            AccountWaitMode::Sticky => tuning.account_busy_wait_sticky_max_waiting,
-            AccountWaitMode::Fallback => tuning.account_busy_wait_fallback_max_waiting,
-        })
-        .ok_or(CredentialSelectionError::Coordinator(None))?;
+        let max_waiting = NonZeroU32::new(tuning.max_waiting_per_account)
+            .ok_or(CredentialSelectionError::Coordinator(None))?;
         let acquisition = control
             .run(async {
                 self.leases

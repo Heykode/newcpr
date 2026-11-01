@@ -2,6 +2,7 @@
 import { Minus, Plus } from '@lucide/vue'
 import { computed, useAttrs } from 'vue'
 
+import { useFormField } from './BaseForm/composables/useFormField'
 import BaseIconButton from './BaseIconButton.vue'
 
 defineOptions({ inheritAttrs: false })
@@ -27,10 +28,7 @@ const props = withDefaults(
 const model = defineModel<number>({ required: true })
 const attrs = useAttrs()
 
-const rootAttrs = computed(() => ({ class: attrs.class, style: attrs.style }))
-const controlAttrs = computed(() =>
-  Object.fromEntries(Object.entries(attrs).filter(([key]) => !['class', 'style'].includes(key))),
-)
+const { rootAttrs, controlAttrs, controlId, invalid, describedBy, ariaRequired, validate } = useFormField(attrs)
 const canDecrease = computed(() => !props.disabled && (props.min === undefined || model.value > props.min))
 const canIncrease = computed(() => !props.disabled && (props.max === undefined || model.value < props.max))
 
@@ -47,16 +45,19 @@ function updateModel(event: Event) {
   const value = (event.target as HTMLInputElement).valueAsNumber
   if (Number.isFinite(value))
     model.value = clampValue(value)
+  void validate('change')
 }
 
 function restoreValue(event: Event) {
   const input = event.target as HTMLInputElement
   input.value = String(model.value)
+  void validate('blur')
 }
 
 function stepBy(direction: -1 | 1) {
   const next = clampValue(model.value + props.step * direction)
   model.value = Number(next.toFixed(stepPrecision()))
+  void validate('change')
 }
 </script>
 
@@ -79,6 +80,10 @@ function stepBy(direction: -1 | 1) {
     <span class="inline-flex min-w-0 items-baseline justify-center gap-1 px-1">
       <input
         v-bind="controlAttrs"
+        :id="controlId"
+        :aria-invalid="invalid || undefined"
+        :aria-describedby="describedBy"
+        :aria-required="ariaRequired"
         :value="model"
         type="number"
         inputmode="decimal"

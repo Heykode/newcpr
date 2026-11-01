@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { AccountCreateForm } from './model'
 import type { AccountGroup } from '@/api'
+import { useTemplateRef } from 'vue'
 import AccountTemplatePicker from '@/components/account-templates/AccountTemplatePicker.vue'
 import BaseCheckbox from '@/components/base/BaseCheckbox.vue'
 import QualityTemplatePicker from '@/components/quality-ops/QualityTemplatePicker.vue'
@@ -17,6 +18,8 @@ defineProps<{
   proxyError?: string
 }>()
 const form = defineModel<AccountCreateForm>({ required: true })
+const settingsRef = useTemplateRef<InstanceType<typeof AccountSettingsFields>>('settingsFields')
+defineExpose({ validate: () => settingsRef.value?.validate() })
 </script>
 
 <template>
@@ -47,6 +50,7 @@ const form = defineModel<AccountCreateForm>({ required: true })
       :disabled="disabled"
     />
     <AccountSettingsFields
+      ref="settingsFields"
       v-model:custom-name="form.customName"
       v-model:enabled="form.enabled"
       v-model:excel-enabled="form.excelEnabled"

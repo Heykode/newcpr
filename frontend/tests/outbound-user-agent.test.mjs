@@ -15,10 +15,6 @@ const compiled = compileScript(descriptor, { id: 'qx-user-agent-test' })
 const cpr = 'Codex Desktop/0.153.4 (Mac OS 15.7.1; arm64) unknown (Codex Desktop; 26.901.51231)'
 const qx = 'codex-tui/0.146.0 (Ubuntu 22.4.0; x86_64) xterm-256color'
 const customQx = 'codex_cli_rs/0.146.0 (Linux 6.8.0; x86_64) unknown'
-const catalog = JSON.parse(readFileSync(new URL('../src/views/settings/components/outbound-user-agent-samples.json', import.meta.url), 'utf8'))
-const sampleModule = load(readFileSync(new URL('../src/views/settings/components/outbound-user-agent-samples.ts', import.meta.url), 'utf8'), {
-  './outbound-user-agent-samples.json': catalog,
-})
 
 test('client version editor pairs CLI suffixes but preserves Desktop application version', () => {
   const { withUserAgentClientVersion, userAgentClientVersion } = load(readFileSync(new URL('../src/views/settings/composables/userAgentClientVersion.ts', import.meta.url), 'utf8'), {})
@@ -93,6 +89,7 @@ function load(text, dependencies) {
   const exports = {}
   runInNewContext(outputText, {
     exports,
+    structuredClone,
     require: name => dependencies[name] ?? require(name),
   })
   return exports
@@ -103,6 +100,7 @@ function view(selection = { mode: 'default' }) {
   const raw = selection.userAgent ?? null
   return {
     mode: selection.mode,
+    configuration: selection.configuration ?? null,
     customUserAgent: raw,
     defaultUserAgent: cpr,
     effectiveUserAgent: raw ?? cpr,
@@ -154,7 +152,7 @@ function harness(initial = view(), overrides = {}) {
     '@/components/base/BaseTextarea.vue': {},
     '@/components/base/BaseToast': { toast: { success: message => messages.push(message) } },
     '@/utils/async': { errorMessage: error => error.message },
-    './outbound-user-agent-samples': sampleModule,
+    './ClientProfileFields.vue': {},
   })
   const scope = vue.effectScope()
   const state = scope.run(() => component.default.setup({}, { expose: () => {} }))
@@ -394,169 +392,78 @@ test('default API does not transmit retired choices or an implicit custom UA', a
   }
 })
 
-test('every bundled sample only edits the custom draft and uses existing preview/save payloads', async () => {
-  const app = harness()
+test('official presets edit only drafts until preview and save', async () => {
+  const app = harness(view({ mode: 'custom', userAgent: customQx }))
   try {
     await app.state.load(true)
-    app.state.applySample(catalog.samples[0].id)
-    assert.equal(app.state.useDefault.value, true)
-    assert.equal(app.state.custom.value, cpr, 'default mode never applies a sample')
-    app.state.useDefault.value = false
-    for (const sample of catalog.samples) {
-      app.state.preview.value = view()
-      const actual = app.state.settings.value
-      const saves = app.requests.length
-      const previews = app.previews.length
-      app.state.applySample(sample.id)
-      await vue.nextTick()
-      assert.equal(app.state.custom.value, sample.userAgent)
-      assert.equal(app.state.selectedSample.value.id, sample.id)
-      assert.equal(app.state.settings.value, actual, 'choosing a sample cannot change effective settings')
-      assert.equal(app.state.preview.value, null)
-      assert.equal(app.requests.length, saves)
-      assert.equal(app.previews.length, previews)
-      assert.equal(app.state.useDefault.value, false)
-      const selection = { mode: 'custom', userAgent: sample.userAgent }
-      await app.state.check()
-      assert.deepEqual(app.previews.at(-1), selection)
-      assert.equal(app.state.preview.value.verified, false)
-      await app.state.save()
-      assert.deepEqual(app.requests.at(-1), selection)
-      await app.state.load(true)
-      assert.equal(app.state.displayedInput.value, sample.userAgent)
-    }
+    assert.equal(app.state.editor.value, 'current')
+    app.state.changeEditor('preset')
+    assert.equal(app.state.configuration.value.osVersion, undefined, 'new platform uses its own defaults instead of inheriting another OS version')
+    app.state.configuration.value = { client: 'cli', platform: 'linux', versionMode: 'latest', cliEntry: 'exec', osVersion: '6.8.1' }
+    await vue.nextTick()
+    assert.equal(app.state.settings.value.effectiveUserAgent, customQx)
+    assert.equal(app.requests.length, 0)
+    const expected = { mode: 'configuration', configuration: structuredClone(vue.toRaw(app.state.configuration.value)) }
+    await app.state.check()
+    assert.deepEqual(app.previews.at(-1), expected)
+    await app.state.save()
+    assert.deepEqual(app.requests.at(-1), expected)
+    await app.state.load(true)
+    assert.equal(app.state.editor.value, 'preset')
+    assert.deepEqual(vue.toRaw(app.state.configuration.value), expected.configuration)
   }
-  finally {
-    app.stop()
-  }
+  finally { app.stop() }
 })
 
-test('sample drafts survive polling and default toggles but explicit refresh restores saved settings', async () => {
-  let saved = view()
-  const app = harness(saved, { getOutboundUserAgent: async () => saved })
+test('preset drafts survive polling and explicit refresh restores the saved legacy UA', async () => {
+  const app = harness(view({ mode: 'custom', userAgent: customQx }))
   try {
     await app.state.load(true)
-    app.state.useDefault.value = false
-    const sample = catalog.samples.at(-1)
-    app.state.applySample(sample.id)
-    await vue.nextTick()
-    saved = { ...saved, defaultUserAgent: 'updated-default' }
+    app.state.changeEditor('preset')
+    app.state.configuration.value.osVersion = '26.4.1'
     await app.state.load(false, true)
-    assert.equal(app.state.custom.value, sample.userAgent)
-    app.state.useDefault.value = true
-    await vue.nextTick()
-    assert.equal(app.state.selectedSample.value, undefined)
-    assert.equal(app.state.displayedInput.value, 'updated-default')
-    app.state.useDefault.value = false
-    assert.equal(app.state.selectedSample.value.id, sample.id)
-    assert.equal(app.state.displayedInput.value, sample.userAgent)
-    app.state.displayedInput.value += ' edited'
-    await vue.nextTick()
-    assert.equal(app.state.selectedSample.value, undefined)
-    assert.equal(app.state.selectedSource.value, null)
+    assert.equal(app.state.configuration.value.osVersion, '26.4.1')
+    assert.equal(app.state.editor.value, 'preset')
     await app.state.load(true)
-    assert.equal(app.state.useDefault.value, true)
-    assert.equal(app.state.custom.value, 'updated-default')
+    assert.equal(app.state.editor.value, 'current')
+    assert.equal(app.state.displayedInput.value, customQx)
     assert.equal(app.requests.length, 0)
-    assert.equal(app.previews.length, 0)
   }
-  finally {
-    app.stop()
-  }
+  finally { app.stop() }
 })
 
-test('invalid sample ids, initial load and busy operations cannot replace the draft', async () => {
+test('complete custom identity uses official companion fields without rewriting UA', async () => {
   const app = harness()
   try {
-    app.state.useDefault.value = false
-    app.state.custom.value = customQx
-    app.state.applySample(catalog.samples[0].id)
-    assert.equal(app.state.custom.value, customQx)
     await app.state.load(true)
-    app.state.useDefault.value = false
-    app.state.applySample('missing')
-    assert.equal(app.state.custom.value, cpr)
-    for (const flag of ['loading', 'saving', 'checking']) {
-      app.state[flag].value = true
-      app.state.applySample(catalog.samples[0].id)
-      assert.equal(app.state.custom.value, cpr)
-      app.state[flag].value = false
-    }
-    assert.equal(app.requests.length, 0)
+    app.state.changeEditor('exact')
+    app.state.configuration.value = { mode: 'custom', userAgent: 'Example client', originator: 'example', codexVersion: '0.159.0' }
+    const expected = { mode: 'configuration', configuration: structuredClone(vue.toRaw(app.state.configuration.value)) }
+    await vue.nextTick()
+    await app.state.check()
+    await app.state.save()
+    assert.deepEqual(app.requests.at(-1), expected)
+    assert.equal(app.state.editor.value, 'exact')
   }
-  finally {
-    app.stop()
-  }
+  finally { app.stop() }
 })
 
-test('failed sample preview and save retain the exact editable draft and persisted state', async () => {
-  const sample = catalog.samples.at(-1)
+test('failed structured preview and save retain the draft and old active settings', async () => {
   const app = harness(view(), {
     previewOutboundUserAgent: async () => { throw new Error('preview rejected') },
     updateOutboundUserAgent: async () => { throw new Error('save rejected') },
   })
   try {
     await app.state.load(true)
-    app.state.useDefault.value = false
-    app.state.applySample(sample.id)
+    app.state.changeEditor('preset')
     await vue.nextTick()
     await app.state.check()
     assert.equal(app.state.error.value, 'preview rejected')
-    assert.equal(app.state.preview.value, null)
     await app.state.save()
     assert.equal(app.state.error.value, 'save rejected')
     assert.equal(app.state.settings.value.mode, 'default')
-    assert.equal(app.state.custom.value, sample.userAgent)
-    assert.equal(app.state.selectedSample.value.id, sample.id)
+    assert.equal(app.state.editor.value, 'preset')
     assert.equal(app.messages.length, 0)
   }
-  finally {
-    app.stop()
-  }
-})
-
-test('saving default after choosing a sample sends no sample or custom fields', async () => {
-  const app = harness()
-  try {
-    await app.state.load(true)
-    app.state.useDefault.value = false
-    app.state.applySample(catalog.samples[0].id)
-    app.state.useDefault.value = true
-    await vue.nextTick()
-    await app.state.check()
-    await app.state.save()
-    assert.deepEqual(app.previews, [{ mode: 'default' }])
-    assert.deepEqual(app.requests, [{ mode: 'default' }])
-  }
-  finally {
-    app.stop()
-  }
-})
-
-test('sample client filtering neither changes the draft nor the preview or effective selection', async () => {
-  const app = harness()
-  try {
-    await app.state.load(true)
-    app.state.useDefault.value = false
-    const sample = catalog.samples.at(-1)
-    app.state.applySample(sample.id)
-    await vue.nextTick()
-    assert.equal(app.state.sampleClient.value, sample.client)
-    await app.state.check()
-    const preview = app.state.preview.value
-    for (const client of ['Desktop', 'CLI', 'Exec']) {
-      app.state.sampleClient.value = client
-      await vue.nextTick()
-      assert(app.state.sampleOptions.value.length <= 5)
-      assert(app.state.sampleOptions.value.every(option => option.client === client))
-      assert.equal(app.state.custom.value, sample.userAgent)
-      assert.equal(app.state.preview.value, preview)
-      assert.equal(app.state.settings.value.mode, 'default')
-    }
-    assert.equal(app.requests.length, 0)
-    assert.equal(app.previews.length, 1)
-  }
-  finally {
-    app.stop()
-  }
+  finally { app.stop() }
 })

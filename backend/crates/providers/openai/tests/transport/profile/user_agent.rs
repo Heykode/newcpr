@@ -11,6 +11,55 @@ const EXEC: &str =
     "codex_exec/0.156.1 (Ubuntu 24.4.0; x86_64) xterm-256color (codex_exec; 0.156.1)";
 
 #[test]
+fn structured_selection_freezes_versions_and_failed_updates_preserve_identity() {
+    use gateway_core::account::OpaqueProviderData;
+    use serde_json::json;
+    for document in [
+        json!({"client":"desktop","platform":"macos","versionMode":"latest","osVersion":"26.4.1"}),
+        json!({"client":"cli","platform":"linux","versionMode":"fixed","codexVersion":"0.159.0","cliEntry":"exec"}),
+        json!({"mode":"custom","userAgent":CUSTOM}),
+        json!({"mode":"custom","userAgent":EXEC}),
+    ] {
+        let state = CodexWireProfileState::new(wire_profile());
+        let selection = ProviderUserAgentOverride::Configuration {
+            document: OpaqueProviderData::new(document.as_object().unwrap().clone()),
+        };
+        state.apply_user_agent_override(&selection).unwrap();
+        let original = state.snapshot();
+        let desktop = state.desktop_snapshot();
+        let snapshot = state.request_snapshot().unwrap();
+        let malformed = ProviderUserAgentOverride::Configuration {
+            document: OpaqueProviderData::new(
+                json!({"mode":"custom","userAgent":"bad\r\nheader"})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            ),
+        };
+        assert!(state.apply_user_agent_override(&malformed).is_err());
+        assert_eq!(state.snapshot(), original);
+        state.update_bundled_release(&CodexBundledReleaseProfile {
+            codex_version: "0.200.0".to_owned(),
+            desktop_version: "27.1.1".to_owned(),
+            desktop_build: "999999".to_owned(),
+            verified_at: Utc::now(),
+        });
+        state
+            .apply_user_agent_override(&ProviderUserAgentOverride::Default)
+            .unwrap();
+        let retry = CodexWireProfileState::from_request_snapshot(&snapshot).unwrap();
+        assert_eq!(retry.snapshot(), original);
+        assert_eq!(retry.desktop_snapshot(), desktop);
+        if document["mode"] == "custom" {
+            assert_eq!(
+                original.user_agent(),
+                document["userAgent"].as_str().unwrap()
+            );
+        }
+    }
+}
+
+#[test]
 fn request_profile_snapshot_keeps_custom_ua_and_auxiliary_desktop_across_updates() {
     for custom in [
         None,

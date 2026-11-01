@@ -2954,8 +2954,7 @@ async fn capacity_wait_corrupt_promotions_preserve_rescans_deadline_and_cleanup(
                 .with_account_concurrency(capacity_handle(&ids, 1));
             let attempt = attempt(BTreeSet::new()).with_request_tuning(
                 gateway_core::routing::RequestTuning {
-                    account_busy_wait_sticky_timeout_seconds: 5,
-                    account_busy_wait_fallback_timeout_seconds: 5,
+                    account_concurrency_wait_timeout_seconds: 5,
                     ..capacity_tuning()
                 },
             );
@@ -3206,7 +3205,7 @@ async fn capacity_wait_sticky_holds_original_before_an_idle_alternative_and_does
             waits[0].mode(),
             gateway_core::engine::AccountWaitMode::Sticky
         );
-        assert_eq!(waits[0].max_waiting().get(), 3);
+        assert_eq!(waits[0].max_waiting().get(), 10);
         assert!(waits[0].deadline() <= attempt.deadline().at().expect("finite deadline"));
     }
     leases.capacity.set_load("acct_original", 0);
@@ -3258,7 +3257,7 @@ async fn capacity_wait_fallback_accepts_busy_snapshot_and_busy_without_retry_hin
                 waits[0].mode(),
                 gateway_core::engine::AccountWaitMode::Fallback
             );
-            assert_eq!(waits[0].max_waiting().get(), 100);
+            assert_eq!(waits[0].max_waiting().get(), 10);
         }
         leases.capacity.set_load("acct_primary", 0);
         leases.capacity.race_busy.store(false, Ordering::SeqCst);
@@ -3348,8 +3347,8 @@ async fn capacity_wait_fallback_interval_rechecks_and_releases() {
         let attempt = interval_wait_attempt(
             interval,
             gateway_core::routing::RequestTuning {
-                account_busy_wait_fallback_max_waiting: 7,
-                account_busy_wait_fallback_timeout_seconds: 1,
+                max_waiting_per_account: 7,
+                account_concurrency_wait_timeout_seconds: 1,
                 ..capacity_tuning()
             },
         );
@@ -3759,7 +3758,7 @@ async fn affinity_interval_waits_only_for_a_healthy_soft_owner_within_budget() {
             CancellationToken::new(),
         )
         .with_request_tuning(gateway_core::routing::RequestTuning {
-            account_busy_wait_sticky_timeout_seconds: 10,
+            account_concurrency_wait_timeout_seconds: 10,
             ..capacity_tuning()
         });
         let selected = capacity_select(&selector, &attempt, Some(&key));
@@ -4465,8 +4464,7 @@ async fn pinned_interval_wait_preserves_owner_and_releases_on_cancel_or_full() {
             CancellationToken::new(),
         )
         .with_request_tuning(gateway_core::routing::RequestTuning {
-            account_busy_wait_sticky_timeout_seconds: 1,
-            account_busy_wait_fallback_timeout_seconds: 1,
+            account_concurrency_wait_timeout_seconds: 1,
             ..capacity_tuning()
         });
         let selected = capacity_select(&selector, &attempt, None);

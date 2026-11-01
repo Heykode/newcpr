@@ -328,6 +328,10 @@ OpenAI 明确返回 `server_is_overloaded`、`slow_down` 或模型容量不足�
 账号 API 使用统一路由，不存在 Provider Instance 或 Provider 专属账号路由。需要 Provider 的请求只接受
 `provider: "openai" | "xai"`。
 
+可选 `customName` 是本地展示名称，不改变账号凭据、上游姓名或邮箱。原始输入最多
+512 UTF-8 字节且不含控制字符，校验后去除首尾空白。编辑时省略保留，`null` 或空白清空；
+导入时省略或空白保留已有名称。数据库通过追加迁移 `0080_account_name_bytes.sql` 对齐边界。
+
 | 方法 | 路由 | 主要 query/body | 说明 |
 | --- | --- | --- | --- |
 | `GET` | `/api/admin/accounts` | `page`、`pageSize`、`provider`、`groupId`、`search`、`status`、排序字段 | 分页查询账号与汇总 |
@@ -1038,7 +1042,7 @@ requestTuning
 `rotationStrategy` 可取 `smart`、`quota_reset_priority`、`round_robin`、`sticky`。
 两个 `minCodex*Version` 字段为 `string | null`，只设置最低版本，不存在最大版本字段。
 
-三个 OpenAI 调度参数位于设置顶层，不放在 `requestTuning`：Guardian 独立并发默认 0；
+三个 OpenAI 调度参数位于设置顶层，不放在 `requestTuning`：Guardian 独立并发初始值 5；
 会话绑定有效期默认 24 小时、范围 1–720；亲和模式默认 `strict`，可选 `preferred`、`relaxed`。
 严格模式子线程跟随根绑定；优先模式共享根绑定，主账号可用时优先使用，暂时不可用时
 可借用其他合格账号，成功后不把主绑定改成借用账号；宽松模式可建立独立子绑定，不改写根绑定。
@@ -1049,7 +1053,11 @@ Guardian/review 使用额外的 R 个名额；例如 L=10、R=3，可分别运�
 两个池的在途数、负载评分和等待人数分别计算，账号请求间隔仍共享；R=0 共用普通池。
 启用账号等待时，审批在独立队列按入队顺序执行，不能插到已有审批前面；取消及超时释放位置。
 沿用本项目已有 sticky/fallback 人数和共享等待截止，不新增全局排队上限，关闭等待仍立即返回容量结果。
-设置的 JSON 字段名、保存值和默认值不变；不改变账号画像、UA、出口或亲和模式。
+设置的 JSON 字段名和已保存值保留；不改变账号画像、UA、出口或亲和模式。
+0078 起新建库的普通账号并发为 3、Guardian 为 5，Key/账号排队人数为 10，等待为 30 秒。
+账号排队通过已有 sticky/fallback 两组字段同时设为 10 人、30 秒并开启账号等待。
+升级只调整 configRevision=1 且并发、Guardian 和排队各字段仍为旧默认的配置；
+已保存或自定义配置保持原值，质量检测继续使用独立的 60 秒预算。
 刷新提前量默认 300 秒，升级仅把历史 3600 秒值改成 300；其他值不覆盖。
 后台刷新按账号增加稳定错峰，请求内提前量不变；这不会重置账号的设备身份或出口。
 
@@ -1073,7 +1081,8 @@ Key 排队只处理并发已满，不等待 RPM 或预算额度恢复。队列�
 `concurrency_queue_timeout`。已取消的准入通过有时限的 Redis 标记防止迟到写入重新占位；
 清理故障时仍依赖租约到期收敛，不声称网络故障下立即释放。
 
-上述字段缺失或为 `null` 时继承默认值。升级不会自动开启地区覆盖或 Key 排队。
+上述字段缺失或为 `null` 时仍继承表中的兼容默认值；新建库显式保存上述新初始化策略。
+升级不会自动开启地区覆盖；Key 排队仅在符合上述未修改旧默认条件时初始化为 10。
 降级到不认识这些字段的旧版本前，应备份并移除这三个新增设置字段。
 
 `requestTuning` 中的 OpenAI 账号忙时等待参数：
@@ -1264,6 +1273,10 @@ errorCode, errorMessage, startedAt, completedAt, expiresAt, createdAt, updatedAt
 用量查询可组合页码/游标、时间范围、Provider、Client Key、账号、模型、route、transport、状态码、
 request/response/upstream ID、outcome 与搜索文本。诊断 `dimension` 可取 `model`、`account`、
 `apiKey`、`provider`、`transport`、`failureClass`、`status`。
+
+账号维度诊断的 `authenticationKind`、`accountPlanType` 和历史名称来自同一条最新请求快照；
+其他维度不返回账号属性。请求与错误列表的套餐也读取当时快照，账号改套餐或删除后不会改变。
+追加迁移 `0079_account_plan_snapshots.sql` 之前没有保存的套餐返回 `null`，不拿当前套餐回填历史。
 
 列表及 Dashboard 最近请求的 `accountCustomName` 按内部账号 ID 关联当前自定义名称，
 不按邮箱关联，也不改写历史请求。修改或清空自定义名称后，下次查询显示最新值；

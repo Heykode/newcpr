@@ -174,6 +174,9 @@ export interface ThemeShadowMap {
 }
 
 export interface ThemeComponentMap {
+  buttonSecondaryBg: string
+  buttonSecondaryHoverBg: string
+  buttonSecondaryActiveBg: string
   menuItemSelectedBg: string
   inputBg: string
   inputHoverBg: string

@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { Check, ChevronDown } from '@lucide/vue'
 import { clamp } from 'es-toolkit'
-import { computed, shallowRef, useTemplateRef, watch } from 'vue'
+import { computed, shallowRef, useAttrs, useTemplateRef, watch } from 'vue'
 import { t } from '@/i18n'
-
 import { normalizeHexColor } from '@/utils/color'
+
 import BaseButton from '../BaseButton.vue'
+import { useFormField } from '../BaseForm/composables/useFormField'
 import BaseInput from '../BaseInput.vue'
 import BasePopover from '../BasePopover.vue'
 import { formatRgbaColor, hexToHsva, hsvaToHex, normalizePickerHexColor, parseRgbaColor, rgbaToHexColor } from './color'
@@ -26,6 +27,8 @@ const props = withDefaults(
 )
 
 const model = defineModel<string>({ required: true })
+const { controlId, invalid, describedBy, ariaRequired, validate } = useFormField(useAttrs())
+watch(model, () => void validate('change'))
 const open = shallowRef(false)
 const hue = shallowRef(0)
 const saturation = shallowRef(100)
@@ -271,12 +274,17 @@ function normalizedInputColor() {
   <BasePopover v-model="open" class="p-0.75" placement="bottom-start" :disabled="props.disabled">
     <template #trigger>
       <button
+        :id="controlId"
+        :aria-invalid="invalid || undefined"
+        :aria-describedby="describedBy"
+        :aria-required="ariaRequired"
         type="button"
         class="group inline-flex size-8 items-center justify-center rounded-sm border-0 bg-transparent p-0 outline-none transition-opacity duration-150 hover:opacity-90 focus-visible:ring-2 focus-visible:ring-cp-control-outline disabled:cursor-not-allowed disabled:opacity-60"
         :disabled="props.disabled"
         :aria-label="props.label"
         aria-haspopup="dialog"
         :aria-expanded="open"
+        @blur="validate('blur')"
       >
         <span
           class="relative flex size-full items-center justify-center overflow-hidden rounded-sm"

@@ -275,7 +275,7 @@ async fn relogin_push_accepts_optional_camel_case_name_and_validates_before_stor
         // This fixture has no relogin store; a parsed, valid request reaches it.
         assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
     }
-    for name in ["x".repeat(129), "bad\nname".to_owned()] {
+    for name in ["x".repeat(513), "bad\nname".to_owned()] {
         let (status, _) = request(
             &fixture,
             "/api/admin/relogin/push",

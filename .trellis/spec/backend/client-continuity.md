@@ -69,6 +69,26 @@ editing prior entries.
 
 ## 2. Signatures
 
+### Structured UA Configuration (Migration 0082)
+
+- Explicit `configuration` mode imports the pinned upstream selection/identity
+  parsers and platform release verification. Never auto-convert existing
+  default/custom/custom-auto-version strings or change production selections.
+- Keep release observations and selected configuration under the same request
+  snapshot lock. Restore verified caches before resolving saved selections at
+  startup. Failed validation must not publish a partial identity.
+- The existing artifact-cache port is scoped by ProviderKind only; platform
+  channels use separate namespaced keys. Do not collide with legacy Desktop
+  and CLI caches or change the generic cache contract for this feature.
+- Preserve independent auxiliary Desktop identity for CLI requests. Include the
+  configuration document in quality/Excel recovery action fences and targeted
+  UA audit fields. Business dumps include the entire table, including the new
+  nullable column. Old binaries do not understand the new mode.
+- Keep current UA version/system editors and legacy auto-version semantics;
+  selecting the new preset is explicit. Latest/Fixed and release history lag
+  belong to the new selection parser; do not claim that legacy auto selections
+  have silently switched to platform-specific releases.
+
 - `ProviderDeviceCodec`: provider-owned credential interpretation. Generic stores
   may replace the installation ID through this codec, not parse OAuth tokens.
 - `provider_device_identities`: provider/user/workspace tuple and installation ID.

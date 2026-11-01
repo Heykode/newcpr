@@ -30,7 +30,6 @@ const MAXIMUM_CATALOG_STABILITY_ATTEMPTS: usize = 4;
 pub struct SnapshotSettingsFacts {
     account_error_protection: crate::account::AccountErrorProtection,
     excel_image_transport: Option<super::ExcelImageTransport>,
-    disable_fast: bool,
     responses_max_decompressed_body_bytes: u64,
     request_location: Option<crate::account::RequestLocation>,
     max_concurrent_per_account: u32,
@@ -71,12 +70,6 @@ impl SnapshotSettingsFacts {
     }
 
     #[must_use]
-    pub const fn with_disable_fast(mut self, disable_fast: bool) -> Self {
-        self.disable_fast = disable_fast;
-        self
-    }
-
-    #[must_use]
     pub const fn with_responses_max_decompressed_body_bytes(mut self, bytes: u64) -> Self {
         self.responses_max_decompressed_body_bytes = bytes;
         self
@@ -102,7 +95,6 @@ impl SnapshotSettingsFacts {
     ) -> Self {
         Self {
             account_error_protection: Default::default(),
-            disable_fast: false,
             excel_image_transport: None,
             responses_max_decompressed_body_bytes:
                 super::DEFAULT_RESPONSES_MAX_DECOMPRESSED_BODY_BYTES,
@@ -736,7 +728,6 @@ async fn compile_runtime_snapshot(
     .map_err(|_| RuntimeSnapshotCompileError::InvalidData)
     .map(|snapshot| {
         snapshot
-            .with_disable_fast(facts.settings.disable_fast)
             .with_responses_max_decompressed_body_bytes(decompressed_body_limit)
             .with_model_mappings(model_mappings)
             .with_account_directory(account_directory)
@@ -763,7 +754,6 @@ type ModelCatalogAccounts = BTreeMap<ProviderKind, BTreeMap<String, BTreeSet<Pro
 pub struct RuntimeSnapshot {
     account_error_protection: Arc<crate::account::CompiledAccountErrorProtection>,
     excel_image_transport: Option<super::ExcelImageTransport>,
-    disable_fast: bool,
     codex_quota_overdraft_enabled: bool,
     codex_quota_overdraft_probe_model: UpstreamModelId,
     responses_max_decompressed_body_bytes: std::num::NonZeroUsize,
@@ -811,12 +801,6 @@ impl RuntimeSnapshot {
         policy: Option<super::ExcelImageTransport>,
     ) -> Self {
         self.excel_image_transport = policy;
-        self
-    }
-
-    #[must_use]
-    pub const fn with_disable_fast(mut self, disable_fast: bool) -> Self {
-        self.disable_fast = disable_fast;
         self
     }
 
@@ -940,7 +924,6 @@ impl RuntimeSnapshot {
             account_error_protection: Arc::new(
                 crate::account::AccountErrorProtection::default().compile(),
             ),
-            disable_fast: false,
             excel_image_transport: None,
             codex_quota_overdraft_enabled: false,
             codex_quota_overdraft_probe_model: UpstreamModelId::new("gpt-6-astra")
@@ -1383,7 +1366,6 @@ impl RuntimeSnapshot {
 
         Ok(RoutingPlan {
             account_error_protection: Arc::clone(&self.account_error_protection),
-            disable_fast: self.disable_fast || account_scope.disable_fast(),
             codex_quota_overdraft_enabled: self.codex_quota_overdraft_enabled,
             codex_quota_overdraft_probe_model: self.codex_quota_overdraft_probe_model.clone(),
             config_revision: self.revision,
@@ -1431,7 +1413,6 @@ impl RuntimeSnapshot {
         };
         Ok(RoutingPlan {
             account_error_protection: Arc::clone(&self.account_error_protection),
-            disable_fast: self.disable_fast || account_scope.disable_fast(),
             codex_quota_overdraft_enabled: self.codex_quota_overdraft_enabled,
             codex_quota_overdraft_probe_model: self.codex_quota_overdraft_probe_model.clone(),
             config_revision: self.revision,

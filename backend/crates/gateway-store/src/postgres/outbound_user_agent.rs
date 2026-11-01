@@ -14,8 +14,8 @@ pub(crate) async fn load_user_agent_override(
     pool: &PgPool,
     provider_kind: &ProviderKind,
 ) -> StoreResult<ProviderUserAgentOverride> {
-    let row = sqlx::query_as::<_, (String, Option<String>)>(
-        "select mode, custom_user_agent from provider_outbound_user_agents
+    let row = sqlx::query_as::<_, (String, Option<String>, Option<serde_json::Value>)>(
+        "select mode, custom_user_agent, configuration_json from provider_outbound_user_agents
          where provider_kind = $1",
     )
     .bind(provider_kind.as_str())
@@ -24,12 +24,17 @@ pub(crate) async fn load_user_agent_override(
     .map_err(|error| postgres_unavailable("load outbound user-agent").with_source(error))?;
     match row {
         None => Ok(ProviderUserAgentOverride::Default),
-        Some((mode, None)) if mode == "default" => Ok(ProviderUserAgentOverride::Default),
-        Some((mode, Some(user_agent))) if mode == "custom" => {
+        Some((mode, None, None)) if mode == "default" => Ok(ProviderUserAgentOverride::Default),
+        Some((mode, None, Some(serde_json::Value::Object(fields)))) if mode == "configuration" => {
+            Ok(ProviderUserAgentOverride::Configuration {
+                document: gateway_core::account::OpaqueProviderData::new(fields),
+            })
+        }
+        Some((mode, Some(user_agent), None)) if mode == "custom" => {
             validate_custom(Some(&user_agent))?;
             Ok(ProviderUserAgentOverride::Custom { user_agent })
         }
-        Some((mode, Some(user_agent))) if mode == "custom-auto-version" => {
+        Some((mode, Some(user_agent), None)) if mode == "custom-auto-version" => {
             validate_custom(Some(&user_agent))?;
             Ok(ProviderUserAgentOverride::CustomAutoVersion { user_agent })
         }
@@ -52,6 +57,7 @@ impl PgControlPlaneRepository {
         audit: AdminAuditEvent,
     ) -> StoreResult<Revision> {
         let (mode, custom) = match &selection {
+            ProviderUserAgentOverride::Configuration { .. } => ("configuration", None),
             ProviderUserAgentOverride::Default => ("default", None),
             ProviderUserAgentOverride::Custom { user_agent } => {
                 ("custom", Some(user_agent.as_str()))
@@ -61,21 +67,28 @@ impl PgControlPlaneRepository {
             }
         };
         validate_custom(custom)?;
+        let configuration = match &selection {
+            ProviderUserAgentOverride::Configuration { document } => Some(
+                serde_json::Value::Object(document.expose_to_provider().clone()),
+            ),
+            _ => None,
+        };
         let mut transaction = self.pool.begin().await.map_err(|error| {
             postgres_unavailable("begin outbound user-agent update").with_source(error)
         })?;
         let revision = bump_config_revision_in_transaction(&mut transaction).await?;
         sqlx::query(
             "insert into provider_outbound_user_agents
-                 (provider_kind, mode, custom_user_agent)
-             values ($1, $2, $3)
+                 (provider_kind, mode, custom_user_agent, configuration_json)
+             values ($1, $2, $3, $4)
              on conflict (provider_kind) do update
-             set mode = excluded.mode, custom_user_agent = excluded.custom_user_agent,
+             set mode = excluded.mode, custom_user_agent = excluded.custom_user_agent, configuration_json = excluded.configuration_json,
                  updated_at = now()",
         )
         .bind(provider_kind.as_str())
         .bind(mode)
         .bind(custom)
+        .bind(configuration)
         .execute(&mut *transaction)
         .await
         .map_err(|error| postgres_unavailable("save outbound user-agent").with_source(error))?;

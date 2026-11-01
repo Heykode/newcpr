@@ -1,22 +1,27 @@
 <script setup lang="ts">
 import type { AccountGroup, AccountModelAccess } from '@/api'
+import type { FormRules } from '@/components/base/BaseForm/types'
 import type { AccountEgressReadState } from '@/utils/account-egress'
 import type { Excel403Action } from '@/utils/excel-settings'
-
+import { computed, useTemplateRef } from 'vue'
 import AccountGroupCheckboxGrid from '@/components/AccountGroupCheckboxGrid.vue'
 import BaseCheckbox from '@/components/base/BaseCheckbox.vue'
 import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
+
+import BaseForm from '@/components/base/BaseForm/index.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseSwitch from '@/components/base/BaseSwitch.vue'
 import Excel403ActionSelect from '@/components/Excel403ActionSelect.vue'
 import ExcelModelFields from '@/components/ExcelModelFields.vue'
 import ExcelRecoveryFields from '@/components/ExcelRecoveryFields.vue'
 import { t } from '@/i18n'
+import { normalizeAccountName } from '@/utils/account-name'
 import { DEFAULT_EXCEL_MODELS_INPUT } from '@/utils/excel-defaults'
+import { accountModelAccessError } from '../utils/modelAccess'
 import AccountModelAccessField from './AccountModelAccessField.vue'
 import AccountOutboundField from './AccountOutboundField.vue'
 
-withDefaults(defineProps<{
+const props = withDefaults(defineProps<{
   groups: AccountGroup[]
   groupsLoading: boolean
   disabled: boolean
@@ -67,11 +72,35 @@ const updateConcurrencyLimit = defineModel<boolean>('updateConcurrencyLimit', { 
 const updateWeight = defineModel<boolean>('updateWeight', { default: false })
 const updateGroups = defineModel<boolean>('updateGroups', { default: false })
 const updateProxy = defineModel<boolean>('updateProxy', { default: false })
+const formRef = useTemplateRef<InstanceType<typeof BaseForm>>('formElement')
+const form = computed(() => ({ customName: customName.value, concurrencyLimit: concurrencyLimit.value, weight: weight.value, modelAccess: modelAccess.value, proxyId: proxyId.value }))
+const rules = computed<FormRules>(() => props.batch
+  ? {}
+  : ({
+      customName: { trigger: ['blur', 'change'], validator: () => {
+        try {
+          normalizeAccountName(customName.value)
+          return true
+        }
+        catch (cause) { return cause instanceof Error ? cause : new Error('账号名称无效') }
+      } },
+      concurrencyLimit: { type: 'integer', transform: value => String(value ?? '').trim() ? Number(value) : undefined, min: 1, max: 4_294_967_295, trigger: ['blur', 'change'], message: '并发上限须为 1–4294967295 的整数，留空跟随全局' },
+      weight: [
+        { required: true, transform: value => String(value ?? '').trim() || undefined, message: '请填写权重', trigger: ['blur', 'change'] },
+        { type: 'integer', transform: value => String(value ?? '').trim() ? Number(value) : undefined, min: 1, max: 100, message: '权重须为 1–100 的整数', trigger: ['blur', 'change'] },
+      ],
+      proxyId: { required: proxyMode.value === 'proxy', whitespace: true, message: '请选择指定代理', trigger: 'change' },
+      modelAccess: { validator: () => {
+        const error = accountModelAccessError(modelAccess.value)
+        return error ? new Error(error) : true
+      }, trigger: 'change' },
+    }))
+defineExpose({ validate: () => formRef.value?.validate().catch(() => false) })
 </script>
 
 <template>
-  <div class="grid gap-5">
-    <BaseFormItem v-if="nameAvailable" label="自定义账号名称（选填）">
+  <BaseForm ref="formElement" :model="form" :rules="rules" scroll-to-error focus-on-error novalidate class="grid gap-5">
+    <BaseFormItem v-if="nameAvailable" prop="customName" label="自定义账号名称（选填）">
       <template v-if="batch" #extra>
         <BaseCheckbox v-model="updateCustomName" label="应用账号名称更改" title="应用账号名称更改" :disabled="disabled" />
       </template>
@@ -189,7 +218,7 @@ const updateProxy = defineModel<boolean>('updateProxy', { default: false })
     </div>
 
     <div class="grid gap-4 sm:grid-cols-2">
-      <BaseFormItem :label="t('accounts.scheduling.concurrencyLimit')">
+      <BaseFormItem prop="concurrencyLimit" :label="t('accounts.scheduling.concurrencyLimit')">
         <template v-if="batch" #extra>
           <BaseCheckbox
             v-model="updateConcurrencyLimit"
@@ -208,7 +237,7 @@ const updateProxy = defineModel<boolean>('updateProxy', { default: false })
           :disabled="disabled || (batch && !updateConcurrencyLimit)"
         />
       </BaseFormItem>
-      <BaseFormItem :label="t('accounts.scheduling.weight')">
+      <BaseFormItem prop="weight" :label="t('accounts.scheduling.weight')">
         <template v-if="batch" #extra>
           <BaseCheckbox
             v-model="updateWeight"
@@ -232,6 +261,7 @@ const updateProxy = defineModel<boolean>('updateProxy', { default: false })
     <AccountModelAccessField
       v-if="modelAccessAvailable"
       v-model="modelAccess"
+      form-prop="modelAccess"
       :account-id="accountId"
       :known-model-catalog="knownModelCatalog"
       :disabled="disabled || (batch && !updateModelAccess)"
@@ -262,6 +292,7 @@ const updateProxy = defineModel<boolean>('updateProxy', { default: false })
       v-model:mode="proxyMode"
       v-model:proxy-id="proxyId"
       v-model:egress-mode="egressMode"
+      form-prop="proxyId"
       :openai="requestProxyAvailable"
       :current-source="requestProxySource"
       :preserve="preserveProxy"
@@ -281,5 +312,5 @@ const updateProxy = defineModel<boolean>('updateProxy', { default: false })
         />
       </template>
     </AccountOutboundField>
-  </div>
+  </BaseForm>
 </template>

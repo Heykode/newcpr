@@ -39,6 +39,16 @@ Strict/Relaxed 设置和 Strict 默认值，不改账号、身份、出口或调
 
 ## 本地测试库
 
+0081_remove_global_fast.sql 删除废弃的全局 disable_fast 列，分组 fast_mode 与
+其兼容列保留。运行配置和上游请求只使用分组策略；该迁移不修改其他已保存参数。
+旧二进制依赖已删除列，升级后不可直接回滚旧镜像，需使用迁移感知的部署流程。
+
+0078_concurrency_defaults.sql 对齐初始化并发/排队策略，保留已保存和自定义设置。
+0079_account_plan_snapshots.sql 为新请求和错误事件保存历史套餐，旧记录保持未知。
+0080_account_name_bytes.sql 将 custom_name 上限对齐为 512 个 UTF-8 字节，
+兼容全部原有合法名称；旧前端可能无法编辑超过其 128 字符限制的新名称。
+三项均为新增迁移，不修改历史 checksum，不更改账号身份和出口。
+
 0077_codex_quota_overdraft.sql 增加默认关闭的 Codex OAuth 额度透支设置与
 多实例探测状态表。状态表不替代 quota_access_state，探测失败仍由原额度耗尽和
 quota_reset_at 控制调度；只有当前配置、凭据和额度周期均匹配的 passed 状态
@@ -62,6 +72,17 @@ quota_reset_at 控制调度；只有当前配置、凭据和额度周期均匹�
 `0072_outbound_proxy_enabled.sql` 为保存的代理新增默认开启的开关，不改写账号或代理绑定。
 禁用代理保留绑定但停止在运行态使用；删除代理会在管理事务中自动解绑。
 旧二进制不识别禁用状态，回退前应处理禁用代理并遵循迁移感知部署流程。
+
+`0082_outbound_client_profile.sql` 新增结构化 UA 配置文档，仅显式选择新预设或
+完整自定义模式时使用。旧 default/custom/custom-auto-version 的模式、字符串、
+时间戳均不重写。业务备份通过整表 pg_dump 包含新列；启用新模式后旧二进制
+不识别该模式，回退须先恢复旧模式并遵循迁移感知部署流程。
+
+`0083_shared_account_wait.sql` 将账号等待的旧四项退休，统一为
+`maxWaitingPerAccount=10` 与 `accountConcurrencyWaitTimeoutSeconds=30`。
+这是用户明确选择的旧值迁移，不是根据两组旧值猜测优先级。已保存的新两项保留；
+等待开关、Key 队列、重试、UA 和其他设置不变。旧二进制不识别新字段，
+回退须按迁移感知流程处理，不能仅替换镜像。
 
 `gateway-store` 的 PG/Redis 集成测试需要以下环境变量，未设置时在本地
 静默跳过（CI 缺失则直接失败）：

@@ -28,6 +28,22 @@ const root = fileURLToPath(new URL('../src/theme/', import.meta.url))
 const { resolveTheme } = load(resolve(root, 'core/resolve.ts'))
 const { THEME_COLOR_PRESETS } = load(resolve(root, 'core/constants.ts'))
 
+test('theme overrides allow alpha only for supported controls and retain native namespaces', () => {
+  const { normalizeThemeCustomization, supportsThemeTokenAlpha } = load(resolve(root, 'core/normalize.ts'))
+  const { createThemeVars } = load(resolve(root, 'namespace.ts'))
+  const overrides = normalizeThemeCustomization({ tokenOverrides: {
+    '--cp-input-bg': '#11223344',
+    '--cp-button-secondary-bg': '#22334455',
+    '--cp-card-bg': '#11223344',
+    '--cp-color-text': '#112233',
+  } }).tokenOverrides
+  assert.equal(overrides['--cp-input-bg'], '#11223344')
+  assert.equal(overrides['--cp-button-secondary-bg'], '#22334455')
+  assert.equal(overrides['--cp-card-bg'], undefined)
+  assert.equal(supportsThemeTokenAlpha('--cp-input-bg'), true)
+  assert.equal(createThemeVars({ 'input-bg': '#11223344' })['--cp-input-bg'], '#11223344')
+})
+
 test('all theme presets keep equal hover/focus feedback even without decorative shadows', () => {
   for (const theme of ['light', 'dark']) {
     for (const preset of THEME_COLOR_PRESETS) {

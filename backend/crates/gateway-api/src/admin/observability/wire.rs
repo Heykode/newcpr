@@ -770,6 +770,7 @@ pub struct UsageInsightsOverviewView {
 pub struct DiagnosticItemView {
     pub key: String,
     pub name: String,
+    pub authentication_kind: Option<String>,
     pub account_plan_type: Option<String>,
     pub account_plan_type_display: Option<String>,
     pub request_count: u64,

@@ -102,6 +102,12 @@ checks because this project does not authorize extra CI quota.
 
 ### Development Guidance Adaptation
 
+Official `839054cd` reply guidance applies to issue/PR communication: state the
+verified behavior, reasoning and actionable next step directly. Avoid repetitive
+process narration or courtesy that obscures disagreement. Keep uncertainty and
+validation limits explicit; never promise an absence of defects. This does not
+replace local skills, agent configuration or authorization boundaries.
+
 The useful review rules from official `abae4a63` are native project guidance:
 
 - Select required specs by both touched files and behavioral impact. Review
@@ -133,6 +139,10 @@ Before porting an upstream change:
 - For a migration, append a new migration and preserve all applied migration
   bytes. Verify old data semantics, especially cumulative cost and budget
   records, before accepting the change.
+- For initial-setting changes, use migrate_schema's lock-protected
+  cpr.fresh_install flag for new databases. config_revision=1 alone is not fresh
+  installation evidence: earlier migrations can increment it. Separately test
+  full production initialization, untouched upgrades and saved/customized values.
 
 ### Stability, Diagnostics, and Forecast Integration
 

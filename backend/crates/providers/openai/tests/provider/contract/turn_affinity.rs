@@ -263,7 +263,7 @@ async fn image_turn_alias_only_keeps_the_root_account_when_busy() {
             planned_provider_endpoint_request("openai", image(None)),
             context("req_image_alias_busy", CancellationToken::new()).with_request_tuning(
                 gateway_core::routing::RequestTuning {
-                    account_busy_wait_sticky_timeout_seconds: 1,
+                    account_concurrency_wait_timeout_seconds: 1,
                     ..Default::default()
                 },
             ),
@@ -373,7 +373,7 @@ async fn live_turn_alias_only_keeps_the_root_account_when_busy() {
             ProviderRequest::new(operation, plan.candidates()[0].clone()),
             context("req_live_alias_busy", CancellationToken::new()).with_request_tuning(
                 gateway_core::routing::RequestTuning {
-                    account_busy_wait_sticky_timeout_seconds: 1,
+                    account_concurrency_wait_timeout_seconds: 1,
                     ..Default::default()
                 },
             ),

@@ -115,7 +115,7 @@ use execution::*;
 pub use failure::openai_failure_affects_account_score;
 use failure::*;
 use observation::*;
-pub(crate) use workers::{cli_version_worker, worker_contributions};
+pub(crate) use workers::{cli_version_worker, profile_release_worker, worker_contributions};
 
 const PROVIDER_NAME: &str = "openai";
 const HTTP_SSE_TRANSPORT: &str = "http_sse";
@@ -582,11 +582,7 @@ impl Provider for CodexProvider {
                 .iter()
                 .any(|tier| tier.id() == "priority")
         });
-        let fast_mode = if context.disable_fast() {
-            gateway_core::account::FastMode::Disabled
-        } else {
-            candidate.account_scope().fast_mode()
-        };
+        let fast_mode = candidate.account_scope().fast_mode();
         upstream_request.apply_fast_policy(fast_mode, supports_priority);
         let client_key_id = context.client_api_key_ref().as_str();
         if previous_session

@@ -359,8 +359,9 @@ preserves acquisition mode and targets; push is a separate confirmation.
   installation identity or Core scheduling facts. Every SQL projection feeding
   `account_summary_from_row` must select it, including refresh and group members.
 - `customName` is optional on imports and manual push. Normalize through the shared
-  Admin helper: trim, blank to None, max 128 Unicode scalar values, reject control
-  characters. HTTP validation and Store mutations use the same rule.
+  Admin helper: reject control characters and raw inputs over 512 UTF-8 bytes before
+  trimming; blank becomes None. HTTP validation and Store mutations use the same
+  rule. Additive migration `0080_account_name_bytes.sql` aligns the database bound.
 - Single/batch updates preserve omitted names and clear explicit null/blank names.
   Import omission/blank preserves an existing name and leaves a new row unnamed.
   Name changes belong to the existing settings/audit transaction; audit field names

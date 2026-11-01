@@ -246,7 +246,7 @@ function costAmount(value: string | null, pointIndex: number) {
     </template>
 
     <template #body>
-      <div class="grid min-h-66 gap-3">
+      <div class="grid min-h-66" :class="hasData ? 'gap-3' : 'flex-1'">
         <div v-if="hasData" class="grid grid-cols-5 gap-1 rounded-xl bg-cp-fill-quaternary/45 p-2">
           <div class="grid min-w-0 gap-1 px-1.5">
             <span class="truncate text-[10px] font-bold text-cp-text-quaternary">实际费用</span>
@@ -286,7 +286,7 @@ function costAmount(value: string | null, pointIndex: number) {
           surface="none"
           :title="error || (loading ? '正在加载成本数据' : '暂无成本效率数据')"
           description="当前范围没有可绘制的费用或缓存收益数据"
-          class="h-52.5 place-content-center"
+          class="place-content-center"
         />
       </div>
     </template>

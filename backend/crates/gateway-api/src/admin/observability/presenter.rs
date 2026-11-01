@@ -1235,6 +1235,7 @@ pub(crate) fn diagnostics_view(
             .into_iter()
             .map(|item| DiagnosticItemView {
                 key: item.key,
+                authentication_kind: item.account_authentication_kind,
                 name: if item.name == "__none__" {
                     "未知".to_owned()
                 } else {

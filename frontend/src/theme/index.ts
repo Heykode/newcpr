@@ -9,6 +9,7 @@ export {
   isThemeColorId,
   isThemeMode,
   normalizeThemeCustomization,
+  supportsThemeTokenAlpha,
 } from './core/normalize'
 export {
   resolveTheme,
@@ -17,6 +18,7 @@ export {
   resolveThemeSeedTokens,
   themeColorPreset,
 } from './core/resolve'
+export { createThemeVars, getThemeVarName, themePrefix } from './namespace'
 export { applyResolvedTheme } from './runtime/browser'
 export type {
   ResolvedTheme,

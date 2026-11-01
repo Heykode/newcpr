@@ -3085,6 +3085,7 @@ async fn provider_compiles_realtime_catalog_capabilities() {
         .presentation()
         .expect("Grok model presentation");
     assert_eq!(presentation.display_name(), Some("Grok 4.5"));
+    assert!(presentation.reasoning_summary());
     assert_eq!(
         presentation.supported_reasoning_efforts(),
         ["low", "medium", "high", "xhigh"]
@@ -3116,6 +3117,7 @@ async fn provider_publishes_default_codex_profile_when_catalog_is_unavailable() 
     assert_eq!(presentation.display_name(), Some("Grok 4.5"));
     assert_eq!(presentation.default_reasoning_effort(), None);
     assert!(presentation.supported_reasoning_efforts().is_empty());
+    assert!(!presentation.reasoning_summary());
     assert_eq!(presentation.context_window_tokens(), Some(500_000));
     assert_eq!(presentation.max_context_window_tokens(), Some(500_000));
     assert!(presentation.agent_tools());

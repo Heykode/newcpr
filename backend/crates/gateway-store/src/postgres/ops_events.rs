@@ -117,7 +117,7 @@ impl OpsEventRepository for PgOpsEventRepository {
                id, model_request_id, attempt_index, level, component, operation,
                provider_kind, provider_account_id, provider_account_ref, upstream_model_id,
                provider_account_name_snapshot, provider_account_email_snapshot,
-               provider_account_authentication_kind_snapshot,
+               provider_account_authentication_kind_snapshot, provider_account_plan_type_snapshot,
                failure_kind, upstream_send_state, status_code, provider_error_code, retry_after_ms,
                upstream_request_id, latency_ms, message, raw_upstream_error,
                created_at
@@ -126,6 +126,7 @@ impl OpsEventRepository for PgOpsEventRepository {
                (select name from provider_accounts where id = $8),
                (select email from provider_accounts where id = $8),
                (select authentication_kind from provider_accounts where id = $8),
+               (select plan_type from provider_accounts where id = $8),
                $11, $12, $13, $14, $15, $16, $17, $18, $19, $20
              )",
         )

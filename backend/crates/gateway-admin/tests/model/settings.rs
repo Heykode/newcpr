@@ -3,6 +3,28 @@ use gateway_core::routing::RequestTuning;
 use serde_json::json;
 
 #[test]
+fn shared_account_wait_ignores_retired_split_controls() {
+    let decoded: RequestTuningOverrides = serde_json::from_value(json!({
+        "maxWaitingPerAccount":5,"accountConcurrencyWaitTimeoutSeconds":60,
+        "accountBusyWaitStickyMaxWaiting":3,"accountBusyWaitStickyTimeoutSeconds":120,
+        "accountBusyWaitFallbackMaxWaiting":100,"accountBusyWaitFallbackTimeoutSeconds":30
+    }))
+    .unwrap();
+    assert!(decoded.validate());
+    assert_eq!(decoded.max_waiting_per_account, Some(5));
+    assert_eq!(decoded.account_concurrency_wait_timeout_seconds, Some(60));
+    let serialized = serde_json::to_value(decoded).unwrap();
+    for key in [
+        "accountBusyWaitStickyMaxWaiting",
+        "accountBusyWaitStickyTimeoutSeconds",
+        "accountBusyWaitFallbackMaxWaiting",
+        "accountBusyWaitFallbackTimeoutSeconds",
+    ] {
+        assert!(serialized.get(key).is_none());
+    }
+}
+
+#[test]
 fn excel_image_policy_defaults_and_warning_bounds_are_explicit() {
     let default = RequestTuning::default();
     assert_eq!(
@@ -140,10 +162,8 @@ fn request_tuning_overrides_round_trip_all_live_fields() {
         max_waiting_per_key: Some(8),
         key_concurrency_wait_timeout_seconds: Some(30),
         account_busy_wait_enabled: Some(true),
-        account_busy_wait_sticky_max_waiting: Some(4),
-        account_busy_wait_sticky_timeout_seconds: Some(121),
-        account_busy_wait_fallback_max_waiting: Some(101),
-        account_busy_wait_fallback_timeout_seconds: Some(31),
+        max_waiting_per_account: Some(4),
+        account_concurrency_wait_timeout_seconds: Some(121),
     };
     assert!(overrides.validate());
     let value = serde_json::to_value(&overrides).expect("serialize overrides");
@@ -183,10 +203,8 @@ fn request_tuning_overrides_round_trip_all_live_fields() {
             "maxWaitingPerKey": 8,
             "keyConcurrencyWaitTimeoutSeconds": 30,
             "accountBusyWaitEnabled": true,
-            "accountBusyWaitStickyMaxWaiting": 4,
-            "accountBusyWaitStickyTimeoutSeconds": 121,
-            "accountBusyWaitFallbackMaxWaiting": 101,
-            "accountBusyWaitFallbackTimeoutSeconds": 31
+            "maxWaitingPerAccount": 4,
+            "accountConcurrencyWaitTimeoutSeconds": 121,
         })
     );
     assert_eq!(
@@ -210,10 +228,8 @@ fn request_tuning_overrides_round_trip_all_live_fields() {
     assert_eq!(defaults["excelImageMaxCount"], 20);
     assert_eq!(defaults["excelImageRelayTtlMinutes"], 30);
     assert_eq!(defaults["accountBusyWaitEnabled"], false);
-    assert_eq!(defaults["accountBusyWaitStickyMaxWaiting"], 3);
-    assert_eq!(defaults["accountBusyWaitStickyTimeoutSeconds"], 120);
-    assert_eq!(defaults["accountBusyWaitFallbackMaxWaiting"], 100);
-    assert_eq!(defaults["accountBusyWaitFallbackTimeoutSeconds"], 30);
+    assert_eq!(defaults["maxWaitingPerAccount"], 10);
+    assert_eq!(defaults["accountConcurrencyWaitTimeoutSeconds"], 30);
 }
 
 #[test]
@@ -349,10 +365,8 @@ fn large_request_threshold_preserves_inheritance_zero_and_legacy_defaults() {
 fn account_busy_wait_overrides_preserve_null_inheritance_and_explicit_false() {
     let inherited = json!({
         "accountBusyWaitEnabled": null,
-        "accountBusyWaitStickyMaxWaiting": null,
-        "accountBusyWaitStickyTimeoutSeconds": null,
-        "accountBusyWaitFallbackMaxWaiting": null,
-        "accountBusyWaitFallbackTimeoutSeconds": null
+        "maxWaitingPerAccount": null,
+        "accountConcurrencyWaitTimeoutSeconds": null,
     });
     let decoded: RequestTuningOverrides =
         serde_json::from_value(inherited).expect("decode inherited wait settings");
@@ -361,10 +375,8 @@ fn account_busy_wait_overrides_preserve_null_inheritance_and_explicit_false() {
 
     let disabled = json!({
         "accountBusyWaitEnabled": false,
-        "accountBusyWaitStickyMaxWaiting": 7,
-        "accountBusyWaitStickyTimeoutSeconds": 123,
-        "accountBusyWaitFallbackMaxWaiting": 111,
-        "accountBusyWaitFallbackTimeoutSeconds": 33
+        "maxWaitingPerAccount": 7,
+        "accountConcurrencyWaitTimeoutSeconds": 123,
     });
     let decoded: RequestTuningOverrides =
         serde_json::from_value(disabled.clone()).expect("decode disabled wait settings");
@@ -379,10 +391,8 @@ fn account_busy_wait_overrides_preserve_null_inheritance_and_explicit_false() {
 #[test]
 fn account_busy_wait_overrides_validate_each_integer_range_even_when_disabled() {
     for (field, maximum) in [
-        ("accountBusyWaitStickyMaxWaiting", 1000),
-        ("accountBusyWaitStickyTimeoutSeconds", 600),
-        ("accountBusyWaitFallbackMaxWaiting", 1000),
-        ("accountBusyWaitFallbackTimeoutSeconds", 600),
+        ("maxWaitingPerAccount", 1000),
+        ("accountConcurrencyWaitTimeoutSeconds", 600),
     ] {
         for enabled in [false, true] {
             for (value, valid) in [(0, false), (1, true), (maximum, true), (maximum + 1, false)] {

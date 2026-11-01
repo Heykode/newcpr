@@ -53,6 +53,7 @@ const minCodexCliVersion = defineModel<string>('minCodexCliVersion', { required:
 
     <BaseForm class="max-w-6xl sm:grid-cols-2">
       <BaseFormItem
+        prop="minCodexDesktopVersion"
         :label="t('settings.clientVersion.codexDesktopMinimumVersion')"
         description="只检查 Desktop 应用版本，例如 26.825.51511"
         :error="desktopError"
@@ -72,6 +73,7 @@ const minCodexCliVersion = defineModel<string>('minCodexCliVersion', { required:
       </BaseFormItem>
 
       <BaseFormItem
+        prop="minCodexCliVersion"
         :label="t('settings.clientVersion.codexCliMinimumVersion')"
         description="只检查独立 CLI 版本，例如 0.152.0"
         :error="cliError"

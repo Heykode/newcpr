@@ -520,7 +520,7 @@ impl ModelRequestRepository for PgExecutionStore {
                image_generation_requested, admission_decision_ms, started_at, deadline_at,
                provider_kind, provider_account_id, provider_account_ref,
                provider_account_name_snapshot, provider_account_email_snapshot,
-               provider_account_authentication_kind_snapshot,
+               provider_account_authentication_kind_snapshot, provider_account_plan_type_snapshot,
                upstream_model_id, upstream_transport, http_version,
                attempt_count, upstream_send_state, account_selection_wait_ms,
                capacity_used_slots, capacity_total_slots
@@ -531,7 +531,7 @@ impl ModelRequestRepository for PgExecutionStore {
                $9, $10, $11, $12, $13::inet, $14, $15,
                $16, $17, $18, $19, $20, $21, $22, $23,
                $24, $25, $26,
-               account.name, account.email, account.authentication_kind,
+               account.name, account.email, account.authentication_kind, account.plan_type,
                $27, $28, $29, 1, 'not_sent', $30, $31, $32, $33, $34, $35, client_key.name
              from (values (true)) as seed(present)
              left join provider_accounts account on account.id = $25
@@ -607,8 +607,9 @@ impl ModelRequestRepository for PgExecutionStore {
                  provider_account_ref = $4,
                  (provider_account_name_snapshot,
                   provider_account_email_snapshot,
-                  provider_account_authentication_kind_snapshot) = (
-                   select name, email, authentication_kind
+                  provider_account_authentication_kind_snapshot,
+                  provider_account_plan_type_snapshot) = (
+                   select name, email, authentication_kind, plan_type
                    from provider_accounts where id = $3
                  ),
                  upstream_model_id = $5,

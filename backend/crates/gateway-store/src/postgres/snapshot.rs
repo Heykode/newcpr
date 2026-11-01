@@ -21,7 +21,6 @@ use super::ClientApiKeySnapshot;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SnapshotRuntimeSettings {
-    pub disable_fast: bool,
     pub responses_max_decompressed_body_bytes: u64,
     pub openai_account_affinity: gateway_core::account::AccountAffinity,
     pub codex_quota_overdraft_enabled: bool,
@@ -163,7 +162,6 @@ impl SnapshotStorePort for PgRuntimeSnapshotRepository {
                 data.settings.min_codex_desktop_version,
                 data.settings.min_codex_cli_version,
             )
-            .with_disable_fast(data.settings.disable_fast)
             .with_responses_max_decompressed_body_bytes(
                 data.settings.responses_max_decompressed_body_bytes,
             )
@@ -346,18 +344,12 @@ fn to_core_request_tuning(
         account_busy_wait_enabled: overrides
             .account_busy_wait_enabled
             .unwrap_or(defaults.account_busy_wait_enabled),
-        account_busy_wait_sticky_max_waiting: overrides
-            .account_busy_wait_sticky_max_waiting
-            .unwrap_or(defaults.account_busy_wait_sticky_max_waiting),
-        account_busy_wait_sticky_timeout_seconds: overrides
-            .account_busy_wait_sticky_timeout_seconds
-            .unwrap_or(defaults.account_busy_wait_sticky_timeout_seconds),
-        account_busy_wait_fallback_max_waiting: overrides
-            .account_busy_wait_fallback_max_waiting
-            .unwrap_or(defaults.account_busy_wait_fallback_max_waiting),
-        account_busy_wait_fallback_timeout_seconds: overrides
-            .account_busy_wait_fallback_timeout_seconds
-            .unwrap_or(defaults.account_busy_wait_fallback_timeout_seconds),
+        max_waiting_per_account: overrides
+            .max_waiting_per_account
+            .unwrap_or(defaults.max_waiting_per_account),
+        account_concurrency_wait_timeout_seconds: overrides
+            .account_concurrency_wait_timeout_seconds
+            .unwrap_or(defaults.account_concurrency_wait_timeout_seconds),
     }
 }
 
@@ -376,7 +368,6 @@ async fn load_settings(
         min_codex_desktop_version: Option<String>,
         min_codex_cli_version: Option<String>,
         request_tuning_json: Option<sqlx::types::Json<RequestTuningOverrides>>,
-        disable_fast: bool,
         responses_max_decompressed_body_bytes: i64,
         openai_guardian_reserved_concurrency: i64,
         openai_session_binding_ttl_hours: i64,
@@ -388,7 +379,7 @@ async fn load_settings(
         "select config_revision, refresh_margin_seconds, refresh_concurrency,
                 max_concurrent_per_account, request_interval_ms, rotation_strategy,
                 model_mappings_json, min_codex_desktop_version,
-                min_codex_cli_version, request_tuning_json, disable_fast,
+                min_codex_cli_version, request_tuning_json,
                 responses_max_decompressed_body_bytes,
                 openai_guardian_reserved_concurrency, openai_session_binding_ttl_hours, openai_account_affinity,
                 codex_quota_overdraft_enabled, codex_quota_overdraft_probe_model
@@ -422,7 +413,6 @@ async fn load_settings(
             request_tuning: row
                 .request_tuning_json
                 .map_or_else(RequestTuningOverrides::default, |value| value.0),
-            disable_fast: row.disable_fast,
             responses_max_decompressed_body_bytes: to_u64(
                 row.responses_max_decompressed_body_bytes,
             )?,

@@ -5,9 +5,14 @@ impl DefaultReloginService {
         &self,
         text: &str,
         replace: bool,
-        enrollment: Option<ReloginEnrollment>,
+        mut enrollment: Option<ReloginEnrollment>,
     ) -> Result<Vec<String>, AdminError> {
         let inputs = parse_relogin_import(text)?;
+        if inputs.len() != 1
+            && let Some(enrollment) = enrollment.as_mut()
+        {
+            enrollment.custom_name = None;
+        }
         let gate = self.gate.lock().await;
         if enrollment.is_some() && self.store()?.settings().await.map_err(store_error)?.paused {
             return Err(AdminError::conflict("重登队列已暂停，请先恢复队列"));

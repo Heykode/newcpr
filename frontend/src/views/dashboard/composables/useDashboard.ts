@@ -222,15 +222,15 @@ const emptyCards: DashboardSummary['cards'] = {
     todayTokensValue: 0,
     yesterdayTokensValue: 0,
     totalTokens: '0',
-    totalBillingAmountUsd: '—',
+    totalBillingAmountUsd: '$0.00',
   },
   cache: {
-    todayHitRate: '—',
+    todayHitRate: '0%',
     todayHitRateValue: null,
     yesterdayHitRateValue: null,
-    totalHitRate: '—',
+    totalHitRate: '0%',
     totalCachedTokens: '0',
-    averageFirstTokenLatencyMs: '—',
+    averageFirstTokenLatencyMs: '0 ms',
   },
 }
 
@@ -340,7 +340,7 @@ function metricCards(
       trend: hasTodayRequests ? trendState(traffic.todayRequestsValue, traffic.yesterdayRequestsValue, 'info') : undefined,
       details: [
         { label: '总请求', value: traffic.totalRequests, tone: 'info' },
-        { label: '首字均值', value: cache.averageFirstTokenLatencyMs, tone: 'info' },
+        { label: '首字均值', value: numericMetricDisplay(cache.averageFirstTokenLatencyMs, '0 ms'), tone: 'info' },
       ],
     },
     {
@@ -357,12 +357,12 @@ function metricCards(
       trend: hasTodayRequests ? trendState(tokens.todayTokensValue, tokens.yesterdayTokensValue, 'success') : undefined,
       details: [
         { label: '总 Token', value: tokens.totalTokens, tone: 'success' },
-        { label: '总计费', value: formatDashboardUsd(tokens.totalBillingAmountUsd), tone: 'success' },
+        { label: '总计费', value: numericMetricDisplay(formatDashboardUsd(tokens.totalBillingAmountUsd), '$0.00'), tone: 'success' },
       ],
     },
     {
       title: '缓存命中',
-      value: cache.todayHitRate,
+      value: numericMetricDisplay(cache.todayHitRate, '0%'),
       valueRaw: cache.todayHitRateValue,
       valueFormatter: formatDashboardRate,
       icon: Timer,
@@ -375,11 +375,15 @@ function metricCards(
         ? trendState(cache.todayHitRateValue, cache.yesterdayHitRateValue, 'warning')
         : undefined,
       details: [
-        { label: '总缓存命中', value: cache.totalHitRate, tone: 'warning' },
+        { label: '总缓存命中', value: numericMetricDisplay(cache.totalHitRate, '0%'), tone: 'warning' },
         { label: '总缓存', value: cache.totalCachedTokens, tone: 'warning' },
       ],
     },
   ]
+}
+
+function numericMetricDisplay(value: string, zero: string) {
+  return !value || value === '—' || value === '-' ? zero : value
 }
 
 function formatAccountCount(value: number) {
@@ -402,7 +406,7 @@ function recentTrendWindow(points: DashboardTrendPoint[]) {
 }
 
 function formatDashboardRate(value: number) {
-  return Number.isFinite(value) ? `${(value * 100).toFixed(1)}%` : '—'
+  return Number.isFinite(value) ? `${(value * 100).toFixed(1)}%` : '0%'
 }
 
 function aggregateUsageTrend(points: DashboardTrendPoint[]) {

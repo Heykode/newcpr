@@ -19,6 +19,27 @@ fn intent() -> ReloginEnrollment {
 
 const MATERIAL: &str = "test@example.invalid----test-only-password----JBSWY3DPEHPK3PXP";
 
+#[tokio::test]
+async fn bulk_enrollment_does_not_copy_one_custom_name_to_all_accounts() {
+    let h = Harness::new(vec![]).await;
+    let text =
+        format!("{MATERIAL}\nother@example.invalid----test-only-password----JBSWY3DPEHPK3PXP");
+    let ids = h
+        .services
+        .relogin()
+        .enroll(&text, false, intent())
+        .await
+        .unwrap();
+    assert_eq!(ids.len(), 2);
+    for id in ids {
+        let row = h.row(&id).await;
+        let enrollment = row.enrollment.unwrap();
+        assert!(enrollment.custom_name.is_none());
+        assert_eq!(enrollment.config, intent().config);
+        assert_eq!(enrollment.purchase_cost, intent().purchase_cost);
+    }
+}
+
 #[test]
 fn enrollment_persists_the_selected_quality_template_without_secrets() {
     let intent = intent().with_quality_template(Some(

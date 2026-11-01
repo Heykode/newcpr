@@ -34,7 +34,6 @@ pub type ModelMappings = BTreeMap<String, String>;
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeSettingsView {
     pub config_revision: u64,
-    pub disable_fast: bool,
     pub turn_state_injection_enabled: bool,
     pub turn_state_models: Vec<String>,
     pub excel_default_models: gateway_core::account::ExcelModels,
@@ -69,7 +68,6 @@ pub struct RuntimeSettingsView {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UpdateRuntimeSettingsRequest {
     pub config_revision: u64,
-    pub disable_fast: Option<bool>,
     pub turn_state_injection_enabled: Option<bool>,
     pub turn_state_models: Option<Vec<String>>,
     pub excel_default_models: Option<gateway_core::account::ExcelModels>,
@@ -229,7 +227,6 @@ impl UpdateRuntimeSettingsRequest {
         Ok(ReplaceRuntimeSettings {
             expected_revision: gateway_admin::model::Revision::new(self.config_revision)
                 .map_err(|_| WireValidationError::new("configRevision"))?,
-            disable_fast: self.disable_fast,
             excel_default_models: self.excel_default_models,
             turn_state_injection_enabled: self.turn_state_injection_enabled,
             turn_state_probe_proxy_id: self.turn_state_probe_proxy_id,
@@ -285,7 +282,6 @@ impl From<RuntimeSettings> for RuntimeSettingsView {
     fn from(settings: RuntimeSettings) -> Self {
         Self {
             config_revision: settings.config_revision.get(),
-            disable_fast: settings.disable_fast,
             excel_default_models: settings.excel_default_models,
             turn_state_injection_enabled: settings.turn_state_injection_enabled,
             turn_state_probe_proxy_id: settings.turn_state_probe_proxy_id,

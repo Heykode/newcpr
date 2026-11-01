@@ -1,0 +1,42 @@
+.release-notes .markdown-alert {
+  margin: 12px 0;
+  border-inline-start: 4px solid var(--markdown-alert-color);
+  padding: 8px 12px;
+}
+
+.release-notes .markdown-alert > :last-child {
+  margin-bottom: 0;
+}
+
+.release-notes .markdown-alert-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--markdown-alert-color);
+  font-weight: var(--font-weight-heavy);
+}
+
+.markdown-alert-title svg {
+  flex: none;
+  fill: currentColor;
+}
+
+.markdown-alert-note {
+  --markdown-alert-color: var(--cp-color-info-text);
+}
+
+.markdown-alert-tip {
+  --markdown-alert-color: var(--cp-color-success-text);
+}
+
+.markdown-alert-important {
+  --markdown-alert-color: var(--cp-color-purple-text);
+}
+
+.markdown-alert-warning {
+  --markdown-alert-color: var(--cp-color-warning-text);
+}
+
+.markdown-alert-caution {
+  --markdown-alert-color: var(--cp-color-error-text);
+}

@@ -39,7 +39,7 @@ const boxClasses = computed(() => [
   <!-- The native checkbox is nested; the rule does not resolve this Vue template pattern. -->
   <!-- eslint-disable-next-line vue-a11y/label-has-for -->
   <label
-    class="group relative inline-flex min-h-4 min-w-4 items-center gap-2.5 text-cp leading-none font-emphasis"
+    class="group relative inline-flex min-h-4 min-w-4 select-none items-center gap-2.5 text-cp leading-none font-emphasis"
     :class="disabled ? 'cursor-not-allowed opacity-55' : 'cursor-pointer'"
   >
     <input ref="input" v-model="model" type="checkbox" class="peer sr-only" :aria-label="label" :disabled="disabled">

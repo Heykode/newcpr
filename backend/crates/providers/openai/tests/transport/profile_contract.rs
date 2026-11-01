@@ -173,101 +173,121 @@ async fn model_transports_apply_configured_routing_and_discard_downstream_values
             [None, Some("NO_CONSTRAINT")],
         ),
     ] {
-        for websocket in [false, true] {
-            let (base_url, capture): (
-                String,
-                futures::future::BoxFuture<'static, reqwest::header::HeaderMap>,
-            ) = if websocket {
-                let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-                let base_url = format!("http://{}", listener.local_addr().unwrap());
-                let task = tokio::spawn(async move {
-                    let (stream, _) = listener.accept().await.unwrap();
-                    let mut headers = None;
-                    let mut socket = accept_codex_test_websocket_with(stream, |request, _| {
-                        headers = Some(request.headers().clone());
-                    })
-                    .await;
-                    socket.next().await.unwrap().unwrap();
-                    socket
-                        .send(Message::Text(
-                            completed_websocket_response("resp_routing", 1, 1).into(),
-                        ))
-                        .await
-                        .unwrap();
-                    headers.unwrap()
-                });
-                (base_url, Box::pin(async { task.await.unwrap() }))
-            } else {
-                let server = MockServer::start().await;
-                Mock::given(any())
-                    .respond_with(
-                        ResponseTemplate::new(200)
-                            .insert_header("content-type", "text/event-stream")
-                            .set_body_string(format!(
-                                "event: response.completed\ndata: {}\n\n",
-                                completed_websocket_response("resp_routing", 1, 1),
-                            )),
+        for profile_document in [
+            None,
+            Some(json!({"client":"desktop","platform":"macos","versionMode":"latest"})),
+            Some(
+                json!({"client":"cli","platform":"linux","versionMode":"fixed","codexVersion":"0.159.0","cliEntry":"exec"}),
+            ),
+            Some(
+                json!({"mode":"custom","userAgent":"codex_exec/0.159.0 (Mac OS 26.4.1; arm64) xterm-256color (codex_exec; 0.159.0)"}),
+            ),
+        ] {
+            for websocket in [false, true] {
+                let (base_url, capture): (
+                    String,
+                    futures::future::BoxFuture<'static, reqwest::header::HeaderMap>,
+                ) = if websocket {
+                    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+                    let base_url = format!("http://{}", listener.local_addr().unwrap());
+                    let task = tokio::spawn(async move {
+                        let (stream, _) = listener.accept().await.unwrap();
+                        let mut headers = None;
+                        let mut socket = accept_codex_test_websocket_with(stream, |request, _| {
+                            headers = Some(request.headers().clone());
+                        })
+                        .await;
+                        socket.next().await.unwrap().unwrap();
+                        socket
+                            .send(Message::Text(
+                                completed_websocket_response("resp_routing", 1, 1).into(),
+                            ))
+                            .await
+                            .unwrap();
+                        headers.unwrap()
+                    });
+                    (base_url, Box::pin(async { task.await.unwrap() }))
+                } else {
+                    let server = MockServer::start().await;
+                    Mock::given(any())
+                        .respond_with(
+                            ResponseTemplate::new(200)
+                                .insert_header("content-type", "text/event-stream")
+                                .set_body_string(format!(
+                                    "event: response.completed\ndata: {}\n\n",
+                                    completed_websocket_response("resp_routing", 1, 1),
+                                )),
+                        )
+                        .expect(1)
+                        .mount(&server)
+                        .await;
+                    (
+                        server.uri(),
+                        Box::pin(async move {
+                            server.received_requests().await.unwrap()[0].headers.clone()
+                        }),
                     )
-                    .expect(1)
-                    .mount(&server)
-                    .await;
-                (
-                    server.uri(),
-                    Box::pin(async move {
-                        server.received_requests().await.unwrap()[0].headers.clone()
-                    }),
-                )
-            };
-            let config: Value = serde_json::from_str(document).unwrap();
-            let profile = CodexWireProfileState::new(CodexWireProfile {
-                residency: config["residency"].as_str().map(str::to_owned),
-                account_routing_override: config["account_routing_override"]
-                    .as_str()
-                    .map(str::to_owned),
-                ..test_wire_profile().snapshot()
-            });
-            let client = CodexBackendClient::new(
-                reqwest::Client::builder().no_proxy().build().unwrap(),
-                base_url,
-                profile,
-            );
-            let downstream_headers = HEADERS
-                .into_iter()
-                .flat_map(|name| {
-                    ["downstream-first", "downstream-second"]
-                        .map(|value| json!([name, STANDARD.encode(value)]))
-                })
-                .collect::<Vec<_>>();
-            let payload = ProtocolPayload::json_object(
-                "openai",
-                codex_request_body("gpt-test", "", Vec::new()),
-            )
-            .unwrap()
-            .with_context(Map::from_iter([
-                ("opaque_request_headers".into(), json!(downstream_headers)),
-                ("use_websocket".into(), json!(websocket)),
-            ]));
-            let request = provider_openai::encode_generate_request(
-                &GenerateRequest::from_protocol_payload(payload),
-                "gpt-test",
-                &Default::default(),
-            )
-            .unwrap();
-            client
-                .create_response(&request, request_context("req_routing", Some("account")))
-                .await
-                .expect("model response");
-            let headers = capture.await;
-            for (name, value) in HEADERS.into_iter().zip(expected) {
-                assert_eq!(
-                    headers
-                        .get_all(name)
-                        .iter()
-                        .map(|value| value.to_str().unwrap())
-                        .collect::<Vec<_>>(),
-                    value.into_iter().collect::<Vec<_>>(),
-                    "{document}, websocket={websocket}, {name}",
+                };
+                let config: Value = serde_json::from_str(document).unwrap();
+                let profile = CodexWireProfileState::new(CodexWireProfile {
+                    residency: config["residency"].as_str().map(str::to_owned),
+                    account_routing_override: config["account_routing_override"]
+                        .as_str()
+                        .map(str::to_owned),
+                    ..test_wire_profile().snapshot()
+                });
+                if let Some(document) = &profile_document {
+                    profile.apply_user_agent_override(&gateway_core::provider_ports::ProviderUserAgentOverride::Configuration {
+                    document: gateway_core::account::OpaqueProviderData::new(document.as_object().unwrap().clone()),
+                }).unwrap();
+                }
+                let expected_identity = profile.snapshot();
+                let client = CodexBackendClient::new(
+                    reqwest::Client::builder().no_proxy().build().unwrap(),
+                    base_url,
+                    profile,
                 );
+                let downstream_headers = HEADERS
+                    .into_iter()
+                    .flat_map(|name| {
+                        ["downstream-first", "downstream-second"]
+                            .map(|value| json!([name, STANDARD.encode(value)]))
+                    })
+                    .collect::<Vec<_>>();
+                let payload = ProtocolPayload::json_object(
+                    "openai",
+                    codex_request_body("gpt-test", "", Vec::new()),
+                )
+                .unwrap()
+                .with_context(Map::from_iter([
+                    ("opaque_request_headers".into(), json!(downstream_headers)),
+                    ("use_websocket".into(), json!(websocket)),
+                ]));
+                let request = provider_openai::encode_generate_request(
+                    &GenerateRequest::from_protocol_payload(payload),
+                    "gpt-test",
+                    &Default::default(),
+                )
+                .unwrap();
+                client
+                    .create_response(&request, request_context("req_routing", Some("account")))
+                    .await
+                    .expect("model response");
+                let headers = capture.await;
+                assert_eq!(headers["user-agent"], expected_identity.user_agent());
+                assert_eq!(headers["originator"], expected_identity.originator);
+                assert_eq!(headers["version"], expected_identity.codex_version);
+                for (name, value) in HEADERS.into_iter().zip(expected) {
+                    assert_eq!(
+                        headers
+                            .get_all(name)
+                            .iter()
+                            .map(|value| value.to_str().unwrap())
+                            .collect::<Vec<_>>(),
+                        value.into_iter().collect::<Vec<_>>(),
+                        "{document}, websocket={websocket}, {name}",
+                    );
+                }
             }
         }
     }

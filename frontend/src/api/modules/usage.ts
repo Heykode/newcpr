@@ -446,6 +446,7 @@ export interface UsageInsightsOverviewResponse {
 export interface UsageDiagnosticItem {
   key: string
   name: string
+  authenticationKind?: string | null
   accountPlanType?: string | null
   accountPlanTypeDisplay?: string | null
   requestCount: number

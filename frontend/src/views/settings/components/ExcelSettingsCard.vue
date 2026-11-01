@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { ExcelImageSettings } from '../composables/useExcelImageSettings'
+import type { RuntimeUnitFields } from '../composables/useRuntimeUnits'
 import type { RequestTuning } from '@/api/modules/settings'
 import { computed } from 'vue'
 import BaseCard from '@/components/base/BaseCard.vue'
@@ -9,7 +10,7 @@ import BaseInput from '@/components/base/BaseInput.vue'
 import BaseSelect from '@/components/base/BaseSelect.vue'
 import { DEFAULT_EXCEL_MODELS_INPUT } from '@/utils/excel-defaults'
 
-const props = defineProps<{ disabled?: boolean, images: ExcelImageSettings }>()
+const props = defineProps<{ disabled?: boolean, images: ExcelImageSettings, units: RuntimeUnitFields }>()
 const models = defineModel<string>('models', { required: true })
 const requestTuning = defineModel<RequestTuning>('requestTuning', { required: true })
 const { mode: imageMode, relayUrl: imageRelayUrl, fields } = props.images
@@ -33,6 +34,13 @@ const totalSizeHint = computed(() => requestTuning.value.excelImageLimitPolicy =
 
 <template>
   <BaseCard title="Excel 配置" description="仅作用于选择 Excel 上游的请求；重试、账号切换和调度继续遵循通用配置。">
+    <section class="mb-5">
+      <BaseForm class="max-w-6xl sm:grid-cols-2">
+        <BaseFormItem label="Excel 提交前缓冲阈值（KiB）" description="仅影响 Excel，默认 128 KiB；0 关闭额外缓冲，非零时前导事件最多等待 2.5 秒，文字、工具输出和终态立即放行。原生 Codex 事件解析后立即下发，不受此项影响。">
+          <BaseInput :model-value="units.prefetchKiB.input.value" aria-label="Excel 提交前缓冲阈值（KiB）" type="number" min="0" step="any" :disabled="disabled" @update:model-value="units.prefetchKiB.setInput" />
+        </BaseFormItem>
+      </BaseForm>
+    </section>
     <section aria-labelledby="excel-default-models-title">
       <h3 id="excel-default-models-title" class="mb-3 mt-0 text-sm font-medium text-cp-text-secondary">
         默认模型

@@ -227,7 +227,17 @@ async fn encrypted_omission_upgrade_preserves_accounts_and_unrelated_settings() 
             .fetch_one(&database.pool)
             .await
             .unwrap();
-    super::TEST_MIGRATOR.run(&database.pool).await.unwrap();
+    // The shared account wait reset has its own migration preservation test.
+    let target = sqlx::migrate::Migrator {
+        migrations: super::TEST_MIGRATOR
+            .iter()
+            .filter(|migration| migration.version < 83)
+            .cloned()
+            .collect::<Vec<_>>()
+            .into(),
+        ..sqlx::migrate::Migrator::DEFAULT
+    };
+    target.run(&database.pool).await.unwrap();
     let mut after: serde_json::Value =
         sqlx::query_scalar("select to_jsonb(a) from provider_accounts a")
             .fetch_one(&database.pool)
@@ -279,6 +289,11 @@ async fn encrypted_omission_upgrade_preserves_accounts_and_unrelated_settings() 
     }
     let previous = settings_before.as_object_mut().unwrap();
     assert_eq!(
+        previous.remove("disable_fast"),
+        Some(serde_json::json!(false))
+    );
+    assert!(!settings.contains_key("disable_fast"));
+    assert_eq!(
         previous.remove("refresh_margin_seconds"),
         Some(serde_json::json!(3600))
     );
@@ -305,7 +320,7 @@ async fn encrypted_omission_upgrade_preserves_accounts_and_unrelated_settings() 
         .execute(&database.pool)
         .await
         .unwrap();
-    super::TEST_MIGRATOR.run(&database.pool).await.unwrap();
+    target.run(&database.pool).await.unwrap();
     assert!(
         sqlx::query_scalar::<_, bool>(
             "select excel_ignore_encrypted_content from provider_accounts"

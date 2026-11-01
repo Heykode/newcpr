@@ -41,6 +41,7 @@ mod reset_credits;
 mod retention;
 mod runtime_settings;
 mod schema_integrity;
+mod shared_account_wait;
 mod snapshot;
 mod snapshots;
 mod turn_state_upgrade;
@@ -162,7 +163,7 @@ async fn connect_and_migrate_should_apply_all_migrations_once_and_reopen_cleanly
             .fetch_one(&first)
             .await
             .unwrap();
-    assert_eq!(initial, 5);
+    assert_eq!(initial, 3);
     sqlx::query("update runtime_settings set max_concurrent_per_account=7 where id=1")
         .execute(&first)
         .await

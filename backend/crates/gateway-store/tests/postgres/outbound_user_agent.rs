@@ -8,6 +8,91 @@ use gateway_store::postgres::{
 use super::TestDatabase;
 
 #[tokio::test]
+async fn structured_profile_round_trips_without_changing_runtime_settings() {
+    let Some(database) = TestDatabase::create("ua_configuration").await else {
+        return;
+    };
+    let repository = PgControlPlaneRepository::new(database.pool.clone());
+    let runtime = PgRuntimeSettingsRepository::new(database.pool.clone());
+    let before = runtime.load_runtime_settings().await.unwrap();
+    let provider = ProviderKind::new("openai").unwrap();
+    for (index, document) in [
+        serde_json::json!({"client":"cli","platform":"linux","versionMode":"latest"}),
+        serde_json::json!({"mode":"custom","userAgent":"X/0.159.0","originator":"X","codexVersion":"0.159.0"}),
+    ].into_iter().enumerate() {
+        let selection = ProviderUserAgentOverride::Configuration {
+            document: gateway_core::account::OpaqueProviderData::new(document.as_object().unwrap().clone()),
+        };
+        repository.replace_user_agent_override(&provider, selection.clone(), audit(&format!("structured-{index}"))).await.unwrap();
+        assert_eq!(repository.load_user_agent_override(&provider).await.unwrap(), selection);
+    }
+    let after = runtime.load_runtime_settings().await.unwrap();
+    assert_eq!(after.request_tuning, before.request_tuning);
+    assert_eq!(after.model_mappings, before.model_mappings);
+    assert_eq!(
+        after.max_concurrent_per_account,
+        before.max_concurrent_per_account
+    );
+    repository
+        .replace_user_agent_override(
+            &provider,
+            ProviderUserAgentOverride::Default,
+            audit("structured-reset"),
+        )
+        .await
+        .unwrap();
+    let configuration: Option<serde_json::Value> = sqlx::query_scalar(
+        "select configuration_json from provider_outbound_user_agents where provider_kind='openai'",
+    )
+    .fetch_one(&database.pool)
+    .await
+    .unwrap();
+    assert!(configuration.is_none());
+    database.close().await;
+}
+
+#[tokio::test]
+async fn structured_profile_migration_preserves_existing_modes_and_exact_strings() {
+    let Some(database) = TestDatabase::create("ua_configuration_upgrade").await else {
+        return;
+    };
+    let mut transaction = database.pool.begin().await.unwrap();
+    sqlx::query("drop table provider_outbound_user_agents")
+        .execute(&mut *transaction)
+        .await
+        .unwrap();
+    for migration in [
+        include_str!("../../../../migrations/0009_outbound_user_agent.sql"),
+        include_str!("../../../../migrations/0011_qx_compatible_user_agent.sql"),
+        include_str!("../../../../migrations/0012_independent_outbound_profiles.sql"),
+        include_str!("../../../../migrations/0018_unified_outbound_profile.sql"),
+        include_str!("../../../../migrations/0071_outbound_client_version_sync.sql"),
+    ] {
+        sqlx::raw_sql(migration)
+            .execute(&mut *transaction)
+            .await
+            .unwrap();
+    }
+    sqlx::query("insert into provider_outbound_user_agents(provider_kind,mode,custom_user_agent) values ('a','default',null),('b','custom','exact fixed UA'),('c','custom-auto-version','exact automatic UA')").execute(&mut *transaction).await.unwrap();
+    let before: Vec<serde_json::Value> = sqlx::query_scalar(
+        "select to_jsonb(t) from provider_outbound_user_agents t order by provider_kind",
+    )
+    .fetch_all(&mut *transaction)
+    .await
+    .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../../../migrations/0082_outbound_client_profile.sql"
+    ))
+    .execute(&mut *transaction)
+    .await
+    .unwrap();
+    let after: Vec<serde_json::Value> = sqlx::query_scalar("select to_jsonb(t) - 'configuration_json' from provider_outbound_user_agents t order by provider_kind").fetch_all(&mut *transaction).await.unwrap();
+    assert_eq!(before, after);
+    transaction.rollback().await.unwrap();
+    database.close().await;
+}
+
+#[tokio::test]
 async fn targeted_user_agent_save_survives_reload_and_preserves_runtime_settings() {
     let Some(database) = TestDatabase::create("outbound_user_agent").await else {
         return;
@@ -592,6 +677,15 @@ async fn unified_migration_archives_all_legacy_choices_and_keeps_backup_after_sa
                 "default"
             }
         );
+    }
+    for migration in [
+        include_str!("../../../../migrations/0071_outbound_client_version_sync.sql"),
+        include_str!("../../../../migrations/0082_outbound_client_profile.sql"),
+    ] {
+        sqlx::raw_sql(migration)
+            .execute(&mut *transaction)
+            .await
+            .unwrap();
     }
     transaction.commit().await.unwrap();
     let repository = PgControlPlaneRepository::new(database.pool.clone());

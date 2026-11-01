@@ -60,7 +60,11 @@ impl SettingsStore for AdminSettingsStoreAdapter {
                     "outbound_user_agent.replace",
                     "provider_outbound_user_agents",
                     provider_kind.as_str(),
-                    vec!["mode".to_owned(), "custom_user_agent".to_owned()],
+                    vec![
+                        "mode".to_owned(),
+                        "custom_user_agent".to_owned(),
+                        "configuration_json".to_owned(),
+                    ],
                 ),
             )
             .await
@@ -95,7 +99,6 @@ impl SettingsStore for AdminSettingsStoreAdapter {
             settings: postgres::RuntimeSettingsUpdate {
                 openai_account_affinity: command.openai_account_affinity,
                 admin_api_key: current.settings.admin_api_key,
-                disable_fast: command.disable_fast,
                 excel_default_models: command
                     .excel_default_models
                     .unwrap_or(current.settings.excel_default_models),
@@ -154,7 +157,6 @@ impl SettingsStore for AdminSettingsStoreAdapter {
                 vec![
                     "model_mappings_json".to_owned(),
                     "excel_default_models".to_owned(),
-                    "disable_fast".to_owned(),
                     "turn_state_injection_enabled".to_owned(),
                     "turn_state_models".to_owned(),
                     "turn_state_probe_proxy_id".to_owned(),
@@ -265,7 +267,6 @@ pub(crate) fn admin_runtime_settings(
         .collect::<AdminStoreResult<ModelMappings>>()?;
     Ok(AdminRuntimeSettings {
         config_revision: admin_revision(settings.config_revision)?,
-        disable_fast: settings.disable_fast,
         excel_default_models: settings.excel_default_models,
         turn_state_injection_enabled: settings.turn_state_injection_enabled,
         turn_state_probe_proxy_id: settings.turn_state_probe_proxy_id,

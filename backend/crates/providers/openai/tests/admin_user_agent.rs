@@ -84,6 +84,41 @@ async fn initializer_restores_custom_ua_without_claiming_artifact_verification()
 }
 
 #[tokio::test]
+async fn initializer_restores_structured_selection_and_preview_without_rewriting_legacy_default() {
+    for document in [
+        serde_json::json!({"client":"desktop","platform":"macos","versionMode":"latest","osVersion":"26.4.1"}),
+        serde_json::json!({"client":"cli","platform":"linux","versionMode":"fixed","codexVersion":"0.159.0","cliEntry":"exec"}),
+        serde_json::json!({"mode":"custom","userAgent":CUSTOM}),
+    ] {
+        let config = valid_config();
+        let selection = ProviderUserAgentOverride::Configuration {
+            document: gateway_core::account::OpaqueProviderData::new(
+                document.as_object().unwrap().clone(),
+            ),
+        };
+        let bundle = provider_openai::initialize(config.config.clone(), ports(selection.clone()))
+            .await
+            .unwrap();
+        let admin = bundle.admin_provider();
+        let saved = admin.outbound_user_agent().unwrap();
+        assert_eq!(saved.selection, selection);
+        let preview = saved.profile_preview.unwrap();
+        assert_eq!(
+            preview.expose_to_provider()["userAgent"],
+            saved.effective_user_agent
+        );
+        assert!(saved.profile_options.is_some());
+        if document["mode"] == "custom" {
+            assert_eq!(saved.effective_user_agent, CUSTOM);
+        }
+        let reset = admin
+            .apply_outbound_user_agent(ProviderUserAgentOverride::Default)
+            .unwrap();
+        assert_eq!(reset.effective_user_agent, saved.default_user_agent);
+    }
+}
+
+#[tokio::test]
 async fn initializer_rejects_invalid_persisted_ua_instead_of_silent_default() {
     let config = valid_config();
     let result = provider_openai::initialize(

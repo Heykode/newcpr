@@ -1,15 +1,16 @@
 <script setup lang="ts">
 import { Save } from '@lucide/vue'
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, ref, useTemplateRef, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import BaseButton from '@/components/base/BaseButton.vue'
-
 import BaseConfirmModal from '@/components/base/BaseConfirmModal.vue'
+import BaseForm from '@/components/base/BaseForm/index.vue'
+
 import BasePageHeader from '@/components/base/BasePageHeader.vue'
 import BaseSegmented from '@/components/base/BaseSegmented.vue'
 import { t } from '@/i18n'
-
 import AccountWarmupCard from './components/AccountWarmupCard.vue'
+
 import AdminApiKeyCard from './components/AdminApiKeyCard.vue'
 import AdminPasswordCard from './components/AdminPasswordCard.vue'
 import SettingsBackupSection from './components/backup/SettingsBackupSection.vue'
@@ -25,6 +26,7 @@ import RotationStrategyCard from './components/RotationStrategyCard.vue'
 import RuntimeSettingsCard from './components/RuntimeSettingsCard.vue'
 import { useAdminApiKey } from './composables/useAdminApiKey'
 import { useSettingsForm } from './composables/useSettingsForm'
+import { useSettingsFormRules } from './composables/useSettingsFormRules'
 import { useSettingsLeaveGuard } from './composables/useSettingsLeaveGuard'
 import { rotationOptions } from './constants'
 
@@ -62,8 +64,7 @@ const {
   refreshConcurrencyValue,
   maxConcurrentPerAccountValue,
   openaiGuardianReservedConcurrencyValue,
-  requestIntervalMsValue,
-  responsesMaxDecompressedBodyBytesValue,
+  unitFields,
   openaiSessionBindingTtlHoursValue,
   minCodexDesktopVersionError,
   minCodexCliVersionError,
@@ -71,6 +72,21 @@ const {
   saveSettings,
   loadSettings,
 } = useSettingsForm()
+
+const settingsForm = useTemplateRef<InstanceType<typeof BaseForm>>('settingsForm')
+const validationModel = computed(() => ({ ...form, modelMappings: mappings.value }))
+const settingsRules = useSettingsFormRules(form)
+async function requestSave() {
+  if (await settingsForm.value?.validate().catch(() => false)) {
+    await saveSettings()
+    return
+  }
+  configurationScope.value = 'common'
+  await nextTick()
+  const first = settingsForm.value?.fields.find(field => field.validateState === 'error')
+  first?.scrollIntoView({ block: 'center' })
+  first?.focus()
+}
 
 const backupSection = ref<InstanceType<typeof SettingsBackupSection> | null>(null)
 const hasUnsavedChanges = computed(() => (section.value === 'runtime' && hasChanges.value) || !!backupSection.value?.hasChanges)
@@ -131,7 +147,7 @@ watch(
         variant="primary"
         :loading="saving"
         :disabled="loading"
-        @click="saveSettings"
+        @click="requestSave"
       >
         <template #icon>
           <Save class="size-4" />
@@ -140,7 +156,7 @@ watch(
       </BaseButton>
     </div>
 
-    <div v-if="section === 'runtime'" class="mt-5 grid w-full gap-5">
+    <BaseForm v-if="section === 'runtime'" ref="settingsForm" as="div" :model="validationModel" :rules="settingsRules" :validate-on-rule-change="false" scroll-to-error focus-on-error class="mt-5 grid w-full gap-5">
       <BaseSegmented
         v-model="configurationScope"
         label="配置范围"
@@ -171,10 +187,8 @@ watch(
           v-model:openai-guardian-reserved-concurrency="openaiGuardianReservedConcurrencyValue"
           v-model:refresh-margin-seconds="refreshMarginSecondsValue"
           v-model:refresh-concurrency="refreshConcurrencyValue"
-          v-model:request-interval-ms="requestIntervalMsValue"
-          v-model:responses-max-decompressed-body-bytes="responsesMaxDecompressedBodyBytesValue"
-          v-model:disable-fast="form.disableFast"
           v-model:request-tuning="form.requestTuning"
+          :units="unitFields"
           :disabled="loading || saving"
         />
 
@@ -233,10 +247,11 @@ watch(
           v-model:models="form.excelDefaultModels"
           v-model:request-tuning="form.requestTuning"
           :images="excelImages"
+          :units="unitFields"
           :disabled="loading || saving"
         />
       </div>
-    </div>
+    </BaseForm>
 
     <div v-else-if="section === 'cleanup'" class="mt-5">
       <SettingsCleanupSection />

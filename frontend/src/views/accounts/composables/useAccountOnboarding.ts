@@ -104,12 +104,13 @@ export function useAccountOnboarding(options: {
         const documents = createForm.value.provider === 'batch'
           ? parseMixedImportDocuments(parseImportJson(createForm.value.importTexts.json))
           : accountImportDocuments(requireImportProvider(createForm.value.provider), mode, createForm.value.importTexts[mode])
-        const items = documents.flatMap(splitAccountDocuments).map(entry => ({
+        const entries = documents.flatMap(splitAccountDocuments)
+        const items = entries.map(entry => ({
           provider: entry.provider,
           data: entry.document,
           ...(createForm.value.importTemplate ? { template: accountImportTemplate(createForm.value, entry.provider), templateSettingsOverride: true } : {}),
           ...(createForm.value.qualityTemplate ? { qualityTemplate: accountImportQualityTemplate(createForm.value) } : {}),
-          settings: accountImportSettings(createForm.value, entry.provider),
+          settings: accountImportSettings(entries.length === 1 ? createForm.value : { ...createForm.value, customName: '' }, entry.provider),
           outboundProxyId: accountCreateEgress(createForm.value, entry.provider === 'openai').outboundProxyId || undefined,
         }))
         const encoded = JSON.stringify(items, (_key, value: unknown) => isRecord(value)
@@ -245,7 +246,7 @@ export function useAccountOnboarding(options: {
     const account = reauthorizingAccount.value
     return {
       provider: createForm.value.provider,
-      name: account?.name || account?.email || `${createForm.value.provider} OAuth`,
+      name: account?.name ?? (createForm.value.provider === 'openai' ? '' : `${createForm.value.provider} OAuth`),
     }
   }
 

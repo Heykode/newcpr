@@ -11,6 +11,19 @@ use serde_json::{Value, json};
 
 use super::TestDatabase;
 
+// Older migration preservation assertions stop before the explicit queue reset.
+fn legacy_settings_migrator() -> sqlx::migrate::Migrator {
+    sqlx::migrate::Migrator {
+        migrations: super::TEST_MIGRATOR
+            .iter()
+            .filter(|migration| migration.version < 83)
+            .cloned()
+            .collect::<Vec<_>>()
+            .into(),
+        ..sqlx::migrate::Migrator::DEFAULT
+    }
+}
+
 fn settings_replacement(
     revision: gateway_store::Revision,
     id: &str,
@@ -33,6 +46,166 @@ fn settings_replacement(
             created_at: Utc::now(),
         },
     }
+}
+
+#[tokio::test]
+async fn upstream_concurrency_defaults_preserve_saved_and_customized_settings() {
+    let old = sqlx::migrate::Migrator {
+        migrations: super::TEST_MIGRATOR
+            .iter()
+            .filter(|migration| migration.version < 78)
+            .cloned()
+            .collect::<Vec<_>>()
+            .into(),
+        ..sqlx::migrate::Migrator::DEFAULT
+    };
+    for (revision, limit, guardian, tuning, change) in [
+        (1_i64, 5_i64, 0_i64, Value::Null, true),
+        (2, 5, 0, Value::Null, false),
+        (1, 7, 0, Value::Null, false),
+        (1, 5, 2, Value::Null, false),
+        (1, 5, 0, json!({"accountBusyWaitEnabled":true}), false),
+        (1, 5, 0, json!({"maxWaitingPerKey":12}), false),
+        (
+            1,
+            5,
+            0,
+            json!({"accountBusyWaitStickyTimeoutSeconds":60}),
+            false,
+        ),
+        (
+            1,
+            5,
+            0,
+            json!({"maxWaitingPerKey":0,"keyConcurrencyWaitTimeoutSeconds":30,"websocketMaxRetries":7}),
+            true,
+        ),
+    ] {
+        let Some(database) = TestDatabase::create_with_migrator("concurrency_defaults", &old).await
+        else {
+            return;
+        };
+        sqlx::query(
+            "update runtime_settings set config_revision=$1,max_concurrent_per_account=$2,
+                    openai_guardian_reserved_concurrency=$3,request_tuning_json=$4 where id=1",
+        )
+        .bind(revision)
+        .bind(limit)
+        .bind(guardian)
+        .bind(if tuning.is_null() {
+            None
+        } else {
+            Some(tuning.clone())
+        })
+        .execute(&database.pool)
+        .await
+        .unwrap();
+        let before: Value = sqlx::query_scalar(
+            "select to_jsonb(s) - 'disable_fast' from runtime_settings s where id=1",
+        )
+        .fetch_one(&database.pool)
+        .await
+        .unwrap();
+        let migration_78 = sqlx::migrate::Migrator {
+            migrations: super::TEST_MIGRATOR
+                .iter()
+                .filter(|migration| migration.version <= 78)
+                .cloned()
+                .collect::<Vec<_>>()
+                .into(),
+            ..sqlx::migrate::Migrator::DEFAULT
+        };
+        migration_78.run(&database.pool).await.unwrap();
+        let after: Value = sqlx::query_scalar(
+            "select to_jsonb(s) - 'disable_fast' from runtime_settings s where id=1",
+        )
+        .fetch_one(&database.pool)
+        .await
+        .unwrap();
+        if change {
+            assert_eq!(after["max_concurrent_per_account"], 3);
+            assert_eq!(after["openai_guardian_reserved_concurrency"], 5);
+            assert_eq!(after["request_tuning_json"]["maxWaitingPerKey"], 10);
+            assert_eq!(
+                after["request_tuning_json"]["accountBusyWaitStickyMaxWaiting"],
+                10
+            );
+            assert_eq!(
+                after["request_tuning_json"]["accountBusyWaitFallbackMaxWaiting"],
+                10
+            );
+            assert_eq!(after["request_tuning_json"]["accountBusyWaitEnabled"], true);
+            assert_eq!(
+                after["request_tuning_json"]["accountBusyWaitStickyTimeoutSeconds"],
+                30
+            );
+            assert_eq!(
+                after["request_tuning_json"]["accountBusyWaitFallbackTimeoutSeconds"],
+                30
+            );
+            for (key, value) in before.as_object().unwrap() {
+                if ![
+                    "max_concurrent_per_account",
+                    "openai_guardian_reserved_concurrency",
+                    "request_tuning_json",
+                ]
+                .contains(&key.as_str())
+                {
+                    assert_eq!(&after[key], value, "unrelated setting {key}");
+                }
+            }
+            if tuning.get("websocketMaxRetries").is_some() {
+                assert_eq!(after["request_tuning_json"]["websocketMaxRetries"], 7);
+            }
+        } else {
+            assert_eq!(before, after);
+        }
+        database.close().await;
+    }
+}
+
+#[tokio::test]
+async fn fresh_concurrency_defaults_reach_runtime_snapshot() {
+    let Some(database) = TestDatabase::create("fresh_concurrency_defaults").await else {
+        return;
+    };
+    let settings = PgRuntimeSettingsRepository::new(database.pool.clone())
+        .load_runtime_settings()
+        .await
+        .unwrap();
+    assert_eq!(settings.max_concurrent_per_account, 3);
+    assert_eq!(settings.openai_guardian_reserved_concurrency, 5);
+    let snapshot = PgRuntimeSnapshotRepository::new(database.pool.clone())
+        .load_runtime_snapshot()
+        .await
+        .unwrap();
+    assert_eq!(
+        snapshot.settings.request_tuning.max_waiting_per_key,
+        Some(10)
+    );
+    assert_eq!(
+        snapshot.settings.request_tuning.account_busy_wait_enabled,
+        Some(true)
+    );
+    assert_eq!(
+        snapshot.settings.request_tuning.max_waiting_per_account,
+        Some(10)
+    );
+    assert_eq!(
+        snapshot
+            .settings
+            .request_tuning
+            .account_concurrency_wait_timeout_seconds,
+        Some(30)
+    );
+    assert_eq!(
+        snapshot
+            .settings
+            .request_tuning
+            .key_concurrency_wait_timeout_seconds,
+        Some(30)
+    );
+    database.close().await;
 }
 
 #[tokio::test]
@@ -189,13 +362,19 @@ async fn preferred_affinity_upgrade_preserves_existing_rows_and_defaults() {
             return;
         };
         sqlx::query("update runtime_settings set openai_account_affinity = $1, rotation_strategy = 'sticky', openai_guardian_reserved_concurrency = 2 where id = 1").bind(mode).execute(&database.pool).await.unwrap();
-        let before: Value =
+        let mut before: Value =
             sqlx::query_scalar("select to_jsonb(s) from runtime_settings s where id = 1")
                 .fetch_one(&database.pool)
                 .await
                 .unwrap();
-        super::TEST_MIGRATOR.run(&database.pool).await.unwrap();
-        super::TEST_MIGRATOR.run(&database.pool).await.unwrap();
+        legacy_settings_migrator()
+            .run(&database.pool)
+            .await
+            .unwrap();
+        legacy_settings_migrator()
+            .run(&database.pool)
+            .await
+            .unwrap();
         let mut after: Value =
             sqlx::query_scalar("select to_jsonb(s) from runtime_settings s where id = 1")
                 .fetch_one(&database.pool)
@@ -207,6 +386,11 @@ async fn preferred_affinity_upgrade_preserves_existing_rows_and_defaults() {
         ] {
             assert_eq!(after.as_object_mut().unwrap().remove(field), Some(default));
         }
+        assert_eq!(
+            before.as_object_mut().unwrap().remove("disable_fast"),
+            Some(json!(false))
+        );
+        assert!(after.get("disable_fast").is_none());
         assert_eq!(before, after);
         sqlx::query(
             "update runtime_settings set openai_account_affinity = 'preferred' where id = 1",
@@ -258,8 +442,14 @@ async fn refresh_margin_migration_updates_only_historical_default_and_preserves_
                 .fetch_one(&database.pool)
                 .await
                 .unwrap();
-        super::TEST_MIGRATOR.run(&database.pool).await.unwrap();
-        super::TEST_MIGRATOR.run(&database.pool).await.unwrap();
+        legacy_settings_migrator()
+            .run(&database.pool)
+            .await
+            .unwrap();
+        legacy_settings_migrator()
+            .run(&database.pool)
+            .await
+            .unwrap();
         let after: Value =
             sqlx::query_scalar("select to_jsonb(s) from runtime_settings s where id = 1")
                 .fetch_one(&database.pool)
@@ -275,7 +465,7 @@ async fn refresh_margin_migration_updates_only_historical_default_and_preserves_
         for (field, value) in before.as_object().unwrap() {
             if matches!(
                 field.as_str(),
-                "refresh_margin_seconds" | "config_revision" | "updated_at"
+                "refresh_margin_seconds" | "config_revision" | "updated_at" | "disable_fast"
             ) {
                 continue;
             }
@@ -284,6 +474,7 @@ async fn refresh_margin_migration_updates_only_historical_default_and_preserves_
                 "migration changed unrelated setting {field}"
             );
         }
+        assert!(after.get("disable_fast").is_none());
         database.close().await;
     }
 }
@@ -350,7 +541,6 @@ fn settings_with_margin(refresh_margin_seconds: u64) -> RuntimeSettingsUpdate {
         openai_account_affinity: None,
         openai_session_binding_ttl_hours: None,
         admin_api_key: None,
-        disable_fast: None,
         turn_state_injection_enabled: None,
         excel_default_models: Default::default(),
         turn_state_models: vec![
@@ -882,10 +1072,8 @@ async fn request_tuning_overrides_should_round_trip() {
         excel_image_relay_entries: Some(128),
         excel_image_relay_ttl_minutes: Some(45),
         account_busy_wait_enabled: Some(true),
-        account_busy_wait_sticky_max_waiting: Some(4),
-        account_busy_wait_sticky_timeout_seconds: Some(121),
-        account_busy_wait_fallback_max_waiting: Some(101),
-        account_busy_wait_fallback_timeout_seconds: Some(31),
+        max_waiting_per_account: Some(4),
+        account_concurrency_wait_timeout_seconds: Some(121),
     };
     let expected = update.request_tuning.clone();
 
@@ -952,10 +1140,8 @@ async fn legacy_request_tuning_should_load_in_settings_and_snapshot_and_disappea
         json!({"websocketHttpFallbackEnabled": null}),
         json!({
             "accountBusyWaitEnabled": null,
-            "accountBusyWaitStickyMaxWaiting": null,
-            "accountBusyWaitStickyTimeoutSeconds": null,
-            "accountBusyWaitFallbackMaxWaiting": null,
-            "accountBusyWaitFallbackTimeoutSeconds": null
+            "maxWaitingPerAccount": null,
+            "accountConcurrencyWaitTimeoutSeconds": null,
         }),
     ] {
         sqlx::query("update runtime_settings set request_tuning_json = $1 where id = 1")
@@ -1076,55 +1262,69 @@ async fn decompression_limit_round_trips_to_settings_and_snapshot() {
 }
 
 #[tokio::test]
-async fn disable_fast_persists_and_omitted_updates_preserve_the_policy() {
-    let Some(database) = TestDatabase::create("disable_fast_settings").await else {
-        return;
+async fn removing_global_fast_preserves_all_other_runtime_settings_and_group_policy() {
+    let old = sqlx::migrate::Migrator {
+        migrations: super::TEST_MIGRATOR
+            .iter()
+            .filter(|migration| migration.version < 81)
+            .cloned()
+            .collect::<Vec<_>>()
+            .into(),
+        ..sqlx::migrate::Migrator::DEFAULT
     };
-    let repository = PgRuntimeSettingsRepository::new(database.pool.clone());
-    assert!(
-        !repository
-            .load_runtime_settings()
+    for enabled in [false, true] {
+        let Some(database) = TestDatabase::create_with_migrator("remove_global_fast", &old).await
+        else {
+            return;
+        };
+        sqlx::query("update runtime_settings set disable_fast=$1 where id=1")
+            .bind(enabled)
+            .execute(&database.pool)
             .await
-            .unwrap()
-            .disable_fast
-    );
-
-    let mut update = settings_with_margin(3_600);
-    update.disable_fast = Some(true);
-    repository
-        .update_runtime_settings(update)
+            .unwrap();
+        sqlx::query("insert into account_groups (id,name,color,enabled,disable_fast,fast_mode,created_at,updated_at) values ('grp_00000000000000000000000000000001','Fast policy','#2563EBFF',true,true,'disabled',now(),now())")
+            .execute(&database.pool).await.unwrap();
+        let before: Value = sqlx::query_scalar(
+            "select to_jsonb(s) - 'disable_fast' from runtime_settings s where id=1",
+        )
+        .fetch_one(&database.pool)
         .await
-        .expect("enable disable-fast");
-    assert!(
-        repository
+        .unwrap();
+        let groups_before: Vec<Value> =
+            sqlx::query_scalar("select to_jsonb(g) from account_groups g order by id")
+                .fetch_all(&database.pool)
+                .await
+                .unwrap();
+        legacy_settings_migrator()
+            .run(&database.pool)
+            .await
+            .unwrap();
+        legacy_settings_migrator()
+            .run(&database.pool)
+            .await
+            .unwrap();
+        let after: Value =
+            sqlx::query_scalar("select to_jsonb(s) from runtime_settings s where id=1")
+                .fetch_one(&database.pool)
+                .await
+                .unwrap();
+        let groups_after: Vec<Value> =
+            sqlx::query_scalar("select to_jsonb(g) from account_groups g order by id")
+                .fetch_all(&database.pool)
+                .await
+                .unwrap();
+        assert_eq!(before, after);
+        assert_eq!(groups_before, groups_after);
+        PgRuntimeSettingsRepository::new(database.pool.clone())
             .load_runtime_settings()
             .await
-            .unwrap()
-            .disable_fast
-    );
-
-    let mut update = settings_with_margin(3_600);
-    update.disable_fast = None;
-    repository
-        .update_runtime_settings(update)
-        .await
-        .expect("preserve disable-fast");
-    assert!(
-        repository
-            .load_runtime_settings()
-            .await
-            .unwrap()
-            .disable_fast
-    );
-    assert!(
+            .unwrap();
         PgRuntimeSnapshotRepository::new(database.pool.clone())
             .load_runtime_snapshot()
             .await
-            .unwrap()
-            .settings
-            .disable_fast
-    );
-    database.close().await;
+            .unwrap();
+        database.close().await;
+    }
 }
 
 #[tokio::test]
