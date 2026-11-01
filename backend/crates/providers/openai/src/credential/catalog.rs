@@ -31,6 +31,7 @@ use crate::transport::{CodexBackendClient, CodexCatalogModel, CodexRequestContex
 
 const MAX_RESPONSE_ETAG_BYTES: usize = 256;
 const PLAN_CATALOG_CACHE_TTL: Duration = Duration::from_secs(5 * 60);
+const SCHEDULING_CATALOG_MAX_AGE: Duration = Duration::from_secs(30 * 60);
 const MAX_CATALOG_FETCH_ATTEMPTS: usize = 3;
 const MAX_PLAN_CATALOG_MODELS: usize = 2_048;
 const MAX_CLIENT_CATALOGS: usize = 32;
@@ -43,14 +44,18 @@ const CLIENT_CATALOG_ERROR_TTL: Duration = Duration::from_secs(5);
 pub struct CodexCatalogScope(ProviderCatalogScope);
 
 impl CodexCatalogScope {
-    /// 从账号已验证的套餐事实构造目录作用域。
-    pub fn for_account(account: &ProviderAccount) -> Result<Self, CodexCredentialCatalogError> {
-        let plan = account
+    fn native_plan(account: &ProviderAccount) -> String {
+        account
             .plan_type()
             .map(str::trim)
             .filter(|plan| !plan.is_empty())
             .map(str::to_ascii_lowercase)
-            .unwrap_or_else(|| "unknown".to_owned());
+            .unwrap_or_else(|| "unknown".to_owned())
+    }
+
+    /// 从账号已验证的套餐事实构造目录作用域。
+    pub fn for_account(account: &ProviderAccount) -> Result<Self, CodexCredentialCatalogError> {
+        let plan = Self::native_plan(account);
         let scope =
             if account.responses_upstream() == gateway_core::account::ResponsesUpstream::Excel {
                 let encoded = serde_json::to_vec(account.excel_models())
@@ -122,6 +127,7 @@ pub struct CodexCredentialCatalogSnapshot {
 #[derive(Clone, PartialEq, Eq)]
 struct CatalogScopeSnapshot {
     models: Vec<String>,
+    native_models: Option<Vec<String>>,
     accounts: BTreeSet<ProviderAccountId>,
 }
 
@@ -261,6 +267,7 @@ impl ClientCatalogEntry {
 
 struct FetchedAccountModels {
     models: Vec<CodexCatalogModel>,
+    native_models: Option<Vec<String>>,
     etag: Option<String>,
 }
 
@@ -542,6 +549,46 @@ impl CodexCredentialCatalogService {
         )))
     }
 
+    /// 有效目录约束账号模型资格，缺失目录或未知套餐继续交由上游判断。
+    pub(crate) fn scheduling_exclusions(
+        &self,
+        accounts: &[ProviderAccount],
+        model: &str,
+        now: SystemTime,
+    ) -> BTreeSet<ProviderAccountId> {
+        let Ok(cache) = self.cache.read() else {
+            return BTreeSet::new();
+        };
+        let Some(snapshot) = cache.snapshot.as_ref().filter(|snapshot| {
+            now.duration_since(snapshot.observed_at)
+                .is_ok_and(|age| age < SCHEDULING_CATALOG_MAX_AGE)
+        }) else {
+            return BTreeSet::new();
+        };
+        // Excel catalogs may contain synthetic bridge models; they cannot prove native entitlements.
+        let excluded_scopes = snapshot
+            .scope_models
+            .iter()
+            .filter(|(scope, catalog)| {
+                scope.as_str() != "plan:unknown"
+                    && catalog
+                        .native_models
+                        .as_ref()
+                        .is_some_and(|models| !models.iter().any(|id| id == model))
+            })
+            .map(|(scope, _)| scope)
+            .collect::<BTreeSet<_>>();
+        accounts
+            .iter()
+            .filter(|account| {
+                CodexCatalogScope::native_plan(account) != "unknown"
+                    && CodexCatalogScope::for_account(account)
+                        .is_ok_and(|scope| excluded_scopes.contains(&scope))
+            })
+            .map(|account| account.id().clone())
+            .collect()
+    }
+
     /// 优先读取套餐目录 cache；缺失时才用当前账号所属套餐的有限候选集实时填充。
     pub async fn cached_or_refresh_account_catalog(
         &self,
@@ -677,6 +724,7 @@ impl CodexCredentialCatalogService {
                 scope,
                 CatalogScopeSnapshot {
                     models: entitlement,
+                    native_models: fetched.native_models,
                     accounts,
                 },
             );
@@ -772,6 +820,10 @@ impl CodexCredentialCatalogService {
                 client_version,
             )
             .await;
+        let native_models = result
+            .as_ref()
+            .ok()
+            .map(|snapshot| model_ids(snapshot.models()));
         if account.responses_upstream() == gateway_core::account::ResponsesUpstream::Excel
             && !account.excel_models().as_slice().is_empty()
         {
@@ -790,11 +842,16 @@ impl CodexCredentialCatalogService {
                         .map_err(|_| CodexCredentialCatalogError::InvalidCredentialData)?,
                 );
             }
-            return Ok(FetchedAccountModels { models, etag: None });
+            return Ok(FetchedAccountModels {
+                models,
+                native_models,
+                etag: None,
+            });
         }
         let snapshot = result.map_err(catalog_client_error)?;
         Ok(FetchedAccountModels {
             models: snapshot.models().to_vec(),
+            native_models,
             etag: snapshot.etag().map(str::to_owned),
         })
     }

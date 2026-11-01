@@ -392,6 +392,7 @@ fn cold_live_call_stream(request: ColdLiveCall) -> EventStream {
             response_origin: &request.response_origin,
             cyber_policy_scope: None,
             allows_account_state_mutation,
+            upstream_model: None,
             is_diagnostic: request.context.is_diagnostic_required_account(),
         };
         let active_account = request.lease.account().clone();

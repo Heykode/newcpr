@@ -14,8 +14,8 @@ use gateway_core::account::{
 };
 use gateway_core::engine::{AttemptContext, ContinuationAttempt};
 use gateway_core::provider_ports::{
-    BindingToken, ProviderConcurrencyPool, ProviderLeaseAcquisition, ProviderLeaseGuard,
-    ProviderLeasePort, ProviderLeaseRequest, ProviderSchedulingLeaseRequest,
+    BindingToken, ProviderConcurrencyPool, ProviderCooldownPort, ProviderLeaseAcquisition,
+    ProviderLeaseGuard, ProviderLeasePort, ProviderLeaseRequest, ProviderSchedulingLeaseRequest,
     ProviderSessionAffinityBinding, ProviderSessionAffinityKey, ProviderSessionAffinityPort,
     ProviderSessionAlias, ProviderSessionExclusionPort, ProviderSessionExclusions,
     ProviderStoreError,
@@ -27,6 +27,7 @@ use thiserror::Error;
 use url::Url;
 
 use super::affinity::{CODEX_ROOT_SESSION_TTL, CodexSessionAffinity};
+use super::catalog::CodexCredentialCatalogService;
 use super::cookie::CodexCookiePolicy;
 use super::quota::CodexCredentialQuotaService;
 use super::repository::{
@@ -39,6 +40,7 @@ use super::types::{
 
 mod capacity_wait;
 mod excel_auth;
+mod model_eligibility;
 
 pub use capacity_wait::AccountWaitFailure;
 
@@ -121,6 +123,7 @@ pub(crate) struct SelectCodexProviderEndpointCredential<'a> {
 
 struct CredentialSelectionInput<'a> {
     upstream_model: Option<&'a str>,
+    responses_model: bool,
     image_request: bool,
     search_request: bool,
     requires_oauth: bool,
@@ -196,6 +199,8 @@ pub struct CodexCredentialSelector {
     session_affinity: Arc<dyn ProviderSessionAffinityPort>,
     session_exclusions: Arc<dyn ProviderSessionExclusionPort>,
     quota: Arc<CodexCredentialQuotaService>,
+    catalog: Arc<CodexCredentialCatalogService>,
+    cooldowns: Arc<dyn ProviderCooldownPort>,
     cookie_policy: CodexCookiePolicy,
     risk_recovery: Mutex<HashMap<String, RiskRecoveryState>>,
     excel_auth_blocks: Mutex<HashMap<ProviderAccountId, excel_auth::ExcelAuthBlock>>,
@@ -352,6 +357,8 @@ impl CodexCredentialSelector {
         session_affinity: Arc<dyn ProviderSessionAffinityPort>,
         session_exclusions: Arc<dyn ProviderSessionExclusionPort>,
         quota: Arc<CodexCredentialQuotaService>,
+        catalog: Arc<CodexCredentialCatalogService>,
+        cooldowns: Arc<dyn ProviderCooldownPort>,
         account_feedback: Arc<AccountFeedbackStats>,
         cookie_policy: CodexCookiePolicy,
     ) -> Self {
@@ -362,6 +369,8 @@ impl CodexCredentialSelector {
             session_affinity,
             session_exclusions,
             quota,
+            catalog,
+            cooldowns,
             cookie_policy,
             risk_recovery: Mutex::new(HashMap::new()),
             excel_auth_blocks: Mutex::new(HashMap::new()),
@@ -472,6 +481,7 @@ impl CodexCredentialSelector {
     ) -> Result<CodexCredentialLease, CredentialSelectionError> {
         let input = CredentialSelectionInput {
             upstream_model: Some(request.upstream_model),
+            responses_model: true,
             image_request: false,
             search_request: false,
             requires_oauth: false,
@@ -492,6 +502,7 @@ impl CodexCredentialSelector {
     ) -> Result<CodexCredentialLease, CredentialSelectionError> {
         let input = CredentialSelectionInput {
             upstream_model: Some(request.upstream_model),
+            responses_model: true,
             image_request: false,
             search_request: false,
             requires_oauth: false,
@@ -507,13 +518,14 @@ impl CodexCredentialSelector {
     /// 为不属于 Responses 文本模型目录的 Provider 原生端点选择账号。
     ///
     /// 账号范围、健康度、配额、并发租约、cookie 与认证准备仍走同一套选择链路；
-    /// 发现型模型目录不用于淘汰文本请求或原生端点的候选账号。
+    /// 独立 Images、Search 和 Live 端点不套用 Responses 的目录资格。
     pub(crate) async fn select_for_provider_endpoint(
         &self,
         request: &SelectCodexProviderEndpointCredential<'_>,
     ) -> Result<CodexCredentialLease, CredentialSelectionError> {
         let input = CredentialSelectionInput {
             upstream_model: request.upstream_model,
+            responses_model: false,
             image_request: request.image_request,
             search_request: request.search_request,
             requires_oauth: request.requires_oauth,
@@ -644,6 +656,7 @@ impl CodexCredentialSelector {
             .into_iter()
             .filter(|account| self.account_in_scope(account, request))
             .collect::<Vec<_>>();
+        self.retain_model_eligible(&mut accounts, request);
         for account in &mut accounts {
             let eligible_route = request.attempt.codex_quota_overdraft_eligible()
                 && Self::request_upstream(account, request)
@@ -667,8 +680,7 @@ impl CodexCredentialSelector {
             for chunk in accounts.chunks(128) {
                 let reads = chunk.iter().map(|account| async {
                     let until = self
-                        .quota
-                        .scheduling_cooldown(account)
+                        .scheduling_cooldown(account, request)
                         .await
                         .unwrap_or(None);
                     (account.id().clone(), until)

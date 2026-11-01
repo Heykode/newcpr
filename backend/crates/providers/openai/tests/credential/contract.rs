@@ -27,9 +27,9 @@ use gateway_core::routing::{
 };
 use provider_openai::OFFICIAL_CODEX_BASE_URL;
 use provider_openai::credential::{
-    CodexAccountFailure, CodexCookiePolicy, CodexCredentialCodec, CodexCredentialQuotaService,
-    CodexCredentialSelector, CodexDeviceCodec, CredentialSelectionError,
-    ImportCodexOAuthCredential, SelectCodexCredential,
+    CodexAccountFailure, CodexCookiePolicy, CodexCredentialCatalogService, CodexCredentialCodec,
+    CodexCredentialQuotaService, CodexCredentialSelector, CodexDeviceCodec,
+    CredentialSelectionError, ImportCodexOAuthCredential, SelectCodexCredential,
 };
 use provider_openai::transport::profile::{CodexWireProfile, CodexWireProfileState};
 use secrecy::ExposeSecret;
@@ -38,7 +38,7 @@ use url::Url;
 
 use crate::support::{
     MemoryAccountStore, MemoryCooldownPort, MemorySessionAffinity, MemorySessionExclusions,
-    TestLeaseCoordinator, account_policy, profile, secret,
+    TestLeaseCoordinator, account_policy, catalog_cache, profile, secret,
 };
 
 fn create_account(store: &Arc<MemoryAccountStore>, id: &str, token: &str) {
@@ -169,10 +169,17 @@ fn selector_with_runtime(
     let http = reqwest::Client::builder().build().expect("HTTP client");
     let quota = Arc::new(CodexCredentialQuotaService::new(
         store.repository(),
+        profile.clone(),
+        http.clone(),
+        OFFICIAL_CODEX_BASE_URL.to_owned(),
+        cooldowns.clone(),
+    ));
+    let catalog = Arc::new(CodexCredentialCatalogService::new(
+        store.repository(),
         profile,
         http,
         OFFICIAL_CODEX_BASE_URL.to_owned(),
-        cooldowns,
+        catalog_cache(),
     ));
     CodexCredentialSelector::new(
         ProviderKind::new("openai").expect("provider"),
@@ -181,6 +188,8 @@ fn selector_with_runtime(
         session_affinity,
         Arc::new(MemorySessionExclusions::default()),
         quota,
+        catalog,
+        cooldowns,
         account_feedback,
         CodexCookiePolicy::official().expect("official cookie policy"),
     )

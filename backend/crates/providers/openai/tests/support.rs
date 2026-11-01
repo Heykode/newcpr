@@ -1576,11 +1576,12 @@ pub(crate) fn account_policy() -> gateway_core::account::AccountSelectionPolicy 
     )
 }
 
-/// 内存 `ProviderCooldownPort`：只实现 `read`/`put_if_later`（openai selector
-/// 429 冷却路径用），其余 scope 变体测试不涉及，返回占位。
+/// In-memory account and model cooldowns with credential revision isolation.
 #[derive(Clone, Default)]
 pub(crate) struct MemoryCooldownPort {
     pub(crate) cooldowns: Arc<Mutex<BTreeMap<ProviderAccountId, ProviderCooldown>>>,
+    pub(crate) scoped:
+        Arc<Mutex<BTreeMap<(ProviderAccountId, ProviderCooldownScope), ProviderScopedCooldown>>>,
 }
 
 impl MemoryCooldownPort {
@@ -1666,17 +1667,43 @@ impl ProviderCooldownPort for MemoryCooldownPort {
 
     fn put_scoped_if_later(
         &self,
-        _cooldown: ProviderScopedCooldown,
+        cooldown: ProviderScopedCooldown,
     ) -> BoxFuture<'_, Result<bool, ProviderStoreError>> {
-        Box::pin(async { Ok(false) })
+        Box::pin(async move {
+            let mut scoped = self.scoped.lock().expect("scoped cooldown lock");
+            let key = (cooldown.account_id().clone(), cooldown.scope().clone());
+            let current = scoped.get(&key);
+            if cooldown.until() <= SystemTime::now()
+                || current.is_some_and(|current| {
+                    current.credential_revision() > cooldown.credential_revision()
+                })
+            {
+                return Ok(false);
+            }
+            let changed = current.is_none_or(|current| {
+                current.credential_revision() < cooldown.credential_revision()
+                    || current.until() < cooldown.until()
+            });
+            if changed {
+                scoped.insert(key, cooldown);
+            }
+            Ok(changed)
+        })
     }
 
     fn read_scoped<'a>(
         &'a self,
-        _account_id: &'a ProviderAccountId,
-        _scope: &'a ProviderCooldownScope,
+        account_id: &'a ProviderAccountId,
+        scope: &'a ProviderCooldownScope,
     ) -> BoxFuture<'a, Result<Option<ProviderScopedCooldown>, ProviderStoreError>> {
-        Box::pin(async { Ok(None) })
+        Box::pin(async move {
+            Ok(self
+                .scoped
+                .lock()
+                .expect("scoped cooldown lock")
+                .get(&(account_id.clone(), scope.clone()))
+                .cloned())
+        })
     }
 
     fn clear_scoped<'a>(

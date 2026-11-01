@@ -41,20 +41,28 @@ if target == "snapshot":
                     "GITHUB_OUTPUT": str(self.output)}
 
     def seed(self):
-        for path in ("registry/cache/source/old.crate", "target/amd64/release/deps/old.rlib"):
-            item = self.cache / path
-            item.parent.mkdir(parents=True, exist_ok=True)
-            item.write_bytes(b"old-cache")
+        self.cache.mkdir(exist_ok=True)
+        for name, path in (("registry", "cache/source/old.crate"), ("target", "amd64/release/deps/old.rlib"), ("git", "db/old")):
+            (self.cache / (name + ".tar.gz")).write_bytes(self.compressed(path, b"old-cache"))
+
+    def compressed(self, path, body):
+        buffer = io.BytesIO()
+        with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
+            info = tarfile.TarInfo(path)
+            info.size = len(body)
+            archive.addfile(info, io.BytesIO(body))
+        return buffer.getvalue()
 
     def make_archive(self, valid=True):
         with tarfile.open(self.archive, "w") as archive:
-            paths = ["registry/cache/source/new.crate"]
-            if valid:
-                paths.append("target/amd64/release/deps/new.rlib")
-            for path in paths:
-                info = tarfile.TarInfo(path)
-                info.size = 3
-                archive.addfile(info, io.BytesIO(b"new"))
+            directory = tarfile.TarInfo("cache")
+            directory.type = tarfile.DIRTYPE
+            archive.addfile(directory)
+            for name, path in (("registry", "cache/source/new.crate"), ("target", "amd64/release/deps/new.rlib" if valid else "invalid"), ("git", "db/new")):
+                body = self.compressed(path, b"new")
+                info = tarfile.TarInfo("cache/" + name + ".tar.gz")
+                info.size = len(body)
+                archive.addfile(info, io.BytesIO(body))
 
     def run_script(self, operation):
         return subprocess.run(["bash", str(SCRIPT), operation, "fixture", str(self.cache), "amd64"],
@@ -75,13 +83,33 @@ if target == "snapshot":
         self.assertEqual(args[-1], str(self.cache))
         self.assertEqual(self.output.read_text(), "usable=true\n")
 
+    def test_restore_ignores_legacy_expanded_snapshot(self):
+        for name in ("registry", "git", "target"):
+            (self.cache / name).mkdir(parents=True)
+        result = self.run_script("restore")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(self.calls.exists())
+        self.assertEqual(self.output.read_text(), "usable=false\n")
+
+    def test_restore_ignores_corrupt_or_wrong_architecture_snapshot(self):
+        for payload in (b"not-gzip", self.compressed("arm64/release/deps/a.rlib", b"other-architecture")):
+            self.seed()
+            (self.cache / "target.tar.gz").write_bytes(payload)
+            self.output.unlink(missing_ok=True)
+            result = self.run_script("restore")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse(self.calls.exists())
+            self.assertEqual(self.output.read_text(), "usable=false\n")
+
     def test_tar_export_replaces_old_snapshot_after_validation(self):
         self.seed()
         self.make_archive()
         result = self.run_script("snapshot")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual((self.cache / "registry/cache/source/new.crate").read_bytes(), b"new")
-        self.assertFalse((self.cache / "registry/cache/source/old.crate").exists())
+        with tarfile.open(self.cache / "registry.tar.gz", "r:gz") as archive:
+            self.assertEqual(archive.extractfile("cache/source/new.crate").read(), b"new")
+            self.assertNotIn("cache/source/old.crate", archive.getnames())
+        self.assertFalse((self.cache / "registry").exists())
         self.assertIn("type=tar,dest=-", json.loads(self.calls.read_text()))
         self.assertEqual(list(self.root.glob("cache.*")), [])
 
@@ -94,7 +122,8 @@ if target == "snapshot":
         self.env["FAIL_TARGET"] = "snapshot"
         failed = self.run_script("snapshot")
         self.assertNotEqual(failed.returncode, 0)
-        self.assertEqual((self.cache / "registry/cache/source/old.crate").read_bytes(), b"old-cache")
+        with tarfile.open(self.cache / "registry.tar.gz", "r:gz") as archive:
+            self.assertEqual(archive.extractfile("cache/source/old.crate").read(), b"old-cache")
         self.assertEqual(list(self.root.glob("cache.*")), [])
 
     def test_source_build_order_and_failure_do_not_export_stale_cache(self):

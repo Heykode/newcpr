@@ -456,3 +456,112 @@ async fn repository() -> Option<(RedisCredentialLeaseRepository, ConnectionManag
         .expect("valid test namespace");
     Some((repository, connection, namespace))
 }
+use std::collections::BTreeMap;
+
+#[tokio::test]
+async fn runtime_signals_preserve_order_and_counts_across_batches() {
+    let Some((repository, _, _)) = repository().await else {
+        return;
+    };
+    let mut ids = (0..3000)
+        .map(|index| format!("acct_batch_{index}"))
+        .collect::<Vec<_>>();
+    let mut guards = Vec::new();
+    let mut expected = BTreeMap::new();
+    for (index, count) in [(0, 1), (127, 2), (128, 1), (500, 2), (2999, 1)] {
+        for _ in 0..count {
+            let request = scheduling_request(&ids[index], "batch-test", 2, Duration::ZERO);
+            let guard = acquired(
+                repository
+                    .try_acquire_bounded_lease(&request)
+                    .await
+                    .unwrap(),
+            );
+            let started = guard.grant().unwrap().expires_at - chrono::Duration::seconds(60);
+            expected.insert(ids[index].clone(), (count, Some(started)));
+            guards.push(guard);
+        }
+    }
+    let expired_request = CredentialBoundedLeaseRequest {
+        ttl: Duration::from_millis(25),
+        ..scheduling_request(&ids[256], "expired-batch-test", 1, Duration::ZERO)
+    };
+    let expired = acquired(
+        repository
+            .try_acquire_bounded_lease(&expired_request)
+            .await
+            .unwrap(),
+    );
+    guards.push(expired);
+    // 长租约保留同一个 ZSET，确保读取会清除已过期成员而非只依赖整个 key 到期
+    let live_request = scheduling_request(&ids[256], "live-batch-test", 2, Duration::ZERO);
+    let live = acquired(
+        repository
+            .try_acquire_bounded_lease(&live_request)
+            .await
+            .unwrap(),
+    );
+    let started = live.grant().unwrap().expires_at - chrono::Duration::seconds(60);
+    expected.insert(ids[256].clone(), (1, Some(started)));
+    guards.push(live);
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // 调用方的顺序与重复项不因批处理而被排序或去重
+    ids.extend([ids[127].clone(), ids[257].clone()]);
+    ids.reverse();
+    let signals = repository.credential_runtime_signals(&ids).await.unwrap();
+    assert_eq!(signals.len(), ids.len());
+    for (signal, id) in signals.iter().zip(&ids) {
+        assert_eq!(&signal.resource_id, id);
+        let (count, started) = expected.get(id).copied().unwrap_or((0, None));
+        assert_eq!(signal.in_flight, count, "{id}");
+        assert_eq!(signal.last_started_at, started, "{id}");
+    }
+    for guard in guards {
+        guard.release().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn runtime_signals_reject_invalid_data_instead_of_returning_a_partial_pool() {
+    let Some((repository, mut connection, namespace)) = repository().await else {
+        return;
+    };
+    assert!(
+        repository
+            .credential_runtime_signals(&[])
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let ids = (0..300)
+        .map(|index| format!("acct_invalid_signal_{index}"))
+        .collect::<Vec<_>>();
+    let request = scheduling_request(&ids[299], "invalid-signal-test", 1, Duration::ZERO);
+    let guard = acquired(
+        repository
+            .try_acquire_bounded_lease(&request)
+            .await
+            .unwrap(),
+    );
+    let keys = redis::cmd("KEYS")
+        .arg(format!("{namespace}:*:last-started"))
+        .query_async::<Vec<String>>(&mut connection)
+        .await
+        .unwrap();
+    assert_eq!(keys.len(), 1);
+    redis::cmd("SET")
+        .arg(&keys[0])
+        .arg("invalid-timestamp")
+        .query_async::<()>(&mut connection)
+        .await
+        .unwrap();
+    assert!(matches!(
+        repository
+            .credential_runtime_signals(&ids)
+            .await
+            .unwrap_err(),
+        gateway_store::StoreError::InvalidData { .. }
+    ));
+    guard.release().await.unwrap();
+}

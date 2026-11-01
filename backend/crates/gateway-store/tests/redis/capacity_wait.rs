@@ -1905,7 +1905,8 @@ mod guardian_pool {
                 .await,
             1
         );
-        let ids = [account(id)];
+        let mut ids = vec![account(id)];
+        ids.extend((0..300).map(|index| account(&format!("pool_batch_{index}"))));
         let provider = provider();
         let client = ClientApiKeyId::new("key_guardian_pool").unwrap();
         let shared = fixture
@@ -1920,6 +1921,10 @@ mod guardian_pool {
             .unwrap();
         assert_eq!(shared.signals()[&ids[0]].in_flight, 2);
         assert_eq!(reserved.signals()[&ids[0]].in_flight, 1);
+        for id in &ids[1..] {
+            assert_eq!(shared.signals()[id].in_flight, 0);
+            assert_eq!(reserved.signals()[id].in_flight, 0);
+        }
         assert_eq!(
             shared.signals()[&ids[0]].last_started_at,
             reserved.signals()[&ids[0]].last_started_at

@@ -176,7 +176,7 @@ jobs:
       - name: Rust tests
         env:
           BACKEND_PACKAGES: ${{ inputs.backend_packages }}
-        run: python3 release/ci_plan.py cargo --packages "$BACKEND_PACKAGES" test -- --lib --test main --locked
+        run: python3 release/ci_plan.py cargo --packages "$BACKEND_PACKAGES" test -- --lib --test main --locked -- --test-threads=8
 
       - name: Redis named-user ACL regression
         if: inputs.run_redis_acl
@@ -193,7 +193,7 @@ jobs:
           docker exec "${{ job.services.redis.id }}" redis-cli --no-auth-warning \
             -a "$redis_password" ACL SETUSER default off
           CPR_TEST_REDIS_URL="redis://cpr_acl:${acl_password}@127.0.0.1:6379" \
-            cargo test -p gateway-store --lib --test main --locked redis::
+            cargo test -p gateway-store --lib --test main --locked redis:: -- --test-threads=8
 
   frontend:
     if: inputs.run_frontend

@@ -379,7 +379,7 @@ async fn compact_propagates_upstream_rejection_and_rejects_false_success() {
 }
 
 #[tokio::test]
-async fn compact_publishes_capability_and_forwards_models_missing_from_discovery() {
+async fn compact_publishes_capability_but_rejects_models_missing_from_valid_catalog() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_provider_contract").await;
     let server = MockServer::start().await;
@@ -396,7 +396,7 @@ async fn compact_publishes_capability_and_forwards_models_missing_from_discovery
         .and(header("authorization", "Bearer at-acct_provider_contract"))
         .and(body_bytes(br#"{"model":"gpt-5.4","input":[]}"#.as_slice()))
         .respond_with(ResponseTemplate::new(200).set_body_raw(COMPACT_RESPONSE, "application/json"))
-        .expect(1)
+        .expect(0)
         .mount(&server)
         .await;
     let provider = provider_with_base_url(&store, server.uri());
@@ -409,7 +409,7 @@ async fn compact_publishes_capability_and_forwards_models_missing_from_discovery
             .is_some()
     );
     assert!(!provider.model_catalog_is_exhaustive());
-    let mut stream = provider
+    let error = provider
         .execute(
             planned_request(
                 "openai",
@@ -421,22 +421,11 @@ async fn compact_publishes_capability_and_forwards_models_missing_from_discovery
             context("req_compact_catalog", CancellationToken::new()),
         )
         .await
-        .expect("discovery does not reject an unlisted compact model");
-    let mut completed = false;
-    let mut raw = None;
-    while let Some(event) = stream.next().await {
-        let (facts, wire) = event.expect("compact result").into_parts();
-        completed |= facts
-            .iter()
-            .any(|fact| matches!(fact, GatewayEvent::Completed(_)));
-        if let Some(body) = wire.and_then(|wire| wire.into_raw_json_body()) {
-            raw = Some(body);
-        }
-    }
-    assert!(completed);
-    assert_eq!(raw.as_deref(), Some(COMPACT_RESPONSE));
+        .err()
+        .expect("valid catalog excludes unlisted compact models");
+    assert_eq!(error.kind(), ProviderErrorKind::NoEligibleAccount);
     let requests = server.received_requests().await.expect("requests");
-    assert_eq!(requests.len(), 2, "one discovery and one compact request");
+    assert_eq!(requests.len(), 1, "only discovery, no compact request");
 }
 
 #[tokio::test]

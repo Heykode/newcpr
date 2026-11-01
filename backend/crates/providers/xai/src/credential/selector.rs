@@ -135,7 +135,11 @@ impl GrokAccountSessionSelector {
             // 目录支持度按套餐 scope 去重后并发批量读取，避免逐账号串行往返。
             let account_scopes = accounts
                 .iter()
-                .map(|account| GrokCatalogScope::for_account(account).ok())
+                .map(|account| {
+                    GrokCatalogScope::for_account(account)
+                        .ok()
+                        .filter(|scope| scope.as_str() != "plan:unknown")
+                })
                 .collect::<Vec<_>>();
             let unique_scopes = account_scopes
                 .iter()
