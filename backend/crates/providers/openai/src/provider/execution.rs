@@ -625,6 +625,7 @@ pub(super) fn cold_json_response_stream(request: ColdJsonResponse) -> EventStrea
             cyber_policy_scope: None,
             is_diagnostic: request.lease.is_diagnostic(),
             allows_account_state_mutation,
+            upstream_model: None,
         };
         let active_account = request.lease.account().clone();
         let cookie_header = if request.excel.is_some() || request.excel_image.is_some() {
@@ -854,6 +855,7 @@ pub(super) fn cold_response_stream_once(response: ColdResponse) -> EventStream {
             cyber_policy_scope: cyber_policy_scope.as_ref(),
             is_diagnostic: lease.is_diagnostic(),
             allows_account_state_mutation,
+            upstream_model: request.excel.is_none().then_some(&upstream_model),
         };
         let mut active_account = lease.account().clone();
         let cookie_header = if request.quality_probe.is_some() {
@@ -1040,6 +1042,12 @@ pub(super) fn cold_response_stream_once(response: ColdResponse) -> EventStream {
                         active_account = current;
                     }
                 }
+                Err(CredentialSelectionError::AccountSnapshotChanged) => tracing::debug!(
+                    request_id = %request_id,
+                    account_id = %active_account.id(),
+                    credential_revision = active_account.revision().get(),
+                    "Skipped OpenAI response cookies after credential revision changed"
+                ),
                 Err(error) => tracing::warn!(
                     request_id = %request_id,
                     account_id = %active_account.id(),

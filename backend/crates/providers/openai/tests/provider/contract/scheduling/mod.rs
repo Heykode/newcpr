@@ -838,6 +838,21 @@ pub(super) fn waiting_provider_with_affinity_and_limit(
     affinity: Arc<MemorySessionAffinity>,
     limit: NonZeroU32,
 ) -> CodexProvider {
+    waiting_provider_with_catalog(store, leases, base_url, exclusions, affinity, limit).0
+}
+
+pub(super) fn waiting_provider_with_catalog(
+    store: &Arc<MemoryAccountStore>,
+    leases: Arc<TestLeaseCoordinator>,
+    base_url: String,
+    exclusions: Arc<MemorySessionExclusions>,
+    affinity: Arc<MemorySessionAffinity>,
+    limit: NonZeroU32,
+) -> (
+    CodexProvider,
+    Arc<CodexCredentialCatalogService>,
+    Arc<MemoryCooldownPort>,
+) {
     let profile = wire_profile();
     let http = reqwest::Client::builder().no_proxy().build().unwrap();
     let catalog = Arc::new(CodexCredentialCatalogService::new(
@@ -847,12 +862,13 @@ pub(super) fn waiting_provider_with_affinity_and_limit(
         base_url.clone(),
         catalog_cache(),
     ));
+    let cooldowns = Arc::new(MemoryCooldownPort::new());
     let quota = Arc::new(CodexCredentialQuotaService::new(
         store.repository(),
         profile.clone(),
         http.clone(),
         base_url.clone(),
-        Arc::new(MemoryCooldownPort::new()),
+        cooldowns.clone(),
     ));
     let feedback = Arc::new(AccountFeedbackStats::default());
     let selector = CodexCredentialSelector::new(
@@ -862,6 +878,8 @@ pub(super) fn waiting_provider_with_affinity_and_limit(
         affinity,
         exclusions,
         Arc::clone(&quota),
+        Arc::clone(&catalog),
+        cooldowns.clone(),
         Arc::clone(&feedback),
         CodexCookiePolicy::official().unwrap(),
     )
@@ -872,9 +890,9 @@ pub(super) fn waiting_provider_with_affinity_and_limit(
             ("acct_scope_new".to_owned(), limit),
         ]),
     ));
-    CodexProvider::new(
+    let provider = CodexProvider::new(
         Arc::new(selector),
-        catalog,
+        Arc::clone(&catalog),
         quota,
         feedback,
         http,
@@ -884,7 +902,8 @@ pub(super) fn waiting_provider_with_affinity_and_limit(
         u32::try_from(DEFAULT_STREAM_MAX_RETRIES).unwrap(),
         gateway_core::time::DeploymentTimeZone::default(),
     )
-    .unwrap()
+    .unwrap();
+    (provider, catalog, cooldowns)
 }
 
 fn waiting_attempt(attempt: AttemptContext) -> AttemptContext {
@@ -910,7 +929,7 @@ async fn provider_wait_queued(leases: &TestLeaseCoordinator) {
 }
 
 #[tokio::test]
-async fn discovery_catalog_missing_model_allows_immediate_and_queued_requests() {
+async fn valid_catalog_missing_model_rejects_before_immediate_or_queued_admission() {
     use std::sync::atomic::Ordering;
     for queued in [false, true] {
         let store = Arc::new(MemoryAccountStore::default());
@@ -924,57 +943,36 @@ async fn discovery_catalog_missing_model_allows_immediate_and_queued_requests() 
                     json!({"models":[{"slug":"other-model","display_name":"Other"}]}),
                 ),
             )
+            .expect(1)
             .mount(&server)
             .await;
         let provider = waiting_provider(&store, Arc::clone(&leases), server.uri());
-        let discovered = provider.query_model_capabilities().await.unwrap();
-        assert!(!provider.model_catalog_is_exhaustive());
-        assert!(
-            discovered
-                .iter()
-                .all(|model| model.upstream_model().as_str() != "gpt-5.4")
-        );
+        provider.query_model_capabilities().await.unwrap();
         let mut attempt = context("req_unlisted_model", CancellationToken::new());
         if queued {
             leases.capacity.enabled.store(true, Ordering::SeqCst);
             leases.capacity.set_load("acct_scope_old", 1);
             attempt = waiting_attempt(attempt);
         }
-        let selected = provider.execute(
-            planned_request("openai", Operation::Generate(generation(None, "hello"))),
-            attempt,
-        );
-        tokio::pin!(selected);
-        if queued {
-            tokio::select! {
-                result = &mut selected => panic!("must reach wait: {:?}", result.err()),
-                () = provider_wait_queued(&leases) => {}
-            }
-            assert!(
-                server
-                    .received_requests()
-                    .await
-                    .unwrap()
-                    .iter()
-                    .all(|request| request.method == "GET")
-            );
-            leases.capacity.set_load("acct_scope_old", 0);
-        }
-        let mut stream = timeout(Duration::from_secs(3), selected)
+        let error = provider
+            .execute(
+                planned_request("openai", Operation::Generate(generation(None, "hello"))),
+                attempt,
+            )
             .await
-            .unwrap()
-            .expect("undiscovered model remains eligible");
-        while let Some(event) = stream.next().await {
-            event.expect("upstream response");
-        }
-        let sent = server.received_requests().await.unwrap();
-        assert_eq!(
-            sent.iter()
-                .filter(|request| request.method == "POST")
-                .count(),
-            1
-        );
+            .err()
+            .expect("valid catalog excludes an unlisted model");
+        assert_eq!(error.kind(), ProviderErrorKind::NoEligibleAccount);
+        assert!(leases.requests.lock().unwrap().is_empty());
         assert_eq!(leases.capacity.waiting.load(Ordering::SeqCst), 0);
+        assert!(
+            server
+                .received_requests()
+                .await
+                .unwrap()
+                .iter()
+                .all(|request| request.method == "GET")
+        );
     }
 }
 
@@ -1456,4 +1454,70 @@ async fn capacity_wait_provider_reloads_cyber_exclusions_without_losing_frozen_c
                 .all(|request| request.account_id().as_str() == "acct_scope_old")
         );
     }
+}
+#[tokio::test]
+async fn waiting_rechecks_catalog_before_promoting_an_account() {
+    use std::sync::atomic::Ordering;
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_scope_old").await;
+    let leases = Arc::new(TestLeaseCoordinator::default());
+    leases.capacity.enabled.store(true, Ordering::SeqCst);
+    leases.capacity.set_load("acct_scope_old", 1);
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/codex/models"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(json!({"models":[{"slug":"gpt-5.4","display_name":"GPT"}]})),
+        )
+        .mount(&server)
+        .await;
+    let (provider, catalog, _) = waiting_provider_with_catalog(
+        &store,
+        leases.clone(),
+        server.uri(),
+        Arc::default(),
+        Arc::default(),
+        NonZeroU32::MIN,
+    );
+    provider.query_model_capabilities().await.unwrap();
+    let selected = provider.execute(
+        planned_request("openai", Operation::Generate(generation(None, "hello"))),
+        waiting_attempt(context(
+            "req_catalog_changes_while_waiting",
+            CancellationToken::new(),
+        )),
+    );
+    tokio::pin!(selected);
+    tokio::select! {
+        result = &mut selected => panic!("expected capacity wait: {:?}", result.err()),
+        () = provider_wait_queued(&leases) => {}
+    }
+    server.reset().await;
+    Mock::given(method("GET"))
+        .and(path("/codex/models"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(json!({"models":[{"slug":"other-model","display_name":"Other"}]})),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    catalog.refresh_catalogs().await.unwrap();
+    leases.capacity.set_load("acct_scope_old", 0);
+    let error = timeout(Duration::from_secs(3), selected)
+        .await
+        .unwrap()
+        .err()
+        .expect("catalog changed before promotion");
+    assert_eq!(error.kind(), ProviderErrorKind::NoEligibleAccount);
+    assert_eq!(leases.capacity.waiting.load(Ordering::SeqCst), 0);
+    assert!(
+        server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .all(|request| request.method == "GET")
+    );
 }

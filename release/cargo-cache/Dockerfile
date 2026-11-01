@@ -7,21 +7,18 @@ RUN --mount=type=bind,target=/cache \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/app/backend/target \
     test -n "$CACHE_STAMP" \
-    && cp -a /cache/registry/. /usr/local/cargo/registry/ \
-    && cp -a /cache/git/. /usr/local/cargo/git/ \
-    && cp -a /cache/target/. /app/backend/target/
+    && tar -xzf /cache/registry.tar.gz -C /usr/local/cargo/registry \
+    && tar -xzf /cache/git.tar.gz -C /usr/local/cargo/git \
+    && tar -xzf /cache/target.tar.gz -C /app/backend/target
 
-FROM busybox:1.37.0-musl@sha256:5cec3fc171c87218698e85a52af7087de727372aae264a787b8112901a5b0092 AS collect
+FROM busybox:1.37.0-musl@sha256:5cec3fc171c87218698e85a52af7087de727372aae264a787b8112901a5b0092 AS snapshot
 ARG CACHE_STAMP
-# 一次导出三个 mount，避免逐目录创建镜像、载入 Docker 再复制文件。
+# 直接压缩 mount 内容，构建层和 runner 只保存归档，避免多份展开的编译产物占满磁盘
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/app/backend/target \
     test -n "$CACHE_STAMP" \
-    && mkdir -p /cache/registry /cache/git /cache/target \
-    && cp -a /usr/local/cargo/registry/. /cache/registry/ \
-    && cp -a /usr/local/cargo/git/. /cache/git/ \
-    && cp -a /app/backend/target/. /cache/target/
-
-FROM scratch AS snapshot
-COPY --from=collect /cache/ /
+    && mkdir -p /cache \
+    && tar -czf /cache/registry.tar.gz -C /usr/local/cargo/registry . \
+    && tar -czf /cache/git.tar.gz -C /usr/local/cargo/git . \
+    && tar -czf /cache/target.tar.gz -C /app/backend/target .

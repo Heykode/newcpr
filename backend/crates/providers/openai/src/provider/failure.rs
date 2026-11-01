@@ -55,6 +55,7 @@ pub(super) struct MappedProviderFailure {
     /// 原始上游错误描述，仅在凭据错误状态下持久化。
     pub(super) error_message: Option<String>,
     pub(super) cyber_policy_failure: bool,
+    pub(super) model_unsupported: bool,
     pub(super) set_cookie_headers: Vec<String>,
     pub(super) rate_limit_headers: Vec<(String, String)>,
     pub(super) rate_limit_observed_at: SystemTime,
@@ -71,6 +72,7 @@ impl MappedProviderFailure {
             account_failure: None,
             error_message: None,
             cyber_policy_failure: false,
+            model_unsupported: false,
             set_cookie_headers: Vec::new(),
             rate_limit_headers: Vec::new(),
             rate_limit_observed_at: SystemTime::now(),
@@ -286,6 +288,7 @@ pub(super) struct OpenAiFailureContext<'a> {
     pub(super) cyber_policy_scope: Option<&'a CodexCyberPolicyScope>,
     pub(super) is_diagnostic: bool,
     pub(super) allows_account_state_mutation: bool,
+    pub(super) upstream_model: Option<&'a UpstreamModelId>,
 }
 
 #[derive(Clone, Copy)]
@@ -454,6 +457,16 @@ pub(super) async fn apply_failure(
     if !context.allows_account_state_mutation {
         return;
     }
+    if failure.model_unsupported
+        && let Some(model) = context.upstream_model
+        && let Err(error) = context
+            .selector
+            .record_model_unsupported(account, model)
+            .await
+    {
+        tracing::warn!(account_id = %account.id(), error = %error,
+            "Failed to persist OpenAI model availability cooldown");
+    }
     synchronize_passive_quota_headers(
         context.quota,
         account,
@@ -508,11 +521,17 @@ pub(super) async fn apply_failure(
             )
             .await
     {
-        tracing::warn!(
-            account_id = %account.id(),
-            error = %error,
-            "Failed to persist OpenAI response cookies"
-        );
+        match error {
+            CredentialSelectionError::AccountSnapshotChanged => tracing::debug!(
+                account_id = %account.id(),
+                credential_revision = account.revision().get(),
+                "Skipped OpenAI response cookies after credential revision changed"
+            ),
+            error => tracing::warn!(
+                account_id = %account.id(), error = %error,
+                "Failed to persist OpenAI response cookies"
+            ),
+        }
     }
 }
 
@@ -638,12 +657,13 @@ pub(super) fn apply_websocket_recovery_policy(
         return;
     }
     // 明确账号拒绝走已有换号路径，容量拒绝走请求内退避；两者都不消耗 WS 传输预算。
-    if failure.error.replay_is_safe()
-        && (failure.account_failure.is_some()
-            || matches!(
-                failure.error.pre_delivery_retry(),
-                Some(gateway_core::error::PreDeliveryRetry::SameAccountTransientRetry { .. })
-            ))
+    if failure.model_unsupported
+        || (failure.error.replay_is_safe()
+            && (failure.account_failure.is_some()
+                || matches!(
+                    failure.error.pre_delivery_retry(),
+                    Some(gateway_core::error::PreDeliveryRetry::SameAccountTransientRetry { .. })
+                )))
     {
         tracing::warn!(
             request_id = context.request_id,
@@ -1591,6 +1611,7 @@ pub(super) fn map_upstream_failure(
         ),
         error_message: failure.client_message,
         cyber_policy_failure,
+        model_unsupported: category == CodexFailureCategory::ModelUnsupported,
         set_cookie_headers: failure.set_cookie_headers,
         rate_limit_headers: failure.rate_limit_headers,
         rate_limit_observed_at: failure.rate_limit_observed_at,

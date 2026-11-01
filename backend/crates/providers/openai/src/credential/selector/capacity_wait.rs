@@ -885,15 +885,15 @@ impl CodexCredentialSelector {
         request: &CredentialSelectionInput<'_>,
     ) -> Result<Vec<AccountCandidate>, CredentialSelectionError> {
         let mut candidates = Vec::new();
-        let accounts = accounts
+        let mut accounts = accounts
             .into_iter()
             .filter(|account| self.account_in_scope(account, request))
             .collect::<Vec<_>>();
+        self.retain_model_eligible(&mut accounts, request);
         self.quota.prepare_scheduling(&accounts).await;
         for account in accounts {
             let cooldown = self
-                .quota
-                .scheduling_cooldown(&account)
+                .scheduling_cooldown(&account, request)
                 .await
                 .map_err(|source| CredentialSelectionError::Store(Some(source.into())))?;
             let health = self

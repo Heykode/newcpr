@@ -170,12 +170,11 @@ fn service_tiers_should_preserve_declared_ids_names_and_descriptions() {
 }
 
 #[test]
-fn missing_or_empty_service_tiers_should_not_infer_fast_from_legacy_metadata() {
+fn missing_or_empty_service_tiers_should_remain_empty() {
     for service_tiers in [None, Some(json!([]))] {
         let mut model = json!({
             "slug": "gpt-5.4",
-            "display_name": "GPT-5.4",
-            "additional_speed_tiers": ["fast"]
+            "display_name": "GPT-5.4"
         });
         if let Some(service_tiers) = service_tiers {
             model["service_tiers"] = service_tiers;

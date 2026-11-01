@@ -280,6 +280,7 @@ fn provider_and_quota_with_profile(
     stream_max_retries: u32,
     profile: CodexWireProfileState,
 ) -> (CodexProvider, Arc<CodexCredentialQuotaService>) {
+    let cooldowns = Arc::new(MemoryCooldownPort::new());
     let http = reqwest::Client::builder()
         .no_proxy()
         .build()
@@ -297,7 +298,7 @@ fn provider_and_quota_with_profile(
         profile.clone(),
         http.clone(),
         base_url.clone(),
-        Arc::new(MemoryCooldownPort::new()),
+        cooldowns.clone(),
     ));
     let account_feedback = Arc::new(AccountFeedbackStats::default());
     let selector = Arc::new(
@@ -308,6 +309,8 @@ fn provider_and_quota_with_profile(
             session_affinity,
             Arc::new(MemorySessionExclusions::default()),
             Arc::clone(&quota),
+            Arc::clone(&catalog),
+            cooldowns,
             Arc::clone(&account_feedback),
             CodexCookiePolicy::official().expect("cookie policy"),
         )
