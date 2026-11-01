@@ -592,11 +592,15 @@ async fn capacity_wait_modes_share_atomic_limits_without_execution_or_cursor_cha
     let Some(mut fixture) = Fixture::new().await else {
         return;
     };
-    for (account, cap) in [("sticky", 3), ("fallback", 100)] {
-        let requests = (0..cap + 20).map(|_| {
+    for (account, cap) in [("sticky", 10), ("fallback", 5)] {
+        let requests = (0..cap + 20).map(|index| {
             fixture.port.try_acquire_wait(wait_request(
                 account,
-                AccountWaitMode::Fallback,
+                if index % 2 == 0 {
+                    AccountWaitMode::Sticky
+                } else {
+                    AccountWaitMode::Fallback
+                },
                 cap,
                 Duration::from_secs(30),
             ))
@@ -618,7 +622,7 @@ async fn capacity_wait_modes_share_atomic_limits_without_execution_or_cursor_cha
                 .try_acquire_wait(wait_request(
                     account,
                     AccountWaitMode::Sticky,
-                    3,
+                    cap,
                     Duration::from_secs(30),
                 ))
                 .await

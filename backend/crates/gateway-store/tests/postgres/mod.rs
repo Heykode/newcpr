@@ -41,6 +41,7 @@ mod reset_credits;
 mod retention;
 mod runtime_settings;
 mod schema_integrity;
+mod shared_account_wait;
 mod snapshot;
 mod snapshots;
 mod turn_state_upgrade;

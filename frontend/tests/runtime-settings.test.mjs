@@ -658,10 +658,8 @@ test('inherited runtime defaults never add the removed global WS opening limit',
       maxWaitingPerKey: 0,
       keyConcurrencyWaitTimeoutSeconds: 30,
       accountBusyWaitEnabled: false,
-      accountBusyWaitStickyMaxWaiting: 3,
-      accountBusyWaitStickyTimeoutSeconds: 120,
-      accountBusyWaitFallbackMaxWaiting: 100,
-      accountBusyWaitFallbackTimeoutSeconds: 30,
+      maxWaitingPerAccount: 10,
+      accountConcurrencyWaitTimeoutSeconds: 30,
     })
   }
   finally {
@@ -743,10 +741,8 @@ test('Excel image budgets roundtrip independently and reject invalid limits', as
 
 const busyWaitDefaults = {
   accountBusyWaitEnabled: false,
-  accountBusyWaitStickyMaxWaiting: 3,
-  accountBusyWaitStickyTimeoutSeconds: 120,
-  accountBusyWaitFallbackMaxWaiting: 100,
-  accountBusyWaitFallbackTimeoutSeconds: 30,
+  maxWaitingPerAccount: 10,
+  accountConcurrencyWaitTimeoutSeconds: 30,
 }
 
 test('retired State settings do not enter the form or save payload', async () => {
@@ -797,17 +793,13 @@ function busyWaitValues(tuning) {
 test('account busy wait loads saved values and round trips edited settings', async () => {
   const initialWait = {
     accountBusyWaitEnabled: true,
-    accountBusyWaitStickyMaxWaiting: 7,
-    accountBusyWaitStickyTimeoutSeconds: 180,
-    accountBusyWaitFallbackMaxWaiting: 150,
-    accountBusyWaitFallbackTimeoutSeconds: 45,
+    maxWaitingPerAccount: 7,
+    accountConcurrencyWaitTimeoutSeconds: 180,
   }
   const editedWait = {
     accountBusyWaitEnabled: true,
-    accountBusyWaitStickyMaxWaiting: 9,
-    accountBusyWaitStickyTimeoutSeconds: 240,
-    accountBusyWaitFallbackMaxWaiting: 200,
-    accountBusyWaitFallbackTimeoutSeconds: 60,
+    maxWaitingPerAccount: 9,
+    accountConcurrencyWaitTimeoutSeconds: 240,
   }
   const query = mountSettings({
     ...settings(),
@@ -840,27 +832,25 @@ test('account busy wait loads saved values and round trips edited settings', asy
 test('account busy wait defaults inherit per field and preserve an explicit false', async () => {
   const serverDefaults = {
     accountBusyWaitEnabled: true,
-    accountBusyWaitStickyMaxWaiting: 5,
-    accountBusyWaitStickyTimeoutSeconds: 150,
-    accountBusyWaitFallbackMaxWaiting: 125,
-    accountBusyWaitFallbackTimeoutSeconds: 40,
+    maxWaitingPerAccount: 5,
+    accountConcurrencyWaitTimeoutSeconds: 150,
   }
   for (const { defaults, tuning, expected } of [
     { defaults: undefined, tuning: undefined, expected: busyWaitDefaults },
     { defaults: serverDefaults, tuning: undefined, expected: serverDefaults },
     {
       defaults: serverDefaults,
-      tuning: { accountBusyWaitEnabled: false, accountBusyWaitStickyMaxWaiting: 8 },
-      expected: { ...serverDefaults, accountBusyWaitEnabled: false, accountBusyWaitStickyMaxWaiting: 8 },
+      tuning: { accountBusyWaitEnabled: false, maxWaitingPerAccount: 8 },
+      expected: { ...serverDefaults, accountBusyWaitEnabled: false, maxWaitingPerAccount: 8 },
     },
     {
-      defaults: { accountBusyWaitStickyTimeoutSeconds: 150 },
-      tuning: { accountBusyWaitEnabled: true, accountBusyWaitFallbackMaxWaiting: 250 },
+      defaults: { accountConcurrencyWaitTimeoutSeconds: 150 },
+      tuning: { accountBusyWaitEnabled: true, maxWaitingPerAccount: 250 },
       expected: {
         ...busyWaitDefaults,
         accountBusyWaitEnabled: true,
-        accountBusyWaitStickyTimeoutSeconds: 150,
-        accountBusyWaitFallbackMaxWaiting: 250,
+        accountConcurrencyWaitTimeoutSeconds: 150,
+        maxWaitingPerAccount: 250,
       },
     },
   ]) {
@@ -886,10 +876,8 @@ test('account busy wait defaults inherit per field and preserve an explicit fals
 test('disabling account busy wait preserves all numeric settings across save and reload', async () => {
   const initialWait = {
     accountBusyWaitEnabled: true,
-    accountBusyWaitStickyMaxWaiting: 11,
-    accountBusyWaitStickyTimeoutSeconds: 210,
-    accountBusyWaitFallbackMaxWaiting: 230,
-    accountBusyWaitFallbackTimeoutSeconds: 55,
+    maxWaitingPerAccount: 11,
+    accountConcurrencyWaitTimeoutSeconds: 210,
   }
   const query = mountSettings({ ...settings(), requestTuning: initialWait })
   try {
@@ -918,10 +906,8 @@ test('account busy wait accepts inclusive numeric bounds when enabled or disable
     for (const [maxWaiting, timeoutSeconds] of [[1, 1], [1000, 600]]) {
       const expected = {
         accountBusyWaitEnabled: enabled,
-        accountBusyWaitStickyMaxWaiting: maxWaiting,
-        accountBusyWaitStickyTimeoutSeconds: timeoutSeconds,
-        accountBusyWaitFallbackMaxWaiting: maxWaiting,
-        accountBusyWaitFallbackTimeoutSeconds: timeoutSeconds,
+        maxWaitingPerAccount: maxWaiting,
+        accountConcurrencyWaitTimeoutSeconds: timeoutSeconds,
       }
       const query = mountSettings(settings())
       try {
@@ -939,10 +925,8 @@ test('account busy wait accepts inclusive numeric bounds when enabled or disable
 })
 
 for (const [field, upperBound] of [
-  ['accountBusyWaitStickyMaxWaiting', 1000],
-  ['accountBusyWaitStickyTimeoutSeconds', 600],
-  ['accountBusyWaitFallbackMaxWaiting', 1000],
-  ['accountBusyWaitFallbackTimeoutSeconds', 600],
+  ['maxWaitingPerAccount', 1000],
+  ['accountConcurrencyWaitTimeoutSeconds', 600],
 ]) {
   for (const enabled of [false, true]) {
     test(`account busy wait rejects invalid ${field} without saving when enabled=${enabled}`, async () => {

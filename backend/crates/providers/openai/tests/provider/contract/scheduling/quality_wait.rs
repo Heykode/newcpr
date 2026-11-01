@@ -153,10 +153,8 @@ fn quality_service(
     .unwrap()
     .with_request_tuning(gateway_core::routing::RequestTuning {
         account_busy_wait_enabled: waiting,
-        account_busy_wait_sticky_max_waiting: 3,
-        account_busy_wait_fallback_max_waiting: 3,
-        account_busy_wait_sticky_timeout_seconds: 1,
-        account_busy_wait_fallback_timeout_seconds: 1,
+        max_waiting_per_account: 3,
+        account_concurrency_wait_timeout_seconds: 1,
         ..Default::default()
     })
     .with_account_directory(Arc::new(RuntimeAccountDirectory::new(BTreeMap::from([

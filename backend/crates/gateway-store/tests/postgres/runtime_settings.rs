@@ -11,6 +11,19 @@ use serde_json::{Value, json};
 
 use super::TestDatabase;
 
+// Older migration preservation assertions stop before the explicit queue reset.
+fn legacy_settings_migrator() -> sqlx::migrate::Migrator {
+    sqlx::migrate::Migrator {
+        migrations: super::TEST_MIGRATOR
+            .iter()
+            .filter(|migration| migration.version < 83)
+            .cloned()
+            .collect::<Vec<_>>()
+            .into(),
+        ..sqlx::migrate::Migrator::DEFAULT
+    }
+}
+
 fn settings_replacement(
     revision: gateway_store::Revision,
     id: &str,
@@ -93,12 +106,22 @@ async fn upstream_concurrency_defaults_preserve_saved_and_customized_settings() 
         .fetch_one(&database.pool)
         .await
         .unwrap();
-        super::TEST_MIGRATOR.run(&database.pool).await.unwrap();
-        let after: Value =
-            sqlx::query_scalar("select to_jsonb(s) from runtime_settings s where id=1")
-                .fetch_one(&database.pool)
-                .await
-                .unwrap();
+        let migration_78 = sqlx::migrate::Migrator {
+            migrations: super::TEST_MIGRATOR
+                .iter()
+                .filter(|migration| migration.version <= 78)
+                .cloned()
+                .collect::<Vec<_>>()
+                .into(),
+            ..sqlx::migrate::Migrator::DEFAULT
+        };
+        migration_78.run(&database.pool).await.unwrap();
+        let after: Value = sqlx::query_scalar(
+            "select to_jsonb(s) - 'disable_fast' from runtime_settings s where id=1",
+        )
+        .fetch_one(&database.pool)
+        .await
+        .unwrap();
         if change {
             assert_eq!(after["max_concurrent_per_account"], 3);
             assert_eq!(after["openai_guardian_reserved_concurrency"], 5);
@@ -165,18 +188,15 @@ async fn fresh_concurrency_defaults_reach_runtime_snapshot() {
         Some(true)
     );
     assert_eq!(
-        snapshot
-            .settings
-            .request_tuning
-            .account_busy_wait_sticky_max_waiting,
+        snapshot.settings.request_tuning.max_waiting_per_account,
         Some(10)
     );
     assert_eq!(
         snapshot
             .settings
             .request_tuning
-            .account_busy_wait_fallback_max_waiting,
-        Some(10)
+            .account_concurrency_wait_timeout_seconds,
+        Some(30)
     );
     assert_eq!(
         snapshot
@@ -347,8 +367,14 @@ async fn preferred_affinity_upgrade_preserves_existing_rows_and_defaults() {
                 .fetch_one(&database.pool)
                 .await
                 .unwrap();
-        super::TEST_MIGRATOR.run(&database.pool).await.unwrap();
-        super::TEST_MIGRATOR.run(&database.pool).await.unwrap();
+        legacy_settings_migrator()
+            .run(&database.pool)
+            .await
+            .unwrap();
+        legacy_settings_migrator()
+            .run(&database.pool)
+            .await
+            .unwrap();
         let mut after: Value =
             sqlx::query_scalar("select to_jsonb(s) from runtime_settings s where id = 1")
                 .fetch_one(&database.pool)
@@ -416,8 +442,14 @@ async fn refresh_margin_migration_updates_only_historical_default_and_preserves_
                 .fetch_one(&database.pool)
                 .await
                 .unwrap();
-        super::TEST_MIGRATOR.run(&database.pool).await.unwrap();
-        super::TEST_MIGRATOR.run(&database.pool).await.unwrap();
+        legacy_settings_migrator()
+            .run(&database.pool)
+            .await
+            .unwrap();
+        legacy_settings_migrator()
+            .run(&database.pool)
+            .await
+            .unwrap();
         let after: Value =
             sqlx::query_scalar("select to_jsonb(s) from runtime_settings s where id = 1")
                 .fetch_one(&database.pool)
@@ -1040,10 +1072,8 @@ async fn request_tuning_overrides_should_round_trip() {
         excel_image_relay_entries: Some(128),
         excel_image_relay_ttl_minutes: Some(45),
         account_busy_wait_enabled: Some(true),
-        account_busy_wait_sticky_max_waiting: Some(4),
-        account_busy_wait_sticky_timeout_seconds: Some(121),
-        account_busy_wait_fallback_max_waiting: Some(101),
-        account_busy_wait_fallback_timeout_seconds: Some(31),
+        max_waiting_per_account: Some(4),
+        account_concurrency_wait_timeout_seconds: Some(121),
     };
     let expected = update.request_tuning.clone();
 
@@ -1110,10 +1140,8 @@ async fn legacy_request_tuning_should_load_in_settings_and_snapshot_and_disappea
         json!({"websocketHttpFallbackEnabled": null}),
         json!({
             "accountBusyWaitEnabled": null,
-            "accountBusyWaitStickyMaxWaiting": null,
-            "accountBusyWaitStickyTimeoutSeconds": null,
-            "accountBusyWaitFallbackMaxWaiting": null,
-            "accountBusyWaitFallbackTimeoutSeconds": null
+            "maxWaitingPerAccount": null,
+            "accountConcurrencyWaitTimeoutSeconds": null,
         }),
     ] {
         sqlx::query("update runtime_settings set request_tuning_json = $1 where id = 1")
@@ -1267,8 +1295,14 @@ async fn removing_global_fast_preserves_all_other_runtime_settings_and_group_pol
                 .fetch_all(&database.pool)
                 .await
                 .unwrap();
-        super::TEST_MIGRATOR.run(&database.pool).await.unwrap();
-        super::TEST_MIGRATOR.run(&database.pool).await.unwrap();
+        legacy_settings_migrator()
+            .run(&database.pool)
+            .await
+            .unwrap();
+        legacy_settings_migrator()
+            .run(&database.pool)
+            .await
+            .unwrap();
         let after: Value =
             sqlx::query_scalar("select to_jsonb(s) from runtime_settings s where id=1")
                 .fetch_one(&database.pool)

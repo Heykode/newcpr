@@ -178,10 +178,8 @@ async fn runtime_snapshot_compiles_account_busy_wait_defaults_overrides_and_froz
         max_waiting_per_key: 10,
         key_concurrency_wait_timeout_seconds: 30,
         account_busy_wait_enabled: true,
-        account_busy_wait_sticky_max_waiting: 10,
-        account_busy_wait_sticky_timeout_seconds: 30,
-        account_busy_wait_fallback_max_waiting: 10,
-        account_busy_wait_fallback_timeout_seconds: 30,
+        max_waiting_per_account: 10,
+        account_concurrency_wait_timeout_seconds: 30,
         ..RequestTuning::default()
     };
     let defaults = compiler.compile().await.expect("compile fresh settings");
@@ -201,10 +199,8 @@ async fn runtime_snapshot_compiles_account_busy_wait_defaults_overrides_and_froz
         excel_image_relay_downloads: 3,
         excel_image_relay_entries: 25,
         account_busy_wait_enabled: true,
-        account_busy_wait_sticky_max_waiting: 7,
-        account_busy_wait_sticky_timeout_seconds: 123,
-        account_busy_wait_fallback_max_waiting: 111,
-        account_busy_wait_fallback_timeout_seconds: 33,
+        max_waiting_per_account: 7,
+        account_concurrency_wait_timeout_seconds: 123,
         max_request_attempts: 8,
         websocket_large_request_threshold_bytes: 4096,
         stream_prefetch_bytes: 256 * 1024,
@@ -227,15 +223,9 @@ async fn runtime_snapshot_compiles_account_busy_wait_defaults_overrides_and_froz
         openai_request_location: Some(location.clone()),
         openai_location_override_enabled: Some(true),
         account_busy_wait_enabled: Some(expected.account_busy_wait_enabled),
-        account_busy_wait_sticky_max_waiting: Some(expected.account_busy_wait_sticky_max_waiting),
-        account_busy_wait_sticky_timeout_seconds: Some(
-            expected.account_busy_wait_sticky_timeout_seconds,
-        ),
-        account_busy_wait_fallback_max_waiting: Some(
-            expected.account_busy_wait_fallback_max_waiting,
-        ),
-        account_busy_wait_fallback_timeout_seconds: Some(
-            expected.account_busy_wait_fallback_timeout_seconds,
+        max_waiting_per_account: Some(expected.max_waiting_per_account),
+        account_concurrency_wait_timeout_seconds: Some(
+            expected.account_concurrency_wait_timeout_seconds,
         ),
         max_request_attempts: Some(expected.max_request_attempts),
         websocket_large_request_threshold_bytes: Some(
@@ -313,10 +303,8 @@ async fn runtime_snapshot_compiles_account_busy_wait_defaults_overrides_and_froz
         json!({}),
         json!({
             "accountBusyWaitEnabled": null,
-            "accountBusyWaitStickyMaxWaiting": null,
-            "accountBusyWaitStickyTimeoutSeconds": null,
-            "accountBusyWaitFallbackMaxWaiting": null,
-            "accountBusyWaitFallbackTimeoutSeconds": null
+            "maxWaitingPerAccount": null,
+            "accountConcurrencyWaitTimeoutSeconds": null,
         }),
     ] {
         sqlx::query(

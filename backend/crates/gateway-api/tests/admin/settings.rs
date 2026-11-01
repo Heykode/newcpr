@@ -75,10 +75,8 @@ fn update_body() -> Value {
             "maxWaitingPerKey": 0,
             "keyConcurrencyWaitTimeoutSeconds": 30,
             "accountBusyWaitEnabled": true,
-            "accountBusyWaitStickyMaxWaiting": 4,
-            "accountBusyWaitStickyTimeoutSeconds": 121,
-            "accountBusyWaitFallbackMaxWaiting": 101,
-            "accountBusyWaitFallbackTimeoutSeconds": 31
+            "maxWaitingPerAccount": 4,
+            "accountConcurrencyWaitTimeoutSeconds": 121,
         }
     });
     body["openaiAccountAffinity"] = json!("strict");
@@ -512,10 +510,8 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
             max_waiting_per_key: Some(8),
             key_concurrency_wait_timeout_seconds: Some(30),
             account_busy_wait_enabled: Some(true),
-            account_busy_wait_sticky_max_waiting: Some(4),
-            account_busy_wait_sticky_timeout_seconds: Some(121),
-            account_busy_wait_fallback_max_waiting: Some(101),
-            account_busy_wait_fallback_timeout_seconds: Some(31),
+            max_waiting_per_account: Some(4),
+            account_concurrency_wait_timeout_seconds: Some(121),
         },
         updated_at: Utc
             .with_ymd_and_hms(2026, 8, 2, 10, 30, 0)
@@ -562,10 +558,8 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
             "maxWaitingPerKey": 8,
             "keyConcurrencyWaitTimeoutSeconds": 30,
             "accountBusyWaitEnabled": true,
-            "accountBusyWaitStickyMaxWaiting": 4,
-            "accountBusyWaitStickyTimeoutSeconds": 121,
-            "accountBusyWaitFallbackMaxWaiting": 101,
-            "accountBusyWaitFallbackTimeoutSeconds": 31
+            "maxWaitingPerAccount": 4,
+            "accountConcurrencyWaitTimeoutSeconds": 121,
         },
         "updatedAt": "2026-08-02T10:30:00Z"
     });
@@ -1017,10 +1011,8 @@ async fn account_busy_wait_settings_should_round_trip_enabled_disabled_and_inher
     let mut inherited = update_body();
     inherited["requestTuning"] = json!({
         "accountBusyWaitEnabled": null,
-        "accountBusyWaitStickyMaxWaiting": null,
-        "accountBusyWaitStickyTimeoutSeconds": null,
-        "accountBusyWaitFallbackMaxWaiting": null,
-        "accountBusyWaitFallbackTimeoutSeconds": null
+        "maxWaitingPerAccount": null,
+        "accountConcurrencyWaitTimeoutSeconds": null,
     });
     let mut legacy = update_body();
     legacy
@@ -1067,10 +1059,8 @@ async fn account_busy_wait_settings_should_reject_invalid_values_without_mutatio
         .expect("read original settings");
     let original = response_json(response).await["data"].clone();
     for (field, maximum) in [
-        ("accountBusyWaitStickyMaxWaiting", 1000),
-        ("accountBusyWaitStickyTimeoutSeconds", 600),
-        ("accountBusyWaitFallbackMaxWaiting", 1000),
-        ("accountBusyWaitFallbackTimeoutSeconds", 600),
+        ("maxWaitingPerAccount", 1000),
+        ("accountConcurrencyWaitTimeoutSeconds", 600),
     ] {
         for (invalid, expected_status) in [
             (json!(0), StatusCode::BAD_REQUEST),

@@ -78,6 +78,12 @@ quota_reset_at 控制调度；只有当前配置、凭据和额度周期均匹�
 时间戳均不重写。业务备份通过整表 pg_dump 包含新列；启用新模式后旧二进制
 不识别该模式，回退须先恢复旧模式并遵循迁移感知部署流程。
 
+`0083_shared_account_wait.sql` 将账号等待的旧四项退休，统一为
+`maxWaitingPerAccount=10` 与 `accountConcurrencyWaitTimeoutSeconds=30`。
+这是用户明确选择的旧值迁移，不是根据两组旧值猜测优先级。已保存的新两项保留；
+等待开关、Key 队列、重试、UA 和其他设置不变。旧二进制不识别新字段，
+回退须按迁移感知流程处理，不能仅替换镜像。
+
 `gateway-store` 的 PG/Redis 集成测试需要以下环境变量，未设置时在本地
 静默跳过（CI 缺失则直接失败）：
 

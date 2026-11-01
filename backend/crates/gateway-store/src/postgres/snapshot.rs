@@ -344,18 +344,12 @@ fn to_core_request_tuning(
         account_busy_wait_enabled: overrides
             .account_busy_wait_enabled
             .unwrap_or(defaults.account_busy_wait_enabled),
-        account_busy_wait_sticky_max_waiting: overrides
-            .account_busy_wait_sticky_max_waiting
-            .unwrap_or(defaults.account_busy_wait_sticky_max_waiting),
-        account_busy_wait_sticky_timeout_seconds: overrides
-            .account_busy_wait_sticky_timeout_seconds
-            .unwrap_or(defaults.account_busy_wait_sticky_timeout_seconds),
-        account_busy_wait_fallback_max_waiting: overrides
-            .account_busy_wait_fallback_max_waiting
-            .unwrap_or(defaults.account_busy_wait_fallback_max_waiting),
-        account_busy_wait_fallback_timeout_seconds: overrides
-            .account_busy_wait_fallback_timeout_seconds
-            .unwrap_or(defaults.account_busy_wait_fallback_timeout_seconds),
+        max_waiting_per_account: overrides
+            .max_waiting_per_account
+            .unwrap_or(defaults.max_waiting_per_account),
+        account_concurrency_wait_timeout_seconds: overrides
+            .account_concurrency_wait_timeout_seconds
+            .unwrap_or(defaults.account_concurrency_wait_timeout_seconds),
     }
 }
 

@@ -457,7 +457,7 @@ async fn soft_affinity_can_use_an_eligible_model_account_without_moving_the_root
             generate("root", Some("strict-child"), None),
             scoped(AccountAffinity::Strict).with_request_tuning(
                 gateway_core::routing::RequestTuning {
-                    account_busy_wait_sticky_timeout_seconds: 1,
+                    account_concurrency_wait_timeout_seconds: 1,
                     ..Default::default()
                 },
             ),
@@ -612,7 +612,7 @@ async fn legacy_strict_child_turn_stays_on_root_in_relaxed_mode() {
             generate("root", Some("child"), Some("turn-legacy")),
             mode_context(AccountAffinity::Relaxed).with_request_tuning(
                 gateway_core::routing::RequestTuning {
-                    account_busy_wait_sticky_timeout_seconds: 1,
+                    account_concurrency_wait_timeout_seconds: 1,
                     ..Default::default()
                 },
             ),

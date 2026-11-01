@@ -54,8 +54,7 @@ fn attempt(wait: bool, excluded: bool, cancellation: CancellationToken) -> Attem
     )
     .with_request_tuning(RequestTuning {
         account_busy_wait_enabled: wait,
-        account_busy_wait_sticky_timeout_seconds: 2,
-        account_busy_wait_fallback_timeout_seconds: 1,
+        account_concurrency_wait_timeout_seconds: 2,
         ..Default::default()
     })
 }

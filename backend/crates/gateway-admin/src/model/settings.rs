@@ -56,10 +56,8 @@ pub struct RequestTuningOverrides {
     pub max_waiting_per_key: Option<u32>,
     pub key_concurrency_wait_timeout_seconds: Option<u64>,
     pub account_busy_wait_enabled: Option<bool>,
-    pub account_busy_wait_sticky_max_waiting: Option<u32>,
-    pub account_busy_wait_sticky_timeout_seconds: Option<u64>,
-    pub account_busy_wait_fallback_max_waiting: Option<u32>,
-    pub account_busy_wait_fallback_timeout_seconds: Option<u64>,
+    pub max_waiting_per_account: Option<u32>,
+    pub account_concurrency_wait_timeout_seconds: Option<u64>,
 }
 
 impl<'de> Deserialize<'de> for RequestTuningOverrides {
@@ -107,10 +105,17 @@ impl<'de> Deserialize<'de> for RequestTuningOverrides {
             max_waiting_per_key: Option<u32>,
             key_concurrency_wait_timeout_seconds: Option<u64>,
             account_busy_wait_enabled: Option<bool>,
-            account_busy_wait_sticky_max_waiting: Option<u32>,
-            account_busy_wait_sticky_timeout_seconds: Option<u64>,
-            account_busy_wait_fallback_max_waiting: Option<u32>,
-            account_busy_wait_fallback_timeout_seconds: Option<u64>,
+            max_waiting_per_account: Option<u32>,
+            account_concurrency_wait_timeout_seconds: Option<u64>,
+            // Retired split controls cannot override the shared account queue policy.
+            #[serde(rename = "accountBusyWaitStickyMaxWaiting")]
+            _legacy_sticky_max_waiting: Option<serde::de::IgnoredAny>,
+            #[serde(rename = "accountBusyWaitStickyTimeoutSeconds")]
+            _legacy_sticky_timeout: Option<serde::de::IgnoredAny>,
+            #[serde(rename = "accountBusyWaitFallbackMaxWaiting")]
+            _legacy_fallback_max_waiting: Option<serde::de::IgnoredAny>,
+            #[serde(rename = "accountBusyWaitFallbackTimeoutSeconds")]
+            _legacy_fallback_timeout: Option<serde::de::IgnoredAny>,
         }
 
         let wire = Wire::deserialize(deserializer)?;
@@ -145,11 +150,8 @@ impl<'de> Deserialize<'de> for RequestTuningOverrides {
             max_waiting_per_key: wire.max_waiting_per_key,
             key_concurrency_wait_timeout_seconds: wire.key_concurrency_wait_timeout_seconds,
             account_busy_wait_enabled: wire.account_busy_wait_enabled,
-            account_busy_wait_sticky_max_waiting: wire.account_busy_wait_sticky_max_waiting,
-            account_busy_wait_sticky_timeout_seconds: wire.account_busy_wait_sticky_timeout_seconds,
-            account_busy_wait_fallback_max_waiting: wire.account_busy_wait_fallback_max_waiting,
-            account_busy_wait_fallback_timeout_seconds: wire
-                .account_busy_wait_fallback_timeout_seconds,
+            max_waiting_per_account: wire.max_waiting_per_account,
+            account_concurrency_wait_timeout_seconds: wire.account_concurrency_wait_timeout_seconds,
         })
     }
 }
@@ -287,26 +289,14 @@ impl RequestTuningOverrides {
             && self
                 .rate_limit_cooldown_seconds
                 .is_none_or(|value| value <= Self::MAX_RATE_LIMIT_COOLDOWN_SECONDS)
-            && [
-                self.account_busy_wait_sticky_max_waiting,
-                self.account_busy_wait_fallback_max_waiting,
-            ]
-            .into_iter()
-            .all(|value| {
-                value.is_none_or(|value| {
-                    (1..=Self::MAX_ACCOUNT_BUSY_WAIT_MAX_WAITING).contains(&value)
-                })
-            })
-            && [
-                self.account_busy_wait_sticky_timeout_seconds,
-                self.account_busy_wait_fallback_timeout_seconds,
-            ]
-            .into_iter()
-            .all(|value| {
-                value.is_none_or(|value| {
+            && self
+                .max_waiting_per_account
+                .is_none_or(|value| (1..=Self::MAX_ACCOUNT_BUSY_WAIT_MAX_WAITING).contains(&value))
+            && self
+                .account_concurrency_wait_timeout_seconds
+                .is_none_or(|value| {
                     (1..=Self::MAX_ACCOUNT_BUSY_WAIT_TIMEOUT_SECONDS).contains(&value)
                 })
-            })
     }
 }
 

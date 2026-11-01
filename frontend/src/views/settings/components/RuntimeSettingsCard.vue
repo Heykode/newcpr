@@ -86,10 +86,8 @@ const tuningValues = {
   websocketMaxRetries: tuningNumber('websocketMaxRetries'),
   websocketFailureThreshold: tuningNumber('websocketFailureThreshold'),
   rateLimitCooldownSeconds: tuningNumber('rateLimitCooldownSeconds'),
-  accountBusyWaitStickyMaxWaiting: tuningNumber('accountBusyWaitStickyMaxWaiting'),
-  accountBusyWaitStickyTimeoutSeconds: tuningNumber('accountBusyWaitStickyTimeoutSeconds'),
-  accountBusyWaitFallbackMaxWaiting: tuningNumber('accountBusyWaitFallbackMaxWaiting'),
-  accountBusyWaitFallbackTimeoutSeconds: tuningNumber('accountBusyWaitFallbackTimeoutSeconds'),
+  maxWaitingPerAccount: tuningNumber('maxWaitingPerAccount'),
+  accountConcurrencyWaitTimeoutSeconds: tuningNumber('accountConcurrencyWaitTimeoutSeconds'),
 }
 </script>
 
@@ -257,10 +255,10 @@ const tuningValues = {
         <BaseSwitch v-model="requestTuning.accountBusyWaitEnabled" label="OpenAI 账号忙时等待" />
       </div>
       <BaseForm class="mt-4 max-w-6xl sm:grid-cols-2">
-        <BaseFormItem label="原绑定账号等待人数上限">
+        <BaseFormItem label="每账号等待请求数上限">
           <BaseInput
-            v-model="tuningValues.accountBusyWaitStickyMaxWaiting.value"
-            aria-label="原绑定账号等待人数上限"
+            v-model="tuningValues.maxWaitingPerAccount.value"
+            aria-label="每账号等待请求数上限"
             type="number"
             min="1"
             max="1000"
@@ -268,32 +266,10 @@ const tuningValues = {
             :disabled="!requestTuning.accountBusyWaitEnabled"
           />
         </BaseFormItem>
-        <BaseFormItem label="原绑定账号最长等待（秒）">
+        <BaseFormItem label="账号最长等待（秒）">
           <BaseInput
-            v-model="tuningValues.accountBusyWaitStickyTimeoutSeconds.value"
-            aria-label="原绑定账号最长等待（秒）"
-            type="number"
-            min="1"
-            max="600"
-            step="1"
-            :disabled="!requestTuning.accountBusyWaitEnabled"
-          />
-        </BaseFormItem>
-        <BaseFormItem label="全忙时单账号等待人数上限">
-          <BaseInput
-            v-model="tuningValues.accountBusyWaitFallbackMaxWaiting.value"
-            aria-label="全忙时单账号等待人数上限"
-            type="number"
-            min="1"
-            max="1000"
-            step="1"
-            :disabled="!requestTuning.accountBusyWaitEnabled"
-          />
-        </BaseFormItem>
-        <BaseFormItem label="全忙时最长等待（秒）">
-          <BaseInput
-            v-model="tuningValues.accountBusyWaitFallbackTimeoutSeconds.value"
-            aria-label="全忙时最长等待（秒）"
+            v-model="tuningValues.accountConcurrencyWaitTimeoutSeconds.value"
+            aria-label="账号最长等待（秒）"
             type="number"
             min="1"
             max="600"

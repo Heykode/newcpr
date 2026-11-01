@@ -157,18 +157,14 @@ pub struct RequestTuning {
     pub openai_location_override_enabled: bool,
     #[serde(default)]
     pub max_waiting_per_key: u32,
-    #[serde(default = "default_fallback_timeout_seconds")]
+    #[serde(default = "default_key_timeout_seconds")]
     pub key_concurrency_wait_timeout_seconds: u64,
     #[serde(default)]
     pub account_busy_wait_enabled: bool,
-    #[serde(default = "default_sticky_max_waiting")]
-    pub account_busy_wait_sticky_max_waiting: u32,
-    #[serde(default = "default_sticky_timeout_seconds")]
-    pub account_busy_wait_sticky_timeout_seconds: u64,
-    #[serde(default = "default_fallback_max_waiting")]
-    pub account_busy_wait_fallback_max_waiting: u32,
-    #[serde(default = "default_fallback_timeout_seconds")]
-    pub account_busy_wait_fallback_timeout_seconds: u64,
+    #[serde(default = "default_account_max_waiting")]
+    pub max_waiting_per_account: u32,
+    #[serde(default = "default_account_timeout_seconds")]
+    pub account_concurrency_wait_timeout_seconds: u64,
 }
 
 const fn default_websocket_large_request_threshold_bytes() -> u64 {
@@ -216,19 +212,15 @@ const fn default_excel_image_relay_ttl_minutes() -> u32 {
     30
 }
 
-const fn default_sticky_max_waiting() -> u32 {
-    3
+const fn default_account_max_waiting() -> u32 {
+    10
 }
 
-const fn default_sticky_timeout_seconds() -> u64 {
-    120
+const fn default_account_timeout_seconds() -> u64 {
+    30
 }
 
-const fn default_fallback_max_waiting() -> u32 {
-    100
-}
-
-const fn default_fallback_timeout_seconds() -> u64 {
+const fn default_key_timeout_seconds() -> u64 {
     30
 }
 
@@ -270,10 +262,8 @@ impl RequestTuning {
             max_waiting_per_key: 0,
             key_concurrency_wait_timeout_seconds: 30,
             account_busy_wait_enabled: false,
-            account_busy_wait_sticky_max_waiting: default_sticky_max_waiting(),
-            account_busy_wait_sticky_timeout_seconds: default_sticky_timeout_seconds(),
-            account_busy_wait_fallback_max_waiting: default_fallback_max_waiting(),
-            account_busy_wait_fallback_timeout_seconds: default_fallback_timeout_seconds(),
+            max_waiting_per_account: default_account_max_waiting(),
+            account_concurrency_wait_timeout_seconds: default_account_timeout_seconds(),
         }
     }
 

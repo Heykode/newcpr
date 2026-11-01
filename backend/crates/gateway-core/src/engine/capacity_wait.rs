@@ -144,10 +144,8 @@ impl AccountWaitBudget {
         mode: AccountWaitMode,
         now: Instant,
     ) -> Result<AccountWaitDeadline, AccountWaitBudgetError> {
-        if self.tuning.account_busy_wait_sticky_max_waiting == 0
-            || self.tuning.account_busy_wait_fallback_max_waiting == 0
-            || self.tuning.account_busy_wait_sticky_timeout_seconds == 0
-            || self.tuning.account_busy_wait_fallback_timeout_seconds == 0
+        if self.tuning.max_waiting_per_account == 0
+            || self.tuning.account_concurrency_wait_timeout_seconds == 0
         {
             return Err(AccountWaitBudgetError::InvalidConfiguration);
         }
@@ -163,10 +161,7 @@ impl AccountWaitBudget {
             windows.expired = true;
             return Err(AccountWaitBudgetError::Expired);
         }
-        let shared_seconds = self
-            .tuning
-            .account_busy_wait_sticky_timeout_seconds
-            .max(self.tuning.account_busy_wait_fallback_timeout_seconds);
+        let shared_seconds = self.tuning.account_concurrency_wait_timeout_seconds;
         let shared_candidate = now
             .checked_add(Duration::from_secs(shared_seconds))
             .ok_or(AccountWaitBudgetError::InvalidConfiguration)?;
@@ -174,18 +169,12 @@ impl AccountWaitBudget {
             self.request_deadline
                 .map_or(shared_candidate, |end| shared_candidate.min(end))
         });
-        let (slot, seconds) = match mode {
-            AccountWaitMode::Sticky => (
-                &mut windows.sticky,
-                self.tuning.account_busy_wait_sticky_timeout_seconds,
-            ),
-            AccountWaitMode::Fallback => (
-                &mut windows.fallback,
-                self.tuning.account_busy_wait_fallback_timeout_seconds,
-            ),
+        let slot = match mode {
+            AccountWaitMode::Sticky => &mut windows.sticky,
+            AccountWaitMode::Fallback => &mut windows.fallback,
         };
         slot.get_or_insert_with(|| {
-            now.checked_add(Duration::from_secs(seconds))
+            now.checked_add(Duration::from_secs(shared_seconds))
                 .unwrap_or(shared)
                 .min(shared)
         });

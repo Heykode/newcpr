@@ -119,19 +119,19 @@ async fn settings_should_reject_invalid_account_busy_wait_before_store_call() {
         .await;
     for request_tuning in [
         RequestTuningOverrides {
-            account_busy_wait_sticky_max_waiting: Some(0),
+            max_waiting_per_account: Some(0),
             ..Default::default()
         },
         RequestTuningOverrides {
-            account_busy_wait_sticky_timeout_seconds: Some(601),
+            account_concurrency_wait_timeout_seconds: Some(601),
             ..Default::default()
         },
         RequestTuningOverrides {
-            account_busy_wait_fallback_max_waiting: Some(1001),
+            max_waiting_per_account: Some(1001),
             ..Default::default()
         },
         RequestTuningOverrides {
-            account_busy_wait_fallback_timeout_seconds: Some(0),
+            account_concurrency_wait_timeout_seconds: Some(0),
             ..Default::default()
         },
     ] {

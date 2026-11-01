@@ -62,10 +62,8 @@ const requestTuningFallbacks: RequestTuning = {
   maxWaitingPerKey: 0,
   keyConcurrencyWaitTimeoutSeconds: 30,
   accountBusyWaitEnabled: false,
-  accountBusyWaitStickyMaxWaiting: 3,
-  accountBusyWaitStickyTimeoutSeconds: 120,
-  accountBusyWaitFallbackMaxWaiting: 100,
-  accountBusyWaitFallbackTimeoutSeconds: 30,
+  maxWaitingPerAccount: 10,
+  accountConcurrencyWaitTimeoutSeconds: 30,
 }
 
 export function useSettingsForm() {
@@ -391,10 +389,8 @@ export function useSettingsForm() {
       toast.warning('Key 等待人数须为 0–1024 的整数，等待秒数须为 1–600 的整数')
       return
     }
-    if (![tuning.accountBusyWaitStickyMaxWaiting, tuning.accountBusyWaitFallbackMaxWaiting]
-      .every(value => Number.isInteger(value) && value >= 1 && value <= 1000)
-      || ![tuning.accountBusyWaitStickyTimeoutSeconds, tuning.accountBusyWaitFallbackTimeoutSeconds]
-        .every(value => Number.isInteger(value) && value >= 1 && value <= 600)) {
+    if (!Number.isInteger(tuning.maxWaitingPerAccount) || tuning.maxWaitingPerAccount < 1 || tuning.maxWaitingPerAccount > 1000
+      || !Number.isInteger(tuning.accountConcurrencyWaitTimeoutSeconds) || tuning.accountConcurrencyWaitTimeoutSeconds < 1 || tuning.accountConcurrencyWaitTimeoutSeconds > 600) {
       toast.warning('OpenAI 账号忙时等待人数须为 1–1000 的整数，等待秒数须为 1–600 的整数')
       return
     }

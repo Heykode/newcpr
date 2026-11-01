@@ -59,10 +59,8 @@ export interface RequestTuning {
   maxWaitingPerKey: number
   keyConcurrencyWaitTimeoutSeconds: number
   accountBusyWaitEnabled: boolean
-  accountBusyWaitStickyMaxWaiting: number
-  accountBusyWaitStickyTimeoutSeconds: number
-  accountBusyWaitFallbackMaxWaiting: number
-  accountBusyWaitFallbackTimeoutSeconds: number
+  maxWaitingPerAccount: number
+  accountConcurrencyWaitTimeoutSeconds: number
 }
 
 export type RequestTuningOverrides = { accountErrorProtection?: AccountErrorProtection | null } & {
