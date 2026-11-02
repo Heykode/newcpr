@@ -50,6 +50,7 @@ export interface UsageBilling {
 }
 
 export interface UsageLatencyDetails {
+  upstreamResponseMs?: number
   admissionDecisionMs?: number
   accountSelectionWaitMs?: number
   capacityUsedSlots?: number

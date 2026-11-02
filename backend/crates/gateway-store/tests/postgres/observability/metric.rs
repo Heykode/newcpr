@@ -13,6 +13,8 @@ async fn usage_metrics_preserve_selected_values_for_aggregate_and_exact_reads() 
     seed_calculated_billing_facts(&database.pool, now)
         .await
         .unwrap();
+    sqlx::query("update model_requests set provider_observation_json = '{\"upstreamTimingMetrics\":{\"upstreamResponseMs\":400}}'::jsonb where outcome = 'succeeded'")
+        .execute(&database.pool).await.unwrap();
     sqlx::query("insert into backup_usage_hours(bucket_start,counts,costs) values(date_bin(interval '1 hour',$1::timestamptz,timestamptz 'epoch'),'{\"request_count\":3,\"success_count\":2,\"failure_count\":1,\"input_tokens\":100,\"cached_tokens\":20,\"total_tokens\":120}'::jsonb,'{\"USD\":\"0.125\"}'::jsonb)")
         .bind(now - TimeDelta::hours(1))
         .execute(&database.pool)
@@ -38,6 +40,7 @@ async fn usage_metrics_preserve_selected_values_for_aggregate_and_exact_reads() 
                 .unwrap(),
         };
         assert!(full.overview.requests.request_count > 0);
+        assert!(full.overview.requests.output_throughput_p50.is_some());
         for metric in [
             Metric::Health,
             Metric::Latency,

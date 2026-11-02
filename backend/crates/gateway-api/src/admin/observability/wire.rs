@@ -208,6 +208,8 @@ pub struct WebSocketPoolMetadataView {
 #[serde(rename_all = "camelCase")]
 pub struct UsageLatencyDetailsView {
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub upstream_response_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub admission_decision_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub account_selection_wait_ms: Option<u64>,

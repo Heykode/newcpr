@@ -254,14 +254,14 @@ export type UsagePerformanceRecord = Pick<UsageCommonRecord, 'latencyDetails' | 
 
 export function usagePerformanceDetails(record: UsagePerformanceRecord) {
   const firstTokenMs = usageFirstTokenMs(record)
-  const totalMs = durationValue(record.latencyMs)
+  const upstreamMs = durationValue(record.latencyDetails?.upstreamResponseMs)
   const outputTokens = record.tokenDetails?.outputTokens
   const throughput = typeof outputTokens === 'number'
     && Number.isFinite(outputTokens)
     && outputTokens > 0
-    && totalMs !== null
-    && totalMs > 0
-    ? outputTokens * 1000 / totalMs
+    && upstreamMs !== null
+    && upstreamMs > 0
+    ? outputTokens * 1000 / upstreamMs
     : null
 
   return {

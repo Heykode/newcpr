@@ -32,6 +32,7 @@ mod metric;
 mod plan_snapshots;
 mod quality_isolation;
 mod search;
+mod timing;
 mod usage_history;
 
 use super::{
@@ -1916,7 +1917,7 @@ async fn admin_observability_adapter_preserves_utc_queries_metrics_costs_and_det
 }
 
 #[tokio::test]
-async fn average_output_tps_uses_total_latency_and_does_not_require_first_token() {
+async fn average_output_tps_uses_upstream_duration_and_does_not_require_first_token() {
     let Some(database) = TestDatabase::create("average_output_tps").await else {
         return;
     };
@@ -1926,25 +1927,25 @@ async fn average_output_tps_uses_total_latency_and_does_not_require_first_token(
     let range =
         ObservabilityRange::new(now - TimeDelta::hours(1), now + TimeDelta::hours(1)).unwrap();
     for first in [Some(0_i64), Some(1000), Some(1999), Some(2000), None] {
-        sqlx::query("update model_requests set output_tokens = 100, latency_ms = 2000, first_token_ms = $1 where outcome = 'succeeded'")
+        sqlx::query("update model_requests set output_tokens = 100, latency_ms = 2000, first_token_ms = $1, provider_observation_json = '{\"upstreamTimingMetrics\":{\"upstreamResponseMs\":400}}'::jsonb where outcome = 'succeeded'")
             .bind(first).execute(&database.pool).await.unwrap();
         let summary = repository
             .usage_summary(range, UsageRecordFilter::default())
             .await
             .unwrap();
-        assert_eq!(summary.requests.output_throughput_p50, Some(50));
+        assert_eq!(summary.requests.output_throughput_p50, Some(250));
         let dashboard = repository.dashboard_summary(range, now).await.unwrap();
         assert!(
             dashboard
                 .trend
                 .iter()
-                .any(|point| point.metrics.output_throughput_p50 == Some(50))
+                .any(|point| point.metrics.output_throughput_p50 == Some(250))
         );
         assert!(dashboard.trend.iter().all(|point| {
             point
                 .metrics
                 .output_throughput_p50
-                .is_none_or(|value| value == 50)
+                .is_none_or(|value| value == 250)
         }));
     }
     let invalid_latency =
@@ -1966,7 +1967,7 @@ async fn average_output_tps_uses_total_latency_and_does_not_require_first_token(
         .usage_summary(range, UsageRecordFilter::default())
         .await
         .unwrap();
-    assert_eq!(summary.requests.output_throughput_p50, None);
+    assert_eq!(summary.requests.output_throughput_p50, Some(250));
     database.close().await;
 }
 

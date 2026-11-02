@@ -312,6 +312,7 @@ pub(crate) fn usage_list_record_view_with_timezone(
         token_details,
         billing,
         latency_details: UsageLatencyDetailsView {
+            upstream_response_ms: record.upstream_response_ms,
             admission_decision_ms: record.admission_decision_ms,
             account_selection_wait_ms: record.account_selection_wait_ms,
             capacity_used_slots: record.capacity_used_slots,
@@ -414,6 +415,7 @@ pub(crate) fn usage_record_view_with_timezone(
         image_generation_requested: record.image_generation_requested,
         image_generation_succeeded: record.image_generation_succeeded,
         latency_details: UsageLatencyDetailsView {
+            upstream_response_ms: record.upstream_response_ms,
             admission_decision_ms: record.admission_decision_ms,
             account_selection_wait_ms: record.account_selection_wait_ms,
             capacity_used_slots: record.capacity_used_slots,

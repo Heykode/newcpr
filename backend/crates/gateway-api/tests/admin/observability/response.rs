@@ -451,6 +451,15 @@ async fn usage_detail_should_keep_attempt_snapshot_contract() {
     let fixture = AdminTestFixture::new().await;
     fixture.auth.insert_session("valid-session");
     let now = Utc::now();
+    let mut request = usage_record_with_account(
+        "req_detail",
+        "acct_snap_a",
+        "Snapshot Alpha",
+        "alpha@example.invalid",
+        "oauth",
+        now,
+    );
+    request.upstream_response_ms = Some(700);
     fixture
         .usage_detail
         .lock()
@@ -458,14 +467,7 @@ async fn usage_detail_should_keep_attempt_snapshot_contract() {
         .replace(UsageDetail {
             trace: None,
             related_requests: Vec::new(),
-            request: usage_record_with_account(
-                "req_detail",
-                "acct_snap_a",
-                "Snapshot Alpha",
-                "alpha@example.invalid",
-                "oauth",
-                now,
-            ),
+            request,
             attempts: vec![UsageAttempt {
                 source: "ops_event".to_owned(),
                 id: "ops_detail".to_owned(),
@@ -518,6 +520,7 @@ async fn usage_detail_should_keep_attempt_snapshot_contract() {
         .await
         .expect("usage detail body");
     let value: serde_json::Value = serde_json::from_slice(&body).expect("usage detail JSON");
+    assert_eq!(value["data"]["latencyDetails"]["upstreamResponseMs"], 700);
     assert_eq!(
         serde_json::json!({
             "accountId": value["data"]["accountId"],
@@ -1016,6 +1019,7 @@ pub(super) fn usage_record_with_account(
         first_text_ms: None,
         first_token_ms: None,
         provider_processing_ms: None,
+        upstream_response_ms: None,
         latency_ms: None,
         admission_decision_ms: None,
         account_selection_wait_ms: None,
@@ -1157,6 +1161,7 @@ async fn usage_route_should_expose_table_facts_without_detail_payload() {
             first_text_ms: Some(19),
             first_token_ms: Some(20),
             provider_processing_ms: Some(21),
+            upstream_response_ms: Some(25),
             latency_ms: Some(31),
             admission_decision_ms: Some(1),
             account_selection_wait_ms: Some(2),
@@ -1286,6 +1291,7 @@ async fn usage_route_should_expose_table_facts_without_detail_payload() {
             "clientTransport": "websocket",
             "upstreamTransport": "http_sse",
             "latencyDetails": {
+                "upstreamResponseMs": 25,
                 "admissionDecisionMs": 1,
                 "accountSelectionWaitMs": 2,
                 "capacityUsedSlots": 3,

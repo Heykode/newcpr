@@ -136,8 +136,15 @@ pub(crate) fn literal_prefix_pattern(value: &str) -> String {
     )
 }
 
-pub(crate) const USAGE_LIST_RECORD_SELECT: &str =
-    "select mr.id, mr.outcome, mr.provider_error_code as error_code, mr.error_message, coalesce(mr.client_api_key_name_snapshot, ck.name) as client_api_key_name, mr.billing_snapshot_json,
+// Read the already captured response clock without changing inference or historical rows.
+// Keep this projection shared by details and aggregate TPS; malformed legacy values stay unknown.
+pub(super) const UPSTREAM_RESPONSE_MS_SQL: &str = r#"jsonb_path_query_first(mr.provider_observation_json,
+       'strict $.upstreamTimingMetrics.upstreamResponseMs ? (@.type() == "number" && @ > 0 && @ <= 9223372036854775807 && @.floor() == @)',
+       '{}'::jsonb, true)::bigint"#;
+
+fn usage_list_record_select() -> String {
+    format!(
+    "select {UPSTREAM_RESPONSE_MS_SQL} as upstream_response_ms, mr.id, mr.outcome, mr.provider_error_code as error_code, mr.error_message, coalesce(mr.client_api_key_name_snapshot, ck.name) as client_api_key_name, mr.billing_snapshot_json,
             mr.endpoint, mr.client_transport, mr.requested_model_id,
             mr.provider_kind, mr.provider_account_ref,
             mr.provider_account_name_snapshot as provider_account_name,
@@ -147,7 +154,7 @@ pub(crate) const USAGE_LIST_RECORD_SELECT: &str =
             mr.provider_account_authentication_kind_snapshot
               as provider_account_authentication_kind,
             mr.upstream_model_id, mr.upstream_transport, mr.service_tier,
-            (mr.provider_observation_json #> '{turnState,summary}')::text as turn_state_summary_json,
+            (mr.provider_observation_json #> '{{turnState,summary}}')::text as turn_state_summary_json,
             mr.input_tokens, mr.output_tokens, mr.cached_tokens, mr.cache_write_tokens,
             mr.reasoning_tokens, mr.image_input_tokens, mr.image_output_tokens,
             mr.total_tokens, mr.cost_source, mr.cost_amount::text, mr.cost_currency,
@@ -157,14 +164,16 @@ pub(crate) const USAGE_LIST_RECORD_SELECT: &str =
             mr.account_selection_wait_ms, mr.capacity_used_slots, mr.capacity_total_slots,
             host(mr.client_ip) as client_ip, mr.user_agent,
             mr.reasoning_effort,
-            mr.provider_observation_json #>> '{requestSummary,effectiveReasoningEffort}' as effective_reasoning_effort, mr.reasoning_preset, mr.subagent_kind, mr.compact,
+            mr.provider_observation_json #>> '{{requestSummary,effectiveReasoningEffort}}' as effective_reasoning_effort, mr.reasoning_preset, mr.subagent_kind, mr.compact,
             mr.started_at
      from model_requests mr
      left join provider_accounts account on account.id = mr.provider_account_ref
-     left join client_api_keys ck on ck.id = mr.client_api_key_ref";
+     left join client_api_keys ck on ck.id = mr.client_api_key_ref")
+}
 
-pub(crate) const USAGE_RECORD_DETAIL_SELECT: &str =
-    "select mr.id, mr.client_api_key_ref, coalesce(mr.client_api_key_name_snapshot, ck.name) as client_api_key_name,
+fn usage_record_detail_select() -> String {
+    format!(
+    "select {UPSTREAM_RESPONSE_MS_SQL} as upstream_response_ms, mr.id, mr.client_api_key_ref, coalesce(mr.client_api_key_name_snapshot, ck.name) as client_api_key_name,
             mr.billing_snapshot_json, mr.config_revision,
             mr.routing_scope, mr.routing_group_refs, mr.routing_group_names_snapshot,
             mr.protocol, mr.operation,
@@ -189,11 +198,12 @@ pub(crate) const USAGE_RECORD_DETAIL_SELECT: &str =
             mr.account_selection_wait_ms, mr.capacity_used_slots, mr.capacity_total_slots,
             host(mr.client_ip) as client_ip,
             mr.user_agent, mr.reasoning_effort,
-            mr.provider_observation_json #>> '{requestSummary,effectiveReasoningEffort}' as effective_reasoning_effort, mr.reasoning_preset, mr.request_kind,
+            mr.provider_observation_json #>> '{{requestSummary,effectiveReasoningEffort}}' as effective_reasoning_effort, mr.reasoning_preset, mr.request_kind,
             mr.subagent_kind, mr.compact, mr.image_generation_requested,
             mr.image_generation_succeeded, mr.started_at, mr.deadline_at, mr.completed_at
      from model_requests mr
-     left join client_api_keys ck on ck.id = mr.client_api_key_ref";
+     left join client_api_keys ck on ck.id = mr.client_api_key_ref")
+}
 
 pub(crate) async fn list_usage_records(
     connection: &mut PgConnection,
@@ -291,7 +301,7 @@ async fn list_usage_record_items_at(
     statement.push(" offset ");
     statement.push_bind(offset);
     statement.push(") ");
-    statement.push(USAGE_LIST_RECORD_SELECT);
+    statement.push(usage_list_record_select());
     statement.push(
         " join candidate_page page on page.id = mr.id order by page.started_at desc, page.id desc",
     );
@@ -423,7 +433,7 @@ pub(crate) async fn usage_record_detail(
 ) -> StoreResult<UsageRecordDetail> {
     require_nonempty("model request", "id", request_id)?;
     validate_text(request_id, MAX_FILTER_BYTES, "request ID")?;
-    let mut statement = QueryBuilder::<Postgres>::new(USAGE_RECORD_DETAIL_SELECT);
+    let mut statement = QueryBuilder::<Postgres>::new(usage_record_detail_select());
     statement.push(" where mr.id = ");
     statement.push_bind(request_id.to_owned());
     let row = statement
