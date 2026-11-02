@@ -2,6 +2,8 @@
 
 use serde_json::{Map, Value, json};
 
+use super::search_tools::tools_declare_search;
+
 use crate::transport::protocol::responses::CodexResponsesRequest;
 
 // TODO(https://github.com/openai/codex/issues/51962): 官方修复历史搜索项与工具声明不匹配后，
@@ -11,13 +13,6 @@ pub(crate) fn normalize_search_history(request: &mut CodexResponsesRequest, requ
     // NewCPR has no plugin header overrides; this is the effective wire flag.
     let responses_lite = request.responses_lite.as_deref() == Some("true");
     if normalize_body(request.body_mut(), responses_lite) {
-        if !responses_lite {
-            request.search_history_tool_index = request
-                .body()
-                .get("tools")
-                .and_then(Value::as_array)
-                .and_then(|tools| tools.len().checked_sub(1));
-        }
         tracing::debug!(
             request_id,
             compatibility = "web_search_history",
@@ -46,7 +41,7 @@ fn normalize_body(body: &mut Map<String, Value>, lite: bool) -> bool {
         Some(Value::Array(tools)) => tools.as_slice(),
         _ => return false,
     };
-    if declares_search(tools) {
+    if tools_declare_search(tools) {
         return false;
     }
     let mut has_tools = !tools.is_empty();
@@ -59,7 +54,7 @@ fn normalize_body(body: &mut Map<String, Value>, lite: bool) -> bool {
                 // 不修补非法工具结构，保留上游原有校验
                 return false;
             };
-            if declares_search(tools) {
+            if tools_declare_search(tools) {
                 return false;
             }
             has_tools |= !tools.is_empty();
@@ -99,14 +94,6 @@ fn normalize_body(body: &mut Map<String, Value>, lite: bool) -> bool {
         body.insert("tool_choice".to_owned(), json!("none"));
     }
     true
-}
-
-fn declares_search(tools: &[Value]) -> bool {
-    tools.iter().any(|tool| {
-        tool.get("type")
-            .and_then(Value::as_str)
-            .is_some_and(|kind| kind == "web_search" || kind.starts_with("web_search_preview"))
-    })
 }
 
 #[cfg(test)]

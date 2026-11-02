@@ -42,6 +42,93 @@ fn attempt(wait: bool) -> AttemptContext {
 }
 
 #[tokio::test]
+async fn unsupported_reasoning_value_preserves_account_eligibility_across_transports() {
+    for transport in ["http", "sse", "websocket"] {
+        let store = Arc::new(MemoryAccountStore::default());
+        create_account(&store, "acct_scope_old").await;
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let leases = Arc::new(TestLeaseCoordinator::default());
+        let (provider, _, cooldowns) = super::scheduling::waiting_provider_with_catalog(
+            &store,
+            leases,
+            format!("http://{}", listener.local_addr().unwrap()),
+            Arc::default(),
+            Arc::default(),
+            NonZeroU32::MIN,
+        );
+        let server = tokio::spawn(async move {
+            for _ in 0..2 {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let error = json!({"code":"unsupported_value","type":"invalid_request_error",
+                    "param":"reasoning.effort","message":"Unsupported value: none is not supported with this model."});
+                if transport == "websocket" {
+                    let mut socket = accept_codex_test_websocket(socket).await;
+                    socket.next().await.unwrap().unwrap();
+                    socket
+                        .send(Message::Text(
+                            json!({"type":"error","status":400,"error":error})
+                                .to_string()
+                                .into(),
+                        ))
+                        .await
+                        .unwrap();
+                } else {
+                    read_http_request(&mut socket).await;
+                    let (status, content_type, body) = if transport == "sse" {
+                        (
+                            "200 OK",
+                            "text/event-stream",
+                            format!(
+                                "event: response.failed\ndata: {}\n\n",
+                                json!({"type":"response.failed","response":{"id":"resp_bad_effort","status":"failed","output":[],"error":error}})
+                            ),
+                        )
+                    } else {
+                        (
+                            "400 Bad Request",
+                            "application/json",
+                            json!({"error":error}).to_string(),
+                        )
+                    };
+                    socket.write_all(format!("HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+                }
+            }
+        });
+        for _ in 0..2 {
+            let error = timeout(Duration::from_secs(3), async {
+                let mut stream = provider
+                    .execute(
+                        planned_request_with_model(
+                            "openai",
+                            operation("gpt-6-astra", transport == "websocket"),
+                            "gpt-6-astra",
+                        ),
+                        attempt(false),
+                    )
+                    .await
+                    .unwrap();
+                while let Some(event) = stream.next().await {
+                    if let Err(error) = event {
+                        return error;
+                    }
+                }
+                panic!("expected upstream request error");
+            })
+            .await
+            .unwrap();
+            assert_eq!(
+                error.kind(),
+                ProviderErrorKind::InvalidRequest,
+                "{transport}"
+            );
+            assert!(!error.replay_is_safe());
+        }
+        assert!(cooldowns.cooldowns.lock().unwrap().is_empty());
+        server.await.unwrap();
+    }
+}
+
+#[tokio::test]
 async fn grok_never_acquires_native_oauth_in_either_selector_or_transport() {
     for wait in [false, true] {
         for excel_enabled in [false, true] {

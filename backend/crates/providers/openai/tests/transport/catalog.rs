@@ -432,7 +432,12 @@ async fn fetch_preserves_large_model_instructions() {
     let result = client
         .fetch_models_with_context(context(), Some("0.166.0"))
         .await
-        .unwrap();
+        .unwrap_or_else(|error| {
+            panic!(
+                "loopback large catalog failed: {error}; source: {:?}",
+                std::error::Error::source(&error)
+            )
+        });
     let preserved: Value = serde_json::from_slice(result.models()[0].document().body()).unwrap();
     assert!(preserved == body["models"][0]);
 }

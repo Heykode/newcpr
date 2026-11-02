@@ -206,7 +206,12 @@ async fn proxy_disable_projects_direct_and_reenable_restores_unchanged_accounts(
                 .kind(),
             AdminStoreErrorKind::Conflict
         );
-        let reservation = proxies.reserve_import(&saved.id).await;
+        let reservation = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            proxies.reserve_import(&saved.id),
+        )
+        .await
+        .expect("stale update must release its import lock before returning");
         assert_eq!(reservation.is_ok(), enabled);
         if let Ok(reservation) = &reservation {
             assert_eq!(reservation.binding.proxy.max_websocket_connections(), 7);

@@ -80,6 +80,7 @@ impl CodexWebSocketConnection {
             connection: Self::responses(base_url, websocket_key, business_headers),
             payload_text: websocket_response_create_payload_text(request)?,
             continuation: WebSocketContinuationRequirement::from_request(request),
+            codex_search_declared: crate::compat::declares_hosted_search(request.body()),
         })
     }
 }

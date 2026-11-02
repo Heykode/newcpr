@@ -81,8 +81,20 @@ jobs:
         with:
           workspaces: backend -> target
 
+      - name: Check cached cargo-audit
+        id: audit-tool
+        shell: bash
+        run: |
+          if command -v cargo-audit >/dev/null 2>&1 && [ "$(cargo-audit audit --version)" = 'cargo-audit-audit 0.22.2' ]; then
+            echo 'available=true' >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Install cargo-audit
-        run: cargo install cargo-audit --version 0.22.2 --locked
+        if: steps.audit-tool.outputs.available != 'true'
+        uses: taiki-e/install-action@68a389c788b2cd04016ce8c80ee23b80d2ab3d68 # v2.88.1
+        with:
+          tool: cargo-audit@0.22.2
+          fallback: none
 
       - name: Run cargo audit
         working-directory: backend

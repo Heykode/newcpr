@@ -21,6 +21,7 @@ mod connection_budget_tests {
             ),
             payload_text: "{}".to_owned(),
             continuation: WebSocketContinuationRequirement::NewChain,
+            codex_search_declared: false,
         }
     }
 
@@ -130,7 +131,7 @@ mod connection_budget_tests {
         // The foreground HTTP path uses the same budget, then finishes sending.
         budget.begin().unwrap();
         budget.complete();
-        let WebSocketPoolAcquire::Wait(waiter) = pool.acquire(&key, None).await else {
+        let WebSocketPoolAcquire::Wait(waiter) = pool.acquire(&key, None, true).await else {
             panic!("pool must still own the background handshake");
         };
         release.send(()).unwrap();
@@ -140,7 +141,8 @@ mod connection_budget_tests {
                 .unwrap(),
             WebSocketPoolConnectOutcome::Ready
         ));
-        let WebSocketPoolAcquire::Reused { connection, lease } = pool.acquire(&key, None).await
+        let WebSocketPoolAcquire::Reused { connection, lease } =
+            pool.acquire(&key, None, true).await
         else {
             panic!("background handshake should remain reusable");
         };
@@ -379,7 +381,7 @@ pub(crate) async fn prepare_response_create_request_with_pool(
                 Some(token) => token.cancelled().await,
                 None => std::future::pending().await,
             }} => WebSocketPoolAcquire::Bypass(WebSocketPoolBypassReason::Disabled),
-            acquired = pool.acquire(&key, required_response_id) => acquired,
+            acquired = pool.acquire(&key, required_response_id, request.codex_search_declared) => acquired,
         }
     })
     .await
@@ -823,6 +825,7 @@ async fn connect_websocket_connection(
             metadata: websocket_connection_metadata(connection, &response),
             continuation: WebSocketContinuationState::default(),
             created_at: tokio::time::Instant::now(),
+            initial_search_declared: None,
         },
         started_at.elapsed(),
     ))
@@ -938,6 +941,7 @@ pub(crate) async fn execute_prepared_response_create_request_stream(
         mut metadata,
         continuation,
         created_at,
+        initial_search_declared,
     } = connection;
     // Only the current exchange owns an active exit reference. Idle sockets do not.
     metadata.session_proxy = request.connection.session_proxy.clone();
@@ -990,6 +994,7 @@ pub(crate) async fn execute_prepared_response_create_request_stream(
         lease,
         created_at,
         continuation,
+        initial_search_declared: initial_search_declared.unwrap_or(request.codex_search_declared),
     });
     let mut exchange = stream_websocket_response(
         websocket,

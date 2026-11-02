@@ -30,6 +30,7 @@ export function useSettingsFormRules(form: SettingsForm) {
     'requestTuning.websocketMaxRetries': integer(0, 100),
     'requestTuning.maxAccountSwitches': integer(0, 31),
     'requestTuning.maxRequestAttempts': integer(1, 32),
+    'requestTuning.maxRetryAfterSeconds': integer(0, 4_294_967_295),
     'accountWarmupScheduleTime': {
       required: true,
       pattern: /^(?:[01]\d|2[0-3]):[0-5]\d(?:,(?:[01]\d|2[0-3]):[0-5]\d)*$/,

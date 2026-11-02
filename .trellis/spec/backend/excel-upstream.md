@@ -229,12 +229,11 @@ account alone. Temporary credential/quota failures must not re-enable v2. Includ
 Excel mode/model selection in catalog-only cache keys so switching off recovers
 the native document; do not change inference cache keys or account selection.
 
-Sub2API #117 normalization belongs in the native final HTTP/WS body preparation:
-remove only top-level external_web_access from web_search* tool entries. Never
-recurse into function schemas, change identity/fingerprints or apply it to Excel.
-The official search-history repair is the sole exception: its privately tracked
-inserted tool retains `external_web_access=false` through HTTP/WS preparation.
-User-supplied tools cannot opt into that exception through request JSON.
+Official v3.39.0 search activation supersedes the old Sub2API #117 field stripping.
+Preserve user-supplied external_web_access and all hosted search options on HTTP/WS.
+Retire a socket initialized without search when a later turn declares search;
+connection-local deltas must recover through full replay, never silently lose history.
+The cached-only history repair retains the same field without a private tool index.
 
 The optional image relay belongs to the provider; Core exposes only a neutral download
 capability and API serves bytes. Default off, HTTPS origin only, no filesystem paths,

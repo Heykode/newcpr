@@ -84,8 +84,6 @@ fn cases() -> Vec<(Value, Value)> {
             "timezone": "America/New_York"
         });
         expected["tools"][2]["user_location"] = expected["tools"][0]["user_location"].clone();
-        expected["tools"][0].as_object_mut().unwrap().remove("external_web_access");
-        expected["tools"][2].as_object_mut().unwrap().remove("external_web_access");
         if index != 1 {
             expected["input"] = json!([{
                 "type":"message","role":"user",

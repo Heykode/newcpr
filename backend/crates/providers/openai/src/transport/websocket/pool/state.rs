@@ -308,6 +308,8 @@ pub(crate) struct PooledWebSocketConnection {
     pub(crate) metadata: CodexWebSocketConnectionMetadata,
     pub(crate) continuation: WebSocketContinuationState,
     pub(crate) created_at: Instant,
+    // None means handshake-only; the first sent request fixes search initialization.
+    pub(crate) initial_search_declared: Option<bool>,
 }
 
 /// 只随具体 WebSocket 生命周期存在的续接状态。

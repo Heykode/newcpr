@@ -10,6 +10,7 @@ mod diagnostics;
 mod fingerprint;
 mod fixture;
 mod metadata;
+mod pool;
 
 fn rate_limit_event(used_percent: u64) -> String {
     json!({

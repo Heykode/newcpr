@@ -37,6 +37,7 @@ pub struct CodexWebSocketRequest {
     pub(crate) connection: CodexWebSocketConnection,
     pub(super) payload_text: String,
     pub(super) continuation: WebSocketContinuationRequirement,
+    pub(super) codex_search_declared: bool,
 }
 
 /// 当前 WebSocket 请求对 previous response 状态的要求。
