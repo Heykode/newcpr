@@ -136,8 +136,6 @@ pub(crate) const PREVIOUS_RESPONSE_NOT_FOUND_MESSAGE: &str =
 /// 其余字段是代理控制状态，不进上游 body（原 `#[serde(skip)]` 字段）。
 #[derive(Clone)]
 pub struct CodexResponsesRequest {
-    /// Locally added cached-search declaration; never accepted from client JSON.
-    pub(crate) search_history_tool_index: Option<usize>,
     /// Original effort for diagnostics when the native compatibility alias is applied.
     pub(crate) requested_reasoning_effort: Option<String>,
     pub(crate) quality_probe: Option<gateway_core::operation::quality_probe::QualityProbeStep>,
@@ -630,7 +628,6 @@ impl CodexResponsesRequest {
     /// 协议默认值仅由类型化访问器在本地解释，不写回上游正文。
     pub fn from_body(body: Map<String, Value>) -> Self {
         Self {
-            search_history_tool_index: None,
             requested_reasoning_effort: None,
             excel: None,
             quality_probe: None,

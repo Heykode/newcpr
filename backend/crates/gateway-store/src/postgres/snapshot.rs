@@ -299,6 +299,9 @@ fn to_core_request_tuning(
         rate_limit_cooldown_seconds: overrides
             .rate_limit_cooldown_seconds
             .unwrap_or(defaults.rate_limit_cooldown_seconds),
+        max_retry_after_seconds: overrides
+            .max_retry_after_seconds
+            .unwrap_or(defaults.max_retry_after_seconds),
         excel_image_relay_bytes: overrides
             .excel_image_relay_bytes
             .unwrap_or(defaults.excel_image_relay_bytes),

@@ -205,7 +205,6 @@ impl CodexUpstreamFailure {
                 message: failure.upstream_message.clone(),
             },
             code: failure.upstream_code.clone(),
-            param: parsed.param,
             error_type: failure.upstream_type.clone(),
             message: failure.message.clone(),
             client_message: Some(failure.message.clone()),
@@ -321,7 +320,6 @@ impl CodexUpstreamFailure {
 struct ParsedUpstreamError {
     upstream_fields: gateway_core::upstream::UpstreamFailureFields,
     code: Option<String>,
-    param: Option<String>,
     error_type: Option<String>,
     message: String,
     client_message: Option<String>,
@@ -339,7 +337,6 @@ impl ParsedUpstreamError {
                     message: None,
                 },
                 code: None,
-                param: None,
                 error_type: None,
                 message: body.to_owned(),
                 client_message: None,
@@ -395,10 +392,6 @@ impl ParsedUpstreamError {
         Self {
             upstream_fields,
             code,
-            param: error
-                .get("param")
-                .and_then(Value::as_str)
-                .and_then(non_empty_owned),
             error_type,
             message,
             client_message,
@@ -561,35 +554,21 @@ fn classify_upstream_failure(
         };
     }
 
-    // Stream failures do not necessarily carry an HTTP error status.
-    if matches!(source, UpstreamFailureSource::SseFailure) && code == "invalid_prompt" {
-        return CodexFailureCategory::InvalidRequest;
-    }
-
-    // Parameter validation can mention a model without rejecting the model itself.
-    // Preserve the original payload for the client; do not cool down or rotate accounts.
-    let parameter_rejection = matches!(
-        code.as_str(),
-        "unsupported_value"
-            | "unsupported_parameter"
-            | "unknown_parameter"
-            | "invalid_value"
-            | "invalid_type"
-            | "invalid_parameter"
-            | "missing_required_parameter"
-    ) || (error_type == "invalid_request_error"
-        && fields
-            .param
-            .as_deref()
-            .is_some_and(|param| param != "model"));
-    if status.is_none_or(|status| matches!(status.as_u16(), 400 | 422)) && parameter_rejection {
-        return CodexFailureCategory::InvalidRequest;
-    }
-
-    if [code.as_str(), message.as_str(), body.as_str()]
-        .into_iter()
-        .any(is_model_unsupported)
+    // Explicit request errors are not evidence of account model eligibility.
+    if code == "unsupported_value"
+        || (matches!(source, UpstreamFailureSource::SseFailure) && code == "invalid_prompt")
     {
+        return CodexFailureCategory::InvalidRequest;
+    }
+
+    // Match the official structured contract; prose cannot revoke model access.
+    if matches!(
+        (fields.code.as_deref(), status),
+        (
+            Some("model_not_found"),
+            None | Some(StatusCode::BAD_REQUEST | StatusCode::FORBIDDEN | StatusCode::NOT_FOUND)
+        )
+    ) {
         return CodexFailureCategory::ModelUnsupported;
     }
     let identity_signals = [
@@ -714,16 +693,6 @@ fn persistable_upstream_code(value: &str) -> Option<&'static str> {
         .iter()
         .copied()
         .find(|known| value.trim().eq_ignore_ascii_case(known))
-}
-
-fn is_model_unsupported(value: &str) -> bool {
-    value.contains("model_not_supported")
-        || value.contains("model_not_available")
-        || (value.contains("model")
-            && (value.contains("not supported")
-                || value.contains("not available")
-                || value.contains("not_supported")
-                || value.contains("not_available")))
 }
 
 fn is_identity_verification_required(value: &str) -> bool {

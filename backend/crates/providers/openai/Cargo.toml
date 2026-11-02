@@ -22,7 +22,7 @@ gateway-core = { path = "../../gateway-core" }
 gateway-protocol = { path = "../../gateway-protocol" }
 getrandom = "0.4.3"
 hex = "0.4.3"
-jsonschema = { version = "=0.57.0", default-features = false, features = ["arbitrary-precision"] }
+jsonschema = { version = "=0.60.2", default-features = false, features = ["arbitrary-precision"] }
 imagesize = "=0.14.0"
 # TLS 依赖按官方 Core 锁文件固定，包含用于约束传递依赖的直接声明。
 # 升级前须重复采样 ClientHello，核对算法、扩展集合及排序约束、key_share 与 ALPN。

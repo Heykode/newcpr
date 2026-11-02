@@ -1060,6 +1060,7 @@ async fn request_tuning_overrides_should_round_trip() {
         websocket_failure_window_ms: Some(30_000),
         websocket_failure_open_duration_ms: Some(45_000),
         rate_limit_cooldown_seconds: Some(60),
+        max_retry_after_seconds: Some(400),
         excel_image_relay_bytes: Some(64 * 1024 * 1024),
         excel_image_max_bytes: Some(8 * 1024 * 1024),
         excel_image_total_bytes: Some(16 * 1024 * 1024),

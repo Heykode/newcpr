@@ -115,7 +115,7 @@ fn key(index: u32) -> CodexWebSocketPoolKey {
 }
 
 fn opening(pool: &CodexWebSocketPool, key: &CodexWebSocketPoolKey) -> WebSocketPoolConnectLease {
-    let (decision, close) = pool.acquire_once(key, None);
+    let (decision, close) = pool.acquire_once(key, None, false);
     assert!(close.is_empty());
     match decision {
         Some(WebSocketPoolAcquire::Connect(lease)) => lease,
@@ -150,6 +150,7 @@ fn connection_with_proxy_permit(
         },
         continuation: WebSocketContinuationState::default(),
         created_at: tokio::time::Instant::now(),
+        initial_search_declared: None,
     };
     (connection, control)
 }
@@ -296,7 +297,7 @@ async fn discard_retains_capacity_until_the_socket_is_destroyed() {
     assert!(!control.destroyed.is_cancelled());
 
     let next_key = key(2);
-    let mut waiting = Box::pin(pool.acquire(&next_key, None));
+    let mut waiting = Box::pin(pool.acquire(&next_key, None, false));
     assert!(futures::poll!(waiting.as_mut()).is_pending());
     let next = timeout(Duration::from_secs(1), waiting)
         .await
@@ -346,7 +347,7 @@ async fn cancelled_discard_waiter_leaves_a_managed_abort() {
     let next_key = key(2);
     let next = timeout(
         WEBSOCKET_CLOSE_TIMEOUT + Duration::from_secs(1),
-        pool.acquire(&next_key, None),
+        pool.acquire(&next_key, None, false),
     )
     .await
     .expect("detached close must release capacity");
@@ -360,7 +361,7 @@ async fn cancelled_discard_waiter_leaves_a_managed_abort() {
 async fn cancelled_opening_success_is_closed_before_its_capacity_is_released() {
     let pool = pool();
     let connect_lease = opening(&pool, &key(1));
-    let shared = match pool.acquire_once(&key(1), None).0 {
+    let shared = match pool.acquire_once(&key(1), None, false).0 {
         Some(WebSocketPoolAcquire::Wait(waiter)) => waiter,
         _ => panic!("same opening must be shared"),
     };
@@ -383,7 +384,7 @@ async fn cancelled_opening_success_is_closed_before_its_capacity_is_released() {
     );
     control.close_started.cancelled().await;
     assert_closing(&pool, &key(1));
-    assert!(pool.acquire_once(&key(2), None).0.is_none());
+    assert!(pool.acquire_once(&key(2), None, false).0.is_none());
     assert!(!control.destroyed.is_cancelled());
 
     control.release_close();
@@ -400,10 +401,10 @@ async fn dropped_busy_lease_aborts_the_socket_before_releasing_capacity() {
     drop(lease);
     assert_closing(&pool, &key(1));
     assert!(!control.destroyed.is_cancelled());
-    assert!(pool.acquire_once(&key(2), None).0.is_none());
+    assert!(pool.acquire_once(&key(2), None, false).0.is_none());
 
     let next_key = key(2);
-    let next = timeout(Duration::from_secs(1), pool.acquire(&next_key, None))
+    let next = timeout(Duration::from_secs(1), pool.acquire(&next_key, None, false))
         .await
         .expect("aborted pump releases capacity");
     assert!(control.destroyed.is_cancelled());
@@ -441,7 +442,7 @@ async fn capacity_wait_retires_only_one_idle_owner_while_close_is_pending() {
         controls.push((index, control));
     }
     let next_key = key(4);
-    let mut waiting = Box::pin(pool.acquire(&next_key, None));
+    let mut waiting = Box::pin(pool.acquire(&next_key, None, false));
     assert!(futures::poll!(waiting.as_mut()).is_pending());
     tokio::task::yield_now().await;
     for _ in 0..3 {
@@ -480,7 +481,7 @@ async fn capacity_wait_retires_only_one_idle_owner_while_close_is_pending() {
             continue;
         }
         match pool
-            .acquire(&key(index), Some(&format!("response-{index}")))
+            .acquire(&key(index), Some(&format!("response-{index}")), false)
             .await
         {
             WebSocketPoolAcquire::Reused { connection, lease } => {
@@ -510,7 +511,7 @@ async fn account_eviction_counts_raced_opening_until_its_socket_is_destroyed() {
     assert_closing(&pool, &key(1));
     assert!(!control.destroyed.is_cancelled());
     let next_key = key(2);
-    let mut waiting = Box::pin(pool.acquire(&next_key, None));
+    let mut waiting = Box::pin(pool.acquire(&next_key, None, false));
     assert!(futures::poll!(waiting.as_mut()).is_pending());
     control.release_close();
     let next = timeout(Duration::from_secs(1), waiting)
@@ -529,7 +530,7 @@ async fn same_key_after_eviction_waits_for_cancelled_opening_to_release_capacity
     let key = key(1);
     let first = opening(&pool, &key);
     let first_id = first.id;
-    let shared = match pool.acquire_once(&key, None).0 {
+    let shared = match pool.acquire_once(&key, None, false).0 {
         Some(WebSocketPoolAcquire::Wait(waiter)) => waiter,
         _ => panic!("active opening must be shared"),
     };
@@ -537,7 +538,7 @@ async fn same_key_after_eviction_waits_for_cancelled_opening_to_release_capacity
     pool.evict_account("account").await;
     assert_eq!(shared.wait().await, WebSocketPoolConnectOutcome::Failed);
 
-    let mut waiting = Box::pin(pool.acquire(&key, None));
+    let mut waiting = Box::pin(pool.acquire(&key, None, false));
     assert!(
         futures::poll!(waiting.as_mut()).is_pending(),
         "new requests must not subscribe to an already-cancelled opening",
@@ -575,7 +576,7 @@ async fn cancelled_opening_does_not_trigger_another_idle_retirement() {
     let connecting = opening(&pool, &key(2));
     connecting.cancellation_token().cancel();
     let next_key = key(3);
-    let mut waiting = Box::pin(pool.acquire(&next_key, None));
+    let mut waiting = Box::pin(pool.acquire(&next_key, None, false));
     assert!(futures::poll!(waiting.as_mut()).is_pending());
     assert!(matches!(
         pool.lock_state().slots.get(&key(1)),
@@ -597,7 +598,7 @@ async fn cancelled_opening_does_not_trigger_another_idle_retirement() {
 async fn repeated_retirement_preserves_the_original_local_opening_failure() {
     let pool = pool();
     let connecting = opening(&pool, &key(1));
-    let shared = match pool.acquire_once(&key(1), None).0 {
+    let shared = match pool.acquire_once(&key(1), None, false).0 {
         Some(WebSocketPoolAcquire::Wait(waiter)) => waiter,
         _ => panic!("same opening must be shared"),
     };
@@ -607,7 +608,7 @@ async fn repeated_retirement_preserves_the_original_local_opening_failure() {
         .send_replace(WebSocketPoolConnectOutcome::LocalEgress(local_error));
     pool.evict_account("account").await;
     pool.evict_account("account").await;
-    assert!(pool.acquire_once(&key(1), None).0.is_none());
+    assert!(pool.acquire_once(&key(1), None, false).0.is_none());
     tokio::time::advance(Duration::from_secs(61)).await;
     pool.maintain_idle_connections().await;
     assert_eq!(
@@ -676,7 +677,7 @@ async fn exact_continuation_moves_binding_and_old_cancellation_cannot_close_new_
     let id = connection.websocket.connection_id();
     lease.put(connection).await;
     let WebSocketPoolAcquire::Reused { connection, lease } =
-        pool.acquire(&new, Some("response-owned")).await
+        pool.acquire(&new, Some("response-owned"), false).await
     else {
         panic!("exact continuation should transfer the existing socket");
     };
@@ -724,7 +725,7 @@ async fn registered_downstream_rebinding_retires_its_previous_chain() {
     let (connection, lease, control) = connected(&pool, &first).await;
     lease.put(connection).await;
     control.release_close();
-    let replacement = pool.acquire(&second, None).await;
+    let replacement = pool.acquire(&second, None, false).await;
     assert!(matches!(replacement, WebSocketPoolAcquire::Connect(_)));
     control.destroyed.cancelled().await;
     assert!(!pool.lock_state().slots.contains_key(&first));

@@ -131,6 +131,8 @@ pub struct RequestTuning {
     pub websocket_failure_window_ms: u64,
     pub websocket_failure_open_duration_ms: u64,
     pub rate_limit_cooldown_seconds: u64,
+    #[serde(default = "default_max_retry_after_seconds")]
+    pub max_retry_after_seconds: u32,
     #[serde(default = "default_excel_image_relay_bytes")]
     pub excel_image_relay_bytes: u64,
     #[serde(default = "default_excel_image_max_bytes")]
@@ -173,6 +175,10 @@ const fn default_websocket_large_request_threshold_bytes() -> u64 {
 
 const fn default_stream_prefetch_bytes() -> u64 {
     128 * 1024
+}
+
+const fn default_max_retry_after_seconds() -> u32 {
+    240
 }
 
 const fn default_excel_image_relay_bytes() -> u64 {
@@ -247,6 +253,7 @@ impl RequestTuning {
             websocket_failure_window_ms: 30_000,
             websocket_failure_open_duration_ms: 30_000,
             rate_limit_cooldown_seconds: 60,
+            max_retry_after_seconds: default_max_retry_after_seconds(),
             excel_image_relay_bytes: default_excel_image_relay_bytes(),
             excel_image_max_bytes: default_excel_image_max_bytes(),
             excel_image_total_bytes: default_excel_image_total_bytes(),
@@ -861,6 +868,11 @@ impl RoutingPlan {
     #[must_use]
     pub const fn request_tuning(&self) -> RequestTuning {
         self.request_tuning
+    }
+
+    #[must_use]
+    pub const fn max_retry_after(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(self.request_tuning.max_retry_after_seconds as u64)
     }
 
     #[must_use]

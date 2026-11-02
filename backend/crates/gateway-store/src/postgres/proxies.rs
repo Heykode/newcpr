@@ -701,11 +701,13 @@ impl ProxyStore for PgProxyRepository {
             .bind(command.max_websocket_connections.map(i64::from))
             .execute(&mut *transaction).await.map_err(|_| store_error(unavailable()))?;
         if changed.rows_affected() != 1 {
-            transaction
-                .rollback()
-                .await
-                .map_err(|_| store_error(unavailable()))?;
-            return Err(store_error(conflict(&command.id)));
+            let error = store_error(conflict(&command.id));
+            return Err(match transaction.rollback().await {
+                Ok(()) => error,
+                Err(cleanup) => {
+                    error.with_source(gateway_core::error::ErrorSource::cleanup(None, cleanup))
+                }
+            });
         }
         if let Some(test) = command.test {
             let current = transaction_record(&mut transaction, &command.id)

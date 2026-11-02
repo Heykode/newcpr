@@ -27,6 +27,30 @@ function loadModule(filename, dependencies = {}) {
 const apiErrors = loadModule(new URL('../src/api/error.ts', import.meta.url))
 const asyncUtils = loadModule(new URL('../src/utils/async.ts', import.meta.url))
 
+test('Retry-After limit defaults to 240 and saves zero and custom values without changing queue settings', async () => {
+  const warnings = []
+  const query = mountSettings(settings(), message => warnings.push(message))
+  try {
+    await query.state.loadSettings()
+    assert.equal(query.state.form.requestTuning.maxRetryAfterSeconds, 240)
+    const waiting = query.state.form.requestTuning.accountConcurrencyWaitTimeoutSeconds
+    for (const seconds of [0, 400, 4_294_967_295]) {
+      query.state.form.requestTuning.maxRetryAfterSeconds = seconds
+      await query.state.saveSettings()
+      assert.equal(query.requests.at(-1).requestTuning.maxRetryAfterSeconds, seconds)
+      assert.equal(query.requests.at(-1).requestTuning.accountConcurrencyWaitTimeoutSeconds, waiting)
+    }
+    const count = query.requests.length
+    for (const seconds of [-1, 0.5, Number.NaN, 4_294_967_296]) {
+      query.state.form.requestTuning.maxRetryAfterSeconds = seconds
+      await query.state.saveSettings()
+      assert.equal(query.requests.length, count)
+    }
+    assert.equal(warnings.length, 4)
+  }
+  finally { query.stop() }
+})
+
 test('runtime display units preserve saved bytes and milliseconds without a global Fast field', async () => {
   const initial = settings()
   initial.requestIntervalMs = 50
@@ -641,6 +665,7 @@ test('inherited runtime defaults never add the removed global WS opening limit',
       websocketFailureWindowMs: 30_000,
       websocketFailureOpenDurationMs: 30_000,
       rateLimitCooldownSeconds: 60,
+      maxRetryAfterSeconds: 240,
       excelImageRelayBytes: 1024 * 1024 * 1024,
       excelImageRelayRequests: 128,
       excelImageRelayDownloads: 32,

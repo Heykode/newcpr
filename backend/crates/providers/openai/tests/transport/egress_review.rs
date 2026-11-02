@@ -189,7 +189,9 @@ async fn default_dual_stack_and_explicit_ipv6_switch_real_http_and_ws_connection
             )
             .await
             .unwrap()
-            .unwrap();
+            .unwrap_or_else(|error| {
+                panic!("loopback egress failed (websocket={websocket}, mode={mode:?}): {error}")
+            });
             assert_eq!(
                 response.transport,
                 if websocket {

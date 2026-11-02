@@ -99,7 +99,7 @@ async fn profile_update_preserves_the_exact_response_socket() {
             pool.routing_owner(&next, Some("response-owned")),
             Some(owner.clone()),
         );
-        match pool.acquire(&next, Some("response-owned")).await {
+        match pool.acquire(&next, Some("response-owned"), false).await {
             WebSocketPoolAcquire::Reused { connection, lease } => {
                 assert_eq!(connection.websocket.connection_id(), connection_id);
                 lease.put(*connection).await;
@@ -128,7 +128,7 @@ async fn client_scope_isolates_live_sockets_but_keeps_same_client_exact_owner() 
             .is_none()
     );
     assert!(matches!(
-        pool.acquire(&other, Some("response-shared")).await,
+        pool.acquire(&other, Some("response-shared"), false).await,
         WebSocketPoolAcquire::Bypass(WebSocketPoolBypassReason::ContinuationNotFound)
     ));
     let other_opening = opening(&pool, &other);
@@ -143,7 +143,10 @@ async fn client_scope_isolates_live_sockets_but_keeps_same_client_exact_owner() 
         pool.routing_owner(&reconnected, Some("response-shared")),
         Some(owner)
     );
-    match pool.acquire(&reconnected, Some("response-shared")).await {
+    match pool
+        .acquire(&reconnected, Some("response-shared"), false)
+        .await
+    {
         WebSocketPoolAcquire::Reused { connection, lease } => {
             assert_eq!(connection.websocket.connection_id(), connection_id);
             lease.put(*connection).await;
@@ -173,7 +176,7 @@ async fn lane_only_continuation_keeps_both_existing_physical_owners() {
     for (response, expected) in [("response-a", first_id), ("response-b", second_id)] {
         let WebSocketPoolAcquire::Reused { connection, lease } = timeout(
             Duration::from_secs(1),
-            pool.acquire(&second, Some(response)),
+            pool.acquire(&second, Some(response), false),
         )
         .await
         .expect("lane collision must not wait for an unrelated owner") else {
@@ -198,7 +201,7 @@ async fn client_scope_isolates_tombstones_and_preserves_same_client_reconnect_lo
         .continuation
         .record_completed("response-shared".to_owned());
     lease.put(connection).await;
-    let replacement = pool.acquire(&key(2), None).await;
+    let replacement = pool.acquire(&key(2), None, false).await;
     assert!(matches!(replacement, WebSocketPoolAcquire::Connect(_)));
     drop(replacement);
 
@@ -207,10 +210,13 @@ async fn client_scope_isolates_tombstones_and_preserves_same_client_reconnect_lo
         .with_downstream_connection_id("new-downstream");
     let other = reconnected.clone().with_client_scope("client-key-b");
     assert!(matches!(
-        pool.acquire(&other, Some("response-shared")).await,
+        pool.acquire(&other, Some("response-shared"), false).await,
         WebSocketPoolAcquire::Bypass(WebSocketPoolBypassReason::ContinuationNotFound)
     ));
-    let observation = match pool.acquire(&reconnected, Some("response-shared")).await {
+    let observation = match pool
+        .acquire(&reconnected, Some("response-shared"), false)
+        .await
+    {
         WebSocketPoolAcquire::ContinuationLost(observation) => observation,
         _ => panic!("same-client reconnect must find its eviction tombstone"),
     };
@@ -244,7 +250,7 @@ async fn client_scope_isolates_tombstones_and_preserves_same_client_reconnect_lo
 }
 
 fn opening(pool: &CodexWebSocketPool, key: &CodexWebSocketPoolKey) -> WebSocketPoolConnectLease {
-    let (acquire, close) = pool.acquire_once(key, None);
+    let (acquire, close) = pool.acquire_once(key, None, false);
     assert!(close.is_empty());
     match acquire {
         Some(WebSocketPoolAcquire::Connect(lease)) => lease,
@@ -286,6 +292,7 @@ async fn connected_with_buffer(
         },
         continuation: WebSocketContinuationState::default(),
         created_at: tokio::time::Instant::now(),
+        initial_search_declared: None,
     };
     match opening.connected_reserved(connection).await {
         Ok((connection, lease)) => (*connection, lease, peer),
@@ -303,7 +310,7 @@ async fn account_capacity_reservation_is_atomic_across_sessions_profiles_and_egr
             let key = key(index)
                 .with_connection_profile(format!("profile-{index}"))
                 .with_egress_key(&format!("proxy-ipv6-{index}"));
-            let (acquire, close) = pool.acquire_once(&key, None);
+            let (acquire, close) = pool.acquire_once(&key, None, false);
             assert!(close.is_empty());
             acquire
         });
@@ -351,7 +358,7 @@ async fn account_capacity_wait_observes_live_increases_and_cancelled_openings() 
     let (pool, limits) = pool(1);
     let first = opening(&pool, &key(1));
     let wait_pool = pool.clone();
-    let mut waiting = tokio::spawn(async move { wait_pool.acquire(&key(2), None).await });
+    let mut waiting = tokio::spawn(async move { wait_pool.acquire(&key(2), None, false).await });
     tokio::task::yield_now().await;
     assert!(!waiting.is_finished());
     publish(&limits, 2, 2);
@@ -364,9 +371,9 @@ async fn account_capacity_wait_observes_live_increases_and_cancelled_openings() 
         _ => panic!("live increase must wake the account waiter"),
     };
     publish(&limits, 3, 1);
-    assert!(pool.acquire_once(&key(3), None).0.is_none());
+    assert!(pool.acquire_once(&key(3), None, false).0.is_none());
     drop(first);
-    assert!(pool.acquire_once(&key(3), None).0.is_none());
+    assert!(pool.acquire_once(&key(3), None, false).0.is_none());
     drop(second);
     drop(opening(&pool, &key(3)));
 }
@@ -376,7 +383,7 @@ async fn account_capacity_cancelled_waiter_does_not_leave_a_slot() {
     let (pool, _) = pool(1);
     let first = opening(&pool, &key(1));
     let wait_pool = pool.clone();
-    let waiting = tokio::spawn(async move { wait_pool.acquire(&key(2), None).await });
+    let waiting = tokio::spawn(async move { wait_pool.acquire(&key(2), None, false).await });
     tokio::task::yield_now().await;
     waiting.abort();
     assert!(matches!(waiting.await, Err(error) if error.is_cancelled()));
@@ -393,11 +400,11 @@ async fn account_capacity_counts_idle_busy_and_opening_together() {
     let (_busy, busy_lease, _busy_peer) = connected(&pool, &key(2)).await;
     let connecting = opening(&pool, &key(3));
     assert_eq!(pool.lock_state().slots.len(), 3);
-    let (decision, close) = pool.acquire_once(&key(4), None);
+    let (decision, close) = pool.acquire_once(&key(4), None, false);
     assert!(decision.is_none());
     assert_eq!(close.len(), 1);
     // Retiring idle still occupies capacity until the actual close completes.
-    assert!(pool.acquire_once(&key(5), None).0.is_none());
+    assert!(pool.acquire_once(&key(5), None, false).0.is_none());
     assert_eq!(pool.lock_state().slots.len(), 3);
     pool.close_retired_connections(close).await;
     drop(opening(&pool, &key(4)));
@@ -425,7 +432,7 @@ async fn account_capacity_shrink_keeps_busy_responses_and_retires_only_excess_re
     second_lease.put(second).await;
     third_lease.put(third).await;
     assert_eq!(pool.lock_state().slots.len(), 1);
-    match pool.acquire(&key(3), Some("response-third")).await {
+    match pool.acquire(&key(3), Some("response-third"), false).await {
         WebSocketPoolAcquire::Reused { connection, lease } => lease.put(*connection).await,
         _ => panic!("remaining exact continuation must keep its owner"),
     }
@@ -472,7 +479,7 @@ async fn account_capacity_shrink_resolves_exact_owner_before_trimming_other_idle
     // The other socket cannot flush its Close yet. Reusing the exact owner must not wait on it.
     match timeout(
         Duration::from_millis(10),
-        pool.acquire(&reconnected, Some("response-first")),
+        pool.acquire(&reconnected, Some("response-first"), false),
     )
     .await
     {
@@ -500,10 +507,10 @@ async fn account_capacity_reclaimed_continuation_has_a_tombstone() {
         .continuation
         .record_completed("response-1".to_owned());
     lease.put(connection).await;
-    let new_opening = pool.acquire(&key(2), None).await;
+    let new_opening = pool.acquire(&key(2), None, false).await;
     assert!(matches!(new_opening, WebSocketPoolAcquire::Connect(_)));
     assert!(matches!(
-        pool.acquire(&key(1), Some("response-1")).await,
+        pool.acquire(&key(1), Some("response-1"), false).await,
         WebSocketPoolAcquire::ContinuationLost(_),
     ));
     drop(new_opening);
@@ -518,7 +525,7 @@ async fn account_capacity_maintenance_does_not_erase_busy_or_cancelled_opening_r
     pool.maintain_idle_connections().await;
     assert_eq!(pool.lock_state().slots.len(), 2);
     assert!(connecting.cancellation_token().is_cancelled());
-    assert!(pool.acquire_once(&key(3), None).0.is_none());
+    assert!(pool.acquire_once(&key(3), None, false).0.is_none());
     drop(connecting);
     drop(busy);
     timeout(Duration::from_secs(1), async {
@@ -534,14 +541,14 @@ async fn account_capacity_maintenance_does_not_erase_busy_or_cancelled_opening_r
 async fn account_capacity_uses_stale_snapshot_but_missing_snapshots_fail_closed() {
     let (pool, limits) = pool(1);
     limits.suspend();
-    let acquired = pool.acquire(&key(1), None).await;
+    let acquired = pool.acquire(&key(1), None, false).await;
     assert!(!matches!(acquired, WebSocketPoolAcquire::LocalEgress(_)));
     drop(acquired);
 
     let empty =
         CodexWebSocketPool::default().with_account_concurrency(AccountConcurrencyHandle::default());
     assert!(matches!(
-        empty.acquire(&key(1), None).await,
+        empty.acquire(&key(1), None, false).await,
         WebSocketPoolAcquire::LocalEgress(_)
     ));
 
@@ -549,13 +556,13 @@ async fn account_capacity_uses_stale_snapshot_but_missing_snapshots_fail_closed(
     suspended.suspend();
     let suspended_pool = CodexWebSocketPool::default().with_account_concurrency(suspended);
     assert!(matches!(
-        suspended_pool.acquire(&key(1), None).await,
+        suspended_pool.acquire(&key(1), None, false).await,
         WebSocketPoolAcquire::LocalEgress(_)
     ));
 
     limits.publish(ConfigRevision::new(2).unwrap(), Default::default());
     assert!(matches!(
-        pool.acquire(&key(1), None).await,
+        pool.acquire(&key(1), None, false).await,
         WebSocketPoolAcquire::LocalEgress(_)
     ));
     assert!(pool.lock_state().slots.is_empty());

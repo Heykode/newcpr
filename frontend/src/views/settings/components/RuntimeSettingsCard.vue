@@ -86,6 +86,7 @@ const tuningValues = {
   websocketMaxRetries: tuningNumber('websocketMaxRetries'),
   websocketFailureThreshold: tuningNumber('websocketFailureThreshold'),
   rateLimitCooldownSeconds: tuningNumber('rateLimitCooldownSeconds'),
+  maxRetryAfterSeconds: tuningNumber('maxRetryAfterSeconds'),
   maxWaitingPerAccount: tuningNumber('maxWaitingPerAccount'),
   accountConcurrencyWaitTimeoutSeconds: tuningNumber('accountConcurrencyWaitTimeoutSeconds'),
 }
@@ -306,6 +307,9 @@ const tuningValues = {
         </BaseFormItem>
         <BaseFormItem label="真实限流冷却时间" description="收到真实限流后等待多久，单位：秒">
           <BaseInput v-model="tuningValues.rateLimitCooldownSeconds.value" aria-label="真实限流冷却时间" type="number" />
+        </BaseFormItem>
+        <BaseFormItem prop="requestTuning.maxRetryAfterSeconds" label="上游建议等待上限（秒）" description="单次 Retry-After 超过此值时尝试安全换号，无法换号则返回原错误；0 不接受正数等待建议">
+          <BaseInput v-model="tuningValues.maxRetryAfterSeconds.value" aria-label="上游建议等待上限（秒）" type="number" min="0" max="4294967295" step="1" />
         </BaseFormItem>
         <h3 class="mb-0 mt-3 text-sm font-medium text-cp-text-secondary sm:col-span-2">
           原生 Codex 上游连接

@@ -4744,6 +4744,214 @@ fn transient_rejection() -> ProviderError {
     )
 }
 
+fn retry_after_plan(operation: &Operation, limit: u32) -> RoutingPlan {
+    plan_with_tuning(
+        operation,
+        AccountSelectionPolicy::new(RotationStrategy::Smart, NonZeroU32::MIN, Duration::ZERO),
+        gateway_core::routing::RequestTuning {
+            max_retry_after_seconds: limit,
+            ..gateway_core::routing::RequestTuning::default()
+        },
+    )
+}
+
+#[test]
+fn zero_retry_after_limit_preserves_zero_and_missing_server_advice() {
+    for advice in [None, Some(Duration::ZERO)] {
+        let operation = generate_operation();
+        let plan = retry_after_plan(&operation, 0);
+        let mut rejection = transient_rejection();
+        if let Some(delay) = advice {
+            rejection = rejection.with_retry_after(delay);
+        }
+        let (coordinator, _, provider) = coordinator(vec![
+            Script::Stream {
+                account_id: "acct_first",
+                items: vec![Err(rejection)],
+            },
+            Script::Stream {
+                account_id: "acct_first",
+                items: complete_stream(None),
+            },
+        ]);
+        let mut session = block_on(coordinator.start(
+            model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
+            operation,
+            plan,
+            None,
+            None,
+            CancellationToken::new(),
+        ))
+        .unwrap();
+        block_on(session.collect_uncommitted()).unwrap();
+        let contexts = provider.contexts.lock().unwrap();
+        assert_eq!(contexts.len(), 2);
+        assert_eq!(
+            contexts[1].required_account().unwrap().as_str(),
+            "acct_first"
+        );
+    }
+}
+
+#[test]
+fn retry_after_at_or_below_the_configured_limit_keeps_the_full_wait() {
+    for (limit, seconds) in [(240, 240), (60, 60), (400, 308)] {
+        let operation = generate_operation();
+        let route_plan = retry_after_plan(&operation, limit);
+        let (coordinator, _, provider) = coordinator(vec![Script::Stream {
+            account_id: "acct_first",
+            items: vec![Err(
+                transient_rejection().with_retry_after(Duration::from_secs(seconds))
+            )],
+        }]);
+        let cancellation = CancellationToken::new();
+        let mut session = block_on(coordinator.start(
+            model_request(&operation, SystemTime::now() + Duration::from_secs(600)),
+            operation,
+            route_plan,
+            None,
+            None,
+            cancellation.clone(),
+        ))
+        .unwrap();
+        let trace = session.trace().clone();
+        let mut collection = Box::pin(session.collect_uncommitted());
+        assert!(block_on(async { futures::poll!(&mut collection) }).is_pending());
+        let trace = trace.snapshot().unwrap();
+        let retry = trace["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|event| event["stage"] == "retry.decided")
+            .unwrap();
+        assert_eq!(retry["data"]["delayMs"], seconds * 1000);
+        assert_eq!(retry["data"]["retryAfterExceeded"], false);
+        cancellation.cancel();
+        assert!(matches!(block_on(collection), Err(EngineError::Cancelled)));
+        assert_eq!(provider.contexts.lock().unwrap().len(), 1);
+    }
+}
+
+#[test]
+fn retry_after_above_the_configured_limit_rotates_without_waiting() {
+    for (limit, seconds) in [(240, 241), (240, 308), (60, 61), (0, 1)] {
+        for rejection in [
+            transient_rejection(),
+            ProviderError::new(ProviderErrorKind::Transport, UpstreamSendState::NotSent)
+                .with_pre_delivery_transport_fallback(),
+            ProviderError::new(ProviderErrorKind::Transport, UpstreamSendState::NotSent)
+                .with_pre_delivery_transport_retry(NonZeroU32::MIN, Duration::from_secs(seconds)),
+        ] {
+            let operation = generate_operation();
+            let route_plan = retry_after_plan(&operation, limit);
+            let (coordinator, _, provider) = coordinator(vec![
+                Script::Stream {
+                    account_id: "acct_first",
+                    items: vec![Err(rejection.with_retry_after(Duration::from_secs(seconds)))],
+                },
+                Script::Stream {
+                    account_id: "acct_second",
+                    items: complete_stream(None),
+                },
+            ]);
+            let mut session = block_on(coordinator.start(
+                model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
+                operation,
+                route_plan,
+                None,
+                None,
+                CancellationToken::new(),
+            ))
+            .unwrap();
+            let mut collection = Box::pin(session.collect_uncommitted());
+            assert!(matches!(
+                block_on(async { futures::poll!(&mut collection) }),
+                std::task::Poll::Ready(Ok(_))
+            ));
+            drop(collection);
+            let contexts = provider.contexts.lock().unwrap();
+            assert_eq!(contexts.len(), 2);
+            assert_eq!(contexts[1].required_account(), None);
+            assert!(
+                contexts[1]
+                    .excluded_accounts()
+                    .contains(&ProviderAccountId::new("acct_first").unwrap())
+            );
+        }
+    }
+}
+
+#[test]
+fn excessive_retry_after_preserves_the_error_when_rotation_is_unavailable_or_disallowed() {
+    for (rejection, rotation_allowed) in [
+        (transient_rejection(), true),
+        (
+            transient_rejection().with_transient_retry_policy(
+                NonZeroU32::MIN,
+                Duration::ZERO,
+                Duration::ZERO,
+                Duration::ZERO,
+                gateway_core::error::TransientRetryPolicy::RetryThenReturnError,
+            ),
+            false,
+        ),
+        (
+            ProviderError::new(ProviderErrorKind::Transport, UpstreamSendState::Ambiguous)
+                .with_pre_delivery_transport_retry(NonZeroU32::MIN, Duration::from_secs(308)),
+            false,
+        ),
+    ] {
+        let operation = generate_operation();
+        let route_plan = plan(&operation);
+        let original = Bytes::from_static(
+            br#"{"error":{"code":"server_is_overloaded","headers":{"retry-after":"308"}}}"#,
+        );
+        let expected_kind = rejection.kind();
+        let rejection = rejection
+            .with_retry_after(Duration::from_secs(308))
+            .with_client_visible_upstream_response(ClientVisibleUpstreamResponse::new(
+                503,
+                Some(b"application/json".to_vec()),
+                original.clone(),
+            ));
+        let mut scripts = vec![Script::Stream {
+            account_id: "acct_first",
+            items: vec![Err(rejection)],
+        }];
+        if rotation_allowed {
+            scripts.push(Script::Error(ProviderError::new(
+                ProviderErrorKind::NoEligibleAccount,
+                UpstreamSendState::NotSent,
+            )));
+        }
+        let (coordinator, _, provider) = coordinator(scripts);
+        let mut session = block_on(coordinator.start(
+            model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
+            operation,
+            route_plan,
+            None,
+            None,
+            CancellationToken::new(),
+        ))
+        .unwrap();
+        let mut collection = Box::pin(session.collect_uncommitted());
+        let result = block_on(async { futures::poll!(&mut collection) });
+        let std::task::Poll::Ready(Err(EngineError::Provider(error))) = result else {
+            panic!("must return the original failure without waiting")
+        };
+        assert_eq!(error.kind(), expected_kind);
+        assert_eq!(error.retry_after(), Some(Duration::from_secs(308)));
+        assert_eq!(
+            error.client_visible_upstream_response().unwrap().body(),
+            &original
+        );
+        assert_eq!(
+            provider.contexts.lock().unwrap().len(),
+            if rotation_allowed { 2 } else { 1 }
+        );
+    }
+}
+
 #[test]
 fn connection_recovery_keeps_required_account_and_stops_after_three_retries() {
     let operation = generate_operation();

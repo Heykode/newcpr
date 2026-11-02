@@ -3,6 +3,31 @@ use gateway_core::routing::RequestTuning;
 use serde_json::json;
 
 #[test]
+fn retry_after_limit_accepts_official_bounds_and_legacy_defaults() {
+    assert_eq!(RequestTuning::default().max_retry_after_seconds, 240);
+    for seconds in [0, 240, 400, u32::MAX] {
+        let settings: RequestTuningOverrides =
+            serde_json::from_value(json!({"maxRetryAfterSeconds":seconds})).unwrap();
+        assert!(settings.validate());
+        assert_eq!(settings.max_retry_after_seconds, Some(seconds));
+        assert_eq!(
+            serde_json::to_value(settings).unwrap()["maxRetryAfterSeconds"],
+            seconds
+        );
+    }
+    for value in [json!({}), json!({"maxRetryAfterSeconds":null})] {
+        let settings: RequestTuningOverrides = serde_json::from_value(value).unwrap();
+        assert_eq!(settings.max_retry_after_seconds, None);
+    }
+    for value in [json!(-1), json!(0.5), json!(4294967296_u64), json!("240")] {
+        assert!(
+            serde_json::from_value::<RequestTuningOverrides>(json!({"maxRetryAfterSeconds":value}))
+                .is_err()
+        );
+    }
+}
+
+#[test]
 fn shared_account_wait_ignores_retired_split_controls() {
     let decoded: RequestTuningOverrides = serde_json::from_value(json!({
         "maxWaitingPerAccount":5,"accountConcurrencyWaitTimeoutSeconds":60,
@@ -147,6 +172,7 @@ fn request_tuning_overrides_round_trip_all_live_fields() {
         websocket_failure_window_ms: Some(30_000),
         websocket_failure_open_duration_ms: Some(45_000),
         rate_limit_cooldown_seconds: Some(60),
+        max_retry_after_seconds: Some(400),
         excel_image_relay_bytes: Some(64 * 1024 * 1024),
         excel_image_max_bytes: Some(8 * 1024 * 1024),
         excel_image_total_bytes: Some(16 * 1024 * 1024),
@@ -187,6 +213,7 @@ fn request_tuning_overrides_round_trip_all_live_fields() {
             "websocketFailureWindowMs": 30000,
             "websocketFailureOpenDurationMs": 45000,
             "rateLimitCooldownSeconds": 60,
+            "maxRetryAfterSeconds": 400,
             "excelImageRelayBytes": 67108864,
             "excelImageMaxBytes": 8388608,
             "excelImageTotalBytes": 16777216,

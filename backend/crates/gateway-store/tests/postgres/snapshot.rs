@@ -204,6 +204,7 @@ async fn runtime_snapshot_compiles_account_busy_wait_defaults_overrides_and_froz
         max_request_attempts: 8,
         websocket_large_request_threshold_bytes: 4096,
         stream_prefetch_bytes: 256 * 1024,
+        max_retry_after_seconds: 400,
         ..RequestTuning::default()
     };
     let overrides = RequestTuningOverrides {
@@ -232,6 +233,7 @@ async fn runtime_snapshot_compiles_account_busy_wait_defaults_overrides_and_froz
             expected.websocket_large_request_threshold_bytes,
         ),
         stream_prefetch_bytes: Some(expected.stream_prefetch_bytes),
+        max_retry_after_seconds: Some(expected.max_retry_after_seconds),
         ..Default::default()
     };
     sqlx::query(
@@ -261,6 +263,7 @@ async fn runtime_snapshot_compiles_account_busy_wait_defaults_overrides_and_froz
         account_busy_wait_enabled: Some(false),
         websocket_large_request_threshold_bytes: Some(0),
         stream_prefetch_bytes: Some(0),
+        max_retry_after_seconds: Some(0),
         ..overrides
     }))
     .execute(&database.pool)
@@ -277,6 +280,7 @@ async fn runtime_snapshot_compiles_account_busy_wait_defaults_overrides_and_froz
             account_busy_wait_enabled: false,
             websocket_large_request_threshold_bytes: 0,
             stream_prefetch_bytes: 0,
+            max_retry_after_seconds: 0,
             ..expected
         }
     );
@@ -305,6 +309,7 @@ async fn runtime_snapshot_compiles_account_busy_wait_defaults_overrides_and_froz
             "accountBusyWaitEnabled": null,
             "maxWaitingPerAccount": null,
             "accountConcurrencyWaitTimeoutSeconds": null,
+            "maxRetryAfterSeconds": null,
         }),
     ] {
         sqlx::query(

@@ -190,12 +190,13 @@ impl CodexWebSocketPool {
         &self,
         key: &CodexWebSocketPoolKey,
         required_response_id: Option<&str>,
+        requires_search: bool,
     ) -> WebSocketPoolAcquire {
         self.spawn_maintenance_task();
         let mut changed = self.capacity_changed.subscribe();
         loop {
             changed.borrow_and_update();
-            let (acquire, close) = self.acquire_once(key, required_response_id);
+            let (acquire, close) = self.acquire_once(key, required_response_id, requires_search);
             drop(self.start_closing(close));
             if let Some(acquire) = acquire {
                 return acquire;
@@ -216,6 +217,7 @@ impl CodexWebSocketPool {
         &self,
         key: &CodexWebSocketPoolKey,
         required_response_id: Option<&str>,
+        requires_search: bool,
     ) -> (
         Option<WebSocketPoolAcquire>,
         Vec<capacity::RetiredConnection>,
@@ -327,7 +329,16 @@ impl CodexWebSocketPool {
                     let idle_expired = !state.has_downstream_binding(&key)
                         && idle_since.elapsed() >= self.config.idle_timeout;
                     let downstream_closed = state.downstream_closed(&key);
-                    if !expired && !closed && !over_capacity && !idle_expired && !downstream_closed
+                    // Hosted search must be initialized by the socket's first payload.
+                    // A generate=false prewarm is a payload; handshake-only is not.
+                    let search_activation_required =
+                        requires_search && connection.initial_search_declared == Some(false);
+                    if !expired
+                        && !closed
+                        && !over_capacity
+                        && !idle_expired
+                        && !downstream_closed
+                        && !search_activation_required
                     {
                         connection.websocket.revoke_control();
                         close.extend(state.take_downstream_connections(
@@ -373,6 +384,11 @@ impl CodexWebSocketPool {
                             .websocket
                             .observation()
                             .with_exit_reason("max_age_expired")
+                    } else if search_activation_required && !closed {
+                        connection
+                            .websocket
+                            .observation()
+                            .with_exit_reason("search_activation_required")
                     } else {
                         connection.websocket.observation()
                     };
@@ -386,8 +402,11 @@ impl CodexWebSocketPool {
                             Some("downstream_connection_closed")
                         } else if idle_expired && !closed {
                             Some("idle_timeout_expired")
+                        } else if expired && !closed {
+                            Some("max_age_expired")
                         } else {
-                            (expired && !closed).then_some("max_age_expired")
+                            (search_activation_required && !closed)
+                                .then_some("search_activation_required")
                         },
                     ));
                     if required_response_id.is_some() {

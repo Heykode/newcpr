@@ -1596,6 +1596,9 @@ where
         );
         // Honor the provider's bounded size-recovery directive without changing
         // the observed send state or permitting account rotation.
+        let retry_after_exceeds_limit = error
+            .retry_after()
+            .is_some_and(|delay| delay > self.plan.max_retry_after());
         let transport_send_allows_recovery = attempt_send_state != UpstreamSendState::Ambiguous
             || error.kind() == ProviderErrorKind::MessageTooBig;
         let transport_recovery = match error.pre_delivery_retry() {
@@ -1615,14 +1618,16 @@ where
             Some(crate::error::PreDeliveryRetry::SameAccountTransportRetry {
                 retry_index,
                 delay,
-            }) if !self.replay_barrier_reached
+            }) if !retry_after_exceeds_limit
+                && !self.replay_barrier_reached
                 && !self.delivery_pending
                 && transport_send_allows_recovery =>
             {
                 Some((AttemptTransport::Retry(retry_index), delay))
             }
             Some(crate::error::PreDeliveryRetry::SameAccountTransportFallback)
-                if !self.replay_barrier_reached
+                if !retry_after_exceeds_limit
+                    && !self.replay_barrier_reached
                     && !self.delivery_pending
                     && transport_send_allows_recovery =>
             {
@@ -1663,7 +1668,7 @@ where
                 max_delay,
                 jitter,
                 ..
-            }) if ordinary_retry && !suppress_transient_retry => {
+            }) if ordinary_retry && !suppress_transient_retry && !retry_after_exceeds_limit => {
                 let retries = self
                     .transient_retry_counts
                     .entry(current.metadata.provider_account_id().clone())
@@ -1718,6 +1723,8 @@ where
             "connectionRotation": connection_rotation.is_some(),
             "reserveConnectionRotation": reserve_connection_rotation,
             "transientRetry": transient_retry.is_some(),
+            "retryAfterExceeded": retry_after_exceeds_limit,
+            "maxRetryAfterSeconds": self.plan.max_retry_after().as_secs(),
             "clientRetrySuppressed": suppress_transient_retry,
             "connectionRetry": connection_retry_requested,
             "connectionRetries": self.connection_retries,

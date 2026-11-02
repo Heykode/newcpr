@@ -45,6 +45,7 @@ const requestTuningFallbacks: RequestTuning = {
   websocketFailureWindowMs: 30_000,
   websocketFailureOpenDurationMs: 30_000,
   rateLimitCooldownSeconds: 60,
+  maxRetryAfterSeconds: 240,
   excelImageRelayBytes: 1024 * 1024 * 1024,
   excelImageMaxBytes: 20 * 1024 * 1024,
   excelImageTotalBytes: 32 * 1024 * 1024,
@@ -307,6 +308,10 @@ export function useSettingsForm() {
       return
     }
     const tuning = form.requestTuning
+    if (!Number.isInteger(tuning.maxRetryAfterSeconds) || tuning.maxRetryAfterSeconds < 0 || tuning.maxRetryAfterSeconds > 4_294_967_295) {
+      toast.warning('上游建议等待上限须为 0–4294967295 的整数秒')
+      return
+    }
     if (!['off', 'auto_compact', 'warn'].includes(tuning.excelImageLimitPolicy)
       || !Number.isInteger(tuning.excelImageWarningRemaining) || tuning.excelImageWarningRemaining < 1 || tuning.excelImageWarningRemaining > 65536
       || !Number.isInteger(tuning.excelImageCompactReserve) || tuning.excelImageCompactReserve < 1 || tuning.excelImageCompactReserve > 65536
