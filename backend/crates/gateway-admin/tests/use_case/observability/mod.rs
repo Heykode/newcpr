@@ -1144,6 +1144,7 @@ fn total_record(
         first_text_ms: None,
         first_token_ms: None,
         provider_processing_ms: None,
+        upstream_response_ms: None,
         latency_ms: Some(100),
         admission_decision_ms: None,
         account_selection_wait_ms: None,

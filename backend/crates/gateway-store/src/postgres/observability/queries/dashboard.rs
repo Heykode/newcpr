@@ -1,6 +1,7 @@
 //! Dashboard 与趋势查询族。
 
 use super::super::*;
+use super::usage::UPSTREAM_RESPONSE_MS_SQL;
 
 pub(crate) async fn request_metrics(
     connection: &mut PgConnection,
@@ -815,39 +816,19 @@ fn metric_projection(metric: Option<admin_observability::UsageInsightMetric>) ->
             "null::double precision as account_selection_wait_p99_ms".to_owned()
         },
     );
-    fields.push(if metric.is_none_or(|metric| metric == M::Throughput) {
-        format!(
-            "round((percentile_cont(0.10) within group (
-                  order by output_tokens::double precision * 1000.0
-                    / nullif(latency_ms, 0)
-                ) filter (where {fact} and output_tokens > 0
-                          and latency_ms > 0)))::bigint as output_throughput_p10"
-        )
-    } else {
-        "null::bigint as output_throughput_p10".to_owned()
-    });
-    fields.push(if metric.is_none_or(|metric| metric == M::Throughput) {
-        format!(
-            "round((percentile_cont(0.50) within group (
-                  order by output_tokens::double precision * 1000.0
-                    / nullif(latency_ms, 0)
-                ) filter (where {fact} and output_tokens > 0
-                          and latency_ms > 0)))::bigint as output_throughput_p50"
-        )
-    } else {
-        "null::bigint as output_throughput_p50".to_owned()
-    });
-    fields.push(if metric.is_none_or(|metric| metric == M::Throughput) {
-        format!(
-            "round((percentile_cont(0.90) within group (
-                  order by output_tokens::double precision * 1000.0
-                    / nullif(latency_ms, 0)
-                ) filter (where {fact} and output_tokens > 0
-                          and latency_ms > 0)))::bigint as output_throughput_p90"
-        )
-    } else {
-        "null::bigint as output_throughput_p90".to_owned()
-    });
+    // One shared aggregate avoids re-reading the observation JSON for each percentile.
+    let throughput = format!(
+        "percentile_cont(array[0.10, 0.50, 0.90]) within group (
+            order by output_tokens::double precision * 1000.0 / ({UPSTREAM_RESPONSE_MS_SQL})
+         ) filter (where {fact} and output_tokens > 0)"
+    );
+    for (index, percentile) in [(1, 10), (2, 50), (3, 90)] {
+        fields.push(if metric.is_none_or(|metric| metric == M::Throughput) {
+            format!("round(({throughput})[{index}])::bigint as output_throughput_p{percentile}")
+        } else {
+            format!("null::bigint as output_throughput_p{percentile}")
+        });
+    }
     fields.push(if metric.is_none_or(|metric| metric == M::Scheduling) {
         "count(capacity_total_slots)::bigint as capacity_sample_count".to_owned()
     } else {

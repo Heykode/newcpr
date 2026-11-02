@@ -21,19 +21,23 @@ function record(overrides = {}) {
   return {
     latencyMs: 3500,
     firstTokenLatencyMs: 1000,
-    latencyDetails: { firstTokenMs: 500, firstEventMs: 100 },
+    latencyDetails: { firstTokenMs: 500, firstEventMs: 100, upstreamResponseMs: 2500 },
     tokenDetails: { outputTokens: 125 },
     ...overrides,
   }
 }
 
-test('throughput uses complete request duration including reasoning and prior attempts', () => {
+test('throughput uses the completed upstream response duration without subtracting reasoning', () => {
   const result = usagePerformanceDetails(record())
-  assert.equal(result.throughputDisplay, '35.7 tok/s')
+  assert.equal(result.throughputDisplay, '50 tok/s')
   assert.equal(result.firstTokenDisplay, '1000ms')
   assert.equal(usageLatencyDetails(record()).firstOutputDisplay, '1000ms')
-  assert.equal(usagePerformanceDetails(record({ firstTokenLatencyMs: null })).throughputDisplay, '35.7 tok/s')
-  assert.equal(usagePerformanceDetails(record({ firstTokenLatencyMs: 0 })).throughputDisplay, '35.7 tok/s')
+  for (const firstTokenLatencyMs of [null, 0, 1000]) {
+    for (const latencyMs of [null, 0, 3500, 60000]) {
+      assert.equal(usagePerformanceDetails(record({ firstTokenLatencyMs, latencyMs })).throughputDisplay, '50 tok/s')
+    }
+  }
+  assert.equal(usageLatencyDetails(record()).totalDisplay, '3500ms')
 })
 
 test('fresh input display subtracts both caches without changing raw usage, totals or billing', () => {
@@ -84,9 +88,10 @@ test('missing or invalid measurements never invent throughput or substitute the 
     { tokenDetails: { outputTokens: -1 } },
     { tokenDetails: { outputTokens: Number.NaN } },
     { tokenDetails: { outputTokens: Number.POSITIVE_INFINITY } },
-    { latencyMs: 0 },
-    { latencyMs: -1 },
-    { latencyMs: null },
+    { latencyDetails: null },
+    { latencyDetails: {} },
+    ...[undefined, null, 0, -1, '2500', Number.NaN, Number.POSITIVE_INFINITY]
+      .map(upstreamResponseMs => ({ latencyDetails: { upstreamResponseMs, firstEventMs: 100, firstTokenMs: 500 } })),
   ]) {
     const value = usagePerformanceDetails(record(overrides)).throughputDisplay
     assert.equal(value, '\u2014')
