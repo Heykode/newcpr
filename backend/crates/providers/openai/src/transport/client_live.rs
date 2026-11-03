@@ -74,8 +74,6 @@ impl CodexBackendClient {
                 context.account_id.unwrap_or(""),
             )
             .scope_endpoint_headers(&mut headers);
-        } else {
-            super::correlation::strip_trace_headers(&mut headers);
         }
         Ok(headers)
     }
@@ -361,14 +359,21 @@ mod tests {
         assert_eq!(headers["authorization"], "Bearer current-token");
         assert_eq!(headers["chatgpt-account-id"], "current-account");
         assert_eq!(headers["user-agent"], frozen.user_agent());
-        assert!(!headers.contains_key("x-codex-installation-id"));
+        assert_eq!(headers["x-codex-installation-id"], "fixed-device");
         assert_eq!(headers["x-client-turn-id"], "turn_test");
         assert_eq!(headers["x-session-id"], "voice-business");
         assert_eq!(headers["voice-session-id"], "voice-ref");
         assert_ne!(headers["session-id"], "tracking");
-        assert!(!headers.contains_key("traceparent"));
-        assert!(!headers.contains_key("sentry-trace"));
-        assert!(!headers.contains_key("baggage"));
+        assert_eq!(headers["traceparent"], "trace");
+        assert_eq!(headers["sentry-trace"], "trace");
+        assert_eq!(
+            headers
+                .get_all("baggage")
+                .iter()
+                .map(|value| value.as_bytes())
+                .collect::<Vec<_>>(),
+            [b"synthetic-one".as_slice(), b"synthetic-two".as_slice()]
+        );
         assert!(!headers.contains_key("x-codex-turn-state"));
         assert_eq!(
             headers

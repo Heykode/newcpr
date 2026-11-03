@@ -296,7 +296,7 @@ async fn backend_websocket_should_stream_upstream_for_non_streaming_client_reque
         headers["user-agent"],
         test_wire_profile().snapshot().user_agent()
     );
-    assert!(!headers.contains_key("x-codex-installation-id"));
+    assert_eq!(headers["x-codex-installation-id"], "account-installation");
     assert!(
         !request.stream(),
         "downstream delivery remains non-streaming"

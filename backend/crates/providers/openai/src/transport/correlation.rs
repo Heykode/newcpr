@@ -5,17 +5,6 @@ use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use std::{cell::RefCell, collections::BTreeMap};
 
-const TRACE_FIELDS: &[&str] = &[
-    "traceparent",
-    "tracestate",
-    "sentry-trace",
-    "baggage",
-    "ws_request_header_traceparent",
-    "ws_request_header_tracestate",
-    "ws_request_header_sentry-trace",
-    "ws_request_header_baggage",
-];
-
 #[derive(Clone, Copy)]
 pub(crate) struct AccountCorrelation<'a> {
     key: &'a str,
@@ -115,12 +104,7 @@ impl<'a> AccountCorrelation<'a> {
         Some(self.derive(kind, value))
     }
 
-    pub(crate) fn is_trace(name: &str) -> bool {
-        TRACE_FIELDS.contains(&name)
-    }
-
     pub(crate) fn scope_fields(self, object: &mut Map<String, Value>) {
-        object.retain(|key, _| !Self::is_trace(key));
         for (key, value) in object {
             if let Value::String(raw) = value
                 && let Some(scoped) = self.field(key, raw)
@@ -132,11 +116,6 @@ impl<'a> AccountCorrelation<'a> {
 
     pub(crate) fn scope_metadata(self, raw: &str) -> Option<String> {
         super::request::scope_raw_turn_correlations(raw, self)
-    }
-
-    pub(crate) fn scope_turn_headers(self, headers: &mut HeaderMap) {
-        // Turn IDs are protocol references, not account tracking identifiers.
-        strip_trace_headers(headers);
     }
 
     fn scope_header(self, headers: &mut HeaderMap, name: &'static str) {
@@ -159,7 +138,6 @@ impl<'a> AccountCorrelation<'a> {
     }
 
     pub(crate) fn scope_endpoint_headers(self, headers: &mut HeaderMap) {
-        self.scope_turn_headers(headers);
         for name in [
             "session-id",
             "session_id",
@@ -218,12 +196,6 @@ impl<'a> AccountCorrelation<'a> {
             }
             let _ = rewrite_git_context(text, self);
         }
-    }
-}
-
-pub(super) fn strip_trace_headers(headers: &mut HeaderMap) {
-    for name in TRACE_FIELDS {
-        headers.remove(*name);
     }
 }
 

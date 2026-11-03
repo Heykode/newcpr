@@ -54,7 +54,6 @@ pub(crate) fn provider_managed_header(name: &str) -> bool {
                 | "openai-organization"
                 | "openai-project"
                 | "x-openai-account-routing-override"
-                | "x-openai-fedramp"
                 | "x-codex-installation-id"
                 | "origin"
                 | "referer"

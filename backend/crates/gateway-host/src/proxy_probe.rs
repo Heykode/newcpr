@@ -124,6 +124,17 @@ impl HttpProxyProbe {
 }
 
 impl HttpProxyProbe {
+    async fn timed_exit_ip_at(
+        &self,
+        proxy: Option<&OutboundProxy>,
+        endpoint: &str,
+    ) -> (Result<IpAddr, &'static str>, u64) {
+        let started = Instant::now();
+        let result = self.exit_ip_at(proxy, endpoint).await;
+        let latency_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        (result, latency_ms)
+    }
+
     async fn test_connection(&self, proxy: Option<&OutboundProxy>) -> ProxyTestResult {
         let started = Instant::now();
         let timeout_limit = Duration::from_secs(15);
@@ -167,14 +178,14 @@ impl HttpProxyProbe {
             } => {
                 let probe = async {
                     tokio::join!(
-                        self.exit_ip_at(proxy, ipv4_endpoint),
-                        self.exit_ip_at(proxy, ipv6_endpoint),
+                        self.timed_exit_ip_at(proxy, ipv4_endpoint),
+                        self.timed_exit_ip_at(proxy, ipv6_endpoint),
                     )
                 };
                 let result = tokio::time::timeout(timeout_limit, probe).await;
                 let latency_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
                 match result {
-                    Ok((ipv4, ipv6)) => {
+                    Ok(((ipv4, latency_v4), (ipv6, latency_v6))) => {
                         let exit_ipv4: Option<Ipv4Addr> = match ipv4 {
                             Ok(IpAddr::V4(value)) => Some(value),
                             _ => None,
@@ -182,6 +193,13 @@ impl HttpProxyProbe {
                         let exit_ipv6: Option<Ipv6Addr> = match ipv6 {
                             Ok(IpAddr::V6(value)) => Some(value),
                             _ => None,
+                        };
+                        let latency_ms = if exit_ipv4.is_some() {
+                            latency_v4
+                        } else if exit_ipv6.is_some() {
+                            latency_v6
+                        } else {
+                            latency_ms
                         };
                         if let (Some(v4), Some(v6)) = (exit_ipv4, exit_ipv6) {
                             ProxyTestResult {

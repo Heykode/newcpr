@@ -325,12 +325,65 @@ fn state_probe_concurrency_defaults_and_snapshot_bounds_are_enforced() {
 
 #[test]
 fn compiler_should_reject_revision_changed_during_consistent_read() {
-    let facts = facts(1, 2);
-    let compiler = compiler(Arc::new(TestSnapshotStore::new(Ok(facts))));
+    let store = Arc::new(SequencedSnapshotStore {
+        facts: vec![Ok(facts(1, 2))],
+        loads: AtomicUsize::new(0),
+    });
+    let compiler = compiler(store.clone());
 
     let error = block_on(compiler.compile()).expect_err("revision drift must fail closed");
 
     assert_eq!(error, RuntimeSnapshotCompileError::RevisionChanged);
+    assert_eq!(store.loads.load(Ordering::SeqCst), 4);
+}
+
+struct SequencedSnapshotStore {
+    facts: Vec<Result<SnapshotFacts, SnapshotStoreError>>,
+    loads: AtomicUsize,
+}
+
+impl SnapshotStorePort for SequencedSnapshotStore {
+    fn load_snapshot_facts(&self) -> BoxFuture<'_, Result<SnapshotFacts, SnapshotStoreError>> {
+        Box::pin(async move {
+            let index = self.loads.fetch_add(1, Ordering::SeqCst);
+            self.facts[index.min(self.facts.len() - 1)].clone()
+        })
+    }
+
+    fn current_config_revision(&self) -> BoxFuture<'_, Result<ConfigRevision, SnapshotStoreError>> {
+        Box::pin(async move {
+            self.facts
+                .last()
+                .unwrap()
+                .as_ref()
+                .map(facts_revision)
+                .map_err(Clone::clone)
+        })
+    }
+}
+
+#[test]
+fn compiler_reloads_complete_facts_after_revision_changes_during_read() {
+    let store = Arc::new(SequencedSnapshotStore {
+        facts: vec![Ok(facts(1, 2)), Ok(facts(2, 2))],
+        loads: AtomicUsize::new(0),
+    });
+    let snapshot = block_on(compiler(store.clone()).compile()).expect("latest consistent facts");
+    assert_eq!(snapshot.revision(), revision(2));
+    assert_eq!(store.loads.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn compiler_does_not_hide_storage_failure_after_a_revision_race() {
+    let store = Arc::new(SequencedSnapshotStore {
+        facts: vec![Ok(facts(1, 2)), Err(SnapshotStoreError)],
+        loads: AtomicUsize::new(0),
+    });
+    assert_eq!(
+        block_on(compiler(store.clone()).compile()).unwrap_err(),
+        RuntimeSnapshotCompileError::StoreUnavailable
+    );
+    assert_eq!(store.loads.load(Ordering::SeqCst), 2);
 }
 
 #[test]

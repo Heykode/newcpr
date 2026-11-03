@@ -95,6 +95,7 @@ mod streamed_errors;
 mod timing;
 mod tls_recovery;
 mod turn_affinity;
+mod turn_state;
 mod ws_message_compatibility;
 mod ws_size_recovery;
 const CAPTURE_COMPLETED_SSE: &str = concat!(
@@ -1081,6 +1082,23 @@ fn captured_header_values(request: &wiremock::Request, name: &str) -> Vec<Vec<u8
         .iter()
         .map(|value| value.as_bytes().to_vec())
         .collect()
+}
+
+fn assert_account_installation_header(request: &wiremock::Request) {
+    let headers = captured_header_values(request, "x-codex-installation-id");
+    assert_eq!(headers.len(), 1);
+    let installation = std::str::from_utf8(&headers[0]).unwrap();
+    uuid::Uuid::parse_str(installation).expect("selected account installation");
+    let body = captured_request_body(request);
+    for pointer in [
+        "/installation_id",
+        "/client_metadata/installation_id",
+        "/client_metadata/x-codex-installation-id",
+    ] {
+        if let Some(value) = body.pointer(pointer) {
+            assert_eq!(value, installation, "{pointer}");
+        }
+    }
 }
 
 fn captured_request_body(request: &wiremock::Request) -> serde_json::Value {
@@ -4050,7 +4068,7 @@ async fn same_account_scope_preserves_future_protocol_shapes() {
     );
     assert!(body.pointer("/client_metadata/installation_id").is_none());
     assert!(body["client_metadata"]["x-codex-installation-id"].is_string());
-    assert!(captured_header_values(&request, "x-codex-installation-id").is_empty());
+    assert_account_installation_header(&request);
 }
 
 #[tokio::test]
@@ -4089,7 +4107,10 @@ async fn account_switch_drops_parent_response_but_preserves_nested_metadata() {
             assert!(body["client_metadata"].get("parent_response_id").is_none());
         }
         assert!(captured_header_values(&request, "x-openai-account-routing-override").is_empty());
-        assert!(captured_header_values(&request, "x-openai-fedramp").is_empty());
+        assert_eq!(
+            captured_header_values(&request, "x-openai-fedramp"),
+            vec![b"untrusted".to_vec()]
+        );
     }
 }
 
@@ -4394,7 +4415,7 @@ async fn cross_account_scope_removes_only_account_bound_body_fields() {
     );
     assert_eq!(body.get("future_field"), Some(&json!({"keep": true})));
     assert!(body["installation_id"].is_string());
-    assert!(captured_header_values(&request, "x-codex-installation-id").is_empty());
+    assert_account_installation_header(&request);
     assert_ne!(
         body.get("installation_id"),
         Some(&json!("client-installation"))
@@ -4470,7 +4491,7 @@ async fn cross_account_body_uses_stored_identity_without_a_standalone_device_hea
     assert_eq!(requests.len(), 1);
     let request = &requests[0];
     let body = captured_request_body(request);
-    assert!(captured_header_values(request, "x-codex-installation-id").is_empty());
+    assert_account_installation_header(request);
     for pointer in [
         "/installation_id",
         "/client_metadata/installation_id",

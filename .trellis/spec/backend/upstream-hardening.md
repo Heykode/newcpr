@@ -54,8 +54,10 @@ remain locally excluded, not account-health failures or snapshot retries.
 All-busy snapshots and lease races without retry hints are capacity errors.
 
 Account switching strips top-level `client_metadata.parent_response_id`;
-nested opaque metadata stays intact. Ingress and Provider both reject
-`x-openai-account-routing-override` and `x-openai-fedramp`.
+nested opaque metadata stays intact. Ingress and Provider both reject downstream
+`x-openai-account-routing-override`; deployment configuration remains authoritative.
+Official v3.39.1 supersedes the earlier `x-openai-fedramp` rejection: it is a
+business header and must survive both boundaries, including repeated values.
 
 WS control messages retain their raw text. Unknown modes, unknown/retired IDs
 and non-JSON controls go transparently to the existing socket, where upstream

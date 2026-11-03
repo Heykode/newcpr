@@ -773,11 +773,13 @@ impl ProxyStore for PgProxyRepository {
         .await
         .map_err(|_| store_error(unavailable()))?;
         if locked.is_none() {
-            transaction
-                .rollback()
-                .await
-                .map_err(|_| store_error(unavailable()))?;
-            return Err(store_error(conflict(id)));
+            let error = store_error(conflict(id));
+            return Err(match transaction.rollback().await {
+                Ok(()) => error,
+                Err(cleanup) => {
+                    error.with_source(gateway_core::error::ErrorSource::cleanup(None, cleanup))
+                }
+            });
         }
         let account_ids: Vec<String> = sqlx::query_scalar(
             "update provider_accounts set outbound_proxy_id = null, outbound_proxy_url = null,

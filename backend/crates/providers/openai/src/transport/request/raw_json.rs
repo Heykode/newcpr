@@ -160,9 +160,6 @@ fn correlation_object(
     depth: u8,
 ) -> Result<Option<String>, serde_json::Error> {
     rewrite_object(raw, |key, value| {
-        if AccountCorrelation::is_trace(key) {
-            return Change::Remove;
-        }
         if depth == 0 && key == "client_metadata" {
             return correlation_object(value.get(), identity, false, 1)
                 .ok()

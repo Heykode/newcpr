@@ -23,7 +23,7 @@ use super::{
     RuntimeAccountDirectory, UpstreamModelId,
 };
 
-const MAXIMUM_CATALOG_STABILITY_ATTEMPTS: usize = 4;
+const MAXIMUM_SNAPSHOT_STABILITY_ATTEMPTS: usize = 4;
 
 /// Store 在一个一致性读取中提供的调度设置事实。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -429,16 +429,19 @@ impl RuntimeSnapshotCompiler {
         previous: Option<&RuntimeSnapshot>,
         refresh_catalog: bool,
     ) -> Result<RuntimeSnapshot, RuntimeSnapshotCompileError> {
-        for _ in 0..MAXIMUM_CATALOG_STABILITY_ATTEMPTS {
-            let catalog_generations = self.catalogs.catalog_generations();
+        let mut instability = RuntimeSnapshotCompileError::CatalogChanged;
+        for _ in 0..MAXIMUM_SNAPSHOT_STABILITY_ATTEMPTS {
             let facts = self
                 .store
                 .load_snapshot_facts()
                 .await
                 .map_err(|_| RuntimeSnapshotCompileError::StoreUnavailable)?;
             if facts.config_revision != facts.observed_current_revision {
-                return Err(RuntimeSnapshotCompileError::RevisionChanged);
+                // Reload all facts after a concurrent commit, never mix revisions.
+                instability = RuntimeSnapshotCompileError::RevisionChanged;
+                continue;
             }
+            let catalog_generations = self.catalogs.catalog_generations();
             let provider_kinds = catalog_generations.keys().cloned().collect();
             let snapshot = compile_runtime_snapshot(
                 facts,
@@ -448,16 +451,19 @@ impl RuntimeSnapshotCompiler {
                 refresh_catalog,
             )
             .await?;
-            if previous.is_some() && !refresh_catalog {
-                // An empty generation map keeps catalog reconciliation pending.
-                return Ok(snapshot);
-            }
             let observed_generations = self.catalogs.catalog_generations();
             if catalog_generations == observed_generations {
-                return Ok(snapshot.with_provider_catalog_generations(observed_generations));
+                return Ok(snapshot.with_provider_catalog_generations(
+                    if previous.is_some() && !refresh_catalog {
+                        BTreeMap::new()
+                    } else {
+                        observed_generations
+                    },
+                ));
             }
+            instability = RuntimeSnapshotCompileError::CatalogChanged;
         }
-        Err(RuntimeSnapshotCompileError::CatalogChanged)
+        Err(instability)
     }
 }
 
