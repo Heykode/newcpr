@@ -257,24 +257,32 @@ async fn frozen_request_profile_survives_publication_without_reusing_account_ide
             "acct_profile_second",
             "acct_profile_second",
         ]) {
-            assert!(!headers.contains_key("x-codex-installation-id"));
-            for name in ["traceparent", "tracestate", "sentry-trace", "baggage"] {
-                assert!(!headers.contains_key(name), "outbound header {name}");
-            }
-            for name in [
-                "sentry-trace",
-                "baggage",
-                "ws_request_header_sentry-trace",
-                "ws_request_header_baggage",
+            assert_eq!(
+                headers["x-codex-installation-id"],
+                body["client_metadata"]["x-codex-installation-id"]
+                    .as_str()
+                    .unwrap()
+            );
+            assert_eq!(headers["traceparent"], "synthetic-trace");
+            assert_eq!(headers["tracestate"], "vendor=synthetic");
+            assert_eq!(headers["sentry-trace"], "synthetic-trace");
+            assert_eq!(
+                headers
+                    .get_all("baggage")
+                    .iter()
+                    .map(|v| v.to_str().unwrap())
+                    .collect::<Vec<_>>(),
+                ["sentry-environment=synthetic", "sentry-release=synthetic"]
+            );
+            for (name, value) in [
+                ("sentry-trace", "synthetic-trace"),
+                ("baggage", "sentry-environment=synthetic"),
             ] {
-                assert!(body.get(name).is_none(), "root field {name}");
-                assert!(
-                    body["client_metadata"].get(name).is_none(),
-                    "metadata {name}"
-                );
-                assert!(
-                    body["turnMetadata"].get(name).is_none(),
-                    "turn metadata {name}"
+                assert_eq!(body[name], value);
+                assert_eq!(body["turnMetadata"][name], value);
+                assert_eq!(
+                    body["client_metadata"][format!("ws_request_header_{name}")],
+                    value
                 );
             }
             let metadata: Value =
@@ -286,8 +294,8 @@ async fn frozen_request_profile_survives_publication_without_reusing_account_ide
             )
             .unwrap();
             for fields in [&metadata, &nested] {
-                assert!(fields.get("sentry-trace").is_none());
-                assert!(fields.get("baggage").is_none());
+                assert_eq!(fields["sentry-trace"], "synthetic-trace");
+                assert_eq!(fields["baggage"], "sentry-environment=synthetic");
                 assert_eq!(fields["turn_id"], "shared-turn");
                 assert_eq!(fields["keep"], "business");
             }
@@ -411,7 +419,7 @@ async fn proxy_location_precedence_preserves_fallback_identity_on_http_and_ws() 
             } else {
                 let requests = http.received_requests().await.unwrap();
                 let body = captured_request_body(&requests[0]);
-                assert!(!requests[0].headers.contains_key("x-codex-installation-id"));
+                assert_account_installation_header(&requests[0]);
                 body
             };
             let selected = store
@@ -810,7 +818,7 @@ async fn qx_provider_projects_http_identity_after_account_selection_with_trusted
         assert_eq!(request.headers["x-client-request-id"], thread);
         assert_eq!(request.headers["x-codex-window-id"], format!("{thread}:0"));
         assert_eq!(body["input"][0]["content"][0]["text"], "hello");
-        assert!(!request.headers.contains_key("x-codex-installation-id"));
+        assert_account_installation_header(request);
         let selected = store
             .repository()
             .load_runtime_credential(&store.account(account).unwrap())
@@ -978,7 +986,7 @@ async fn qx_saved_seed_survives_location_change_without_accepting_a_foreign_key(
         next["client_metadata"]["x-codex-installation-id"]
     );
     for request in &requests {
-        assert!(!request.headers.contains_key("x-codex-installation-id"));
+        assert_account_installation_header(request);
     }
     for header in ["thread-id", "session-id"] {
         assert_eq!(
@@ -1088,7 +1096,12 @@ async fn provider_websocket_pool_isolates_keys_in_native_and_qx_policies() {
             .unwrap();
         assert_eq!(captures.len(), 2);
         let (opening, frames) = &captures[0];
-        assert!(!opening.contains_key("x-codex-installation-id"));
+        assert_eq!(
+            opening["x-codex-installation-id"],
+            frames[0]["client_metadata"]["x-codex-installation-id"]
+                .as_str()
+                .unwrap()
+        );
         assert_eq!(
             frames.len(),
             2,
@@ -1103,10 +1116,15 @@ async fn provider_websocket_pool_isolates_keys_in_native_and_qx_policies() {
             .load_runtime_credential(&store.account(ACCOUNT).unwrap())
             .await
             .unwrap();
-        for (headers, bodies) in &captures {
-            assert!(!headers.contains_key("x-codex-installation-id"));
-            assert!(!headers.contains_key("sentry-trace"));
-            assert!(!headers.contains_key("baggage"));
+        for (index, (headers, bodies)) in captures.iter().enumerate() {
+            assert_eq!(headers["x-codex-installation-id"], selected.installation_id);
+            if index == 0 {
+                assert_eq!(headers["sentry-trace"], "synthetic-trace-0");
+                assert_eq!(headers["baggage"], "sentry-trace_id=synthetic-0");
+            } else {
+                assert!(!headers.contains_key("sentry-trace"));
+                assert!(!headers.contains_key("baggage"));
+            }
             for body in bodies {
                 assert_eq!(
                     body["client_metadata"]["x-codex-installation-id"],

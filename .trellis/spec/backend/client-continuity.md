@@ -171,11 +171,12 @@ editing prior entries.
 - Preserve valid active installation IDs. Ambiguous existing archives fail
   validation instead of silently changing devices. Deployment preflight must
   detect this condition before restarting production.
-- Responses HTTP/WS omit the standalone `x-codex-installation-id` header,
-  including downstream mixed-case/repeated copies and the final QX projection.
-  Retain the selected device in body metadata, existing turn-metadata aliases,
-  session derivation and connection ownership. Do not add another generator or
-  alter device persistence/locking when aligning the outbound header contract.
+- Official v3.39.1 supersedes the earlier installation-header omission. Model
+  HTTP/WS and Live send `context.installation_id`, matching account-owned body
+  metadata. Drop downstream copies, then use the durable selected identity;
+  never generate a new device. Missing values are omitted, explicit empty values
+  remain explicit, and invalid header values fail before connecting. Account and
+  OAuth headers retain their separate protocol builders.
 - Account/import/delete and affinity mutations share transactions. Acquire the
   egress settings fence before device/account locks; preserve existing managed
   proxy/config revision lock order.
@@ -487,12 +488,9 @@ time. Observe actual opening duration and its outcome independently.
   must use the existing ASCII JSON representation. Escaped Unicode is wire
   representation only; parsing it upstream must retain the original Unicode
   values.
-- Responses HTTP and WS opening send the account-owned installation header in
-  both profiles. Use only `context.installation_id`; omit missing/blank values,
-  reject invalid nonblank header values before connecting, and never recover this
-  authority from downstream headers or body. Keep the rule in the Responses-only
-  builder, not shared model/account/OAuth helpers. Existing WS openings do not
-  change per frame. Test real Provider header/body agreement after account scoping.
+- Model HTTP/WS and Live share the account-owned installation header contract
+  above, following official v3.39.1. Existing WS openings do not change per frame.
+  Test real Provider header/body agreement after account scoping.
 - Auxiliary service factories must use `profile.frozen()`, not
   `CodexWireProfileState::new(profile.snapshot())`: the latter turns the selected
   CLI profile into the default and loses the independent Desktop fallback.
@@ -809,16 +807,13 @@ derive from the additional turn fields.
   The private `correlation_originals` map stores mapped-to-original identifier
   strings only, allowing repeat projections and account changes without rehashing
   an earlier outbound value. Never serialize it or retain complete input payloads.
-- Remove known client trace propagation fields. Handle object and JSON-string
-  turn metadata; retain header-safe ASCII encoding. Preserve opaque response IDs,
-  tool call IDs, encrypted contents and normal user/tool text.
-  Official `c57af9b0` extends the shared `TRACE_FIELDS` with `sentry-trace`,
-  `baggage` and their `ws_request_header_*` copies, alongside traceparent/tracestate.
-  Strip mixed-case and repeated HTTP headers before computing the WS connection
-  profile. Trace-only changes must reuse the owning socket and preserve cache/session
-  identities; meaningful identity/profile changes still isolate ordinary requests,
-  while exact continuation retains its physical owner. Do not add configurable
-  privacy policies to implement this fixed cleanup.
+- Official v3.39.1 reverses the earlier trace cleanup: preserve traceparent,
+  tracestate, sentry-trace, baggage, their WS metadata copies and repeated headers.
+  Preserve x-openai-fedramp as a business header. Keep deployment residency and
+  account routing authoritative, including omission/null versus explicit empty.
+  Apply across API decoding, Provider filtering, JSON span editing, final HTTP/WS
+  projection and Live. Trace-only changes keep existing socket/cache identity;
+  account/Key/UA changes remain isolated. Do not reintroduce privacy policies.
 - Only recognized complete Desktop Git context is edited, with XML node/byte
   bounds and explicit content classification respected. Map only sessionId and
   threadId; leave turnId, workspace paths and other content intact. Historical
@@ -832,6 +827,25 @@ derive from the additional turn fields.
 
 This contract reduces shared correlation identifiers; it does not establish a
 measured reduction in upstream risk controls, account bans or rate limits.
+
+## Verified Turn-State Echo (Official v3.39.1)
+
+Provider-local proofs hash downstream Key, account, session, thread, turn and
+upstream token. Store only digests/expiry, with the official 4096-entry cap and
+the native session-binding TTL. OAuth refresh does not change ownership.
+Record success headers, failed HTTP headers and WS metadata before completion
+or failure. Unknown-scope full requests may echo only a matching proven token;
+this does not authorize a previous_response_id, parent response or other account
+state. Conflicting owners remain excluded. Expiry/restart requires new evidence.
+The proof scope is cloned with the existing native encrypted-history repair
+attempt; retries do not broaden its identity scope or mutate scheduling.
+For native requests, a sticky lease hit only selects an account; it is not
+state ownership. Use explicit attempt/session/pinned-continuation owners for
+Same scope. Good: matching proof echoes its token and removes unowned metadata.
+Base: first full request strips unknown token. Bad: new turn/Key/account, expiry
+or conflicting owner cannot echo; unknown previous_response_id still requests
+replay. Exercise these cases plus failed HTTP and failed WS metadata in
+`provider::contract::turn_state`. Never restore `affinity_hit()` as state proof.
 
 ## Guardian Parent Routing Snapshot
 

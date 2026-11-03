@@ -4,7 +4,6 @@ use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use super::correlation;
 pub(crate) use super::correlation::AccountCorrelation;
 
 use super::{CodexClientResult, CodexRequestContext, protocol::responses::CodexResponsesRequest};
@@ -251,9 +250,13 @@ pub fn apply_response_headers(
     request: &CodexResponsesRequest,
     context: CodexRequestContext<'_>,
 ) -> CodexClientResult<()> {
-    // Installation identity belongs in account-scoped body metadata, not a standalone header.
     headers.remove("x-codex-installation-id");
-    correlation::strip_trace_headers(headers);
+    if let Some(installation) = context.installation_id {
+        headers.insert(
+            HeaderName::from_static("x-codex-installation-id"),
+            HeaderValue::from_str(installation)?,
+        );
+    }
     let conversation = protocol_value(request.client_conversation_id.as_deref());
     let ids = wire_identity(request, context);
     let session = ids
@@ -317,7 +320,6 @@ pub fn apply_response_headers(
     }
     if let Some(ids) = ids {
         let scope = correlation_scope(request, context).expect("wire identity authority");
-        scope.scope_turn_headers(headers);
         headers.remove("x-codex-parent-thread-id");
         if let Some(parent) = &ids.parent {
             headers.insert("x-codex-parent-thread-id", HeaderValue::from_str(parent)?);

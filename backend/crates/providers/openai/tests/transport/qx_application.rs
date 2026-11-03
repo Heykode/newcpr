@@ -88,7 +88,7 @@ fn resolved_ids_override_passthrough_without_mutating_body_or_continuation() {
         headers.insert(name, HeaderValue::from_static(value));
     }
     apply_response_headers(&mut headers, &request, context).unwrap();
-    assert!(!headers.contains_key("x-codex-installation-id"));
+    assert_header(&headers, "x-codex-installation-id", INSTALLATION);
     for (name, expected) in [
         ("session-id", "cpr-session"),
         ("session_id", "cpr-session"),
@@ -258,7 +258,7 @@ fn beta_features_preserve_existing_empty_and_multivalue_declarations() {
 }
 
 #[test]
-fn installation_identity_is_not_interpreted_as_a_header_value() {
+fn invalid_installation_identity_cannot_inject_headers() {
     let request = request();
     let mut context = context();
     context.installation_id = Some("invalid\r\ninstallation");
@@ -269,7 +269,7 @@ fn installation_identity_is_not_interpreted_as_a_header_value() {
         HeaderValue::from_static("downstream-device"),
     );
     let body_before = request.body().clone();
-    apply_response_headers(&mut headers, &request, context).unwrap();
+    assert!(apply_response_headers(&mut headers, &request, context).is_err());
     assert!(!headers.contains_key("x-codex-installation-id"));
     assert_eq!(headers["x-custom"], "preserve");
     assert_eq!(request.body(), &body_before);
@@ -335,16 +335,13 @@ fn correlation_turns_match_headers_history_and_metadata_without_touching_opaque_
     assert_eq!(projected.body()["input"][1], before["input"][1]);
     assert_eq!(projected.body()["input"][2], before["input"][2]);
     assert_eq!(projected.body()["previous_response_id"], "resp-original");
-    assert!(!projected.body().contains_key("traceparent"));
-    for name in ["sentry-trace", "baggage"] {
-        assert!(!projected.body().contains_key(name));
-        assert!(projected.body()["turnMetadata"].get(name).is_none());
+    for name in ["traceparent", "sentry-trace", "baggage"] {
+        assert_eq!(projected.body()[name], before[name]);
+        assert_eq!(
+            projected.body()["turnMetadata"][name],
+            before["turnMetadata"][name]
+        );
     }
-    assert!(
-        projected.body()["turnMetadata"]
-            .get("traceparent")
-            .is_none()
-    );
     let mut headers = HeaderMap::new();
     headers.insert("x-client-turn-id", HeaderValue::from_static("turn-root"));
     headers.insert(
@@ -369,12 +366,19 @@ fn correlation_turns_match_headers_history_and_metadata_without_touching_opaque_
     let metadata: serde_json::Value =
         serde_json::from_str(headers["x-codex-turn-metadata"].to_str().unwrap()).unwrap();
     assert_eq!(metadata["turn_id"], turn);
-    assert!(metadata.get("tracestate").is_none());
-    assert!(!headers.contains_key("traceparent"));
-    for name in ["sentry-trace", "baggage"] {
-        assert!(metadata.get(name).is_none());
-        assert!(!headers.contains_key(name));
-    }
+    assert_eq!(metadata["tracestate"], "trace");
+    assert_eq!(metadata["sentry-trace"], "trace");
+    assert_eq!(metadata["baggage"], "synthetic");
+    assert_eq!(headers["traceparent"], "client-trace");
+    assert_eq!(headers["sentry-trace"], "client-trace");
+    assert_eq!(
+        headers
+            .get_all("baggage")
+            .iter()
+            .map(|value| value.to_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["sentry-environment=synthetic", "sentry-release=synthetic"]
+    );
     assert_eq!(request.body(), &before);
     assert_eq!(
         project_response_request(&projected, context()).body(),

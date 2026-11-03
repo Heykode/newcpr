@@ -415,6 +415,8 @@ fn decoder_should_preserve_ordinary_request_headers_as_opaque_multivalues() {
     headers.insert("content-length", HeaderValue::from_static("999"));
     headers.insert("authorization", HeaderValue::from_static("Bearer client"));
     headers.insert("x-api-key", HeaderValue::from_static("client-key"));
+    headers.append("x-openai-fedramp", HeaderValue::from_static("business-one"));
+    headers.append("x-openai-fedramp", HeaderValue::from_static("business-two"));
     headers.insert(
         "x-openai-actor-authorization",
         HeaderValue::from_static("proxy-managed"),
@@ -464,6 +466,10 @@ fn decoder_should_preserve_ordinary_request_headers_as_opaque_multivalues() {
         vec![b"future-ascii".to_vec(), b"\x80\xff".to_vec()]
     );
     assert_eq!(
+        values("x-openai-fedramp"),
+        vec![b"business-one".to_vec(), b"business-two".to_vec()]
+    );
+    assert_eq!(
         openai_protocol_context(&decoded).get("version"),
         Some(&json!("future-v1"))
     );
@@ -480,6 +486,7 @@ fn decoder_should_preserve_ordinary_request_headers_as_opaque_multivalues() {
         assert_eq!(values(preserved).len(), 1, "missing {preserved}");
     }
     for excluded in [
+        // Installation and routing remain managed even when business headers pass through.
         "connection",
         "x-private-hop",
         "host",

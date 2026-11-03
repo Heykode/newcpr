@@ -106,6 +106,7 @@ mod live;
 mod observation;
 mod quality_probe;
 mod request_proxy;
+mod turn_state;
 mod workers;
 pub(crate) use live::{CodexLiveGateway, CodexLiveRegistry};
 
@@ -153,6 +154,7 @@ pub struct CodexProvider {
     session_identity: Option<CodexSessionIdentity>,
     session_transport_recovery: CodexSessionTransportRecovery,
     guardian_routing: guardian::GuardianRouting,
+    turn_state_ownership: turn_state::TurnStateOwnership,
     encrypted_history: encrypted_history::InvalidEncryptedHistory,
     stream_max_retries: u32,
     request_tuning: Option<gateway_core::runtime::RequestTuningHandle>,
@@ -267,6 +269,7 @@ impl CodexProvider {
             session_identity: None,
             session_transport_recovery: CodexSessionTransportRecovery::default(),
             guardian_routing: guardian::GuardianRouting::default(),
+            turn_state_ownership: turn_state::TurnStateOwnership::default(),
             encrypted_history: encrypted_history::InvalidEncryptedHistory::default(),
             stream_max_retries: _stream_max_retries,
             request_tuning: None,
@@ -699,18 +702,22 @@ impl Provider for CodexProvider {
         }
         let provider_kind = ProviderKind::new(PROVIDER_NAME)
             .map_err(|_| provider_error(ProviderErrorKind::Protocol, UpstreamSendState::NotSent))?;
-        let state_owner_cross_account = context
-            .account_state_owner()
+        let native_owner = context.continuation().and_then(ContinuationBinding::pinned);
+        let state_owner_cross_account = native_owner
             .is_some_and(|owner| !owner.matches(&provider_kind, lease.account_id()))
+            || context
+                .account_state_owner()
+                .is_some_and(|owner| !owner.matches(&provider_kind, lease.account_id()))
             || previous_session
                 .as_ref()
                 .is_some_and(|state| state.account_id != lease.account_id().as_str());
-        let has_explicit_state_owner =
-            context.account_state_owner().is_some() || previous_session.is_some();
+        let has_explicit_state_owner = context.account_state_owner().is_some()
+            || previous_session.is_some()
+            || native_owner.is_some();
         let account_scope =
             if state_owner_cross_account || (!has_explicit_state_owner && lease.account_switch()) {
                 RequestAccountScope::Different
-            } else if has_explicit_state_owner || lease.affinity_hit() {
+            } else if has_explicit_state_owner || (excel && lease.affinity_hit()) {
                 RequestAccountScope::Same
             } else {
                 RequestAccountScope::Unknown
@@ -784,17 +791,25 @@ impl Provider for CodexProvider {
                 )
                 .map(|affinity| (response_id.to_owned(), affinity))
         });
-        // A sticky account hit does not prove ownership of a Guardian parent response.
-        let request_state_scope =
-            if !excel && upstream_request.is_guardian() && !has_explicit_state_owner {
-                RequestAccountScope::Unknown
-            } else {
-                account_scope
-            };
+        let turn_state_scope = self
+            .turn_state_ownership
+            .scope(&context, &lease, &upstream_request);
+        // A token proof grants only turn-state echo, not ownership of other account state.
+        let verified_turn_state = upstream_request
+            .turn_state
+            .as_ref()
+            .filter(|token| {
+                matches!(account_scope, RequestAccountScope::Unknown)
+                    && turn_state_scope
+                        .as_ref()
+                        .is_some_and(|scope| scope.owns(token))
+            })
+            .cloned();
         scope_request_to_account(
             &mut upstream_request,
             lease.installation_id(),
-            request_state_scope,
+            account_scope,
+            verified_turn_state.as_deref(),
         );
         if let Some((response_id, _)) = &guardian_parent
             && let Some(Value::Object(metadata)) =
@@ -809,7 +824,8 @@ impl Provider for CodexProvider {
             trace.record_evidence(
                 "provider.request.account_scope",
                 serde_json::json!({
-                    "accountStateReusable": request_state_scope.can_reuse_account_state(),
+                    "accountStateReusable": account_scope.can_reuse_account_state(),
+                    "verifiedTurnStateEcho": verified_turn_state.is_some(),
                     "before": before,
                     "after": crate::transport::evidence::request_state(&upstream_request),
                 }),
@@ -984,6 +1000,7 @@ impl Provider for CodexProvider {
             transport_affinity_key,
             session_transport_recovery: self.session_transport_recovery.clone(),
             guardian_routing: self.guardian_routing.clone(),
+            turn_state_scope,
             websocket_retry_count,
             stream_max_retries: if self.request_tuning.is_some() {
                 request_tuning.websocket_max_retries

@@ -223,7 +223,12 @@ async fn capture(
     for name in ["authorization", "chatgpt-account-id", "session_id"] {
         assert!(!headers[name].is_empty(), "{name}");
     }
-    assert!(!headers.contains_key("x-codex-installation-id"));
+    assert_eq!(
+        headers["x-codex-installation-id"],
+        body["client_metadata"]["x-codex-installation-id"]
+            .as_str()
+            .unwrap()
+    );
     let selected = accounts
         .repository()
         .load_runtime_credential(&accounts.account(account_id).unwrap())

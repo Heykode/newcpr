@@ -25,8 +25,8 @@
   不借用上游 ETag 表示改写后的正文。
 - 冻结 effective profile 并使用同一份画像发出 HTTP 请求；保留账号代理、
   自定义 UA、CA、IPv6 及失败类型。活动 IPv6 不得偷偷退回 IPv4。
-- 账号上下文使用自己的 installation ID；是否上网发送由该端点已有协议决定，
-  不能为了“对齐”向模型目录臆造 installation 头。
+- 按官方 v3.39.1，模型目录共用模型请求头构建器，发送当前账号已有的
+  `x-codex-installation-id`；不得生成新身份或采用下游提供的设备号。
 - 缓存键包括账号、credential revision、上游用户/账号、套餐、代理、
   egress revision、client version、effective profile，以及 Excel 模式/模型列表。
   后两项仅隔离模型目录缓存，不改变推理缓存键或会话编号。
@@ -139,7 +139,8 @@ Correct：从缓存键的冻结画像构建既有账号 client，经原出站控
 
 只加载指定账号的凭据，允许显式指定已停用账号但不启用它。冻结当前 effective
 profile，保留原账号代理、IPv6、CA 和 15 秒超时。不得读取其他账号补结果、
-回退套餐缓存、发布全局目录、生成模型调用或添加 installation 头。
+回退套餐缓存、发布全局目录或生成模型调用。安装号头遵循上面的 v3.39.1
+共享构建器合同，固定使用选中账号的持久身份。
 保留原生对象未知字段、null、嵌套结构和模型数组顺序。
 
 ### Validation & Error Matrix

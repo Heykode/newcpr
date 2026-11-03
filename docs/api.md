@@ -239,10 +239,13 @@ Responses 不透传下游的逐跳头、反代元数据（如 `cf-*`、`x-forwar
 先提取 `session_id` 的会话语义，再丢弃其原样透传值；同时存在时仍以 `session-id` 为先。
 最终会话、线程和安装编号继续由原有账号/Key 隔离规则生成，包括 QX 兼容别名。
 未知业务头不受上述下游环境头过滤影响，原始入站头仍供本地鉴权、CORS 和观测读取。
-出站固定移除 `traceparent`、`tracestate`、`sentry-trace`、`baggage` 及对应的
-`ws_request_header_*` 副本，覆盖 HTTP/WS 请求头和既有相关性处理范围内的正文、
-client metadata、对象或 JSON 字符串形式的 turn metadata。业务正文、turn 引用、
-加密内容和既有账号/Key 身份映射保持原有处理；这不是可配置隐私策略或风控效果保证。
+按官方 v3.39.1 保留 `traceparent`、`tracestate`、`sentry-trace`、`baggage` 及对应
+`ws_request_header_*` 副本，包含重复头、client metadata 和对象/字符串 turn metadata。
+`x-openai-fedramp` 按业务头透传；地域及账号路由头仍以部署配置为准。
+模型请求和 Live 的 `x-codex-installation-id` 使用账号持久设备号，与正文身份一致，
+不接受下游伪造值。会话/Key 隔离、turn 引用和加密内容继续遵守原有协议合同。
+同一轮全量请求可回传已记录且归属匹配的上游 turn-state，包括失败响应提供的值；
+此证明不授予未知 response ID 或其他账号状态的使用权。
 
 OpenAI Responses 在统一请求编码阶段，将 `input` 数组中显式指定
 `type: "message"` 且 `role: "system"` 的消息转换为 `role: "developer"`。

@@ -247,13 +247,17 @@ async fn model_transports_apply_configured_routing_and_discard_downstream_values
                     base_url,
                     profile,
                 );
-                let downstream_headers = HEADERS
+                let mut downstream_headers = HEADERS
                     .into_iter()
                     .flat_map(|name| {
                         ["downstream-first", "downstream-second"]
                             .map(|value| json!([name, STANDARD.encode(value)]))
                     })
                     .collect::<Vec<_>>();
+                downstream_headers.extend([
+                    json!(["x-openai-fedramp", STANDARD.encode("business-one")]),
+                    json!(["x-openai-fedramp", STANDARD.encode("business-two")]),
+                ]);
                 let payload = ProtocolPayload::json_object(
                     "openai",
                     codex_request_body("gpt-test", "", Vec::new()),
@@ -277,6 +281,14 @@ async fn model_transports_apply_configured_routing_and_discard_downstream_values
                 assert_eq!(headers["user-agent"], expected_identity.user_agent());
                 assert_eq!(headers["originator"], expected_identity.originator);
                 assert_eq!(headers["version"], expected_identity.codex_version);
+                assert_eq!(
+                    headers
+                        .get_all("x-openai-fedramp")
+                        .iter()
+                        .map(|value| value.to_str().unwrap())
+                        .collect::<Vec<_>>(),
+                    ["business-one", "business-two"]
+                );
                 for (name, value) in HEADERS.into_iter().zip(expected) {
                     assert_eq!(
                         headers

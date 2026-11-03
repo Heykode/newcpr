@@ -409,6 +409,7 @@ async fn backend_websocket_should_forward_context_headers_and_preserve_payload_f
         ("x-codex-beta-features", "feature-a"),
         ("x-responsesapi-include-timing-metrics", "true"),
         ("version", "1.2.3"),
+        ("x-codex-installation-id", "install-123"),
         ("x-codex-window-id", "cp_derived:0"),
         ("x-codex-parent-thread-id", "parent-456"),
         ("x-openai-subagent", "future_codex_mode"),
@@ -424,7 +425,6 @@ async fn backend_websocket_should_forward_context_headers_and_preserve_payload_f
         );
     }
     for forbidden in [
-        "x-codex-installation-id",
         "x-codex-turn-id",
         "x-openai-internal-codex-residency",
         "accept",
@@ -536,8 +536,18 @@ async fn backend_http_should_preserve_business_headers_without_downstream_transp
         assert_eq!(raw_header_values(&raw, name), vec![value.to_vec()]);
     }
     // 指纹头由运行时画像生成，不透传客户端值。
-    assert!(raw_header_values(&raw, "traceparent").is_empty());
-    assert!(raw_header_values(&raw, "tracestate").is_empty());
+    assert_eq!(
+        raw_header_values(&raw, "traceparent"),
+        vec![b"synthetic-trace".to_vec()]
+    );
+    assert_eq!(
+        raw_header_values(&raw, "tracestate"),
+        vec![b"synthetic-state".to_vec()]
+    );
+    assert_eq!(
+        raw_header_values(&raw, "x-codex-installation-id"),
+        vec![b"lease-installation".to_vec()]
+    );
     assert_eq!(
         raw_header_values(&raw, "user-agent"),
         vec![expected_user_agent.as_bytes().to_vec()]
@@ -551,7 +561,6 @@ async fn backend_http_should_preserve_business_headers_without_downstream_transp
         vec![expected_core_version.into_bytes()]
     );
     for dropped in [
-        "x-codex-installation-id",
         "openai-beta",
         "chatgpt-project-id",
         "openai-organization",
@@ -713,10 +722,13 @@ async fn backend_websocket_should_preserve_business_headers_without_downstream_t
         values("chatgpt-account-id"),
         vec![b"lease-account".to_vec()]
     );
-    assert!(values("x-codex-installation-id").is_empty());
+    assert_eq!(
+        values("x-codex-installation-id"),
+        vec![b"lease-installation".to_vec()]
+    );
     assert_eq!(values("x-codex-turn-state"), vec![b"turn-ascii".to_vec()]);
-    assert!(values("traceparent").is_empty());
-    assert!(values("tracestate").is_empty());
+    assert_eq!(values("traceparent"), vec![b"synthetic-trace".to_vec()]);
+    assert_eq!(values("tracestate"), vec![b"synthetic-state".to_vec()]);
     assert_eq!(
         values("idempotency-key"),
         vec![b"synthetic-idempotency".to_vec()]
@@ -858,7 +870,6 @@ async fn backend_http_should_send_codex_context_without_browser_headers() {
         assert!(header_names.iter().any(|name| name == required));
     }
     for forbidden in [
-        "x-codex-installation-id",
         "x-codex-turn-id",
         "x-openai-internal-codex-residency",
         "sec-ch-ua",
@@ -1084,7 +1095,10 @@ async fn backend_http_should_force_upstream_sse_for_non_streaming_client_request
         read_header_value(head, "user-agent"),
         Some(test_wire_profile().snapshot().user_agent().as_str())
     );
-    assert_eq!(read_header_value(head, "x-codex-installation-id"), None);
+    assert_eq!(
+        read_header_value(head, "x-codex-installation-id"),
+        Some("account-installation")
+    );
     assert_eq!(read_header_value(head, "content-encoding"), None);
     let json: serde_json::Value =
         serde_json::from_slice(&raw[separator + 4..]).expect("small body should be valid JSON");

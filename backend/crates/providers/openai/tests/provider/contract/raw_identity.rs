@@ -20,8 +20,8 @@ const CLEAN_BODY: &[u8] = br#" {
 const IDENTITY_BODY: &[u8] = br#" {
   "model":"gpt-5.4", "input":[{"type":"compaction","encrypted_content":"opaque"}],
   "id":"shared-root", "id":"shared-root", "session_id":"shared-root", "conversation_id":"client-correlation",
-  "turn_id":"shared-turn", "traceparent":"discard-me", "sentry-trace":"discard-me", "baggage":"discard-me",
-  "turn_metadata":{"turn_id":"shared-turn","account_id":"discard-me","tracestate":"discard-me","sentry-trace":"discard-me","baggage":"discard-me","business":"unchanged"},
+  "turn_id":"shared-turn", "traceparent":"client-trace", "sentry-trace":"client-trace", "baggage":"client-trace",
+  "turn_metadata":{"turn_id":"shared-turn","account_id":"discard-me","tracestate":"client-trace","sentry-trace":"client-trace","baggage":"client-trace","business":"unchanged"},
   "prompt":"literal \u4e2d text", "commands":{"search_query":[{"q":"test","account_id":"business"}]},
   "images":[{"image_url":"data:image/png;base64,c3ludGhldGlj"}],
   "metadata":{"account_id":"business"}, "future":9007199254740993,
@@ -31,13 +31,13 @@ const IDENTITY_BODY: &[u8] = br#" {
   "turnState":"discard-me", "installation_id":"discard-me", "installation_id":"discard-me",
   "installationId":null, "x-codex-installation-id":"discard-me",
   "client_metadata":{
-    "ws_request_header_sentry-trace":"discard-me", "ws_request_header_baggage":"discard-me",
+    "ws_request_header_sentry-trace":"client-trace", "ws_request_header_baggage":"client-trace",
     "account_id":"discard-me", "account_id":"discard-me", "response_id":"discard-me",
     "x-codex-turn-state":"discard-me", "installation_id":"discard-me",
     "installationId":"discard-me", "x-codex-installation-id":"discard-me",
     "future_meta":9007199254740993, "future_meta":1.23456789012345678901234567890
   },
-  "turnMetadata":"{\"account_id\":\"discard-me\",\"installation_id\":\"discard-me\",\"sentry-trace\":\"discard-me\",\"baggage\":\"discard-me\",\"future_turn\":1,\"future_turn\":2}"
+  "turnMetadata":"{\"account_id\":\"discard-me\",\"installation_id\":\"discard-me\",\"sentry-trace\":\"client-trace\",\"baggage\":\"client-trace\",\"future_turn\":1,\"future_turn\":2}"
 } "#;
 
 fn raw_operation(endpoint: &str, body: Bytes) -> Operation {
@@ -128,7 +128,7 @@ fn assert_scoped_request(request: &wiremock::Request, account: &str) -> String {
         captured_header_values(request, "chatgpt-account-id"),
         vec![format!("chatgpt-{account}").into_bytes()]
     );
-    assert!(captured_header_values(request, "x-codex-installation-id").is_empty());
+    assert_account_installation_header(request);
     let raw = std::str::from_utf8(&request.body).expect("UTF-8 body");
     assert!(!raw.contains("discard-me"), "old account identity survived");
     assert_business_preserved(raw);
@@ -156,7 +156,10 @@ fn assert_scoped_request(request: &wiremock::Request, account: &str) -> String {
     assert_eq!(body["turn_metadata"]["turn_id"], body["turn_id"]);
     assert_eq!(body["turn_metadata"]["business"], "unchanged");
     assert!(body["turn_metadata"].get("account_id").is_none());
-    assert!(body["turn_metadata"].get("tracestate").is_none());
+    assert_eq!(body["turn_metadata"]["tracestate"], "client-trace");
+    for field in ["traceparent", "sentry-trace", "baggage"] {
+        assert_eq!(body[field], "client-trace");
+    }
     let encoded_id = format!("\"id\":{}", serde_json::to_string(&body["id"]).unwrap());
     assert_eq!(
         raw.matches(&encoded_id).count(),
@@ -215,7 +218,7 @@ async fn standalone_endpoints_keep_clean_wire_bytes_without_inventing_identity_f
                 .unwrap()
                 .len()
         );
-        assert!(captured_header_values(&requests[0], "x-codex-installation-id").is_empty());
+        assert_account_installation_header(&requests[0]);
         server.verify().await;
     }
 }
@@ -329,7 +332,7 @@ async fn standalone_images_match_body_and_header_turn_correlations() {
             .unwrap()
             .with_context(Map::from_iter([
                 ("image_turn_id".to_owned(), json!("shared-turn")),
-                ("turn_metadata".to_owned(), json!(r#"{"turn_id":"shared-turn","account_id":"discard-me","traceparent":"discard-me","future":1,"future":2}"#)),
+                ("turn_metadata".to_owned(), json!(r#"{"turn_id":"shared-turn","account_id":"discard-me","traceparent":"preserve-trace","future":1,"future":2}"#)),
             ]));
         let kind = if endpoint == "images/edits" {
             ImageRequestKind::Edit
@@ -359,6 +362,7 @@ async fn standalone_images_match_body_and_header_turn_correlations() {
         assert!(raw.contains(r#""future":2"#));
         let metadata: Value = serde_json::from_str(raw).unwrap();
         assert_eq!(metadata["turn_id"], turn);
+        assert_eq!(metadata["traceparent"], "preserve-trace");
         server.verify().await;
     }
 }

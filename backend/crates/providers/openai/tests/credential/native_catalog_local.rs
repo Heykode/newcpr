@@ -240,6 +240,12 @@ async fn native_catalog_excel_switch_does_not_reuse_synthesized_capabilities() {
 async fn native_catalog_freezes_effective_custom_profile_and_invalidates_default_release() {
     let store = Arc::new(MemoryAccountStore::default());
     let account = seed_account(&store, "acct_profile_catalog").await;
+    let installation_id = store
+        .repository()
+        .load_runtime_credential(&account)
+        .await
+        .expect("credential")
+        .installation_id;
     let scope = client_scope(&[account]);
     let server = MockServer::start().await;
     Mock::given(method("GET"))
@@ -316,8 +322,7 @@ async fn native_catalog_freezes_effective_custom_profile_and_invalidates_default
             request.headers["chatgpt-account-id"],
             "chatgpt-acct_profile_catalog"
         );
-        // This endpoint has no installation-ID wire header in the established profile.
-        assert!(!request.headers.contains_key("x-codex-installation-id"));
+        assert_eq!(request.headers["x-codex-installation-id"], installation_id);
         assert!(!request.headers.contains_key("x-codex-turn-metadata"));
     }
     server.verify().await;
@@ -327,6 +332,12 @@ async fn native_catalog_freezes_effective_custom_profile_and_invalidates_default
 async fn account_catalog_export_freezes_current_profile_and_keeps_custom_selection() {
     let store = Arc::new(MemoryAccountStore::default());
     let account = seed_account(&store, "acct_export_profile").await;
+    let installation_id = store
+        .repository()
+        .load_runtime_credential(&account)
+        .await
+        .expect("credential")
+        .installation_id;
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/codex/models"))
@@ -411,7 +422,7 @@ async fn account_catalog_export_freezes_current_profile_and_keeps_custom_selecti
             request.headers["chatgpt-account-id"],
             "chatgpt-acct_export_profile"
         );
-        assert!(!request.headers.contains_key("x-codex-installation-id"));
+        assert_eq!(request.headers["x-codex-installation-id"], installation_id);
     }
     server.verify().await;
 }

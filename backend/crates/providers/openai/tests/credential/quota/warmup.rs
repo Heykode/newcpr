@@ -170,7 +170,10 @@ async fn warmup_uses_selected_pool_preserves_identity_and_releases_lease() {
                 request.headers["user-agent"],
                 wire_profile().snapshot().user_agent()
             );
-            assert!(!request.headers.contains_key("x-codex-installation-id"));
+            assert_eq!(
+                request.headers["x-codex-installation-id"],
+                credential.installation_id
+            );
             assert!(!request.headers.contains_key("x-codex-turn-state"));
             assert!(!request.headers.contains_key("cookie"));
             let body: Value = serde_json::from_slice(&request.body).unwrap();

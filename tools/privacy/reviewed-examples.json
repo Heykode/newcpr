@@ -2422,5 +2422,29 @@
     "file_sha256": "96bc27f652cc1884ec903e33b95af2ff19c40c3effd06dac5cb9e3de4b84219d",
     "line_sha256": "1a58dbbe57cd503aa12612f4280a27ea49f813090650ceaf6490c90504084620",
     "reason": "Manually re-reviewed unchanged Rust test function identifier after removal of manual capture tests; not a credential."
+  },
+  {
+    "path": "backend/crates/gateway-host/tests/proxy_probe.rs",
+    "rule": "authenticated-url",
+    "line": 87,
+    "file_sha256": "a7140b2c8900fb0d9666a6bf79ef42d3c284bed58f25ce626a3298397ad3f3c0",
+    "line_sha256": "3f38fe650b6ee1a2a780c28e6a85fc7f3944ed5a6d440efba94da0db6a8757b5",
+    "reason": "Manually re-reviewed unchanged synthetic proxy authentication after adding dual-stack latency coverage; both listeners bind loopback and exit addresses are documentation fixtures."
+  },
+  {
+    "path": "backend/crates/gateway-host/tests/proxy_probe.rs",
+    "rule": "authenticated-url",
+    "line": 256,
+    "file_sha256": "a7140b2c8900fb0d9666a6bf79ef42d3c284bed58f25ce626a3298397ad3f3c0",
+    "line_sha256": "3f38fe650b6ee1a2a780c28e6a85fc7f3944ed5a6d440efba94da0db6a8757b5",
+    "reason": "Manually re-reviewed unchanged synthetic automatic-location proxy fixture; credentials only authenticate requests to its ephemeral local MockServer."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/credential/native_catalog_local.rs",
+    "rule": "authenticated-url",
+    "line": 534,
+    "file_sha256": "d8830d66c0da3f49fcf39c1df6888f0b904d66dd895733c2506bcdbf90f412a9",
+    "line_sha256": "df037a1268a2fe553e47104c6feee56ef05f531030847103b46d3a4582695472",
+    "reason": "Manually re-reviewed byte-identical synthetic catalog proxy credentials after installation-header assertions shifted this fixture; its destination is explicitly bound to an ephemeral loopback listener."
   }
 ]
