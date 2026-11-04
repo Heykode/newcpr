@@ -4,8 +4,7 @@ use bytes::{Buf as _, Bytes};
 
 use super::*;
 
-// CPR HTTP uses the linked platform native-tls backend; CPR WebSocket retains its
-// captured Rustls contract. QX stays on the independently selected OpenSSL transport.
+// HTTP uses the linked native-tls backend; WS follows the upstream Rustls defaults.
 #[derive(Debug, PartialEq, Eq)]
 struct ClientHello {
     cipher_suites: Vec<u16>,
@@ -17,7 +16,7 @@ struct ClientHello {
 }
 
 #[test]
-fn rustls_provider_preserves_cpr_profile_and_preinstalled_host() {
+fn rustls_provider_preserves_upstream_defaults_and_preinstalled_host() {
     use std::{process::Command, sync::Arc};
 
     use rustls::crypto::{CryptoProvider, aws_lc_rs};
@@ -29,7 +28,7 @@ fn rustls_provider_preserves_cpr_profile_and_preinstalled_host() {
             let output = Command::new(std::env::current_exe().unwrap())
                 .args([
                     "--exact",
-                    "transport::tls::rustls_provider_preserves_cpr_profile_and_preinstalled_host",
+                    "transport::tls::rustls_provider_preserves_upstream_defaults_and_preinstalled_host",
                     "--nocapture",
                 ])
                 .env(CHILD, mode)
@@ -599,7 +598,9 @@ fn official_websocket_hello() -> ClientHello {
         ],
         extensions: vec![0, 5, 10, 11, 13, 23, 35, 43, 45, 51],
         groups: vec![4588, 29, 23, 24],
-        signature_algorithms: vec![1283, 1027, 1539, 2055, 2054, 2053, 2052, 1537, 1281, 1025],
+        signature_algorithms: vec![
+            1283, 1027, 1539, 2055, 2054, 2053, 2052, 1537, 1281, 1025, 2308, 2309, 2310,
+        ],
         key_shares: vec![(4588, 1216), (29, 32)],
         alpn: Vec::new(),
     }

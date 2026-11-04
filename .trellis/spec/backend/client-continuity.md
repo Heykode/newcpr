@@ -196,7 +196,9 @@ editing prior entries.
 - No source pool means normal import still works. A historical fixed binding
   survives deletion, but only live accounts count as occupants when allocating
   vacant addresses. A missing historical address must not be silently replaced.
-- `None` account mode inherits; `Some(Unchanged)` explicitly disables IPv6.
+- `None` account mode inherits; `Some(Unchanged)` explicitly disables source-pool
+  selection, not operating-system IPv6. Ordinary direct connections use the
+  deployment's available network families.
   Active local IPv6 and an account proxy cannot coexist.
 - Opt-in selection reads immutable runtime state, not PostgreSQL per frame.
   Publish only after commit; failed reload fences stale outbound state.
@@ -629,7 +631,7 @@ time. Observe actual opening duration and its outcome independently.
   Existing TLS, identity and pre-send fallback regressions remain required.
   Synthetic compression timing is not end-to-end latency or upstream acceptance.
 
-## 13. 固定 Rustls 画像与安全依赖
+## 13. 官方 Rustls 默认画像与安全依赖
 
 - Rustls 安全基线升级至 0.23.46（上游 7c38aabf）；保留原 features 和 provider。
   本地 macOS 升级前后各 40 次采样，四条路径的算法、扩展集合、key share、ALPN
@@ -639,14 +641,17 @@ time. Observe actual opening duration and its outcome independently.
   CPR WS、显式 Rustls HTTP helper、共享该 provider 的代理、XAI/Host 等消费者
   均受影响，不能将它描述为 OpenAI 私有配置。宿主预装 provider 必须保留。
   CPR 默认 native HTTP 和 QX OpenSSL 主链路不由这份签名列表控制。
-- 安全库版本和固定画像是两个合同。Rustls 签名列表固定为
-  Desktop 26.901.51231 / Core 0.153.4 的旧十项，通过新版 aws-lc provider 的
-  `signature_verification_algorithms.mapping` 配置，不通过改写报文实现。
-  `all` 证书链算法、cipher suites、KX、随机源及密钥 provider 保留新版实现。
-- 固定列表不含 ML-DSA 握手签名，不支持仅使用这些签名的对端。这不等于删除
-  混合后量子 KX，也不能据此关闭证书或主机名校验。
+- 按用户批准对齐官方 `21d84af2`：使用未改写的 aws-lc 默认 provider，
+  删除旧十项签名白名单。当前 Rustls 0.23.46 默认十三项，包含 ML-DSA。
+  保留现有配套依赖版本和全部证书、主机名校验，不将默认列表再次硬编码到运行时代码。
+- 普通直连 WS 使用官方 `connect_async_tls_with_config`，保留连接预算与超时。
+  仅无显式代理、无源地址绑定且环境代理解析为无代理时进入该分支。
+  显式代理、源地址及环境代理隔离继续走账号拨号器，不允许隐式绕开账号出口。
 - 依赖升级不得仅为通过测试而修改参考值。要么保留已批准画像，要么在重新采样、
   审阅并批准目标后版本化改变；不得退回漏洞版本或屏蔽安全告警。
+- 已批准对齐官方且完成源码核对、实际采样后，应同步更新过时测试预期，
+  不得为了通过旧测试保留已决定替换的旧行为。一次性对比实验可在仓库外验证，
+  不自动增加永久 CI 测试。
 - 合并其他传输改动后，保留主分支 native HTTP、Rustls helper/WS 和 QX 的
   各自断言与扩展顺序语义。旧架构采样不能冒充合并后架构的对照；
   使用当前主分支和同一采样器重新比较安全依赖前后差异。
@@ -666,7 +671,7 @@ time. Observe actual opening duration and its outcome independently.
   Retain that original client across proxy rebinding so removing a proxy cannot
   reuse the proxy pool. Authentication, Cookie, State and the frozen UA remain
   request-scoped; account or UA cache invalidation must not tear down the shared
-  base pool. Preserve ordinary direct IPv4 binding and independent IPv6/probe clients.
+  base pool. Preserve ordinary direct dual-stack routing and independent IPv6/probe clients.
 - Account HTTP cache clients (including proxied requests) retain the process-wide
   256-entry LRU keyed by account/proxy, additive CA and frozen UA. Do not replace
   LRU with clear-all eviction or remove account isolation from proxy clients.

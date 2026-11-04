@@ -6,7 +6,9 @@ use bytes::Bytes;
 use gateway_protocol::openai::events;
 use tokio::io::BufWriter;
 use tokio::time::timeout;
-use tokio_tungstenite::{Connector, MaybeTlsStream, client_async_tls_with_config};
+use tokio_tungstenite::{
+    Connector, MaybeTlsStream, client_async_tls_with_config, connect_async_tls_with_config,
+};
 use tungstenite::{
     self, Message,
     extensions::{ExtensionsConfig, compression::deflate::DeflateConfig},
@@ -204,7 +206,19 @@ async fn connect_websocket(
         remaining.min(WEBSOCKET_CONNECT_TIMEOUT)
     });
     let result = timeout(connect_timeout, async {
-        // All paths retain the same TLS/WS handshake and explicit egress policy.
+        // Match upstream's native connector without bypassing explicit account routes.
+        if connection.outbound_proxy.is_none()
+            && connection.egress_source.is_none()
+            && matches!(
+                tungstenite::proxy::ProxyConfig::from_env(request.uri()),
+                Ok(None)
+            )
+        {
+            let (websocket, response) =
+                connect_async_tls_with_config(request, Some(websocket_config()), false, connector)
+                    .await?;
+            return Ok((Box::new(websocket) as RawWsStream, response));
+        }
         let stream = dial_account(connection).await?;
         match stream {
             MaybeTlsStream::Plain(tcp) => {
