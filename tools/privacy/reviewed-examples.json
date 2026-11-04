@@ -2454,5 +2454,29 @@
     "file_sha256": "d8830d66c0da3f49fcf39c1df6888f0b904d66dd895733c2506bcdbf90f412a9",
     "line_sha256": "df037a1268a2fe553e47104c6feee56ef05f531030847103b46d3a4582695472",
     "reason": "Manually re-reviewed byte-identical synthetic catalog proxy credentials after installation-header assertions shifted this fixture; its destination is explicitly bound to an ephemeral loopback listener."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/transport/tls.rs",
+    "rule": "gitleaks:cpr-api-key",
+    "line": 137,
+    "file_sha256": "4e3367941990b3a9678e30d53d68ba49cc59a03e71340959acf125b1b00f19d0",
+    "line_sha256": "0c9d5d94fc2f00276883de931fc26f0ced43e5e9a0b7730407fc6b6c869b1e4e",
+    "reason": "Manually re-reviewed unchanged Rust TLS key-epoch test identifier after upstream-default ClientHello coverage; this is a function declaration, not a credential."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/transport/tls.rs",
+    "rule": "authenticated-url",
+    "line": 240,
+    "file_sha256": "4e3367941990b3a9678e30d53d68ba49cc59a03e71340959acf125b1b00f19d0",
+    "line_sha256": "9aa104ea897354d3eb1e73d00d4b556f8ca5fb140acba2afb88e290615cc59ac",
+    "reason": "Manually re-reviewed unchanged localhost HTTPS proxy fixture after upstream-default ClientHello coverage; literal user/pass authenticate only its ephemeral loopback server."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/transport/tls.rs",
+    "rule": "gitleaks:cpr-api-key",
+    "line": 338,
+    "file_sha256": "4e3367941990b3a9678e30d53d68ba49cc59a03e71340959acf125b1b00f19d0",
+    "line_sha256": "1a58dbbe57cd503aa12612f4280a27ea49f813090650ceaf6490c90504084620",
+    "reason": "Manually re-reviewed unchanged Rust certificate-validation test identifier after upstream-default ClientHello coverage; this is a function declaration, not a credential."
   }
 ]

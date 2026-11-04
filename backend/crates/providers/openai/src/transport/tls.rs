@@ -4,9 +4,9 @@ use std::{
     sync::{Arc, OnceLock},
 };
 
-use rustls::{ClientConfig, RootCertStore, SignatureScheme};
+use rustls::{ClientConfig, RootCertStore};
 use rustls_pki_types::{
-    CertificateDer, SignatureVerificationAlgorithm,
+    CertificateDer,
     pem::{self, PemObject, SectionKind},
 };
 use thiserror::Error;
@@ -15,49 +15,13 @@ const CA_CERT_HINT: &str = "If you set CODEX_CA_CERTIFICATE or SSL_CERT_FILE, en
 
 type PemSection = (SectionKind, Vec<u8>);
 
-// Desktop 26.901.51231 / Core 0.153.4 的固定画像；安全库升级不隐式更新协商列表。
-const CPR_SIGNATURE_SCHEMES: [SignatureScheme; 10] = [
-    SignatureScheme::ECDSA_NISTP384_SHA384,
-    SignatureScheme::ECDSA_NISTP256_SHA256,
-    SignatureScheme::ECDSA_NISTP521_SHA512,
-    SignatureScheme::ED25519,
-    SignatureScheme::RSA_PSS_SHA512,
-    SignatureScheme::RSA_PSS_SHA384,
-    SignatureScheme::RSA_PSS_SHA256,
-    SignatureScheme::RSA_PKCS1_SHA512,
-    SignatureScheme::RSA_PKCS1_SHA384,
-    SignatureScheme::RSA_PKCS1_SHA256,
-];
-
-type SignatureAlgorithmMapping = (
-    SignatureScheme,
-    &'static [&'static dyn SignatureVerificationAlgorithm],
-);
-
 /// 与官方 Codex 的 rustls 路径一致，安装支持 P-521 和混合后量子密钥交换的
 /// aws-lc provider。依赖图也包含 ring，因此不能让 rustls 自动选择 provider。
 /// 与官方嵌入场景一致，保留宿主在初始化之前已经安装的 provider。
-/// 固定的签名画像作用于整个进程默认 provider，不仅是 OpenAI 请求。
 pub fn ensure_rustls_provider() {
     static INSTALL: OnceLock<()> = OnceLock::new();
-    static SIGNATURE_MAPPING: OnceLock<[SignatureAlgorithmMapping; 10]> = OnceLock::new();
     INSTALL.get_or_init(|| {
-        if rustls::crypto::CryptoProvider::get_default().is_some() {
-            return;
-        }
-        let mut provider = rustls::crypto::aws_lc_rs::default_provider();
-        let algorithms = provider.signature_verification_algorithms;
-        // 仅固定握手签名声明，证书链算法和所有密码实现仍来自已修复的依赖。
-        provider.signature_verification_algorithms.mapping = SIGNATURE_MAPPING.get_or_init(|| {
-            CPR_SIGNATURE_SCHEMES.map(|scheme| {
-                *algorithms
-                    .mapping
-                    .iter()
-                    .find(|(supported, _)| *supported == scheme)
-                    .expect("pinned aws-lc provider must support the CPR signature profile")
-            })
-        });
-        let _ = provider.install_default();
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
     });
 }
 
