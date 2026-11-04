@@ -181,6 +181,7 @@ pub fn initialize_with_timezone(
     };
     let index = config.asset_directory.join("index.html");
     let mut router = Router::new()
+        .route("/readyz", get(health::readyz))
         .route("/healthz", get(health::healthz))
         .merge(openai::router::router())
         .merge(admin::router::<ApiState>())

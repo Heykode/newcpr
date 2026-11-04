@@ -231,7 +231,7 @@ async fn normalization_not_incoming_body_size_controls_the_threshold() {
 #[tokio::test]
 async fn default_threshold_selects_http_even_for_highly_compressible_payload() {
     let _guard = crate::support::LARGE_PAYLOAD_TEST_LOCK.lock().await;
-    let request = request(json!("x".repeat(15 * 1024 * 1024)));
+    let request = request(json!("x".repeat(16 * 1024 * 1024)));
     let (response, _) = exchange(
         &request,
         RequestTuning::default(),

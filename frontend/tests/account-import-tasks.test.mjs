@@ -125,6 +125,8 @@ function mountOnboarding(t, api = {}, globals = {}) {
       },
       async startAccountOAuth(input) {
         oauthStarts.push(structuredClone(input))
+        if (api.startOAuth)
+          return api.startOAuth(input)
         return { flowId: 'flow-a', authorizationUrl: 'https://example.com/oauth' }
       },
       async completeAccountOAuth(input) {
@@ -803,6 +805,37 @@ test('partial batch submission keeps the retry form and opens progress only afte
   assert.equal(h.state.showCreateModal.value, false)
   assert.equal(h.created.length, 1)
   assert.equal(h.created[0].taskId, h.submissions[1].submissionId)
+})
+
+test('OAuth expiry warns only for the current open flow and clears timers on dismissal', async (t) => {
+  const timers = new Map()
+  let timerId = 0
+  let flowId = 0
+  const h = mountOnboarding(t, {
+    startOAuth: () => ({ flowId: `flow-${++flowId}`, authorizationUrl: 'https://example.com/oauth', expiresAt: new Date(Date.now() + 60000).toISOString() }),
+  }, {
+    setTimeout: (callback, delay) => {
+      const id = ++timerId
+      timers.set(id, { callback, delay })
+      return id
+    },
+    clearTimeout: id => timers.delete(id),
+  })
+  h.input('openai', 'oauth')
+  await h.state.handleAuthorizeOAuth()
+  const old = [...timers.values()][0]
+  assert.ok(old.delay > 0 && old.delay <= 60000)
+  await h.state.handleAuthorizeOAuth()
+  assert.equal(timers.size, 1)
+  old.callback()
+  assert.equal(h.notifications.warnings.length, 0)
+  const current = [...timers.values()][0]
+  current.callback()
+  assert.equal(h.notifications.warnings.length, 1)
+  h.state.showCreateModal.value = false
+  assert.equal(timers.size, 0)
+  current.callback()
+  assert.equal(h.notifications.warnings.length, 1)
 })
 
 test('OAuth creation and existing-account relogin keep their original APIs and settings semantics', async (t) => {

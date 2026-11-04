@@ -10,11 +10,45 @@ use crate::error::{
 };
 use crate::identity::ProviderKind;
 use crate::routing::UpstreamModelId;
-use crate::{account::ProviderAccountId, operation::Operation, upstream::UpstreamSendState};
+use crate::{
+    account::{AccountEligibilityPolicy, ProviderAccountId},
+    operation::Operation,
+    upstream::UpstreamSendState,
+};
+
+/// 探测始终固定账号，恢复探测的账号状态由解冻任务持有
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AccountProbeTarget {
+    ConnectionTest(ProviderAccountId),
+    FreezeRecovery(ProviderAccountId),
+}
+
+impl From<ProviderAccountId> for AccountProbeTarget {
+    fn from(account: ProviderAccountId) -> Self {
+        Self::ConnectionTest(account)
+    }
+}
+
+impl AccountProbeTarget {
+    pub fn account_id(&self) -> &ProviderAccountId {
+        match self {
+            Self::ConnectionTest(account) | Self::FreezeRecovery(account) => account,
+        }
+    }
+
+    pub(super) fn into_selection(self) -> (ProviderAccountId, AccountEligibilityPolicy) {
+        match self {
+            Self::ConnectionTest(account) => {
+                (account, AccountEligibilityPolicy::BypassForDiagnostic)
+            }
+            Self::FreezeRecovery(account) => (account, AccountEligibilityPolicy::FreezeRecovery),
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct AccountProbeRequest {
-    pub account_id: ProviderAccountId,
+    pub target: AccountProbeTarget,
     pub provider_kind: ProviderKind,
     pub upstream_model: UpstreamModelId,
     pub operation: Operation,

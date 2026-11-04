@@ -235,7 +235,7 @@ async fn quality_interval_wait_bypasses_business_queue_and_rechecks_safety() {
         let cancellation = CancellationToken::new();
         let check = service.quality_check(
             AccountProbeRequest {
-                account_id: id.clone(),
+                target: id.clone().into(),
                 provider_kind: ProviderKind::new("openai").unwrap(),
                 upstream_model: UpstreamModelId::new("gpt-5.4").unwrap(),
                 operation: http_generate_operation(),
@@ -350,7 +350,7 @@ async fn state_probe_wait_uses_each_shots_total_budget_not_business_wait_window(
         Duration::from_secs(5),
         service.state_probe(
             AccountProbeRequest {
-                account_id: id.clone(),
+                target: id.clone().into(),
                 provider_kind: ProviderKind::new("openai").unwrap(),
                 upstream_model: UpstreamModelId::new("gpt-5.4").unwrap(),
                 operation: http_generate_operation(),
@@ -444,7 +444,7 @@ async fn state_probe_wait_and_response_share_sixty_second_timeout() {
     let started = std::time::Instant::now();
     let probe = service.state_probe(
         AccountProbeRequest {
-            account_id: id.clone(),
+            target: id.clone().into(),
             provider_kind: ProviderKind::new("openai").unwrap(),
             upstream_model: UpstreamModelId::new("gpt-5.4").unwrap(),
             operation: http_generate_operation(),

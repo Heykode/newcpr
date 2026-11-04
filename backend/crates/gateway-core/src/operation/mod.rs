@@ -120,8 +120,10 @@ impl CapabilityRequirements {
 /// 下一轮，不能读取或改写正文。
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProviderSessionState {
-    provider: String,
+    provider: Box<str>,
     payload: Map<String, Value>,
+    #[serde(skip)]
+    reconnect_websocket: bool,
 }
 
 impl ProviderSessionState {
@@ -138,7 +140,11 @@ impl ProviderSessionState {
         validate_text(&provider, 64, true, None).map_err(|_| OperationError::EmptyField {
             field: "provider_session_state provider",
         })?;
-        Ok(Self { provider, payload })
+        Ok(Self {
+            provider: provider.into_boxed_str(),
+            payload,
+            reconnect_websocket: false,
+        })
     }
 
     #[must_use]
@@ -149,6 +155,17 @@ impl ProviderSessionState {
     #[must_use]
     pub const fn payload(&self) -> &Map<String, Value> {
         &self.payload
+    }
+
+    #[must_use]
+    pub const fn with_websocket_reconnect(mut self) -> Self {
+        self.reconnect_websocket = true;
+        self
+    }
+
+    #[must_use]
+    pub const fn prefers_websocket_reconnect(&self) -> bool {
+        self.reconnect_websocket
     }
 }
 

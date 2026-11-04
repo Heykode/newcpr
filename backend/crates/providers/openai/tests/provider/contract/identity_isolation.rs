@@ -680,12 +680,11 @@ async fn generate_compatibility_matches_wire_and_session_facts_in_both_profiles_
                     "frequency_penalty",
                     "presence_penalty",
                     "max_completion_tokens",
+                    "max_output_tokens",
                 ] {
                     assert_eq!(captured.get(field), body.get(field), "{field}");
                 }
-                for field in ["max_output_tokens", "temperature"] {
-                    assert!(captured.get(field).is_none(), "{field}");
-                }
+                assert!(captured.get("temperature").is_none());
                 assert_eq!(
                     state.payload()["continuation_scope"],
                     if captured["store"] == true {

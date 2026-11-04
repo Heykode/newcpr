@@ -7,6 +7,7 @@ import BaseTable from '@/components/base/BaseTable/index.vue'
 import ProviderIconGroup from '@/components/ProviderIconGroup.vue'
 import { t } from '@/i18n'
 import AccountPlanBadge from '@/views/accounts/components/AccountPlanBadge.vue'
+import { usageErrorSummary } from '../utils/errors'
 import {
   usageAccountText,
   usageAuthenticationKind,
@@ -52,6 +53,12 @@ const emit = defineEmits<{ filter: [value: UsageFilterParams] }>()
       </span>
     </template>
     <template #errorMessage="{ row }">
+      <span v-if="usageErrorSummary(row)" class="block text-cp-text">{{ usageErrorSummary(row) }}</span>
+      <span v-if="row.recovered" class="block text-cp-success-text">已恢复</span>
+      <span v-if="row.websocketCloseCode" class="block font-mono text-cp-warning-text">WS {{ row.websocketCloseCode }}</span>
+      <span v-if="row.continuationUnavailableReason || row.upstreamConnectionExitReason" class="block break-all text-cp-xs text-cp-text-secondary">
+        {{ row.continuationUnavailableReason || row.upstreamConnectionExitReason }}
+      </span>
       <span class="line-clamp-3 whitespace-pre-wrap break-all text-cp-error-text" :title="['failed', 'incomplete'].includes(row.outcome ?? '') ? row.errorMessage || row.errorCode || undefined : undefined">
         {{ ['failed', 'incomplete'].includes(row.outcome ?? '') ? (row.errorMessage || row.errorCode || '未记录具体错误消息') : '—' }}
       </span>

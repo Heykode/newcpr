@@ -46,6 +46,7 @@ use crate::openai::{api_router, authenticated_client};
 
 #[derive(Default)]
 struct CrossingLimitTrace {
+    reconnect_for_replay: AtomicBool,
     release_terminal: tokio::sync::Notify,
     starts: AtomicUsize,
     inputs: Mutex<Vec<Value>>,
@@ -71,7 +72,9 @@ impl ExecutionSession for CrossingLimitSession {
             if !self.terminal_emitted {
                 self.trace.release_terminal.notified().await;
                 self.terminal_emitted = true;
-                return Ok(Some(crossing_limit_terminal_batch()));
+                return Ok(Some(crossing_limit_terminal_batch(
+                    self.trace.reconnect_for_replay.load(Ordering::Acquire),
+                )));
             }
             self.finalized = true;
             self.trace.finalized.store(true, Ordering::Release);
@@ -194,8 +197,8 @@ fn crossing_limit_started_batch() -> CoordinatedEvent {
         .expect("started WebSocket batch")
 }
 
-fn crossing_limit_terminal_batch() -> CoordinatedEvent {
-    let completed = ProviderEvent::wire(
+fn crossing_limit_terminal_batch(reconnect: bool) -> CoordinatedEvent {
+    let mut completed = ProviderEvent::wire(
         ProtocolWireEvent::json(
             "openai",
             Some("response.completed".to_owned()),
@@ -204,12 +207,20 @@ fn crossing_limit_terminal_batch() -> CoordinatedEvent {
                 "response": {
                     "id": "resp_ws_crossing_limit",
                     "model": "model-a",
+                    "output": [],
                     "status": "completed"
                 }
             }),
         )
         .expect("completed wire"),
     );
+    if reconnect {
+        completed.attach_session_update(
+            gateway_core::operation::ProviderSessionState::new("openai", serde_json::Map::new())
+                .unwrap()
+                .with_websocket_reconnect(),
+        );
+    }
     CoordinatedEvent::try_batch(vec![completed], CommitRequirement::AlreadyCommitted)
         .expect("terminal WebSocket batch")
 }
@@ -936,6 +947,77 @@ async fn requests_received_during_an_active_response_should_execute_in_order() {
     );
     assert!(!trace.cancelled.load(Ordering::Acquire));
     socket.close(None).await.expect("close WebSocket");
+    server.abort();
+}
+
+#[tokio::test]
+async fn replay_reconnect_waits_for_queued_requests_and_writes_the_last_terminal() {
+    let (trace, mut socket, server) = start_active_response().await;
+    trace.reconnect_for_replay.store(true, Ordering::Release);
+    for input in ["second", "third"] {
+        socket
+            .send(ClientMessage::Text(
+                json!({"type": "response.create", "model": "model-a", "input": input})
+                    .to_string()
+                    .into(),
+            ))
+            .await
+            .expect("send queued response.create");
+    }
+    socket
+        .send(ClientMessage::Ping(vec![1, 2, 3].into()))
+        .await
+        .expect("send Ping after queued requests");
+    let message = tokio::time::timeout(Duration::from_secs(2), socket.next())
+        .await
+        .expect("Pong timeout while response is active")
+        .expect("WebSocket remains open")
+        .expect("valid WebSocket frame");
+    assert!(matches!(message, ClientMessage::Pong(_)));
+    assert_eq!(trace.starts.load(Ordering::Acquire), 1);
+
+    for completed_count in 1..=3 {
+        trace.release_terminal.notify_one();
+        let expected_types = if completed_count < 3 {
+            vec![
+                "response.completed",
+                "response.metadata",
+                "response.created",
+            ]
+        } else {
+            vec!["response.completed"]
+        };
+        let mut event_types = Vec::new();
+        for _ in &expected_types {
+            let message = tokio::time::timeout(Duration::from_secs(2), socket.next())
+                .await
+                .expect("serial response timeout")
+                .expect("WebSocket remains open")
+                .expect("valid WebSocket frame");
+            let ClientMessage::Text(text) = message else {
+                panic!("unexpected frame during serial execution: {message:?}");
+            };
+            let event: Value = serde_json::from_str(&text).expect("response event JSON");
+            event_types.push(event["type"].as_str().expect("event type").to_owned());
+        }
+        assert_eq!(event_types, expected_types);
+        assert_eq!(
+            trace.starts.load(Ordering::Acquire),
+            (completed_count + 1).min(3)
+        );
+    }
+    assert_eq!(
+        *trace.inputs.lock().expect("input trace lock"),
+        vec![json!("hello"), json!("second"), json!("third")]
+    );
+    assert!(!trace.cancelled.load(Ordering::Acquire));
+    let next = tokio::time::timeout(Duration::from_secs(2), socket.next())
+        .await
+        .expect("replay close timeout")
+        .unwrap()
+        .unwrap();
+    assert!(matches!(next, ClientMessage::Close(Some(frame))
+        if frame.code == CloseCode::Normal && frame.reason == "Reconnect with full input."));
     server.abort();
 }
 

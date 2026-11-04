@@ -299,6 +299,7 @@ fn is_audited_private_test(member: &str, relative: &Path, item: &Item) -> bool {
                         "connection_budget_tests"
                     )
                     | ("transport/profile/cli_version.rs", "tests")
+                    | ("session_transport.rs", "tests")
             ) =>
         {
             module.content.is_some() && matches!(module.vis, syn::Visibility::Inherited)

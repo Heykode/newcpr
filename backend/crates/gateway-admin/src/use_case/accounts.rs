@@ -1634,7 +1634,7 @@ impl AccountsService for DefaultAccountsService {
         let terminal = futures::stream::once(async move {
             let result = probe
                 .probe(AccountProbeRequest {
-                    account_id,
+                    target: account_id.into(),
                     provider_kind: account.provider_kind,
                     upstream_model,
                     operation,

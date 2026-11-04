@@ -782,6 +782,7 @@ pub struct ProviderQuotaWindow {
 pub enum AccountUsagePeriod {
     Weekly,
     Monthly,
+    Daily,
 }
 
 /// Provider 解释 quota 所需的公共请求事实。
@@ -978,6 +979,17 @@ impl ProviderQuota {
         self.usage_windows()
             .filter(|(window, _)| window.local_usage.is_some())
             .min_by_key(|(_, period)| *period)
+            .or_else(|| {
+                self.windows
+                    .iter()
+                    .find(|window| {
+                        window.local_usage_attribution == QuotaLocalUsageAttribution::AccountWide
+                            && window.window_seconds == Some(86_400)
+                            && window.reset_at.is_none()
+                            && window.local_usage.is_some()
+                    })
+                    .map(|window| (window, AccountUsagePeriod::Daily))
+            })
     }
 
     /// 统计与预测共用窗口归属规则，避免把模型专属桶或短期限流当作账号容量。

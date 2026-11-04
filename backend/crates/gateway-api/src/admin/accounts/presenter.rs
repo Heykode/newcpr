@@ -271,6 +271,7 @@ fn quota_forecast_view(
 ) -> AccountQuotaForecastView {
     AccountQuotaForecastView {
         period: match forecast.period {
+            AccountUsagePeriod::Daily => "daily",
             AccountUsagePeriod::Weekly => "weekly",
             AccountUsagePeriod::Monthly => "monthly",
         },
@@ -545,6 +546,7 @@ pub(super) fn account_usage_view(
     };
     AccountUsageView {
         window_label_display: match source.map(|(_, period)| period) {
+            Some(AccountUsagePeriod::Daily) => "滚动日用量",
             Some(AccountUsagePeriod::Weekly) => "周额度窗口",
             Some(AccountUsagePeriod::Monthly) => "月额度窗口",
             None => "周/月额度窗口",
@@ -553,6 +555,7 @@ pub(super) fn account_usage_view(
         quota_window: source.map(|(window, period)| AccountUsageQuotaWindowView {
             key: window.key.clone(),
             period: match period {
+                AccountUsagePeriod::Daily => "daily",
                 AccountUsagePeriod::Weekly => "weekly",
                 AccountUsagePeriod::Monthly => "monthly",
             },

@@ -68,6 +68,7 @@ use crate::transport::accept_codex_test_websocket;
 const OFFICIAL_FIXTURE: &[u8] =
     include_bytes!("../../transport/fixtures/official_models_snapshot.json");
 
+mod account_isolation;
 mod affinity;
 mod affinity_modes;
 mod affinity_recovery;
@@ -75,6 +76,7 @@ mod cache_diagnostics;
 mod compact;
 mod excel_encrypted_content;
 mod fast_mode;
+mod freeze_recovery;
 mod generate_compat;
 mod guardian;
 mod guardian_routing;
@@ -678,6 +680,18 @@ fn fallback_overdraft_transport_context(request_id: &str) -> AttemptContext {
 }
 
 fn diagnostic_context(request_id: &str, account_id: &str) -> AttemptContext {
+    probe_context(
+        request_id,
+        ProviderAccountId::new(account_id)
+            .expect("account id")
+            .into(),
+    )
+}
+
+fn probe_context(
+    request_id: &str,
+    target: gateway_core::engine::probe::AccountProbeTarget,
+) -> AttemptContext {
     AttemptContext::new(
         RequestAttemptContext::new(
             ModelRequestId::new(request_id).expect("request id"),
@@ -686,11 +700,7 @@ fn diagnostic_context(request_id: &str, account_id: &str) -> AttemptContext {
         NonZeroU32::new(1).expect("attempt"),
         SystemTime::now() + Duration::from_secs(30),
         account_policy(),
-        AccountAttemptContext::diagnostic(
-            BTreeSet::new(),
-            ProviderAccountId::new(account_id).expect("account id"),
-            None,
-        ),
+        AccountAttemptContext::diagnostic(BTreeSet::new(), target, None),
         None,
         CancellationToken::new(),
     )
@@ -4107,10 +4117,14 @@ async fn account_switch_drops_parent_response_but_preserves_nested_metadata() {
             assert!(body["client_metadata"].get("parent_response_id").is_none());
         }
         assert!(captured_header_values(&request, "x-openai-account-routing-override").is_empty());
-        assert_eq!(
-            captured_header_values(&request, "x-openai-fedramp"),
-            vec![b"untrusted".to_vec()]
-        );
+        if owner == "acct_scope_new" {
+            assert_eq!(
+                captured_header_values(&request, "x-openai-fedramp"),
+                vec![b"untrusted".to_vec()]
+            );
+        } else {
+            assert!(captured_header_values(&request, "x-openai-fedramp").is_empty());
+        }
     }
 }
 
@@ -4306,7 +4320,7 @@ async fn oversized_websocket_new_chain_requires_full_replay_after_http_store_fal
     let provider = provider_with_base_url(&store, server.uri());
     let operation = |previous: Option<&str>| {
         let input = if previous.is_none() {
-            "x".repeat(15 * 1024 * 1024)
+            "x".repeat(16 * 1024 * 1024)
         } else {
             "delta".to_owned()
         };
@@ -4347,6 +4361,13 @@ async fn oversized_websocket_new_chain_requires_full_replay_after_http_store_fal
     assert!(completed);
     let state = state.expect("HTTP scope captured");
     assert_eq!(state.payload()["continuation_scope"], "replay_required");
+    assert!(state.prefers_websocket_reconnect());
+    let restored: ProviderSessionState =
+        serde_json::from_value(serde_json::to_value(&state).unwrap()).unwrap();
+    assert!(
+        !restored.prefers_websocket_reconnect(),
+        "reconnect advice must not persist across connections"
+    );
     let result = provider
         .execute(
             planned_request(
@@ -7133,7 +7154,7 @@ async fn response_failed_after_semantic_output_is_exposed_and_not_replay_safe() 
 }
 
 #[tokio::test]
-async fn disabled_account_diagnostic_success_uses_upstream_and_persists_health() {
+async fn disabled_account_diagnostic_success_uses_upstream_without_mutating_health() {
     let store = Arc::new(MemoryAccountStore::default());
     let account_id = "acct_disabled_diagnostic";
     create_account(&store, account_id).await;
@@ -7196,13 +7217,13 @@ async fn disabled_account_diagnostic_success_uses_upstream_and_persists_health()
         .expect("disabled test account after test");
     assert!(!account.enabled());
     assert_eq!(account.credential_state(), CredentialState::Ready);
-    assert_eq!(account.quota().access(), QuotaAccessState::Allowed);
-    assert!(store.has_quota(account_id));
+    assert_eq!(account.quota().access(), QuotaAccessState::Exhausted);
+    assert!(!store.has_quota(account_id));
     assert_eq!(affinity.binding_count(), 0);
 }
 
 #[tokio::test]
-async fn disabled_account_diagnostic_failure_uses_upstream_and_persists_health() {
+async fn disabled_account_diagnostic_failure_uses_upstream_without_mutating_health() {
     let store = Arc::new(MemoryAccountStore::default());
     let account_id = "acct_disabled_diagnostic_failure";
     create_account_with_enabled(&store, account_id, false).await;
@@ -7246,12 +7267,9 @@ async fn disabled_account_diagnostic_failure_uses_upstream_and_persists_health()
         .account(account_id)
         .expect("disabled test account after failure");
     assert!(!account.enabled());
-    assert_eq!(account.credential_state(), CredentialState::Expired);
-    assert_eq!(
-        account.last_error_reason(),
-        Some(AccountErrorReason::AccessTokenExpired)
-    );
-    assert_eq!(account.last_error_message(), Some("credential rejected"));
+    assert_eq!(account.credential_state(), CredentialState::Ready);
+    assert_eq!(account.last_error_reason(), None);
+    assert_eq!(account.last_error_message(), None);
     assert!(!store.has_quota(account_id));
 }
 

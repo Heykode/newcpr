@@ -83,7 +83,9 @@ impl ErrorProtectionRecoveryService {
         let result = self
             .probe
             .probe(AccountProbeRequest {
-                account_id: state.account_id.clone(),
+                target: gateway_core::engine::probe::AccountProbeTarget::FreezeRecovery(
+                    state.account_id.clone(),
+                ),
                 provider_kind: item.account.provider_kind,
                 upstream_model: model,
                 operation,

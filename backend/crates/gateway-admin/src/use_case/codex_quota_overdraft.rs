@@ -41,7 +41,7 @@ impl CodexQuotaOverdraftService {
             )
             .map_err(|error| map_provider_error(error, "Codex quota overdraft probe"))?;
         let request = AccountProbeRequest {
-            account_id: claim.account_id.clone(),
+            target: claim.account_id.clone().into(),
             provider_kind: claim.provider_kind.clone(),
             upstream_model: claim.probe_model.clone(),
             operation,

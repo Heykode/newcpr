@@ -32,7 +32,7 @@ impl AccountProbe for RecoveryProbe {
         cancellation: CancellationToken,
     ) -> BoxFuture<'_, Result<AccountProbeResult, AccountProbeError>> {
         Box::pin(async move {
-            assert_eq!(request.account_id.as_str(), "acct_recovery");
+            assert_eq!(request.target.account_id().as_str(), "acct_recovery");
             assert_eq!(request.upstream_model.as_str(), "fixture-model");
             assert_eq!((revision, config), (7, 11));
             self.started.store(true, Ordering::SeqCst);

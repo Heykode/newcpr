@@ -170,7 +170,7 @@ pub struct RequestTuning {
 }
 
 const fn default_websocket_large_request_threshold_bytes() -> u64 {
-    15 * 1024 * 1024
+    31 * 1024 * 1024 / 2
 }
 
 const fn default_stream_prefetch_bytes() -> u64 {

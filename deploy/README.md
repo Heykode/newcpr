@@ -78,13 +78,15 @@ docker compose -f deploy/compose.yaml up -d --no-build --wait
 docker compose -f deploy/compose.yaml ps
 ```
 
-健康检查：
+流量就绪检查：升级后确认 `/readyz` 返回 `204`，负载均衡器可使用此接口决定是否接入流量。
 
 ```bash
-curl -i http://127.0.0.1:8080/healthz
+curl -i http://127.0.0.1:8080/readyz
 ```
 
-`204 No Content` 表示应用、PostgreSQL、Redis 和后台任务的健康检查通过，不代表每个上游账号都可用。
+`204 No Content` 表示运行时快照、PostgreSQL、Redis 可用，不代表每个上游账号都可用。
+独立监控仍使用 `/healthz` 检查日志和关键后台任务；镜像及 Compose 的默认综合检查保持不变。
+若服务发现同时依赖容器健康状态，应在确认新接口可用后同步调整应用容器的检查路径。
 
 不要把未脱敏的 `docker compose config` 或 `docker inspect` 输出上传到工单；它们会包含
 PostgreSQL/Redis 启动密码。日常校验使用 `config --quiet`。

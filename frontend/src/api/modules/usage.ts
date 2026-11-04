@@ -80,6 +80,11 @@ export interface UsageTurnStateSummary {
 }
 
 export interface UsageListRecord {
+  errorKind?: string | null
+  websocketCloseCode?: number | null
+  continuationUnavailableReason?: string | null
+  upstreamConnectionExitReason?: string | null
+  recovered?: boolean
   errorCode?: string | null
   errorMessage?: string | null
   outcome?: string
@@ -118,6 +123,14 @@ export interface UsageListRecord {
 }
 
 export interface UsageRecord {
+  errorKind?: string | null
+  websocketCloseCode?: number | null
+  continuationUnavailableReason?: string | null
+  upstreamConnectionExitReason?: string | null
+  recovered?: boolean
+  errorCode?: string | null
+  retryAfterMs?: number | null
+  upstreamError?: UsageUpstreamError | null
   clientApiKeyName?: string | null
   id: string
   requestId: string
@@ -690,4 +703,13 @@ export function getUsageCost<M extends UsageCostMetric>(data: UsageRangeQuery & 
     params: data,
     ...options,
   })
+}
+
+export interface UsageUpstreamError {
+  code: string | null
+  errorType: string | null
+  message: string | null
+  param: string | null
+  closeReason: string | null
+  lastEventType: string | null
 }

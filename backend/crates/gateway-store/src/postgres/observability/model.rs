@@ -498,6 +498,11 @@ pub struct DashboardObservation {
 /// 使用记录列表所需的窄投影；完整执行、路由和客户端详情按 ID 单独读取。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UsageListRecord {
+    pub error_kind: Option<String>,
+    pub websocket_close_code: Option<u16>,
+    pub continuation_unavailable_reason: Option<String>,
+    pub upstream_connection_exit_reason: Option<String>,
+    pub recovered: bool,
     pub error_code: Option<String>,
     pub error_message: Option<String>,
     pub outcome: String,
@@ -555,6 +560,11 @@ pub struct UsageListRecord {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UsageRecord {
+    pub websocket_close_code: Option<u16>,
+    pub continuation_unavailable_reason: Option<String>,
+    pub upstream_connection_exit_reason: Option<String>,
+    pub recovered: bool,
+    pub upstream_error: Option<admin_observability::UsageUpstreamError>,
     pub client_api_key_name: Option<String>,
     pub billing_snapshot_json: Option<serde_json::Value>,
     pub id: String,

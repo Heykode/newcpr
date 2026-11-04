@@ -147,6 +147,7 @@ fn encoder_should_remove_unsupported_fields_from_upstream_body() {
             "model": "gpt-test",
             "input": [{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}],
             "max_tokens": 256,
+            "max_output_tokens": 512,
             "top_p": 0.9,
             "frequency_penalty": 0.1,
             "presence_penalty": 0.1,

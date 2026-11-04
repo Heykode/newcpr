@@ -432,6 +432,11 @@ pub(crate) fn admin_usage_list_record(
         }
     };
     Ok(admin_observability::UsageListRecord {
+        error_kind: record.error_kind,
+        websocket_close_code: record.websocket_close_code,
+        continuation_unavailable_reason: record.continuation_unavailable_reason,
+        upstream_connection_exit_reason: record.upstream_connection_exit_reason,
+        recovered: record.recovered,
         error_code: record.error_code,
         error_message: record.error_message,
         outcome: admin_observability::RequestOutcome::new(record.outcome)
@@ -513,6 +518,11 @@ pub(crate) fn admin_usage_record(
         }
     };
     Ok(admin_observability::UsageRecord {
+        websocket_close_code: record.websocket_close_code,
+        continuation_unavailable_reason: record.continuation_unavailable_reason,
+        upstream_connection_exit_reason: record.upstream_connection_exit_reason,
+        recovered: record.recovered,
+        upstream_error: record.upstream_error,
         client_api_key_name: record.client_api_key_name,
         id: record.id,
         client_api_key_ref: record.client_api_key_ref,
@@ -785,6 +795,12 @@ pub(crate) fn usage_list_record_from_row(
     row: &sqlx::postgres::PgRow,
 ) -> StoreResult<UsageListRecord> {
     Ok(UsageListRecord {
+        error_kind: get(row, "error_kind")?,
+        websocket_close_code: get::<Option<String>>(row, "websocket_close_code")?
+            .and_then(|code| code.parse().ok()),
+        continuation_unavailable_reason: get(row, "continuation_unavailable_reason")?,
+        upstream_connection_exit_reason: get(row, "upstream_connection_exit_reason")?,
+        recovered: get(row, "recovered")?,
         error_code: get(row, "error_code")?,
         error_message: get(row, "error_message")?,
         outcome: get(row, "outcome")?,
@@ -842,7 +858,14 @@ pub(crate) fn usage_list_record_from_row(
 }
 
 pub(crate) fn usage_record_from_row(row: &sqlx::postgres::PgRow) -> StoreResult<UsageRecord> {
+    let upstream_error =
+        saved_upstream_error(get::<Option<String>>(row, "error_details")?.as_deref());
     Ok(UsageRecord {
+        continuation_unavailable_reason: get(row, "continuation_unavailable_reason")?,
+        upstream_connection_exit_reason: get(row, "upstream_connection_exit_reason")?,
+        recovered: get(row, "recovered")?,
+        upstream_error: usage_upstream_error(upstream_error.as_ref()),
+        websocket_close_code: websocket_close_code(upstream_error.as_ref()),
         client_api_key_name: get(row, "client_api_key_name")?,
         billing_snapshot_json: get(row, "billing_snapshot_json")?,
         id: get(row, "id")?,
@@ -1103,4 +1126,56 @@ pub(crate) fn invalid(message: &str) -> StoreError {
         entity: "observability",
         message: message.to_owned(),
     }
+}
+
+// 只读取已保存的结构化正文，旧记录缺失或损坏时不从摘要猜测字段
+fn saved_upstream_error(details: Option<&str>) -> Option<serde_json::Value> {
+    let details: serde_json::Value = serde_json::from_str(details?).ok()?;
+    serde_json::from_str(details.get("upstream")?.as_str()?).ok()
+}
+
+fn websocket_close_code(upstream: Option<&serde_json::Value>) -> Option<u16> {
+    let upstream = upstream?;
+    if upstream.get("type")?.as_str()? != "websocket.close" {
+        return None;
+    }
+    u16::try_from(upstream.get("code")?.as_u64()?).ok()
+}
+
+fn usage_upstream_error(
+    upstream: Option<&serde_json::Value>,
+) -> Option<admin_observability::UsageUpstreamError> {
+    let upstream = upstream?;
+    let close = (upstream.get("type").and_then(serde_json::Value::as_str)
+        == Some("websocket.close"))
+    .then_some(upstream);
+    let error = upstream
+        .get("error")
+        .or_else(|| upstream.get("response")?.get("error"));
+    let field = |value: Option<&serde_json::Value>, name: &str| {
+        value?
+            .get(name)?
+            .as_str()
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+    };
+    let details = admin_observability::UsageUpstreamError {
+        code: field(error, "code"),
+        error_type: field(error, "type"),
+        message: field(error, "message"),
+        param: field(error, "param"),
+        close_reason: field(close, "reason"),
+        last_event_type: field(close, "last_event_type"),
+    };
+    [
+        &details.code,
+        &details.error_type,
+        &details.message,
+        &details.param,
+        &details.close_reason,
+        &details.last_event_type,
+    ]
+    .iter()
+    .any(|value| value.is_some())
+    .then_some(details)
 }

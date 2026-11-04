@@ -270,8 +270,11 @@ async fn serve_responses_websocket(socket: Socket, session: ResponsesWebSocketSe
 
         control = started.session.response_control().unwrap_or_default();
         control.set_connection_cancellation(connection.cancellation());
-        if forward_execution(&mut connection, started, &mut replay).await
-            == ForwardOutcome::Disconnect
+        let outcome = forward_execution(&mut connection, started, &mut replay).await;
+        if outcome == ForwardOutcome::Disconnect
+            || (outcome == ForwardOutcome::ReconnectIfIdle
+                && !connection.is_expired()
+                && connection.close_for_replay_if_idle().await)
         {
             break;
         }

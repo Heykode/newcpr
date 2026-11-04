@@ -8,7 +8,8 @@ use async_trait::async_trait;
 use chrono::Utc;
 use gateway_core::account::{
     CredentialCasOutcome, CredentialCasUpdate, CredentialRevision, CredentialState,
-    ProviderAccountId, ProviderAccountStore, ProviderAccountUpdate,
+    OpaqueProviderData, ProviderAccountId, ProviderAccountStore, ProviderAccountUpdate,
+    QuotaObservation,
 };
 use gateway_core::provider_ports::{
     ProviderCredentialState, ProviderCredentialStatePort, ProviderLeaseAcquisition,
@@ -161,6 +162,28 @@ fn due_input(suffix: &str) -> provider_xai::CreateGrokCredential {
     let mut input = create_input(suffix, &format!("subject-{suffix}"));
     input.account.access_token_expires_at = Utc::now() + chrono::Duration::minutes(2);
     input
+}
+
+async fn seed_quota_snapshot(
+    store: &MemoryProviderAccountStore,
+    id: &ProviderAccountId,
+) -> QuotaObservation {
+    let account = store.account(id).unwrap();
+    let quota = QuotaObservation {
+        account_id: id.clone(),
+        expected_revision: account.revision(),
+        plan_type: None,
+        quota: OpaqueProviderData::new(
+            serde_json::json!({"subscriptionTier": "free", "config": null})
+                .as_object()
+                .unwrap()
+                .clone(),
+        ),
+        observed_at: SystemTime::now(),
+        state: account.quota(),
+    };
+    store.compare_and_swap_quota(quota.clone()).await.unwrap();
+    quota
 }
 
 async fn fixture(
@@ -445,6 +468,7 @@ async fn successful_refresh_rotates_plaintext_tokens_once() {
     let id = input.account_id.clone();
     let (store, _, refresher, service) =
         fixture(input, [Ok(success_tokens(Some("new-refresh")))], true).await;
+    let mut quota = seed_quota_snapshot(&store, &id).await;
     let outcomes = service.refresh_due().await.expect("refresh cycle");
 
     assert!(matches!(
@@ -455,6 +479,11 @@ async fn successful_refresh_rotates_plaintext_tokens_once() {
         }] if account_id == &id && credential_revision.get() == 2
     ));
     assert_eq!(refresher.prepare_calls.load(Ordering::SeqCst), 1);
+    quota.expected_revision = CredentialRevision::new(2).unwrap();
+    assert_eq!(
+        store.get_quotas(std::slice::from_ref(&id)).await.unwrap(),
+        vec![quota]
+    );
     let credential = store.credential(&id).expect("credential");
     assert_eq!(
         credential_object(&credential)
@@ -572,6 +601,7 @@ async fn manual_refresh_returns_prepared_rotation_without_writing_store() {
     let id = input.account_id.clone();
     let (store, _, refresher, service) =
         fixture(input, [Ok(success_tokens(Some("manual-refresh")))], true).await;
+    let mut quota = seed_quota_snapshot(&store, &id).await;
     let current = store
         .load_current_credential(&id)
         .await
@@ -592,6 +622,8 @@ async fn manual_refresh_returns_prepared_rotation_without_writing_store() {
             .expect("persist prepared rotation"),
         CredentialCasOutcome::Updated(revision) if revision.get() == 2
     ));
+    quota.expected_revision = CredentialRevision::new(2).unwrap();
+    assert_eq!(store.get_quotas(&[id]).await.unwrap(), vec![quota]);
     drop(guard);
 }
 
@@ -777,6 +809,7 @@ async fn pre_send_transient_failure_applies_bounded_oauth_backoff() {
     let input = due_input("transient");
     let id = input.account_id.clone();
     let (store, _, _, service) = fixture(input, [Err(GrokRefreshFailure::Transient)], true).await;
+    let mut quota = seed_quota_snapshot(&store, &id).await;
     service.refresh_due().await.expect("refresh");
     let account = store.account(&id).expect("account");
     assert_eq!(account.credential_state(), CredentialState::Unknown);
@@ -786,6 +819,8 @@ async fn pre_send_transient_failure_applies_bounded_oauth_backoff() {
             .next_refresh_at()
             .is_some_and(|retry| retry > std::time::SystemTime::now())
     );
+    quota.expected_revision = CredentialRevision::new(2).unwrap();
+    assert_eq!(store.get_quotas(&[id]).await.unwrap(), vec![quota]);
 }
 
 #[tokio::test]

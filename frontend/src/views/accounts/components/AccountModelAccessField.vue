@@ -16,6 +16,7 @@ import BaseSegmented from '@/components/base/BaseSegmented.vue'
 import { useRequestState } from '@/composables/useRequestState'
 import { t } from '@/i18n'
 import { accountModelAccessError, accountModelIdError } from '../utils/modelAccess'
+import AccountModelCleanupPopover from './AccountModelCleanupPopover.vue'
 
 const props = withDefaults(defineProps<{
   accountId?: string
@@ -26,6 +27,7 @@ const props = withDefaults(defineProps<{
 }>(), { disabled: false, allowPreserve: false, knownModelCatalog: false })
 const model = defineModel<AccountModelAccess | undefined>({ required: true })
 const catalog = ref<Array<{ id: string, label: string }>>([])
+const refreshButton = ref<InstanceType<typeof BaseIconButton>>()
 const catalogObservedAtDisplay = ref<string>()
 const catalogHelpOpen = ref(false)
 const catalogHelpId = useId()
@@ -58,6 +60,25 @@ const mode = computed({
 })
 const restricted = computed(() => mode.value === 'allowlist' || mode.value === 'denylist')
 const canAdd = computed(() => Boolean(search.value.trim()) && !model.value?.models.includes(search.value.trim()))
+const missingModels = computed(() => {
+  if (mode.value !== 'allowlist' || !canIdentifyMissing.value || !catalog.value.length)
+    return []
+  const ids = new Set(catalog.value.map(item => item.id))
+  return (model.value?.models ?? []).filter(id => !ids.has(id))
+})
+function removeMissingModels(ids: string[]) {
+  if (props.disabled || model.value?.mode !== 'allowlist')
+    return
+  const removed = new Set(missingModels.value.filter(id => ids.includes(id)))
+  const next = { ...model.value, models: model.value.models.filter(id => !removed.has(id)) }
+  inputError.value = accountModelAccessError(next) ?? ''
+  if (!inputError.value)
+    model.value = next
+}
+function restoreCleanupFocus() {
+  if (!missingModels.value.length)
+    (refreshButton.value?.$el as HTMLElement | undefined)?.focus()
+}
 const models = computed(() => {
   const entries = new Map(catalog.value.map(item => [item.id, { ...item, unavailable: false }]))
   for (const id of model.value?.models ?? []) {
@@ -199,7 +220,8 @@ watch(search, () => {
           </div>
         </BasePopover>
         <slot name="extra" />
-        <BaseIconButton v-if="restricted && (accountId || useKnownCatalog)" :label="t('accounts.modelAccess.refreshModel')" size="sm" :loading="loading" :disabled="disabled" @click="load(true)">
+        <AccountModelCleanupPopover v-if="mode === 'allowlist'" :models="missingModels" :model-count="model?.models.length ?? 0" :disabled="disabled || !missingModels.length" @remove="removeMissingModels" @closed="restoreCleanupFocus" />
+        <BaseIconButton v-if="restricted && (accountId || useKnownCatalog)" ref="refreshButton" :label="t('accounts.modelAccess.refreshModel')" size="sm" :loading="loading" :disabled="disabled" @click="load(true)">
           <template #loading>
             <RefreshCw class="size-3.5 animate-spin motion-reduce:animate-none" />
           </template>

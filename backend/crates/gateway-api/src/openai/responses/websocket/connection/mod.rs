@@ -231,6 +231,7 @@ pub struct ResponsesWebSocketConnection {
     commands: Option<mpsc::Sender<ConnectionCommand>>,
     incoming: mpsc::Receiver<PendingConnectionEvent>,
     deferred: VecDeque<PendingConnectionEvent>,
+    input_gate: Arc<Mutex<()>>,
     exited: oneshot::Receiver<PumpExitReason>,
     pump_task: Option<JoinHandle<()>>,
     stats: Arc<ConnectionStats>,
@@ -393,6 +394,30 @@ impl ResponsesWebSocketConnection {
         .await;
     }
 
+    pub(super) async fn close_for_replay_if_idle(&mut self) -> bool {
+        let Ok(_guard) = self.input_gate.clone().try_lock_owned() else {
+            return false;
+        };
+        if !self.deferred.is_empty() || !self.incoming.is_empty() {
+            return false;
+        }
+        self.close_for_replay().await;
+        true
+    }
+
+    async fn close_for_replay(&mut self) {
+        let reason = "Reconnect with full input.";
+        self.close(
+            CloseFrame {
+                code: close_code::NORMAL,
+                reason: reason.into(),
+            },
+            WriteContext::connection(FramePhase::Close),
+            PumpExitReason::ServerClose,
+        )
+        .await;
+    }
+
     async fn close(
         &mut self,
         frame: CloseFrame,
@@ -546,11 +571,13 @@ where
     let (incoming_tx, incoming_rx) = mpsc::channel(INBOUND_EVENT_BUFFER);
     let (exit_tx, exit_rx) = oneshot::channel();
     let connection_cancellation = CancellationToken::new();
+    let input_gate = Arc::new(Mutex::new(()));
     let pump_task = tokio::spawn(run_pump(
         socket,
         activity.clone(),
         command_rx,
         incoming_tx,
+        Arc::clone(&input_gate),
         exit_tx,
         Arc::clone(&connection_id),
         cancellation,
@@ -569,6 +596,7 @@ where
         commands: Some(command_tx),
         incoming: incoming_rx,
         deferred: VecDeque::new(),
+        input_gate,
         exited: exit_rx,
         pump_task: Some(pump_task),
         stats,
@@ -584,6 +612,7 @@ async fn run_pump<S, E>(
     activity: watch::Sender<Instant>,
     mut commands: mpsc::Receiver<ConnectionCommand>,
     incoming: mpsc::Sender<PendingConnectionEvent>,
+    input_gate: Arc<Mutex<()>>,
     exited: oneshot::Sender<PumpExitReason>,
     connection_id: Arc<str>,
     cancellation: CancellationToken,
@@ -625,6 +654,7 @@ async fn run_pump<S, E>(
                     }
                 }
                 message = reader.next() => {
+                    let _guard = input_gate.lock().await;
                     if matches!(&message, Some(Ok(_))) {
                         activity.send_replace(Instant::now());
                     }

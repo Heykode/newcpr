@@ -523,6 +523,7 @@ pub enum AccountEligibilityPolicy {
     #[default]
     Enforce,
     BypassForDiagnostic,
+    FreezeRecovery,
     /// Trusted fixed-account quality retests, never ordinary traffic or judges.
     BypassForQualityRetest,
     /// Provider must verify persistent quality ownership for the pinned account first.
@@ -531,10 +532,19 @@ pub enum AccountEligibilityPolicy {
 
 impl AccountEligibilityPolicy {
     #[must_use]
+    pub const fn allows_account_state_mutation(self, enabled: bool) -> bool {
+        match self {
+            Self::FreezeRecovery => false,
+            Self::BypassForDiagnostic => enabled,
+            Self::Enforce | Self::BypassForQualityRetest | Self::IgnoreQualityPause => true,
+        }
+    }
+
+    #[must_use]
     pub const fn bypasses_local_eligibility(self) -> bool {
         matches!(
             self,
-            Self::BypassForDiagnostic | Self::BypassForQualityRetest
+            Self::BypassForDiagnostic | Self::BypassForQualityRetest | Self::FreezeRecovery
         )
     }
 }

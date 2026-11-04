@@ -67,10 +67,6 @@ fn cases() -> Vec<(Value, Value)> {
             .unwrap()
             .entry("store")
             .or_insert(json!(false));
-        expected
-            .as_object_mut()
-            .unwrap()
-            .remove("max_output_tokens");
         expected.as_object_mut().unwrap().remove("temperature");
         expected
             .as_object_mut()
