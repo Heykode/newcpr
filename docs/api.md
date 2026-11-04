@@ -109,7 +109,10 @@ body 不进入这个通用信封。稳定业务码如下：
 
 | 方法 | 路由 | 鉴权 | 说明 |
 | --- | --- | --- | --- |
-| `GET` | `/healthz` | 无 | Core、Store 和后台任务健康时返回 `204`，否则返回 `503` |
+| `GET` | `/readyz` | 无 | 运行时快照、PostgreSQL、Redis 可用时返回 `204`，否则返回 `503` |
+| `GET` | `/healthz` | 无 | 综合检查运行依赖、日志和关键后台任务，健康时返回 `204`，否则返回 `503` |
+
+两个接口均返回空正文，探针并行执行并使用 2 秒超时。后台维护故障保留在综合健康告警中，不影响 `/readyz` 的流量就绪判断。
 
 ## 3. OpenAI 数据面与模型目录
 
@@ -1114,13 +1117,14 @@ Redis 故障拒绝准入，取消正常释放登记；故障或进程退出时�
 
 `requestTuning.websocketLargeRequestThresholdBytes` 控制 OpenAI 普通新链的大请求发送前 HTTP 选择：
 
-- 默认 `15728640`（15 MiB），允许整数 `0..67108864`；`0` 关闭大小分流，缺失或 `null` 继承默认。
+- 默认 `16252928`（15.5 MiB），允许整数 `0..67108864`；`0` 关闭大小分流，缺失或 `null` 继承默认。已保存的显式配置保持不变。同一线程超过阈值后，完整请求须低于阈值减 2 MiB 才恢复 WS，避免临界大小反复切换。
 - 仅当传输要求为独立新链 `new_chain` 或 `websocket_new_chain` 时生效。
   比较的是身份投影、协议归一化后的最终 WS JSON UTF-8 字节数，达到阈值即走现有 HTTP/SSE 通道，
   不建立 WS、不尝试先发送失败再重放。HTTP 沿用选定账号、设备画像、出口与下游交付偏好。
 - 原生 WS 独立首轮可在发送前选择 HTTP；预热及已有响应续链不参与这种分流，
   精确 WS 续接超过阈值返回续接不可用，不拼接成新 HTTP 请求。
-  不拼接历史，不自动压缩会话，不将该决定写成会话永久 HTTP 状态；后续独立小请求仍按原策略选择。
+  不拼接历史，不自动压缩会话。大小偏好保存在有界的线程记忆中；完整请求低于恢复阈值或记忆空闲过期后恢复原策略。
+  大包 HTTP 回复要求完整历史续接时，只有成功终态完整写给客户端、且队列为空，才以正常关闭码通知下游 WS 重连；不打断已排队请求，不依赖客户端 UA。
 - 这是保守路由阈值，不是上游硬限额或 HTTP 无限大小保证。WS 压缩不改变此字节计算。
   已发送后的 WS 1009 在有效输出前允许有界同账号重试和符合传输条件的 HTTP 回退；
   不允许换号、精确续接重放或有效输出后重放，其他发送状态不明错误保留原有保护。
@@ -1279,6 +1283,11 @@ errorCode, errorMessage, startedAt, completedAt, expiresAt, createdAt, updatedAt
 用量查询可组合页码/游标、时间范围、Provider、Client Key、账号、模型、route、transport、状态码、
 request/response/upstream ID、outcome 与搜索文本。诊断 `dimension` 可取 `model`、`account`、
 `apiKey`、`provider`、`transport`、`failureClass`、`status`。
+
+请求列表及详情额外返回 `errorKind`、`websocketCloseCode`、`continuationUnavailableReason`、
+`upstreamConnectionExitReason` 和 `recovered`。详情的 `upstreamError` 只提取已保存错误中的
+`code/type/message/param` 及关闭原因、最后事件，不导出完整原始正文或请求头。
+旧记录缺少或无法解析这些字段时返回未知，不根据错误文案猜测；客户端与上游传输方式分别展示。
 
 账号维度诊断的 `authenticationKind`、`accountPlanType` 和历史名称来自同一条最新请求快照；
 其他维度不返回账号属性。请求与错误列表的套餐也读取当时快照，账号改套餐或删除后不会改变。

@@ -2290,8 +2290,8 @@
   {
     "path": "backend/crates/gateway-admin/tests/model/provider_credentials.rs",
     "rule": "authenticated-url",
-    "line": 230,
-    "file_sha256": "ffe117c8cb3c0efd022d236d0be2881cfa61dfc4cc559d2d2ee2292b936a1a39",
+    "line": 260,
+    "file_sha256": "56c23d8d4ce98ccdf257727cc07cf8dafebd57bb8b6edf84cab7d874c440c011",
     "line_sha256": "c85204f4407a8fb3204045ad397ed644fc6cb87825bfac0e6e809b0324b82079",
     "reason": "Reviewed synthetic documentation-domain proxy credentials in an in-memory provider credential serialization test; no network request or production credential is used."
   },

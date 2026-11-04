@@ -1097,6 +1097,11 @@ fn total_record(
     now: DateTime<Utc>,
 ) -> UsageListRecord {
     UsageListRecord {
+        error_kind: None,
+        websocket_close_code: None,
+        continuation_unavailable_reason: None,
+        upstream_connection_exit_reason: None,
+        recovered: false,
         error_code: None,
         error_message: None,
         outcome: gateway_admin::model::observability::RequestOutcome::Succeeded,

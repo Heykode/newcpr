@@ -14,6 +14,7 @@ import ThemePreviewScope from './ThemePreviewScope.vue'
 defineProps<{
   theme: ThemeName
   style: CSSProperties
+  stylesRevision?: number
 }>()
 
 const viewport = useTemplateRef<HTMLElement>('viewport')
@@ -50,8 +51,8 @@ const boardStyle = computed<CSSProperties>(() => ({
       :data-scale="scalePercent"
       :style="stageStyle"
     >
-      <ThemePreviewScope :theme="theme" :style="style">
-        <div class="overflow-hidden bg-cp-bg-layout p-6" data-theme-preview-board :style="boardStyle">
+      <ThemePreviewScope :theme="theme" :style="style" :styles-revision="stylesRevision">
+        <div class="overflow-hidden bg-cp-bg-layout p-6 empty:invisible" data-theme-preview-board :style="boardStyle">
           <slot />
         </div>
       </ThemePreviewScope>

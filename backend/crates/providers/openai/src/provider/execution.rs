@@ -417,6 +417,7 @@ pub(super) struct OpenAiSessionCapture {
     pub(super) client_turn_id: Option<String>,
     pub(super) reasoning_effort_override: Option<String>,
     pub(super) response_store: bool,
+    pub(super) oversized_http: bool,
     pub(super) continuation_scope: Option<OpenAiContinuationScope>,
     pub(super) client_api_key_id: Option<String>,
     pub(super) identity_seed: Option<crate::transport::qx_application::CodexIdentitySeed>,
@@ -486,6 +487,13 @@ pub(super) fn attach_openai_session_update(
     };
     let Ok(update) = encode_openai_session_capture(&capture) else {
         return;
+    };
+    let update = if capture.oversized_http
+        && capture.continuation_scope == Some(OpenAiContinuationScope::ReplayRequired)
+    {
+        update.with_websocket_reconnect()
+    } else {
+        update
     };
     events[terminal_index].attach_session_update(update);
 }
@@ -1011,6 +1019,7 @@ pub(super) fn cold_response_stream_once(response: ColdResponse) -> EventStream {
         }
         super::quality_probe::observe(&request, &client, &active_account, &response);
         if let Some(capture) = session_capture.as_mut() {
+            capture.oversized_http = response.transport_metrics.decision == Some(crate::transport::CodexTransportDecision::HttpLargeRequest);
             capture.continuation_scope = Some(if request.excel.is_some() {
                 OpenAiContinuationScope::ReplayRequired
             } else if capture.response_store {

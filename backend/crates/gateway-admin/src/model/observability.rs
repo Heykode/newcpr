@@ -581,6 +581,11 @@ pub struct DashboardObservation {
 /// 使用记录表格的窄读模型。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UsageListRecord {
+    pub error_kind: Option<String>,
+    pub websocket_close_code: Option<u16>,
+    pub continuation_unavailable_reason: Option<String>,
+    pub upstream_connection_exit_reason: Option<String>,
+    pub recovered: bool,
     pub outcome: RequestOutcome,
     pub error_code: Option<String>,
     pub error_message: Option<String>,
@@ -639,9 +644,31 @@ pub struct UsageListRecord {
     pub started_at: DateTime<Utc>,
 }
 
+/// 受控请求详情中的上游错误字段，不参与错误分类或普通日志输出
+#[derive(Clone, PartialEq, Eq)]
+pub struct UsageUpstreamError {
+    pub code: Option<String>,
+    pub error_type: Option<String>,
+    pub message: Option<String>,
+    pub param: Option<String>,
+    pub close_reason: Option<String>,
+    pub last_event_type: Option<String>,
+}
+
+impl std::fmt::Debug for UsageUpstreamError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("UsageUpstreamError(<restricted>)")
+    }
+}
+
 /// 一次完整模型请求的公共观测记录。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UsageRecord {
+    pub websocket_close_code: Option<u16>,
+    pub continuation_unavailable_reason: Option<String>,
+    pub upstream_connection_exit_reason: Option<String>,
+    pub recovered: bool,
+    pub upstream_error: Option<UsageUpstreamError>,
     pub client_api_key_name: Option<String>,
     pub id: String,
     pub client_api_key_ref: String,

@@ -1,0 +1,8 @@
+{
+  "from_version": "3.39.0",
+  "to_version": "3.40.0",
+  "from_migrations_tree": "57f4e4278ad56da81d864f0e039119521200925c",
+  "to_migrations_tree": "fc7a6551eaae1f5d6d4eb0bbcd6ac20dc99e788c",
+  "added": ["0084_preserve_client_key_ledger.sql"],
+  "recovery": "manual"
+}

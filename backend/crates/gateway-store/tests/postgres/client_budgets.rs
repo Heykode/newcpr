@@ -428,6 +428,49 @@ async fn budget_database_outage_fails_closed() {
 }
 
 #[tokio::test]
+async fn deleting_key_preserves_ledger_and_idempotent_late_settlement() {
+    let Some(database) = TestDatabase::create("budget_deleted_ledger").await else {
+        return;
+    };
+    seed(&database, "old-key", "10", "100").await;
+    let store = PgClientBudgetStore::new(database.pool.clone());
+    store
+        .settle(charge("old-key", "before-delete", "0.5"))
+        .await
+        .unwrap();
+    sqlx::query("delete from client_api_keys where id = 'old-key'")
+        .execute(&database.pool)
+        .await
+        .unwrap();
+    let late = charge("old-key", "late-after-delete", "0.25");
+    store.settle(late.clone()).await.unwrap();
+    store.settle(late).await.unwrap();
+    let count: i64 = sqlx::query_scalar(
+        "select count(*) from client_key_charge_events where client_api_key_id = 'old-key'",
+    )
+    .fetch_one(&database.pool)
+    .await
+    .unwrap();
+    assert_eq!(count, 2);
+    let used: String = sqlx::query_scalar("select daily_used_usd::text from client_key_budget_windows where client_api_key_id = 'old-key'").fetch_one(&database.pool).await.unwrap();
+    assert_eq!(used.parse::<Decimal>().unwrap(), "0.75".parse().unwrap());
+    seed(&database, "new-key", "10", "100").await;
+    sqlx::query("update client_api_keys set name = 'old-key' where id = 'new-key'")
+        .execute(&database.pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        status(&database, "new-key").await.daily_used_usd,
+        Decimal::ZERO
+    );
+    assert_eq!(
+        store.admit(key_id("old-key")).await.unwrap_err().kind(),
+        GatewayErrorKind::Unauthorized
+    );
+    database.close().await;
+}
+
+#[tokio::test]
 async fn manual_budget_reset_preserves_history_limits_and_window_end_and_fences_late_charges() {
     use gateway_admin::model::client_keys::{ClientKeyBudgetPeriod, ResetClientKeyBudget};
     let Some(database) = TestDatabase::create("budget_reset").await else {

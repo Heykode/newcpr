@@ -1082,19 +1082,9 @@ fn project_quota(
     refresh_token_expires_at: Option<DateTime<Utc>>,
     rolling_usage: Option<gateway_admin::model::accounts::AccountUsage>,
 ) -> ProviderQuota {
-    let Some(snapshot) = snapshot else {
-        return ProviderQuota {
-            credits: None,
-            plan_type: None,
-            observed_at: None,
-            refresh_token_expires_at,
-            windows: Vec::new(),
-            limit_reached: quota_exhausted,
-            provider_data: None,
-        };
-    };
-    let billing = snapshot.billing();
-    let window = if billing.has_authoritative_quota() {
+    let billing = snapshot.as_ref().map(GrokQuotaSnapshot::billing);
+    let window = if let Some(billing) = billing.filter(|billing| billing.has_authoritative_quota())
+    {
         let period_kind = billing.period_kind();
         let window_seconds = quota_window_seconds(billing.period_start(), billing.period_end());
         let mut data = Map::new();
@@ -1159,7 +1149,7 @@ fn project_quota(
     ProviderQuota {
         credits: None,
         plan_type: None,
-        observed_at: Some(snapshot.observed_at()),
+        observed_at: snapshot.as_ref().map(GrokQuotaSnapshot::observed_at),
         refresh_token_expires_at,
         windows: vec![window],
         limit_reached: quota_exhausted,

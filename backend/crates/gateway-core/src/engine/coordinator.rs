@@ -58,14 +58,15 @@ pub struct AttemptCoordinator<S: ?Sized> {
 enum AccountSelection {
     Scheduled(Option<crate::account::ProviderAccountId>),
     Quality(crate::account::ProviderAccountId, bool),
-    Diagnostic(crate::account::ProviderAccountId),
+    Diagnostic(crate::engine::probe::AccountProbeTarget),
 }
 
 impl AccountSelection {
     fn required_account(&self) -> Option<&crate::account::ProviderAccountId> {
         match self {
             Self::Scheduled(account) => account.as_ref(),
-            Self::Diagnostic(account) | Self::Quality(account, _) => Some(account),
+            Self::Diagnostic(target) => Some(target.account_id()),
+            Self::Quality(account, _) => Some(account),
         }
     }
 
@@ -118,7 +119,7 @@ where
         request: NewModelRequest,
         operation: Operation,
         plan: RoutingPlan,
-        required_account: crate::account::ProviderAccountId,
+        required_account: impl Into<crate::engine::probe::AccountProbeTarget>,
         continuation: Option<ContinuationBinding>,
         cancellation: CancellationToken,
     ) -> Result<ResponseExecutionSession<S>, EngineError> {
@@ -126,7 +127,7 @@ where
             request,
             operation,
             plan,
-            AccountSelection::Diagnostic(required_account),
+            AccountSelection::Diagnostic(required_account.into()),
             continuation,
             cancellation,
         )
@@ -994,9 +995,10 @@ where
             (Some(recovery.account), recovery.transport)
         } else {
             match &self.account_selection {
-                AccountSelection::Diagnostic(account) => {
-                    (Some(account.clone()), AttemptTransport::Default)
-                }
+                AccountSelection::Diagnostic(account) => (
+                    Some(account.account_id().clone()),
+                    AttemptTransport::Default,
+                ),
                 AccountSelection::Scheduled(_) | AccountSelection::Quality(_, _) => (
                     self.recovery_account
                         .take()

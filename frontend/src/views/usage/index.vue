@@ -90,12 +90,12 @@ const {
   recordStatus,
 })
 
-const { showDetailModal, selectedUsageRecord, handleViewDetail } = useUsageRecordDetail()
+const { showDetailModal, selectedUsageRecord, detailIsError, detailLoading, detailError, handleViewDetail, reloadDetail } = useUsageRecordDetail()
 const fullDetail = shallowRef(false)
 watch([showDetailModal, () => selectedUsageRecord.value?.requestId], () => {
   fullDetail.value = false
 })
-const errorDetail = computed(() => !fullDetail.value && ['failed', 'incomplete'].includes(selectedUsageRecord.value?.logicalOutcome ?? ''))
+const errorDetail = computed(() => !fullDetail.value && detailIsError.value)
 
 function applyFilter(value: UsageFilterParams) {
   draft.value = {
@@ -234,7 +234,7 @@ watch(timeRange, () => {
       </template>
     </BaseCard>
 
-    <UsageErrorDetailModal v-if="errorDetail" v-model="showDetailModal" :record="selectedUsageRecord" @full-detail="fullDetail = true" />
-    <UsageRecordDetailModal v-else v-model="showDetailModal" :record="selectedUsageRecord" />
+    <UsageErrorDetailModal v-if="errorDetail" v-model="showDetailModal" :record="selectedUsageRecord" :loading="detailLoading" :error="detailError" @retry="reloadDetail" @full-detail="fullDetail = true" />
+    <UsageRecordDetailModal v-else v-model="showDetailModal" :record="selectedUsageRecord" :loading="detailLoading" :error="detailError" @retry="reloadDetail" />
   </div>
 </template>

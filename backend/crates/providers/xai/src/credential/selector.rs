@@ -88,7 +88,7 @@ impl GrokAccountSessionSelector {
         &self,
         request: GrokSessionSelection,
     ) -> Result<SelectedGrokSession, GrokSessionSelectorError> {
-        let diagnostic = request.eligibility() == AccountEligibilityPolicy::BypassForDiagnostic;
+        let diagnostic = request.eligibility().bypasses_local_eligibility();
         let quality_recovery = if request.eligibility()
             == AccountEligibilityPolicy::IgnoreQualityPause
             && let Some(required) = request.required_account()
@@ -229,7 +229,7 @@ impl GrokAccountSessionSelector {
             preferred_account_overrides_weight: false,
             round_robin_cursor: scheduling.round_robin_cursor(),
             eligibility: if diagnostic {
-                AccountEligibilityPolicy::BypassForDiagnostic
+                request.eligibility()
             } else if quality_recovery {
                 AccountEligibilityPolicy::IgnoreQualityPause
             } else {
@@ -249,7 +249,9 @@ impl GrokAccountSessionSelector {
             let selected = selection.candidate();
             let selected_id = selected.account.id().clone();
             let selected_revision = selected.account.revision();
-            let allows_account_state_mutation = !diagnostic || selected.account.enabled();
+            let allows_account_state_mutation = context
+                .eligibility
+                .allows_account_state_mutation(selected.account.enabled());
             let lease = self
                 .scheduling
                 .try_acquire(ProviderLeaseRequest::Scheduling(

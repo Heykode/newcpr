@@ -393,7 +393,7 @@ impl GrokCredentialRepository {
         )?;
         let outcome = self
             .store
-            .compare_and_swap_credential(prepared.credential)
+            .compare_and_swap_credential(prepared.credential.preserving_profile())
             .await
             .map_err(map_store_error)?;
         let CredentialCasOutcome::Updated(revision) = outcome else {
@@ -437,7 +437,7 @@ impl GrokCredentialRepository {
         .map_err(|_| GrokCredentialRepositoryError::InvalidCredentialData)?;
         match self
             .store
-            .compare_and_swap_credential(update)
+            .compare_and_swap_credential(update.preserving_profile())
             .await
             .map_err(map_store_error)?
         {

@@ -339,8 +339,8 @@ or multipart image editing. These contracts extend, not replace,
 - Exercise real local New API converter fixtures, retaining their provenance.
   Converter output is not a captured production channel request.
 - Test API delivery and actual provider encoding, not only intermediate JSON.
-  Existing Codex normalization removes max_output_tokens and temperature; do not
-  assert these controls are enforced because the Chat converter maps them.
+  Upstream #606 preserves max_output_tokens through the final Codex request;
+  temperature is still removed. Mapping a field does not prove upstream enforcement.
 - Compile before timing-sensitive socket suites. Missing database fixtures are
   not successful integration tests. Real upstream capabilities require accounts
   and separate approval; mock completion must never be reported as production
@@ -449,7 +449,8 @@ events, then use the existing encoder and single execution finalization.
   unknown values. Internal store interpretation, transport and session capture
   must read this same encoded value. Explicit true follows existing persisted
   continuation semantics; missing/false retains replay/connection-local guards.
-- Remove only `max_output_tokens`, `temperature` and `prompt_cache_retention`.
+- After upstream #606, remove only `temperature` and `prompt_cache_retention`.
+  Preserve `max_output_tokens` in HTTP and WS final-wire normalization.
   Preserve `max_completion_tokens`, `top_p`, `frequency_penalty` and
   `presence_penalty`, leaving validation to the upstream. Do not apply this filter to
   Compact, Search, Images or other providers.

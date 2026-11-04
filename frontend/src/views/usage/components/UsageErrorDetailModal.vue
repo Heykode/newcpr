@@ -4,15 +4,29 @@ import { computed } from 'vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseModal from '@/components/base/BaseModal/index.vue'
 import { t } from '@/i18n'
+import { usageErrorSummary } from '../utils/errors'
 import { usageAccountText, usageTransportType } from '../utils/records'
 import RequestDiagnosticsPanel from './RequestDiagnosticsPanel.vue'
 import UsageDetailFieldGrid from './UsageDetailFieldGrid.vue'
+import UsageDetailState from './UsageDetailState.vue'
 import UsageStatusCodeBadge from './UsageStatusCodeBadge.vue'
 
-const props = defineProps<{ record: UsageViewModel | null }>()
-defineEmits<{ fullDetail: [] }>()
+const props = defineProps<{ record: UsageViewModel | null, loading?: boolean, error?: string }>()
+const emit = defineEmits<{ fullDetail: [], retry: [] }>()
 const open = defineModel<boolean>({ default: false })
 const context = computed(() => [
+  { label: '原因分类', value: props.record ? usageErrorSummary(props.record) : null, wrap: true },
+  { label: 'WS 关闭码', value: props.record?.websocketCloseCode },
+  { label: '已由后续请求恢复', value: props.record?.recovered ? '是' : '否' },
+  { label: '上游错误码', value: props.record?.upstreamError?.code ?? props.record?.errorCode, wrap: true },
+  { label: '上游错误类型', value: props.record?.upstreamError?.errorType, wrap: true },
+  { label: '上游错误参数', value: props.record?.upstreamError?.param, wrap: true },
+  { label: '上游原始消息', value: props.record?.upstreamError?.message, wrap: true, fullWidth: true },
+  { label: '上游关闭原因', value: props.record?.upstreamError?.closeReason, wrap: true },
+  { label: '最后事件', value: props.record?.upstreamError?.lastEventType, wrap: true },
+  { label: '续接不可用原因', value: props.record?.continuationUnavailableReason, wrap: true },
+  { label: '连接退出原因', value: props.record?.upstreamConnectionExitReason, wrap: true },
+  { label: '建议重试等待', value: props.record?.retryAfterMs == null ? null : `${props.record.retryAfterMs / 1000} 秒` },
   { label: '账号', value: props.record ? usageAccountText(props.record) : null, wrap: true, fullWidth: true },
   { label: '时间', value: props.record?.createdAtDisplay },
   { label: '总耗时', value: props.record?.latencyMsDisplay },
@@ -33,7 +47,8 @@ const errorMessage = computed(() => {
 
 <template>
   <BaseModal v-model="open" :title="t('usage.error.errorDetails')" tone="danger" size="xl">
-    <div v-if="record" class="grid min-w-0 gap-4">
+    <UsageDetailState v-if="loading || error" :loading="loading" :error="error" @retry="emit('retry')" />
+    <div v-else-if="record" class="grid min-w-0 gap-4">
       <section class="min-w-0 border-l-2 border-cp-error px-3">
         <div class="flex flex-wrap items-center gap-3">
           <strong>{{ record.logicalOutcome === 'incomplete' ? '响应未完成' : '请求失败' }}</strong>
@@ -74,7 +89,7 @@ const errorMessage = computed(() => {
       <RequestDiagnosticsPanel :request-id="record.requestId" :active="open" />
     </div>
     <template #footer>
-      <BaseButton variant="soft" @click="$emit('fullDetail')">
+      <BaseButton variant="soft" :disabled="loading || !!error || !record" @click="$emit('fullDetail')">
         完整详情
       </BaseButton>
       <BaseButton variant="primary" @click="open = false">

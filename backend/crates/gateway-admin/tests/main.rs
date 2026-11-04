@@ -325,7 +325,17 @@ fn usage_window_should_not_use_daily_rolling_usage_for_weekly_statistics() {
         provider_data: None,
     };
 
-    assert_eq!(quota.usage_window(), None);
+    assert_eq!(
+        quota.usage_window().map(|(_, period)| period),
+        Some(gateway_admin::model::provider_credentials::AccountUsagePeriod::Daily)
+    );
+    let forecasts = gateway_admin::model::quota_forecast::account_quota_forecasts(
+        &quota,
+        Utc::now(),
+        Utc::now(),
+        &[],
+    );
+    assert!(forecasts.iter().all(|item| item.source.is_none()));
 }
 
 #[test]

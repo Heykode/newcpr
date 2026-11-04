@@ -933,6 +933,7 @@ impl Provider for CodexProvider {
                 )
                 .reasoning_effort_override,
             response_store,
+            oversized_http: false,
             continuation_scope: None,
             client_api_key_id: upstream_request.client_api_key_id.clone(),
             identity_seed: upstream_request.identity_seed.clone(),
@@ -968,6 +969,10 @@ impl Provider for CodexProvider {
             });
         let client = self
             .account_exit_client(&context, lease.account(), excel, session)?
+            .with_session_transport(
+                self.session_transport_recovery.clone(),
+                transport_affinity_key.clone(),
+            )
             .with_routing_affinity(guardian_parent.map(|(_, affinity)| affinity));
         let client = if !excel && context.continuation_attempt() == ContinuationAttempt::None {
             client.with_connection_budget(context.connection_budget().clone())

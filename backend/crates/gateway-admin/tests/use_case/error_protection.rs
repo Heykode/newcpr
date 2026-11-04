@@ -87,7 +87,11 @@ impl AccountProbe for ProtectionProbe {
         request: AccountProbeRequest,
     ) -> BoxFuture<'_, Result<AccountProbeResult, AccountProbeError>> {
         Box::pin(async move {
-            assert_eq!(request.account_id.as_str(), "acct_test");
+            assert_eq!(request.target.account_id().as_str(), "acct_test");
+            assert!(matches!(
+                request.target,
+                gateway_core::engine::probe::AccountProbeTarget::FreezeRecovery(_)
+            ));
             assert_eq!(request.upstream_model.as_str(), "fixture-model");
             self.started.store(true, Ordering::SeqCst);
             let _drop = ProbeDrop(&self.dropped);

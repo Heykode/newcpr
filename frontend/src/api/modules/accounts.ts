@@ -159,7 +159,7 @@ export interface AccountUsage {
   windowLabelDisplay: string
   quotaWindow: {
     key: string
-    period: 'weekly' | 'monthly'
+    period: 'daily' | 'weekly' | 'monthly'
     usedPercent: number | null
     resetAt: string | null
     estimatedUsd: number | null

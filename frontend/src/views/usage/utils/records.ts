@@ -16,6 +16,14 @@ import { formatDuration } from './format'
 
 // Usage 记录的规范化 view model：组件只消费这个形状。
 export interface UsageViewModel {
+  errorCode?: string | null
+  errorKind?: string | null
+  websocketCloseCode?: number | null
+  continuationUnavailableReason?: string | null
+  upstreamConnectionExitReason?: string | null
+  recovered?: boolean
+  retryAfterMs?: number | null
+  upstreamError?: import('@/api/modules/usage').UsageUpstreamError | null
   outcome?: string
   id: string
   requestId: string
@@ -86,6 +94,14 @@ export function normalizeUsageRecord(record: UsageRecordDetail): UsageViewModel 
   const metadata = record.metadata
 
   return {
+    errorCode: record.errorCode,
+    errorKind: record.errorKind,
+    websocketCloseCode: record.websocketCloseCode,
+    continuationUnavailableReason: record.continuationUnavailableReason,
+    upstreamConnectionExitReason: record.upstreamConnectionExitReason,
+    recovered: record.recovered,
+    retryAfterMs: record.retryAfterMs,
+    upstreamError: record.upstreamError,
     id: record.id,
     requestId: record.requestId,
     clientApiKeyId: record.clientApiKeyId,

@@ -439,7 +439,7 @@ async fn select_grok_session(
         context.client_api_key_ref().clone(),
     )
     .with_eligibility_policy(if context.is_diagnostic_required_account() {
-        AccountEligibilityPolicy::BypassForDiagnostic
+        context.account_eligibility()
     } else if context.is_quality_check() {
         AccountEligibilityPolicy::IgnoreQualityPause
     } else {

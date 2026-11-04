@@ -42,6 +42,13 @@ export function useAccountOnboarding(options: {
   const createForm = ref(emptyAccountCreateForm())
   let submissionIds: string[] = []
   let submittedBatches = 0
+  let oauthExpiryTimer: ReturnType<typeof setTimeout> | undefined
+  function clearOAuthExpiry() {
+    clearTimeout(oauthExpiryTimer)
+    oauthExpiryTimer = undefined
+  }
+  onScopeDispose(clearOAuthExpiry)
+  watch([createModalOpen, () => createForm.value.oauthFlowId], clearOAuthExpiry, { flush: 'sync' })
   // Modal-local credential material; never persist or log this comparison key.
   let submissionKey: string | undefined
 
@@ -167,6 +174,13 @@ export function useAccountOnboarding(options: {
           oauthCallback: '',
         }
         toast.success('授权链接已生成')
+        const expiresAt = Date.parse(result.expiresAt)
+        if (Number.isFinite(expiresAt)) {
+          oauthExpiryTimer = setTimeout(() => {
+            if (createModalOpen.value && createForm.value.oauthFlowId === result.flowId && !creatingAccount.value)
+              toast.warning('授权链接已过期，请重新生成')
+          }, Math.max(0, Math.min(expiresAt - Date.now(), 2_147_483_647)))
+        }
       },
     )
   }

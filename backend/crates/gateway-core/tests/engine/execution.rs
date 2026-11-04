@@ -1273,12 +1273,16 @@ fn account_probe_should_not_write_to_the_persistent_execution_store() {
         Arc::new(RecordingClientApiKeyUsage::default()),
     );
 
-    let error = block_on(service.probe(AccountProbeRequest {
-        account_id: ProviderAccountId::new("acct_probe").expect("account ID"),
-        provider_kind: ProviderKind::new("openai").expect("provider kind"),
-        upstream_model: UpstreamModelId::new("gpt-probe").expect("model ID"),
-        operation: probe_operation(),
-    }))
+    let error = block_on(
+        service.probe(AccountProbeRequest {
+            target: ProviderAccountId::new("acct_probe")
+                .expect("account ID")
+                .into(),
+            provider_kind: ProviderKind::new("openai").expect("provider kind"),
+            upstream_model: UpstreamModelId::new("gpt-probe").expect("model ID"),
+            operation: probe_operation(),
+        }),
+    )
     .expect_err("empty Provider registry should stop the probe after it starts");
 
     assert_eq!(error.kind(), GatewayErrorKind::NoAvailableProvider);
@@ -1315,7 +1319,7 @@ fn diagnostic_probe_keeps_its_local_model_policy_exemption() {
         Arc::new(RecordingClientApiKeyUsage::default()),
     );
     let error = block_on(service.probe(AccountProbeRequest {
-        account_id: ProviderAccountId::new("acct_probe").unwrap(),
+        target: ProviderAccountId::new("acct_probe").unwrap().into(),
         provider_kind: ProviderKind::new("openai").unwrap(),
         upstream_model: UpstreamModelId::new("gpt-probe").unwrap(),
         operation: probe_operation(),
@@ -1508,7 +1512,7 @@ fn quality_check_uses_normal_fixed_account_and_persists_without_client_charges()
         )
         .with_captures(captures.clone());
         let request = AccountProbeRequest {
-            account_id: ProviderAccountId::new("acct_start").unwrap(),
+            target: ProviderAccountId::new("acct_start").unwrap().into(),
             provider_kind: ProviderKind::new("openai").unwrap(),
             upstream_model: UpstreamModelId::new("gpt-start").unwrap(),
             operation: start_operation(),
@@ -1600,12 +1604,16 @@ fn probe_failures_should_be_observable_without_a_model_request_row() {
         Arc::new(RecordingClientApiKeyUsage::default()),
     );
 
-    let error = block_on(service.probe(AccountProbeRequest {
-        account_id: ProviderAccountId::new("acct_probe").expect("account ID"),
-        provider_kind: ProviderKind::new("openai").expect("provider kind"),
-        upstream_model: UpstreamModelId::new("gpt-probe").expect("model ID"),
-        operation: probe_operation(),
-    }))
+    let error = block_on(
+        service.probe(AccountProbeRequest {
+            target: ProviderAccountId::new("acct_probe")
+                .expect("account ID")
+                .into(),
+            provider_kind: ProviderKind::new("openai").expect("provider kind"),
+            upstream_model: UpstreamModelId::new("gpt-probe").expect("model ID"),
+            operation: probe_operation(),
+        }),
+    )
     .expect_err("the provider rejects every probe");
 
     assert_eq!(error.kind(), GatewayErrorKind::UpstreamUnavailable);
@@ -1643,12 +1651,16 @@ fn provider_local_probe_failure_should_remain_distinct_from_upstream() {
         Arc::new(RecordingClientApiKeyUsage::default()),
     );
 
-    let error = block_on(service.probe(AccountProbeRequest {
-        account_id: ProviderAccountId::new("acct_probe").expect("account ID"),
-        provider_kind: ProviderKind::new("openai").expect("provider kind"),
-        upstream_model: UpstreamModelId::new("gpt-probe").expect("model ID"),
-        operation: probe_operation(),
-    }))
+    let error = block_on(
+        service.probe(AccountProbeRequest {
+            target: ProviderAccountId::new("acct_probe")
+                .expect("account ID")
+                .into(),
+            provider_kind: ProviderKind::new("openai").expect("provider kind"),
+            upstream_model: UpstreamModelId::new("gpt-probe").expect("model ID"),
+            operation: probe_operation(),
+        }),
+    )
     .expect_err("the Provider rejects the probe before sending it");
 
     assert_eq!(error.source(), AccountProbeErrorSource::Provider);
@@ -1674,12 +1686,16 @@ fn probe_observation_store_failure_preserves_the_provider_error() {
         Arc::new(RecordingClientApiKeyUsage::default()),
     );
 
-    let error = block_on(service.probe(AccountProbeRequest {
-        account_id: ProviderAccountId::new("acct_probe").expect("account ID"),
-        provider_kind: ProviderKind::new("openai").expect("provider kind"),
-        upstream_model: UpstreamModelId::new("gpt-probe").expect("model ID"),
-        operation: probe_operation(),
-    }))
+    let error = block_on(
+        service.probe(AccountProbeRequest {
+            target: ProviderAccountId::new("acct_probe")
+                .expect("account ID")
+                .into(),
+            provider_kind: ProviderKind::new("openai").expect("provider kind"),
+            upstream_model: UpstreamModelId::new("gpt-probe").expect("model ID"),
+            operation: probe_operation(),
+        }),
+    )
     .expect_err("the provider error must survive observation failure");
 
     assert_eq!(error.kind(), GatewayErrorKind::UpstreamUnavailable);
@@ -3008,7 +3024,7 @@ mod failure_isolation {
             );
             if diagnostic {
                 let error = block_on(service.probe(AccountProbeRequest {
-                    account_id: ProviderAccountId::new("acct_failed").unwrap(),
+                    target: ProviderAccountId::new("acct_failed").unwrap().into(),
                     provider_kind: provider,
                     upstream_model: UpstreamModelId::new("gpt-start").unwrap(),
                     operation: start_operation(),
@@ -3138,7 +3154,7 @@ mod quality_trace {
         );
         block_on(service.quality_check(
             AccountProbeRequest {
-                account_id: ProviderAccountId::new("acct_start").unwrap(),
+                target: ProviderAccountId::new("acct_start").unwrap().into(),
                 provider_kind: ProviderKind::new("openai").unwrap(),
                 upstream_model: UpstreamModelId::new("gpt-start").unwrap(),
                 operation: start_operation(),
@@ -3317,7 +3333,7 @@ fn quality_overload_code_survives_http_and_stream_failures_in_both_modes() {
                 Arc::new(RecordingClientApiKeyUsage::default()),
             );
             let request = AccountProbeRequest {
-                account_id: ProviderAccountId::new("acct_start").unwrap(),
+                target: ProviderAccountId::new("acct_start").unwrap().into(),
                 provider_kind: ProviderKind::new("openai").unwrap(),
                 upstream_model: UpstreamModelId::new("gpt-start").unwrap(),
                 operation: start_operation(),
@@ -3405,7 +3421,7 @@ fn quality_stream_preserves_terminal_provider_kind() {
     );
     let error = block_on(service.quality_retest(
         AccountProbeRequest {
-            account_id: ProviderAccountId::new("acct_start").unwrap(),
+            target: ProviderAccountId::new("acct_start").unwrap().into(),
             provider_kind: ProviderKind::new("openai").unwrap(),
             upstream_model: UpstreamModelId::new("gpt-start").unwrap(),
             operation: start_operation(),

@@ -528,6 +528,11 @@ async fn explicit_quota_plan_is_fenced_and_survives_token_only_refreshes() {
         repository.compare_and_swap_quota(stale).await.unwrap(),
         QuotaWriteOutcome::Conflict
     );
+    let mut saved_quota = repository
+        .get_quotas(std::slice::from_ref(&id))
+        .await
+        .unwrap()
+        .remove(0);
     let refresh = CredentialCasUpdate::new(
         id.clone(),
         original.revision(),
@@ -558,6 +563,14 @@ async fn explicit_quota_plan_is_fenced_and_survives_token_only_refreshes() {
     ));
     let current = repository.get_account(&id).await.unwrap().unwrap();
     assert_eq!(current.plan_type(), Some("pro"));
+    saved_quota.expected_revision = current.revision();
+    assert_eq!(
+        repository
+            .get_quotas(std::slice::from_ref(&id))
+            .await
+            .unwrap(),
+        vec![saved_quota.clone()]
+    );
     assert_eq!(
         repository
             .compare_and_swap_quota(observation)
@@ -586,6 +599,14 @@ async fn explicit_quota_plan_is_fenced_and_survives_token_only_refreshes() {
     assert_eq!(refreshed.plan_type(), Some("pro"));
     assert_eq!(refreshed.name(), original.name());
     assert_eq!(refreshed.upstream_user_id(), original.upstream_user_id());
+    saved_quota.expected_revision = refreshed.revision();
+    assert_eq!(
+        repository
+            .get_quotas(std::slice::from_ref(&id))
+            .await
+            .unwrap(),
+        vec![saved_quota]
+    );
     database.close().await;
 }
 

@@ -76,6 +76,147 @@ fn usage_outcome_filter_should_accept_bounded_unknown_values() {
     );
 }
 
+#[tokio::test]
+async fn usage_detail_preserves_upstream_error_fields_without_exporting_other_body_fields() {
+    let Some(database) = TestDatabase::create("usage_upstream_error").await else {
+        return;
+    };
+    seed_observability_facts(&database.pool, Utc::now())
+        .await
+        .unwrap();
+    let repository = observability_repository(&database.pool);
+    let error = serde_json::json!({
+        "code": "turn_rate_limit_exceeded", "type": "rate_limit_error",
+        "message": "Codex is at capacity, please try again later", "param": "model",
+        "unrelated": "private-diagnostic-value"
+    });
+    for body in [
+        serde_json::json!({"type":"error", "error":error, "headers":{"Retry-After":"206", "Authorization":"private-header-value"}}),
+        serde_json::json!({"type":"response.failed", "response":{"error":error}}),
+    ] {
+        let details =
+            serde_json::json!({"upstream":body.to_string(), "redacted":false}).to_string();
+        sqlx::query("update model_requests set raw_upstream_error=$1, retry_after_ms=206000 where id='req_observe_failed'")
+            .bind(details).execute(&database.pool).await.unwrap();
+        let detail = repository
+            .usage_record_detail("req_observe_failed")
+            .await
+            .unwrap();
+        assert_eq!(detail.request.retry_after_ms, Some(206_000));
+        let upstream = detail.request.upstream_error.unwrap();
+        assert_eq!(
+            upstream,
+            admin_observability::UsageUpstreamError {
+                code: Some("turn_rate_limit_exceeded".to_owned()),
+                error_type: Some("rate_limit_error".to_owned()),
+                message: Some("Codex is at capacity, please try again later".to_owned()),
+                param: Some("model".to_owned()),
+                close_reason: None,
+                last_event_type: None,
+            }
+        );
+        assert_eq!(format!("{upstream:?}"), "UsageUpstreamError(<restricted>)");
+    }
+    database.close().await;
+}
+
+#[tokio::test]
+async fn usage_error_facts_preserve_recovery_and_validate_saved_close_frames() {
+    let Some(database) = TestDatabase::create("usage_error_facts").await else {
+        return;
+    };
+    let now = Utc::now();
+    seed_observability_facts(&database.pool, now).await.unwrap();
+    let range =
+        ObservabilityRange::new(now - TimeDelta::hours(1), now + TimeDelta::hours(1)).unwrap();
+    let repository = observability_repository(&database.pool);
+    let saved =
+        |frame: serde_json::Value| serde_json::json!({"upstream": frame.to_string()}).to_string();
+    for (details, close_code) in [
+        (
+            Some(saved(
+                serde_json::json!({"type":"websocket.close","code":1012,"reason":"opaque reason"}),
+            )),
+            Some(1012),
+        ),
+        (
+            Some(saved(serde_json::json!({"type":"error","code":1012}))),
+            None,
+        ),
+        (
+            Some(saved(
+                serde_json::json!({"type":"websocket.close","code":70000}),
+            )),
+            None,
+        ),
+        (
+            Some(saved(
+                serde_json::json!({"type":"websocket.close","code":null}),
+            )),
+            None,
+        ),
+        (Some("legacy plain-text error".to_owned()), None),
+        (None, None),
+    ] {
+        sqlx::query(
+            "update model_requests
+             set error_kind = 'continuation_recovery_required', raw_upstream_error = $1,
+                 recovery_request_id = 'req_observe_success', recovered_at = $2,
+                 continuation_requested = true, continuation_affinity_hash = repeat('a', 64), recovery_attempt_count = 1,
+                 continuation_previous_response_id_hash = repeat('b', 64),
+                 recovery_retry_delay_ms = 4000, recovery_total_latency_ms = 8000,
+                 upstream_connection_id = 'conn-preview', upstream_connection_age_ms = 3300000, upstream_connection_idle_ms = 0,
+                 continuation_unavailable_reason = 'reused_connection_lost', upstream_connection_exit_reason = 'max_age_expired'
+             where id = 'req_observe_failed'",
+        ).bind(details).bind(now).execute(&database.pool).await.unwrap();
+        let page = repository
+            .list_usage_records(UsageRecordQuery {
+                record_status: admin_observability::UsageRecordStatus::All,
+                range,
+                filter: UsageRecordFilter::default(),
+                current_page: 1,
+                page_size: ObservabilityPageSize::new(10).unwrap(),
+            })
+            .await
+            .expect("list with saved error facts");
+        let record = page
+            .items
+            .iter()
+            .find(|record| record.id == "req_observe_failed")
+            .unwrap();
+        assert_eq!(record.websocket_close_code, close_code);
+        assert_eq!(
+            record.error_kind.as_deref(),
+            Some("continuation_recovery_required")
+        );
+        assert_eq!(
+            record.continuation_unavailable_reason.as_deref(),
+            Some("reused_connection_lost")
+        );
+        assert_eq!(
+            record.upstream_connection_exit_reason.as_deref(),
+            Some("max_age_expired")
+        );
+        assert!(record.recovered);
+        assert_eq!(record.outcome, "failed");
+        let detail = repository
+            .usage_record_detail(&record.id)
+            .await
+            .expect("detail with saved error facts");
+        assert_eq!(detail.request.websocket_close_code, close_code);
+        assert!(detail.request.recovered);
+        assert_eq!(
+            detail.request.continuation_unavailable_reason,
+            record.continuation_unavailable_reason
+        );
+        assert_eq!(
+            detail.request.upstream_connection_exit_reason,
+            record.upstream_connection_exit_reason
+        );
+    }
+    database.close().await;
+}
+
 #[test]
 fn postgres_observability_adapter_implements_query_port() {
     fn assert_port<T: ObservabilityRepository>() {}

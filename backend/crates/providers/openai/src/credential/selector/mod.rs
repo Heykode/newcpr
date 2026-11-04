@@ -837,7 +837,7 @@ impl CodexCredentialSelector {
                     || policy.preferred_account_overrides_weight(),
                 round_robin_cursor,
                 eligibility: if diagnostic {
-                    AccountEligibilityPolicy::BypassForDiagnostic
+                    request.attempt.account_eligibility()
                 } else if quality_recovery {
                     AccountEligibilityPolicy::IgnoreQualityPause
                 } else {
@@ -907,11 +907,9 @@ impl CodexCredentialSelector {
                 .find(|candidate| candidate.account.id() == selected.account.id())
                 .map(|candidate| candidate.account.clone())
                 .ok_or(CredentialSelectionError::InvalidCredential(None))?;
-            // A diagnostic request is explicitly authorized to update the
-            // selected account's health facts, even when scheduling has
-            // disabled that account. Ordinary scheduling keeps the enabled
-            // guard in case the account changes after candidate loading.
-            let allows_account_state_mutation = diagnostic || quality_recovery || account.enabled();
+            let allows_account_state_mutation = context
+                .eligibility
+                .allows_account_state_mutation(account.enabled());
             if !diagnostic && self.excel_auth_block(&account).is_some() {
                 excluded.insert(account.id().clone());
                 continue;

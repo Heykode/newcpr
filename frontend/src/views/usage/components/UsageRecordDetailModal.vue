@@ -30,14 +30,17 @@ import {
 import RequestDiagnosticsPanel from './RequestDiagnosticsPanel.vue'
 import UsageDetailCodePanel from './UsageDetailCodePanel.vue'
 import UsageDetailFieldGrid from './UsageDetailFieldGrid.vue'
+import UsageDetailState from './UsageDetailState.vue'
 import UsageStatusCodeBadge from './UsageStatusCodeBadge.vue'
 
 const props = defineProps<{
   record: UsageViewModel | null
+  loading?: boolean
+  error?: string
 }>()
 
+const emit = defineEmits<{ retry: [] }>()
 const open = defineModel<boolean>({ default: false })
-
 const { palette } = useChartPalette()
 
 const requestText = computed(() => props.record ? visibleRequestText(props.record) : '')
@@ -84,6 +87,19 @@ const modelRouteItems = computed(() => [
 ])
 
 const clientUpstreamItems = computed(() => [
+  { label: '错误类型', value: props.record?.errorKind, mono: true },
+  { label: '错误代码', value: props.record?.errorCode, mono: true },
+  { label: 'WS 关闭码', value: props.record?.websocketCloseCode, mono: true },
+  { label: '续接失败原因', value: props.record?.continuationUnavailableReason, wrap: true },
+  { label: '连接退出原因', value: props.record?.upstreamConnectionExitReason, wrap: true },
+  { label: '恢复状态', value: props.record?.recovered ? '已恢复' : '未记录恢复' },
+  { label: '上游建议等待（毫秒）', value: props.record?.retryAfterMs },
+  { label: '上游原始错误代码', value: props.record?.upstreamError?.code, mono: true },
+  { label: '上游原始错误类型', value: props.record?.upstreamError?.errorType, mono: true },
+  { label: '上游原始错误消息', value: props.record?.upstreamError?.message, wrap: true, fullWidth: true },
+  { label: '上游报错参数', value: props.record?.upstreamError?.param, wrap: true },
+  { label: '上游关闭原因', value: props.record?.upstreamError?.closeReason, wrap: true },
+  { label: '关闭前最后事件', value: props.record?.upstreamError?.lastEventType, mono: true },
   { label: '客户端 IP', value: props.record ? usageClientIp(props.record) : '—', mono: true },
   { label: '服务档位', value: props.record?.serviceTier, mono: true },
   { label: '事件类型', value: props.record?.kind, mono: true },
@@ -280,7 +296,8 @@ const tokenDonutOption = computed<EChartsOption>(() => {
     tone="info"
     size="xl"
   >
-    <div v-if="record" class="grid min-w-0 gap-3">
+    <UsageDetailState v-if="loading || error" :loading="loading" :error="error" @retry="emit('retry')" />
+    <div v-else-if="record" class="grid min-w-0 gap-3">
       <section :class="panelClass">
         <dl
           class="grid min-w-0 grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-4 lg:grid-cols-[minmax(0,2fr)_100px_minmax(0,1fr)_180px]"

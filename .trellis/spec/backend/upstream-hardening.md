@@ -86,6 +86,14 @@ Filter protocol metadata headers in active, settlement and idle phases, retainin
 business fields. Do not expose `codex.rate_limits` to downstream clients.
 
 Oversized new chains may use HTTP under the existing fallback settings.
+The default size threshold is 15.5 MiB with recovery below 13.5 MiB; configured
+thresholds retain the same 2 MiB hysteresis and zero disables size routing.
+Measure the final WS frame after identity projection and overdraft injection.
+Keep oversized memory separate from WS failure budgets: successful incremental
+turns must not erase the full-history size decision. After oversized replay has
+completed successfully, request downstream reconnection only after the matching
+terminal has been written and the native input queue is empty. The reconnect
+hint is transient, never persisted, and must not be restricted by client UA.
 Oversized exact continuations fail before sending. A downstream WS delta
 after HTTP `store:false` requires full replay; it is never silently sent as a
 new chain. Keep the separate Excel replay contract.

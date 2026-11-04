@@ -3,13 +3,14 @@ import type { CSSProperties } from 'vue'
 import type { ThemeColorTokens } from '@/composables/useThemeColor'
 import type { ThemeName } from '@/theme'
 
-import { computed, onMounted, shallowRef, useTemplateRef } from 'vue'
+import { computed, onMounted, shallowRef, useTemplateRef, watch } from 'vue'
 
 import { provideThemeColorTokens } from '@/composables/useThemeColor'
 
 const props = defineProps<{
   theme: ThemeName
   style: CSSProperties
+  stylesRevision?: number
 }>()
 
 const host = useTemplateRef<HTMLElement>('host')
@@ -29,12 +30,18 @@ function serializeDocumentStyles() {
   }).filter(Boolean).join('\n')
 }
 
+let applicationStyles: HTMLStyleElement | undefined
+watch(() => props.stylesRevision, () => {
+  if (applicationStyles)
+    applicationStyles.textContent = serializeDocumentStyles()
+}, { flush: 'post' })
+
 onMounted(() => {
   if (!host.value)
     return
 
   const shadowRoot = host.value.attachShadow({ mode: 'open' })
-  const applicationStyles = document.createElement('style')
+  applicationStyles = document.createElement('style')
   const previewRoot = document.createElement('div')
 
   applicationStyles.dataset.themePreviewStyles = ''
@@ -54,7 +61,7 @@ onMounted(() => {
   >
     <Teleport v-if="contentRoot" :to="contentRoot">
       <div
-        class="h-full min-h-0 w-full min-w-0 bg-cp-bg-layout font-sans text-cp-text"
+        class="h-full min-h-0 w-full min-w-0 font-sans text-cp-text"
         :data-theme="theme"
         :style="style"
       >

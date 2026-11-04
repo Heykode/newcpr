@@ -875,7 +875,7 @@ impl DefaultExecutionService {
         let account_scope = Arc::new(
             snapshot
                 .all_account_scope()
-                .for_quality_check(request.account_id.clone()),
+                .for_quality_check(request.target.account_id().clone()),
         );
         let routing_context = RoutingContext {
             required_provider: Some(request.provider_kind.clone()),
@@ -936,7 +936,7 @@ impl DefaultExecutionService {
                 new_request,
                 request.operation,
                 plan,
-                request.account_id,
+                request.target.account_id().clone(),
                 attempt_cancellation.clone(),
                 retest,
             )
@@ -1027,14 +1027,14 @@ impl DefaultExecutionService {
         request: AccountProbeRequest,
     ) -> Result<AccountProbeResult, AccountProbeError> {
         let AccountProbeRequest {
-            account_id,
+            target,
             provider_kind,
             upstream_model,
             operation,
         } = request;
         let observed = ProbeObservation {
             provider_kind: provider_kind.clone(),
-            account_id: account_id.clone(),
+            account_id: target.account_id().clone(),
             upstream_model: upstream_model.clone(),
         };
         let snapshot = self.snapshots.acquire().map_err(|_| {
@@ -1091,7 +1091,7 @@ impl DefaultExecutionService {
                 new_request,
                 operation,
                 plan,
-                account_id,
+                target,
                 None,
                 CancellationToken::new(),
             )

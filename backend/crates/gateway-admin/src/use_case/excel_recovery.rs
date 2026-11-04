@@ -43,8 +43,9 @@ impl ExcelRecoveryService {
             .probe
             .excel_recovery(
                 AccountProbeRequest {
-                    account_id: ProviderAccountId::new(claim.account_id.clone())
-                        .map_err(|_| AdminError::invalid("invalid recovery account"))?,
+                    target: ProviderAccountId::new(claim.account_id.clone())
+                        .map_err(|_| AdminError::invalid("invalid recovery account"))?
+                        .into(),
                     provider_kind: provider,
                     upstream_model: model,
                     operation,

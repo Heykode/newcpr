@@ -2,6 +2,10 @@
 
 ## Scope and Authority
 
+PR titles use a complete English Conventional Commit title, such as
+`fix(openai): preserve replay recovery across transports`. This adopts upstream
+`53a09bb` without importing its plugin-specific development workflow.
+
 Use this guide when comparing CPR with the official upstream tree, integrating
 an upstream fix, reviewing dependency drift, preparing a PR, or preparing a
 release.
@@ -27,8 +31,9 @@ release.
   repository wholesale. Useful development skill/agent rules may be distilled
   into the existing Trellis guides after checking their applicability; never
   import unavailable plugin tooling or replace local authorization boundaries.
-- Do not import XAI/Grok-specific behavior, unrelated PR work, or a branch that
-  has not entered the fixed official baseline.
+- Do not import unrequested XAI/Grok behavior, unrelated PR work, or a branch
+  outside the fixed official baseline. The v3.40.0 native integration explicitly
+  includes the approved xAI refresh/snapshot and rolling daily usage fixes.
 
 ## Evidence Before Conclusions
 

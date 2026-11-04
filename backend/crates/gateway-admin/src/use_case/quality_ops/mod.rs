@@ -624,8 +624,9 @@ impl QualityOpsService {
             operation
         };
         let request = AccountProbeRequest {
-            account_id: ProviderAccountId::new(account_id.to_owned())
-                .map_err(|_| AdminError::invalid("账号ID不合法"))?,
+            target: ProviderAccountId::new(account_id.to_owned())
+                .map_err(|_| AdminError::invalid("账号ID不合法"))?
+                .into(),
             provider_kind,
             upstream_model,
             operation,
@@ -800,8 +801,9 @@ impl QualityOpsService {
                 self.probe
                     .state_probe(
                         AccountProbeRequest {
-                            account_id: ProviderAccountId::new(config.account_id.clone())
-                                .map_err(|_| AdminError::invalid("账号ID不合法"))?,
+                            target: ProviderAccountId::new(config.account_id.clone())
+                                .map_err(|_| AdminError::invalid("账号ID不合法"))?
+                                .into(),
                             provider_kind,
                             upstream_model: model,
                             operation,

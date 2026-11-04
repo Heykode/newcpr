@@ -460,6 +460,19 @@ async fn usage_detail_should_keep_attempt_snapshot_contract() {
         now,
     );
     request.upstream_response_ms = Some(700);
+    request.error_kind = Some("continuation_recovery_required".to_owned());
+    request.continuation_unavailable_reason = Some("reused_connection_lost".to_owned());
+    request.upstream_connection_exit_reason = Some("max_age_expired".to_owned());
+    request.websocket_close_code = Some(1012);
+    request.recovered = true;
+    request.upstream_error = Some(gateway_admin::model::observability::UsageUpstreamError {
+        code: Some("previous_response_not_found".to_owned()),
+        error_type: Some("invalid_request_error".to_owned()),
+        message: Some("Previous response is unavailable.".to_owned()),
+        param: Some("previous_response_id".to_owned()),
+        close_reason: None,
+        last_event_type: None,
+    });
     fixture
         .usage_detail
         .lock()
@@ -520,6 +533,25 @@ async fn usage_detail_should_keep_attempt_snapshot_contract() {
         .await
         .expect("usage detail body");
     let value: serde_json::Value = serde_json::from_slice(&body).expect("usage detail JSON");
+    assert_eq!(value["data"]["errorKind"], "continuation_recovery_required");
+    assert_eq!(value["data"]["websocketCloseCode"], 1012);
+    assert_eq!(value["data"]["recovered"], true);
+    assert_eq!(
+        value["data"]["continuationUnavailableReason"],
+        "reused_connection_lost"
+    );
+    assert_eq!(
+        value["data"]["upstreamConnectionExitReason"],
+        "max_age_expired"
+    );
+    assert_eq!(
+        value["data"]["upstreamError"]["param"],
+        "previous_response_id"
+    );
+    assert_eq!(
+        value["data"]["upstreamError"]["message"],
+        "Previous response is unavailable."
+    );
     assert_eq!(value["data"]["latencyDetails"]["upstreamResponseMs"], 700);
     assert_eq!(
         serde_json::json!({
@@ -963,6 +995,11 @@ pub(super) fn usage_record_with_account(
     use gateway_admin::model::observability::{RequestOutcome, UsageRecord};
 
     UsageRecord {
+        upstream_error: None,
+        websocket_close_code: None,
+        continuation_unavailable_reason: None,
+        upstream_connection_exit_reason: None,
+        recovered: false,
         client_api_key_name: Some("test-client".to_owned()),
         id: id.to_owned(),
         client_api_key_ref: "key_detail".to_owned(),
@@ -1098,6 +1135,11 @@ async fn usage_route_should_expose_table_facts_without_detail_payload() {
         .lock()
         .expect("usage records")
         .push(UsageListRecord {
+            error_kind: None,
+            websocket_close_code: None,
+            continuation_unavailable_reason: None,
+            upstream_connection_exit_reason: None,
+            recovered: false,
             error_code: None,
             error_message: None,
             outcome: gateway_admin::model::observability::RequestOutcome::Succeeded,

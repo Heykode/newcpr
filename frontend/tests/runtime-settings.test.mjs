@@ -62,7 +62,7 @@ test('runtime display units preserve saved bytes and milliseconds without a glob
     const units = query.state.unitFields
     assert.equal(units.intervalSeconds.input.value, '0.05')
     assert.equal(units.bodyMiB.input.value, String(initial.responsesMaxDecompressedBodyBytes / 1048576))
-    assert.equal(units.largeRequestMiB.input.value, '15')
+    assert.equal(units.largeRequestMiB.input.value, '15.5')
     assert.equal(units.maxAgeSeconds.input.value, '3300')
     await query.state.saveSettings()
     assert.equal(query.requests.at(-1).responsesMaxDecompressedBodyBytes, initial.responsesMaxDecompressedBodyBytes)
@@ -530,7 +530,7 @@ test('stream prefetch rejects only invalid or inexact byte numbers before saving
 
 test('large request threshold inherits defaults and round trips zero and custom bytes', async () => {
   for (const [overrides, defaults, expected] of [
-    [{}, {}, 15 * 1024 * 1024],
+    [{}, {}, 15.5 * 1024 * 1024],
     [{ websocketLargeRequestThresholdBytes: null }, { websocketLargeRequestThresholdBytes: 8192 }, 8192],
     [{ websocketLargeRequestThresholdBytes: 0 }, { websocketLargeRequestThresholdBytes: 8192 }, 0],
   ]) {
@@ -657,7 +657,7 @@ test('inherited runtime defaults never add the removed global WS opening limit',
       maxAccountSwitches: 31,
       maxRequestAttempts: 32,
       websocketMaxRetries: 5,
-      websocketLargeRequestThresholdBytes: 15 * 1024 * 1024,
+      websocketLargeRequestThresholdBytes: 15.5 * 1024 * 1024,
       streamPrefetchBytes: 128 * 1024,
       websocketMaxAgeMs: 55 * 60 * 1_000,
       websocketStreamIdleTimeoutMs: 300_000,

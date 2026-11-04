@@ -243,7 +243,7 @@ fn request_tuning_overrides_round_trip_all_live_fields() {
     assert!(defaults.get("websocketMaxConnecting").is_none());
     assert_eq!(
         defaults["websocketLargeRequestThresholdBytes"],
-        15 * 1024 * 1024
+        31 * 1024 * 1024 / 2
     );
     assert_eq!(defaults["openaiLocationOverrideEnabled"], false);
     assert_eq!(defaults["excelImageRelayBytes"], 1024 * 1024 * 1024);

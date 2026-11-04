@@ -23,6 +23,7 @@ use super::{
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum ForwardOutcome {
     Continue,
+    ReconnectIfIdle,
     Disconnect,
 }
 
@@ -171,7 +172,6 @@ async fn forward_execution_inner(
             return outcome;
         }
         let provider_terminal_at = Instant::now();
-        commit_connection_replay(replay, &encoder, provider_state.take());
         let writes_succeeded = send_metadata(
             connection,
             &request_id,
@@ -194,7 +194,7 @@ async fn forward_execution_inner(
         }
         log_terminal_write_success(connection, &request_id, provider_terminal_at.elapsed());
         execution.disarm();
-        return ForwardOutcome::Continue;
+        return commit_connection_replay(replay, &encoder, provider_state.take());
     }
     if !send_metadata(
         connection,
@@ -255,7 +255,6 @@ async fn forward_execution_inner(
                         return outcome;
                     }
                     let provider_terminal_at = Instant::now();
-                    commit_connection_replay(replay, &encoder, provider_state.take());
                     if !send_messages(
                         connection,
                         &control,
@@ -280,7 +279,7 @@ async fn forward_execution_inner(
                         provider_terminal_at.elapsed(),
                     );
                     execution.disarm();
-                    return ForwardOutcome::Continue;
+                    return commit_connection_replay(replay, &encoder, provider_state.take());
                 }
                 let terminal_batch = encoder.has_wire_failure();
                 if !send_messages(
@@ -357,9 +356,19 @@ fn commit_connection_replay(
     replay: &mut ConnectionReplaySnapshot,
     encoder: &OpenAiResponsesEncoder,
     provider_state: Option<ProviderSessionState>,
-) {
+) -> ForwardOutcome {
+    let reconnect = encoder.completed_response_id().is_some()
+        && encoder.completed_response_id() == encoder.response_id()
+        && provider_state
+            .as_ref()
+            .is_some_and(ProviderSessionState::prefers_websocket_reconnect);
     if let Some(response_id) = encoder.response_id() {
         replay.commit(response_id.to_owned(), provider_state);
+    }
+    if reconnect {
+        ForwardOutcome::ReconnectIfIdle
+    } else {
+        ForwardOutcome::Continue
     }
 }
 

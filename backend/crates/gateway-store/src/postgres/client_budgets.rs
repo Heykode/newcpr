@@ -250,16 +250,7 @@ impl PgClientBudgetStore {
             .begin()
             .await
             .map_err(|source| ClientBudgetError(Some(source.into())))?;
-        // 与窗口开启和重置统一先锁 Key，再写窗口和费用
-        let key = sqlx::query_scalar::<_, String>(
-            "select id from client_api_keys where id = $1 for update",
-        )
-        .bind(first.key_id.as_str())
-        .fetch_optional(&mut *tx)
-        .await
-        .map_err(|source| ClientBudgetError(Some(source.into())))?;
-        let Some(key) = key else { return Ok(()) }; // 删除 Key 时也会删除其费用记录
-        settle_in_transaction(&mut tx, &key, charges)
+        settle_in_transaction(&mut tx, first.key_id.as_str(), charges)
             .await
             .map_err(|source| ClientBudgetError(Some(source.into())))?;
         tx.commit()
@@ -273,6 +264,22 @@ async fn settle_in_transaction(
     key: &str,
     charges: &[ClientBudgetCharge],
 ) -> Result<(), sqlx::Error> {
+    // 删除凭据后仍使用已开启的预算窗口串行化在途请求结算。
+    let active = sqlx::query("select 1 from client_api_keys where id = $1 for update")
+        .bind(key)
+        .fetch_optional(&mut **tx)
+        .await?;
+    if active.is_none()
+        && sqlx::query(
+            "select 1 from client_key_budget_windows where client_api_key_id = $1 for update",
+        )
+        .bind(key)
+        .fetch_optional(&mut **tx)
+        .await?
+        .is_none()
+    {
+        return Ok(());
+    }
     let ids = charges
         .iter()
         .map(|charge| charge.request_id.as_str())

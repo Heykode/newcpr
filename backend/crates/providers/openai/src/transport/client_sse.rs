@@ -52,6 +52,7 @@ impl CodexBackendClient {
         let base_url = base_url.into().trim_end_matches('/').to_string();
         Self {
             routing_affinity: None,
+            session_transport: None,
             connection_budget: None,
             session_proxy: None,
             direct_client: client.clone(),
@@ -666,6 +667,22 @@ impl CodexBackendClient {
             ));
         }
         // Only independent new chains can change transport without rebuilding history.
+        let oversized = if matches!(
+            requirement,
+            TransportRequirement::NewChain | TransportRequirement::WebSocketNewChain
+        ) {
+            self.session_transport
+                .as_ref()
+                .map_or(oversized, |(recovery, key)| {
+                    recovery.http_for_full_payload(
+                        key.as_ref(),
+                        payload_bytes as usize,
+                        tuning.websocket_large_request_threshold_bytes as usize,
+                    )
+                })
+        } else {
+            oversized
+        };
         if oversized
             && matches!(
                 requirement,

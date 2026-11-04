@@ -67,22 +67,7 @@ impl HealthStatus {
                 ),
             })
             .collect();
-        // 逐个探针共享截止时间，保留已完成结果并指出具体超时组件
-        let deadline = tokio::time::Instant::now() + HEALTH_CHECK_TIMEOUT;
-        let checks = self.probes.iter().map(|probe| async move {
-            let (state, reason) = match tokio::time::timeout_at(deadline, probe.check()).await {
-                Ok(HealthState::Healthy) => return None,
-                Ok(HealthState::Degraded(reason)) => ("degraded", reason),
-                Ok(HealthState::Unhealthy(reason)) => ("unhealthy", reason),
-                Err(_) => ("timed_out", "health probe exceeded 2s deadline".to_owned()),
-            };
-            Some(HealthFailure {
-                component: format!("probe:{}", probe.name()),
-                state,
-                reason,
-            })
-        });
-        failures.extend(join_all(checks).await.into_iter().flatten());
+        failures.extend(probe_failures(self.probes.iter()).await);
         let healthy = failures.is_empty();
         let changed = {
             let mut previous = self
@@ -127,6 +112,40 @@ impl HealthStatus {
             }
         }
         healthy
+    }
+}
+
+async fn probe_failures<'a>(
+    probes: impl Iterator<Item = &'a Arc<dyn HealthProbe>>,
+) -> Vec<HealthFailure> {
+    // 探针并行共用截止时间，保留已完成结果并指出具体超时组件
+    let deadline = tokio::time::Instant::now() + HEALTH_CHECK_TIMEOUT;
+    let checks = probes.map(|probe| async move {
+        let (state, reason) = match tokio::time::timeout_at(deadline, probe.check()).await {
+            Ok(HealthState::Healthy) => return None,
+            Ok(HealthState::Degraded(reason)) => ("degraded", reason),
+            Ok(HealthState::Unhealthy(reason)) => ("unhealthy", reason),
+            Err(_) => ("timed_out", "health probe exceeded 2s deadline".to_owned()),
+        };
+        Some(HealthFailure {
+            component: format!("probe:{}", probe.name()),
+            state,
+            reason,
+        })
+    });
+    join_all(checks).await.into_iter().flatten().collect()
+}
+
+pub(crate) async fn readyz(State(state): State<ApiState>) -> StatusCode {
+    let required = state
+        .health()
+        .probes
+        .iter()
+        .filter(|probe| probe.required_for_readiness());
+    if probe_failures(required).await.is_empty() {
+        StatusCode::NO_CONTENT
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
     }
 }
 

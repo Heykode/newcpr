@@ -966,6 +966,10 @@ pub(super) struct RecoveryAttemptRoute {
 /// Codex HTTP/SSE 上游客户端。
 #[derive(Clone)]
 pub struct CodexBackendClient {
+    pub(super) session_transport: Option<(
+        crate::session_transport::CodexSessionTransportRecovery,
+        Option<gateway_core::provider_ports::ProviderSessionAffinityKey>,
+    )>,
     pub(super) routing_affinity: Option<super::routing_affinity::ChatGptRoutingAffinity>,
     pub(super) connection_budget: Option<gateway_core::engine::connection::ConnectionBudget>,
     pub(super) session_proxy:
@@ -991,6 +995,15 @@ pub struct CodexBackendClient {
 }
 
 impl CodexBackendClient {
+    pub(crate) fn with_session_transport(
+        mut self,
+        recovery: crate::session_transport::CodexSessionTransportRecovery,
+        key: Option<gateway_core::provider_ports::ProviderSessionAffinityKey>,
+    ) -> Self {
+        self.session_transport = Some((recovery, key));
+        self
+    }
+
     pub(crate) fn with_routing_affinity(
         mut self,
         affinity: Option<super::routing_affinity::ChatGptRoutingAffinity>,

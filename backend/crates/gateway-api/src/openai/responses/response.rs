@@ -24,6 +24,7 @@ pub struct OpenAiResponsesEncoder {
     response_snapshot: Option<Value>,
     wire_terminal: Option<Value>,
     wire_failure: bool,
+    completed_response_id: Option<String>,
 }
 
 impl OpenAiResponsesEncoder {
@@ -35,6 +36,7 @@ impl OpenAiResponsesEncoder {
             response_snapshot: None,
             wire_terminal: None,
             wire_failure: false,
+            completed_response_id: None,
         }
     }
 
@@ -138,6 +140,10 @@ impl OpenAiResponsesEncoder {
         self.response_id.as_deref()
     }
 
+    pub(super) fn completed_response_id(&self) -> Option<&str> {
+        self.completed_response_id.as_deref()
+    }
+
     /// 校验完整响应并返回原生终态 response object。
     ///
     /// # Errors
@@ -170,6 +176,13 @@ impl OpenAiResponsesEncoder {
         let effective_type = wire
             .event_type()
             .or_else(|| wire.data().get("type").and_then(Value::as_str));
+        if effective_type == Some("response.completed") {
+            self.completed_response_id = wire
+                .data()
+                .pointer("/response/id")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+        }
         if matches!(
             effective_type,
             Some("response.created" | "response.in_progress" | "response.queued")

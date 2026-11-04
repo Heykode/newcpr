@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { Check, PanelsTopLeft, RotateCcw, Save, Search, Undo2 } from '@lucide/vue'
-import { defineAsyncComponent, shallowRef } from 'vue'
+import { shallowRef } from 'vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 
 import BaseInput from '@/components/base/BaseInput.vue'
@@ -12,9 +12,9 @@ import { t } from '@/i18n'
 
 import { useThemeEditor } from '../composables/useThemeEditor'
 import ThemeComponentTokenPanel from './ThemeComponentTokenPanel.vue'
-import ThemeGlobalTokenPanel from './ThemeGlobalTokenPanel.vue'
+import ThemeEditorPreview from './ThemeEditorPreview.vue'
 
-const ThemeEditorPreview = defineAsyncComponent(() => import('./ThemeEditorPreview.vue'))
+import ThemeGlobalTokenPanel from './ThemeGlobalTokenPanel.vue'
 
 const {
   draft,

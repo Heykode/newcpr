@@ -145,6 +145,17 @@ pub(super) const UPSTREAM_RESPONSE_MS_SQL: &str = r#"jsonb_path_query_first(mr.p
 fn usage_list_record_select() -> String {
     format!(
     "select {UPSTREAM_RESPONSE_MS_SQL} as upstream_response_ms, mr.id, mr.outcome, mr.provider_error_code as error_code, mr.error_message, coalesce(mr.client_api_key_name_snapshot, ck.name) as client_api_key_name, mr.billing_snapshot_json,
+            mr.error_kind,
+            case when pg_input_is_valid(mr.raw_upstream_error, 'jsonb') then
+              case when jsonb_typeof(mr.raw_upstream_error::jsonb -> 'upstream') = 'string'
+                and pg_input_is_valid(mr.raw_upstream_error::jsonb ->> 'upstream', 'jsonb') then
+                (select case when jsonb_array_length(codes) = 1 then codes ->> 0 end
+                 from jsonb_path_query_array((mr.raw_upstream_error::jsonb ->> 'upstream')::jsonb,
+                   '$ ? (@.type == \"websocket.close\").code ? (@.type() == \"number\")') as codes)
+              end
+            end as websocket_close_code,
+            mr.continuation_unavailable_reason, mr.upstream_connection_exit_reason,
+            (mr.recovery_request_id is not null and mr.recovered_at is not null) as recovered,
             mr.endpoint, mr.client_transport, mr.requested_model_id,
             mr.provider_kind, mr.provider_account_ref,
             mr.provider_account_name_snapshot as provider_account_name,
@@ -189,6 +200,8 @@ fn usage_record_detail_select() -> String {
             mr.outcome, mr.client_status_code, mr.upstream_status_code,
             mr.client_response_id, mr.upstream_request_id, mr.upstream_response_id,
             mr.error_kind, mr.provider_error_code, mr.error_message, mr.retry_after_ms,
+            mr.raw_upstream_error as error_details, mr.continuation_unavailable_reason, mr.upstream_connection_exit_reason,
+            (mr.recovery_request_id is not null and mr.recovered_at is not null) as recovered,
             mr.input_tokens, mr.output_tokens, mr.cached_tokens, mr.cache_write_tokens,
             mr.reasoning_tokens, mr.image_input_tokens, mr.image_output_tokens,
             mr.total_tokens, mr.cost_source, mr.cost_amount::text,
