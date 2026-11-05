@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { ApiKeyFormValue } from '../composables/useApiKeyMutations'
 import type { AccountGroup } from '@/api'
-import { Copy, DollarSign, KeyRound, Upload } from '@lucide/vue'
+import { Copy, Dices, DollarSign, KeyRound, Upload } from '@lucide/vue'
 import { computed, reactive, ref, watch } from 'vue'
 import AccountGroupCheckboxGrid from '@/components/AccountGroupCheckboxGrid.vue'
 import BaseButton from '@/components/base/BaseButton.vue'
@@ -42,6 +42,13 @@ function save() {
   if (!Object.keys(errors.value).length)
     emit('save')
 }
+function generateInstallationId() {
+  const bytes = globalThis.crypto.getRandomValues(new Uint8Array(16))
+  bytes[6] = (bytes[6] & 0x0F) | 0x40
+  bytes[8] = (bytes[8] & 0x3F) | 0x80
+  const hex = Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('')
+  form.value.installationId = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
+}
 watch(open, () => {
   submitted.value = false
   for (const key of Object.keys(touched) as Array<keyof ApiKeyFormValue>)
@@ -80,6 +87,22 @@ watch(open, () => {
           :placeholder="t('keys.editor.forExampleBackendService')"
           :disabled="saving"
         />
+      </BaseFormItem>
+
+      <BaseFormItem :error="fieldError('installationId')" label="安装 ID">
+        <div class="flex items-center gap-2">
+          <BaseInput
+            v-model="form.installationId"
+            class="min-w-0 flex-1"
+            aria-label="安装 ID"
+            placeholder="留空使用上游账号的安装ID"
+            :disabled="saving"
+            @blur="touched.installationId = true"
+          />
+          <BaseIconButton label="生成安装 ID" :disabled="saving" @click="generateInstallationId">
+            <Dices class="size-4" />
+          </BaseIconButton>
+        </div>
       </BaseFormItem>
 
       <BaseFormItem :label="t('accounts.fields.accountGrouping')">

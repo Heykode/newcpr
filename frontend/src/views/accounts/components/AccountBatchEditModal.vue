@@ -104,7 +104,7 @@ const egressMode = defineModel<string>('egressMode', { required: true })
       encrypted-content-available
       name-available
       model-access-available
-      :account-id="catalogAccountId"
+      :model-account-id="catalogAccountId"
       :groups="groups"
       :groups-loading="groupsLoading"
       :excel-available="excelAvailable"

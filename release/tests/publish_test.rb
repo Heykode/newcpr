@@ -37,6 +37,10 @@ class PublishTest < Minitest::Test
     File.write(File.join(@repo, "release/version.yaml"), "version: \"0.1.0\"\n")
     File.write(File.join(@repo, "release/notes.md"), "# v0.1.0\n\nInitial\n")
     File.write(File.join(@repo, "source.txt"), "unchanged\n")
+    %w[release/toolchains.rb release/release-metadata.rb release/platforms.yaml backend/rust-toolchain.toml deploy/Dockerfile].each do |path|
+      FileUtils.mkdir_p(File.dirname(File.join(@repo, path)))
+      FileUtils.cp(File.join(File.expand_path("../..", __dir__), path), File.join(@repo, path))
+    end
     git("add", ".")
     git("commit", "--quiet", "-m", "initial")
     git("remote", "add", "origin", @remote)
@@ -97,8 +101,18 @@ class PublishTest < Minitest::Test
     assert_equal "version: \"0.1.1\"\n", git("show", "v0.1.1:release/version.yaml")
   end
 
-  def publish(version)
-    Open3.capture2e(@env, "bash", SCRIPT, version, chdir: @repo)
+  def test_check_preserves_files_refs_index_and_remote
+    File.write(File.join(@repo, "release/notes.md"), "# v0.1.1\n\nSynthetic update\n")
+    before = [git("show-ref"), git("ls-remote", "origin"), File.binread(File.join(@repo, ".git/index"))]
+    output, status = publish("--check", "0.1.1")
+    assert status.success?, output
+    assert_includes output, "Preflight passed"
+    assert_equal before, [git("show-ref"), git("ls-remote", "origin"), File.binread(File.join(@repo, ".git/index"))]
+    assert_equal "version: \"0.1.0\"\n", File.read(File.join(@repo, "release/version.yaml"))
+  end
+
+  def publish(*arguments)
+    Open3.capture2e(@env, "bash", SCRIPT, *arguments, chdir: @repo)
   end
 
   def git(*args)

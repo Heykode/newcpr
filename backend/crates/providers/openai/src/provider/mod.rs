@@ -106,7 +106,6 @@ mod live;
 mod observation;
 mod quality_probe;
 mod request_proxy;
-mod turn_state;
 mod workers;
 pub(crate) use live::{CodexLiveGateway, CodexLiveRegistry};
 
@@ -154,7 +153,6 @@ pub struct CodexProvider {
     session_identity: Option<CodexSessionIdentity>,
     session_transport_recovery: CodexSessionTransportRecovery,
     guardian_routing: guardian::GuardianRouting,
-    turn_state_ownership: turn_state::TurnStateOwnership,
     encrypted_history: encrypted_history::InvalidEncryptedHistory,
     stream_max_retries: u32,
     request_tuning: Option<gateway_core::runtime::RequestTuningHandle>,
@@ -269,7 +267,6 @@ impl CodexProvider {
             session_identity: None,
             session_transport_recovery: CodexSessionTransportRecovery::default(),
             guardian_routing: guardian::GuardianRouting::default(),
-            turn_state_ownership: turn_state::TurnStateOwnership::default(),
             encrypted_history: encrypted_history::InvalidEncryptedHistory::default(),
             stream_max_retries: _stream_max_retries,
             request_tuning: None,
@@ -317,6 +314,28 @@ impl fmt::Debug for CodexProvider {
 
 #[async_trait]
 impl Provider for CodexProvider {
+    fn resolve_key_request_profile(
+        &self,
+        profile: Option<&gateway_core::account::OpaqueProviderData>,
+    ) -> Result<Option<gateway_core::account::OpaqueProviderData>, ProviderError> {
+        match profile {
+            Some(profile) => self
+                .client
+                .profile_state()
+                .key_request_snapshot(profile)
+                .map(Some)
+                .map_err(|error| {
+                    provider_error(
+                        ProviderErrorKind::InvalidRequest,
+                        UpstreamSendState::NotSent,
+                    )
+                    .with_diagnostic(failure::profile_diagnostic(&error))
+                    .with_source(error)
+                }),
+            None => self.resolve_request_profile(),
+        }
+    }
+
     fn resolve_request_profile(
         &self,
     ) -> Result<Option<gateway_core::account::OpaqueProviderData>, ProviderError> {
@@ -791,26 +810,11 @@ impl Provider for CodexProvider {
                 )
                 .map(|affinity| (response_id.to_owned(), affinity))
         });
-        let turn_state_scope = self
-            .turn_state_ownership
-            .scope(&context, &lease, &upstream_request);
-        // A token proof grants only turn-state echo, not ownership of other account state.
-        let verified_turn_state = upstream_request
-            .turn_state
-            .as_ref()
-            .filter(|token| {
-                matches!(account_scope, RequestAccountScope::Unknown)
-                    && turn_state_scope
-                        .as_ref()
-                        .is_some_and(|scope| scope.owns(token))
-            })
-            .cloned();
-        scope_request_to_account(
-            &mut upstream_request,
-            lease.installation_id(),
-            account_scope,
-            verified_turn_state.as_deref(),
-        );
+        let installation_id = self
+            .client_for_request(&context)?
+            .profile_state()
+            .effective_installation_id(lease.installation_id());
+        scope_request_to_account(&mut upstream_request, &installation_id, account_scope);
         if let Some((response_id, _)) = &guardian_parent
             && let Some(Value::Object(metadata)) =
                 upstream_request.body_mut().get_mut("client_metadata")
@@ -825,7 +829,6 @@ impl Provider for CodexProvider {
                 "provider.request.account_scope",
                 serde_json::json!({
                     "accountStateReusable": account_scope.can_reuse_account_state(),
-                    "verifiedTurnStateEcho": verified_turn_state.is_some(),
                     "before": before,
                     "after": crate::transport::evidence::request_state(&upstream_request),
                 }),
@@ -984,6 +987,7 @@ impl Provider for CodexProvider {
         }
         let events = cold_response_stream(ColdResponse {
             encrypted_history: self.encrypted_history.clone(),
+            installation_id,
             client,
             response_origin: if excel {
                 Url::parse(crate::transport::excel::RESPONSES_URL).map_err(|_| {
@@ -1005,7 +1009,6 @@ impl Provider for CodexProvider {
             transport_affinity_key,
             session_transport_recovery: self.session_transport_recovery.clone(),
             guardian_routing: self.guardian_routing.clone(),
-            turn_state_scope,
             websocket_retry_count,
             stream_max_retries: if self.request_tuning.is_some() {
                 request_tuning.websocket_max_retries

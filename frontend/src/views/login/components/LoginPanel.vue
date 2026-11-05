@@ -45,7 +45,7 @@ function togglePasswordVisible(): void {
   <BaseCard
     as="form"
     padding="none"
-    class="login-form relative grid min-h-120 w-[min(440px,100%)] gap-2.5 rounded-lg px-7.5 pt-6.5 pb-6 max-[560px]:min-h-auto max-[560px]:gap-4 max-[560px]:p-5.5"
+    class="login-form relative grid w-[min(440px,100%)] gap-2.5 rounded-lg px-7.5 pt-6.5 pb-6 min-[980px]:min-h-120 max-[560px]:gap-4 max-[560px]:p-5.5"
     @submit.prevent="emit('submit')"
   >
     <div class="login-form-line" />

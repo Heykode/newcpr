@@ -338,6 +338,7 @@ pub(crate) fn admin_dashboard_account_model_usage(
 ) -> AdminStoreResult<admin_observability::DashboardAccountModelUsage> {
     Ok(admin_observability::DashboardAccountModelUsage {
         model: usage.model,
+        health: usage.health,
         request_count: usage.request_count,
         success_count: usage.success_count,
         input_tokens: usage.input_tokens,

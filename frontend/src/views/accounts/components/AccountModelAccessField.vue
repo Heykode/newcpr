@@ -2,7 +2,7 @@
 import type { AccountModelAccess } from '@/api'
 import { CircleAlert, RefreshCw, Search } from '@lucide/vue'
 
-import { computed, ref, useId, watch } from 'vue'
+import { computed, ref, useId, useTemplateRef, watch } from 'vue'
 import { getAccountModels, refreshAccountModels } from '@/api'
 import { getQualityModels } from '@/api/modules/quality-ops'
 import BaseButton from '@/components/base/BaseButton.vue'
@@ -26,6 +26,8 @@ const props = withDefaults(defineProps<{
   allowPreserve?: boolean
 }>(), { disabled: false, allowPreserve: false, knownModelCatalog: false })
 const model = defineModel<AccountModelAccess | undefined>({ required: true })
+const formItem = useTemplateRef<InstanceType<typeof BaseFormItem>>('modelAccessItem')
+watch(model, () => formItem.value?.clearValidate())
 const catalog = ref<Array<{ id: string, label: string }>>([])
 const refreshButton = ref<InstanceType<typeof BaseIconButton>>()
 const catalogObservedAtDisplay = ref<string>()
@@ -187,7 +189,7 @@ watch(search, () => {
 
 <template>
   <div class="grid gap-3">
-    <BaseFormItem :prop="formProp">
+    <BaseFormItem ref="modelAccessItem" :prop="formProp">
       <template #label>
         <span class="inline-flex flex-wrap items-end gap-x-2 gap-y-1">
           <span>{{ t('accounts.modelAccess.modelCatalog') }}</span>

@@ -482,12 +482,51 @@ pub struct AccountPoolMetrics {
     pub error: u64,
 }
 
+/// 请求健康与成功用量分开计数；调用方错误和取消不计入服务成功率。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RequestHealth {
+    pub success_requests: u64,
+    pub failed_requests: u64,
+    pub cancelled_requests: u64,
+    pub incomplete_requests: u64,
+    pub caller_error_requests: u64,
+}
+
+impl RequestHealth {
+    #[must_use]
+    pub fn from_counts(
+        success: u64,
+        failed: u64,
+        cancelled: u64,
+        incomplete: u64,
+        caller_error: u64,
+    ) -> Self {
+        Self {
+            success_requests: success,
+            failed_requests: failed.saturating_sub(caller_error),
+            cancelled_requests: cancelled,
+            incomplete_requests: incomplete,
+            caller_error_requests: caller_error,
+        }
+    }
+
+    #[must_use]
+    pub fn success_rate(self) -> Option<f64> {
+        let total = self
+            .success_requests
+            .saturating_add(self.failed_requests)
+            .saturating_add(self.incomplete_requests);
+        (total > 0).then(|| self.success_requests as f64 / total as f64 * 100.0)
+    }
+}
+
 /// Dashboard 中一个账号的模型级用量事实。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DashboardAccountModelUsage {
     pub model: String,
     pub request_count: u64,
     pub success_count: u64,
+    pub health: RequestHealth,
     pub input_tokens: Option<u64>,
     pub output_tokens: Option<u64>,
     pub cached_tokens: Option<u64>,
@@ -500,7 +539,7 @@ pub struct DashboardAccountModelUsage {
     pub total_tokens: Option<u64>,
     pub cost_coverage: CostCoverage,
     pub costs: Vec<CurrencyCost>,
-    pub last_used_at: DateTime<Utc>,
+    pub last_used_at: Option<DateTime<Utc>>,
 }
 
 /// Dashboard 中账号的单小时请求数。

@@ -57,7 +57,7 @@ export function useSettingsFormRules(form: SettingsForm) {
       message: '探测模型不可包含控制字符，最长 128 个字符',
     },
     'accountErrorProtection.rules': {
-      trigger: 'change',
+      trigger: [],
       validator: () => {
         const error = protectionRulesError(form.accountErrorProtection)
         return error ? new Error(error) : true

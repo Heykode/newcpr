@@ -184,6 +184,13 @@ pub(crate) fn admin_account_usage_window_model(
         (account_id, window_key, model.clone()),
         AccountModelUsage {
             model,
+            health: gateway_admin::model::observability::RequestHealth::from_counts(
+                window_usage_count(row, "health_success_count")?,
+                window_usage_count(row, "health_failed_count")?,
+                window_usage_count(row, "health_cancelled_count")?,
+                window_usage_count(row, "health_incomplete_count")?,
+                window_usage_count(row, "health_caller_error_count")?,
+            ),
             request_count: window_usage_count(row, "request_count")?,
             success_count: window_usage_count(row, "success_count")?,
             input_tokens: optional_window_usage_count(row, "input_tokens")?,
@@ -299,6 +306,7 @@ pub(crate) fn admin_account_model_usage(
 ) -> AdminStoreResult<AccountModelUsage> {
     Ok(AccountModelUsage {
         model: usage.model,
+        health: usage.health,
         request_count: usage.request_count,
         success_count: usage.success_count,
         input_tokens: usage.input_tokens,

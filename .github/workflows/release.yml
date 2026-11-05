@@ -21,6 +21,9 @@ env:
 
 jobs:
   release-info:
+    permissions:
+      contents: read
+      actions: read
     runs-on: ubuntu-26.04
     timeout-minutes: 10
     outputs:
@@ -39,6 +42,7 @@ jobs:
       rust: ${{ steps.toolchains.outputs.rust }}
       rust_image: ${{ steps.toolchains.outputs.rust_image }}
       prerelease: ${{ steps.version.outputs.prerelease }}
+      run_backend: ${{ steps.quality.outputs.run_backend }}
 
     steps:
       - name: Checkout
@@ -58,12 +62,28 @@ jobs:
         id: toolchains
         run: ruby release/toolchains.rb >> "$GITHUB_OUTPUT"
 
+      - name: Check reusable backend CI evidence
+        id: quality
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ruby release/release-quality.rb >> "$GITHUB_OUTPUT"
+
   quality:
     needs: [release-info]
     uses: ./.github/workflows/_quality.yml
     with:
       ref: ${{ needs.release-info.outputs.git_sha }}
       upload_frontend: true
+      run_backend: ${{ needs.release-info.outputs.run_backend == 'true' }}
+
+  security:
+    needs: release-info
+    uses: ./.github/workflows/security-scan.yml
+    permissions:
+      contents: read
+      security-events: write
+    with:
+      ref: ${{ needs.release-info.outputs.git_sha }}
 
   build-docker-binary:
     name: build-docker-binary (${{ matrix.os }}-${{ matrix.arch }})
@@ -80,40 +100,16 @@ jobs:
         with:
           ref: ${{ needs.release-info.outputs.git_sha }}
 
-      - name: Cache Cargo
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            backend/target
-          key: cargo-v3-${{ runner.os }}-${{ matrix.target }}-${{ needs.release-info.outputs.rust_image }}-${{ hashFiles('backend/Cargo.lock', 'backend/rust-toolchain.toml', 'backend/**/Cargo.toml', 'backend/.cargo/config.toml') }}
-          restore-keys: |
-            cargo-v3-${{ runner.os }}-${{ matrix.target }}-
-
       - name: Build binary
-        shell: bash
-        run: |
-          mkdir -p "$HOME/.cargo" "../dist/binaries/${{ matrix.os }}-${{ matrix.arch }}"
-          docker run --rm \
-            --platform "${{ matrix.dockerPlatform }}" \
-            --user "$(id -u):$(id -g)" \
-            -e CARGO_HOME=/cargo \
-            -e HOME=/tmp \
-            -e CPR_VERSION="${CPR_VERSION}" \
-            -e CPR_GIT_SHA="${CPR_GIT_SHA}" \
-            -e CPR_BUILD_TIME="${CPR_BUILD_TIME}" \
-            -e CPR_BUILD_TYPE="${CPR_BUILD_TYPE}" \
-            -v "$HOME/.cargo:/cargo" \
-            -v "$PWD/..:/workspace" \
-            -w /workspace/backend \
-            "${RUST_IMAGE}" \
-            cargo build --release --locked --target "${{ matrix.target }}" --bin codex-proxy-rs
-          cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" "../dist/binaries/${{ matrix.os }}-${{ matrix.arch }}/${{ matrix.binary }}"
-        working-directory: backend
+        uses: ./.github/actions/build-binary
+        with:
+          rust: ${{ needs.release-info.outputs.rust }}
+          target: ${{ matrix.target }}
+          platform: ${{ matrix.os }}-${{ matrix.arch }}
+          binary: ${{ matrix.binary }}
+          rust-image: ${{ needs.release-info.outputs.rust_image }}
         env:
           CPR_VERSION: ${{ needs.release-info.outputs.version }}
-          RUST_IMAGE: ${{ needs.release-info.outputs.rust_image }}
           CPR_GIT_SHA: ${{ needs.release-info.outputs.git_sha }}
           CPR_BUILD_TIME: ${{ needs.release-info.outputs.build_time }}
           CPR_BUILD_TYPE: ${{ needs.release-info.outputs.build_type }}
@@ -142,30 +138,13 @@ jobs:
         with:
           ref: ${{ needs.release-info.outputs.git_sha }}
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
-        with:
-          toolchain: ${{ needs.release-info.outputs.rust }}
-          targets: ${{ matrix.target }}
-
-      - name: Cache Cargo
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            backend/target
-          key: cargo-v3-${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('backend/Cargo.lock', 'backend/rust-toolchain.toml', 'backend/**/Cargo.toml', 'backend/.cargo/config.toml') }}
-          restore-keys: |
-            cargo-v3-${{ runner.os }}-${{ matrix.target }}-
-
       - name: Build binary
-        shell: bash
-        run: |
-          cargo build --release --locked --target "${{ matrix.target }}" --bin codex-proxy-rs
-          mkdir -p "../dist/binaries/${{ matrix.os }}-${{ matrix.arch }}"
-          cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" "../dist/binaries/${{ matrix.os }}-${{ matrix.arch }}/${{ matrix.binary }}"
-        working-directory: backend
+        uses: ./.github/actions/build-binary
+        with:
+          rust: ${{ needs.release-info.outputs.rust }}
+          target: ${{ matrix.target }}
+          platform: ${{ matrix.os }}-${{ matrix.arch }}
+          binary: ${{ matrix.binary }}
         env:
           CPR_VERSION: ${{ needs.release-info.outputs.version }}
           CPR_GIT_SHA: ${{ needs.release-info.outputs.git_sha }}
@@ -365,12 +344,13 @@ jobs:
     concurrency:
       group: release-publication
       queue: max
-    needs: [release-info, package-assets, build-docker-image]
+    needs: [release-info, package-assets, build-docker-image, security]
     if: >-
       ${{
         !cancelled() &&
         needs.release-info.result == 'success' &&
         needs.package-assets.result == 'success' &&
+        needs.security.result == 'success' &&
         needs.build-docker-image.result == 'success'
       }}
     runs-on: ubuntu-26.04

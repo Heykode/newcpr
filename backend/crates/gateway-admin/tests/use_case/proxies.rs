@@ -18,8 +18,8 @@ struct ControlledProbe {
 
 #[async_trait]
 impl ProxyProbe for ControlledProbe {
-    async fn test(&self, proxy: &OutboundProxy, _: bool) -> ProxyTestResult {
-        assert_eq!(proxy.endpoint(), "http://proxy.example:8080/");
+    async fn test(&self, proxy: Option<&OutboundProxy>, _: bool) -> ProxyTestResult {
+        assert_eq!(proxy.unwrap().endpoint(), "http://proxy.example:8080/");
         self.entered.add_permits(1);
         self.release.acquire().await.unwrap().forget();
         ProxyTestResult {
@@ -59,7 +59,7 @@ async fn unsaved_proxy_probe_returns_success_and_failure_without_store_access() 
         let result = services
             .proxies()
             .probe(
-                &OutboundProxy::parse("http://proxy.example:8080").unwrap(),
+                Some(&OutboundProxy::parse("http://proxy.example:8080").unwrap()),
                 false,
             )
             .await
@@ -92,7 +92,7 @@ async fn unsaved_proxy_probe_shares_test_limit_and_releases_slot_on_cancellation
             service
                 .proxies()
                 .probe(
-                    &OutboundProxy::parse("http://proxy.example:8080").unwrap(),
+                    Some(&OutboundProxy::parse("http://proxy.example:8080").unwrap()),
                     detect_location,
                 )
                 .await
@@ -103,7 +103,7 @@ async fn unsaved_proxy_probe_shares_test_limit_and_releases_slot_on_cancellation
     assert_eq!(
         services
             .proxies()
-            .probe(&proxy, true)
+            .probe(Some(&proxy), true)
             .await
             .unwrap_err()
             .kind(),
@@ -128,7 +128,7 @@ async fn unsaved_proxy_probe_shares_test_limit_and_releases_slot_on_cancellation
     assert!(cancelled.await.unwrap_err().is_cancelled());
     let service = services.clone();
     tasks.push(tokio::spawn(async move {
-        service.proxies().probe(&proxy, false).await
+        service.proxies().probe(Some(&proxy), false).await
     }));
     wait_for_probes(&probe, 1).await;
     probe.release.add_permits(4);
@@ -236,7 +236,7 @@ impl ProxyStore for TestProxies {
 
 #[async_trait]
 impl ProxyProbe for TestProxies {
-    async fn test(&self, _: &OutboundProxy, _: bool) -> ProxyTestResult {
+    async fn test(&self, _: Option<&OutboundProxy>, _: bool) -> ProxyTestResult {
         panic!("unexpected proxy probe")
     }
 }

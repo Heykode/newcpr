@@ -10,6 +10,7 @@ usage() {
   cat <<USAGE
 Usage:
   release/publish <version>
+  release/publish --check <version>
 
 Example:
   release/publish 0.1.4
@@ -63,6 +64,13 @@ if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
   exit 0
 fi
 
+check_only=false
+if [[ "${1:-}" == "--check" ]]; then
+  check_only=true
+  export GIT_OPTIONAL_LOCKS=0
+  shift
+fi
+
 [[ "$#" -eq 1 ]] || {
   usage >&2
   exit 2
@@ -100,6 +108,8 @@ if ! git diff --cached --quiet --ignore-submodules -- . ":(exclude)$NOTES_FILE";
 fi
 
 version="$(ruby "$metadata_script" validate "$version")"
+ruby release/toolchains.rb >/dev/null
+ruby -r ./release/release-metadata -e 'ReleaseMetadata.platforms'
 current_version="$(read_version_key version)"
 current_version="${current_version#v}"
 [[ "$version" != "$current_version" ]] || die "$VERSION_FILE is already $version"
@@ -114,12 +124,20 @@ if git rev-parse --quiet --verify "refs/tags/$tag" >/dev/null; then
   die "local tag already exists: $tag"
 fi
 
-git fetch "$remote"
+if [[ "$check_only" == false ]]; then
+  git fetch "$remote"
+fi
 
 upstream="$remote/$remote_branch"
 local_head="$(git rev-parse HEAD)"
-upstream_head="$(git rev-parse "$upstream")"
-merge_base="$(git merge-base HEAD "$upstream")"
+remote_refs="$(git ls-remote --refs "$remote" "$merge_ref" "refs/tags/$tag")" || die "failed to read remote refs"
+upstream_head="$(awk -v ref="$merge_ref" '$2 == ref { print $1 }' <<< "$remote_refs")"
+[[ -n "$upstream_head" ]] || die "upstream branch does not exist: $upstream"
+if awk -v ref="refs/tags/$tag" '$2 == ref { found = 1 } END { exit !found }' <<< "$remote_refs"; then
+  die "remote tag already exists: $tag"
+fi
+git cat-file -e "$upstream_head^{commit}" 2>/dev/null || die "upstream has unseen commits; run git fetch $remote first"
+merge_base="$(git merge-base HEAD "$upstream_head")" || die "branch has no common history with $upstream"
 
 if [[ "$local_head" != "$upstream_head" && "$merge_base" != "$upstream_head" ]]; then
   if [[ "$merge_base" == "$local_head" ]]; then
@@ -128,8 +146,10 @@ if [[ "$local_head" != "$upstream_head" && "$merge_base" != "$upstream_head" ]];
   die "branch has diverged from $upstream"
 fi
 
-if git ls-remote --exit-code --tags "$remote" "refs/tags/$tag" >/dev/null 2>&1; then
-  die "remote tag already exists: $tag"
+if [[ "$check_only" == true ]]; then
+  echo "Preflight passed: $APP_NAME $version on $branch -> $repository ($remote_branch)"
+  echo "No files, Git refs, or remote state changed."
+  exit 0
 fi
 
 update_version_file "$version"

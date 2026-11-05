@@ -1188,6 +1188,7 @@ async fn request_capture_global_is_opt_in_request_scoped_and_readable_after_disa
     };
     let directory = tempfile::tempdir().unwrap();
     let (manager, cancel, worker) = setup(&database, directory.path()).await;
+    assert!(!manager.is_active());
     let old_task = enable(&manager).await;
     assert!(!manager.settings().await.unwrap().global_active);
     let config = RequestCaptureConfig {
@@ -1199,6 +1200,7 @@ async fn request_capture_global_is_opt_in_request_scoped_and_readable_after_disa
     };
     manager.configure(config.clone(), &context()).await.unwrap();
     assert!(manager.settings().await.unwrap().global_active);
+    assert!(manager.is_active());
     let status = manager.status().await.unwrap();
     assert_eq!(
         status
@@ -1218,14 +1220,19 @@ async fn request_capture_global_is_opt_in_request_scoped_and_readable_after_disa
         1
     );
 
-    // No account has been selected: a local adaptation failure still has evidence.
+    // Ingress failure precedes account selection; its response is consumed after status.
     let request = trace(&manager, "req_local_failure");
     request.capture(
-        "client.request.body",
+        "ingress.request.body",
         br#"{"input":"local fixture","access_token":"private-fixture"}"#,
     );
-    request.record("downstream.status", json!({"status":400}));
+    request.record("ingress.body.finished", json!({"complete":true}));
     request.record("request.finished", json!({"outcome":"Failed"}));
+    request.capture(
+        "ingress.response.body",
+        br#"{"error":{"code":"invalid_request","param":"model"}}"#,
+    );
+    request.record("ingress.body.finished", json!({"complete":false}));
     drop(request);
     wait_records(&manager, 1).await;
 
@@ -1257,10 +1264,14 @@ async fn request_capture_global_is_opt_in_request_scoped_and_readable_after_disa
     let records = manager.for_request("req_local_failure").await.unwrap();
     assert_eq!(records.len(), 1);
     assert_eq!(records[0].request_id, "req_local_failure");
+    assert!(records[0].incomplete);
     assert!(manager.for_request("req_unknown").await.unwrap().is_empty());
     let id = &records[0].id;
     let body = manager.read(id, 0, &context()).await.unwrap().text;
     assert!(body.contains("local fixture"));
+    assert!(body.contains("ingress.request.body"));
+    assert!(body.contains("ingress.response.body"));
+    assert!(body.contains("invalid_request"));
     assert!(!body.contains("private-fixture"));
     assert!(!body.contains("another fixture"));
 
@@ -1268,6 +1279,7 @@ async fn request_capture_global_is_opt_in_request_scoped_and_readable_after_disa
     disabled.enabled = false;
     disabled.global_errors = false;
     manager.configure(disabled, &context()).await.unwrap();
+    assert!(!manager.is_active());
     assert!(manager.start("req_disabled", "any-key", &[]).is_none());
     assert!(!manager.settings().await.unwrap().global_active);
     assert_eq!(manager.read(id, 0, &context()).await.unwrap().text, body);

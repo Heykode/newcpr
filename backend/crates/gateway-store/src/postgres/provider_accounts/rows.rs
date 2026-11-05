@@ -13,6 +13,7 @@ pub(crate) const ADMIN_USAGE_CHUNK_SIZE: usize = 200;
 /// 表示对应维度未参与该行聚合，调用方据此区分窗口、模型与成本行。
 pub(crate) fn account_usage_by_windows_sql() -> String {
     let completed_usage = completed_usage_fact_predicate("mr");
+    let business = super::super::usage_facts::business_request_predicate("mr");
     format!(
         "with requested_windows as (
          select *
@@ -23,17 +24,19 @@ pub(crate) fn account_usage_by_windows_sql() -> String {
                 requested.window_key,
                 mr.id as request_id,
                 coalesce(mr.upstream_model_id, mr.requested_model_id) as model,
+                coalesce(({completed_usage}), false) as included, mr.client_status_code,
                 mr.outcome, mr.input_tokens, mr.output_tokens, mr.cached_tokens,
                 mr.cache_write_tokens, mr.reasoning_tokens,
                 mr.image_input_tokens, mr.image_output_tokens,
                 mr.image_generation_succeeded, mr.total_tokens,
-                mr.cost_source, mr.cost_amount, mr.cost_currency, mr.started_at
+                mr.cost_source, mr.cost_amount,
+                case when {completed_usage} then mr.cost_currency end as cost_currency, mr.started_at
            from requested_windows requested
            left join model_requests mr
              on mr.provider_account_ref = requested.account_id
             and mr.started_at >= requested.window_start
             and mr.started_at < requested.window_end
-            and {completed_usage}
+            and mr.recovered_at is null and ({business})
      )
      select account_id,
             window_key,
@@ -41,31 +44,36 @@ pub(crate) fn account_usage_by_windows_sql() -> String {
             cost_currency,
             grouping(model)::integer as model_grouping,
             grouping(cost_currency)::integer as currency_grouping,
-            count(request_id)::bigint as request_count,
-            count(request_id) filter (where outcome = 'succeeded')::bigint as success_count,
-            sum(input_tokens)::bigint as input_tokens,
-            sum(output_tokens)::bigint as output_tokens,
-            sum(cached_tokens)::bigint as cached_tokens,
-            sum(cache_write_tokens)::bigint as cache_write_tokens,
-            sum(reasoning_tokens)::bigint as reasoning_tokens,
-            sum(image_input_tokens)::bigint as image_input_tokens,
-            sum(image_output_tokens)::bigint as image_output_tokens,
-            count(request_id) filter (where image_generation_succeeded is true)::bigint
+            count(request_id) filter (where included)::bigint as request_count,
+            count(request_id) filter (where included)::bigint as success_count,
+            sum(input_tokens) filter (where included)::bigint as input_tokens,
+            sum(output_tokens) filter (where included)::bigint as output_tokens,
+            sum(cached_tokens) filter (where included)::bigint as cached_tokens,
+            sum(cache_write_tokens) filter (where included)::bigint as cache_write_tokens,
+            sum(reasoning_tokens) filter (where included)::bigint as reasoning_tokens,
+            sum(image_input_tokens) filter (where included)::bigint as image_input_tokens,
+            sum(image_output_tokens) filter (where included)::bigint as image_output_tokens,
+            count(request_id) filter (where included and image_generation_succeeded is true)::bigint
               as image_request_count,
-            count(request_id) filter (where image_generation_succeeded is false)::bigint
+            count(request_id) filter (where included and image_generation_succeeded is false)::bigint
               as image_request_failed_count,
             coalesce(sum(coalesce(
               total_tokens,
               coalesce(input_tokens, 0) + coalesce(output_tokens, 0)
-            )), 0)::bigint as total_tokens,
-            count(request_id) filter (where cost_source = 'provider_reported')::bigint
+            )) filter (where included), 0)::bigint as total_tokens,
+            count(request_id) filter (where included and cost_source = 'provider_reported')::bigint
               as provider_reported_count,
-            count(request_id) filter (where cost_source = 'calculated')::bigint
+            count(request_id) filter (where included and cost_source = 'calculated')::bigint
               as calculated_count,
-            count(request_id) filter (where cost_source = 'unavailable')::bigint
+            count(request_id) filter (where included and cost_source = 'unavailable')::bigint
               as unavailable_count,
-            max(started_at) as last_used_at,
-            sum(cost_amount)::text as amount
+            count(request_id) filter (where outcome = 'succeeded')::bigint as health_success_count,
+                  count(request_id) filter (where outcome = 'failed')::bigint as health_failed_count,
+                  count(request_id) filter (where outcome = 'cancelled')::bigint as health_cancelled_count,
+                  count(request_id) filter (where outcome = 'incomplete')::bigint as health_incomplete_count,
+                  count(request_id) filter (where client_status_code between 400 and 499)::bigint as health_caller_error_count,
+                  max(started_at) filter (where included) as last_used_at,
+            sum(cost_amount) filter (where included)::text as amount
        from matched
       group by grouping sets (
         (account_id, window_key),

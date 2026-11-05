@@ -323,6 +323,121 @@ async fn custom_names_are_atomic_searchable_and_preserve_account_identity() {
 }
 
 #[tokio::test]
+async fn model_success_rates_preserve_usage_across_window_and_rolling_reads() {
+    let Some(database) = TestDatabase::create("account_model_health").await else {
+        return;
+    };
+    PgProviderAccountRepository::new(database.pool.clone())
+        .insert_provider_account(account("acct_health", "user-health"))
+        .await
+        .unwrap();
+    let start = chrono::DateTime::from_timestamp(Utc::now().timestamp().div_euclid(3600) * 3600, 0)
+        .unwrap()
+        - TimeDelta::hours(3);
+    for (index, (id, model, outcome, status)) in [
+        ("health_success", "mixed", "succeeded", 200),
+        ("health_retry", "mixed", "succeeded", 200),
+        ("health_failed", "mixed", "failed", 502),
+        ("health_incomplete", "mixed", "incomplete", 200),
+        ("health_cancelled", "mixed", "cancelled", 200),
+        ("health_caller", "mixed", "failed", 400),
+        ("health_recovered", "mixed", "failed", 502),
+        ("health_only_failed", "failed-only", "failed", 502),
+        ("health_only_cancelled", "no-sample", "cancelled", 200),
+        ("health_only_caller", "no-sample", "failed", 400),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        seed_model_request(
+            &database.pool,
+            ModelRequestSeed {
+                request_id: id,
+                account_id: "acct_health",
+                provider_kind: "openai",
+                model,
+                total_tokens: 11,
+                cost_amount: "2.5",
+                started_at: start + TimeDelta::minutes(5 + index as i64 * 5),
+            },
+        )
+        .await
+        .unwrap();
+        sqlx::query("update model_requests set outcome=$2,client_status_code=$3,attempt_count=case when id='health_retry' then 3 else 1 end where id=$1")
+            .bind(id).bind(outcome).bind(status).execute(&database.pool).await.unwrap();
+    }
+    sqlx::query("update model_requests set recovery_request_id='health_retry',recovered_at=completed_at,recovery_attempt_count=1,recovery_retry_delay_ms=0,recovery_total_latency_ms=1 where id='health_recovered'")
+        .execute(&database.pool).await.unwrap();
+    let windows = [
+        AccountUsageWindowQuery {
+            account_id: "acct_health".to_owned(),
+            key: "whole".to_owned(),
+            range: TimeRange {
+                start,
+                end: start + TimeDelta::hours(2),
+            },
+        },
+        AccountUsageWindowQuery {
+            account_id: "acct_health".to_owned(),
+            key: "boundary".to_owned(),
+            range: TimeRange {
+                start: start + TimeDelta::minutes(3),
+                end: start + TimeDelta::minutes(117),
+            },
+        },
+    ];
+    let store = admin_account_store(&database.pool);
+    let source = store.load_account_usage_by_windows(&windows).await.unwrap();
+    for result in &source {
+        let usage = &result.usage;
+        assert_eq!((usage.request_count, usage.total_tokens), (2, Some(22)));
+        assert_eq!(usage.costs[0].amount.as_str(), "5");
+        assert_eq!(usage.cost_coverage.provider_reported_count, 2);
+        let mixed = usage
+            .models
+            .iter()
+            .find(|model| model.model == "mixed")
+            .unwrap();
+        assert_eq!(mixed.health.success_rate(), Some(50.0));
+        assert_eq!(mixed.health.success_requests, 2);
+        assert_eq!(mixed.health.failed_requests, 1);
+        assert_eq!(mixed.health.incomplete_requests, 1);
+        let failed = usage
+            .models
+            .iter()
+            .find(|model| model.model == "failed-only")
+            .unwrap();
+        assert_eq!(failed.health.success_rate(), Some(0.0));
+        assert_eq!(failed.last_used_at, None);
+        assert!(failed.costs.is_empty());
+        let excluded = usage
+            .models
+            .iter()
+            .find(|model| model.model == "no-sample")
+            .unwrap();
+        assert_eq!(excluded.health.success_rate(), None);
+    }
+    let rolling = store
+        .load_account_usage(windows[0].range, &["acct_health".to_owned()])
+        .await
+        .unwrap();
+    for model in &rolling[0].models {
+        assert_eq!(
+            model.health,
+            source[0]
+                .usage
+                .models
+                .iter()
+                .find(|expected| expected.model == model.model)
+                .unwrap()
+                .health
+        );
+    }
+
+    database.close().await;
+}
+
+#[tokio::test]
 async fn custom_names_and_excel_omission_survive_reimport_rotation_and_credential_refresh() {
     use gateway_admin::model::accounts::AccountImportSettings;
     let Some(database) = TestDatabase::create("custom_name_retention").await else {

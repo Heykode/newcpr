@@ -37,4 +37,7 @@ fn with_model_request_id(
     }
     headers.insert("x-gateway-request-id", gateway_id);
     response
+        .extensions_mut()
+        .insert(crate::diagnostics::ExecutionObserved);
+    response
 }

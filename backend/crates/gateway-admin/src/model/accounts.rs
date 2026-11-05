@@ -333,6 +333,7 @@ pub struct AccountModelUsage {
     pub model: String,
     pub request_count: u64,
     pub success_count: u64,
+    pub health: super::observability::RequestHealth,
     pub input_tokens: Option<u64>,
     pub output_tokens: Option<u64>,
     pub cached_tokens: Option<u64>,
@@ -345,7 +346,7 @@ pub struct AccountModelUsage {
     pub total_tokens: Option<u64>,
     pub cost_coverage: super::observability::CostCoverage,
     pub costs: Vec<AccountCost>,
-    pub last_used_at: DateTime<Utc>,
+    pub last_used_at: Option<DateTime<Utc>>,
 }
 
 /// 账号在一个小时窗口内的请求数。

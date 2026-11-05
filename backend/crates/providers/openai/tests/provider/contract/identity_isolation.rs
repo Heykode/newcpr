@@ -1205,3 +1205,262 @@ async fn qx_new_thread_does_not_reuse_opening_headers_of_another_thread() {
         .unwrap()
         .unwrap();
 }
+
+const KEY_INSTALLATION_ID: &str = "3b11bc82-c666-417d-b9ff-2a34fd040385";
+
+#[tokio::test]
+async fn key_installation_override_scopes_http_headers_metadata_and_cache_without_changing_account()
+{
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_scope_same").await;
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(CAPTURE_COMPLETED_SSE),
+        )
+        .expect(4)
+        .mount(&server)
+        .await;
+    let profiles = wire_profile();
+    let provider = provider_and_quota_with_profile(
+        &store,
+        Arc::new(MemorySessionAffinity::default()),
+        server.uri(),
+        Arc::new(TestLeaseCoordinator::default()),
+        0,
+        profiles.clone(),
+    )
+    .0;
+    let invalid = OpaqueProviderData::new(
+        json!({
+            "inherit": { "installationId": "invalid-id" }
+        })
+        .as_object()
+        .unwrap()
+        .clone(),
+    );
+    assert_eq!(
+        provider
+            .resolve_key_request_profile(Some(&invalid))
+            .unwrap_err()
+            .diagnostic()
+            .and_then(|diagnostic| diagnostic.code()),
+        Some("request_profile_installation_id_invalid")
+    );
+    for (index, installation_id) in [
+        None,
+        Some(KEY_INSTALLATION_ID),
+        None,
+        Some(KEY_INSTALLATION_ID),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        if index == 3 {
+            profiles
+                .apply_user_agent_override(
+                    &gateway_core::provider_ports::ProviderUserAgentOverride::Configuration {
+                        document: OpaqueProviderData::new(
+                            json!({
+                                "mode": "custom", "userAgent": "codex-tui/1.0.0"
+                            })
+                            .as_object()
+                            .unwrap()
+                            .clone(),
+                        ),
+                    },
+                )
+                .unwrap();
+        }
+        let configuration = OpaqueProviderData::new(
+            json!({
+                "inherit": { "installationId": installation_id }
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+        );
+        let profile = provider
+            .resolve_key_request_profile(Some(&configuration))
+            .unwrap()
+            .unwrap();
+        let payload = ProtocolPayload::json_object(
+            "openai",
+            json!({
+                "model":"gpt-5.4","input":"hello","prompt_cache_key":"same-cache-key"
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+        )
+        .unwrap()
+        .with_context(Map::from_iter([("use_websocket".to_owned(), json!(false))]));
+        let mut stream = provider
+            .execute(
+                planned_request(
+                    "openai",
+                    Operation::Generate(GenerateRequest::from_protocol_payload(payload)),
+                ),
+                installation_context("req_device", "acct_scope_same", Some(profile)),
+            )
+            .await
+            .unwrap();
+        while let Some(event) = stream.next().await {
+            event.unwrap();
+        }
+    }
+    let requests = server.received_requests().await.unwrap();
+    let bodies = requests
+        .iter()
+        .map(captured_request_body)
+        .collect::<Vec<_>>();
+    for (request, body) in requests.iter().zip(&bodies) {
+        assert_eq!(
+            request.headers["x-codex-installation-id"].to_str().unwrap(),
+            body["client_metadata"]["x-codex-installation-id"]
+                .as_str()
+                .unwrap()
+        );
+    }
+    let id = |i: usize| &bodies[i]["client_metadata"]["x-codex-installation-id"];
+    assert_ne!(id(0), KEY_INSTALLATION_ID);
+    assert_eq!(id(1), KEY_INSTALLATION_ID);
+    assert_eq!(id(0), id(2));
+    assert_eq!(id(1), id(3));
+    assert_eq!(
+        requests[0].headers["user-agent"],
+        requests[1].headers["user-agent"]
+    );
+    assert_eq!(
+        requests[0].headers["user-agent"],
+        requests[2].headers["user-agent"]
+    );
+    assert_eq!(requests[3].headers["user-agent"], "codex-tui/1.0.0");
+    assert_ne!(bodies[0]["prompt_cache_key"], bodies[1]["prompt_cache_key"]);
+    assert_eq!(bodies[0]["prompt_cache_key"], bodies[2]["prompt_cache_key"]);
+}
+
+#[tokio::test]
+async fn websocket_account_scoping_replaces_downstream_installation_header() {
+    for owner in ["acct_scope_same", "acct_scope_old"] {
+        let raw = r#"{"installation_id":"client-installation","future":true}"#;
+        let store = Arc::new(MemoryAccountStore::default());
+        create_account(&store, "acct_scope_same").await;
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener");
+        let base_url = format!("http://{}", listener.local_addr().expect("address"));
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.expect("accept websocket");
+            let mut received_headers = None;
+            let mut socket =
+                crate::transport::accept_codex_test_websocket_with(socket, |request, _| {
+                    received_headers = Some(request.headers().clone());
+                })
+                .await;
+            let message = socket.next().await.expect("request").expect("valid frame");
+            let body: Value = serde_json::from_str(message.to_text().expect("text")).expect("JSON");
+            super::generate_compat::send_completion(&mut socket, "resp_installation").await;
+            (received_headers.expect("opening headers"), body)
+        });
+        let payload = ProtocolPayload::json_object(
+            "openai",
+            Map::from_iter([
+                ("model".to_owned(), json!("gpt-5.4")),
+                ("input".to_owned(), json!("hello")),
+                ("installation_id".to_owned(), json!("client-installation")),
+                (
+                    "client_metadata".to_owned(),
+                    json!({
+                        "x-codex-installation-id": "client-installation",
+                        "x-codex-turn-metadata": raw
+                    }),
+                ),
+            ]),
+        )
+        .expect("payload")
+        .with_context(Map::from_iter([
+            ("turn_metadata".to_owned(), json!(raw)),
+            (
+                "opaque_request_headers".to_owned(),
+                json!([
+                    [
+                        "x-codex-installation-id",
+                        STANDARD.encode(b"client-installation")
+                    ],
+                    ["x-codex-turn-metadata", STANDARD.encode(raw)]
+                ]),
+            ),
+        ]));
+        let provider = provider_with_base_url(&store, base_url);
+        let configuration = OpaqueProviderData::new(json!({
+            "mode": "custom", "userAgent": "codex-tui/1.0.0", "installationId": KEY_INSTALLATION_ID
+        }).as_object().unwrap().clone());
+        let profile = provider
+            .resolve_key_request_profile(Some(&configuration))
+            .unwrap()
+            .unwrap();
+        let mut stream = provider
+            .execute(
+                planned_request(
+                    "openai",
+                    Operation::Generate(GenerateRequest::from_protocol_payload(payload)),
+                ),
+                installation_context("req_installation_ws", owner, Some(profile)),
+            )
+            .await
+            .expect("provider stream");
+        while let Some(event) = stream.next().await {
+            event.expect("successful websocket response");
+        }
+        let (header, body) = server.await.expect("server");
+        let installation_id = body["client_metadata"]["x-codex-installation-id"]
+            .as_str()
+            .expect("account installation ID");
+        assert_eq!(installation_id, KEY_INSTALLATION_ID);
+        assert_eq!(body["installation_id"], installation_id);
+        assert_eq!(header["x-codex-installation-id"], installation_id);
+        for encoded in [
+            header["x-codex-turn-metadata"]
+                .to_str()
+                .expect("header metadata"),
+            body["client_metadata"]["x-codex-turn-metadata"]
+                .as_str()
+                .expect("body metadata"),
+        ] {
+            assert_eq!(
+                serde_json::from_str::<Value>(encoded).expect("turn metadata JSON"),
+                json!({"installation_id": installation_id, "future": true}),
+            );
+        }
+    }
+}
+
+fn installation_context(
+    request: &str,
+    account: &str,
+    profile: Option<OpaqueProviderData>,
+) -> AttemptContext {
+    AttemptContext::new(
+        RequestAttemptContext::new(
+            ModelRequestId::new(request).unwrap(),
+            ClientApiKeyId::new("key_openai_contract").unwrap(),
+        )
+        .with_request_profile(profile.map(Arc::new)),
+        NonZeroU32::new(1).unwrap(),
+        SystemTime::now() + Duration::from_secs(30),
+        account_policy(),
+        AccountAttemptContext::new(
+            BTreeSet::new(),
+            None,
+            Some(ProviderAccountStateOwner::new(
+                ProviderKind::new("openai").unwrap(),
+                ProviderAccountId::new(account).unwrap(),
+            )),
+        )
+        .with_account_scope(contract_account_scope()),
+        None,
+        CancellationToken::new(),
+    )
+}

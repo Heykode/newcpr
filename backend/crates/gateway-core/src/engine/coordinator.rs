@@ -1060,7 +1060,12 @@ where
                 provider: candidate.provider().as_str().to_owned(),
             })?;
         if !self.request_profiles.contains_key(candidate.provider()) {
-            match provider.resolve_request_profile() {
+            match provider.resolve_key_request_profile(
+                candidate
+                    .account_scope()
+                    .request_profiles()
+                    .get(candidate.provider()),
+            ) {
                 Ok(profile) => {
                     self.request_profiles
                         .insert(candidate.provider().clone(), profile.map(Arc::new));

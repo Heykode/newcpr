@@ -213,17 +213,25 @@ async fn optional_nulls_follow_official_defaults() {
 }
 
 #[tokio::test]
-async fn legacy_custom_and_builtin_chat_tools_are_rejected_before_execution() {
+async fn custom_and_builtin_chat_tools_reach_the_existing_execution_path() {
     for tool in [
         json!({"type":"custom","custom":{"name":"code"}}),
         json!({"type":"web_search"}),
         json!({"type":"image_generation"}),
     ] {
-        let fixture = Fixture::new(Session::new(Vec::new())).await;
+        let fixture = Fixture::new(Session::new(vec![completed(json!([message("ok")]))])).await;
         let mut body = chat_request(false);
-        body["tools"] = json!([tool]);
-        assert_eq!(fixture.post(body).await.status(), StatusCode::BAD_REQUEST);
-        assert!(fixture.execution.captured.lock().unwrap().is_none());
+        body["tools"] = json!([tool.clone()]);
+        let response = fixture.post(body).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let _ = json_body(response).await;
+        let expected = if tool["type"] == "custom" {
+            json!({"type":"custom", "name":"code"})
+        } else {
+            tool
+        };
+        assert_eq!(fixture.captured().body["tools"], json!([expected]));
+        assert_eq!(fixture.trace.commits.load(Ordering::SeqCst), 1);
     }
 }
 
@@ -233,7 +241,7 @@ async fn invalid_tool_outputs_fail_once_without_success_or_usage() {
         json!({"type":"function_call","call_id":"","name":"lookup","arguments":"{}"}),
         json!({"type":"function_call","call_id":"call","name":"","arguments":"{}"}),
         json!({"type":"function_call","call_id":"call","name":"lookup","arguments":{}}),
-        json!({"type":"custom_tool_call","call_id":"call","name":"code","input":"raw"}),
+        json!({"type":"custom_tool_call","call_id":"call","name":"code","input":{}}),
     ] {
         for streaming in [false, true] {
             let fixture =

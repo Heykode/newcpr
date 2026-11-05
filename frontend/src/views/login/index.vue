@@ -60,7 +60,7 @@ async function handleSubmit(): Promise<void> {
     </div>
 
     <section
-      class="grid min-h-dvh items-center justify-items-center px-5 py-[clamp(24px,5dvh,64px)] min-[980px]:justify-items-end min-[980px]:pr-[clamp(48px,17.3vw,332px)] max-[560px]:p-4.5"
+      class="grid min-h-dvh items-center justify-items-center px-5 py-16 min-[980px]:justify-items-end min-[980px]:py-[clamp(24px,5dvh,64px)] min-[980px]:pr-[clamp(48px,17.3vw,332px)] max-[560px]:px-4.5"
       :aria-label="t('auth.pageLabel')"
     >
       <LoginPanel

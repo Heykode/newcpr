@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import sys
 import tomllib
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -168,7 +169,7 @@ def main():
     plan.add_argument("--event", required=True)
     cargo = commands.add_parser("cargo")
     cargo.add_argument("--packages", default="[]")
-    cargo.add_argument("operation", choices=("clippy", "test"))
+    cargo.add_argument("operation", choices=("clippy", "test", "nextest-list"))
     cargo.add_argument("arguments", nargs=argparse.REMAINDER)
     args = parser.parse_args()
     if args.command == "plan":
@@ -182,8 +183,9 @@ def main():
     arguments = args.arguments
     if arguments and arguments[0] == "--":
         arguments = arguments[1:]
-    command = ["cargo", args.operation, *cargo_arguments(args.packages), *arguments]
-    print(json.dumps(command), flush=True)
+    operation = ["nextest", "list"] if args.operation == "nextest-list" else [args.operation]
+    command = ["cargo", *operation, *cargo_arguments(args.packages), *arguments]
+    print(json.dumps(command), file=sys.stderr, flush=True)
     subprocess.run(command, cwd=ROOT / "backend", check=True)
 
 

@@ -201,6 +201,13 @@ pub trait ExecutionSession: Send {
 }
 
 pub trait ExecutionService: Send + Sync {
+    fn start_ingress_capture(
+        &self,
+        _request_id: &str,
+        _plaintext_key: Option<&str>,
+    ) -> Option<Arc<dyn crate::diagnostics::request_capture::RequestCaptureObserver>> {
+        None
+    }
     fn authenticate(
         &self,
         plaintext: &str,
@@ -668,7 +675,14 @@ impl DefaultExecutionService {
                     .await;
                 }
                 admission.release().await;
-                return Err(gateway_error_from_engine(&error));
+                let gateway = gateway_error_from_engine(&error);
+                return Err(
+                    if matches!(error, EngineError::Cancelled | EngineError::Deadline) {
+                        gateway.with_observed_request(request_id)
+                    } else {
+                        gateway
+                    },
+                );
             }
         };
         Ok(StartedExecution {
@@ -1258,6 +1272,40 @@ impl ExecutionStore for TransientExecutionStore {
 }
 
 impl ExecutionService for DefaultExecutionService {
+    fn start_ingress_capture(
+        &self,
+        request_id: &str,
+        plaintext_key: Option<&str>,
+    ) -> Option<Arc<dyn crate::diagnostics::request_capture::RequestCaptureObserver>> {
+        let factory = self.captures.as_ref()?;
+        if !factory.is_active() {
+            return None;
+        }
+        let snapshot = self.snapshots.acquire().ok();
+        let policy = plaintext_key.and_then(|key| {
+            snapshot
+                .as_ref()?
+                .client_policies()
+                .find(|policy| constant_time_equal(key, policy.plaintext_key().expose_for_auth()))
+        });
+        let routing = policy.map(|policy| policy.account_scope().routing_snapshot());
+        let groups = routing
+            .as_ref()
+            .map(|routing| {
+                routing
+                    .groups_snapshot()
+                    .iter()
+                    .map(|group| group.id().as_str())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        factory.start(
+            request_id,
+            policy.map_or("", |policy| policy.key_id().as_str()),
+            &groups,
+        )
+    }
+
     fn authenticate(
         &self,
         plaintext: &str,

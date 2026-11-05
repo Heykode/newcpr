@@ -833,24 +833,30 @@ derive from the additional turn fields.
 This contract reduces shared correlation identifiers; it does not establish a
 measured reduction in upstream risk controls, account bans or rate limits.
 
-## Verified Turn-State Echo (Official v3.39.1)
+## Turn-State 全量回传
 
-Provider-local proofs hash downstream Key, account, session, thread, turn and
-upstream token. Store only digests/expiry, with the official 4096-entry cap and
-the native session-binding TTL. OAuth refresh does not change ownership.
-Record success headers, failed HTTP headers and WS metadata before completion
-or failure. Unknown-scope full requests may echo only a matching proven token;
-this does not authorize a previous_response_id, parent response or other account
-state. Conflicting owners remain excluded. Expiry/restart requires new evidence.
-The proof scope is cloned with the existing native encrypted-history repair
-attempt; retries do not broaden its identity scope or mutate scheduling.
-For native requests, a sticky lease hit only selects an account; it is not
-state ownership. Use explicit attempt/session/pinned-continuation owners for
-Same scope. Good: matching proof echoes its token and removes unowned metadata.
-Base: first full request strips unknown token. Bad: new turn/Key/account, expiry
-or conflicting owner cannot echo; unknown previous_response_id still requests
-replay. Exercise these cases plus failed HTTP and failed WS metadata in
-`provider::contract::turn_state`. Never restore `affinity_hit()` as state proof.
+按官方 `1daa0623a0`，未知归属的完整请求保留客户端 turn-state，首次请求、
+失败后重试和进程重启均不要求本地 proof 缓存。只保留 token 不代表认可其
+previous_response_id、parent_response_id 或账号归属；无主续接仍走已有历史重放。
+明确换号、轮次冲突继续清理 header、passthrough 及已知正文镜像，包括字符串和
+对象形式的嵌套 metadata。普通粘性命中只参与选号，不证明响应所有权。
+对应 HTTP/WS 全量请求、失败 token、换号和不完整历史回归位于
+`provider::contract::turn_state` 与 `identity_isolation`。
+
+## 下游 Key 安装 ID
+
+- Key 默认没有覆盖，沿用账号的持久 installation ID。生成按钮仅填写草稿，保存
+  后生效；清空后发送该 Provider 的 null 补丁，删除覆盖并恢复账号默认。
+- 只设置安装 ID 使用 `{"inherit":{"installationId":"UUID"}}`，每个请求从当前
+  全局画像冻结，不把保存时的 UA 固定到 Key。完整自定义画像仍按其明确配置解析。
+- Provider 校验标准带连字符 UUID。请求头、正文与已知 metadata 镜像、cache identity、
+  HTTP、WS、目录和 Live 使用同一有效 ID，不改写账号数据库身份。
+- 安装 ID 仅允许用于 Key 画像。全局 UA 配置拒绝 `installationId` 与 `inherit`，
+  防止把一个 Key 的身份设置误用于所有账号；非法 UUID 使用官方独立错误分类。
+- WS 连接键、hash、逻辑连接和路由所有权同时包含安装 ID，不能复用修改前的连接。
+  既有续接丢失与全历史重放机制继续有效，不把旧连接的 response ID 授给新连接。
+- `client_api_keys.provider_request_profiles_json` 由迁移 0085 添加，空对象为默认；
+  更新省略保留、显式 null 删除对应 Provider，业务备份恢复必须保留该字段。
 
 ## Guardian Parent Routing Snapshot
 

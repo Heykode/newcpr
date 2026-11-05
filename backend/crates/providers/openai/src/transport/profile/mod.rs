@@ -51,6 +51,8 @@ pub use gateway_core::account::RequestLocation as CodexRequestLocation;
 pub struct CodexWireProfile {
     /// QX CLI 保留原始安全语法；CPR 由配套字段生成。
     pub raw_user_agent: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub installation_id: Option<String>,
     /// `originator` 请求头及 User-Agent 产品名。
     pub originator: String,
     /// Desktop ZIP 内嵌 Core 版本；用于模型请求的 version、client_version 与 UA。
@@ -175,6 +177,7 @@ impl CodexWireProfile {
         }
         Ok(Self {
             raw_user_agent: None,
+            installation_id: None,
             originator: originator.to_owned(),
             codex_version: codex_version.to_owned(),
             desktop_version: desktop_version.to_owned(),
@@ -306,7 +309,7 @@ impl CodexWireProfileSelection {
                 let state = CodexWireProfileState {
                     selection: Arc::new(RwLock::new(frozen)),
                 };
-                identity::RequestProfileSelection::parse(document)
+                identity::RequestProfileSelection::parse_global(document)
                     .and_then(|selection| selection.resolve(&state))
                     .unwrap_or_else(|_| *fallback.clone())
             }
@@ -341,7 +344,7 @@ impl CodexWireProfileSelection {
         match &self.mode {
             CodexWireProfileOverride::Configuration { document, .. } => {
                 let effective = self.effective();
-                let is_desktop = identity::RequestProfileSelection::parse(document)
+                let is_desktop = identity::RequestProfileSelection::parse_global(document)
                     .ok()
                     .and_then(|selection| {
                         selection
@@ -371,6 +374,29 @@ impl CodexWireProfileSelection {
 }
 
 impl CodexWireProfileState {
+    pub(crate) fn effective_installation_id(&self, account_installation_id: &str) -> String {
+        self.snapshot()
+            .installation_id
+            .unwrap_or_else(|| account_installation_id.to_owned())
+    }
+
+    pub(crate) fn key_request_snapshot(
+        &self,
+        document: &OpaqueProviderData,
+    ) -> Result<OpaqueProviderData, selection::ClientProfileError> {
+        let frozen = self.frozen();
+        let profile =
+            identity::RequestProfileSelection::parse(document)?.resolve_key(&frozen, document)?;
+        frozen
+            .selection
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .mode = CodexWireProfileOverride::Custom(Box::new(profile));
+        frozen
+            .request_snapshot()
+            .map_err(|_| selection::ClientProfileError::Invalid)
+    }
+
     /// 只保存客户端配置；CLI 自定义与独立 Desktop 辅助画像必须原子冻结。
     pub fn request_snapshot(&self) -> Result<OpaqueProviderData, serde_json::Error> {
         let selection = self
@@ -477,7 +503,7 @@ impl CodexWireProfileState {
     ) -> Result<(), CodexWireProfileError> {
         if let ProviderUserAgentOverride::Configuration { document } = selection {
             let frozen = self.frozen();
-            let profile = identity::RequestProfileSelection::parse(document)
+            let profile = identity::RequestProfileSelection::parse_global(document)
                 .and_then(|selection| selection.resolve(&frozen))
                 .map_err(|_| CodexWireProfileError::Incoherent)?;
             self.selection

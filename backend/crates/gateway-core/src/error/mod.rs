@@ -1125,6 +1125,7 @@ impl GatewayErrorKind {
 #[derive(Clone, Error)]
 #[error("{message}")]
 pub struct GatewayError {
+    observed_request_id: Option<crate::engine::ModelRequestId>,
     source: Option<ErrorSource>,
     kind: GatewayErrorKind,
     message: &'static str,
@@ -1141,6 +1142,19 @@ struct GatewayClientErrorDetails {
 
 impl GatewayError {
     #[must_use]
+    pub(crate) fn with_observed_request(
+        mut self,
+        request_id: crate::engine::ModelRequestId,
+    ) -> Self {
+        self.observed_request_id = Some(request_id);
+        self
+    }
+
+    #[must_use]
+    pub fn observed_request_id(&self) -> Option<&crate::engine::ModelRequestId> {
+        self.observed_request_id.as_ref()
+    }
+    #[must_use]
     pub fn with_source(mut self, source: impl Into<ErrorSource>) -> Self {
         self.source = Some(source.into());
         self
@@ -1154,6 +1168,7 @@ impl GatewayError {
     #[must_use]
     pub const fn new(kind: GatewayErrorKind, message: &'static str) -> Self {
         Self {
+            observed_request_id: None,
             source: None,
             kind,
             message,

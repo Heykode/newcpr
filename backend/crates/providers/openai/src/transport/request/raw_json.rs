@@ -7,7 +7,8 @@ use serde::{Deserialize, Deserializer};
 use serde_json::value::RawValue;
 
 use super::{
-    ACCOUNT_BOUND_STATE_KEYS, CROSS_ACCOUNT_IDENTITY_KEYS, INSTALLATION_ID_KEYS, TURN_METADATA_KEYS,
+    ACCOUNT_BOUND_STATE_KEYS, CROSS_ACCOUNT_IDENTITY_KEYS, INSTALLATION_ID_KEYS,
+    TURN_METADATA_KEYS, TURN_STATE_KEYS,
 };
 
 /// Scope standalone endpoint identities without normalizing opaque business JSON.
@@ -198,7 +199,10 @@ fn correlation_object(
 }
 
 fn member_change(key: &str, value: &RawValue, installation_id: &str, scope: Scope) -> Change {
-    if CROSS_ACCOUNT_IDENTITY_KEYS.contains(&key) || ACCOUNT_BOUND_STATE_KEYS.contains(&key) {
+    if CROSS_ACCOUNT_IDENTITY_KEYS.contains(&key)
+        || ACCOUNT_BOUND_STATE_KEYS.contains(&key)
+        || TURN_STATE_KEYS.contains(&key)
+    {
         return Change::Remove;
     }
     if INSTALLATION_ID_KEYS.contains(&key) {

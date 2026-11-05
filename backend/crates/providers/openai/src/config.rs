@@ -430,6 +430,7 @@ impl From<CodexWireProfileConfig> for CodexWireProfile {
     fn from(value: CodexWireProfileConfig) -> Self {
         Self {
             raw_user_agent: None,
+            installation_id: None,
             originator: value.originator,
             codex_version: value.codex_version,
             desktop_version: value.desktop_version,

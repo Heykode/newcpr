@@ -1,6 +1,12 @@
 name: Security Scan
 
 on:
+  workflow_call:
+    inputs:
+      ref:
+        description: Exact release commit to audit
+        required: true
+        type: string
   workflow_dispatch:
     inputs:
       privacy_only:
@@ -20,7 +26,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: security-scan-${{ github.event.pull_request.head.repo.full_name || github.repository }}-${{ github.head_ref || github.ref_name }}
+  group: security-scan-${{ github.workflow }}-${{ inputs.ref || github.event.pull_request.head.repo.full_name || github.repository }}-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 
 jobs:
@@ -32,7 +38,7 @@ jobs:
       - name: Checkout complete history
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ inputs.ref || github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -65,7 +71,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ inputs.ref || github.event.pull_request.head.sha || github.sha }}
 
       - name: Read build toolchains
         id: toolchains
@@ -108,7 +114,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ inputs.ref || github.event.pull_request.head.sha || github.sha }}
 
       - name: Read build toolchains
         id: toolchains

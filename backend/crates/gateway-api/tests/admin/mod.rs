@@ -918,6 +918,7 @@ impl ClientKeyStore for MemoryClientKeyStore {
         let now = Utc::now();
         Ok(Some(ClientKeySecret::new(
             ClientKeyRecord {
+                request_profile_overrides: Default::default(),
                 budget: Default::default(),
                 id: id.clone(),
                 name: "revealed".to_owned(),

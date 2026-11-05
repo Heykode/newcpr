@@ -194,6 +194,7 @@ impl SnapshotStorePort for PgRuntimeSnapshotRepository {
                         key.group_ids,
                         key.limits,
                     )
+                    .with_request_profiles(key.request_profiles)
                 })
                 .collect();
             let account_groups = data
@@ -427,11 +428,23 @@ async fn load_settings(
 async fn load_client_keys(
     transaction: &mut Transaction<'_, Postgres>,
 ) -> StoreResult<Vec<ClientApiKeySnapshot>> {
-    let rows = sqlx::query_as::<_, (String, String, Vec<String>, i64, i64)>(
+    let rows = sqlx::query_as::<
+        _,
+        (
+            String,
+            String,
+            Vec<String>,
+            i64,
+            i64,
+            sqlx::types::Json<
+                std::collections::BTreeMap<String, serde_json::Map<String, serde_json::Value>>,
+            >,
+        ),
+    >(
         "select k.id, k.key,
                 coalesce(array_agg(kg.account_group_id order by kg.account_group_id)
                   filter (where kg.account_group_id is not null), '{}') as group_ids,
-                k.max_concurrency, k.requests_per_minute
+                k.max_concurrency, k.requests_per_minute, k.provider_request_profiles_json
          from client_api_keys k
          left join client_api_key_groups kg on kg.client_api_key_id = k.id
          where k.enabled
@@ -442,7 +455,11 @@ async fn load_client_keys(
     .await
     .map_err(|error| postgres_unavailable("load snapshot client policies").with_source(error))?;
     rows.into_iter()
-        .map(|row| ClientApiKeySnapshot::from_persisted(row.0, row.1, row.2, row.3, row.4))
+        .map(|row| {
+            let mut key = ClientApiKeySnapshot::from_persisted(row.0, row.1, row.2, row.3, row.4)?;
+            key.request_profiles = super::client_keys::decode_request_profiles(row.5.0)?;
+            Ok(key)
+        })
         .collect()
 }
 

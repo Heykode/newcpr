@@ -21,7 +21,7 @@ async fn dual_stack_latency_measures_the_selected_exit_without_the_other_family_
             format!("{}/v4", server.uri()),
             format!("{}/v6", server.uri()),
         )
-        .test(&OutboundProxy::parse(&server.uri()).unwrap(), false)
+        .test(Some(&OutboundProxy::parse(&server.uri()).unwrap()), false)
         .await;
         assert!(result.success);
         assert_eq!(result.exit_ipv4.is_some(), working_family == "v4");
@@ -87,7 +87,7 @@ async fn proxy_probe_supports_both_proxy_and_exit_address_families() {
             OutboundProxy::parse(&format!("http://user:password@{}", proxy_server.address()))
                 .unwrap();
         let result = HttpProxyProbe::new("http://unresolvable.invalid/ip")
-            .test(&proxy, false)
+            .test(Some(&proxy), false)
             .await;
         assert!(
             result.success,
@@ -113,7 +113,10 @@ async fn proxy_probe_rejects_auth_errors_redirects_and_invalid_or_oversized_resp
             .mount(&proxy_server)
             .await;
         let result = HttpProxyProbe::new("http://unresolvable.invalid/ip")
-            .test(&OutboundProxy::parse(&proxy_server.uri()).unwrap(), false)
+            .test(
+                Some(&OutboundProxy::parse(&proxy_server.uri()).unwrap()),
+                false,
+            )
             .await;
         assert!(!result.success);
         assert!(result.exit_ip.is_none());
@@ -131,7 +134,9 @@ async fn unavailable_proxy_never_falls_back_to_direct_connection() {
     let unused = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let proxy = OutboundProxy::parse(&format!("http://{}", unused.local_addr().unwrap())).unwrap();
     drop(unused);
-    let result = HttpProxyProbe::new(target.uri()).test(&proxy, false).await;
+    let result = HttpProxyProbe::new(target.uri())
+        .test(Some(&proxy), false)
+        .await;
     assert!(!result.success);
 }
 
@@ -145,7 +150,7 @@ async fn invalid_certificate_configuration_should_not_fall_back_or_expose_detail
         .await;
     let result = HttpProxyProbe::new(target.uri())
         .with_client_builder(|_| Err("private-certificate-path"))
-        .test(&OutboundProxy::parse(&target.uri()).unwrap(), false)
+        .test(Some(&OutboundProxy::parse(&target.uri()).unwrap()), false)
         .await;
     assert!(!result.success);
     assert!(!result.message.contains("private-certificate-path"));
@@ -170,7 +175,7 @@ async fn dual_stack_proxy_probe_reports_both_addresses_when_available() {
         format!("{}/v4", proxy_server.uri()),
         format!("{}/v6", proxy_server.uri()),
     )
-    .test(&proxy, false)
+    .test(Some(&proxy), false)
     .await;
 
     assert!(result.success);
@@ -198,7 +203,7 @@ async fn dual_stack_proxy_probe_reports_single_stack_when_only_one_succeeds() {
         format!("{}/v4", proxy_server.uri()),
         format!("{}/v6", proxy_server.uri()),
     )
-    .test(&proxy, false)
+    .test(Some(&proxy), false)
     .await;
 
     assert!(result.success);
@@ -255,7 +260,7 @@ async fn automatic_location_is_opt_in_and_queries_the_measured_ip_through_the_sa
         let proxy =
             OutboundProxy::parse(&format!("http://user:password@{}", proxy_server.address()))
                 .unwrap();
-        let result = probe.test(&proxy, enabled).await;
+        let result = probe.test(Some(&proxy), enabled).await;
         assert!(result.success);
         assert_eq!(builds.load(Ordering::SeqCst), 1 + usize::from(enabled));
         if enabled {
@@ -305,7 +310,10 @@ async fn dual_stack_location_requires_success_for_both_and_a_common_timezone() {
             .await;
         let result = HttpProxyProbe::new_dual("http://exit.invalid/v4", "http://exit.invalid/v6")
             .with_location_endpoint("http://location.invalid/geo")
-            .test(&OutboundProxy::parse(&proxy_server.uri()).unwrap(), true)
+            .test(
+                Some(&OutboundProxy::parse(&proxy_server.uri()).unwrap()),
+                true,
+            )
             .await;
         assert!(
             result.success,
@@ -345,7 +353,10 @@ async fn automatic_location_rejects_incomplete_untrusted_and_oversized_results()
             .await;
         let result = HttpProxyProbe::new("http://exit.invalid/exit")
             .with_location_endpoint("http://location.invalid/geo")
-            .test(&OutboundProxy::parse(&proxy_server.uri()).unwrap(), true)
+            .test(
+                Some(&OutboundProxy::parse(&proxy_server.uri()).unwrap()),
+                true,
+            )
             .await;
         assert!(result.success);
         let ProxyLocationDetection::Failed { message } = result.location else {
@@ -376,7 +387,10 @@ async fn geo_lookup_never_connects_directly_when_the_proxy_rejects_it() {
         .await;
     let result = HttpProxyProbe::new("http://exit.invalid/exit")
         .with_location_endpoint(location_server.uri())
-        .test(&OutboundProxy::parse(&proxy_server.uri()).unwrap(), true)
+        .test(
+            Some(&OutboundProxy::parse(&proxy_server.uri()).unwrap()),
+            true,
+        )
         .await;
     assert!(result.success);
     assert!(matches!(
@@ -407,7 +421,7 @@ async fn automatic_location_timeout_preserves_connectivity_without_retry() {
     let probe = HttpProxyProbe::new("http://exit.invalid/exit")
         .with_location_endpoint("http://location.invalid/geo");
     let proxy = OutboundProxy::parse(&proxy_server.uri()).unwrap();
-    let result = tokio::time::timeout(Duration::from_secs(10), probe.test(&proxy, true))
+    let result = tokio::time::timeout(Duration::from_secs(10), probe.test(Some(&proxy), true))
         .await
         .expect("location query must have its own bounded timeout");
     assert!(result.success);

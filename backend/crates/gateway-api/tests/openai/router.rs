@@ -207,7 +207,14 @@ async fn removed_responses_review_route_should_not_reach_the_responses_handler()
         .await
         .expect("route removed review request");
 
-    assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let body: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(body["error"]["code"], "unknown_endpoint");
 }
 
 #[tokio::test]

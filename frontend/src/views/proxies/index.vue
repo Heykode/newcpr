@@ -461,6 +461,6 @@ onMounted(() => void query.execute())
         禁用“{{ pendingDisable?.name }}”后保留配置和 {{ pendingDisable?.accountCount ?? 0 }} 个账号的绑定，原来使用此代理的后续请求将改为直连。重新启用后恢复使用。
       </p>
     </BaseConfirmModal>
-    <ProxyAccountsModal v-model="showAccounts" :proxy="inspected" @removed="query.execute({ silent: true })" />
+    <ProxyAccountsModal v-model="showAccounts" :proxy="inspected" @changed="query.execute({ silent: true })" />
   </div>
 </template>

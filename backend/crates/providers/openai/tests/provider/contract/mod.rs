@@ -162,6 +162,7 @@ fn selected_account_log_fields<'events>(
 
 fn wire_profile() -> CodexWireProfileState {
     CodexWireProfileState::new(CodexWireProfile {
+        installation_id: None,
         raw_user_agent: None,
         originator: "codex_cli_rs".to_owned(),
         codex_version: "0.144.0".to_owned(),
@@ -4863,7 +4864,7 @@ async fn missing_affinity_continuation_should_require_client_replay_without_an_u
 }
 
 #[tokio::test]
-async fn missing_affinity_full_request_should_clear_unowned_turn_state() {
+async fn missing_affinity_full_request_should_preserve_client_turn_state() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_unknown_turn_state").await;
     let server = MockServer::start().await;
@@ -4908,7 +4909,10 @@ async fn missing_affinity_full_request_should_clear_unowned_turn_state() {
         .await
         .expect("captured full replay request");
 
-    assert!(captured_header_values(&requests[0], "x-codex-turn-state").is_empty());
+    assert_eq!(
+        captured_header_values(&requests[0], "x-codex-turn-state"),
+        vec![b"unowned-turn-state".to_vec()]
+    );
 }
 
 #[tokio::test]

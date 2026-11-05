@@ -151,7 +151,7 @@ export interface AccountModelUsage {
   partialCostCount: number
   unknownCostCount: number
   costs: AccountCurrencyCost[]
-  lastUsedAt: string
+  lastUsedAt: string | null
   lastUsedAtDisplay: string
 }
 

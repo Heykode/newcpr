@@ -1603,6 +1603,7 @@ dependencies = [
  "gateway-admin",
  "gateway-core",
  "gateway-protocol",
+ "http-body",
  "hyper",
  "hyper-util",
  "multer",

@@ -28,6 +28,7 @@ pub struct CodexWebSocketPoolKey {
     client_scope: String,
     conversation_id: String,
     connection_profile: String,
+    installation_id: Option<String>,
     routing_affinity_id: Option<Uuid>,
     pub(super) downstream_connection_id: String,
     pub(super) proxy_capacity_key: String,
@@ -52,6 +53,7 @@ impl PartialEq for CodexWebSocketPoolKey {
             && self.conversation_id == other.conversation_id
             && self.routing_affinity_id == other.routing_affinity_id
             && self.connection_profile == other.connection_profile
+            && self.installation_id == other.installation_id
             && self.downstream_connection_id == other.downstream_connection_id
             && self.egress_key == other.egress_key
     }
@@ -65,6 +67,7 @@ impl Hash for CodexWebSocketPoolKey {
         self.account_id.hash(state);
         self.conversation_id.hash(state);
         self.connection_profile.hash(state);
+        self.installation_id.hash(state);
         self.downstream_connection_id.hash(state);
         self.egress_key.hash(state);
         self.routing_affinity_id.hash(state);
@@ -75,6 +78,11 @@ impl Hash for CodexWebSocketPoolKey {
 }
 
 impl CodexWebSocketPoolKey {
+    pub(crate) fn with_installation_id(mut self, id: Option<&str>) -> Self {
+        self.installation_id = id.map(str::to_owned);
+        self
+    }
+
     pub(crate) fn with_proxy_capacity(
         mut self,
         proxy: Option<&gateway_core::account::OutboundProxy>,
@@ -94,6 +102,7 @@ impl CodexWebSocketPoolKey {
             client_scope: String::new(),
             conversation_id: conversation_id.into(),
             connection_profile: String::new(),
+            installation_id: None,
             routing_affinity_id: None,
             downstream_connection_id: String::new(),
             proxy_capacity_key: String::new(),
@@ -202,6 +211,7 @@ impl CodexWebSocketPoolKey {
             self.account_id.as_str(),
             self.conversation_id.as_str(),
             self.connection_profile.as_str(),
+            self.installation_id.as_deref().unwrap_or_default(),
             self.downstream_connection_id.as_str(),
             self.egress_key.as_str(),
         ];
@@ -216,6 +226,7 @@ impl CodexWebSocketPoolKey {
     pub(super) fn same_logical_connection(&self, other: &Self) -> bool {
         self.base_url == other.base_url
             && self.account_id == other.account_id
+            && self.installation_id == other.installation_id
             && self.client_scope == other.client_scope
             && self.conversation_id == other.conversation_id
             && self.routing_affinity_id == other.routing_affinity_id

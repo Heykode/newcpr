@@ -348,6 +348,22 @@ impl CodexCredentialCatalogService {
         client_version: &str,
     ) -> ClientCatalogResult {
         let now = SystemTime::now();
+        let request_profile = match scope
+            .request_profiles()
+            .iter()
+            .find(|(kind, _)| kind.as_str() == "openai")
+        {
+            Some((_, document)) => {
+                let snapshot = self
+                    .profile
+                    .key_request_snapshot(document)
+                    .map_err(|_| CodexCredentialCatalogError::InvalidCredentialData)?;
+                CodexWireProfileState::from_request_snapshot(&snapshot)
+                    .map_err(|_| CodexCredentialCatalogError::InvalidCredentialData)?
+                    .snapshot()
+            }
+            None => self.profile.snapshot(),
+        };
         let mut accounts = self.repository.list_for_provider().await?;
         // Discovery may use a native account while inference can use Excel.
         // Derive capability restrictions from the authorized pool, not transient
@@ -372,7 +388,7 @@ impl CodexCredentialCatalogService {
         accounts.sort_by(|left, right| left.id().cmp(right.id()));
         let mut last_error = CodexCredentialCatalogError::NoEligibleCredential;
         for account in accounts.iter().take(MAX_CATALOG_FETCH_ATTEMPTS) {
-            let profile = self.profile.snapshot();
+            let profile = request_profile.clone();
             let egress_revision = self
                 .egress_runtime
                 .as_ref()

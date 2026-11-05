@@ -1,5 +1,6 @@
 mod auth;
 mod compact;
+mod diagnostics;
 mod endpoint;
 mod error;
 mod images;

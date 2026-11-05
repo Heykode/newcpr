@@ -30,7 +30,15 @@ impl CodexBackendClient {
         extra_protocol_headers: &[ProviderHttpHeader],
         content_type: Option<&str>,
     ) -> CodexClientResult<HeaderMap> {
-        let mut headers = self.model_request_headers(&self.profile.snapshot(), context)?;
+        let profile = self.profile.snapshot();
+        let context = CodexRequestContext {
+            installation_id: profile
+                .installation_id
+                .as_deref()
+                .or(context.installation_id),
+            ..context
+        };
+        let mut headers = self.model_request_headers(&profile, context)?;
         for header in extra_protocol_headers {
             let name = reqwest::header::HeaderName::from_bytes(header.name().as_bytes())?;
             if is_managed_identity_header(name.as_str())
@@ -50,7 +58,11 @@ impl CodexBackendClient {
                     .installation_id
                     .zip(std::str::from_utf8(header.value()).ok())
                     .and_then(|(installation, raw)| {
-                        super::request::scope_turn_metadata(raw, installation, true)
+                        super::request::scope_turn_metadata(
+                            raw,
+                            installation,
+                            super::request::RequestAccountScope::Different,
+                        )
                     })
                 else {
                     continue;

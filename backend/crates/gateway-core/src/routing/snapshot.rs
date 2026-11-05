@@ -183,6 +183,7 @@ impl SnapshotSettingsFacts {
 /// Store 读取到的一个启用 Client API Key 策略事实。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SnapshotClientPolicyFacts {
+    request_profiles: BTreeMap<ProviderKind, crate::account::OpaqueProviderData>,
     key_id: ClientApiKeyId,
     plaintext_key: PlaintextClientApiKey,
     group_ids: Vec<AccountGroupId>,
@@ -190,6 +191,15 @@ pub struct SnapshotClientPolicyFacts {
 }
 
 impl SnapshotClientPolicyFacts {
+    #[must_use]
+    pub fn with_request_profiles(
+        mut self,
+        profiles: BTreeMap<ProviderKind, crate::account::OpaqueProviderData>,
+    ) -> Self {
+        self.request_profiles = profiles;
+        self
+    }
+
     #[must_use]
     pub fn new(
         key_id: ClientApiKeyId,
@@ -199,6 +209,7 @@ impl SnapshotClientPolicyFacts {
     ) -> Self {
         Self {
             key_id,
+            request_profiles: BTreeMap::new(),
             plaintext_key,
             group_ids,
             limits,
@@ -716,6 +727,7 @@ async fn compile_runtime_snapshot(
             policy.plaintext_key,
             Arc::new(
                 account_scope
+                    .with_request_profiles(policy.request_profiles)
                     .with_fast_mode(fast_mode)
                     .with_image_generation(allow_image_generation),
             ),
