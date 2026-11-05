@@ -61,8 +61,9 @@ runs:
         else
           cargo build --release --locked --timings --target "$BUILD_TARGET" --bin codex-proxy-rs
         fi
-        "target/$BUILD_TARGET/release/$BUILD_BINARY" --help
-        "target/$BUILD_TARGET/release/$BUILD_BINARY" --version
+        # The native gateway exposes only serve; verify-container checks startup and health.
+        test -s "target/$BUILD_TARGET/release/$BUILD_BINARY"
+        test -x "target/$BUILD_TARGET/release/$BUILD_BINARY"
         mkdir -p "../dist/binaries/$BUILD_PLATFORM"
         cp "target/$BUILD_TARGET/release/$BUILD_BINARY" "../dist/binaries/$BUILD_PLATFORM/$BUILD_BINARY"
 

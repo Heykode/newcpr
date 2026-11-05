@@ -85,7 +85,8 @@ class CiWorkflowsTest < Minitest::Test
     action = YAML.load_file(File.join(ROOT, ".github/actions/build-binary/action.yml"))
     build = action["runs"]["steps"].find { |item| item["name"] == "Build binary" }
     assert_includes build["run"], "cargo build --release --locked --timings"
-    assert_includes build["run"], '--version'
+    assert_includes build["run"], 'test -s "target/$BUILD_TARGET/release/$BUILD_BINARY"'
+    assert_includes build["run"], 'test -x "target/$BUILD_TARGET/release/$BUILD_BINARY"'
     refute build.key?("if"), "Cache misses still build current source"
   end
 
