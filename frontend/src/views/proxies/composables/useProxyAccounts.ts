@@ -85,5 +85,6 @@ export function useProxyAccounts(options: {
     setPageSize,
     removing: removeAction.loading,
     removeAccount,
+    reload: () => query.execute(),
   }
 }

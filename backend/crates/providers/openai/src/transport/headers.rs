@@ -120,7 +120,10 @@ impl CodexBackendClient {
         insert_optional_header(
             &mut headers,
             "x-codex-installation-id",
-            context.installation_id,
+            profile
+                .installation_id
+                .as_deref()
+                .or(context.installation_id),
         )?;
         Ok(headers)
     }

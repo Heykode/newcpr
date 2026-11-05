@@ -356,15 +356,17 @@ useEventListener(window, 'scroll', updatePopoverPositionThrottled, { capture: tr
               @mousedown.prevent
               @click="chooseOption(option, index)"
             >
-              <span class="min-w-0 truncate" :class="option.description ? 'max-w-1/2 shrink-0' : 'flex-1'">{{ option.label }}</span>
-              <span
-                v-if="option.description"
-                :title="option.description"
-                class="min-w-0 flex-1 truncate text-xs font-normal"
-                :class="option.disabled ? 'text-cp-text-disabled' : 'text-cp-text-tertiary'"
-              >
-                {{ option.description }}
-              </span>
+              <slot name="option" :option="option" :selected="option.value === model">
+                <span class="min-w-0 truncate" :class="option.description ? 'max-w-1/2 shrink-0' : 'flex-1'">{{ option.label }}</span>
+                <span
+                  v-if="option.description"
+                  :title="option.description"
+                  class="min-w-0 flex-1 truncate text-xs font-normal"
+                  :class="option.disabled ? 'text-cp-text-disabled' : 'text-cp-text-tertiary'"
+                >
+                  {{ option.description }}
+                </span>
+              </slot>
               <Check
                 v-if="option.value === model"
                 class="shrink-0 text-cp-primary-text"

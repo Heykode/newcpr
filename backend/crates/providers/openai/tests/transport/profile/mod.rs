@@ -139,6 +139,7 @@ impl ProviderArtifactProfileCachePort for ArtifactProfiles {
 fn wire_profile_should_generate_bundled_core_app_server_user_agent() {
     let profile = CodexWireProfile {
         raw_user_agent: None,
+        installation_id: None,
         originator: "Codex Desktop".to_owned(),
         codex_version: "0.147.0-alpha.6.6".to_owned(),
         desktop_version: "26.803.81509".to_owned(),
@@ -396,6 +397,7 @@ fn service(
 fn wire_profile() -> CodexWireProfile {
     CodexWireProfile {
         raw_user_agent: None,
+        installation_id: None,
         originator: "Codex Desktop".to_owned(),
         codex_version: "0.147.0-alpha.6.6".to_owned(),
         desktop_version: "26.803.81509".to_owned(),

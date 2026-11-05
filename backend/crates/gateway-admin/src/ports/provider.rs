@@ -169,6 +169,13 @@ impl ProviderAdminError {
 /// 全部由 [`crate::ports::store::AccountStore`] 提交。运行时资源通知只在事务成功后发生。
 #[async_trait]
 pub trait ProviderAdmin: Send + Sync {
+    fn validate_key_client_profile(
+        &self,
+        _profile: &gateway_core::account::OpaqueProviderData,
+    ) -> Result<(), ProviderAdminError> {
+        Err(ProviderAdminError::new(ProviderAdminErrorKind::Unsupported))
+    }
+
     fn provider_kind(&self) -> &ProviderKind;
 
     async fn relogin(

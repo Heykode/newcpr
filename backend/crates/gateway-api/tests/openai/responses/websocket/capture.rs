@@ -158,8 +158,24 @@ async fn capture_real_core_http_error_keeps_body_status_and_finalization() {
         .await
         .unwrap();
     let requests = captures.0.lock().unwrap();
-    assert_eq!(requests.len(), 1);
-    let bodies = requests[0].bodies.lock().unwrap();
+    assert_eq!(requests.len(), 2);
+    assert!(
+        requests[0]
+            .facts
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(stage, value)| *stage == "request.finished" && value["outcome"] == "Succeeded")
+    );
+    assert!(
+        !requests[0]
+            .bodies
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(stage, _)| *stage == "ingress.response.body")
+    );
+    let bodies = requests[1].bodies.lock().unwrap();
     assert!(
         bodies
             .iter()
@@ -170,7 +186,7 @@ async fn capture_real_core_http_error_keeps_body_status_and_finalization() {
             .iter()
             .any(|(stage, body)| *stage == "downstream.body" && body == &downstream)
     );
-    let facts = requests[0].facts.lock().unwrap();
+    let facts = requests[1].facts.lock().unwrap();
     assert!(
         facts
             .iter()
@@ -228,8 +244,16 @@ async fn capture_real_core_websocket_rounds_keep_separate_bodies_and_completion_
     }
     socket.close(None).await.unwrap();
     let requests = captures.0.lock().unwrap();
-    assert_eq!(requests.len(), 3);
-    for (round, request) in requests.iter().enumerate() {
+    assert_eq!(requests.len(), 4);
+    assert!(
+        requests[0]
+            .facts
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(stage, value)| *stage == "request.finished" && value["outcome"] == "Succeeded")
+    );
+    for (round, request) in requests[1..].iter().enumerate() {
         let bodies = request.bodies.lock().unwrap();
         let input: Vec<_> = bodies
             .iter()

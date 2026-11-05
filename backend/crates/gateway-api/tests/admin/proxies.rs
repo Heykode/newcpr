@@ -375,11 +375,13 @@ async fn proxy_location_api_preserves_omitted_and_clears_explicit_null() {
 
 #[async_trait]
 impl ProxyProbe for SuccessfulProbe {
-    async fn test(&self, proxy: &OutboundProxy, detect_location: bool) -> ProxyTestResult {
-        assert_eq!(
-            proxy.expose_url(),
-            "http://test-user:private-password@proxy.example:8080/"
-        );
+    async fn test(&self, proxy: Option<&OutboundProxy>, detect_location: bool) -> ProxyTestResult {
+        if let Some(proxy) = proxy {
+            assert_eq!(
+                proxy.expose_url(),
+                "http://test-user:private-password@proxy.example:8080/"
+            );
+        }
         ProxyTestResult {
             location: if detect_location {
                 ProxyLocationDetection::Detected {
@@ -689,11 +691,11 @@ async fn proxy_probe_does_not_modify_existing_connection_or_test_results() {
 }
 
 #[tokio::test]
-async fn proxy_probe_rejects_empty_invalid_or_ambiguous_input() {
+async fn proxy_probe_accepts_direct_and_rejects_invalid_or_ambiguous_input() {
     let fixture = AdminTestFixture::new().await;
     fixture.auth.insert_session("valid-session");
     for (body, expected) in [
-        (json!({"proxyUrl":""}), StatusCode::BAD_REQUEST),
+        (json!({"proxyUrl":""}), StatusCode::OK),
         (json!({}), StatusCode::UNPROCESSABLE_ENTITY),
         (json!({"proxyUrl":null}), StatusCode::UNPROCESSABLE_ENTITY),
         (

@@ -29,6 +29,7 @@ const props = withDefaults(defineProps<{
   endpoint?: string | null
   currentProxyId?: string | null
   accountId?: string
+  modelAccountId?: string
   preserveProxy?: boolean
   egressReadState?: AccountEgressReadState
   requestProxyAvailable?: boolean
@@ -93,13 +94,13 @@ const rules = computed<FormRules>(() => props.batch
       modelAccess: { validator: () => {
         const error = accountModelAccessError(modelAccess.value)
         return error ? new Error(error) : true
-      }, trigger: 'change' },
+      }, trigger: [] },
     }))
 defineExpose({ validate: () => formRef.value?.validate().catch(() => false) })
 </script>
 
 <template>
-  <BaseForm ref="formElement" :model="form" :rules="rules" scroll-to-error focus-on-error novalidate class="grid gap-5">
+  <BaseForm ref="formElement" :model="form" :rules="rules" :validate-on-rule-change="false" scroll-to-error focus-on-error novalidate class="grid gap-5">
     <BaseFormItem v-if="nameAvailable" prop="customName" label="自定义账号名称（选填）">
       <template v-if="batch" #extra>
         <BaseCheckbox v-model="updateCustomName" label="应用账号名称更改" title="应用账号名称更改" :disabled="disabled" />
@@ -262,7 +263,7 @@ defineExpose({ validate: () => formRef.value?.validate().catch(() => false) })
       v-if="modelAccessAvailable"
       v-model="modelAccess"
       form-prop="modelAccess"
-      :account-id="accountId"
+      :account-id="modelAccountId ?? accountId"
       :known-model-catalog="knownModelCatalog"
       :disabled="disabled || (batch && !updateModelAccess)"
       :allow-preserve="preserveModelAccess"

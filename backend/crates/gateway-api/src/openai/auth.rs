@@ -122,7 +122,17 @@ pub(crate) fn authenticate_client(
 }
 
 pub(crate) fn client_access_error_response(error: ClientAccessError) -> Response {
-    match error {
+    let reason = match &error {
+        ClientAccessError::Authentication(error) => error.reason(),
+        ClientAccessError::Version(error) => {
+            if error.current().is_some() {
+                "client_version_too_old"
+            } else {
+                "client_version_unavailable"
+            }
+        }
+    };
+    let mut response = match error {
         ClientAccessError::Authentication(error) => {
             log_client_api_key_auth_failure(error);
             if error == ClientApiKeyAuthError::RuntimeUnavailable {
@@ -140,7 +150,11 @@ pub(crate) fn client_access_error_response(error: ClientAccessError) -> Response
             );
             client_version_rejection_response(&error).into_response()
         }
-    }
+    };
+    response
+        .extensions_mut()
+        .insert(crate::diagnostics::AccessRejection(reason));
+    response
 }
 
 /// Desktop 优先于内嵌 CLI/Core；未知客户端及未提供应用版本的手机远程客户端返回 `None`。

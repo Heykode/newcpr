@@ -238,6 +238,21 @@ Prepared state is not a deployment result or a permanent recovery guarantee.
 
 ## Minimum Verification Checklist
 
+### 构建复用与发布预检
+
+- 共享 build-binary/build-frontend 动作保留原生检查。普通源码变更以前后端并行
+  产物组装 runtime-prebuilt；依赖、工具链、Dockerfile 或 build.rs 变化走源码镜像。
+  产物失败必须使容器验证失败，不能把检查变成 skipped。
+- Rust nextest 先生成完整二进制清单和 cargo metadata，常规及 Redis ACL 测试复用
+  同一清单；按包验证仍执行拥有者、反向依赖和 App 架构检查。
+- `release/publish --check` 只读，不 fetch、不改 refs/index/文件、不 dispatch。
+  远端对象未同步或读取失败时明确报错，不能猜测远端 tag 不存在。
+- 只包含版本和发布说明的单父提交，可复用其父提交最新一次成功的 main push CI
+  且必须找到成功的完整 `quality / backend`。局部、跳过、失败、进行中或查证失败
+  均完整重跑。安全扫描、镜像验证、签名和现有部署证据不能省略。
+- 工作流语法和模拟测试不证明 GitHub 实际提速；报告必须区分本地验证服务器、
+  真实 GitHub Actions 和生产切换，未执行不能写成通过。
+
 ### Affected CI and Deployment Artifacts
 
 - Frontend-only application edits must have a current-tree verified CI image,

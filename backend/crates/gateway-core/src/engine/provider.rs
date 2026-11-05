@@ -571,6 +571,20 @@ pub trait Provider: Send + Sync {
         true
     }
 
+    /// 冻结 Key 的请求画像；实现必须复用与普通请求相同的全局快照。
+    fn resolve_key_request_profile(
+        &self,
+        profile: Option<&crate::account::OpaqueProviderData>,
+    ) -> Result<Option<crate::account::OpaqueProviderData>, ProviderError> {
+        if profile.is_some() {
+            return Err(ProviderError::new(
+                ProviderErrorKind::InvalidRequest,
+                crate::upstream::UpstreamSendState::NotSent,
+            ));
+        }
+        self.resolve_request_profile()
+    }
+
     /// 解释 Provider 差异化观测字段；不参与路由和传输。
     fn request_observation(
         &self,

@@ -106,6 +106,13 @@ struct Session {
 }
 
 impl RequestCaptureFactory for CaptureManager {
+    fn is_active(&self) -> bool {
+        !self.shared.fault.load(Ordering::Acquire)
+            && self.shared.control.try_read().is_ok_and(|control| {
+                control.config.enabled && control.tasks.iter().any(|task| task.accepts())
+            })
+    }
+
     fn start(
         &self,
         request_id: &str,
@@ -164,6 +171,8 @@ impl RequestCaptureObserver for Session {
         if !matches!(
             stage,
             "client.request.body"
+                | "ingress.request.body"
+                | "ingress.response.body"
                 | "upstream.request.body"
                 | "upstream.error.body"
                 | "upstream.response.body"
@@ -330,6 +339,9 @@ impl RequestCaptureObserver for Session {
         // Completion is an authoritative protocol fact, not a prefix/SSE heuristic.
         if stage == "request.finished" {
             state.finished = true;
+        }
+        if stage == "ingress.body.finished" && data["complete"] == false {
+            self.incomplete.store(true, Ordering::Release);
         }
         let failed = matches!(stage, "attempt.failed" | "downstream.write.failed")
             || stage == "downstream.status"

@@ -1105,6 +1105,7 @@ impl CodexBackendClient {
             .with_client_scope(request.client_api_key_id.as_deref().unwrap_or_default())
             .with_egress_key(&self.egress_key)
             .with_connection_profile(connection_profile)
+            .with_installation_id(context.installation_id)
             .with_routing_affinity(self.routing_affinity.as_ref().map(|pin| pin.id()));
         if let Some(connection_id) = request.downstream_websocket_connection_id.as_deref() {
             key = key.with_downstream_connection_id(connection_id);

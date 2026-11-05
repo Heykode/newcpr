@@ -632,16 +632,11 @@ pub(super) fn account_model_usage_view(
         model: usage.model,
         request_count: usage.request_count,
         request_count_display: format_number(usage.request_count),
-        success_rate: (usage.request_count > 0)
-            .then(|| usage.success_count as f64 * 100.0 / usage.request_count as f64),
-        success_rate_display: if usage.request_count == 0 {
-            "—".to_owned()
-        } else {
-            format!(
-                "{:.1}%",
-                usage.success_count as f64 * 100.0 / usage.request_count as f64
-            )
-        },
+        success_rate: usage.health.success_rate(),
+        success_rate_display: usage
+            .health
+            .success_rate()
+            .map_or_else(|| "—".to_owned(), |rate| format!("{rate:.1}%")),
         input_tokens: usage.input_tokens,
         input_tokens_display: display_optional_tokens(usage.input_tokens),
         output_tokens: usage.output_tokens,
@@ -668,8 +663,13 @@ pub(super) fn account_model_usage_view(
         partial_cost_count: u64::from(cost_estimate_status == "partial"),
         unknown_cost_count: usage.cost_coverage.unavailable_count,
         costs: usage.costs.iter().map(account_currency_cost_view).collect(),
-        last_used_at: timezone_rfc3339(&usage.last_used_at, timezone),
-        last_used_at_display: relative_time_with_timezone(usage.last_used_at, now, timezone),
+        last_used_at: usage
+            .last_used_at
+            .map(|value| timezone_rfc3339(&value, timezone)),
+        last_used_at_display: usage.last_used_at.map_or_else(
+            || "—".to_owned(),
+            |value| relative_time_with_timezone(value, now, timezone),
+        ),
     }
 }
 

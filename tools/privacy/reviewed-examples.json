@@ -2478,5 +2478,85 @@
     "file_sha256": "4e3367941990b3a9678e30d53d68ba49cc59a03e71340959acf125b1b00f19d0",
     "line_sha256": "1a58dbbe57cd503aa12612f4280a27ea49f813090650ceaf6490c90504084620",
     "reason": "Manually re-reviewed unchanged Rust certificate-validation test identifier after upstream-default ClientHello coverage; this is a function declaration, not a credential."
+  },
+  {
+    "path": "backend/apps/gateway/tests/bootstrap.rs",
+    "rule": "authenticated-url",
+    "line": 388,
+    "file_sha256": "0f69f4f1fe857f087b78b17004bf44dd2afbfcadde1d3d19f4d2e1b6c51dc122",
+    "line_sha256": "be871b5bb1fb717424afe768be0a94bd16324aa95d478d8be07e11d0ed234c75",
+    "reason": "Manually re-reviewed unchanged loopback parser rejection fixture after the optional proxy argument adaptation; embedded is synthetic input and no database connection is made."
+  },
+  {
+    "path": "backend/crates/gateway-api/tests/admin/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 35,
+    "file_sha256": "f86edb7f91fac6748bad2fb289dab79d41dd669221b10546721cbdfc7a01f956",
+    "line_sha256": "67a2d50bb2845a354154b03afae3748669dd1152f0c944342ec3c3bef3ce984f",
+    "reason": "Manually re-reviewed unchanged synthetic credential-marker and reserved proxy.example fixture after direct-probe support; MemoryProxies handles it without a network connection."
+  },
+  {
+    "path": "backend/crates/gateway-api/tests/admin/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 382,
+    "file_sha256": "f86edb7f91fac6748bad2fb289dab79d41dd669221b10546721cbdfc7a01f956",
+    "line_sha256": "0daf5322378ec1f4089cffe5f7839bf43e667f3177f1d4ac94651b4fcd8a7d43",
+    "reason": "Manually re-reviewed the same synthetic proxy.example credential assertion after wrapping it in the optional-proxy branch and formatting; SuccessfulProbe is an in-memory stub."
+  },
+  {
+    "path": "backend/crates/gateway-api/tests/admin/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 443,
+    "file_sha256": "f86edb7f91fac6748bad2fb289dab79d41dd669221b10546721cbdfc7a01f956",
+    "line_sha256": "68c0f9074b2a4b0317d8586a6524a6153303a423e298086c96185772796837d3",
+    "reason": "Manually re-reviewed unchanged synthetic proxy.example create input after direct-probe adaptation; the admin fixture uses memory storage and no real credentials."
+  },
+  {
+    "path": "backend/crates/gateway-api/tests/admin/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 642,
+    "file_sha256": "f86edb7f91fac6748bad2fb289dab79d41dd669221b10546721cbdfc7a01f956",
+    "line_sha256": "b2d2a8562a4ed48e58c93460d8667865b9a7e1df7b2416d42095ce76b8078f54",
+    "reason": "Manually re-reviewed unchanged synthetic unsaved proxy.example probe payload; SuccessfulProbe does not open a network connection."
+  },
+  {
+    "path": "backend/crates/gateway-api/tests/admin/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 683,
+    "file_sha256": "f86edb7f91fac6748bad2fb289dab79d41dd669221b10546721cbdfc7a01f956",
+    "line_sha256": "b2d2a8562a4ed48e58c93460d8667865b9a7e1df7b2416d42095ce76b8078f54",
+    "reason": "Manually re-reviewed unchanged synthetic probe isolation fixture; it verifies that an in-memory saved connection is not changed by testing a draft."
+  },
+  {
+    "path": "backend/crates/gateway-api/tests/admin/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 789,
+    "file_sha256": "f86edb7f91fac6748bad2fb289dab79d41dd669221b10546721cbdfc7a01f956",
+    "line_sha256": "6ca8102fb3d417f5b9c43b2b86187c41e05688ea3a984cfa48578f057c3e4d93",
+    "reason": "Manually re-reviewed unchanged reserved-domain automatic-location draft fixture after direct-probe support; all credentials and location facts are synthetic."
+  },
+  {
+    "path": "backend/crates/gateway-api/tests/admin/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 907,
+    "file_sha256": "f86edb7f91fac6748bad2fb289dab79d41dd669221b10546721cbdfc7a01f956",
+    "line_sha256": "c36a0dbdd71274dfb45379085d8b6535806e84789a7edb39c1c60e508b0a311b",
+    "reason": "Manually re-reviewed unchanged synthetic location probe payload; the reserved proxy.example destination is handled by a mock probe without connecting."
+  },
+  {
+    "path": "backend/crates/gateway-host/tests/proxy_probe.rs",
+    "rule": "authenticated-url",
+    "line": 87,
+    "file_sha256": "e9bbdb383f64e457c086c2426129efa0aabbb7684d8d301356e8b7f396b5beed",
+    "line_sha256": "3f38fe650b6ee1a2a780c28e6a85fc7f3944ed5a6d440efba94da0db6a8757b5",
+    "reason": "Manually re-reviewed unchanged user/password fixture after the optional-proxy API adaptation; listeners bind loopback and returned exit addresses are documentation examples."
+  },
+  {
+    "path": "backend/crates/gateway-host/tests/proxy_probe.rs",
+    "rule": "authenticated-url",
+    "line": 261,
+    "file_sha256": "e9bbdb383f64e457c086c2426129efa0aabbb7684d8d301356e8b7f396b5beed",
+    "line_sha256": "3f38fe650b6ee1a2a780c28e6a85fc7f3944ed5a6d440efba94da0db6a8757b5",
+    "reason": "Manually re-reviewed unchanged automatic-location authentication fixture after optional-proxy API adaptation; synthetic credentials authenticate only the ephemeral local MockServer."
   }
 ]

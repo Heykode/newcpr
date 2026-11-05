@@ -6,6 +6,8 @@ export type ApiKeyRoutingScope = 'all' | 'groups'
 export type ApiKeyBudgetPeriod = 'daily' | 'weekly' | 'all'
 
 export interface ApiKey {
+  providerRequestProfileOverrides: Record<string, Record<string, unknown>>
+  openaiClientProfileOverride: Record<string, unknown> | null
   id: string
   name: string
   label: string | null
@@ -58,6 +60,7 @@ interface ApiKeyListParams {
 }
 
 export interface ApiKeyWriteParam {
+  providerRequestProfileOverrides?: Record<string, Record<string, unknown> | null>
   name: string
   label: string | null
   groupIds: string[]

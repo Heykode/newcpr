@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { OutboundProxyAccount, OutboundProxyRecord } from '@/api'
-import { Search, Unlink } from '@lucide/vue'
+import { Plus, Search, Unlink } from '@lucide/vue'
 import { computed, shallowRef, watch } from 'vue'
 import AccountGroupMarks from '@/components/AccountGroupMarks.vue'
 import BaseConfirmModal from '@/components/base/BaseConfirmModal.vue'
@@ -15,19 +15,21 @@ import { t } from '@/i18n'
 import AccountPlanBadge from '@/views/accounts/components/AccountPlanBadge.vue'
 import { stablePresetVisualToneClass } from '@/views/accounts/utils/visualTone'
 import { useProxyAccounts } from '../composables/useProxyAccounts'
+import ProxyAssignAccountsModal from './ProxyAssignAccountsModal.vue'
 
 const props = defineProps<{
   proxy: OutboundProxyRecord | null
 }>()
-const emit = defineEmits<{ removed: [] }>()
+const emit = defineEmits<{ changed: [] }>()
 const open = defineModel<boolean>({ required: true })
 const displayProxy = shallowRef<OutboundProxyRecord | null>(null)
 const pendingRemove = shallowRef<OutboundProxyAccount | null>(null)
 const showRemove = shallowRef(false)
-const { accounts, loading, error, pagination, search, setPage, setPageSize, removing, removeAccount } = useProxyAccounts({
+const showAssignment = shallowRef(false)
+const { accounts, loading, error, pagination, search, setPage, setPageSize, removing, removeAccount, reload } = useProxyAccounts({
   isOpen: () => open.value,
   proxyId: () => props.proxy?.id,
-  onRemoved: () => emit('removed'),
+  onRemoved: () => emit('changed'),
 })
 const columns = defineTableColumns<OutboundProxyAccount>([
   { key: 'identity', label: '账号', kind: 'identity', size: '3xl' },
@@ -63,10 +65,16 @@ async function confirmRemove() {
     showRemove.value = false
 }
 
+function onAssigned() {
+  emit('changed')
+  void reload()
+}
+
 watch([open, () => props.proxy?.id], ([isOpen]) => {
   if (!isOpen)
     return
   displayProxy.value = props.proxy
+  showAssignment.value = false
   showRemove.value = false
   pendingRemove.value = null
 }, { immediate: true, flush: 'sync' })
@@ -85,11 +93,19 @@ function clearRemove() {
 <template>
   <BaseModal v-model="open" :title="t('proxies.accounts.linkAccount')" :description="description" size="lg" :dismissible="!removing">
     <div class="flex min-h-0 flex-col">
+      <div class="mb-3 flex justify-end">
+        <BaseIconButton :label="t('proxies.assignment.title')" :disabled="removing || !proxy?.enabled" @click="showAssignment = true">
+          <Plus class="size-4" />
+        </BaseIconButton>
+      </div>
       <BaseInput v-model="search" class="mb-4 shrink-0 sm:w-80" :disabled="removing" :aria-label="t('proxies.accounts.searchAssociatedAccounts')" :placeholder="t('proxies.accounts.searchAccountNameOrEmail')">
         <template #prefix>
           <Search class="size-4.5 text-cp-text-tertiary" />
         </template>
       </BaseInput>
+      <p v-if="proxy && !proxy.enabled" class="mt-0 mb-3 text-cp-xs text-cp-text-secondary">
+        {{ t('proxies.assignment.enableFirst') }}
+      </p>
       <BaseTable :key="displayProxy?.id" class="min-h-0 shrink-0 [--cp-table-row-height:64px]" :style="{ height: tableHeight }" :columns="columns" :rows="rows" :loading="loading" :empty-text="emptyText">
         <template #identity="{ row }">
           <div class="flex min-w-0 items-center gap-3">
@@ -133,6 +149,7 @@ function clearRemove() {
       <BaseTablePagination :pagination="pagination" :loading="loading || removing" @page-change="setPage" @page-size-change="setPageSize" />
     </div>
   </BaseModal>
+  <ProxyAssignAccountsModal v-model="showAssignment" :proxy="proxy" @assigned="onAssigned" />
   <BaseConfirmModal v-model="showRemove" :title="t('proxies.accounts.removeAssociatedAccount')" :confirm-text="t('proxies.accounts.remove')" :loading="removing" @confirm="confirmRemove" @after-leave="clearRemove">
     <p class="m-0 break-words">
       将“{{ pendingRemove?.name }}”从“{{ displayProxy?.name }}”移除后，该账号将改为直连。

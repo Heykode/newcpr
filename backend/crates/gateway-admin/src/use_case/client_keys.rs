@@ -58,14 +58,23 @@ pub trait ClientKeyService: Send + Sync {
 }
 
 pub(crate) struct DefaultClientKeyService {
+    providers: crate::ports::provider::ProviderAdminRegistry,
     store: Arc<dyn ClientKeyStore>,
     snapshot: Arc<dyn SnapshotControl>,
 }
 
 impl DefaultClientKeyService {
     #[must_use]
-    pub(crate) fn new(store: Arc<dyn ClientKeyStore>, snapshot: Arc<dyn SnapshotControl>) -> Self {
-        Self { store, snapshot }
+    pub(crate) fn new(
+        store: Arc<dyn ClientKeyStore>,
+        snapshot: Arc<dyn SnapshotControl>,
+        providers: crate::ports::provider::ProviderAdminRegistry,
+    ) -> Self {
+        Self {
+            store,
+            snapshot,
+            providers,
+        }
     }
 }
 
@@ -103,6 +112,12 @@ impl ClientKeyService for DefaultClientKeyService {
         context: &MutationContext,
         command: CreateClientKey,
     ) -> Result<CreatedClientKey, AdminError> {
+        for (provider, profile) in &command.request_profile_overrides {
+            self.providers
+                .require(provider)
+                .and_then(|provider| provider.validate_key_client_profile(profile))
+                .map_err(|error| super::map_provider_error(error, "client profile"))?;
+        }
         let id = ClientApiKeyId::new(format!("key_{}", Uuid::now_v7().simple()))
             .map_err(|_| AdminError::internal("创建 Client API Key ID 失败"))?;
         let mut bytes = [0_u8; 32];
@@ -112,6 +127,7 @@ impl ClientKeyService for DefaultClientKeyService {
             .store
             .create_client_key(
                 NewClientKey {
+                    request_profile_overrides: command.request_profile_overrides,
                     id,
                     name: command.name,
                     label: command.label,
@@ -136,6 +152,14 @@ impl ClientKeyService for DefaultClientKeyService {
         context: &MutationContext,
         command: UpdateClientKey,
     ) -> Result<ClientKeyMutation, AdminError> {
+        for (provider, profile) in &command.request_profile_override_updates {
+            if let Some(profile) = profile {
+                self.providers
+                    .require(provider)
+                    .and_then(|provider| provider.validate_key_client_profile(profile))
+                    .map_err(|error| super::map_provider_error(error, "client profile"))?;
+            }
+        }
         let id = command.id.clone();
         let (config_revision, record) = self
             .store

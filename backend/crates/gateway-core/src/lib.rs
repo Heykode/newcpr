@@ -16,6 +16,7 @@ pub mod metering;
 pub mod operation;
 pub mod policy;
 pub mod provider_ports;
+pub mod request_profiles;
 pub mod routing;
 pub mod runtime;
 pub mod task;

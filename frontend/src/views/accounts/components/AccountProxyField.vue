@@ -1,16 +1,21 @@
 <script setup lang="ts">
+import type { OutboundProxyTest } from '@/api'
+import { Wifi } from '@lucide/vue'
 import { computed } from 'vue'
 import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
-
+import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseSelect from '@/components/base/BaseSelect.vue'
+
 import { useProxyCatalog } from '@/composables/useProxyCatalog'
 import { t } from '@/i18n'
+import { useAccountProxyTest } from '../composables/useAccountProxyTest'
+import AccountProxyTestBadge from './AccountProxyTestBadge.vue'
 
 const props = withDefaults(defineProps<{ accountId?: string, currentProxyId?: string | null, endpoint?: string | null, disabled?: boolean, preserve?: boolean, error?: string }>(), { preserve: true })
 
 const mode = defineModel<string>('mode', { required: true })
 const proxyId = defineModel<string>('proxyId', { required: true })
-const { proxies, loading } = useProxyCatalog()
+const { proxies, loading, loadProxies } = useProxyCatalog()
 // 按绑定 ID 识别代理，避免相同脱敏地址下的不同认证配置被误认
 const currentSelection = computed(() => props.currentProxyId || (props.endpoint ? 'preserve' : 'direct'))
 const options = computed(() => [
@@ -67,13 +72,74 @@ const selection = computed({
       : ''
   },
 })
+const selectedProxy = computed(() => proxies.value.find(proxy => proxy.id === selection.value))
+// 目录刷新只禁用测试入口，不改变目标，避免清除版本冲突提示
+const testTarget = computed(() => {
+  if (props.disabled)
+    return null
+  // 禁用代理的账号实际走直连，不把该代理自身的测试结果当成账号出口
+  if (selection.value === 'direct' || selectedProxy.value?.enabled === false)
+    return 'direct' as const
+  return selectedProxy.value ?? null
+})
+const { result, directResult, testing, test } = useAccountProxyTest({
+  target: () => testTarget.value,
+  accountId: () => props.accountId,
+  onConflict: loadProxies,
+  onTested: (record) => {
+    proxies.value = proxies.value.map(proxy => proxy.id === record.id
+      ? record
+      : proxy)
+  },
+})
+// 代理复用目录中的最近测试，直连结果只保留在当前账号的编辑过程
+const optionTests = computed<Record<string, OutboundProxyTest | null>>(() => ({
+  ...Object.fromEntries(proxies.value.map(proxy => [
+    proxy.id,
+    proxy.enabled ? proxy.lastTest : null,
+  ])),
+  direct: directResult.value,
+}))
+const selectedTest = computed(() => result.value ?? (testTarget.value === 'direct'
+  ? directResult.value
+  : optionTests.value[selection.value]))
+const testHint = computed(() => selectedProxy.value?.enabled === false
+  ? t('accounts.proxy.disabledUsesDirect')
+  : selection.value !== 'direct' && !selectedProxy.value
+    ? t('accounts.proxy.selectToTest')
+    : null)
 </script>
 
 <template>
-  <BaseFormItem :label="t('accounts.proxy.outboundTunnel')" :error="error">
+  <BaseFormItem :error="error" :label="t('accounts.proxy.outboundTunnel')">
     <template v-if="$slots.extra" #extra>
       <slot name="extra" />
     </template>
-    <BaseSelect :key="disabled ? 'disabled' : 'enabled'" v-model="selection" class="w-full" :options="options" :disabled="disabled || loading" :aria-label="t('accounts.proxy.outboundTunnel')" />
+    <div class="grid w-full min-w-0 gap-1.5">
+      <div class="flex min-w-0 gap-2">
+        <div class="relative min-w-0 flex-1">
+          <!-- 为框内测试结果预留空间，避免遮挡代理文本和下拉箭头 -->
+          <BaseSelect :key="disabled ? 'disabled' : 'enabled'" v-model="selection" class="w-full" :class="{ '[&_[role=combobox]]:pr-28': selectedTest?.success }" :options="options" :disabled="disabled || loading" :aria-label="t('accounts.proxy.outboundTunnel')">
+            <template #option="{ option, selected }">
+              <span class="min-w-0 truncate" :class="option.description ? 'max-w-1/2 shrink-0' : 'flex-1'">{{ option.label }}</span>
+              <span v-if="option.description" class="min-w-0 flex-1 truncate font-normal" :class="option.disabled ? 'text-cp-text-disabled' : 'text-cp-text-tertiary'" :title="option.description">
+                {{ option.description }}
+              </span>
+              <AccountProxyTestBadge class="ml-auto" :result="optionTests[option.value]" in-option />
+              <span v-if="!selected" class="size-[15px] shrink-0" aria-hidden="true" />
+            </template>
+          </BaseSelect>
+          <div v-if="selectedTest?.success" class="absolute inset-y-0 right-9 flex items-center">
+            <AccountProxyTestBadge :result="selectedTest" />
+          </div>
+        </div>
+        <BaseIconButton class="shrink-0" variant="secondary" :loading="testing" :disabled="testing || loading || !testTarget" :label="t('accounts.proxy.testExit')" @click="test">
+          <Wifi class="size-4" />
+        </BaseIconButton>
+      </div>
+      <p v-if="testHint" class="m-0 text-cp-xs text-cp-text-secondary">
+        {{ testHint }}
+      </p>
+    </div>
   </BaseFormItem>
 </template>

@@ -1,5 +1,6 @@
 import type { Ref } from 'vue'
 import type { ApiKeyBudgetPeriod, getApiKeys } from '@/api'
+import { cloneDeep } from 'es-toolkit'
 import { onScopeDispose, ref, shallowRef, watch } from 'vue'
 import {
   createApiKey,
@@ -19,6 +20,8 @@ import { apiKeyFormErrors } from '../utils/formValidation'
 type ApiKeyRow = Awaited<ReturnType<typeof getApiKeys>>['items'][number]
 
 export interface ApiKeyFormValue {
+  installationId: string
+  providerRequestProfileOverrides: Record<string, Record<string, unknown>>
   name: string
   label: string
   groupIds: string[]
@@ -95,7 +98,17 @@ export function useApiKeyMutations(options: {
 
   function openEdit(key: ApiKeyRow) {
     editingKey.value = key
+    const profiles = cloneDeep(key.providerRequestProfileOverrides ?? {})
+    const openai = profiles.openai
+    const identity = (openai?.inherit as Record<string, unknown> | undefined) ?? openai
+    const installationId = typeof identity?.installationId === 'string' ? identity.installationId : ''
+    if (openai?.inherit)
+      delete profiles.openai
+    else if (openai)
+      delete openai.installationId
     form.value = {
+      installationId,
+      providerRequestProfileOverrides: profiles,
       name: key.name,
       label: key.label ?? '',
       groupIds: key.groups.map(group => group.id),
@@ -137,12 +150,20 @@ export function useApiKeyMutations(options: {
           dailyLimitUsd: form.value.dailyLimitUsd.trim() || '0',
           weeklyLimitUsd: form.value.weeklyLimitUsd.trim() || '0',
         }
+        const profiles: Record<string, Record<string, unknown> | null> = cloneDeep(form.value.providerRequestProfileOverrides)
+        const installationId = form.value.installationId
+        if (installationId)
+          profiles.openai = profiles.openai ? { ...profiles.openai, installationId } : { inherit: { installationId } }
         const current = editingKey.value
         if (current) {
-          await updateApiKey({ id: current.id, ...payload })
+          for (const provider of Object.keys(current.providerRequestProfileOverrides ?? {})) {
+            if (!Object.hasOwn(profiles, provider))
+              profiles[provider] = null
+          }
+          await updateApiKey({ id: current.id, ...payload, providerRequestProfileOverrides: profiles })
         }
         else {
-          const result = await createApiKey(payload)
+          const result = await createApiKey({ ...payload, providerRequestProfileOverrides: profiles })
           createdKey.value = result.plaintextKey
           createdKeyName.value = payload.name
         }
@@ -154,7 +175,6 @@ export function useApiKeyMutations(options: {
         }
         else {
           showKeyModal.value = true
-          toast.success('API Key 创建成功')
         }
       },
       { onError: () => void options.reload() },
@@ -230,7 +250,7 @@ export function useApiKeyMutations(options: {
   }
 
   async function copyToClipboard(text: string) {
-    await copyText(text, { successText: '已复制到剪贴板', emptyErrorText: '复制失败' })
+    await copyText(text, { notifyWhenEmpty: true })
   }
 
   async function revealPlaintextKey(apiKey: ApiKeyRow, action: 'copy' | 'configuration' | 'import' = 'configuration') {
@@ -318,6 +338,8 @@ export function useApiKeyMutations(options: {
 
 function emptyForm(): ApiKeyFormValue {
   return {
+    installationId: '',
+    providerRequestProfileOverrides: {},
     name: '',
     label: '',
     groupIds: [],

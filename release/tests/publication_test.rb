@@ -129,10 +129,8 @@ class PublicationTest < Minitest::Test
     assert steps[0...upload].any? { |step| step['run'].to_s.include?('cosign sign') }
     %w[build-docker-binary build-binary].each do |name|
       build_steps = workflow.fetch('jobs').fetch(name).fetch('steps')
-      cache = build_steps.find { |step| step['name'] == 'Cache Cargo' }.fetch('with')
-      refute_includes cache.fetch('key'), 'outputs.git_sha'
-      assert_includes cache.fetch('key'), 'rust-toolchain.toml'
       build = build_steps.find { |step| step['name'] == 'Build binary' }
+      assert_equal './.github/actions/build-binary', build.fetch('uses')
       assert_equal '${{ needs.release-info.outputs.build_type }}', build.fetch('env').fetch('CPR_BUILD_TYPE')
     end
   end

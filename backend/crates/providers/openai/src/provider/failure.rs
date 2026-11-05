@@ -1259,6 +1259,21 @@ pub(super) fn client_diagnostic(error: &CodexClientError) -> Option<ProviderDiag
     Some(ProviderDiagnostic::new(message).with_classification(stage, code))
 }
 
+pub(super) fn profile_diagnostic(
+    error: &crate::transport::profile::selection::ClientProfileError,
+) -> ProviderDiagnostic {
+    use crate::transport::profile::selection::ClientProfileError;
+    let code = match error {
+        ClientProfileError::Invalid => "request_profile_invalid",
+        ClientProfileError::InvalidInstallationId => "request_profile_installation_id_invalid",
+        ClientProfileError::InvalidUserAgent => "request_profile_user_agent_invalid",
+        ClientProfileError::CompanionHeadersRequired => "request_profile_headers_required",
+        ClientProfileError::CompanionHeadersConflict => "request_profile_headers_conflict",
+        ClientProfileError::ReleaseUnavailable => "request_profile_release_unavailable",
+    };
+    ProviderDiagnostic::new(error.to_string()).with_classification("prepare", code)
+}
+
 fn websocket_diagnostic(error: &CodexWebSocketExchangeError) -> ProviderDiagnostic {
     let (stage, code) = match error.diagnostic_cause() {
         CodexWebSocketExchangeError::Connect(_) => (

@@ -72,7 +72,9 @@ pub(super) fn capacity_error_for_client(data: &Value) -> Option<Value> {
 
 /// 严格协议 decoder/encoder 返回的安全错误 body。
 pub fn protocol_error_response(status: StatusCode, body: ProtocolErrorBody) -> Response {
-    (status, Json(body.into_value())).into_response()
+    let mut response = (status, Json(body.clone().into_value())).into_response();
+    response.extensions_mut().insert(body);
+    response
 }
 
 /// 下游 Client API Key 无效。
@@ -189,6 +191,10 @@ pub fn gateway_error_response(error: &GatewayError) -> Response {
         body["error"]["param"] = param.into();
     }
     let mut response = (status, Json(body)).into_response();
+    response.extensions_mut().insert(error.clone());
+    if let Some(request_id) = error.observed_request_id() {
+        response = super::with_model_request_id(response, request_id);
+    }
     if let Some(delay) = error.retry_after()
         && let Ok(value) = HeaderValue::from_str(
             &delay

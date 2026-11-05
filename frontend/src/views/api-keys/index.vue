@@ -264,16 +264,12 @@ watch(
 
     <BaseConfirmModal
       v-model="showAllAccountsConfirm"
-      title="授予全部账号权限"
-      description="保存后，该密钥可以使用所有账号。"
-      confirm-text="确认授予全部账号"
+      title="允许访问全部账号"
+      description="保存后也可访问未分组和以后新增的账号"
+      confirm-text="允许访问"
       :loading="savingKey"
       @confirm="confirmAllAccountsScope"
-    >
-      <p class="m-0">
-        该密钥可以使用所有账号，包括以后新增和未分组的账号。
-      </p>
-    </BaseConfirmModal>
+    />
 
     <BaseConfirmModal
       v-model="showDeleteModal"

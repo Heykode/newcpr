@@ -166,6 +166,19 @@ impl OpenAiAdminProvider {
 
 #[async_trait]
 impl ProviderAdmin for OpenAiAdminProvider {
+    fn validate_key_client_profile(
+        &self,
+        profile: &OpaqueProviderData,
+    ) -> Result<(), ProviderAdminError> {
+        self.profile
+            .key_request_snapshot(profile)
+            .map(|_| ())
+            .map_err(|_| {
+                provider_admin_error(ProviderAdminErrorKind::Invalid)
+                    .with_public_message("无效的 OpenAI 请求画像或安装 ID")
+            })
+    }
+
     fn provider_kind(&self) -> &ProviderKind {
         &self.provider_kind
     }

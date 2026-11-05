@@ -65,6 +65,50 @@ const COMPLETED_SESSION_SSE: &str = concat!(
 );
 
 #[tokio::test]
+async fn installation_id_is_optional_and_validated_only_for_key_profiles() {
+    use gateway_admin::model::user_agent::ProviderUserAgentOverride;
+    let bundle = provider_openai::initialize(valid_config().config, provider_ports())
+        .await
+        .unwrap();
+    let provider = bundle.admin_provider();
+    let id = "3B11BC82-C666-417D-B9FF-2A34FD040385";
+    for (value, valid) in [
+        (json!(id), true),
+        (json!(null), true),
+        (json!(""), true),
+        (json!(id.replace('-', "")), false),
+        (json!("bad"), false),
+        (json!(42), false),
+    ] {
+        for document in [
+            json!({"mode":"custom", "userAgent":"codex-tui/1.0.0", "installationId":value}),
+            json!({"inherit":{"installationId":value}}),
+        ] {
+            let configuration = OpaqueProviderData::new(document.as_object().unwrap().clone());
+            assert_eq!(
+                provider.validate_key_client_profile(&configuration).is_ok(),
+                valid
+            );
+            let global = ProviderUserAgentOverride::Configuration {
+                document: configuration,
+            };
+            assert!(provider.preview_outbound_user_agent(&global).is_err());
+            assert!(provider.apply_outbound_user_agent(global).is_err());
+        }
+    }
+    assert!(
+        provider
+            .validate_key_client_profile(&OpaqueProviderData::new(
+                json!({"inherit":{"userAgent":"other"}})
+                    .as_object()
+                    .unwrap()
+                    .clone()
+            ))
+            .is_err()
+    );
+}
+
+#[tokio::test]
 async fn openai_bundle_exposes_one_core_provider_and_drains_worker_contributions_once() {
     let config = valid_config();
     let mut bundle = provider_openai::initialize(config.config.clone(), provider_ports())

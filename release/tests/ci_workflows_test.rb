@@ -13,9 +13,10 @@ class CiWorkflowsTest < Minitest::Test
 
   def selected?(area, path)
     filter = step(CI, "changes", "Detect affected checks")
-    YAML.safe_load(filter.fetch("with").fetch("filters")).fetch(area).any? do |pattern|
-      File.fnmatch?(pattern, path, File::FNM_DOTMATCH)
-    end
+    patterns = YAML.safe_load(filter.fetch("with").fetch("filters")).fetch(area)
+    positive, negative = patterns.partition { |pattern| !pattern.start_with?("!") }
+    positive.any? { |pattern| File.fnmatch?(pattern, path, File::FNM_DOTMATCH) } &&
+      negative.none? { |pattern| File.fnmatch?(pattern.delete_prefix("!"), path, File::FNM_DOTMATCH) }
   end
 
   def test_frontend_only_has_quality_and_a_deployable_image_without_backend_tests
@@ -50,7 +51,7 @@ class CiWorkflowsTest < Minitest::Test
     inputs = trigger["workflow_call"]["inputs"]
     assert_equal "[]", inputs["backend_packages"]["default"]
     assert_equal true, inputs["run_redis_acl"]["default"]
-    %w[Rust\ clippy Rust\ tests].each do |name|
+    ["Rust clippy", "Build Rust tests once"].each do |name|
       command = step(QUALITY, "backend", name)
       assert_includes command["run"], 'release/ci_plan.py cargo --packages "$BACKEND_PACKAGES"'
       refute_includes command["run"], "${{ inputs.backend_packages }}"
@@ -58,46 +59,34 @@ class CiWorkflowsTest < Minitest::Test
     acl = step(QUALITY, "backend", "Redis named-user ACL regression")
     assert_equal "inputs.run_redis_acl", acl["if"]
     assert_includes acl["run"], "ACL SETUSER default off"
-    assert_includes acl["run"], "--lib --test main --locked redis::"
+    assert_includes acl["run"], "package(=gateway-store) & test(/^redis::/)"
+    assert_includes step(QUALITY, "backend", "Build Rust tests once")["run"], "--lib --test main --locked"
+    assert_includes step(QUALITY, "backend", "Rust tests")["run"], "--binaries-metadata"
     assert_match(/^mod redis;/, File.read(File.join(ROOT, "backend/crates/gateway-store/tests/main.rs")))
   end
 
-  def test_runtime_uses_current_binary_and_full_frontend_not_an_old_image
-    build = step(CONTAINER, "container", "Build current backend with cached compilation")
-    assert_equal "${{ inputs.ref }}", build["env"]["CPR_GIT_SHA"]
-    assert_equal "bash release/build_ci_backend.sh", build["run"]
+  def test_runtime_builds_source_for_dependency_changes_and_reuses_validated_assets_otherwise
+    %w[deploy/Dockerfile backend/Cargo.lock backend/crates/gateway-core/Cargo.toml
+       backend/apps/gateway/build.rs frontend/pnpm-lock.yaml frontend/.npmrc].each do |path|
+      assert selected?("source_container", path), path
+    end
+    refute selected?("source_container", "backend/crates/gateway-core/src/lib.rs")
+    refute selected?("container", "frontend/README.md")
     image = step(CONTAINER, "container", "Build runtime image")["with"]
-    assert_equal "runtime-ci", image["target"]
+    assert_equal "${{ inputs.source_build && 'runtime' || 'runtime-prebuilt' }}", image["target"]
     assert_equal "linux/amd64", image["platforms"]
-    assert_includes image["build-args"], "CPR_SECURITY_REFRESH=${{ steps.identity.outputs.security_refresh }}"
+    assert_includes image["no-cache-filters"], "runtime-base"
     assert_includes image["labels"], "org.opencontainers.image.revision=${{ inputs.ref }}"
-    dockerfile = File.read(File.join(ROOT, "deploy/Dockerfile"))
-    assert_match(/FROM rust:[^\n]+@sha256:[a-f0-9]{64} AS backend-toolchain/, dockerfile)
-    assert_includes dockerfile, "FROM backend-toolchain AS backend-builder"
-    stage = dockerfile.split("FROM runtime-base AS runtime-ci", 2).last.split("FROM runtime-base AS runtime-prebuilt", 2).first
-    assert_includes stage, "COPY --from=frontend-builder"
-    assert_includes stage, "${CPR_PREBUILT_DIR}/linux-amd64/codex-proxy-rs"
-    assert_includes dockerfile, "ARG CPR_SECURITY_REFRESH=unknown"
-    assert_equal "backend-toolchain", step(CONTAINER, "container", "Load pinned backend toolchain")["with"]["target"]
-    backend = dockerfile.split("FROM backend-toolchain AS backend-builder", 2).last.split(/^FROM /, 2).first
-    copied = backend.lines.grep(/^COPY /).flat_map { |line| line.split[1...-1] }
-    assert_equal %w[backend/Cargo.toml backend/Cargo.lock backend/apps backend/crates backend/migrations release/version.yaml], copied,
-                 "Update cached CI source staging together with backend-builder"
-    assert_equal 1, backend.lines.grep(/^RUN /).length,
-                 "Additional toolchain preparation must also reach the cached CI build"
-  end
-
-  def test_cache_miss_still_builds_and_verifies_and_scheduled_runtime_stays_fresh
-    cache = step(CONTAINER, "container", "Cache backend compilation")["with"]
-    assert_equal "${{ runner.temp }}/cpr-ci-cargo", cache["path"]
-    assert_includes cache["key"], "deploy/Dockerfile"
-    refute step(CONTAINER, "container", "Build current backend with cached compilation").key?("if")
+    assert_includes step(CONTAINER, "container", "Require prebuilt inputs")["run"], 'test "$BINARY_RESULT" = success'
     refute step(CONTAINER, "container", "Verify runtime image").key?("if")
-    policy = step(CONTAINER, "container", "Select runtime cache policy")["run"]
-    assert_includes policy, "echo 'runtime-base'"
-    assert_includes policy, "echo 'runtime-ci'"
-    security = YAML.load_file(File.join(ROOT, ".github/workflows/security-scan.yml"))
-    assert_equal true, security["jobs"]["container-security"]["with"]["fresh_runtime"]
+    assert step(CONTAINER, "container", "Save the verified image")
+    binary = CONTAINER["jobs"]["binary"]["steps"].find { |item| item["uses"] == "./.github/actions/build-binary" }
+    assert_equal "${{ inputs.ref }}", binary["env"]["CPR_GIT_SHA"]
+    action = YAML.load_file(File.join(ROOT, ".github/actions/build-binary/action.yml"))
+    build = action["runs"]["steps"].find { |item| item["name"] == "Build binary" }
+    assert_includes build["run"], "cargo build --release --locked --timings"
+    assert_includes build["run"], '--version'
+    refute build.key?("if"), "Cache misses still build current source"
   end
 
   def test_merge_reuse_and_main_gate_are_preserved

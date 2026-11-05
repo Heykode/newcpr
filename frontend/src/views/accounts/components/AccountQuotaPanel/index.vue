@@ -31,6 +31,11 @@ const quotaEntries = computed(() => groupedAccountQuotaWindows(
   orderedPanelQuotaWindows(props.account.quota.windows),
 ))
 const profileOpen = shallowRef(false)
+const lastRefreshed = computed(() => props.account.quota.refreshedAtRelative
+  ? t('accounts.quota.lastRefreshed', {
+      refreshedAtDisplay: formatRelativeTime(props.account.quota.refreshedAtRelative, props.account.quota.refreshedAtDisplay),
+    })
+  : undefined)
 </script>
 
 <template>
@@ -41,14 +46,15 @@ const profileOpen = shallowRef(false)
           {{ t('accounts.quota.accountLimit') }}
         </h3>
         <p
+          v-if="account.planType || lastRefreshed"
           class="m-0 mt-1 flex min-w-0 items-center gap-1.5 text-cp-xs font-emphasis text-cp-text-secondary"
           :class="mobile ? 'flex-wrap break-all' : undefined"
         >
           <template v-if="account.planType">
             <AccountPlanBadge :plan-type="account.planType" :plan-type-display="account.planTypeDisplay" size="sm" />
-            <span>·</span>
+            <span v-if="lastRefreshed">·</span>
           </template>
-          <span>{{ t('accounts.quota.lastRefreshed', { refreshedAtDisplay: formatRelativeTime(account.quota.refreshedAtRelative, account.quota.refreshedAtDisplay) }) }}</span>
+          <span v-if="lastRefreshed">{{ lastRefreshed }}</span>
         </p>
       </div>
       <div class="flex shrink-0 items-center gap-0.5">

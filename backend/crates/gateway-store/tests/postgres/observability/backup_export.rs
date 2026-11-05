@@ -17,6 +17,14 @@ async fn business_backup_restore_preserves_ledgers_and_global_usage_without_deta
         .unwrap();
     sqlx::query("insert into client_api_keys(id,name,key,created_at,updated_at) values('backup_key','Backup key',$1,now(),now())")
         .bind(format!("sk_{}", "b".repeat(43))).execute(&db.pool).await.unwrap();
+    let key_profile = serde_json::json!({"openai":{"inherit":{"installationId":"12345678-1234-4234-8234-123456789abc"}}});
+    sqlx::query(
+        "update client_api_keys set provider_request_profiles_json=$1 where id='backup_key'",
+    )
+    .bind(&key_profile)
+    .execute(&db.pool)
+    .await
+    .unwrap();
     sqlx::query("insert into client_key_budget_windows(client_api_key_id,daily_start,daily_end,weekly_start,weekly_end,daily_used_usd,weekly_used_usd) values('backup_key',$1,$1+interval '1 day',$1,$1+interval '7 days',2.5,9.5)")
         .bind(hour).execute(&db.pool).await.unwrap();
     sqlx::query("insert into client_key_charge_events(request_id,client_api_key_id,amount_usd,completed_at) values('charge_before_backup','backup_key',2.5,now())")
@@ -95,6 +103,13 @@ async fn business_backup_restore_preserves_ledgers_and_global_usage_without_deta
             "{}",
             String::from_utf8_lossy(&output.stderr)
         );
+        let restored_profile: serde_json::Value = sqlx::query_scalar(
+            "select provider_request_profiles_json from client_api_keys where id='backup_key'",
+        )
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(restored_profile, key_profile);
         let restored = repo
             .usage_summary(range, UsageRecordFilter::default())
             .await

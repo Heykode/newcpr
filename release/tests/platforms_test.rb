@@ -198,7 +198,7 @@ class ReleasePlatformsTest < Minitest::Test
   end
 
   def test_publication_requires_every_direct_dependency
-    states = { "release-info" => "success", "package-assets" => "success", "build-docker-image" => "success" }
+    states = { "release-info" => "success", "package-assets" => "success", "build-docker-image" => "success", "security" => "success" }
     assert allowed?("publish", states, false, false)
     refute allowed?("publish", states, false, true)
     states.each_key do |job|

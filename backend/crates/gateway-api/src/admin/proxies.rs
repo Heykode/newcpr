@@ -637,14 +637,10 @@ async fn probe<S>(
 where
     S: AdminSessionState + Send + Sync,
 {
-    let proxy = request
-        .proxy_url
-        .0
-        .ok_or_else(|| AdminError::bad_request("代理 URL 不能为空"))?;
     let result = state
         .admin_services()
         .proxies()
-        .probe(&proxy, request.detect_location)
+        .probe(request.proxy_url.0.as_ref(), request.detect_location)
         .await
         .map_err(map_error)?;
     Ok(AdminResponse::new(

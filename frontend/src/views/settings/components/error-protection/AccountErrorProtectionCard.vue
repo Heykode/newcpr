@@ -2,7 +2,7 @@
 import type { ProtectionDraft } from './form'
 import type { ProtectionRule } from '@/api/modules/settings/protection'
 import { Activity, CircleAlert, Gauge, Plus, Snowflake, Timer } from '@lucide/vue'
-import { computed, shallowRef, useId } from 'vue'
+import { computed, shallowRef, useId, useTemplateRef, watch } from 'vue'
 import ZButton from '@/components/base/BaseButton.vue'
 import ZCard from '@/components/base/BaseCard.vue'
 import ZCheckbox from '@/components/base/BaseCheckbox.vue'
@@ -21,8 +21,11 @@ import ProtectionRuleRow from './ProtectionRuleRow.vue'
 const props = defineProps<{ disabled: boolean }>()
 
 const policy = defineModel<ProtectionDraft>({ required: true })
+const rulesItem = useTemplateRef<InstanceType<typeof ZFormItem>>('rulesItem')
+const showErrors = computed(() => Boolean(rulesItem.value?.validateState))
+watch(() => policy.value.rules, () => rulesItem.value?.clearValidate())
 const expandedId = shallowRef<string | null>(null)
-const rulesError = computed(() => policy.value.enabled && !policy.value.rules.length
+const rulesError = computed(() => showErrors.value && policy.value.enabled && !policy.value.rules.length
   ? t('settings.errorProtection.validation.required')
   : '')
 const probeModelId = useId()
@@ -100,7 +103,7 @@ function removeRule(id: string) {
         @update:model-value="update({ enabled: $event })"
       />
 
-      <ZFormItem prop="accountErrorProtection.rules" class="col-span-full">
+      <ZFormItem ref="rulesItem" prop="accountErrorProtection.rules" class="col-span-full">
         <section class="grid min-w-0 gap-3" :aria-label="t('settings.errorProtection.rules')">
           <div class="flex flex-wrap items-center justify-between gap-2">
             <div class="flex min-w-0 items-center gap-1">
@@ -147,6 +150,7 @@ function removeRule(id: string) {
               <ProtectionRuleRow
                 :rule="rule"
                 :expanded="expandedId === rule.id"
+                :show-errors="showErrors"
                 :disabled="disabled"
                 @toggle="expandedId = expandedId === rule.id ? null : rule.id"
                 @remove="removeRule(rule.id)"

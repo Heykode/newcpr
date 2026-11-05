@@ -377,8 +377,8 @@ impl HttpProxyProbe {
 
 #[async_trait]
 impl ProxyProbe for HttpProxyProbe {
-    async fn test(&self, proxy: &OutboundProxy, detect_location: bool) -> ProxyTestResult {
-        self.probe(Some(proxy), detect_location).await
+    async fn test(&self, proxy: Option<&OutboundProxy>, detect_location: bool) -> ProxyTestResult {
+        self.probe(proxy, detect_location).await
     }
 
     async fn test_direct(&self) -> Option<ProxyTestResult> {

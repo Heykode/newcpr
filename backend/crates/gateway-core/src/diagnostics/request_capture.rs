@@ -5,6 +5,10 @@ use std::sync::Arc;
 use serde_json::Value;
 
 pub trait RequestCaptureFactory: Send + Sync {
+    fn is_active(&self) -> bool {
+        true
+    }
+
     fn start(
         &self,
         request_id: &str,

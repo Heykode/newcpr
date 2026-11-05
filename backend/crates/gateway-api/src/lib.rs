@@ -30,6 +30,7 @@ use crate::health::HealthStatus;
 use crate::openai::service::OpenAiService;
 
 pub mod admin;
+mod diagnostics;
 mod health;
 mod image_relay;
 pub mod openai;
@@ -175,7 +176,7 @@ pub fn initialize_with_timezone(
         .map_err(|_| ApiError::Config(ApiConfigError::InvalidRequestIdHeader))?;
     let state = ApiState {
         admin,
-        openai: OpenAiService::new(execution, lifecycle),
+        openai: OpenAiService::new(execution.clone(), lifecycle),
         health: HealthStatus::new(probes, worker_health),
         timezone,
     };
@@ -216,6 +217,10 @@ pub fn initialize_with_timezone(
         ));
     }
     // Trace 必须在 SetRequestId 内侧，span 才能捕获本服务生成的 request_id；
+    router = router.layer(axum::middleware::from_fn_with_state(
+        execution,
+        diagnostics::record_ingress,
+    ));
     // 默认 DEBUG span 会被 info 日志过滤器丢弃，这里显式用 info_span。
     let trace_layer = TraceLayer::new_for_http().make_span_with({
         let request_id_header = request_id_header.clone();

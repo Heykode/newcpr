@@ -1316,6 +1316,8 @@ async fn removing_global_fast_preserves_all_other_runtime_settings_and_group_pol
                 .unwrap();
         assert_eq!(before, after);
         assert_eq!(groups_before, groups_after);
+        // 旧迁移的数据保留断言完成后，升级到当前读取器所需的完整 schema。
+        super::TEST_MIGRATOR.run(&database.pool).await.unwrap();
         PgRuntimeSettingsRepository::new(database.pool.clone())
             .load_runtime_settings()
             .await

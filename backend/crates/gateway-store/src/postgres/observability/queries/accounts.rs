@@ -13,12 +13,14 @@ pub(crate) async fn provider_account_usage(
         return Err(invalid("account usage limit must be between 1 and 200"));
     }
 
-    let mut statement = QueryBuilder::<Postgres>::new(
+    let completed_usage = completed_usage_fact_predicate("mr");
+    let mut statement = QueryBuilder::<Postgres>::new(format!(
         "with matched as (
            select pa.id, pa.provider_kind, pa.authentication_kind, pa.name, pa.email,
                   pa.plan_type, mr.id as request_id,
                   coalesce(mr.upstream_model_id, mr.requested_model_id) as model,
-                  mr.cost_currency, mr.outcome, mr.input_tokens, mr.output_tokens,
+                  case when {completed_usage} then mr.cost_currency end as cost_currency,
+                  coalesce(({completed_usage}), false) as included, mr.client_status_code, mr.outcome, mr.input_tokens, mr.output_tokens,
                   mr.cached_tokens, mr.cache_write_tokens, mr.reasoning_tokens,
                   mr.image_input_tokens, mr.image_output_tokens,
                   mr.image_generation_succeeded, mr.total_tokens, mr.cost_source,
@@ -26,11 +28,12 @@ pub(crate) async fn provider_account_usage(
              from provider_accounts pa
              left join model_requests mr
                on mr.provider_account_ref = pa.id and mr.started_at >= ",
-    );
+    ));
     statement.push_bind(query.range.start);
     statement.push(" and mr.started_at < ");
     statement.push_bind(query.range.end);
-    push_completed_usage_fact_filter(&mut statement, "mr");
+    push_unrecovered_request_filter(&mut statement, "mr");
+    push_business_request_filter(&mut statement, "mr");
     if let Some(account_ids) = &query.account_ids {
         statement.push(" where pa.id = any(");
         statement.push_bind(account_ids.clone());
@@ -42,29 +45,34 @@ pub(crate) async fn provider_account_usage(
                   model, cost_currency,
                   grouping(model)::integer as model_grouping,
                   grouping(cost_currency)::integer as currency_grouping,
-                  count(request_id)::bigint as request_count,
-                  count(request_id) filter (where outcome = 'succeeded')::bigint
+                  count(request_id) filter (where included)::bigint as request_count,
+                  count(request_id) filter (where included)::bigint
                     as success_count,
-                  sum(input_tokens)::bigint as input_tokens,
-                  sum(output_tokens)::bigint as output_tokens,
-                  sum(cached_tokens)::bigint as cached_tokens,
-                  sum(cache_write_tokens)::bigint as cache_write_tokens,
-                  sum(reasoning_tokens)::bigint as reasoning_tokens,
-                  sum(image_input_tokens)::bigint as image_input_tokens,
-                  sum(image_output_tokens)::bigint as image_output_tokens,
-                  count(request_id) filter (where image_generation_succeeded is true)::bigint
+                  sum(input_tokens) filter (where included)::bigint as input_tokens,
+                  sum(output_tokens) filter (where included)::bigint as output_tokens,
+                  sum(cached_tokens) filter (where included)::bigint as cached_tokens,
+                  sum(cache_write_tokens) filter (where included)::bigint as cache_write_tokens,
+                  sum(reasoning_tokens) filter (where included)::bigint as reasoning_tokens,
+                  sum(image_input_tokens) filter (where included)::bigint as image_input_tokens,
+                  sum(image_output_tokens) filter (where included)::bigint as image_output_tokens,
+                  count(request_id) filter (where included and image_generation_succeeded is true)::bigint
                     as image_request_count,
-                  count(request_id) filter (where image_generation_succeeded is false)::bigint
+                  count(request_id) filter (where included and image_generation_succeeded is false)::bigint
                     as image_request_failed_count,
-                  sum(total_tokens)::bigint as total_tokens,
-                  count(request_id) filter (where cost_source = 'provider_reported')::bigint
+                  sum(total_tokens) filter (where included)::bigint as total_tokens,
+                  count(request_id) filter (where included and cost_source = 'provider_reported')::bigint
                     as provider_reported_count,
-                  count(request_id) filter (where cost_source = 'calculated')::bigint
+                  count(request_id) filter (where included and cost_source = 'calculated')::bigint
                     as calculated_count,
-                  count(request_id) filter (where cost_source = 'unavailable')::bigint
+                  count(request_id) filter (where included and cost_source = 'unavailable')::bigint
                     as unavailable_count,
-                  max(started_at) as last_used_at,
-                  sum(cost_amount)::text as amount
+                  count(request_id) filter (where outcome = 'succeeded')::bigint as health_success_count,
+                  count(request_id) filter (where outcome = 'failed')::bigint as health_failed_count,
+                  count(request_id) filter (where outcome = 'cancelled')::bigint as health_cancelled_count,
+                  count(request_id) filter (where outcome = 'incomplete')::bigint as health_incomplete_count,
+                  count(request_id) filter (where client_status_code between 400 and 499)::bigint as health_caller_error_count,
+                  max(started_at) filter (where included) as last_used_at,
+                  sum(cost_amount) filter (where included)::text as amount
              from matched
             group by id, provider_kind, authentication_kind, name, email, plan_type,
                      grouping sets ((), (cost_currency), (model), (model, cost_currency))
@@ -256,6 +264,13 @@ fn provider_account_model_from_row(
 ) -> StoreResult<ProviderAccountModelUsageObservation> {
     Ok(ProviderAccountModelUsageObservation {
         model: get(row, "model")?,
+        health: admin_observability::RequestHealth::from_counts(
+            unsigned(row, "health_success_count")?,
+            unsigned(row, "health_failed_count")?,
+            unsigned(row, "health_cancelled_count")?,
+            unsigned(row, "health_incomplete_count")?,
+            unsigned(row, "health_caller_error_count")?,
+        ),
         request_count: unsigned(row, "request_count")?,
         success_count: unsigned(row, "success_count")?,
         input_tokens: optional_unsigned(row, "input_tokens")?,

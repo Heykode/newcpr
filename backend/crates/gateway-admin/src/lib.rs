@@ -557,6 +557,7 @@ pub async fn initialize_with_timezone(
         client_keys: Arc::new(DefaultClientKeyService::new(
             store.client_keys(),
             snapshot.clone(),
+            registry.clone(),
         )),
         client_distribution: Arc::new(DefaultClientDistributionService::new(client_distribution)),
         observability: Arc::new(DefaultObservabilityService::new_with_timezone(
