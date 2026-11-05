@@ -87,6 +87,8 @@ class CiWorkflowsTest < Minitest::Test
     assert_includes build["run"], "cargo build --release --locked --timings"
     assert_includes build["run"], 'test -s "target/$BUILD_TARGET/release/$BUILD_BINARY"'
     assert_includes build["run"], 'test -x "target/$BUILD_TARGET/release/$BUILD_BINARY"'
+    assert_includes build["run"], 'export CPR_BUILD_TYPE="${CPR_BUILD_TYPE:-release}"'
+    assert_includes build["run"], 'export CPR_BUILD_TIME="${CPR_BUILD_TIME:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"'
     refute build.key?("if"), "Cache misses still build current source"
   end
 

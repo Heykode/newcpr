@@ -50,6 +50,8 @@ runs:
         RUST_IMAGE: ${{ inputs.rust-image }}
       run: |
         set -euo pipefail
+        export CPR_BUILD_TYPE="${CPR_BUILD_TYPE:-release}"
+        export CPR_BUILD_TIME="${CPR_BUILD_TIME:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
         if [ -n "$RUST_IMAGE" ]; then
           mkdir -p "$HOME/.cargo"
           docker run --rm --user "$(id -u):$(id -g)" \
