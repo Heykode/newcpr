@@ -1,0 +1,8 @@
+{
+  "from_version": "3.40.2",
+  "to_version": "3.41.0",
+  "from_migrations_tree": "fc7a6551eaae1f5d6d4eb0bbcd6ac20dc99e788c",
+  "to_migrations_tree": "76ea9af7b8cb6b4320f730407fb22de430cddbe3",
+  "added": ["0085_client_key_request_profiles.sql"],
+  "recovery": "manual"
+}
