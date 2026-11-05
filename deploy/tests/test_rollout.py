@@ -251,6 +251,32 @@ class RolloutTests(unittest.TestCase):
         self.assertEqual(candidate["services"]["app"]["networks"],
                          self.original["services"]["app"]["networks"])
 
+    def test_ipv6_transition_and_image_rollback_keep_ipv6_disabled(self):
+        self.original["services"]["app"]["networks"] = {"v4": {"gw_priority": 1}, "v6": {}}
+        self.original["networks"] = {"v4": {"name": "example-v4"}, "v6": {"name": "example-v6"}}
+        self.compose.write_text(yaml.safe_dump(self.original))
+        self.request["profile"]["ipv6_policy"] = "disabled"
+        self.request["disable_ipv6"] = True
+        self.worker = rollout.Rollout(self.request, self.archive)
+        def compose_run(*args, **kwargs):
+            output = json.dumps(self.original).encode() if args == ("config", "--format", "json") else b""
+            return subprocess.CompletedProcess(args, 0, stdout=output)
+        with patch.object(self.worker, "compose_run", side_effect=compose_run), \
+                patch.object(rollout.egress_check, "network_details", return_value={
+                    "example-v4": {"Driver": "bridge", "EnableIPv6": False},
+                    "example-v6": {"Driver": "macvlan", "EnableIPv6": True},
+                }):
+            self.worker.prepare()
+        candidate = yaml.safe_load(self.worker.pending.read_text())
+        rollback = yaml.safe_load((self.worker.backup / "rollback.yaml").read_text())
+        for value in (candidate, rollback):
+            app = value["services"]["app"]
+            self.assertEqual(app["networks"], {"v4": {"gw_priority": 1}})
+            self.assertEqual(app["sysctls"]["net.ipv6.conf.all.disable_ipv6"], "1")
+            self.assertEqual(value["services"]["db"], self.original["services"]["db"])
+        self.assertEqual(rollback["services"]["app"]["image"], "sha256:old")
+        self.assertEqual(yaml.safe_load(self.compose.read_text()), self.original)
+
     def test_failed_upgrade_rolls_back_pinned_old_image(self):
         def up(log_name):
             self.fake_up(log_name)
