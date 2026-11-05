@@ -63,6 +63,7 @@ def validate_profile(profile):
         raise images.Unavailable("The application cannot also be a protected container")
     try:
         egress_check.validate_checks(profile.get("egress_checks", []))
+        egress_check.validate_network_policy(profile)
     except (TypeError, ValueError):
         raise images.Unavailable("Invalid deployment egress checks") from None
     return profile
@@ -141,9 +142,11 @@ def require_target_ci(repository, commit):
 
 
 def run(profile, commit, apply, migration_plan=None, *, prepare=False, staged=None,
-        skip_backup=False):
+        skip_backup=False, disable_ipv6=False):
     if type(skip_backup) is not bool:
         raise images.Unavailable("Backup selection must be boolean")
+    if type(disable_ipv6) is not bool or (disable_ipv6 and profile.get("ipv6_policy") != "disabled"):
+        raise images.Unavailable("IPv6 transition requires ipv6_policy=disabled in the profile")
     if (apply and prepare) or (staged is not None and not apply):
         raise images.Unavailable("Use --prepare or --apply; --staged requires --apply")
     if staged is not None and not re.fullmatch(r"/var/tmp/cpr-deploy\.[A-Za-z0-9]+", staged):
@@ -174,6 +177,8 @@ def run(profile, commit, apply, migration_plan=None, *, prepare=False, staged=No
         "build_required": False, "migrations_changed": upgrade is not None,
         "automatic_image_rollback": upgrade is None and not skip_backup,
         "backup_mode": "skipped_by_request" if skip_backup else "enabled",
+        "ipv6_policy": profile.get("ipv6_policy", "preserve"),
+        "ipv6_transition": disable_ipv6,
     }), flush=True)
     if not apply and not prepare:
         return
@@ -184,6 +189,8 @@ def run(profile, commit, apply, migration_plan=None, *, prepare=False, staged=No
         request = {"profile": profile, "selected": selected, "expected_old_image": old_id}
         if skip_backup:
             request["skip_backup"] = True
+        if disable_ipv6:
+            request["disable_ipv6"] = True
         if upgrade:
             request["migration_upgrade"] = upgrade
         if staged is not None:
@@ -243,6 +250,8 @@ def main():
     parser.add_argument("--migration-plan", help="Reviewed upgrade name, for example v3.13.0")
     parser.add_argument("--skip-backup", action="store_true",
                         help="Explicitly omit backups; failures require manual recovery")
+    parser.add_argument("--disable-ipv6", action="store_true",
+                        help="Explicitly transition this application to its persistent IPv6-disabled policy")
     args = parser.parse_args()
     if not images.SHA.fullmatch(args.commit):
         parser.error("--commit requires the full commit SHA")
@@ -254,7 +263,8 @@ def main():
     try:
         profile = validate_profile(json.loads(profile_path.read_text()))
         run(profile, args.commit, args.apply, args.migration_plan,
-            prepare=args.prepare, staged=args.staged, skip_backup=args.skip_backup)
+            prepare=args.prepare, staged=args.staged, skip_backup=args.skip_backup,
+            disable_ipv6=args.disable_ipv6)
     except (images.Unavailable, subprocess.SubprocessError, OSError, ValueError, KeyError) as error:
         # Never echo subprocess commands that may contain private deployment paths.
         message = str(error) if isinstance(error, images.Unavailable) else type(error).__name__

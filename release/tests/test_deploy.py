@@ -50,6 +50,12 @@ class DeployTests(unittest.TestCase):
         with self.assertRaises(images.Unavailable):
             deploy.validate_profile({**profile(), "egress_checks": [{"name": "invalid"}]})
         self.assertIn("deploy/egress_check.py", deploy.DEPLOY_FILES)
+        ipv4_only = {**profile(), "ipv6_policy": "disabled", "egress_checks": checks}
+        self.assertEqual(deploy.validate_profile(ipv4_only), ipv4_only)
+        for invalid in ({**ipv4_only, "ipv6_policy": "enabled"},
+                        {**ipv4_only, "egress_checks": [{**checks[0], "family": "ipv6"}]}):
+            with self.assertRaises(images.Unavailable):
+                deploy.validate_profile(invalid)
 
     def test_upgrade_boundaries(self):
         _, proof, _ = fixtures()

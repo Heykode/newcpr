@@ -30,6 +30,53 @@ def synthetic_proxy(scheme="http", port=8080):
 
 
 class EgressCheckTests(unittest.TestCase):
+    def test_disabled_policy_preserves_ipv4_and_rejects_future_ipv6_configuration(self):
+        document = {"services": {"app": {
+            "image": "example:current", "networks": {"v4": {"gw_priority": 1}, "v6": {}},
+            "labels": {"example": "keep"},
+        }, "db": {"image": "example:database"}}, "networks": {"v4": {}, "v6": {"external": True}}}
+        rendered = copy.deepcopy(document)
+        rendered["networks"] = {"v4": {"name": "example-v4"}, "v6": {"name": "example-v6"}}
+        networks = {"example-v4": {"Driver": "bridge", "EnableIPv6": False},
+                    "example-v6": {"Driver": "macvlan", "EnableIPv6": True}}
+        with patch.object(egress_check, "network_details", return_value=networks):
+            with self.assertRaisesRegex(RuntimeError, "reconnect IPv6"):
+                egress_check.ipv6_disabled_document(document, rendered, "app")
+            updated = egress_check.ipv6_disabled_document(document, rendered, "app", transition=True)
+        app = updated["services"]["app"]
+        self.assertEqual(app["networks"], {"v4": {"gw_priority": 1}})
+        self.assertEqual(updated["networks"], document["networks"])
+        self.assertEqual(updated["services"]["db"], document["services"]["db"])
+        self.assertEqual(app["labels"]["example"], "keep")
+        self.assertIn("v6", document["services"]["app"]["networks"])
+        next_render = copy.deepcopy(updated)
+        next_render["networks"] = rendered["networks"]
+        with patch.object(egress_check, "network_details", return_value=networks):
+            self.assertEqual(egress_check.ipv6_disabled_document(updated, next_render, "app"), updated)
+            for field in ("sysctls", "labels"):
+                invalid = copy.deepcopy(next_render)
+                invalid["services"]["app"].pop(field)
+                with self.subTest(field=field), self.assertRaises(RuntimeError):
+                    egress_check.ipv6_disabled_document(updated, invalid, "app")
+
+    def test_disabled_policy_checks_runtime_and_cannot_be_silently_omitted(self):
+        profile = {"container": "example-app", "ipv6_policy": "disabled"}
+        app = {"Config": {"Labels": {egress_check.IPV6_POLICY_LABEL: "true"}},
+               "HostConfig": {"NetworkMode": "example-v4", "Sysctls": dict.fromkeys(egress_check.IPV6_SYSCTLS, "1")},
+               "NetworkSettings": {"Networks": {"example-v4": {}}}}
+        with self.assertRaisesRegex(RuntimeError, "must remain"):
+            egress_check.verify_network_policy({}, app)
+        with patch.object(egress_check, "network_details", return_value={"example-v4": {"EnableIPv6": False}}), \
+                patch.object(egress_check.subprocess, "run") as run:
+            egress_check.verify_network_policy(profile, app)
+            self.assertIn('/proc/net/if_inet6', run.call_args.args[0][-1])
+            run.side_effect = subprocess.CalledProcessError(1, ["docker"])
+            with self.assertRaisesRegex(RuntimeError, "runtime"):
+                egress_check.verify_network_policy(profile, app)
+        with patch.object(egress_check, "network_details", return_value={"example-v4": {"EnableIPv6": True}}), \
+                self.assertRaisesRegex(RuntimeError, "network attached"):
+            egress_check.verify_network_policy(profile, app)
+
     def test_validate_optional_and_bounded_checks(self):
         self.assertEqual(egress_check.validate_checks([]), [])
         self.assertEqual(egress_check.validate_checks([check()]), [check()])

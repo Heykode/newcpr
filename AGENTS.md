@@ -95,3 +95,7 @@ release and deployment require the user's applicable authorization.
   deployment. Do not invoke the release workflow merely to update one server.
 - Report the actual deployed source/merge commits and measured health gap.
   Preparation time is not downtime; do not promise a fixed zero-downtime window.
+- Preserve an instance's explicit IPv6-disabled deployment policy across updates,
+  restarts and image rollback. Do not reconnect its IPv6 network, remove disable
+  sysctls or re-enable external IPv6 maintenance without new user authorization.
+  Follow the persistent IPv6 policy section in `deploy/verified-deployment.md`.

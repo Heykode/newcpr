@@ -1,12 +1,117 @@
 """Bounded container egress checks; never mutate managed proxy/account state."""
 
 import concurrent.futures
+import copy
 import ipaddress
 import json
 import math
 import re
 import subprocess
 from urllib.parse import urlsplit
+
+
+IPV6_POLICY_LABEL = "io.newcpr.ipv6-disabled"
+IPV6_SYSCTLS = ("net.ipv6.conf.all.disable_ipv6", "net.ipv6.conf.default.disable_ipv6")
+
+
+def validate_network_policy(profile):
+    policy = profile.get("ipv6_policy")
+    if policy not in (None, "disabled"):
+        raise ValueError("ipv6_policy must be disabled or omitted")
+    if policy == "disabled" and any(
+            item.get("family") == "ipv6" for item in profile.get("egress_checks", [])):
+        raise ValueError("Disabled IPv6 conflicts with an IPv6 egress check")
+    return policy == "disabled"
+
+
+def network_details(names):
+    if not names:
+        raise RuntimeError("Application must retain an isolated network")
+    try:
+        result = subprocess.run(["docker", "network", "inspect", *names],
+                                capture_output=True, text=True, timeout=15, check=True)
+        networks = json.loads(result.stdout)
+        if len(networks) != len(names):
+            raise ValueError("Missing network")
+        return {item["Name"]: item for item in networks}
+    except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError):
+        raise RuntimeError("Cannot verify application network policy") from None
+
+
+def policy_required(profile, app):
+    required = validate_network_policy(profile)
+    labels = app.get("Config", {}).get("Labels") or {}
+    if labels.get(IPV6_POLICY_LABEL) == "true" and not required:
+        raise RuntimeError("Existing IPv6-disabled policy must remain in the deployment profile")
+    return required
+
+
+def verify_network_policy(profile, app, *, transition=False):
+    if not policy_required(profile, app):
+        return
+    host = app.get("HostConfig", {})
+    if host.get("NetworkMode") in ("host", "none") or str(host.get("NetworkMode", "")).startswith("container:"):
+        raise RuntimeError("IPv6 policy requires an isolated application network namespace")
+    if transition:
+        return
+    sysctls = host.get("Sysctls") or {}
+    if any(str(sysctls.get(key)) != "1" for key in IPV6_SYSCTLS):
+        raise RuntimeError("Application lacks persistent IPv6 disable settings")
+    networks = network_details(list(app.get("NetworkSettings", {}).get("Networks", {})))
+    if any(item.get("EnableIPv6") for item in networks.values()):
+        raise RuntimeError("Application has an IPv6 network attached")
+    try:
+        subprocess.run([
+            "docker", "exec", profile["container"], "sh", "-ec",
+            'test "$(cat /proc/sys/net/ipv6/conf/all/disable_ipv6)" = 1; '
+            'test "$(cat /proc/sys/net/ipv6/conf/default/disable_ipv6)" = 1; '
+            'test -z "$(cat /proc/net/if_inet6)"',
+        ], capture_output=True, timeout=15, check=True)
+    except (OSError, subprocess.SubprocessError):
+        raise RuntimeError("Application IPv6 is not disabled at runtime") from None
+
+
+def mapping(value):
+    if isinstance(value, list):
+        return {item.partition("=")[0]: item.partition("=")[2] for item in value}
+    return dict(value or {})
+
+
+def ipv6_disabled_document(document, rendered, service, *, transition=False):
+    result = copy.deepcopy(document)
+    app = result["services"][service]
+    resolved = rendered["services"][service]
+    if resolved.get("network_mode"):
+        raise RuntimeError("IPv6 policy requires explicit isolated Compose networks")
+    attached = resolved.get("networks") or {}
+    names = {key: rendered["networks"][key]["name"] for key in attached}
+    networks = network_details(list(names.values()))
+    ipv6_keys = {
+        key for key, name in names.items()
+        if networks[name].get("EnableIPv6")
+        or rendered["networks"][key].get("enable_ipv6")
+        or (attached[key] or {}).get("ipv6_address")
+    }
+    if ipv6_keys and not transition:
+        raise RuntimeError("Candidate Compose configuration would reconnect IPv6")
+    if any(networks[name].get("Driver") in ("host", "null") for name in names.values()):
+        raise RuntimeError("IPv6 policy requires isolated Compose networks")
+    if transition:
+        configured = app.get("networks", list(attached))
+        if isinstance(configured, list):
+            app["networks"] = [key for key in configured if key not in ipv6_keys]
+        else:
+            app["networks"] = {key: value for key, value in configured.items() if key not in ipv6_keys}
+        if not app["networks"]:
+            raise RuntimeError("Disabling IPv6 would remove every application network")
+        app["sysctls"] = {**mapping(app.get("sysctls")), **dict.fromkeys(IPV6_SYSCTLS, "1")}
+        app["labels"] = {**mapping(app.get("labels")), IPV6_POLICY_LABEL: "true"}
+    else:
+        if any(str(mapping(resolved.get("sysctls")).get(key)) != "1" for key in IPV6_SYSCTLS):
+            raise RuntimeError("Candidate Compose configuration would enable IPv6")
+        if mapping(resolved.get("labels")).get(IPV6_POLICY_LABEL) != "true":
+            raise RuntimeError("Candidate Compose configuration removed the IPv6 policy marker")
+    return result
 
 
 def validate_checks(checks):
@@ -100,7 +205,8 @@ def probe(container, check, proxy_url=None):
             "via_proxy": proxy_url is not None, "seconds": round(seconds, 3)}
 
 
-def verify(profile, app, protected):
+def verify(profile, app, protected, *, ipv6_transition=False):
+    verify_network_policy(profile, app, transition=ipv6_transition)
     checks = validate_checks(profile.get("egress_checks", []))
     if not checks:
         return []

@@ -343,7 +343,6 @@ async fn dial_account(
     tokio_tungstenite::proxy::connect_via_proxy(BufWriter::new(stream), &config, &target, port)
         .await
         .map(BufWriter::into_inner)
-        .map_err(|_| invalid())
 }
 
 async fn connect_tcp(host: &str, port: u16) -> Result<tokio::net::TcpStream, tungstenite::Error> {

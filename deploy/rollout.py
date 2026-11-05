@@ -72,6 +72,10 @@ class Rollout:
         self.skip_backup = request.get("skip_backup", False)
         if type(self.skip_backup) is not bool:
             raise ValueError("Backup selection must be boolean")
+        self.disable_ipv6 = request.get("disable_ipv6", False)
+        if (type(self.disable_ipv6) is not bool
+                or (self.disable_ipv6 and self.profile.get("ipv6_policy") != "disabled")):
+            raise ValueError("IPv6 transition requires an explicit disabled policy")
         self.archive = Path(archive)
         self.compose = Path(self.profile["compose_file"])
         record_directory = ".deployment-records" if self.skip_backup else ".deployment-backups"
@@ -142,7 +146,11 @@ class Rollout:
             raise RuntimeError("Invalid protected container list")
         self.protected = {name: inspect(name) for name in self.profile["protected_containers"]}
         self.configs = {Path(path): digest(path) for path in self.profile.get("config_files", [])}
-        self.egress_before = egress_check.verify(self.profile, self.old, self.protected)
+        if self.disable_ipv6:
+            self.egress_before = egress_check.verify(
+                self.profile, self.old, self.protected, ipv6_transition=True)
+        else:
+            self.egress_before = egress_check.verify(self.profile, self.old, self.protected)
         if digest(self.archive) != self.proof["archive_sha256"]:
             raise RuntimeError("Transferred archive checksum mismatch")
         loaded = subprocess.run(["docker", "image", "load", "--input", str(self.archive)],
@@ -172,6 +180,13 @@ class Rollout:
             if digest(self.backup / "compose.yaml") != self.compose_digest:
                 raise RuntimeError("Compose configuration changed while creating the backup")
             document = yaml.safe_load((self.backup / "compose.yaml").read_text())
+        if egress_check.policy_required(self.profile, self.old):
+            rendered = self.compose_run("config", "--format", "json")
+            if rendered.returncode:
+                raise RuntimeError("Cannot resolve Compose application networks")
+            document = egress_check.ipv6_disabled_document(
+                document, json.loads(rendered.stdout), self.profile["service"],
+                transition=self.disable_ipv6)
         updated = changed_image(document, self.profile["service"], self.new_image)
         self.pending = temporary_sibling(self.compose)
         self.pending.write_text(yaml.safe_dump(updated, sort_keys=False))
@@ -215,6 +230,8 @@ class Rollout:
                   "previous_image": self.old_image, "version": self.proof["version"],
                   "migrations_changed": self.upgrade is not None,
                   "backup_mode": "skipped_by_request" if self.skip_backup else "enabled",
+                  "ipv6_policy": self.profile.get("ipv6_policy", "preserve"),
+                  "ipv6_transition": self.disable_ipv6,
                   "egress_before": self.egress_before}
         self.samples.append((time.monotonic(), True))
         monitor = threading.Thread(target=self.monitor)
