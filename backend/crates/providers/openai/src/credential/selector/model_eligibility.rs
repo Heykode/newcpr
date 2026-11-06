@@ -8,6 +8,67 @@ use gateway_core::routing::UpstreamModelId;
 const MODEL_UNSUPPORTED_COOLDOWN: Duration = Duration::from_secs(30 * 60);
 
 impl CodexCredentialSelector {
+    pub(super) async fn scheduling_cooldowns(
+        &self,
+        accounts: &[ProviderAccount],
+        request: &CredentialSelectionInput<'_>,
+    ) -> HashMap<ProviderAccountId, Option<SystemTime>> {
+        let ids = accounts
+            .iter()
+            .map(|account| account.id().clone())
+            .collect::<Vec<_>>();
+        let revisions = accounts
+            .iter()
+            .map(|account| (account.id().clone(), account.revision()))
+            .collect::<Vec<_>>();
+        let native = accounts
+            .iter()
+            .filter(|account| Self::native_model(account, request).is_some())
+            .collect::<Vec<_>>();
+        let native_ids = native
+            .iter()
+            .map(|account| account.id().clone())
+            .collect::<Vec<_>>();
+        let scope = request
+            .upstream_model
+            .and_then(|model| UpstreamModelId::new(model).ok())
+            .map(ProviderCooldownScope::upstream_model);
+        let model_cooldowns = async {
+            match scope.as_ref() {
+                Some(scope) => self.cooldowns.read_scoped_many(&native_ids, scope).await,
+                None => Vec::new(),
+            }
+        };
+        let (cooldowns, protections, models) = futures::join!(
+            self.cooldowns.read_many(&ids),
+            self.cooldowns.read_protection_many(&revisions),
+            model_cooldowns
+        );
+        let now = SystemTime::now();
+        let mut limits = HashMap::with_capacity(accounts.len());
+        for ((id, cooldown), protection) in ids.iter().zip(cooldowns).zip(protections) {
+            let until = cooldown
+                .ok()
+                .flatten()
+                .map(|value| value.until())
+                .filter(|until| *until > now);
+            let protected = protection
+                .ok()
+                .flatten()
+                .map(|value| value.scheduling_until(now));
+            limits.insert(id.clone(), until.max(protected));
+        }
+        for (account, cooldown) in native.into_iter().zip(models) {
+            if let Some(cooldown) = cooldown.ok().flatten().filter(|value| {
+                value.credential_revision() == account.revision() && value.until() > now
+            }) {
+                let until = limits.entry(account.id().clone()).or_default();
+                *until = (*until).max(Some(cooldown.until()));
+            }
+        }
+        limits
+    }
+
     fn native_model<'a>(
         account: &ProviderAccount,
         request: &CredentialSelectionInput<'a>,
@@ -29,9 +90,16 @@ impl CodexCredentialSelector {
         }) else {
             return;
         };
-        let excluded = self
+        let mut excluded = self
             .catalog
             .scheduling_exclusions(accounts, model, SystemTime::now());
+        if let Some(scope) = request.attempt.account_scope() {
+            excluded.retain(|id| {
+                scope.directory().account(id).is_none_or(|account| {
+                    account.model_access().mode() != AccountModelAccessMode::Allowlist
+                })
+            });
+        }
         let before = accounts.len();
         accounts.retain(|account| {
             Self::native_model(account, request).is_none() || !excluded.contains(account.id())
@@ -43,35 +111,6 @@ impl CodexCredentialSelector {
                 serde_json::json!({"rejectedCount": rejected}),
             );
         }
-    }
-
-    pub(super) async fn scheduling_cooldown(
-        &self,
-        account: &ProviderAccount,
-        request: &CredentialSelectionInput<'_>,
-    ) -> Result<Option<SystemTime>, super::super::quota::CodexCredentialQuotaError> {
-        let model_cooldown = async {
-            let model = Self::native_model(account, request)?;
-            let scope = ProviderCooldownScope::upstream_model(UpstreamModelId::new(model).ok()?);
-            self.cooldowns
-                .read_scoped(account.id(), &scope)
-                .await
-                .ok()
-                .flatten()
-                .filter(|cooldown| {
-                    cooldown.credential_revision() == account.revision()
-                        && cooldown.until() > SystemTime::now()
-                })
-        };
-        let (account_cooldown, model_cooldown) =
-            futures::join!(self.quota.scheduling_cooldown(account), model_cooldown);
-        if let Some(model_cooldown) = model_cooldown {
-            // A failed account cooldown read must not erase a known model refusal.
-            return Ok(account_cooldown
-                .unwrap_or(None)
-                .max(Some(model_cooldown.until())));
-        }
-        account_cooldown
     }
 
     pub(crate) async fn record_model_unsupported(

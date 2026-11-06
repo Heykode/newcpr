@@ -1,10 +1,10 @@
-use std::{env, error::Error, io};
+use std::{error::Error, io};
 
 use provider_openai::ensure_rustls_provider;
 
 fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     ensure_rustls_provider();
-    let mut arguments = env::args_os().skip(1);
+    let mut arguments = gateway_host::system_update::startup_arguments()?;
     match arguments.next().as_deref().and_then(|value| value.to_str()) {
         None | Some("serve") => {
             reject_extra_arguments(arguments)?;

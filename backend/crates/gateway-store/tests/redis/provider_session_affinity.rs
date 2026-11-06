@@ -11,6 +11,119 @@ use redis::aio::ConnectionManager;
 use uuid::Uuid;
 
 #[tokio::test]
+async fn admission_upgrades_raw_and_json_legacy_bindings_and_fences_stale_generations() {
+    let Some((repository, mut connection, namespace)) = affinity_repository().await else {
+        return;
+    };
+    let provider = ProviderKind::new("openai").unwrap();
+    let key = ProviderSessionAffinityKey::try_new("admission-upgrade").unwrap();
+    let a = ProviderAccountId::new("acct_admission_a").unwrap();
+    let b = ProviderAccountId::new("acct_admission_b").unwrap();
+    let ttl = Duration::from_secs(60);
+    for raw in [false, true] {
+        repository.bind(&provider, &key, &a, ttl).await.unwrap();
+        let keys: Vec<String> = redis::cmd("KEYS")
+            .arg(format!("{namespace}:*"))
+            .query_async(&mut connection)
+            .await
+            .unwrap();
+        if raw {
+            redis::cmd("SET")
+                .arg(&keys[0])
+                .arg(a.as_str())
+                .arg("PX")
+                .arg(60_000)
+                .query_async::<()>(&mut connection)
+                .await
+                .unwrap();
+        }
+        let legacy = repository
+            .load_binding(&provider, &key)
+            .await
+            .unwrap()
+            .unwrap();
+        let admitted = repository
+            .admit_binding(&provider, &key, Some(&legacy), &b, ttl)
+            .await
+            .unwrap()
+            .expect("both legacy encodings must admit");
+        assert_eq!(admitted.account_id(), &b);
+        assert_ne!(admitted.token().expose_to_store(), "legacy");
+        // An old request cannot restore A or shorten the winner's TTL.
+        assert!(
+            repository
+                .admit_binding(&provider, &key, Some(&legacy), &a, Duration::from_millis(1))
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            repository
+                .admit_binding(&provider, &key, None, &a, ttl)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let remaining: i64 = redis::cmd("PTTL")
+            .arg(&keys[0])
+            .query_async(&mut connection)
+            .await
+            .unwrap();
+        assert!(remaining > 50_000);
+        assert_eq!(
+            repository.load_binding(&provider, &key).await.unwrap(),
+            Some(admitted.clone())
+        );
+        let renewed = repository
+            .admit_binding(&provider, &key, Some(&admitted), &b, ttl)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(renewed, admitted);
+        repository.clear(&provider, &key).await.unwrap();
+        assert!(
+            repository
+                .admit_binding(&provider, &key, Some(&admitted), &a, ttl)
+                .await
+                .unwrap()
+                .is_none(),
+            "expired generations cannot recreate a binding"
+        );
+    }
+}
+
+#[tokio::test]
+async fn concurrent_admissions_accept_exactly_one_missing_or_observed_generation() {
+    let Some((repository, _, _)) = affinity_repository().await else {
+        return;
+    };
+    let provider = ProviderKind::new("openai").unwrap();
+    let key = ProviderSessionAffinityKey::try_new("admission-concurrent").unwrap();
+    let a = ProviderAccountId::new("acct_admission_a").unwrap();
+    let b = ProviderAccountId::new("acct_admission_b").unwrap();
+    let c = ProviderAccountId::new("acct_admission_c").unwrap();
+    let ttl = Duration::from_secs(60);
+    let (first, second) = tokio::join!(
+        repository.admit_binding(&provider, &key, None, &a, ttl),
+        repository.admit_binding(&provider, &key, None, &b, ttl)
+    );
+    let (first, second) = (first.unwrap(), second.unwrap());
+    assert_ne!(first.is_some(), second.is_some());
+    let initial = first.or(second).unwrap();
+    let other = if initial.account_id() == &a { &b } else { &a };
+    let (first, second) = tokio::join!(
+        repository.admit_binding(&provider, &key, Some(&initial), other, ttl),
+        repository.admit_binding(&provider, &key, Some(&initial), &c, ttl)
+    );
+    let (first, second) = (first.unwrap(), second.unwrap());
+    assert_ne!(first.is_some(), second.is_some());
+    assert_eq!(
+        repository.load_binding(&provider, &key).await.unwrap(),
+        first.or(second)
+    );
+}
+
+#[tokio::test]
 async fn renewal_supports_720_hours_but_never_recreates_or_replaces_a_binding() {
     let Some((repository, mut connection, namespace)) = affinity_repository().await else {
         return;

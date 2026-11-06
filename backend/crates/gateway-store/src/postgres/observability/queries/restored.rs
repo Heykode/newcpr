@@ -20,7 +20,7 @@ pub(crate) fn backup_usage_export_sql() -> String {
                'failure_count',count(*) FILTER (WHERE outcome='failed'),
                'cancelled_count',count(*) FILTER (WHERE outcome='cancelled'),
                'incomplete_count',count(*) FILTER (WHERE outcome='incomplete'),
-               'caller_error_count',count(*) FILTER (WHERE client_status_code BETWEEN 400 AND 499),
+               'caller_error_count',count(*) FILTER (WHERE outcome = 'failed' AND client_status_code BETWEEN 400 AND 499),
                'input_tokens',coalesce(sum(input_tokens) FILTER (WHERE fact),0),
                'output_tokens',coalesce(sum(output_tokens) FILTER (WHERE fact),0),
                'cached_tokens',coalesce(sum(cached_tokens) FILTER (WHERE fact),0),

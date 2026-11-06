@@ -1,0 +1,528 @@
+//! 验证会话候选投影的容量口径、实时准入、隔离与有界失效
+
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use futures::FutureExt;
+use gateway_core::account::{AccountAffinity, AccountRuntimeSignals};
+use gateway_core::provider_ports::ProviderCooldown;
+use tokio::sync::Notify;
+
+use super::*;
+
+fn projection_attempt(
+    client_key: &str,
+    scope: Arc<FrozenAccountScope>,
+    policy: AccountSelectionPolicy,
+) -> AttemptContext {
+    AttemptContext::new(
+        RequestAttemptContext::new(
+            ModelRequestId::new("req_projection").unwrap(),
+            ClientApiKeyId::new(client_key).unwrap(),
+        ),
+        NonZeroU32::new(1).unwrap(),
+        SystemTime::now() + Duration::from_secs(30),
+        policy,
+        AccountAttemptContext::new(BTreeSet::new(), None, None).with_account_scope(scope),
+        None,
+        CancellationToken::new(),
+    )
+}
+
+async fn select(
+    selector: &CodexCredentialSelector,
+    attempt: &AttemptContext,
+    key: &ProviderSessionAffinityKey,
+    model: &str,
+) -> Result<provider_openai::credential::CodexCredentialLease, CredentialSelectionError> {
+    selector
+        .select(&SelectCodexCredential {
+            upstream_model: model,
+            request_url: &Url::parse(OFFICIAL_CODEX_BASE_URL).unwrap(),
+            attempt,
+            session_affinity_key: Some(key),
+            guardian: false,
+        })
+        .await
+}
+
+fn signal(in_flight: u32) -> AccountRuntimeSignals {
+    AccountRuntimeSignals {
+        in_flight,
+        last_started_at: None,
+        quota_reset_at: None,
+        quota_remaining_rank: None,
+        rate_limited_until: None,
+        failure_rate_basis_points: None,
+        first_output_latency_ms: None,
+    }
+}
+
+#[tokio::test]
+async fn healthy_binding_reuses_complete_capacity_and_refreshes_selected_account() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_first", "test-first");
+    create_account(&store, "acct_second", "test-second");
+    let leases = Arc::new(TestLeaseCoordinator::default());
+    let first = ProviderAccountId::new("acct_first").unwrap();
+    leases
+        .capacity
+        .signals
+        .lock()
+        .unwrap()
+        .insert(ProviderAccountId::new("acct_second").unwrap(), signal(1));
+    let selector = selector(&store, leases.clone());
+    let attempt = attempt(BTreeSet::new());
+    assert!(attempt.freeze_provider_route("codex"));
+    let key = ProviderSessionAffinityKey::try_new("projection-capacity").unwrap();
+    drop(select(&selector, &attempt, &key, "gpt-5.4").await.unwrap());
+
+    store.fail_provider_listing();
+    leases
+        .capacity
+        .signals
+        .lock()
+        .unwrap()
+        .insert(first.clone(), signal(1));
+    let selected = select(&selector, &attempt, &key, "gpt-5.4").await.unwrap();
+    let capacity = selected.capacity_snapshot().unwrap();
+    assert_eq!(selected.account_id(), &first);
+    assert_eq!((capacity.used_slots(), capacity.total_slots()), (3, 4));
+    assert_eq!(store.provider_list_reads(), 1);
+    // One live owner read plus one final revision fence for each admitted request.
+    assert_eq!(store.account_reads(), 3);
+}
+
+#[tokio::test]
+async fn changed_owner_and_lease_contention_refresh_the_complete_pool() {
+    for reason in ["disabled", "cooldown", "lease_busy"] {
+        let store = Arc::new(MemoryAccountStore::default());
+        create_account(&store, "acct_first", "test-first");
+        create_account(&store, "acct_second", "test-second");
+        let leases = Arc::new(TestLeaseCoordinator::default());
+        let cooldowns = Arc::new(MemoryCooldownPort::new());
+        let selector = selector_with_runtime(
+            &store,
+            leases.clone(),
+            Arc::new(MemorySessionAffinity::default()),
+            Arc::new(AccountFeedbackStats::default()),
+            cooldowns.clone(),
+        );
+        let attempt = projection_attempt(
+            "key_codex_contract",
+            contract_account_scope(),
+            account_policy().with_openai_account_affinity(AccountAffinity::Preferred),
+        );
+        let key = ProviderSessionAffinityKey::try_new("projection-refresh").unwrap();
+        let selected = select(&selector, &attempt, &key, "gpt-5.4").await.unwrap();
+        let first = selected.account_id().clone();
+        drop(selected);
+        match reason {
+            "disabled" => store.set_enabled(&first, false).await.unwrap(),
+            "cooldown" => {
+                cooldowns
+                    .put_if_later(ProviderCooldown::new(
+                        first.clone(),
+                        store.account(first.as_str()).unwrap().revision(),
+                        SystemTime::now() + Duration::from_secs(60),
+                    ))
+                    .await
+                    .unwrap();
+            }
+            "lease_busy" => {
+                leases.busy_accounts.lock().unwrap().insert(first.clone());
+            }
+            _ => unreachable!(),
+        }
+        let selected = select(&selector, &attempt, &key, "gpt-5.4").await.unwrap();
+        assert_ne!(selected.account_id(), &first, "{reason}");
+        assert_eq!(store.provider_list_reads(), 2, "{reason}");
+    }
+}
+
+#[tokio::test]
+async fn projection_is_isolated_by_client_scope_model_and_account_policy() {
+    for changed in [
+        "client",
+        "scope",
+        "model",
+        "concurrency",
+        "route",
+        "overdraft",
+        "path",
+    ] {
+        let store = Arc::new(MemoryAccountStore::default());
+        create_account(&store, "acct_first", "test-first");
+        create_account(&store, "acct_second", "test-second");
+        let selector = selector(&store, Arc::new(TestLeaseCoordinator::default()));
+        let key = ProviderSessionAffinityKey::try_new("projection-isolation").unwrap();
+        let initial = attempt(BTreeSet::new());
+        drop(select(&selector, &initial, &key, "gpt-5.4").await.unwrap());
+        store.fail_provider_listing();
+        let scope = if changed == "scope" {
+            Arc::new(FrozenAccountScope::new(
+                Arc::new(RuntimeAccountDirectory::new(BTreeMap::from([(
+                    ProviderAccountId::new("acct_first").unwrap(),
+                    RuntimeAccount::new(ProviderKind::new("openai").unwrap(), BTreeSet::new()),
+                )]))),
+                ClientRoutingScope::all_accounts(),
+            ))
+        } else {
+            contract_account_scope()
+        };
+        let policy = if changed == "concurrency" {
+            AccountSelectionPolicy::new(
+                RotationStrategy::Smart,
+                NonZeroU32::new(3).unwrap(),
+                Duration::ZERO,
+            )
+        } else {
+            account_policy()
+        };
+        let attempt = projection_attempt(
+            if changed == "client" {
+                "key_another"
+            } else {
+                "key_codex_contract"
+            },
+            scope,
+            policy,
+        );
+        let attempt = attempt.with_codex_quota_overdraft_eligibility(changed == "overdraft");
+        if changed == "route" {
+            assert!(attempt.freeze_provider_route("codex"));
+        }
+        let mut request_url = Url::parse(OFFICIAL_CODEX_BASE_URL).unwrap();
+        if changed == "path" {
+            request_url.set_path("/alternate/responses");
+        }
+        let error = selector
+            .select(&SelectCodexCredential {
+                upstream_model: if changed == "model" {
+                    "gpt-5.5"
+                } else {
+                    "gpt-5.4"
+                },
+                request_url: &request_url,
+                attempt: &attempt,
+                session_affinity_key: Some(&key),
+                guardian: false,
+            })
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(error, CredentialSelectionError::Store(_)),
+            "{changed}: {error:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn expired_projection_requires_a_complete_read() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_first", "test-first");
+    let selector = selector(&store, Arc::new(TestLeaseCoordinator::default()));
+    let attempt = attempt(BTreeSet::new());
+    let key = ProviderSessionAffinityKey::try_new("projection-expiry").unwrap();
+    drop(select(&selector, &attempt, &key, "gpt-5.4").await.unwrap());
+    store.fail_provider_listing();
+    tokio::time::sleep(Duration::from_millis(220)).await;
+    assert!(matches!(
+        select(&selector, &attempt, &key, "gpt-5.4").await,
+        Err(CredentialSelectionError::Store(_)),
+    ));
+}
+
+#[tokio::test]
+async fn projection_entry_budget_evicts_older_models() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_first", "test-first");
+    let selector = selector(&store, Arc::new(TestLeaseCoordinator::default()));
+    let attempt = attempt(BTreeSet::new());
+    let key = ProviderSessionAffinityKey::try_new("projection-bound").unwrap();
+    for index in 0..33 {
+        drop(
+            select(
+                &selector,
+                &attempt,
+                &key,
+                &format!("gpt-projection-{index}"),
+            )
+            .await
+            .unwrap(),
+        );
+    }
+    store.fail_provider_listing();
+    drop(
+        select(&selector, &attempt, &key, "gpt-projection-32")
+            .await
+            .unwrap(),
+    );
+    assert!(matches!(
+        select(&selector, &attempt, &key, "gpt-projection-0").await,
+        Err(CredentialSelectionError::Store(_)),
+    ));
+}
+
+#[tokio::test]
+async fn projection_fill_merges_equal_keys_and_releases_cancelled_owners() {
+    for scenario in ["same_key", "different_key", "cancel_owner"] {
+        let store = Arc::new(MemoryAccountStore::default());
+        create_account(&store, "acct_first", "test-first");
+        create_account(&store, "acct_second", "test-second");
+        let affinity = Arc::new(MemorySessionAffinity::default());
+        let key = ProviderSessionAffinityKey::try_new("projection-concurrent").unwrap();
+        affinity
+            .bind(
+                &ProviderKind::new("openai").unwrap(),
+                &key,
+                &ProviderAccountId::new("acct_first").unwrap(),
+                Duration::from_secs(60),
+            )
+            .await
+            .unwrap();
+        let blocked = Arc::new(AtomicBool::new(true));
+        let released = Arc::new(Notify::new());
+        let hook_blocked = blocked.clone();
+        let hook_released = released.clone();
+        let cooldowns = Arc::new(MemoryCooldownPort::new().with_read_hook(Arc::new(move |_| {
+            let blocked = hook_blocked.clone();
+            let released = hook_released.clone();
+            Box::pin(async move {
+                if blocked.load(Ordering::SeqCst) {
+                    released.notified().await;
+                }
+                Ok(())
+            })
+        })));
+        let selector = selector_with_runtime(
+            &store,
+            Arc::new(TestLeaseCoordinator::default()),
+            affinity,
+            Arc::new(AccountFeedbackStats::default()),
+            cooldowns,
+        );
+        let attempt = attempt(BTreeSet::new());
+        let mut first = Box::pin(select(&selector, &attempt, &key, "gpt-5.4"));
+        assert!(first.as_mut().now_or_never().is_none());
+        let mut second = Box::pin(select(
+            &selector,
+            &attempt,
+            &key,
+            if scenario == "different_key" {
+                "gpt-5.5"
+            } else {
+                "gpt-5.4"
+            },
+        ));
+        assert!(second.as_mut().now_or_never().is_none());
+        assert_eq!(
+            store.provider_list_reads(),
+            if scenario == "different_key" { 2 } else { 1 }
+        );
+        blocked.store(false, Ordering::SeqCst);
+        released.notify_waiters();
+        if scenario == "cancel_owner" {
+            drop(first);
+            drop(second.await.unwrap());
+            assert_eq!(store.provider_list_reads(), 2);
+        } else {
+            let (first, second) = futures::join!(first, second);
+            drop(first.unwrap());
+            drop(second.unwrap());
+        }
+    }
+}
+
+#[tokio::test]
+async fn strict_bound_waiters_recheck_only_their_account_until_capacity_opens() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_first", "test-first");
+    create_account(&store, "acct_second", "test-second");
+    let leases = Arc::new(TestLeaseCoordinator::default());
+    leases.capacity.enabled.store(true, Ordering::SeqCst);
+    let selector = selector_with_runtime(
+        &store,
+        leases.clone(),
+        Arc::new(MemorySessionAffinity::default()),
+        Arc::new(AccountFeedbackStats::default()),
+        Arc::new(MemoryCooldownPort::new()),
+    )
+    .with_account_concurrency(capacity_handle(&["acct_first", "acct_second"], 2));
+    let key = ProviderSessionAffinityKey::try_new("queued-projection").unwrap();
+    let queue_policy = account_policy();
+    let first_attempt =
+        projection_attempt("key_codex_contract", contract_account_scope(), queue_policy)
+            .with_request_tuning(capacity_tuning());
+    let second_attempt =
+        projection_attempt("key_codex_contract", contract_account_scope(), queue_policy)
+            .with_request_tuning(capacity_tuning());
+    drop(
+        select(&selector, &first_attempt, &key, "gpt-5.4")
+            .await
+            .unwrap(),
+    );
+    for id in ["acct_first", "acct_second"] {
+        leases
+            .capacity
+            .signals
+            .lock()
+            .unwrap()
+            .insert(ProviderAccountId::new(id).unwrap(), signal(100));
+    }
+    let mut first = Box::pin(select(&selector, &first_attempt, &key, "gpt-5.4"));
+    assert!(first.as_mut().now_or_never().is_none());
+    let mut second = Box::pin(select(&selector, &second_attempt, &key, "gpt-5.4"));
+    assert!(second.as_mut().now_or_never().is_none());
+    let initial_reads = store.provider_list_reads();
+    let release = async {
+        tokio::time::sleep(Duration::from_millis(650)).await;
+        assert_eq!(store.provider_list_reads(), initial_reads);
+        leases.capacity.signals.lock().unwrap().clear();
+    };
+    let (first, second, ()) = tokio::time::timeout(Duration::from_secs(3), async {
+        futures::join!(first, second, release)
+    })
+    .await
+    .unwrap();
+    for lease in [first.unwrap(), second.unwrap()] {
+        assert_eq!(lease.capacity_snapshot().unwrap().total_slots(), 4);
+    }
+}
+
+#[tokio::test]
+async fn movable_waiters_use_other_accounts_even_before_queue_promotion() {
+    for (mode, has_session, bind_session) in [
+        (AccountAffinity::Relaxed, false, false),
+        (AccountAffinity::Strict, true, false),
+        (AccountAffinity::Preferred, true, true),
+    ] {
+        for has_waiter_ahead in [false, true] {
+            let store = Arc::new(MemoryAccountStore::default());
+            create_account(&store, "acct_first", "test-first");
+            create_account(&store, "acct_second", "test-second");
+            let first = ProviderAccountId::new("acct_first").unwrap();
+            let second = ProviderAccountId::new("acct_second").unwrap();
+            let leases = Arc::new(TestLeaseCoordinator::default());
+            leases.capacity.enabled.store(true, Ordering::SeqCst);
+            let feedback = Arc::new(AccountFeedbackStats::default());
+            for _ in 0..4 {
+                feedback.report(
+                    &ProviderKind::new("openai").unwrap(),
+                    &second,
+                    AccountAttemptFeedback::Failed {
+                        first_output_ms: None,
+                    },
+                );
+            }
+            let selector = selector_with_runtime(
+                &store,
+                leases.clone(),
+                Arc::new(MemorySessionAffinity::default()),
+                feedback,
+                Arc::new(MemoryCooldownPort::new()),
+            )
+            .with_account_concurrency(capacity_handle(&["acct_first", "acct_second"], 2));
+            // 健康分保证请求排入 A，已有队首时也不因 B 的队列较短而提前排入 B
+            // This test isolates queue pressure from request-interval pacing.
+            let policy = AccountSelectionPolicy::new(
+                RotationStrategy::Smart,
+                NonZeroU32::new(2).unwrap(),
+                Duration::ZERO,
+            )
+            .with_smart_scheduling(
+                gateway_core::account::smart_scheduling::SmartSchedulingConfig::new(
+                    [0.0, 0.0, 1.0, 0.0, 0.0, 0.2],
+                    true,
+                )
+                .unwrap(),
+            );
+            let head_attempt =
+                projection_attempt("key_codex_contract", contract_account_scope(), policy)
+                    .with_request_tuning(gateway_core::routing::RequestTuning {
+                        smart_scheduling: policy.smart_scheduling(),
+                        ..capacity_tuning()
+                    });
+            let head_key = ProviderSessionAffinityKey::try_new("fixed-head").unwrap();
+            assert_eq!(
+                select(&selector, &head_attempt, &head_key, "gpt-5.4")
+                    .await
+                    .unwrap()
+                    .account_id(),
+                &first,
+            );
+            let attempt = projection_attempt(
+                "key_codex_contract",
+                contract_account_scope(),
+                policy.with_openai_account_affinity(mode),
+            )
+            .with_request_tuning(gateway_core::routing::RequestTuning {
+                smart_scheduling: policy.smart_scheduling(),
+                ..capacity_tuning()
+            });
+            let key = ProviderSessionAffinityKey::try_new("movable-waiter").unwrap();
+            if bind_session {
+                assert_eq!(
+                    select(&selector, &attempt, &key, "gpt-5.4")
+                        .await
+                        .unwrap()
+                        .account_id(),
+                    &first,
+                );
+            }
+            for id in [&first, &second] {
+                leases
+                    .capacity
+                    .signals
+                    .lock()
+                    .unwrap()
+                    .insert(id.clone(), signal(2));
+            }
+            let mut head = Box::pin(select(&selector, &head_attempt, &head_key, "gpt-5.4"));
+            if has_waiter_ahead {
+                assert!(head.as_mut().now_or_never().is_none());
+            }
+            let request = SelectCodexCredential {
+                upstream_model: "gpt-5.4",
+                request_url: &Url::parse(OFFICIAL_CODEX_BASE_URL).unwrap(),
+                attempt: &attempt,
+                session_affinity_key: has_session.then_some(&key),
+                guardian: false,
+            };
+            let mut pending = Box::pin(selector.select(&request));
+            if let Some(result) = pending.as_mut().now_or_never() {
+                panic!(
+                    "must queue: mode={mode:?}, has_waiter_ahead={has_waiter_ahead}, result={result:?}"
+                );
+            }
+            assert_eq!(
+                leases
+                    .capacity
+                    .waits
+                    .lock()
+                    .unwrap()
+                    .last()
+                    .unwrap()
+                    .account_id(),
+                &first
+            );
+            // A 及其队首始终占位，只释放 B，验证请求能在晋升或超时前使用新空位
+            leases.capacity.signals.lock().unwrap().remove(&second);
+            let selected = tokio::time::timeout(Duration::from_secs(2), pending)
+                .await
+                .unwrap_or_else(|_| {
+                    panic!(
+                        "missed free account: mode={mode:?}, has_waiter_ahead={has_waiter_ahead}"
+                    )
+                })
+                .unwrap();
+            assert_eq!(selected.account_id(), &second);
+            let capacity = selected.capacity_snapshot().unwrap();
+            assert_eq!((capacity.used_slots(), capacity.total_slots()), (3, 4));
+            if has_waiter_ahead {
+                assert!(head.as_mut().now_or_never().is_none());
+            }
+            drop(head);
+            assert_eq!(leases.capacity.waiting.load(Ordering::SeqCst), 0);
+        }
+    }
+}

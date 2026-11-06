@@ -79,7 +79,7 @@ const diagnosticColumns = computed(() => defineTableColumns<DiagnosticDisplayIte
       }]),
   {
     key: 'errorCount',
-    label: '错误 / 未完',
+    label: t('usage.health.errors'),
     kind: 'numeric',
     size: 'sm',
   },
@@ -245,19 +245,14 @@ function diagnosticNameDisplay(name: string, key: string) {
         </template>
 
         <template #errorCount="{ row }">
-          <div
-            class="flex items-center justify-end gap-1.5 whitespace-nowrap text-right font-mono leading-none tabular-nums"
-            :aria-label="`错误 ${formatCompactNumber(row.errorCount)}，未完成 ${formatCompactNumber(row.nonCompletionCount)}`"
-            :title="`错误率 ${formatPercent(row.errorRate)}；未完成率 ${formatPercent(row.nonCompletionRate)}`"
+          <strong
+            class="font-mono font-bold tabular-nums"
+            :class="row.errorCount > 0 ? 'text-cp-error-text' : 'text-cp-text-quaternary'"
+            :aria-label="t('usage.diagnostics.errors', { count: formatCompactNumber(row.errorCount) })"
+            :title="t('usage.diagnostics.errorRate', { rate: formatPercent(row.errorRate) })"
           >
-            <strong :class="row.errorCount > 0 ? 'text-cp-error-text' : 'text-cp-text-quaternary'">
-              {{ formatCompactNumber(row.errorCount) }}
-            </strong>
-            <span class="text-[9px] text-cp-text-quaternary">/</span>
-            <strong :class="row.nonCompletionCount > 0 ? 'text-cp-orange-text' : 'text-cp-text-quaternary'">
-              {{ formatCompactNumber(row.nonCompletionCount) }}
-            </strong>
-          </div>
+            {{ formatCompactNumber(row.errorCount) }}
+          </strong>
         </template>
 
         <template #firstTokenP95Ms="{ row }">

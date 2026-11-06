@@ -979,7 +979,7 @@ async fn capacity_wait_cancelled_future_cleans_write_before_reply_delivery() {
 }
 
 #[tokio::test]
-async fn capacity_wait_fast_acquire_ignores_full_wait_queue_and_cleans_on_drop() {
+async fn capacity_wait_fast_acquire_respects_existing_queue_and_cleans_after_release() {
     let Some(mut fixture) = Fixture::new().await else {
         return;
     };
@@ -997,19 +997,39 @@ async fn capacity_wait_fast_acquire_ignores_full_wait_queue_and_cleans_on_drop()
             .expect("full wait queue"),
         ProviderWaitLeaseAcquisition::Full
     ));
+    let request = scheduling("fast", 1, Duration::ZERO, Duration::from_secs(10));
+    assert!(matches!(
+        fixture
+            .port
+            .try_acquire_scheduling(request.clone())
+            .await
+            .expect("direct admission respects older waiters"),
+        ProviderLeaseAcquisition::Busy { .. }
+    ));
+    assert_eq!(fixture.waiting("fast").await, 100);
+    assert_eq!(fixture.in_flight("fast").await, 0);
+    let quality = fast_acquired(
+        fixture
+            .port
+            .try_acquire_scheduling(request.clone().with_quality_check(true))
+            .await
+            .expect("quality retains its independent capacity"),
+    );
+    assert_eq!(fixture.in_flight("fast").await, 0);
+    assert_eq!(fixture.waiting("fast").await, 100);
+    drop(quality);
+    for waiter in waiters {
+        waiter.release().await.expect("normal wait release");
+    }
+    assert_eq!(fixture.waiting("fast").await, 0);
     let executing = fast_acquired(
         fixture
             .port
-            .try_acquire_scheduling(scheduling(
-                "fast",
-                1,
-                Duration::ZERO,
-                Duration::from_secs(10),
-            ))
+            .try_acquire_scheduling(request)
             .await
-            .expect("fast acquisition independent of wait count"),
+            .expect("direct admission after the queue clears"),
     );
-    assert_eq!(fixture.waiting("fast").await, 100);
+    assert_eq!(fixture.waiting("fast").await, 0);
     assert_eq!(fixture.in_flight("fast").await, 1);
     assert!(matches!(
         fixture
@@ -1025,9 +1045,6 @@ async fn capacity_wait_fast_acquire_ignores_full_wait_queue_and_cleans_on_drop()
         ProviderLeaseAcquisition::Busy { .. }
     ));
     drop(executing);
-    for waiter in waiters {
-        waiter.release().await.expect("normal wait release");
-    }
     fixture.drain().await;
     assert_eq!(fixture.in_flight("fast").await, 0);
     fixture.finish().await;
@@ -2017,11 +2034,17 @@ mod guardian_pool {
     }
 
     #[tokio::test]
-    async fn reserved_fifo_releases_cancelled_and_expired_heads_and_rejects_cross_pool_promotion() {
+    async fn business_pool_fifo_releases_cancelled_and_expired_heads_and_rejects_cross_pool_promotion()
+     {
         let Some(mut fixture) = Fixture::new().await else {
             return;
         };
-        for expire in [false, true] {
+        for (pool, expire) in [
+            (ProviderConcurrencyPool::Shared, false),
+            (ProviderConcurrencyPool::Shared, true),
+            (ProviderConcurrencyPool::Reserved, false),
+            (ProviderConcurrencyPool::Reserved, true),
+        ] {
             let id = if expire {
                 "expired-head"
             } else {
@@ -2032,7 +2055,7 @@ mod guardian_pool {
                     .port
                     .try_acquire_wait(
                         wait_request(id, AccountWaitMode::Sticky, 3, Duration::from_secs(10))
-                            .with_concurrency_pool(ProviderConcurrencyPool::Reserved),
+                            .with_concurrency_pool(pool),
                     )
                     .await
                     .unwrap(),
@@ -2042,19 +2065,34 @@ mod guardian_pool {
                     .port
                     .try_acquire_wait(
                         wait_request(id, AccountWaitMode::Fallback, 3, Duration::from_secs(10))
-                            .with_concurrency_pool(ProviderConcurrencyPool::Reserved),
+                            .with_concurrency_pool(pool),
                     )
                     .await
                     .unwrap(),
             );
             let request = scheduling(id, 1, Duration::ZERO, Duration::from_secs(10))
-                .with_concurrency_pool(ProviderConcurrencyPool::Reserved);
+                .with_concurrency_pool(pool);
             assert!(matches!(
                 next.try_promote(request.clone()).await.unwrap(),
                 ProviderWaitPromotion::Busy { .. }
             ));
+            assert!(
+                matches!(
+                    fixture
+                        .port
+                        .try_acquire_scheduling(request.clone())
+                        .await
+                        .unwrap(),
+                    ProviderLeaseAcquisition::Busy { .. }
+                ),
+                "a new or cross-account admission cannot overtake the destination queue"
+            );
             if expire {
-                let key = format!("{}:reserved:waiting", fixture.active_key(id));
+                let key = if pool == ProviderConcurrencyPool::Reserved {
+                    format!("{}:reserved:waiting", fixture.active_key(id))
+                } else {
+                    fixture.waiting_key(id)
+                };
                 let tokens: Vec<String> = redis::cmd("ZRANGE")
                     .arg(format!("{key}:order"))
                     .arg(0)

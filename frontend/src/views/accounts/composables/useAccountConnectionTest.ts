@@ -453,7 +453,7 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
       const result = await getAccountModels({ accountId: account.id }, { silent: true })
       if (request !== connectionTestModelRequest)
         return
-      applyConnectionTestModels(result)
+      applyConnectionTestModels(result.models, account)
       if (!connectionTestSelectedModel.value) {
         connectionTestError.value = '没有可测试模型'
       }
@@ -461,10 +461,8 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
     catch (error: unknown) {
       if (request !== connectionTestModelRequest)
         return
-      connectionTestError.value
-        = `模型列表加载失败：${errorMessage(error, '无法读取上游模型，请稍后重试')}`
-      connectionTestModelOptions.value = []
-      connectionTestSelectedModel.value = ''
+      connectionTestError.value = `模型列表加载失败：${errorMessage(error)}`
+      applyConnectionTestModels([], account)
     }
     finally {
       if (request === connectionTestModelRequest)
@@ -472,18 +470,17 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
     }
   }
 
-  function applyConnectionTestModels(result: AccountModelsResponse, preserveSelection = false) {
+  function applyConnectionTestModels(catalog: AccountModelsResponse['models'], account: Account, preserveSelection = false) {
     const previousSelection = preserveSelection ? connectionTestSelectedModel.value : ''
-    connectionTestModelOptions.value = []
-    for (const model of result.models ?? []) {
-      connectionTestModelOptions.value.push({
-        label: model.label || model.id,
-        value: model.id,
-      })
+    const labels = new Map(catalog.map(model => [model.id, model.label || model.id]))
+    if (account.modelAccess?.mode === 'allowlist') {
+      for (const id of account.modelAccess.models) {
+        if (!labels.has(id))
+          labels.set(id, id)
+      }
     }
-    connectionTestSelectedModel.value = connectionTestModelOptions.value.some(
-      model => model.value === previousSelection,
-    )
+    connectionTestModelOptions.value = Array.from(labels, ([value, label]) => ({ value, label }))
+    connectionTestSelectedModel.value = labels.has(previousSelection)
       ? previousSelection
       : connectionTestModelOptions.value.find(model => model.value === 'gpt-6-astra')?.value
         || connectionTestModelOptions.value[0]?.value || ''
@@ -499,7 +496,7 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
       const result = await refreshAccountModels({ accountId: account.id }, { silent: true })
       if (request !== connectionTestModelRequest)
         return
-      applyConnectionTestModels(result, true)
+      applyConnectionTestModels(result.models, account, true)
       toast.success(`已刷新 ${connectionTestModelOptions.value.length} 个上游模型`)
     }
     catch (error: unknown) {

@@ -217,10 +217,10 @@ async fn restart_should_request_process_restart_inside_docker() {
 }
 
 #[tokio::test]
-async fn restart_should_spawn_replacement_before_shutdown_outside_docker() {
+async fn restart_should_wait_for_service_release_before_starting_replacement() {
     let fixture = Fixture::new();
     let replacement_marker = fixture.root.path().join("replacement-ran");
-    fixture.write_executable("#!/bin/sh\n: > \"${0%/*}/replacement-ran\"\n");
+    fixture.write_executable("#!/bin/sh\n: > \"${0%/*}/replacement-waiting\"\ncat >/dev/null\n: > \"${0%/*}/replacement-ran\"\n");
     let mut config = fixture.config("http://127.0.0.1:1/repos");
     config.self_restart_enabled = true;
     let shutdown = CancellationToken::new();
@@ -237,6 +237,18 @@ async fn restart_should_spawn_replacement_before_shutdown_outside_docker() {
     tokio::time::timeout(Duration::from_secs(2), shutdown.cancelled())
         .await
         .expect("shutdown requested after spawn");
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !fixture.root.path().join("replacement-waiting").exists() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("replacement waiting for old service");
+    assert!(
+        !replacement_marker.exists(),
+        "new service must wait for resource release"
+    );
+    drop(service);
     tokio::time::timeout(Duration::from_secs(2), async {
         while !replacement_marker.is_file() {
             tokio::time::sleep(Duration::from_millis(10)).await;

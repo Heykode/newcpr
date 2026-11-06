@@ -1309,7 +1309,8 @@ async fn account_health_non_completion_counts_match_diagnostics_and_scope() {
         assert_eq!(diagnostic.success_count, 2, "{case}");
         assert_eq!(diagnostic.failure_count, 1, "{case}");
         assert_eq!(
-            diagnostic.non_completion_count, expected_non_completion,
+            diagnostic.cancelled_count + diagnostic.incomplete_count,
+            expected_non_completion,
             "{case}"
         );
         assert_eq!(
@@ -1317,7 +1318,7 @@ async fn account_health_non_completion_counts_match_diagnostics_and_scope() {
                 .iter()
                 .map(|bucket| bucket.non_completion_count)
                 .sum::<u64>(),
-            diagnostic.non_completion_count,
+            diagnostic.cancelled_count + diagnostic.incomplete_count,
             "{case}"
         );
     }

@@ -19,6 +19,7 @@ function mountDashboard() {
       refresh = callback
       return { resume() {} }
     } },
+    '@/i18n': { t: key => key },
     '@/api': {
       getDashboardSummary: (_query, options) => new Promise((resolve, reject) => pending.push({ resolve, reject, ...options })),
       getDashboardTrend: () => assert.fail('unexpected trend request'),

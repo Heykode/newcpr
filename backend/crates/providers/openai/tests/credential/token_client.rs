@@ -193,13 +193,13 @@ async fn native_configuration_failure_is_not_a_retryable_refresh() {
         error,
         RefreshFailure::Transport { upstream: None, .. }
     ));
-    assert_eq!(
+    assert!(matches!(
         client
             .exchange_authorization_code(code_grant())
             .await
             .unwrap_err(),
         AuthorizationCodeExchangeError::Unavailable
-    );
+    ));
     assert!(origin.received_requests().await.unwrap().is_empty());
 }
 
@@ -215,13 +215,16 @@ async fn native_connect_failure_is_retryable_but_lost_reply_is_ambiguous() {
         client.refresh("synthetic-refresh").await.unwrap_err(),
         RefreshFailure::RetryableTransport { .. }
     ));
-    assert_eq!(
+    assert!(matches!(
         client
             .exchange_authorization_code(code_grant())
             .await
             .unwrap_err(),
-        AuthorizationCodeExchangeError::Unavailable
-    );
+        AuthorizationCodeExchangeError::Connection {
+            timed_out: false,
+            ..
+        }
+    ));
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let client = native_client(
@@ -245,13 +248,13 @@ async fn native_connect_failure_is_retryable_but_lost_reply_is_ambiguous() {
         client.refresh("synthetic-refresh").await.unwrap_err(),
         RefreshFailure::Transport { upstream: None, .. }
     ));
-    assert_eq!(
+    assert!(matches!(
         client
             .exchange_authorization_code(code_grant())
             .await
             .unwrap_err(),
-        AuthorizationCodeExchangeError::Ambiguous
-    );
+        AuthorizationCodeExchangeError::Ambiguous { .. }
+    ));
     server.await.unwrap();
 }
 
@@ -315,13 +318,13 @@ async fn native_token_timeout_is_shared_by_headers_and_response_body() {
                         RefreshFailure::Transport { upstream: None, .. }
                     ));
                 }
-                "exchange" => assert_eq!(
+                "exchange" => assert!(matches!(
                     client
                         .exchange_authorization_code(code_grant())
                         .await
                         .unwrap_err(),
-                    AuthorizationCodeExchangeError::Ambiguous
-                ),
+                    AuthorizationCodeExchangeError::Ambiguous { .. }
+                )),
                 "pat" => {
                     let error = pat_service(client)
                         .prepare_import_document(
@@ -725,6 +728,68 @@ async fn authorization_code_exchange_keeps_upstream_access_and_refresh_tokens_ve
 }
 
 #[tokio::test]
+async fn authorization_code_response_timeouts_remain_ambiguous_without_exposing_request_material() {
+    use std::error::Error as _;
+    use std::time::Duration;
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+    for partial_body in [false, true] {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0; 4096];
+            let count = socket.read(&mut request).await.unwrap();
+            assert!(request[..count].starts_with(b"POST "));
+            if partial_body {
+                socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\n{\"access_token\":\"PRIVATE_BODY").await.unwrap();
+            }
+            std::future::pending::<()>().await;
+        });
+        let client = OpenAiTokenClient::new(
+            reqwest::Client::builder()
+                .no_proxy()
+                .timeout(Duration::from_millis(250))
+                .build()
+                .unwrap(),
+            TokenClientConfig {
+                client_id: "test-public-client".to_owned(),
+                token_endpoint: format!("http://{address}/oauth/token?PRIVATE_URL_MARKER"),
+            },
+            provider_openai::OpenAiConfig::default().wire_profile_state(),
+        );
+        let error = client
+            .exchange_authorization_code(AuthorizationCodeGrant {
+                code: SecretString::from("PRIVATE_CODE"),
+                code_verifier: SecretString::from("PRIVATE_VERIFIER"),
+            })
+            .await
+            .unwrap_err();
+        server.abort();
+        assert!(server.await.unwrap_err().is_cancelled());
+        assert!(matches!(
+            error,
+            AuthorizationCodeExchangeError::Ambiguous { .. }
+        ));
+        let mut source = error.source();
+        let transport = loop {
+            let cause = source.expect("transport cause must survive classification");
+            if let Some(transport) = cause.downcast_ref::<reqwest::Error>() {
+                break transport;
+            }
+            source = cause.source();
+        };
+        assert!(transport.is_timeout());
+        assert!(!transport.is_connect());
+        assert!(transport.url().is_none());
+        assert!(!format!("{error:?} {error}").contains("PRIVATE_"));
+        let details =
+            gateway_core::error::ErrorDetails::capture(Some(&error.into()), None, true).unwrap();
+        assert!(!details.as_str().contains("PRIVATE_"));
+    }
+}
+
+#[tokio::test]
 async fn authorization_code_exchange_requires_id_token_and_json_response() {
     let missing_id = MockServer::start().await;
     Mock::given(method("POST"))
@@ -752,7 +817,7 @@ async fn authorization_code_exchange_requires_id_token_and_json_response() {
             })
             .await
             .expect_err("invalid token response fails closed");
-        assert_eq!(error, AuthorizationCodeExchangeError::Rejected);
+        assert!(matches!(error, AuthorizationCodeExchangeError::Rejected));
     }
 }
 

@@ -91,6 +91,7 @@ mod quota_observation;
 mod raw_identity;
 mod reasoning_replay;
 mod request_alignment;
+mod response_control_lifecycle;
 mod scheduling;
 mod search_history;
 mod streamed_errors;
@@ -98,6 +99,7 @@ mod timing;
 mod tls_recovery;
 mod turn_affinity;
 mod turn_state;
+mod upstream_affinity;
 mod ws_message_compatibility;
 mod ws_size_recovery;
 const CAPTURE_COMPLETED_SSE: &str = concat!(
@@ -1861,7 +1863,7 @@ async fn search_and_images_should_share_responses_affinity_and_existing_busy_fai
 }
 
 #[tokio::test]
-async fn child_search_and_images_should_share_child_failover_without_changing_the_root() {
+async fn child_search_and_images_share_the_migrated_root_binding() {
     assert_cross_endpoint_affinity(Some("child-thread")).await;
 }
 
@@ -1888,7 +1890,7 @@ async fn assert_cross_endpoint_affinity(thread_id: Option<&str>) {
     let root_stream = provider
         .execute(
             planned_request("openai", root.clone()),
-            relaxed_context("req_cross_endpoint_root", CancellationToken::new()),
+            context("req_cross_endpoint_root", CancellationToken::new()),
         )
         .await
         .expect("root selection");
@@ -1902,7 +1904,7 @@ async fn assert_cross_endpoint_affinity(thread_id: Option<&str>) {
     let first = provider
         .execute(
             planned_request("openai", generation.clone()),
-            relaxed_context("req_cross_endpoint_first", CancellationToken::new()),
+            context("req_cross_endpoint_first", CancellationToken::new()),
         )
         .await
         .expect("first selection");
@@ -1951,7 +1953,7 @@ async fn assert_cross_endpoint_affinity(thread_id: Option<&str>) {
     let mut same = provider
         .execute(
             planned_provider_endpoint_request("openai", search.clone()),
-            relaxed_context("req_cross_endpoint_search", CancellationToken::new()),
+            context("req_cross_endpoint_search", CancellationToken::new()),
         )
         .await
         .expect("search selection");
@@ -1999,7 +2001,7 @@ async fn assert_cross_endpoint_affinity(thread_id: Option<&str>) {
     let resumed = provider
         .execute(
             planned_request("openai", generation.clone()),
-            relaxed_context("req_cross_endpoint_resumed", CancellationToken::new()),
+            context("req_cross_endpoint_resumed", CancellationToken::new()),
         )
         .await
         .expect("resumed responses");
@@ -2036,7 +2038,7 @@ async fn assert_cross_endpoint_affinity(thread_id: Option<&str>) {
         let selected_image = provider
             .execute(
                 planned_provider_endpoint_request("openai", image),
-                relaxed_context("req_cross_endpoint_image", CancellationToken::new()),
+                context("req_cross_endpoint_image", CancellationToken::new()),
             )
             .await
             .expect("image selection");
@@ -2050,16 +2052,23 @@ async fn assert_cross_endpoint_affinity(thread_id: Option<&str>) {
         let root_stream = provider
             .execute(
                 planned_request("openai", root),
-                relaxed_context(
+                context(
                     "req_cross_endpoint_root_after_child",
                     CancellationToken::new(),
                 ),
             )
             .await
             .expect("root after child migration");
-        assert_eq!(root_stream.metadata().provider_account_id(), &root_account);
+        assert_eq!(
+            root_stream.metadata().provider_account_id().as_str(),
+            other_account
+        );
         drop(root_stream);
-        assert_eq!(affinity.binding_count(), 2, "only root and child bindings");
+        assert_eq!(
+            affinity.binding_count(),
+            1,
+            "all endpoints share the root binding"
+        );
     } else {
         let keys = affinity.lookup_keys();
         assert!(
@@ -5492,7 +5501,7 @@ async fn affinity_quota_switch_should_clear_old_turn_state_without_a_provider_st
 }
 
 #[tokio::test]
-async fn thread_spawn_children_should_inherit_the_root_with_independent_scoped_bindings() {
+async fn thread_spawn_children_share_the_root_binding_but_keep_client_and_root_isolation() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_thread_spawn_affinity").await;
     let affinity = Arc::new(MemorySessionAffinity::default());
@@ -5547,10 +5556,10 @@ async fn thread_spawn_children_should_inherit_the_root_with_independent_scoped_b
         keys[0], keys[5],
         "unidentified thread retains root fallback"
     );
-    assert_ne!(keys[0], keys[2]);
-    assert_ne!(keys[2], keys[3]);
-    assert_eq!(keys[2], keys[4], "same child reuses its own key");
-    assert_eq!(affinity.binding_count(), 3);
+    assert_eq!(keys[0], keys[2]);
+    assert_eq!(keys[2], keys[3]);
+    assert_eq!(keys[2], keys[4], "same child reuses the shared root key");
+    assert_eq!(affinity.binding_count(), 1);
     for (root, client_key) in [
         ("other-root", client_key),
         (
@@ -5592,11 +5601,12 @@ async fn thread_spawn_children_should_inherit_the_root_with_independent_scoped_b
         );
         drop(stream);
     }
-    assert_eq!(affinity.binding_count(), 5);
+    assert_eq!(affinity.binding_count(), 3);
 }
 
 #[tokio::test]
-async fn child_busy_failover_should_leave_the_running_parent_and_siblings_on_the_root_account() {
+async fn relaxed_child_migration_preserves_running_parent_and_late_completion_cannot_restore_old_root()
+ {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_subagent_a").await;
     let affinity = Arc::new(MemorySessionAffinity::default());
@@ -5637,6 +5647,29 @@ async fn child_busy_failover_should_leave_the_running_parent_and_siblings_on_the
         .await
         .expect("parent selection");
     let root_account = parent.metadata().provider_account_id().clone();
+    let child_context = |request_id: &str| {
+        AttemptContext::new(
+            RequestAttemptContext::new(
+                ModelRequestId::new(request_id).unwrap(),
+                ClientApiKeyId::new("key_openai_contract").unwrap(),
+            ),
+            NonZeroU32::MIN,
+            SystemTime::now() + Duration::from_secs(30),
+            account_policy()
+                .with_openai_account_affinity(gateway_core::account::AccountAffinity::Relaxed),
+            AccountAttemptContext::new(
+                BTreeSet::new(),
+                None,
+                Some(ProviderAccountStateOwner::new(
+                    ProviderKind::new("openai").unwrap(),
+                    root_account.clone(),
+                )),
+            )
+            .with_account_scope(contract_account_scope()),
+            None,
+            CancellationToken::new(),
+        )
+    };
     let parent_task = tokio::spawn(async move {
         let mut completed = false;
         while let Some(event) = parent.next().await {
@@ -5678,18 +5711,18 @@ async fn child_busy_failover_should_leave_the_running_parent_and_siblings_on_the
     let child = provider
         .execute(
             planned_request("openai", operation("child-one")),
-            relaxed_context("req_child_inherit", CancellationToken::new()),
+            child_context("req_child_inherit"),
         )
         .await
         .expect("initial child selection");
     assert_eq!(
-        child.metadata().provider_account_id(),
-        &root_account,
-        "root preference outranks B's weight"
+        child.metadata().provider_account_id().as_str(),
+        "acct_subagent_b",
+        "Relaxed uses normal weight order and migrates the shared binding at admission"
     );
     drop(child);
 
-    // 租约层报告 A 已满；既有子线程和首次出现的子线程都能独立选择 B。
+    // A 的运行中请求继续，后续子线程可用 B；A 迟到完成不能恢复旧绑定。
     leases
         .busy_accounts
         .lock()
@@ -5699,7 +5732,7 @@ async fn child_busy_failover_should_leave_the_running_parent_and_siblings_on_the
         let mut child = provider
             .execute(
                 planned_request("openai", operation(thread)),
-                relaxed_context("req_child_busy", CancellationToken::new()),
+                child_context("req_child_busy"),
             )
             .await
             .expect("child busy fallback");
@@ -5732,15 +5765,15 @@ async fn child_busy_failover_should_leave_the_running_parent_and_siblings_on_the
     leases.busy_accounts.lock().expect("busy accounts").clear();
 
     for (thread, expected) in [
-        ("parent-session", "acct_subagent_a"),
+        ("parent-session", "acct_subagent_b"),
         ("child-one", "acct_subagent_b"),
         ("cold-child", "acct_subagent_b"),
-        ("new-sibling", "acct_subagent_a"),
+        ("new-sibling", "acct_subagent_b"),
     ] {
         let stream = provider
             .execute(
                 planned_request("openai", operation(thread)),
-                relaxed_context("req_after_parent_completion", CancellationToken::new()),
+                child_context("req_after_parent_completion"),
             )
             .await
             .expect("selection after parent completion");
@@ -5753,8 +5786,8 @@ async fn child_busy_failover_should_leave_the_running_parent_and_siblings_on_the
     }
     assert_eq!(
         affinity.binding_count(),
-        7,
-        "four thread bindings and three successful Guardian parent records"
+        4,
+        "one shared root binding and three successful Guardian parent records"
     );
     let requests = server.received_requests().await.expect("child requests");
     assert_eq!(requests.len(), 2);
@@ -5776,7 +5809,7 @@ async fn child_busy_failover_should_leave_the_running_parent_and_siblings_on_the
 }
 
 #[tokio::test]
-async fn failed_child_failover_should_preserve_both_existing_bindings() {
+async fn failed_relaxed_child_does_not_undo_the_binding_already_migrated_at_admission() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_subagent_a").await;
     let affinity = Arc::new(MemorySessionAffinity::default());
@@ -5854,18 +5887,18 @@ async fn failed_child_failover_should_preserve_both_existing_bindings() {
                     "openai",
                     Operation::Generate(generate_with_session_context("root", thread, None)),
                 ),
-                relaxed_context("req_after_child_failure", CancellationToken::new()),
+                context("req_after_child_failure", CancellationToken::new()),
             )
             .await
             .expect("binding after failure");
         assert_eq!(
             stream.metadata().provider_account_id().as_str(),
-            "acct_subagent_a",
-            "failure must not migrate either binding"
+            "acct_subagent_b",
+            "completion or failure must not restore the old binding"
         );
         drop(stream);
     }
-    assert_eq!(affinity.binding_count(), 2);
+    assert_eq!(affinity.binding_count(), 1);
     server.verify().await;
 }
 

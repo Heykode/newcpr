@@ -444,7 +444,7 @@ async fn upstream_model_rejection_cools_only_that_model_across_requests_and_tran
 }
 
 #[tokio::test]
-async fn native_catalog_membership_precedes_weight_affinity_pin_and_model_policy() {
+async fn native_catalog_membership_precedes_weight_and_pin_but_explicit_allowlist_can_extend_it() {
     use gateway_core::account::{AccountModelAccess, AccountModelAccessMode};
     for wait in [false, true] {
         let store = Arc::new(MemoryAccountStore::default());
@@ -477,7 +477,7 @@ async fn native_catalog_membership_precedes_weight_affinity_pin_and_model_policy
             .respond_with(
                 ResponseTemplate::new(200).set_body_raw(CAPTURE_COMPLETED_SSE, "text/event-stream"),
             )
-            .expect(3)
+            .expect(4)
             .mount(&server)
             .await;
         let leases = Arc::new(TestLeaseCoordinator::default());
@@ -576,7 +576,12 @@ async fn native_catalog_membership_precedes_weight_affinity_pin_and_model_policy
                 ),
                 NonZeroU32::MIN,
                 SystemTime::now() + Duration::from_secs(30),
-                account_policy(),
+                // These independent eligibility assertions do not test pacing.
+                gateway_core::account::AccountSelectionPolicy::new(
+                    gateway_core::account::RotationStrategy::Smart,
+                    NonZeroU32::MIN,
+                    Duration::ZERO,
+                ),
                 AccountAttemptContext::new(
                     BTreeSet::new(),
                     required.map(|id| ProviderAccountId::new(id).unwrap()),
@@ -591,14 +596,28 @@ async fn native_catalog_membership_precedes_weight_affinity_pin_and_model_policy
                 ..Default::default()
             });
             let before = leases.requests.lock().unwrap().len();
-            let error = provider
+            let selected = provider
                 .execute(
                     planned_request_with_model("openai", operation(model, false), model),
                     context,
                 )
-                .await
+                .await;
+            if deny_supported {
+                let mut stream = selected.unwrap_or_else(|error| {
+                    panic!("explicit allowlist extends the missing catalog entry (wait={wait}): {error:?}")
+                });
+                assert_eq!(
+                    stream.metadata().provider_account_id().as_str(),
+                    "acct_scope_old"
+                );
+                while let Some(event) = stream.next().await {
+                    event.unwrap();
+                }
+                continue;
+            }
+            let error = selected
                 .err()
-                .expect("catalog and model policy must both allow account");
+                .expect("catalog rejects models without an explicit allowlist");
             assert_eq!(error.kind(), ProviderErrorKind::NoEligibleAccount);
             assert_eq!(leases.requests.lock().unwrap().len(), before);
         }
@@ -807,4 +826,188 @@ async fn failed_native_catalog_cannot_turn_excel_synthetic_models_into_refusal_e
         }
         server.verify().await;
     }
+}
+
+#[tokio::test]
+async fn account_allowlists_override_catalog_omissions_but_weight_affinity_and_pinning_do_not() {
+    use gateway_core::account::{
+        AccountModelAccess,
+        AccountModelAccessMode::{All, Allowlist, Denylist},
+    };
+
+    let native = MockServer::start().await;
+    let store = Arc::new(MemoryAccountStore::default());
+    for (id, plan, models) in [
+        (
+            "acct_provider_contract",
+            "pro",
+            vec!["gpt-6-luna", "gpt-6-astra"],
+        ),
+        ("acct_scope_new", "free", vec!["gpt-6-luna"]),
+    ] {
+        {
+            let mut identity = profile(&format!("chatgpt-{id}"));
+            identity.plan_type = Some(plan.to_owned());
+            store
+                .seed_oauth_credential(ImportCodexOAuthCredential {
+                    account_id: id.to_owned(),
+                    name: plan.to_owned(),
+                    secret: secret("test-access"),
+                    verified_account: identity,
+                    next_refresh_at: Some(Utc::now() + chrono::Duration::minutes(30)),
+                    enabled: true,
+                })
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/codex/models"))
+                .and(header("chatgpt-account-id", format!("chatgpt-{id}")))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "models": models.iter().map(|id| json!({"slug": id, "display_name": id})).collect::<Vec<_>>()
+                })))
+                .expect(1)
+                .mount(&native).await;
+        }
+    }
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw(CAPTURE_COMPLETED_SSE, "text/event-stream"),
+        )
+        .mount(&native)
+        .await;
+    store.set_scheduling("acct_scope_new", None, AccountWeight::new(100).unwrap());
+    let affinity = Arc::new(MemorySessionAffinity::default());
+    let leases = Arc::new(TestLeaseCoordinator::default());
+    let provider = provider_with_affinity_and_base_url_and_leases(
+        &store,
+        affinity.clone(),
+        native.uri(),
+        leases.clone(),
+    );
+    provider.query_model_capabilities().await.unwrap();
+    for (model, expected) in [
+        ("gpt-6-luna", "acct_scope_new"),
+        ("gpt-6-astra", "acct_provider_contract"),
+    ] {
+        let request_operation = Operation::Generate(GenerateRequest::from_protocol_payload(
+            ProtocolPayload::json_object(
+                "openai",
+                json!({
+                    "model": model, "input": "hello",
+                    "client_metadata": {"x-codex-turn-metadata": json!({
+                        "session_id":"model-session", "thread_id":"model-session"
+                    }).to_string()}
+                })
+                .as_object()
+                .unwrap()
+                .clone(),
+            )
+            .unwrap()
+            .with_context(Map::from_iter([("use_websocket".to_owned(), json!(false))])),
+        ));
+        let mut stream = provider
+            .execute(
+                planned_request_with_model("openai", request_operation, model),
+                context("req_catalog_model", CancellationToken::new()),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            stream.metadata().provider_account_id().as_str(),
+            expected,
+            "{model}: native OAuth account"
+        );
+        while let Some(event) = stream.next().await {
+            event.unwrap();
+        }
+    }
+    assert_eq!(affinity.binding_count(), 1);
+    let primary = "acct_provider_contract";
+    let secondary = "acct_scope_new";
+    // 目录外许可只属于明确添加该模型的账号，不能借用同池账号的白名单
+    for (model, required, primary_mode, secondary_mode, expected) in [
+        ("gpt-6-astra", Some(secondary), All, All, None),
+        ("custom-unlisted", None, All, All, None),
+        ("gpt-6.1-sol", None, Allowlist, All, Some(primary)),
+        ("gpt-6-astra", None, Denylist, Allowlist, Some(secondary)),
+        (
+            "custom-unlisted",
+            None,
+            Denylist,
+            Allowlist,
+            Some(secondary),
+        ),
+        ("gpt-6-luna", Some(primary), Denylist, Allowlist, None),
+    ] {
+        let accounts = [(primary, primary_mode), (secondary, secondary_mode)]
+            .into_iter()
+            .map(|(id, mode)| {
+                let access = if mode == All {
+                    AccountModelAccess::all()
+                } else {
+                    AccountModelAccess::new(mode, vec![model.to_owned()]).unwrap()
+                };
+                (
+                    ProviderAccountId::new(id).unwrap(),
+                    RuntimeAccount::new(ProviderKind::new("openai").unwrap(), BTreeSet::new())
+                        .with_model_access(access),
+                )
+            })
+            .collect();
+        let scope = Arc::new(FrozenAccountScope::new(
+            Arc::new(RuntimeAccountDirectory::new(accounts)),
+            ClientRoutingScope::all_accounts(),
+        ));
+        let attempt = AttemptContext::new(
+            RequestAttemptContext::new(
+                ModelRequestId::new("req_account_catalog_policy").unwrap(),
+                ClientApiKeyId::new("key_openai_contract").unwrap(),
+            ),
+            NonZeroU32::MIN,
+            SystemTime::now() + Duration::from_secs(30),
+            account_policy(),
+            AccountAttemptContext::new(
+                BTreeSet::new(),
+                required.map(|id| ProviderAccountId::new(id).unwrap()),
+                None,
+            )
+            .with_account_scope(scope),
+            None,
+            CancellationToken::new(),
+        );
+        let acquisitions = leases.requests.lock().unwrap().len();
+        let result = provider
+            .execute(
+                planned_request_with_model("openai", operation(model, false), model),
+                attempt,
+            )
+            .await;
+        if let Some(expected) = expected {
+            let mut stream = result.unwrap();
+            assert_eq!(stream.metadata().provider_account_id().as_str(), expected);
+            while let Some(event) = stream.next().await {
+                event.unwrap();
+            }
+        } else {
+            let error = result.err().expect("account must be excluded");
+            assert_eq!(error.kind(), ProviderErrorKind::NoEligibleAccount);
+            assert_eq!(leases.requests.lock().unwrap().len(), acquisitions);
+        }
+    }
+    let sent: Vec<_> = native
+        .received_requests()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|request| request.method == "POST")
+        .map(|request| {
+            captured_request_body(&request)["model"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        })
+        .collect();
+    assert_eq!(sent.len(), 5);
+    assert!(sent.iter().any(|model| model == "gpt-6.1-sol"));
+    assert!(sent.iter().any(|model| model == "custom-unlisted"));
 }

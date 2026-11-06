@@ -303,46 +303,45 @@ impl RedisCredentialCooldownRepository {
             .invoke_async(&mut self.connection.clone())
             .await
             .map_err(|error| redis_unavailable("read account protection").with_source(error))?;
-        if values.is_empty() {
-            return Ok(None);
+        parse_protection(account, values)
+    }
+
+    pub(super) async fn read_account_protections(
+        &self,
+        accounts: &[(ProviderAccountId, CredentialRevision)],
+    ) -> Vec<StoreResult<Option<AccountProtectionState>>> {
+        if !self.protection_enabled.load(Ordering::Acquire) {
+            return vec![Ok(None); accounts.len()];
         }
-        let invalid = || super::credential_cooldown::invalid("invalid protection snapshot");
-        let revision = values
-            .get("revision")
-            .ok_or_else(invalid)?
-            .parse::<u64>()
-            .map_err(|_| invalid())?;
-        let until_ms = values
-            .get("until_ms")
-            .ok_or_else(invalid)?
-            .parse::<i64>()
-            .map_err(|_| invalid())?;
-        Ok(Some(AccountProtectionState {
-            account_id: ProviderAccountId::new(account.to_owned()).map_err(|_| invalid())?,
-            credential_revision: CredentialRevision::new(revision).map_err(|_| invalid())?,
-            until: DateTime::from_timestamp_millis(until_ms)
-                .ok_or_else(invalid)?
-                .into(),
-            generation: values.get("generation").cloned().ok_or_else(invalid)?,
-            requires_probe: values
-                .get("kind")
-                .is_some_and(|kind| kind == "error_protection_probe"),
-            duration_seconds: values
-                .get("duration")
-                .ok_or_else(invalid)?
-                .parse()
-                .map_err(|_| invalid())?,
-            probe_model: values
-                .get("model")
-                .filter(|value| !value.is_empty())
-                .cloned(),
-            rules: values
-                .get("rules")
-                .map(|value| serde_json::from_str(value))
-                .transpose()
-                .map_err(|_| invalid())?
-                .unwrap_or_default(),
-        }))
+        let script = Script::new(READ);
+        let mut results = Vec::with_capacity(accounts.len());
+        for batch in accounts.chunks(128) {
+            let commands = batch
+                .iter()
+                .map(|(account, revision)| {
+                    let mut command = redis::cmd("EVALSHA");
+                    command
+                        .arg(script.get_hash())
+                        .arg(3)
+                        .arg(self.policy_key())
+                        .arg(self.protection_key(account.as_str())?)
+                        .arg(self.protection_index_key())
+                        .arg(account.as_str())
+                        .arg(revision.get());
+                    Ok(command)
+                })
+                .collect();
+            let values = self.read_script_batch(&script, commands).await;
+            results.extend(batch.iter().zip(values).map(|((account, _), value)| {
+                let values = value.and_then(|value| {
+                    redis::from_redis_value(value).map_err(|source| {
+                        redis_unavailable("decode protection batch").with_source(source)
+                    })
+                })?;
+                parse_protection(account.as_str(), values)
+            }));
+        }
+        results
     }
 
     pub(crate) async fn active_protections(
@@ -468,4 +467,50 @@ impl RedisCredentialCooldownRepository {
             .map_err(|e| redis_unavailable("finish account protection").with_source(e))?;
         Ok(changed == 1)
     }
+}
+
+fn parse_protection(
+    account: &str,
+    values: BTreeMap<String, String>,
+) -> StoreResult<Option<AccountProtectionState>> {
+    if values.is_empty() {
+        return Ok(None);
+    }
+    let invalid = || super::credential_cooldown::invalid("invalid protection snapshot");
+    let revision = values
+        .get("revision")
+        .ok_or_else(invalid)?
+        .parse::<u64>()
+        .map_err(|_| invalid())?;
+    let until_ms = values
+        .get("until_ms")
+        .ok_or_else(invalid)?
+        .parse::<i64>()
+        .map_err(|_| invalid())?;
+    Ok(Some(AccountProtectionState {
+        account_id: ProviderAccountId::new(account.to_owned()).map_err(|_| invalid())?,
+        credential_revision: CredentialRevision::new(revision).map_err(|_| invalid())?,
+        until: DateTime::from_timestamp_millis(until_ms)
+            .ok_or_else(invalid)?
+            .into(),
+        generation: values.get("generation").cloned().ok_or_else(invalid)?,
+        requires_probe: values
+            .get("kind")
+            .is_some_and(|kind| kind == "error_protection_probe"),
+        duration_seconds: values
+            .get("duration")
+            .ok_or_else(invalid)?
+            .parse()
+            .map_err(|_| invalid())?,
+        probe_model: values
+            .get("model")
+            .filter(|value| !value.is_empty())
+            .cloned(),
+        rules: values
+            .get("rules")
+            .map(|value| serde_json::from_str(value))
+            .transpose()
+            .map_err(|_| invalid())?
+            .unwrap_or_default(),
+    }))
 }

@@ -11,6 +11,7 @@ mod recovery_log;
 mod refresh;
 pub(crate) mod relogin;
 mod repository;
+mod scheduling_projection;
 mod security;
 mod selector;
 pub mod token_client;

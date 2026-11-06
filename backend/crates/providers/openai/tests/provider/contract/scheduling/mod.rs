@@ -602,10 +602,29 @@ async fn scheduling_hint_migrated_sessions_fail_over_independently() {
     let mut stream = provider
         .execute(
             planned_request("openai", Operation::Generate(retry)),
-            context_with_state_owner("req_failover", "acct_scope_old"),
+            AttemptContext::new(
+                RequestAttemptContext::new(
+                    ModelRequestId::new("req_failover").unwrap(),
+                    ClientApiKeyId::new("key_openai_contract").unwrap(),
+                ),
+                NonZeroU32::new(2).unwrap(),
+                SystemTime::now() + Duration::from_secs(30),
+                account_policy(),
+                AccountAttemptContext::new(
+                    [old_account.clone()].into(),
+                    None,
+                    Some(ProviderAccountStateOwner::new(
+                        ProviderKind::new("openai").unwrap(),
+                        old_account.clone(),
+                    )),
+                )
+                .with_account_scope(contract_account_scope()),
+                None,
+                CancellationToken::new(),
+            ),
         )
         .await
-        .expect("escape busy account");
+        .expect("authorized retry excludes the failed account");
     assert_eq!(
         stream.metadata().provider_account_id().as_str(),
         "acct_scope_new"

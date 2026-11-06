@@ -160,7 +160,8 @@ async fn serve_responses_websocket(socket: Socket, session: ResponsesWebSocketSe
         let event = tokio::select! {
             event = connection.next_event() => event,
             event = control.receive() => {
-                if forward_control_event(&mut connection, &control, event).await == ForwardOutcome::Disconnect {
+                let outcome = forward_control_event(&mut connection, &control, event).await;
+                if disconnect_after_forward(&mut connection, outcome).await {
                     break;
                 }
                 continue;
@@ -271,11 +272,7 @@ async fn serve_responses_websocket(socket: Socket, session: ResponsesWebSocketSe
         control = started.session.response_control().unwrap_or_default();
         control.set_connection_cancellation(connection.cancellation());
         let outcome = forward_execution(&mut connection, started, &mut replay).await;
-        if outcome == ForwardOutcome::Disconnect
-            || (outcome == ForwardOutcome::ReconnectIfIdle
-                && !connection.is_expired()
-                && connection.close_for_replay_if_idle().await)
-        {
+        if disconnect_after_forward(&mut connection, outcome).await {
             break;
         }
         if connection.is_expired() {
@@ -285,6 +282,16 @@ async fn serve_responses_websocket(socket: Socket, session: ResponsesWebSocketSe
     }
 
     connection.log_summary(request_count);
+}
+
+async fn disconnect_after_forward(
+    connection: &mut ResponsesWebSocketConnection,
+    outcome: ForwardOutcome,
+) -> bool {
+    outcome == ForwardOutcome::Disconnect
+        || (outcome == ForwardOutcome::ReconnectIfIdle
+            && !connection.is_expired()
+            && connection.close_for_replay_if_idle().await)
 }
 
 // 尚未建立模型请求的拒绝也保留原文入口，用返回给客户端的 correlation ID 检索。

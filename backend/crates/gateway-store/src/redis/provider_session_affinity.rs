@@ -15,6 +15,16 @@ use crate::StoreResult;
 
 use super::{namespace, resource_fingerprint};
 
+const ADMIT_BINDING_SCRIPT: &str = r#"
+local current = redis.call('GET', KEYS[1])
+if (not current and ARGV[1] == '') or current == ARGV[1]
+   or (ARGV[4] ~= '' and current == ARGV[4]) then
+  redis.call('PSETEX', KEYS[1], tonumber(ARGV[3]), ARGV[2])
+  return 1
+end
+return 0
+"#;
+
 const CLAIM_OR_LOAD_SCRIPT: &str = r#"
 local current = redis.call('GET', KEYS[1])
 if current then
@@ -136,6 +146,52 @@ impl RedisProviderSessionAffinityRepository {
 }
 
 impl ProviderSessionAffinityPort for RedisProviderSessionAffinityRepository {
+    fn admit_binding<'a>(
+        &'a self,
+        provider_kind: &'a ProviderKind,
+        key: &'a ProviderSessionAffinityKey,
+        expected: Option<&'a ProviderSessionAffinityBinding>,
+        account_id: &'a ProviderAccountId,
+        ttl: Duration,
+    ) -> futures::future::BoxFuture<
+        'a,
+        Result<Option<ProviderSessionAffinityBinding>, ProviderStoreError>,
+    > {
+        Box::pin(async move {
+            let ttl_millis = session_affinity_ttl_millis(ttl)?;
+            let expected_raw = expected
+                .map(encode_binding)
+                .transpose()?
+                .unwrap_or_default();
+            // Upgrades may encounter both the original raw ID and the later JSON legacy binding.
+            let expected_legacy = expected
+                .filter(|binding| binding.token().expose_to_store() == "legacy")
+                .map_or("", |binding| binding.account_id().as_str());
+            // 同账号命中仅续期；初次认领及换号生成新版本
+            let binding = match expected.filter(|binding| {
+                binding.account_id() == account_id && binding.token().expose_to_store() != "legacy"
+            }) {
+                Some(binding) => binding.clone(),
+                None => ProviderSessionAffinityBinding::new(
+                    account_id.clone(),
+                    BindingToken::generate(),
+                ),
+            };
+            let applied = redis::Script::new(ADMIT_BINDING_SCRIPT)
+                .key(self.key(provider_kind, key)?)
+                .arg(expected_raw)
+                .arg(encode_binding(&binding)?)
+                .arg(ttl_millis)
+                .arg(expected_legacy)
+                .invoke_async::<bool>(&mut self.connection.clone())
+                .await
+                .map_err(|source| {
+                    provider_unavailable("admit provider session binding").with_source(source)
+                })?;
+            Ok(applied.then_some(binding))
+        })
+    }
+
     fn load<'a>(
         &'a self,
         provider_kind: &'a ProviderKind,

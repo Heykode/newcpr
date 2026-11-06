@@ -176,7 +176,7 @@ async fn quota_forecast_excludes_openai_prewarm_but_preserves_inference_and_audi
     assert_eq!(diagnostic.request_count, 5);
     assert_eq!(diagnostic.success_count, 3);
     assert_eq!(diagnostic.failure_count, 1);
-    assert_eq!(diagnostic.non_completion_count, 1);
+    assert_eq!(diagnostic.cancelled_count + diagnostic.incomplete_count, 1);
     assert_eq!(diagnostic.total_tokens, 300);
     assert_eq!(diagnostic.cost_coverage.unavailable_count, 0);
     assert_eq!(

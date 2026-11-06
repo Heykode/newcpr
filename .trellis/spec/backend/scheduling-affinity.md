@@ -16,7 +16,7 @@ do not replace transport identity, account authorization or billing contracts.
   `x-conversation-id`, `x-qx-affinity-codex-session`,
   `x-qx-affinity-claude-session`.
 - `CodexSessionAffinity::migration_key()` references the unchanged old key.
-  Existing `ProviderSessionAffinityPort::{load,claim_or_load,compare_and_bind}`
+  Existing `ProviderSessionAffinityPort::{load,claim_or_load,compare_and_bind,admit_binding}`
   own persistence; there is no new schema/configuration or audit stream.
 
 ## 3. Contracts
@@ -37,7 +37,7 @@ do not replace transport identity, account authorization or billing contracts.
   Never log a new raw hint as an anchor.
 - On a primary miss, the old binding is only a preference, not authorization.
   Recheck enabled status, model/account scope, exclusions, quota and lease
-  capacity. Reuse atomic first claim and compare-and-bind on the new key only.
+  capacity. Use atomic admission CAS against the observed generation (or observed miss) on the new key only.
   A primary hit never consults migration. Store unavailability is not a miss.
 - Retain original root-plus-child rules. An explicit standalone thread
   suppresses new hints; do not invent a hint parent for an existing thread.
@@ -65,7 +65,7 @@ do not replace transport identity, account authorization or billing contracts.
 | New key already bound | No legacy read or rewrite |
 | Binding store unavailable or over 500 ms | SessionBound failure before send; no selection bypass or retry |
 | Ordinary retry with state owner | Retain hint routing/recovery key |
-| Native continuation with conflicting hint | Original exact owner wins |
+| Native continuation with conflicting hint | Strict rejects a conflicting current binding with ContinuationOwnerChanged; other modes retain exact owner without restoring an old primary |
 | Account changes during full replay | Original account-state stripping still applies |
 
 ## 5. Good / Base / Bad Cases
@@ -89,8 +89,9 @@ do not replace transport identity, account authorization or billing contracts.
   with a conflicting hint keeps its socket and account.
 - Real local HTTP body/header equality and complete Provider/API/Protocol
   regressions. Synthetic fallback experiments are not runtime acceptance.
-- Require canonical completion in fixtures used to assert successful affinity
-  renewal; a wire event alone does not prove that success was recorded.
+- Assert primary binding claims, migrations and renewals at admission, before
+  sending. Only Guardian parent success records require canonical completion;
+  a wire event alone does not prove that success was recorded.
 - Direct-selector CAS and lease-release fixtures must enable the simulated
   capacity coordinator; otherwise the after-acquire hook never runs and the
   guard is a no-op. Assert the winning account and released lease on both paths.
@@ -120,9 +121,34 @@ do not replace transport identity, account authorization or billing contracts.
 - A retained alias without a primary may use the existing atomic initial claim.
   Unavailable storage is not a missing binding. Connection-local replay is
   rejected before selection, leases, alias writes or primary renewal.
-- Preserve Relaxed child bindings across mode changes. Cover restoration,
-  native-owner conflicts, concurrent claims, successful spillover/return, compact
-  completion, model restrictions and capacity-wait selection.
+- Relaxed now shares the root binding. It may move the root on admission; do not
+  restore the previous independent-child behavior or migrate the primary on completion.
+  Cover restoration, native-owner conflicts, concurrent claims, successful
+  spillover/return, compact completion, model restrictions and capacity-wait selection.
+- Turn aliases retain both child transport identity and root routing identity
+  in every mode. Reject an explicit different child for the same turn even if
+  its root matches. Root-only legacy aliases and root-only standalone endpoint
+  requests remain compatible; sharing a root binding never merges transport identities.
+- Preferred retains a temporarily blocked primary (capacity, interval, cooldown,
+  model restriction, quota reset within the recovery window). Deleted, disabled,
+  expired, invalid or banned accounts and unknown/far/stale exhausted-quota resets
+  migrate at admission. Use the official session hash for stable spillover ordering.
+- Strict and Preferred prioritize the binding ahead of account weights. Per the
+  user's explicit strict-mode contract, a busy bound root cannot spill even when
+  ordinary waiting is disabled. Authorized Core retries that exclude the old root
+  may admit another eligible account and CAS the root before send; completion of
+  an old request cannot undo it. Strict children remain follow-only and wait for
+  the root to recover or migrate rather than independently changing the root.
+- Redis admission accepts legacy raw and JSON bindings, upgrades to a new token,
+  and fences both observed-miss and observed-generation races. Conflict must not
+  refresh TTL; an expired observed generation cannot recreate a key.
+- The 200 ms projection cache is bounded to 32 entries / 8192 candidates, coalesces
+  fills and never grants capacity. Scope, client, model, policy and concurrency
+  pool are isolated; local route/path/overdraft and request eligibility fields
+  also partition the cache. Selected-account credential/live-capacity/revision
+  checks still run after acquisition. Contention or invalidation refreshes the pool.
+  The frozen scope defines the authorized ID universe; a cached projection must
+  not permanently exclude a currently eligible ID that its earlier read omitted.
 
 Wrong: clear local hints whenever `account_state_owner` is present.
 

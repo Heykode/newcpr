@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import type { BarSeriesOption, EChartsOption, LineSeriesOption } from 'echarts'
+import type { EChartsOption } from 'echarts'
+
 import type { getUsageRecordInsightsOverview } from '@/api'
 import { BarChart } from 'echarts/charts'
 import { use } from 'echarts/core'
@@ -11,40 +12,39 @@ import BaseChart from '@/components/charts/BaseChart.vue'
 import { chartTooltipContent } from '@/components/charts/tooltip'
 import { useChartPalette } from '@/composables/useChartPalette'
 import { t } from '@/i18n'
-import { formatLocalizedCompactNumber as formatCompactNumber } from '@/utils/number'
 
+import { formatLocalizedCompactNumber as formatCompactNumber } from '@/utils/number'
 import {
   tooltipIndex,
   tooltipRows,
   usageCategoryAxis,
-  usageGapAwareLineSeries,
   usageLegend,
   usageTooltip,
   usageTooltipItem,
   usageValueAxis,
 } from '../utils/chart'
+
 import { formatPercent } from '../utils/format'
+
+const props = withDefaults(
+  defineProps<{
+    health: Health | null
+    error?: string
+    granularity: string
+    loading?: boolean
+  }>(),
+  {
+    loading: false,
+  },
+)
 
 type Health = Awaited<ReturnType<typeof getUsageRecordInsightsOverview>>['health']
 type HealthPoint = Health['points'][number]
 
-const props = withDefaults(
-  defineProps<{
-    health: Health
-    granularity: string
-    loading?: boolean
-    error?: string
-  }>(),
-  {
-    loading: false,
-    error: '',
-  },
-)
-
 use([BarChart])
 
 const { palette } = useChartPalette()
-const points = computed<HealthPoint[]>(() => props.health.points)
+const points = computed<HealthPoint[]>(() => props.health?.points ?? [])
 
 const hasData = computed(
   () => !props.loading && points.value.some(point => requestCount(point) > 0),
@@ -68,26 +68,12 @@ const description = computed(() => props.loading || !granularityText.value
 const chartOption = computed<EChartsOption>(() => {
   const theme = palette.value
   const chartPoints = points.value
-  const activePointCount = chartPoints.filter(point => requestCount(point) > 0).length
-  const successRateSeries = usageGapAwareLineSeries(
-    t('usage.health.serviceSuccessRate'),
-    chartPoints.map(serviceSuccessRate),
-    theme.success,
-    { yAxisIndex: 1 },
-  )
-  const series: Array<BarSeriesOption | LineSeriesOption> = [
+  const series = [
     outcomeSeries(t('common.status.success'), chartPoints.map(point => point.successRequests), theme.success),
     outcomeSeries(t('usage.health.point.serviceFailed'), chartPoints.map(point => point.failedRequests), theme.danger),
     outcomeSeries(t('usage.status.cancelled'), chartPoints.map(point => point.cancelledRequests), theme.info),
     outcomeSeries(t('usage.health.notCompleted'), chartPoints.map(point => point.incompleteRequests), theme.warning),
     outcomeSeries(t('usage.health.point.callerError'), chartPoints.map(point => point.callerErrorRequests), theme.normal),
-    ...successRateSeries.map((item, index) => index === 0
-      ? {
-          ...item,
-          symbol: activePointCount <= 16 ? 'circle' : 'none',
-          symbolSize: 4,
-        }
-      : item),
   ]
 
   return {
@@ -100,20 +86,13 @@ const chartOption = computed<EChartsOption>(() => {
       outerBoundsMode: 'same',
       outerBoundsContain: 'axisLabel',
     },
-    legend: usageLegend(theme, [t('common.status.success'), t('usage.health.point.serviceFailed'), t('usage.status.cancelled'), t('usage.health.notCompleted'), t('usage.health.point.callerError'), t('usage.health.serviceSuccessRate')]),
+    legend: usageLegend(theme, series.map(item => item.name)),
     tooltip: usageTooltip(theme, formatTooltip),
     xAxis: usageCategoryAxis(
       chartPoints.map(point => point.label),
       theme,
     ),
-    yAxis: [
-      usageValueAxis(theme, value => formatCompactNumber(value)),
-      usageValueAxis(theme, value => formatPercent(value), {
-        min: 0,
-        max: 1,
-        splitLine: false,
-      }),
-    ],
+    yAxis: usageValueAxis(theme, value => formatCompactNumber(value)),
     series,
   }
 })
@@ -122,11 +101,10 @@ function requestCount(point: HealthPoint) {
   return Math.max(0, point.totalRequests ?? 0)
 }
 
-function serviceSuccessRate(point: HealthPoint) {
-  const total = Math.max(0, point.successRequests) + Math.max(0, point.failedRequests) + Math.max(0, point.incompleteRequests ?? 0)
-  if (total > 0)
-    return Math.max(0, point.successRequests ?? 0) / total
-  return requestCount(point) === 0 ? 0 : null
+function serviceSuccessRateText(rate: number | null) {
+  return rate == null
+    ? t('usage.noValidSample')
+    : formatPercent(rate)
 }
 
 function outcomeSeries(name: string, data: number[], color: string) {
@@ -146,7 +124,9 @@ function formatTooltip(params: unknown) {
   if (!point)
     return ''
 
-  const successRate = serviceSuccessRate(point)
+  const successRate = point.errorRate == null
+    ? null
+    : 1 - point.errorRate
   const theme = palette.value
 
   return chartTooltipContent(point.label, [
@@ -158,7 +138,7 @@ function formatTooltip(params: unknown) {
     usageTooltipItem(t('usage.health.point.callerError'), formatCompactNumber(point.callerErrorRequests), theme.normal),
     usageTooltipItem(
       t('usage.health.serviceSuccessRate'),
-      successRate == null ? t('usage.health.noServiceResult') : formatPercent(successRate),
+      serviceSuccessRateText(successRate),
       theme.success,
     ),
   ])
@@ -174,11 +154,11 @@ function formatTooltip(params: unknown) {
   >
     <template #body>
       <div class="grid min-h-66" :class="hasData ? 'gap-3' : 'h-full'">
-        <div v-if="hasData" class="grid grid-cols-3 gap-2 rounded-xl bg-cp-fill-quaternary/45 p-2">
+        <div v-if="hasData && health" class="grid grid-cols-2 gap-2 rounded-xl bg-cp-fill-quaternary/45 p-2 sm:grid-cols-4">
           <div class="grid gap-1 px-2">
             <span class="text-[10px] font-bold text-cp-text-quaternary">{{ t('usage.health.serviceSuccessRate') }}</span>
             <strong class="font-mono text-cp-base font-heavy tabular-nums text-cp-green-text">
-              {{ formatPercent(health.successRate) }}
+              {{ serviceSuccessRateText(health.successRate) }}
             </strong>
           </div>
           <div class="grid gap-1 px-2">
@@ -188,9 +168,15 @@ function formatTooltip(params: unknown) {
             </strong>
           </div>
           <div class="grid gap-1 px-2">
-            <span class="text-[10px] font-bold text-cp-text-quaternary">{{ t('usage.health.abnormalEnd') }}</span>
+            <span class="text-[10px] font-bold text-cp-text-quaternary">{{ t('usage.status.cancelled') }}</span>
+            <strong class="font-mono text-cp-base font-heavy tabular-nums text-cp-blue-text">
+              {{ formatCompactNumber(health.cancelledRequests) }}
+            </strong>
+          </div>
+          <div class="grid gap-1 px-2">
+            <span class="text-[10px] font-bold text-cp-text-quaternary">{{ t('usage.health.notCompleted') }}</span>
             <strong class="font-mono text-cp-base font-heavy tabular-nums text-cp-orange-text">
-              {{ formatCompactNumber(health.cancelledRequests + health.incompleteRequests) }}
+              {{ formatCompactNumber(health.incompleteRequests) }}
             </strong>
           </div>
         </div>
@@ -199,8 +185,7 @@ function formatTooltip(params: unknown) {
           v-else
           size="sm"
           surface="none"
-          :title="error || (loading ? '正在加载请求健康数据' : '暂无请求健康数据')"
-          description="当前范围没有可绘制的请求记录"
+          :title="error || (loading ? t('usage.health.loading') : t('usage.health.empty'))"
           class="h-full place-content-center"
         />
       </div>

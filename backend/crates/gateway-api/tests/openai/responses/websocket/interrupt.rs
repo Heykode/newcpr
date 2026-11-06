@@ -9,6 +9,8 @@ struct ControlTransport {
     id: String,
     delay_interrupt: bool,
     active: std::sync::atomic::AtomicBool,
+    closed: CancellationToken,
+    unavailable_observed: tokio::sync::Notify,
     requests: Mutex<Vec<String>>,
     sender: tokio::sync::mpsc::Sender<String>,
     receiver: tokio::sync::Mutex<tokio::sync::mpsc::Receiver<String>>,
@@ -21,6 +23,8 @@ impl ControlTransport {
             id,
             delay_interrupt,
             active: std::sync::atomic::AtomicBool::new(true),
+            closed: CancellationToken::new(),
+            unavailable_observed: tokio::sync::Notify::new(),
             requests: Mutex::default(),
             sender,
             receiver: tokio::sync::Mutex::new(receiver),
@@ -52,12 +56,15 @@ impl ResponseControlTransport for ControlTransport {
             .map_err(|_| ResponseControlUnavailable)
     }
     async fn receive(&self) -> Result<String, ResponseControlUnavailable> {
-        self.receiver
-            .lock()
-            .await
-            .recv()
-            .await
-            .ok_or(ResponseControlUnavailable)
+        tokio::select! {
+            () = self.closed.cancelled() => {
+                self.unavailable_observed.notify_one();
+                Err(ResponseControlUnavailable)
+            }
+            event = async { self.receiver.lock().await.recv().await } => {
+                event.ok_or(ResponseControlUnavailable)
+            }
+        }
     }
 }
 
@@ -879,4 +886,139 @@ async fn non_replayable_delivery_blocks_retry_even_after_a_replayable_prelude() 
         assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
         socket.close(None).await.unwrap();
     }
+}
+
+#[tokio::test]
+async fn unavailable_idle_upstream_closes_client_and_allows_a_fresh_request() {
+    let provider = Arc::new(InterruptProvider::default());
+    let admissions = Arc::new(InterruptAdmissions::default());
+    let (mut socket, _server) = connect(provider.clone(), admissions.clone()).await;
+    let create = json!({"type":"response.create","model":"model-a","input":"hello"});
+    send(&mut socket, create.clone()).await;
+    assert_eq!(next(&mut socket).await["type"], "response.created");
+    provider.complete.notify_one();
+    assert_eq!(next(&mut socket).await["type"], "response.completed");
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while admissions.active.load(Ordering::SeqCst) != 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    provider
+        .transport
+        .lock()
+        .unwrap()
+        .as_ref()
+        .unwrap()
+        .closed
+        .cancel();
+    assert_replay_close(&mut socket).await;
+    assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(provider.store.finalizations.lock().unwrap().len(), 1);
+
+    let tokio_tungstenite::MaybeTlsStream::Plain(transport) = socket.get_ref() else {
+        panic!("test server must use plain TCP");
+    };
+    let mut request = format!("ws://{}/v1/responses", transport.peer_addr().unwrap())
+        .into_client_request()
+        .unwrap();
+    request.headers_mut().insert(
+        AUTHORIZATION,
+        HeaderValue::from_static("Bearer sk_ws_interrupt"),
+    );
+    let (mut reconnected, _) = connect_async(request).await.unwrap();
+    send(&mut reconnected, create).await;
+    assert_eq!(
+        next(&mut reconnected).await["response"]["id"],
+        "resp_interrupt_1"
+    );
+    provider.complete.notify_one();
+    assert_eq!(next(&mut reconnected).await["type"], "response.completed");
+    assert_eq!(provider.calls.load(Ordering::SeqCst), 2);
+    reconnected.close(None).await.unwrap();
+}
+
+#[tokio::test]
+async fn unavailable_upstream_waits_for_settlement_and_preserves_queued_requests() {
+    for queued in [false, true] {
+        let provider = Arc::new(InterruptProvider::default());
+        let (release, wait_for_release) = tokio::sync::oneshot::channel();
+        let admissions = Arc::new(InterruptAdmissions {
+            release_gate: Mutex::new(Some(wait_for_release)),
+            ..Default::default()
+        });
+        let (mut socket, _server) = connect(provider.clone(), admissions.clone()).await;
+        let create = json!({"type":"response.create","model":"model-a","input":"hello"});
+        send(&mut socket, create.clone()).await;
+        assert_eq!(next(&mut socket).await["type"], "response.created");
+        provider.complete.notify_one();
+        // NewCPR confirms settlement before delivering the terminal frame.
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            admissions.release_started.notified(),
+        )
+        .await
+        .unwrap();
+        let transport = provider.transport.lock().unwrap().clone().unwrap();
+        transport.closed.cancel();
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            transport.unavailable_observed.notified(),
+        )
+        .await
+        .unwrap();
+        if queued {
+            send(&mut socket, create).await;
+        }
+        socket
+            .send(ClientMessage::Ping(vec![1].into()))
+            .await
+            .unwrap();
+        let reply = tokio::time::timeout(Duration::from_secs(5), socket.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert!(matches!(reply, ClientMessage::Pong(_)));
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(admissions.active.load(Ordering::SeqCst), 1);
+        release.send(()).unwrap();
+        assert_eq!(next(&mut socket).await["type"], "response.completed");
+        if queued {
+            assert_eq!(
+                next(&mut socket).await["response"]["id"],
+                "resp_interrupt_1"
+            );
+            provider.complete.notify_one();
+            assert_eq!(next(&mut socket).await["type"], "response.completed");
+            // 旧连接的失效不能关闭已绑定新上游的客户端
+            socket
+                .send(ClientMessage::Ping(vec![2].into()))
+                .await
+                .unwrap();
+            let reply = tokio::time::timeout(Duration::from_secs(5), socket.next())
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            assert!(matches!(reply, ClientMessage::Pong(_)));
+            socket.close(None).await.unwrap();
+        } else {
+            assert_replay_close(&mut socket).await;
+            assert_eq!(admissions.active.load(Ordering::SeqCst), 0);
+            assert_eq!(provider.store.finalizations.lock().unwrap().len(), 1);
+        }
+    }
+}
+
+async fn assert_replay_close(socket: &mut TestSocket) {
+    let message = tokio::time::timeout(Duration::from_secs(5), socket.next())
+        .await
+        .expect("idle upstream loss must notify the client")
+        .unwrap()
+        .unwrap();
+    assert!(matches!(message, ClientMessage::Close(Some(frame))
+        if frame.code == tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode::Normal
+            && frame.reason == "Reconnect with full input."));
 }

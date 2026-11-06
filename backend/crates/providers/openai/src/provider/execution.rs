@@ -314,7 +314,6 @@ impl CodexProvider {
             selector: Arc::clone(&self.selector),
             quota: Arc::clone(&self.quota),
             lease: Arc::clone(&lease),
-            session_affinity_key: session_affinity.and_then(CodexSessionAffinity::into_key),
             upstream_model: request.upstream_model,
             excel,
             excel_image,
@@ -379,7 +378,6 @@ pub(super) struct ColdJsonResponse {
     pub(super) selector: Arc<CodexCredentialSelector>,
     pub(super) quota: Arc<CodexCredentialQuotaService>,
     pub(super) lease: Arc<CodexCredentialLease>,
-    pub(super) session_affinity_key: Option<ProviderSessionAffinityKey>,
     pub(super) upstream_model: Option<UpstreamModelId>,
     pub(super) excel: Option<CodexResponsesRequest>,
     pub(super) excel_image: Option<crate::transport::excel::image_generation::PreparedImage>,
@@ -711,17 +709,6 @@ pub(super) fn cold_json_response_stream(request: ColdJsonResponse) -> EventStrea
         } else {
             None
         };
-        if allows_account_state_mutation
-            && request.context.account_selection_policy().openai_account_affinity() != gateway_core::account::AccountAffinity::Preferred
-            && let Some(key) = request.session_affinity_key.as_ref() {
-            // JSON 已完整接收；在首个 yield 前提交亲和迁移，避免下游取消漏掉更新。
-            request.selector.update_session_affinity_binding(
-                key,
-                request.lease.affinity_expected_binding(),
-                active_account.id(),
-                request.lease.session_binding_ttl(),
-            ).await;
-        }
         let mut metrics = response.transport_metrics.clone();
         metrics.first_event_ms = Some(
             i64::try_from(request.context.timing_started_at().elapsed().as_millis())

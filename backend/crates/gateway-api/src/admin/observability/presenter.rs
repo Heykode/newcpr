@@ -737,8 +737,8 @@ pub(crate) fn trend_point_view_with_timezone(
         cached_tokens_value: point.metrics.cached_tokens,
         cache_hit_rate_value: point.cached_token_rate,
         tokens_value: point.metrics.total_tokens,
-        errors: format_compact_number(point.service_failure_count),
-        errors_value: point.service_failure_count,
+        errors: format_compact_number(point.error_count),
+        errors_value: point.error_count,
         latency: display_duration(point.average_latency_ms),
         latency_value: point.average_latency_ms,
         max_latency: display_duration(point.metrics.max_latency_ms),
@@ -825,7 +825,7 @@ pub(crate) fn trend_summary_view(
         TrendKind::Errors => vec![
             TrendSummaryView {
                 label: "错误数".to_owned(),
-                value: format_compact_number(summary.service_failure_count),
+                value: format_compact_number(summary.error_count),
                 ratio: None,
             },
             TrendSummaryView {

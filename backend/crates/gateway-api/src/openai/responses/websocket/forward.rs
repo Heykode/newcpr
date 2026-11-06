@@ -99,6 +99,7 @@ async fn forward_execution_inner(
     let streaming = started.stream;
     let control = started.session.response_control().unwrap_or_default();
     let mut interrupt = ResponseInterrupt::default();
+    let mut reconnect_after_terminal = false;
     let mut execution = PendingExecution::new(started.session);
     if !streaming {
         let error = GatewayError::new(
@@ -113,6 +114,7 @@ async fn forward_execution_inner(
         &mut interrupt,
         &request_id,
         false,
+        &mut reconnect_after_terminal,
     )
     .await
     {
@@ -165,9 +167,14 @@ async fn forward_execution_inner(
     }
     let mut first_frame_written = false;
     if encoder.is_completed() {
-        if let Err(outcome) =
-            confirm_completed_execution(connection, &mut execution, &mut interrupt, &request_id)
-                .await
+        if let Err(outcome) = confirm_completed_execution(
+            connection,
+            &mut execution,
+            &mut interrupt,
+            &request_id,
+            &mut reconnect_after_terminal,
+        )
+        .await
         {
             return outcome;
         }
@@ -194,7 +201,12 @@ async fn forward_execution_inner(
         }
         log_terminal_write_success(connection, &request_id, provider_terminal_at.elapsed());
         execution.disarm();
-        return commit_connection_replay(replay, &encoder, provider_state.take());
+        let outcome = commit_connection_replay(replay, &encoder, provider_state.take());
+        return if reconnect_after_terminal {
+            ForwardOutcome::ReconnectIfIdle
+        } else {
+            outcome
+        };
     }
     if !send_metadata(
         connection,
@@ -223,6 +235,7 @@ async fn forward_execution_inner(
             &mut interrupt,
             &request_id,
             false,
+            &mut reconnect_after_terminal,
         )
         .await
         {
@@ -249,6 +262,7 @@ async fn forward_execution_inner(
                         &mut execution,
                         &mut interrupt,
                         &request_id,
+                        &mut reconnect_after_terminal,
                     )
                     .await
                     {
@@ -279,7 +293,12 @@ async fn forward_execution_inner(
                         provider_terminal_at.elapsed(),
                     );
                     execution.disarm();
-                    return commit_connection_replay(replay, &encoder, provider_state.take());
+                    let outcome = commit_connection_replay(replay, &encoder, provider_state.take());
+                    return if reconnect_after_terminal {
+                        ForwardOutcome::ReconnectIfIdle
+                    } else {
+                        outcome
+                    };
                 }
                 let terminal_batch = encoder.has_wire_failure();
                 if !send_messages(
@@ -377,8 +396,18 @@ async fn confirm_completed_execution(
     execution: &mut PendingExecution,
     interrupt: &mut ResponseInterrupt,
     request_id: &Arc<str>,
+    reconnect_after_terminal: &mut bool,
 ) -> Result<(), ForwardOutcome> {
-    match next_active_input(connection, execution, interrupt, request_id, true).await {
+    match next_active_input(
+        connection,
+        execution,
+        interrupt,
+        request_id,
+        true,
+        reconnect_after_terminal,
+    )
+    .await
+    {
         ActiveInput::Event(Ok(None))
             if execution
                 .session_mut()
@@ -419,6 +448,7 @@ async fn next_active_input(
     interrupt: &mut ResponseInterrupt,
     request_id: &Arc<str>,
     terminal_seen: bool,
+    reconnect_after_terminal: &mut bool,
 ) -> ActiveInput {
     let Some(session) = execution.session_mut() else {
         return ActiveInput::Disconnect;
@@ -461,8 +491,10 @@ async fn next_active_input(
                 }
             }
             reply = async { control.as_ref().expect("guarded control").receive().await }, if terminal_seen && control.is_some() => {
-                if forward_control_event(connection, control.as_ref().expect("guarded control"), reply).await == ForwardOutcome::Disconnect {
-                    return ActiveInput::Disconnect;
+                match forward_control_event(connection, control.as_ref().expect("guarded control"), reply).await {
+                    ForwardOutcome::Disconnect => return ActiveInput::Disconnect,
+                    ForwardOutcome::ReconnectIfIdle => *reconnect_after_terminal = true,
+                    ForwardOutcome::Continue => {}
                 }
             }
             event = &mut event => return ActiveInput::Event(event),
@@ -684,7 +716,7 @@ pub(super) async fn forward_control_event(
 ) -> ForwardOutcome {
     let Ok(payload) = event else {
         control.clear();
-        return ForwardOutcome::Continue;
+        return ForwardOutcome::ReconnectIfIdle;
     };
     let Some(payload) = super::super::response::control_payload_for_client(payload) else {
         return ForwardOutcome::Continue;

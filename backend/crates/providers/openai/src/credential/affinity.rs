@@ -72,11 +72,7 @@ impl CodexSessionAffinity {
         &self,
         alias: &'a ProviderSessionAlias,
     ) -> &'a ProviderSessionAffinityKey {
-        if self.mode != AccountAffinity::Relaxed {
-            alias.root_session_key().unwrap_or(alias.session_key())
-        } else {
-            alias.session_key()
-        }
+        alias.root_session_key().unwrap_or(alias.session_key())
     }
 
     pub(crate) fn accepts_turn_alias(&self, alias: &ProviderSessionAlias) -> bool {
@@ -85,6 +81,17 @@ impl CodexSessionAffinity {
             .as_ref()
             .zip(alias.root_session_key())
             .is_some_and(|(root, alias_root)| root != alias_root)
+        {
+            return false;
+        }
+        // Routing shares the root binding, but an explicit child turn still
+        // belongs to its own transport identity. Root-only legacy aliases remain
+        // compatible, as do endpoints that provide only the root and turn ID.
+        if self.root_key.is_some()
+            && alias
+                .root_session_key()
+                .is_some_and(|root| root != alias.session_key())
+            && self.transport_key() != Some(alias.session_key())
         {
             return false;
         }
@@ -100,12 +107,9 @@ impl CodexSessionAffinity {
 
     pub(crate) fn alias_record(&self) -> Option<ProviderSessionAlias> {
         self.resolved_alias.clone().or_else(|| {
-            let root = (self.mode == AccountAffinity::Relaxed)
-                .then(|| self.root_key.clone())
-                .flatten();
             Some(
-                ProviderSessionAlias::new(self.binding_key()?.clone(), self.follow_only())
-                    .with_root_session_key(root),
+                ProviderSessionAlias::new(self.transport_key()?.clone(), self.follow_only())
+                    .with_root_session_key(self.root_key.clone()),
             )
         })
     }
@@ -140,19 +144,19 @@ impl CodexSessionAffinity {
     }
 
     pub(crate) fn follow_only(&self) -> bool {
-        self.resolved_alias.as_ref().is_some_and(|alias| {
-            (self.mode != AccountAffinity::Preferred && alias.follow_only())
-                || (self.mode == AccountAffinity::Strict && alias.root_session_key().is_some())
-        }) || (self.mode == AccountAffinity::Strict && self.follow_only)
+        self.mode == AccountAffinity::Strict
+            && (self.follow_only
+                || self
+                    .resolved_alias
+                    .as_ref()
+                    .is_some_and(|alias| alias.follow_only() || alias.root_session_key().is_some()))
     }
 
     pub(crate) fn binding_key(&self) -> Option<&ProviderSessionAffinityKey> {
         if let Some(alias) = self.resolved_alias.as_ref() {
             Some(self.alias_binding_key(alias))
-        } else if self.mode != AccountAffinity::Relaxed {
-            self.root_key.as_ref().or(self.key.as_ref())
         } else {
-            self.key.as_ref().or(self.root_key.as_ref())
+            self.root_key.as_ref().or(self.key.as_ref())
         }
     }
 

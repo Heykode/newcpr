@@ -344,7 +344,7 @@ async fn fixture() -> (
 }
 
 #[tokio::test]
-async fn relaxed_child_prefers_root_but_can_escape_busy_root_without_migrating_it() {
+async fn relaxed_child_uses_normal_weight_order_and_migrates_the_shared_root() {
     for busy in [false, true] {
         let (provider, affinity, leases, _upstream) = fixture().await;
         if busy {
@@ -363,17 +363,13 @@ async fn relaxed_child_prefers_root_but_can_escape_busy_root_without_migrating_i
             .unwrap();
         assert_eq!(
             stream.metadata().provider_account_id().as_str(),
-            if busy {
-                "acct_subagent_b"
-            } else {
-                "acct_subagent_a"
-            }
+            "acct_subagent_b"
         );
         drop(stream);
         assert_eq!(
             affinity.binding_count(),
-            2,
-            "child owns an independent binding"
+            1,
+            "child shares and updates the root binding"
         );
         leases.busy_accounts.lock().unwrap().clear();
         let root = provider
@@ -385,13 +381,13 @@ async fn relaxed_child_prefers_root_but_can_escape_busy_root_without_migrating_i
             .unwrap();
         assert_eq!(
             root.metadata().provider_account_id().as_str(),
-            "acct_subagent_a"
+            "acct_subagent_b"
         );
     }
 }
 
 #[tokio::test]
-async fn soft_affinity_can_use_an_eligible_model_account_without_moving_the_root() {
+async fn preferred_preserves_the_model_blocked_root_while_relaxed_migrates_it() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_subagent_a").await;
     let affinity = Arc::new(MemorySessionAffinity::default());
@@ -479,6 +475,18 @@ async fn soft_affinity_can_use_an_eligible_model_account_without_moving_the_root
         "acct_subagent_b"
     );
     drop(preferred);
+    assert_eq!(
+        affinity
+            .load(
+                &ProviderKind::new("openai").unwrap(),
+                &ProviderSessionAffinityKey::try_new(root_key.clone()).unwrap()
+            )
+            .await
+            .unwrap()
+            .unwrap()
+            .as_str(),
+        "acct_subagent_a"
+    );
     let child = provider
         .execute(
             generate("root", Some("child"), None),
@@ -498,8 +506,8 @@ async fn soft_affinity_can_use_an_eligible_model_account_without_moving_the_root
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(bound.as_str(), "acct_subagent_a");
-    assert_eq!(affinity.binding_count(), 2);
+    assert_eq!(bound.as_str(), "acct_subagent_b");
+    assert_eq!(affinity.binding_count(), 1);
     server.verify().await;
 }
 
@@ -525,8 +533,8 @@ async fn relaxed_child_turn_alias_survives_mode_changes_without_overwriting_its_
     drop(child);
     leases.busy_accounts.lock().unwrap().clear();
     for (mode, expected) in [
-        (AccountAffinity::Strict, "acct_subagent_a"),
-        (AccountAffinity::Preferred, "acct_subagent_a"),
+        (AccountAffinity::Strict, "acct_subagent_b"),
+        (AccountAffinity::Preferred, "acct_subagent_b"),
         (AccountAffinity::Relaxed, "acct_subagent_b"),
     ] {
         for body in [
@@ -555,7 +563,7 @@ async fn relaxed_child_turn_alias_survives_mode_changes_without_overwriting_its_
         }
     }
     assert_eq!(affinity.alias_count(), 1);
-    assert_eq!(affinity.binding_count(), 2);
+    assert_eq!(affinity.binding_count(), 1);
     let error = provider
         .execute(
             generate("another-root", Some("child"), Some("turn-mode")),
@@ -577,7 +585,7 @@ async fn relaxed_child_turn_alias_survives_mode_changes_without_overwriting_its_
 }
 
 #[tokio::test]
-async fn legacy_strict_child_turn_stays_on_root_in_relaxed_mode() {
+async fn strict_child_turn_alias_does_not_force_follow_only_after_switching_to_relaxed() {
     let (provider, affinity, leases, upstream) = fixture().await;
     drop(
         provider
@@ -597,7 +605,7 @@ async fn legacy_strict_child_turn_stays_on_root_in_relaxed_mode() {
         .unwrap();
     assert_eq!(
         stream.metadata().provider_account_id().as_str(),
-        "acct_subagent_a"
+        "acct_subagent_b"
     );
     drop(stream);
     assert_eq!(affinity.binding_count(), 1);
@@ -607,7 +615,7 @@ async fn legacy_strict_child_turn_stays_on_root_in_relaxed_mode() {
         .unwrap()
         .insert(ProviderAccountId::new("acct_subagent_a").unwrap());
     leases.capacity.set_load("acct_subagent_a", 3);
-    let error = provider
+    let selected = provider
         .execute(
             generate("root", Some("child"), Some("turn-legacy")),
             mode_context(AccountAffinity::Relaxed).with_request_tuning(
@@ -618,10 +626,12 @@ async fn legacy_strict_child_turn_stays_on_root_in_relaxed_mode() {
             ),
         )
         .await
-        .err()
         .unwrap();
-    assert_eq!(error.kind(), ProviderErrorKind::AccountCapacityUnavailable);
-    assert!(error.retry_is_prohibited());
+    assert_eq!(
+        selected.metadata().provider_account_id().as_str(),
+        "acct_subagent_b"
+    );
+    drop(selected);
     assert_eq!(
         leases
             .capacity
@@ -633,7 +643,7 @@ async fn legacy_strict_child_turn_stays_on_root_in_relaxed_mode() {
 }
 
 #[tokio::test]
-async fn strict_mode_child_alias_reclaims_lost_root_without_rewriting_relaxed_child() {
+async fn strict_mode_child_alias_reclaims_one_shared_root_after_expiry() {
     let (provider, affinity, _leases, upstream) = fixture().await;
     let root = ProviderSessionAffinityKey::try_new(affinity.lookup_keys()[0].clone()).unwrap();
     drop(
@@ -663,8 +673,8 @@ async fn strict_mode_child_alias_reclaims_lost_root_without_rewriting_relaxed_ch
     drop(stream);
     assert_eq!(
         affinity.binding_count(),
-        2,
-        "child binding survives independently of the reclaimed root"
+        1,
+        "the reclaimed root is the only primary binding"
     );
     let child = provider
         .execute(
@@ -675,13 +685,13 @@ async fn strict_mode_child_alias_reclaims_lost_root_without_rewriting_relaxed_ch
         .unwrap();
     assert_eq!(
         child.metadata().provider_account_id().as_str(),
-        "acct_subagent_a"
+        "acct_subagent_b"
     );
     assert!(upstream.received_requests().await.unwrap().is_empty());
 }
 
 #[tokio::test]
-async fn relaxed_search_and_compact_keep_the_independent_child_binding() {
+async fn relaxed_search_and_compact_update_the_same_root_binding() {
     let (provider, affinity, leases, _upstream) = fixture().await;
     leases
         .busy_accounts
@@ -738,7 +748,7 @@ async fn relaxed_search_and_compact_keep_the_independent_child_binding() {
         "acct_subagent_b"
     );
     drop(stream);
-    assert_eq!(affinity.binding_count(), 2);
+    assert_eq!(affinity.binding_count(), 1);
 }
 
 #[tokio::test]
@@ -807,7 +817,7 @@ async fn relaxed_native_owner_still_wins_over_a_strict_child_turn() {
 }
 
 #[tokio::test]
-async fn live_turn_uses_relaxed_child_or_strict_root_without_rebinding() {
+async fn live_turn_uses_the_shared_root_after_relaxed_migration() {
     use gateway_core::operation::{
         ProviderHttpHeader, ProviderHttpMethod, ProviderHttpRequest, RawHttpPayload,
     };
@@ -829,8 +839,8 @@ async fn live_turn_uses_relaxed_child_or_strict_root_without_rebinding() {
     leases.busy_accounts.lock().unwrap().clear();
     for (mode, expected) in [
         (AccountAffinity::Relaxed, "acct_subagent_b"),
-        (AccountAffinity::Strict, "acct_subagent_a"),
-        (AccountAffinity::Preferred, "acct_subagent_a"),
+        (AccountAffinity::Strict, "acct_subagent_b"),
+        (AccountAffinity::Preferred, "acct_subagent_b"),
     ] {
         let operation = Operation::ProviderHttp(
             ProviderHttpRequest::new(
@@ -877,11 +887,11 @@ async fn live_turn_uses_relaxed_child_or_strict_root_without_rebinding() {
         assert_eq!(stream.metadata().provider_account_id().as_str(), expected);
         drop(stream);
     }
-    assert_eq!(affinity.binding_count(), 2);
+    assert_eq!(affinity.binding_count(), 1);
 }
 
 #[tokio::test]
-async fn relaxed_capacity_wait_keeps_qx_sticky_first_then_fallback_on_full_queue() {
+async fn relaxed_capacity_wait_uses_ready_accounts_without_a_sticky_queue() {
     use std::sync::atomic::Ordering;
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_scope_old").await;
@@ -934,13 +944,9 @@ async fn relaxed_capacity_wait_keeps_qx_sticky_first_then_fallback_on_full_queue
         "acct_scope_new"
     );
     drop(stream);
-    assert_eq!(leases.capacity.waits.lock().unwrap().len(), 1);
-    assert_eq!(
-        leases.capacity.waits.lock().unwrap()[0].mode(),
-        gateway_core::engine::AccountWaitMode::Sticky
-    );
+    assert!(leases.capacity.waits.lock().unwrap().is_empty());
     assert_eq!(leases.capacity.waiting.load(Ordering::SeqCst), 0);
-    assert_eq!(affinity.binding_count(), 2);
+    assert_eq!(affinity.binding_count(), 1);
     assert!(upstream.received_requests().await.unwrap().is_empty());
 }
 

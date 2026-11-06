@@ -96,7 +96,7 @@ end
 if redis.call('ZSCORE', KEYS[2], ARGV[1]) then
   return {1, '0'}
 end
--- Reserved admissions cannot jump an older waiter, even without a wait token.
+-- Both business pools preserve account-local FIFO, including cross-account admission.
 if ARGV[8] == '1' then
   local head = redis.call('ZRANGE', KEYS[6], 0, 0)
   if #head > 0 and head[1] ~= ARGV[1] then return {0, '100'} end
@@ -338,9 +338,8 @@ impl RedisCapacityWait {
                 .arg(&cleanup.token)
                 .arg(deadline)
                 .arg(request.max_waiting().get())
-                .arg(u8::from(
-                    request.concurrency_pool() == ProviderConcurrencyPool::Reserved,
-                ))
+                // Wait leases are business requests; both pools maintain FIFO order.
+                .arg(1_u8)
                 .invoke_async::<i64>(&mut connection)
                 .await
                 .map_err(|_| unavailable("enqueue account capacity wait"))?;
@@ -524,9 +523,7 @@ impl Ownership {
             .arg(interval_millis)
             .arg(SIGNAL_TTL_MILLIS.max(interval_millis))
             .arg(u8::from(require_wait))
-            .arg(u8::from(
-                request.concurrency_pool() == ProviderConcurrencyPool::Reserved,
-            ))
+            .arg(u8::from(!request.is_quality_check()))
             .arg(
                 request
                     .detail()
