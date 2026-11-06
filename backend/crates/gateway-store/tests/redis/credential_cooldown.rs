@@ -465,7 +465,7 @@ fn cooldown(account_id: &str, revision: u64, seconds: i64) -> CredentialCooldown
 
 #[tokio::test]
 async fn cooldown_batch_preserves_order_partial_errors_and_observation_tokens() {
-    let Some((repository, mut connection, namespace)) = repository().await else {
+    let Some((repository, mut connection, namespace, mut proxy)) = batch_repository().await else {
         return;
     };
     let mut accounts = (0..131)
@@ -512,12 +512,7 @@ async fn cooldown_batch_preserves_order_partial_errors_and_observation_tokens() 
         .await
         .unwrap();
 
-    // Exercise EVALSHA recovery after Redis loses its script cache.
-    redis::cmd("SCRIPT")
-        .arg("FLUSH")
-        .query_async::<()>(&mut connection)
-        .await
-        .unwrap();
+    proxy.inject_script_miss();
     assert!(repository.read_many(&[]).await.is_empty());
     let results = repository.read_many(&accounts).await;
     assert_eq!(results.len(), accounts.len());
@@ -542,11 +537,13 @@ async fn cooldown_batch_preserves_order_partial_errors_and_observation_tokens() 
             );
         }
     }
+    proxy.verify_script_miss().await;
+    proxy.finish().await;
 }
 
 #[tokio::test]
 async fn scoped_cooldown_batch_preserves_model_revision_and_partial_errors() {
-    let Some((repository, mut connection, namespace)) = repository().await else {
+    let Some((repository, mut connection, namespace, mut proxy)) = batch_repository().await else {
         return;
     };
     let mut accounts = (0..130)
@@ -592,11 +589,7 @@ async fn scoped_cooldown_batch_preserves_model_revision_and_partial_errors() {
             .unwrap();
     }
 
-    redis::cmd("SCRIPT")
-        .arg("FLUSH")
-        .query_async::<()>(&mut connection)
-        .await
-        .unwrap();
+    proxy.inject_script_miss();
     assert!(repository.read_scoped_many(&[], &scope).await.is_empty());
     let results = repository.read_scoped_many(&accounts, &scope).await;
     assert_eq!(results.len(), accounts.len());
@@ -621,6 +614,8 @@ async fn scoped_cooldown_batch_preserves_model_revision_and_partial_errors() {
             );
         }
     }
+    proxy.verify_script_miss().await;
+    proxy.finish().await;
 }
 
 fn millisecond_precision(value: DateTime<Utc>) -> DateTime<Utc> {
@@ -638,6 +633,24 @@ async fn repository() -> Option<(RedisCredentialCooldownRepository, ConnectionMa
     let repository = RedisCredentialCooldownRepository::new(connection.clone(), &namespace)
         .expect("valid cooldown namespace");
     Some((repository, connection, namespace))
+}
+
+// A connection-local NOSCRIPT exercises recovery without flushing scripts used
+// by parallel tests (including the separate named-user ACL pass).
+async fn batch_repository() -> Option<(
+    RedisCredentialCooldownRepository,
+    ConnectionManager,
+    String,
+    super::capacity_wait::FaultProxy,
+)> {
+    use super::capacity_wait::{Fault, FaultProxy, ScriptTarget};
+    crate::support::test_env("CPR_TEST_REDIS_URL")?;
+    let proxy = FaultProxy::start(Fault::NoScript, ScriptTarget::Any).await;
+    let connection = proxy.connection().await;
+    let namespace = format!("gateway-store-cooldown-test-{}", Uuid::new_v4());
+    let repository = RedisCredentialCooldownRepository::new(connection.clone(), &namespace)
+        .expect("valid cooldown namespace");
+    Some((repository, connection, namespace, proxy))
 }
 
 async fn namespace_keys(connection: &mut ConnectionManager, namespace: &str) -> Vec<String> {
@@ -954,7 +967,7 @@ async fn protection_stale_disabled_publish_cannot_disable_a_newer_policy() {
 
 #[tokio::test]
 async fn protection_batch_preserves_revisions_probe_state_order_and_partial_errors() {
-    let Some((repository, mut connection, namespace)) = repository().await else {
+    let Some((repository, mut connection, namespace, mut proxy)) = batch_repository().await else {
         return;
     };
     let policy = protection_policy();
@@ -1018,11 +1031,7 @@ async fn protection_batch_preserves_revisions_probe_state_order_and_partial_erro
         .unwrap();
     accounts.push((accounts[2].0.clone(), CredentialRevision::new(3).unwrap()));
     accounts.push(accounts[129].clone());
-    redis::cmd("SCRIPT")
-        .arg("FLUSH")
-        .query_async::<()>(&mut connection)
-        .await
-        .unwrap();
+    proxy.inject_script_miss();
     assert!(repository.read_protection_many(&[]).await.is_empty());
     let results = repository.read_protection_many(&accounts).await;
     assert_eq!(results.len(), accounts.len());
@@ -1050,4 +1059,6 @@ async fn protection_batch_preserves_revisions_probe_state_order_and_partial_erro
             "{index}"
         );
     }
+    proxy.verify_script_miss().await;
+    proxy.finish().await;
 }

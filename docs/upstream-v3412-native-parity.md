@@ -239,3 +239,19 @@ Shared/Reserved/Quality 容量与 Redis 原子准入保持其各自合同。
 | `gateway-protocol` | 0 | 90 | 协议合同 |
 | `provider-xai` | 0 | 391 | 共用接口和既有行为 |
 | `codex-proxy-rs` | 0 | 62 | 启动、架构及模块布局 |
+
+
+### CI 并行测试隔离修正
+
+`ec138feee` 的 GitHub 主测试 4,479 项全部通过（1 项既有 ignored）；其后的 Redis
+命名用户 ACL 复测暴露新增批量读取回归中的全局 `SCRIPT FLUSH` 干扰了并行单账号读取。
+这属于测试夹具污染共享脚本缓存：去掉全局清空，复用既有 RESP 故障代理，只对当前测试
+连接的一条未执行 EVALSHA 注入 `NOSCRIPT`，并确认注入实际发生。原有顺序、部分错误、
+revision、probe 状态和重载断言全部保留；不修改生产代码、不增加重试或降低断言。
+
+修正后真实 Redis 全组并发 8 验证：默认用户 116 项通过；关闭 default 用户后的命名 ACL
+用户场景同样 116 项通过，均无失败或忽略。包括原有丢回复、延迟、取消、长请求排空
+以及三项批量读取的实际 NOSCRIPT 重载验证。后端 1,137 个跟踪文件与验证源码逐项
+校验一致；本次只修改上述测试夹具与验证记录。
+
+本次 Store `all-targets/all-features` Clippy（`-D warnings`）、fmt 和 diff 检查均通过。
