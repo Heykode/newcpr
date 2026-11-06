@@ -194,7 +194,7 @@ async fn explicit_continuation_preserves_even_invalid_item_ids_for_the_original_
 }
 
 #[test]
-fn content_fallback_normalizes_text_formats_and_preserves_explicit_affinity() {
+fn only_explicit_sessions_supply_continuation_affinity() {
     let provider = provider(&Arc::new(MemoryAccountStore::default()));
     let key = |input: Value, session: Option<&str>| {
         let mut body = json!({"input":input,"instructions":"stable prefix","service_tier":"fast"});
@@ -208,12 +208,10 @@ fn content_fallback_normalizes_text_formats_and_preserves_explicit_affinity() {
             .request_observation(&operation, &ClientApiKeyId::new("client").unwrap())
             .continuation
             .affinity_hash
-            .expect("existing content or session affinity")
     };
     let string_key = key(json!("hello"), None);
-    // String-only requests now include the first user text. This intentionally
-    // replaces the old instructions-only fallback, while explicit IDs stay stable.
-    assert_ne!(string_key, key(json!("different"), None));
+    assert!(string_key.is_none());
+    assert_eq!(string_key, key(json!("different"), None));
     let list_key = key(json!([{"role":"user","content":"hello"}]), None);
     assert_eq!(string_key, list_key);
     assert_eq!(
@@ -223,11 +221,12 @@ fn content_fallback_normalizes_text_formats_and_preserves_explicit_affinity() {
             None
         )
     );
-    assert_ne!(
+    assert_eq!(
         list_key,
         key(json!([{"role":"user","content":"different"}]), None)
     );
     let session_key = key(json!("hello"), Some("explicit-session"));
+    assert!(session_key.is_some());
     assert_eq!(
         session_key,
         key(

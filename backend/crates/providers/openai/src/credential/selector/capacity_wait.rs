@@ -326,7 +326,8 @@ impl CodexCredentialSelector {
         let mut affinity = control
             .run(async {
                 self.resolve_session_affinity(
-                    request.session_affinity_key,
+                    request,
+                    request.affinity_key(),
                     request
                         .session_affinity_observation
                         .and_then(CodexSessionAffinity::root_key),
@@ -493,11 +494,16 @@ impl CodexCredentialSelector {
                     .await?;
             }
             reload = true;
+            if request.is_cache_preference() && request.affinity_key().is_none() {
+                state.observed_affinity = None;
+                state.observed_affinity_binding = None;
+                state.affinity = AffinitySelection::default();
+            }
             if (state.follows_root || (refresh_affinity && state.pinned.is_none()))
-                && let Some(key) = request.session_affinity_key
+                && let Some(key) = request.affinity_key()
             {
                 match control
-                    .run(async { Ok(self.lookup_session_affinity(key).await) })
+                    .run(async { Ok(self.lookup_request_affinity(request, key).await) })
                     .await?
                 {
                     SessionAffinityLookup::Bound(binding) => {
@@ -606,13 +612,23 @@ impl CodexCredentialSelector {
                     candidate.account.id() == original
                         && (AccountSelector.availability(candidate, &state.context, &limits)
                             == AccountSchedulingAvailability::Busy
-                            || interval_wait_deadline(
-                                candidate,
-                                &state.context,
-                                &limits,
-                                state.pinned.is_some() || strict,
-                            )
-                            .is_some())
+                            || (state.pinned.is_some()
+                                && interval_wait_deadline(
+                                    candidate,
+                                    &state.context,
+                                    &limits,
+                                    true,
+                                )
+                                .is_some())
+                            || (strict && {
+                                let mut without_interval = candidate.clone();
+                                without_interval.signals.last_started_at = None;
+                                AccountSelector.availability(
+                                    &without_interval,
+                                    &state.context,
+                                    &limits,
+                                ) == AccountSchedulingAvailability::Busy
+                            }))
                 })
             {
                 sticky_tried.insert(original.clone());
@@ -1130,8 +1146,9 @@ impl CodexCredentialSelector {
         let limits = self.wait_limits()?;
         let fixed_wait = state.pinned.as_ref() == Some(id)
             || (state.follows_root
-                || state.context.policy.openai_account_affinity()
-                    == gateway_core::account::AccountAffinity::Strict)
+                || (mode == AccountWaitMode::Sticky
+                    && state.context.policy.openai_account_affinity()
+                        == gateway_core::account::AccountAffinity::Strict))
                 && state.observed_affinity.as_ref() == Some(id);
         let retain_on_contention = fixed_wait || mode == AccountWaitMode::Fallback;
         let interval_end = candidate.as_ref().and_then(|candidate| {
@@ -1254,8 +1271,8 @@ impl CodexCredentialSelector {
                 let poll = Duration::from_millis(100);
                 let mut next_pool_recheck = tokio::time::Instant::now();
                 loop {
-                    if let Some(key) = request.session_affinity_key {
-                        match self.lookup_session_affinity(key).await {
+                    if let Some(key) = request.affinity_key() {
+                        match self.lookup_request_affinity(request, key).await {
                             SessionAffinityLookup::Bound(binding)
                                 if Some(&binding) == state.observed_affinity_binding.as_ref() => {}
                             SessionAffinityLookup::Missing
@@ -1580,7 +1597,7 @@ impl CodexCredentialSelector {
             return Ok(None);
         };
         if state.follows_root
-            && let Some(key) = request.session_affinity_key
+            && let Some(key) = request.affinity_key()
             && let Err(error) = self.verify_followed_root(key, &expected).await
         {
             if matches!(error, CredentialSelectionError::CapacityUnavailable { .. }) {
@@ -1620,7 +1637,7 @@ impl CodexCredentialSelector {
             cyber_policy_scope: state.cyber_policy_scope.clone(),
             diagnostic: false,
             allows_account_state_mutation: true,
-            affinity_telemetry: state.affinity.telemetry(id),
+            affinity_telemetry: state.affinity.telemetry(id, request.is_cache_preference()),
             affinity_expected_binding: expected,
             guardian_parent_record_key: request
                 .session_affinity_observation

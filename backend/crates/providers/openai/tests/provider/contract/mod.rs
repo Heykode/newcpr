@@ -73,6 +73,7 @@ mod affinity;
 mod affinity_modes;
 mod affinity_recovery;
 mod cache_diagnostics;
+mod cache_preference;
 mod compact;
 mod excel_encrypted_content;
 mod fast_mode;
@@ -5159,10 +5160,13 @@ async fn account_selection_log_should_include_affinity_observation_fields() {
 
     let conversation =
         selected_account_log_fields(&events, "req_affinity_observation_conversation");
-    assert_eq!(conversation["affinity_anchor_source"], "root-conversation");
+    assert_eq!(
+        conversation["affinity_anchor_source"],
+        "client-cache-preference"
+    );
     assert_eq!(
         conversation["affinity_anchor"],
-        "root-observation-conversation"
+        conversation["affinity_key_hash"]
     );
     assert_eq!(conversation["session_id"], "");
     assert_eq!(conversation["session_id_present"], false);
@@ -5903,7 +5907,7 @@ async fn failed_relaxed_child_does_not_undo_the_binding_already_migrated_at_admi
 }
 
 #[tokio::test]
-async fn invalid_local_conversation_id_should_fall_back_to_an_opaque_affinity_key() {
+async fn restored_conversation_does_not_create_a_content_account_binding() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_local_affinity").await;
     let affinity = Arc::new(MemorySessionAffinity::default());
@@ -5943,9 +5947,8 @@ async fn invalid_local_conversation_id_should_fall_back_to_an_opaque_affinity_ke
     drop(stream);
 
     let keys = affinity.lookup_keys();
-    assert_eq!(keys.len(), 1);
-    assert_eq!(keys[0].len(), 64);
-    assert!(keys[0].bytes().all(|byte| byte.is_ascii_hexdigit()));
+    assert!(keys.is_empty());
+    assert_eq!(affinity.binding_count(), 0);
 }
 
 #[tokio::test]

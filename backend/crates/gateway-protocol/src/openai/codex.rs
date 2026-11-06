@@ -42,6 +42,66 @@ pub fn codex_thread_id(body: &Map<String, Value>, context: &Map<String, Value>) 
     codex_identity_field(body, context, "thread_id")
 }
 
+/// 账号绑定使用逻辑会话身份；Responses 的 session-id 可能只是缓存路由键
+/// WebSocket 每帧元数据优先于连接上下文，缺少逻辑元数据时才回退到显式 session_id
+#[must_use]
+pub fn codex_account_session_id(
+    body: &Map<String, Value>,
+    context: &Map<String, Value>,
+) -> Option<String> {
+    client_metadata_string(body, "session_id")
+        .map(str::to_owned)
+        .or_else(|| request_turn_metadata(body).and_then(turn_metadata_session_id))
+        .or_else(|| {
+            non_empty_string(context.get("turn_metadata")).and_then(turn_metadata_session_id)
+        })
+        .or_else(|| non_empty_string(body.get("session_id")).map(str::to_owned))
+        .or_else(|| codex_session_id(body, context))
+}
+
+/// 每条请求的逻辑线程身份，与缓存路由头分开解析
+#[must_use]
+pub fn codex_account_thread_id(
+    body: &Map<String, Value>,
+    context: &Map<String, Value>,
+) -> Option<String> {
+    client_metadata_string(body, "thread_id")
+        .map(str::to_owned)
+        .or_else(|| request_turn_metadata(body).and_then(turn_metadata_thread_id))
+        .or_else(|| {
+            non_empty_string(context.get("turn_metadata")).and_then(turn_metadata_thread_id)
+        })
+        .or_else(|| codex_thread_id(body, context))
+}
+
+#[must_use]
+pub fn turn_metadata_thread_id(metadata: &str) -> Option<String> {
+    let metadata: Value = serde_json::from_str(metadata).ok()?;
+    non_empty_string(metadata.get("thread_id")).map(str::to_owned)
+}
+
+#[must_use]
+pub fn turn_metadata_session_id(metadata: &str) -> Option<String> {
+    let metadata: Value = serde_json::from_str(metadata).ok()?;
+    non_empty_string(metadata.get("session_id")).map(str::to_owned)
+}
+
+/// 官方工具调用的 turn_id，同时用于关联独立 Images 请求
+#[must_use]
+pub fn codex_turn_id(body: &Map<String, Value>, context: &Map<String, Value>) -> Option<String> {
+    client_metadata_string(body, "turn_id")
+        .map(str::to_owned)
+        .or_else(|| request_turn_metadata(body).and_then(turn_metadata_turn_id))
+        .or_else(|| non_empty_string(context.get("turn_metadata")).and_then(turn_metadata_turn_id))
+        .or_else(|| codex_identity_field(body, context, "turn_id"))
+}
+
+#[must_use]
+pub fn turn_metadata_turn_id(metadata: &str) -> Option<String> {
+    let metadata: Value = serde_json::from_str(metadata).ok()?;
+    non_empty_string(metadata.get("turn_id")).map(str::to_owned)
+}
+
 fn codex_identity_field(
     body: &Map<String, Value>,
     context: &Map<String, Value>,

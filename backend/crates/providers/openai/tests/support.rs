@@ -994,6 +994,7 @@ impl ProviderLeasePort for TestLeaseCoordinator {
         Box::pin(async move {
             let capacity = self.capacity_for_pool(request.concurrency_pool());
             let id = request.account_id().clone();
+            let max_waiting = request.max_waiting().get();
             capacity.waits.lock().unwrap().push(request);
             if capacity.fail_wait.load(Ordering::SeqCst) {
                 return Err(ProviderStoreError::new(
@@ -1001,16 +1002,15 @@ impl ProviderLeasePort for TestLeaseCoordinator {
                     "test wait",
                 ));
             }
-            if capacity.full.load(Ordering::SeqCst) {
+            let mut active = capacity.active_waits.lock().unwrap();
+            if capacity.full.load(Ordering::SeqCst)
+                || active.get(&id).copied().unwrap_or(0) >= max_waiting
+            {
                 return Ok(ProviderWaitLeaseAcquisition::Full);
             }
+            *active.entry(id.clone()).or_default() += 1;
+            drop(active);
             capacity.waiting.fetch_add(1, Ordering::SeqCst);
-            *capacity
-                .active_waits
-                .lock()
-                .unwrap()
-                .entry(id.clone())
-                .or_default() += 1;
             Ok(ProviderWaitLeaseAcquisition::Acquired(Box::new(
                 TestCapacityWait {
                     state: Arc::clone(capacity),

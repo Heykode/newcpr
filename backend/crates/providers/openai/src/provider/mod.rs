@@ -57,8 +57,9 @@ use crate::credential::{
     CodexCredentialRefreshService, CodexCredentialRepository, CodexCredentialSelector,
     CodexCyberPolicyScope, CodexQuotaRefreshPolicy, CodexSessionAffinity, CredentialSelectionError,
     RuntimeCodexCookie, SelectCodexCredential, SelectCodexProviderEndpointCredential,
-    derive_codex_cyber_policy_session_key, derive_codex_endpoint_session_affinity,
-    derive_codex_session_affinity, derive_previous_response_id_hash,
+    derive_cache_preference, derive_codex_cyber_policy_session_key,
+    derive_codex_endpoint_session_affinity, derive_codex_session_affinity,
+    derive_codex_transport_key, derive_previous_response_id_hash, derive_turn_alias,
 };
 use crate::session_transport::CodexSessionTransportRecovery;
 use crate::transport::canonical::{
@@ -663,13 +664,21 @@ impl Provider for CodexProvider {
                 crate::transport::request::clear_turn_state(&mut upstream_request);
             }
         }
-        let session_affinity = derive_codex_session_affinity(
-            &upstream_request,
-            context.client_api_key_ref(),
-        )
-        .map(|affinity| {
-            affinity.with_policy(context.account_selection_policy().openai_account_affinity())
-        });
+        let session_affinity =
+            derive_codex_session_affinity(&upstream_request, context.client_api_key_ref()).map(
+                |affinity| {
+                    let turn_alias = affinity.key().and_then(|_| {
+                        gateway_protocol::openai::codex_turn_id(
+                            generate.protocol_payload().body(),
+                            generate.protocol_payload().context(),
+                        )
+                        .and_then(|turn| derive_turn_alias(&turn, context.client_api_key_ref()))
+                    });
+                    affinity
+                        .with_turn_alias(turn_alias)
+                        .with_policy(context.account_selection_policy().openai_account_affinity())
+                },
+            );
         // Restored and native owners take precedence over a client turn alias.
         let session_affinity = if previous_session.is_some()
             || continuation_requested
@@ -683,6 +692,26 @@ impl Provider for CodexProvider {
         let cyber_policy_session_key =
             derive_codex_cyber_policy_session_key(&upstream_request, context.client_api_key_ref());
         let guardian = upstream_request.guardian_parent_thread_id().is_some();
+        let cache_preference = (session_affinity
+            .as_ref()
+            .and_then(CodexSessionAffinity::key)
+            .is_none()
+            && previous_session.is_none()
+            && context.account_selection_policy().openai_account_affinity()
+                != gateway_core::account::AccountAffinity::Relaxed
+            && context.continuation_attempt() == ContinuationAttempt::None
+            && !continuation_requested
+            && !guardian)
+            .then(|| derive_cache_preference(&upstream_request, context.client_api_key_ref()))
+            .flatten()
+            .map(|preference| preference.with_guardian_record_from(session_affinity.as_ref()));
+        let account_affinity = session_affinity
+            .as_ref()
+            .filter(|affinity| affinity.key().is_some() || guardian)
+            .or(cache_preference.as_ref())
+            .or(session_affinity.as_ref());
+        let transport_affinity_key =
+            derive_codex_transport_key(&upstream_request, context.client_api_key_ref());
 
         let selection_started_at = Instant::now();
         let lease = self
@@ -692,13 +721,11 @@ impl Provider for CodexProvider {
                     upstream_model: upstream_model.as_str(),
                     request_url: &self.responses_url,
                     attempt: &context,
-                    session_affinity_key: session_affinity
-                        .as_ref()
-                        .and_then(CodexSessionAffinity::key),
+                    session_affinity_key: account_affinity.and_then(CodexSessionAffinity::key),
                     guardian,
                 },
                 cyber_policy_session_key.as_ref(),
-                session_affinity.as_ref(),
+                account_affinity,
             )
             .await
             .map_err(map_selection_error)?;
@@ -736,7 +763,9 @@ impl Provider for CodexProvider {
         let account_scope =
             if state_owner_cross_account || (!has_explicit_state_owner && lease.account_switch()) {
                 RequestAccountScope::Different
-            } else if has_explicit_state_owner || (excel && lease.affinity_hit()) {
+            } else if has_explicit_state_owner
+                || (excel && cache_preference.is_none() && lease.affinity_hit())
+            {
                 RequestAccountScope::Same
             } else {
                 RequestAccountScope::Unknown
@@ -890,11 +919,9 @@ impl Provider for CodexProvider {
         let requirement = transport_requirement(&upstream_request);
         let requested_transport = selected_transport(&upstream_request);
         let session_http_fallback = requirement.allows_pre_send_http_fallback()
-            && session_affinity.as_ref().is_some_and(|affinity| {
-                affinity
-                    .transport_key()
-                    .is_some_and(|key| self.session_transport_recovery.uses_http(key))
-            });
+            && transport_affinity_key
+                .as_ref()
+                .is_some_and(|key| self.session_transport_recovery.uses_http(key));
         let transport = if requirement.requires_websocket() {
             CodexProviderTransport::PreferWebSocket
         } else if context.transport() == AttemptTransport::Fallback || session_http_fallback {
@@ -945,10 +972,6 @@ impl Provider for CodexProvider {
         let session_affinity_key_hash = session_affinity
             .as_ref()
             .map(|affinity| affinity.key_hash().to_owned());
-        let transport_affinity_key = session_affinity
-            .as_ref()
-            .and_then(CodexSessionAffinity::transport_key)
-            .cloned();
         let session_affinity_key = session_affinity.and_then(CodexSessionAffinity::into_key);
         let request_tuning = context.request_tuning();
         let websocket_retry_count = match context.transport() {

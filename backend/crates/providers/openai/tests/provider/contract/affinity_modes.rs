@@ -1078,3 +1078,103 @@ async fn strict_child_waits_for_root_request_interval_without_switching_accounts
     assert_eq!(affinity.binding_count(), 1);
     assert!(upstream.received_requests().await.unwrap().is_empty());
 }
+
+#[tokio::test]
+async fn responses_turn_alias_rejects_root_child_role_changes_across_modes() {
+    for mode in [
+        AccountAffinity::Strict,
+        AccountAffinity::Preferred,
+        AccountAffinity::Relaxed,
+    ] {
+        for child_first in [false, true] {
+            let (provider, affinity, _leases, upstream) = fixture().await;
+            drop(
+                provider
+                    .execute(
+                        generate("root", child_first.then_some("child"), Some("role-turn")),
+                        mode_context(mode),
+                    )
+                    .await
+                    .unwrap(),
+            );
+            let error = provider
+                .execute(
+                    generate("root", (!child_first).then_some("child"), Some("role-turn")),
+                    mode_context(mode),
+                )
+                .await
+                .err()
+                .expect("official Responses rejects a changed follow-only identity");
+            assert_eq!(error.kind(), ProviderErrorKind::InvalidRequest);
+            assert_eq!(error.send_state(), UpstreamSendState::NotSent);
+            assert_eq!(affinity.alias_count(), 1);
+            assert!(upstream.received_requests().await.unwrap().is_empty());
+        }
+    }
+}
+
+#[tokio::test]
+async fn responses_turn_alias_uses_logical_metadata_independently_of_transport_turn() {
+    for mode in [
+        AccountAffinity::Strict,
+        AccountAffinity::Preferred,
+        AccountAffinity::Relaxed,
+    ] {
+        for same_logical_turn in [false, true] {
+            let (provider, affinity, _leases, upstream) = fixture().await;
+            let request = |root: &str, logical_turn: &str, transport_turn: &str| {
+                let payload = ProtocolPayload::json_object(
+                    "openai",
+                    json!({
+                        "model": "gpt-5.4", "input": "hello", "session_id": root,
+                        "client_metadata": {"turn_id": logical_turn}
+                    })
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+                )
+                .unwrap()
+                .with_context(Map::from_iter([
+                    ("turn_id".to_owned(), json!(transport_turn)),
+                    ("use_websocket".to_owned(), json!(false)),
+                ]));
+                planned_request(
+                    "openai",
+                    Operation::Generate(GenerateRequest::from_protocol_payload(payload)),
+                )
+            };
+            drop(
+                provider
+                    .execute(
+                        request("root", "logical-turn-a", "transport-turn-a"),
+                        mode_context(mode),
+                    )
+                    .await
+                    .unwrap(),
+            );
+            let (logical, transport) = if same_logical_turn {
+                ("logical-turn-a", "transport-turn-b")
+            } else {
+                ("logical-turn-b", "transport-turn-a")
+            };
+            let result = provider
+                .execute(
+                    request("another-root", logical, transport),
+                    mode_context(mode),
+                )
+                .await;
+            if same_logical_turn {
+                let error = result
+                    .err()
+                    .expect("one logical turn cannot belong to different roots");
+                assert_eq!(error.kind(), ProviderErrorKind::InvalidRequest);
+                assert_eq!(error.send_state(), UpstreamSendState::NotSent);
+                assert_eq!(affinity.alias_count(), 1);
+            } else {
+                drop(result.expect("different logical turns may reuse a transport header"));
+                assert_eq!(affinity.alias_count(), 2);
+            }
+            assert!(upstream.received_requests().await.unwrap().is_empty());
+        }
+    }
+}

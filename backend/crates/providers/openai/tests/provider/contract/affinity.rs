@@ -100,7 +100,14 @@ async fn scheduling_hint_is_stable_across_content_changes_but_keeps_legacy_migra
         context("req_hint_migration", CancellationToken::new()),
     )
     .await;
-    assert_eq!(keys, [new_key, old_key]);
+    // Historical e5a76755 content key: the new cache-preference namespace must not replace it.
+    assert_eq!(
+        keys,
+        [
+            new_key,
+            "241a286b14e7cdb3d11c93cd21ba7d1bb38684bd1e1e547a4b41c0c036978e8f".to_owned()
+        ]
+    );
     let Operation::Generate(legacy) = legacy else {
         unreachable!()
     };
@@ -120,7 +127,7 @@ async fn scheduling_hint_is_stable_across_content_changes_but_keeps_legacy_migra
 }
 
 #[test]
-fn scheduling_hints_are_isolated_by_client_source_and_explicit_thread_retains_priority() {
+fn scheduling_hints_are_isolated_and_thread_only_does_not_invent_a_session() {
     let provider = provider(&Arc::new(MemoryAccountStore::default()));
     let body = json!({"input":"hello"});
     let base = generation(body.clone(), hint_context("x-session-id", "root"));
@@ -136,17 +143,16 @@ fn scheduling_hints_are_isolated_by_client_source_and_explicit_thread_retains_pr
             )
         );
     }
-    let mut children = Vec::new();
     for thread in ["child-a", "child-b"] {
         let mut explicit = Map::from_iter([("thread_id".to_owned(), json!(thread))]);
         let baseline = generation(body.clone(), explicit.clone());
-        explicit.extend(hint_context("x-session-id", "changed-root"));
-        let hinted = generation(body.clone(), explicit);
-        let key = affinity(&provider, &baseline, "client-a").expect("thread");
-        assert_eq!(Some(key.clone()), affinity(&provider, &hinted, "client-a"));
-        children.push(key);
+        assert_eq!(affinity(&provider, &baseline, "client-a"), None);
+        explicit.extend(hint_context("x-session-id", "root"));
+        assert_eq!(
+            affinity(&provider, &generation(body.clone(), explicit), "client-a"),
+            Some(root.clone())
+        );
     }
-    assert_ne!(children[0], children[1]);
 }
 
 #[tokio::test]
@@ -160,7 +166,6 @@ async fn scheduling_hint_does_not_override_original_explicit_identity_or_previou
     for body in [
         json!({"input":"hello","session_id":"body-session"}),
         json!({"input":"hello","client_metadata":{"session_id":"metadata-session"}}),
-        json!({"input":"hello","prompt_cache_key":"cache"}),
         json!({"input":[{"role":"user","content":"hello"}],"previous_response_id":"resp_old"}),
     ] {
         let baseline = generation(body.clone(), Map::new());
@@ -170,8 +175,8 @@ async fn scheduling_hint_does_not_override_original_explicit_identity_or_previou
             affinity(&provider, &hinted, "client")
         );
     }
-    for field in ["session_id", "conversation_id", "thread_id"] {
-        let mut explicit = Map::from_iter([(field.to_owned(), json!("original"))]);
+    {
+        let mut explicit = Map::from_iter([("session_id".to_owned(), json!("original"))]);
         let baseline = generation(json!({"input":"hello"}), explicit.clone());
         explicit.extend(hint_context("x-session-id", "new-hint"));
         let hinted = generation(json!({"input":"hello"}), explicit);
@@ -375,7 +380,18 @@ async fn scheduling_hint_preserves_persisted_local_identity_and_account_projecti
                         "new key miss reads actual lc_ legacy"
                     );
                     assert_ne!(Some(keys[before].clone()), old_key);
-                    assert_eq!(Some(keys[before + 1].clone()), old_key);
+                    use sha2::{Digest, Sha256};
+                    let historical = |domain: &str, value: &str| {
+                        hex::encode(Sha256::digest(
+                            format!("codex-session-affinity-v1\0{domain}\0{value}").as_bytes(),
+                        ))
+                    };
+                    let local =
+                        historical("local-conversation", local_identity.as_deref().unwrap());
+                    assert_eq!(
+                        keys[before + 1],
+                        historical("client-session", &format!("key_openai_contract\0{local}"))
+                    );
                 } else {
                     assert_eq!(keys.len() - before, 1);
                     old_key = Some(keys[before].clone());

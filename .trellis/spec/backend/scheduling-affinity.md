@@ -27,8 +27,11 @@ do not replace transport identity, account authorization or billing contracts.
 - Read hints from ingress-created context, never from wire body or a WS frame's
   purported context. The shared provider validator rechecks the source/value.
   A client hint is not authenticated end-user identity.
-- Preserve standard session, conversation, thread and explicit valid cache
-  precedence. Native previous-response and restored provider state also win.
+- Resolve real account sessions from per-frame client metadata, turn metadata,
+  then explicit session IDs, as upstream `1240f225` specifies. Conversation,
+  thread-only, generated `lc_` and cache/content keys are not real session identities.
+  Supplemental hints remain explicit local routing hints. Native previous-response
+  and restored provider state take precedence.
   An `account_state_owner` alone is NOT evidence of native continuation: Core
   adds it on ordinary retries too. Such retries must retain the new affinity key
   and associated existing transport recovery state.
@@ -39,12 +42,12 @@ do not replace transport identity, account authorization or billing contracts.
   Recheck enabled status, model/account scope, exclusions, quota and lease
   capacity. Use atomic admission CAS against the observed generation (or observed miss) on the new key only.
   A primary hit never consults migration. Store unavailability is not a miss.
-- Retain original root-plus-child rules. An explicit standalone thread
-  suppresses new hints; do not invent a hint parent for an existing thread.
+- Share the root account binding across children. A thread alone does not create
+  a real session; local hints may still supply their independent routing binding.
   Search/Images keep original session/Search `id` priority. Compact keeps
   session > explicit cache > hint and parses the raw body once.
-- Keep content fallback, generated `lc_`, device/installation, UA, client
-  session/thread metadata, payload and physical WS pool identity unchanged.
+- Keep generated `lc_`, device/installation, UA, transport session/thread metadata,
+  payload and physical WS pool identity independent from account preference.
   An existing exact continuation still belongs to its original account/socket.
 - Existing diagnostic affinity hashes may reflect the new routing key.
   They do not authenticate a user or select a native response owner.
@@ -58,7 +61,7 @@ do not replace transport identity, account authorization or billing contracts.
 | No valid hint | Original behavior |
 | Duplicate highest-priority source, valid next source | Skip duplicate, use next |
 | Same ID, different source or client key | Different new affinity keys |
-| Explicit standard thread plus changing hint | Keep original thread key |
+| Thread-only plus changing hint | No real session; use the independent hint binding |
 | Standalone endpoint thread without a root/cache | Keep original lack of binding |
 | New key absent, old account eligible | Claim new key with old account preference |
 | Old account disabled/outside scope/excluded/exhausted/busy | Normal authorized selection |
@@ -72,7 +75,7 @@ do not replace transport identity, account authorization or billing contracts.
 
 - Good: two different conversation hints inherit one old content binding, then
   one fails over without rewriting the other hint or the old binding.
-- Base: absent hints keep the original content-based selection and wire fields.
+- Base: absent hints use upstream cache-preference selection without creating a real session; wire identity is independent.
 - Bad: infer that all users behind one business key are the same conversation.
 - Bad: treat different content hashes as proof of different people, or claim
   sharing an upstream account necessarily means sharing conversation state.
@@ -136,11 +139,12 @@ do not replace transport identity, account authorization or billing contracts.
   model restriction, quota reset within the recovery window). Deleted, disabled,
   expired, invalid or banned accounts and unknown/far/stale exhausted-quota resets
   migrate at admission. Use the official session hash for stable spillover ordering.
-- Strict and Preferred prioritize the binding ahead of account weights. Per the
-  user's explicit strict-mode contract, a busy bound root cannot spill even when
-  ordinary waiting is disabled. Authorized Core retries that exclude the old root
-  may admit another eligible account and CAS the root before send; completion of
-  an old request cannot undo it. Strict children remain follow-only and wait for
+- Strict and Preferred prioritize the binding ahead of account weights. Strict
+  waits for its busy bound root when ordinary waiting is enabled; full/timeout
+  cannot spill. With ordinary waiting disabled, a root may select another eligible
+  account and CAS the new primary before send, as upstream does. Authorized Core
+  retries that exclude the old root may also migrate; late completion cannot undo it.
+  A local interval-only blocker does not add another Strict migration prohibition. Strict children remain follow-only and wait for
   the root to recover or migrate rather than independently changing the root.
 - Redis admission accepts legacy raw and JSON bindings, upgrades to a new token,
   and fences both observed-miss and observed-generation races. Conflict must not
@@ -158,7 +162,34 @@ Wrong: clear local hints whenever `account_state_owner` is present.
 Correct: protect actual restored/native continuation; an ordinary retry carries
 an owner for account-state stripping and must keep its original routing key.
 
-Wrong: strengthen a shared content seed with expiring signed URLs.
+Wrong: change the transport identity seed while integrating account cache preference.
 
-Correct: retain the seed unless representative fixtures demonstrate benefits
-without introducing unacceptable splits; do not change `lc_` incidentally.
+Correct: keep the existing transport `lc_` identity independent. Account cache preference
+uses the official algorithm below; obsolete content-as-session tests must not restore
+that retired routing behavior.
+
+## 8. Sessionless cache preference (upstream 1240f225)
+
+- Use upstream length-prefixed SHA-256 fields: model, instructions, initial
+  system/developer texts, then the first user text. Ignore later turns, tools and
+  media URLs; no first user text means no content preference. Explicit nonempty
+  prompt cache keys take priority. Both namespaces are client-key isolated.
+- Strict/Preferred honor the configured mode; Relaxed skips preference storage.
+  Preferred may discard only optional cache preference on store failure, across
+  direct, cached projection, waiting and admission paths. A CAS conflict still
+  releases capacity and retries. Real session/Strict failures remain fail-closed.
+- Cache preferences do not supply turn aliases, continuation observations, state
+  owner proof or transport recovery keys. Suppress account_switch for preferences;
+  do not infer Excel state ownership from their affinity_hit. Guardian success
+  observations remain independently recorded.
+- Responses turn reuse checks root key AND raw follow-only identity, independent
+  of current affinity mode. Sibling children are compatible; root/child changes
+  and different roots are rejected. Independent endpoints compare root and OR
+  follow-only constraints, retaining the original alias on renewal.
+- Historical hint migration fixtures must use actual pre-update stored keys;
+  do not seed them by invoking the new sessionless preference implementation.
+
+- Responses turn aliases use logical turn metadata from the original payload,
+  independently of the header-authoritative transport `client_turn_id`, matching
+  upstream `remember_generate_turn`. A shared transport header cannot merge distinct
+  logical turns; different transport headers cannot hide a cross-root logical turn conflict.

@@ -198,7 +198,7 @@ async fn capture(
             .as_str()
             .is_some_and(|value| value.starts_with("lc_"))
     );
-    assert!(affinity.is_some());
+    assert_eq!(affinity.is_some(), original.get("session_id").is_some());
     let Operation::Generate(request) = operation else {
         unreachable!()
     };

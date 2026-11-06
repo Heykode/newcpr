@@ -36,7 +36,7 @@ impl CodexCredentialSelector {
                         request.attempt.continuation_attempt(),
                         ContinuationAttempt::None | ContinuationAttempt::ReplayAny
                     )
-                    && request.session_affinity_key.is_some()
+                    && request.affinity_key().is_some()
                     && request
                         .attempt
                         .account_selection_policy()
@@ -61,9 +61,9 @@ impl CodexCredentialSelector {
             _ => None,
         };
         let binding = if key.is_some()
-            && let Some(session) = request.session_affinity_key
+            && let Some(session) = request.affinity_key()
         {
-            match self.lookup_session_affinity(session).await {
+            match self.lookup_request_affinity(request, session).await {
                 SessionAffinityLookup::Bound(binding) => Some(binding),
                 SessionAffinityLookup::Missing => None,
                 SessionAffinityLookup::Unavailable => return Err(binding_unavailable()),

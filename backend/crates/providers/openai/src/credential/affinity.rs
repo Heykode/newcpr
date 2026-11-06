@@ -10,7 +10,10 @@ use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
 use crate::transport::protocol::responses::CodexResponsesRequest;
-use crate::transport::request::derive_conversation_anchor;
+use crate::transport::request::{derive_conversation_anchor, message_text_parts};
+
+const CLIENT_CACHE_PREFERENCE: &str = "client-cache-preference";
+const CONTENT_PREFERENCE: &str = "content-preference";
 
 const AFFINITY_KEY_HASH_LENGTH: usize = 12;
 pub(crate) const CODEX_ROOT_SESSION_TTL: Duration = Duration::from_secs(24 * 60 * 60);
@@ -27,6 +30,7 @@ pub(crate) struct CodexSessionAffinity {
     guardian_parent_record_key: Option<ProviderSessionAffinityKey>,
     turn_alias_key: Option<ProviderSessionAffinityKey>,
     turn_alias_required: bool,
+    response_turn_contract: bool,
     follow_only: bool,
     key_hash: String,
     anchor_source: &'static str,
@@ -47,6 +51,7 @@ impl CodexSessionAffinity {
             key_hash: short_key_hash(&turn_alias_key),
             turn_alias_key: Some(turn_alias_key),
             turn_alias_required: true,
+            response_turn_contract: false,
             follow_only: false,
             anchor_source: "turn-session",
             anchor: String::new(),
@@ -80,6 +85,8 @@ impl CodexSessionAffinity {
         // transport key does not make its shared-root alias incompatible.
         self.binding_key()
             .is_none_or(|key| key == self.alias_binding_key(alias))
+            && (!self.response_turn_contract
+                || self.follow_only == (alias.follow_only() || alias.root_session_key().is_some()))
     }
 
     pub(crate) fn alias_record(&self) -> Option<ProviderSessionAlias> {
@@ -95,10 +102,6 @@ impl CodexSessionAffinity {
     #[must_use]
     pub(crate) fn key(&self) -> Option<&ProviderSessionAffinityKey> {
         self.binding_key()
-    }
-
-    pub(crate) fn transport_key(&self) -> Option<&ProviderSessionAffinityKey> {
-        self.key.as_ref()
     }
 
     pub(crate) fn root_key(&self) -> Option<&ProviderSessionAffinityKey> {
@@ -146,6 +149,12 @@ impl CodexSessionAffinity {
         self.guardian_parent_preference_key.as_ref()
     }
 
+    pub(crate) fn with_guardian_record_from(mut self, source: Option<&Self>) -> Self {
+        self.guardian_parent_record_key =
+            source.and_then(Self::guardian_parent_record_key).cloned();
+        self
+    }
+
     pub(crate) fn guardian_parent_record_key(&self) -> Option<&ProviderSessionAffinityKey> {
         self.guardian_parent_record_key.as_ref()
     }
@@ -172,7 +181,10 @@ impl CodexSessionAffinity {
         Some(self)
     }
 
-    fn with_turn_alias(mut self, turn_alias_key: Option<ProviderSessionAffinityKey>) -> Self {
+    pub(crate) fn with_turn_alias(
+        mut self,
+        turn_alias_key: Option<ProviderSessionAffinityKey>,
+    ) -> Self {
         self.turn_alias_key = turn_alias_key;
         self
     }
@@ -194,8 +206,19 @@ impl CodexSessionAffinity {
     }
 
     #[must_use]
+    pub(crate) fn is_cache_preference(&self) -> bool {
+        matches!(
+            self.anchor_source,
+            CLIENT_CACHE_PREFERENCE | CONTENT_PREFERENCE
+        )
+    }
+
     pub(crate) fn anchor(&self) -> &str {
-        &self.anchor
+        if self.is_cache_preference() {
+            self.key_hash()
+        } else {
+            &self.anchor
+        }
     }
 
     #[must_use]
@@ -232,56 +255,50 @@ pub(crate) fn derive_codex_session_affinity(
     request: &CodexResponsesRequest,
     client_api_key_id: &ClientApiKeyId,
 ) -> Option<CodexSessionAffinity> {
-    let session_id = non_empty(request.client_session_id.as_deref()).map(str::to_owned);
-    let guardian_parent_thread_id = request.guardian_parent_thread_id();
-    let guardian_request = guardian_parent_thread_id.is_some();
-    let guardian_parent_preference_key = guardian_parent_thread_id
+    let session_id = non_empty(request.client_account_session_id.as_deref());
+    let guardian_parent = request.guardian_parent_thread_id();
+    let preference = guardian_parent
         .as_deref()
         .and_then(|parent| guardian_parent_affinity_key(parent, client_api_key_id));
-    let guardian_parent_record_key = (!guardian_request)
+    let record = guardian_parent
+        .is_none()
         .then(|| non_empty(request.client_thread_id.as_deref()))
         .flatten()
-        .and_then(|thread_id| guardian_parent_affinity_key(thread_id, client_api_key_id));
-    let legacy = derive_account_affinity_anchor(request).and_then(|(source, anchor)| {
-        session_affinity(source, anchor, session_id, client_api_key_id)?
-            .with_thread(request.client_thread_id.as_deref())
-    });
-    let turn_alias_key = request
-        .client_turn_id
-        .as_deref()
-        .and_then(|turn_id| derive_turn_alias(turn_id, client_api_key_id));
-    let legacy = legacy.map(|affinity| {
-        affinity
-            .with_guardian(
-                guardian_parent_preference_key.clone(),
-                guardian_parent_record_key.clone(),
-            )
-            .with_turn_alias(turn_alias_key.clone())
-    });
-    let guardian_only = || {
-        guardian_parent_preference_key
-            .clone()
-            .zip(guardian_parent_thread_id.clone())
-            .map(|(preference_key, parent_thread_id)| {
-                guardian_only_affinity(preference_key, parent_thread_id)
-                    .with_turn_alias(turn_alias_key.clone())
-            })
-    };
-    if non_empty(request.client_session_id.as_deref()).is_some()
-        || non_empty(request.client_conversation_id.as_deref()).is_some()
-        || non_empty(request.client_thread_id.as_deref()).is_some()
-        || (request.explicit_prompt_cache_key && non_empty(request.prompt_cache_key()).is_some())
-        || request.previous_response_id().is_some()
+        .and_then(|thread| guardian_parent_affinity_key(thread, client_api_key_id));
+    let mut affinity = if let Some(session) = session_id {
+        session_affinity(
+            "root-session",
+            session.to_owned(),
+            Some(session.to_owned()),
+            client_api_key_id,
+        )?
+    } else if request.previous_response_id().is_none()
+        && let Some(hint) = request.scheduling_session_hint.as_ref()
     {
-        return legacy.or_else(guardian_only);
-    }
-    let Some(hint) = request.scheduling_session_hint.as_ref() else {
-        return legacy.or_else(guardian_only);
+        let mut affinity = scheduling_hint_affinity(hint, client_api_key_id)?;
+        // Existing local hints may inherit an eligible legacy binding once. The
+        // legacy content identity itself is never exposed as a real session.
+        affinity.migration_key =
+            derive_account_affinity_anchor(request).and_then(|(source, anchor)| {
+                session_affinity(source, anchor, None, client_api_key_id)?.into_key()
+            });
+        affinity
+    } else {
+        return preference
+            .zip(guardian_parent)
+            .map(|(key, parent)| guardian_only_affinity(key, parent))
+            .or_else(|| {
+                record.map(|key| {
+                    let mut affinity = guardian_only_affinity(key.clone(), String::new());
+                    affinity.guardian_parent_preference_key = None;
+                    affinity.guardian_parent_record_key = Some(key);
+                    affinity
+                })
+            });
     };
-    let mut affinity = scheduling_hint_affinity(hint, client_api_key_id)?;
-    affinity.migration_key = legacy.and_then(CodexSessionAffinity::into_key);
-    affinity = affinity.with_guardian(guardian_parent_preference_key, guardian_parent_record_key);
-    affinity = affinity.with_turn_alias(turn_alias_key);
+    affinity.follow_only = request.client_account_follow_only;
+    affinity.response_turn_contract = true;
+    affinity = affinity.with_guardian(preference, record);
     Some(affinity)
 }
 
@@ -362,16 +379,17 @@ fn endpoint_explicit_session_affinity(
     client_api_key_id: &ClientApiKeyId,
     body_session_field: &str,
 ) -> Option<CodexSessionAffinity> {
-    let session_id = gateway_protocol::openai::codex_session_id(body, context).or_else(|| {
-        non_empty(body.get(body_session_field).and_then(Value::as_str)).map(str::to_owned)
-    })?;
+    let session_id =
+        gateway_protocol::openai::codex_account_session_id(body, context).or_else(|| {
+            non_empty(body.get(body_session_field).and_then(Value::as_str)).map(str::to_owned)
+        })?;
     session_affinity(
         "root-session",
         session_id.clone(),
         Some(session_id),
         client_api_key_id,
     )?
-    .with_thread(gateway_protocol::openai::codex_thread_id(body, context).as_deref())
+    .with_thread(gateway_protocol::openai::codex_account_thread_id(body, context).as_deref())
 }
 
 fn endpoint_scheduling_hint_affinity(
@@ -460,6 +478,7 @@ fn session_affinity(
         guardian_parent_record_key: None,
         turn_alias_key: None,
         turn_alias_required: true,
+        response_turn_contract: false,
         follow_only: false,
         key_hash,
         anchor_source,
@@ -494,6 +513,7 @@ fn guardian_only_affinity(
         guardian_parent_record_key: None,
         turn_alias_key: None,
         turn_alias_required: true,
+        response_turn_contract: false,
         follow_only: false,
         key_hash: short_key_hash(&preference_key),
         anchor_source: "guardian-parent-thread",
@@ -512,7 +532,7 @@ fn guardian_parent_affinity_key(
     )
 }
 
-fn derive_turn_alias(
+pub(crate) fn derive_turn_alias(
     turn_id: &str,
     client_api_key_id: &ClientApiKeyId,
 ) -> Option<ProviderSessionAffinityKey> {
@@ -595,4 +615,62 @@ pub(crate) fn derive_codex_cyber_policy_session_key(
 
 fn non_empty(value: Option<&str>) -> Option<&str> {
     value.map(str::trim).filter(|value| !value.is_empty())
+}
+
+/// 仅供选号使用。缓存键与输入正文均不作为会话、轮次或传输身份。
+pub(crate) fn derive_cache_preference(
+    request: &CodexResponsesRequest,
+    client_key: &ClientApiKeyId,
+) -> Option<CodexSessionAffinity> {
+    if request.client_account_follow_only || request.previous_response_id().is_some() {
+        return None;
+    }
+    if request.explicit_prompt_cache_key
+        && let Some(key) = non_empty(request.prompt_cache_key())
+    {
+        return session_affinity(CLIENT_CACHE_PREFERENCE, key.to_owned(), None, client_key);
+    }
+    let mut hash = Sha256::new();
+    hash_text_field(&mut hash, std::iter::once(request.model()));
+    hash_text_field(&mut hash, std::iter::once(request.instructions()));
+    let mut items = request.input().iter().peekable();
+    while let Some(item) =
+        items.next_if(|item| matches!(item["role"].as_str(), Some("system" | "developer")))
+    {
+        hash_text_field(&mut hash, message_text_parts(item));
+    }
+    let first_user = items.next().filter(|item| item["role"] == "user")?;
+    if !hash_text_field(&mut hash, message_text_parts(first_user)) {
+        return None;
+    }
+    session_affinity(
+        CONTENT_PREFERENCE,
+        hex::encode(hash.finalize()),
+        None,
+        client_key,
+    )
+}
+
+/// 长度前缀区分消息边界；同一消息的文本块按顺序流式计算，避免复制长提示词。
+fn hash_text_field<'a>(hash: &mut Sha256, parts: impl Iterator<Item = &'a str> + Clone) -> bool {
+    if !parts.clone().any(|part| !part.trim().is_empty()) {
+        return false;
+    }
+    let length: usize = parts.clone().map(str::len).sum();
+    hash.update((length as u64).to_be_bytes());
+    for part in parts {
+        hash.update(part.as_bytes());
+    }
+    true
+}
+
+/// Transport recovery remains independent of account affinity and cache preferences.
+pub(crate) fn derive_codex_transport_key(
+    request: &CodexResponsesRequest,
+    client: &ClientApiKeyId,
+) -> Option<ProviderSessionAffinityKey> {
+    let (source, anchor) = non_empty(request.client_thread_id.as_deref())
+        .map(|thread| ("thread-transport", thread.to_owned()))
+        .or_else(|| derive_conversation_anchor(request))?;
+    session_affinity(source, anchor, None, client)?.into_key()
 }

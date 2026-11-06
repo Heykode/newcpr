@@ -526,3 +526,56 @@ async fn movable_waiters_use_other_accounts_even_before_queue_promotion() {
         }
     }
 }
+
+#[tokio::test]
+async fn projection_refresh_rediscovers_an_authorized_account_absent_from_the_cached_pool() {
+    for waiting in [false, true] {
+        let store = Arc::new(MemoryAccountStore::default());
+        create_account(&store, "acct_first", "test-first");
+        create_account(&store, "acct_second", "test-second");
+        let first = ProviderAccountId::new("acct_first").unwrap();
+        let second = ProviderAccountId::new("acct_second").unwrap();
+        store.set_enabled(&second, false).await.unwrap();
+        let leases = Arc::new(TestLeaseCoordinator::default());
+        leases.capacity.enabled.store(true, Ordering::SeqCst);
+        let selector = selector_with_runtime(
+            &store,
+            leases.clone(),
+            Arc::new(MemorySessionAffinity::default()),
+            Arc::new(AccountFeedbackStats::default()),
+            Arc::new(MemoryCooldownPort::new()),
+        )
+        .with_account_concurrency(capacity_handle(&["acct_first", "acct_second"], 1));
+        let policy =
+            AccountSelectionPolicy::new(RotationStrategy::Smart, NonZeroU32::MIN, Duration::ZERO)
+                .with_openai_account_affinity(AccountAffinity::Preferred);
+        let attempt = projection_attempt("key_codex_contract", contract_account_scope(), policy)
+            .with_request_tuning(gateway_core::routing::RequestTuning {
+                account_busy_wait_enabled: waiting,
+                ..capacity_tuning()
+            });
+        let key = ProviderSessionAffinityKey::try_new("projection-omitted-account").unwrap();
+        assert!(attempt.freeze_provider_route("codex"));
+        drop(select(&selector, &attempt, &key, "gpt-5.4").await.unwrap());
+        let initial_reads = store.provider_list_reads();
+        drop(select(&selector, &attempt, &key, "gpt-5.4").await.unwrap());
+        assert_eq!(
+            store.provider_list_reads(),
+            initial_reads,
+            "healthy cached owner"
+        );
+        store.set_enabled(&second, true).await.unwrap();
+        leases.capacity.set_load("acct_first", 1);
+        let selected = select(&selector, &attempt, &key, "gpt-5.4").await.unwrap();
+        assert_eq!(
+            selected.account_id(),
+            &second,
+            "waiting={waiting}; a cached omission cannot shrink the request scope"
+        );
+        assert_ne!(selected.account_id(), &first);
+        assert!(
+            store.provider_list_reads() > initial_reads,
+            "invalidated projection reloads the authorized pool"
+        );
+    }
+}

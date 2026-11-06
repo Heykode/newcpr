@@ -133,10 +133,38 @@ struct CredentialSelectionInput<'a> {
     attempt: &'a AttemptContext,
     session_affinity_key: Option<&'a ProviderSessionAffinityKey>,
     session_affinity_observation: Option<&'a CodexSessionAffinity>,
+    cache_preference_disabled: std::sync::atomic::AtomicBool,
     guardian: bool,
 }
 
 impl CredentialSelectionInput<'_> {
+    fn is_cache_preference(&self) -> bool {
+        self.session_affinity_observation
+            .is_some_and(CodexSessionAffinity::is_cache_preference)
+    }
+
+    fn discard_optional_cache_preference(&self) -> bool {
+        let optional = self.is_cache_preference()
+            && self
+                .attempt
+                .account_selection_policy()
+                .openai_account_affinity()
+                == gateway_core::account::AccountAffinity::Preferred;
+        if optional {
+            self.cache_preference_disabled
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        optional
+    }
+
+    fn affinity_key(&self) -> Option<&ProviderSessionAffinityKey> {
+        self.session_affinity_key.filter(|_| {
+            !self
+                .cache_preference_disabled
+                .load(std::sync::atomic::Ordering::Relaxed)
+        })
+    }
+
     fn follows_root(&self) -> bool {
         !self.attempt.is_diagnostic_required_account()
             && self.attempt.required_account().is_none()
@@ -328,16 +356,21 @@ impl AffinitySelection {
         }
     }
 
-    fn telemetry(&self, selected_account: &ProviderAccountId) -> AffinityTelemetry {
+    fn telemetry(
+        &self,
+        selected_account: &ProviderAccountId,
+        cache_preference: bool,
+    ) -> AffinityTelemetry {
         AffinityTelemetry {
             affinity_hit: !self.inherited
                 && self.bound_account.as_ref() == Some(selected_account)
                 && self.escape_reason.is_none(),
             escape_reason: self.escape_reason,
-            account_switch: self
-                .bound_account
-                .as_ref()
-                .is_some_and(|bound| bound != selected_account),
+            account_switch: !cache_preference
+                && self
+                    .bound_account
+                    .as_ref()
+                    .is_some_and(|bound| bound != selected_account),
         }
     }
 }
@@ -484,6 +517,7 @@ impl CodexCredentialSelector {
         request: &SelectCodexCredential<'_>,
     ) -> Result<CodexCredentialLease, CredentialSelectionError> {
         let input = CredentialSelectionInput {
+            cache_preference_disabled: std::sync::atomic::AtomicBool::new(false),
             upstream_model: Some(request.upstream_model),
             responses_model: true,
             image_request: false,
@@ -505,6 +539,7 @@ impl CodexCredentialSelector {
         session_affinity_observation: Option<&CodexSessionAffinity>,
     ) -> Result<CodexCredentialLease, CredentialSelectionError> {
         let input = CredentialSelectionInput {
+            cache_preference_disabled: std::sync::atomic::AtomicBool::new(false),
             upstream_model: Some(request.upstream_model),
             responses_model: true,
             image_request: false,
@@ -528,6 +563,7 @@ impl CodexCredentialSelector {
         request: &SelectCodexProviderEndpointCredential<'_>,
     ) -> Result<CodexCredentialLease, CredentialSelectionError> {
         let input = CredentialSelectionInput {
+            cache_preference_disabled: std::sync::atomic::AtomicBool::new(false),
             upstream_model: request.upstream_model,
             responses_model: false,
             image_request: request.image_request,
@@ -805,7 +841,8 @@ impl CodexCredentialSelector {
             AffinitySelection::default()
         } else {
             self.resolve_session_affinity(
-                request.session_affinity_key,
+                request,
+                request.affinity_key(),
                 request
                     .session_affinity_observation
                     .and_then(CodexSessionAffinity::root_key),
@@ -915,22 +952,6 @@ impl CodexCredentialSelector {
             let capacity = AccountSelector.capacity_snapshot(&candidates, &context);
             capacity_unavailable |= AccountSelector.has_busy_candidate(&candidates, &context);
             let selection = AccountSelector.select(&candidates, &context);
-            if policy.openai_account_affinity() == gateway_core::account::AccountAffinity::Strict
-                && observed_affinity_binding.is_some()
-                && selection.as_ref().is_some_and(|selection| {
-                    matches!(
-                        selection.preferred(),
-                        PreferredAccountSelection::Blocked(
-                            AccountSchedulingBlocker::ConcurrencyLimit
-                                | AccountSchedulingBlocker::RequestInterval
-                        )
-                    )
-                })
-            {
-                return Err(CredentialSelectionError::CapacityUnavailable {
-                    retry_after: shortest_retry,
-                });
-            }
             request
                 .attempt
                 .trace()
@@ -1041,14 +1062,6 @@ impl CodexCredentialSelector {
                         self.invalidate_projection(&projection);
                         return Err(CredentialSelectionError::AccountSnapshotChanged);
                     }
-                    if policy.openai_account_affinity()
-                        == gateway_core::account::AccountAffinity::Strict
-                        && observed_affinity_binding
-                            .as_ref()
-                            .is_some_and(|binding| binding.account_id() == account.id())
-                    {
-                        return Err(CredentialSelectionError::CapacityUnavailable { retry_after });
-                    }
                     capacity_unavailable = true;
                     affinity.observe_lease_busy(account.id());
                     shortest_retry = minimum_duration(shortest_retry, retry_after);
@@ -1082,7 +1095,8 @@ impl CodexCredentialSelector {
                         self.invalidate_projection(&projection);
                         return Err(CredentialSelectionError::AccountSnapshotChanged);
                     };
-                    let affinity_telemetry = affinity.telemetry(account.id());
+                    let affinity_telemetry =
+                        affinity.telemetry(account.id(), request.is_cache_preference());
                     let affinity_observation = request.session_affinity_observation;
                     tracing::info!(
                         request_id = %request.attempt.request_id(),
@@ -1117,7 +1131,7 @@ impl CodexCredentialSelector {
                             request.attempt.continuation_attempt(),
                             ContinuationAttempt::Native | ContinuationAttempt::ReplayOwner
                         )
-                        && let Some(key) = request.session_affinity_key
+                        && let Some(key) = request.affinity_key()
                     {
                         self.verify_followed_root(key, &affinity_expected_binding)
                             .await?;
@@ -1192,6 +1206,7 @@ impl CodexCredentialSelector {
     #[expect(clippy::too_many_arguments)]
     async fn resolve_session_affinity(
         &self,
+        request: &CredentialSelectionInput<'_>,
         key: Option<&ProviderSessionAffinityKey>,
         root_key: Option<&ProviderSessionAffinityKey>,
         migration_key: Option<&ProviderSessionAffinityKey>,
@@ -1205,7 +1220,7 @@ impl CodexCredentialSelector {
             let lookup = match observed {
                 Some(Some(binding)) => SessionAffinityLookup::Bound(binding.clone()),
                 Some(None) => SessionAffinityLookup::Missing,
-                None => self.lookup_session_affinity(key).await,
+                None => self.lookup_request_affinity(request, key).await,
             };
             match lookup {
                 SessionAffinityLookup::Bound(binding) => {
@@ -1222,7 +1237,7 @@ impl CodexCredentialSelector {
         }
 
         for fallback_key in [root_key, migration_key].into_iter().flatten() {
-            match self.lookup_session_affinity(fallback_key).await {
+            match self.lookup_request_affinity(request, fallback_key).await {
                 SessionAffinityLookup::Bound(binding) => {
                     let mut inherited = affinity_selection_for_bound_account(
                         binding,
@@ -1255,6 +1270,24 @@ impl CodexCredentialSelector {
         }
 
         Ok(AffinitySelection::default())
+    }
+
+    async fn lookup_request_affinity(
+        &self,
+        request: &CredentialSelectionInput<'_>,
+        key: &ProviderSessionAffinityKey,
+    ) -> SessionAffinityLookup {
+        if request.affinity_key().is_none() && request.is_cache_preference() {
+            return SessionAffinityLookup::Missing;
+        }
+        let lookup = self.lookup_session_affinity(key).await;
+        if matches!(lookup, SessionAffinityLookup::Unavailable)
+            && request.discard_optional_cache_preference()
+        {
+            SessionAffinityLookup::Missing
+        } else {
+            lookup
+        }
     }
 
     pub(crate) async fn lookup_session_alias(

@@ -28,7 +28,7 @@ impl CodexCredentialSelector {
             && binding.is_some()
         {
             use sha2::{Digest, Sha256};
-            request.session_affinity_key.map_or(cursor, |key| {
+            request.affinity_key().map_or(cursor, |key| {
                 let digest = Sha256::digest(key.expose_to_store().as_bytes());
                 let mut bytes = [0; 8];
                 bytes.copy_from_slice(&digest[..8]);
@@ -47,7 +47,7 @@ impl CodexCredentialSelector {
         pinned: bool,
     ) -> Result<Option<ProviderSessionAffinityBinding>, CredentialSelectionError> {
         let Some(key) = request
-            .session_affinity_key
+            .affinity_key()
             .filter(|_| !request.attempt.is_diagnostic_required_account())
         else {
             return Ok(Some(ProviderSessionAffinityBinding::legacy(
@@ -78,7 +78,7 @@ impl CodexCredentialSelector {
         if pinned && expected.is_some_and(|binding| binding.account_id() != account) {
             binding_account = expected.expect("observed binding").account_id();
         }
-        tokio::time::timeout(
+        let result = tokio::time::timeout(
             SESSION_AFFINITY_TIMEOUT,
             self.session_affinity.admit_binding(
                 &self.provider_kind,
@@ -89,8 +89,14 @@ impl CodexCredentialSelector {
             ),
         )
         .await
-        .map_err(binding_store_error)?
         .map_err(binding_store_error)
+        .and_then(|result| result.map_err(binding_store_error));
+        match result {
+            Err(_) if request.discard_optional_cache_preference() => Ok(Some(
+                ProviderSessionAffinityBinding::legacy(account.clone()),
+            )),
+            result => result,
+        }
     }
 
     /// 只按账号整体的当前事实迁移主绑定，临时容量和单模型限制仍允许恢复热缓存
