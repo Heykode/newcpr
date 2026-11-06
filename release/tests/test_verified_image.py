@@ -1,4 +1,6 @@
 from datetime import datetime, timedelta, timezone
+from contextlib import redirect_stderr, redirect_stdout
+import io
 import json
 from pathlib import Path
 import subprocess
@@ -159,6 +161,120 @@ class ResolveTests(unittest.TestCase):
                 else:
                     with self.assertRaises(images.Unavailable):
                         images.require_security(REPOSITORY, SOURCE)
+
+
+class ReleaseEvidenceTests(unittest.TestCase):
+    def setUp(self):
+        self.run, self.proof, _ = fixtures()
+        self.run.update(id=30, run_attempt=1, head_sha=PARENT,
+                        event="push", head_branch="main")
+        self.job = {"name": "quality / backend", "status": "completed",
+                    "conclusion": "success", "html_url": "https://example.invalid/jobs/1"}
+
+    def evidence(self, main_jobs=(), source_jobs=(), changes="release/version.yaml\0",
+                 parents=None, runs=None):
+        def api(path):
+            if path.endswith("ci.yml"):
+                return {"id": 9}
+            if "/workflows/9/runs?" in path:
+                self.assertIn(f"event=push&branch=main&head_sha={PARENT}&per_page=1", path)
+                return {"workflow_runs": [self.run] if runs is None else runs}
+            if path.endswith("/runs/30"):
+                return self.run
+            if path.endswith("/runs/12"):
+                return fixtures()[0]
+            if path.endswith("/runs/30/jobs?filter=latest&per_page=100"):
+                return {"jobs": main_jobs}
+            self.assertTrue(path.endswith("/runs/12/jobs?filter=latest&per_page=100"), path)
+            return {"jobs": source_jobs}
+
+        with patch.object(images, "git", side_effect=[
+                parents or f"{'e' * 40} {PARENT}", changes]), \
+                patch.object(images, "api", side_effect=api) as remote, \
+                patch.object(images, "resolve", return_value={"proof": self.proof}) as resolve:
+            result = images.release_evidence(REPOSITORY)
+            return result, remote, resolve
+
+    def test_direct_full_main_validation_is_reused(self):
+        result, _, resolve = self.evidence(main_jobs=[self.job])
+        self.assertEqual(result, self.job["html_url"])
+        resolve.assert_not_called()
+
+    def test_merge_reuse_requires_the_proven_source_complete_backend(self):
+        result, _, resolve = self.evidence(source_jobs=[self.job])
+        self.assertEqual(result, self.job["html_url"])
+        resolve.assert_called_once_with(REPOSITORY, PARENT)
+
+    def test_partial_skipped_failed_or_missing_source_checks_are_not_reused(self):
+        for jobs in ([], [{**self.job, "name": "quality / backend-selected"}],
+                     [{**self.job, "status": "in_progress"}],
+                     *[[{**self.job, "conclusion": state}]
+                       for state in ("skipped", "failure", "cancelled")]):
+            with self.subTest(jobs=jobs):
+                self.assertIsNone(self.evidence(source_jobs=jobs)[0])
+
+    def test_latest_main_failure_wrong_identity_or_expiry_cannot_use_old_pr(self):
+        original = dict(self.run)
+        for field, value in {
+            "conclusion": "failure", "status": "in_progress", "head_sha": SOURCE,
+            "head_repository": {"full_name": "other/repository"},
+            "head_branch": "topic", "event": "pull_request", "workflow_id": 8,
+            "path": ".github/workflows/build-cache.yml",
+            "updated_at": (datetime.now(timezone.utc) - timedelta(days=8)).isoformat(),
+        }.items():
+            with self.subTest(field=field):
+                self.run = {**original, field: value}
+                result, _, resolve = self.evidence(source_jobs=[self.job])
+                self.assertIsNone(result)
+                resolve.assert_not_called()
+        self.run = original
+        result, _, resolve = self.evidence(runs=[])
+        self.assertIsNone(result)
+        resolve.assert_not_called()
+
+    def test_only_nonempty_metadata_changes_on_single_parent_commits_are_eligible(self):
+        for changes, parents in [
+            ("", None), ("backend/source.rs\0", None),
+            ("release/notes.md\0backend/source.rs\0", None),
+            ("release/notes.md\0", SOURCE),
+            ("release/notes.md\0", f"{SOURCE} {PARENT} {TREE}"),
+        ]:
+            with self.subTest(changes=changes, parents=parents):
+                result, remote, resolve = self.evidence(changes=changes, parents=parents)
+                self.assertIsNone(result)
+                remote.assert_not_called()
+                resolve.assert_not_called()
+
+    def test_same_run_without_full_backend_is_not_a_reuse_chain(self):
+        self.proof["run_id"] = self.run["id"]
+        self.assertIsNone(self.evidence(source_jobs=[self.job])[0])
+
+    def test_failed_job_rerun_retains_earlier_successful_backend(self):
+        job = {**self.job, "run_attempt": 1}
+        self.assertEqual(self.evidence(source_jobs=[job])[0], job["html_url"])
+
+    def test_new_attempt_or_failure_during_evidence_resolution_is_rejected(self):
+        run = fixtures()[0]
+        for change in ({"run_attempt": 3}, {"status": "in_progress"}, {"conclusion": "failure"}):
+            with self.subTest(change=change), patch.object(images, "api", return_value={**run, **change}), \
+                    self.assertRaises(images.Unavailable):
+                images.backend_job(REPOSITORY, 12, 2)
+
+    def test_unavailable_proof_falls_back_to_full_checks_with_clean_output(self):
+        for error in (images.Unavailable("expired proof"), OSError("API unavailable"),
+                      ValueError("invalid proof"), KeyError("missing identity")):
+            with self.subTest(error=type(error).__name__), \
+                    patch.object(images, "release_evidence", side_effect=error), \
+                    patch.dict(images.os.environ, {}, clear=True), \
+                    redirect_stdout(io.StringIO()) as output, redirect_stderr(io.StringIO()):
+                images.report_release_quality(REPOSITORY)
+                self.assertEqual(output.getvalue(), "run_backend=true\n")
+
+    def test_success_reports_reuse_without_requesting_release_or_deployment(self):
+        with patch.object(images, "release_evidence", return_value=self.job["html_url"]), \
+                patch.dict(images.os.environ, {}, clear=True), redirect_stdout(io.StringIO()) as output:
+            images.report_release_quality(REPOSITORY)
+            self.assertEqual(output.getvalue(), "run_backend=false\n")
 
 
 class ArtifactTests(unittest.TestCase):

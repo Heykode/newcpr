@@ -1,0 +1,119 @@
+name: Build Cache
+
+on:
+  workflow_run:
+    workflows: [CI]
+    branches: [main]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Cache maintenance is separate from the CI/deployment gate. Let a cold build
+# finish rather than repeatedly cancelling it when unrelated changes merge.
+concurrency:
+  group: build-cache-main
+  cancel-in-progress: false
+
+jobs:
+  quality:
+    if: >-
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+      (github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'main' &&
+       github.event.workflow_run.head_repository.full_name == github.repository &&
+       github.event.workflow_run.path == '.github/workflows/ci.yml')
+    runs-on: ubuntu-26.04
+    timeout-minutes: 25
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_PROFILE_DEV_DEBUG: '1'
+      RUST_MIN_STACK: 16777216
+    steps:
+      - name: Checkout validated source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          persist-credentials: false
+      - name: Read build toolchains
+        id: toolchains
+        run: ruby release/toolchains.rb >> "$GITHUB_OUTPUT"
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: ${{ steps.toolchains.outputs.rust }}
+          components: rustfmt,clippy
+      - name: Look up quality cache
+        id: cache
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: backend -> target
+          shared-key: quality
+          cache-bin: false
+          lookup-only: true
+          save-if: false
+      - name: Restore and save missing quality cache
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: backend -> target
+          shared-key: quality
+          cache-bin: false
+      - name: Setup nextest
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: taiki-e/install-action@682ce6c3c696a4cd5168a05f98e51aa02b877941 # v2.89.1
+        with:
+          tool: cargo-nextest@0.9.143
+          fallback: none
+      - name: Compile missing quality dependencies
+        if: steps.cache.outputs.cache-hit != 'true'
+        working-directory: backend
+        run: |
+          cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+          cargo nextest list --workspace --lib --test main --locked --list-type binaries-only > /dev/null
+
+  release:
+    if: >-
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+      (github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'main' &&
+       github.event.workflow_run.head_repository.full_name == github.repository &&
+       github.event.workflow_run.path == '.github/workflows/ci.yml')
+    runs-on: ubuntu-26.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout validated source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          persist-credentials: false
+      - name: Read build toolchains
+        id: toolchains
+        run: ruby release/toolchains.rb >> "$GITHUB_OUTPUT"
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: ${{ steps.toolchains.outputs.rust }}
+          targets: x86_64-unknown-linux-gnu
+      - name: Look up release cache
+        id: cache
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: backend -> target
+          shared-key: release-x86_64-unknown-linux-gnu-${{ steps.toolchains.outputs.rust_image }}
+          cache-bin: false
+          lookup-only: true
+          save-if: false
+      - name: Compile missing release dependencies
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: ./.github/actions/build-binary
+        with:
+          rust: ${{ steps.toolchains.outputs.rust }}
+          target: x86_64-unknown-linux-gnu
+          platform: linux-amd64
+          rust-image: ${{ steps.toolchains.outputs.rust_image }}
+        env:
+          CPR_GIT_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
