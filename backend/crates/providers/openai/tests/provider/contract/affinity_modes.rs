@@ -512,7 +512,7 @@ async fn preferred_preserves_the_model_blocked_root_while_relaxed_migrates_it() 
 }
 
 #[tokio::test]
-async fn relaxed_child_turn_alias_survives_mode_changes_without_overwriting_its_target() {
+async fn child_turn_alias_accepts_siblings_across_modes_but_rejects_another_root() {
     let (provider, affinity, leases, _upstream) = fixture().await;
     leases
         .busy_accounts
@@ -541,6 +541,7 @@ async fn relaxed_child_turn_alias_survives_mode_changes_without_overwriting_its_
             json!({"prompt":"square"}),
             json!({"prompt":"square", "session_id":"root"}),
             json!({"prompt":"square", "session_id":"root", "thread_id":"child"}),
+            json!({"prompt":"square", "session_id":"root", "thread_id":"other-child"}),
         ] {
             let image = Operation::GenerateImage(ImageRequest::from_raw_json(
                 ImageRequestKind::Generation,
@@ -561,21 +562,21 @@ async fn relaxed_child_turn_alias_survives_mode_changes_without_overwriting_its_
             assert_eq!(stream.metadata().provider_account_id().as_str(), expected);
             drop(stream);
         }
+        let sibling = provider
+            .execute(
+                generate("root", Some("other-child"), Some("turn-mode")),
+                mode_context(mode),
+            )
+            .await
+            .expect("upstream turn aliases identify the shared root, not one child");
+        assert_eq!(sibling.metadata().provider_account_id().as_str(), expected);
+        drop(sibling);
     }
     assert_eq!(affinity.alias_count(), 1);
     assert_eq!(affinity.binding_count(), 1);
     let error = provider
         .execute(
             generate("another-root", Some("child"), Some("turn-mode")),
-            mode_context(AccountAffinity::Relaxed),
-        )
-        .await
-        .err()
-        .unwrap();
-    assert_eq!(error.kind(), ProviderErrorKind::InvalidRequest);
-    let error = provider
-        .execute(
-            generate("root", Some("other-child"), Some("turn-mode")),
             mode_context(AccountAffinity::Relaxed),
         )
         .await

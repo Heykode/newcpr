@@ -76,40 +76,18 @@ impl CodexSessionAffinity {
     }
 
     pub(crate) fn accepts_turn_alias(&self, alias: &ProviderSessionAlias) -> bool {
-        if self
-            .root_key
-            .as_ref()
-            .zip(alias.root_session_key())
-            .is_some_and(|(root, alias_root)| root != alias_root)
-        {
-            return false;
-        }
-        // Routing shares the root binding, but an explicit child turn still
-        // belongs to its own transport identity. Root-only legacy aliases remain
-        // compatible, as do endpoints that provide only the root and turn ID.
-        if self.root_key.is_some()
-            && alias
-                .root_session_key()
-                .is_some_and(|root| root != alias.session_key())
-            && self.transport_key() != Some(alias.session_key())
-        {
-            return false;
-        }
-        self.binding_key().is_none_or(|key| key == self.alias_binding_key(alias))
-            // Some endpoint calls carry only the root plus a child turn ID.
-            || (self.root_key.is_none() && self.key.as_ref().is_some_and(|key| Some(key) == alias.root_session_key()))
-            // Legacy strict child aliases have only a root target. Keep that turn
-            // on its original root even when new child turns use relaxed affinity.
-            || (alias.follow_only()
-                && alias.root_session_key().is_none()
-                && self.root_key.as_ref() == Some(alias.session_key()))
+        // Upstream turn aliases identify the root session. A sibling's separate
+        // transport key does not make its shared-root alias incompatible.
+        self.binding_key()
+            .is_none_or(|key| key == self.alias_binding_key(alias))
     }
 
     pub(crate) fn alias_record(&self) -> Option<ProviderSessionAlias> {
         self.resolved_alias.clone().or_else(|| {
             Some(
-                ProviderSessionAlias::new(self.transport_key()?.clone(), self.follow_only())
-                    .with_root_session_key(self.root_key.clone()),
+                // Preserve legacy records on renewal; new records use the root
+                // directly, with the child follow-only fact independent of mode.
+                ProviderSessionAlias::new(self.binding_key()?.clone(), self.follow_only),
             )
         })
     }

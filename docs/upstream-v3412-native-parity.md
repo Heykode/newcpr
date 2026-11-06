@@ -35,7 +35,7 @@
 1. **用户明确的严格模式要求**：已绑定 A 仅因并发/请求间隔阻塞不得改用 B，包括关闭普通等待开关时。Core 获准重试并排除 A 后，合法 B 在发送前 CAS 成为主绑定。旧 A 完成不改回主绑定。官方关闭普通等待路径与本需求存在差异，此处以用户明确要求为来源。
 2. **严格子线程**：沿官方 follow-only 合同，跟随根绑定；它本身报错不独立迁移根。根迁移后跟随新账号。固定 native owner 冲突要求完整重放，不伪造续接。
 3. **Preferred**：暂时满载、间隔、冷却、模型限制及接近额度恢复时保留主账号；永久失格或未知/远期/过期额度 reset 才迁移。使用官方 session hash 稳定备用选择。
-4. **Relaxed**：共用根绑定并在准入时迁移；不沿用旧本地独立 child 主绑定。三个模式均不在完成回调回写主账号。别名仍分别保存 child 传输身份与 root 路由身份；同根不同 child 不能冒用同一 turn，兼容旧 root-only 别名和仅带 root 的独立端点。
+4. **Relaxed**：共用根绑定并在准入时迁移；不沿用旧本地独立 child 主绑定。三个模式均不在完成回调回写主账号。turn 别名按官方保存根会话及独立于模式的 follow-only 标记；同根不同 child 可复用 turn，跨根拒绝。旧 child/root 记录按 root 解析并原样续期；各线程传输身份和真实续接归属单独校验。
 5. **本地真实 owner**：继续由 Redis 管理等待/执行 token、deadline、续期和取消；Shared/Reserved 各自 FIFO，Quality 独立。全池重查不能越过目的账号更早的等待者；不增加第二套内存队列。
 6. **实时安全校验**：缓存只复用候选投影。保留本地 post-acquire revision/live 容量/凭据终检；route、path、overdraft 等加入缓存 key。额外读取有明确用途，不为了匹配官方测试次数删除。
 7. **统计和备份**：按本地 raw SQL 与恢复小时基线接入官方最终 outcome 定义；老备份已丢失请求明细时无法反推重分组，不能编造历史取消分类。
@@ -162,10 +162,37 @@
 | `retain_model_eligible` 的基线函数 | `account_allowlists_override_catalog_omissions_but_weight_affinity_and_pinning_do_not` | 失败 → 通过；精确白名单、权重、亲和与指定账号边界保持完整 |
 | direct selector 原有的满载重选分支，移除本次新增的两处 Strict 满载保护 | `strict_busy_owner_stays_bound_and_authorized_retry_migrates_before_send` | 失败 → 通过；满载不换、合法重试准入迁移、迟到完成不回绑 |
 
-另外，本轮适配中发现的 Strict 并发与间隔同时阻塞、同根不同 child 的 turn
-身份冲突，分别由 `strict_interval_wait_keeps_the_owner_and_shared_deadline` 与
-`relaxed_child_turn_alias_survives_mode_changes_without_overwriting_its_target`
-在第四轮失败、第五轮修复后通过。
+Strict 并发与间隔同时阻塞由
+`strict_interval_wait_keeps_the_owner_and_shared_deadline` 验证，属于本地明确保留的
+请求间隔合同。原先把同根不同 child 复用 turn 判为身份冲突，实际是旧测试将旧的
+独立 child 绑定规则带入新实现，不能归类为官方缺陷；已按下述复核修正。
+
+### 最新官方复核与旧断言纠正
+
+2026-11-06 重新从官方 main 获取 `e390417821f676e02a705aec3754b8d458c0da4b`
+（提交时间 12:01:01 UTC）。它比本次固定合入范围多一条无显式会话请求的缓存偏好
+提交。本节以它核对严格模式及 turn 合同，不表示该新增功能已包含在前述 18 条合入中。
+
+| 场景 | 最新官方 | 本地已提交版本 `ff168afdc` |
+| --- | --- | --- |
+| 普通根会话 A 并发满、开启排队 | 等 A；队满或超时失败 | 相同；空闲 B 不改变正在等待的严格绑定 |
+| 普通根会话 A 并发满、关闭排队 | 可选择 B；准入时迁移绑定 | 额外拒绝换号，可能有空闲 B 仍返回容量不足 |
+| 获准错误重试且 A 已被排除 | 可准入 B 并 CAS 绑定，旧 A 完成不回绑 | 相同；重试种类和次数仍由 Core 控制 |
+| 严格子线程、已有根绑定 | 只跟随根；关闭普通排队也有界等待 | 相同 |
+| required/native owner | 固定指定或续接 owner，不借忙跨号 | 相同 |
+| 账号请求间隔 | 当前官方选择器没有本地 RequestInterval 合同 | 本地扩展，严格绑定仍等原账号；不能称为官方要求 |
+| 同根不同子线程复用 turn | 按根会话兼容，传输身份单独隔离 | 原先额外拒绝；本轮撤销该限制并同步旧测试 |
+
+turn 修正直接依据官方 `credential/affinity.rs::{from_turn_alias,alias_record}`、
+`credential/selector.rs::remember_turn` 和 `provider/execution.rs` 的显式/推断根键比较。
+本地删除 child 身份拒绝分支，新别名登记根键，历史别名保留原记录续期。
+回归 `child_turn_alias_accepts_siblings_across_modes_but_rejects_another_root`
+覆盖三个模式的 Responses 与图片入口同根复用，并保留跨根负例。相同新版测试在
+`ff168afdc` 实现下成功编译后，以 `InvalidRequest` 失败，证明旧限制实际阻止请求。
+修正后同一用例通过。OpenAI 全部 1,215 项集成测试已覆盖：整包先通过 1,214 项，
+另 1 项 IPv6 出口测试在补齐隔离容器的 `::1 localhost` 解析后定向通过；没有修改
+出口测试或生产配置来取得通过结果。线程隔离、严格子线程跟随和真实续接归属回归保留。
+本轮 Provider 的 all-targets/all-features Clippy（`-D warnings`）、格式及 diff 检查通过。
 
 测试夹具修正均有独立原因：冻结 scope 不预先授权后续才导入的账号；旧账号
 turn-state 携带真实 `account_state_owner`；共享根绑定计数与 Guardian 成功记录分别断言；

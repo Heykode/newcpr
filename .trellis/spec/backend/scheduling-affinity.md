@@ -125,10 +125,13 @@ do not replace transport identity, account authorization or billing contracts.
   restore the previous independent-child behavior or migrate the primary on completion.
   Cover restoration, native-owner conflicts, concurrent claims, successful
   spillover/return, compact completion, model restrictions and capacity-wait selection.
-- Turn aliases retain both child transport identity and root routing identity
-  in every mode. Reject an explicit different child for the same turn even if
-  its root matches. Root-only legacy aliases and root-only standalone endpoint
-  requests remain compatible; sharing a root binding never merges transport identities.
+- Align turn aliases with upstream `e39041782`: new records name the root
+  session and retain the child's follow-only fact independently of the current
+  mode. Resolve legacy child-plus-root records to the root and renew the original
+  record without rewriting it. Accept siblings of the same root; reject another
+  root. Thread transport keys and actual continuation/socket ownership remain
+  separate. Do not restore the obsolete test that rejected a sibling solely for
+  having a different thread ID.
 - Preferred retains a temporarily blocked primary (capacity, interval, cooldown,
   model restriction, quota reset within the recovery window). Deleted, disabled,
   expired, invalid or banned accounts and unknown/far/stale exhausted-quota resets
