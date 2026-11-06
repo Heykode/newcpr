@@ -16,7 +16,7 @@ do not replace transport identity, account authorization or billing contracts.
   `x-conversation-id`, `x-qx-affinity-codex-session`,
   `x-qx-affinity-claude-session`.
 - `CodexSessionAffinity::migration_key()` references the unchanged old key.
-  Existing `ProviderSessionAffinityPort::{load,claim_or_load,compare_and_bind}`
+  Existing `ProviderSessionAffinityPort::{load,claim_or_load,compare_and_bind,admit_binding}`
   own persistence; there is no new schema/configuration or audit stream.
 
 ## 3. Contracts
@@ -27,8 +27,11 @@ do not replace transport identity, account authorization or billing contracts.
 - Read hints from ingress-created context, never from wire body or a WS frame's
   purported context. The shared provider validator rechecks the source/value.
   A client hint is not authenticated end-user identity.
-- Preserve standard session, conversation, thread and explicit valid cache
-  precedence. Native previous-response and restored provider state also win.
+- Resolve real account sessions from per-frame client metadata, turn metadata,
+  then explicit session IDs, as upstream `1240f225` specifies. Conversation,
+  thread-only, generated `lc_` and cache/content keys are not real session identities.
+  Supplemental hints remain explicit local routing hints. Native previous-response
+  and restored provider state take precedence.
   An `account_state_owner` alone is NOT evidence of native continuation: Core
   adds it on ordinary retries too. Such retries must retain the new affinity key
   and associated existing transport recovery state.
@@ -37,14 +40,14 @@ do not replace transport identity, account authorization or billing contracts.
   Never log a new raw hint as an anchor.
 - On a primary miss, the old binding is only a preference, not authorization.
   Recheck enabled status, model/account scope, exclusions, quota and lease
-  capacity. Reuse atomic first claim and compare-and-bind on the new key only.
+  capacity. Use atomic admission CAS against the observed generation (or observed miss) on the new key only.
   A primary hit never consults migration. Store unavailability is not a miss.
-- Retain original root-plus-child rules. An explicit standalone thread
-  suppresses new hints; do not invent a hint parent for an existing thread.
+- Share the root account binding across children. A thread alone does not create
+  a real session; local hints may still supply their independent routing binding.
   Search/Images keep original session/Search `id` priority. Compact keeps
   session > explicit cache > hint and parses the raw body once.
-- Keep content fallback, generated `lc_`, device/installation, UA, client
-  session/thread metadata, payload and physical WS pool identity unchanged.
+- Keep generated `lc_`, device/installation, UA, transport session/thread metadata,
+  payload and physical WS pool identity independent from account preference.
   An existing exact continuation still belongs to its original account/socket.
 - Existing diagnostic affinity hashes may reflect the new routing key.
   They do not authenticate a user or select a native response owner.
@@ -58,21 +61,21 @@ do not replace transport identity, account authorization or billing contracts.
 | No valid hint | Original behavior |
 | Duplicate highest-priority source, valid next source | Skip duplicate, use next |
 | Same ID, different source or client key | Different new affinity keys |
-| Explicit standard thread plus changing hint | Keep original thread key |
+| Thread-only plus changing hint | No real session; use the independent hint binding |
 | Standalone endpoint thread without a root/cache | Keep original lack of binding |
 | New key absent, old account eligible | Claim new key with old account preference |
 | Old account disabled/outside scope/excluded/exhausted/busy | Normal authorized selection |
 | New key already bound | No legacy read or rewrite |
 | Binding store unavailable or over 500 ms | SessionBound failure before send; no selection bypass or retry |
 | Ordinary retry with state owner | Retain hint routing/recovery key |
-| Native continuation with conflicting hint | Original exact owner wins |
+| Native continuation with conflicting hint | Strict rejects a conflicting current binding with ContinuationOwnerChanged; other modes retain exact owner without restoring an old primary |
 | Account changes during full replay | Original account-state stripping still applies |
 
 ## 5. Good / Base / Bad Cases
 
 - Good: two different conversation hints inherit one old content binding, then
   one fails over without rewriting the other hint or the old binding.
-- Base: absent hints keep the original content-based selection and wire fields.
+- Base: absent hints use upstream cache-preference selection without creating a real session; wire identity is independent.
 - Bad: infer that all users behind one business key are the same conversation.
 - Bad: treat different content hashes as proof of different people, or claim
   sharing an upstream account necessarily means sharing conversation state.
@@ -89,8 +92,9 @@ do not replace transport identity, account authorization or billing contracts.
   with a conflicting hint keeps its socket and account.
 - Real local HTTP body/header equality and complete Provider/API/Protocol
   regressions. Synthetic fallback experiments are not runtime acceptance.
-- Require canonical completion in fixtures used to assert successful affinity
-  renewal; a wire event alone does not prove that success was recorded.
+- Assert primary binding claims, migrations and renewals at admission, before
+  sending. Only Guardian parent success records require canonical completion;
+  a wire event alone does not prove that success was recorded.
 - Direct-selector CAS and lease-release fixtures must enable the simulated
   capacity coordinator; otherwise the after-acquire hook never runs and the
   guard is a no-op. Assert the winning account and released lease on both paths.
@@ -120,16 +124,72 @@ do not replace transport identity, account authorization or billing contracts.
 - A retained alias without a primary may use the existing atomic initial claim.
   Unavailable storage is not a missing binding. Connection-local replay is
   rejected before selection, leases, alias writes or primary renewal.
-- Preserve Relaxed child bindings across mode changes. Cover restoration,
-  native-owner conflicts, concurrent claims, successful spillover/return, compact
-  completion, model restrictions and capacity-wait selection.
+- Relaxed now shares the root binding. It may move the root on admission; do not
+  restore the previous independent-child behavior or migrate the primary on completion.
+  Cover restoration, native-owner conflicts, concurrent claims, successful
+  spillover/return, compact completion, model restrictions and capacity-wait selection.
+- Align turn aliases with upstream `e39041782`: new records name the root
+  session and retain the child's follow-only fact independently of the current
+  mode. Resolve legacy child-plus-root records to the root and renew the original
+  record without rewriting it. Accept siblings of the same root; reject another
+  root. Thread transport keys and actual continuation/socket ownership remain
+  separate. Do not restore the obsolete test that rejected a sibling solely for
+  having a different thread ID.
+- Preferred retains a temporarily blocked primary (capacity, interval, cooldown,
+  model restriction, quota reset within the recovery window). Deleted, disabled,
+  expired, invalid or banned accounts and unknown/far/stale exhausted-quota resets
+  migrate at admission. Use the official session hash for stable spillover ordering.
+- Strict and Preferred prioritize the binding ahead of account weights. Strict
+  waits for its busy bound root when ordinary waiting is enabled; full/timeout
+  cannot spill. With ordinary waiting disabled, a root may select another eligible
+  account and CAS the new primary before send, as upstream does. Authorized Core
+  retries that exclude the old root may also migrate; late completion cannot undo it.
+  A local interval-only blocker does not add another Strict migration prohibition. Strict children remain follow-only and wait for
+  the root to recover or migrate rather than independently changing the root.
+- Redis admission accepts legacy raw and JSON bindings, upgrades to a new token,
+  and fences both observed-miss and observed-generation races. Conflict must not
+  refresh TTL; an expired observed generation cannot recreate a key.
+- The 200 ms projection cache is bounded to 32 entries / 8192 candidates, coalesces
+  fills and never grants capacity. Scope, client, model, policy and concurrency
+  pool are isolated; local route/path/overdraft and request eligibility fields
+  also partition the cache. Selected-account credential/live-capacity/revision
+  checks still run after acquisition. Contention or invalidation refreshes the pool.
+  The frozen scope defines the authorized ID universe; a cached projection must
+  not permanently exclude a currently eligible ID that its earlier read omitted.
 
 Wrong: clear local hints whenever `account_state_owner` is present.
 
 Correct: protect actual restored/native continuation; an ordinary retry carries
 an owner for account-state stripping and must keep its original routing key.
 
-Wrong: strengthen a shared content seed with expiring signed URLs.
+Wrong: change the transport identity seed while integrating account cache preference.
 
-Correct: retain the seed unless representative fixtures demonstrate benefits
-without introducing unacceptable splits; do not change `lc_` incidentally.
+Correct: keep the existing transport `lc_` identity independent. Account cache preference
+uses the official algorithm below; obsolete content-as-session tests must not restore
+that retired routing behavior.
+
+## 8. Sessionless cache preference (upstream 1240f225)
+
+- Use upstream length-prefixed SHA-256 fields: model, instructions, initial
+  system/developer texts, then the first user text. Ignore later turns, tools and
+  media URLs; no first user text means no content preference. Explicit nonempty
+  prompt cache keys take priority. Both namespaces are client-key isolated.
+- Strict/Preferred honor the configured mode; Relaxed skips preference storage.
+  Preferred may discard only optional cache preference on store failure, across
+  direct, cached projection, waiting and admission paths. A CAS conflict still
+  releases capacity and retries. Real session/Strict failures remain fail-closed.
+- Cache preferences do not supply turn aliases, continuation observations, state
+  owner proof or transport recovery keys. Suppress account_switch for preferences;
+  do not infer Excel state ownership from their affinity_hit. Guardian success
+  observations remain independently recorded.
+- Responses turn reuse checks root key AND raw follow-only identity, independent
+  of current affinity mode. Sibling children are compatible; root/child changes
+  and different roots are rejected. Independent endpoints compare root and OR
+  follow-only constraints, retaining the original alias on renewal.
+- Historical hint migration fixtures must use actual pre-update stored keys;
+  do not seed them by invoking the new sessionless preference implementation.
+
+- Responses turn aliases use logical turn metadata from the original payload,
+  independently of the header-authoritative transport `client_turn_id`, matching
+  upstream `remember_generate_turn`. A shared transport header cannot merge distinct
+  logical turns; different transport headers cannot hide a cross-root logical turn conflict.

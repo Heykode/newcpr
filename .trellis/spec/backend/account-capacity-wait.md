@@ -52,12 +52,11 @@ Web只展示两个账号等待输入，Key队列仍独立。旧四项仅接受�
 
 ## 4. 冻结 Universe 与 Live 事实
 
-`WaitingSelection.universe` 是一次 selector 调用首次 `list_for_provider()` 得到的
-账号 ID 集合。该次等待及有界重选中的池重载只能取这个集合与冻结
-`FrozenAccountScope` 的交集。即使 scope 是 AllAccounts，等待期间新导入的 ID
-也不能加入这次选择。不要将这个局部集合误称为跨所有 attempt 的新全局目录。
-初始列表漏掉已停用的根账号时，只能在等待初始化时补入当时已绑定、仍存在且有权限的
-同一账号 ID；恢复 enabled 后仍须通过完整资格终检。等待开始后不得借根迁移扩大集合。
+`WaitingSelection.universe` 优先来自请求的 `FrozenAccountScope.allowed_account_ids()`，
+与官方完整池重载一致。缓存中暂时缺失、停用或不满足模型条件的账号不能缩小这个授权范围；
+它们恢复合格后可在缓存失效/等待重查时重新进入候选。请求开始后才导入且不在冻结 scope 中的 ID
+仍不能进入这次选择。仅无 scope 的本地诊断/兼容调用保留初始 Store ID 集合。
+这不是额外账号准入规则，也不是缓存内容决定授权；每次选择仍重验账号资格和容量。
 
 | 保持冻结 | 重新核验 |
 | --- | --- |
@@ -81,17 +80,11 @@ Web只展示两个账号等待输入，Key队列仍独立。旧四项仅接受�
 普通可选等待不接纳 cooldown、停用、失效、无额度、越权、模型不支持和业务排除。
 strict 子线程是例外：这些阻塞仍禁止执行，但可以等待根绑定恢复、迁移或过期，见下文。
 
-1. 合格原绑定账号 Busy 时优先 sticky 等待。软亲和另允许请求间隔为唯一阻塞时，
-   在原间隔截止前等待；去除间隔后必须 Ready，且截止必须早于现有共享等待预算。
-   间隔长于请求或 sticky 窗口时直接重选，不得先启动一个不会使用的等待窗口。
-   不把间隔重新分类为 Busy；fallback 的间隔等待见下文。
-   固定账号（required、Native/ReplayOwner）也允许使用既有 sticky
-   队列等待请求间隔；并发与间隔同时阻塞仍可等待，但停用、额度、权限等其他阻塞不能入队。
-   固定账号入队后，间隔被竞争请求延后或账号转 Busy 时继续等，始终受同一共享截止限制，
-   不重开窗口、不换账号；队满和取消仍沿现有错误退出。
-   软亲和仍在间隔被其他请求延后、账号变忙或失格时释放租约后正常重选；不持续追逐新截止。
-   软亲和队列满可转正常选择；
-   required account、Native、ReplayOwner 的硬绑定不得自行换号。
+1. Strict 原绑定并发 Busy 且开启普通等待时进入 sticky 等待；队满、超时不能转到其他账号。
+   关闭普通等待时，普通根请求按官方选择其他合法账号并在准入时迁移绑定。
+   仅请求间隔阻塞不额外禁止普通根请求迁移；仍必须先通过间隔的原子准入。
+   并发与间隔同时阻塞可进入 Strict 并发等待，入队后保持原共享截止。
+   required/native 固定账号和严格子线程仍等待其归属，间隔延后不重开预算。
 2. fallback 前必须先尝试可立即执行的合法账号。仅调用
    `select_for_capacity_wait` 不证明已经满足“全忙”；Provider 负责完成此判断。
    可选 Preferred 模式先尝试 Ready 候选，不先进入软绑定的 sticky 队列；
@@ -102,11 +95,13 @@ strict 子线程是例外：这些阻塞仍禁止执行，但可以等待根绑�
    排队期间其他请求推迟间隔或占满并发时，继续持有原等待租约和截止，不能重新计时。
    无法在窗口内满足间隔时，按原等待超时退出；不沿用软 sticky 的提前放弃窗口逻辑。
    队列满可有界扫描其他 Busy/间隔候选，
-   成功入队后固定目标，不承诺严格 FIFO 或其他账号空闲后立即迁移。
+   可移动等待者每 500ms 重查完整冻结候选池，即使本账号尚未轮到队首也可检查其他账号。
+   找到可用账号仍必须通过目的账号/容量池的原子队首和容量检查；Shared 与 Reserved
+   各自 FIFO，不能插队。已进入严格并发等待的绑定与 required/native owner 不跨号。
 4. 目标失格或终检冲突，先释放所有权再有界重选；快照冲突最多三轮。
    排队中观察到的 strict 根绑定迁移不消耗快照冲突预算，但仍受同一共享截止限制。
    lease-race Busy 集与业务排除集分开，不能伪造 `in_flight` 或写入账号失败记录。
-5. 容量轮询从 100ms 退避至 1s，并加 0..24ms jitter；间隔轮询取当前退避和剩余
+5. 容量轮询保持 100ms，并加 0..24ms jitter；间隔轮询取当前轮询周期和剩余
    间隔的较小值。不能按执行租约 TTL 一次睡数分钟。
    每次晋升前检查目标资格、排除状态和 live limit。
 
@@ -115,7 +110,7 @@ strict 子线程是例外：这些阻塞仍禁止执行，但可以等待根绑�
 不得返回旧凭据。终检忽略本请求刚写入的 `last_started_at` 所造成的自身间隔阻塞；
 真正准入仍由 Redis 原子检查前一次请求间隔。
 
-所有可失败资格/容量检查在成功亲和 mutation 前完成。初始亲和 CAS 输给已有 owner
+所有可失败资格/容量检查在成功亲和 mutation 前完成。准入亲和 CAS（observed-miss 或 observed-generation）输给已有 owner
 时释放槽并重选，不能让未发送请求抢走已有绑定。最终容量观测不包含等待人数；
 Redis `in_flight` 已含本请求时不得再加一。PG 与 Redis 之间不是跨库强事务，
 发送前仍依赖既有凭据、出口 revision 和传输所有权检查收敛竞态。
@@ -263,8 +258,9 @@ API 不为账号排队提前提交 SSE 或发送业务 payload。
   即使 R 独立，live publication 缺失也不准入。普通容量观测端口只读 Shared。
 - Redis 只在原账号 active key 后追加 `:reserved`，独立 waiting/order/cancelled；
   间隔和 fence 仍是账号级。Quality 继续独立 `:quality`，不进入审批池。
-- 审批排队用 fence 序列保留 FIFO，deadline ZSET 负责到期；不能按截止早晚排序。
-  直接执行也原子复核队首，取消/超时同时移除排序位置；不改变普通等待顺序。
+- Shared 和 Reserved 排队各自用 fence 序列保留 FIFO，deadline ZSET 负责到期；
+  不能按截止早晚排序。直接执行和跨账号重查同样原子复核目的队首，
+  取消/超时同时移除排序位置；Quality 不进入业务等待队列。
 - 保留本项目 sticky/fallback 的有限人数及共享截止，不新增官方进程级总队列。
   普通请求在等待开关关闭时不隐式排队；strict 根线程跟随保留上述有界等待。
   容量、续期和不确定结果清理仍复用既有所有权流程。
@@ -272,7 +268,7 @@ API 不为账号排队提前提交 SSE 或发送业务 payload。
 
 | 层 | 最低反例与断言 |
 | --- | --- |
-| 配置 | 旧 JSON/null/false、四数值默认及往返、关闭保值、非法值不提交；POST 到 PG/snapshot/新请求；旧请求仍冻结 |
+| 配置 | 旧 JSON/null/false、统一人数/时限默认及往返、关闭保值、非法值不提交；POST 到 PG/snapshot/新请求；旧请求仍冻结 |
 | Core | Busy 与双阻塞区分、全失格不等、Busy+失格仍可等；Smart/权重不变；跨 attempt/模式共享截止 |
 | Provider | 原号优先、全忙才 fallback、队满有界退出；等待内导入新 ID 不扩 Universe；disable/delete/额度/模型/排除变化终检 |
 | Live 容量 | 上下调及 publication 竞态、缺失失败关闭、凭据 revision 冲突归还槽；容量观测不计 waiter、不重复计算自身 |
@@ -283,7 +279,7 @@ API 不为账号排队提前提交 SSE 或发送业务 payload。
 
 对应回归位于 Core `tests/account/selection.rs`、`tests/engine/capacity_wait.rs`、
 `tests/engine/coordinator.rs`，Store `tests/redis/capacity_wait.rs`，以及 OpenAI
-`tests/credential/contract.rs`、`tests/provider/contract/scheduling.rs` 等受影响测试模块。
+`tests/credential/contract/mod.rs`、`tests/provider/contract/scheduling.rs` 等受影响测试模块。
 表格是验收要求，不表示每行已获实证。真实隔离 PG/Redis 不可用导致的 skip 不能计为通过；
 定向测试不能代替 workspace、协议、生命周期和性能验收。
 
@@ -299,3 +295,20 @@ API 不为账号排队提前提交 SSE 或发送业务 payload。
 - `provider::contract::affinity_modes::strict_child_waits_for_root_request_interval_without_switching_accounts`
   从公开 Provider 入口建立根绑定，再让子线程遇间隔，确认只使用根账号且不创建独立绑定。
 - 原软亲和短间隔、过长间隔、质量检查专用等待、Native owner 及容量限制回归必须继续通过。
+
+## 官方 v3.41.2 增量约束
+
+- 严格模式已有主绑定因并发满且开启等待时，只等待原账号；关闭普通等待允许改选并迁移。
+  仅间隔阻塞不锁定主账号，进入 fallback 后仍可发现新空闲账号；required/native 和子线程归属不变。
+  Core 允许错误恢复且剩余换号预算足够时，排除旧根账号后可选新账号并在发送前 CAS；
+  请求完成不写主绑定。严格子线程沿 follow-only 等根恢复/迁移。
+- RootChanged 不消耗 snapshot conflict 重试预算，但必须清理旧 sticky_tried 集合、
+  重读完整冻结候选和当前绑定并保留原 deadline；A→B→A 不能误入一般 fallback。
+- 排队全池复查复用官方 scheduling projection/scoped reads；缓存不替代 live 容量、
+  Redis 队首、credential revision 与取消检查。源等待租约释放后才能交付新执行租约。
+- 对应实现与逐官方文件差异见 `docs/upstream-v3412-native-parity.md`，运行验证结果
+  必须按实际测试记录，不能仅凭本文宣称通过。
+
+无显式会话的缓存偏好同样服从上述模式。Preferred 的可选偏好存储故障必须在
+直接、投影和等待路径均停用本次偏好；已持有的等待/执行槽按正常生命周期释放。
+真实会话和 Strict 缓存偏好不降级，CAS 冲突不属于可忽略的存储故障。

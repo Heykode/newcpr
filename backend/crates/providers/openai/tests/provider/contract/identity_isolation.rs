@@ -51,7 +51,7 @@ async fn matching_turn_preserves_explicit_state_and_business_content() {
 }
 
 #[test]
-fn fallback_includes_string_input_and_normalizes_equivalent_text_messages() {
+fn content_preference_never_becomes_a_continuation_identity() {
     let accounts = Arc::new(MemoryAccountStore::default());
     let provider = provider(&accounts);
     let affinity = |input| {
@@ -71,8 +71,8 @@ fn fallback_includes_string_input_and_normalizes_equivalent_text_messages() {
             .affinity_hash
     };
     let string = affinity(json!("first"));
-    assert!(string.is_some());
-    assert_ne!(string, affinity(json!("different")));
+    assert!(string.is_none());
+    assert_eq!(string, affinity(json!("different")));
     assert_eq!(string, affinity(json!([{"role":"user","content":"first"}])));
     assert_eq!(
         string,

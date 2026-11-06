@@ -641,8 +641,9 @@ pub(crate) async fn usage_diagnostics(
                   round(percentile_cont(0.95) within group (order by first_token_ms)
                     filter (where is_completed_usage))::bigint
                     as first_token_p95_ms,
-                  count(*) filter (where outcome in ('cancelled', 'incomplete'))::bigint
-                    as non_completion_count,
+                  count(*) filter (where outcome = 'cancelled')::bigint as cancelled_count,
+                  count(*) filter (where outcome = 'incomplete')::bigint as incomplete_count,
+                  count(*) filter (where outcome = 'failed' and client_status_code between 400 and 499)::bigint as caller_error_count,
                   coalesce(sum(greatest(attempt_count - 1, 0)), 0)::bigint as retry_count,
                   count(*) filter (where attempt_count > 1)::bigint as retried_request_count,
                   count(*) filter (
@@ -725,7 +726,9 @@ pub(crate) async fn usage_diagnostics(
                 average_latency_ms: optional_unsigned(row, "average_latency_ms")?,
                 latency_p95_ms: optional_unsigned(row, "latency_p95_ms")?,
                 first_token_p95_ms: optional_unsigned(row, "first_token_p95_ms")?,
-                non_completion_count: unsigned(row, "non_completion_count")?,
+                cancelled_count: unsigned(row, "cancelled_count")?,
+                incomplete_count: unsigned(row, "incomplete_count")?,
+                caller_error_count: unsigned(row, "caller_error_count")?,
                 retry_count: unsigned(row, "retry_count")?,
                 retried_request_count: unsigned(row, "retried_request_count")?,
                 cost_coverage: coverage_from_row(row)?,

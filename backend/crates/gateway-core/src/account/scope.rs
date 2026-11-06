@@ -256,6 +256,11 @@ pub struct FrozenAccountScope {
 }
 
 impl FrozenAccountScope {
+    /// Enumerate the accounts actually authorized by the frozen scope.
+    pub fn allowed_account_ids(&self) -> impl Iterator<Item = &ProviderAccountId> {
+        self.directory.accounts.keys().filter(|id| self.allows(id))
+    }
+
     #[must_use]
     pub fn with_request_profiles(
         mut self,

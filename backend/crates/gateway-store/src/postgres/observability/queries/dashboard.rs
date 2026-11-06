@@ -608,7 +608,7 @@ fn metric_projection(metric: Option<admin_observability::UsageInsightMetric>) ->
         "0::bigint as incomplete_count".to_owned()
     });
     fields.push(if metric.is_none_or(|metric| metric == M::Health) {
-        "count(*) filter (where client_status_code between 400 and 499)::bigint
+        "count(*) filter (where outcome = 'failed' and client_status_code between 400 and 499)::bigint
                   as caller_error_count"
             .to_owned()
     } else {

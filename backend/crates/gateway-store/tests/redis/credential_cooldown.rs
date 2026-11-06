@@ -463,6 +463,161 @@ fn cooldown(account_id: &str, revision: u64, seconds: i64) -> CredentialCooldown
     }
 }
 
+#[tokio::test]
+async fn cooldown_batch_preserves_order_partial_errors_and_observation_tokens() {
+    let Some((repository, mut connection, namespace, mut proxy)) = batch_repository().await else {
+        return;
+    };
+    let mut accounts = (0..131)
+        .map(|index| ProviderAccountId::new(format!("acct_batch_{index}")).unwrap())
+        .collect::<Vec<_>>();
+    accounts.push(accounts[130].clone());
+    repository
+        .cache_credential_cooldown(&cooldown(accounts[1].as_str(), 1, 60))
+        .await
+        .unwrap();
+    let bad_type_key = namespace_keys(&mut connection, &namespace)
+        .await
+        .into_iter()
+        .find(|key| key.ends_with(":cooldown"))
+        .unwrap();
+    redis::cmd("SET")
+        .arg(&bad_type_key)
+        .arg("invalid")
+        .query_async::<()>(&mut connection)
+        .await
+        .unwrap();
+    repository
+        .cache_credential_cooldown(&cooldown(accounts[2].as_str(), 2, 60))
+        .await
+        .unwrap();
+    let bad_value_key = namespace_keys(&mut connection, &namespace)
+        .await
+        .into_iter()
+        .find(|key| key.ends_with(":cooldown") && key != &bad_type_key)
+        .unwrap();
+    redis::cmd("HSET")
+        .arg(bad_value_key)
+        .arg("revision")
+        .arg("unknown")
+        .query_async::<i64>(&mut connection)
+        .await
+        .unwrap();
+    repository
+        .cache_credential_cooldown(&cooldown(accounts[3].as_str(), 3, 60))
+        .await
+        .unwrap();
+    repository
+        .cache_credential_cooldown(&cooldown(accounts[130].as_str(), 4, 60))
+        .await
+        .unwrap();
+
+    proxy.inject_script_miss();
+    assert!(repository.read_many(&[]).await.is_empty());
+    let results = repository.read_many(&accounts).await;
+    assert_eq!(results.len(), accounts.len());
+    assert!(
+        results[3]
+            .as_ref()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .observation_token()
+            .is_some()
+    );
+    assert!(results[130].as_ref().unwrap().is_some());
+    for (index, (account, result)) in accounts.iter().zip(results).enumerate() {
+        if matches!(index, 1 | 2) {
+            assert!(result.is_err(), "{index}");
+        } else {
+            assert_eq!(
+                result.unwrap(),
+                repository.read(account).await.unwrap(),
+                "{index}"
+            );
+        }
+    }
+    proxy.verify_script_miss().await;
+    proxy.finish().await;
+}
+
+#[tokio::test]
+async fn scoped_cooldown_batch_preserves_model_revision_and_partial_errors() {
+    let Some((repository, mut connection, namespace, mut proxy)) = batch_repository().await else {
+        return;
+    };
+    let mut accounts = (0..130)
+        .map(|index| ProviderAccountId::new(format!("acct_scoped_batch_{index}")).unwrap())
+        .collect::<Vec<_>>();
+    accounts.push(accounts[129].clone());
+    let scope = ProviderCooldownScope::upstream_model(
+        gateway_core::routing::UpstreamModelId::new("gpt-test").unwrap(),
+    );
+    let other_scope = ProviderCooldownScope::upstream_model(
+        gateway_core::routing::UpstreamModelId::new("gpt-other").unwrap(),
+    );
+    let revision = CredentialRevision::new(3).unwrap();
+    let until = millisecond_precision(Utc::now() + Duration::seconds(60)).into();
+    repository
+        .put_scoped_if_later(ProviderScopedCooldown::new(
+            accounts[1].clone(),
+            revision,
+            scope.clone(),
+            until,
+        ))
+        .await
+        .unwrap();
+    let bad_key = namespace_keys(&mut connection, &namespace)
+        .await
+        .pop()
+        .unwrap();
+    redis::cmd("SET")
+        .arg(bad_key)
+        .arg("invalid")
+        .query_async::<()>(&mut connection)
+        .await
+        .unwrap();
+    for (account, model) in [(&accounts[2], &other_scope), (&accounts[129], &scope)] {
+        repository
+            .put_scoped_if_later(ProviderScopedCooldown::new(
+                account.clone(),
+                revision,
+                model.clone(),
+                until,
+            ))
+            .await
+            .unwrap();
+    }
+
+    proxy.inject_script_miss();
+    assert!(repository.read_scoped_many(&[], &scope).await.is_empty());
+    let results = repository.read_scoped_many(&accounts, &scope).await;
+    assert_eq!(results.len(), accounts.len());
+    assert!(results[2].as_ref().unwrap().is_none());
+    assert_eq!(
+        results[129]
+            .as_ref()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .credential_revision(),
+        revision
+    );
+    for (index, (account, result)) in accounts.iter().zip(results).enumerate() {
+        if index == 1 {
+            assert!(result.is_err());
+        } else {
+            assert_eq!(
+                result.unwrap(),
+                repository.read_scoped(account, &scope).await.unwrap(),
+                "{index}"
+            );
+        }
+    }
+    proxy.verify_script_miss().await;
+    proxy.finish().await;
+}
+
 fn millisecond_precision(value: DateTime<Utc>) -> DateTime<Utc> {
     DateTime::from_timestamp_millis(value.timestamp_millis()).expect("valid timestamp")
 }
@@ -478,6 +633,24 @@ async fn repository() -> Option<(RedisCredentialCooldownRepository, ConnectionMa
     let repository = RedisCredentialCooldownRepository::new(connection.clone(), &namespace)
         .expect("valid cooldown namespace");
     Some((repository, connection, namespace))
+}
+
+// A connection-local NOSCRIPT exercises recovery without flushing scripts used
+// by parallel tests (including the separate named-user ACL pass).
+async fn batch_repository() -> Option<(
+    RedisCredentialCooldownRepository,
+    ConnectionManager,
+    String,
+    super::capacity_wait::FaultProxy,
+)> {
+    use super::capacity_wait::{Fault, FaultProxy, ScriptTarget};
+    crate::support::test_env("CPR_TEST_REDIS_URL")?;
+    let proxy = FaultProxy::start(Fault::NoScript, ScriptTarget::Any).await;
+    let connection = proxy.connection().await;
+    let namespace = format!("gateway-store-cooldown-test-{}", Uuid::new_v4());
+    let repository = RedisCredentialCooldownRepository::new(connection.clone(), &namespace)
+        .expect("valid cooldown namespace");
+    Some((repository, connection, namespace, proxy))
 }
 
 async fn namespace_keys(connection: &mut ConnectionManager, namespace: &str) -> Vec<String> {
@@ -790,4 +963,102 @@ async fn protection_stale_disabled_publish_cannot_disable_a_newer_policy() {
             .unwrap()
             .is_some()
     );
+}
+
+#[tokio::test]
+async fn protection_batch_preserves_revisions_probe_state_order_and_partial_errors() {
+    let Some((repository, mut connection, namespace, mut proxy)) = batch_repository().await else {
+        return;
+    };
+    let policy = protection_policy();
+    repository
+        .publish_protection_policy(
+            &policy,
+            gateway_core::routing::ConfigRevision::new(5).unwrap(),
+        )
+        .await
+        .unwrap();
+    let revision = CredentialRevision::new(2).unwrap();
+    let mut accounts = (0..130)
+        .map(|index| {
+            (
+                ProviderAccountId::new(format!("acct_protection_batch_{index}")).unwrap(),
+                revision,
+            )
+        })
+        .collect::<Vec<_>>();
+    let mut corrupt_key = None;
+    for index in [1, 2, 129] {
+        let guard = protection_guard(&repository, &accounts[index].0, 2, &policy, 5).await;
+        assert!(
+            !repository
+                .record_protection_failure(&guard, &policy, &protection_matches())
+                .await
+                .unwrap()
+        );
+        assert!(
+            repository
+                .record_protection_failure(&guard, &policy, &protection_matches())
+                .await
+                .unwrap()
+        );
+        if index == 1 {
+            for key in namespace_keys(&mut connection, &namespace).await {
+                let kind: String = redis::cmd("TYPE")
+                    .arg(&key)
+                    .query_async(&mut connection)
+                    .await
+                    .unwrap();
+                if kind == "hash" {
+                    let frozen: bool = redis::cmd("HEXISTS")
+                        .arg(&key)
+                        .arg("until_ms")
+                        .query_async(&mut connection)
+                        .await
+                        .unwrap();
+                    if frozen {
+                        corrupt_key = Some(key);
+                    }
+                }
+            }
+        }
+    }
+    redis::cmd("SET")
+        .arg(corrupt_key.expect("protection state key"))
+        .arg("invalid")
+        .query_async::<()>(&mut connection)
+        .await
+        .unwrap();
+    accounts.push((accounts[2].0.clone(), CredentialRevision::new(3).unwrap()));
+    accounts.push(accounts[129].clone());
+    proxy.inject_script_miss();
+    assert!(repository.read_protection_many(&[]).await.is_empty());
+    let results = repository.read_protection_many(&accounts).await;
+    assert_eq!(results.len(), accounts.len());
+    assert!(results[1].is_err());
+    assert!(results[130].as_ref().unwrap().is_none());
+    let protected = results[129].as_ref().unwrap().as_ref().unwrap();
+    assert!(protected.requires_probe);
+    assert_eq!(protected.credential_revision, revision);
+    assert_eq!(protected.rules, protection_matches());
+    for (index, ((account, revision), result)) in accounts.iter().zip(results).enumerate() {
+        if index == 1 {
+            continue;
+        }
+        // Index 130 advances account 2's credential revision, invalidating its older state.
+        if index == 2 {
+            assert!(result.unwrap().is_some());
+            continue;
+        }
+        assert_eq!(
+            result.unwrap(),
+            repository
+                .read_protection(account, *revision)
+                .await
+                .unwrap(),
+            "{index}"
+        );
+    }
+    proxy.verify_script_miss().await;
+    proxy.finish().await;
 }

@@ -11,15 +11,17 @@ mod recovery_log;
 mod refresh;
 pub(crate) mod relogin;
 mod repository;
+mod scheduling_projection;
 mod security;
 mod selector;
 pub mod token_client;
 mod types;
 
 pub(crate) use affinity::{
-    CodexSessionAffinity, derive_codex_compact_session_affinity,
+    CodexSessionAffinity, derive_cache_preference, derive_codex_compact_session_affinity,
     derive_codex_cyber_policy_session_key, derive_codex_endpoint_session_affinity,
-    derive_codex_session_affinity, derive_live_session_affinity, derive_previous_response_id_hash,
+    derive_codex_session_affinity, derive_codex_transport_key, derive_live_session_affinity,
+    derive_previous_response_id_hash, derive_turn_alias,
 };
 pub(crate) use oauth::oauth_owner_ref;
 pub(crate) use types::{candidate_oauth_metadata, parse_access_token_expiration};

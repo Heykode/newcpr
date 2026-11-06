@@ -22,8 +22,8 @@ use std::{
 };
 
 const MAX_OAUTH_RESPONSE_BYTES: usize = 64 * 1024;
-const TOKEN_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
-const TOKEN_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const TOKEN_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
+const TOKEN_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_CACHED_ACCOUNT_TOKEN_CLIENTS: usize = 128;
 
 type TokenClientCacheKey = (Option<String>, String, String, String);
@@ -326,15 +326,24 @@ impl fmt::Debug for AuthorizationTokenSet {
     }
 }
 
-/// Authorization Code exchange 的低基数失败。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+/// Authorization Code exchange 的失败分类及受控原因链
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum AuthorizationCodeExchangeError {
     #[error("authorization code was rejected")]
     Rejected,
     #[error("authorization code exchange is unavailable")]
     Unavailable,
+    #[error("authorization code connection failed (request URL redacted)")]
+    Connection {
+        timed_out: bool,
+        #[source]
+        source: gateway_core::error::ErrorSource,
+    },
     #[error("authorization code exchange send state is ambiguous")]
-    Ambiguous,
+    Ambiguous {
+        #[source]
+        source: gateway_core::error::ErrorSource,
+    },
 }
 
 #[async_trait]
@@ -663,7 +672,13 @@ impl TokenRefresher for OpenAiTokenClient {
             .send(request)
             .await
             .map_err(TokenTransportError::into_refresh_failure)?;
-        let (status, body) = read_bounded_response(response).await?;
+        let (status, body) =
+            read_bounded_response(response)
+                .await
+                .map_err(|error| RefreshFailure::Transport {
+                    message: Some(error.to_string()),
+                    upstream: None,
+                })?;
         if !status.is_success() {
             return Err(classify_refresh_failure(status, &body));
         }
@@ -727,13 +742,26 @@ impl AuthorizationCodeExchanger for OpenAiTokenClient {
             ("redirect_uri", OFFICIAL_CODEX_REDIRECT_URI),
             ("code_verifier", grant.code_verifier.expose_secret()),
         ]);
-        let response = self
-            .send(request)
-            .await
-            .map_err(TokenTransportError::into_exchange_failure)?;
-        let (status, body) = read_bounded_response(response)
-            .await
-            .map_err(|_| AuthorizationCodeExchangeError::Ambiguous)?;
+        let response = self.send(request).await.map_err(|error| {
+            // 连接阶段包含代理隧道和 TLS 握手，此时授权码尚未发往上游
+            if error.0.is_builder() {
+                AuthorizationCodeExchangeError::Unavailable
+            } else if error.0.is_connect() {
+                AuthorizationCodeExchangeError::Connection {
+                    timed_out: error.0.is_timeout(),
+                    source: error.0.without_url().into(),
+                }
+            } else {
+                AuthorizationCodeExchangeError::Ambiguous {
+                    source: error.0.without_url().into(),
+                }
+            }
+        })?;
+        let (status, body) = read_bounded_response(response).await.map_err(|error| {
+            AuthorizationCodeExchangeError::Ambiguous {
+                source: error.into(),
+            }
+        })?;
         if !status.is_success() {
             return Err(match status.as_u16() {
                 429 | 500..=599 => AuthorizationCodeExchangeError::Unavailable,
@@ -760,39 +788,31 @@ impl TokenTransportError {
     fn into_refresh_failure(self) -> RefreshFailure {
         refresh_transport_failure(&self.0)
     }
+}
 
-    fn into_exchange_failure(self) -> AuthorizationCodeExchangeError {
-        if self.0.is_builder() || is_safe_to_retry_refresh_transport(&self.0) {
-            AuthorizationCodeExchangeError::Unavailable
-        } else {
-            AuthorizationCodeExchangeError::Ambiguous
-        }
-    }
+#[derive(Debug, thiserror::Error)]
+enum OAuthResponseReadError {
+    #[error("failed to read OAuth response")]
+    Transport(#[source] reqwest::Error),
+    #[error("OpenAI OAuth response exceeded {MAX_OAUTH_RESPONSE_BYTES} bytes")]
+    TooLarge,
 }
 
 async fn read_bounded_response(
     mut response: reqwest::Response,
-) -> Result<(StatusCode, Vec<u8>), RefreshFailure> {
+) -> Result<(StatusCode, Vec<u8>), OAuthResponseReadError> {
     let status = response.status();
     let mut body = Vec::new();
     while let Some(chunk) = response
         .chunk()
         .await
-        .map_err(|error| RefreshFailure::Transport {
-            message: Some(error.to_string()),
-            upstream: None,
-        })?
+        .map_err(|error| OAuthResponseReadError::Transport(error.without_url()))?
     {
         let next_len = body
             .len()
             .checked_add(chunk.len())
             .filter(|length| *length <= MAX_OAUTH_RESPONSE_BYTES)
-            .ok_or_else(|| RefreshFailure::Transport {
-                message: Some(format!(
-                    "OpenAI OAuth response exceeded {MAX_OAUTH_RESPONSE_BYTES} bytes"
-                )),
-                upstream: None,
-            })?;
+            .ok_or(OAuthResponseReadError::TooLarge)?;
         body.reserve(next_len.saturating_sub(body.len()));
         body.extend_from_slice(&chunk);
     }

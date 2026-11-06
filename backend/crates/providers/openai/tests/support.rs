@@ -52,6 +52,7 @@ pub(crate) struct MemoryAccountStore {
     accounts: Mutex<BTreeMap<ProviderAccountId, StoredAccount>>,
     quota_reads: AtomicUsize,
     fail_provider_listing: AtomicBool,
+    provider_list_reads: AtomicUsize,
     pub(crate) before_provider_list: Mutex<Option<Box<dyn FnOnce() + Send + Sync>>>,
     pub(crate) before_credential_load: Mutex<Option<Box<dyn FnOnce() + Send + Sync>>>,
     pub(crate) credential_conflicts: AtomicUsize,
@@ -65,6 +66,13 @@ pub(crate) struct MemoryAccountStore {
 }
 
 impl MemoryAccountStore {
+    pub(crate) fn provider_list_reads(&self) -> usize {
+        self.provider_list_reads.load(Ordering::SeqCst)
+    }
+    pub(crate) fn account_reads(&self) -> usize {
+        self.account_reads.load(Ordering::SeqCst)
+    }
+
     pub(crate) fn set_outbound_proxy(&self, id: &str, proxy: gateway_core::account::OutboundProxy) {
         let mut accounts = self.accounts.lock().unwrap();
         let stored = accounts
@@ -185,6 +193,19 @@ impl MemoryAccountStore {
 
 #[async_trait]
 impl ProviderAccountStore for MemoryAccountStore {
+    async fn list_for_provider_accounts(
+        &self,
+        provider: &ProviderKind,
+        account_ids: &[ProviderAccountId],
+    ) -> Result<Vec<ProviderAccount>, StoreError> {
+        Ok(self
+            .list_for_provider(provider)
+            .await?
+            .into_iter()
+            .filter(|account| account_ids.contains(account.id()))
+            .collect())
+    }
+
     async fn create_account(&self, input: NewProviderAccount) -> Result<(), StoreError> {
         let mut accounts = self.accounts.lock().expect("account store lock");
         if accounts.contains_key(input.account.id()) {
@@ -232,6 +253,7 @@ impl ProviderAccountStore for MemoryAccountStore {
         &self,
         provider: &ProviderKind,
     ) -> Result<Vec<ProviderAccount>, StoreError> {
+        self.provider_list_reads.fetch_add(1, Ordering::SeqCst);
         let hook = self.before_provider_list.lock().unwrap().take();
         if let Some(hook) = hook {
             hook();
@@ -688,6 +710,7 @@ pub(crate) struct TestCapacityState {
     pub(crate) enabled: AtomicBool,
     pub(crate) signals: Mutex<BTreeMap<ProviderAccountId, AccountRuntimeSignals>>,
     pub(crate) waits: Mutex<Vec<ProviderWaitLeaseRequest>>,
+    active_waits: Mutex<BTreeMap<ProviderAccountId, u32>>,
     pub(crate) waiting: AtomicUsize,
     pub(crate) promotions: AtomicUsize,
     pub(crate) promotion_requests: Mutex<Vec<ProviderSchedulingLeaseRequest>>,
@@ -772,13 +795,26 @@ impl Drop for TestCapacityExecution {
 
 struct TestCapacityWait {
     state: Arc<TestCapacityState>,
+    id: ProviderAccountId,
     active: bool,
+}
+impl TestCapacityWait {
+    fn deactivate(&mut self) {
+        if self.active {
+            self.state.waiting.fetch_sub(1, Ordering::SeqCst);
+            let mut counts = self.state.active_waits.lock().unwrap();
+            let count = counts.get_mut(&self.id).expect("active waiter count");
+            *count -= 1;
+            if *count == 0 {
+                counts.remove(&self.id);
+            }
+            self.active = false;
+        }
+    }
 }
 impl Drop for TestCapacityWait {
     fn drop(&mut self) {
-        if self.active {
-            self.state.waiting.fetch_sub(1, Ordering::SeqCst);
-        }
+        self.deactivate();
     }
 }
 impl ProviderWaitLease for TestCapacityWait {
@@ -797,8 +833,7 @@ impl ProviderWaitLease for TestCapacityWait {
                 return Ok(ProviderWaitPromotion::Expired);
             }
             if let Some(guard) = self.state.acquire(&request) {
-                self.state.waiting.fetch_sub(1, Ordering::SeqCst);
-                self.active = false;
+                self.deactivate();
                 Ok(ProviderWaitPromotion::Acquired(guard))
             } else {
                 Ok(ProviderWaitPromotion::Busy { retry_after: None })
@@ -937,12 +972,29 @@ impl ProviderLeasePort for TestLeaseCoordinator {
         })
     }
 
+    fn load_waiting_counts_for_pool<'a>(
+        &'a self,
+        _provider: &'a ProviderKind,
+        accounts: &'a [ProviderAccountId],
+        pool: gateway_core::provider_ports::ProviderConcurrencyPool,
+    ) -> BoxFuture<'a, Result<BTreeMap<ProviderAccountId, u32>, ProviderStoreError>> {
+        Box::pin(async move {
+            let counts = self.capacity_for_pool(pool).active_waits.lock().unwrap();
+            Ok(accounts
+                .iter()
+                .map(|id| (id.clone(), counts.get(id).copied().unwrap_or(0)))
+                .collect())
+        })
+    }
+
     fn try_acquire_wait(
         &self,
         request: ProviderWaitLeaseRequest,
     ) -> BoxFuture<'_, Result<ProviderWaitLeaseAcquisition, ProviderStoreError>> {
         Box::pin(async move {
             let capacity = self.capacity_for_pool(request.concurrency_pool());
+            let id = request.account_id().clone();
+            let max_waiting = request.max_waiting().get();
             capacity.waits.lock().unwrap().push(request);
             if capacity.fail_wait.load(Ordering::SeqCst) {
                 return Err(ProviderStoreError::new(
@@ -950,13 +1002,19 @@ impl ProviderLeasePort for TestLeaseCoordinator {
                     "test wait",
                 ));
             }
-            if capacity.full.load(Ordering::SeqCst) {
+            let mut active = capacity.active_waits.lock().unwrap();
+            if capacity.full.load(Ordering::SeqCst)
+                || active.get(&id).copied().unwrap_or(0) >= max_waiting
+            {
                 return Ok(ProviderWaitLeaseAcquisition::Full);
             }
+            *active.entry(id.clone()).or_default() += 1;
+            drop(active);
             capacity.waiting.fetch_add(1, Ordering::SeqCst);
             Ok(ProviderWaitLeaseAcquisition::Acquired(Box::new(
                 TestCapacityWait {
                     state: Arc::clone(capacity),
+                    id,
                     active: true,
                 },
             )))
@@ -1091,6 +1149,49 @@ impl MemorySessionAffinity {
 }
 
 impl ProviderSessionAffinityPort for MemorySessionAffinity {
+    fn admit_binding<'a>(
+        &'a self,
+        provider_kind: &'a ProviderKind,
+        key: &'a ProviderSessionAffinityKey,
+        expected: Option<&'a ProviderSessionAffinityBinding>,
+        account_id: &'a ProviderAccountId,
+        ttl: Duration,
+    ) -> BoxFuture<'a, Result<Option<ProviderSessionAffinityBinding>, ProviderStoreError>> {
+        Box::pin(async move {
+            self.delay_operation(if expected.is_none() { "claim" } else { "renew" })
+                .await;
+            if expected.is_none()
+                && let Some(barrier) = &self.claim_barrier
+            {
+                barrier.wait().await;
+            }
+            let k = (
+                provider_kind.as_str().to_owned(),
+                key.expose_to_store().to_owned(),
+            );
+            let mut bindings = self.bindings.lock().expect("session affinity lock");
+            if bindings.get(&k) != expected {
+                return Ok(None);
+            }
+            let binding = expected
+                .filter(|b| b.account_id() == account_id)
+                .cloned()
+                .unwrap_or_else(|| {
+                    ProviderSessionAffinityBinding::new(
+                        account_id.clone(),
+                        BindingToken::generate(),
+                    )
+                });
+            bindings.insert(k, binding.clone());
+            if expected.is_none() {
+                self.claim_ttls.lock().expect("claim TTL").push(ttl);
+            } else {
+                self.renewal_ttls.lock().expect("renew TTL").push(ttl);
+            }
+            Ok(Some(binding))
+        })
+    }
+
     fn load<'a>(
         &'a self,
         provider_kind: &'a ProviderKind,
@@ -1577,14 +1678,22 @@ pub(crate) fn account_policy() -> gateway_core::account::AccountSelectionPolicy 
 }
 
 /// In-memory account and model cooldowns with credential revision isolation.
+type CooldownReadHook =
+    dyn Fn(ProviderAccountId) -> BoxFuture<'static, Result<(), ProviderStoreError>> + Send + Sync;
 #[derive(Clone, Default)]
 pub(crate) struct MemoryCooldownPort {
+    before_read: Option<Arc<CooldownReadHook>>,
     pub(crate) cooldowns: Arc<Mutex<BTreeMap<ProviderAccountId, ProviderCooldown>>>,
     pub(crate) scoped:
         Arc<Mutex<BTreeMap<(ProviderAccountId, ProviderCooldownScope), ProviderScopedCooldown>>>,
 }
 
 impl MemoryCooldownPort {
+    pub(crate) fn with_read_hook(mut self, hook: Arc<CooldownReadHook>) -> Self {
+        self.before_read = Some(hook);
+        self
+    }
+
     #[must_use]
     pub(crate) fn new() -> Self {
         Self::default()
@@ -1648,6 +1757,9 @@ impl ProviderCooldownPort for MemoryCooldownPort {
         account_id: &'a ProviderAccountId,
     ) -> BoxFuture<'a, Result<Option<ProviderCooldown>, ProviderStoreError>> {
         Box::pin(async move {
+            if let Some(hook) = &self.before_read {
+                hook(account_id.clone()).await?;
+            }
             Ok(self
                 .cooldowns
                 .lock()

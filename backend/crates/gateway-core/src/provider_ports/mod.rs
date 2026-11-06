@@ -359,7 +359,7 @@ pub trait ProviderLeasePort: Send + Sync {
         })
     }
     /// Acquire execution capacity directly for opt-in scheduling, without joining
-    /// the ordinary waiting queue. Reserved admission must respect its FIFO.
+    /// the ordinary waiting queue. Shared and Reserved admission respect each pool's FIFO.
     /// Unsupported stores must fail closed.
     ///
     /// Before any remote write, the store must own a known token and arm cleanup.
@@ -586,6 +586,17 @@ impl fmt::Debug for ProviderSessionAffinityBinding {
 
 /// 可丢失的会话到账号偏好；Provider 负责先把原始会话标识哈希为不透明键。
 pub trait ProviderSessionAffinityPort: Send + Sync {
+    /// Atomically admit against the exact observed generation (including absence).
+    /// A conflict neither changes the owner nor renews its TTL.
+    fn admit_binding<'a>(
+        &'a self,
+        provider_kind: &'a ProviderKind,
+        key: &'a ProviderSessionAffinityKey,
+        expected: Option<&'a ProviderSessionAffinityBinding>,
+        account_id: &'a ProviderAccountId,
+        ttl: Duration,
+    ) -> BoxFuture<'a, Result<Option<ProviderSessionAffinityBinding>, ProviderStoreError>>;
+
     fn load<'a>(
         &'a self,
         provider_kind: &'a ProviderKind,
@@ -1226,6 +1237,56 @@ impl AccountProtectionState {
 }
 
 pub trait ProviderCooldownPort: Send + Sync {
+    /// Ordered, bounded batches; per-item errors do not discard neighboring facts.
+    fn read_many<'a>(
+        &'a self,
+        ids: &'a [ProviderAccountId],
+    ) -> BoxFuture<'a, Vec<Result<Option<ProviderCooldown>, ProviderStoreError>>> {
+        Box::pin(async move {
+            let mut results = Vec::with_capacity(ids.len());
+            for batch in ids.chunks(128) {
+                results
+                    .extend(futures::future::join_all(batch.iter().map(|id| self.read(id))).await);
+            }
+            results
+        })
+    }
+    fn read_scoped_many<'a>(
+        &'a self,
+        ids: &'a [ProviderAccountId],
+        scope: &'a ProviderCooldownScope,
+    ) -> BoxFuture<'a, Vec<Result<Option<ProviderScopedCooldown>, ProviderStoreError>>> {
+        Box::pin(async move {
+            let mut results = Vec::with_capacity(ids.len());
+            for batch in ids.chunks(128) {
+                results.extend(
+                    futures::future::join_all(batch.iter().map(|id| self.read_scoped(id, scope)))
+                        .await,
+                );
+            }
+            results
+        })
+    }
+    fn read_protection_many<'a>(
+        &'a self,
+        accounts: &'a [(ProviderAccountId, CredentialRevision)],
+    ) -> BoxFuture<'a, Vec<Result<Option<AccountProtectionState>, ProviderStoreError>>> {
+        Box::pin(async move {
+            let mut results = Vec::with_capacity(accounts.len());
+            for batch in accounts.chunks(128) {
+                results.extend(
+                    futures::future::join_all(
+                        batch
+                            .iter()
+                            .map(|(id, revision)| self.read_protection(id, *revision)),
+                    )
+                    .await,
+                );
+            }
+            results
+        })
+    }
+
     fn read_protection<'a>(
         &'a self,
         _account_id: &'a ProviderAccountId,

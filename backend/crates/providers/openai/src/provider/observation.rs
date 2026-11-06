@@ -891,6 +891,9 @@ pub(super) fn map_selection_error(error: CredentialSelectionError) -> ProviderEr
         CredentialSelectionError::PinnedAccount { .. } => {
             unreachable!("pinned selection was unwrapped")
         }
+        CredentialSelectionError::ContinuationOwnerChanged => {
+            super::failure::continuation_replay_required_error("scope_unavailable")
+        }
         CredentialSelectionError::Cancelled => {
             provider_error(ProviderErrorKind::Cancelled, UpstreamSendState::NotSent)
         }

@@ -1,3 +1,4 @@
+mod scheduling_projection;
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU32;
 use std::sync::Arc;
@@ -1008,7 +1009,7 @@ async fn admitted_requests_use_their_frozen_binding_retention() {
 }
 
 #[tokio::test]
-async fn selector_should_replace_a_busy_affinity_binding_after_the_fallback_succeeds() {
+async fn strict_queue_disabled_migrates_busy_owner_before_send() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_first", "at-first");
     create_account(&store, "acct_second", "at-second");
@@ -1031,7 +1032,7 @@ async fn selector_should_replace_a_busy_affinity_binding_after_the_fallback_succ
         Url::parse("https://chatgpt.com/backend-api/codex/responses").expect("request URL");
     let request_attempt = attempt(BTreeSet::new());
 
-    let selected = selector
+    let result = selector
         .select(&SelectCodexCredential {
             upstream_model: "gpt-5.4",
             request_url: &request_url,
@@ -1039,28 +1040,53 @@ async fn selector_should_replace_a_busy_affinity_binding_after_the_fallback_succ
             session_affinity_key: Some(&key),
             guardian: false,
         })
-        .await
-        .expect("select fallback account");
-    selector
-        .record_success(selected.account(), Some(&key), &bound)
         .await;
-
+    let selected = result.expect("official Strict permits migration when the queue is disabled");
+    assert_eq!(selected.account_id().as_str(), "acct_second");
     assert_eq!(
-        (
-            selected.account_id().as_str(),
-            selected.affinity_hit(),
-            selected.escape_reason(),
-            selected.account_switch(),
-        ),
-        ("acct_second", false, Some("lease_saturated"), true)
+        affinity.load(&provider, &key).await.unwrap(),
+        Some(selected.account_id().clone())
     );
+    drop(selected);
+    // Core only supplies this exclusion after an eligible error and within its switch budget.
+    let retry = attempt(BTreeSet::from([bound.clone()]));
+    let selected = selector
+        .select(&SelectCodexCredential {
+            upstream_model: "gpt-5.4",
+            request_url: &request_url,
+            attempt: &retry,
+            session_affinity_key: Some(&key),
+            guardian: false,
+        })
+        .await
+        .unwrap();
+    assert_eq!(selected.account_id().as_str(), "acct_second");
     assert_eq!(
-        affinity
-            .load(&provider, &key)
-            .await
-            .expect("load replaced affinity"),
-        Some(ProviderAccountId::new("acct_second").expect("second account"))
+        affinity.load(&provider, &key).await.unwrap(),
+        Some(selected.account_id().clone()),
+        "migration is committed at admission before send"
     );
+    selector
+        .record_success(&store.account("acct_first").unwrap(), Some(&key), &bound)
+        .await;
+    assert_eq!(
+        affinity.load(&provider, &key).await.unwrap(),
+        Some(selected.account_id().clone()),
+        "late completion must not restore the old owner"
+    );
+    drop(selected);
+    let next_attempt = attempt(BTreeSet::new());
+    let next = selector
+        .select(&SelectCodexCredential {
+            upstream_model: "gpt-5.4",
+            request_url: &request_url,
+            attempt: &next_attempt,
+            session_affinity_key: Some(&key),
+            guardian: false,
+        })
+        .await
+        .unwrap();
+    assert_eq!(next.account_id().as_str(), "acct_second");
 }
 
 #[tokio::test]
@@ -2487,7 +2513,7 @@ async fn corrupt_credential(store: &MemoryAccountStore, id: &str) {
 }
 
 #[tokio::test]
-async fn corrupt_unpinned_candidate_never_claims_or_renews_affinity() {
+async fn corrupt_candidate_is_skipped_before_admitting_the_healthy_binding() {
     use std::sync::atomic::Ordering;
 
     for waiting in [false, true] {
@@ -2521,14 +2547,10 @@ async fn corrupt_unpinned_candidate_never_claims_or_renews_affinity() {
                 .expect("healthy candidate must remain selectable");
             assert_eq!(lease.account_id().as_str(), "acct_other");
             assert_eq!(store.account("acct_original"), Some(original.clone()));
-            assert!(affinity.renewal_ttls().is_empty());
+            assert_eq!(affinity.renewal_ttls().len(), usize::from(bound));
             assert_eq!(
                 affinity.load(&provider, &key).await.unwrap(),
-                Some(if bound {
-                    original.id().clone()
-                } else {
-                    lease.account_id().clone()
-                })
+                Some(lease.account_id().clone())
             );
             if bound {
                 assert_eq!(lease.escape_reason(), Some("hard_unavailable"));
@@ -2852,12 +2874,12 @@ async fn immediate_saturation_and_lease_race_without_hint_remain_capacity_errors
 }
 
 #[tokio::test]
-async fn smart_switchback_setting_preserves_default_and_required_owners_on_both_paths() {
+async fn strict_binding_precedes_smart_switchback_weight_on_both_paths() {
     use gateway_core::account::smart_scheduling::SmartSchedulingConfig;
     for waiting in [false, true] {
         for (switchback, required, expected) in [
             (false, false, "acct_original"),
-            (true, false, "acct_other"),
+            (true, false, "acct_original"),
             (true, true, "acct_original"),
         ] {
             let store = Arc::new(MemoryAccountStore::default());
@@ -3089,15 +3111,18 @@ async fn capacity_wait_corrupt_promotions_preserve_rescans_deadline_and_cleanup(
             assert_eq!(leases.capacity.waiting.load(Ordering::SeqCst), 0);
             assert_eq!(
                 affinity.load(&provider, &key).await.unwrap(),
-                if bound {
-                    Some(original_accounts[0].id().clone())
-                } else if ending == "success" {
+                if ending == "success" {
                     Some(original_accounts[3].id().clone())
+                } else if bound {
+                    Some(original_accounts[0].id().clone())
                 } else {
                     None
                 },
             );
-            assert!(affinity.renewal_ttls().is_empty());
+            assert_eq!(
+                affinity.renewal_ttls().len(),
+                usize::from(bound && ending == "success")
+            );
             for (index, account) in original_accounts.iter().enumerate() {
                 assert_eq!(store.account(ids[index]).as_ref(), Some(account));
                 assert_eq!(
@@ -3655,7 +3680,7 @@ async fn capacity_wait_never_classifies_non_capacity_blockers_as_busy() {
 }
 
 #[tokio::test]
-async fn capacity_wait_queue_full_soft_affinity_can_use_idle_but_required_cannot_move() {
+async fn capacity_wait_queue_full_preserves_strict_and_required_owners() {
     use std::sync::atomic::Ordering;
     for required in [false, true] {
         let store = Arc::new(MemoryAccountStore::default());
@@ -3691,7 +3716,12 @@ async fn capacity_wait_queue_full_soft_affinity_can_use_idle_but_required_cannot
                 })
             ));
         } else {
-            assert_eq!(selected.unwrap().account_id().as_str(), "acct_other");
+            assert!(matches!(
+                selected,
+                Err(CredentialSelectionError::AccountWait(
+                    provider_openai::credential::AccountWaitFailure::QueueFull
+                ))
+            ));
         }
         assert_eq!(leases.capacity.waiting.load(Ordering::SeqCst), 0);
         assert_eq!(leases.capacity.waits.lock().unwrap().len(), 1);
@@ -3699,15 +3729,13 @@ async fn capacity_wait_queue_full_soft_affinity_can_use_idle_but_required_cannot
 }
 
 #[tokio::test]
-async fn affinity_interval_waits_only_for_a_healthy_soft_owner_within_budget() {
+async fn required_owner_interval_wait_preserves_shared_deadline() {
     use std::sync::atomic::Ordering;
     for scenario in [
         "ready",
         "full",
         "too-long",
         "busy",
-        "disabled",
-        "invalid",
         "cancel",
         "rotated-start",
     ] {
@@ -3762,20 +3790,20 @@ async fn affinity_interval_waits_only_for_a_healthy_soft_owner_within_budget() {
                     Duration::from_millis(250)
                 },
             ),
-            AccountAttemptContext::new(BTreeSet::new(), None, None)
+            AccountAttemptContext::new(BTreeSet::new(), Some(original.clone()), None)
                 .with_account_scope(contract_account_scope()),
             None,
             CancellationToken::new(),
         )
         .with_request_tuning(gateway_core::routing::RequestTuning {
-            account_concurrency_wait_timeout_seconds: 10,
+            account_concurrency_wait_timeout_seconds: 1,
             ..capacity_tuning()
         });
         let selected = capacity_select(&selector, &attempt, Some(&key));
         tokio::pin!(selected);
         if matches!(
             scenario,
-            "ready" | "disabled" | "invalid" | "cancel" | "rotated-start"
+            "ready" | "busy" | "disabled" | "invalid" | "cancel" | "rotated-start"
         ) {
             tokio::select! {
                 result = &mut selected => panic!("interval must queue ({scenario}): {result:?}"),
@@ -3786,6 +3814,7 @@ async fn affinity_interval_waits_only_for_a_healthy_soft_owner_within_budget() {
                 "no early execution"
             );
             match scenario {
+                "busy" => leases.capacity.set_load("acct_original", 0),
                 "disabled" => store.set_enabled(&original, false).await.unwrap(),
                 "invalid" => persist_credential_state(
                     &store,
@@ -3809,20 +3838,38 @@ async fn affinity_interval_waits_only_for_a_healthy_soft_owner_within_budget() {
         let result = tokio::time::timeout(Duration::from_secs(2), selected)
             .await
             .unwrap();
+        let result = result.map_err(|error| match error {
+            CredentialSelectionError::PinnedAccount { source, .. } => *source,
+            error => error,
+        });
         if scenario == "cancel" {
             assert!(matches!(result, Err(CredentialSelectionError::Cancelled)));
+        } else if scenario == "full" {
+            assert!(matches!(
+                result,
+                Err(CredentialSelectionError::AccountWait(
+                    provider_openai::credential::AccountWaitFailure::QueueFull
+                ))
+            ));
+        } else if matches!(scenario, "too-long" | "rotated-start") {
+            assert!(matches!(
+                result,
+                Err(CredentialSelectionError::AccountWait(
+                    provider_openai::credential::AccountWaitFailure::Timeout
+                ))
+            ));
         } else {
             let lease = result.unwrap();
             assert_eq!(
                 lease.account_id().as_str(),
-                if scenario == "ready" {
+                if matches!(scenario, "ready" | "busy") {
                     "acct_original"
                 } else {
                     "acct_other"
                 },
                 "{scenario}"
             );
-            if scenario == "ready" {
+            if matches!(scenario, "ready" | "busy") {
                 assert!(lease.affinity_hit());
             }
         }
@@ -3831,19 +3878,12 @@ async fn affinity_interval_waits_only_for_a_healthy_soft_owner_within_budget() {
             0,
             "{scenario}"
         );
-        if matches!(scenario, "too-long" | "busy") {
+        if matches!(scenario, "too-long" | "rotated-start") {
             assert!(
-                leases.capacity.waits.lock().unwrap().is_empty(),
-                "{scenario}"
-            );
-        }
-        if scenario == "too-long" {
-            assert!(
-                !attempt
+                attempt
                     .account_wait_budget()
                     .unwrap()
-                    .is_exhausted_at(std::time::Instant::now() + Duration::from_secs(11)),
-                "skipping interval waiting must not start its ten-second window"
+                    .is_exhausted_at(std::time::Instant::now())
             );
         }
     }
@@ -4100,7 +4140,27 @@ async fn capacity_wait_frozen_universe_does_not_add_new_imports_during_reselecti
     leases.capacity.set_load("acct_primary", 1);
     let live = capacity_handle(&["acct_primary"], 1);
     let selector = selector(&store, Arc::clone(&leases)).with_account_concurrency(live.clone());
-    let attempt = attempt(BTreeSet::new()).with_request_tuning(capacity_tuning());
+    // A real request snapshot predates this import and cannot already authorize its ID.
+    let scope = Arc::new(FrozenAccountScope::new(
+        Arc::new(RuntimeAccountDirectory::new(BTreeMap::from([(
+            ProviderAccountId::new("acct_primary").unwrap(),
+            RuntimeAccount::new(ProviderKind::new("openai").unwrap(), BTreeSet::new()),
+        )]))),
+        ClientRoutingScope::all_accounts(),
+    ));
+    let attempt = AttemptContext::new(
+        RequestAttemptContext::new(
+            ModelRequestId::new("req_frozen_import").unwrap(),
+            ClientApiKeyId::new("key_codex_contract").unwrap(),
+        ),
+        NonZeroU32::MIN,
+        SystemTime::now() + Duration::from_secs(30),
+        account_policy(),
+        AccountAttemptContext::new(BTreeSet::new(), None, None).with_account_scope(scope),
+        None,
+        CancellationToken::new(),
+    )
+    .with_request_tuning(capacity_tuning());
     let selected = capacity_select(&selector, &attempt, None);
     tokio::pin!(selected);
     tokio::select! {
@@ -4522,5 +4582,79 @@ async fn pinned_interval_wait_preserves_owner_and_releases_on_cancel_or_full() {
             "{scenario}"
         );
         assert_eq!(leases.capacity.waits.lock().unwrap().len(), 1, "{scenario}");
+    }
+}
+
+#[tokio::test]
+async fn strict_interval_alone_can_migrate_to_a_ready_account() {
+    for becomes_ready_while_waiting in [false, true] {
+        use std::sync::atomic::Ordering;
+        let store = Arc::new(MemoryAccountStore::default());
+        create_account(&store, "acct_original", "at-original");
+        create_account(&store, "acct_other", "at-other");
+        let original = ProviderAccountId::new("acct_original").unwrap();
+        let leases = Arc::new(TestLeaseCoordinator::default());
+        leases.capacity.enabled.store(true, Ordering::SeqCst);
+        leases.capacity.set_load("acct_original", 0);
+        leases
+            .capacity
+            .set_load("acct_other", u32::from(becomes_ready_while_waiting));
+        leases
+            .capacity
+            .signals
+            .lock()
+            .unwrap()
+            .get_mut(&original)
+            .unwrap()
+            .last_started_at = Some(SystemTime::now());
+        let affinity = Arc::new(MemorySessionAffinity::default());
+        let key = ProviderSessionAffinityKey::try_new("interval-only-migration").unwrap();
+        let provider = ProviderKind::new("openai").unwrap();
+        affinity
+            .bind(&provider, &key, &original, Duration::from_secs(60))
+            .await
+            .unwrap();
+        let selector = selector_with_affinity(&store, leases.clone(), affinity.clone())
+            .with_account_concurrency(capacity_handle(&["acct_original", "acct_other"], 1));
+        let attempt = AttemptContext::new(
+            RequestAttemptContext::new(
+                ModelRequestId::new("req_interval_migration").unwrap(),
+                ClientApiKeyId::new("key_codex_contract").unwrap(),
+            ),
+            NonZeroU32::MIN,
+            SystemTime::now() + Duration::from_secs(30),
+            gateway_core::account::AccountSelectionPolicy::new(
+                gateway_core::account::RotationStrategy::Smart,
+                NonZeroU32::new(2).unwrap(),
+                Duration::from_secs(20),
+            ),
+            AccountAttemptContext::new(BTreeSet::new(), None, None)
+                .with_account_scope(contract_account_scope()),
+            None,
+            CancellationToken::new(),
+        )
+        .with_request_tuning(capacity_tuning());
+        let mut selection = Box::pin(capacity_select(&selector, &attempt, Some(&key)));
+        if becomes_ready_while_waiting {
+            assert!(
+                tokio::time::timeout(Duration::from_millis(30), selection.as_mut())
+                    .await
+                    .is_err()
+            );
+            leases.capacity.set_load("acct_other", 0);
+        }
+        let selected = tokio::time::timeout(Duration::from_secs(2), selection)
+            .await
+            .expect("interval-only waiting must discover a newly ready account")
+            .unwrap();
+        assert_eq!(selected.account_id().as_str(), "acct_other");
+        assert_eq!(
+            affinity.load(&provider, &key).await.unwrap(),
+            Some(selected.account_id().clone())
+        );
+        if !becomes_ready_while_waiting {
+            assert!(leases.capacity.waits.lock().unwrap().is_empty());
+        }
+        assert_eq!(leases.capacity.waiting.load(Ordering::SeqCst), 0);
     }
 }

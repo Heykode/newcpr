@@ -887,6 +887,22 @@ fn replace_metadata_field(metadata: &mut Map<String, Value>, key: &str, value: O
 // 优先;body 顶层别名只在 header 缺失时兜底(例如 WebSocket 帧无法逐轮携带
 // 请求头的场景)。
 fn apply_protocol_context(request: &mut CodexResponsesRequest, context: &Map<String, Value>) {
+    request.client_account_session_id =
+        gateway_protocol::openai::codex_account_session_id(request.body(), context);
+    let account_thread = gateway_protocol::openai::codex_account_thread_id(request.body(), context);
+    request.client_account_follow_only = match request
+        .client_account_session_id
+        .as_ref()
+        .zip(account_thread.as_ref())
+    {
+        Some((session, thread)) => session != thread,
+        None => {
+            gateway_protocol::openai::codex_responses_request_semantics(request.body(), context)
+                .subagent_kind
+                .is_some()
+        }
+    };
+
     request.scheduling_session_hint =
         gateway_protocol::openai::OpenAiSchedulingSessionHint::from_context(context);
     request.passthrough_headers = decode_passthrough_headers(context);
@@ -974,4 +990,17 @@ fn context_string(context: &Map<String, Value>, field: &str) -> Option<String> {
         .get(field)
         .and_then(Value::as_str)
         .map(ToOwned::to_owned)
+}
+
+/// 同时接受简写字符串与 Responses 文本块，忽略图片等非文本部分。
+pub(crate) fn message_text_parts(item: &Value) -> impl Iterator<Item = &str> + Clone {
+    let content = &item["content"];
+    content.as_str().into_iter().chain(
+        content
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|part| part.get("type").and_then(Value::as_str) == Some("input_text"))
+            .filter_map(|part| part.get("text").and_then(Value::as_str)),
+    )
 }

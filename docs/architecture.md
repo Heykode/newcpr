@@ -326,7 +326,15 @@ Continuation 仍受原请求的 Client Key、账号范围、Provider 和发送/�
 - xAI 使用客户端提交的完整历史作为重放输入；
 - scope 外账号、跨 Key 复用或不明确发送结果均 fail closed。
 
-会话亲和是优先选择提示，不是硬账号绑定；native continuation 才携带不可跨越的 owner 约束。
+会话绑定由 Store 保存带代次的账号事实，Provider 在取得租约后、发送前执行 CAS；冲突释放租约并重读。
+响应完成只更新健康与 Guardian 观测，不写回主绑定。Strict 开启排队时满载保留绑定，关闭排队或获准错误重试后可迁移；
+Preferred 临时借用保留主账号、持续不可用才迁移；Relaxed 共享绑定但不优先选择绑定账号。
+精确 native continuation 有独立 owner；Strict 与当前共享绑定冲突要求完整重放。
+
+正常选号按冻结账号 ID 范围读取 Store，冷却与保护状态采用每批最多 128 项的 Redis pipeline，单项错误
+不丢弃邻项事实；NOSCRIPT 只重试未执行项。Provider 的完整候选投影从读取开始保留 200ms，最多 32 项、
+合计 8,192 个候选；同范围填充合并。缓存按 Key、范围、模型、策略、容量池及本地路由/请求资格隔离。
+健康绑定仍实时检查账号、冷却、运行状态、凭据和最终租约；失效、容量争用或修订冲突重新读取完整池。
 
 ### OpenAI 账号等待
 
@@ -341,9 +349,12 @@ Continuation 仍受原请求的 Client Key、账号范围、Provider 和发送/�
 
 等待登记具有唯一 token 与原始截止时间；Redis 原子检查人数及晋升，取消清理由 Store 的有界
 worker 管理。迟到操作必须受到取消标记约束；基础设施不可用时保守拒绝，不能当成空池或无限容量。
-等待不是严格 FIFO，也不承诺 Redis 数据丢失后的多副本强一致。
+普通与 Reserved 池分别按账号保持 FIFO，新请求及跨账号重查不能越过目的账号的已有等待者。
+可移动等待者每 500ms 重查完整候选池，固定 owner 与严格绑定只重查原账号；目标晋升每 100ms 轮询。
+绑定迁移重读共享代次并保留原截止，不计入上游尝试次数。跨账号准入后释放原等待 token。
+Redis 数据丢失后的多副本强一致不在该协调合同内。
 启用等待的 native 容量退出携带明确恢复限制，不能因普通容量错误自动改绑或跨账号重放。
-关闭时保留原选择与恢复行为，已有 WS socket 所有权和发送边界不变。
+关闭普通等待时，普通严格根绑定可因满载改选合格账号，准入 CAS 迁移主绑定；严格子线程及 required/native owner 继续固定归属。
 
 ### Client Key 限额与结算
 
@@ -514,3 +525,18 @@ docker compose -f deploy/compose.yaml config --quiet
 
 行为、配置或边界变化必须同步其唯一文档 owner：用户入口写入根 README，HTTP 合同写入 `docs/api.md`，
 部署操作写入 `deploy/README.md`，架构不变量保留在本文。
+
+### 二进制重启交接
+
+替换进程带 `--restart-handoff` 启动，在建立异步 runtime 前等待父进程 stdin 管道 EOF。旧进程先释放更新
+操作锁，再关闭交接管道；正常退出及异常退出都会释放等待。容器部署继续沿已有部署流程。
+
+### 无显式会话的选号偏好
+
+`derive_cache_preference` 按官方 `1240f225` 从显式缓存键或开头文本派生客户端隔离的偏好；
+只有 Strict/Preferred 且无真实会话、restored/native continuation 或 Guardian 时使用。
+逻辑账号身份按每帧 metadata 优先解析，传输身份仍单独派生；内容偏好不进入 continuation observation、
+turn alias、会话恢复或账号状态所有权。Preferred 缓存读写失败只停用本次请求的偏好，适用于投影、
+直接选号、等待重查和准入；CAS 冲突释放槽并重选，不当作存储故障放行。cache preference 的分流
+不产生真实 `account_switch`，Excel 也不能仅凭这类 `affinity_hit` 推断状态属于所选账号。
+本地 Guardian 父线程成功记录独立保留；内容偏好没有主绑定完成回写。

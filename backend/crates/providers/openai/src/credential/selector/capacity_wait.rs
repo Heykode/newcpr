@@ -115,6 +115,7 @@ impl<'a> WaitControl<'a> {
 }
 
 struct WaitingSelection {
+    projection: projection::SelectionProjection,
     follows_root: bool,
     universe: BTreeSet<ProviderAccountId>,
     invalid_credentials: BTreeSet<ProviderAccountId>,
@@ -206,7 +207,21 @@ impl CodexCredentialSelector {
         initial_universe: Option<&BTreeSet<ProviderAccountId>>,
     ) -> Result<CodexCredentialLease, CredentialSelectionError> {
         let mut control = WaitControl::new(request.attempt, request.follows_root())?;
-        let mut accounts = control.run(self.wait_accounts(request)).await?;
+        let mut projection = control.run(self.read_projection(request)).await?;
+        let mut accounts = if let Some(owner) = projection.owner() {
+            control
+                .run(async {
+                    self.repository
+                        .store()
+                        .get_account(owner)
+                        .await
+                        .map(|account| account.into_iter().collect())
+                        .map_err(|source| CredentialSelectionError::Store(Some(source.into())))
+                })
+                .await?
+        } else {
+            control.run(self.wait_accounts(request)).await?
+        };
         if let Some(universe) = initial_universe {
             accounts.retain(|account| universe.contains(account.id()));
         }
@@ -230,6 +245,54 @@ impl CodexCredentialSelector {
         let mut candidates = control
             .run(self.wait_candidates(accounts, scheduling.signals(), request))
             .await?;
+        let mut projection_valid = false;
+        if let Some(cached) = projection.candidates.as_ref() {
+            if let Some(current) = candidates.pop()
+                && cached.iter().any(|previous| {
+                    previous.account.id() == current.account.id()
+                        && only_quota_observation_advanced(&previous.account, &current.account)
+                })
+            {
+                candidates = cached
+                    .iter()
+                    .map(|candidate| {
+                        if candidate.account.id() == current.account.id() {
+                            current.clone()
+                        } else {
+                            candidate.clone()
+                        }
+                    })
+                    .collect();
+                projection_valid = true;
+            } else {
+                self.invalidate_projection(&projection);
+                projection.candidates = None;
+                let accounts = control.run(self.wait_accounts(request)).await?;
+                let ids = accounts
+                    .iter()
+                    .map(|account| account.id().clone())
+                    .collect::<Vec<_>>();
+                let signals = control
+                    .run(async {
+                        self.leases
+                            .load_signals_for_pool(
+                                &self.provider_kind,
+                                &ids,
+                                request.concurrency_pool(),
+                            )
+                            .await
+                            .map_err(Into::into)
+                    })
+                    .await?;
+                candidates = control
+                    .run(self.wait_candidates(accounts, &signals, request))
+                    .await?;
+            }
+        }
+        if !projection_valid {
+            self.publish_projection(&projection, &candidates);
+        }
+        drop(projection.fill.take());
         let continuation = match request.attempt.continuation_attempt() {
             ContinuationAttempt::Native => request
                 .attempt
@@ -251,7 +314,11 @@ impl CodexCredentialSelector {
         {
             return Err(CredentialSelectionError::NoEligibleCredential);
         }
-        let mut pinned = request.attempt.required_account().cloned().or(continuation);
+        let mut pinned = request
+            .attempt
+            .required_account()
+            .cloned()
+            .or_else(|| continuation.clone());
         let follows_root = pinned.is_none()
             && request
                 .session_affinity_observation
@@ -259,7 +326,8 @@ impl CodexCredentialSelector {
         let mut affinity = control
             .run(async {
                 self.resolve_session_affinity(
-                    request.session_affinity_key,
+                    request,
+                    request.affinity_key(),
                     request
                         .session_affinity_observation
                         .and_then(CodexSessionAffinity::root_key),
@@ -273,10 +341,23 @@ impl CodexCredentialSelector {
                     &candidates,
                     SystemTime::now(),
                     request.attempt.codex_quota_overdraft_eligible(),
+                    projection.key.as_ref().map(|_| projection.binding.as_ref()),
                 )
                 .await
             })
             .await?;
+        if request
+            .attempt
+            .account_selection_policy()
+            .openai_account_affinity()
+            == gateway_core::account::AccountAffinity::Strict
+            && affinity
+                .bound_account()
+                .zip(continuation.as_ref())
+                .is_some_and(|(binding, owner)| binding != owner)
+        {
+            return Err(CredentialSelectionError::ContinuationOwnerChanged);
+        }
         if follows_root {
             pinned = affinity.bound_account().cloned();
         }
@@ -320,7 +401,18 @@ impl CodexCredentialSelector {
             .map(|binding| binding.account_id().clone());
         let mut universe: BTreeSet<_> = initial_universe
             .cloned()
-            .unwrap_or_else(|| ids.into_iter().collect());
+            .or_else(|| {
+                request
+                    .attempt
+                    .account_scope()
+                    .map(|scope| scope.allowed_account_ids().cloned().collect())
+            })
+            .unwrap_or_else(|| {
+                candidates
+                    .iter()
+                    .map(|candidate| candidate.account.id().clone())
+                    .collect()
+            });
         if follows_root
             && let Some(owner) = pinned.as_ref()
             && !universe.contains(owner)
@@ -344,6 +436,7 @@ impl CodexCredentialSelector {
             }
         }
         let mut state = WaitingSelection {
+            projection,
             follows_root,
             universe,
             invalid_credentials: BTreeSet::new(),
@@ -352,20 +445,21 @@ impl CodexCredentialSelector {
                 policy: request.attempt.account_selection_policy(),
                 now: SystemTime::now(),
                 excluded_accounts: excluded,
-                preferred_account: pinned
-                    .clone()
-                    .or_else(|| affinity.preferred_account().cloned()),
-                preferred_account_overrides_weight: pinned.is_some()
-                    || request
+                preferred_account: pinned.clone().or_else(|| {
+                    (request
                         .attempt
                         .account_selection_policy()
                         .openai_account_affinity()
-                        == gateway_core::account::AccountAffinity::Preferred
-                    || request
-                        .attempt
-                        .account_selection_policy()
-                        .preferred_account_overrides_weight(),
-                round_robin_cursor: scheduling.round_robin_cursor(),
+                        != gateway_core::account::AccountAffinity::Relaxed)
+                        .then(|| affinity.preferred_account().cloned())
+                        .flatten()
+                }),
+                preferred_account_overrides_weight: true,
+                round_robin_cursor: Self::session_round_robin_cursor(
+                    request,
+                    observed_affinity_binding.as_ref(),
+                    scheduling.round_robin_cursor(),
+                ),
                 eligibility: if request.attempt.is_quality_retest() {
                     AccountEligibilityPolicy::BypassForQualityRetest
                 } else {
@@ -391,17 +485,25 @@ impl CodexCredentialSelector {
                 return Err(CredentialSelectionError::Coordinator(None));
             }
             scan += 1;
+            let refresh_affinity = reload;
             if reload {
+                self.invalidate_projection(&state.projection);
+                state.projection.candidates = None;
                 candidates = control
                     .run(self.reload_wait_pool(request, &state.universe))
                     .await?;
             }
             reload = true;
-            if (state.follows_root || (scan > 1 && state.pinned.is_none()))
-                && let Some(key) = request.session_affinity_key
+            if request.is_cache_preference() && request.affinity_key().is_none() {
+                state.observed_affinity = None;
+                state.observed_affinity_binding = None;
+                state.affinity = AffinitySelection::default();
+            }
+            if (state.follows_root || (refresh_affinity && state.pinned.is_none()))
+                && let Some(key) = request.affinity_key()
             {
                 match control
-                    .run(async { Ok(self.lookup_session_affinity(key).await) })
+                    .run(async { Ok(self.lookup_request_affinity(request, key).await) })
                     .await?
                 {
                     SessionAffinityLookup::Bound(binding) => {
@@ -435,10 +537,22 @@ impl CodexCredentialSelector {
                 candidates.retain(|candidate| candidate.account.id() == pin);
             }
             state.context.now = SystemTime::now();
-            state.context.preferred_account = state
-                .pinned
-                .clone()
-                .or_else(|| state.affinity.preferred_account().cloned());
+            state.context.preferred_account = state.pinned.clone().or_else(|| {
+                (state.context.policy.openai_account_affinity()
+                    != gateway_core::account::AccountAffinity::Relaxed)
+                    .then(|| state.affinity.preferred_account().cloned())
+                    .flatten()
+            });
+            if state.projection.candidates.is_some() {
+                let limits = self.wait_limits()?;
+                let ready =
+                    AccountSelector.select_with_live_capacity(&candidates, &state.context, &limits);
+                if ready.is_none_or(|selected| {
+                    Some(selected.candidate().account.id()) != state.projection.owner()
+                }) {
+                    continue 'rescan;
+                }
+            }
             if state.follows_root
                 && let Some(owner) = state.pinned.clone()
             {
@@ -470,6 +584,7 @@ impl CodexCredentialSelector {
                         // Root migrations are bounded by the shared wait deadline, not
                         // the snapshot-conflict retry count. Reload the full frozen pool.
                         scan = 0;
+                        sticky_tried.clear();
                         continue 'rescan;
                     }
                     WaitOutcome::Retry | WaitOutcome::Changed | WaitOutcome::Skipped => {
@@ -478,45 +593,42 @@ impl CodexCredentialSelector {
                 }
             }
             let limits = self.wait_limits()?;
-            let original = state
-                .pinned
-                .clone()
-                .or_else(|| state.affinity.bound_account().cloned())
-                .filter(|id| {
-                    if state.context.preferred_account_overrides_weight {
-                        return true;
-                    }
-                    let original_weight = candidates
-                        .iter()
-                        .find(|c| c.account.id() == id)
-                        .map(|c| c.account.weight());
-                    !AccountSelector
-                        .select_with_live_capacity(&candidates, &state.context, &limits)
-                        .is_some_and(|selected| {
-                            original_weight.is_some_and(|weight| {
-                                selected.candidate().account.weight() > weight
-                            })
-                        })
-                });
+            let strict = state.context.policy.openai_account_affinity()
+                == gateway_core::account::AccountAffinity::Strict;
+            let original = state.pinned.clone().or_else(|| {
+                strict
+                    .then(|| state.affinity.bound_account().cloned())
+                    .flatten()
+            });
             if let Some(original) = original.as_ref()
                 && (state.pinned.is_some()
                     || request
                         .attempt
                         .account_selection_policy()
                         .openai_account_affinity()
-                        != gateway_core::account::AccountAffinity::Preferred)
+                        == gateway_core::account::AccountAffinity::Strict)
                 && !sticky_tried.contains(original)
                 && candidates.iter().any(|candidate| {
                     candidate.account.id() == original
                         && (AccountSelector.availability(candidate, &state.context, &limits)
                             == AccountSchedulingAvailability::Busy
-                            || interval_wait_deadline(
-                                candidate,
-                                &state.context,
-                                &limits,
-                                state.pinned.is_some(),
-                            )
-                            .is_some())
+                            || (state.pinned.is_some()
+                                && interval_wait_deadline(
+                                    candidate,
+                                    &state.context,
+                                    &limits,
+                                    true,
+                                )
+                                .is_some())
+                            || (strict && {
+                                let mut without_interval = candidate.clone();
+                                without_interval.signals.last_started_at = None;
+                                AccountSelector.availability(
+                                    &without_interval,
+                                    &state.context,
+                                    &limits,
+                                ) == AccountSchedulingAvailability::Busy
+                            }))
                 })
             {
                 sticky_tried.insert(original.clone());
@@ -531,7 +643,12 @@ impl CodexCredentialSelector {
                     .await?
                 {
                     WaitOutcome::Acquired(lease) => return Ok(*lease),
-                    WaitOutcome::Retry | WaitOutcome::RootChanged => continue 'rescan,
+                    WaitOutcome::RootChanged => {
+                        scan = 0;
+                        sticky_tried.clear();
+                        continue 'rescan;
+                    }
+                    WaitOutcome::Retry => continue 'rescan,
                     WaitOutcome::Skipped => {}
                     WaitOutcome::Changed => {
                         if state.pinned.is_some() {
@@ -540,7 +657,7 @@ impl CodexCredentialSelector {
                         continue 'rescan;
                     }
                     WaitOutcome::Full => {
-                        if state.pinned.is_some() {
+                        if state.pinned.is_some() || strict {
                             return Err(CredentialSelectionError::AccountWait(
                                 AccountWaitFailure::QueueFull,
                             ));
@@ -654,6 +771,9 @@ impl CodexCredentialSelector {
                         continue 'rescan;
                     }
                     ProviderLeaseAcquisition::Busy { .. } => {
+                        if state.projection.candidates.is_some() {
+                            continue 'rescan;
+                        }
                         if request.attempt.is_quality_check()
                             && let Some(current) =
                                 control.run(self.reload_wait_target(&id, request)).await?
@@ -693,7 +813,12 @@ impl CodexCredentialSelector {
                                 .await?
                             {
                                 WaitOutcome::Acquired(lease) => return Ok(*lease),
-                                WaitOutcome::Retry | WaitOutcome::RootChanged => continue 'rescan,
+                                WaitOutcome::RootChanged => {
+                                    scan = 0;
+                                    sticky_tried.clear();
+                                    continue 'rescan;
+                                }
+                                WaitOutcome::Retry => continue 'rescan,
                                 WaitOutcome::Skipped => continue,
                                 WaitOutcome::Changed => {
                                     if state.pinned.is_some() {
@@ -701,7 +826,7 @@ impl CodexCredentialSelector {
                                     }
                                     continue 'rescan;
                                 }
-                                WaitOutcome::Full if state.pinned.is_some() => {
+                                WaitOutcome::Full if state.pinned.is_some() || strict => {
                                     return Err(CredentialSelectionError::AccountWait(
                                         AccountWaitFailure::QueueFull,
                                     ));
@@ -802,7 +927,12 @@ impl CodexCredentialSelector {
                     .await?
                 {
                     WaitOutcome::Acquired(lease) => return Ok(*lease),
-                    WaitOutcome::Retry | WaitOutcome::RootChanged => continue 'rescan,
+                    WaitOutcome::RootChanged => {
+                        scan = 0;
+                        sticky_tried.clear();
+                        continue 'rescan;
+                    }
+                    WaitOutcome::Retry => continue 'rescan,
                     WaitOutcome::Skipped if request.attempt.is_quality_check() => {
                         // A refreshed interval belongs to direct quality waiting, not
                         // the bounded credential/publication conflict retry budget.
@@ -833,7 +963,7 @@ impl CodexCredentialSelector {
         &self,
         request: &CredentialSelectionInput<'_>,
     ) -> Result<Vec<ProviderAccount>, CredentialSelectionError> {
-        let mut accounts = self.repository.list_for_provider().await?;
+        let mut accounts = self.scoped_accounts(request).await?;
         if request.attempt.is_quality_retest()
             && let Some(required) = request.attempt.required_account()
             && !accounts.iter().any(|account| account.id() == required)
@@ -891,11 +1021,9 @@ impl CodexCredentialSelector {
             .collect::<Vec<_>>();
         self.retain_model_eligible(&mut accounts, request);
         self.quota.prepare_scheduling(&accounts).await;
+        let cooldowns = self.scheduling_cooldowns(&accounts, request).await;
         for account in accounts {
-            let cooldown = self
-                .scheduling_cooldown(&account, request)
-                .await
-                .map_err(|source| CredentialSelectionError::Store(Some(source.into())))?;
+            let cooldown = cooldowns.get(account.id()).copied().flatten();
             let health = self
                 .account_feedback
                 .scheduling_signals(&self.provider_kind, account.id());
@@ -1016,7 +1144,13 @@ impl CodexCredentialSelector {
             .run(self.reload_wait_exclusions(state, request))
             .await?;
         let limits = self.wait_limits()?;
-        let retain_on_contention = state.pinned.is_some() || mode == AccountWaitMode::Fallback;
+        let fixed_wait = state.pinned.as_ref() == Some(id)
+            || (state.follows_root
+                || (mode == AccountWaitMode::Sticky
+                    && state.context.policy.openai_account_affinity()
+                        == gateway_core::account::AccountAffinity::Strict))
+                && state.observed_affinity.as_ref() == Some(id);
+        let retain_on_contention = fixed_wait || mode == AccountWaitMode::Fallback;
         let interval_end = candidate.as_ref().and_then(|candidate| {
             interval_wait_deadline(candidate, &state.context, &limits, retain_on_contention)
         });
@@ -1076,7 +1210,7 @@ impl CodexCredentialSelector {
                     AccountSelector.availability(&current, &state.context, &limits),
                     AccountSchedulingAvailability::Blocked(_)
                 ) && !state.follows_root
-                    && !(mode == AccountWaitMode::Fallback
+                    && !(retain_on_contention
                         && interval_wait_deadline(&current, &state.context, &limits, true)
                             .is_some())
                 {
@@ -1089,7 +1223,7 @@ impl CodexCredentialSelector {
         let tuning = request.attempt.request_tuning();
         // A skipped interval must not start a new sticky window for later retries.
         if mode == AccountWaitMode::Sticky
-            && !state.follows_root
+            && !fixed_wait
             && interval_end.is_some_and(|end| {
                 request
                     .attempt
@@ -1104,7 +1238,7 @@ impl CodexCredentialSelector {
         }
         let deadline = control.enter(mode)?;
         if mode == AccountWaitMode::Sticky
-            && !state.follows_root
+            && !fixed_wait
             && interval_end.is_some_and(|end| end >= deadline.deadline())
         {
             return Ok(WaitOutcome::Changed);
@@ -1134,19 +1268,63 @@ impl CodexCredentialSelector {
         };
         let result = control
             .run(async {
-                let mut poll = Duration::from_millis(100);
+                let poll = Duration::from_millis(100);
+                let mut next_pool_recheck = tokio::time::Instant::now();
                 loop {
-                    if state.follows_root
-                        && let Some(key) = request.session_affinity_key
-                    {
-                        match self.lookup_session_affinity(key).await {
+                    if let Some(key) = request.affinity_key() {
+                        match self.lookup_request_affinity(request, key).await {
                             SessionAffinityLookup::Bound(binding)
                                 if Some(&binding) == state.observed_affinity_binding.as_ref() => {}
+                            SessionAffinityLookup::Missing
+                                if state.observed_affinity_binding.is_none() => {}
                             SessionAffinityLookup::Bound(_) | SessionAffinityLookup::Missing => {
                                 return Ok(WaitOutcome::RootChanged);
                             }
                             SessionAffinityLookup::Unavailable => {
                                 return Err(binding_unavailable());
+                            }
+                        }
+                    }
+                    if !fixed_wait && tokio::time::Instant::now() >= next_pool_recheck {
+                        next_pool_recheck =
+                            tokio::time::Instant::now() + Duration::from_millis(500);
+                        let candidates = self.reload_wait_pool(request, &state.universe).await?;
+                        self.reload_wait_exclusions(state, request).await?;
+                        let limits = self.wait_limits()?;
+                        let mut context = state.context.clone();
+                        context.now = SystemTime::now();
+                        context.excluded_accounts.insert(id.clone());
+                        while let Some(selected) = AccountSelector.select_with_live_capacity(
+                            &candidates,
+                            &context,
+                            &limits,
+                        ) {
+                            let account = &selected.candidate().account;
+                            match self
+                                .leases
+                                .try_acquire_scheduling(
+                                    self.wait_execution_request(account, &limits, request)?,
+                                )
+                                .await?
+                            {
+                                ProviderLeaseAcquisition::Acquired(guard) => {
+                                    if let Some(lease) = self
+                                        .finish_wait_selection(
+                                            guard,
+                                            limits.revision(),
+                                            account,
+                                            request,
+                                            state,
+                                        )
+                                        .await?
+                                    {
+                                        return Ok(WaitOutcome::Acquired(Box::new(lease)));
+                                    }
+                                    return Ok(WaitOutcome::Retry);
+                                }
+                                ProviderLeaseAcquisition::Busy { .. } => {
+                                    context.excluded_accounts.insert(account.id().clone());
+                                }
                             }
                         }
                     }
@@ -1158,7 +1336,6 @@ impl CodexCredentialSelector {
                     let Some(candidate) = candidate else {
                         if state.follows_root {
                             tokio::time::sleep(poll).await;
-                            poll = (poll * 2).min(Duration::from_secs(1));
                             continue;
                         }
                         return Ok(WaitOutcome::Changed);
@@ -1187,7 +1364,6 @@ impl CodexCredentialSelector {
                                 .and_then(|end| end.duration_since(SystemTime::now()).ok())
                                 .unwrap_or_default();
                             tokio::time::sleep(poll.min(remaining)).await;
-                            poll = (poll * 2).min(Duration::from_secs(1));
                             continue;
                         }
                         AccountSchedulingAvailability::Blocked(_) => {
@@ -1195,7 +1371,6 @@ impl CodexCredentialSelector {
                                 // Authentication, cooldown and exclusions cannot grant a
                                 // lease. Keep waiting for recovery or a root migration.
                                 tokio::time::sleep(poll).await;
-                                poll = (poll * 2).min(Duration::from_secs(1));
                                 continue;
                             }
                             return Ok(WaitOutcome::Changed);
@@ -1253,13 +1428,12 @@ impl CodexCredentialSelector {
                     let jitter =
                         Duration::from_millis(u64::from(uuid::Uuid::new_v4().as_bytes()[0] % 25));
                     tokio::time::sleep(poll + jitter).await;
-                    poll = (poll * 2).min(Duration::from_secs(1));
                 }
             })
             .await;
         if let Ok(WaitOutcome::Acquired(lease)) = result {
-            // Promotion has already removed/disarmed the wait ownership atomically.
-            drop(waiting);
+            // Promotion disarms ownership; cross-account admission must release the original token.
+            waiting.release().await?;
             return Ok(WaitOutcome::Acquired(lease));
         }
         // Await normal cleanup. Cancellation drops this future into Store's owned cleanup path.
@@ -1350,19 +1524,6 @@ impl CodexCredentialSelector {
             drop(guard);
             return Ok(None);
         }
-        let mut expected = if state
-            .pinned
-            .as_ref()
-            .zip(state.observed_affinity.as_ref())
-            .is_some_and(|(pin, bound)| pin != bound)
-        {
-            ProviderSessionAffinityBinding::legacy(id.clone())
-        } else {
-            state
-                .observed_affinity_binding
-                .clone()
-                .unwrap_or_else(|| ProviderSessionAffinityBinding::legacy(id.clone()))
-        };
         if !request.attempt.is_quality_retest()
             && self.excel_auth_block(&candidate.account).is_some()
         {
@@ -1385,7 +1546,20 @@ impl CodexCredentialSelector {
                     )
             })
             .collect();
-        let current = self.reload_wait_pool(request, &state.universe).await?;
+        let current = if let Some(cached) = state.projection.candidates.as_ref() {
+            cached
+                .iter()
+                .map(|old| {
+                    if old.account.id() == id {
+                        candidate.clone()
+                    } else {
+                        old.clone()
+                    }
+                })
+                .collect()
+        } else {
+            self.reload_wait_pool(request, &state.universe).await?
+        };
         self.reload_wait_exclusions(state, request).await?;
         let current_limits = self.wait_limits()?;
         acquired_context.now = SystemTime::now();
@@ -1410,41 +1584,20 @@ impl CodexCredentialSelector {
             &state.context,
             &current_limits,
         );
-        // All fallible credential/capacity validation precedes affinity mutation.
-        // A losing initial CAS only observes the existing winner; it cannot bind this account.
-        let renew_existing_binding = state.observed_affinity_binding.is_some()
-            && (state.observed_affinity.as_ref() == Some(id)
-                || request
-                    .attempt
-                    .account_selection_policy()
-                    .openai_account_affinity()
-                    == gateway_core::account::AccountAffinity::Preferred);
-        if state.observed_affinity.is_none()
-            && let Some(key) = request.session_affinity_key
-        {
-            let effective = self
-                .claim_initial_session_affinity(
-                    key,
-                    id,
-                    request
-                        .attempt
-                        .account_selection_policy()
-                        .openai_session_binding_ttl(),
-                )
-                .await?;
-            if state.pinned.is_none() {
-                state.observed_affinity_binding = Some(effective.clone());
-                state.observed_affinity = Some(effective.account_id().clone());
-                if effective.account_id() != id {
-                    drop(guard);
-                    state.affinity = AffinitySelection::preferred(effective);
-                    return Ok(None);
-                }
-                expected = effective;
-            }
-        }
+        let Some(expected) = self
+            .admit_selected_session(
+                request,
+                state.observed_affinity_binding.as_ref(),
+                id,
+                state.pinned.is_some(),
+            )
+            .await?
+        else {
+            drop(guard);
+            return Ok(None);
+        };
         if state.follows_root
-            && let Some(key) = request.session_affinity_key
+            && let Some(key) = request.affinity_key()
             && let Err(error) = self.verify_followed_root(key, &expected).await
         {
             if matches!(error, CredentialSelectionError::CapacityUnavailable { .. }) {
@@ -1466,25 +1619,6 @@ impl CodexCredentialSelector {
         {
             return Err(binding_unavailable());
         }
-        if renew_existing_binding && let Some(key) = request.session_affinity_key {
-            let renewed = self
-                .renew_session_affinity_binding(
-                    key,
-                    state
-                        .observed_affinity_binding
-                        .as_ref()
-                        .unwrap_or(&expected),
-                    request
-                        .attempt
-                        .account_selection_policy()
-                        .openai_session_binding_ttl(),
-                )
-                .await?;
-            if !renewed && (state.follows_root || state.pinned.is_none()) {
-                drop(guard);
-                return Ok(None);
-            }
-        }
         if !request.attempt.is_quality_retest()
             && self.excel_auth_block(&candidate.account).is_some()
         {
@@ -1503,7 +1637,7 @@ impl CodexCredentialSelector {
             cyber_policy_scope: state.cyber_policy_scope.clone(),
             diagnostic: false,
             allows_account_state_mutation: true,
-            affinity_telemetry: state.affinity.telemetry(id),
+            affinity_telemetry: state.affinity.telemetry(id, request.is_cache_preference()),
             affinity_expected_binding: expected,
             guardian_parent_record_key: request
                 .session_affinity_observation

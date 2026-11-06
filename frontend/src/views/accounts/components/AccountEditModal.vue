@@ -63,7 +63,7 @@ async function requestSave() {
     v-model="open"
     :title="t('accounts.editor.title')"
     description="查看账号信息，并调整调度与所属分组。"
-    size="md"
+    size="lg"
     :dismissible="!saving"
   >
     <div v-if="account" class="grid gap-5">

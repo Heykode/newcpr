@@ -550,7 +550,7 @@ async fn first_exchange_permits_missing_identity_claims_but_requires_a_parseable
     let error = complete("header.not-base64.signature".to_owned())
         .await
         .expect_err("official local payload parsing rejects malformed id tokens");
-    assert_eq!(error, CodexOAuthAdminError::TokenRejected);
+    assert!(matches!(error, CodexOAuthAdminError::TokenRejected));
 }
 
 struct CandidateExchanger {
@@ -654,7 +654,10 @@ async fn reauthorization_checks_candidate_before_reusing_a_missing_refresh_token
             })
             .await;
         if let Some(expected_error) = expected_error {
-            assert_eq!(result.unwrap_err(), expected_error);
+            assert_eq!(
+                std::mem::discriminant(&result.unwrap_err()),
+                std::mem::discriminant(&expected_error)
+            );
         } else {
             let CompletedCodexOAuthCredential::Reauthorize(prepared) = result.unwrap().credential
             else {
@@ -731,5 +734,5 @@ async fn first_exchange_rejects_conflicting_id_and_access_principals() {
         })
         .await
         .unwrap_err();
-    assert_eq!(error, CodexOAuthAdminError::PrincipalConflict);
+    assert!(matches!(error, CodexOAuthAdminError::PrincipalConflict));
 }

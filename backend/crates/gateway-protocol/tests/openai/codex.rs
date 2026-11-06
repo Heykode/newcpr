@@ -225,3 +225,57 @@ fn reasoning_effort_should_follow_the_latest_configuration_update() {
         assert_eq!(body, original);
     }
 }
+
+#[test]
+fn account_session_metadata_wins_over_cache_routing_without_changing_transport_identity() {
+    use gateway_protocol::openai::{
+        codex_account_session_id, codex_account_thread_id, codex_turn_id,
+    };
+    let context = object(
+        json!({"session_id":"cache-route","thread_id":"connection-thread", "turn_metadata":"{\"session_id\":\"connection-session\",\"thread_id\":\"connection-child\"}"}),
+    );
+    for (body, session, thread) in [
+        (
+            json!({"client_metadata":{"session_id":"frame-session","thread_id":"frame-child","turn_id":"frame-turn"}, "turn_metadata":"{\"session_id\":\"metadata-session\"}"}),
+            "frame-session",
+            "frame-child",
+        ),
+        (
+            json!({"turn_metadata":"{\"session_id\":\"metadata-session\",\"thread_id\":\"metadata-child\"}"}),
+            "metadata-session",
+            "metadata-child",
+        ),
+        (
+            json!({"session_id":"body-session"}),
+            "connection-session",
+            "connection-child",
+        ),
+    ] {
+        let body = object(body);
+        assert_eq!(
+            codex_account_session_id(&body, &context).as_deref(),
+            Some(session)
+        );
+        assert_eq!(
+            codex_account_thread_id(&body, &context).as_deref(),
+            Some(thread)
+        );
+        assert_eq!(
+            codex_session_id(&body, &context).as_deref(),
+            Some("cache-route")
+        );
+        if body.contains_key("client_metadata") {
+            assert_eq!(
+                codex_turn_id(&body, &context).as_deref(),
+                Some("frame-turn")
+            );
+        }
+    }
+    assert!(
+        codex_account_session_id(
+            &object(json!({"prompt_cache_key":"hint","thread_id":"child","turn_id":"turn"})),
+            &Map::new()
+        )
+        .is_none()
+    );
+}

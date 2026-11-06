@@ -153,6 +153,9 @@ pub struct CodexResponsesRequest {
     pub client_conversation_id: Option<String>,
     /// 客户端 session ID，仅保留在受控本地上下文。
     pub client_session_id: Option<String>,
+    /// Logical account identity, independent of cache routing and transport.
+    pub(crate) client_account_session_id: Option<String>,
+    pub(crate) client_account_follow_only: bool,
     /// 客户端 thread ID，仅保留在受控本地上下文。
     pub client_thread_id: Option<String>,
     /// Local account-selection hint; never part of upstream or connection identity.
@@ -638,6 +641,8 @@ impl CodexResponsesRequest {
             explicit_prompt_cache_key: false,
             client_conversation_id: None,
             client_session_id: None,
+            client_account_session_id: None,
+            client_account_follow_only: false,
             client_thread_id: None,
             scheduling_session_hint: None,
             client_request_id: None,

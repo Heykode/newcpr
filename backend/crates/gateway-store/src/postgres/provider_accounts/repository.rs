@@ -123,6 +123,47 @@ impl PgProviderAccountRepository {
         self
     }
 
+    pub(super) async fn list_provider_account_summaries(
+        &self,
+        provider_kind: Option<&str>,
+        include_disabled: bool,
+        account_ids: Option<&[&str]>,
+    ) -> StoreResult<Vec<ProviderAccountSummary>> {
+        let mut query = sqlx::QueryBuilder::<Postgres>::new("select
+                    coalesce((select enabled from outbound_proxies where outbound_proxies.id = provider_accounts.outbound_proxy_id), true) as outbound_proxy_enabled,
+            coalesce((select max_websocket_connections from outbound_proxies where outbound_proxies.id = provider_accounts.outbound_proxy_id), 0) as max_websocket_connections,
+            (select case when auto_location then detected_location_json -> 'location' else request_location_json end from outbound_proxies where outbound_proxies.id = provider_accounts.outbound_proxy_id and enabled) as request_location_json,
+                    outbound_proxy_id, outbound_proxy_url, id, provider_kind, name, custom_name, email, upstream_user_id,
+                    upstream_account_id, plan_type, authentication_kind, credential_revision, turn_state_binding_revision, has_refresh_token,
+                    access_token_expires_at, next_refresh_at, enabled, turn_state_injection_enabled, responses_upstream, excel_models, excel_models_follow_global, excel_cache_creation_as_input, excel_ignore_encrypted_content, request_proxy_source, excel_auto_disable_on_403, excel_403_action, excel_auto_disabled_at, excel_403_warning_at, excel_mode_disabled_at,
+            case when excel_models_follow_global then (select excel_default_models from runtime_settings where id = 1) else excel_models end as effective_excel_models, concurrency_limit, weight, model_access_json, credential_state,
+                    credential_observed_at, quota_access_state, quota_evidence,
+                    quota_access_observed_at, quota_reset_at,
+                    coalesce((select status = 'passed' and provider_accounts.quota_access_state='exhausted' and account_subject=provider_accounts.upstream_account_id from codex_quota_overdraft_states where account_id = provider_accounts.id and credential_revision = provider_accounts.credential_revision and config_revision = (select config_revision from runtime_settings where id = 1) and exists(select 1 from runtime_settings where id = 1 and codex_quota_overdraft_enabled)), false) as codex_quota_overdraft_passed,
+                    quota_observed_at, last_error_reason, last_error_message, created_at, updated_at,
+                    relogin_count, last_relogin_at
+             from provider_accounts
+             where true");
+        if let Some(provider_kind) = provider_kind {
+            query.push(" and provider_kind = ").push_bind(provider_kind);
+        }
+        if !include_disabled {
+            query.push(" and enabled");
+        }
+        if let Some(account_ids) = account_ids {
+            query
+                .push(" and id = any(")
+                .push_bind(account_ids)
+                .push("::text[])");
+        }
+        query.push(" order by provider_kind, name, id");
+        let rows =
+            query.build().fetch_all(&self.pool).await.map_err(|error| {
+                postgres_unavailable("list provider accounts").with_source(error)
+            })?;
+        rows.into_iter().map(account_summary_from_row).collect()
+    }
+
     pub(super) async fn advance_protection(&self, id: &str, revision: u64) {
         let Some(store) = &self.protection else {
             return;
@@ -171,30 +212,8 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
         provider_kind: Option<&str>,
         include_disabled: bool,
     ) -> StoreResult<Vec<ProviderAccountSummary>> {
-        let rows = sqlx::query(
-            "select
-                    coalesce((select enabled from outbound_proxies where outbound_proxies.id = provider_accounts.outbound_proxy_id), true) as outbound_proxy_enabled,
-            coalesce((select max_websocket_connections from outbound_proxies where outbound_proxies.id = provider_accounts.outbound_proxy_id), 0) as max_websocket_connections,
-            (select case when auto_location then detected_location_json -> 'location' else request_location_json end from outbound_proxies where outbound_proxies.id = provider_accounts.outbound_proxy_id and enabled) as request_location_json,
-                    outbound_proxy_id, outbound_proxy_url, id, provider_kind, name, custom_name, email, upstream_user_id,
-                    upstream_account_id, plan_type, authentication_kind, credential_revision, turn_state_binding_revision, has_refresh_token,
-                    access_token_expires_at, next_refresh_at, enabled, turn_state_injection_enabled, responses_upstream, excel_models, excel_models_follow_global, excel_cache_creation_as_input, excel_ignore_encrypted_content, request_proxy_source, excel_auto_disable_on_403, excel_403_action, excel_auto_disabled_at, excel_403_warning_at, excel_mode_disabled_at,
-            case when excel_models_follow_global then (select excel_default_models from runtime_settings where id = 1) else excel_models end as effective_excel_models, concurrency_limit, weight, model_access_json, credential_state,
-                    credential_observed_at, quota_access_state, quota_evidence,
-                    quota_access_observed_at, quota_reset_at,
-                    coalesce((select status = 'passed' and provider_accounts.quota_access_state='exhausted' and account_subject=provider_accounts.upstream_account_id from codex_quota_overdraft_states where account_id = provider_accounts.id and credential_revision = provider_accounts.credential_revision and config_revision = (select config_revision from runtime_settings where id = 1) and exists(select 1 from runtime_settings where id = 1 and codex_quota_overdraft_enabled)), false) as codex_quota_overdraft_passed,
-                    quota_observed_at, last_error_reason, last_error_message, created_at, updated_at,
-                    relogin_count, last_relogin_at
-             from provider_accounts
-             where ($1::text is null or provider_kind = $1) and ($2 or enabled)
-             order by provider_kind, name, id",
-        )
-        .bind(provider_kind)
-        .bind(include_disabled)
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|error| postgres_unavailable("list provider accounts").with_source(error))?;
-        rows.into_iter().map(account_summary_from_row).collect()
+        self.list_provider_account_summaries(provider_kind, include_disabled, None)
+            .await
     }
 
     async fn insert_provider_account(&self, mut account: NewProviderAccount) -> StoreResult<()> {

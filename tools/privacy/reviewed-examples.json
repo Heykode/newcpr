@@ -2558,5 +2558,37 @@
     "file_sha256": "e9bbdb383f64e457c086c2426129efa0aabbb7684d8d301356e8b7f396b5beed",
     "line_sha256": "3f38fe650b6ee1a2a780c28e6a85fc7f3944ed5a6d440efba94da0db6a8757b5",
     "reason": "Manually re-reviewed unchanged automatic-location authentication fixture after optional-proxy API adaptation; synthetic credentials authenticate only the ephemeral local MockServer."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/credential/token_client.rs",
+    "rule": "gitleaks:generic-api-key",
+    "line": 72,
+    "file_sha256": "ba0a10b5467777e425d4ddbfc9f09fde8286cfd15cedea5cb019314ae55d3e6a",
+    "line_sha256": "e08f3e5adfbd37e055a284d9e81db7a0ca0b59c809eb7c60cd2f91ebc8cb95f9",
+    "reason": "Manually re-reviewed unsigned mock JWT in the local proxy token route fixture; header.e30.signature has an empty object payload and no valid signature."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/credential/token_client.rs",
+    "rule": "gitleaks:generic-api-key",
+    "line": 385,
+    "file_sha256": "ba0a10b5467777e425d4ddbfc9f09fde8286cfd15cedea5cb019314ae55d3e6a",
+    "line_sha256": "866aaa0977c3b9fa9b43fe03981074ea2d58b2b0eefb046ffd37628fb4fe5f05",
+    "reason": "Manually re-reviewed unsigned mock JWT returned by the two loopback proxy fixtures to verify account-specific refresh and code exchange routing."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/credential/token_client.rs",
+    "rule": "gitleaks:generic-api-key",
+    "line": 420,
+    "file_sha256": "ba0a10b5467777e425d4ddbfc9f09fde8286cfd15cedea5cb019314ae55d3e6a",
+    "line_sha256": "9de12eaf8ba8b0e4858b4328471402834f850fcf52eeb8962f910183467f1026",
+    "reason": "Manually re-reviewed unsigned mock JWT in the online wire-profile fixture; synthetic token fields are served only by MockServer."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/credential/token_client.rs",
+    "rule": "gitleaks:generic-api-key",
+    "line": 536,
+    "file_sha256": "ba0a10b5467777e425d4ddbfc9f09fde8286cfd15cedea5cb019314ae55d3e6a",
+    "line_sha256": "61848d28dd41e959f480609bf1437a9575194a9527f3a563c1fcb2fd8448783d",
+    "reason": "Manually re-reviewed unsigned mock JWT in the bounded OAuth response parser fixture; checks rotation field parsing without a real credential."
   }
 ]

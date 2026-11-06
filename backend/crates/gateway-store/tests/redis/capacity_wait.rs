@@ -979,7 +979,7 @@ async fn capacity_wait_cancelled_future_cleans_write_before_reply_delivery() {
 }
 
 #[tokio::test]
-async fn capacity_wait_fast_acquire_ignores_full_wait_queue_and_cleans_on_drop() {
+async fn capacity_wait_fast_acquire_respects_existing_queue_and_cleans_after_release() {
     let Some(mut fixture) = Fixture::new().await else {
         return;
     };
@@ -997,19 +997,39 @@ async fn capacity_wait_fast_acquire_ignores_full_wait_queue_and_cleans_on_drop()
             .expect("full wait queue"),
         ProviderWaitLeaseAcquisition::Full
     ));
+    let request = scheduling("fast", 1, Duration::ZERO, Duration::from_secs(10));
+    assert!(matches!(
+        fixture
+            .port
+            .try_acquire_scheduling(request.clone())
+            .await
+            .expect("direct admission respects older waiters"),
+        ProviderLeaseAcquisition::Busy { .. }
+    ));
+    assert_eq!(fixture.waiting("fast").await, 100);
+    assert_eq!(fixture.in_flight("fast").await, 0);
+    let quality = fast_acquired(
+        fixture
+            .port
+            .try_acquire_scheduling(request.clone().with_quality_check(true))
+            .await
+            .expect("quality retains its independent capacity"),
+    );
+    assert_eq!(fixture.in_flight("fast").await, 0);
+    assert_eq!(fixture.waiting("fast").await, 100);
+    drop(quality);
+    for waiter in waiters {
+        waiter.release().await.expect("normal wait release");
+    }
+    assert_eq!(fixture.waiting("fast").await, 0);
     let executing = fast_acquired(
         fixture
             .port
-            .try_acquire_scheduling(scheduling(
-                "fast",
-                1,
-                Duration::ZERO,
-                Duration::from_secs(10),
-            ))
+            .try_acquire_scheduling(request)
             .await
-            .expect("fast acquisition independent of wait count"),
+            .expect("direct admission after the queue clears"),
     );
-    assert_eq!(fixture.waiting("fast").await, 100);
+    assert_eq!(fixture.waiting("fast").await, 0);
     assert_eq!(fixture.in_flight("fast").await, 1);
     assert!(matches!(
         fixture
@@ -1025,9 +1045,6 @@ async fn capacity_wait_fast_acquire_ignores_full_wait_queue_and_cleans_on_drop()
         ProviderLeaseAcquisition::Busy { .. }
     ));
     drop(executing);
-    for waiter in waiters {
-        waiter.release().await.expect("normal wait release");
-    }
     fixture.drain().await;
     assert_eq!(fixture.in_flight("fast").await, 0);
     fixture.finish().await;
@@ -1685,17 +1702,19 @@ fn fast_acquired(outcome: ProviderLeaseAcquisition) -> Box<dyn ProviderLeaseGuar
 }
 
 #[derive(Clone, Copy)]
-enum Fault {
+pub(super) enum Fault {
     LoseReply,
     DelayCommand,
     HoldReply,
+    NoScript,
 }
 
 #[derive(Clone, Copy)]
-enum ScriptTarget {
+pub(super) enum ScriptTarget {
     Enqueue,
     Execution,
     Cancel,
+    Any,
 }
 
 impl ScriptTarget {
@@ -1704,6 +1723,7 @@ impl ScriptTarget {
             Self::Enqueue => (4, 4),
             Self::Execution => (6, 9),
             Self::Cancel => (4, 2),
+            Self::Any => return true,
         };
         args.get(2)
             .is_some_and(|count| *count == keys.to_string().as_bytes())
@@ -1711,16 +1731,17 @@ impl ScriptTarget {
     }
 }
 
-struct FaultProxy {
+pub(super) struct FaultProxy {
     url: String,
     captured: mpsc::UnboundedReceiver<Vec<u8>>,
     resume: Arc<Notify>,
     shutdown: Arc<Notify>,
     task: JoinHandle<()>,
+    fired: Arc<AtomicBool>,
 }
 
 impl FaultProxy {
-    async fn start(fault: Fault, script: ScriptTarget) -> Self {
+    pub(super) async fn start(fault: Fault, script: ScriptTarget) -> Self {
         let mut url =
             url::Url::parse(&std::env::var("CPR_TEST_REDIS_URL").expect("real Redis required"))
                 .expect("test URL");
@@ -1742,8 +1763,10 @@ impl FaultProxy {
         let shutdown = Arc::new(Notify::new());
         let stop = Arc::clone(&shutdown);
         let proceed = Arc::clone(&resume);
+        let fired = Arc::new(AtomicBool::new(matches!(fault, Fault::NoScript)));
+        let trigger = Arc::clone(&fired);
         let task = tokio::spawn(async move {
-            let fired = Arc::new(AtomicBool::new(false));
+            let fired = trigger;
             let mut sessions = JoinSet::new();
             loop {
                 tokio::select! {
@@ -1773,10 +1796,11 @@ impl FaultProxy {
             resume,
             shutdown,
             task,
+            fired,
         }
     }
 
-    async fn connection(&self) -> ConnectionManager {
+    pub(super) async fn connection(&self) -> ConnectionManager {
         redis::Client::open(self.url.as_str())
             .expect("proxy URL")
             .get_connection_manager_with_config(
@@ -1788,7 +1812,18 @@ impl FaultProxy {
             .expect("proxy Redis connection")
     }
 
-    async fn finish(self) {
+    pub(super) fn inject_script_miss(&self) {
+        self.fired.store(false, Ordering::SeqCst);
+    }
+
+    pub(super) async fn verify_script_miss(&mut self) {
+        tokio::time::timeout(Duration::from_secs(2), self.captured.recv())
+            .await
+            .expect("script miss was exercised")
+            .expect("injected EVALSHA was captured");
+    }
+
+    pub(super) async fn finish(self) {
         self.shutdown.notify_one();
         self.task.await.expect("join fault proxy");
     }
@@ -1817,6 +1852,19 @@ async fn proxy_connection(
             sender.send(command).expect("capture delayed command");
             return;
         }
+        if target && matches!(fault, Fault::NoScript) {
+            // Reject only this connection's unexecuted command; SCRIPT FLUSH
+            // would invalidate the shared Redis cache for unrelated tests.
+            sender.send(command).expect("capture script miss");
+            if client
+                .write_all(b"-NOSCRIPT injected test cache miss\r\n")
+                .await
+                .is_err()
+            {
+                return;
+            }
+            continue;
+        }
         if server.write_all(&command).await.is_err() {
             return;
         }
@@ -1831,7 +1879,7 @@ async fn proxy_connection(
             match fault {
                 Fault::LoseReply => return,
                 Fault::HoldReply => resume.notified().await,
-                Fault::DelayCommand => unreachable!(),
+                Fault::DelayCommand | Fault::NoScript => unreachable!(),
             }
         }
         if client.write_all(&reply).await.is_err() {
@@ -2017,11 +2065,17 @@ mod guardian_pool {
     }
 
     #[tokio::test]
-    async fn reserved_fifo_releases_cancelled_and_expired_heads_and_rejects_cross_pool_promotion() {
+    async fn business_pool_fifo_releases_cancelled_and_expired_heads_and_rejects_cross_pool_promotion()
+     {
         let Some(mut fixture) = Fixture::new().await else {
             return;
         };
-        for expire in [false, true] {
+        for (pool, expire) in [
+            (ProviderConcurrencyPool::Shared, false),
+            (ProviderConcurrencyPool::Shared, true),
+            (ProviderConcurrencyPool::Reserved, false),
+            (ProviderConcurrencyPool::Reserved, true),
+        ] {
             let id = if expire {
                 "expired-head"
             } else {
@@ -2032,7 +2086,7 @@ mod guardian_pool {
                     .port
                     .try_acquire_wait(
                         wait_request(id, AccountWaitMode::Sticky, 3, Duration::from_secs(10))
-                            .with_concurrency_pool(ProviderConcurrencyPool::Reserved),
+                            .with_concurrency_pool(pool),
                     )
                     .await
                     .unwrap(),
@@ -2042,19 +2096,34 @@ mod guardian_pool {
                     .port
                     .try_acquire_wait(
                         wait_request(id, AccountWaitMode::Fallback, 3, Duration::from_secs(10))
-                            .with_concurrency_pool(ProviderConcurrencyPool::Reserved),
+                            .with_concurrency_pool(pool),
                     )
                     .await
                     .unwrap(),
             );
             let request = scheduling(id, 1, Duration::ZERO, Duration::from_secs(10))
-                .with_concurrency_pool(ProviderConcurrencyPool::Reserved);
+                .with_concurrency_pool(pool);
             assert!(matches!(
                 next.try_promote(request.clone()).await.unwrap(),
                 ProviderWaitPromotion::Busy { .. }
             ));
+            assert!(
+                matches!(
+                    fixture
+                        .port
+                        .try_acquire_scheduling(request.clone())
+                        .await
+                        .unwrap(),
+                    ProviderLeaseAcquisition::Busy { .. }
+                ),
+                "a new or cross-account admission cannot overtake the destination queue"
+            );
             if expire {
-                let key = format!("{}:reserved:waiting", fixture.active_key(id));
+                let key = if pool == ProviderConcurrencyPool::Reserved {
+                    format!("{}:reserved:waiting", fixture.active_key(id))
+                } else {
+                    fixture.waiting_key(id)
+                };
                 let tokens: Vec<String> = redis::cmd("ZRANGE")
                     .arg(format!("{key}:order"))
                     .arg(0)

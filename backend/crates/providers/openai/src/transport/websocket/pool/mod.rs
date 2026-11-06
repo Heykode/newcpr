@@ -459,10 +459,9 @@ impl CodexWebSocketPool {
         reservation_id: Uuid,
         connection: PooledWebSocketConnection,
     ) {
+        // The original downstream retains idle control until checkout replaces it
+        // or retirement closes the socket. Terminal delivery alone is not revocation.
         let mut connection = Some(connection);
-        if let Some(connection) = &mut connection {
-            connection.websocket.revoke_control();
-        }
         let mut close = Vec::new();
         {
             let mut state = self.lock_state();

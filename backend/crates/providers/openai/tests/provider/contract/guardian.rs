@@ -276,7 +276,10 @@ async fn guardian_parent_preference_never_overrides_own_binding_or_native_owner(
         request(
             "codex-auto-review",
             child_body("guardian"),
-            Map::from_iter([("thread_id".to_owned(), json!("child-thread"))]),
+            Map::from_iter([
+                ("session_id".to_owned(), json!("child-session")),
+                ("thread_id".to_owned(), json!("child-thread")),
+            ]),
         )
     };
     let before = bindings.lookup_keys().len();
@@ -295,7 +298,9 @@ async fn guardian_parent_preference_never_overrides_own_binding_or_native_owner(
         .unwrap();
     assert_eq!(stream.metadata().provider_account_id(), &new);
     drop(stream);
-    assert_eq!(&bindings.lookup_keys()[before..], &[own_key]);
+    let keys = bindings.lookup_keys();
+    assert!(keys.len() > before);
+    assert!(keys[before..].iter().all(|key| key == &own_key));
 
     let before = bindings.lookup_keys().len();
     let stream = provider

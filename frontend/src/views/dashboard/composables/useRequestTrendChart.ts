@@ -3,10 +3,11 @@ import type { Ref } from 'vue'
 import type { dashboardTrendView, normalizeDashboardTrendKind } from './useDashboard'
 import { usePreferredReducedMotion } from '@vueuse/core'
 import { computed, shallowRef, watch } from 'vue'
-
 import { sampleGapBridgeSeries } from '@/components/charts/timeSeriesGap'
+
 import { chartTooltipContent, chartTooltipStyle, tooltipIndex } from '@/components/charts/tooltip'
 import { useChartPalette } from '@/composables/useChartPalette'
+import { t } from '@/i18n'
 
 type TrendKind = ReturnType<typeof normalizeDashboardTrendKind>
 type TrendView = ReturnType<typeof dashboardTrendView>
@@ -232,8 +233,11 @@ export function useRequestTrendChart(options: {
     }
     if (name === '错误数')
       return point?.errors ?? value
-    if (name === '成功率')
-      return zeroAwareRateText(point, 'successRate', 'requestsValue') ?? value
+    if (name === '成功率') {
+      return point?.successRateValue == null
+        ? t('usage.health.noSamples')
+        : trendPointText(point, 'successRate') ?? value
+    }
     if (name === '总请求')
       return point?.requests ?? value
     return value
@@ -304,7 +308,7 @@ export function useRequestTrendChart(options: {
       ),
       ...gapLineSeries(
         '成功率',
-        activeSeriesValues('successRateValue'),
+        seriesValues('successRateValue'),
         trendColor('成功', '--cp-color-green-solid', '#12B981'),
         { width: 2.4, yAxisIndex: 1 },
       ),

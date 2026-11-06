@@ -2,8 +2,9 @@ import type { Component } from 'vue'
 import { Activity, FileText, Timer, Users } from '@lucide/vue'
 import { useIntervalFn } from '@vueuse/core'
 import { computed, onMounted, onScopeDispose, shallowRef } from 'vue'
-
 import { getDashboardSummary, getDashboardTrend } from '@/api'
+
+import { t } from '@/i18n'
 import { errorMessage, withMinimumDuration } from '@/utils/async'
 import { formatDateTime } from '@/utils/date'
 import { formatCompactNumber, formatInteger } from '@/utils/number'
@@ -284,7 +285,7 @@ export function dashboardTrendView(trend: DashboardTrend | null) {
   for (const item of trend.summary) {
     summary.push({
       label: item.label,
-      value: trend.kind === 'errors' && item.ratio !== null ? item.ratio : item.value,
+      value: trend.kind === 'errors' && item.label === '成功率' ? item.ratio ?? t('usage.health.noSamples') : item.value,
       tone: trendSummaryTone(item.label),
       colorVar: trendSummaryColorVar(trend.kind, item.label),
     })

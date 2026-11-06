@@ -591,7 +591,7 @@ async fn observability_services_should_calculate_usage_insights_and_diagnostic_s
 
     assert_eq!(insights.health.total_requests, 10);
     assert_eq!(insights.health.failed_requests, 2);
-    assert_eq!(insights.health.success_rate, 0.75);
+    assert_eq!(insights.health.success_rate, Some(0.75));
     assert_eq!(insights.health.completion_rate, 1.0);
     assert_eq!(insights.granularity, Granularity::FifteenMinutes);
     assert_eq!(insights.performance.latency_coverage, 0.5);
@@ -1183,7 +1183,9 @@ fn diagnostic(name: &str, request_count: u64) -> DiagnosticObservation {
         account_plan_type: None,
         retried_request_count: 0,
         first_token_p95_ms: None,
-        non_completion_count: 0,
+        cancelled_count: 0,
+        incomplete_count: 0,
+        caller_error_count: 0,
         retry_count: 0,
         key: name.to_owned(),
         name: name.to_owned(),
@@ -1294,4 +1296,125 @@ async fn usage_metric_budget_includes_waiting_for_the_same_cache_slot() {
         .usage_metric(range, UsageFilter::default(), M::Latency)
         .await
         .expect("timeout must release the cache initializer for the next request");
+}
+
+#[tokio::test]
+async fn health_views_should_include_incomplete_and_keep_final_outcomes_separate() {
+    let now = Utc::now();
+    let current_slot = quarter_hour_start(now);
+    let store = Arc::new(FixtureObservabilityStore::new(observation_range(now)));
+    let services = observability_services(store.clone()).await;
+    let fixtures = [
+        (162, 0, 2, 0, 0, 0, Some(98.780_487_804_878_05)),
+        (297, 0, 2, 5, 0, 0, Some(99.331_103_678_929_76)),
+        (467, 1, 5, 0, 0, 0, Some(98.731_501_057_082_45)),
+        (95, 2, 3, 4, 1, 7, Some(95.0)),
+        (100, 0, 0, 0, 0, 0, Some(100.0)),
+        (0, 0, 0, 0, 0, 0, None),
+        (0, 0, 0, 4, 3, 2, None),
+        (0, 1, 2, 0, 0, 0, Some(0.0)),
+    ];
+
+    for (
+        index,
+        (success, failed, incomplete, cancelled, caller_error, running, expected_percent),
+    ) in fixtures.into_iter().enumerate()
+    {
+        let range = observation_range(
+            now + Duration::seconds(i64::try_from(index).expect("fixture index fits i64") * 2),
+        );
+        let metrics = RequestMetrics {
+            request_count: success + failed + incomplete + cancelled + caller_error + running,
+            success_count: success,
+            failure_count: failed + caller_error,
+            incomplete_count: incomplete,
+            cancelled_count: cancelled,
+            caller_error_count: caller_error,
+            ..RequestMetrics::default()
+        };
+        store.replace_trend(vec![health_metric_point(current_slot, metrics.clone())]);
+        store.replace_overview(UsageOverview {
+            range,
+            requests: metrics,
+            // 中间尝试失败不会增加最终失败请求数
+            attempts: AttemptMetrics {
+                failure_count: 2,
+                ..AttemptMetrics::default()
+            },
+            providers: Vec::new(),
+        });
+
+        let mut item = diagnostic(
+            "model",
+            success + failed + incomplete + cancelled + caller_error + running,
+        );
+        item.success_count = success;
+        item.failure_count = failed + caller_error;
+        item.incomplete_count = incomplete;
+        item.cancelled_count = cancelled;
+        item.caller_error_count = caller_error;
+        store.replace_diagnostics(vec![item]);
+        let diagnostics = services
+            .observability()
+            .diagnostics(
+                range,
+                UsageFilter::default(),
+                DiagnosticDimension::Model,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(diagnostics.items[0].error_count, failed + incomplete);
+
+        let dashboard = services
+            .observability()
+            .dashboard_summary(range, TrendKind::Usage)
+            .await
+            .expect("dashboard summary");
+        let timeline = dashboard.health_timeline;
+        let point = timeline
+            .points
+            .iter()
+            .find(|point| point.bucket_start == current_slot)
+            .expect("current health slot");
+        assert_eq!(dashboard.trend.summary.error_count, failed + incomplete);
+        assert_eq!(dashboard.trend.points[0].error_count, failed + incomplete);
+        assert_eq!(point.failed_requests, failed);
+        assert_eq!(point.incomplete_requests, incomplete);
+        assert_eq!(point.cancelled_requests, cancelled);
+        assert_eq!(point.caller_error_requests, caller_error);
+
+        let insights = services
+            .observability()
+            .usage_insights(range, UsageFilter::default())
+            .await
+            .expect("usage insights");
+        assert_eq!(insights.health.failed_requests, failed);
+        assert_eq!(insights.health.incomplete_requests, incomplete);
+        for actual in [
+            timeline.reliability_percent,
+            point.reliability_percent,
+            dashboard
+                .trend
+                .summary
+                .success_rate
+                .map(|rate| rate * 100.0),
+            dashboard.trend.points[0]
+                .success_rate
+                .map(|rate| rate * 100.0),
+            insights.health.success_rate.map(|rate| rate * 100.0),
+            insights.health.points[0]
+                .error_rate
+                .map(|rate| (1.0 - rate) * 100.0),
+            diagnostics.items[0]
+                .error_rate
+                .map(|rate| (1.0 - rate) * 100.0),
+        ] {
+            match (actual, expected_percent) {
+                (Some(actual), Some(expected)) => assert!((actual - expected).abs() < 1e-10),
+                (None, None) => {}
+                _ => panic!("unexpected rate: {actual:?}, expected {expected_percent:?}"),
+            }
+        }
+    }
 }

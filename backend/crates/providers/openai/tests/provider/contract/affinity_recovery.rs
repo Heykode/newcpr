@@ -30,6 +30,15 @@ fn request(child: bool) -> ProviderRequest {
 }
 
 fn attempt(wait: bool, excluded: bool, cancellation: CancellationToken) -> AttemptContext {
+    attempt_in_scope(wait, excluded, cancellation, contract_account_scope())
+}
+
+fn attempt_in_scope(
+    wait: bool,
+    excluded: bool,
+    cancellation: CancellationToken,
+    scope: Arc<FrozenAccountScope>,
+) -> AttemptContext {
     AttemptContext::new(
         RequestAttemptContext::new(
             ModelRequestId::new("req_follow_recovery").unwrap(),
@@ -48,7 +57,7 @@ fn attempt(wait: bool, excluded: bool, cancellation: CancellationToken) -> Attem
             None,
             None,
         )
-        .with_account_scope(contract_account_scope()),
+        .with_account_scope(scope),
         None,
         cancellation,
     )
@@ -442,10 +451,17 @@ async fn strict_migration_to_an_account_outside_the_frozen_universe_cannot_acqui
     let f = fixture(false).await;
     credential_state(&f, CredentialState::Expired).await;
     let cancel = CancellationToken::new();
-    let mut pending = Box::pin(
-        f.provider
-            .execute(request(true), attempt(true, false, cancel.clone())),
-    );
+    let scope = Arc::new(FrozenAccountScope::new(
+        Arc::new(RuntimeAccountDirectory::new(BTreeMap::from([(
+            ProviderAccountId::new("acct_scope_old").unwrap(),
+            RuntimeAccount::new(ProviderKind::new("openai").unwrap(), BTreeSet::new()),
+        )]))),
+        ClientRoutingScope::all_accounts(),
+    ));
+    let mut pending = Box::pin(f.provider.execute(
+        request(true),
+        attempt_in_scope(true, false, cancel.clone(), scope),
+    ));
     queued(&mut pending, &f).await;
     create_account(&f.store, "acct_scope_new").await;
     f.affinity.seed_binding(

@@ -5,6 +5,10 @@ use gateway_core::provider_ports::{
 
 mod quality_wait;
 
+// Persisted pre-sessionless-preference digest from the synthetic e5a76755 fixture.
+const LEGACY_CONTENT_DIGEST: &str =
+    "31924d7180732fe7c7d38a31da3b93fe901d86b775e81c4bd0017ac959e97f66";
+
 #[tokio::test]
 async fn retired_state_flags_do_not_gate_either_selector_or_bypass_model_restrictions() {
     use gateway_core::routing::OpenAiTurnStatePolicy;
@@ -284,7 +288,7 @@ async fn scheduling_hint_migrates_once_without_rewriting_the_old_binding() {
         context("req_legacy", CancellationToken::new()),
     )
     .await;
-    let old_key = affinity.lookup_keys()[0].clone();
+    let old_key = LEGACY_CONTENT_DIGEST.to_owned();
     let kind = ProviderKind::new("openai").expect("provider");
     let old_account = ProviderAccountId::new("acct_scope_old").expect("account");
     let other_account = ProviderAccountId::new("acct_scope_new").expect("account");
@@ -354,7 +358,7 @@ async fn scheduling_hint_migration_rechecks_disabled_scope_exclusion_quota_and_c
             context("req_old", CancellationToken::new()),
         )
         .await;
-        let old_key = affinity.lookup_keys()[0].clone();
+        let old_key = LEGACY_CONTENT_DIGEST.to_owned();
         let old_account = ProviderAccountId::new(old_id).expect("old account");
         affinity.seed_binding(
             &ProviderKind::new("openai").expect("provider"),
@@ -567,7 +571,7 @@ async fn scheduling_hint_migrated_sessions_fail_over_independently() {
         context("req_old", CancellationToken::new()),
     )
     .await;
-    let old_key = affinity.lookup_keys()[0].clone();
+    let old_key = LEGACY_CONTENT_DIGEST.to_owned();
     let old_account = ProviderAccountId::new("acct_scope_old").unwrap();
     affinity.seed_binding(
         &ProviderKind::new("openai").unwrap(),
@@ -602,10 +606,29 @@ async fn scheduling_hint_migrated_sessions_fail_over_independently() {
     let mut stream = provider
         .execute(
             planned_request("openai", Operation::Generate(retry)),
-            context_with_state_owner("req_failover", "acct_scope_old"),
+            AttemptContext::new(
+                RequestAttemptContext::new(
+                    ModelRequestId::new("req_failover").unwrap(),
+                    ClientApiKeyId::new("key_openai_contract").unwrap(),
+                ),
+                NonZeroU32::new(2).unwrap(),
+                SystemTime::now() + Duration::from_secs(30),
+                account_policy(),
+                AccountAttemptContext::new(
+                    [old_account.clone()].into(),
+                    None,
+                    Some(ProviderAccountStateOwner::new(
+                        ProviderKind::new("openai").unwrap(),
+                        old_account.clone(),
+                    )),
+                )
+                .with_account_scope(contract_account_scope()),
+                None,
+                CancellationToken::new(),
+            ),
         )
         .await
-        .expect("escape busy account");
+        .expect("authorized retry excludes the failed account");
     assert_eq!(
         stream.metadata().provider_account_id().as_str(),
         "acct_scope_new"
@@ -733,16 +756,31 @@ async fn scheduling_hint_cannot_move_a_live_websocket_continuation_to_another_ac
         context("req_seed_owner", CancellationToken::new()),
     )
     .await;
-    let owner_key = affinity.lookup_keys()[before].clone();
-    affinity.seed_binding(
-        &ProviderKind::new("openai").unwrap(),
-        &owner_key,
-        ProviderAccountId::new("acct_scope_old").unwrap(),
+    assert_eq!(
+        affinity.lookup_keys().len(),
+        before,
+        "restored ownership does not create a content binding"
     );
     let mut stream = provider
         .execute(
             planned_request("openai", Operation::Generate(first)),
-            context("req_ws_first", CancellationToken::new()),
+            AttemptContext::new(
+                RequestAttemptContext::new(
+                    ModelRequestId::new("req_ws_first").unwrap(),
+                    ClientApiKeyId::new("key_openai_contract").unwrap(),
+                ),
+                NonZeroU32::MIN,
+                SystemTime::now() + Duration::from_secs(30),
+                account_policy(),
+                AccountAttemptContext::new(
+                    BTreeSet::new(),
+                    Some(ProviderAccountId::new("acct_scope_old").unwrap()),
+                    None,
+                )
+                .with_account_scope(contract_account_scope()),
+                None,
+                CancellationToken::new(),
+            ),
         )
         .await
         .unwrap();
@@ -795,10 +833,6 @@ async fn scheduling_hint_cannot_move_a_live_websocket_continuation_to_another_ac
             .contains("conflicting")
     );
     assert_eq!(bound(&affinity, &hint_key).await.as_str(), "acct_scope_new");
-    assert_eq!(
-        bound(&affinity, &owner_key).await.as_str(),
-        "acct_scope_old"
-    );
 }
 
 fn waiting_provider(

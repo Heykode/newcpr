@@ -1,12 +1,11 @@
 <script setup lang="ts">
 import type { AccountModelAccess } from '@/api'
-import { CircleAlert, RefreshCw, Search } from '@lucide/vue'
+import { CircleAlert, ListChecks, ListMinus, Plus, RefreshCw, Search } from '@lucide/vue'
 
 import { computed, ref, useId, useTemplateRef, watch } from 'vue'
 import { getAccountModels, refreshAccountModels } from '@/api'
 import { getQualityModels } from '@/api/modules/quality-ops'
 import BaseButton from '@/components/base/BaseButton.vue'
-import BaseCheckbox from '@/components/base/BaseCheckbox.vue'
 import BaseEmpty from '@/components/base/BaseEmpty.vue'
 import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
@@ -17,6 +16,7 @@ import { useRequestState } from '@/composables/useRequestState'
 import { t } from '@/i18n'
 import { accountModelAccessError, accountModelIdError } from '../utils/modelAccess'
 import AccountModelCleanupPopover from './AccountModelCleanupPopover.vue'
+import AccountModelOption from './AccountModelOption.vue'
 
 const props = withDefaults(defineProps<{
   accountId?: string
@@ -39,7 +39,8 @@ const catalogLoaded = ref(false)
 const retryAppend = ref(false)
 const useKnownCatalog = computed(() => !props.accountId && props.knownModelCatalog)
 const search = ref('')
-const inputError = ref('')
+const selectionError = ref('')
+const searchInput = useTemplateRef<InstanceType<typeof BaseInput>>('searchInput')
 const request = useRequestState()
 const { loading, error } = request
 const canIdentifyMissing = computed(() => catalogLoaded.value && !loading.value && !error.value && !partialCatalog.value && (!useKnownCatalog.value || nextPage.value === null))
@@ -52,7 +53,7 @@ const modes = computed(() => [
 const mode = computed({
   get: () => model.value?.mode ?? (props.allowPreserve ? 'preserve' : 'all'),
   set: (value: string) => {
-    inputError.value = ''
+    selectionError.value = ''
     if (value === 'preserve') {
       model.value = undefined
       return
@@ -61,59 +62,103 @@ const mode = computed({
   },
 })
 const restricted = computed(() => mode.value === 'allowlist' || mode.value === 'denylist')
-const canAdd = computed(() => Boolean(search.value.trim()) && !model.value?.models.includes(search.value.trim()))
-const missingModels = computed(() => {
-  if (mode.value !== 'allowlist' || !canIdentifyMissing.value || !catalog.value.length)
-    return []
-  const ids = new Set(catalog.value.map(item => item.id))
-  return (model.value?.models ?? []).filter(id => !ids.has(id))
+const selectedIds = computed(() => new Set(model.value?.models))
+// 候选项保留到本次编辑结束，取消勾选只修改待保存的模型限制。
+const availableIds = ref<string[]>([])
+const catalogReady = computed(() => canIdentifyMissing.value)
+const extraIds = computed(() => {
+  const ids = new Set(catalog.value?.map(item => item.id))
+  return availableIds.value.filter(id => !ids.has(id))
 })
+// 目录已就绪且非空时才能按目录清理白名单
+const missingModels = computed(() => mode.value === 'allowlist' && catalogReady.value && catalog.value?.length
+  ? extraIds.value.filter(id => selectedIds.value.has(id))
+  : [])
+const query = computed(() => search.value.trim().toLowerCase())
+const catalogResults = computed(() => (catalog.value ?? [])
+  .filter(item => `${item.id} ${item.label}`.toLowerCase().includes(query.value))
+  .map(item => item.id))
+const allResultsSelected = computed(() => catalogResults.value.every(id => selectedIds.value.has(id)))
+const groups = computed(() => [
+  {
+    key: 'selected',
+    label: catalogReady.value
+      ? t('accounts.modelAccess.customModels')
+      : t('accounts.modelAccess.availableModels'),
+    ids: extraIds.value.filter(id => id.toLowerCase().includes(query.value)),
+  },
+  {
+    key: 'catalog',
+    label: t('accounts.modelAccess.upstreamCatalog'),
+    ids: catalogResults.value,
+  },
+].filter(group => group.ids.length))
+const newModelId = computed(() => groups.value.length
+  ? ''
+  : search.value.trim())
+const inputError = computed(() => selectionError.value || (newModelId.value && accountModelIdError(newModelId.value)))
+const canAdd = computed(() => Boolean(newModelId.value) && !inputError.value)
+
 function removeMissingModels(ids: string[]) {
   if (props.disabled || model.value?.mode !== 'allowlist')
     return
-  const removed = new Set(missingModels.value.filter(id => ids.includes(id)))
-  const next = { ...model.value, models: model.value.models.filter(id => !removed.has(id)) }
-  inputError.value = accountModelAccessError(next) ?? ''
-  if (!inputError.value)
+  const selected = new Set(ids)
+  const removed = new Set(missingModels.value.filter(id => selected.has(id)))
+  if (!removed.size)
+    return
+  const next = {
+    ...model.value,
+    models: model.value.models.filter(id => !removed.has(id)),
+  }
+  selectionError.value = accountModelAccessError(next) ?? ''
+  if (!selectionError.value) {
+    availableIds.value = availableIds.value.filter(id => !removed.has(id))
     model.value = next
+  }
 }
+
 function restoreCleanupFocus() {
-  if (!missingModels.value.length)
+  // 最后一项清理后入口禁用，改回相邻刷新按钮，避免焦点落到页面背景
+  if (!missingModels.value.length && document.activeElement === document.body)
     (refreshButton.value?.$el as HTMLElement | undefined)?.focus()
 }
-const models = computed(() => {
-  const entries = new Map(catalog.value.map(item => [item.id, { ...item, unavailable: false }]))
-  for (const id of model.value?.models ?? []) {
-    if (!entries.has(id))
-      entries.set(id, { id, label: id, unavailable: canIdentifyMissing.value })
-  }
-  const query = search.value.trim().toLowerCase()
-  return [...entries.values()].filter(item => `${item.id} ${item.label}`.toLowerCase().includes(query))
-})
 
-function select(id: string, selected: boolean) {
+function select(modelIds: string[], selected: boolean) {
   if (props.disabled || !model.value || !restricted.value)
     return
-  const ids = new Set(model.value.models)
-  if (selected)
-    ids.add(id)
-  else ids.delete(id)
-  const next = { ...model.value, models: [...ids] }
-  inputError.value = selected ? accountModelAccessError(next) ?? '' : ''
-  if (!inputError.value)
+  const ids = new Set(selectedIds.value)
+  for (const id of modelIds) {
+    if (selected)
+      ids.add(id)
+    else ids.delete(id)
+  }
+  const next = {
+    ...model.value,
+    models: [...ids],
+  }
+  selectionError.value = selected
+    ? accountModelAccessError(next) ?? ''
+    : ''
+  if (!selectionError.value)
     model.value = next
 }
 
 function addModel() {
   if (props.disabled || !restricted.value || !canAdd.value)
     return
-  const id = search.value.trim()
-  inputError.value = accountModelIdError(id) ?? ''
-  if (inputError.value)
-    return
-  select(id, true)
-  if (!inputError.value)
+  select([newModelId.value], true)
+  if (!selectionError.value) {
     search.value = ''
+    const input = (searchInput.value?.$el as HTMLElement | undefined)?.querySelector('input')
+    input?.focus()
+  }
+}
+
+function handleSearchEnter(event: KeyboardEvent) {
+  if (event.isComposing)
+    return
+  event.preventDefault()
+  addModel()
 }
 
 function handleCatalogHelpKeydown(event: KeyboardEvent, close: () => void) {
@@ -168,6 +213,21 @@ async function load(refresh = false, append = false) {
   }
 }
 
+watch([
+  () => props.accountId,
+  () => model.value?.models,
+], ([accountId, ids], [previousAccountId]) => {
+  const retained = accountId === previousAccountId
+    ? availableIds.value
+    : []
+  availableIds.value = [
+    ...new Set([
+      ...retained,
+      ...(ids ?? []),
+    ]),
+  ]
+}, { immediate: true })
+
 watch([() => props.accountId, () => props.knownModelCatalog, restricted, () => props.disabled], () => {
   request.invalidate()
   catalog.value = []
@@ -177,22 +237,22 @@ watch([() => props.accountId, () => props.knownModelCatalog, restricted, () => p
   partialCatalog.value = false
   catalogLoaded.value = false
   search.value = ''
-  inputError.value = ''
+  selectionError.value = ''
   error.value = ''
   void load()
 }, { immediate: true })
 
 watch(search, () => {
-  inputError.value = ''
+  selectionError.value = ''
 })
 </script>
 
 <template>
-  <div class="grid gap-3">
+  <div class="@container grid gap-3">
     <BaseFormItem ref="modelAccessItem" :prop="formProp">
       <template #label>
         <span class="inline-flex flex-wrap items-end gap-x-2 gap-y-1">
-          <span>{{ t('accounts.modelAccess.modelCatalog') }}</span>
+          <span>{{ t('accounts.modelAccess.modelRestrictionMode') }}</span>
           <span v-if="restricted && catalogObservedAtDisplay" class="text-cp-xs leading-none font-normal text-cp-text-tertiary tabular-nums">
             {{ catalogObservedAtDisplay }}
           </span>
@@ -233,43 +293,56 @@ watch(search, () => {
       <BaseSegmented v-model="mode" class="w-full" :label="t('accounts.modelAccess.modelRestrictionMode')" :options="modes" :disabled="disabled" />
     </BaseFormItem>
     <template v-if="restricted">
-      <BaseInput v-model="search" :aria-label="t('accounts.modelAccess.searchOrAddModels')" :placeholder="t('accounts.modelAccess.searchOrEnterIdAndPressEnter')" :disabled="disabled" :aria-invalid="Boolean(inputError)" @keydown.enter.prevent="addModel">
-        <template #prefix>
-          <Search class="size-4" aria-hidden="true" />
-        </template>
-      </BaseInput>
-      <p v-if="useKnownCatalog" class="m-0 text-cp-xs text-cp-text-tertiary">
-        可勾选已有账号的已知模型，也可输入完整模型 ID 后按回车添加。列表不代表每个账号都支持所有模型。
-      </p>
+      <div class="flex min-w-0 items-center gap-2">
+        <BaseInput ref="searchInput" v-model="search" class="min-w-0 flex-1" :aria-label="t('accounts.modelAccess.searchOrAddModels')" :placeholder="t('accounts.modelAccess.searchOrEnterId')" :disabled="disabled" :aria-invalid="Boolean(inputError)" @keydown.enter="handleSearchEnter">
+          <template #prefix>
+            <Search class="size-4" aria-hidden="true" />
+          </template>
+        </BaseInput>
+        <BaseButton class="shrink-0" :disabled="disabled || !canAdd" @click="addModel">
+          <Plus class="size-4" aria-hidden="true" />
+          {{ t('accounts.modelAccess.addModel') }}
+        </BaseButton>
+      </div>
       <p v-if="inputError" class="m-0 text-cp-xs text-cp-error-text" role="alert">
         {{ inputError }}
       </p>
-      <div v-if="models.length" class="grid max-h-60 grid-cols-2 gap-2 overflow-y-auto p-1 -m-1 sm:grid-cols-3" role="group" :aria-label="t('accounts.modelAccess.selectModel')" :aria-busy="loading || undefined">
-        <BasePopover v-for="item in models" :key="item.id" trigger="hover-click" class="min-w-0">
-          <template #trigger>
-            <BaseCheckbox
-              class="min-h-11 w-full min-w-0 rounded-cp px-3 py-2.5 wrap-anywhere"
-              :class="item.unavailable ? 'bg-cp-warning-container text-cp-warning' : model?.models.includes(item.id) ? 'bg-cp-primary-container text-cp-primary-on-container' : 'bg-cp-fill-quaternary text-cp-text-secondary'"
-              :model-value="model?.models.includes(item.id) ?? false"
-              :label="item.id"
-              :title="item.unavailable ? '当前目录未返回，仍可保存' : item.id"
-              show-label
-              :disabled="disabled"
-              @update:model-value="select(item.id, $event)"
-            />
-          </template>
-          <div class="max-w-80 break-all p-3 text-cp-sm">
-            {{ item.id }}
-            <p v-if="item.unavailable" class="mb-0 text-cp-warning">
-              当前目录未返回，仍可保存
-            </p>
+      <div v-if="groups.length" class="grid min-w-0 gap-3" :aria-busy="loading || undefined">
+        <div v-for="group in groups" :key="group.key" role="group" :aria-label="group.label">
+          <div class="mb-1.5 flex items-center justify-between gap-2">
+            <span class="text-cp-xs font-medium text-cp-text-secondary">{{ group.label }}</span>
+            <BaseIconButton
+              v-if="group.key === 'catalog'"
+              variant="ghost"
+              size="sm"
+              class="-my-1 size-6!"
+              :label="allResultsSelected ? t('accounts.modelAccess.deselectAll') : t('accounts.modelAccess.selectAll')"
+              :disabled="disabled || loading"
+              @click="select(group.ids, !allResultsSelected)"
+            >
+              <ListMinus v-if="allResultsSelected" aria-hidden="true" />
+              <ListChecks v-else aria-hidden="true" />
+            </BaseIconButton>
           </div>
-        </BasePopover>
+          <div class="grid grid-cols-2 gap-2 @xl:grid-cols-3 @3xl:grid-cols-4">
+            <div
+              v-for="id in group.ids"
+              :key="id"
+              class="flex min-w-0 items-center rounded-cp transition-colors duration-150 motion-reduce:transition-none"
+              :class="selectedIds.has(id) ? 'bg-cp-primary-container text-cp-primary-on-container' : 'bg-cp-fill-quaternary text-cp-text-secondary hover:bg-cp-fill-tertiary hover:text-cp-text'"
+            >
+              <AccountModelOption :model-value="selectedIds.has(id)" :label="id" :disabled="disabled" @update:model-value="select([id], $event)" />
+            </div>
+          </div>
+        </div>
       </div>
       <p v-else-if="loading" class="m-0 py-4 text-center text-cp-sm text-cp-text-tertiary" role="status">
-        加载模型中…
+        {{ t('accounts.modelAccess.loadingModel') }}
       </p>
-      <BaseEmpty v-else-if="!error" :title="search ? '无匹配模型' : '暂无模型'" :icon="search ? Search : undefined" size="sm" surface="none" />
+      <p v-else-if="mode === 'denylist' && canAdd" class="m-0 text-cp-xs text-cp-text-secondary">
+        {{ t('accounts.modelAccess.addToDenylistHint') }}
+      </p>
+      <BaseEmpty v-else-if="!error && !search" :title="t('accounts.modelAccess.noModels')" size="sm" surface="none" />
       <p v-if="error" class="m-0 text-cp-xs text-cp-error-text" role="alert">
         模型列表加载失败，已选模型仍保留，可重试或手动输入。
       </p>

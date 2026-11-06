@@ -23,6 +23,9 @@ release.
   and tests. If an existing spec contradicts the requested behavior, resolve and
   update it explicitly instead of treating the old behavior as the acceptance
   criterion. Carry over the upstream negative cases, not just the happy path.
+- Apply the test/spec synchronization rules in
+  `docs/upstream-integration-checklist.md` on every update. Distinguish stale
+  expectations and fixtures from implementation defects before changing code.
 - Classify historical comparisons as verified equivalent, missing, deliberately
   excluded, fixed in a later release, or not yet verified. New upstream commits
   after the recorded integration baseline are not past integration omissions.

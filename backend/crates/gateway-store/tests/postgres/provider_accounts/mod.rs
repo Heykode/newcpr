@@ -1,3 +1,4 @@
+mod core_adapter;
 use std::{
     collections::BTreeMap,
     num::NonZeroU32,
