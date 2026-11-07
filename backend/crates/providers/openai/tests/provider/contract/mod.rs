@@ -7339,6 +7339,8 @@ async fn diagnostic_quota_failures_do_not_schedule_authoritative_usage_refresh()
         let store = Arc::new(MemoryAccountStore::default());
         let account_id = "acct_provider_contract";
         create_account(&store, account_id).await;
+        // 开启点数后，普通失败可补查；诊断失败仍须不产生后台任务。
+        store.enable_quota_credits(account_id);
         let account = store.account(account_id).expect("account");
         let observed_at = SystemTime::now() - Duration::from_secs(1);
         let raw_quota = json!({
