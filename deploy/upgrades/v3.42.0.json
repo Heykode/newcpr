@@ -1,0 +1,8 @@
+{
+  "from_version": "3.41.0",
+  "to_version": "3.42.0",
+  "from_migrations_tree": "76ea9af7b8cb6b4320f730407fb22de430cddbe3",
+  "to_migrations_tree": "e6db425876bae65121c78ff8928da79e4b3f95c9",
+  "added": ["0086_quota_credits_and_installation_seed.sql"],
+  "recovery": "manual"
+}
