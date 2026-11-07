@@ -17,12 +17,6 @@ runInNewContext(ts.transpileModule(readFileSync(layoutFile, 'utf8'), {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2024 },
 }).outputText, { exports: layoutExports })
 const { accountGroupLayout } = layoutExports
-const iconButtonFile = new URL('../src/components/base/BaseIconButton.vue', import.meta.url)
-const iconButtonExports = {}
-const iconScript = compileScript(parse(readFileSync(iconButtonFile, 'utf8')).descriptor, { id: 'group-icon-button', inlineTemplate: true })
-runInNewContext(ts.transpileModule(iconScript.content, {
-  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2024 },
-}).outputText, { exports: iconButtonExports, require })
 const filename = new URL('../src/components/AccountGroupMarks.vue', import.meta.url)
 const { descriptor } = parse(readFileSync(filename, 'utf8'), { filename: filename.pathname })
 const compiled = compileScript(descriptor, { id: 'account-groups-test', inlineTemplate: true })
@@ -40,8 +34,6 @@ const popover = defineComponent({
 runInNewContext(outputText, {
   exports,
   require: (name) => {
-    if (name === '@/components/base/BaseIconButton.vue')
-      return iconButtonExports
     if (name === '@/i18n')
       return translations
     if (name === './account-group-layout')
