@@ -53,6 +53,18 @@
   cancel paths, batch editing, unknown quota/capacity, and quota refresh without a GET.
   Use synthetic APIs in the isolated test server; no production credentials or traffic.
 
+## Account Group Summaries
+
+- Desktop `AccountGroupMarks.layout = 'stacked'` centers text badges in at most
+  two rows, measures the available width, truncates long names and reserves `+N`
+  for hidden groups. Mobile `wrap` shows every name with natural wrapping.
+- Keep the full-name popover accessible by keyboard, pointer and touch. Its
+  trigger must grow with the badges; the fixed-size `BaseIconButton` and its
+  internal grid are intended for a single icon, not multiple text badges.
+- Verify rendered badge bounds, clipping and separation in the actual account
+  table and mobile cards. SSR markup and packing-helper tests alone cannot
+  validate the layout of a substituted base component.
+
 ## First-Step Import Templates
 
 - The existing relogin retry dialog edits `retryIntervalSeconds` (default 30,

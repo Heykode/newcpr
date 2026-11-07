@@ -3,7 +3,6 @@ import type { AccountGroupRef } from '@/api'
 import { FastColor } from '@ant-design/fast-color'
 import { useResizeObserver } from '@vueuse/core'
 import { computed, ref, shallowRef, watch } from 'vue'
-import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BasePopover from '@/components/base/BasePopover.vue'
 import { useThemeColor } from '@/composables/useThemeColor'
 import { t } from '@/i18n'
@@ -72,10 +71,9 @@ const hiddenCount = computed(() => Math.max(props.groups.length - visibleGroups.
       arrow-surface-class="bg-cp-bg-elevated"
     >
       <template #trigger="{ open }">
-        <BaseIconButton
-          variant="link"
-          :label="`查看账号分组：${fullNames}`"
-          class="min-w-0 max-w-full cursor-help items-center overflow-hidden border-0 bg-transparent p-0 text-left"
+        <button
+          type="button"
+          class="min-w-0 max-w-full cursor-help items-center overflow-hidden border-0 bg-transparent p-0 text-left focus-visible:ring-2 focus-visible:ring-cp-control-outline focus-visible:outline-none"
           :class="layout === 'wrap' ? 'flex w-full flex-wrap gap-1.5' : layout === 'stacked' ? 'flex w-full flex-wrap justify-center gap-x-1.5 gap-y-1' : 'flex flex-nowrap gap-1.5'"
           :aria-label="`查看账号分组：${fullNames}`"
           :aria-expanded="open"
@@ -96,7 +94,7 @@ const hiddenCount = computed(() => Math.max(props.groups.length - visibleGroups.
           >
             +{{ hiddenCount }}
           </span>
-        </BaseIconButton>
+        </button>
       </template>
       <div
         class="max-h-64 max-w-[min(360px,calc(100vw-16px))] overflow-y-auto p-2"

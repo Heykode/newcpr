@@ -5,6 +5,26 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { createServer } from 'vite'
 import { mobileAccounts } from '../fixtures/mobile-account-data.mjs'
 
+async function assertGroupBounds(trigger, maxRows) {
+  const layout = await trigger.evaluate((button) => {
+    const bounds = button.getBoundingClientRect()
+    const labels = [...button.querySelectorAll('span[style]')]
+    const overflow = [...button.querySelectorAll('span')].find(span => /^\+\d+$/.test(span.textContent.trim()))
+    const boxes = [...labels, ...(overflow ? [overflow] : [])].map(label => label.getBoundingClientRect())
+    return {
+      count: labels.length,
+      fits: boxes.every(box => box.left >= bounds.left - 1 && box.right <= bounds.right + 1 && box.top >= bounds.top - 1 && box.bottom <= bounds.bottom + 1),
+      separated: boxes.every((box, index) => boxes.slice(index + 1).every(other => box.right <= other.left + 1 || other.right <= box.left + 1 || box.bottom <= other.top + 1 || other.bottom <= box.top + 1)),
+      rows: boxes.reduce((tops, box) => tops.some(top => Math.abs(top - box.top) <= 1) ? tops : [...tops, box.top], []).length,
+    }
+  })
+  assert.ok(layout.count >= 2, 'multiple group labels are rendered')
+  assert.ok(layout.fits, 'group labels and overflow count fit inside the clickable summary')
+  assert.ok(layout.separated, 'group labels never overlap each other')
+  if (maxRows)
+    assert.ok(layout.rows <= maxRows, 'desktop group summary uses at most two rows')
+}
+
 async function main() {
   const { chromium } = await import(process.env.PLAYWRIGHT_MODULE ? pathToFileURL(process.env.PLAYWRIGHT_MODULE).href : 'playwright')
   const output = process.env.QA_OUTPUT_DIR || '/tmp/cpr-mobile-accounts'
@@ -61,6 +81,7 @@ async function main() {
         writes.push(body)
         const row = rows.find(row => row.id === body.accountId)
         row.quota.refreshedAtDisplay = 'mobile-refresh-complete'
+        row.quota.refreshedAtRelative = { kind: 'absolute', value: 'mobile-refresh-complete' }
         return fulfill(route, { account: row })
       }
       if (path === '/api/admin/auth/refresh')
@@ -74,6 +95,7 @@ async function main() {
       switch (path) {
         case '/api/admin/auth/status': return fulfill(route, { authenticated: true })
         case '/api/admin/system/version': return fulfill(route, { version: 'mobile-fixture', buildType: 'test' })
+        case '/api/admin/system/update/detail': return fulfill(route, { currentVersion: 'mobile-fixture', latestVersion: null, hasUpdate: false, updateSupported: false })
         case '/api/admin/account-groups':
         case '/api/admin/proxies': return fulfill(route, { items: [], page: { page: 1, pageSize: 200, total: 0, totalPages: 0 } })
         case '/api/admin/account-templates':
@@ -117,6 +139,9 @@ async function main() {
           await page.getByRole('button', { name: theme === 'dark' ? '切换暗黑模式' : '切换浅色模式', exact: true }).evaluate(button => button.click())
           await page.waitForFunction(value => document.documentElement.dataset.theme === value, theme)
         }
+        const desktopGroups = page.locator(`tr[data-row-key="${rows[0].id}"]`).getByRole('button', { name: /^查看账号分组/ })
+        await desktopGroups.waitFor()
+        await assertGroupBounds(desktopGroups, 2)
         for (const width of [320, 390, 430, 767]) {
           await page.setViewportSize({ width, height: 900 })
           await first().scrollIntoViewIfNeeded()
@@ -148,6 +173,7 @@ async function main() {
           const capacity = await footer.getByText('容量', { exact: true }).boundingBox()
           const groups = await footer.getByRole('button', { name: /^查看账号分组/ }).boundingBox()
           assert.ok(groups.x > capacity.x + capacity.width, 'groups share the footer with capacity')
+          await assertGroupBounds(footer.getByRole('button', { name: /^查看账号分组/ }))
           const billing = first().locator('[data-account-inline-billing]')
           const credits = await billing.getByLabel('Codex 点数', { exact: true }).boundingBox()
           const spending = await billing.getByText('消费：$12.50', { exact: true }).boundingBox()
@@ -183,7 +209,8 @@ async function main() {
       await page.locator(`[data-account-card="${rows[3].id}"]`).waitFor()
       await check(page.locator(`[data-account-card="${rows[3].id}"]`))
       await page.getByText('已选 4', { exact: true }).waitFor()
-      await page.getByRole('button', { name: '批量编辑账号', exact: true }).click()
+      await page.getByRole('button', { name: '批量操作', exact: true }).click()
+      await page.getByRole('button', { name: '编辑 (4)', exact: true }).click()
       const batchDialog = page.getByRole('dialog')
       await batchDialog.getByText('已选择 4 个账号', { exact: true }).waitFor()
       await batchDialog.getByRole('button', { name: '取消', exact: true }).click()
@@ -245,7 +272,10 @@ async function main() {
       await page.getByRole('alertdialog').getByRole('button', { name: '取消', exact: true }).click()
       assert.equal(await first().getByRole('checkbox').isChecked(), true, 'actions never toggle selection')
       const switchControl = first().getByRole('switch')
-      await switchControl.locator('..').click()
+      await Promise.all([
+        page.waitForResponse(response => response.url().includes('/api/admin/accounts/update') && response.request().method() === 'POST'),
+        switchControl.locator('..').click(),
+      ])
       await page.waitForFunction(() => document.querySelector('[data-account-card] input[role="switch"]')?.checked === false)
       assert.equal(writes.at(-1).enabled, false)
       const autoStopped = page.locator(`[data-account-card="${rows[2].id}"]`)
