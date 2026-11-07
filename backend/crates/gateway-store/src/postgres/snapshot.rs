@@ -345,6 +345,9 @@ fn to_core_request_tuning(
         key_concurrency_wait_timeout_seconds: overrides
             .key_concurrency_wait_timeout_seconds
             .unwrap_or(defaults.key_concurrency_wait_timeout_seconds),
+        switch_account_on_queue_failure: overrides
+            .switch_account_on_queue_failure
+            .unwrap_or(defaults.switch_account_on_queue_failure),
         account_busy_wait_enabled: overrides
             .account_busy_wait_enabled
             .unwrap_or(defaults.account_busy_wait_enabled),

@@ -525,11 +525,11 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
             @mousedown="onMouseDown"
           >
             <template #expander="{ row }">
-              <button
-                type="button"
+              <BaseIconButton
+                size="sm"
                 class="inline-flex size-6 cursor-pointer items-center justify-center rounded-md border-0 bg-transparent text-cp-text-secondary transition hover:bg-cp-bg-text-hover hover:text-cp-text"
                 :class="isMobile ? 'size-8!' : undefined"
-                :title="expandedAccountIds.has(row.id) ? '收起统计' : '展开统计'"
+                :label="expandedAccountIds.has(row.id) ? '收起统计' : '展开统计'"
                 :aria-label="expandedAccountIds.has(row.id) ? '收起统计' : '展开统计'"
                 :aria-expanded="expandedAccountIds.has(row.id)"
                 :aria-controls="isMobile && expandedAccountIds.has(row.id) ? `account-details-${row.id}` : undefined"
@@ -539,7 +539,7 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
                   class="size-3.5 transition-transform"
                   :class="expandedAccountIds.has(row.id) ? '' : '-rotate-90'"
                 />
-              </button>
+              </BaseIconButton>
             </template>
 
             <template #header-selection>

@@ -3,11 +3,12 @@
 use std::pin::Pin;
 
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use futures::Stream;
 
 use crate::model::system::{
-    SystemOperationAccepted, SystemUpdateDetail, SystemUpdateEvent, SystemUpdateStatus,
-    SystemVersion,
+    SystemOperationAccepted, SystemUpdateChannel, SystemUpdateCheck, SystemUpdateDetail,
+    SystemUpdateEvent, SystemUpdateStatus, SystemVersion,
 };
 
 /// Host 系统操作失败类型。
@@ -25,6 +26,7 @@ pub enum SystemOperationErrorKind {
 pub struct SystemOperationError {
     kind: SystemOperationErrorKind,
     message: String,
+    retry_at: Option<DateTime<Utc>>,
     source: Option<gateway_core::error::ErrorSource>,
     sensitive_context_redacted: bool,
 }
@@ -35,9 +37,21 @@ impl SystemOperationError {
         Self {
             kind,
             message: message.into(),
+            retry_at: None,
             source: None,
             sensitive_context_redacted: false,
         }
+    }
+
+    #[must_use]
+    pub fn with_retry_at(mut self, retry_at: DateTime<Utc>) -> Self {
+        self.retry_at = Some(retry_at);
+        self
+    }
+
+    #[must_use]
+    pub const fn retry_at(&self) -> Option<DateTime<Utc>> {
+        self.retry_at
     }
 
     #[must_use]
@@ -88,7 +102,8 @@ pub trait SystemOperations: Send + Sync {
 
     async fn update_detail(
         &self,
-        refresh: bool,
+        check: SystemUpdateCheck,
+        channel: Option<SystemUpdateChannel>,
     ) -> Result<SystemUpdateDetail, SystemOperationError>;
 
     fn update_events(&self) -> SystemUpdateEventStream;
@@ -96,6 +111,7 @@ pub trait SystemOperations: Send + Sync {
     async fn perform_update(
         &self,
         target_version: Option<String>,
+        channel: Option<SystemUpdateChannel>,
     ) -> Result<SystemOperationAccepted, SystemOperationError>;
 
     async fn update_status(&self) -> Result<SystemUpdateStatus, SystemOperationError>;

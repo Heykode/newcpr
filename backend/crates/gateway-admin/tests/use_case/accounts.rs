@@ -2182,6 +2182,7 @@ async fn accounts_batch_update_should_commit_once_and_notify_each_provider() {
         .batch_update(
             &context("batch-update-request"),
             BatchUpdateAccounts {
+                auto_use_quota_credits: None,
                 excel_recovery: None,
                 purchase_cost: None,
                 egress_mode: None,
@@ -4071,6 +4072,7 @@ fn account_list_query() -> AccountListQuery {
 pub(super) fn account_record(kind: &str) -> AccountRecord {
     let now = Utc::now();
     AccountRecord {
+        auto_use_quota_credits: false,
         outbound_proxy_enabled: true,
         effective_excel_models: Default::default(),
         model_access: Default::default(),

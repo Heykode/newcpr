@@ -37,7 +37,7 @@ use crate::support::{MemoryAccountStore, profile, secret};
 
 fn wire_profile() -> CodexWireProfileState {
     CodexWireProfileState::new(CodexWireProfile {
-        installation_id: None,
+        installation_seed: None,
         raw_user_agent: None,
         originator: "codex_cli_rs".to_owned(),
         codex_version: "0.144.0".to_owned(),
@@ -286,7 +286,7 @@ async fn reset_credits_global_qx_preserves_desktop() {
 }
 
 #[tokio::test]
-async fn successful_inference_headers_are_authoritative_even_at_full_display_usage() {
+async fn successful_inference_at_the_subscription_limit_stops_further_scheduling() {
     let store = Arc::new(MemoryAccountStore::default());
     let account_id = "acct_passive_allowed";
     create_account(&store, account_id).await;
@@ -318,11 +318,11 @@ async fn successful_inference_headers_are_authoritative_even_at_full_display_usa
         .expect("quota snapshot");
 
     assert_eq!(snapshot.fact().remaining_percent(), Some(0));
-    assert_eq!(snapshot.quota().access(), QuotaAccessState::Allowed);
-    assert_eq!(current.quota().access(), QuotaAccessState::Allowed);
+    assert_eq!(snapshot.quota().access(), QuotaAccessState::Exhausted);
+    assert_eq!(current.quota().access(), QuotaAccessState::Exhausted);
     assert_eq!(
         current.status_projection(SystemTime::now(), None).status,
-        AccountStatus::Normal
+        AccountStatus::QuotaExhausted
     );
 }
 

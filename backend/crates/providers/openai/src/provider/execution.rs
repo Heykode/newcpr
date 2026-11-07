@@ -269,7 +269,11 @@ impl CodexProvider {
         let installation_id = self
             .client_for_request(&context)?
             .profile_state()
-            .effective_installation_id(lease.installation_id());
+            .effective_installation_id(
+                context.client_api_key_ref(),
+                lease.account_id(),
+                lease.installation_id(),
+            );
         let mut turn_metadata = request.turn_metadata.as_deref().and_then(|metadata| {
             crate::transport::request::scope_raw_turn_metadata(metadata, &installation_id)
         });

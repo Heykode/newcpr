@@ -674,6 +674,15 @@ async fn compile_runtime_snapshot(
         default_concurrency,
         Duration::from_millis(facts.settings.request_interval_ms),
     )
+    .with_switch_account_on_queue_failure(request_tuning.switch_account_on_queue_failure)
+    .with_queue(crate::concurrency::ConcurrencyQueuePolicy {
+        max_waiting: if request_tuning.account_busy_wait_enabled {
+            request_tuning.max_waiting_per_account
+        } else {
+            0
+        },
+        timeout: Duration::from_secs(request_tuning.account_concurrency_wait_timeout_seconds),
+    })
     .with_smart_scheduling(request_tuning.smart_scheduling)
     .with_openai_account_affinity(facts.settings.openai_account_affinity)
     .with_openai_session_binding_ttl(
@@ -1000,6 +1009,17 @@ impl RuntimeSnapshot {
         self.request_tuning = request_tuning;
         self.account_selection_policy = self
             .account_selection_policy
+            .with_switch_account_on_queue_failure(request_tuning.switch_account_on_queue_failure)
+            .with_queue(crate::concurrency::ConcurrencyQueuePolicy {
+                max_waiting: if request_tuning.account_busy_wait_enabled {
+                    request_tuning.max_waiting_per_account
+                } else {
+                    0
+                },
+                timeout: Duration::from_secs(
+                    request_tuning.account_concurrency_wait_timeout_seconds,
+                ),
+            })
             .with_smart_scheduling(request_tuning.smart_scheduling);
         self
     }

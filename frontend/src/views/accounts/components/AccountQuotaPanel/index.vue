@@ -93,7 +93,7 @@ const lastRefreshed = computed(() => props.account.quota.refreshedAtRelative
       <AccountQuotaCredits
         v-if="account.provider === 'openai'"
         :class="mobile ? 'w-full min-w-0' : 'max-sm:w-[calc(100vw-5.5rem)]'"
-        :credits="account.quota.credits"
+        :account="account"
       />
       <AccountQuotaOverdraftStatus
         v-if="account.provider === 'openai' && account.quota.overdraft"

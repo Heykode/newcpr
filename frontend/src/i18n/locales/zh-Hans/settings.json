@@ -43,7 +43,12 @@
       "grokCliVersion": "Grok CLI 版本",
       "forExample": "例如：1.0.13",
       "clientIdentity": "客户端身份",
-      "description": "配置网关向上游声明的客户端类型、版本与请求头"
+      "description": "配置网关向上游声明的客户端类型、版本与请求头",
+      "installationSeed": "安装身份种子",
+      "generateInstallationSeed": "生成安装身份种子",
+      "installationSeedHelp": "按密钥和上游账号生成独立、稳定的安装身份，种子不会发送给上游，修改种子会切换身份",
+      "installationSeedPlaceholder": "留空使用上游账号的安装 ID",
+      "invalidInstallationSeed": "请输入带连字符的 UUID"
     },
     "pricing": {
       "multiplier": "倍率",
@@ -278,15 +283,24 @@
       "keyQueueHelp": "每个密钥的等待上限，0 不排队",
       "accountQueueCapacity": "账号队列容量",
       "accountQueueHelp": "每个账号的等待上限，0 不排队",
-      "queueTimeoutLabel": "排队超时（秒）",
-      "queueTimeoutHelp": "两个队列共用，1–120 秒",
       "autoReview": {
         "label": "自动审批独立并发",
         "description": "每个 Codex 账号的额外名额，0 共用普通并发",
         "helpTitle": "自动审批独立并发说明"
       },
-      "queueTimeoutHelpTitle": "排队超时说明",
-      "queueTimeoutDetails": "密钥与账号队列共用此时限，从首次入队起计时"
+      "keyTimeout": "密钥排队超时",
+      "keyTimeoutHelp": "等待密钥并发名额的时限，超时返回错误",
+      "accountTimeout": "账号排队超时",
+      "accountTimeoutHelp": "从首次进入账号队列起计时，重试不重置",
+      "queueFailure": "账号队满或超时后",
+      "queueFailureHelp": "尝试换号时，改用有空位的账号；无法换号则返回排队错误",
+      "queueFailureHelpTitle": "账号换号规则",
+      "queueFailureDetails": "只重新选择一次，不再排队。指定账号、需要用原账号续写，或必须跟随主会话的请求不能自行换号。",
+      "returnError": "返回错误",
+      "trySwitch": "尝试换号",
+      "retryAfter": {
+        "label": "上游重试等待上限"
+      }
     },
     "modelMapping": "模型映射",
     "routing": {
@@ -350,7 +364,7 @@
     },
     "tokenRefresh": {
       "title": "凭据刷新",
-      "leadTimeLabel": "提前刷新（秒）",
+      "leadTimeLabel": "提前刷新",
       "leadTimeHelp": "在访问令牌到期前触发刷新",
       "concurrencyLabel": "刷新并发上限",
       "concurrencyHelp": "同时刷新的上限，调低可减少限流"
@@ -663,7 +677,6 @@
       "countValidity": "计数有效期",
       "windowHelp": "每次匹配失败后续期，普通调用成功后清零",
       "countValiditySeconds": "计数有效期秒数",
-      "seconds": "秒",
       "cooldownTime": "冷却时长",
       "cooldownHelp": "探测失败时，按此时长延后恢复",
       "cooldownTimeInSeconds": "冷却时长秒数",
@@ -731,6 +744,10 @@
       "moreValues": "{values} 或其他 {count} 项",
       "messageHelp": "包含匹配检查错误信息的前 8 KiB，保留完整字符，等值匹配比较完整信息，超长信息不会被视为字段缺失",
       "limitsHelp": "最多 32 条规则，每条 8 个条件，每个条件 16 个候选值，所有规则文本与探测模型合计不超过 64 KiB UTF-8"
+    },
+    "units": {
+      "seconds": "秒",
+      "inSeconds": "{label}（秒）"
     }
   }
 }

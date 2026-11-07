@@ -201,7 +201,7 @@ async fn runtime_snapshot_compiles_account_busy_wait_defaults_overrides_and_froz
         excel_image_relay_entries: 25,
         account_busy_wait_enabled: true,
         max_waiting_per_account: 7,
-        account_concurrency_wait_timeout_seconds: 123,
+        account_concurrency_wait_timeout_seconds: 120,
         max_request_attempts: 8,
         websocket_large_request_threshold_bytes: 4096,
         stream_prefetch_bytes: 256 * 1024,
@@ -225,6 +225,7 @@ async fn runtime_snapshot_compiles_account_busy_wait_defaults_overrides_and_froz
         openai_request_location: Some(location.clone()),
         openai_location_override_enabled: Some(true),
         account_busy_wait_enabled: Some(expected.account_busy_wait_enabled),
+        switch_account_on_queue_failure: None,
         max_waiting_per_account: Some(expected.max_waiting_per_account),
         account_concurrency_wait_timeout_seconds: Some(
             expected.account_concurrency_wait_timeout_seconds,
@@ -262,6 +263,7 @@ async fn runtime_snapshot_compiles_account_busy_wait_defaults_overrides_and_froz
     .bind(sqlx::types::Json(RequestTuningOverrides {
         openai_location_override_enabled: Some(false),
         account_busy_wait_enabled: Some(false),
+        switch_account_on_queue_failure: None,
         websocket_large_request_threshold_bytes: Some(0),
         stream_prefetch_bytes: Some(0),
         max_retry_after_seconds: Some(0),

@@ -276,7 +276,7 @@ impl ClientProfileSelection {
                 .clone()
                 .unwrap_or_else(|| "unknown".to_owned()),
             raw_user_agent: None,
-            installation_id: None,
+            installation_seed: None,
             location: deployment.location,
             residency: deployment.residency,
             account_routing_override: deployment.account_routing_override,
@@ -400,8 +400,8 @@ pub(crate) fn object(value: &impl Serialize) -> Result<OpaqueProviderData, Clien
 pub enum ClientProfileError {
     #[error("客户端身份字段或版本组合不合法")]
     Invalid,
-    #[error("安装 ID 必须是带连字符的 UUID")]
-    InvalidInstallationId,
+    #[error("安装身份种子必须是带连字符的 UUID")]
+    InvalidInstallationSeed,
     #[error("User-Agent 必须是 1 至 4096 字节的单行 ASCII 文本，且首尾不能含空白")]
     InvalidUserAgent,
     #[error("无法识别 User-Agent，请补充 originator 和有效的 Core version")]

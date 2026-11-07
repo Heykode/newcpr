@@ -1724,6 +1724,7 @@ impl Provider for NativeCatalogProvider {
     }
     async fn query_client_model_catalog(
         &self,
+        _key: &gateway_core::policy::ClientApiKeyId,
         scope: &FrozenAccountScope,
         protocol: &str,
         version: &str,

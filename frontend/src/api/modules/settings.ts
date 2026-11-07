@@ -58,10 +58,11 @@ export interface RequestTuning {
   openaiLocationOverrideEnabled: boolean
   openaiRequestLocation: RequestLocation | null
   maxWaitingPerKey: number
-  keyConcurrencyWaitTimeoutSeconds: number
+  keyQueueTimeoutSeconds: number
   accountBusyWaitEnabled: boolean
+  switchAccountOnQueueFailure: boolean
   maxWaitingPerAccount: number
-  accountConcurrencyWaitTimeoutSeconds: number
+  accountQueueTimeoutSeconds: number
 }
 
 export type RequestTuningOverrides = { accountErrorProtection?: AccountErrorProtection | null } & {

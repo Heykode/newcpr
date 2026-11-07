@@ -461,6 +461,7 @@ impl Provider for CodexProvider {
 
     async fn query_client_model_catalog(
         &self,
+        client_api_key_id: &gateway_core::policy::ClientApiKeyId,
         scope: &gateway_core::account::scope::FrozenAccountScope,
         protocol: &str,
         client_version: &str,
@@ -472,7 +473,7 @@ impl Provider for CodexProvider {
             return Ok(None);
         }
         self.catalog
-            .client_model_catalog(scope, client_version)
+            .client_model_catalog(client_api_key_id, scope, client_version)
             .await
             .map(Some)
             .map_err(|_| gateway_core::routing::ProviderCatalogUnavailable)
@@ -842,7 +843,11 @@ impl Provider for CodexProvider {
         let installation_id = self
             .client_for_request(&context)?
             .profile_state()
-            .effective_installation_id(lease.installation_id());
+            .effective_installation_id(
+                context.client_api_key_ref(),
+                lease.account_id(),
+                lease.installation_id(),
+            );
         scope_request_to_account(&mut upstream_request, &installation_id, account_scope);
         if let Some((response_id, _)) = &guardian_parent
             && let Some(Value::Object(metadata)) =
@@ -872,6 +877,7 @@ impl Provider for CodexProvider {
             crate::compat::normalize_message_history_ids(upstream_request.body_mut());
             crate::compat::normalize_reasoning_replay(upstream_request.body_mut());
             if !excel {
+                crate::compat::normalize_codex_oauth_options(upstream_request.body_mut());
                 crate::compat::normalize_search_history(
                     &mut upstream_request,
                     context.request_id().as_str(),

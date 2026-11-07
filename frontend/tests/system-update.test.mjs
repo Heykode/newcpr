@@ -80,6 +80,8 @@ function harness(t, initialStatus = status()) {
         updateSupported: true,
         latestVersion: '3.2.0',
         notes: 'Synthetic release notes',
+        policy: { channel: 'stable', availableChannels: ['stable', 'preview'] },
+        retryAt: null,
       }),
       getSystemUpdateStatus: async () => {
         calls.push('status')
@@ -109,18 +111,18 @@ test('accepted updates remain busy until persisted success and reject duplicate 
   const h = harness(t)
   await h.store.loadSystem()
   assert.equal(h.store.canUpdate, true)
-  await h.store.updateNow('v3.2.0')
+  await h.store.updateNow('v3.2.0', 'stable')
   assert.equal(h.store.updating, true)
-  assert.equal(h.store.updateSuccess, false)
+  assert.equal(h.store.phase.kind === 'succeeded', false)
   assert.equal(h.store.needRestart, false)
   assert.equal(h.poll.isActive.value, true)
-  assert.equal(await h.store.updateNow('3.2.0'), null)
+  assert.equal(await h.store.updateNow('3.2.0', 'stable'), null)
   assert.equal(h.calls.filter(call => call === 'post').length, 1)
   h.network.current = status('succeeded', 'new-operation')
   await h.poll.tick()
   assert.equal(h.store.updating, false)
   assert.equal(h.store.needRestart, true)
-  assert.equal(h.store.updateSuccess, true)
+  assert.equal(h.store.phase.kind, 'restart_required')
   assert.equal(h.store.canUpdate, false)
   assert.equal(h.poll.isActive.value, false)
 })
@@ -132,7 +134,7 @@ test('lost POST response is reconciled by status without repeating installation'
     h.network.current = status('running', 'accepted-but-disconnected')
     throw new ApiError(0)
   }
-  assert.equal(await h.store.updateNow('3.2.0'), null)
+  assert.equal(await h.store.updateNow('3.2.0', 'stable'), null)
   assert.equal(h.store.updating, true)
   assert.equal(h.store.updateError, '')
   await h.poll.tick()
@@ -145,7 +147,7 @@ test('uncertain submission with unchanged operation is not reported as started',
   h.network.post = async () => {
     throw new ApiError(503)
   }
-  await h.store.updateNow('3.2.0')
+  await h.store.updateNow('3.2.0', 'stable')
   assert.equal(h.store.updating, false)
   assert.match(h.store.updateError, /尚未确认更新任务/)
   assert.equal(h.poll.isActive.value, false)
@@ -199,8 +201,10 @@ test('failed persisted task releases busy controls without claiming a successful
   })
   await h.store.loadSystem()
   assert.equal(h.store.updating, false)
-  assert.equal(h.store.updateSuccess, false)
+  assert.equal(h.store.phase.kind === 'succeeded', false)
   assert.equal(h.store.needRestart, false)
-  assert.equal(h.store.updateError, 'Checksum mismatch')
+  assert.equal(h.store.updateError, '')
+  assert.equal(h.store.lastFailedOperation.error, 'Checksum mismatch')
+  assert.equal(h.store.canUpdate, true)
   assert.equal(h.poll.isActive.value, false)
 })

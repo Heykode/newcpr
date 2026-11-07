@@ -20,7 +20,7 @@ import { apiKeyFormErrors } from '../utils/formValidation'
 type ApiKeyRow = Awaited<ReturnType<typeof getApiKeys>>['items'][number]
 
 export interface ApiKeyFormValue {
-  installationId: string
+  installationSeed: string
   providerRequestProfileOverrides: Record<string, Record<string, unknown>>
   name: string
   label: string
@@ -101,13 +101,13 @@ export function useApiKeyMutations(options: {
     const profiles = cloneDeep(key.providerRequestProfileOverrides ?? {})
     const openai = profiles.openai
     const identity = (openai?.inherit as Record<string, unknown> | undefined) ?? openai
-    const installationId = typeof identity?.installationId === 'string' ? identity.installationId : ''
+    const installationSeed = typeof identity?.installationSeed === 'string' ? identity.installationSeed : ''
     if (openai?.inherit)
       delete profiles.openai
     else if (openai)
-      delete openai.installationId
+      delete openai.installationSeed
     form.value = {
-      installationId,
+      installationSeed,
       providerRequestProfileOverrides: profiles,
       name: key.name,
       label: key.label ?? '',
@@ -151,9 +151,9 @@ export function useApiKeyMutations(options: {
           weeklyLimitUsd: form.value.weeklyLimitUsd.trim() || '0',
         }
         const profiles: Record<string, Record<string, unknown> | null> = cloneDeep(form.value.providerRequestProfileOverrides)
-        const installationId = form.value.installationId
-        if (installationId)
-          profiles.openai = profiles.openai ? { ...profiles.openai, installationId } : { inherit: { installationId } }
+        const installationSeed = form.value.installationSeed
+        if (installationSeed)
+          profiles.openai = profiles.openai ? { ...profiles.openai, installationSeed } : { inherit: { installationSeed } }
         const current = editingKey.value
         if (current) {
           for (const provider of Object.keys(current.providerRequestProfileOverrides ?? {})) {
@@ -338,7 +338,7 @@ export function useApiKeyMutations(options: {
 
 function emptyForm(): ApiKeyFormValue {
   return {
-    installationId: '',
+    installationSeed: '',
     providerRequestProfileOverrides: {},
     name: '',
     label: '',

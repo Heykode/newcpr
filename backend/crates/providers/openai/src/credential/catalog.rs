@@ -10,6 +10,7 @@ use gateway_core::account::{
     CredentialRevision, CredentialState, OpaqueProviderData, OutboundProxy, ProviderAccount,
     ProviderAccountId,
 };
+use gateway_core::policy::ClientApiKeyId;
 use gateway_core::provider_ports::{
     ProviderCatalogCacheKey, ProviderCatalogCachePort, ProviderCatalogScope,
 };
@@ -215,6 +216,7 @@ struct CatalogCacheState {
 
 #[derive(PartialEq, Eq)]
 struct ClientCatalogKey {
+    client_key_id: Option<ClientApiKeyId>,
     account_id: ProviderAccountId,
     revision: CredentialRevision,
     responses_upstream: gateway_core::account::ResponsesUpstream,
@@ -344,6 +346,7 @@ impl CodexCredentialCatalogService {
     /// Native objects never use the plan cache or metered execution path.
     pub async fn client_model_catalog(
         &self,
+        client_key_id: &ClientApiKeyId,
         scope: &FrozenAccountScope,
         client_version: &str,
     ) -> ClientCatalogResult {
@@ -405,6 +408,10 @@ impl CodexCredentialCatalogService {
                 }
             };
             let key = ClientCatalogKey {
+                client_key_id: profile
+                    .installation_seed
+                    .as_ref()
+                    .map(|_| client_key_id.clone()),
                 account_id: account.id().clone(),
                 revision: account.revision(),
                 responses_upstream: account.responses_upstream(),
@@ -457,7 +464,11 @@ impl CodexCredentialCatalogService {
                     let client = self.backend_client_with_profile(profile);
                     let result = tokio::time::timeout(
                         CLIENT_CATALOG_TIMEOUT,
-                        self.fetch_account_models(&client, account, Some(client_version)),
+                        self.fetch_account_models(
+                            &client,
+                            account,
+                            Some((client_key_id, client_version)),
+                        ),
                     )
                     .await
                     .map_err(|_| CodexCredentialCatalogError::Upstream {
@@ -811,13 +822,21 @@ impl CodexCredentialCatalogService {
         &self,
         client: &CodexBackendClient,
         account: &ProviderAccount,
-        client_version: Option<&str>,
+        client_identity: Option<(&ClientApiKeyId, &str)>,
     ) -> Result<FetchedAccountModels, CodexCredentialCatalogError> {
         let credential = self
             .repository
             .load_runtime_credential(account)
             .await
             .map_err(|_| CodexCredentialCatalogError::InvalidCredentialData)?;
+        let installation_id = client_identity.map(|(key_id, _)| {
+            client.profile_state().effective_installation_id(
+                key_id,
+                account.id(),
+                &credential.installation_id,
+            )
+        });
+        let client_version = client_identity.map(|(_, version)| version);
         let request_id = format!("catalog_{}", Uuid::now_v7().simple());
         let authorization = credential
             .authentication
@@ -831,7 +850,9 @@ impl CodexCredentialCatalogService {
                     authorization.expose_secret(),
                     account.upstream_account_id(),
                     &request_id,
-                    Some(&credential.installation_id),
+                    installation_id
+                        .as_deref()
+                        .or(Some(&credential.installation_id)),
                 ),
                 client_version,
             )

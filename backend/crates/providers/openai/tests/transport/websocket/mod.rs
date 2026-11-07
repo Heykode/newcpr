@@ -2088,6 +2088,12 @@ async fn codex_backend_client_stream_should_cancel_while_inbound_is_backpressure
                         tungstenite::error::ProtocolError::ResetWithoutClosingHandshake,
                     ))) => return,
                     Some(Ok(_)) => continue,
+                    // Cancellation drops unread TCP data; macOS reports the peer reset as IO.
+                    Some(Err(tungstenite::Error::Io(error)))
+                        if error.kind() == std::io::ErrorKind::ConnectionReset =>
+                    {
+                        return;
+                    }
                     Some(Err(error)) => panic!("unexpected websocket cleanup error: {error}"),
                 }
             }

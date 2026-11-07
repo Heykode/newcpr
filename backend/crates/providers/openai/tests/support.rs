@@ -66,6 +66,14 @@ pub(crate) struct MemoryAccountStore {
 }
 
 impl MemoryAccountStore {
+    pub(crate) fn enable_quota_credits(&self, id: &str) {
+        let mut accounts = self.accounts.lock().unwrap();
+        let stored = accounts
+            .get_mut(&ProviderAccountId::new(id).unwrap())
+            .unwrap();
+        stored.account = stored.account.clone().with_auto_use_quota_credits(true);
+    }
+
     pub(crate) fn provider_list_reads(&self) -> usize {
         self.provider_list_reads.load(Ordering::SeqCst)
     }
@@ -674,6 +682,7 @@ fn rebuild_account(current: &ProviderAccount, rebuild: AccountRebuild) -> Provid
         rebuild.last_error_message,
     )
     .with_scheduling(current.concurrency_limit(), current.weight())
+    .with_auto_use_quota_credits(current.auto_use_quota_credits())
     .with_turn_state_injection_enabled(current.turn_state_injection_enabled())
     .with_turn_state_binding_revision(current.turn_state_binding_revision())
     .with_outbound_proxy(current.outbound_proxy().cloned())

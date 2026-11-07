@@ -28,7 +28,7 @@ pub(crate) fn preview(
             ProviderAdminError::new(ProviderAdminErrorKind::Invalid).with_public_message(
                 match error {
                     ClientProfileError::Invalid => "客户端身份字段或版本组合不合法",
-                    ClientProfileError::InvalidInstallationId => "安装 ID 必须是带连字符的 UUID",
+                    ClientProfileError::InvalidInstallationSeed => "安装 ID 必须是带连字符的 UUID",
                     ClientProfileError::InvalidUserAgent => {
                         "User-Agent 必须是 1 至 4096 字节的单行 ASCII 文本，且首尾不能含空白"
                     }

@@ -17,8 +17,8 @@ use axum::{
 use futures::{Stream, StreamExt};
 use gateway_admin::model::system::{
     SystemOperationAccepted, SystemOperationKind, SystemOperationState, SystemOperationStatus,
-    SystemUpdateDetail, SystemUpdateEvent, SystemUpdateEventLevel, SystemUpdateStatus,
-    SystemVersion,
+    SystemUpdateChannel, SystemUpdateCheck, SystemUpdateDetail, SystemUpdateEvent,
+    SystemUpdateEventLevel, SystemUpdatePolicy, SystemUpdateStatus, SystemVersion,
 };
 use serde::{Deserialize, Serialize};
 
@@ -32,13 +32,25 @@ use super::{
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UpdateDetailQuery {
     refresh: Option<bool>,
+    summary_only: Option<bool>,
+    channel: Option<SystemUpdateChannel>,
 }
 
 impl UpdateDetailQuery {
-    /// 是否强制从发布源刷新。
     #[must_use]
     pub fn refresh(&self) -> bool {
         self.refresh.unwrap_or(false)
+    }
+
+    #[must_use]
+    pub fn check(&self) -> SystemUpdateCheck {
+        if self.summary_only.unwrap_or(false) {
+            SystemUpdateCheck::Summary
+        } else if self.refresh() {
+            SystemUpdateCheck::Refresh
+        } else {
+            SystemUpdateCheck::Detail
+        }
     }
 }
 
@@ -47,6 +59,7 @@ impl UpdateDetailQuery {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UpdateRequest {
     target_version: String,
+    channel: Option<SystemUpdateChannel>,
 }
 
 impl UpdateRequest {
@@ -92,6 +105,8 @@ impl From<SystemVersion> for SystemVersionView {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SystemUpdateDetailView {
+    policy: SystemUpdatePolicy,
+    retry_at: Option<String>,
     current_version: String,
     latest_version: String,
     has_update: bool,
@@ -112,6 +127,8 @@ impl From<SystemUpdateDetail> for SystemUpdateDetailView {
         Self {
             deployment_mode_label: deployment_mode_label(&detail.deployment_mode).to_owned(),
             build_type_label: build_type_label(&detail.build_type),
+            policy: detail.policy,
+            retry_at: detail.retry_at.map(|value| value.to_rfc3339()),
             current_version: detail.current_version,
             latest_version: detail.latest_version,
             has_update: detail.has_update,
@@ -260,7 +277,7 @@ where
     let detail = state
         .admin_services()
         .system()
-        .update_detail(query.refresh())
+        .update_detail(query.check(), query.channel)
         .await
         .map_err(map_system_error)?;
     Ok(AdminResponse::new(
@@ -296,10 +313,13 @@ async fn perform_update<S>(
 where
     S: AdminSessionState + Send + Sync,
 {
+    let (target, channel) = payload
+        .map(|AdminJson(value)| (Some(value.target_version), value.channel))
+        .unwrap_or_default();
     let result = state
         .admin_services()
         .system()
-        .perform_update(payload.map(|AdminJson(value)| value.into_target_version()))
+        .perform_update(target, channel)
         .await
         .map_err(map_system_error)?;
     let SystemOperationAccepted::Update {

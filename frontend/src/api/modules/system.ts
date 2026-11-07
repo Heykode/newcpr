@@ -14,7 +14,12 @@ export interface SystemVersion {
   updateWarning: string | null
 }
 
+export type SystemUpdateChannel = 'stable' | 'alpha' | 'beta' | 'rc' | 'exp'
+export interface SystemUpdatePolicy { channel: SystemUpdateChannel, availableChannels: SystemUpdateChannel[] }
+
 export interface SystemUpdateDetail {
+  policy: SystemUpdatePolicy
+  retryAt: string | null
   currentVersion: string
   latestVersion: string
   hasUpdate: boolean
@@ -67,10 +72,13 @@ export function getSystemVersion(options: RequestOptions = {}) {
 }
 
 interface SystemUpdateDetailQuery {
+  channel?: SystemUpdateChannel
+  summaryOnly?: boolean
   refresh?: boolean
 }
 
 interface SystemUpdateTarget {
+  channel?: SystemUpdateChannel
   targetVersion?: string
 }
 

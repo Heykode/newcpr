@@ -102,7 +102,7 @@ async fn passive_failure_preserves_plan_access_and_identity_revisions() {
 }
 
 #[tokio::test]
-async fn successful_inference_recovers_access_without_refreshing_stale_quota() {
+async fn stale_successful_observation_preserves_exhausted_access_and_quota_age() {
     let store = Arc::new(MemoryAccountStore::default());
     let id = "acct_quota_stale_success";
     create_account(&store, id).await;
@@ -127,7 +127,7 @@ async fn successful_inference_recovers_access_without_refreshing_stale_quota() {
         .unwrap();
     assert_eq!(
         store.account(id).unwrap().quota().access(),
-        QuotaAccessState::Allowed
+        QuotaAccessState::Exhausted
     );
     assert_eq!(store.quota_json(id).unwrap(), before);
     assert_eq!(

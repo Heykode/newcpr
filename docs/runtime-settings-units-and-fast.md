@@ -17,7 +17,10 @@
 官方对应删除位于 `0016_client_profiles_and_model_pricing.sql`；本项目按现有迁移序列新增。
 旧二进制依赖该列，不能直接回滚旧镜像。全局禁用不会转写为所有分组禁用。
 
-## 核对结论
+## 历史核对结论
+
+以下为2026-11-01基线的历史差异，不是当前队列或 UA 合同。当前配置采用独立 Key/账号
+等待时限及安装种子，见 [v3.42.0对齐记录](upstream-v3420-native-parity.md)。
 
 官方 `backend/migrations/0035_cpr_link_and_concurrency_defaults.sql` 把新安装
 max_waiting_per_account 改为 10；`0008_concurrency_queues.sql` 的统一等待时间为 30 秒。

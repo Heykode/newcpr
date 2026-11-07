@@ -17,7 +17,6 @@ import { useSidebarFocus } from './useSidebarFocus'
 const uiStore = useUiStore()
 const systemUpdateStore = useSystemUpdateStore()
 const { sidebarCollapsed } = storeToRefs(uiStore)
-const { loadedOnce } = storeToRefs(systemUpdateStore)
 const { toggleSidebar } = uiStore
 const route = useRoute()
 const pageScrollbarRef = ref<InstanceType<typeof BaseScrollbar> | null>(null)
@@ -42,8 +41,7 @@ async function openSystemUpdate() {
 
   systemUpdateOpening.value = true
   try {
-    if (!loadedOnce.value)
-      await systemUpdateStore.loadSystem(false)
+    await systemUpdateStore.loadSystem(false)
   }
   catch {
     // 弹窗打开后由弹窗内的加载逻辑提示失败原因。
@@ -55,7 +53,7 @@ async function openSystemUpdate() {
 }
 
 onMounted(() => {
-  void systemUpdateStore.loadVersion().catch(() => undefined)
+  void systemUpdateStore.loadSidebarVersion().catch(() => undefined)
 })
 
 onBeforeUnmount(() => {

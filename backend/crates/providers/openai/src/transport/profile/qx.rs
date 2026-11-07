@@ -68,7 +68,7 @@ pub(super) fn parse(
     }
     Ok(CodexWireProfile {
         raw_user_agent: Some(value.to_owned()),
-        installation_id: None,
+        installation_seed: None,
         originator: originator.to_owned(),
         codex_version: version.to_owned(),
         os_type: os_type.to_owned(),

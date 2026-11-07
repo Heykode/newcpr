@@ -445,6 +445,12 @@ async fn select_grok_session(
     } else {
         AccountEligibilityPolicy::Enforce
     })
+    .with_concurrency_wait_budget(
+        context
+            .account_wait_budget()
+            .map(|budget| budget.concurrency_wait_budget())
+            .unwrap_or_default(),
+    )
     .with_affinity(affinity)
     .with_cancellation(context.cancellation().clone());
     if context.deadline().is_elapsed() {

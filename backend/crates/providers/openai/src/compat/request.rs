@@ -62,6 +62,55 @@ pub(crate) fn normalize_reasoning_replay(body: &mut Map<String, Value>) {
     });
 }
 
+pub(crate) fn normalize_codex_oauth_options(body: &mut Map<String, Value>) {
+    // Codex OAuth 拒绝这些客户端选项，即使采样参数取默认值
+    for field in [
+        "top_p",
+        "frequency_penalty",
+        "presence_penalty",
+        "chat_template_kwargs",
+        "user",
+        "metadata",
+        "safety_identifier",
+    ] {
+        body.shift_remove(field);
+    }
+    // Responses 自带用量；保留官方流式推理摘要等其他选项
+    if let Some(options) = body
+        .get_mut("stream_options")
+        .and_then(Value::as_object_mut)
+    {
+        options.shift_remove("include_usage");
+    }
+    // 只省略没有实际效果的配置，不静默取消客户端要求的截断、停止条件或缓存策略
+    if body.get("truncation").and_then(Value::as_str) == Some("disabled") {
+        body.shift_remove("truncation");
+    }
+    if body
+        .get("stop_sequences")
+        .and_then(Value::as_array)
+        .is_some_and(Vec::is_empty)
+    {
+        body.shift_remove("stop_sequences");
+    }
+    if body
+        .get("prompt_cache_options")
+        .and_then(Value::as_object)
+        .is_some_and(Map::is_empty)
+    {
+        body.shift_remove("prompt_cache_options");
+    }
+    // 原生上限优先，Chat 别名只补缺，非法值仍交给上游校验
+    for alias in ["max_completion_tokens", "max_tokens"] {
+        if let Some(limit) = body.shift_remove(alias)
+            && !limit.is_null()
+            && body.get("max_output_tokens").is_none_or(Value::is_null)
+        {
+            body.insert("max_output_tokens".to_owned(), limit);
+        }
+    }
+}
+
 /// 补齐 Codex 请求缺省字段并适配已确认不兼容的请求形状，不递归清洗业务正文
 ///
 /// 兼容基准是 Codex Core/Desktop 的模型请求，不是公开 OpenAI Responses API

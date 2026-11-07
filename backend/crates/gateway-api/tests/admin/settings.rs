@@ -74,10 +74,11 @@ fn update_body() -> Value {
             "openaiLocationOverrideEnabled": false,
             "openaiRequestLocation": null,
             "maxWaitingPerKey": 0,
-            "keyConcurrencyWaitTimeoutSeconds": 30,
+            "keyQueueTimeoutSeconds": 30,
             "accountBusyWaitEnabled": true,
+            "switchAccountOnQueueFailure": null,
             "maxWaitingPerAccount": 4,
-            "accountConcurrencyWaitTimeoutSeconds": 121,
+            "accountQueueTimeoutSeconds": 120,
         }
     });
     body["openaiAccountAffinity"] = json!("strict");
@@ -512,8 +513,9 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
             max_waiting_per_key: Some(8),
             key_concurrency_wait_timeout_seconds: Some(30),
             account_busy_wait_enabled: Some(true),
+            switch_account_on_queue_failure: None,
             max_waiting_per_account: Some(4),
-            account_concurrency_wait_timeout_seconds: Some(121),
+            account_concurrency_wait_timeout_seconds: Some(120),
         },
         updated_at: Utc
             .with_ymd_and_hms(2026, 8, 2, 10, 30, 0)
@@ -559,10 +561,11 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
             "openaiLocationOverrideEnabled": true,
             "openaiRequestLocation": null,
             "maxWaitingPerKey": 8,
-            "keyConcurrencyWaitTimeoutSeconds": 30,
+            "keyQueueTimeoutSeconds": 30,
             "accountBusyWaitEnabled": true,
+            "switchAccountOnQueueFailure": null,
             "maxWaitingPerAccount": 4,
-            "accountConcurrencyWaitTimeoutSeconds": 121,
+            "accountQueueTimeoutSeconds": 120,
         },
         "updatedAt": "2026-08-02T10:30:00Z"
     });
@@ -942,7 +945,7 @@ async fn location_and_key_wait_settings_round_trip_without_changing_account_wait
         body["requestTuning"]["openaiRequestLocation"] =
             json!({"country":"JP","region":" Tokyo ","city":" Tokyo ","timezone":"Asia/Tokyo"});
         body["requestTuning"]["maxWaitingPerKey"] = json!(waiting);
-        body["requestTuning"]["keyConcurrencyWaitTimeoutSeconds"] = json!(timeout);
+        body["requestTuning"]["keyQueueTimeoutSeconds"] = json!(timeout);
         let response = app(fixture.state())
             .oneshot(request(
                 Method::POST,
@@ -1015,7 +1018,7 @@ async fn account_busy_wait_settings_should_round_trip_enabled_disabled_and_inher
     inherited["requestTuning"] = json!({
         "accountBusyWaitEnabled": null,
         "maxWaitingPerAccount": null,
-        "accountConcurrencyWaitTimeoutSeconds": null,
+        "accountQueueTimeoutSeconds": null,
     });
     let mut legacy = update_body();
     legacy
@@ -1063,7 +1066,7 @@ async fn account_busy_wait_settings_should_reject_invalid_values_without_mutatio
     let original = response_json(response).await["data"].clone();
     for (field, maximum) in [
         ("maxWaitingPerAccount", 1000),
-        ("accountConcurrencyWaitTimeoutSeconds", 600),
+        ("accountQueueTimeoutSeconds", 120),
     ] {
         for (invalid, expected_status) in [
             (json!(0), StatusCode::BAD_REQUEST),

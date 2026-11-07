@@ -106,6 +106,7 @@ pub(super) fn account_view(
     quota.overdraft =
         codex_quota_overdraft.map(|state| codex_quota_overdraft_view(state, timezone));
     AccountView {
+        auto_use_quota_credits: account.auto_use_quota_credits,
         error_protection,
         purchase_cost,
         excel_recovery,

@@ -6,7 +6,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant, SystemTime};
 
+use crate::concurrency::{CapacityWait, ConcurrencyQueuePolicy, QueueRejection};
 use crate::identity::ProviderKind;
+use futures::FutureExt;
+use std::cmp::Reverse;
 
 use super::{AccountStatus, ProviderAccount, ProviderAccountId};
 
@@ -85,6 +88,8 @@ pub fn parse_openai_session_binding_ttl_hours(hours: u32) -> Option<Duration> {
 /// 从 `runtime_settings` 冻结到一次请求计划的账号调度策略。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AccountSelectionPolicy {
+    queue_policy: ConcurrencyQueuePolicy,
+    switch_account_on_queue_failure: bool,
     smart_scheduling: super::smart_scheduling::SmartSchedulingConfig,
     strategy: RotationStrategy,
     max_concurrent_per_account: NonZeroU32,
@@ -102,6 +107,11 @@ impl AccountSelectionPolicy {
         request_interval: Duration,
     ) -> Self {
         Self {
+            queue_policy: ConcurrencyQueuePolicy {
+                max_waiting: 0,
+                timeout: Duration::from_secs(30),
+            },
+            switch_account_on_queue_failure: false,
             smart_scheduling: super::smart_scheduling::SmartSchedulingConfig::defaults(),
             strategy,
             max_concurrent_per_account,
@@ -145,6 +155,56 @@ impl AccountSelectionPolicy {
     #[must_use]
     pub const fn openai_account_affinity(self) -> AccountAffinity {
         self.openai_account_affinity
+    }
+
+    #[must_use]
+    pub const fn with_switch_account_on_queue_failure(mut self, enabled: bool) -> Self {
+        self.switch_account_on_queue_failure = enabled;
+        self
+    }
+
+    /// 原队位由首次选号释放。仅对允许换号的请求调用，重选不排队，也不延长请求总期限
+    pub async fn reselect_after_queue_rejection<
+        T,
+        E: From<QueueRejection>,
+        F: Future<Output = Result<T, E>>,
+    >(
+        self,
+        rejection: QueueRejection,
+        remaining: Option<Duration>,
+        select: impl FnOnce(ConcurrencyQueuePolicy) -> F,
+        no_account_available: impl FnOnce(&E) -> bool,
+    ) -> Result<T, E> {
+        if !self.switch_account_on_queue_failure || remaining.is_some_and(|time| time.is_zero()) {
+            return Err(rejection.into());
+        }
+        let queue = ConcurrencyQueuePolicy {
+            max_waiting: 0,
+            ..self.queue_policy
+        };
+        let selection = select(queue);
+        let result = match remaining {
+            Some(limit) => futures::select_biased! {
+                () = futures_timer::Delay::new(limit).fuse() => return Err(rejection.into()),
+                result = selection.fuse() => result,
+            },
+            None => selection.await,
+        };
+        match result {
+            Err(error) if no_account_available(&error) => Err(rejection.into()),
+            result => result,
+        }
+    }
+
+    #[must_use]
+    pub const fn with_queue(mut self, queue: ConcurrencyQueuePolicy) -> Self {
+        self.queue_policy = queue;
+        self
+    }
+
+    #[must_use]
+    pub const fn queue_policy(self) -> ConcurrencyQueuePolicy {
+        self.queue_policy
     }
 
     #[must_use]
@@ -872,6 +932,60 @@ impl AccountSelector {
             candidate,
             preferred,
         })
+    }
+
+    /// 只有本地并发可等待；账号权限、失效、额度与上游冷却仍立即排除
+    #[must_use]
+    pub fn wait_candidates(
+        &self,
+        candidates: &[AccountCandidate],
+        context: &AccountSelectionContext,
+    ) -> Vec<ProviderAccountId> {
+        let mut candidates = candidates
+            .iter()
+            .filter(|candidate| {
+                matches!(
+                    self.scheduling_blocker(candidate, context),
+                    None | Some(AccountSchedulingBlocker::ConcurrencyLimit)
+                )
+            })
+            .collect::<Vec<_>>();
+        candidates.sort_by_key(|candidate| {
+            (
+                context.preferred_account.as_ref() != Some(candidate.account.id()),
+                Reverse(candidate.account.weight()),
+                candidate.account.id().clone(),
+            )
+        });
+        candidates
+            .into_iter()
+            .map(|candidate| candidate.account.id().clone())
+            .collect()
+    }
+
+    /// Provider 先投影续写范围与资格，再将等待候选交给共用评分规则选择队列
+    pub async fn wait_for_capacity(
+        &self,
+        waiting: &mut CapacityWait<'_, ProviderAccountId>,
+        keys: &[ProviderAccountId],
+        candidates: &[AccountCandidate],
+        context: &AccountSelectionContext,
+    ) -> Result<(), QueueRejection> {
+        let config = context.policy.smart_scheduling();
+        let queue_weight = config.weights()[5];
+        if context.policy.strategy() != RotationStrategy::Smart || queue_weight == 0.0 {
+            return waiting.wait(keys).await;
+        }
+        // 账号信号在队列锁外评分，锁内只读取实时队长并查表，避免扫描候选阻塞其他等待者
+        let scores = candidates
+            .iter()
+            .map(|candidate| (candidate.account.id(), smart_score(candidate, context)))
+            .collect::<HashMap<_, _>>();
+        waiting
+            .wait_with_priority(keys, |key, count| {
+                scores[key] + queue_weight / (1.0 + count as f64)
+            })
+            .await
     }
 
     pub(crate) fn scheduling_blocker(

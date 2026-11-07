@@ -1,9 +1,12 @@
+pub(super) static CLIENT_KEY: std::sync::LazyLock<gateway_core::policy::ClientApiKeyId> =
+    std::sync::LazyLock::new(|| gateway_core::policy::ClientApiKeyId::new("key_catalog").unwrap());
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use chrono::{TimeZone as _, Utc};
 use futures::executor::block_on;
 use gateway_core::account::{ProviderAccount, ProviderAccountId, ProviderAccountStore};
+use gateway_core::policy::ClientApiKeyId;
 use gateway_core::provider_ports::ProviderCatalogCachePort;
 use gateway_core::routing::{
     ClientRoutingScope, FrozenAccountScope, ModelServiceTier, ProviderKind, RuntimeAccount,
@@ -57,7 +60,7 @@ impl Respond for SequencedCatalogResponder {
 
 pub(super) fn wire_profile() -> CodexWireProfileState {
     CodexWireProfileState::new(CodexWireProfile {
-        installation_id: None,
+        installation_seed: None,
         raw_user_agent: None,
         originator: "codex_cli_rs".to_owned(),
         codex_version: "0.144.0".to_owned(),
@@ -348,7 +351,7 @@ async fn client_catalog_is_account_and_version_scoped_and_keeps_original_objects
         (vec![first], "0.154.0", "a-original"),
     ] {
         let models = service
-            .client_model_catalog(&client_scope(&accounts), version)
+            .client_model_catalog(&CLIENT_KEY, &client_scope(&accounts), version)
             .await
             .expect("catalog");
         let document: serde_json::Value =
@@ -363,7 +366,7 @@ async fn client_catalog_is_account_and_version_scoped_and_keeps_original_objects
     }
     assert!(
         service
-            .client_model_catalog(&client_scope(&[]), "0.154.0")
+            .client_model_catalog(&CLIENT_KEY, &client_scope(&[]), "0.154.0")
             .await
             .is_err()
     );
@@ -388,20 +391,20 @@ async fn client_catalog_coalesces_reads_and_invalidates_on_etag_expiry_and_expli
         .await;
     let service = service_with_catalog_cache(&store, server.uri(), catalog_cache());
     let (first, second) = tokio::join!(
-        service.client_model_catalog(&scope, "0.154.0"),
-        service.client_model_catalog(&scope, "0.154.0")
+        service.client_model_catalog(&CLIENT_KEY, &scope, "0.154.0"),
+        service.client_model_catalog(&CLIENT_KEY, &scope, "0.154.0")
     );
     assert_eq!(first.expect("first"), second.expect("second"));
     service
         .invalidate()
         .expect("reset without a routing snapshot");
     service
-        .client_model_catalog(&scope, "0.154.0")
+        .client_model_catalog(&CLIENT_KEY, &scope, "0.154.0")
         .await
         .expect("after reset");
     assert!(service.observe_response_etag("catalog-new").expect("ETag"));
     service
-        .client_model_catalog(&scope, "0.154.0")
+        .client_model_catalog(&CLIENT_KEY, &scope, "0.154.0")
         .await
         .expect("after ETag");
     assert!(
@@ -410,14 +413,14 @@ async fn client_catalog_coalesces_reads_and_invalidates_on_etag_expiry_and_expli
             .expect("same ETag")
     );
     service
-        .client_model_catalog(&scope, "0.154.0")
+        .client_model_catalog(&CLIENT_KEY, &scope, "0.154.0")
         .await
         .expect("still cached");
     tokio::time::pause();
     tokio::time::advance(std::time::Duration::from_secs(301)).await;
     tokio::time::resume();
     service
-        .client_model_catalog(&scope, "0.154.0")
+        .client_model_catalog(&CLIENT_KEY, &scope, "0.154.0")
         .await
         .expect("after TTL");
     server.verify().await;
@@ -447,7 +450,7 @@ async fn client_catalog_cache_does_not_survive_credential_rotation() {
     }
     let service = service_with_catalog_cache(&store, server.uri(), catalog_cache());
     let first = service
-        .client_model_catalog(&scope, "0.154.0")
+        .client_model_catalog(&CLIENT_KEY, &scope, "0.154.0")
         .await
         .expect("old");
     store
@@ -456,7 +459,7 @@ async fn client_catalog_cache_does_not_survive_credential_rotation() {
         .await
         .expect("rotate");
     let second = service
-        .client_model_catalog(&scope, "0.154.0")
+        .client_model_catalog(&CLIENT_KEY, &scope, "0.154.0")
         .await
         .expect("new");
     assert_ne!(first, second);
@@ -481,7 +484,7 @@ async fn failed_client_catalog_never_falls_back_to_an_out_of_scope_account_or_pl
     for _ in 0..2 {
         assert!(
             service
-                .client_model_catalog(&scope, "0.154.0")
+                .client_model_catalog(&CLIENT_KEY, &scope, "0.154.0")
                 .await
                 .is_err()
         );
@@ -567,16 +570,16 @@ async fn client_catalog_evicts_old_entries_after_32_distinct_versions() {
     let service = service_with_catalog_cache(&store, server.uri(), catalog_cache());
     for patch in 0..33 {
         service
-            .client_model_catalog(&scope, &format!("0.154.{patch}"))
+            .client_model_catalog(&CLIENT_KEY, &scope, &format!("0.154.{patch}"))
             .await
             .expect("catalog");
     }
     service
-        .client_model_catalog(&scope, "0.154.32")
+        .client_model_catalog(&CLIENT_KEY, &scope, "0.154.32")
         .await
         .expect("newest is cached");
     service
-        .client_model_catalog(&scope, "0.154.0")
+        .client_model_catalog(&CLIENT_KEY, &scope, "0.154.0")
         .await
         .expect("oldest was evicted");
     server.verify().await;
@@ -597,7 +600,7 @@ async fn client_catalog_retries_after_short_failure_cache_expires() {
     let service = service_with_catalog_cache(&store, server.uri(), catalog_cache());
     assert!(
         service
-            .client_model_catalog(&scope, "0.154.0")
+            .client_model_catalog(&CLIENT_KEY, &scope, "0.154.0")
             .await
             .is_err()
     );
@@ -610,7 +613,7 @@ async fn client_catalog_retries_after_short_failure_cache_expires() {
         .await;
     assert!(
         service
-            .client_model_catalog(&scope, "0.154.0")
+            .client_model_catalog(&CLIENT_KEY, &scope, "0.154.0")
             .await
             .is_err()
     );
@@ -618,7 +621,7 @@ async fn client_catalog_retries_after_short_failure_cache_expires() {
     tokio::time::advance(std::time::Duration::from_secs(6)).await;
     tokio::time::resume();
     service
-        .client_model_catalog(&scope, "0.154.0")
+        .client_model_catalog(&CLIENT_KEY, &scope, "0.154.0")
         .await
         .expect("recovered after failure TTL");
     server.verify().await;
@@ -1068,10 +1071,86 @@ async fn client_catalog_byte_budget_evicts_completed_entries_without_rejecting_l
         "small",
     ] {
         let models = service
-            .client_model_catalog(&scope, version)
+            .client_model_catalog(&CLIENT_KEY, &scope, version)
             .await
             .expect("large catalog delivered");
         assert_eq!(models.len(), 1);
     }
     server.verify().await;
+}
+
+#[tokio::test]
+async fn installation_seed_partitions_catalog_identity_and_cache_by_key_and_account() {
+    use gateway_core::account::OpaqueProviderData;
+    use serde_json::json;
+
+    let store = Arc::new(MemoryAccountStore::default());
+    let first = seed_account(&store, "acct_seed_a").await;
+    let second = seed_account(&store, "acct_seed_b").await;
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/codex/models"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "models": [{"slug": "gpt-native", "display_name": "Native"}]
+        })))
+        .expect(6)
+        .mount(&server)
+        .await;
+    let service = service_with_catalog_cache(&store, server.uri(), catalog_cache());
+    let key_a = ClientApiKeyId::new("key_a").unwrap();
+    let key_b = ClientApiKeyId::new("key_b").unwrap();
+    let seed = "3b11bc82-c666-417d-b9ff-2a34fd040385";
+    let scoped = |account: &ProviderAccount, seed: Option<&str>| {
+        client_scope(std::slice::from_ref(account)).with_request_profiles(
+            std::collections::BTreeMap::from([(
+                ProviderKind::new("openai").unwrap(),
+                OpaqueProviderData::new(
+                    json!({
+                        "mode": "custom", "userAgent": "codex-tui/1.0.0", "installationSeed": seed
+                    })
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+                ),
+            )]),
+        )
+    };
+    for (key, account, seed) in [
+        (&key_a, &first, Some(seed)),
+        (&key_a, &second, Some(seed)),
+        (&key_b, &first, Some(seed)),
+        (&key_b, &second, Some(seed)),
+        (&key_a, &first, Some(seed)),
+        (&key_a, &first, None),
+        (&key_b, &first, None),
+    ] {
+        service
+            .client_model_catalog(key, &scoped(account, seed), "1.0.0")
+            .await
+            .unwrap();
+    }
+    // 重建进程内服务仍产生同一身份，未配置种子的不同 Key 共用账号目录缓存
+    service_with_catalog_cache(&store, server.uri(), catalog_cache())
+        .client_model_catalog(&key_a, &scoped(&first, Some(seed)), "1.0.0")
+        .await
+        .unwrap();
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 6);
+    let ids: Vec<_> = requests
+        .iter()
+        .map(|request| {
+            let id = request.headers["x-codex-installation-id"].to_str().unwrap();
+            assert_ne!(id, seed);
+            assert!(uuid::Uuid::parse_str(id).is_ok());
+            id
+        })
+        .collect();
+    assert_eq!(
+        ids[..5]
+            .iter()
+            .collect::<std::collections::BTreeSet<_>>()
+            .len(),
+        5
+    );
+    assert_eq!(ids[0], ids[5]);
 }

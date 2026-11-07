@@ -32,8 +32,6 @@
       "started": "更新已開始"
     },
     "errors": {
-      "remoteTargetMissing": "遠端目標版本爲空",
-      "infoPending": "請等待系統更新信息加載完成",
       "preRestartCheck": "重啓前檢查失敗",
       "restart": "重啓失敗，請重新檢查",
       "unconfirmed": "尚未確認更新任務，請檢查狀態後重試",
@@ -56,14 +54,16 @@
       "upToDate": "無可用更新",
       "notChecked": "未檢查",
       "retrying": "暫時無法確認更新狀態，正在重試",
-      "confirmingStart": "正在確認更新是否已開始"
+      "confirmingStart": "正在確認更新是否已開始",
+      "warning": "警告",
+      "unconfirmedVersion": "未確認"
     },
     "targetVersion": "目標版本 v{version}",
     "releaseNotes": "發佈說明",
     "progress": "更新進度",
     "actions": {
       "check": "檢查更新",
-      "install": "下載並更新",
+      "install": "下載更新",
       "continueRestart": "繼續重啓",
       "restart": "立即重啓"
     },
@@ -74,12 +74,6 @@
       "requestErrorHelp": "插件啓動成功後仍可能出現請求錯誤，可嘗試禁用相關插件後重試"
     },
     "versionAfterRestart": "重啓後版本",
-    "confirmation": {
-      "newerVersion": "發現新的更新版本",
-      "channelChanged": "所選通道的最新版本已變化",
-      "title": "確認更新",
-      "description": "點擊確認後彈窗會關閉，並按遠端最新目標版本開始更新"
-    },
     "logs": {
       "live": "實時",
       "disconnectedState": "斷開",
@@ -93,8 +87,6 @@
     "latestVersion": "通道最新",
     "build": "構建",
     "deployment": "部署",
-    "displayedTarget": "已顯示目標",
-    "remoteTarget": "遠端最新目標",
     "buildTypes": {
       "release": "正式構建",
       "source": "源碼構建",
@@ -105,6 +97,7 @@
       "docker": "Docker",
       "binary": "二進制",
       "source": "源碼運行"
-    }
+    },
+    "retryAt": "可重試時間"
   }
 }
