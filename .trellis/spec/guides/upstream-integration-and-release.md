@@ -250,9 +250,11 @@ Prepared state is not a deployment result or a permanent recovery guarantee.
   同一清单；按包验证仍执行拥有者、反向依赖和 App 架构检查。
 - `release/publish --check` 只读，不 fetch、不改 refs/index/文件、不 dispatch。
   远端对象未同步或读取失败时明确报错，不能猜测远端 tag 不存在。
-- 只包含版本和发布说明的单父提交，可复用其父提交最新一次成功的 main push CI
-  且必须找到成功的完整 `quality / backend`。局部、跳过、失败、进行中或查证失败
-  均完整重跑。安全扫描、镜像验证、签名和现有部署证据不能省略。
+- 只包含版本和发布说明的单父提交，通过 `verified_image.py release-quality`
+  查验其父提交最新一次成功且未过期的 main push CI。若 main 已复用 PR，继续沿
+  现有同树镜像证明查验原始 CI，必须找到成功的完整 `quality / backend`。
+  局部、跳过、失败、进行中、证明过期或查证失败均完整重跑。
+  安全扫描、镜像验证、签名和现有部署证据不能省略。
 - 工作流语法和模拟测试不证明 GitHub 实际提速；报告必须区分本地验证服务器、
   真实 GitHub Actions 和生产切换，未执行不能写成通过。
 
@@ -267,12 +269,26 @@ Prepared state is not a deployment result or a permanent recovery guarantee.
 - Run focused development checks for localized changes; reuse successful CI only
   under the existing exact-tree and freshness rules. Do not repeat workspace tests
   on unchanged frontend-only work, or weaken full checks for core contract changes.
+- A successful authoritative CI result does not need another local full run merely
+  for committing, merging or deploying the same validated source. Infrastructure
+  failures on an unchanged commit may rerun failed jobs and their dependents;
+  source, workflow or test-input changes require fresh applicable validation.
 - Container CI caches release compilation outside ephemeral BuildKit mounts but
   still builds current source/version metadata with the pinned Docker toolchain.
   Keep `build_ci_backend.sh` source staging aligned with `backend-builder` inputs;
   do not silently switch to a host rustup override or reuse a stale binary.
-- Cache misses are normal builds. PR-scoped caches do not seed unrelated PRs;
-  current main CI and the existing scheduled security scan supply shared baselines.
+- Quality CI uses upstream's `CARGO_PROFILE_DEV_DEBUG=1`; test assertions, overflow
+  checks and release compilation settings are not disabled for build speed.
+- Cache misses are normal builds. Same-repository PRs may save dependency caches
+  for their own reruns, but those caches do not seed unrelated PRs. `build-cache.yml`
+  separately warms missing quality/release dependencies after successful trusted
+  main CI. It performs exact-key lookups first, runs no business tests, creates no
+  deployment proof and is not a CI or deployment gate. Its profile, toolchain and
+  cache namespace must match the corresponding normal build. Cache maintenance
+  must not cancel an in-progress cold build for each unrelated main update.
+- A cache hit is not validation evidence. Normal image and release builds still
+  compile the current workspace and its embedded revision/build metadata. Do not
+  promote an old backend binary merely because only frontend files changed.
 - Keep image scanning/startup/proof, security, privacy, migration and deployment
   gates. Formal Release defaults to complete quality checks and keeps signing.
 - For CI-only edits, run planner/build-fixture tests, workflow contracts, actionlint

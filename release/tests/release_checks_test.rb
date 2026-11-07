@@ -2,7 +2,6 @@ require 'fileutils'
 require 'json'
 require 'open3'
 require 'tmpdir'
-require_relative '../release-quality'
 
 # 使用临时 Git 仓库验证远端状态和只读边界，不访问真实 GitHub 或修改当前仓库
 ROOT = File.expand_path('../..', __dir__)
@@ -41,7 +40,6 @@ Dir.mktmpdir('release-checks-') do |directory|
       FileUtils.cp(File.join(ROOT, path), path)
     end
     commit('initial source')
-    assert(ReleaseQuality.evidence('owner/repo').nil?, 'root commit should require full checks')
     git('remote', 'add', 'origin', remote)
     git('push', '-qu', 'origin', 'main')
     File.write('release/notes.md', "# v99.0.0\n\nFixture notes\n")
@@ -106,55 +104,6 @@ Dir.mktmpdir('release-checks-') do |directory|
 
     File.write('release/version.yaml', "version: \"99.0.0\"\n")
     commit('release metadata')
-    parent = git('rev-parse', 'HEAD^')
-    run = { 'head_sha' => parent, 'conclusion' => 'success', 'head_repository' => { 'full_name' => 'owner/repo' }, 'id' => 42 }
-    job = { 'name' => 'quality / backend', 'conclusion' => 'success', 'html_url' => 'https://example.invalid/42' }
-    runs = [run]
-    jobs = [job]
-    original_capture = ReleaseQuality.method(:capture)
-    ReleaseQuality.define_singleton_method(:capture) do |*arguments|
-      if arguments.first == 'gh'
-        endpoint = arguments.find { |argument| argument.start_with?('repos/') }
-        if endpoint.include?('/workflows/ci.yml/runs?')
-          assert(endpoint.include?("event=push&branch=main&head_sha=#{parent}"), 'wrong CI evidence scope')
-          JSON.generate('workflow_runs' => runs)
-        else
-          assert(endpoint == 'repos/owner/repo/actions/runs/42/jobs?per_page=100', 'wrong run jobs')
-          jobs.map { |entry| JSON.generate(entry) }.join("\n")
-        end
-      else
-        original_capture.call(*arguments)
-      end
-    end
-    assert(ReleaseQuality.evidence('owner/repo') == job['html_url'], 'valid CI evidence not reused')
-    %w[skipped failure cancelled].each do |conclusion|
-      job['conclusion'] = conclusion
-      assert(ReleaseQuality.evidence('owner/repo').nil?, "reused #{conclusion} backend")
-    end
-    job['conclusion'] = 'success'
-    jobs = []
-    assert(ReleaseQuality.evidence('owner/repo').nil?, 'reused missing backend job')
-    jobs = [job]
-    run['conclusion'] = 'failure'
-    assert(ReleaseQuality.evidence('owner/repo').nil?, 'reused failed CI run')
-    run['conclusion'] = nil
-    assert(ReleaseQuality.evidence('owner/repo').nil?, 'reused unfinished CI run')
-    run['conclusion'] = 'success'
-    run['head_repository']['full_name'] = 'fork/repo'
-    assert(ReleaseQuality.evidence('owner/repo').nil?, 'reused foreign repository CI')
-    run['head_repository']['full_name'] = 'owner/repo'
-    runs = []
-    assert(ReleaseQuality.evidence('owner/repo').nil?, 'reused absent CI run')
-    runs = [run]
-    output, _, status = Open3.capture3(environment.merge('GITHUB_REPOSITORY' => 'owner/repo'), 'ruby', File.join(ROOT, 'release/release-quality.rb'))
-    assert(status.success? && output.strip == 'run_backend=true', 'API failure did not fall back to full checks')
-    File.write('backend/source.rs', '// changed source')
-    commit('source changed')
-    assert(ReleaseQuality.evidence('owner/repo').nil?, 'reused CI across source changes')
-    merge = git('commit-tree', 'HEAD^{tree}', '-p', 'HEAD', '-p', 'HEAD^', '-m', 'merge fixture')
-    git('update-ref', 'HEAD', merge)
-    assert(ReleaseQuality.evidence('owner/repo').nil?, 'merge commit should require full checks')
-
     # 在同一个隔离仓库走实际提交与原子推送路径，dispatch 仍由本地替身接收
     git('merge', '--no-edit', 'origin/main')
     File.write('release/notes.md', "# v100.0.0\n\nPublish fixture notes\n")

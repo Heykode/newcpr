@@ -38,7 +38,7 @@ runs:
         shared-key: release-${{ inputs.target }}-${{ inputs.rust-image }}
         cache-bin: false
         # 只缓存依赖，避免随版本变化的 workspace 产物挤占缓存
-        save-if: ${{ github.event_name != 'pull_request' }}
+        save-if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
 
     - name: Build binary
       shell: bash

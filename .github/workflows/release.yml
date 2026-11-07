@@ -66,7 +66,7 @@ jobs:
         id: quality
         env:
           GH_TOKEN: ${{ github.token }}
-        run: ruby release/release-quality.rb >> "$GITHUB_OUTPUT"
+        run: python3 release/verified_image.py release-quality --repository "$GITHUB_REPOSITORY" >> "$GITHUB_OUTPUT"
 
   quality:
     needs: [release-info]

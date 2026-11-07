@@ -9,6 +9,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import zipfile
 
@@ -127,7 +128,7 @@ def artifact_file(repository, artifact, member, destination):
             except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
                 if attempt == ARTIFACT_DOWNLOAD_ATTEMPTS:
                     raise Unavailable("Unable to download CI artifact after repeated attempts") from error
-                print("CI artifact download failed; retrying from the beginning.", flush=True)
+                print("CI artifact download failed; retrying from the beginning.", file=sys.stderr, flush=True)
         if "sha256:" + sha256(archive) != artifact["digest"]:
             raise Unavailable("GitHub artifact digest mismatch")
         with zipfile.ZipFile(archive) as bundle:
@@ -196,6 +197,74 @@ def require_security(repository, commit):
         raise Unavailable("A privacy-only run is not a complete security gate")
 
 
+def backend_job(repository, run_id, attempt):
+    """A partial or skipped check cannot replace complete release validation."""
+    current = api(f"repos/{repository}/actions/runs/{run_id}")
+    if (current.get("run_attempt") != attempt or current.get("status") != "completed"
+            or current.get("conclusion") != "success"):
+        raise Unavailable("CI changed while checking release evidence")
+    # Failed-job reruns retain successful jobs from earlier attempts. GitHub's
+    # latest filter includes those jobs, unlike an individual attempt's list.
+    jobs = api(
+        f"repos/{repository}/actions/runs/{run_id}/jobs?filter=latest&per_page=100"
+    )["jobs"]
+    return next((job for job in jobs
+                 if job.get("name") == "quality / backend"
+                 and job.get("status") == "completed"
+                 and job.get("conclusion") == "success"), None)
+
+
+def release_evidence(repository):
+    """Reuse complete validation only for a version/notes-only release commit."""
+    if not REPOSITORY.fullmatch(repository):
+        raise Unavailable("Invalid repository")
+    parents = git("rev-list", "--parents", "-n", "1", "HEAD").split()
+    if len(parents) != 2:
+        return None
+    parent = parents[1]
+    changes = set(filter(None, git("diff", "--name-only", "-z", parent, "HEAD").split("\0")))
+    if not changes or not changes <= {"release/version.yaml", "release/notes.md"}:
+        return None
+
+    workflow = api(f"repos/{repository}/actions/workflows/ci.yml")["id"]
+    runs = api(
+        f"repos/{repository}/actions/workflows/{workflow}/runs"
+        f"?event=push&branch=main&head_sha={parent}&per_page=1"
+    )["workflow_runs"]
+    if not runs:
+        return None
+    run = runs[0]
+    if (not trusted_run(run, repository, parent, workflow)
+            or run.get("event") != "push" or run.get("head_branch") != "main"):
+        return None
+    job = backend_job(repository, run["id"], run["run_attempt"])
+    if job:
+        return job["html_url"]
+
+    # A successful merge run may have reused its identical-tree PR. Resolve the
+    # existing immutable proof instead of treating a skipped backend as success.
+    selected = resolve(repository, parent)
+    proof = selected["proof"]
+    if proof["run_id"] == run["id"]:
+        return None
+    job = backend_job(repository, proof["run_id"], proof["run_attempt"])
+    return job["html_url"] if job else None
+
+
+def report_release_quality(repository):
+    try:
+        evidence = release_evidence(repository)
+    except (Unavailable, subprocess.SubprocessError, OSError, ValueError, KeyError, TypeError):
+        print("CI evidence unavailable; running full release checks.", file=sys.stderr)
+        evidence = None
+    print(f"run_backend={str(evidence is None).lower()}")
+    if os.environ.get("GITHUB_STEP_SUMMARY"):
+        message = (f"后端质量检查复用同源完整 [CI 结果]({evidence})；仅版本与发布说明不同"
+                   if evidence else "未找到可复用的完整后端 CI 结果，完整检查发行提交")
+        with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
+            summary.write(message + "\n")
+
+
 def create(image, archive, output):
     image_info = json.loads(command("docker", "image", "inspect", image))[0]
     source = git("rev-parse", "HEAD")
@@ -229,7 +298,12 @@ def main():
     for name in ("repository", "commit", "output"):
         find.add_argument("--" + name, required=True)
     find.add_argument("--optional", action="store_true")
+    quality = commands.add_parser("release-quality")
+    quality.add_argument("--repository", required=True)
     args = parser.parse_args()
+    if args.command == "release-quality":
+        report_release_quality(args.repository)
+        return
     if args.command == "create":
         create(args.image, args.archive, args.output)
         return

@@ -44,6 +44,7 @@ jobs:
     timeout-minutes: 30
     env:
       CARGO_TERM_COLOR: always
+      CARGO_PROFILE_DEV_DEBUG: '1'
       # 编译 AWS SDK 调试信息需要更大的 codegen 线程栈。
       RUST_MIN_STACK: 16777216
     services:
@@ -127,7 +128,7 @@ jobs:
           workspaces: backend -> target
           shared-key: quality
           cache-bin: false
-          save-if: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
+          save-if: ${{ github.ref == 'refs/heads/main' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) }}
 
       - name: Rust format
         working-directory: backend
