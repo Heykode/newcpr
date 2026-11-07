@@ -198,6 +198,7 @@ export interface ThemeComponentMap {
   progressRemainingColor: string
   layoutSiderBg: string
   cardShadow: string
+  popoverShadow: string
   inputShadow: string
   inputHoverShadow: string
   inputActiveShadow: string

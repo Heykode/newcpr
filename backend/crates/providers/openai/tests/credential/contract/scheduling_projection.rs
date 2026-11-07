@@ -18,7 +18,10 @@ fn projection_attempt(
         RequestAttemptContext::new(
             ModelRequestId::new("req_projection").unwrap(),
             ClientApiKeyId::new(client_key).unwrap(),
-        ),
+        )
+        .with_trace(gateway_core::diagnostics::TraceContext::new(
+            "req_projection",
+        )),
         NonZeroU32::new(1).unwrap(),
         SystemTime::now() + Duration::from_secs(30),
         policy,
@@ -478,6 +481,26 @@ async fn strict_queue_failure_reselects_once_and_only_rebinds_after_admission() 
             );
             &first
         };
+        let snapshot = ctx.trace().snapshot().unwrap();
+        let migrations: Vec<_> = snapshot["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|event| event["stage"] == "account.binding.migrated")
+            .collect();
+        assert_eq!(migrations.len(), usize::from(spare && enabled));
+        if let Some(event) = migrations.first() {
+            assert_eq!(event["data"]["fromAccountId"], first.as_str());
+            assert_eq!(event["data"]["toAccountId"], second.as_str());
+            assert_eq!(
+                event["data"]["reason"],
+                if full {
+                    "concurrency wait queue is full"
+                } else {
+                    "concurrency wait deadline elapsed"
+                }
+            );
+        }
         drop(head);
         leases.capacity.signals.lock().unwrap().clear();
         assert_eq!(

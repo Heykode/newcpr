@@ -124,15 +124,15 @@ class PublicationTest < Minitest::Test
     steps = job.fetch('steps')
     upload = steps.index { |step| step['id'] == 'release' }
     publish = steps.index { |step| step['run'].to_s.include?('ruby release/publish-release.rb') }
-    prepare_index = steps.index { |step| step['run'].to_s.include?('published-channels.rb prepare') }
-    finish_index = steps.index { |step| step['run'].to_s.include?('published-channels.rb finish') }
-    assert_operator prepare_index, :<, upload
+    check_index = steps.index { |step| step['run'].to_s.include?('published-channels.rb check') }
+    publish_index = steps.index { |step| step['run'].to_s.include?('published-channels.rb publish') }
+    assert_operator check_index, :<, upload
     assert_operator upload, :<, publish
-    assert_operator publish, :<, finish_index
+    assert_operator publish, :<, publish_index
     recovery = workflow.fetch('jobs').fetch('recover-index')
     assert_equal job.fetch('concurrency'), recovery.fetch('concurrency')
     assert_equal 'inputs.index_only', recovery.fetch('if')
-    assert recovery.fetch('steps').any? { |step| step['run'].to_s.include?('published-channels.rb finish') }
+    assert recovery.fetch('steps').any? { |step| step['run'].to_s.include?('published-channels.rb publish') }
     assert_equal true, steps[upload].fetch('with').fetch('draft')
     assert_equal 'false', steps[upload].fetch('with').fetch('make_latest')
     assert steps[0...upload].any? { |step| step['run'].to_s.include?('cosign sign') }
@@ -155,6 +155,124 @@ class PublicationTest < Minitest::Test
     assert_equal '3.42.0', document.dig('published', '3', 'stable')
     PublishedChannels.advance(document, '4.0.0')
     assert_equal '3.42.0', document.dig('published', '3', 'stable')
+  end
+
+  def test_channel_publication_checks_assets_and_uses_the_observed_main_sha
+    publisher = PublishedChannels::Publisher.new('example/repo')
+    events = []
+    main = { 'version' => '3.43.0-exp.1', 'published' => { '4' => { 'stable' => '4.0.0' } } }
+    publisher.stub(:verify_assets, ->(version) { events << [:verified, version] }) do
+      publisher.stub(:api, lambda { |endpoint, **options|
+        events << [endpoint, options]
+        if options[:method] == 'PUT'
+          data = options.fetch(:data)
+          assert_equal 'main', data.fetch(:branch)
+          assert_equal 'observed-file-sha', data.fetch(:sha)
+          written = YAML.safe_load(Base64.decode64(data.fetch(:content)))
+          assert_equal main['version'], written['version']
+          assert_equal '4.0.0', written.dig('published', '4', 'stable')
+          assert_equal '3.42.1', written.dig('published', '3', 'stable')
+          {}
+        else
+          { 'sha' => 'observed-file-sha', 'content' => Base64.strict_encode64(YAML.dump(main)) }
+        end
+      }) { publisher.publish('3.42.1') }
+    end
+    assert_equal [:verified, '3.42.1'], events.first
+    assert_equal 'repos/example/repo/contents/release/version.yaml?ref=main', events[1][0]
+    assert_equal :PUT.to_s, events[2][1][:method]
+  end
+
+  def test_missing_assets_or_a_concurrent_main_edit_cannot_advance_channels
+    publisher = PublishedChannels::Publisher.new('example/repo')
+    publisher.stub(:verify_assets, ->(_) { raise 'incomplete assets' }) do
+      publisher.stub(:api, ->(*) { flunk 'must not read or write main before asset verification' }) do
+        assert_raises(RuntimeError) { publisher.publish('3.42.1') }
+      end
+    end
+    publisher.stub(:verify_assets, ->(_) {}) do
+      publisher.stub(:api, lambda { |_, **options|
+        raise 'HTTP 409: file changed' if options[:method] == 'PUT'
+        { 'sha' => 'stale-sha', 'content' => Base64.strict_encode64(YAML.dump({ 'version' => '3.42.0', 'published' => {} })) }
+      }) do
+        error = assert_raises(RuntimeError) { publisher.publish('3.42.1') }
+        assert_includes error.message, '409'
+      end
+    end
+  end
+
+  def checked_publication(outcome: 'success', concurrent_main: false)
+    publisher = PublishedChannels::Publisher.new('example/repo')
+    events = []
+    document = { 'version' => '3.43.0', 'published' => {} }
+    api = lambda do |endpoint, **options|
+      events << [endpoint, options]
+      method = options.fetch(:method, 'GET')
+      case
+      when endpoint.end_with?('/git/ref/heads/main')
+        { 'object' => { 'sha' => 'observed-main' } }
+      when endpoint.end_with?('?ref=observed-main')
+        { 'sha' => 'observed-file', 'content' => Base64.strict_encode64(YAML.dump(document)) }
+      when method == 'PUT'
+        data = options.fetch(:data)
+        assert_match %r{\Acodex/published-v3\.42\.1-}, data.fetch(:branch)
+        assert_equal 'observed-file', data.fetch(:sha)
+        written = YAML.safe_load(Base64.decode64(data.fetch(:content)))
+        assert_equal '3.43.0', written.fetch('version')
+        assert_equal '3.42.1', written.dig('published', '3', 'stable')
+        { 'commit' => { 'sha' => 'candidate' } }
+      when endpoint.include?('/runs?')
+        { 'workflow_runs' => [
+          { 'head_sha' => 'unrelated', 'status' => 'completed', 'conclusion' => 'success' },
+          { 'head_sha' => 'candidate', 'status' => 'completed', 'conclusion' => outcome }
+        ] }
+      when method == 'PATCH'
+        assert_equal({ sha: 'candidate', force: false }, options.fetch(:data))
+        raise 'main moved; fast-forward rejected' if concurrent_main
+        {}
+      else
+        nil # dispatch and DELETE return HTTP 204 without a JSON body
+      end
+    end
+    publisher.stub(:verify_assets, ->(version) { events << [:assets, version] }) do
+      publisher.stub(:api, api) do
+        if outcome != 'success' || concurrent_main
+          assert_raises(RuntimeError) { publisher.publish('3.42.1', checked_main: true) }
+        else
+          publisher.publish('3.42.1', checked_main: true)
+        end
+      end
+    end
+    events
+  end
+
+  def test_protected_main_checks_the_exact_candidate_before_fast_forward
+    events = checked_publication
+    dispatch = events.index { |endpoint, _| endpoint.to_s.end_with?('/dispatches') }
+    promote = events.index { |_, options| options.is_a?(Hash) && options[:method] == 'PATCH' }
+    assert_operator dispatch, :<, promote
+    assert_equal({ privacy_only: true }, events[dispatch][1].fetch(:data).fetch(:inputs))
+    assert_equal 'DELETE', events.last[1].fetch(:method)
+    %w[publish recover-index].each do |name|
+      job = YAML.load_file(File.expand_path('../../.github/workflows/release.yml', __dir__)).fetch('jobs').fetch(name)
+      assert_equal 'write', job.fetch('permissions').fetch('actions')
+      step = job.fetch('steps').find { |item| item['run'].to_s.include?('published-channels.rb publish') }
+      assert_equal 'true', step.fetch('env').fetch('PUBLISHED_CHANNELS_CHECKED_MAIN')
+    end
+  end
+
+  def test_failed_privacy_or_concurrent_main_preserves_the_candidate_without_force
+    events = checked_publication(outcome: 'failure')
+    refute events.any? { |_, options| options.is_a?(Hash) && %w[PATCH DELETE].include?(options[:method]) }
+    events = checked_publication(concurrent_main: true)
+    refute events.any? { |_, options| options.is_a?(Hash) && options[:method] == 'DELETE' }
+  end
+
+  def test_github_empty_success_response_is_accepted
+    publisher = PublishedChannels::Publisher.new('example/repo')
+    Open3.stub(:capture3, response('', '', true)) do
+      assert_nil publisher.api('repos/example/repo/actions/workflows/security-scan.yml/dispatches', method: 'POST', data: {})
+    end
   end
 
 end

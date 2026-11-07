@@ -585,7 +585,7 @@ impl CodexCredentialSelector {
     ) -> Result<CodexCredentialLease, CredentialSelectionError> {
         let selection = async {
             let first = self
-                .select_unfrozen(request, cyber_policy_session_key, true)
+                .select_unfrozen(request, cyber_policy_session_key, true, None)
                 .await;
             match first {
                 Err(CredentialSelectionError::AccountWait(
@@ -614,7 +614,12 @@ impl CodexCredentialSelector {
                                     "account.queue.reselect",
                                     serde_json::json!({"reason": rejection.to_string()}),
                                 );
-                                self.select_unfrozen(request, cyber_policy_session_key, false)
+                                self.select_unfrozen(
+                                    request,
+                                    cyber_policy_session_key,
+                                    false,
+                                    Some(rejection),
+                                )
                             },
                             |error| {
                                 matches!(
@@ -658,6 +663,7 @@ impl CodexCredentialSelector {
         request: &CredentialSelectionInput<'_>,
         cyber_policy_session_key: Option<&ProviderSessionAffinityKey>,
         allow_queue: bool,
+        queue_rejection: Option<gateway_core::concurrency::QueueRejection>,
     ) -> Result<CodexCredentialLease, CredentialSelectionError> {
         let diagnostic = request.attempt.is_diagnostic_required_account();
         if allow_queue
@@ -672,7 +678,12 @@ impl CodexCredentialSelector {
         let mut universe = None;
         for retry in 0..=3 {
             let result = self
-                .select_snapshot(request, cyber_policy_session_key, &mut universe)
+                .select_snapshot(
+                    request,
+                    cyber_policy_session_key,
+                    &mut universe,
+                    queue_rejection,
+                )
                 .await;
             if allow_queue
                 && request.follows_root()
@@ -715,6 +726,7 @@ impl CodexCredentialSelector {
         request: &CredentialSelectionInput<'_>,
         cyber_policy_session_key: Option<&ProviderSessionAffinityKey>,
         universe: &mut Option<BTreeSet<ProviderAccountId>>,
+        queue_rejection: Option<gateway_core::concurrency::QueueRejection>,
     ) -> Result<CodexCredentialLease, CredentialSelectionError> {
         let diagnostic = request.attempt.is_diagnostic_required_account();
         let quality = request.attempt.is_quality_check();
@@ -1140,6 +1152,7 @@ impl CodexCredentialSelector {
                             observed_affinity_binding.as_ref(),
                             account.id(),
                             pinned_account.is_some(),
+                            queue_rejection,
                         )
                         .await?;
                     let Some(affinity_expected_binding) = admitted else {

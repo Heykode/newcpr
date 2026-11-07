@@ -388,19 +388,7 @@ pub(super) fn map_request_error(error: GrokRequestEncodeError) -> ProviderError 
 pub(super) fn map_selection_error(error: GrokSessionSelectorError) -> ProviderError {
     let (retry_after, message, code) = match error {
         GrokSessionSelectorError::QueueRejected(reason) => {
-            let code = match reason {
-                gateway_core::concurrency::QueueRejection::Full => "account_queue_full",
-                gateway_core::concurrency::QueueRejection::Timeout => "account_queue_timeout",
-            };
-            return provider_error(
-                ProviderErrorKind::AccountCapacityUnavailable,
-                UpstreamSendState::NotSent,
-            )
-            .with_client_visible_upstream_error(ClientVisibleUpstreamError::new(
-                reason.to_string(),
-                Some(code.to_owned()),
-                Some("account_unavailable_error".to_owned()),
-            ));
+            return provider_error(reason.provider_kind(), UpstreamSendState::NotSent);
         }
         GrokSessionSelectorError::AccountCoolingDown { retry_after } => (
             retry_after,

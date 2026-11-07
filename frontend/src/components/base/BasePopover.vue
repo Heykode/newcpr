@@ -57,6 +57,7 @@ const attrs = useAttrs()
 
 const rootRef = ref<HTMLElement | null>(null)
 const popoverRef = ref<HTMLElement | null>(null)
+const leavingStyle = new WeakMap<HTMLElement, string>()
 const popoverStyle = ref<CSSProperties>({})
 const popoverArrowStyle = ref<CSSProperties>({})
 const popoverPlacement = shallowRef<PopoverPlacement>(props.placement)
@@ -65,7 +66,7 @@ const hoverOpenTimer = shallowRef<number>()
 const viewportTarget = computed(() => (open.value && typeof window !== 'undefined' ? window : null))
 
 const popoverClasses = computed(() => [
-  'fixed z-50 overflow-visible rounded-cp-lg border-0 bg-cp-bg-elevated text-left text-cp-text shadow-cp',
+  'fixed z-50 overflow-visible rounded-cp-lg border-0 bg-cp-bg-elevated text-left text-cp-text shadow-cp-popover',
   props.animatePosition
     ? 'transition-[left,top] duration-150 ease-out motion-reduce:transition-none'
     : undefined,
@@ -379,6 +380,32 @@ useEventListener(viewportTarget, 'keydown', (event) => {
 })
 useEventListener(viewportTarget, 'resize', updatePopoverPositionThrottled)
 useEventListener(viewportTarget, 'scroll', updatePopoverPositionThrottled, { capture: true })
+function freezeLeavePosition(element: Element) {
+  if (!(element instanceof HTMLElement))
+    return
+  const rect = element.getBoundingClientRect()
+  leavingStyle.set(element, element.style.cssText)
+  // 退场时外部锚点可能被清空或移除，冻结实际坐标后只做透明度过渡
+  Object.assign(element.style, {
+    positionAnchor: 'none',
+    positionVisibility: 'always',
+    left: `${rect.left}px`,
+    top: `${rect.top}px`,
+    translate: 'none',
+    transform: 'none',
+    transitionProperty: 'opacity',
+  })
+}
+function restorePosition(element: Element) {
+  if (!(element instanceof HTMLElement))
+    return
+  const style = leavingStyle.get(element)
+  if (style !== undefined) {
+    element.style.cssText = style
+    leavingStyle.delete(element)
+  }
+}
+
 onBeforeUnmount(() => {
   clearHoverOpenTimer()
   clearHoverCloseTimer()
@@ -392,10 +419,14 @@ onBeforeUnmount(() => {
     <Teleport to="body">
       <Transition
         :name="transition"
+        @before-enter="restorePosition"
+        @before-leave="freezeLeavePosition"
+        @leave-cancelled="restorePosition"
       >
         <div
           v-if="open"
           ref="popoverRef"
+          :data-cp-placement="popoverPlacement"
           :class="popoverClasses"
           :style="popoverStyle"
         >

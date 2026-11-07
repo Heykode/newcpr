@@ -10,10 +10,10 @@ Use this guide when comparing CPR with the official upstream tree, integrating
 an upstream fix, reviewing dependency drift, preparing a PR, or preparing a
 release.
 
-- Each task must pin its own official reference in its PRD before editing.
-  The v3.4.1 integration used `5205c07d`; the v3.5 integration uses
-  `b98c2f01a572da42531b34b4bc57299caabf702e`. Do not use a moving branch,
-  an unmerged feature branch, or a Dependabot branch as a compatibility baseline.
+- `docs/upstream-integration-checklist.md` is the authoritative shared integration
+  checklist. Pin the previous integrated upstream SHA, new official target, local
+  base and deployed source before editing. Old release ledgers are historical
+  evidence, not a moving baseline or authority over new behavior.
 - Preserve native NewCPR contracts: smart sticky scheduling, account continuity,
   outbound proxy and IPv6 control, device identity, outbound user agent,
   cumulative account cost, non-streaming routing, and runtime settings.
@@ -34,9 +34,11 @@ release.
   repository wholesale. Useful development skill/agent rules may be distilled
   into the existing Trellis guides after checking their applicability; never
   import unavailable plugin tooling or replace local authorization boundaries.
-- Do not import unrequested XAI/Grok behavior, unrelated PR work, or a branch
-  outside the fixed official baseline. The v3.40.0 native integration explicitly
-  includes the approved xAI refresh/snapshot and rolling daily usage fixes.
+- Apply shared fixes to every actual approved caller, including xAI; an old
+  task's exclusion is not a permanent exemption for shared error contracts.
+  Preserve explicit product exclusions (plugin runtime, peer_link, upstream
+  API-key product and cancelled functionality). State the actual excluded entry
+  point; missing same-named files alone do not justify excluding public fixes.
 
 ## Evidence Before Conclusions
 
@@ -62,7 +64,7 @@ passing integration test. A build or health check alone is not proof of the
 end-to-end business behavior.
 
 Combined sources need a fresh workspace-wide compile and App architecture check:
-a clean three-way patch does not verify renamed session fields, port signatures
+a clean patch application does not verify renamed session fields, port signatures
 or test module layout. Test fixtures must also match the real initialized
 provider: terminal-only SSE is not evidence of a canonical completed response.
 Preserve matching response-created/terminal events and actual completion
@@ -323,3 +325,19 @@ Prepared state is not a deployment result or a permanent recovery guarantee.
 - [ ] PR target is `main`; review evidence matches the current head.
 - [ ] Push, merge, release, tag, and deployment actions each have their own
       authorization.
+
+
+## Published Index On Protected Main
+
+- Keep upstream's published channel calculation and complete-asset validation.
+  NewCPR's protected main requires Privacy Guard, so its release and index-only
+  jobs use `PUBLISHED_CHANNELS_CHECKED_MAIN=true`. Stage the result from an exact
+  main commit, dispatch the existing privacy-only workflow on the candidate,
+  require that exact SHA to succeed, then fast-forward main without force.
+- Do not disable branch protection, forge a check, or treat a workflow on a
+  different SHA as proof. Concurrent main updates fail closed; recovery rereads
+  current main and revalidates the public assets. A failed candidate is retained
+  for diagnosis, while successful temporary branches are removed.
+- Empty `published` means no verified downloadable release. A deployment tag or
+  CI image alone must not populate it. Local publisher tests do not replace an
+  authorized end-to-end GitHub release run.

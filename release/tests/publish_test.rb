@@ -66,6 +66,18 @@ class PublishTest < Minitest::Test
     end
   end
 
+  def test_preparing_a_version_preserves_the_published_channel_table
+    published = "published:\n  '0':\n    stable: 0.1.0\n"
+    File.write(File.join(@repo, "release/version.yaml"), "version: \"0.1.0\"\n" + published)
+    git("add", "release/version.yaml")
+    git("commit", "--quiet", "-m", "seed published channel")
+    git("push", "--quiet")
+    File.write(File.join(@repo, "release/notes.md"), "# v0.1.1\n\nSynthetic update\n")
+    output, status = publish("0.1.1")
+    assert status.success?, output
+    assert_equal "version: \"0.1.1\"\n" + published, git("show", "v0.1.1:release/version.yaml")
+  end
+
   def test_rejects_clean_wrong_or_empty_notes_without_mutating_history
     initial = git("rev-parse", "HEAD")
     [nil, "# v9.9.9\n\nWrong\n", "# v0.1.1\n\n"].each do |notes|

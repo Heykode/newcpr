@@ -899,11 +899,18 @@ pub(super) fn map_selection_error(error: CredentialSelectionError) -> ProviderEr
         }
         CredentialSelectionError::AccountWait(reason) => {
             tracing::debug!(reason = %reason, "OpenAI account wait ended before upstream send");
-            provider_error(
-                ProviderErrorKind::AccountCapacityUnavailable,
-                UpstreamSendState::NotSent,
-            )
-            .with_diagnostic(
+            let kind = match reason {
+                crate::credential::AccountWaitFailure::QueueFull => {
+                    ProviderErrorKind::ConcurrencyQueueFull
+                }
+                crate::credential::AccountWaitFailure::Timeout => {
+                    ProviderErrorKind::ConcurrencyQueueTimeout
+                }
+                crate::credential::AccountWaitFailure::TokenExpired => {
+                    ProviderErrorKind::AccountCapacityUnavailable
+                }
+            };
+            provider_error(kind, UpstreamSendState::NotSent).with_diagnostic(
                 gateway_core::error::ProviderDiagnostic::new(
                     "OpenAI account capacity wait ended before upstream send",
                 )

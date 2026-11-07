@@ -53,7 +53,6 @@ async fn discovery_request_budget_is_constant_under_load() {
                 .collect::<serde_json::Map<_, _>>()
                 .into();
         }
-        mount_pointer(&server).await;
         Mock::given(path(INDEX_PATH))
             .respond_with(
                 ResponseTemplate::new(200)
@@ -82,7 +81,7 @@ async fn discovery_request_budget_is_constant_under_load() {
             .unwrap();
         assert_eq!(summary.latest_version, target);
         assert!(summary.notes.is_none());
-        assert_eq!(server.received_requests().await.unwrap().len(), 3);
+        assert_eq!(server.received_requests().await.unwrap().len(), 2);
 
         let mut callers = tokio::task::JoinSet::new();
         for i in 0..512 {
@@ -104,9 +103,9 @@ async fn discovery_request_budget_is_constant_under_load() {
         for _ in 0..64 {
             assert!(service.version().await.unwrap().has_update);
         }
-        assert_eq!(server.received_requests().await.unwrap().len(), 3);
+        assert_eq!(server.received_requests().await.unwrap().len(), 2);
         eprintln!(
-            "history={history} concurrent_detail=512 local_probes=65 pointer=1 snapshot=1 release=1 lists=0 elapsed={:?}",
+            "history={history} concurrent_detail=512 local_probes=65 index=1 release=1 lists=0 elapsed={:?}",
             started.elapsed()
         );
     }
@@ -118,7 +117,6 @@ async fn cold_summary_stampede_and_slow_source_do_not_block_runtime_probes() {
     let fixture = Fixture::new();
     let service = Arc::new(fixture.service(&server));
     let (started, mut observed) = tokio::sync::mpsc::unbounded_channel();
-    mount_pointer(&server).await;
     Mock::given(path(INDEX_PATH))
         .respond_with(move |_: &wiremock::Request| {
             started.send(()).unwrap();
@@ -162,7 +160,7 @@ async fn cold_summary_stampede_and_slow_source_do_not_block_runtime_probes() {
     while let Some(summary) = callers.join_next().await {
         assert!(summary.unwrap().has_update);
     }
-    assert_eq!(server.received_requests().await.unwrap().len(), 3);
+    assert_eq!(server.received_requests().await.unwrap().len(), 2);
 }
 
 #[tokio::test]
@@ -216,7 +214,7 @@ async fn api_cooldown_is_shared_and_summary_does_not_advertise_an_unverified_rel
                 .unwrap()
                 .has_update
         );
-        assert_eq!(server.received_requests().await.unwrap().len(), 3);
+        assert_eq!(server.received_requests().await.unwrap().len(), 2);
     }
 }
 
@@ -225,15 +223,14 @@ async fn invalid_or_missing_published_data_does_not_fallback_to_build_version_or
     for body in [
         "version: '1.9.9'".to_owned(),
         "version: '9.0.0'\npublished: {'2': {stable: '2.0.0'}}".to_owned(),
-        format!("version: '{SNAPSHOT}'\npublished: {{'1': {{stable: '2.0.0'}}}}"),
-        format!("version: '{SNAPSHOT}'\npublished: {{'1': {{stable: '1.2.0-rc.1'}}}}"),
+        format!("version: '{BUILD_VERSION}'\npublished: {{'1': {{stable: '2.0.0'}}}}"),
+        format!("version: '{BUILD_VERSION}'\npublished: {{'1': {{stable: '1.2.0-rc.1'}}}}"),
         "bad: &loop [1]\npublished: *loop".to_owned(),
         "x".repeat(128 * 1024 + 1),
     ] {
         let server = MockServer::start().await;
         let fixture = Fixture::new();
         let service = fixture.service(&server);
-        mount_pointer(&server).await;
         Mock::given(path(INDEX_PATH))
             .respond_with(ResponseTemplate::new(200).set_body_string(body))
             .expect(1)
@@ -247,7 +244,7 @@ async fn invalid_or_missing_published_data_does_not_fallback_to_build_version_or
             assert!(detail.warning.is_some());
             assert!(!detail.has_update);
         }
-        assert_eq!(server.received_requests().await.unwrap().len(), 2);
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
     }
 }
 
@@ -284,33 +281,18 @@ async fn install_rechecks_even_a_warm_candidate_and_never_downloads_a_changed_ta
     let fixture = Fixture::new();
     let service = fixture.service(&server);
     let requests = AtomicUsize::new(0);
-    Mock::given(path(POINTER_PATH))
+    Mock::given(path(INDEX_PATH))
         .respond_with(move |_: &wiremock::Request| {
-            pointer_response(if requests.fetch_add(1, Ordering::SeqCst) == 0 {
-                SNAPSHOT
+            let target = if requests.fetch_add(1, Ordering::SeqCst) == 0 {
+                "1.1.0"
             } else {
-                "4.0.0"
-            })
+                "1.2.0"
+            };
+            ResponseTemplate::new(200).set_body_json(fixture_index(target))
         })
         .expect(2)
         .mount(&server)
         .await;
-    for (path_name, latest, target) in [
-        (INDEX_PATH, SNAPSHOT, "1.1.0"),
-        (
-            "/owner/repository/releases/download/v4.0.0/version.yaml",
-            "4.0.0",
-            "1.2.0",
-        ),
-    ] {
-        let mut index = fixture_index(target);
-        index["version"] = latest.into();
-        Mock::given(path(path_name))
-            .respond_with(ResponseTemplate::new(200).set_body_json(index))
-            .expect(1)
-            .mount(&server)
-            .await;
-    }
     Mock::given(path("/repos/owner/repository/releases/tags/v1.1.0"))
         .respond_with(release_response("1.1.0", available_assets("1.1.0")))
         .expect(1)
@@ -324,7 +306,7 @@ async fn install_rechecks_even_a_warm_candidate_and_never_downloads_a_changed_ta
     let status = complete_update(&service, &detail.latest_version).await;
     assert_eq!(status.operation.status, SystemOperationStatus::Failed);
     assert!(status.operation.error.unwrap().contains("重新检查并确认"));
-    assert_eq!(server.received_requests().await.unwrap().len(), 5);
+    assert_eq!(server.received_requests().await.unwrap().len(), 3);
 }
 
 #[tokio::test]
@@ -353,7 +335,7 @@ async fn channels_pointing_to_one_release_share_its_detail() {
                 .has_update
         );
     }
-    assert_eq!(server.received_requests().await.unwrap().len(), 3);
+    assert_eq!(server.received_requests().await.unwrap().len(), 2);
 }
 
 #[tokio::test]
@@ -361,10 +343,9 @@ async fn transient_release_absence_expires_and_refresh_interval_is_bounded() {
     let server = MockServer::start().await;
     let fixture = Fixture::new();
     let service = fixture.service(&server);
-    mount_pointer(&server).await;
     Mock::given(path(INDEX_PATH))
         .respond_with(ResponseTemplate::new(200).set_body_json(fixture_index(TARGET_VERSION)))
-        .expect(1)
+        .expect(2)
         .mount(&server)
         .await;
     let calls = AtomicUsize::new(0);
@@ -464,7 +445,7 @@ async fn metadata_never_follows_redirects_or_accepts_oversized_release() {
         } else {
             "大小限制"
         }));
-        assert_eq!(server.received_requests().await.unwrap().len(), 3);
+        assert_eq!(server.received_requests().await.unwrap().len(), 2);
     }
 }
 
@@ -474,7 +455,6 @@ async fn slow_metadata_times_out_without_retry_or_blocking_future_version_reads(
     let fixture = Fixture::new();
     let service = Arc::new(fixture.service(&server));
     let (sent, mut received) = tokio::sync::mpsc::unbounded_channel();
-    mount_pointer(&server).await;
     Mock::given(path(INDEX_PATH))
         .respond_with(move |_: &wiremock::Request| {
             sent.send(()).unwrap();
@@ -498,7 +478,7 @@ async fn slow_metadata_times_out_without_retry_or_blocking_future_version_reads(
     assert!(detail.warning.is_some());
     assert!(!detail.has_update);
     assert_eq!(service.version().await.unwrap().version, "1.0.0");
-    assert_eq!(server.received_requests().await.unwrap().len(), 2);
+    assert_eq!(server.received_requests().await.unwrap().len(), 1);
 }
 
 #[tokio::test]
@@ -528,25 +508,32 @@ async fn summary_and_local_probe_require_downloadable_target() {
 }
 
 #[tokio::test]
-async fn unpublished_or_untrusted_pointer_cannot_redirect_discovery() {
-    for (draft, current) in [
-        (true, Some("3.42.0")),
-        (false, None),
-        (false, Some("https://example.com/v1")),
-    ] {
-        let server = MockServer::start().await;
-        let fixture = Fixture::new();
-        let service = fixture.service(&server);
-        Mock::given(path(POINTER_PATH)).respond_with(ResponseTemplate::new(200).set_body_json(
-            serde_json::json!({"tag_name":"update-index","prerelease":true,"draft":draft,
-                "body":serde_json::json!({"current":current,"pending":{"version":"3.42.0"}}).to_string()})
-        )).expect(1).mount(&server).await;
-        let detail = service
-            .update_detail(SystemUpdateCheck::Summary, None)
+async fn empty_published_table_does_not_advertise_unpublished_deployment_tags() {
+    let server = MockServer::start().await;
+    mount_index(
+        &server,
+        serde_json::json!({"version": "3.42.0", "published": {}}),
+    )
+    .await;
+    let fixture = Fixture::new();
+    let detail = fixture
+        .service(&server)
+        .update_detail(
+            gateway_admin::model::system::SystemUpdateCheck::Refresh,
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(!detail.has_update);
+    assert!(detail.warning.unwrap().contains("尚未发布"));
+    assert_eq!(
+        server
+            .received_requests()
             .await
-            .unwrap();
-        assert!(!detail.has_update);
-        assert!(detail.warning.is_some());
-        assert_eq!(server.received_requests().await.unwrap().len(), 1);
-    }
+            .unwrap()
+            .iter()
+            .map(|request| request.url.path())
+            .collect::<Vec<_>>(),
+        [INDEX_PATH]
+    );
 }

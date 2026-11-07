@@ -179,6 +179,7 @@
   --shadow-cp-secondary: var(--cp-box-shadow-secondary);
   --shadow-cp-tertiary: var(--cp-box-shadow-tertiary);
   --shadow-cp-card: var(--cp-card-shadow);
+  --shadow-cp-popover: var(--cp-popover-shadow);
   --shadow-cp-input: var(--cp-input-shadow);
   --shadow-cp-input-hover: var(--cp-input-hover-shadow);
   --shadow-cp-input-active: var(--cp-input-active-shadow);

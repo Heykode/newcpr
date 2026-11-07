@@ -1090,7 +1090,7 @@ async fn capacity_wait_provider_native_queue_full_cannot_authorize_core_replay_a
         .await
         .err()
         .unwrap();
-    assert_eq!(error.kind(), ProviderErrorKind::AccountCapacityUnavailable);
+    assert_eq!(error.kind(), ProviderErrorKind::ConcurrencyQueueFull);
     assert_eq!(error.send_state(), UpstreamSendState::NotSent);
     assert_eq!(
         error.continuation_recovery_disposition(),

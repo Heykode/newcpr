@@ -23,7 +23,7 @@ function select() {
           <span class="block text-cp-sm text-cp-text-secondary">{{ t('keys.configuration.ccSwitchDescription') }}</span>
         </span>
       </button>
-      <a href="https://github.com/farion1231/cc-switch" target="_blank" rel="noopener noreferrer" :aria-label="t('keys.configuration.viewOnGitHub', { name: 'CC Switch' })" :title="t('keys.configuration.viewOnGitHub', { name: 'CC Switch' })" class="shrink-0 p-2">
+      <a href="https://github.com/farion1231/cc-switch" target="_blank" rel="noopener noreferrer" :aria-label="t('keys.configuration.viewOnGitHub', { name: 'CC Switch' })" class="shrink-0 p-2">
         <Github class="size-5" />
       </a>
     </div>

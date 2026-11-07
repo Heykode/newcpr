@@ -241,7 +241,6 @@ defineExpose({
                     type="button"
                     class="inline-flex max-w-full touch-manipulation items-center gap-1 border-0 bg-transparent p-0 text-inherit outline-none transition-colors hover:text-cp-text focus-visible:text-cp-primary-text motion-reduce:transition-none"
                     :aria-label="sortButtonLabel(column)"
-                    :title="sortButtonLabel(column)"
                     @click="toggleColumnSort(column)"
                   >
                     <span data-column-label class="truncate">

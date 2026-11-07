@@ -271,7 +271,7 @@ async fn image_turn_alias_only_keeps_the_root_account_when_busy() {
         .await
         .err()
         .expect("child must not escape to B");
-    assert_eq!(error.kind(), ProviderErrorKind::AccountCapacityUnavailable);
+    assert_eq!(error.kind(), ProviderErrorKind::ConcurrencyQueueTimeout);
     assert!(error.retry_is_prohibited());
     assert_eq!(
         leases
@@ -381,7 +381,7 @@ async fn live_turn_alias_only_keeps_the_root_account_when_busy() {
         .await
         .err()
         .expect("Live child must not escape to B");
-    assert_eq!(error.kind(), ProviderErrorKind::AccountCapacityUnavailable);
+    assert_eq!(error.kind(), ProviderErrorKind::ConcurrencyQueueTimeout);
     assert!(error.retry_is_prohibited());
     assert_eq!(
         leases

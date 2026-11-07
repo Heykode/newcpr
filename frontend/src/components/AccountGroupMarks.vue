@@ -74,7 +74,6 @@ const hiddenCount = computed(() => Math.max(props.groups.length - visibleGroups.
       <template #trigger="{ open }">
         <BaseIconButton
           variant="link"
-          :show-tooltip="false"
           :label="`查看账号分组：${fullNames}`"
           class="min-w-0 max-w-full cursor-help items-center overflow-hidden border-0 bg-transparent p-0 text-left"
           :class="layout === 'wrap' ? 'flex w-full flex-wrap gap-1.5' : layout === 'stacked' ? 'flex w-full flex-wrap justify-center gap-x-1.5 gap-y-1' : 'flex flex-nowrap gap-1.5'"

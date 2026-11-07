@@ -478,18 +478,6 @@ async fn same_window_recovery_requires_consecutive_known_account_wide_observatio
         "limit_name": "separate_model",
         "rate_limit": {"primary_window": same_window_usage(50, 18)["rate_limit"]["secondary_window"]}
     }]);
-    let mut missing_usage = same_window_usage(50, 18);
-    missing_usage["rate_limit"]["secondary_window"]
-        .as_object_mut()
-        .unwrap()
-        .remove("used_percent");
-    let mut missing_reset = same_window_usage(50, 18);
-    missing_reset["rate_limit"]["secondary_window"]
-        .as_object_mut()
-        .unwrap()
-        .remove("reset_at");
-    let mut older_reset = same_window_usage(50, 18);
-    older_reset["rate_limit"]["secondary_window"]["reset_at"] = json!(SAME_WINDOW_WEEK_RESET - 1);
     let mut advanced_high_usage = same_window_usage(50, 18);
     advanced_high_usage["rate_limit"]["secondary_window"]["reset_at"] =
         json!(SAME_WINDOW_WEEK_RESET + 604_800);
@@ -500,9 +488,6 @@ async fn same_window_recovery_requires_consecutive_known_account_wide_observatio
         explicit_limit,
         missing_window,
         model_only,
-        missing_usage,
-        missing_reset,
-        older_reset,
         advanced_high_usage,
     ] {
         let (_, server, service, account) = seed_same_window_exhaustion(50).await;
@@ -517,6 +502,33 @@ async fn same_window_recovery_requires_consecutive_known_account_wide_observatio
                 .refresh_account(account.id())
                 .await
                 .expect("refresh");
+            assert_eq!(snapshot.quota().is_exhausted(), exhausted, "{usage}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn same_window_recovery_accepts_upstream_unadvanced_reset_without_percent() {
+    let mut missing_usage = same_window_usage(50, 18);
+    missing_usage["rate_limit"]["secondary_window"]
+        .as_object_mut()
+        .unwrap()
+        .remove("used_percent");
+    let mut missing_reset = same_window_usage(50, 18);
+    missing_reset["rate_limit"]["secondary_window"]
+        .as_object_mut()
+        .unwrap()
+        .remove("reset_at");
+    let mut older_reset = same_window_usage(50, 18);
+    older_reset["rate_limit"]["secondary_window"]["reset_at"] = json!(SAME_WINDOW_WEEK_RESET - 1);
+    for usage in [missing_usage, missing_reset, older_reset] {
+        let (_, server, service, account) = seed_same_window_exhaustion(50).await;
+        for exhausted in [true, false] {
+            mount_same_window_usage(&server, usage.clone()).await;
+            let snapshot = service
+                .refresh_account(account.id())
+                .await
+                .expect("fresh observation");
             assert_eq!(snapshot.quota().is_exhausted(), exhausted, "{usage}");
         }
     }

@@ -500,4 +500,4 @@ pg_restore --no-owner --no-privileges --password \
 
 迁移新增默认关闭的账号点数开关，将 Key 的旧安装 ID 配置改为身份种子，并把 Key/账号等待字段改名、秒数限制到1..120。旧 Key 的上游有效身份会重新派生；账号设备、凭据、出口和账号 ID 保留。关闭新功能不能替代数据库降级。
 
-发布索引使用 prepare → 发布资产 → finish 校验后推进通道指针；索引恢复可使用 release workflow 的 `index_only` 和原已公开 tag，重验完整资产后收尾，不重建或覆盖已发布包。发布和恢复共用仓库发布锁。本次代码合入本身不发布版本或切换生产服务。
+发布索引使用 `published-channels.rb check VERSION` → 发布资产 → `publish VERSION`：先验证公开资产完整，再更新 main 的 `release/version.yaml` 中 `published` 通道。NewCPR 的受保护主线使用 `PUBLISHED_CHANNELS_CHECKED_MAIN=true`：从精确 main 提交建立临时索引分支，按文件 SHA 写入，显式触发现有 Security Scan 的 `privacy_only`，等待该候选提交检查成功，再以非强制快进更新 main。检查失败、超时或 main 并发前进均停止，保留候选供检查；不会关闭分支保护。只有发布和索引恢复 job 增加所需 `actions: write`。并发冲突失败后重新读取并恢复，不能覆盖其他通道。索引恢复使用 release workflow 的 `index_only` 和原已公开 tag，重验完整资产后推进，不重建或覆盖已发布包。普通部署标签不自动进入发布通道；空通道表返回“尚未发布”。发布和恢复共用仓库发布锁。本次代码合入本身不发布版本或切换生产服务。

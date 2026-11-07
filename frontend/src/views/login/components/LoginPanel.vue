@@ -72,7 +72,6 @@ function togglePasswordVisible(): void {
         :class="themeToggleClasses"
         type="button"
         :aria-label="themeToggleLabel"
-        :title="themeToggleLabel"
         @click="emit('toggleTheme', $event)"
       >
         <Sun :size="16" />

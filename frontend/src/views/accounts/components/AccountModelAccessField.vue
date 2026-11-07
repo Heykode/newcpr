@@ -264,7 +264,6 @@ watch(search, () => {
             <BaseIconButton
               :label="t('accounts.modelAccess.catalogHelpTitle')"
               size="sm"
-              :show-tooltip="false"
               :aria-describedby="catalogHelpOpen ? catalogHelpId : undefined"
               :aria-expanded="catalogHelpOpen"
               @keydown="handleCatalogHelpKeydown($event, close)"

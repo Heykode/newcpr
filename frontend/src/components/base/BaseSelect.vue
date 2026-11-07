@@ -46,6 +46,7 @@ const popoverRef = ref<HTMLElement | null>(null)
 const open = ref(false)
 const activeIndex = ref(-1)
 const popoverStyle = ref<CSSProperties>({})
+const popoverPlacement = ref<'top' | 'bottom'>('bottom')
 const selectId = `base-select-${useId()}`
 const rootAttrs = computed(() => ({ class: attrs.class, style: attrs.style }))
 const triggerAttrs = computed(() =>
@@ -100,7 +101,7 @@ const triggerClasses = computed(() => [
 ])
 
 const popoverClasses = computed(() => [
-  'fixed z-50 flex flex-col gap-1 rounded-cp-lg border-0 bg-cp-bg-elevated p-1 shadow-cp',
+  'fixed z-50 flex flex-col gap-1 rounded-cp-lg border-0 bg-cp-bg-elevated p-1 shadow-cp-popover',
   props.options.length > 6 ? 'cp-scrollbar overflow-y-auto' : 'overflow-visible',
 ])
 
@@ -136,6 +137,7 @@ function updatePopoverPosition() {
   const belowSpace = window.innerHeight - rect.bottom - gap
   const aboveSpace = rect.top - gap
   const placeAbove = belowSpace < estimatedMenuHeight && aboveSpace > belowSpace
+  popoverPlacement.value = placeAbove ? 'top' : 'bottom'
   const availableHeight = Math.max(placeAbove ? aboveSpace : belowSpace, 120)
   const maxHeight = clamp(estimatedMenuHeight, 0, availableHeight)
   const top = placeAbove
@@ -317,18 +319,12 @@ useEventListener(window, 'scroll', updatePopoverPositionThrottled, { capture: tr
     </button>
 
     <Teleport to="body">
-      <Transition
-        enter-active-class="transition-[opacity,transform] duration-150 ease-out motion-reduce:transition-none"
-        enter-from-class="-translate-y-1 opacity-0"
-        enter-to-class="translate-y-0 opacity-100"
-        leave-active-class="transition-opacity duration-150 ease-in motion-reduce:transition-none"
-        leave-from-class="opacity-100"
-        leave-to-class="opacity-0"
-      >
+      <Transition name="cp-slide-fade">
         <div
           v-if="open"
           :id="`${selectId}-listbox`"
           ref="popoverRef"
+          :data-cp-placement="popoverPlacement"
           :class="popoverClasses"
           :style="popoverStyle"
           role="listbox"
