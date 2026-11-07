@@ -112,7 +112,6 @@ function removeRule(id: string) {
                 <template #trigger="{ open }">
                   <ZIconButton
                     variant="link"
-                    :show-tooltip="false"
                     size="sm"
                     :label="t('settings.errorProtection.matchingHelpTitle')"
                     :aria-expanded="open"

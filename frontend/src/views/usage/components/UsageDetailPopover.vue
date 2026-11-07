@@ -20,7 +20,6 @@ defineProps<{
     <template #trigger>
       <BaseIconButton
         variant="link"
-        :show-tooltip="false"
         class="size-4! rounded-full!"
         :class="tone === 'warning'
           ? 'text-cp-warning-text'

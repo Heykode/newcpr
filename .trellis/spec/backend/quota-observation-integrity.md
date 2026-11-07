@@ -113,3 +113,15 @@ rate rejection, upstream quota denial and account authentication failures are
 different test outcomes. A one-account run cannot validate account-switch
 cleaning, and unchanged tokens/device identity do not imply an unchanged
 credential CAS or Cookie material.
+
+## Same-window Recovery
+
+The official recovery rule accepts two fresh account-wide observations with no
+forward reset and no reached limit. A missing percent or a reset moving backward
+is not an extra blocker. A missing window, reached limit, or a forward reset
+without sufficiently low usage breaks this evidence. An unknown baseline reset
+must first be anchored. Preserve independent observation clocks: duplicate,
+out-of-order and pre-exhaustion observations cannot advance recovery. These are
+separate concerns; do not reinstate strict reset equality to enforce freshness.
+The quota recovery tests cover both upstream business conditions and local clock
+fences; update old fixture expectations when upstream changes these conditions.

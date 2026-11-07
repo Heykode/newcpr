@@ -380,7 +380,14 @@ async fn strict_wait_timeout_and_queue_full_cannot_escape_to_provider_fallback()
         .unwrap()
         .err()
         .unwrap();
-        assert_eq!(error.kind(), ProviderErrorKind::AccountCapacityUnavailable);
+        assert_eq!(
+            error.kind(),
+            if full {
+                ProviderErrorKind::ConcurrencyQueueFull
+            } else {
+                ProviderErrorKind::ConcurrencyQueueTimeout
+            }
+        );
         assert!(error.retry_is_prohibited());
         assert_eq!(budget.is_exhausted(), !full);
         assert_eq!(f.leases.capacity.waiting.load(Ordering::SeqCst), 0);

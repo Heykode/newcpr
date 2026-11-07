@@ -461,7 +461,7 @@ async fn preferred_preserves_the_model_blocked_root_while_relaxed_migrates_it() 
         .await
         .err()
         .unwrap();
-    assert_eq!(strict.kind(), ProviderErrorKind::AccountCapacityUnavailable);
+    assert_eq!(strict.kind(), ProviderErrorKind::ConcurrencyQueueTimeout);
     assert!(strict.retry_is_prohibited());
     let preferred = provider
         .execute(

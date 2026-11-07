@@ -7,10 +7,10 @@
 排队，不是新的调度算法，也不增加执行并发。管理诊断走原 selector 路径；
 不能据此要求 OAuth 刷新、后台额度/目录任务或其他 Provider 自动排队。
 
-本文根据任务 `09-14-qx-profile-capacity-wait` 的当前 Core、OpenAI Provider、
-Redis Store 实现及研究合同同步。本轮已通过全 workspace、真实 PG/Redis、Host 停机
-监督和界面验证，证据见该任务 `research/integration-verification.md`。
-维护合同不代替未来改动的验证，也不代表性能压测、跨平台发布或生产验收完成。
+本文维护当前 Core、OpenAI Provider 和 Redis Store 的运行合同。
+本次官方基线、接入差异及验证边界见 `docs/upstream-v3421-native-parity.md`；
+历史任务或曾经通过的测试不替代当前行为核验。后续更新遵循
+`docs/upstream-integration-checklist.md`，同提交淘汰冲突的旧条款和旧预期。
 
 ## 2. 单一权威与入口
 
@@ -38,7 +38,8 @@ Redis key；WS pool 不兼任账号调度器。不新建配置表、第二套粘
 | `accountQueueTimeoutSeconds` | `30` | 整数，`1..=120` |
 
 2026-11-01 用户批准统一为两项：sticky、fallback 和 strict follow-only 等待读取
-同一份人数上限和时限；跨模式、跨 attempt 不得重开共享截止。
+同一份等待配置；普通池按人数上限，Reserved 按下文 High 优先级免普通单账号上限。
+时限跨模式、跨 attempt 不得重开共享截止。
 迁移0083将旧四项统一到10/30，保留已经保存的新两项及其他所有设置。
 Web只展示两个账号等待输入，Key队列仍独立。旧四项仅接受后丢弃，不参与新运行快照。
 
@@ -46,7 +47,7 @@ Web只展示两个账号等待输入，Key队列仍独立。旧四项仅接受�
   零不表示无限；关闭后保留两个数值，服务端仍校验范围，未知字段仍拒绝。
 - 发布必须在提交后。开关、人数、秒数沿 `attempt.request_tuning()` 冻结；
   轮询不能重读 live tuning 给旧请求续时。关闭使普通新请求走原路径；strict 子线程
-  仍使用同一 sticky 人数上限、超时和共享预算等待其根绑定。
+  仍按其容量池规则、同一超时和共享预算等待根绑定。
 - 本功能复用 JSONB，不需要改历史迁移。关闭开关不等于可直接降级旧二进制：
   旧解析器可能拒绝新增字段；降级须定向恢复旧版字段，不能清空全部设置。
 
@@ -100,7 +101,8 @@ strict 子线程是例外：这些阻塞仍禁止执行，但可以等待根绑�
    可移动等待者每 500ms 重查完整冻结候选池，即使本账号尚未轮到队首也可检查其他账号。
    找到可用账号仍必须通过目的账号/容量池的原子队首和容量检查；Shared 与 Reserved
    各自 FIFO，不能插队。已进入严格并发等待的绑定与 required/native owner 不跨号。
-4. 目标失格或终检冲突，先释放所有权再有界重选；快照冲突最多三轮。
+4. 目标失格或终检冲突先释放所有权再重选。真实账号事实/凭据快照冲突最多重试三次（含首次共四次），
+   耗尽返回 `AccountSnapshotChanged`；普通缓存、容量 publication 或亲和重查不消耗这个计数。
    排队中观察到的 strict 根绑定迁移不消耗快照冲突预算，但仍受同一共享截止限制。
    lease-race Busy 集与业务排除集分开，不能伪造 `in_flight` 或写入账号失败记录。
 5. 容量轮询保持 100ms，并加 0..24ms jitter；间隔轮询取当前轮询周期和剩余
@@ -140,7 +142,7 @@ Redis `in_flight` 已含本请求时不得再加一。PG 与 Redis 之间不是�
 之前检查；不写账号健康、不重新读取全部凭据、不增加上游调用。
 普通 Ready、sticky Ready 重取及等待晋升三条路径都遵循同一边界。
 等待路径以 `WaitOutcome::Skipped` 区别本地坏候选与真实 facts/revision 冲突：
-前者消耗一个候选，不消耗原有三轮重扫预算，也不重置共享等待截止。
+前者消耗一个候选，不消耗快照冲突重试次数，也不重置共享等待截止。
 `reload_wait_exclusions` 合并此局部排除集；下一次请求仍重新核验。
 
 required、Native、ReplayOwner、管理员指定诊断及 Store/revision 故障保留原错误，
@@ -183,7 +185,8 @@ D_active = min(D_shared, 所有已经启动的 D_mode)
 
 每个窗口只创建一次；保留已启动模式的截止，不只计算当前模式。任一窗口到期或显式
 `expire()` 后预算耗尽。原号等满 120 秒不能再送 30 秒，fallback 到期不能换号重开；
-成功后上游执行经过的时间也不暂停窗口，retry 只能使用原窗口剩余时间。
+成功后上游执行经过的时间也不暂停窗口。后续 retry 若需要排队，只能使用原窗口剩余时间；
+等待耗尽不禁止请求期限内对立即空闲账号的准入，也不独立禁止官方允许的恢复。
 
 Core 使用单调时钟保留截止，并从同一次 wall/monotonic origin 导出 Store 所需绝对时间。
 Provider `WaitControl::run` 将取消和 deadline 覆盖到账号读取、Store await、轮询和终检；
@@ -196,8 +199,11 @@ Provider `WaitControl::run` 将取消和 deadline 覆盖到账号读取、Store 
 - Client Key admission、账号等待 lease、账号执行 lease、WS 实体槽是不同资源。
   等待不重新消耗一次请求准入，不计入 execution `in_flight`、Smart load 或 used slots。
   先拿账号执行槽，再进入原 WS pool；不能持有 WS socket 反过来等账号槽。
-- 同账号 sticky/fallback 使用同一个 waiting ZSET 与总 `ZCARD`，各自阈值检查该总数，
-  不是独立的 3+100 保留区，也不是每个 Client Key 各 100 人。
+- 同账号、同容量池的 sticky/fallback 共用 waiting ZSET；普通池按配置的单账号人数限制。
+  Reserved 按官方 High 优先级免普通单账号人数限制；两池各自仍受每 Provider、每进程
+  合计 1024 个等待者约束。执行不占此等待名额，晋升/取消/错误释放名额。
+  生产 `bundle` 每实例构造一次 coordinator；1024 归该队列实例所有，测试中的独立 coordinator 模拟另一实例。
+  Redis 继续负责跨实例单账号原子准入及 FIFO，1024 不是集群全局上限。
 - Store 使用 Redis TIME、唯一 token、绝对 member deadline；key TTL 覆盖最晚 member，
   新入队不能续旧 token。600 秒是异常回收租约，不是普通模型请求总执行上限。
   已交付的普通或晋升执行 guard 每 200 秒续自己的 live member；显式截止仍限制续期。
@@ -234,15 +240,26 @@ Host 强制终止后的残留依原 TTL 保守回收，不承诺立即释放全�
 
 ## 8. 错误、Native 与协议边界
 
-`queue_full`、`wait_timeout`、`wait_token_expired` 映射为
-`AccountCapacityUnavailable + NotSent` 的安全诊断；存储/必要事实不可用必须失败关闭，
-不能当作人数为零。等待不是 upstream attempt，不制造上游失败、熔断观测或 SSE 首包。
+| 实际原因 | Provider / Gateway 分类 | HTTP |
+| --- | --- | --- |
+| `queue_full` | `ConcurrencyQueueFull` | 429，`concurrency_queue_full` |
+| `wait_timeout` | `ConcurrencyQueueTimeout` | 429，`concurrency_queue_timeout` |
+| `wait_token_expired` / 真实账号容量不可用 | `AccountCapacityUnavailable` | 503，`account_capacity_unavailable` |
 
-启用路径硬绑定错误通过 `PinnedAccount` 携带恢复限制：owner 未丢失时
-`RetryExactConnection`，选择已无合格 owner 时 `ClientReplayRequired`。
-Core 必须尊重这些 disposition 及耗尽预算，不能因为本地容量错误进入 `ReplayAny`。
-这不是禁止所有经 Provider 证明安全的重放；关闭路径原有恢复合同仍保留。
-普通 retry 的 `account_state_owner` 本身不构成 Native 硬绑定。
+三者均为本地 `NotSent`；Store 故障保留基础设施错误，不能机械改成 429。
+等待不制造上游 attempt、熔断观测或 SSE 首包。`QueueRejection::provider_kind()`
+同时用于 xAI；API 通过 `GatewayError::from_provider` 保留分类。
+
+Native prepare 恢复按官方完整分支：只处理未发送时的无候选、容量不可用或额度耗尽，
+要求仍有换号预算和 Provider 会话状态；required account、retry prohibited 仍禁止换号。
+队满/超时不直接进入此 Native 恢复分支。流内的 exact-owner/client-replay disposition
+仍按独立流内恢复逻辑处理，不能拿它给所有 prepare 阶段额外上锁。
+跨 Provider 候选推进独立检查未发送状态、续写模式、retry prohibited 和换号预算，
+不能仅因账号排队预算到期而禁止推进。普通 retry 的 `account_state_owner` 本身不构成硬绑定。
+
+严格根会话队满/超时后的重选仍由既有开关控制，释放队位后仅立即尝试一次，取得租约
+并成功提交亲和 CAS 后绑定新账号。实际迁移记录 `account.binding.migrated` 及原因、前后账号；
+失败准入/未改绑定不记迁移。strict 子线程仍跟随根绑定，不能绕过它独自重选。
 
 等待成功继续走原 HTTP/WS 执行入口。精确续接保留原账号、socket、出口和画像；
 不得删除 `previous_response_id`、伪造 history loss 或改用 HTTP 绕过等待。
@@ -262,8 +279,8 @@ API 不为账号排队提前提交 SSE 或发送业务 payload。
 - Shared 和 Reserved 排队各自用 fence 序列保留 FIFO，deadline ZSET 负责到期；
   不能按截止早晚排序。直接执行和跨账号重查同样原子复核目的队首，
   取消/超时同时移除排序位置；Quality 不进入业务等待队列。
-- 保留本项目 sticky/fallback 的有限人数及共享截止，不新增官方进程级总队列。
-  普通请求在等待开关关闭时不隐式排队；strict 根线程跟随保留上述有界等待。
+- 普通池保留单账号人数限制，Reserved 免此限制；两池均接入官方每进程等待总量 1024。
+  普通请求在等待开关关闭时不隐式排队；strict 子线程跟随根账号时保留上述有界等待。
   容量、续期和不确定结果清理仍复用既有所有权流程。
 - 未实现 Reserved 的端口失败关闭，不得回落读取普通池的计数。
 
@@ -273,16 +290,16 @@ API 不为账号排队提前提交 SSE 或发送业务 payload。
 | Core | Busy 与双阻塞区分、全失格不等、Busy+失格仍可等；Smart/权重不变；跨 attempt/模式共享截止 |
 | Provider | 原号优先、全忙才 fallback、队满有界退出；等待内导入新 ID 不扩 Universe；disable/delete/额度/模型/排除变化终检 |
 | Live 容量 | 上下调及 publication 竞态、缺失失败关闭、凭据 revision 冲突归还槽；容量观测不计 waiter、不重复计算自身 |
-| Redis | 3/100 共享人数、跨 Key 同账号共享、账号隔离、原子晋升不超卖、独立 member TTL |
+| Redis | 普通池单账号上限、Reserved 免此上限、每 Provider/池/进程总量 1024、晋升/取消释放名额、原子晋升不超卖和独立 member TTL |
 | 取消 | 准入/晋升前中后取消、未 poll future、成功响应丢失、取消先到、重复 release、旧 token 不删新 owner |
 | 停机 P1 | 超过旧 35 秒窗口后请求/执行 guard 才 Drop 仍可清理；存活 owner 未归还不能提前关闭；Store 验证外层 timeout/abort，Host 验证自定义 HTTP drain 后统一限时 abort/join |
-| Native/协议 | full/timeout/失格不进入 ReplayAny；关闭路径不变；等待时零上游调用且无提前 SSE；取得执行槽后真实 WS 及精确续接 |
+| Native/协议 | 队满/超时不进入 Native 跨号重放；本地无候选等仅按官方 prepare 分支恢复；耗尽等待但立即空闲可准入，换号预算为零仍禁止恢复；等待时零上游调用且无提前 SSE |
 
 对应回归位于 Core `tests/account/selection.rs`、`tests/engine/capacity_wait.rs`、
 `tests/engine/coordinator.rs`，Store `tests/redis/capacity_wait.rs`，以及 OpenAI
 `tests/credential/contract/mod.rs`、`tests/provider/contract/scheduling.rs` 等受影响测试模块。
 表格是验收要求，不表示每行已获实证。真实隔离 PG/Redis 不可用导致的 skip 不能计为通过；
-定向测试不能代替 workspace、协议、生命周期和性能验收。
+按影响执行验证并复用有效证据；定向测试不代表完整协议、生命周期或性能验收。
 
 ## 请求间隔修复回归
 
@@ -321,3 +338,10 @@ API 不为账号排队提前提交 SSE 或发送业务 payload。
 - `switchAccountOnQueueFailure` 默认 false。开启后只在队满/超时后进行一次立即重选，不重新排队；严格根请求取得 B 后绑定 B，Preferred 保留原软绑定。固定账号、真实续接 owner 和严格子线程不跨号。
 - xAI 接入官方进程内等待队列及重选 helper；执行并发继续由已有 Store 准入拥有，不承诺跨实例的全局等待 FIFO。OpenAI 保留既有 Redis 等待 owner 和 Shared/Reserved 容量池。
 - 官方回归与本地队列接线同时验证；固定官方来源、差异及结果见 `docs/upstream-v3420-native-parity.md`。
+
+## 10. 典型正反例
+
+- 正常：等待已耗尽、请求未过期，新 attempt 的合法候选立即空闲，仍可准入；若还需排队则返回 429 超时。
+- 边界：Reserved 同账号已有一个等待者且普通人数配置为 1，第二个仍可入队；该进程同 Provider/池已有 1024 等待者时拒绝。
+- 错误：把任意三次缓存/容量重查压成 coordinator 故障；正确做法仅对真实快照冲突计三次重试，其余受取消和截止约束。
+- 保留官方风险：strict 子线程等根绑定时可占据 FIFO 队首，执行槽空闲也可能队满。429 分类对齐不等于消除这种阻塞；改变该机制须独立授权、设计和验证。

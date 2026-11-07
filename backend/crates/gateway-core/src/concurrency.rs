@@ -407,6 +407,13 @@ impl<'a, K: Clone + Eq + Hash> CapacityWait<'a, K> {
 
 impl QueueRejection {
     #[must_use]
+    pub const fn provider_kind(self) -> crate::error::ProviderErrorKind {
+        match self {
+            Self::Full => crate::error::ProviderErrorKind::ConcurrencyQueueFull,
+            Self::Timeout => crate::error::ProviderErrorKind::ConcurrencyQueueTimeout,
+        }
+    }
+    #[must_use]
     pub fn gateway_error(self) -> crate::error::GatewayError {
         match self {
             Self::Full => crate::error::GatewayError::new(

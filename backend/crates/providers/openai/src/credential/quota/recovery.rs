@@ -146,8 +146,9 @@ impl QuotaRecovery {
                 } else if previous_reset.is_none() {
                     // 首次获知 reset 只建立基准，不算恢复证据。
                     self.pending.insert(key.to_owned(), window.reset_at());
-                } else if window.reset_at() == previous_reset
-                    && window.used_percent().is_some()
+                } else if !window
+                    .reset_at()
+                    .is_some_and(|current| Some(current) > previous_reset)
                     && !window.limit_reached()
                 {
                     if self.candidates.contains_key(key) {
@@ -160,7 +161,7 @@ impl QuotaRecovery {
                 self.pending.insert(key.to_owned(), window.reset_at());
             }
         }
-        // 窗口缺失、再次触顶或 reset 不匹配都会中断该窗口的连续证据。
+        // 窗口缺失、再次触顶或 reset 前进但用量仍高都会中断连续证据。
         self.candidates = candidates;
         had_baseline && self.pending.is_empty()
     }

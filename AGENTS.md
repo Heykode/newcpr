@@ -38,6 +38,10 @@ Managed by Trellis. Edits outside this block are preserved; edits inside may be 
   Pin the official commit and record every affected entry point, helper, caller,
   error boundary, test and intentional exclusion. Matching converter files alone
   does not establish endpoint equivalence.
+- Treat that checklist as the single shared merge policy. Update conflicting
+  specs and tests in the same change; retire obsolete rules rather than appending
+  exceptions that leave both old and new instructions active. Historical parity
+  ledgers are evidence for their recorded baseline, not current requirements.
 - Keep a reviewed difference ledger. Any extra precheck, fallback or error mapping
   needs an explicit source and behavioral justification; do not retain it merely
   because it already exists locally. Verify defects with failing-before and

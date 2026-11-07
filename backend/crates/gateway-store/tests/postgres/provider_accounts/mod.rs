@@ -2952,65 +2952,112 @@ async fn authorization_create_returns_existing_account_id_when_identity_is_upser
         unreachable!("credential fixture must be an object");
     };
 
-    let result = admin_account_store(&database.pool)
-        .commit_authorization(
-            AuthorizationCommit {
-                settings: Some(gateway_admin::model::accounts::AccountImportSettings {
-                    template_proxy_mode: None,
-                    excel_recovery: None,
-                    purchase_cost: None,
-                    clear_outbound_proxy: false,
-                    egress_mode: None,
-                    model_access: Default::default(),
-                    custom_name: None,
-                    enabled: false,
-                    turn_state_injection_enabled: Some(true),
-                    responses_upstream: Default::default(),
-                    excel_models_follow_global: Default::default(),
-                    excel_cache_creation_as_input: Default::default(),
-                    excel_ignore_encrypted_content: Default::default(),
-                    request_proxy_source: Default::default(),
-                    excel_auto_disable_on_403: Default::default(),
-                    excel_403_action: Default::default(),
-                    excel_models: Default::default(),
-                    concurrency_limit: None,
-                    weight: gateway_core::account::AccountWeight::new(9).expect("weight"),
-                    group_ids: Vec::new(),
-                }),
-                pending: PendingAuthorizationMutation::new(
-                    provider_kind.clone(),
-                    AuthorizationMutationTarget::Create {
-                        name: "authorized account".to_owned(),
-                    },
-                    AuthorizationOwnerBinding::from_context(&context),
-                ),
-                credential: AuthorizationCredentialCommit::Create(PreparedCredentialCreate {
-                    model_access: Default::default(),
-                    outbound_proxy: None,
-                    account_id: ProviderAccountId::new("acct_authorization_candidate")
-                        .expect("candidate account ID"),
-                    provider_kind,
-                    name: "authorized account".to_owned(),
-                    email: Some("authorized@example.invalid".to_owned()),
-                    upstream_user_id: Some("user-authorization-upsert".to_owned()),
-                    upstream_account_id: None,
-                    plan_type: Some("free".to_owned()),
-                    authentication_kind: "oauth".to_owned(),
-                    provider_material: ProviderDocument::new(OpaqueProviderData::new(
-                        provider_material,
-                    )),
-                    has_refresh_token: true,
-                    access_token_expires_at: Some(Utc::now() + TimeDelta::hours(1)),
-                    next_refresh_at: None,
-                    enabled: true,
-                    credential_state: CredentialState::Ready,
-                    credential_observed_at: Utc::now(),
-                }),
-            },
-            &context,
-        )
+    let proxy_url = "socks5h://proxy.example.invalid:1080";
+    let proxy_id = "proxy_synthetic";
+    let proxy = gateway_core::account::OutboundProxy::parse(proxy_url)
+        .unwrap()
+        .with_max_websocket_connections(16);
+    sqlx::query("insert into outbound_proxies (id, name, proxy_url, enabled, max_websocket_connections) values ($1, 'Synthetic proxy', $2, true, 16)")
+        .bind(proxy_id).bind(proxy_url).execute(&database.pool).await.unwrap();
+    let pending = PendingAuthorizationMutation::new(
+        provider_kind.clone(),
+        AuthorizationMutationTarget::Create {
+            name: "authorized account".to_owned(),
+        },
+        AuthorizationOwnerBinding::from_context(&context),
+    )
+    .with_outbound_proxy(Some(proxy.clone()))
+    .with_outbound_proxy_id(Some(proxy_id.into()));
+    let command = AuthorizationCommit {
+        settings: Some(gateway_admin::model::accounts::AccountImportSettings {
+            template_proxy_mode: None,
+            excel_recovery: None,
+            purchase_cost: None,
+            clear_outbound_proxy: false,
+            egress_mode: None,
+            model_access: Default::default(),
+            custom_name: None,
+            enabled: false,
+            turn_state_injection_enabled: Some(true),
+            responses_upstream: Default::default(),
+            excel_models_follow_global: Default::default(),
+            excel_cache_creation_as_input: Default::default(),
+            excel_ignore_encrypted_content: Default::default(),
+            request_proxy_source: Default::default(),
+            excel_auto_disable_on_403: Default::default(),
+            excel_403_action: Default::default(),
+            excel_models: Default::default(),
+            concurrency_limit: None,
+            weight: gateway_core::account::AccountWeight::new(9).expect("weight"),
+            group_ids: Vec::new(),
+        }),
+        pending: PendingAuthorizationMutation::from_storage_v1(serde_json::Value::Object(
+            pending.to_storage_v1(),
+        ))
+        .unwrap(),
+        credential: AuthorizationCredentialCommit::Create(PreparedCredentialCreate {
+            model_access: Default::default(),
+            outbound_proxy: Some(proxy),
+            account_id: ProviderAccountId::new("acct_authorization_candidate")
+                .expect("candidate account ID"),
+            provider_kind,
+            name: "authorized account".to_owned(),
+            email: Some("authorized@example.invalid".to_owned()),
+            upstream_user_id: Some("user-authorization-upsert".to_owned()),
+            upstream_account_id: None,
+            plan_type: Some("free".to_owned()),
+            authentication_kind: "oauth".to_owned(),
+            provider_material: ProviderDocument::new(OpaqueProviderData::new(provider_material)),
+            has_refresh_token: true,
+            access_token_expires_at: Some(Utc::now() + TimeDelta::hours(1)),
+            next_refresh_at: None,
+            enabled: true,
+            credential_state: CredentialState::Ready,
+            credential_observed_at: Utc::now(),
+        }),
+    };
+    let store = admin_account_store(&database.pool);
+    for (url, limit, enabled, expected) in [
+        (
+            "socks5h://other.example.invalid:1080",
+            16_i64,
+            true,
+            gateway_admin::ports::store::AdminStoreErrorKind::StaleRevision,
+        ),
+        (
+            proxy_url,
+            17,
+            true,
+            gateway_admin::ports::store::AdminStoreErrorKind::StaleRevision,
+        ),
+        (
+            proxy_url,
+            16,
+            false,
+            gateway_admin::ports::store::AdminStoreErrorKind::Conflict,
+        ),
+    ] {
+        sqlx::query("update outbound_proxies set proxy_url=$2, max_websocket_connections=$3, enabled=$4 where id=$1")
+            .bind(proxy_id).bind(url).bind(limit).bind(enabled).execute(&database.pool).await.unwrap();
+        let error = store
+            .commit_authorization(command.clone(), &context)
+            .await
+            .expect_err("changed proxy must still be rejected");
+        assert_eq!(error.kind(), expected);
+    }
+    sqlx::query("update outbound_proxies set proxy_url=$2, max_websocket_connections=16, enabled=true where id=$1")
+        .bind(proxy_id).bind(proxy_url).execute(&database.pool).await.unwrap();
+    let result = store
+        .commit_authorization(command, &context)
         .await
-        .expect("authorize existing identity");
+        .expect("unchanged saved proxy survives pending storage");
+    let saved_proxy: Option<String> =
+        sqlx::query_scalar("select outbound_proxy_id from provider_accounts where id=$1")
+            .bind(result.account_id.as_str())
+            .fetch_one(&database.pool)
+            .await
+            .unwrap();
+    assert_eq!(saved_proxy.as_deref(), Some(proxy_id));
 
     assert_eq!(
         (

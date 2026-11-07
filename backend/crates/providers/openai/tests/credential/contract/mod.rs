@@ -2803,6 +2803,73 @@ async fn quota_observation_only_update_does_not_restart_selection() {
 }
 
 #[tokio::test]
+async fn waiting_snapshot_conflicts_allow_three_retries_and_preserve_the_error() {
+    use std::sync::atomic::Ordering;
+    for conflicts in [3, 4] {
+        let store = Arc::new(MemoryAccountStore::default());
+        create_account(&store, "acct_original", "fixture");
+        store
+            .credential_conflicts
+            .store(conflicts, Ordering::SeqCst);
+        let leases = Arc::new(TestLeaseCoordinator::default());
+        leases.capacity.enabled.store(true, Ordering::SeqCst);
+        let selector = selector(&store, Arc::clone(&leases))
+            .with_account_concurrency(capacity_handle(&["acct_original"], 2));
+        let attempt = attempt(BTreeSet::new()).with_request_tuning(capacity_tuning());
+        let result = capacity_select(&selector, &attempt, None).await;
+        if conflicts == 3 {
+            assert_eq!(result.unwrap().account_id().as_str(), "acct_original");
+        } else {
+            assert!(matches!(
+                result,
+                Err(CredentialSelectionError::AccountSnapshotChanged)
+            ));
+        }
+        assert_eq!(store.credential_loads.load(Ordering::SeqCst), 4);
+        assert_eq!(leases.capacity.waiting.load(Ordering::SeqCst), 0);
+        assert!(
+            leases
+                .capacity
+                .signals
+                .lock()
+                .unwrap()
+                .values()
+                .all(|signal| signal.in_flight == 0)
+        );
+    }
+}
+
+#[tokio::test]
+async fn exhausted_queue_clock_allows_immediate_admission_but_cannot_start_another_wait() {
+    use std::sync::atomic::Ordering;
+    for busy in [false, true] {
+        let store = Arc::new(MemoryAccountStore::default());
+        create_account(&store, "acct_original", "fixture");
+        let leases = Arc::new(TestLeaseCoordinator::default());
+        leases.capacity.enabled.store(true, Ordering::SeqCst);
+        if busy {
+            leases.capacity.set_load("acct_original", 2);
+        }
+        let selector = selector(&store, Arc::clone(&leases))
+            .with_account_concurrency(capacity_handle(&["acct_original"], 2));
+        let attempt = attempt(BTreeSet::new()).with_request_tuning(capacity_tuning());
+        attempt.account_wait_budget().unwrap().expire();
+        let result = capacity_select(&selector, &attempt, None).await;
+        if busy {
+            assert!(matches!(
+                result,
+                Err(CredentialSelectionError::AccountWait(
+                    provider_openai::credential::AccountWaitFailure::Timeout
+                ))
+            ));
+        } else {
+            assert_eq!(result.unwrap().account_id().as_str(), "acct_original");
+        }
+        assert!(leases.capacity.waits.lock().unwrap().is_empty());
+    }
+}
+
+#[tokio::test]
 async fn immediate_snapshot_conflict_is_bounded_without_consuming_a_lease() {
     use std::sync::atomic::Ordering;
     let store = Arc::new(MemoryAccountStore::default());

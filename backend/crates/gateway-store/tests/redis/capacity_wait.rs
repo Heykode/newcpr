@@ -452,6 +452,122 @@ async fn guardian_waiters_are_fifo_without_blocking_normal_promotion() {
 }
 
 #[tokio::test]
+async fn waiting_total_is_per_provider_pool_and_process_and_releases_on_promotion_or_drop() {
+    let Some(fixture) = Fixture::new().await else {
+        return;
+    };
+    for pool in [
+        ProviderConcurrencyPool::Shared,
+        ProviderConcurrencyPool::Reserved,
+    ] {
+        let cap = if pool == ProviderConcurrencyPool::Reserved {
+            1
+        } else {
+            2048
+        };
+        let request = || {
+            wait_request(
+                "bounded",
+                AccountWaitMode::Fallback,
+                cap,
+                Duration::from_secs(60),
+            )
+            .with_concurrency_pool(pool)
+        };
+        let mut waiting = Vec::new();
+        for _ in 0..1024 {
+            waiting.push(acquired(
+                fixture.port.try_acquire_wait(request()).await.unwrap(),
+            ));
+        }
+        assert!(matches!(
+            fixture.port.try_acquire_wait(request()).await.unwrap(),
+            ProviderWaitLeaseAcquisition::Full
+        ));
+        let other_pool = if pool == ProviderConcurrencyPool::Shared {
+            ProviderConcurrencyPool::Reserved
+        } else {
+            ProviderConcurrencyPool::Shared
+        };
+        let other = acquired(
+            fixture
+                .port
+                .try_acquire_wait(
+                    wait_request(
+                        "separate-pool",
+                        AccountWaitMode::Fallback,
+                        1,
+                        Duration::from_secs(60),
+                    )
+                    .with_concurrency_pool(other_pool),
+                )
+                .await
+                .unwrap(),
+        );
+        other.release().await.unwrap();
+        let other = acquired(
+            fixture
+                .port
+                .try_acquire_wait(
+                    ProviderWaitLeaseRequest::new(
+                        ProviderKind::new("xai").unwrap(),
+                        account("other-provider"),
+                        ModelRequestId::new("req_other_provider").unwrap(),
+                        AccountWaitMode::Fallback,
+                        NonZeroU32::new(1).unwrap(),
+                        SystemTime::now() + Duration::from_secs(60),
+                    )
+                    .with_concurrency_pool(pool),
+                )
+                .await
+                .unwrap(),
+        );
+        other.release().await.unwrap();
+        let (other_process, writer) =
+            RedisProviderLeaseCoordinator::new(fixture.repository.clone());
+        let other = acquired(
+            other_process
+                .try_acquire_wait(
+                    wait_request(
+                        "separate-process",
+                        AccountWaitMode::Fallback,
+                        1,
+                        Duration::from_secs(60),
+                    )
+                    .with_concurrency_pool(pool),
+                )
+                .await
+                .unwrap(),
+        );
+        other.release().await.unwrap();
+        drain(writer).await;
+        let mut head = waiting.remove(0);
+        let execution = promoted(
+            head.try_promote(
+                scheduling("bounded", 1, Duration::ZERO, Duration::from_secs(60))
+                    .with_concurrency_pool(pool),
+            )
+            .await
+            .unwrap(),
+        );
+        let replacement = acquired(fixture.port.try_acquire_wait(request()).await.unwrap());
+        assert!(matches!(
+            fixture.port.try_acquire_wait(request()).await.unwrap(),
+            ProviderWaitLeaseAcquisition::Full
+        ));
+        drop(replacement);
+        let replacement = acquired(fixture.port.try_acquire_wait(request()).await.unwrap());
+        replacement.release().await.unwrap();
+        drop(execution);
+        drop(head);
+        for waiter in waiting {
+            waiter.release().await.unwrap();
+        }
+    }
+    fixture.finish().await;
+}
+
+#[tokio::test]
 async fn queue_pressure_reads_real_wait_ownership_without_advancing_rotation() {
     let Some(fixture) = Fixture::new().await else {
         return;
@@ -1399,7 +1515,6 @@ async fn capacity_wait_cleanup_queue_is_bounded_and_overflow_retains_only_origin
     };
     let deadline = SystemTime::now() + Duration::from_secs(15);
     // Fill the cleanup queue without flooding Redis's independent response timeout.
-    let mut waiting = Vec::with_capacity(4097);
     for _ in 0..4097 {
         let request = ProviderWaitLeaseRequest::new(
             provider(),
@@ -1409,7 +1524,7 @@ async fn capacity_wait_cleanup_queue_is_bounded_and_overflow_retains_only_origin
             NonZeroU32::new(5000).expect("test queue limit"),
             deadline,
         );
-        waiting.push(acquired(
+        drop(acquired(
             fixture
                 .port
                 .try_acquire_wait(request)
@@ -1417,7 +1532,6 @@ async fn capacity_wait_cleanup_queue_is_bounded_and_overflow_retains_only_origin
                 .expect("enqueue overflow fixture"),
         ));
     }
-    drop(waiting);
     assert_eq!(fixture.waiting("overflow").await, 4097);
     fixture.drain().await;
     assert_eq!(
@@ -1720,7 +1834,7 @@ pub(super) enum ScriptTarget {
 impl ScriptTarget {
     fn matches(self, args: &[Vec<u8>]) -> bool {
         let (keys, arguments) = match self {
-            Self::Enqueue => (4, 4),
+            Self::Enqueue => (4, 5),
             Self::Execution => (6, 9),
             Self::Cancel => (4, 2),
             Self::Any => return true,
@@ -1995,17 +2109,23 @@ mod guardian_pool {
                     .await
                     .unwrap(),
             ));
-            assert!(matches!(
-                fixture.port.try_acquire_wait(request).await.unwrap(),
-                ProviderWaitLeaseAcquisition::Full
-            ));
+            let next = fixture.port.try_acquire_wait(request).await.unwrap();
+            if pool == ProviderConcurrencyPool::Shared {
+                assert!(matches!(next, ProviderWaitLeaseAcquisition::Full));
+            } else {
+                waiters.push(acquired(next));
+            }
             assert_eq!(
                 fixture
                     .port
                     .load_waiting_counts_for_pool(&provider, &ids, pool)
                     .await
                     .unwrap()[&ids[0]],
-                1
+                if pool == ProviderConcurrencyPool::Shared {
+                    1
+                } else {
+                    2
+                }
             );
         }
         assert_eq!(

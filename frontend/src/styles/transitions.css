@@ -4,7 +4,8 @@
   transition: opacity 150ms ease;
 }
 
-.cp-slide-fade-enter-active {
+/* 定位翻转可能在初始帧更新，进入目标帧时再启动位移。 */
+.cp-slide-fade-enter-to {
   transition:
     opacity 150ms ease-out,
     translate 150ms ease-out;
@@ -35,6 +36,19 @@
   translate: 0 calc(-1 * var(--cp-size-unit, 4px));
 }
 
+/* 翻转后从靠近锚点的一侧进入。 */
+.cp-slide-fade-enter-from[data-cp-placement^='top'] {
+  translate: 0 var(--cp-size-unit, 4px);
+}
+
+.cp-slide-fade-enter-from[data-cp-placement='left'] {
+  translate: var(--cp-size-unit, 4px) 0;
+}
+
+.cp-slide-fade-enter-from[data-cp-placement='right'] {
+  translate: calc(-1 * var(--cp-size-unit, 4px)) 0;
+}
+
 .cp-zoom-in-top-enter-from,
 .cp-zoom-in-top-leave-to {
   scale: 1 0;
@@ -43,7 +57,7 @@
 @media (prefers-reduced-motion: reduce) {
   .cp-fade-enter-active,
   .cp-fade-leave-active,
-  .cp-slide-fade-enter-active,
+  .cp-slide-fade-enter-to,
   .cp-slide-fade-leave-active,
   .cp-zoom-in-top-enter-active,
   .cp-zoom-in-top-leave-active {

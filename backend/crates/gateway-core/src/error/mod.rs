@@ -41,6 +41,10 @@ pub enum ProviderErrorKind {
     QuotaExhausted,
     /// 仍有符合条件的账号，但它们暂时没有可调度容量。
     AccountCapacityUnavailable,
+    /// 账号等待队列已满。
+    ConcurrencyQueueFull,
+    /// 账号等待期限已到。
+    ConcurrencyQueueTimeout,
     /// Provider 已确认当前请求无法选出可用账号。
     NoEligibleAccount,
     /// 当前会话被先前上游策略拒绝，不能据此判定账号或整个号池故障。
@@ -77,6 +81,8 @@ impl ProviderErrorKind {
             Self::RateLimited => "rate_limited",
             Self::QuotaExhausted => "quota_exhausted",
             Self::AccountCapacityUnavailable => "account_capacity_unavailable",
+            Self::ConcurrencyQueueFull => "concurrency_queue_full",
+            Self::ConcurrencyQueueTimeout => "concurrency_queue_timeout",
             Self::NoEligibleAccount => "no_eligible_account",
             Self::SessionPolicyRestricted => "session_policy_restricted",
             Self::ProviderInfrastructureUnavailable => "provider_infrastructure_unavailable",
@@ -1232,6 +1238,14 @@ impl GatewayError {
             ProviderErrorKind::RateLimited | ProviderErrorKind::QuotaExhausted => Self::new(
                 GatewayErrorKind::RateLimited,
                 "Upstream capacity is temporarily unavailable.",
+            ),
+            ProviderErrorKind::ConcurrencyQueueFull => Self::new(
+                GatewayErrorKind::ConcurrencyQueueFull,
+                "Request queue is full.",
+            ),
+            ProviderErrorKind::ConcurrencyQueueTimeout => Self::new(
+                GatewayErrorKind::ConcurrencyQueueTimeout,
+                "Request queue wait timed out.",
             ),
             ProviderErrorKind::AccountCapacityUnavailable => Self::new(
                 GatewayErrorKind::AccountCapacityUnavailable,

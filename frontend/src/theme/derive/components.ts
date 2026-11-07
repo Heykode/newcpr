@@ -192,6 +192,7 @@ function deriveDarkComponentMap(
     progressRemainingColor: mix(surfaces.colorBgContainer, surfaces.colorBorderSecondary, 0.92),
     layoutSiderBg: surfaces.colorBgContainer,
     cardShadow: scaleShadowAlpha(`0 18px 34px -26px ${withAlpha(BLACK, 0.64)}`, shadowStrength),
+    popoverShadow: scaleShadowAlpha(`0 1px 6px -1px ${withAlpha(BLACK, 0.30)}, 0 10px 22px -11px ${withAlpha(BLACK, 0.52)}`, shadowStrength),
     inputShadow: scaleShadowAlpha(`0 12px 24px -20px ${withAlpha(BLACK, 0.66)}`, shadowStrength),
     inputHoverShadow: scaleShadowAlpha(
       `0 0 0 3px ${inputOutlineColor}, 0 14px 28px -22px ${withAlpha(BLACK, 0.72)}`,
@@ -246,6 +247,7 @@ function deriveLightComponentMap(
     progressRemainingColor: surfaces.colorBorderSecondary,
     layoutSiderBg: surfaces.colorBgContainer,
     cardShadow: scaleShadowAlpha(`0 10px 22px -18px ${withAlpha(LIGHT_SHADOW_BASE, 0.08)}`, shadowStrength),
+    popoverShadow: scaleShadowAlpha(`0 1px 6px -1px ${withAlpha(LIGHT_SHADOW_BASE, 0.09)}, 0 8px 20px -10px ${withAlpha(LIGHT_SHADOW_BASE, 0.08)}`, shadowStrength),
     inputShadow: scaleShadowAlpha(`0 9px 18px -14px ${withAlpha(LIGHT_SHADOW_BASE, 0.086)}`, shadowStrength),
     inputHoverShadow: scaleShadowAlpha(
       `0 0 0 3px ${inputOutlineColor}, 0 12px 24px -16px ${withAlpha(LIGHT_SHADOW_BASE, 0.12)}`,

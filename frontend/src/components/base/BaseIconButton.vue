@@ -13,7 +13,6 @@ const props = withDefaults(
     loading?: boolean
     disabled?: boolean
     pressed?: boolean
-    showTooltip?: boolean
     type?: 'button' | 'submit' | 'reset'
   }>(),
   {
@@ -22,7 +21,6 @@ const props = withDefaults(
     loading: false,
     disabled: false,
     pressed: false,
-    showTooltip: true,
     type: 'button',
   },
 )
@@ -76,7 +74,6 @@ const classes = computed(() => [
     :aria-label="label"
     :aria-pressed="pressed || undefined"
     :aria-busy="loading || undefined"
-    :title="showTooltip ? label : undefined"
   >
     <span
       v-if="loading"

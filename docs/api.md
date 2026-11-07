@@ -1377,6 +1377,12 @@ OpenAI 的 `serviceTier` 只接受上游响应生命周期事件确认的实际 
 `flex` 映射为 `Flex`，缺失或 `default` 映射为 `Default`；未知非空值原样展示。Fast 优先使用模型的
 priority 价格，缺少专用价格时回退到标准价格的 `2.00x`；Flex 为 `0.50x`，Default 为 `1.00x`。
 
+OpenAI 账号队满或超时后的重选记录为 `account.queue.reselect`；绑定 CAS 迁移成功后，
+`account.binding.migrated` 保存拒绝原因 `reason`、原账号 `fromAccountId` 和新账号 `toAccountId`。
+首次认领、临时分流和失败重选不记录为绑定迁移。账号队满/超时分别返回 HTTP 429 与
+`concurrency_queue_full` / `concurrency_queue_timeout`；真实账号容量不足仍是 HTTP 503，
+不能仅凭状态码认为严格子线程的根绑定等待或 FIFO 队首阻塞已经消失。
+
 ## 11. 版本、更新与重启
 
 | 方法 | 路由 | 主要 query/body | 说明 |

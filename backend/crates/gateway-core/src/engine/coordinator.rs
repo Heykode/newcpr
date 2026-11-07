@@ -1166,6 +1166,8 @@ where
                             ProviderErrorKind::NoEligibleAccount
                                 | ProviderErrorKind::AccountCapacityUnavailable
                                 | ProviderErrorKind::QuotaExhausted
+                                | ProviderErrorKind::ConcurrencyQueueFull
+                                | ProviderErrorKind::ConcurrencyQueueTimeout
                         )
                     {
                         let recovery = self
@@ -1199,14 +1201,17 @@ where
                             ProviderErrorKind::AccountCapacityUnavailable
                                 | ProviderErrorKind::NoEligibleAccount
                                 | ProviderErrorKind::QuotaExhausted
+                                | ProviderErrorKind::ConcurrencyQueueFull
+                                | ProviderErrorKind::ConcurrencyQueueTimeout
                                 | ProviderErrorKind::ProviderInfrastructureUnavailable
                         )
-                        && !self.account_wait_budget.is_exhausted()
                         && error.send_state() == UpstreamSendState::NotSent
                         && matches!(
                             self.continuation_attempt,
                             ContinuationAttempt::None | ContinuationAttempt::ReplayAny
                         )
+                        && self.current_send_state() == UpstreamSendState::NotSent
+                        && self.account_switches < self.plan.request_tuning().max_account_switches
                         && self.advance_provider_candidate()
                     {
                         attempt_trace.record(
@@ -1237,6 +1242,8 @@ where
                                 ProviderErrorKind::AccountCapacityUnavailable
                                     | ProviderErrorKind::NoEligibleAccount
                                     | ProviderErrorKind::QuotaExhausted
+                                    | ProviderErrorKind::ConcurrencyQueueFull
+                                    | ProviderErrorKind::ConcurrencyQueueTimeout
                             )))
                         && let Some(last_failure) = self.last_retryable_failure.take()
                     {
@@ -1255,6 +1262,8 @@ where
                             | ProviderErrorKind::NoEligibleAccount
                             | ProviderErrorKind::SessionPolicyRestricted
                             | ProviderErrorKind::QuotaExhausted
+                            | ProviderErrorKind::ConcurrencyQueueFull
+                            | ProviderErrorKind::ConcurrencyQueueTimeout
                             | ProviderErrorKind::ProviderInfrastructureUnavailable
                     ) && error.send_state() == UpstreamSendState::NotSent)
                     {
@@ -2033,16 +2042,9 @@ where
     fn prepare_unavailable_native_continuation_replay(&mut self, error: &ProviderError) -> bool {
         if error.retry_is_prohibited()
             || self.account_selection.required_account().is_some()
-            || self.account_wait_budget.is_exhausted()
-            || (self.plan.request_tuning().account_busy_wait_enabled
-                && matches!(
-                    error.continuation_recovery_disposition(),
-                    Some(
-                        ContinuationRecoveryDisposition::RetryExactConnection
-                            | ContinuationRecoveryDisposition::ClientReplayRequired
-                    )
-                ))
             || self.continuation_attempt != ContinuationAttempt::Native
+            || self.current_send_state() != UpstreamSendState::NotSent
+            || self.account_switches >= self.plan.request_tuning().max_account_switches
             || !matches!(
                 error.kind(),
                 ProviderErrorKind::NoEligibleAccount

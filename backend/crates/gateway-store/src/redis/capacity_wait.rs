@@ -1,7 +1,8 @@
 //! Account waiting ownership, atomic promotion and bounded cancellation cleanup.
 
-use std::sync::Arc;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use futures::future::BoxFuture;
@@ -15,13 +16,15 @@ use gateway_core::provider_ports::{
 };
 use gateway_core::task::{DaemonTask, WorkerTaskError};
 use redis::{Script, aio::ConnectionManager};
-use tokio::sync::{Mutex, Notify, mpsc};
+use tokio::sync::{Mutex, Notify, OwnedSemaphorePermit, Semaphore, mpsc};
 use tokio::time::Instant;
 use uuid::Uuid;
 
 use super::{MAX_REDIS_EXACT_INTEGER, RedisCredentialLeaseRepository, resource_fingerprint};
 
 const QUEUE_CAPACITY: usize = 4_096;
+// Match the upstream selector queue bound per provider, pool and process.
+const MAX_TOTAL_WAITING: usize = 1_024;
 const CLEANUP_CONCURRENCY: usize = 32;
 const IO_TIMEOUT: Duration = Duration::from_millis(250);
 const RETRY_DELAY: Duration = Duration::from_millis(100);
@@ -54,7 +57,7 @@ local existing = redis.call('ZSCORE', KEYS[1], ARGV[1])
 if existing then
   return 1
 end
-if redis.call('ZCARD', KEYS[1]) >= tonumber(ARGV[3]) then
+if ARGV[5] ~= '1' and redis.call('ZCARD', KEYS[1]) >= tonumber(ARGV[3]) then
   return 0
 end
 if ARGV[4] == '1' then
@@ -164,6 +167,7 @@ pub(super) struct RedisCapacityWait {
     repository: RedisCredentialLeaseRepository,
     sender: mpsc::Sender<Cleanup>,
     process_id: Uuid,
+    waiting: StdMutex<HashMap<(gateway_core::routing::ProviderKind, bool), Arc<Semaphore>>>,
     lifecycle: Arc<CleanupLifecycle>,
 }
 
@@ -212,6 +216,7 @@ impl RedisCapacityWait {
                 repository,
                 sender,
                 process_id: Uuid::new_v4(),
+                waiting: StdMutex::default(),
                 lifecycle: Arc::clone(&lifecycle),
             },
             CapacityWaitCleanupWriter {
@@ -265,6 +270,7 @@ impl RedisCapacityWait {
             lifecycle: Arc::clone(&self.lifecycle),
             renewal: None,
             execution_deadline: None,
+            wait_slot: None,
         };
         // Pair with shutdown's stop-then-count sequence; never submit a write
         // after a zero-owner shutdown has closed the cleanup receiver.
@@ -320,6 +326,17 @@ impl RedisCapacityWait {
     ) -> BoxFuture<'_, Result<ProviderWaitLeaseAcquisition, ProviderStoreError>> {
         Box::pin(async move {
             let deadline = timestamp(request.deadline())?;
+            let reserved = request.concurrency_pool() == ProviderConcurrencyPool::Reserved;
+            let slots = Arc::clone(
+                self.waiting
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .entry((request.provider_kind().clone(), reserved))
+                    .or_insert_with(|| Arc::new(Semaphore::new(MAX_TOTAL_WAITING))),
+            );
+            let Ok(slot) = slots.try_acquire_owned() else {
+                return Ok(ProviderWaitLeaseAcquisition::Full);
+            };
             // Ownership exists before the first write, including a lost Redis reply.
             let (mut owner, keys) = self.ownership(
                 request.account_id(),
@@ -328,6 +345,7 @@ impl RedisCapacityWait {
                 false,
                 request.concurrency_pool(),
             )?;
+            owner.wait_slot = Some(slot);
             let cleanup = owner.cleanup.as_ref().expect("pending ownership");
             let mut connection = self.connection.clone();
             let outcome = Script::new(ENQUEUE_SCRIPT)
@@ -340,6 +358,8 @@ impl RedisCapacityWait {
                 .arg(request.max_waiting().get())
                 // Wait leases are business requests; both pools maintain FIFO order.
                 .arg(1_u8)
+                // Reserved waiters are High priority upstream: no per-account normal cap.
+                .arg(u8::from(reserved))
                 .invoke_async::<i64>(&mut connection)
                 .await
                 .map_err(|_| unavailable("enqueue account capacity wait"))?;
@@ -440,10 +460,13 @@ struct Ownership {
     lifecycle: Arc<CleanupLifecycle>,
     renewal: Option<crate::lease_renewal::LeaseRenewal>,
     execution_deadline: Option<Deadline>,
+    wait_slot: Option<OwnedSemaphorePermit>,
 }
 
 impl Ownership {
     fn maintain(&mut self, request: &ProviderSchedulingLeaseRequest) {
+        // An admitted execution no longer occupies a waiting position.
+        self.wait_slot.take();
         let cleanup = self.cleanup.as_ref().expect("execution ownership");
         let active_key = cleanup.active_key.clone();
         let cancelled_key = cleanup.cancelled_key.clone();

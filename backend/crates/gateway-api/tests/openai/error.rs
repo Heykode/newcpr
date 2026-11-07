@@ -280,6 +280,35 @@ fn engine_provider_error_should_preserve_retry_classification() {
     );
 }
 
+#[tokio::test]
+async fn provider_queue_errors_preserve_the_full_http_contract() {
+    for (provider_kind, kind, code) in [
+        (
+            ProviderErrorKind::ConcurrencyQueueFull,
+            GatewayErrorKind::ConcurrencyQueueFull,
+            "concurrency_queue_full",
+        ),
+        (
+            ProviderErrorKind::ConcurrencyQueueTimeout,
+            GatewayErrorKind::ConcurrencyQueueTimeout,
+            "concurrency_queue_timeout",
+        ),
+    ] {
+        let error = EngineError::Provider(ProviderError::new(
+            provider_kind,
+            UpstreamSendState::NotSent,
+        ));
+        let mapped = gateway_error_from_engine(&error);
+        assert_eq!(mapped.kind(), kind);
+        let response = gateway_error_response(&mapped);
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["error"]["code"], code);
+        assert_eq!(body["error"]["type"], "rate_limit_error");
+    }
+}
+
 #[test]
 fn local_provider_capacity_exhaustion_should_map_to_service_unavailable() {
     let error = EngineError::Provider(ProviderError::new(

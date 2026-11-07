@@ -2702,7 +2702,7 @@ fn unavailable_native_continuation_uses_provider_recovery_with_the_configured_ac
 }
 
 #[test]
-fn account_wait_native_exit_respects_exact_owner_and_client_replay_dispositions() {
+fn local_prepare_recovery_is_independent_of_queue_clock_and_stream_disposition() {
     for disposition in [
         ContinuationRecoveryDisposition::RetryExactConnection,
         ContinuationRecoveryDisposition::ClientReplayRequired,
@@ -2712,23 +2712,42 @@ fn account_wait_native_exit_respects_exact_owner_and_client_replay_dispositions(
             ProviderErrorKind::NoEligibleAccount,
             ProviderErrorKind::QuotaExhausted,
         ] {
-            assert_account_wait_native_exit_stops(
-                ProviderError::new(kind, UpstreamSendState::NotSent)
-                    .with_continuation_recovery_disposition(disposition),
-                false,
-            );
+            for expired in [false, true] {
+                assert_account_wait_native_exit(
+                    ProviderError::new(kind, UpstreamSendState::NotSent)
+                        .with_continuation_recovery_disposition(disposition),
+                    expired,
+                    1,
+                    true,
+                );
+            }
         }
     }
 }
 
 #[test]
-fn account_wait_expired_budget_does_not_reopen_native_recovery() {
-    assert_account_wait_native_exit_stops(
+fn queue_rejection_does_not_reopen_native_recovery() {
+    for kind in [
+        ProviderErrorKind::ConcurrencyQueueFull,
+        ProviderErrorKind::ConcurrencyQueueTimeout,
+    ] {
+        assert_account_wait_native_exit_stops(
+            ProviderError::new(kind, UpstreamSendState::NotSent),
+            true,
+        );
+    }
+}
+
+#[test]
+fn local_prepare_recovery_respects_account_switch_budget() {
+    assert_account_wait_native_exit(
         ProviderError::new(
             ProviderErrorKind::AccountCapacityUnavailable,
             UpstreamSendState::NotSent,
         ),
         true,
+        0,
+        false,
     );
 }
 
@@ -2745,6 +2764,15 @@ fn prohibited_local_quota_failure_cannot_reopen_native_recovery() {
 }
 
 fn assert_account_wait_native_exit_stops(error: ProviderError, expire: bool) {
+    assert_account_wait_native_exit(error, expire, 1, false);
+}
+
+fn assert_account_wait_native_exit(
+    error: ProviderError,
+    expire: bool,
+    max_switches: u32,
+    recover: bool,
+) {
     let Operation::Generate(generate) = generate_operation() else {
         panic!("generate");
     };
@@ -2754,6 +2782,7 @@ fn assert_account_wait_native_exit_stops(error: ProviderError, expire: bool) {
     );
     let tuning = gateway_core::routing::RequestTuning {
         account_busy_wait_enabled: true,
+        max_account_switches: max_switches,
         ..Default::default()
     };
     let route_plan = plan_with_tuning(
@@ -2794,6 +2823,24 @@ fn assert_account_wait_native_exit_stops(error: ProviderError, expire: bool) {
         CancellationToken::new(),
     ))
     .unwrap();
+    if recover {
+        block_on(session.collect_uncommitted())
+            .expect("local preparation can recover without reentering the queue");
+        block_on(session.commit_downstream(Some(200))).unwrap();
+        let contexts = provider.contexts.lock().unwrap();
+        assert_eq!(contexts.len(), 2);
+        assert_eq!(
+            contexts[1].continuation_attempt(),
+            ContinuationAttempt::ReplayAny
+        );
+        assert!(contexts[1].excluded_accounts().contains(&original));
+        assert_eq!(
+            contexts[1].account_wait_budget().unwrap().is_exhausted(),
+            expire
+        );
+        assert_eq!(store.state.lock().unwrap().attempts.len(), 1);
+        return;
+    }
     assert!(matches!(
         block_on(session.collect_uncommitted()),
         Err(EngineError::Provider(_))

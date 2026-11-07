@@ -45,6 +45,7 @@ impl CodexCredentialSelector {
         expected: Option<&ProviderSessionAffinityBinding>,
         account: &ProviderAccountId,
         pinned: bool,
+        queue_rejection: Option<gateway_core::concurrency::QueueRejection>,
     ) -> Result<Option<ProviderSessionAffinityBinding>, CredentialSelectionError> {
         let Some(key) = request
             .affinity_key()
@@ -91,6 +92,28 @@ impl CodexCredentialSelector {
         .await
         .map_err(binding_store_error)
         .and_then(|result| result.map_err(binding_store_error));
+        if let Ok(Some(binding)) = &result
+            && let Some(reason) = queue_rejection
+            && let Some(previous) =
+                expected.filter(|previous| previous.account_id() != binding.account_id())
+        {
+            tracing::info!(
+                request_id = %request.attempt.request_id(),
+                attempt_index = request.attempt.attempt_index().get(),
+                reason = %reason,
+                from_account_id = %previous.account_id(),
+                to_account_id = %binding.account_id(),
+                "OpenAI 账号排队失败后已迁移绑定"
+            );
+            request.attempt.trace().record_evidence(
+                "account.binding.migrated",
+                serde_json::json!({
+                    "reason": reason.to_string(),
+                    "fromAccountId": previous.account_id().as_str(),
+                    "toAccountId": binding.account_id().as_str(),
+                }),
+            );
+        }
         match result {
             Err(_) if request.discard_optional_cache_preference() => Ok(Some(
                 ProviderSessionAffinityBinding::legacy(account.clone()),

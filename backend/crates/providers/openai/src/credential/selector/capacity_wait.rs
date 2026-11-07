@@ -46,14 +46,11 @@ impl<'a> WaitControl<'a> {
         attempt: &'a AttemptContext,
         follows_root: bool,
     ) -> Result<Self, CredentialSelectionError> {
-        let budget = attempt
+        // An exhausted queue clock only prevents entering another wait. A new
+        // attempt may still acquire an immediately available account upstream.
+        attempt
             .account_wait_budget()
             .ok_or(CredentialSelectionError::Coordinator(None))?;
-        if budget.is_exhausted() {
-            return Err(CredentialSelectionError::AccountWait(
-                AccountWaitFailure::Timeout,
-            ));
-        }
         Ok(Self {
             attempt,
             follows_root,
@@ -115,6 +112,7 @@ impl<'a> WaitControl<'a> {
 }
 
 struct WaitingSelection {
+    snapshot_retries: u32,
     projection: projection::SelectionProjection,
     follows_root: bool,
     universe: BTreeSet<ProviderAccountId>,
@@ -436,6 +434,7 @@ impl CodexCredentialSelector {
             }
         }
         let mut state = WaitingSelection {
+            snapshot_retries: 0,
             projection,
             follows_root,
             universe,
@@ -477,14 +476,10 @@ impl CodexCredentialSelector {
         };
         let mut sticky_tried = BTreeSet::new();
 
-        // A changed account/credential/publication gets a bounded fresh selection, never an upstream retry.
-        let mut scan = 0;
+        // Capacity/cache/affinity rechecks share the request/queue clocks. Only
+        // actual account snapshot conflicts consume the upstream retry bound.
         let mut reload = false;
         'rescan: loop {
-            if scan == 3 {
-                return Err(CredentialSelectionError::Coordinator(None));
-            }
-            scan += 1;
             let refresh_affinity = reload;
             if reload {
                 self.invalidate_projection(&state.projection);
@@ -583,7 +578,6 @@ impl CodexCredentialSelector {
                     WaitOutcome::RootChanged => {
                         // Root migrations are bounded by the shared wait deadline, not
                         // the snapshot-conflict retry count. Reload the full frozen pool.
-                        scan = 0;
                         sticky_tried.clear();
                         continue 'rescan;
                     }
@@ -644,7 +638,6 @@ impl CodexCredentialSelector {
                 {
                     WaitOutcome::Acquired(lease) => return Ok(*lease),
                     WaitOutcome::RootChanged => {
-                        scan = 0;
                         sticky_tried.clear();
                         continue 'rescan;
                     }
@@ -814,7 +807,6 @@ impl CodexCredentialSelector {
                             {
                                 WaitOutcome::Acquired(lease) => return Ok(*lease),
                                 WaitOutcome::RootChanged => {
-                                    scan = 0;
                                     sticky_tried.clear();
                                     continue 'rescan;
                                 }
@@ -928,7 +920,6 @@ impl CodexCredentialSelector {
                 {
                     WaitOutcome::Acquired(lease) => return Ok(*lease),
                     WaitOutcome::RootChanged => {
-                        scan = 0;
                         sticky_tried.clear();
                         continue 'rescan;
                     }
@@ -936,7 +927,6 @@ impl CodexCredentialSelector {
                     WaitOutcome::Skipped if request.attempt.is_quality_check() => {
                         // A refreshed interval belongs to direct quality waiting, not
                         // the bounded credential/publication conflict retry budget.
-                        scan = 0;
                         continue 'rescan;
                     }
                     WaitOutcome::Skipped => continue,
@@ -1459,6 +1449,11 @@ impl CodexCredentialSelector {
     ) -> Result<Option<CodexCredentialLease>, CredentialSelectionError> {
         let id = acquired_account.id();
         let Some(mut candidate) = self.reload_wait_target(id, request).await? else {
+            retry_account_snapshot(
+                request.attempt,
+                acquired_account,
+                &mut state.snapshot_retries,
+            )?;
             return Ok(None);
         };
         let limits = self.wait_limits()?;
@@ -1473,8 +1468,16 @@ impl CodexCredentialSelector {
             Duration::ZERO,
         )
         .with_smart_scheduling(state.context.policy.smart_scheduling());
-        if !only_quota_observation_advanced(acquired_account, &candidate.account)
-            || limits.revision() != revision
+        if !only_quota_observation_advanced(acquired_account, &candidate.account) {
+            drop(guard);
+            retry_account_snapshot(
+                request.attempt,
+                acquired_account,
+                &mut state.snapshot_retries,
+            )?;
+            return Ok(None);
+        }
+        if limits.revision() != revision
             || matches!(
                 AccountSelector.availability(&candidate, &acquired_context, &limits),
                 AccountSchedulingAvailability::Blocked(_)
@@ -1497,6 +1500,11 @@ impl CodexCredentialSelector {
             }
             Err(CredentialRepositoryError::RevisionConflict(_)) => {
                 drop(guard);
+                retry_account_snapshot(
+                    request.attempt,
+                    &candidate.account,
+                    &mut state.snapshot_retries,
+                )?;
                 return Ok(None);
             }
             Err(CredentialRepositoryError::InvalidCredentialData(_)) if state.pinned.is_none() => {
@@ -1511,17 +1519,25 @@ impl CodexCredentialSelector {
             }
             Err(error) => return Err(error.into()),
         };
-        if self.wait_limits()?.revision() != revision
-            || self
-                .repository
-                .store()
-                .get_account(id)
-                .await
-                .map_err(|source| CredentialSelectionError::Store(Some(source.into())))?
-                .as_ref()
-                .is_none_or(|current| !only_quota_observation_advanced(&candidate.account, current))
+        if self.wait_limits()?.revision() != revision {
+            drop(guard);
+            return Ok(None);
+        }
+        if self
+            .repository
+            .store()
+            .get_account(id)
+            .await
+            .map_err(|source| CredentialSelectionError::Store(Some(source.into())))?
+            .as_ref()
+            .is_none_or(|current| !only_quota_observation_advanced(&candidate.account, current))
         {
             drop(guard);
+            retry_account_snapshot(
+                request.attempt,
+                &candidate.account,
+                &mut state.snapshot_retries,
+            )?;
             return Ok(None);
         }
         if !request.attempt.is_quality_retest()
@@ -1564,6 +1580,18 @@ impl CodexCredentialSelector {
         let current_limits = self.wait_limits()?;
         acquired_context.now = SystemTime::now();
         acquired_context.excluded_accounts = state.context.excluded_accounts.clone();
+        if !current
+            .iter()
+            .any(|latest| only_quota_observation_advanced(&candidate.account, &latest.account))
+        {
+            drop(guard);
+            retry_account_snapshot(
+                request.attempt,
+                &candidate.account,
+                &mut state.snapshot_retries,
+            )?;
+            return Ok(None);
+        }
         if current_limits.revision() != revision
             || !current.iter().any(|latest| {
                 only_quota_observation_advanced(&candidate.account, &latest.account)
@@ -1590,6 +1618,7 @@ impl CodexCredentialSelector {
                 state.observed_affinity_binding.as_ref(),
                 id,
                 state.pinned.is_some(),
+                None,
             )
             .await?
         else {
@@ -1646,5 +1675,31 @@ impl CodexCredentialSelector {
             capacity,
             _guard: guard,
         }))
+    }
+}
+
+fn retry_account_snapshot(
+    attempt: &AttemptContext,
+    account: &ProviderAccount,
+    retries: &mut u32,
+) -> Result<(), CredentialSelectionError> {
+    let retry = *retries < 3;
+    if retry {
+        *retries += 1;
+    }
+    attempt.trace().record(
+        "account.snapshot_conflict",
+        serde_json::json!({
+            "accountId": account.id().as_str(),
+            "credentialRevision": account.revision().get(),
+            "retry": retry,
+            "retryCount": *retries,
+            "maxRetries": 3,
+        }),
+    );
+    if retry {
+        Ok(())
+    } else {
+        Err(CredentialSelectionError::AccountSnapshotChanged)
     }
 }

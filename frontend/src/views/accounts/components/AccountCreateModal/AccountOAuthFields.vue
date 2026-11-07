@@ -60,7 +60,6 @@ const copyWithToast = useCopyText()
           <BaseIconButton
             variant="secondary"
             size="sm"
-            :title="t('accounts.onboarding.copyLink')"
             :label="t('accounts.onboarding.copyLink')"
             :disabled="disabled"
             @click="copyWithToast(authUrl, { successText: '授权链接已复制' })"
