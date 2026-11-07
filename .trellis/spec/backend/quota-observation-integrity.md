@@ -9,10 +9,11 @@ access clocks by credential revision. Do not add a second scheduler or epoch.
 
 `QuotaRefreshAuthority::PreserveAccess` on a passive failure preserves access and
 does not learn plan changes. Active refresh retains its established recovery
-policy. Active failure-triggered usage readback may restore access when fresh
-explicit credits are usable; passive headers still cannot do so. Successful inference
-uses `ObserveAccess`: a 100% header is not a denial,
-and stale snapshot data must not prevent a real success from restoring access.
+policy. Failure-triggered usage readback is scheduled only when the account
+explicitly enables `autoUseQuotaCredits`; fresh usable credits may restore access. Passive
+failure observations preserve access authority. Successful OAuth inference clears
+cooldown but does not itself grant quota access: fresh subscription observations
+determine exhaustion, including a fully consumed window.
 
 Transparent terminal-only responses can lack canonical completion facts. Observe
 their explicit successful terminal for quota only; do not change canonical
@@ -48,7 +49,10 @@ resets retain the 30-minute fallback; ordinary accounts retain their previous ca
 Adapted from upstream #469. `has_credits=true` or `unlimited=true` is sufficient
 only without explicit spend-control exhaustion or a non-subscription limit reason.
 Numeric balance alone is not proof. Preserve all displayed subscription percentages.
-Fresh credits clear recovery markers; never retry the business request because the
+Credits are disabled by default. Explicit opt-in plus usable fresh evidence permits
+`CreditsAvailable` access while retaining subscription reset facts; turning the
+option off revokes credit-only access, including late writes fenced by the SQL trigger.
+Fresh permitted credits clear recovery markers; never retry the business request because the
 background readback restored access. Credential revision and independent access
 observation fences remain authoritative.
 

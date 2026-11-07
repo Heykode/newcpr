@@ -387,6 +387,21 @@ pub(super) fn map_request_error(error: GrokRequestEncodeError) -> ProviderError 
 /// 将选择阶段失败映射为带结构化 code 与 retry_after 的 Provider 错误。
 pub(super) fn map_selection_error(error: GrokSessionSelectorError) -> ProviderError {
     let (retry_after, message, code) = match error {
+        GrokSessionSelectorError::QueueRejected(reason) => {
+            let code = match reason {
+                gateway_core::concurrency::QueueRejection::Full => "account_queue_full",
+                gateway_core::concurrency::QueueRejection::Timeout => "account_queue_timeout",
+            };
+            return provider_error(
+                ProviderErrorKind::AccountCapacityUnavailable,
+                UpstreamSendState::NotSent,
+            )
+            .with_client_visible_upstream_error(ClientVisibleUpstreamError::new(
+                reason.to_string(),
+                Some(code.to_owned()),
+                Some("account_unavailable_error".to_owned()),
+            ));
+        }
         GrokSessionSelectorError::AccountCoolingDown { retry_after } => (
             retry_after,
             cooling_down_message(retry_after),

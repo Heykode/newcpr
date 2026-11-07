@@ -52,7 +52,7 @@ pub struct CodexWireProfile {
     /// QX CLI 保留原始安全语法；CPR 由配套字段生成。
     pub raw_user_agent: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub installation_id: Option<String>,
+    pub installation_seed: Option<String>,
     /// `originator` 请求头及 User-Agent 产品名。
     pub originator: String,
     /// Desktop ZIP 内嵌 Core 版本；用于模型请求的 version、client_version 与 UA。
@@ -177,7 +177,7 @@ impl CodexWireProfile {
         }
         Ok(Self {
             raw_user_agent: None,
-            installation_id: None,
+            installation_seed: None,
             originator: originator.to_owned(),
             codex_version: codex_version.to_owned(),
             desktop_version: desktop_version.to_owned(),
@@ -374,10 +374,17 @@ impl CodexWireProfileSelection {
 }
 
 impl CodexWireProfileState {
-    pub(crate) fn effective_installation_id(&self, account_installation_id: &str) -> String {
-        self.snapshot()
-            .installation_id
-            .unwrap_or_else(|| account_installation_id.to_owned())
+    pub(crate) fn effective_installation_id(
+        &self,
+        client_key_id: &gateway_core::policy::ClientApiKeyId,
+        account_id: &gateway_core::account::ProviderAccountId,
+        account_installation_id: &str,
+    ) -> String {
+        self.snapshot().effective_installation_id(
+            client_key_id,
+            account_id,
+            account_installation_id,
+        )
     }
 
     pub(crate) fn key_request_snapshot(

@@ -2590,5 +2590,13 @@
     "file_sha256": "ba0a10b5467777e425d4ddbfc9f09fde8286cfd15cedea5cb019314ae55d3e6a",
     "line_sha256": "61848d28dd41e959f480609bf1437a9575194a9527f3a563c1fcb2fd8448783d",
     "reason": "Manually re-reviewed unsigned mock JWT in the bounded OAuth response parser fixture; checks rotation field parsing without a real credential."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/credential/native_catalog_local.rs",
+    "rule": "authenticated-url",
+    "line": 543,
+    "file_sha256": "e905a6d2b5bd3b55c91b3e008be91e9e28c32fa052545321bdad4024e6e0a56f",
+    "line_sha256": "df037a1268a2fe553e47104c6feee56ef05f531030847103b46d3a4582695472",
+    "reason": "Manually re-reviewed unchanged synthetic catalog-user/catalog-pass proxy fixture after installation-seed integration; the destination is an ephemeral loopback listener and no real credential is used."
   }
 ]

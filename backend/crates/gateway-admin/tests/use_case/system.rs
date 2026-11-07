@@ -35,8 +35,17 @@ impl SystemOperations for RecordingSystemOperations {
         })
     }
 
-    async fn update_detail(&self, _: bool) -> Result<SystemUpdateDetail, SystemOperationError> {
+    async fn update_detail(
+        &self,
+        _: gateway_admin::model::system::SystemUpdateCheck,
+        _: Option<gateway_admin::model::system::SystemUpdateChannel>,
+    ) -> Result<SystemUpdateDetail, SystemOperationError> {
         Ok(SystemUpdateDetail {
+            policy: gateway_admin::model::system::SystemUpdatePolicy {
+                channel: gateway_admin::model::system::SystemUpdateChannel::Stable,
+                available_channels: vec![gateway_admin::model::system::SystemUpdateChannel::Stable],
+            },
+            retry_at: None,
             current_version: "1.0.0".to_owned(),
             latest_version: "1.0.0".to_owned(),
             has_update: false,
@@ -58,6 +67,7 @@ impl SystemOperations for RecordingSystemOperations {
     async fn perform_update(
         &self,
         target_version: Option<String>,
+        _channel: Option<gateway_admin::model::system::SystemUpdateChannel>,
     ) -> Result<SystemOperationAccepted, SystemOperationError> {
         *self.target.lock().expect("target") = Some(target_version.clone());
         Ok(SystemOperationAccepted::Update {
@@ -138,7 +148,7 @@ async fn system_update_should_normalize_blank_target_to_latest() {
         .await;
     services
         .system()
-        .perform_update(Some("   ".to_owned()))
+        .perform_update(Some("   ".to_owned()), None)
         .await
         .expect("perform update");
 

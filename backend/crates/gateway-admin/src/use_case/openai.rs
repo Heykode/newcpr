@@ -83,28 +83,7 @@ impl DefaultOpenAiService {
     }
 
     fn observe_initial_quotas(&self, account_ids: &[ProviderAccountId], request_id: &str) {
-        let provider = Arc::clone(&self.provider);
-        let account_ids = account_ids.to_vec();
-        let request_id = request_id.to_owned();
-        tokio::spawn(async move {
-            for account_id in account_ids {
-                if let Err(error) = provider
-                    .quota(ProviderQuotaRequest {
-                        account_id: account_id.clone(),
-                        refresh: true,
-                        rolling_usage: None,
-                    })
-                    .await
-                {
-                    tracing::warn!(
-                        request_id,
-                        account_id = %account_id.as_str(),
-                        quota_error = ?error.kind(),
-                        "OpenAI initial quota observation failed"
-                    );
-                }
-            }
-        });
+        observe_account_quotas(&self.provider, account_ids, request_id);
     }
     async fn import(
         &self,
@@ -304,4 +283,33 @@ impl OpenAiService for DefaultOpenAiService {
         publish_committed(self.snapshot.as_ref(), result.config_revision).await?;
         Ok(result)
     }
+}
+
+pub(super) fn observe_account_quotas(
+    provider: &Arc<dyn ProviderAdmin>,
+    account_ids: &[ProviderAccountId],
+    request_id: &str,
+) {
+    let provider = Arc::clone(provider);
+    let account_ids = account_ids.to_vec();
+    let request_id = request_id.to_owned();
+    tokio::spawn(async move {
+        for account_id in account_ids {
+            if let Err(error) = provider
+                .quota(ProviderQuotaRequest {
+                    account_id: account_id.clone(),
+                    refresh: true,
+                    rolling_usage: None,
+                })
+                .await
+            {
+                tracing::warn!(
+                    request_id,
+                    account_id = %account_id.as_str(),
+                    quota_error = ?error.kind(),
+                    "OpenAI account quota observation failed"
+                );
+            }
+        }
+    });
 }

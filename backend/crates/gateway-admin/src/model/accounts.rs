@@ -207,6 +207,7 @@ pub struct AccountTurnStateSlotStatus {
 /// 账号公共存储投影；Provider 专属字段不进入此结构。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountRecord {
+    pub auto_use_quota_credits: bool,
     pub custom_name: Option<String>,
     pub id: String,
     pub provider_kind: ProviderKind,
@@ -466,6 +467,7 @@ pub struct AccountUpdateResult {
 /// 一批账号可编辑事实的一次性替换命令。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BatchUpdateAccounts {
+    pub auto_use_quota_credits: Option<bool>,
     pub excel_recovery: Option<super::excel_recovery::ExcelRecoveryConfig>,
     pub purchase_cost: Option<super::account_purchase::AccountPurchaseUpdate>,
     pub egress_mode: Option<Option<gateway_core::provider_ports::egress::EgressMode>>,

@@ -584,7 +584,7 @@ async fn installation_alias_shape_keeps_account_fingerprint_routing_and_cache() 
                         result.body["client_metadata"]["x-codex-installation-id"],
                         device
                     );
-                    assert_eq!(result.body["metadata"], base["metadata"]);
+                    assert!(result.body.get("metadata").is_none());
                     assert_eq!(result.body["client_metadata"]["business"], "preserve");
                     assert_eq!(
                         stable_facts(&clean),

@@ -10,6 +10,7 @@ use gateway_core::account::{
     AccountSelectionContext, AccountSelector, CredentialState, ProviderAccount, ProviderAccountId,
     QuotaAccessState, QuotaEvidence, QuotaState,
 };
+use gateway_core::concurrency::{CapacityWait, ConcurrencyQueuePolicy, ConcurrencyWaitQueue};
 use gateway_core::provider_ports::{
     ProviderCooldown, ProviderCooldownPort, ProviderCooldownScope, ProviderLeaseAcquisition,
     ProviderLeasePort, ProviderLeaseRequest, ProviderSchedulingLeaseRequest,
@@ -53,6 +54,7 @@ struct RuntimeCooldown {
 
 /// 仅经 Core account port、TTL catalog cache 和 Redis lease 选择一个 OAuth session。
 pub struct GrokAccountSessionSelector {
+    waiting: ConcurrencyWaitQueue<ProviderAccountId>,
     provider_kind: ProviderKind,
     repository: GrokCredentialRepository,
     catalog_cache: Arc<dyn GrokCredentialCatalogCache>,
@@ -74,6 +76,7 @@ impl GrokAccountSessionSelector {
         account_feedback: Arc<AccountFeedbackStats>,
     ) -> Self {
         Self {
+            waiting: ConcurrencyWaitQueue::default(),
             provider_kind,
             repository,
             catalog_cache,
@@ -88,277 +91,339 @@ impl GrokAccountSessionSelector {
         &self,
         request: GrokSessionSelection,
     ) -> Result<SelectedGrokSession, GrokSessionSelectorError> {
-        let diagnostic = request.eligibility().bypasses_local_eligibility();
-        let quality_recovery = if request.eligibility()
-            == AccountEligibilityPolicy::IgnoreQualityPause
-            && let Some(required) = request.required_account()
-        {
-            self.repository
-                .quality_pause_is_owned(required)
-                .await
-                .map_err(|_| GrokSessionSelectorError::Unavailable)?
-        } else {
-            false
-        };
-        let mut accounts = self
-            .repository
-            .list_accounts_for_provider()
-            .await
-            .map_err(|_| GrokSessionSelectorError::Unavailable)?;
-        if (diagnostic || quality_recovery)
-            && let Some(required) = request.required_account()
-            && !accounts.iter().any(|account| account.id() == required)
-            && let Some(account) = self
-                .repository
-                .account_by_id(required)
-                .await
-                .map_err(|_| GrokSessionSelectorError::Unavailable)?
-            && account.provider() == &self.provider_kind
-        {
-            accounts.push(account);
-        }
-        let accounts = if diagnostic {
-            accounts
-        } else {
-            accounts
-                .into_iter()
-                .filter(|account| {
-                    request
-                        .account_scope()
-                        .allows_model(account.id(), request.upstream_model().as_str())
-                })
-                .collect()
-        };
-        let catalog_eligible = if diagnostic {
-            accounts
-        } else {
-            // 目录支持度按套餐 scope 去重后并发批量读取，避免逐账号串行往返。
-            let account_scopes = accounts
-                .iter()
-                .map(|account| {
-                    GrokCatalogScope::for_account(account)
-                        .ok()
-                        .filter(|scope| scope.as_str() != "plan:unknown")
-                })
-                .collect::<Vec<_>>();
-            let unique_scopes = account_scopes
-                .iter()
-                .flatten()
-                .cloned()
-                .collect::<std::collections::BTreeSet<_>>();
-            let support_reads = futures::future::join_all(unique_scopes.iter().map(|scope| {
-                self.catalog_cache
-                    .observed_model_support(scope, request.upstream_model().as_str())
-            }))
-            .await;
-            let support_by_scope = unique_scopes
-                .into_iter()
-                .zip(support_reads)
-                .collect::<std::collections::BTreeMap<_, _>>();
-            accounts
-                .into_iter()
-                .zip(account_scopes)
-                .filter_map(|(account, scope)| {
-                    let unsupported = scope.is_some_and(|scope| {
-                        matches!(support_by_scope.get(&scope), Some(Ok(Some(false))))
-                    });
-                    (!unsupported).then_some(account)
-                })
-                .collect()
-        };
-        if catalog_eligible.is_empty() {
-            return Err(GrokSessionSelectorError::NoEligibleSession);
-        }
-        if !diagnostic {
-            self.quota.prepare_scheduling(&catalog_eligible).await;
-        }
-
-        let account_ids = catalog_eligible
-            .iter()
-            .map(|account| account.id().clone())
-            .collect::<Vec<_>>();
-        let scheduling = self
-            .scheduling
-            .load_state(
-                request.client_api_key_id(),
-                &self.provider_kind,
-                &account_ids,
-            )
-            .await
-            .map_err(|_| GrokSessionSelectorError::Unavailable)?;
-        let runtime_cooldowns = if diagnostic {
-            std::collections::BTreeMap::new()
-        } else {
-            self.runtime_cooldowns(&catalog_eligible, request.upstream_model())
-                .await
-        };
-        let mut candidates = catalog_eligible
-            .into_iter()
-            .filter(|account| !runtime_cooldowns.contains_key(account.id()))
-            .map(|account| {
-                let health = self
-                    .account_feedback
-                    .scheduling_signals(&self.provider_kind, account.id());
-                let signals = scheduling
-                    .signals()
-                    .get(account.id())
-                    .cloned()
-                    .ok_or(GrokSessionSelectorError::Unavailable)?
-                    .with_provider_quota(self.quota.scheduling_signals(&account))
-                    .with_runtime_health(health.0, health.1);
-                Ok(AccountCandidate { account, signals })
-            })
-            .collect::<Result<Vec<_>, GrokSessionSelectorError>>()?;
-        if let Some(required) = request.required_account() {
-            candidates.retain(|candidate| candidate.account.id() == required);
-        }
-
-        let affinity_account = request.affinity().and_then(|affinity| {
-            candidates
-                .iter()
-                .filter(|candidate| !request.excluded_accounts().contains(candidate.account.id()))
-                .max_by_key(|candidate| affinity.score(candidate.account.id()))
-                .map(|candidate| candidate.account.id().clone())
-        });
-        let context = AccountSelectionContext {
-            waiting_counts: Default::default(),
-            policy: request.account_selection_policy(),
-            now: SystemTime::now(),
-            excluded_accounts: request.excluded_accounts().clone(),
-            preferred_account: request.required_account().cloned().or(affinity_account),
-            preferred_account_overrides_weight: false,
-            round_robin_cursor: scheduling.round_robin_cursor(),
-            eligibility: if diagnostic {
-                request.eligibility()
-            } else if quality_recovery {
-                AccountEligibilityPolicy::IgnoreQualityPause
-            } else {
-                AccountEligibilityPolicy::Enforce
-            },
-            allow_codex_quota_overdraft: false,
-            account_scope: (!diagnostic).then(|| Arc::clone(request.account_scope())),
-            reserved_concurrency: 0,
-        };
-        let mut capacity_denied = false;
-        let mut retry_after = None;
-        loop {
-            let capacity = AccountSelector.capacity_snapshot(&candidates, &context);
-            let Some(selection) = AccountSelector.select(&candidates, &context) else {
-                break;
-            };
-            let selected = selection.candidate();
-            let selected_id = selected.account.id().clone();
-            let selected_revision = selected.account.revision();
-            let allows_account_state_mutation = context
-                .eligibility
-                .allows_account_state_mutation(selected.account.enabled());
-            let lease = self
-                .scheduling
-                .try_acquire(ProviderLeaseRequest::Scheduling(
-                    ProviderSchedulingLeaseRequest::new(
-                        self.provider_kind.clone(),
-                        selected_id.clone(),
-                        selected_revision,
-                        selected.account.effective_concurrency(
-                            request
-                                .account_selection_policy()
-                                .max_concurrent_per_account(),
-                        ),
-                        request.account_selection_policy().request_interval(),
-                        request.deadline(),
+        let policy = request.account_selection_policy();
+        let select = |queue| self.select_with_queue(&request, queue);
+        match select(policy.queue_policy()).await {
+            Err(GrokSessionSelectorError::QueueRejected(reason))
+                if request.required_account().is_none() =>
+            {
+                policy
+                    .reselect_after_queue_rejection(
+                        reason,
+                        request.deadline().remaining(),
+                        select,
+                        |err| {
+                            matches!(
+                                err,
+                                GrokSessionSelectorError::CapacityUnavailable { .. }
+                                    | GrokSessionSelectorError::NoEligibleSession
+                                    | GrokSessionSelectorError::AccountCoolingDown { .. }
+                                    | GrokSessionSelectorError::ModelCoolingDown { .. }
+                            )
+                        },
                     )
-                    .with_cancellation(request.cancellation().clone()),
-                ))
-                .await
-                .map_err(|_| GrokSessionSelectorError::Unavailable)?;
-            let guard = match lease {
-                ProviderLeaseAcquisition::Acquired(guard) => guard,
-                ProviderLeaseAcquisition::Busy {
-                    retry_after: candidate_retry,
-                } => {
-                    capacity_denied = true;
-                    retry_after = minimum_retry_after(retry_after, candidate_retry);
-                    candidates.retain(|candidate| candidate.account.id() != &selected_id);
-                    continue;
-                }
-            };
+                    .await
+            }
+            result => result,
+        }
+    }
 
-            let loaded = self
-                .repository
-                .load(&selected_id, selected_revision)
-                .await
-                .map_err(|_| GrokSessionSelectorError::InvalidSession)?;
-            if quality_recovery
-                && !self
-                    .repository
-                    .quality_pause_is_owned(&selected_id)
+    async fn select_with_queue(
+        &self,
+        request: &GrokSessionSelection,
+        queue_policy: ConcurrencyQueuePolicy,
+    ) -> Result<SelectedGrokSession, GrokSessionSelectorError> {
+        let mut waiting = CapacityWait::new(
+            &self.waiting,
+            queue_policy,
+            request.deadline().at(),
+            request.concurrency_wait_budget(),
+        );
+        'refresh: loop {
+            let diagnostic = request.eligibility().bypasses_local_eligibility();
+            let quality_recovery = if request.eligibility()
+                == AccountEligibilityPolicy::IgnoreQualityPause
+                && let Some(required) = request.required_account()
+            {
+                self.repository
+                    .quality_pause_is_owned(required)
                     .await
                     .map_err(|_| GrokSessionSelectorError::Unavailable)?
+            } else {
+                false
+            };
+            let mut accounts = self
+                .repository
+                .list_accounts_for_provider()
+                .await
+                .map_err(|_| GrokSessionSelectorError::Unavailable)?;
+            if (diagnostic || quality_recovery)
+                && let Some(required) = request.required_account()
+                && !accounts.iter().any(|account| account.id() == required)
+                && let Some(account) = self
+                    .repository
+                    .account_by_id(required)
+                    .await
+                    .map_err(|_| GrokSessionSelectorError::Unavailable)?
+                && account.provider() == &self.provider_kind
             {
+                accounts.push(account);
+            }
+            let accounts = if diagnostic {
+                accounts
+            } else {
+                accounts
+                    .into_iter()
+                    .filter(|account| {
+                        request
+                            .account_scope()
+                            .allows_model(account.id(), request.upstream_model().as_str())
+                    })
+                    .collect()
+            };
+            let catalog_eligible = if diagnostic {
+                accounts
+            } else {
+                // 目录支持度按套餐 scope 去重后并发批量读取，避免逐账号串行往返。
+                let account_scopes = accounts
+                    .iter()
+                    .map(|account| {
+                        GrokCatalogScope::for_account(account)
+                            .ok()
+                            .filter(|scope| scope.as_str() != "plan:unknown")
+                    })
+                    .collect::<Vec<_>>();
+                let unique_scopes = account_scopes
+                    .iter()
+                    .flatten()
+                    .cloned()
+                    .collect::<std::collections::BTreeSet<_>>();
+                let support_reads = futures::future::join_all(unique_scopes.iter().map(|scope| {
+                    self.catalog_cache
+                        .observed_model_support(scope, request.upstream_model().as_str())
+                }))
+                .await;
+                let support_by_scope = unique_scopes
+                    .into_iter()
+                    .zip(support_reads)
+                    .collect::<std::collections::BTreeMap<_, _>>();
+                accounts
+                    .into_iter()
+                    .zip(account_scopes)
+                    .filter_map(|(account, scope)| {
+                        let unsupported = scope.is_some_and(|scope| {
+                            matches!(support_by_scope.get(&scope), Some(Ok(Some(false))))
+                        });
+                        (!unsupported).then_some(account)
+                    })
+                    .collect()
+            };
+            if catalog_eligible.is_empty() {
                 return Err(GrokSessionSelectorError::NoEligibleSession);
             }
-            if !diagnostic
-                && loaded
-                    .refresh_token_expires_at
-                    .is_some_and(|expires_at| expires_at <= Utc::now())
-            {
-                return Err(GrokSessionSelectorError::InvalidSession);
+            if !diagnostic {
+                self.quota.prepare_scheduling(&catalog_eligible).await;
             }
-            let binding = GrokSessionBinding::new(selected_id.as_str())
-                .map_err(|_| GrokSessionSelectorError::InvalidSession)?
-                .with_outbound_proxy(loaded.account.outbound_proxy().cloned());
-            let upstream_user_id = loaded
-                .account
-                .upstream_user_id()
-                .ok_or(GrokSessionSelectorError::InvalidSession)?;
-            let session = SelectedGrokSession::new(
-                selected_id,
-                selected_revision,
-                loaded.access_token,
-                SecretValue::new(upstream_user_id),
-                loaded
-                    .account
-                    .email()
-                    .map(|value| SecretValue::new(value.to_owned())),
-                binding,
-                guard,
-            )
-            .map_err(|_| GrokSessionSelectorError::InvalidSession)?
-            .with_capacity_snapshot(capacity.map(AccountCapacitySnapshot::with_acquired_request));
-            return Ok(if allows_account_state_mutation {
-                session
-            } else {
-                session.without_account_state_mutation()
-            });
-        }
 
-        if capacity_denied {
-            return Err(GrokSessionSelectorError::CapacityUnavailable { retry_after });
-        }
-        // 钉死账号时只看该账号，否则取最早退出 cooldown 的候选。
-        let cooled = match request.required_account() {
-            Some(required) => runtime_cooldowns.get(required).copied(),
-            None => runtime_cooldowns
-                .values()
-                .copied()
-                .min_by_key(|item| item.until),
-        };
-        if let Some(cooled) = cooled {
-            let retry_after = cooled
-                .until
-                .duration_since(SystemTime::now())
-                .ok()
-                .filter(|remaining| !remaining.is_zero());
-            return Err(match cooled.scope {
-                RuntimeCooldownScope::Account => {
-                    GrokSessionSelectorError::AccountCoolingDown { retry_after }
-                }
-                RuntimeCooldownScope::Model => {
-                    GrokSessionSelectorError::ModelCoolingDown { retry_after }
-                }
+            let account_ids = catalog_eligible
+                .iter()
+                .map(|account| account.id().clone())
+                .collect::<Vec<_>>();
+            let scheduling = self
+                .scheduling
+                .load_state(
+                    request.client_api_key_id(),
+                    &self.provider_kind,
+                    &account_ids,
+                )
+                .await
+                .map_err(|_| GrokSessionSelectorError::Unavailable)?;
+            let runtime_cooldowns = if diagnostic {
+                std::collections::BTreeMap::new()
+            } else {
+                self.runtime_cooldowns(&catalog_eligible, request.upstream_model())
+                    .await
+            };
+            let mut candidates = catalog_eligible
+                .into_iter()
+                .filter(|account| !runtime_cooldowns.contains_key(account.id()))
+                .map(|account| {
+                    let health = self
+                        .account_feedback
+                        .scheduling_signals(&self.provider_kind, account.id());
+                    let signals = scheduling
+                        .signals()
+                        .get(account.id())
+                        .cloned()
+                        .ok_or(GrokSessionSelectorError::Unavailable)?
+                        .with_provider_quota(self.quota.scheduling_signals(&account))
+                        .with_runtime_health(health.0, health.1);
+                    Ok(AccountCandidate { account, signals })
+                })
+                .collect::<Result<Vec<_>, GrokSessionSelectorError>>()?;
+            if let Some(required) = request.required_account() {
+                candidates.retain(|candidate| candidate.account.id() == required);
+            }
+
+            let affinity_account = request.affinity().and_then(|affinity| {
+                candidates
+                    .iter()
+                    .filter(|candidate| {
+                        !request.excluded_accounts().contains(candidate.account.id())
+                    })
+                    .max_by_key(|candidate| affinity.score(candidate.account.id()))
+                    .map(|candidate| candidate.account.id().clone())
             });
+            let context = AccountSelectionContext {
+                waiting_counts: Default::default(),
+                policy: request.account_selection_policy(),
+                now: SystemTime::now(),
+                excluded_accounts: request.excluded_accounts().clone(),
+                preferred_account: request.required_account().cloned().or(affinity_account),
+                preferred_account_overrides_weight: false,
+                round_robin_cursor: scheduling.round_robin_cursor(),
+                eligibility: if diagnostic {
+                    request.eligibility()
+                } else if quality_recovery {
+                    AccountEligibilityPolicy::IgnoreQualityPause
+                } else {
+                    AccountEligibilityPolicy::Enforce
+                },
+                allow_codex_quota_overdraft: false,
+                account_scope: (!diagnostic).then(|| Arc::clone(request.account_scope())),
+                reserved_concurrency: 0,
+            };
+            let queue_candidates = candidates.clone();
+            candidates.retain(|candidate| waiting.can_try(candidate.account.id()));
+            let mut capacity_denied = false;
+            let mut retry_after = None;
+            loop {
+                let capacity = AccountSelector.capacity_snapshot(&candidates, &context);
+                let Some(selection) = AccountSelector.select(&candidates, &context) else {
+                    break;
+                };
+                let selected = selection.candidate();
+                let selected_id = selected.account.id().clone();
+                let selected_revision = selected.account.revision();
+                let allows_account_state_mutation = context
+                    .eligibility
+                    .allows_account_state_mutation(selected.account.enabled());
+                let lease = self
+                    .scheduling
+                    .try_acquire(ProviderLeaseRequest::Scheduling(
+                        ProviderSchedulingLeaseRequest::new(
+                            self.provider_kind.clone(),
+                            selected_id.clone(),
+                            selected_revision,
+                            selected.account.effective_concurrency(
+                                request
+                                    .account_selection_policy()
+                                    .max_concurrent_per_account(),
+                            ),
+                            request.account_selection_policy().request_interval(),
+                            request.deadline(),
+                        )
+                        .with_cancellation(request.cancellation().clone()),
+                    ))
+                    .await
+                    .map_err(|_| GrokSessionSelectorError::Unavailable)?;
+                let guard = match lease {
+                    ProviderLeaseAcquisition::Acquired(guard) => guard,
+                    ProviderLeaseAcquisition::Busy {
+                        retry_after: candidate_retry,
+                    } => {
+                        capacity_denied = true;
+                        retry_after = minimum_retry_after(retry_after, candidate_retry);
+                        candidates.retain(|candidate| candidate.account.id() != &selected_id);
+                        continue;
+                    }
+                };
+
+                let loaded = self
+                    .repository
+                    .load(&selected_id, selected_revision)
+                    .await
+                    .map_err(|_| GrokSessionSelectorError::InvalidSession)?;
+                if quality_recovery
+                    && !self
+                        .repository
+                        .quality_pause_is_owned(&selected_id)
+                        .await
+                        .map_err(|_| GrokSessionSelectorError::Unavailable)?
+                {
+                    return Err(GrokSessionSelectorError::NoEligibleSession);
+                }
+                if !diagnostic
+                    && loaded
+                        .refresh_token_expires_at
+                        .is_some_and(|expires_at| expires_at <= Utc::now())
+                {
+                    return Err(GrokSessionSelectorError::InvalidSession);
+                }
+                let binding = GrokSessionBinding::new(selected_id.as_str())
+                    .map_err(|_| GrokSessionSelectorError::InvalidSession)?
+                    .with_outbound_proxy(loaded.account.outbound_proxy().cloned());
+                let upstream_user_id = loaded
+                    .account
+                    .upstream_user_id()
+                    .ok_or(GrokSessionSelectorError::InvalidSession)?;
+                let session = SelectedGrokSession::new(
+                    selected_id,
+                    selected_revision,
+                    loaded.access_token,
+                    SecretValue::new(upstream_user_id),
+                    loaded
+                        .account
+                        .email()
+                        .map(|value| SecretValue::new(value.to_owned())),
+                    binding,
+                    guard,
+                )
+                .map_err(|_| GrokSessionSelectorError::InvalidSession)?
+                .with_capacity_snapshot(
+                    capacity.map(AccountCapacitySnapshot::with_acquired_request),
+                );
+                return Ok(if allows_account_state_mutation {
+                    session
+                } else {
+                    session.without_account_state_mutation()
+                });
+            }
+
+            let wait_candidates = AccountSelector.wait_candidates(&queue_candidates, &context);
+            if !diagnostic && queue_policy.max_waiting > 0 && !wait_candidates.is_empty() {
+                AccountSelector
+                    .wait_for_capacity(&mut waiting, &wait_candidates, &queue_candidates, &context)
+                    .await
+                    .map_err(|error| {
+                        tracing::info!(
+                            queue_layer = "account",
+                            queue_wait_ms = waiting.elapsed().as_millis() as u64,
+                            reason = %error,
+                            "xAI 账号排队请求被拒绝"
+                        );
+                        GrokSessionSelectorError::QueueRejected(error)
+                    })?;
+                continue 'refresh;
+            }
+            if capacity_denied {
+                return Err(GrokSessionSelectorError::CapacityUnavailable { retry_after });
+            }
+            // 钉死账号时只看该账号，否则取最早退出 cooldown 的候选。
+            let cooled = match request.required_account() {
+                Some(required) => runtime_cooldowns.get(required).copied(),
+                None => runtime_cooldowns
+                    .values()
+                    .copied()
+                    .min_by_key(|item| item.until),
+            };
+            if let Some(cooled) = cooled {
+                let retry_after = cooled
+                    .until
+                    .duration_since(SystemTime::now())
+                    .ok()
+                    .filter(|remaining| !remaining.is_zero());
+                return Err(match cooled.scope {
+                    RuntimeCooldownScope::Account => {
+                        GrokSessionSelectorError::AccountCoolingDown { retry_after }
+                    }
+                    RuntimeCooldownScope::Model => {
+                        GrokSessionSelectorError::ModelCoolingDown { retry_after }
+                    }
+                });
+            }
+            return Err(GrokSessionSelectorError::NoEligibleSession);
         }
-        Err(GrokSessionSelectorError::NoEligibleSession)
     }
 
     async fn runtime_cooldowns(

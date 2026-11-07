@@ -2,8 +2,8 @@ import type { ApiKeyFormValue } from '../composables/useApiKeyMutations'
 
 export function apiKeyFormErrors(form: ApiKeyFormValue) {
   const errors: Partial<Record<keyof ApiKeyFormValue, string>> = {}
-  if (form.installationId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(form.installationId))
-    errors.installationId = '安装 ID 必须是带连字符的 UUID'
+  if (form.installationSeed && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(form.installationSeed))
+    errors.installationSeed = '安装种子 必须是带连字符的 UUID'
   if (!form.name.trim())
     errors.name = '请输入 API Key 名称'
   for (const [key, label] of [['dailyLimitUsd', '日限额'], ['weeklyLimitUsd', '周限额']] as const) {

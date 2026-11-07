@@ -56,13 +56,13 @@ function toggleSecretVisible(): void {
     <template #description>
       <I18nT keypath="settings.backup.storage.description" tag="span" scope="global" class="text-cp-text-secondary">
         <template #service>
-          <button
-            type="button"
+          <BaseButton
+            variant="link"
             class="cursor-pointer border-0 bg-transparent p-0 text-cp-link underline underline-offset-2 hover:text-cp-link-hover"
             @click="emit('openR2Guide')"
           >
             Cloudflare R2
-          </button>
+          </BaseButton>
         </template>
       </I18nT>
     </template>

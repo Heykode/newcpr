@@ -228,6 +228,7 @@ impl fmt::Debug for SelectedGrokSession {
 /// 单次 selector 调用的入参，持有冻结且不含密钥的尝试视图。
 #[derive(Debug, Clone)]
 pub struct GrokSessionSelection {
+    concurrency_wait_budget: gateway_core::concurrency::ConcurrencyWaitBudget,
     upstream_model: UpstreamModelId,
     excluded_accounts: BTreeSet<ProviderAccountId>,
     required_account: Option<ProviderAccountId>,
@@ -241,6 +242,22 @@ pub struct GrokSessionSelection {
 }
 
 impl GrokSessionSelection {
+    #[must_use]
+    pub fn with_concurrency_wait_budget(
+        mut self,
+        budget: gateway_core::concurrency::ConcurrencyWaitBudget,
+    ) -> Self {
+        self.concurrency_wait_budget = budget;
+        self
+    }
+
+    #[must_use]
+    pub const fn concurrency_wait_budget(
+        &self,
+    ) -> &gateway_core::concurrency::ConcurrencyWaitBudget {
+        &self.concurrency_wait_budget
+    }
+
     #[must_use]
     pub fn with_cancellation(
         mut self,
@@ -267,6 +284,7 @@ impl GrokSessionSelection {
         client_api_key_id: ClientApiKeyId,
     ) -> Self {
         Self {
+            concurrency_wait_budget: Default::default(),
             upstream_model,
             excluded_accounts,
             required_account,
@@ -425,6 +443,8 @@ pub trait GrokSessionSelector: Send + Sync {
 /// 不含密钥的选择器失败。
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum GrokSessionSelectorError {
+    #[error(transparent)]
+    QueueRejected(#[from] gateway_core::concurrency::QueueRejection),
     /// 没有会话同时满足模型、状态与排除约束。
     #[error("no eligible Grok Build session is available")]
     NoEligibleSession,

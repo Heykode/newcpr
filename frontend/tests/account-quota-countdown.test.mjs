@@ -38,6 +38,12 @@ function loadSource(filename) {
   runInNewContext(outputText, {
     exports,
     require(name) {
+      if (name === '@/api')
+        return { batchUpdateAccounts: () => { throw new Error('Read-only quota view must not mutate accounts') } }
+      if (name === '@/api/request')
+        return { ApiError: class ApiError extends Error {} }
+      if (name === '@/components/base/BaseToast')
+        return { toast: { error: () => {} } }
       if (name === '@/i18n')
         return require(name)
       if (name === '@/composables/useUiClock')

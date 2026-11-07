@@ -2,6 +2,7 @@ require 'minitest/autorun'
 require 'minitest/mock'
 require 'yaml'
 require_relative '../publish-release'
+require_relative '../published-channels'
 
 class PublicationTest < Minitest::Test
   DIGEST = "sha256:#{'a' * 64}"
@@ -123,7 +124,15 @@ class PublicationTest < Minitest::Test
     steps = job.fetch('steps')
     upload = steps.index { |step| step['id'] == 'release' }
     publish = steps.index { |step| step['run'].to_s.include?('ruby release/publish-release.rb') }
+    prepare_index = steps.index { |step| step['run'].to_s.include?('published-channels.rb prepare') }
+    finish_index = steps.index { |step| step['run'].to_s.include?('published-channels.rb finish') }
+    assert_operator prepare_index, :<, upload
     assert_operator upload, :<, publish
+    assert_operator publish, :<, finish_index
+    recovery = workflow.fetch('jobs').fetch('recover-index')
+    assert_equal job.fetch('concurrency'), recovery.fetch('concurrency')
+    assert_equal 'inputs.index_only', recovery.fetch('if')
+    assert recovery.fetch('steps').any? { |step| step['run'].to_s.include?('published-channels.rb finish') }
     assert_equal true, steps[upload].fetch('with').fetch('draft')
     assert_equal 'false', steps[upload].fetch('with').fetch('make_latest')
     assert steps[0...upload].any? { |step| step['run'].to_s.include?('cosign sign') }
@@ -134,4 +143,18 @@ class PublicationTest < Minitest::Test
       assert_equal '${{ needs.release-info.outputs.build_type }}', build.fetch('env').fetch('CPR_BUILD_TYPE')
     end
   end
+  def test_published_channels_promote_only_allowed_stages_and_experimental_baselines
+    document = { 'published' => {} }
+    assert PublishedChannels.advance(document, '3.42.0-beta.1')
+    assert_equal({ 'beta' => '3.42.0-beta.1', 'alpha' => '3.42.0-beta.1' }, document['published']['3'])
+    PublishedChannels.advance(document, '3.42.0')
+    assert_equal %w[stable rc beta alpha].to_h { |stage| [stage, '3.42.0'] }, document['published']['3']
+    refute PublishedChannels.advance(document, '3.41.0')
+    PublishedChannels.advance(document, '3.43.0-exp.1')
+    assert_equal '3.43.0-exp.1', document.dig('published', '3', 'exp', '3.43.0')
+    assert_equal '3.42.0', document.dig('published', '3', 'stable')
+    PublishedChannels.advance(document, '4.0.0')
+    assert_equal '3.42.0', document.dig('published', '3', 'stable')
+  end
+
 end

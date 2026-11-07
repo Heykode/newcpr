@@ -42,12 +42,12 @@ function save() {
   if (!Object.keys(errors.value).length)
     emit('save')
 }
-function generateInstallationId() {
+function generateInstallationSeed() {
   const bytes = globalThis.crypto.getRandomValues(new Uint8Array(16))
   bytes[6] = (bytes[6] & 0x0F) | 0x40
   bytes[8] = (bytes[8] & 0x3F) | 0x80
   const hex = Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('')
-  form.value.installationId = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
+  form.value.installationSeed = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
 }
 watch(open, () => {
   submitted.value = false
@@ -89,17 +89,17 @@ watch(open, () => {
         />
       </BaseFormItem>
 
-      <BaseFormItem :error="fieldError('installationId')" label="安装 ID">
+      <BaseFormItem :error="fieldError('installationSeed')" label="安装种子" description="同一 Key 的种子会与 Key 和账号身份共同派生安装 ID；种子不会直接发送给上游。留空沿用账号安装 ID。">
         <div class="flex items-center gap-2">
           <BaseInput
-            v-model="form.installationId"
+            v-model="form.installationSeed"
             class="min-w-0 flex-1"
-            aria-label="安装 ID"
+            aria-label="安装种子"
             placeholder="留空使用上游账号的安装ID"
             :disabled="saving"
-            @blur="touched.installationId = true"
+            @blur="touched.installationSeed = true"
           />
-          <BaseIconButton label="生成安装 ID" :disabled="saving" @click="generateInstallationId">
+          <BaseIconButton label="生成安装种子" :disabled="saving" @click="generateInstallationSeed">
             <Dices class="size-4" />
           </BaseIconButton>
         </div>

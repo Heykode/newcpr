@@ -35,7 +35,7 @@ Redis key；WS pool 不兼任账号调度器。不新建配置表、第二套粘
 | --- | --- | --- |
 | `accountBusyWaitEnabled` | `false` | boolean |
 | `maxWaitingPerAccount` | `10` | 整数，`1..=1000` |
-| `accountConcurrencyWaitTimeoutSeconds` | `30` | 整数，`1..=600` |
+| `accountQueueTimeoutSeconds` | `30` | 整数，`1..=120` |
 
 2026-11-01 用户批准统一为两项：sticky、fallback 和 strict follow-only 等待读取
 同一份人数上限和时限；跨模式、跨 attempt 不得重开共享截止。
@@ -80,7 +80,9 @@ Web只展示两个账号等待输入，Key队列仍独立。旧四项仅接受�
 普通可选等待不接纳 cooldown、停用、失效、无额度、越权、模型不支持和业务排除。
 strict 子线程是例外：这些阻塞仍禁止执行，但可以等待根绑定恢复、迁移或过期，见下文。
 
-1. Strict 原绑定并发 Busy 且开启普通等待时进入 sticky 等待；队满、超时不能转到其他账号。
+1. Strict 原绑定并发 Busy 且开启普通等待时进入 sticky 等待。队满或超时默认返回原错误；
+   `switchAccountOnQueueFailure=true` 时，普通根请求允许一次不排队的立即重选，成功准入后迁移绑定。
+   无可用账号保留原队列错误，不重置账号等待预算；required/native owner 和 strict 子线程不适用。
    关闭普通等待时，普通根请求按官方选择其他合法账号并在准入时迁移绑定。
    仅请求间隔阻塞不额外禁止普通根请求迁移；仍必须先通过间隔的原子准入。
    并发与间隔同时阻塞可进入 Strict 并发等待，入队后保持原共享截止。
@@ -153,9 +155,8 @@ required、Native、ReplayOwner、管理员指定诊断及 Store/revision 故障
 ### 下游 Key 前置排队
 
 Key 并发队列与上游账号容量队列独立。`maxWaitingPerKey=0` 默认关闭，
-`keyConcurrencyWaitTimeoutSeconds=30`；首次 Key 入队将自己的单调截止时间
-写入同一 `AccountWaitBudget`，随后所有账号等待和 attempt 不得延长该截止。
-未发生 Key 等待的请求保持原账号等待窗口行为。
+`keyQueueTimeoutSeconds=30`（1..120 秒）；Key 与账号从各自首次入队分别计时。
+Key 等待不压缩账号窗口。账号层跨 attempt 和 Provider 仍共享截止，两层均受请求总截止约束。
 
 Key 位置是进程内有界 FIFO（单 Key 配置上限、所有 Key 合计 1024），Redis
 仍拥有并发及 RPM 原子准入。只有队首可以获取并发，拒绝不得记 RPM；
@@ -312,3 +313,11 @@ API 不为账号排队提前提交 SSE 或发送业务 payload。
 无显式会话的缓存偏好同样服从上述模式。Preferred 的可选偏好存储故障必须在
 直接、投影和等待路径均停用本次偏好；已持有的等待/执行槽按正常生命周期释放。
 真实会话和 Strict 缓存偏好不降级，CAS 冲突不属于可忽略的存储故障。
+
+
+## v3.42.0 原生接入
+
+- 对外写入 `keyQueueTimeoutSeconds` / `accountQueueTimeoutSeconds`，旧两个字段名仅作为输入 alias；两者范围均为 1..120 秒。迁移0086将已保存的超范围值限至120秒，保留人数、显式关闭和其他设置。
+- `switchAccountOnQueueFailure` 默认 false。开启后只在队满/超时后进行一次立即重选，不重新排队；严格根请求取得 B 后绑定 B，Preferred 保留原软绑定。固定账号、真实续接 owner 和严格子线程不跨号。
+- xAI 接入官方进程内等待队列及重选 helper；执行并发继续由已有 Store 准入拥有，不承诺跨实例的全局等待 FIFO。OpenAI 保留既有 Redis 等待 owner 和 Shared/Reserved 容量池。
+- 官方回归与本地队列接线同时验证；固定官方来源、差异及结果见 `docs/upstream-v3420-native-parity.md`。

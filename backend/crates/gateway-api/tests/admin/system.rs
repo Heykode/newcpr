@@ -125,7 +125,11 @@ impl SystemOperations for ProgressSystem {
         Err(unavailable_system())
     }
 
-    async fn update_detail(&self, _: bool) -> Result<SystemUpdateDetail, SystemOperationError> {
+    async fn update_detail(
+        &self,
+        _: gateway_admin::model::system::SystemUpdateCheck,
+        _: Option<gateway_admin::model::system::SystemUpdateChannel>,
+    ) -> Result<SystemUpdateDetail, SystemOperationError> {
         Err(unavailable_system())
     }
 
@@ -147,6 +151,7 @@ impl SystemOperations for ProgressSystem {
     async fn perform_update(
         &self,
         target: Option<String>,
+        _channel: Option<gateway_admin::model::system::SystemUpdateChannel>,
     ) -> Result<SystemOperationAccepted, SystemOperationError> {
         Ok(SystemOperationAccepted::Update {
             operation_id: "update-1".to_owned(),

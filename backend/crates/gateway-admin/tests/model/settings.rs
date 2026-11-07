@@ -30,7 +30,7 @@ fn retry_after_limit_accepts_official_bounds_and_legacy_defaults() {
 #[test]
 fn shared_account_wait_ignores_retired_split_controls() {
     let decoded: RequestTuningOverrides = serde_json::from_value(json!({
-        "maxWaitingPerAccount":5,"accountConcurrencyWaitTimeoutSeconds":60,
+        "maxWaitingPerAccount":5,"accountQueueTimeoutSeconds":60,
         "accountBusyWaitStickyMaxWaiting":3,"accountBusyWaitStickyTimeoutSeconds":120,
         "accountBusyWaitFallbackMaxWaiting":100,"accountBusyWaitFallbackTimeoutSeconds":30
     }))
@@ -188,8 +188,9 @@ fn request_tuning_overrides_round_trip_all_live_fields() {
         max_waiting_per_key: Some(8),
         key_concurrency_wait_timeout_seconds: Some(30),
         account_busy_wait_enabled: Some(true),
+        switch_account_on_queue_failure: None,
         max_waiting_per_account: Some(4),
-        account_concurrency_wait_timeout_seconds: Some(121),
+        account_concurrency_wait_timeout_seconds: Some(120),
     };
     assert!(overrides.validate());
     let value = serde_json::to_value(&overrides).expect("serialize overrides");
@@ -228,10 +229,11 @@ fn request_tuning_overrides_round_trip_all_live_fields() {
             "openaiLocationOverrideEnabled": true,
             "openaiRequestLocation": null,
             "maxWaitingPerKey": 8,
-            "keyConcurrencyWaitTimeoutSeconds": 30,
+            "keyQueueTimeoutSeconds": 30,
             "accountBusyWaitEnabled": true,
+            "switchAccountOnQueueFailure": null,
             "maxWaitingPerAccount": 4,
-            "accountConcurrencyWaitTimeoutSeconds": 121,
+            "accountQueueTimeoutSeconds": 120,
         })
     );
     assert_eq!(
@@ -256,7 +258,7 @@ fn request_tuning_overrides_round_trip_all_live_fields() {
     assert_eq!(defaults["excelImageRelayTtlMinutes"], 30);
     assert_eq!(defaults["accountBusyWaitEnabled"], false);
     assert_eq!(defaults["maxWaitingPerAccount"], 10);
-    assert_eq!(defaults["accountConcurrencyWaitTimeoutSeconds"], 30);
+    assert_eq!(defaults["accountQueueTimeoutSeconds"], 30);
 }
 
 #[test]
@@ -393,7 +395,7 @@ fn account_busy_wait_overrides_preserve_null_inheritance_and_explicit_false() {
     let inherited = json!({
         "accountBusyWaitEnabled": null,
         "maxWaitingPerAccount": null,
-        "accountConcurrencyWaitTimeoutSeconds": null,
+        "accountQueueTimeoutSeconds": null,
     });
     let decoded: RequestTuningOverrides =
         serde_json::from_value(inherited).expect("decode inherited wait settings");
@@ -403,7 +405,7 @@ fn account_busy_wait_overrides_preserve_null_inheritance_and_explicit_false() {
     let disabled = json!({
         "accountBusyWaitEnabled": false,
         "maxWaitingPerAccount": 7,
-        "accountConcurrencyWaitTimeoutSeconds": 123,
+        "accountQueueTimeoutSeconds": 120,
     });
     let decoded: RequestTuningOverrides =
         serde_json::from_value(disabled.clone()).expect("decode disabled wait settings");
@@ -419,7 +421,7 @@ fn account_busy_wait_overrides_preserve_null_inheritance_and_explicit_false() {
 fn account_busy_wait_overrides_validate_each_integer_range_even_when_disabled() {
     for (field, maximum) in [
         ("maxWaitingPerAccount", 1000),
-        ("accountConcurrencyWaitTimeoutSeconds", 600),
+        ("accountQueueTimeoutSeconds", 120),
     ] {
         for enabled in [false, true] {
             for (value, valid) in [(0, false), (1, true), (maximum, true), (maximum + 1, false)] {
@@ -579,5 +581,26 @@ fn global_location_switch_only_projects_enabled_saved_location() {
     assert_eq!(
         legacy_empty.effective_request_location(),
         Some(RequestLocation::default())
+    );
+}
+
+#[test]
+fn queue_timeout_legacy_aliases_write_only_the_new_field_names() {
+    let decoded: RequestTuningOverrides = serde_json::from_value(json!({
+        "keyConcurrencyWaitTimeoutSeconds":12,
+        "accountConcurrencyWaitTimeoutSeconds":42,
+        "switchAccountOnQueueFailure":true
+    }))
+    .unwrap();
+    assert!(decoded.validate());
+    let encoded = serde_json::to_value(decoded).unwrap();
+    assert_eq!(encoded["keyQueueTimeoutSeconds"], 12);
+    assert_eq!(encoded["accountQueueTimeoutSeconds"], 42);
+    assert_eq!(encoded["switchAccountOnQueueFailure"], true);
+    assert!(encoded.get("keyConcurrencyWaitTimeoutSeconds").is_none());
+    assert!(
+        encoded
+            .get("accountConcurrencyWaitTimeoutSeconds")
+            .is_none()
     );
 }

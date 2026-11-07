@@ -1819,6 +1819,7 @@ mod response {
             codex_quota_overdraft: None,
             effective_concurrency_limit: std::num::NonZeroU32::new(3).expect("concurrency limit"),
             account: AccountRecord {
+                auto_use_quota_credits: false,
                 outbound_proxy_enabled: true,
                 effective_excel_models: Default::default(),
                 model_access: Default::default(),

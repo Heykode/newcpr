@@ -175,6 +175,7 @@ async fn settings_should_reject_invalid_account_busy_wait_before_store_call() {
                         audit_retention_days: 90,
                         request_tuning: RequestTuningOverrides {
                             account_busy_wait_enabled: Some(enabled),
+                            switch_account_on_queue_failure: None,
                             ..request_tuning.clone()
                         },
                     },

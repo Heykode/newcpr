@@ -42,7 +42,17 @@ async fn shared_account_wait_migration_retires_split_values_and_preserves_other_
         .fetch_one(&database.pool)
         .await
         .unwrap();
-        super::TEST_MIGRATOR.run(&database.pool).await.unwrap();
+        // 0083的旧字段/幂等合同与0086的字段升级分开验证。
+        let shared_wait_upgrade = sqlx::migrate::Migrator {
+            migrations: super::TEST_MIGRATOR
+                .iter()
+                .filter(|migration| migration.version <= 83)
+                .cloned()
+                .collect::<Vec<_>>()
+                .into(),
+            ..sqlx::migrate::Migrator::DEFAULT
+        };
+        shared_wait_upgrade.run(&database.pool).await.unwrap();
         let after: Value =
             sqlx::query_scalar("select to_jsonb(s) from runtime_settings s where id=1")
                 .fetch_one(&database.pool)

@@ -91,7 +91,7 @@ const accountTypeLabel = computed(() => {
     <div :class="comfortable ? 'flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1' : 'contents'" :data-account-inline-billing="comfortable || undefined">
       <AccountQuotaCredits
         v-if="account.provider === 'openai'"
-        :credits="account.quota.credits"
+        :account="account"
         :class="comfortable ? 'max-w-full' : undefined"
         compact
       />

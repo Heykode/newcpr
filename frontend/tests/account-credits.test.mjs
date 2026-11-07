@@ -30,7 +30,9 @@ function component(path, dependencies = {}) {
   })
   return { __esModule: true, default: exports.default }
 }
-const credits = component('AccountQuotaPanel/Credits.vue')
+const credits = component('AccountQuotaPanel/Credits.vue', {
+  '@/composables/useAsyncAction': { useAsyncAction: () => ({ loading: vue.ref(false), run: task => task() }) },
+})
 const panel = component('AccountQuotaPanel/index.vue', {
   '@/utils/relative-time': relativeTime,
   './Credits.vue': credits,
@@ -78,6 +80,7 @@ test('other providers do not display a Codex credit balance', async () => {
 test('embedded mobile quota panel removes only the desktop frame and uses the available width', async () => {
   const account = structuredClone(accounts[0])
   account.quota.credits = { hasCredits: true, unlimited: false, balance: '123.45' }
+  account.planType = 'plus'
   for (const mobile of [false, true]) {
     const html = await renderToString(vue.createSSRApp(panel.default, { account, refreshing: false, mobile }))
     assert.equal(html.includes('rounded-lg bg-cp-bg-container p-4 shadow-cp-tertiary'), !mobile)

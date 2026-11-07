@@ -808,7 +808,7 @@ fn client(base_url: &str) -> CodexBackendClient {
 fn profile() -> CodexWireProfileState {
     CodexWireProfileState::new(CodexWireProfile {
         raw_user_agent: None,
-        installation_id: None,
+        installation_seed: None,
         originator: "codex_cli_rs".to_owned(),
         codex_version: "0.144.0".to_owned(),
         desktop_version: "1.0.0".to_owned(),

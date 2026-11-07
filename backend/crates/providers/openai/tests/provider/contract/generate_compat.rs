@@ -16,7 +16,7 @@ async fn disable_fast_rewrites_only_the_top_level_known_fast_tier() {
                 "model":"gpt-5.4",
                 "input":"hello",
                 "service_tier":requested,
-                "metadata":{"service_tier":"priority"}
+                "client_metadata":{"service_tier":"priority"}
             })
             .as_object()
             .unwrap()
@@ -28,7 +28,7 @@ async fn disable_fast_rewrites_only_the_top_level_known_fast_tier() {
         .await;
         let body = captured_request_body(&captured);
         assert_eq!(body["service_tier"], expected);
-        assert_eq!(body["metadata"]["service_tier"], "priority");
+        assert_eq!(body["client_metadata"]["service_tier"], "priority");
     }
 }
 
@@ -73,7 +73,7 @@ async fn repeated_requests_preserve_item_ids_original_payload_and_nested_busines
     let (input, expected) = item_id_fixture();
     let mut body = json!({
         "model":"gpt-5.4", "input":input,
-        "metadata":{"id":"local-business-id","top_p":0.9},
+        "client_metadata":{"id":"local-business-id","top_p":0.9},
         "tools":[{
             "type":"function","name":"lookup",
             "parameters":{"type":"object","properties":{"id":{"type":"string"}}}
@@ -90,7 +90,9 @@ async fn repeated_requests_preserve_item_ids_original_payload_and_nested_busines
         .await;
         let outgoing = captured_request_body(&captured);
         assert_eq!(outgoing["input"], expected);
-        assert_eq!(outgoing["metadata"], body["metadata"]);
+        for (field, value) in body["client_metadata"].as_object().unwrap() {
+            assert_eq!(&outgoing["client_metadata"][field], value);
+        }
         assert_eq!(outgoing["tools"], body["tools"]);
         body["input"] = outgoing["input"].clone();
     }
@@ -402,5 +404,146 @@ pub(super) async fn send_completion(
             .send(Message::Text(event.to_string().into()))
             .await
             .unwrap();
+    }
+}
+
+async fn capture_downstream_request(original: Value, websocket: bool, lite: bool) -> Value {
+    let http = MockServer::start().await;
+    let (base_url, websocket_server) = if websocket {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let task =
+            tokio::spawn(async move {
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut websocket = accept_codex_test_websocket(stream).await;
+                let frame = websocket.next().await.unwrap().unwrap();
+                let body: Value = serde_json::from_str(frame.to_text().unwrap()).unwrap();
+                websocket.send(Message::Text(json!({
+                "type":"response.completed","response":{
+                    "id":"resp_replay","model":"gpt-5.4","status":"completed","output":[],
+                    "usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}
+                }
+            }).to_string().into())).await.unwrap();
+                body
+            });
+        (base_url, Some(task))
+    } else {
+        Mock::given(method("POST"))
+            .and(path("/codex/responses"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_raw(CAPTURE_COMPLETED_SSE, "text/event-stream"),
+            )
+            .expect(1)
+            .mount(&http)
+            .await;
+        (http.uri(), None)
+    };
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_provider_contract").await;
+    let operation = Operation::Generate(GenerateRequest::from_protocol_payload(
+        ProtocolPayload::json_object("openai", original.as_object().unwrap().clone())
+            .unwrap()
+            .with_context(Map::from_iter([
+                ("use_websocket".to_owned(), json!(websocket)),
+                (
+                    "responses_lite".to_owned(),
+                    json!(if lite { "true" } else { "false" }),
+                ),
+            ])),
+    ));
+    let provider = provider_with_base_url(&store, base_url);
+    let mut stream = provider
+        .execute(
+            planned_request("openai", operation),
+            context("req_replay_compatibility", CancellationToken::new()),
+        )
+        .await
+        .unwrap();
+    while let Some(event) = stream.next().await {
+        event.expect("successful upstream completion");
+    }
+    if let Some(server) = websocket_server {
+        timeout(Duration::from_secs(5), server)
+            .await
+            .unwrap()
+            .unwrap()
+    } else {
+        let requests = http.received_requests().await.unwrap();
+        assert_eq!(
+            requests.len(),
+            1,
+            "compatibility must run before the first send, without retry"
+        );
+        captured_request_body(&requests[0])
+    }
+}
+
+#[tokio::test]
+async fn codex_oauth_options_are_normalized_on_both_transports() {
+    let oauth_omissions = json!({
+        "frequency_penalty": 0, "presence_penalty": 0, "top_p": 1,
+        "chat_template_kwargs": {"enable_thinking": false}, "user": "example",
+        "metadata": {"source": "example"}, "safety_identifier": "example",
+        "truncation": "disabled", "stop_sequences": [], "prompt_cache_options": {}
+    });
+    let mut body = json!({
+        "model": "gpt-5.4", "input": "hello", "max_tokens": 16,
+        "stream_options": {"include_usage": true, "reasoning_summary_delivery": "sequential_cutoff"},
+        "client_metadata": {"user": "keep"},
+        "tools": [{"type": "function", "name": "sample", "parameters": {
+            "type": "object", "properties": {"top_p": {"type": "number"}}
+        }}]
+    });
+    let omissions = oauth_omissions.as_object().unwrap();
+    body.as_object_mut().unwrap().extend(omissions.clone());
+    {
+        let api_key = false;
+        for websocket in [false, true] {
+            let sent = capture_downstream_request(body.clone(), websocket, false).await;
+            for (field, value) in omissions {
+                assert_eq!(
+                    sent.get(field),
+                    api_key.then_some(value),
+                    "{field}, api_key={api_key}, websocket={websocket}"
+                );
+            }
+            if api_key {
+                assert_eq!(sent["stream_options"], body["stream_options"]);
+                assert_eq!(sent["max_tokens"], 16);
+                assert!(sent.get("max_output_tokens").is_none());
+            } else {
+                assert_eq!(
+                    sent["stream_options"],
+                    json!({"reasoning_summary_delivery": "sequential_cutoff"})
+                );
+                assert_eq!(sent["max_output_tokens"], 16);
+                assert!(sent.get("max_tokens").is_none());
+            }
+            assert_eq!(sent["client_metadata"]["user"], "keep");
+            assert_eq!(sent["tools"], body["tools"]);
+        }
+    }
+}
+
+#[tokio::test]
+async fn codex_oauth_keeps_explicit_limits_and_context_options() {
+    for (native, completion, expected) in [
+        (json!(16), json!(32), json!(16)),
+        (Value::Null, json!(32), json!(32)),
+        (Value::Null, Value::Null, json!(64)),
+    ] {
+        let body = json!({
+            "model": "gpt-5.4", "input": "hello", "max_output_tokens": native,
+            "max_completion_tokens": completion, "max_tokens": 64,
+            "truncation": "auto", "stop_sequences": ["end"],
+            "prompt_cache_options": {"future_option": true}
+        });
+        let sent = capture_downstream_request(body.clone(), false, false).await;
+        assert_eq!(sent["max_output_tokens"], expected);
+        assert!(sent.get("max_completion_tokens").is_none());
+        assert!(sent.get("max_tokens").is_none());
+        for key in ["truncation", "stop_sequences", "prompt_cache_options"] {
+            assert_eq!(sent[key], body[key]);
+        }
     }
 }

@@ -80,7 +80,7 @@ function tuningNumber(key: NumericTuningKey, scale = 1) {
 }
 const tuningValues = {
   maxWaitingPerKey: tuningNumber('maxWaitingPerKey'),
-  keyConcurrencyWaitTimeoutSeconds: tuningNumber('keyConcurrencyWaitTimeoutSeconds'),
+  keyQueueTimeoutSeconds: tuningNumber('keyQueueTimeoutSeconds'),
   maxAccountSwitches: tuningNumber('maxAccountSwitches'),
   maxRequestAttempts: tuningNumber('maxRequestAttempts'),
   websocketMaxRetries: tuningNumber('websocketMaxRetries'),
@@ -88,7 +88,7 @@ const tuningValues = {
   rateLimitCooldownSeconds: tuningNumber('rateLimitCooldownSeconds'),
   maxRetryAfterSeconds: tuningNumber('maxRetryAfterSeconds'),
   maxWaitingPerAccount: tuningNumber('maxWaitingPerAccount'),
-  accountConcurrencyWaitTimeoutSeconds: tuningNumber('accountConcurrencyWaitTimeoutSeconds'),
+  accountQueueTimeoutSeconds: tuningNumber('accountQueueTimeoutSeconds'),
 }
 </script>
 
@@ -154,6 +154,9 @@ const tuningValues = {
         >
           <template #prefix>
             <Timer class="size-4" />
+          </template>
+          <template #suffix>
+            秒
           </template>
         </BaseInput>
       </BaseFormItem>
@@ -242,8 +245,8 @@ const tuningValues = {
         <BaseFormItem prop="requestTuning.maxWaitingPerKey" label="Key 最大等待人数（0 为关闭）">
           <BaseInput v-model="tuningValues.maxWaitingPerKey.value" aria-label="Key 最大等待人数" type="number" min="0" max="1024" step="1" />
         </BaseFormItem>
-        <BaseFormItem prop="requestTuning.keyConcurrencyWaitTimeoutSeconds" label="Key 并发等待秒数">
-          <BaseInput v-model="tuningValues.keyConcurrencyWaitTimeoutSeconds.value" aria-label="Key 并发等待秒数" type="number" min="1" max="600" step="1" :disabled="requestTuning.maxWaitingPerKey === 0" />
+        <BaseFormItem prop="requestTuning.keyQueueTimeoutSeconds" label="Key 并发等待秒数">
+          <BaseInput v-model="tuningValues.keyQueueTimeoutSeconds.value" aria-label="Key 并发等待秒数" type="number" min="1" max="120" step="1" :disabled="requestTuning.maxWaitingPerKey === 0" />
         </BaseFormItem>
       </BaseForm>
     </div>
@@ -251,9 +254,9 @@ const tuningValues = {
     <div class="mt-5 border-t border-(--cp-border-color) pt-4">
       <div class="flex items-center justify-between gap-3">
         <h3 class="text-sm font-medium text-cp-text-secondary">
-          OpenAI 账号忙时等待
+          账号忙时等待（OpenAI / xAI）
         </h3>
-        <BaseSwitch v-model="requestTuning.accountBusyWaitEnabled" label="OpenAI 账号忙时等待" />
+        <BaseSwitch v-model="requestTuning.accountBusyWaitEnabled" label="账号忙时等待（OpenAI / xAI）" />
       </div>
       <BaseForm class="mt-4 max-w-6xl sm:grid-cols-2">
         <BaseFormItem prop="requestTuning.maxWaitingPerAccount" label="每账号等待请求数上限">
@@ -267,18 +270,25 @@ const tuningValues = {
             :disabled="!requestTuning.accountBusyWaitEnabled"
           />
         </BaseFormItem>
-        <BaseFormItem prop="requestTuning.accountConcurrencyWaitTimeoutSeconds" label="账号最长等待（秒）">
+        <BaseFormItem prop="requestTuning.accountQueueTimeoutSeconds" label="账号最长等待（秒）">
           <BaseInput
-            v-model="tuningValues.accountConcurrencyWaitTimeoutSeconds.value"
+            v-model="tuningValues.accountQueueTimeoutSeconds.value"
             aria-label="账号最长等待（秒）"
             type="number"
             min="1"
-            max="600"
+            max="120"
             step="1"
             :disabled="!requestTuning.accountBusyWaitEnabled"
           />
         </BaseFormItem>
       </BaseForm>
+    </div>
+
+    <div class="mt-4 grid gap-2">
+      <BaseSwitch v-model="requestTuning.switchAccountOnQueueFailure" label="账号排队失败后尝试切换账号" show-label />
+      <p class="text-cp-xs text-cp-text-secondary">
+        Key 和账号从各自首次入队独立计时，重试不重置账号预算，总请求期限优先。开关默认关闭；开启后，账号队列满或等待超时仅立即重选一次，不再次排队。严格模式只在新账号准入成功后改绑，固定账号和必须跟随根会话的请求不切换。
+      </p>
     </div>
 
     <div class="mt-5 border-t border-(--cp-border-color) pt-4">

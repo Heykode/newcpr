@@ -1131,6 +1131,7 @@ fn account_from_record(account: &AccountRecord) -> Result<ProviderAccount, Provi
         account.access_token_expires_at.map(SystemTime::from),
     )
     .with_outbound_proxy(account.effective_outbound_proxy().cloned())
+    .with_auto_use_quota_credits(account.auto_use_quota_credits)
     .with_profile(
         account.email.clone(),
         account.upstream_account_id.clone(),

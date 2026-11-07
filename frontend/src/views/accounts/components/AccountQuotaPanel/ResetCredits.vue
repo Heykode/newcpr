@@ -117,20 +117,12 @@ function handleRequestConsume(creditId: string) {
 </script>
 
 <template>
-  <button
-    type="button"
-    class="inline-flex shrink-0 touch-manipulation items-center justify-center rounded-cp border-0 bg-transparent text-cp-text-secondary outline-none transition-[background-color,color,opacity,transform] duration-150 hover:bg-cp-fill-quaternary hover:text-cp-text active:bg-cp-fill-tertiary focus-visible:ring-2 focus-visible:ring-cp-control-outline focus-visible:ring-offset-2 focus-visible:ring-offset-cp-bg-container motion-safe:active:scale-[0.96] motion-reduce:transition-none"
-    :class="showTriggerCount ? 'h-cp-control-sm gap-1 px-2' : 'size-cp-control-sm'"
-    :aria-label="triggerLabel"
-    :aria-pressed="panelOpen || undefined"
-    :title="triggerLabel"
-    @click="panelOpen = true"
-  >
+  <BaseIconButton size="sm" :label="triggerLabel" :pressed="panelOpen" :class="showTriggerCount ? 'w-auto! gap-1 px-2' : undefined" @click="panelOpen = true">
     <TicketCheck class="size-4 shrink-0" />
     <span v-if="showTriggerCount" class="translate-y-px font-mono text-[10px] leading-none font-heavy tabular-nums">
       x{{ availableCount }}
     </span>
-  </button>
+  </BaseIconButton>
 
   <BaseModal
     v-model="panelOpen"
@@ -155,11 +147,12 @@ function handleRequestConsume(creditId: string) {
         </p>
       </section>
 
-      <AccountQuotaCredits :credits="account.quota.credits" />
+      <AccountQuotaCredits :account="account" />
     </div>
 
     <div v-else class="grid gap-4">
       <UsageLimits :windows="account.quota.windows" />
+      <AccountQuotaCredits :key="account.id" :account="account" editable @account-updated="emit('accountUpdated', $event)" />
       <AutoReset :account-id="account.id" :native="account.authenticationKind === 'oauth' && account.responsesUpstream !== 'excel'" />
 
       <section v-if="ambiguous" class="flex items-start gap-3 rounded-cp bg-cp-warning-container px-4 py-3.5" role="status">

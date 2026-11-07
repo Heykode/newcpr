@@ -55,9 +55,12 @@ pub struct RequestTuningOverrides {
     pub openai_location_override_enabled: Option<bool>,
     pub openai_request_location: Option<gateway_core::account::RequestLocation>,
     pub max_waiting_per_key: Option<u32>,
+    #[serde(rename = "keyQueueTimeoutSeconds")]
     pub key_concurrency_wait_timeout_seconds: Option<u64>,
     pub account_busy_wait_enabled: Option<bool>,
+    pub switch_account_on_queue_failure: Option<bool>,
     pub max_waiting_per_account: Option<u32>,
+    #[serde(rename = "accountQueueTimeoutSeconds")]
     pub account_concurrency_wait_timeout_seconds: Option<u64>,
 }
 
@@ -105,9 +108,18 @@ impl<'de> Deserialize<'de> for RequestTuningOverrides {
             openai_location_override_enabled: Option<bool>,
             openai_request_location: Option<gateway_core::account::RequestLocation>,
             max_waiting_per_key: Option<u32>,
+            #[serde(
+                rename = "keyQueueTimeoutSeconds",
+                alias = "keyConcurrencyWaitTimeoutSeconds"
+            )]
             key_concurrency_wait_timeout_seconds: Option<u64>,
             account_busy_wait_enabled: Option<bool>,
+            switch_account_on_queue_failure: Option<bool>,
             max_waiting_per_account: Option<u32>,
+            #[serde(
+                rename = "accountQueueTimeoutSeconds",
+                alias = "accountConcurrencyWaitTimeoutSeconds"
+            )]
             account_concurrency_wait_timeout_seconds: Option<u64>,
             // Retired split controls cannot override the shared account queue policy.
             #[serde(rename = "accountBusyWaitStickyMaxWaiting")]
@@ -153,6 +165,7 @@ impl<'de> Deserialize<'de> for RequestTuningOverrides {
             max_waiting_per_key: wire.max_waiting_per_key,
             key_concurrency_wait_timeout_seconds: wire.key_concurrency_wait_timeout_seconds,
             account_busy_wait_enabled: wire.account_busy_wait_enabled,
+            switch_account_on_queue_failure: wire.switch_account_on_queue_failure,
             max_waiting_per_account: wire.max_waiting_per_account,
             account_concurrency_wait_timeout_seconds: wire.account_concurrency_wait_timeout_seconds,
         })
@@ -183,7 +196,7 @@ impl RequestTuningOverrides {
     pub const MAX_WEBSOCKET_FAILURE_OPEN_DURATION_MS: u64 = 86_400_000;
     pub const MAX_RATE_LIMIT_COOLDOWN_SECONDS: u64 = 86_400;
     pub const MAX_ACCOUNT_BUSY_WAIT_MAX_WAITING: u32 = 1_000;
-    pub const MAX_ACCOUNT_BUSY_WAIT_TIMEOUT_SECONDS: u64 = 600;
+    pub const MAX_ACCOUNT_BUSY_WAIT_TIMEOUT_SECONDS: u64 = 120;
 
     pub fn validate(&self) -> bool {
         if self
@@ -261,7 +274,7 @@ impl RequestTuningOverrides {
             && self.max_waiting_per_key.is_none_or(|value| value <= 1024)
             && self
                 .key_concurrency_wait_timeout_seconds
-                .is_none_or(|value| (1..=600).contains(&value))
+                .is_none_or(|value| (1..=120).contains(&value))
             && self
                 .max_account_switches
                 .is_none_or(|value| value <= Self::MAX_ACCOUNT_SWITCHES)

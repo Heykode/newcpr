@@ -680,10 +680,10 @@ async fn generate_compatibility_matches_wire_and_session_facts_in_both_profiles_
                     "frequency_penalty",
                     "presence_penalty",
                     "max_completion_tokens",
-                    "max_output_tokens",
                 ] {
-                    assert_eq!(captured.get(field), body.get(field), "{field}");
+                    assert!(captured.get(field).is_none(), "{field}");
                 }
+                assert_eq!(captured["max_output_tokens"], body["max_output_tokens"]);
                 assert!(captured.get("temperature").is_none());
                 assert_eq!(
                     state.payload()["continuation_scope"],
@@ -1206,11 +1206,10 @@ async fn qx_new_thread_does_not_reuse_opening_headers_of_another_thread() {
         .unwrap();
 }
 
-const KEY_INSTALLATION_ID: &str = "3b11bc82-c666-417d-b9ff-2a34fd040385";
+const KEY_INSTALLATION_SEED: &str = "3b11bc82-c666-417d-b9ff-2a34fd040385";
 
 #[tokio::test]
-async fn key_installation_override_scopes_http_headers_metadata_and_cache_without_changing_account()
-{
+async fn installation_seed_inherits_global_profile_without_changing_account() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_scope_same").await;
     let server = MockServer::start().await;
@@ -1236,7 +1235,7 @@ async fn key_installation_override_scopes_http_headers_metadata_and_cache_withou
     .0;
     let invalid = OpaqueProviderData::new(
         json!({
-            "inherit": { "installationId": "invalid-id" }
+            "inherit": { "installationSeed": "invalid-id" }
         })
         .as_object()
         .unwrap()
@@ -1248,13 +1247,13 @@ async fn key_installation_override_scopes_http_headers_metadata_and_cache_withou
             .unwrap_err()
             .diagnostic()
             .and_then(|diagnostic| diagnostic.code()),
-        Some("request_profile_installation_id_invalid")
+        Some("request_profile_installation_seed_invalid")
     );
     for (index, installation_id) in [
         None,
-        Some(KEY_INSTALLATION_ID),
+        Some(KEY_INSTALLATION_SEED),
         None,
-        Some(KEY_INSTALLATION_ID),
+        Some(KEY_INSTALLATION_SEED),
     ]
     .into_iter()
     .enumerate()
@@ -1277,7 +1276,7 @@ async fn key_installation_override_scopes_http_headers_metadata_and_cache_withou
         }
         let configuration = OpaqueProviderData::new(
             json!({
-                "inherit": { "installationId": installation_id }
+                "inherit": { "installationSeed": installation_id }
             })
             .as_object()
             .unwrap()
@@ -1326,8 +1325,9 @@ async fn key_installation_override_scopes_http_headers_metadata_and_cache_withou
         );
     }
     let id = |i: usize| &bodies[i]["client_metadata"]["x-codex-installation-id"];
-    assert_ne!(id(0), KEY_INSTALLATION_ID);
-    assert_eq!(id(1), KEY_INSTALLATION_ID);
+    assert_ne!(id(0), KEY_INSTALLATION_SEED);
+    assert_ne!(id(1), KEY_INSTALLATION_SEED);
+    assert!(uuid::Uuid::parse_str(id(1).as_str().unwrap()).is_ok());
     assert_eq!(id(0), id(2));
     assert_eq!(id(1), id(3));
     assert_eq!(
@@ -1395,7 +1395,7 @@ async fn websocket_account_scoping_replaces_downstream_installation_header() {
         ]));
         let provider = provider_with_base_url(&store, base_url);
         let configuration = OpaqueProviderData::new(json!({
-            "mode": "custom", "userAgent": "codex-tui/1.0.0", "installationId": KEY_INSTALLATION_ID
+            "mode": "custom", "userAgent": "codex-tui/1.0.0", "installationSeed": KEY_INSTALLATION_SEED
         }).as_object().unwrap().clone());
         let profile = provider
             .resolve_key_request_profile(Some(&configuration))
@@ -1418,7 +1418,8 @@ async fn websocket_account_scoping_replaces_downstream_installation_header() {
         let installation_id = body["client_metadata"]["x-codex-installation-id"]
             .as_str()
             .expect("account installation ID");
-        assert_eq!(installation_id, KEY_INSTALLATION_ID);
+        assert_ne!(installation_id, KEY_INSTALLATION_SEED);
+        assert!(uuid::Uuid::parse_str(installation_id).is_ok());
         assert_eq!(body["installation_id"], installation_id);
         assert_eq!(header["x-codex-installation-id"], installation_id);
         for encoded in [
@@ -1463,4 +1464,144 @@ fn installation_context(
         None,
         CancellationToken::new(),
     )
+}
+
+#[tokio::test]
+async fn installation_seed_scopes_http_identity_and_cache_by_key_and_account() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_scope_same").await;
+    create_account(&store, "acct_scope_new").await;
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(CAPTURE_COMPLETED_SSE),
+        )
+        .expect(9)
+        .mount(&server)
+        .await;
+    let mut provider = provider_with_base_url(&store, server.uri());
+    let other_seed = "a3146f84-64b3-4759-9cf1-a8a001448930";
+    for (index, (key, account, seed, version)) in [
+        ("key_a", "acct_scope_same", None, "1.0.0"),
+        (
+            "key_a",
+            "acct_scope_same",
+            Some(KEY_INSTALLATION_SEED),
+            "1.0.0",
+        ),
+        (
+            "key_a",
+            "acct_scope_new",
+            Some(KEY_INSTALLATION_SEED),
+            "1.0.0",
+        ),
+        (
+            "key_b",
+            "acct_scope_same",
+            Some(KEY_INSTALLATION_SEED),
+            "1.0.0",
+        ),
+        (
+            "key_b",
+            "acct_scope_new",
+            Some(KEY_INSTALLATION_SEED),
+            "1.0.0",
+        ),
+        (
+            "key_a",
+            "acct_scope_same",
+            Some(KEY_INSTALLATION_SEED),
+            "2.0.0",
+        ),
+        ("key_a", "acct_scope_same", Some(other_seed), "1.0.0"),
+        ("key_a", "acct_scope_same", None, "1.0.0"),
+        (
+            "key_a",
+            "acct_scope_same",
+            Some(KEY_INSTALLATION_SEED),
+            "1.0.0",
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        if index == 8 {
+            provider = provider_with_base_url(&store, server.uri());
+        }
+        let configuration = OpaqueProviderData::new(json!({
+            "client": "cli", "platform": "linux", "versionMode": "fixed", "codexVersion": version,
+            "installationSeed": seed
+        }).as_object().unwrap().clone());
+        let profile = provider
+            .resolve_key_request_profile(Some(&configuration))
+            .unwrap()
+            .unwrap();
+        let payload = ProtocolPayload::json_object(
+            "openai",
+            json!({"model":"gpt-5.4","input":"hello","prompt_cache_key":"same-cache-key"})
+                .as_object()
+                .unwrap()
+                .clone(),
+        )
+        .unwrap()
+        .with_context(Map::from_iter([("use_websocket".to_owned(), json!(false))]));
+        let context = scoped_context_with_profile(
+            &format!("req_seed_{index}"),
+            key,
+            account,
+            Some(Arc::new(profile)),
+        );
+        let mut stream = provider
+            .execute(
+                planned_request(
+                    "openai",
+                    Operation::Generate(GenerateRequest::from_protocol_payload(payload)),
+                ),
+                context,
+            )
+            .await
+            .unwrap();
+        while let Some(event) = stream.next().await {
+            event.unwrap();
+        }
+    }
+    let requests = server.received_requests().await.unwrap();
+    let bodies: Vec<_> = requests.iter().map(captured_request_body).collect();
+    let ids: Vec<_> = requests
+        .iter()
+        .zip(&bodies)
+        .map(|(request, body)| {
+            let id = request.headers["x-codex-installation-id"].to_str().unwrap();
+            assert_eq!(id, body["client_metadata"]["x-codex-installation-id"]);
+            assert!(uuid::Uuid::parse_str(id).is_ok());
+            assert_ne!(id, KEY_INSTALLATION_SEED);
+            assert_ne!(id, other_seed);
+            assert!(!String::from_utf8_lossy(&request.body).contains(KEY_INSTALLATION_SEED));
+            id
+        })
+        .collect();
+    assert_eq!(ids[0], ids[7]);
+    assert_eq!(ids[1], ids[5]);
+    assert_eq!(ids[1], ids[8]);
+    assert_eq!(
+        [ids[0], ids[1], ids[2], ids[3], ids[4], ids[6]]
+            .into_iter()
+            .collect::<BTreeSet<_>>()
+            .len(),
+        6
+    );
+    assert_eq!(bodies[0]["prompt_cache_key"], bodies[7]["prompt_cache_key"]);
+    assert_eq!(bodies[1]["prompt_cache_key"], bodies[5]["prompt_cache_key"]);
+    assert_eq!(bodies[1]["prompt_cache_key"], bodies[8]["prompt_cache_key"]);
+    assert_eq!(
+        [0, 1, 2, 3, 4, 6]
+            .map(|i| bodies[i]["prompt_cache_key"].as_str().unwrap())
+            .into_iter()
+            .collect::<BTreeSet<_>>()
+            .len(),
+        6
+    );
 }

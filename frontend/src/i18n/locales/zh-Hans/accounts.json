@@ -54,7 +54,9 @@
         "days": "{duration}日额度",
         "hours": "{duration}小时额度",
         "minutes": "{duration}分钟额度"
-      }
+      },
+      "autoUsePoints": "自动使用额度点数",
+      "autoUsePointsHelp": "订阅额度耗尽后，使用可用点数继续请求"
     },
     "account": "账号",
     "connectionTest": {
@@ -525,7 +527,6 @@
         "label": "自动使用临期重置卡"
       },
       "automaticallyUseResetCard": "自动使用重置卡",
-      "automaticallyUsed": "自动使用",
       "automaticUsageRules": "自动使用规则",
       "setGlobalLeadTime": "设置全局提前时间",
       "minutesInAdvance": "提前 {leadMinutes} 分钟",

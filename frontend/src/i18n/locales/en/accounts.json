@@ -54,7 +54,9 @@
         "days": "{duration} d limit",
         "hours": "{duration} h limit",
         "minutes": "{duration} min limit"
-      }
+      },
+      "autoUsePoints": "Automatically use credits",
+      "autoUsePointsHelp": "Use available credits when the subscription limit is reached"
     },
     "account": "Account",
     "connectionTest": {
@@ -525,7 +527,6 @@
         "label": "Automatically use expiring reset credits"
       },
       "automaticallyUseResetCard": "Automatically use resets",
-      "automaticallyUsed": "Auto use",
       "automaticUsageRules": "Automatic usage rules",
       "setGlobalLeadTime": "Set global lead time",
       "minutesInAdvance": "{leadMinutes} min in advance",

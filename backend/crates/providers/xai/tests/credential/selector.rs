@@ -1539,3 +1539,329 @@ async fn catalog_rejects_unlisted_models_but_does_not_share_unknown_plan_entitle
     let session = fixture.selector.select(request()).await.unwrap();
     assert_eq!(session.account_id(), &id);
 }
+
+fn queue_request(fixture: &SelectorFixture, timeout: Duration) -> GrokSessionSelection {
+    let request = fixture.request(BTreeSet::new());
+    GrokSessionSelection::new(
+        request.upstream_model().clone(),
+        BTreeSet::new(),
+        None,
+        request
+            .account_selection_policy()
+            .with_queue(gateway_core::concurrency::ConcurrencyQueuePolicy {
+                max_waiting: 1,
+                timeout,
+            })
+            .with_smart_scheduling(
+                gateway_core::account::smart_scheduling::SmartSchedulingConfig::new(
+                    [1.0, 0.8, 1.0, 0.5, 1.0, 1.0],
+                    false,
+                )
+                .unwrap(),
+            ),
+        request.deadline(),
+        request.account_scope().clone(),
+        request.client_api_key_id().clone(),
+    )
+}
+
+#[tokio::test]
+async fn smart_queue_weight_changes_the_selected_wait_queue_and_respects_required_account() {
+    use futures::FutureExt;
+    for queue_weight in [0.0, 0.2] {
+        let fixture = SelectorFixture::new(&["healthy", "unhealthy"]).await;
+        let healthy = account_id("healthy");
+        for signal in fixture.coordinator.signals.lock().unwrap().values_mut() {
+            signal.in_flight = 2;
+        }
+        for _ in 0..4 {
+            fixture.feedback.report(
+                &gateway_core::routing::ProviderKind::new("xai").unwrap(),
+                &account_id("unhealthy"),
+                AccountAttemptFeedback::Failed {
+                    first_output_ms: None,
+                },
+            );
+        }
+        let make_request = |required| {
+            let request = fixture.request(BTreeSet::new());
+            GrokSessionSelection::new(
+                request.upstream_model().clone(),
+                BTreeSet::new(),
+                required,
+                request
+                    .account_selection_policy()
+                    .with_queue(gateway_core::concurrency::ConcurrencyQueuePolicy {
+                        max_waiting: 2,
+                        timeout: Duration::from_secs(2),
+                    })
+                    .with_smart_scheduling(
+                        gateway_core::account::smart_scheduling::SmartSchedulingConfig::new(
+                            [0.0, 0.0, 1.0, 0.0, 0.0, queue_weight],
+                            false,
+                        )
+                        .unwrap(),
+                    ),
+                request.deadline(),
+                request.account_scope().clone(),
+                request.client_api_key_id().clone(),
+            )
+        };
+        let mut head = fixture.selector.select(make_request(Some(healthy.clone())));
+        assert!(head.as_mut().now_or_never().is_none());
+        let mut next = fixture.selector.select(make_request(None));
+        assert!(next.as_mut().now_or_never().is_none());
+        let mut probe = fixture.selector.select(make_request(Some(healthy.clone())));
+        match probe.as_mut().now_or_never() {
+            Some(Err(GrokSessionSelectorError::QueueRejected(
+                gateway_core::concurrency::QueueRejection::Full,
+            ))) => assert!(queue_weight > 0.0),
+            None => assert_eq!(queue_weight, 0.0),
+            other => panic!("unexpected queue probe: {other:?}"),
+        }
+        drop((next, probe));
+        // 其他账号先空闲不能解除 required account 限制
+        fixture
+            .coordinator
+            .signals
+            .lock()
+            .unwrap()
+            .get_mut(&account_id("unhealthy"))
+            .unwrap()
+            .in_flight = 0;
+        tokio::time::sleep(Duration::from_millis(110)).await;
+        assert!(head.as_mut().now_or_never().is_none());
+        fixture
+            .coordinator
+            .signals
+            .lock()
+            .unwrap()
+            .get_mut(&healthy)
+            .unwrap()
+            .in_flight = 0;
+        assert_eq!(head.await.unwrap().account_id(), &healthy);
+    }
+}
+
+#[tokio::test]
+async fn saturated_account_snapshot_queues_and_rechecks_live_capacity() {
+    use futures::FutureExt;
+    let fixture = SelectorFixture::new(&["queue"]).await;
+    let id = account_id("queue");
+    fixture
+        .coordinator
+        .signals
+        .lock()
+        .unwrap()
+        .get_mut(&id)
+        .unwrap()
+        .in_flight = 2;
+    let mut first = fixture
+        .selector
+        .select(queue_request(&fixture, Duration::from_secs(2)));
+    assert!(first.as_mut().now_or_never().is_none());
+    assert!(
+        fixture.coordinator.requests.lock().unwrap().is_empty(),
+        "a full snapshot must wait before attempting a lease"
+    );
+    let rejected = fixture
+        .selector
+        .select(queue_request(&fixture, Duration::from_secs(2)))
+        .await
+        .err()
+        .unwrap();
+    assert!(matches!(
+        rejected,
+        GrokSessionSelectorError::QueueRejected(gateway_core::concurrency::QueueRejection::Full)
+    ));
+    fixture
+        .coordinator
+        .signals
+        .lock()
+        .unwrap()
+        .get_mut(&id)
+        .unwrap()
+        .in_flight = 0;
+    let selected = first.await.unwrap();
+    assert_eq!(selected.account_id(), &id);
+}
+
+#[tokio::test]
+async fn account_queue_timeout_reselects_only_if_enabled_and_not_pinned() {
+    use futures::FutureExt;
+    let fixture = SelectorFixture::new(&["first", "spare"]).await;
+    let first = account_id("first");
+    let spare = account_id("spare");
+    for (enabled, pinned) in [(true, false), (true, true), (false, false)] {
+        let base = queue_request(&fixture, Duration::from_millis(30));
+        let req = GrokSessionSelection::new(
+            base.upstream_model().clone(),
+            BTreeSet::new(),
+            pinned.then_some(first.clone()),
+            base.account_selection_policy()
+                .with_switch_account_on_queue_failure(enabled),
+            base.deadline(),
+            base.account_scope().clone(),
+            base.client_api_key_id().clone(),
+        );
+        for signal in fixture.coordinator.signals.lock().unwrap().values_mut() {
+            signal.in_flight = 2;
+        }
+        let mut pending = fixture.selector.select(req);
+        assert!(pending.as_mut().now_or_never().is_none());
+        fixture
+            .coordinator
+            .signals
+            .lock()
+            .unwrap()
+            .get_mut(&spare)
+            .unwrap()
+            .in_flight = 0;
+        if enabled && !pinned {
+            assert_eq!(pending.await.unwrap().account_id(), &spare);
+        } else {
+            assert!(matches!(
+                pending.await,
+                Err(GrokSessionSelectorError::QueueRejected(
+                    gateway_core::concurrency::QueueRejection::Timeout
+                ))
+            ));
+        }
+    }
+}
+
+#[tokio::test]
+async fn account_queue_cancel_reclaims_capacity_and_does_not_wait_for_upstream_cooldown() {
+    use futures::FutureExt;
+    let fixture = SelectorFixture::new(&["queue-cancel"]).await;
+    let id = account_id("queue-cancel");
+    let session = fixture
+        .selector
+        .select(fixture.request(BTreeSet::new()))
+        .await
+        .unwrap();
+    fixture
+        .coordinator
+        .signals
+        .lock()
+        .unwrap()
+        .get_mut(&id)
+        .unwrap()
+        .in_flight = 2;
+    let mut pending = fixture
+        .selector
+        .select(queue_request(&fixture, Duration::from_secs(2)));
+    assert!(pending.as_mut().now_or_never().is_none());
+    drop(pending);
+    let timeout = fixture
+        .selector
+        .select(queue_request(&fixture, Duration::from_millis(20)))
+        .await
+        .err()
+        .unwrap();
+    assert!(matches!(
+        timeout,
+        GrokSessionSelectorError::QueueRejected(gateway_core::concurrency::QueueRejection::Timeout)
+    ));
+    fixture
+        .selector
+        .record_failure(
+            &session,
+            GrokCredentialFailure::RateLimited {
+                retry_after: Some(Duration::from_secs(60)),
+            },
+        )
+        .await;
+    let error = fixture
+        .selector
+        .select(queue_request(&fixture, Duration::from_secs(2)))
+        .await
+        .err()
+        .unwrap();
+    assert!(matches!(
+        error,
+        GrokSessionSelectorError::AccountCoolingDown { .. }
+    ));
+}
+
+#[tokio::test]
+async fn model_access_excludes_a_required_xai_account_before_acquiring_a_lease() {
+    use gateway_core::account::{AccountModelAccess, AccountModelAccessMode};
+    let fixture = SelectorFixture::new(&["model-restricted", "model-allowed"]).await;
+    let restricted = account_id("model-restricted");
+    let allowed = account_id("model-allowed");
+    let provider = gateway_core::routing::ProviderKind::new("xai").expect("provider");
+    let scope = Arc::new(FrozenAccountScope::new(
+        Arc::new(RuntimeAccountDirectory::new(BTreeMap::from([
+            (
+                restricted.clone(),
+                RuntimeAccount::new(provider.clone(), BTreeSet::new()).with_model_access(
+                    AccountModelAccess::new(
+                        AccountModelAccessMode::Denylist,
+                        vec!["grok-4.5".to_owned()],
+                    )
+                    .expect("policy"),
+                ),
+            ),
+            (
+                allowed.clone(),
+                RuntimeAccount::new(provider, BTreeSet::new()),
+            ),
+        ]))),
+        ClientRoutingScope::all_accounts(),
+    ));
+    for (required, succeeds) in [(Some(restricted), false), (None, true)] {
+        let request = GrokSessionSelection::new(
+            UpstreamModelId::new("grok-4.5").expect("model"),
+            BTreeSet::new(),
+            required,
+            AccountSelectionPolicy::new(
+                RotationStrategy::Smart,
+                std::num::NonZeroU32::new(2).expect("limit"),
+                Duration::ZERO,
+            )
+            .with_queue(gateway_core::concurrency::ConcurrencyQueuePolicy {
+                max_waiting: 1,
+                timeout: Duration::from_secs(2),
+            }),
+            SystemTime::now() + Duration::from_secs(30),
+            Arc::clone(&scope),
+            ClientApiKeyId::new("key_xai_selector").expect("key"),
+        );
+        use futures::FutureExt;
+        if succeeds {
+            fixture
+                .coordinator
+                .denied
+                .lock()
+                .unwrap()
+                .insert(allowed.clone());
+        }
+        let mut pending = fixture.selector.select(request);
+        if succeeds {
+            assert!(pending.as_mut().now_or_never().is_none());
+            fixture.coordinator.denied.lock().unwrap().clear();
+        }
+        let result = pending.await;
+        if succeeds {
+            assert_eq!(
+                result.expect("select allowed account").account_id(),
+                &allowed
+            );
+        } else {
+            assert!(matches!(
+                result,
+                Err(GrokSessionSelectorError::NoEligibleSession)
+            ));
+        }
+    }
+    assert!(
+        fixture
+            .coordinator
+            .requests
+            .lock()
+            .expect("leases")
+            .iter()
+            .all(|lease| lease.account_id() == &allowed)
+    );
+}

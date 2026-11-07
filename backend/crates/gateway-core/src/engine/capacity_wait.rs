@@ -71,20 +71,13 @@ pub struct AccountWaitBudget {
     monotonic_origin: Instant,
     request_deadline: Option<Instant>,
     windows: Mutex<WaitWindows>,
+    concurrency: crate::concurrency::ConcurrencyWaitBudget,
 }
 
 impl AccountWaitBudget {
-    /// A preceding Key queue constrains all later account queues and retries.
-    pub(super) fn constrain_deadline(&self, deadline: Instant) {
-        let mut windows = self.windows.lock().unwrap_or_else(|e| e.into_inner());
-        windows.shared = Some(
-            windows
-                .shared
-                .map_or(deadline, |current| current.min(deadline)),
-        );
-        if let Some(request_deadline) = self.request_deadline {
-            windows.shared = windows.shared.map(|end| end.min(request_deadline));
-        }
+    #[must_use]
+    pub fn concurrency_wait_budget(&self) -> crate::concurrency::ConcurrencyWaitBudget {
+        self.concurrency.clone()
     }
 
     #[must_use]
@@ -111,6 +104,7 @@ impl AccountWaitBudget {
             monotonic_origin: monotonic_now,
             request_deadline,
             windows: Mutex::new(WaitWindows::default()),
+            concurrency: crate::concurrency::ConcurrencyWaitBudget::default(),
         }
     }
 
@@ -162,9 +156,9 @@ impl AccountWaitBudget {
             return Err(AccountWaitBudgetError::Expired);
         }
         let shared_seconds = self.tuning.account_concurrency_wait_timeout_seconds;
-        let shared_candidate = now
-            .checked_add(Duration::from_secs(shared_seconds))
-            .ok_or(AccountWaitBudgetError::InvalidConfiguration)?;
+        let shared_candidate = self
+            .concurrency
+            .start_at(now, Duration::from_secs(shared_seconds));
         let shared = *windows.shared.get_or_insert_with(|| {
             self.request_deadline
                 .map_or(shared_candidate, |end| shared_candidate.min(end))
@@ -209,7 +203,11 @@ impl AccountWaitBudget {
             && (self
                 .request_deadline
                 .is_some_and(|deadline| now >= deadline)
-                || windows.expired_at(now))
+                || windows.expired_at(now)
+                || self
+                    .concurrency
+                    .existing_deadline()
+                    .is_some_and(|deadline| now >= deadline))
     }
 
     pub fn expire(&self) {
@@ -243,66 +241,38 @@ mod tests {
     }
 
     #[test]
-    fn key_queue_alone_does_not_enable_disabled_account_waiting() {
-        let now = Instant::now();
-        let budget = AccountWaitBudget::new_at(
-            Deadline::default(),
-            RequestTuning::default(),
-            SystemTime::now(),
-            now,
-        );
-        let deadline = now + Duration::from_secs(30);
-        budget.constrain_deadline(deadline);
-        assert!(!budget.is_exhausted_at(deadline));
-        assert_eq!(
-            budget.enter(AccountWaitMode::Sticky),
-            Err(AccountWaitBudgetError::Disabled)
-        );
-        assert_eq!(
-            budget
-                .enter_session_affinity()
-                .unwrap()
-                .monotonic_deadline(),
-            deadline
-        );
-        assert!(budget.is_exhausted_at(deadline));
-    }
-
-    #[test]
-    fn key_queue_deadline_caps_later_sticky_and_fallback_waits() {
-        let wall = SystemTime::now();
+    fn account_wait_starts_after_key_admission_and_is_shared_across_retries() {
         let now = Instant::now();
         let budget = AccountWaitBudget::new_at(
             Deadline::default(),
             RequestTuning {
                 account_busy_wait_enabled: true,
+                account_concurrency_wait_timeout_seconds: 30,
                 ..Default::default()
             },
-            wall,
+            SystemTime::now(),
             now,
         );
-        let deadline = now + Duration::from_secs(30);
-        budget.constrain_deadline(deadline);
-        for mode in [AccountWaitMode::Sticky, AccountWaitMode::Fallback] {
-            assert_eq!(
-                budget
-                    .enter_at(mode, now + Duration::from_secs(20))
-                    .unwrap()
-                    .monotonic_deadline(),
-                deadline
-            );
-            assert_eq!(
-                budget
-                    .enter_at(mode, now + Duration::from_secs(25))
-                    .unwrap()
-                    .monotonic_deadline(),
-                deadline
-            );
-        }
-        assert!(budget.is_exhausted_at(deadline));
+        let account_start = now + Duration::from_secs(20);
+        let deadline = account_start + Duration::from_secs(30);
         assert_eq!(
-            budget.enter_at(AccountWaitMode::Sticky, deadline),
-            Err(AccountWaitBudgetError::Expired)
+            budget
+                .enter_at(AccountWaitMode::Sticky, account_start)
+                .unwrap()
+                .monotonic_deadline(),
+            deadline
         );
+        assert_eq!(
+            budget
+                .enter_at(
+                    AccountWaitMode::Fallback,
+                    account_start + Duration::from_secs(5)
+                )
+                .unwrap()
+                .monotonic_deadline(),
+            deadline
+        );
+        assert_eq!(budget.concurrency.existing_deadline(), Some(deadline));
+        assert!(budget.is_exhausted_at(deadline));
     }
 }

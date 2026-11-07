@@ -1342,6 +1342,7 @@ impl AccountStore for PgAdminAccountStore {
         let config_revision = self
             .accounts
             .batch_update_provider_accounts_admin(BatchUpdateProviderAccountsAdmin {
+                auto_use_quota_credits: None,
                 excel_recovery: command.excel_recovery,
                 purchase_cost: command.purchase_cost,
                 egress_mode: command.egress_mode,
@@ -1449,6 +1450,10 @@ impl AccountStore for PgAdminAccountStore {
                 "request_proxy_source",
             ),
             (command.egress_mode.is_some(), "egress_mode"),
+            (
+                command.auto_use_quota_credits.is_some(),
+                "auto_use_quota_credits",
+            ),
             (command.enabled.is_some(), "enabled"),
             (command.responses_upstream.is_some(), "responses_upstream"),
             (command.excel_models.is_some(), "excel_models"),
@@ -1493,6 +1498,7 @@ impl AccountStore for PgAdminAccountStore {
         let config_revision = self
             .accounts
             .batch_update_provider_accounts_admin(BatchUpdateProviderAccountsAdmin {
+                auto_use_quota_credits: command.auto_use_quota_credits,
                 excel_recovery: command.excel_recovery,
                 purchase_cost: command.purchase_cost,
                 egress_mode: command.egress_mode,

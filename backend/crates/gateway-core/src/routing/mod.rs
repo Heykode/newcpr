@@ -160,12 +160,22 @@ pub struct RequestTuning {
     #[serde(default)]
     pub max_waiting_per_key: u32,
     #[serde(default = "default_key_timeout_seconds")]
+    #[serde(
+        rename = "keyQueueTimeoutSeconds",
+        alias = "keyConcurrencyWaitTimeoutSeconds"
+    )]
     pub key_concurrency_wait_timeout_seconds: u64,
     #[serde(default)]
     pub account_busy_wait_enabled: bool,
+    #[serde(default)]
+    pub switch_account_on_queue_failure: bool,
     #[serde(default = "default_account_max_waiting")]
     pub max_waiting_per_account: u32,
     #[serde(default = "default_account_timeout_seconds")]
+    #[serde(
+        rename = "accountQueueTimeoutSeconds",
+        alias = "accountConcurrencyWaitTimeoutSeconds"
+    )]
     pub account_concurrency_wait_timeout_seconds: u64,
 }
 
@@ -269,6 +279,7 @@ impl RequestTuning {
             max_waiting_per_key: 0,
             key_concurrency_wait_timeout_seconds: 30,
             account_busy_wait_enabled: false,
+            switch_account_on_queue_failure: false,
             max_waiting_per_account: default_account_max_waiting(),
             account_concurrency_wait_timeout_seconds: default_account_timeout_seconds(),
         }

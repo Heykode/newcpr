@@ -1,5 +1,6 @@
 use super::catalog::{
-    OFFICIAL_FIXTURE, client_scope, seed_account, service_with_catalog_cache, wire_profile,
+    CLIENT_KEY, OFFICIAL_FIXTURE, client_scope, seed_account, service_with_catalog_cache,
+    wire_profile,
 };
 use crate::support::{MemoryAccountStore, catalog_cache};
 
@@ -154,7 +155,7 @@ async fn native_catalog_intersects_excel_capabilities_after_cache_without_changi
         let service = &service;
         async move {
             let models = service
-                .client_model_catalog(scope, "0.154.0")
+                .client_model_catalog(&CLIENT_KEY, scope, "0.154.0")
                 .await
                 .unwrap();
             serde_json::from_slice::<Value>(models[0].payload.body()).unwrap()
@@ -218,14 +219,14 @@ async fn native_catalog_excel_switch_does_not_reuse_synthesized_capabilities() {
         .await;
     let service = service_with_catalog_cache(&store, server.uri(), catalog_cache());
     let models = service
-        .client_model_catalog(&scope, "0.154.0")
+        .client_model_catalog(&CLIENT_KEY, &scope, "0.154.0")
         .await
         .unwrap();
     let descriptor: Value = serde_json::from_slice(models[0].payload.body()).unwrap();
     assert_eq!(descriptor.get("multi_agent_version"), Some(&Value::Null));
     store.set_responses_upstream(account.id().as_str(), ResponsesUpstream::Codex);
     let models = service
-        .client_model_catalog(&scope, "0.154.0")
+        .client_model_catalog(&CLIENT_KEY, &scope, "0.154.0")
         .await
         .unwrap();
     let descriptor: Value = serde_json::from_slice(models[0].payload.body()).unwrap();
@@ -265,7 +266,11 @@ async fn native_catalog_freezes_effective_custom_profile_and_invalidates_default
     let first = tokio::spawn({
         let service = service.clone();
         let scope = scope.clone();
-        async move { service.client_model_catalog(&scope, "0.154.0").await }
+        async move {
+            service
+                .client_model_catalog(&CLIENT_KEY, &scope, "0.154.0")
+                .await
+        }
     });
     timeout(Duration::from_secs(5), async {
         while server
@@ -287,7 +292,7 @@ async fn native_catalog_freezes_effective_custom_profile_and_invalidates_default
         .apply_override(CodexWireProfileOverride::Custom(Box::new(custom.clone())))
         .expect("custom override");
     service
-        .client_model_catalog(&scope, "0.154.0")
+        .client_model_catalog(&CLIENT_KEY, &scope, "0.154.0")
         .await
         .expect("custom");
     first.await.expect("join").expect("original frozen request");
@@ -298,14 +303,14 @@ async fn native_catalog_freezes_effective_custom_profile_and_invalidates_default
         verified_at: Utc::now(),
     });
     service
-        .client_model_catalog(&scope, "0.154.0")
+        .client_model_catalog(&CLIENT_KEY, &scope, "0.154.0")
         .await
         .expect("default release must not replace custom cache identity");
     profile
         .apply_override(CodexWireProfileOverride::Default)
         .expect("default");
     service
-        .client_model_catalog(&scope, "0.154.0")
+        .client_model_catalog(&CLIENT_KEY, &scope, "0.154.0")
         .await
         .expect("new default");
     let requests = server.received_requests().await.expect("requests");
@@ -441,7 +446,7 @@ async fn native_catalog_rechecks_plan_user_account_and_live_eligibility() {
         .await;
     let service = service_with_catalog_cache(&store, server.uri(), catalog_cache());
     service
-        .client_model_catalog(&scope, "0.154.0")
+        .client_model_catalog(&CLIENT_KEY, &scope, "0.154.0")
         .await
         .expect("original");
     store
@@ -454,7 +459,7 @@ async fn native_catalog_rechecks_plan_user_account_and_live_eligibility() {
         .await
         .expect("plan-only update");
     service
-        .client_model_catalog(&scope, "0.154.0")
+        .client_model_catalog(&CLIENT_KEY, &scope, "0.154.0")
         .await
         .expect("new plan");
     let changed_user = ProviderAccount::new(
@@ -473,7 +478,7 @@ async fn native_catalog_rechecks_plan_user_account_and_live_eligibility() {
     );
     replace_account_facts(&store, changed_user.clone()).await;
     service
-        .client_model_catalog(&scope, "0.154.0")
+        .client_model_catalog(&CLIENT_KEY, &scope, "0.154.0")
         .await
         .expect("new user");
     replace_account_facts(
@@ -486,7 +491,7 @@ async fn native_catalog_rechecks_plan_user_account_and_live_eligibility() {
     )
     .await;
     service
-        .client_model_catalog(&scope, "0.154.0")
+        .client_model_catalog(&CLIENT_KEY, &scope, "0.154.0")
         .await
         .expect("new upstream account");
     assert_eq!(
@@ -501,12 +506,16 @@ async fn native_catalog_rechecks_plan_user_account_and_live_eligibility() {
         .await
         .expect("disable");
     assert!(matches!(
-        service.client_model_catalog(&scope, "0.154.0").await,
+        service
+            .client_model_catalog(&CLIENT_KEY, &scope, "0.154.0")
+            .await,
         Err(CodexCredentialCatalogError::NoEligibleCredential)
     ));
     store.delete_account(original.id()).await.expect("delete");
     assert!(matches!(
-        service.client_model_catalog(&scope, "0.154.0").await,
+        service
+            .client_model_catalog(&CLIENT_KEY, &scope, "0.154.0")
+            .await,
         Err(CodexCredentialCatalogError::NoEligibleCredential)
     ));
     server.verify().await;
@@ -526,7 +535,7 @@ async fn native_catalog_uses_account_proxy_and_does_not_reuse_direct_catalog() {
         .await;
     let service = service_with_catalog_cache(&store, server.uri(), catalog_cache());
     service
-        .client_model_catalog(&scope, "0.154.0")
+        .client_model_catalog(&CLIENT_KEY, &scope, "0.154.0")
         .await
         .expect("direct");
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("proxy");
@@ -548,7 +557,7 @@ async fn native_catalog_uses_account_proxy_and_does_not_reuse_direct_catalog() {
     });
     timeout(
         Duration::from_secs(5),
-        service.client_model_catalog(&scope, "0.154.0"),
+        service.client_model_catalog(&CLIENT_KEY, &scope, "0.154.0"),
     )
     .await
     .expect("proxy deadline")
@@ -601,7 +610,7 @@ async fn native_catalog_uses_ipv6_source_and_fences_cached_data_after_route_relo
     });
     timeout(
         Duration::from_secs(5),
-        service.client_model_catalog(&scope, "0.154.0"),
+        service.client_model_catalog(&CLIENT_KEY, &scope, "0.154.0"),
     )
     .await
     .expect("catalog deadline")
@@ -624,7 +633,9 @@ async fn native_catalog_uses_ipv6_source_and_fences_cached_data_after_route_relo
     runtime.reload().await.expect("disable source");
     assert!(
         matches!(
-            service.client_model_catalog(&scope, "0.154.0").await,
+            service
+                .client_model_catalog(&CLIENT_KEY, &scope, "0.154.0")
+                .await,
             Err(CodexCredentialCatalogError::Upstream {
                 egress: Some(CodexEgressError::SourceDisabled),
                 status: None,
@@ -664,7 +675,7 @@ async fn native_catalog_explicit_ipv6_never_falls_back_to_ipv4() {
     assert!(matches!(
         timeout(
             Duration::from_secs(5),
-            service.client_model_catalog(&scope, "0.154.0")
+            service.client_model_catalog(&CLIENT_KEY, &scope, "0.154.0")
         )
         .await
         .expect("deadline"),
@@ -712,26 +723,30 @@ async fn native_catalog_invalidations_preserve_inflight_bound_and_cancelled_slot
         .collect::<Vec<_>>();
     let mut requests = versions
         .iter()
-        .map(|version| Box::pin(service.client_model_catalog(&scope, version)))
+        .map(|version| Box::pin(service.client_model_catalog(&CLIENT_KEY, &scope, version)))
         .collect::<Vec<_>>();
     for request in &mut requests {
         assert!(futures::poll!(request.as_mut()).is_pending());
     }
     assert!(matches!(
-        service.client_model_catalog(&scope, "0.155.0").await,
+        service
+            .client_model_catalog(&CLIENT_KEY, &scope, "0.155.0")
+            .await,
         Err(CodexCredentialCatalogError::Cache)
     ));
     service
         .invalidate()
         .expect("invalidate while requests are pending");
     assert!(matches!(
-        service.client_model_catalog(&scope, "0.155.0").await,
+        service
+            .client_model_catalog(&CLIENT_KEY, &scope, "0.155.0")
+            .await,
         Err(CodexCredentialCatalogError::Cache)
     ));
     drop(requests);
     timeout(
         Duration::from_secs(5),
-        service.client_model_catalog(&scope, "0.155.0"),
+        service.client_model_catalog(&CLIENT_KEY, &scope, "0.155.0"),
     )
     .await
     .expect("deadline")
@@ -762,7 +777,7 @@ async fn native_catalog_tries_at_most_three_in_scope_accounts_and_stops_on_first
     let service = service_with_catalog_cache(&store, server.uri(), catalog_cache());
     assert!(
         service
-            .client_model_catalog(&scope, "0.154.0")
+            .client_model_catalog(&CLIENT_KEY, &scope, "0.154.0")
             .await
             .is_err()
     );
@@ -788,7 +803,7 @@ async fn native_catalog_tries_at_most_three_in_scope_accounts_and_stops_on_first
     }
     service.invalidate().expect("reset failed catalog");
     service
-        .client_model_catalog(&scope, "0.154.0")
+        .client_model_catalog(&CLIENT_KEY, &scope, "0.154.0")
         .await
         .expect("second account succeeds");
     assert_eq!(server.received_requests().await.expect("requests").len(), 2);

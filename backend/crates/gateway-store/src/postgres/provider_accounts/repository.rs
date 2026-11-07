@@ -139,7 +139,7 @@ impl PgProviderAccountRepository {
             case when excel_models_follow_global then (select excel_default_models from runtime_settings where id = 1) else excel_models end as effective_excel_models, concurrency_limit, weight, model_access_json, credential_state,
                     credential_observed_at, quota_access_state, quota_evidence,
                     quota_access_observed_at, quota_reset_at,
-                    coalesce((select status = 'passed' and provider_accounts.quota_access_state='exhausted' and account_subject=provider_accounts.upstream_account_id from codex_quota_overdraft_states where account_id = provider_accounts.id and credential_revision = provider_accounts.credential_revision and config_revision = (select config_revision from runtime_settings where id = 1) and exists(select 1 from runtime_settings where id = 1 and codex_quota_overdraft_enabled)), false) as codex_quota_overdraft_passed,
+                    coalesce((select status = 'passed' and provider_accounts.quota_access_state='exhausted' and account_subject=provider_accounts.upstream_account_id from codex_quota_overdraft_states where account_id = provider_accounts.id and credential_revision = provider_accounts.credential_revision and config_revision = (select config_revision from runtime_settings where id = 1) and exists(select 1 from runtime_settings where id = 1 and codex_quota_overdraft_enabled)), false) as codex_quota_overdraft_passed, auto_use_quota_credits,
                     quota_observed_at, last_error_reason, last_error_message, created_at, updated_at,
                     relogin_count, last_relogin_at
              from provider_accounts
@@ -1077,6 +1077,11 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
                 },
             )
             .await?;
+            if let Some(enabled) = command.auto_use_quota_credits {
+                sqlx::query("update provider_accounts set auto_use_quota_credits = $2 where id = any($1) and auto_use_quota_credits <> $2")
+                    .bind(&command.account_ids).bind(enabled).execute(&mut *transaction).await
+                    .map_err(|_| postgres_unavailable("set account quota credits policy"))?;
+            }
             if let Some(name) = &command.custom_name {
                 update_custom_name_in_transaction(
                     &mut transaction,

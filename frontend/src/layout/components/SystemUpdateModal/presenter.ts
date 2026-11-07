@@ -12,15 +12,12 @@ interface SystemUpdatePresentationInput {
   hasUpdate: boolean
   updateStreaming: boolean
   updateStreamError: string
-  previousTargetVersion: string
-  confirmedTargetVersion: string | null
 }
 
 export function resolveSystemUpdatePresentation(input: SystemUpdatePresentationInput) {
   return {
     status: resolveStatus(input),
     summaryItems: resolveSummaryItems(input),
-    confirmRows: resolveConfirmRows(input),
     releaseVersion: displayValue(input.updateInfo?.latestVersion),
     streamStatusLabel: input.updateStreaming
       ? '实时'
@@ -102,14 +99,6 @@ function resolveSummaryItems(input: SystemUpdatePresentationInput) {
       value: displayValue(input.version?.deploymentModeLabel),
       title: input.version?.deploymentMode,
     },
-  ]
-}
-
-function resolveConfirmRows(input: SystemUpdatePresentationInput) {
-  return [
-    { key: 'current', label: '当前版本', value: versionLabel(input.version?.version) },
-    { key: 'previous', label: '已显示目标', value: versionLabel(input.previousTargetVersion) },
-    { key: 'target', label: '远端最新目标', value: versionLabel(input.confirmedTargetVersion) },
   ]
 }
 

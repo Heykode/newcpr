@@ -48,6 +48,7 @@ async fn model_policy_patch_preserves_identity_state_groups_and_egress() {
         AccountModelAccess::new(AccountModelAccessMode::Denylist, vec!["model-a".into()]).unwrap();
     let store = admin_account_store(&database.pool);
     let command = BatchUpdateAccounts {
+        auto_use_quota_credits: None,
         excel_recovery: None,
         purchase_cost: None,
         egress_mode: None,
@@ -128,6 +129,7 @@ async fn model_policy_patch_preserves_identity_state_groups_and_egress() {
         store
             .batch_update_accounts(
                 BatchUpdateAccounts {
+                    auto_use_quota_credits: None,
                     excel_recovery: None,
                     purchase_cost: None,
                     model_access: Some(AccountModelAccess::all()),
@@ -154,6 +156,7 @@ async fn model_policy_patch_preserves_identity_state_groups_and_egress() {
     store
         .batch_update_accounts(
             BatchUpdateAccounts {
+                auto_use_quota_credits: None,
                 excel_recovery: None,
                 purchase_cost: None,
                 model_access: Some(AccountModelAccess::all()),

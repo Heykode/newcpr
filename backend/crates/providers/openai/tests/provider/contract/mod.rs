@@ -165,7 +165,7 @@ fn selected_account_log_fields<'events>(
 
 fn wire_profile() -> CodexWireProfileState {
     CodexWireProfileState::new(CodexWireProfile {
-        installation_id: None,
+        installation_seed: None,
         raw_user_agent: None,
         originator: "codex_cli_rs".to_owned(),
         codex_version: "0.144.0".to_owned(),
@@ -6093,6 +6093,7 @@ async fn official_usage_limit_failure_persists_fact_without_fabricating_usage() 
     let account_id = "acct_usage_limit_request_path";
     let reset_at = 1_900_000_000;
     create_account(&store, account_id).await;
+    store.enable_quota_credits(account_id);
     let account = store.account(account_id).expect("created account");
     let observed_at = SystemTime::now();
     store
@@ -7338,6 +7339,8 @@ async fn diagnostic_quota_failures_do_not_schedule_authoritative_usage_refresh()
         let store = Arc::new(MemoryAccountStore::default());
         let account_id = "acct_provider_contract";
         create_account(&store, account_id).await;
+        // 开启点数后，普通失败可补查；诊断失败仍须不产生后台任务。
+        store.enable_quota_credits(account_id);
         let account = store.account(account_id).expect("account");
         let observed_at = SystemTime::now() - Duration::from_secs(1);
         let raw_quota = json!({
@@ -7554,7 +7557,7 @@ async fn quota_limited_account_diagnostic_uses_upstream() {
 }
 
 #[tokio::test]
-async fn successful_response_treats_inference_success_as_authoritative_allowance() {
+async fn successful_response_with_full_subscription_blocks_subsequent_requests() {
     let store = Arc::new(MemoryAccountStore::default());
     let account_id = "acct_success_exhausted";
     create_account(&store, account_id).await;
@@ -7602,7 +7605,7 @@ async fn successful_response_treats_inference_success_as_authoritative_allowance
             .expect("account after successful response")
             .quota()
             .access(),
-        QuotaAccessState::Allowed
+        QuotaAccessState::Exhausted
     );
     assert!(store.has_quota(account_id));
 }
@@ -7670,7 +7673,7 @@ async fn successful_http_sse_rate_limit_event_persists_structured_exhaustion() {
         .account(account_id)
         .expect("account after HTTP SSE response");
     assert_eq!(account.credential_state(), CredentialState::Ready);
-    assert_eq!(account.quota().access(), QuotaAccessState::Allowed);
+    assert_eq!(account.quota().access(), QuotaAccessState::Exhausted);
 }
 
 #[test]
@@ -7916,7 +7919,12 @@ async fn provider_compiles_catalog_presentation_for_codex_models() {
         ClientRoutingScope::all_accounts(),
     );
     let native = provider
-        .query_client_model_catalog(&scope, "codex", "0.154.0")
+        .query_client_model_catalog(
+            &ClientApiKeyId::new("key_catalog").unwrap(),
+            &scope,
+            "codex",
+            "0.154.0",
+        )
         .await
         .expect("native catalog")
         .expect("supported");
@@ -8559,4 +8567,92 @@ async fn connection_limit_payload_survives_exhausted_retry_budget() {
         observation.request_id().map(|id| id.as_str()),
         Some("req-limit-final")
     );
+}
+
+#[tokio::test]
+async fn usage_limit_failure_recovers_with_credits_without_replaying_the_failed_request() {
+    for enabled in [false, true] {
+        let store = Arc::new(MemoryAccountStore::default());
+        let account_id = "acct_provider_contract";
+        create_account(&store, account_id).await;
+        if enabled {
+            store.enable_quota_credits(account_id);
+        }
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/codex/usage"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "rate_limit": {
+                    "allowed": false,
+                    "limit_reached": true,
+                    "primary_window": {"used_percent": 100, "reset_at": 1_900_000_000}
+                },
+                "credits": {"has_credits": true, "unlimited": false, "balance": "20"}
+            })))
+            .expect(if enabled { 1 } else { 0 })
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .respond_with(ResponseTemplate::new(429).set_body_json(json!({
+            "error": {"type": "usage_limit_reached", "message": "usage limit reached", "resets_at": 1_900_000_000}
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+        let mut stream = provider_with_base_url(&store, server.uri())
+            .execute(
+                planned_request("openai", http_generate_operation()),
+                context("req_usage_limit_credits", CancellationToken::new()),
+            )
+            .await
+            .expect("provider stream");
+        let failure = loop {
+            match stream.next().await {
+                Some(Ok(_)) => {}
+                Some(Err(error)) => break error,
+                None => panic!("quota failure must reach the caller"),
+            }
+        };
+        assert_eq!(failure.kind(), ProviderErrorKind::QuotaExhausted);
+        assert!(
+            store
+                .account(account_id)
+                .expect("account")
+                .quota()
+                .is_exhausted()
+        );
+
+        if !enabled {
+            tokio::time::sleep(Duration::from_millis(3100)).await;
+            assert!(store.account(account_id).unwrap().quota().is_exhausted());
+            assert!(stream.next().await.is_none());
+            server.verify().await;
+            continue;
+        }
+        timeout(Duration::from_secs(5), async {
+            while store
+                .account(account_id)
+                .expect("account")
+                .quota()
+                .is_exhausted()
+            {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("credits restore access after background refresh");
+        assert!(stream.next().await.is_none());
+        let account = store.account(account_id).expect("recovered account");
+        assert_eq!(account.quota().access(), QuotaAccessState::Allowed);
+        assert_eq!(account.credential_state(), CredentialState::Ready);
+        let quota = store.quota_json(account_id).expect("persisted credits");
+        assert_eq!(quota.pointer("/credits/has_credits"), Some(&json!(true)));
+        assert_eq!(
+            quota.pointer("/rate_limits_by_limit_id/codex/primary_window/used_percent"),
+            Some(&json!(100))
+        );
+        assert!(quota.get("_quota_recovery").is_none());
+        server.verify().await;
+    }
 }

@@ -2,8 +2,10 @@
 
 mod archive;
 mod diagnostics;
+mod discovery;
 mod download;
 mod error;
+mod metadata;
 mod process;
 mod release;
 mod state;
@@ -20,8 +22,9 @@ use std::time::Duration;
 use async_trait::async_trait;
 use chrono::Utc;
 use gateway_admin::model::system::{
-    SystemOperationAccepted, SystemOperationKind, SystemUpdateDetail, SystemUpdateEvent,
-    SystemUpdateEventLevel, SystemUpdateStatus, SystemVersion,
+    SystemOperationAccepted, SystemOperationKind, SystemUpdateChannel as UpdateChannel,
+    SystemUpdateCheck, SystemUpdateDetail, SystemUpdateEvent, SystemUpdateEventLevel,
+    SystemUpdateStatus, SystemVersion,
 };
 use gateway_admin::ports::system::{
     SystemOperationError, SystemOperationErrorKind, SystemOperations, SystemUpdateEventStream,
@@ -33,11 +36,11 @@ use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard, broadcast};
 use crate::config::ConfigError;
 
 use self::archive::extract_release;
-use self::download::{MAX_CHECKSUM_SIZE, MAX_DOWNLOAD_SIZE, download_file, verify_checksum};
+use self::discovery::ReleaseCache;
+use self::download::{download_file, fetch_expected_checksum, verify_checksum};
 use self::process::{environment_value, spawn_replacement};
 use self::release::{
-    ReleaseCache, confirmed_target, detail_from_release, fetch_latest, select_archive,
-    versions_cross_major,
+    base_update_detail, confirmed_target, update_policy, validate_update_target, version_channel,
 };
 use self::state::{
     OperationFileLock, UpdateOperation, UpdateTempDir, finish, operation_id, read_status,
@@ -174,37 +177,6 @@ impl SystemUpdateConfig {
         Ok(())
     }
 
-    fn update_support_error(&self) -> Option<String> {
-        if self.build_type != "release" {
-            return Some("一键更新需要正式构建包".to_owned());
-        }
-        let Some(repository) = self.update_repository.as_deref() else {
-            return Some("检查更新需要配置 CPR_UPDATE_REPOSITORY".to_owned());
-        };
-        if let Err(error) = release::validate_repository(repository) {
-            return Some(error.to_string());
-        }
-        if let Err(error) = release::validate_api_base(&self.github_api_base) {
-            return Some(error);
-        }
-        if let Err(error) = self.web_dist_dir() {
-            return Some(error.to_string());
-        }
-        None
-    }
-
-    fn release_cache_key(&self) -> String {
-        format!(
-            "{}|{}|{}|{}|{}|{}",
-            self.update_repository.as_deref().unwrap_or_default(),
-            self.github_api_base,
-            self.version,
-            self.deployment_mode,
-            self.build_type,
-            self.update_channel,
-        )
-    }
-
     pub(crate) fn executable_path(&self) -> Result<PathBuf, OperationError> {
         if let Some(path) = &self.executable_path {
             return Ok(path.clone());
@@ -273,9 +245,26 @@ impl ProcessSystemOperations {
         Ok(operation)
     }
 
+    fn resolve_channel(
+        &self,
+        requested: Option<UpdateChannel>,
+    ) -> Result<UpdateChannel, OperationError> {
+        let channel = requested.unwrap_or_else(|| {
+            version_channel(&self.config.version).unwrap_or(UpdateChannel::Stable)
+        });
+        if !update_policy(&self.config, channel)
+            .available_channels
+            .contains(&channel)
+        {
+            return Err(conflict("当前发行版本不支持此更新通道"));
+        }
+        Ok(channel)
+    }
+
     fn start_update(
         &self,
         target_version: Option<String>,
+        channel: Option<UpdateChannel>,
     ) -> Result<SystemOperationAccepted, OperationError> {
         let operation_lock = self.lock_operation()?;
         if let Some(reason) = self.config.update_support_error() {
@@ -284,11 +273,8 @@ impl ProcessSystemOperations {
             return Err(conflict(reason));
         }
         let target = confirmed_target(target_version)?;
-        if versions_cross_major(&self.config.version, &target).unwrap_or(false) {
-            let reason = "跨大版本升级不提供自动更新，请按发布说明手动迁移";
-            self.events.error_terminal(None, Some("preflight"), reason);
-            return Err(conflict(reason));
-        }
+        let selected = self.resolve_channel(channel)?;
+        validate_update_target(&self.config.version, &target, selected)?;
         let file_lock = OperationFileLock::acquire(&self.config.update_lock_file)?;
         let status = read_status(&self.config.update_state_file, &self.config.version)?;
         if status.need_restart {
@@ -316,7 +302,7 @@ impl ProcessSystemOperations {
             let result = tokio::select! {
                 biased;
                 () = service.cancellation.cancelled() => Err(conflict("服务关闭，更新已中断")),
-                result = service.perform_update_inner(&target, &operation_id) => result,
+                result = service.perform_update_inner(&target, selected, &operation_id) => result,
             };
             let completion = operation.complete(&result);
             if let Err(error) = &result {
@@ -352,31 +338,18 @@ impl ProcessSystemOperations {
     async fn perform_update_inner(
         &self,
         target: &str,
+        channel: UpdateChannel,
         operation_id: &str,
     ) -> Result<(), OperationError> {
-        let repository = self
-            .config
-            .update_repository
-            .as_deref()
-            .ok_or_else(|| conflict("未配置更新仓库 CPR_UPDATE_REPOSITORY"))?;
         self.events.info(
             Some(operation_id),
             Some("release"),
             "正在获取最新 Release 信息",
         );
-        let release = fetch_latest(
-            &self.config.github_api_base,
-            repository,
-            &self.config.update_channel,
-        )
-        .await?;
-        let detail = detail_from_release(&self.config, &release);
-        if detail.latest_version != target {
-            return Err(conflict("远端最新版本已变化，请重新确认"));
-        }
-        if !detail.has_update {
-            return Err(conflict("当前没有可用更新"));
-        }
+        let release = self
+            .release_cache
+            .install(&self.config, channel, target, &self.diagnostics)
+            .await?;
         self.events.info(
             Some(operation_id),
             Some("prepare"),
@@ -396,7 +369,7 @@ impl ProcessSystemOperations {
             Some("asset"),
             "正在选择匹配当前平台的更新包",
         );
-        let archive = select_archive(release, version)?;
+        let (archive, checksum) = release.install_assets(version, &self.config.github_api_base)?;
         self.events.info(
             Some(operation_id),
             Some("asset"),
@@ -408,25 +381,24 @@ impl ProcessSystemOperations {
         );
         self.events
             .info(Some(operation_id), Some("verify"), "正在校验更新资源");
-        if archive.size == 0 || archive.size > MAX_DOWNLOAD_SIZE {
-            return Err(invalid("更新包大小无效或超出限制"));
-        }
-        let checksum = release
-            .assets
-            .iter()
-            .find(|asset| asset.name == "checksums.txt")
-            .ok_or_else(|| upstream("发行版本缺少 checksums.txt 校验文件，无法安全更新"))?;
-        if checksum.size == 0 || checksum.size > MAX_CHECKSUM_SIZE {
-            return Err(invalid("校验文件大小无效或超出限制"));
-        }
-        self.events
-            .info(Some(operation_id), Some("prepare"), "正在创建临时更新目录");
+        self.events.info(
+            Some(operation_id),
+            Some("prepare"),
+            "正在获取更新包的 SHA-256 校验值",
+        );
+        let expected_checksum = fetch_expected_checksum(
+            &archive.name,
+            &checksum.browser_download_url,
+            checksum.size,
+            &self.config.github_api_base,
+        )
+        .await?;
         fs::create_dir_all(&self.config.update_temp_dir)
             .map_err(|error| internal("无法创建更新临时目录").with_source(error))?;
         let temp_root = fs::canonicalize(&self.config.update_temp_dir)
             .map_err(|error| internal("无法确定更新临时目录位置").with_source(error))?;
         let temp = UpdateTempDir::create(&temp_root)?;
-        let archive_path = temp.path().join(&archive.name);
+        let archive_path = temp.path().join("release.tar.gz");
         self.events
             .info(Some(operation_id), Some("download"), "开始下载更新包");
         download_file(
@@ -442,14 +414,7 @@ impl ProcessSystemOperations {
             .success(Some(operation_id), Some("download"), "更新包下载完成");
         self.events
             .info(Some(operation_id), Some("checksum"), "正在校验 checksum");
-        verify_checksum(
-            &archive_path,
-            &archive.name,
-            &checksum.browser_download_url,
-            checksum.size,
-            &self.config.github_api_base,
-        )
-        .await?;
+        verify_checksum(&archive_path, &expected_checksum)?;
         self.events
             .success(Some(operation_id), Some("checksum"), "checksum 校验通过");
         self.events
@@ -473,13 +438,18 @@ impl ProcessSystemOperations {
 #[async_trait]
 impl SystemOperations for ProcessSystemOperations {
     async fn version(&self) -> Result<SystemVersion, OperationError> {
-        let detail = self.update_detail(false).await?;
+        let detail = self
+            .release_cache
+            .local(&self.config, self.resolve_channel(None)?)
+            .await;
         Ok(SystemVersion {
             version: self.config.version.clone(),
             git_sha: self.config.git_sha.clone(),
             build_time: self.config.build_time.clone(),
             deployment_mode: self.config.deployment_mode.clone(),
-            update_channel: self.config.update_channel.clone(),
+            update_channel: version_channel(&self.config.version)
+                .map(|channel| channel.as_str().to_owned())
+                .unwrap_or_else(|| "unknown".to_owned()),
             latest_version: detail.latest_version,
             has_update: detail.has_update,
             update_cached: detail.cached,
@@ -487,17 +457,24 @@ impl SystemOperations for ProcessSystemOperations {
         })
     }
 
-    async fn update_detail(&self, refresh: bool) -> Result<SystemUpdateDetail, OperationError> {
-        match self.release_cache.detail(&self.config, refresh).await {
+    async fn update_detail(
+        &self,
+        check: SystemUpdateCheck,
+        channel: Option<UpdateChannel>,
+    ) -> Result<SystemUpdateDetail, OperationError> {
+        let channel = self.resolve_channel(channel)?;
+        match self
+            .release_cache
+            .detail(&self.config, channel, check, &self.diagnostics)
+            .await
+        {
             Ok(detail) => Ok(detail),
-            Err(error) => {
-                self.diagnostics.record("check_release", None, &error).await;
-                Ok(base_update_detail(
-                    &self.config,
-                    self.config.update_support_error(),
-                    Some(error.message().to_owned()),
-                ))
-            }
+            Err(error) => Ok(base_update_detail(
+                &self.config,
+                channel,
+                self.config.update_support_error(),
+                Some(&error),
+            )),
         }
     }
 
@@ -523,8 +500,9 @@ impl SystemOperations for ProcessSystemOperations {
     async fn perform_update(
         &self,
         target_version: Option<String>,
+        channel: Option<UpdateChannel>,
     ) -> Result<SystemOperationAccepted, OperationError> {
-        self.start_update(target_version)
+        self.start_update(target_version, channel)
     }
 
     async fn update_status(&self) -> Result<SystemUpdateStatus, OperationError> {
@@ -611,26 +589,6 @@ impl SystemOperations for ProcessSystemOperations {
             operation_id,
             message: message.to_owned(),
         })
-    }
-}
-
-fn base_update_detail(
-    config: &SystemUpdateConfig,
-    unsupported_reason: Option<String>,
-    warning: Option<String>,
-) -> SystemUpdateDetail {
-    SystemUpdateDetail {
-        current_version: config.version.clone(),
-        latest_version: config.version.clone(),
-        has_update: false,
-        deployment_mode: config.deployment_mode.clone(),
-        build_type: config.build_type.clone(),
-        release_url: None,
-        notes: None,
-        cached: false,
-        update_supported: unsupported_reason.is_none() && warning.is_none(),
-        unsupported_reason,
-        warning,
     }
 }
 

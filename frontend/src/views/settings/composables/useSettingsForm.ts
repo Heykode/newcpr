@@ -61,10 +61,11 @@ const requestTuningFallbacks: RequestTuning = {
   openaiLocationOverrideEnabled: false,
   openaiRequestLocation: null,
   maxWaitingPerKey: 0,
-  keyConcurrencyWaitTimeoutSeconds: 30,
+  keyQueueTimeoutSeconds: 30,
   accountBusyWaitEnabled: false,
+  switchAccountOnQueueFailure: false,
   maxWaitingPerAccount: 10,
-  accountConcurrencyWaitTimeoutSeconds: 30,
+  accountQueueTimeoutSeconds: 30,
 }
 
 export function useSettingsForm() {
@@ -390,13 +391,13 @@ export function useSettingsForm() {
       return
     }
     if (!Number.isInteger(tuning.maxWaitingPerKey) || tuning.maxWaitingPerKey < 0 || tuning.maxWaitingPerKey > 1024
-      || !Number.isInteger(tuning.keyConcurrencyWaitTimeoutSeconds) || tuning.keyConcurrencyWaitTimeoutSeconds < 1 || tuning.keyConcurrencyWaitTimeoutSeconds > 600) {
-      toast.warning('Key 等待人数须为 0–1024 的整数，等待秒数须为 1–600 的整数')
+      || !Number.isInteger(tuning.keyQueueTimeoutSeconds) || tuning.keyQueueTimeoutSeconds < 1 || tuning.keyQueueTimeoutSeconds > 120) {
+      toast.warning('Key 等待人数须为 0–1024 的整数，等待秒数须为 1–120 的整数')
       return
     }
     if (!Number.isInteger(tuning.maxWaitingPerAccount) || tuning.maxWaitingPerAccount < 1 || tuning.maxWaitingPerAccount > 1000
-      || !Number.isInteger(tuning.accountConcurrencyWaitTimeoutSeconds) || tuning.accountConcurrencyWaitTimeoutSeconds < 1 || tuning.accountConcurrencyWaitTimeoutSeconds > 600) {
-      toast.warning('OpenAI 账号忙时等待人数须为 1–1000 的整数，等待秒数须为 1–600 的整数')
+      || !Number.isInteger(tuning.accountQueueTimeoutSeconds) || tuning.accountQueueTimeoutSeconds < 1 || tuning.accountQueueTimeoutSeconds > 120) {
+      toast.warning('账号忙时等待人数须为 1–1000 的整数，等待秒数须为 1–120 的整数')
       return
     }
     // Disabled overlays retain the saved value, not an unfinished editor draft.

@@ -183,6 +183,7 @@ fn window_reset_recovered(window: &CodexQuotaWindow, previous: Option<DateTime<U
 /// 观测确认未触顶；耗尽窗口全部到期后也接受新的明确 allowed 或可用点数。
 pub(super) fn reconcile_refresh(
     current: QuotaState,
+    auto_use_credits: bool,
     refreshed: &mut CodexAccountQuotaSnapshot,
     previous: Option<&CodexAccountQuotaSnapshot>,
     document: &mut Map<String, Value>,
@@ -197,11 +198,14 @@ pub(super) fn reconcile_refresh(
         DateTime::<Utc>::from(refreshed.observed_at()).timestamp_micros()
             > DateTime::<Utc>::from(last).timestamp_micros()
     });
-    if fresh && refreshed.credits_usable() {
-        refreshed.recovery = None;
-        return Ok(QuotaState::allowed(refreshed.observed_at()));
-    }
-    let state = if current.is_exhausted() {
+    let state = if current.evidence() == Some(QuotaEvidence::CreditsAvailable) {
+        QuotaState::exhausted(
+            QuotaEvidence::AccountLimitReached,
+            current.observed_at().unwrap_or(refreshed.observed_at()),
+            current.reset_at(),
+        )
+        .merge_observation(refreshed.quota())
+    } else if current.is_exhausted() {
         current
     } else {
         current.merge_observation(refreshed.quota())
@@ -243,17 +247,25 @@ pub(super) fn reconcile_refresh(
         .min()
         .map(SystemTime::from)
         .or(state.reset_at());
+    let state = refreshed.access_with_credits(
+        QuotaState::exhausted(
+            state
+                .evidence()
+                .unwrap_or(QuotaEvidence::AccountLimitReached),
+            state.observed_at().unwrap_or(refreshed.observed_at()),
+            reset_at,
+        ),
+        auto_use_credits,
+    );
+    if !state.is_exhausted() {
+        refreshed.recovery = None;
+        return Ok(state);
+    }
     document.insert(
         RECOVERY_FIELD.to_owned(),
         serde_json::to_value(&recovery)
             .map_err(|_| CodexCredentialQuotaError::InvalidCredentialData)?,
     );
     refreshed.recovery = Some(recovery);
-    Ok(QuotaState::exhausted(
-        state
-            .evidence()
-            .unwrap_or(QuotaEvidence::AccountLimitReached),
-        state.observed_at().unwrap_or(refreshed.observed_at()),
-        reset_at,
-    ))
+    Ok(state)
 }

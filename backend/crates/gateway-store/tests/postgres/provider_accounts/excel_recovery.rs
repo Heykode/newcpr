@@ -4,6 +4,7 @@ use gateway_core::account::ResponsesUpstream;
 
 fn patch(id: &str) -> BatchUpdateAccounts {
     BatchUpdateAccounts {
+        auto_use_quota_credits: None,
         account_ids: vec![id.into()],
         excel_recovery: None,
         purchase_cost: None,
@@ -42,6 +43,7 @@ async fn seed(db: &TestDatabase, id: &str) {
     admin_account_store(&db.pool)
         .batch_update_accounts(
             BatchUpdateAccounts {
+                auto_use_quota_credits: None,
                 enabled: Some(false),
                 responses_upstream: Some(ResponsesUpstream::Excel),
                 excel_recovery: Some(ExcelRecoveryConfig {
@@ -98,6 +100,7 @@ async fn recovery_defaults_omission_validation_and_success_preserve_history() {
         store
             .batch_update_accounts(
                 BatchUpdateAccounts {
+                    auto_use_quota_credits: None,
                     excel_recovery: Some(ExcelRecoveryConfig {
                         enabled: true,
                         interval_minutes: 0
@@ -112,6 +115,7 @@ async fn recovery_defaults_omission_validation_and_success_preserve_history() {
     store
         .batch_update_accounts(
             BatchUpdateAccounts {
+                auto_use_quota_credits: None,
                 weight: Some(gateway_core::account::AccountWeight::DEFAULT),
                 ..patch("acct_recovery")
             },
@@ -344,6 +348,7 @@ async fn recovery_success_does_not_invalidate_other_accounts_and_new_pause_clear
     store
         .batch_update_accounts(
             BatchUpdateAccounts {
+                auto_use_quota_credits: None,
                 enabled: Some(false),
                 ..patch("acct_one")
             },
@@ -362,6 +367,7 @@ async fn recovery_success_does_not_invalidate_other_accounts_and_new_pause_clear
     store
         .batch_update_accounts(
             BatchUpdateAccounts {
+                auto_use_quota_credits: None,
                 enabled: Some(true),
                 ..patch("acct_one")
             },

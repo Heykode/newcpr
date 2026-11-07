@@ -758,8 +758,8 @@ OAuth start 使用：
   OAuth refresh 的明确永久错误写入。
 - Responses 的响应头、`codex.rate_limits` 和 SSE/WS 错误事件中的额度白名单字段合并进同一 quota 快照，
   保留原始采集时间；迟到的旧样本不覆盖新快照，仅有套餐或 credits 元数据时不刷新旧额度窗口的年龄。
-  失败或纯观察不能恢复账号可用，也不从新增错误头学习套餐、Cookie 或 State；真实推理成功仍是
-  可用证据，即使响应额度为 100% 或附带旧快照。Free、K12 等套餐共用该状态机，不增加专属额度路径。
+  失败或纯观察不能恢复账号可用，也不从新增错误头学习套餐、Cookie 或 State；OAuth 推理成功只解除冷却；
+  账号是否可用由新鲜额度观测决定，窗口耗尽不会因同一请求成功而被覆盖。Free、K12 等套餐共用该状态机，不增加专属额度路径。
 - 明确的额度耗尽错误保留有效的 `resets_at`，支持数值和数字字符串；没有有效未来绝对时间时使用正数
   `resets_in_seconds`。普通 `Retry-After` 仍是临时冷却，不作为额度重置时间。缺失或非法 reset 不增加
   永久冻结，现有周期复核不变。活动具名桶的通用额度头归入该桶，`premium` 保留普通桶语义；
@@ -1098,7 +1098,7 @@ Guardian/review 使用额外的 R 个名额；例如 L=10、R=3，可分别运�
 | --- | --- | --- |
 | `openaiLocationOverrideEnabled` | `false` | 是否覆盖 OpenAI 搜索地区和环境上下文时区 |
 | `maxWaitingPerKey` | `0` | 单个下游 Key 的等待人数上限，整数 0–1024；0 关闭 |
-| `keyConcurrencyWaitTimeoutSeconds` | `30` | Key 并发排队最长时间，整数 1–600 秒 |
+| `keyQueueTimeoutSeconds` | `30` | Key 并发排队最长时间，整数 1–120 秒 |
 
 地区开关关闭时保留客户端原值；开启时使用配置文件的 `openai.wire_profile.location`，
 未自定义时为 `US / Ohio / Piketon / America/New_York`。开关不清空地区配置，
@@ -1122,13 +1122,14 @@ Key 排队只处理并发已满，不等待 RPM 或预算额度恢复。队列�
 | --- | --- | --- |
 | `accountBusyWaitEnabled` | `false` | boolean |
 | `maxWaitingPerAccount` | `10` | 整数 1–1000 |
-| `accountConcurrencyWaitTimeoutSeconds` | `30` | 整数 1–600 秒 |
+| `accountQueueTimeoutSeconds` | `30` | 整数 1–120 秒 |
 
 缺失或 `null` 使用默认，`false` 不被默认值覆盖；零不表示无限等待。设置更新仍是全量替换，
 应保留其他 `requestTuning` 字段。关闭后新请求使用原有快速选择路径；已开始的请求保持冻结设置。
 普通等待接纳授权范围内、其他资格合格而并发满或请求间隔未到的账号；冷却、停用、失效和无额度不进入普通队列。
 严格子线程可有界等待根绑定恢复或迁移，但仍不能发送到失格账号。
-两个模式共用每账号等待总人数和统一时限，不增加执行并发；严格并发等待队满即失败，
+两个模式共用每账号等待总人数和统一时限，不增加执行并发。严格根请求队满或超时默认失败；
+开启 `switchAccountOnQueueFailure` 后可进行一次不排队的重选，成功准入后迁移绑定。
 可移动等待仍可按官方规则检查其他候选，精确续接只能使用原 owner。等待受请求总截止及共享阶段预算限制，换号不重置，阶段超时不叠加新预算。
 等待期间不向上游发送业务请求，不提前提交 SSE；名额获得后继续原有 HTTP/WS 传输。
 Redis 故障拒绝准入，取消正常释放登记；故障或进程退出时由原截止时间限制残留。
@@ -1380,10 +1381,10 @@ priority 价格，缺少专用价格时回退到标准价格的 `2.00x`；Flex �
 
 | 方法 | 路由 | 主要 query/body | 说明 |
 | --- | --- | --- | --- |
-| `GET` | `/api/admin/system/version` | 无 | 当前构建、部署模式和可用更新 |
-| `GET` | `/api/admin/system/update/detail` | `refresh=true|false` | 读取或强制刷新 Release 详情 |
+| `GET` | `/api/admin/system/version` | 无 | 本地构建与已缓存的运行通道摘要，不主动联网 |
+| `GET` | `/api/admin/system/update/detail` | `refresh`、`channel`、`summaryOnly` | 有界查询发布索引；返回 policy、retryAt 和候选版本 |
 | `GET` | `/api/admin/system/update/events` | 无 | SSE 更新事件流 |
-| `POST` | `/api/admin/system/update` | `{ targetVersion }` | 返回 `202` 和 `operationId`，后台执行在线更新 |
+| `POST` | `/api/admin/system/update` | `{ targetVersion, channel }` | 返回 `202` 和 `operationId`，后台执行在线更新 |
 | `GET` | `/api/admin/system/update/status` | 无 | 查询当前更新或回滚状态 |
 | `POST` | `/api/admin/system/rollback` | 无 | 回滚到保留的上一版本 |
 | `POST` | `/api/admin/system/restart` | 无 | 请求进程重启 |
@@ -1417,3 +1418,12 @@ priority 价格，缺少专用价格时回退到标准价格的 `2.00x`；Flex �
 - 地区覆盖只在账号选定后作用于上游副本，观察和选号前不注入。
   同一原始请求的身份和调度输入不随地区开关或位置变化而改变。
 - 不包含上游 #126 的容量冻结、自动降低并发或恢复探测任务。
+
+
+## v3.42.0 配置兼容
+
+- 账号响应增加 `autoUseQuotaCredits`，默认 false；账号批量更新可显式设置此字段，仅支持 OpenAI OAuth。关闭立即撤销只凭点数放行的状态；开启对已耗尽账号异步刷新额度。该开关不等于额度重置卡自动使用，也不改变本地额度透支探测设置。
+- Key 画像的 `installationSeed` 替代 `installationId`；支持 `inherit.installationSeed`。种子只参与 Key+账号的确定性派生，不发送到上游。迁移0086保留旧值作为种子，因此旧 Key 的有效上游身份会变化，账号持久设备号不变。
+- `requestTuning` 增加 `switchAccountOnQueueFailure=false`。开启后，允许换号的请求在账号队满/超时后只做一次立即选号。严格根请求成功准入 B 后绑定 B；Preferred 保留旧软绑定；真实 owner、required 账号和严格子线程仍不可跨号。
+- Key/账号等待秒数分别使用 `keyQueueTimeoutSeconds` / `accountQueueTimeoutSeconds`，范围1..120；旧名称作为输入 alias 接受，新响应只使用新名称。升级将旧值大于120的部分限至120，并保留显式关闭和人数设置。
+- OAuth Responses 按官方移除不支持的顶层选项，归一化 token 上限别名，保留有效上下文选项与业务嵌套字段。Excel 等本地独立路由不套用 OAuth 清理。

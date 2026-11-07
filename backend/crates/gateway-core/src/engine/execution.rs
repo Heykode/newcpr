@@ -602,7 +602,6 @@ impl DefaultExecutionService {
                 &request_id,
                 deadline_at,
                 plan.request_tuning(),
-                &wait_budget,
                 cancellation.clone(),
             )
             .await?;
@@ -705,7 +704,6 @@ impl DefaultExecutionService {
         request_id: &ModelRequestId,
         deadline: Deadline,
         tuning: crate::routing::RequestTuning,
-        wait_budget: &super::AccountWaitBudget,
         cancellation: CancellationToken,
     ) -> Result<AdmissionLease, GatewayError> {
         let key = client.policy.key_id();
@@ -786,7 +784,6 @@ impl DefaultExecutionService {
                             + deadline.bounded(Duration::from_secs(
                                 tuning.key_concurrency_wait_timeout_seconds,
                             ));
-                        wait_budget.constrain_deadline(wait_deadline);
                         ticket = Some(self.admission_waiting.enqueue(
                             key,
                             tuning.max_waiting_per_key,
@@ -1345,7 +1342,12 @@ impl ExecutionService for DefaultExecutionService {
             for kind in scope.provider_kinds() {
                 let provider = self.providers.get(kind).ok_or(ProviderCatalogUnavailable)?;
                 let Some(models) = provider
-                    .query_client_model_catalog(scope, protocol, client_version)
+                    .query_client_model_catalog(
+                        client.policy.key_id(),
+                        scope,
+                        protocol,
+                        client_version,
+                    )
                     .await?
                 else {
                     for profile in client.snapshot.public_model_profiles_for_provider(kind) {

@@ -14,7 +14,7 @@ use crate::support::{MemoryAccountStore, profile, secret};
 
 fn wire_profile() -> CodexWireProfileState {
     CodexWireProfileState::new(CodexWireProfile {
-        installation_id: None,
+        installation_seed: None,
         raw_user_agent: None,
         originator: "codex_cli_rs".to_owned(),
         codex_version: "0.144.0".to_owned(),

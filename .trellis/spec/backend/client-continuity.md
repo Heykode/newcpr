@@ -843,20 +843,13 @@ previous_response_id、parent_response_id 或账号归属；无主续接仍走�
 对应 HTTP/WS 全量请求、失败 token、换号和不完整历史回归位于
 `provider::contract::turn_state` 与 `identity_isolation`。
 
-## 下游 Key 安装 ID
+## 下游 Key 安装身份种子
 
-- Key 默认没有覆盖，沿用账号的持久 installation ID。生成按钮仅填写草稿，保存
-  后生效；清空后发送该 Provider 的 null 补丁，删除覆盖并恢复账号默认。
-- 只设置安装 ID 使用 `{"inherit":{"installationId":"UUID"}}`，每个请求从当前
-  全局画像冻结，不把保存时的 UA 固定到 Key。完整自定义画像仍按其明确配置解析。
-- Provider 校验标准带连字符 UUID。请求头、正文与已知 metadata 镜像、cache identity、
-  HTTP、WS、目录和 Live 使用同一有效 ID，不改写账号数据库身份。
-- 安装 ID 仅允许用于 Key 画像。全局 UA 配置拒绝 `installationId` 与 `inherit`，
-  防止把一个 Key 的身份设置误用于所有账号；非法 UUID 使用官方独立错误分类。
-- WS 连接键、hash、逻辑连接和路由所有权同时包含安装 ID，不能复用修改前的连接。
-  既有续接丢失与全历史重放机制继续有效，不把旧连接的 response ID 授给新连接。
-- `client_api_keys.provider_request_profiles_json` 由迁移 0085 添加，空对象为默认；
-  更新省略保留、显式 null 删除对应 Provider，业务备份恢复必须保留该字段。
+- `installationSeed` 是 Key 专属的 UUID 种子。官方 SHA-256 域分隔和长度前缀将种子、稳定 Key ID、账号 ID 派生为 UUID 形式的安装身份；种子本身不发送给上游。未设置仍使用账号持久设备 ID。
+- 只设置种子使用 `{"inherit":{"installationSeed":"UUID"}}`，保持继承当前全局画像；完整自定义画像保持自身 UA 配置。全局 UA 不接受种子。生成仅改草稿，保存后生效，清空仍按 Provider null 补丁删除。
+- 迁移0086把旧 `installationId` 配置转换为种子，已有 Key 的有效身份会重新派生，相关连接/缓存自然隔离；账号设备记录不改写。
+- 同一个 Key 和账号跨请求/进程/UA版本得到同一派生身份；更换 Key、账号或种子得到不同身份。HTTP、WS、目录和 Live 共用此派生入口，Live 续接沿用创建时冻结画像。
+- 本地已有 session/thread/window/cache 隔离继续使用有效安装身份；不改真实 turn ID、出口或 credential revision。测试包括种子不泄漏、身份稳定、跨 Key/账号隔离和完整画像继承。
 
 ## Guardian Parent Routing Snapshot
 

@@ -69,6 +69,7 @@ pub(super) struct ApplyAccountTemplateRequest {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BatchUpdateAccountsRequest {
+    pub auto_use_quota_credits: Option<bool>,
     pub excel_recovery: Option<gateway_admin::model::excel_recovery::ExcelRecoveryConfig>,
     pub purchase_cost: Option<gateway_admin::model::account_purchase::AccountPurchaseUpdate>,
     #[serde(default, deserialize_with = "deserialize_optional_nullable")]
@@ -158,7 +159,8 @@ impl BatchUpdateAccountsRequest {
             self.outbound_proxy_id.clone(),
             self.outbound_proxy_url.clone(),
         )?;
-        if self.excel_recovery.is_none()
+        if self.auto_use_quota_credits.is_none()
+            && self.excel_recovery.is_none()
             && self.purchase_cost.is_none()
             && self.custom_name.is_none()
             && self.egress_mode.is_none()
@@ -187,6 +189,7 @@ impl BatchUpdateAccountsRequest {
     pub(super) fn into_command(self) -> Result<BatchUpdateAccounts, WireValidationError> {
         self.validate()?;
         Ok(BatchUpdateAccounts {
+            auto_use_quota_credits: self.auto_use_quota_credits,
             excel_recovery: self.excel_recovery,
             purchase_cost: self.purchase_cost,
             egress_mode: self.egress_mode,
@@ -347,6 +350,7 @@ pub struct AccountSummaryView {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountView {
+    pub auto_use_quota_credits: bool,
     pub error_protection: Option<gateway_admin::model::accounts::AccountProtectionView>,
     pub custom_name: Option<String>,
     pub outbound_proxy_id: Option<String>,

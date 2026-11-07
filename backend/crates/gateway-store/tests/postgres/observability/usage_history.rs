@@ -444,17 +444,17 @@ async fn history_upgrade_backfills_available_names_without_rewriting_billing_or_
             .unwrap();
     let costs: Vec<serde_json::Value> = sqlx::query_scalar("select to_jsonb(c) from account_cumulative_costs c order by provider_account_ref, currency")
         .fetch_all(&database.pool).await.unwrap();
-    crate::postgres::TEST_MIGRATOR
-        .run(&database.pool)
-        .await
-        .unwrap();
-    let known_plans: i64 = sqlx::query_scalar(
-        "select count(*) from model_requests where provider_account_plan_type_snapshot is not null",
-    )
-    .fetch_one(&database.pool)
-    .await
-    .unwrap();
-    assert_eq!(known_plans, 0, "legacy plans must not be invented");
+    // 本用例验证0069的历史回填；后续账号schema新增字段不属于该迁移的不变性断言。
+    let history_upgrade = sqlx::migrate::Migrator {
+        migrations: crate::postgres::TEST_MIGRATOR
+            .iter()
+            .filter(|migration| migration.version <= 69)
+            .cloned()
+            .collect::<Vec<_>>()
+            .into(),
+        ..sqlx::migrate::Migrator::DEFAULT
+    };
+    history_upgrade.run(&database.pool).await.unwrap();
     assert_eq!(sqlx::query_scalar::<_, Option<String>>("select client_api_key_name_snapshot from model_requests where id = 'req_observe_success'")
         .fetch_one(&database.pool).await.unwrap().as_deref(), Some("Legacy name"));
     assert_eq!(sqlx::query_scalar::<_, Option<String>>("select client_api_key_name_snapshot from model_requests where id = 'req_observe_failed'")
@@ -481,5 +481,17 @@ async fn history_upgrade_backfills_available_names_without_rewriting_billing_or_
         assert!(index.contains("account_quality_check"));
         assert!(index.contains("prewarm"));
     }
+    // 计划快照由后续0079新增；完成全部升级后仍不能编造旧请求的套餐事实。
+    crate::postgres::TEST_MIGRATOR
+        .run(&database.pool)
+        .await
+        .unwrap();
+    let known_plans: i64 = sqlx::query_scalar(
+        "select count(*) from model_requests where provider_account_plan_type_snapshot is not null",
+    )
+    .fetch_one(&database.pool)
+    .await
+    .unwrap();
+    assert_eq!(known_plans, 0, "legacy plans must not be invented");
     database.close().await;
 }

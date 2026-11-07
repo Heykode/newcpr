@@ -17,6 +17,7 @@ fn month_start() -> NaiveDate {
 
 fn patch(ids: &[&str], amount: Option<&str>, date: Option<NaiveDate>) -> BatchUpdateAccounts {
     BatchUpdateAccounts {
+        auto_use_quota_credits: None,
         excel_recovery: None,
         purchase_cost: Some(AccountPurchaseUpdate {
             amount_cny: amount.map(str::to_owned),

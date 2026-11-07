@@ -33,12 +33,12 @@ test('Retry-After limit defaults to 240 and saves zero and custom values without
   try {
     await query.state.loadSettings()
     assert.equal(query.state.form.requestTuning.maxRetryAfterSeconds, 240)
-    const waiting = query.state.form.requestTuning.accountConcurrencyWaitTimeoutSeconds
+    const waiting = query.state.form.requestTuning.accountQueueTimeoutSeconds
     for (const seconds of [0, 400, 4_294_967_295]) {
       query.state.form.requestTuning.maxRetryAfterSeconds = seconds
       await query.state.saveSettings()
       assert.equal(query.requests.at(-1).requestTuning.maxRetryAfterSeconds, seconds)
-      assert.equal(query.requests.at(-1).requestTuning.accountConcurrencyWaitTimeoutSeconds, waiting)
+      assert.equal(query.requests.at(-1).requestTuning.accountQueueTimeoutSeconds, waiting)
     }
     const count = query.requests.length
     for (const seconds of [-1, 0.5, Number.NaN, 4_294_967_296]) {
@@ -572,14 +572,14 @@ test('large request threshold rejects invalid byte counts before saving', async 
 })
 
 test('key queue bounds round trip and invalid values cannot be saved', async () => {
-  for (const [maxWaitingPerKey, keyConcurrencyWaitTimeoutSeconds, valid] of [
+  for (const [maxWaitingPerKey, keyQueueTimeoutSeconds, valid] of [
     [0, 1, true],
-    [1024, 600, true],
+    [1024, 120, true],
     [-1, 30, false],
     [1025, 30, false],
     [1.5, 30, false],
     [1, 0, false],
-    [1, 601, false],
+    [1, 121, false],
     [1, 2.5, false],
   ]) {
     const warnings = []
@@ -587,15 +587,15 @@ test('key queue bounds round trip and invalid values cannot be saved', async () 
     try {
       await query.state.loadSettings()
       assert.equal(query.state.form.requestTuning.maxWaitingPerKey, 0)
-      assert.equal(query.state.form.requestTuning.keyConcurrencyWaitTimeoutSeconds, 30)
-      Object.assign(query.state.form.requestTuning, { maxWaitingPerKey, keyConcurrencyWaitTimeoutSeconds })
+      assert.equal(query.state.form.requestTuning.keyQueueTimeoutSeconds, 30)
+      Object.assign(query.state.form.requestTuning, { maxWaitingPerKey, keyQueueTimeoutSeconds })
       await query.state.saveSettings()
       assert.equal(query.requests.length, valid ? 1 : 0)
       assert.equal(warnings.length, valid ? 0 : 1)
       if (valid) {
         await query.state.loadSettings()
         assert.equal(query.state.form.requestTuning.maxWaitingPerKey, maxWaitingPerKey)
-        assert.equal(query.state.form.requestTuning.keyConcurrencyWaitTimeoutSeconds, keyConcurrencyWaitTimeoutSeconds)
+        assert.equal(query.state.form.requestTuning.keyQueueTimeoutSeconds, keyQueueTimeoutSeconds)
         assert.equal(query.state.form.rotationStrategy, 'smart')
       }
     }
@@ -681,10 +681,11 @@ test('inherited runtime defaults never add the removed global WS opening limit',
       openaiLocationOverrideEnabled: false,
       openaiRequestLocation: { country: 'US', region: 'Ohio', city: 'Piketon', timezone: 'America/New_York' },
       maxWaitingPerKey: 0,
-      keyConcurrencyWaitTimeoutSeconds: 30,
+      keyQueueTimeoutSeconds: 30,
+      switchAccountOnQueueFailure: false,
       accountBusyWaitEnabled: false,
       maxWaitingPerAccount: 10,
-      accountConcurrencyWaitTimeoutSeconds: 30,
+      accountQueueTimeoutSeconds: 30,
     })
   }
   finally {
@@ -767,7 +768,7 @@ test('Excel image budgets roundtrip independently and reject invalid limits', as
 const busyWaitDefaults = {
   accountBusyWaitEnabled: false,
   maxWaitingPerAccount: 10,
-  accountConcurrencyWaitTimeoutSeconds: 30,
+  accountQueueTimeoutSeconds: 30,
 }
 
 test('retired State settings do not enter the form or save payload', async () => {
@@ -819,12 +820,12 @@ test('account busy wait loads saved values and round trips edited settings', asy
   const initialWait = {
     accountBusyWaitEnabled: true,
     maxWaitingPerAccount: 7,
-    accountConcurrencyWaitTimeoutSeconds: 180,
+    accountQueueTimeoutSeconds: 90,
   }
   const editedWait = {
     accountBusyWaitEnabled: true,
     maxWaitingPerAccount: 9,
-    accountConcurrencyWaitTimeoutSeconds: 240,
+    accountQueueTimeoutSeconds: 120,
   }
   const query = mountSettings({
     ...settings(),
@@ -858,7 +859,7 @@ test('account busy wait defaults inherit per field and preserve an explicit fals
   const serverDefaults = {
     accountBusyWaitEnabled: true,
     maxWaitingPerAccount: 5,
-    accountConcurrencyWaitTimeoutSeconds: 150,
+    accountQueueTimeoutSeconds: 75,
   }
   for (const { defaults, tuning, expected } of [
     { defaults: undefined, tuning: undefined, expected: busyWaitDefaults },
@@ -869,12 +870,12 @@ test('account busy wait defaults inherit per field and preserve an explicit fals
       expected: { ...serverDefaults, accountBusyWaitEnabled: false, maxWaitingPerAccount: 8 },
     },
     {
-      defaults: { accountConcurrencyWaitTimeoutSeconds: 150 },
+      defaults: { accountQueueTimeoutSeconds: 75 },
       tuning: { accountBusyWaitEnabled: true, maxWaitingPerAccount: 250 },
       expected: {
         ...busyWaitDefaults,
         accountBusyWaitEnabled: true,
-        accountConcurrencyWaitTimeoutSeconds: 150,
+        accountQueueTimeoutSeconds: 75,
         maxWaitingPerAccount: 250,
       },
     },
@@ -902,7 +903,7 @@ test('disabling account busy wait preserves all numeric settings across save and
   const initialWait = {
     accountBusyWaitEnabled: true,
     maxWaitingPerAccount: 11,
-    accountConcurrencyWaitTimeoutSeconds: 210,
+    accountQueueTimeoutSeconds: 105,
   }
   const query = mountSettings({ ...settings(), requestTuning: initialWait })
   try {
@@ -928,11 +929,11 @@ test('disabling account busy wait preserves all numeric settings across save and
 
 test('account busy wait accepts inclusive numeric bounds when enabled or disabled', async () => {
   for (const enabled of [false, true]) {
-    for (const [maxWaiting, timeoutSeconds] of [[1, 1], [1000, 600]]) {
+    for (const [maxWaiting, timeoutSeconds] of [[1, 1], [1000, 120]]) {
       const expected = {
         accountBusyWaitEnabled: enabled,
         maxWaitingPerAccount: maxWaiting,
-        accountConcurrencyWaitTimeoutSeconds: timeoutSeconds,
+        accountQueueTimeoutSeconds: timeoutSeconds,
       }
       const query = mountSettings(settings())
       try {
@@ -951,7 +952,7 @@ test('account busy wait accepts inclusive numeric bounds when enabled or disable
 
 for (const [field, upperBound] of [
   ['maxWaitingPerAccount', 1000],
-  ['accountConcurrencyWaitTimeoutSeconds', 600],
+  ['accountQueueTimeoutSeconds', 120],
 ]) {
   for (const enabled of [false, true]) {
     test(`account busy wait rejects invalid ${field} without saving when enabled=${enabled}`, async () => {
@@ -968,7 +969,7 @@ for (const [field, upperBound] of [
           assert.equal(query.requests.length, 0, `${field}=${String(value)} must not reach updateSettings`)
           assert.equal(query.state.saving.value, false)
         }
-        assert.deepEqual(warnings, invalidValues.map(() => 'OpenAI 账号忙时等待人数须为 1–1000 的整数，等待秒数须为 1–600 的整数'))
+        assert.deepEqual(warnings, invalidValues.map(() => '账号忙时等待人数须为 1–1000 的整数，等待秒数须为 1–120 的整数'))
 
         query.state.form.requestTuning[field] = validValue
         await query.state.saveSettings()

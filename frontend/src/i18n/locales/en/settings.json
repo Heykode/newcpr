@@ -43,7 +43,12 @@
       "grokCliVersion": "Grok CLI version",
       "forExample": "For example: 1.0.13",
       "clientIdentity": "Client identity",
-      "description": "Set the client type, version, and request headers the gateway sends upstream"
+      "description": "Set the client type, version, and request headers the gateway sends upstream",
+      "installationSeed": "Installation seed",
+      "generateInstallationSeed": "Generate installation seed",
+      "installationSeedHelp": "Derives a stable installation identity for each key and upstream account without sending the seed upstream, changing the seed changes the identity",
+      "installationSeedPlaceholder": "Leave blank to use the upstream account’s installation ID",
+      "invalidInstallationSeed": "Enter a hyphenated UUID"
     },
     "pricing": {
       "multiplier": "Multiplier",
@@ -278,15 +283,24 @@
       "keyQueueHelp": "Per API key, 0 disables queuing",
       "accountQueueCapacity": "Account queue capacity",
       "accountQueueHelp": "Per account, 0 disables queuing",
-      "queueTimeoutLabel": "Queue timeout (s)",
-      "queueTimeoutHelp": "Shared by both queues, 1–120 seconds",
       "autoReview": {
         "label": "Reserved auto review slots",
         "description": "Extra slots per Codex account, 0 shares regular concurrency",
         "helpTitle": "About auto review concurrency"
       },
-      "queueTimeoutHelpTitle": "About queue timeout",
-      "queueTimeoutDetails": "The API key and account queues share this timeout, measured from the first queue entry"
+      "keyTimeout": "API key queue timeout",
+      "keyTimeoutHelp": "Maximum wait for a key slot before returning an error",
+      "accountTimeout": "Account queue timeout",
+      "accountTimeoutHelp": "Starts on first account queue entry and continues across retries",
+      "queueFailure": "When the account queue is full or times out",
+      "queueFailureHelp": "Try another account with room. If switching is not possible, return the queue error.",
+      "queueFailureHelpTitle": "Account switching rules",
+      "queueFailureDetails": "Check once without queuing again. Requests pinned to an account, native continuations, and requests bound to a parent session cannot switch on their own.",
+      "returnError": "Return error",
+      "trySwitch": "Try another account",
+      "retryAfter": {
+        "label": "Upstream retry wait limit"
+      }
     },
     "modelMapping": "Model mapping",
     "routing": {
@@ -350,7 +364,7 @@
     },
     "tokenRefresh": {
       "title": "Credential refresh",
-      "leadTimeLabel": "Refresh lead time (s)",
+      "leadTimeLabel": "Refresh lead time",
       "leadTimeHelp": "Refresh access tokens before they expire",
       "concurrencyLabel": "Refresh concurrency limit",
       "concurrencyHelp": "Concurrent refresh limit, lower to reduce rate limiting"
@@ -663,7 +677,6 @@
       "countValidity": "Count validity",
       "windowHelp": "Each matching failure renews the count, a successful call clears it",
       "countValiditySeconds": "Count validity in seconds",
-      "seconds": "seconds",
       "cooldownTime": "Cooldown duration",
       "cooldownHelp": "A failed probe starts another cooldown",
       "cooldownTimeInSeconds": "Cooldown duration in seconds",
@@ -731,6 +744,10 @@
       "moreValues": "{values} OR {count} more",
       "messageHelp": "Contains checks the first 8 KiB of the error message, preserving complete characters, equals compares the full message, longer messages are not treated as missing",
       "limitsHelp": "Up to 32 rules, 8 conditions per rule, and 16 values per condition, all rule text and the probe model share a 64 KiB UTF-8 limit"
+    },
+    "units": {
+      "seconds": "seconds",
+      "inSeconds": "{label} (seconds)"
     }
   }
 }

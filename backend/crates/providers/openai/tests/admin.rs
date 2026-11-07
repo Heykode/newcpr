@@ -65,7 +65,7 @@ const COMPLETED_SESSION_SSE: &str = concat!(
 );
 
 #[tokio::test]
-async fn installation_id_is_optional_and_validated_only_for_key_profiles() {
+async fn installation_seed_is_optional_and_validated_only_for_key_profiles() {
     use gateway_admin::model::user_agent::ProviderUserAgentOverride;
     let bundle = provider_openai::initialize(valid_config().config, provider_ports())
         .await
@@ -81,8 +81,8 @@ async fn installation_id_is_optional_and_validated_only_for_key_profiles() {
         (json!(42), false),
     ] {
         for document in [
-            json!({"mode":"custom", "userAgent":"codex-tui/1.0.0", "installationId":value}),
-            json!({"inherit":{"installationId":value}}),
+            json!({"mode":"custom", "userAgent":"codex-tui/1.0.0", "installationSeed":value}),
+            json!({"inherit":{"installationSeed":value}}),
         ] {
             let configuration = OpaqueProviderData::new(document.as_object().unwrap().clone());
             assert_eq!(
@@ -2438,6 +2438,7 @@ fn provider_ports_with_catalog(
 fn account_record(account: &ProviderAccount) -> AccountRecord {
     let now = Utc::now();
     AccountRecord {
+        auto_use_quota_credits: false,
         outbound_proxy_enabled: true,
         effective_excel_models: Default::default(),
         model_access: Default::default(),

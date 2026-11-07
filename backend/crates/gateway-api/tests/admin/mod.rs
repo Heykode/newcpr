@@ -1611,7 +1611,11 @@ impl SystemOperations for UnusedSystem {
         Err(unavailable_system())
     }
 
-    async fn update_detail(&self, _: bool) -> Result<SystemUpdateDetail, SystemOperationError> {
+    async fn update_detail(
+        &self,
+        _: gateway_admin::model::system::SystemUpdateCheck,
+        _: Option<gateway_admin::model::system::SystemUpdateChannel>,
+    ) -> Result<SystemUpdateDetail, SystemOperationError> {
         Err(unavailable_system())
     }
 
@@ -1622,6 +1626,7 @@ impl SystemOperations for UnusedSystem {
     async fn perform_update(
         &self,
         _: Option<String>,
+        _channel: Option<gateway_admin::model::system::SystemUpdateChannel>,
     ) -> Result<SystemOperationAccepted, SystemOperationError> {
         Err(unavailable_system())
     }

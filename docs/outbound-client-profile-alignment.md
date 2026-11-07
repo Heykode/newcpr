@@ -36,13 +36,12 @@
 时才使用启动值，二者不累加。官方当前启动装配读取 stream_max_retries，不提供该字段
 Web 热修改；这是实现方式，并非该参数在技术上不能热更新。
 
-官方 maxWaitingPerAccount 和 concurrencyWaitTimeoutSeconds 分别是每账号等待人数
-及等待时长，两条等待路径共用，新安装默认 10 人/30 秒；Key 队列也共用此时限，
-Key 等待人数另有独立字段。严格续接仍保留官方 follow_only 特殊边界，并非因此允许换号。
-后续账号等待对齐将原账号与全忙候选等待合为 maxWaitingPerAccount 和
-accountConcurrencyWaitTimeoutSeconds 两项，两条路径共用，默认 10 个请求/30 秒。
-迁移 0083 按用户要求退休旧四项并采用 10/30，已存在的新两项不被覆盖。
-Key 等待配置仍独立；本轮只统一账号等待，不扩大到 Key 排队。
+当前队列合同已随官方 v3.42.0 更新：`maxWaitingPerAccount` 为每账号等待人数，
+`keyQueueTimeoutSeconds` 与 `accountQueueTimeoutSeconds` 分别控制两层等待，范围1..120秒。
+账号重选及后续尝试共享账号预算；`switchAccountOnQueueFailure` 显式开启后，允许换号的
+请求才在队满/超时后立即重选一次。严格后代、固定账号及原生续接仍按归属处理。
+迁移0083统一过旧账号等待设置；0086仅改 canonical 名并收敛超时范围，保留已有人数及
+显式关闭。具体规则见 [本轮对齐记录](upstream-v3420-native-parity.md)。
 
 ## 验证
 

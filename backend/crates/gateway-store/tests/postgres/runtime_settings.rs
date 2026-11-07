@@ -1073,8 +1073,9 @@ async fn request_tuning_overrides_should_round_trip() {
         excel_image_relay_entries: Some(128),
         excel_image_relay_ttl_minutes: Some(45),
         account_busy_wait_enabled: Some(true),
+        switch_account_on_queue_failure: None,
         max_waiting_per_account: Some(4),
-        account_concurrency_wait_timeout_seconds: Some(121),
+        account_concurrency_wait_timeout_seconds: Some(120),
     };
     let expected = update.request_tuning.clone();
 
@@ -1102,6 +1103,7 @@ async fn request_tuning_overrides_should_round_trip() {
     let mut disabled = settings_with_margin(3_600);
     disabled.request_tuning = RequestTuningOverrides {
         account_busy_wait_enabled: Some(false),
+        switch_account_on_queue_failure: None,
         ..expected
     };
     let expected_disabled = disabled.request_tuning.clone();
@@ -1464,5 +1466,83 @@ async fn protection_policy_persists_old_client_omission_and_explicit_disable() {
             .account_error_protection,
         Some(disabled)
     );
+    database.close().await;
+}
+
+#[tokio::test]
+async fn v3420_migration_preserves_queue_settings_and_converts_key_installation_seeds() {
+    let old = sqlx::migrate::Migrator {
+        migrations: super::TEST_MIGRATOR
+            .iter()
+            .filter(|migration| migration.version < 86)
+            .cloned()
+            .collect::<Vec<_>>()
+            .into(),
+        ..sqlx::migrate::Migrator::DEFAULT
+    };
+    let Some(database) = TestDatabase::create_with_migrator("v3420_settings", &old).await else {
+        return;
+    };
+    sqlx::query("update runtime_settings set request_tuning_json = $1 where id=1")
+        .bind(serde_json::json!({
+            "accountBusyWaitEnabled": false, "maxWaitingPerAccount": 17,
+            "maxWaitingPerKey": 0, "keyConcurrencyWaitTimeoutSeconds": 12,
+            "accountConcurrencyWaitTimeoutSeconds": 600, "streamMaxRetries": 4
+        }))
+        .execute(&database.pool)
+        .await
+        .unwrap();
+    let seed = "3b11bc82-c666-417d-b9ff-2a34fd040385";
+    for (id, profile) in [
+        (
+            "key_seed_inherit",
+            serde_json::json!({"openai":{"inherit":{"installationId":seed}}}),
+        ),
+        (
+            "key_seed_custom",
+            serde_json::json!({"openai":{"mode":"custom","userAgent":"codex-tui/1.0.0","installationId":seed}}),
+        ),
+        ("key_seed_empty", serde_json::json!({})),
+    ] {
+        sqlx::query("insert into client_api_keys (id,name,key,enabled,max_concurrency,requests_per_minute,provider_request_profiles_json,created_at,updated_at) values ($1,$1,$2,true,0,0,$3,now(),now())")
+            .bind(id).bind(format!("sk_{}", match id { "key_seed_inherit" => "a", "key_seed_custom" => "b", _ => "c" }.repeat(43))).bind(profile)
+            .execute(&database.pool).await.unwrap();
+    }
+    super::TEST_MIGRATOR.run(&database.pool).await.unwrap();
+    let settings: Value =
+        sqlx::query_scalar("select request_tuning_json from runtime_settings where id=1")
+            .fetch_one(&database.pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        settings,
+        serde_json::json!({
+            "accountBusyWaitEnabled":false, "maxWaitingPerAccount":17,
+            "maxWaitingPerKey":0, "keyQueueTimeoutSeconds":12,
+            "accountQueueTimeoutSeconds":120, "streamMaxRetries":4,
+            "switchAccountOnQueueFailure":false
+        })
+    );
+    for (id, expected) in [
+        (
+            "key_seed_inherit",
+            serde_json::json!({"openai":{"inherit":{"installationSeed":seed}}}),
+        ),
+        (
+            "key_seed_custom",
+            serde_json::json!({"openai":{"mode":"custom","userAgent":"codex-tui/1.0.0","installationSeed":seed}}),
+        ),
+        ("key_seed_empty", serde_json::json!({})),
+    ] {
+        let profile: Value = sqlx::query_scalar(
+            "select provider_request_profiles_json from client_api_keys where id=$1",
+        )
+        .bind(id)
+        .fetch_one(&database.pool)
+        .await
+        .unwrap();
+        assert_eq!(profile, expected);
+    }
+    super::TEST_MIGRATOR.run(&database.pool).await.unwrap();
     database.close().await;
 }

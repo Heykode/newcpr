@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { SystemUpdateDetail } from '@/api'
+import type { SystemUpdateChannel } from '@/api'
 import {
   ArrowUpCircle,
   Circle,
@@ -10,15 +10,14 @@ import {
 } from '@lucide/vue'
 import { storeToRefs } from 'pinia'
 
-import { computed, nextTick, shallowRef, useTemplateRef, watch } from 'vue'
+import { computed, nextTick, useTemplateRef, watch } from 'vue'
 import BaseButton from '@/components/base/BaseButton.vue'
-import BaseConfirmModal from '@/components/base/BaseConfirmModal.vue'
 import BaseEmpty from '@/components/base/BaseEmpty.vue'
 import BaseModal from '@/components/base/BaseModal/index.vue'
 import BaseScrollbar from '@/components/base/BaseScrollbar.vue'
 import { toast } from '@/components/base/BaseToast'
 import { t } from '@/i18n'
-import { normalizeSystemVersion, useSystemUpdateStore } from '@/stores/modules/system-update'
+import { useSystemUpdateStore } from '@/stores/modules/system-update'
 import { errorMessage } from '@/utils/async'
 import { formatTime } from '@/utils/date'
 import { renderReleaseNotes } from './markdown'
@@ -38,22 +37,21 @@ const {
   updating,
   restarting,
   updateError,
-  updateSuccess,
   needRestart,
   updateLogs,
   updateStreaming,
   updateStreamError,
-  hasUpdate,
+  hasCandidateUpdate: hasUpdate,
+  canRestart,
+  changingChannel,
+  selectedChannel,
+  availableChannels,
+  canChangeChannel,
   canUpdate,
 } = storeToRefs(systemUpdateStore)
-const { loadSystem, checkUpdates, updateNow, restartNow } = systemUpdateStore
+const { loadSystem, checkUpdates, changeChannel, updateNow, restartNow } = systemUpdateStore
 
 const updateLogScrollbar = useTemplateRef<InstanceType<typeof BaseScrollbar>>('updateLogScrollbar')
-const updateConfirmOpen = shallowRef(false)
-const updateConfirmInfo = shallowRef<SystemUpdateDetail | null>(null)
-const updateConfirmPreviousTarget = shallowRef('')
-const preparingUpdate = shallowRef(false)
-
 const presentation = computed(() => resolveSystemUpdatePresentation({
   version: version.value,
   updateInfo: updateInfo.value,
@@ -61,12 +59,11 @@ const presentation = computed(() => resolveSystemUpdatePresentation({
   restarting: restarting.value,
   updating: updating.value,
   updateError: updateError.value,
-  updateSuccess: updateSuccess.value,
+  updateSuccess: needRestart.value,
   hasUpdate: hasUpdate.value,
   updateStreaming: updateStreaming.value,
   updateStreamError: updateStreamError.value,
-  previousTargetVersion: updateConfirmPreviousTarget.value,
-  confirmedTargetVersion: updateConfirmInfo.value?.latestVersion ?? null,
+
 }))
 
 const updateLogRows = computed(() =>
@@ -97,63 +94,33 @@ function pinUpdateLogsToBottom() {
 async function handleCheckUpdates(force = true) {
   try {
     const data = await checkUpdates(force)
-    toast.success(data?.hasUpdate ? '发现可用更新' : '当前已是最新版本')
+    if (!data || data.warning)
+      return
+    toast.success(data.hasUpdate ? '发现可用更新' : '当前已是最新版本')
   }
   catch {}
 }
 
 async function handleUpdateRequest() {
-  if (preparingUpdate.value || updating.value)
+  const detail = updateInfo.value
+  if (!canUpdate.value || !detail)
     return
-
-  const previousTargetVersion = normalizeSystemVersion(updateInfo.value?.latestVersion)
-  preparingUpdate.value = true
   try {
-    const data = await checkUpdates(true)
-    if (!data?.hasUpdate) {
-      toast.success('当前已是最新版本')
-      return
-    }
-    const remoteTargetVersion = normalizeSystemVersion(data.latestVersion)
-    if (!remoteTargetVersion) {
-      toast.error('远端目标版本为空')
-      return
-    }
-    if (previousTargetVersion && previousTargetVersion !== remoteTargetVersion) {
-      updateConfirmPreviousTarget.value = previousTargetVersion
-      updateConfirmInfo.value = data
-      updateConfirmOpen.value = true
-      return
-    }
-    await runConfirmedUpdate(remoteTargetVersion)
-  }
-  catch {}
-  finally {
-    preparingUpdate.value = false
-  }
-}
-
-async function runConfirmedUpdate(targetVersion: string) {
-  try {
-    const result = await updateNow(targetVersion)
-    if (result) {
+    const result = await updateNow(detail.latestVersion, detail.policy.channel)
+    if (result)
       toast.success('更新已开始')
-    }
   }
   catch {}
 }
 
-async function handleConfirmUpdate() {
-  const targetVersion = normalizeSystemVersion(updateConfirmInfo.value?.latestVersion)
-  if (!targetVersion)
-    return
-
-  updateConfirmOpen.value = false
-  await nextTick()
-  await runConfirmedUpdate(targetVersion)
+function handleChannelChange(event: Event) {
+  const value = (event.target as HTMLSelectElement).value as SystemUpdateChannel
+  void changeChannel(value).catch(() => undefined)
 }
 
 async function handleRestart() {
+  if (!canRestart.value)
+    return
   try {
     await restartNow()
   }
@@ -252,6 +219,7 @@ watch(
           class="m-0 rounded-cp bg-cp-error-container px-3 py-2 text-cp-sm leading-normal font-bold text-cp-error-on-container"
         >
           {{ updateError || updateInfo?.warning }}
+          <span v-if="updateInfo?.retryAt" class="mt-2 block">可重试时间：<time :datetime="updateInfo.retryAt">{{ new Date(updateInfo.retryAt).toLocaleString() }}</time></span>
         </p>
       </section>
 
@@ -328,10 +296,16 @@ watch(
     </div>
 
     <template #footer>
+      <label for="system-update-channel" class="flex items-center gap-2 text-cp-sm">
+        更新通道
+        <select id="system-update-channel" :value="selectedChannel" :disabled="!canChangeChannel" aria-label="更新通道" class="rounded-cp bg-cp-bg-container px-2 py-1" @change="handleChannelChange">
+          <option v-for="channel in availableChannels" :key="channel" :value="channel">{{ channel }}</option>
+        </select>
+      </label>
       <BaseButton
         variant="secondary"
         :loading="checking"
-        :disabled="loading || updating || restarting"
+        :disabled="loading || updating || restarting || changingChannel"
         @click="handleCheckUpdates(true)"
       >
         <template #loading>
@@ -343,10 +317,10 @@ watch(
         {{ t('systemUpdate.actions.check') }}
       </BaseButton>
       <BaseButton
-        v-if="updateSuccess && needRestart"
+        v-if="needRestart"
         variant="primary"
         :loading="restarting"
-        :disabled="updating"
+        :disabled="!canRestart"
         @click="handleRestart"
       >
         <template #icon>
@@ -357,8 +331,8 @@ watch(
       <BaseButton
         v-else
         variant="primary"
-        :loading="preparingUpdate || updating"
-        :disabled="!canUpdate || preparingUpdate"
+        :loading="updating"
+        :disabled="!canUpdate"
         @click="handleUpdateRequest"
       >
         <template #icon>
@@ -368,38 +342,6 @@ watch(
       </BaseButton>
     </template>
   </BaseModal>
-
-  <BaseConfirmModal
-    v-model="updateConfirmOpen"
-    :title="t('systemUpdate.confirmation.newerVersion')"
-    description="检测到远端 latest 与当前显示的目标版本不一致"
-    :confirm-text="t('systemUpdate.confirmation.title')"
-    :loading="updating"
-    :confirm-disabled="!updateConfirmInfo?.latestVersion"
-    @confirm="handleConfirmUpdate"
-  >
-    <div class="grid gap-3">
-      <div class="grid gap-2 rounded-cp bg-cp-fill-quaternary p-3">
-        <div
-          v-for="item in presentation.confirmRows"
-          :key="item.key"
-          class="flex min-w-0 items-center justify-between gap-3"
-        >
-          <span class="text-cp-sm leading-none font-bold text-cp-text-quaternary">
-            {{ item.label }}
-          </span>
-          <span
-            class="truncate font-mono text-cp leading-none font-heavy text-cp-text"
-          >
-            {{ item.value }}
-          </span>
-        </div>
-      </div>
-      <p class="m-0 text-cp-sm leading-relaxed font-emphasis text-cp-text-quaternary">
-        {{ t('systemUpdate.confirmation.description') }}
-      </p>
-    </div>
-  </BaseConfirmModal>
 </template>
 
 <style scoped>

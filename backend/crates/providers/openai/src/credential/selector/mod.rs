@@ -583,18 +583,67 @@ impl CodexCredentialSelector {
         request: &CredentialSelectionInput<'_>,
         cyber_policy_session_key: Option<&ProviderSessionAffinityKey>,
     ) -> Result<CodexCredentialLease, CredentialSelectionError> {
-        let result = self
-            .select_unfrozen(request, cyber_policy_session_key)
-            .await
-            .and_then(|lease| {
-                if request.attempt.freeze_provider_route(
-                    Self::request_upstream(lease.account(), request).as_str(),
-                ) {
-                    Ok(lease)
-                } else {
-                    Err(CredentialSelectionError::NoEligibleCredential)
+        let selection = async {
+            let first = self
+                .select_unfrozen(request, cyber_policy_session_key, true)
+                .await;
+            match first {
+                Err(CredentialSelectionError::AccountWait(
+                    reason @ (AccountWaitFailure::QueueFull | AccountWaitFailure::Timeout),
+                )) if !request.follows_root()
+                    && request.attempt.required_account().is_none()
+                    && matches!(
+                        request.attempt.continuation_attempt(),
+                        ContinuationAttempt::None | ContinuationAttempt::ReplayAny
+                    ) =>
+                {
+                    let rejection = match reason {
+                        AccountWaitFailure::QueueFull => {
+                            gateway_core::concurrency::QueueRejection::Full
+                        }
+                        _ => gateway_core::concurrency::QueueRejection::Timeout,
+                    };
+                    request
+                        .attempt
+                        .account_selection_policy()
+                        .reselect_after_queue_rejection(
+                            rejection,
+                            request.attempt.deadline().remaining(),
+                            |_| {
+                                request.attempt.trace().record(
+                                    "account.queue.reselect",
+                                    serde_json::json!({"reason": rejection.to_string()}),
+                                );
+                                self.select_unfrozen(request, cyber_policy_session_key, false)
+                            },
+                            |error| {
+                                matches!(
+                                    error,
+                                    CredentialSelectionError::CapacityUnavailable { .. }
+                                        | CredentialSelectionError::NoEligibleCredential
+                                        | CredentialSelectionError::QuotaExhausted
+                                )
+                            },
+                        )
+                        .await
                 }
-            });
+                result => result,
+            }
+        };
+        let result = tokio::select! {
+            biased;
+            () = request.attempt.cancellation().cancelled() => Err(CredentialSelectionError::Cancelled),
+            result = selection => result,
+        }.and_then(|lease| {
+            if request
+                .attempt
+                .freeze_provider_route(Self::request_upstream(lease.account(), request).as_str())
+            {
+                Ok(lease)
+            } else {
+                Err(CredentialSelectionError::NoEligibleCredential)
+            }
+        });
         result.map_err(|error| {
             if request.follows_root() {
                 CredentialSelectionError::SessionBound(Box::new(error))
@@ -608,10 +657,12 @@ impl CodexCredentialSelector {
         &self,
         request: &CredentialSelectionInput<'_>,
         cyber_policy_session_key: Option<&ProviderSessionAffinityKey>,
+        allow_queue: bool,
     ) -> Result<CodexCredentialLease, CredentialSelectionError> {
         let diagnostic = request.attempt.is_diagnostic_required_account();
-        if (request.attempt.request_tuning().account_busy_wait_enabled
-            || request.attempt.is_quality_check())
+        if allow_queue
+            && (request.attempt.request_tuning().account_busy_wait_enabled
+                || request.attempt.is_quality_check())
             && !diagnostic
         {
             return self
@@ -623,7 +674,8 @@ impl CodexCredentialSelector {
             let result = self
                 .select_snapshot(request, cyber_policy_session_key, &mut universe)
                 .await;
-            if request.follows_root()
+            if allow_queue
+                && request.follows_root()
                 && matches!(
                     result,
                     Err(CredentialSelectionError::NoEligibleCredential
@@ -2251,6 +2303,15 @@ fn quality_interval_delay(
             .unwrap_or_default()
             .max(Duration::from_millis(1))
     })
+}
+
+impl From<gateway_core::concurrency::QueueRejection> for CredentialSelectionError {
+    fn from(reason: gateway_core::concurrency::QueueRejection) -> Self {
+        Self::AccountWait(match reason {
+            gateway_core::concurrency::QueueRejection::Full => AccountWaitFailure::QueueFull,
+            gateway_core::concurrency::QueueRejection::Timeout => AccountWaitFailure::Timeout,
+        })
+    }
 }
 
 #[cfg(test)]
