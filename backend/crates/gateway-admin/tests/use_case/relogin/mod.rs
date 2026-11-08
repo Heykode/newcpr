@@ -38,6 +38,8 @@ pub(super) struct MemoryStore {
     templates: Mutex<BTreeMap<String, ReloginTemplate>>,
     pub(super) invalid_template_references: Mutex<bool>,
     rows: Mutex<BTreeMap<String, ReloginEntry>>,
+    history: Mutex<BTreeMap<(String, String), ReloginAttempt>>,
+    totp_reads: Mutex<Vec<String>>,
     settings: Mutex<ReloginSettings>,
     fail_after: Mutex<Option<usize>>,
     ready_save_delay: Mutex<std::time::Duration>,
@@ -49,6 +51,58 @@ fn conflict() -> AdminStoreError {
 
 #[async_trait]
 impl ReloginStore for MemoryStore {
+    async fn save_attempt(
+        &self,
+        id: &str,
+        revision: u64,
+        attempt: &ReloginAttempt,
+    ) -> AdminStoreResult<()> {
+        let mut rows = self.rows.lock().unwrap();
+        let row = rows.get_mut(id).ok_or_else(conflict)?;
+        if row.revision != revision
+            || row
+                .last_attempt
+                .as_ref()
+                .is_none_or(|previous| previous.id != attempt.id)
+        {
+            return Err(conflict());
+        }
+        row.last_attempt = Some(attempt.clone());
+        self.history
+            .lock()
+            .unwrap()
+            .insert((id.to_owned(), attempt.id.clone()), attempt.clone());
+        Ok(())
+    }
+
+    async fn history(
+        &self,
+        id: &str,
+        before: Option<&str>,
+        limit: usize,
+    ) -> AdminStoreResult<Vec<ReloginAttempt>> {
+        Ok(self
+            .history
+            .lock()
+            .unwrap()
+            .iter()
+            .rev()
+            .filter(|((entry, attempt), _)| {
+                entry == id && before.is_none_or(|cursor| attempt.as_str() < cursor)
+            })
+            .take(limit)
+            .map(|(_, value)| value.clone())
+            .collect())
+    }
+    async fn record_totp_access(
+        &self,
+        id: &str,
+        _: &gateway_admin::model::MutationContext,
+    ) -> AdminStoreResult<()> {
+        self.totp_reads.lock().unwrap().push(id.to_owned());
+        Ok(())
+    }
+
     async fn record_export(
         &self,
         _: &[String],
@@ -133,6 +187,12 @@ impl ReloginStore for MemoryStore {
             }
             updated.insert(entry.id.clone(), entry.clone());
         }
+        let mut history = self.history.lock().unwrap();
+        for (entry, _) in entries {
+            if let Some(attempt) = &entry.last_attempt {
+                history.insert((entry.id.clone(), attempt.id.clone()), attempt.clone());
+            }
+        }
         *rows = updated;
         Ok(())
     }
@@ -142,6 +202,10 @@ impl ReloginStore for MemoryStore {
             return Err(conflict());
         }
         rows.remove(id);
+        self.history
+            .lock()
+            .unwrap()
+            .retain(|(entry, _), _| entry != id);
         Ok(())
     }
     async fn settings(&self) -> AdminStoreResult<ReloginSettings> {
@@ -2253,4 +2317,133 @@ async fn deleting_account_and_library_fences_running_login_without_cancelling_fa
             );
         }
     }
+}
+
+#[tokio::test]
+async fn relogin_history_records_separate_attempts_and_preserves_push_outcomes() {
+    let h = Harness::new(vec![account(false)]).await;
+    let id = h.import("test@example.invalid").await;
+    assert!(
+        h.services
+            .relogin()
+            .history(&id, None)
+            .await
+            .unwrap()
+            .items
+            .is_empty()
+    );
+    *h.provider.relogin_result.lock().unwrap() = None;
+    h.services
+        .relogin()
+        .queue(std::slice::from_ref(&id))
+        .await
+        .unwrap();
+    h.cycle().await;
+    let failed = h
+        .services
+        .relogin()
+        .history(&id, None)
+        .await
+        .unwrap()
+        .items
+        .remove(0);
+    assert_eq!(failed.result, ReloginAttemptResult::Failed);
+    assert_eq!(failed.push_result, ReloginPushResult::NotRequested);
+    assert!(failed.finished_at.is_some());
+    *h.provider.relogin_result.lock().unwrap() = Some(credential());
+    h.ready(&id).await;
+    let row = h.row(&id).await;
+    let revisions = BTreeMap::from([(id.clone(), row.revision)]);
+    h.provider.fail_next(ProviderAdminErrorKind::Invalid);
+    assert!(
+        !h.services
+            .relogin()
+            .push(
+                std::slice::from_ref(&id),
+                &revisions,
+                &context("history-failed-push")
+            )
+            .await
+            .unwrap()[0]
+            .success
+    );
+    let history = h.services.relogin().history(&id, None).await.unwrap();
+    assert_eq!(history.items.len(), 2);
+    assert_eq!(history.items[0].result, ReloginAttemptResult::Succeeded);
+    assert_eq!(history.items[0].push_result, ReloginPushResult::Failed);
+    assert_eq!(history.items[1].id, failed.id);
+    assert!(
+        h.services
+            .relogin()
+            .push(
+                std::slice::from_ref(&id),
+                &revisions,
+                &context("history-retry-push")
+            )
+            .await
+            .unwrap()[0]
+            .success
+    );
+    let history = h.services.relogin().history(&id, None).await.unwrap();
+    assert_eq!(history.items.len(), 2);
+    assert_eq!(history.items[0].push_result, ReloginPushResult::Succeeded);
+    assert!(history.items[0].pushed_at.is_some());
+    assert_eq!(
+        h.services.relogin().list().await.unwrap().items[0].last_attempt_at,
+        Some(history.items[0].started_at)
+    );
+    h.services
+        .relogin()
+        .import(
+            "test@example.invalid----replacement-password----JBSWY3DPEHPK3PXP",
+            true,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        h.services
+            .relogin()
+            .history(&id, None)
+            .await
+            .unwrap()
+            .items
+            .len(),
+        2
+    );
+    assert!(
+        h.services
+            .relogin()
+            .history(&id, Some("invalid"))
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn relogin_totp_is_explicit_audited_and_absent_from_safe_lists_and_history() {
+    let h = Harness::new(vec![]).await;
+    let id = h.import("test@example.invalid").await;
+    let totp = h
+        .services
+        .relogin()
+        .totp(&id, &context("view-totp"))
+        .await
+        .unwrap();
+    assert_eq!(totp.secret, "JBSWY3DPEHPK3PXP");
+    assert_eq!(*h.store.totp_reads.lock().unwrap(), vec![id.clone()]);
+    h.ready(&id).await;
+    for value in [
+        serde_json::to_string(&h.services.relogin().list().await.unwrap()).unwrap(),
+        serde_json::to_string(&h.services.relogin().history(&id, None).await.unwrap()).unwrap(),
+    ] {
+        assert!(!value.contains(&totp.secret));
+        assert!(!value.contains("test-only-password"));
+    }
+    assert!(
+        h.services
+            .relogin()
+            .totp("missing", &context("missing-totp"))
+            .await
+            .is_err()
+    );
 }

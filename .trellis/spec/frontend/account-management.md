@@ -860,10 +860,12 @@ real row and checks both themes at 1440/390/320px for clipping and overflow.
 ## Relogin Templates and Account Actions
 
 - Keep the key badge independent from the account action's busy/blocked state.
-  The menu uses a bounded current-page action query, immutable confirmation target
+  The menu uses a bounded current-page action query, immutable clicked target
   and version, independent error state, and cancellation for reads only.
-- A confirmed account-menu action queues login plus automatic settlement to the
-  selected account. Show progress, block duplicate submissions, refresh account
+- The account-menu `立即重登` action sits immediately below the Excel entry and
+  queues login plus automatic settlement to the selected account on one click; no
+  second confirmation dialog. Preserve the request revision and backend target fences.
+  Show progress, block duplicate submissions, refresh account
   facts/counts on completion, and retain actionable failures. Do not implicitly
   enable scheduling or require the per-entry automatic-relogin switch.
 - Template management reuses import scheduling/group/proxy controls. Persist on
@@ -1073,3 +1075,18 @@ accounts. The UI is display/configuration only and never infers schedulability.
 Wrong: duplicate probe details in a new account card and derive active windows from 100%.
 Correct: render only the server projection inside the existing quota components and
 match window statistics by exact stable window key.
+
+## Relogin History and TOTP Detail
+
+- Place `上次重登时间` immediately after the library identity column. Read `lastAttemptAt`
+  for all outcomes; fall back to the existing successful `lastReloginAt` for old entries.
+  This does not change `ReloginCountCell` or pool success-counter semantics.
+- Clicking the timestamp lazily opens paginated history. Show acquisition and push
+  results separately; a verified login with failed/uncertain push is not synchronized.
+  No old detail is fabricated. Cancel stale reads on close, entry change and disposal.
+- Clicking the library email lazily reads only TOTP via the authenticated no-store
+  endpoint. Use `useCopyText`; never persist the secret or fetch it with the list.
+  Cancel immediately on close and clear plaintext after the real leave transition;
+  an old response/afterLeave callback cannot update or erase a reopened modal.
+- Retain existing swipe handles and selection exclusions for interactive buttons.
+  Verify real dialogs and the menu at desktop/mobile widths with synthetic data.

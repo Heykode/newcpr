@@ -428,6 +428,16 @@ OpenAI 的 `self_serve_business_prolite` 等 Team 套餐显示为 `Business`；�
 OpenAI 原位替换接受重登文档中的 `email`、`account_id`、`type: codex` 元数据，
 邮箱和工作区必须与新令牌声明一致，元数据不能代替令牌主体或覆盖原设备身份。
 
+重登列表另有 `lastAttemptAt`，表示最近一次尝试开始时间，包括失败；不改变成功统计。
+`POST /api/admin/relogin/history` 接受 `{id,before?}`，按尝试 ID 倒序返回至多 50 条
+`items` 和 `nextCursor`。记录包含 `source`、`startedAt`、`finishedAt`、`result`、
+`message`、`accountId`、`workspaceId`、`pushResult`、`pushMessage`、`pushedAt`。
+登录与推送结果独立，旧版未保存的详情不回填。
+`POST /api/admin/relogin/totp` 接受 `{id}`，仅管理员可按需读取 `{secret}`；
+响应 `Cache-Control: no-store`，审计只记录访问动作和条目 ID，不包含敏感内容。
+账号更多菜单的立即重登直接调用已有 `/api/admin/relogin/accounts/queue`，仍提交
+`entryId`、`revision` 与完整 `target`；队列接受不等于登录/推送成功。
+
 重登列表新增 `importedAt`（可空）并按导入时间倒序返回，最新导入在最上方；
 更新已有资料会更新导入时间，后台重登、开关调整和状态刷新不会改变该排序依据。
 旧资料从有效 UUIDv7 ID 读取创建时间，无法还原时返回空值，不使用最近更新时间冒充。

@@ -24,6 +24,8 @@ async function main() {
       revision: 1,
       email: `${id}@example.invalid`,
       automatic: true,
+      hasTotp: true,
+      lastAttemptAt: null,
       status: 'pending',
       message: '',
       planType: null,
@@ -45,6 +47,7 @@ async function main() {
   }
   let rows = [
     row('team-account', {
+      lastAttemptAt: now,
       status: 'ready',
       planType: 'self_serve_business_prolite',
       workspaceId: '12345678-1234-5678-9012-123456789012',
@@ -69,6 +72,11 @@ async function main() {
   ]
   let settings = { concurrency: 1, paused: false }
   const mutations = []
+  let totpReads = 0
+  let historyReads = 0
+  let releaseTotp
+  let notifyTotp
+  let holdTotp = false
   await page.route('**/dev/api/**', async (route) => {
     const request = route.request()
     const path = new URL(request.url()).pathname.replace('/dev', '')
@@ -78,6 +86,24 @@ async function main() {
     }
     else if (path === '/api/admin/relogin') {
       data = { items: [...rows].sort((a, b) => b.importedAt.localeCompare(a.importedAt)), settings }
+    }
+    else if (path.endsWith('/relogin/totp')) {
+      totpReads++
+      if (holdTotp) {
+        await new Promise((resolve) => {
+          releaseTotp = resolve
+          notifyTotp?.()
+        })
+      }
+      data = { secret: 'JBSWY3DPEHPK3PXP' }
+    }
+    else if (path.endsWith('/relogin/history')) {
+      historyReads++
+      const before = request.postDataJSON().before
+      const common = { source: 'account_menu', startedAt: now, finishedAt: now, workspaceId: 'workspace-test', accountId: 'acct_original', pushedAt: null }
+      data = before
+        ? { items: [{ ...common, id: 'older', result: 'failed', message: '登录验证失败', pushResult: 'not_requested', pushMessage: '' }], nextCursor: null }
+        : { items: [{ ...common, id: 'latest', result: 'succeeded', message: '登录验证通过', pushResult: 'failed', pushMessage: '推送前校验失败' }], nextCursor: 'latest' }
     }
     else if (path.startsWith('/api/admin/relogin/')) {
       const body = request.postDataJSON()
@@ -121,6 +147,48 @@ async function main() {
     await page.getByText('team-account@example.invalid', { exact: true }).waitFor()
     assert.equal(await page.locator('tbody tr').count(), 3)
     const team = page.locator('tbody tr[data-row-key="team-account"]')
+    assert.equal(totpReads, 0)
+    assert.equal(historyReads, 0)
+    const headers = await page.getByRole('columnheader').allTextContents()
+    assert.equal(headers.indexOf('上次重登时间'), headers.indexOf('账号') + 1)
+    await page.context().grantPermissions(['clipboard-read', 'clipboard-write'])
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({ width, height: 900 })
+      await team.getByRole('button', { name: 'team-account@example.invalid', exact: true }).click()
+      const totp = page.getByRole('dialog', { name: '2FA 密钥', exact: true })
+      await totp.getByText('JBSWY3DPEHPK3PXP', { exact: true }).waitFor()
+      await totp.getByRole('button', { name: '复制密钥', exact: true }).click()
+      assert.equal(await page.evaluate(() => navigator.clipboard.readText()), 'JBSWY3DPEHPK3PXP')
+      await page.keyboard.press('Escape')
+      await totp.waitFor({ state: 'hidden' })
+      assert.equal(await page.getByText('JBSWY3DPEHPK3PXP', { exact: true }).count(), 0)
+      await team.locator('button[title="查看重登详情"]').click()
+      const history = page.getByRole('dialog', { name: '重登详情', exact: true })
+      await history.getByText('登录成功', { exact: true }).waitFor()
+      await history.getByText('推送失败', { exact: true }).waitFor()
+      await history.getByRole('button', { name: '加载更多', exact: true }).click()
+      await history.getByText('登录失败', { exact: true }).waitFor()
+      assert.equal(await history.getByRole('button', { name: '加载更多', exact: true }).count(), 0)
+      assert.ok(await history.evaluate(element => element.scrollWidth <= element.clientWidth + 1))
+      await page.screenshot({ path: `${output}/history-${width}.png`, fullPage: true })
+      await page.keyboard.press('Escape')
+      await history.waitFor({ state: 'hidden' })
+    }
+    holdTotp = true
+    const heldRead = new Promise(resolve => notifyTotp = resolve)
+    await team.getByRole('button', { name: 'team-account@example.invalid', exact: true }).click()
+    const totp = page.getByRole('dialog', { name: '2FA 密钥', exact: true })
+    await heldRead
+    await totp.getByText('正在读取', { exact: true }).waitFor()
+    await page.keyboard.press('Escape')
+    await totp.waitFor({ state: 'hidden' })
+    releaseTotp()
+    holdTotp = false
+    await page.getByRole('button', { name: 'free-account@example.invalid', exact: true }).click()
+    await totp.getByText('JBSWY3DPEHPK3PXP', { exact: true }).waitFor()
+    await page.keyboard.press('Escape')
+    await totp.waitFor({ state: 'hidden' })
+
     await team.getByText('凭据失效', { exact: true }).waitFor()
     assert.match(await team.locator('[data-column-key="pool"] [title]').getAttribute('title'), /401/)
     assert.equal(await team.getByRole('button', { name: '重登', exact: true }).count(), 1)
@@ -161,7 +229,10 @@ async function main() {
     assert.equal(await page.locator('tbody tr').count(), 1)
     await page.getByRole('textbox', { name: '搜索邮箱', exact: true }).fill('')
     await page.locator('tbody tr[data-row-key="team-account"]').waitFor()
-    await page.getByRole('switch', { name: 'free-account@example.invalid 自动重登', exact: true }).locator('..').click()
+    await Promise.all([
+      page.waitForResponse(response => response.url().endsWith('/relogin/automatic')),
+      page.getByRole('switch', { name: 'free-account@example.invalid 自动重登', exact: true }).locator('..').click(),
+    ])
     await page.waitForFunction(() => document.querySelector('[aria-label="free-account@example.invalid 自动重登"]')?.checked === false)
     assert.equal(rows.find(row => row.id === 'free-account').automatic, false)
 
@@ -184,9 +255,9 @@ async function main() {
     await page.getByRole('checkbox', { name: '全选当前页', exact: true }).locator('..').click()
     await page.getByText('已选 5 项', { exact: true }).waitFor()
     await page.getByRole('button', { name: '取消选择', exact: true }).click()
-    await page.locator('tbody tr').first().locator('[data-swipe-select-handle]').last().scrollIntoViewIfNeeded()
-    const first = page.locator('tbody tr').nth(0).locator('[data-swipe-select-handle]').last()
-    const third = page.locator('tbody tr').nth(2).locator('[data-swipe-select-handle]').last()
+    await page.locator('tbody tr').first().locator('[data-swipe-select-handle]').first().scrollIntoViewIfNeeded()
+    const first = page.locator('tbody tr').nth(0).locator('[data-swipe-select-handle]').first()
+    const third = page.locator('tbody tr').nth(2).locator('[data-swipe-select-handle]').first()
     const a = await first.boundingBox()
     const b = await third.boundingBox()
     await page.mouse.move(a.x + 10, a.y + 10)

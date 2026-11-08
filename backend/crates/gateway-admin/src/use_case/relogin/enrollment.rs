@@ -86,6 +86,7 @@ impl DefaultReloginService {
                 changes.push((entry, Some(expected)));
             } else {
                 let entry = ReloginEntry {
+                    last_attempt: None,
                     id: format!("relogin_{}", uuid::Uuid::now_v7().simple()),
                     revision: 1,
                     email: input.email,

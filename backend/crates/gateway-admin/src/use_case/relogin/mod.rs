@@ -35,6 +35,7 @@ use tokio::sync::Mutex;
 
 mod enrollment;
 mod export;
+mod history;
 mod recovery;
 mod worker;
 mod workspace;
@@ -67,6 +68,7 @@ pub struct ReloginView {
     pub relogin_account_id: Option<String>,
     pub relogin_count: Option<u64>,
     pub last_relogin_at: Option<DateTime<Utc>>,
+    pub last_attempt_at: Option<DateTime<Utc>>,
     pub verified_at: Option<DateTime<Utc>>,
     pub expires_at: Option<DateTime<Utc>>,
     pub imported_at: Option<DateTime<Utc>>,
@@ -116,6 +118,8 @@ pub struct AccountReloginAction {
 
 #[async_trait]
 pub trait ReloginService: Send + Sync {
+    async fn history(&self, id: &str, before: Option<&str>) -> Result<ReloginHistory, AdminError>;
+    async fn totp(&self, id: &str, context: &MutationContext) -> Result<ReloginTotp, AdminError>;
     async fn push_with_template(
         &self,
         ids: &[String],
@@ -279,6 +283,7 @@ impl DefaultReloginService {
             .filter(|revision| *revision <= i64::MAX as u64)
             .ok_or_else(|| AdminError::internal("重登资料版本超出范围"))?;
         entry.updated_at = Utc::now();
+        entry.update_attempt();
         self.store()?
             .save(entry, Some(expected))
             .await
@@ -294,6 +299,14 @@ impl DefaultReloginService {
         if entry.status.active() {
             entry.status = ReloginStatus::Failed;
             entry.message = "任务已取消，未推送凭据".to_owned();
+            if let Some(attempt) = entry.last_attempt.as_mut()
+                && attempt.result == ReloginAttemptResult::Running
+            {
+                attempt.result = ReloginAttemptResult::Cancelled;
+                attempt.message = entry.message.clone();
+                attempt.finished_at = Some(Utc::now());
+                attempt.push_result = ReloginPushResult::NotRequested;
+            }
         }
     }
 
@@ -321,6 +334,18 @@ impl DefaultReloginService {
             entry.status = ReloginStatus::Uncertain;
             entry.message = "推送结果未确认，请检查号池并重新获取凭证后再推送".to_owned();
             self.save(entry).await?;
+        }
+        if let Err(error) = &outcome
+            && entry.status != ReloginStatus::Uncertain
+            && let Some(attempt) = entry.last_attempt.as_mut()
+            && attempt.result == ReloginAttemptResult::Succeeded
+        {
+            attempt.push_result = ReloginPushResult::Failed;
+            attempt.push_message = error.message().to_owned();
+            self.store()?
+                .save_attempt(&entry.id, entry.revision, attempt)
+                .await
+                .map_err(store_error)?;
         }
         outcome
     }
@@ -754,6 +779,13 @@ fn result(id: String, outcome: Result<(), AdminError>) -> ReloginBatchResult {
 
 #[async_trait]
 impl ReloginService for DefaultReloginService {
+    async fn history(&self, id: &str, before: Option<&str>) -> Result<ReloginHistory, AdminError> {
+        self.read_history(id, before).await
+    }
+    async fn totp(&self, id: &str, context: &MutationContext) -> Result<ReloginTotp, AdminError> {
+        self.read_totp(id, context).await
+    }
+
     async fn account_actions(
         &self,
         ids: &[String],
@@ -989,6 +1021,10 @@ impl ReloginService for DefaultReloginService {
                         .map(|account| account.relogin_count)
                         .or_else(|| matches.is_empty().then_some(0)),
                     last_relogin_at: statistics.and_then(|account| account.last_relogin_at),
+                    last_attempt_at: entry
+                        .last_attempt
+                        .as_ref()
+                        .map(|attempt| attempt.started_at),
                     verified_at: credential.map(|value| value.verified_at),
                     expires_at: credential.map(|value| value.expires_at),
                     imported_at,

@@ -42,20 +42,86 @@ async fn save_row(
         sqlx::query("update account_relogin_entries set revision=$2, material=$3 where id=$1 and revision=$4 and email=$5")
             .bind(&entry.id).bind(revision).bind(material)
             .bind(i64::try_from(expected).map_err(unavailable)?).bind(&entry.email)
-            .execute(connection).await
+            .execute(&mut *connection).await
     } else {
         sqlx::query("insert into account_relogin_entries (id,email,revision,material) values ($1,$2,$3,$4) on conflict do nothing")
             .bind(&entry.id).bind(&entry.email).bind(revision).bind(material)
-            .execute(connection).await
+            .execute(&mut *connection).await
     }.map_err(unavailable)?;
     if result.rows_affected() != 1 {
         return Err(conflict());
+    }
+    if let Some(attempt) = &entry.last_attempt {
+        sqlx::query(
+            "insert into account_relogin_history (entry_id,id,detail) values ($1,$2,$3)
+            on conflict (entry_id,id) do update set detail=excluded.detail",
+        )
+        .bind(&entry.id)
+        .bind(&attempt.id)
+        .bind(serde_json::to_value(attempt).map_err(unavailable)?)
+        .execute(&mut *connection)
+        .await
+        .map_err(unavailable)?;
     }
     Ok(())
 }
 
 #[async_trait]
 impl ReloginStore for PgReloginStore {
+    async fn save_attempt(
+        &self,
+        id: &str,
+        revision: u64,
+        attempt: &gateway_admin::model::relogin::ReloginAttempt,
+    ) -> AdminStoreResult<()> {
+        let mut transaction = self.pool.begin().await.map_err(unavailable)?;
+        let detail = serde_json::to_value(attempt).map_err(unavailable)?;
+        let result = sqlx::query("update account_relogin_entries set material=jsonb_set(material,'{last_attempt}',$3) where id=$1 and revision=$2 and material->'last_attempt'->>'id'=$4")
+            .bind(id).bind(i64::try_from(revision).map_err(unavailable)?).bind(&detail).bind(&attempt.id)
+            .execute(&mut *transaction).await.map_err(unavailable)?;
+        if result.rows_affected() != 1 {
+            return Err(conflict());
+        }
+        sqlx::query("update account_relogin_history set detail=$3 where entry_id=$1 and id=$2")
+            .bind(id)
+            .bind(&attempt.id)
+            .bind(detail)
+            .execute(&mut *transaction)
+            .await
+            .map_err(unavailable)?;
+        transaction.commit().await.map_err(unavailable)
+    }
+
+    async fn history(
+        &self,
+        id: &str,
+        before: Option<&str>,
+        limit: usize,
+    ) -> AdminStoreResult<Vec<gateway_admin::model::relogin::ReloginAttempt>> {
+        let rows = sqlx::query("select detail from account_relogin_history where entry_id=$1 and ($2::text is null or id<$2) order by id desc limit $3")
+            .bind(id).bind(before).bind(limit.min(51) as i64).fetch_all(&self.pool).await.map_err(unavailable)?;
+        rows.into_iter()
+            .map(|row| {
+                serde_json::from_value(row.try_get("detail").map_err(unavailable)?)
+                    .map_err(unavailable)
+            })
+            .collect()
+    }
+    async fn record_totp_access(
+        &self,
+        id: &str,
+        context: &gateway_admin::model::MutationContext,
+    ) -> AdminStoreResult<()> {
+        let mut transaction = self.pool.begin().await.map_err(unavailable)?;
+        super::admin_security_audit::insert_admin_audit_event(
+            &mut transaction,
+            crate::mutation_audit(context, "view_relogin_2fa", "relogin_entry", id, Vec::new()),
+        )
+        .await
+        .map_err(unavailable)?;
+        transaction.commit().await.map_err(unavailable)
+    }
+
     async fn record_export(
         &self,
         ids: &[String],
@@ -199,8 +265,9 @@ impl ReloginStore for PgReloginStore {
             .collect()
     }
     async fn save(&self, entry: &ReloginEntry, expected: Option<u64>) -> AdminStoreResult<()> {
-        let mut connection = self.pool.acquire().await.map_err(unavailable)?;
-        save_row(&mut connection, entry, expected).await
+        let mut transaction = self.pool.begin().await.map_err(unavailable)?;
+        save_row(&mut transaction, entry, expected).await?;
+        transaction.commit().await.map_err(unavailable)
     }
     async fn save_batch(&self, entries: &[(ReloginEntry, Option<u64>)]) -> AdminStoreResult<()> {
         let mut transaction = self.pool.begin().await.map_err(unavailable)?;

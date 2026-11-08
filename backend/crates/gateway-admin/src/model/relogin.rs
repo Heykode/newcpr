@@ -299,9 +299,150 @@ pub struct ReloginEntry {
     #[serde(default)]
     pub imported_at: Option<DateTime<Utc>>,
     pub updated_at: DateTime<Utc>,
+    #[serde(default)]
+    pub last_attempt: Option<ReloginAttempt>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReloginAttemptSource {
+    Library,
+    AccountMenu,
+    Automatic,
+    Enrollment,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReloginAttemptResult {
+    Running,
+    Succeeded,
+    Failed,
+    Cancelled,
+    AwaitingWorkspace,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReloginPushResult {
+    NotRequested,
+    Pending,
+    Running,
+    Succeeded,
+    Failed,
+    Uncertain,
+}
+
+/// Safe history projection. Never include credentials or provider documents here.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReloginAttempt {
+    pub id: String,
+    pub source: ReloginAttemptSource,
+    pub started_at: DateTime<Utc>,
+    pub finished_at: Option<DateTime<Utc>>,
+    pub result: ReloginAttemptResult,
+    pub message: String,
+    pub account_id: Option<String>,
+    pub workspace_id: Option<String>,
+    pub push_result: ReloginPushResult,
+    pub push_message: String,
+    pub pushed_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReloginHistory {
+    pub items: Vec<ReloginAttempt>,
+    pub next_cursor: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReloginTotp {
+    pub secret: String,
 }
 
 impl ReloginEntry {
+    pub fn begin_attempt(&mut self) {
+        let source = if self.automatic_job {
+            ReloginAttemptSource::Automatic
+        } else if self.manual_push_context.is_some() {
+            ReloginAttemptSource::AccountMenu
+        } else if self.enrollment.is_some() {
+            ReloginAttemptSource::Enrollment
+        } else {
+            ReloginAttemptSource::Library
+        };
+        self.last_attempt = Some(ReloginAttempt {
+            id: uuid::Uuid::now_v7().simple().to_string(),
+            source,
+            started_at: Utc::now(),
+            finished_at: None,
+            result: ReloginAttemptResult::Running,
+            message: String::new(),
+            account_id: self.target.as_ref().map(|target| target.account_id.clone()),
+            workspace_id: self
+                .target
+                .as_ref()
+                .map(|target| target.workspace_id.clone())
+                .or_else(|| self.selected_workspace_id.clone())
+                .or_else(|| self.preferred_workspace_id.clone()),
+            push_result: if source == ReloginAttemptSource::Library {
+                ReloginPushResult::NotRequested
+            } else {
+                ReloginPushResult::Pending
+            },
+            push_message: String::new(),
+            pushed_at: None,
+        });
+    }
+
+    pub fn update_attempt(&mut self) {
+        let Some(attempt) = self.last_attempt.as_mut() else {
+            return;
+        };
+        if attempt.result == ReloginAttemptResult::Running {
+            let result = match self.status {
+                ReloginStatus::Ready => ReloginAttemptResult::Succeeded,
+                ReloginStatus::Failed => ReloginAttemptResult::Failed,
+                ReloginStatus::AwaitingWorkspace => ReloginAttemptResult::AwaitingWorkspace,
+                ReloginStatus::Pending => ReloginAttemptResult::Cancelled,
+                _ => return,
+            };
+            attempt.result = result;
+            attempt.finished_at = Some(Utc::now());
+            attempt.message = self.message.clone();
+            if result != ReloginAttemptResult::Succeeded {
+                attempt.push_result = ReloginPushResult::NotRequested;
+            }
+            if let Some(credential) = &self.credential {
+                attempt.workspace_id = Some(credential.workspace_id.clone());
+            }
+        }
+        if attempt.result == ReloginAttemptResult::Succeeded {
+            let push = match self.status {
+                ReloginStatus::Pushing => Some(ReloginPushResult::Running),
+                ReloginStatus::Uncertain => Some(ReloginPushResult::Uncertain),
+                ReloginStatus::Ready if self.synced_at.is_some() => {
+                    Some(ReloginPushResult::Succeeded)
+                }
+                ReloginStatus::Failed if self.credential.is_some() => {
+                    Some(ReloginPushResult::Failed)
+                }
+                _ => None,
+            };
+            if let Some(push) = push {
+                attempt.push_result = push;
+                attempt.push_message = self.message.clone();
+                attempt.pushed_at = self.synced_at;
+                if let Some(target) = &self.target {
+                    attempt.account_id = Some(target.account_id.clone());
+                }
+            }
+        }
+    }
+
     pub fn automatic_stop_reason(&self) -> Option<ReloginStopReason> {
         if self.status != ReloginStatus::Failed {
             return None;
@@ -394,7 +535,7 @@ pub struct ReloginInput {
     pub mfa_secret: String,
 }
 
-fn totp_secret(raw: &str) -> Option<String> {
+pub(crate) fn totp_secret(raw: &str) -> Option<String> {
     let secret: String = raw
         .chars()
         .filter(|ch| !ch.is_whitespace() && *ch != '\u{feff}' && *ch != '-')

@@ -226,6 +226,7 @@ impl DefaultReloginService {
                     self.save(&mut entry).await?;
                     continue;
                 }
+                entry.begin_attempt();
                 if let (Some(target), Some(account)) = (&entry.target, target_account)
                     && !target.matches_account(account)
                 {

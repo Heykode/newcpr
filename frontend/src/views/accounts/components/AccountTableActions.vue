@@ -118,24 +118,6 @@ const emit = defineEmits<{
             {{ t('accounts.actions.reauthorize') }}
           </BaseMenuItem>
           <BaseMenuItem
-            v-if="relogin"
-            :loading="relogin.busy"
-            :disabled="reloginUnavailable || relogin.busy || Boolean(relogin.blockedReason)"
-            :title="reloginUnavailable ? '重登状态读取失败，正在重试' : relogin.blockedReason || relogin.message"
-            @click.stop="(close(), emit('relogin', account))"
-          >
-            <template #icon>
-              <RotateCcw class="size-3.5 text-cp-text-quaternary" />
-            </template>
-            {{ relogin.busy ? '重登处理中' : '失效重登' }}
-          </BaseMenuItem>
-          <p
-            v-if="relogin && !relogin.busy && (relogin.status === 'failed' || relogin.status === 'uncertain')"
-            class="px-2 py-1 text-cp-xs break-words text-cp-error"
-          >
-            {{ relogin.message }}
-          </p>
-          <BaseMenuItem
             :loading="recovering"
             :disabled="recovering"
             @click.stop="(close(), emit('recover', account.id))"
@@ -156,6 +138,24 @@ const emit = defineEmits<{
             </template>
             {{ account.responsesUpstream === 'excel' ? '关闭 Excel 入口' : '开启 Excel 入口' }}
           </BaseMenuItem>
+          <BaseMenuItem
+            v-if="relogin"
+            :loading="relogin.busy"
+            :disabled="reloginUnavailable || relogin.busy || Boolean(relogin.blockedReason)"
+            :title="reloginUnavailable ? '重登状态读取失败，正在重试' : relogin.blockedReason || relogin.message"
+            @click.stop="(close(), emit('relogin', account))"
+          >
+            <template #icon>
+              <RotateCcw class="size-3.5 text-cp-text-quaternary" />
+            </template>
+            {{ relogin.busy ? '重登处理中' : '立即重登' }}
+          </BaseMenuItem>
+          <p
+            v-if="relogin && !relogin.busy && (relogin.status === 'failed' || relogin.status === 'uncertain')"
+            class="px-2 py-1 text-cp-xs break-words text-cp-error"
+          >
+            {{ relogin.message }}
+          </p>
         </div>
       </template>
     </BasePopover>

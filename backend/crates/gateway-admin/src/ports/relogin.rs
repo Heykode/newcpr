@@ -7,6 +7,24 @@ use async_trait::async_trait;
 
 #[async_trait]
 pub trait ReloginStore: Send + Sync {
+    /// Record a failed push preflight without invalidating its existing confirmation revision.
+    async fn save_attempt(
+        &self,
+        id: &str,
+        revision: u64,
+        attempt: &crate::model::relogin::ReloginAttempt,
+    ) -> AdminStoreResult<()>;
+    async fn history(
+        &self,
+        id: &str,
+        before: Option<&str>,
+        limit: usize,
+    ) -> AdminStoreResult<Vec<crate::model::relogin::ReloginAttempt>>;
+    async fn record_totp_access(
+        &self,
+        id: &str,
+        context: &crate::model::MutationContext,
+    ) -> AdminStoreResult<()>;
     async fn record_export(
         &self,
         ids: &[String],
