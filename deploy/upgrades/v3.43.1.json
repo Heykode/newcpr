@@ -1,0 +1,9 @@
+{
+  "from_version": "3.42.2",
+  "to_version": "3.43.1",
+  "from_migrations_tree": "e6db425876bae65121c78ff8928da79e4b3f95c9",
+  "to_migrations_tree": "b026ee392fcc382c729660b7b1293b53bce4c992",
+  "added": ["0087_account_relogin_history.sql"],
+  "modified_documentation": ["README.md"],
+  "recovery": "manual"
+}
