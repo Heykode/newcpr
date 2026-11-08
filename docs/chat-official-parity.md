@@ -114,7 +114,7 @@ Chat 入口不再透传旧 `use_websocket` 扩展。直接使用原生 Responses
 | --- | --- |
 | `manual_rotation_commits_same_principal_and_rejects_conflict_or_unknown_without_pg_changes` | 合法更新凭据保留设备身份；账号主体冲突或无法确认时拒绝写库 |
 | `same_principal_reimport_uses_real_codec_and_keeps_the_persisted_device` | 重复导入同一账号更新凭据，保留原账号和设备身份，不新增重复账号 |
-| `loopback_reauthorization_rejects_wrong_or_unknown_principals_without_pg_changes` | 模拟 OAuth 重登返回其他账号或无法确认身份时，拒绝覆盖原账号数据 |
+| `loopback_reauthorization_rejects_wrong_or_unknown_principals_without_pg_changes`（历史用例） | 当时验证 OAuth 换主体或身份不明时拒绝写库；换主体拒绝的预期已被官方 `1a2a4a56` 替代，现行规则及对应 App 用例见 [v3.43.1 差异账](upstream-v3431-native-parity.md) |
 
 上述用例属于账号身份与持久化集成，不是 Chat 文本、工具或流式转换功能。
 补测没有修改生产代码或数据库结构，也没有接触生产数据库。

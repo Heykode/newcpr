@@ -6,9 +6,10 @@ use gateway_admin::{
     model::{
         MutationActor, MutationContext,
         provider_credentials::{
-            AuthorizationMutationTarget, AuthorizationOwnerBinding, CompleteAuthorization,
-            CredentialImportCommit, CredentialRotationCommit, PendingAuthorizationMutation,
-            PrepareCredentialImport, PrepareCredentialRotation, ProviderDocument,
+            AuthorizationCommit, AuthorizationCredentialCommit, AuthorizationMutationTarget,
+            AuthorizationOwnerBinding, CompleteAuthorization, CredentialImportCommit,
+            CredentialRotationCommit, PendingAuthorizationMutation, PrepareCredentialImport,
+            PrepareCredentialRotation, PreparedAuthorizationCredential, ProviderDocument,
         },
     },
     ports::{provider::ProviderAdminErrorKind, store::AccountStore},
@@ -906,20 +907,20 @@ async fn same_principal_reimport_uses_real_codec_and_keeps_the_persisted_device(
 }
 
 #[tokio::test]
-async fn loopback_reauthorization_rejects_wrong_or_unknown_principals_without_pg_changes() {
+async fn loopback_reauthorization_rebinds_selected_account_and_rejects_incomplete_identity() {
     let Some(harness) = Harness::create().await else {
         return;
     };
     let old = token("user-A", "workspace-A", "old@example.com", "pro");
     let id = harness.import("opaque-old", Some(&old)).await;
-    let before = harness.snapshot().await;
-    for (fresh, message) in [
+    for (fresh, replaces_identity) in [
         (
             token("user-B", "workspace-B", "other@example.com", "plus"),
-            "账号主体",
+            true,
         ),
-        ("opaque-id".to_owned(), "无法确认"),
+        ("opaque-id".to_owned(), false),
     ] {
+        let before = harness.snapshot().await;
         harness.server.reset().await;
         Mock::given(method("POST"))
             .and(path("/oauth/token"))
@@ -957,23 +958,73 @@ async fn loopback_reauthorization_rejects_wrong_or_unknown_principals_without_pg
             .expect("inner OAuth authorization URL contains state")
             .1
             .into_owned();
-        let error = harness
+        let result = harness
             .provider
             .admin_provider()
             .complete_authorization(CompleteAuthorization {
                 settings: None,
-                context,
+                context: context.clone(),
                 flow_id: started.flow_id,
                 callback_url: format!(
                     "http://localhost:1455/auth/callback?code=synthetic&state={state}"
                 ),
             })
-            .await
-            .unwrap_err();
-        assert_eq!(error.kind(), ProviderAdminErrorKind::Conflict);
-        assert!(error.public_message().unwrap().contains(message));
-        assert!(!error.public_message().unwrap().contains("无效"));
+            .await;
         assert_eq!(harness.snapshot().await, before);
+        if replaces_identity {
+            let prepared = result.expect("manual OAuth adopts the newly authorized identity");
+            let PreparedAuthorizationCredential::Reauthorize(rotation) = &prepared.credential
+            else {
+                panic!("expected reauthorization of the selected account");
+            };
+            let facts = rotation.facts();
+            assert_eq!(facts.account_id, id);
+            let identity = facts.replacement_identity.as_ref().unwrap();
+            assert_eq!(identity.upstream_user_id(), "user-B");
+            assert_eq!(identity.upstream_account_id(), Some("workspace-B"));
+            harness
+                .store
+                .commit_authorization(
+                    AuthorizationCommit {
+                        settings: None,
+                        pending: prepared.pending.clone(),
+                        credential: AuthorizationCredentialCommit::Reauthorize(facts.clone()),
+                    },
+                    &context,
+                )
+                .await
+                .unwrap();
+            let current = harness
+                .repository
+                .load_current_credential(&id)
+                .await
+                .unwrap();
+            assert_eq!(current.account.upstream_user_id(), Some("user-B"));
+            assert_eq!(current.account.upstream_account_id(), Some("workspace-B"));
+            assert_eq!(current.account.email(), Some("other@example.com"));
+            assert_eq!(current.account.plan_type(), Some("plus"));
+            assert_eq!(
+                current.account.name(),
+                before["accounts"][0]["name"].as_str().unwrap()
+            );
+            let credential = CodexCredentialCodec::decode(&current.credential).unwrap();
+            assert_eq!(
+                credential.installation_id,
+                before["devices"][0]["installation_id"].as_str().unwrap()
+            );
+            let after = harness.snapshot().await;
+            assert_eq!(after["accounts"].as_array().unwrap().len(), 1);
+            assert_eq!(after["devices"].as_array().unwrap().len(), 1);
+            assert_eq!(after["devices"][0]["upstream_user_id"], "user-B");
+            assert_eq!(after["devices"][0]["upstream_account_id"], "workspace-B");
+        } else {
+            let error = result.unwrap_err();
+            assert_eq!(error.kind(), ProviderAdminErrorKind::Invalid);
+            assert_eq!(
+                error.public_message(),
+                Some("OpenAI 拒绝了授权码，请重新发起授权")
+            );
+        }
         harness.server.verify().await;
     }
     harness.close().await;

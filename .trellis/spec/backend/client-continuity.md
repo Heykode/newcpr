@@ -471,6 +471,9 @@ Provider `reauthorization_entry_adopts_new_identity_and_rejects_incomplete_crede
 在真实 PG 验证事务、归档、设置与 State；WS 的
 `exact_continuation_reuses_owning_socket_after_connection_profile_updates`
 同时验证同身份可续接、换身份不能借用旧 socket。
+App `loopback_reauthorization_rebinds_selected_account_and_rejects_incomplete_identity`
+在真实 PG/Redis 与模拟 OAuth callback 验证新身份实际写入所选槽位、保留名称和安装 ID，
+以及不完整身份拒绝且数据库零变更。旧的人工 OAuth“换主体即拒绝”断言已废弃。
 
 ### 错误与正确做法
 
