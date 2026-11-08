@@ -51,6 +51,7 @@ async fn relogin_seconds_upgrade_converts_defaults_and_preserves_custom_duration
 
 fn entry(id: &str, email: &str) -> ReloginEntry {
     ReloginEntry {
+        last_attempt: None,
         imported_at: Some(chrono::Utc::now()),
         id: id.into(),
         email: email.into(),
@@ -1083,4 +1084,73 @@ async fn account_deletion_option_cleans_only_selected_relogin_material_atomicall
         }
         db.close().await;
     }
+}
+
+#[tokio::test]
+async fn relogin_history_is_atomic_paginated_and_removed_with_material() {
+    use gateway_admin::model::relogin::{ReloginAttemptResult, ReloginPushResult};
+    let Some(database) = TestDatabase::create("relogin_history").await else {
+        return;
+    };
+    let store = PgReloginStore::new(database.pool.clone());
+    let mut row = entry("history-entry", "history@example.invalid");
+    store.save(&row, None).await.unwrap();
+    let mut attempt_ids = Vec::new();
+    for _ in 0..55 {
+        row.begin_attempt();
+        row.status = ReloginStatus::Failed;
+        row.message = "验证失败".into();
+        row.update_attempt();
+        let expected = row.revision;
+        row.revision += 1;
+        store.save(&row, Some(expected)).await.unwrap();
+        attempt_ids.push(row.last_attempt.as_ref().unwrap().id.clone());
+    }
+    let page = store.history(&row.id, None, 50).await.unwrap();
+    assert_eq!(page.len(), 50);
+    assert_eq!(page[0].id, attempt_ids[54]);
+    assert_eq!(page[0].result, ReloginAttemptResult::Failed);
+    let tail = store
+        .history(&row.id, Some(&page[49].id), 50)
+        .await
+        .unwrap();
+    assert_eq!(tail.len(), 5);
+    assert_eq!(tail[4].id, attempt_ids[0]);
+    let mut next = row.clone();
+    next.begin_attempt();
+    next.revision += 1;
+    let duplicate = entry("history-duplicate", "history@example.invalid");
+    assert!(
+        store
+            .save_batch(&[(next.clone(), Some(row.revision)), (duplicate, None)])
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        store.history(&row.id, None, 1).await.unwrap()[0].id,
+        attempt_ids[54]
+    );
+    assert_eq!(store.entries().await.unwrap()[0].revision, row.revision);
+    let mut failed_push = row.last_attempt.clone().unwrap();
+    failed_push.result = ReloginAttemptResult::Succeeded;
+    failed_push.push_result = ReloginPushResult::Failed;
+    failed_push.push_message = "推送前校验失败".into();
+    store
+        .save_attempt(&row.id, row.revision, &failed_push)
+        .await
+        .unwrap();
+    assert_eq!(store.entries().await.unwrap()[0].revision, row.revision);
+    assert_eq!(
+        store.history(&row.id, None, 1).await.unwrap()[0].push_result,
+        ReloginPushResult::Failed
+    );
+    assert!(
+        store
+            .save_attempt(&row.id, row.revision - 1, &failed_push)
+            .await
+            .is_err()
+    );
+    store.delete(&row.id, row.revision).await.unwrap();
+    assert!(store.history(&row.id, None, 50).await.unwrap().is_empty());
+    database.close().await;
 }

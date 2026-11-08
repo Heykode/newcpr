@@ -250,25 +250,25 @@ function costAmount(value: string | null, pointIndex: number) {
         <div v-if="hasData" class="grid grid-cols-5 gap-1 rounded-xl bg-cp-fill-quaternary/45 p-2">
           <div class="grid min-w-0 gap-1 px-1.5">
             <span class="truncate text-[10px] font-bold text-cp-text-quaternary">实际费用</span>
-            <strong class="truncate font-mono text-cp-sm font-heavy tabular-nums text-cp-text" :title="formatUsd(cost.estimatedCost)">
+            <strong class="truncate font-mono text-cp-sm font-heavy tabular-nums text-cp-text">
               {{ formatUsd(cost.estimatedCost) }}
             </strong>
           </div>
           <div class="grid min-w-0 gap-1 px-1.5">
             <span class="truncate text-[10px] font-bold text-cp-text-quaternary">{{ t('usage.cost.cacheSavings') }}</span>
-            <strong class="truncate font-mono text-cp-sm font-heavy tabular-nums text-cp-green-text" :title="formatUsd(cost.cacheSavings)">
+            <strong class="truncate font-mono text-cp-sm font-heavy tabular-nums text-cp-green-text">
               {{ formatUsd(cost.cacheSavings) }}
             </strong>
           </div>
           <div class="grid min-w-0 gap-1 px-1.5">
             <span class="truncate text-[10px] font-bold text-cp-text-quaternary">{{ t('usage.cost.tierPremium') }}</span>
-            <strong class="truncate font-mono text-cp-sm font-heavy tabular-nums text-cp-orange-text" :title="formatUsd(cost.tierPremium)">
+            <strong class="truncate font-mono text-cp-sm font-heavy tabular-nums text-cp-orange-text">
               {{ formatUsd(cost.tierPremium) }}
             </strong>
           </div>
           <div class="grid min-w-0 gap-1 px-1.5">
             <span class="truncate text-[10px] font-bold text-cp-text-quaternary">每成功请求</span>
-            <strong class="truncate font-mono text-cp-sm font-heavy tabular-nums text-cp-text" :title="formatUsd(cost.costPerSuccessfulRequest, true)">
+            <strong class="truncate font-mono text-cp-sm font-heavy tabular-nums text-cp-text">
               {{ formatUsd(cost.costPerSuccessfulRequest, true) }}
             </strong>
           </div>

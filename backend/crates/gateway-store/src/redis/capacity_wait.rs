@@ -176,6 +176,7 @@ struct CleanupLifecycle {
     stopping: AtomicBool,
     owners: AtomicUsize,
     changed: Notify,
+    scheduling: super::scheduling_cleanup::SchedulingLeaseCleanup,
 }
 
 impl RedisCapacityWait {
@@ -290,6 +291,12 @@ impl RedisCapacityWait {
             {
                 return Err(invalid("quality scheduling pool mismatch"));
             }
+            let _acquisition = self
+                .lifecycle
+                .scheduling
+                .acquire()
+                .await
+                .ok_or_else(|| unavailable("account lease cleanup is stopping"))?;
             let deadline = request.deadline().lease_deadline();
             let (mut owner, keys) = self.ownership(
                 request.account_id(),
@@ -302,7 +309,9 @@ impl RedisCapacityWait {
             match outcome {
                 1 => {
                     owner.maintain(&request);
-                    Ok(ProviderLeaseAcquisition::Acquired(Box::new(owner)))
+                    Ok(ProviderLeaseAcquisition::Acquired(Box::new(
+                        owner.supervise(&request),
+                    )))
                 }
                 0 => {
                     let retry_after = retry_interval(&value)?;
@@ -410,12 +419,20 @@ impl ProviderWaitLease for RedisWaitLease {
             {
                 return Err(invalid("capacity promotion owner mismatch"));
             }
+            let lifecycle = Arc::clone(&owner.lifecycle);
+            let _acquisition = lifecycle
+                .scheduling
+                .acquire()
+                .await
+                .ok_or_else(|| unavailable("account lease cleanup is stopping"))?;
             let (outcome, value) = owner.acquire_execution(&self.keys, &request, true).await?;
             match outcome {
                 1 => {
                     // No await between delivery and disarming the waiting guard.
                     owner.maintain(&request);
-                    Ok(ProviderWaitPromotion::Acquired(Box::new(owner)))
+                    Ok(ProviderWaitPromotion::Acquired(Box::new(
+                        owner.supervise(&request),
+                    )))
                 }
                 0 => {
                     let retry_after = retry_interval(&value)?;
@@ -464,6 +481,18 @@ struct Ownership {
 }
 
 impl Ownership {
+    fn supervise(
+        self,
+        request: &ProviderSchedulingLeaseRequest,
+    ) -> super::scheduling_cleanup::SchedulingLeaseGuard {
+        let cleanup = self.lifecycle.scheduling.clone();
+        cleanup.track(request.cancellation(), async move {
+            self.release().await.map(|()| true).map_err(|error| {
+                crate::redis_unavailable("release account execution lease").with_source(error)
+            })
+        })
+    }
+
     fn maintain(&mut self, request: &ProviderSchedulingLeaseRequest) {
         // An admitted execution no longer occupies a waiting position.
         self.wait_slot.take();
@@ -608,13 +637,17 @@ impl DaemonTask for CapacityWaitCleanupWriter {
             let mut pending = FuturesUnordered::new();
             let mut input_closed = false;
             let mut stopping = false;
+            let shutdown = self.lifecycle.scheduling.shutdown();
+            tokio::pin!(shutdown);
+            let mut supervised_drained = false;
+            let mut shutdown_deadline = None;
             let cancelled = cancellation.cancelled();
             tokio::pin!(cancelled);
             loop {
                 if stopping && self.lifecycle.owners.load(Ordering::SeqCst) == 0 {
                     receiver.close();
                 }
-                if input_closed && pending.is_empty() {
+                if input_closed && pending.is_empty() && (!stopping || supervised_drained) {
                     return Ok(());
                 }
                 tokio::select! {
@@ -622,6 +655,19 @@ impl DaemonTask for CapacityWaitCleanupWriter {
                     () = &mut cancelled, if !stopping => {
                         self.lifecycle.stopping.store(true, Ordering::SeqCst);
                         stopping = true;
+                        shutdown_deadline = Some(Instant::now() + super::scheduling_cleanup::SHUTDOWN_TIMEOUT);
+                    }
+                    () = &mut shutdown, if stopping && !supervised_drained => {
+                        supervised_drained = true;
+                    }
+                    () = async {
+                        match shutdown_deadline {
+                            Some(deadline) => tokio::time::sleep_until(deadline).await,
+                            None => std::future::pending().await,
+                        }
+                    }, if stopping => {
+                        tracing::warn!("Account lease shutdown cleanup timed out; remaining leases rely on TTL");
+                        return Ok(());
                     }
                     () = self.lifecycle.changed.notified(), if stopping => {}
                     Some(succeeded) = pending.next(), if !pending.is_empty() => {

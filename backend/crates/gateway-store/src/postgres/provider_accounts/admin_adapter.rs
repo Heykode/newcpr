@@ -444,6 +444,10 @@ impl PgAdminAccountStore {
         };
         let rotation = if switch_workspace {
             self.accounts.switch_relogin_workspace(command).await
+        } else if action == "reauthorize" {
+            self.accounts
+                .rotate_with_workspace_policy(command, false, true)
+                .await
         } else {
             self.accounts.rotate_provider_account(command).await
         }

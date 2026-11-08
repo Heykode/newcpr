@@ -1864,12 +1864,6 @@ fn map_oauth_error(error: CodexOAuthAdminError) -> ProviderAdminError {
         Error::TokenRejected | Error::Exchange(Exchange::Rejected) => {
             (Kind::Invalid, "OpenAI 拒绝了授权码，请重新发起授权")
         }
-        Error::PrincipalConflict => {
-            return map_credential_admin_error(CodexCredentialAdminError::PrincipalConflict);
-        }
-        Error::PrincipalUnconfirmed => {
-            return map_credential_admin_error(CodexCredentialAdminError::PrincipalUnconfirmed);
-        }
         Error::Credential => (Kind::Invalid, "OpenAI 授权返回的凭据不完整或无效"),
         Error::NotFound | Error::FlowExpired => (
             Kind::NotFound,
@@ -1911,8 +1905,6 @@ const fn oauth_error_code(error: &CodexOAuthAdminError) -> &'static str {
     match error {
         CodexOAuthAdminError::InvalidInput => "invalid_input",
         CodexOAuthAdminError::NotFound => "not_found",
-        CodexOAuthAdminError::PrincipalConflict => "principal_conflict",
-        CodexOAuthAdminError::PrincipalUnconfirmed => "principal_unconfirmed",
         CodexOAuthAdminError::Conflict => "conflict",
         CodexOAuthAdminError::FlowExpired => "flow_expired",
         CodexOAuthAdminError::CallbackRejected => "callback_rejected",

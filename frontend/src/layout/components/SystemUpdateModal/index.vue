@@ -255,7 +255,7 @@ watch(
           </div>
           <span
             class="inline-flex h-6 items-center gap-1.5 rounded-full bg-cp-fill-quaternary px-2 text-cp-xs leading-none font-bold text-cp-text-secondary"
-            :title="updateStreamError || presentation.streamStatusLabel"
+            :title="updateStreamError || undefined"
           >
             <i
               class="size-1.5 rounded-full"

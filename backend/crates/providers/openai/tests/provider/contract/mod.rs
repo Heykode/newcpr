@@ -8656,3 +8656,109 @@ async fn usage_limit_failure_recovers_with_credits_without_replaying_the_failed_
         server.verify().await;
     }
 }
+
+#[tokio::test]
+async fn image_quota_headers_keep_the_codex_weekly_window_and_access_state() {
+    let store = Arc::new(MemoryAccountStore::default());
+    let account_id = "acct_provider_contract";
+    create_account(&store, account_id).await;
+    let account = store.account(account_id).expect("account");
+    let server = MockServer::start().await;
+    let (provider, quota) = provider_and_quota_with_affinity_and_base_url_and_leases(
+        &store,
+        Arc::new(MemorySessionAffinity::default()),
+        server.uri(),
+        Arc::new(TestLeaseCoordinator::default()),
+        0,
+    );
+    let core_headers = [
+        ("x-codex-active-limit", "codex"),
+        ("x-codex-primary-used-percent", "95"),
+        ("x-codex-primary-window-minutes", "10080"),
+        ("x-codex-primary-reset-at", "1900604800"),
+        ("x-codex-allowed", "true"),
+    ]
+    .map(|(name, value)| (name.to_owned(), value.to_owned()));
+    quota
+        .synchronize_passive_headers(
+            &account,
+            &core_headers,
+            SystemTime::now(),
+            provider_openai::credential::QuotaRefreshAuthority::ObserveAccess,
+        )
+        .await
+        .expect("initial weekly quota");
+    let initial = quota.read_account(account.id()).await.unwrap().unwrap();
+    let response = br#"{"data":[{"b64_json":"AAEC"}]}"#;
+    // 生图响应仅用 active-limit 标明归属，窗口仍使用通用 x-codex 头
+    Mock::given(method("POST"))
+        .and(path("/codex/images/generations"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("x-codex-active-limit", "imagegen_premium")
+                .insert_header("x-codex-primary-used-percent", "0")
+                .insert_header("x-codex-primary-window-minutes", "1440")
+                .insert_header("x-codex-primary-reset-at", "1900000000")
+                .insert_header("x-codex-secondary-used-percent", "0")
+                .insert_header("x-codex-secondary-window-minutes", "0")
+                .insert_header("x-codex-secondary-reset-at", "")
+                .set_body_raw(response.as_slice(), "application/json"),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let payload = RawJsonPayload::new(
+        "openai",
+        Bytes::from_static(br#"{"model":"gpt-image-2.6-flare","prompt":"a tree"}"#),
+    )
+    .unwrap();
+    let operation = Operation::GenerateImage(ImageRequest::from_raw_json(
+        ImageRequestKind::Generation,
+        payload,
+    ));
+    let mut stream = provider
+        .execute(
+            planned_provider_endpoint_request("openai", operation),
+            context("req_image_quota", CancellationToken::new()),
+        )
+        .await
+        .expect("image stream");
+    let mut delivered = None;
+    while let Some(event) = stream.next().await {
+        let event = event.expect("image event");
+        if let Some(body) = event.wire_event().and_then(|wire| wire.raw_json_body()) {
+            delivered = Some(body.clone());
+        }
+    }
+    assert_eq!(delivered.as_deref(), Some(response.as_slice()));
+
+    let snapshot = quota.read_account(account.id()).await.unwrap().unwrap();
+    let core = snapshot
+        .windows()
+        .iter()
+        .find(|window| window.is_account_wide())
+        .unwrap();
+    let image = snapshot
+        .windows()
+        .iter()
+        .find(|window| window.source() == "imagegen_premium")
+        .unwrap();
+    assert_eq!(core, &initial.windows()[0]);
+    assert_eq!(image.window_seconds(), Some(86_400));
+    assert_eq!(image.used_percent(), Some(0.0));
+    assert!(!image.is_account_wide());
+    assert_eq!(store.account(account_id).unwrap().quota(), initial.quota());
+
+    quota
+        .synchronize_passive_headers(
+            &account,
+            &core_headers,
+            SystemTime::now(),
+            provider_openai::credential::QuotaRefreshAuthority::ObserveAccess,
+        )
+        .await
+        .expect("next Codex quota observation");
+    let refreshed = quota.read_account(account.id()).await.unwrap().unwrap();
+    assert_eq!(refreshed.windows(), snapshot.windows());
+    server.verify().await;
+}

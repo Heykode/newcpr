@@ -187,7 +187,7 @@ editing prior entries.
   recreation with a reused local ID cannot pass an old snapshot. Keep the final
   CAS and account/State retention unchanged. Missing bindings use the serialized binding
   path before acquiring any account row lock. Never escalate from an account row
-  lock to the registry lock, silently repair a conflicting archive, or permit a
+  lock to the registry lock, repair a conflicting archive during ordinary refresh/import, or permit a
   binding mutation without advancing the account credential revision.
 - Verify lock scope with real PostgreSQL: hold the registry/unrelated-account
   locks while a bound credential CAS completes, verify same-account conflicts,
@@ -408,54 +408,78 @@ Wrong: the foreground deadline expired, so the origin handshake was slow.
 Correct: capacity queueing spends foreground time but not handshake health
 time. Observe actual opening duration and its outcome independently.
 
-## 8. 原地凭据替换与刷新边界
+## 8. 人工 OAuth 重授权与凭据更新入口
 
-本节根据任务 `09-14-qx-profile-capacity-wait` 的当前实现与主体研究合同同步；
-记录非明显行为，不代表真实上游、跨层事务或全量回归已验收。
+### 适用范围
 
-- 手工替换指定账号的凭据、已有账号 OAuth 重新授权，与正常 RT 刷新是不同语义。
-  前两者必须经 OpenAI Provider 的 `prepare_candidate_oauth_rotation` 检查本次新材料；
-  不能借刷新专用 `prepare_refreshed_oauth_rotation` 保留旧身份来绕过候选检查。
-- `candidate_oauth_metadata` 先分别读取本次 ID token 与 AT 的身份投影：
-  两份材料的已知 user/workspace 冲突，或候选与旧账号已知字段冲突，返回
-  `principal_conflict`。不得先补旧 ID token 或旧 RT，再把补出的身份当作新材料证明。
-  email/plan 逐字段投影，类型损坏或缺失不能遮蔽可观察的主体冲突。
-- 没发现冲突不等于已确认连续。原地替换需要旧账号有非空 user 锚，且新材料给出
-  相同 user 和完整 workspace；旧 workspace 已知时必须一致。旧 user 已知而 workspace
-  缺失可按该条件补齐；仅同 workspace、同 email、双方都缺字段均不足以认领旧设备。
-- 不满足连续性条件返回 `principal_unconfirmed`，写入前拒绝，旧账号保持不变；
-  提示使用新建授权，不将其称为 Token 无效。该决策不禁止全新 opaque OAuth 材料
-  按原有 unresolved 导入语义保存，也不自动冻结、删除或批量重置存量账号。
-- 完整一致的投影在既有受信管理员模型下允许。opaque AT 加本次显式提交的完整一致
-  ID token 不因 AT 无法解析自动拒绝；仅旧 ID 能补齐则不能通过。
-  这是误换主体的一致性检查，不是 JWT 验签、issuer/audience 校验，
-  也不证明 opaque AT 与 ID token 的密码学关联。不据此宣称能防恶意管理员伪造 JWT。
-- 通过后才保留允许缺失的旧材料，并采用新 email/plan；缺失的非身份资料保留旧值。
-  原 installation ID 不变，不由 email、local account ID 或不完整主体恢复历史设备。
-- Provider 解释 token 并生成 `replacement_identity=Some(confirmed_identity)`；
-  Provider Admin 将其传入现有待提交事实，Store 的
-  `prepare_rotated_device` 在既有 revision/设备事务防线中再次检查已知身份不可移动。
-  通用 Store 不反解 OAuth token；CAS 只证明 revision 一致，不能替代主体判断。
-- 正常手工“刷新”和自动 RT exchange 保留现有刷新合同，成功准备路径仍使用
-  `replacement_identity=None`，不借刷新改主体或设备，不新增无条件身份网络查询，
-  不要求 opaque 新 AT 能本地解析。缺失字段保留沿原刷新链路处理，不与人工替换合并。
+以官方 `1a2a4a56` 为准，人工 OAuth 可以把选中的本地账号槽位更新为本次登录的
+上游身份。它与本地文件替换、自动重登和普通 RT 续期是不同入口，不能共用旧的
+“必须与旧主体连续”预检查。合成 JWT 测试验证投影规则，不代表验证了 JWT 签名。
 
-必须保留的反例与断言：
+### 签名与调用链
 
-| 场景 | 必要结果 |
+- OAuth start/complete → `CodexCredentialAdmin::prepare_oauth_rotation(current,
+  secret, Some(metadata), expires, next_refresh)` → `PreparedCredentialRotationFacts`
+  → `PgAdminAccountStore::commit_authorization`。
+- `rotate_with_workspace_policy(command, false, true)` 在同一事务完成设备、凭据、
+  identity、额度及 State 归属变更；最后一个布尔值仅标记人工重授权。
+- 普通 RT 成功调用同一 preparer，传 `metadata=None`，保留 profile；本地文件替换
+  继续由 `prepare_candidate_oauth_replacement` 处理，自动切 workspace 有独立入口。
+
+### 合同
+
+- 本次 ID token 优先，缺失字段从本次 access token 补全；必须有非空 user，workspace
+  可缺失，不拿旧 ID/RT 为本次登录补身份或凭据。新 email/plan 替换旧值，包括缺失值。
+- 只有 user/workspace 实际变化才生成 `replacement_identity=Some(...)`，并清旧
+  Cookie/principal。同身份重授权保留额度访问证据，但清旧额度快照；换身份额外清耗尽、
+  evidence、reset/observation 时间。普通 RT 续期保留旧资料和额度。
+- 人工重授权保留当前本地 name、自定义名称、启停、分组、权重、并发、安装 ID 和
+  已配置出口政策。设备表在全局设备锁下重绑；已删除目标的设备归档不能阻止换身份，
+  只有没有活账号引用的目标归档可在本事务替换。普通导入仍复用历史设备，不更改此规则。
+- 凭据 revision/CAS、重复账号与 pending claim 校验继续生效；失败整体回滚，成功后
+  消费 claim、通知 account facts、发布 snapshot，并异步尝试初始额度观测。
+- HTTP/WS、Excel 使用的账号 client 与 session-proxy client 都给池 key 加入
+  `oauth_identity_key`（本地槽位 + 上游 user + workspace）。Session continuation、
+  Guardian 和头像缓存采用同一身份边界。State 由现有 binding revision 隔离旧归属。
+- 同身份 RT/profile 更新保留合法原 socket 续接；更换身份不能续用原 socket。
+  Local file/relogin 入口保留已批准的 email/workspace 一致性检查，不扩散到人工 OAuth。
+
+### 校验与错误矩阵
+
+| 场景 | 结果 |
 | --- | --- |
-| 新 AT=B、无新 ID，但旧 ID=A | 冲突拒绝；不得靠补旧 ID 遮蔽 |
-| 本次 ID=A/AT=B，或同 user 异 workspace、同 workspace 异 user | 冲突拒绝；不得生成成功待提交变更 |
-| 新完整 A 或新完整 ID=A 配合 opaque AT，旧主体完整 A | 按受信 token-set 模型允许；保留设备，消费新 metadata |
-| 新材料 unknown，只有旧材料能补齐 | `principal_unconfirmed`，不是 InvalidToken，零凭据提交 |
-| 旧有 user 锚但缺 workspace / 旧仅有 workspace | 前者仅允许同 user 的完整候选补齐；后者不能认领旧设备 |
-| 正常 RT 刷新得到 opaque AT / 全新 unresolved 导入 | 保留既有成功语义，不引入无条件身份查询 |
-| 通过 Provider 准备后遇到 Store stale revision 或设备归属冲突 | 事务失败；无部分凭据、设备、身份或成功 audit 更新 |
+| OAuth 从 A 登录成 B，或同 user 换 workspace | 允许准备，提交后绑定 B，清旧身份状态 |
+| ID=A、AT=B，ID 所需字段完整 | 按官方 ID 优先，不再套文件导入的冲突检查 |
+| 本次两种 token 都没有 user | Invalid credential，释放 claim，零账号写入 |
+| 当前本地身份缺失，本次 user 完整 | 可修复绑定；workspace 缺失也可保存 |
+| 目标身份已有活账号、revision 变化或提交失败 | 冲突/失败，凭据、设备、配置 revision 一起回滚 |
+| 目标只有已删除账号的设备归档 | 允许人工授权重绑，保留当前槽位安装 ID |
+| 普通 RT 续期返回 opaque AT | 正常轮换，不增加身份查询，不改既有身份 |
 
-负例须覆盖真实 `ProviderAdmin::prepare_rotation`、OAuth start/complete 和 Admin
-提交边界，并断言失败时 commit/success audit/snapshot 次数为零及 guard 正确释放。
-仅向 Store 直接传 `Some(B)` 的测试不能证明 Provider 没丢掉新候选身份；
-合成未验签 JWT 测试也只能证明投影与决策，不能命名为验签通过。
+### 正常、基线与反例
+
+正常：人工登录 B 成功后，本地槽位、名称和并发设置仍在，上游 user/workspace 已是 B。
+基线：同身份续期不清额度、不破坏原响应的物理 socket 归属。
+反例：将 A 的 Cookie、头像、Guardian/WS 续写或耗尽状态带给 B。
+
+### 必要回归
+
+Provider `reauthorization_entry_adopts_new_identity_and_rejects_incomplete_credentials`
+覆盖真实 start/complete 与 claim；`reauthorization_binds_the_selected_slot_to_the_new_oauth_account`
+覆盖新身份与 Cookie/RT。Store
+`oauth_reauthorization_rebinds_device_preserves_local_settings_and_rolls_back_duplicates`
+在真实 PG 验证事务、归档、设置与 State；WS 的
+`exact_continuation_reuses_owning_socket_after_connection_profile_updates`
+同时验证同身份可续接、换身份不能借用旧 socket。
+App `loopback_reauthorization_rebinds_selected_account_and_rejects_incomplete_identity`
+在真实 PG/Redis 与模拟 OAuth callback 验证新身份实际写入所选槽位、保留名称和安装 ID，
+以及不完整身份拒绝且数据库零变更。旧的人工 OAuth“换主体即拒绝”断言已废弃。
+
+### 错误与正确做法
+
+错误：旧测试要求重授权主体冲突就拒绝，因此把官方允许换身份的代码改回旧检查。
+正确：按本次官方 OAuth 合同更新旧断言，保留真实重复账号/CAS/不完整凭据负例，
+本地设备和 State 接入不能额外否决官方允许的人工登录。
 
 ## 9. Optional QX-Compatible Transport
 

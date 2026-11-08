@@ -2606,5 +2606,13 @@
     "file_sha256": "bf4706b005b7659e961d31d114972c8a84ed184ebeea5d31027de82c65a59bce",
     "line_sha256": "c85204f4407a8fb3204045ad397ed644fc6cb87825bfac0e6e809b0324b82079",
     "reason": "Manually re-reviewed byte-identical documentation-domain proxy fixture against HEAD and its approved digest. OAuth pending capacity assertions use only synthetic data and no network."
+  },
+  {
+    "path": "backend/apps/gateway/tests/bootstrap.rs",
+    "rule": "authenticated-url",
+    "line": 389,
+    "file_sha256": "c9e16d96b97ab6daf606f0c16829a361a79bccd5d7a50ff524307a7197ad747c",
+    "line_sha256": "be871b5bb1fb717424afe768be0a94bd16324aa95d478d8be07e11d0ed234c75",
+    "reason": "Manually re-reviewed the unchanged loopback configuration rejection fixture against HEAD after updating the OAuth integration test. The embedded password is synthetic parser input; this fixture never connects to a database."
   }
 ]

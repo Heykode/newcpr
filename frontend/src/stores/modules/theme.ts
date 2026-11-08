@@ -5,6 +5,7 @@ import type {
   ThemeColorId,
   ThemeCustomization,
   ThemeMode,
+  ThemePresetId,
 } from '@/theme'
 
 import { usePreferredDark, usePreferredReducedMotion, useTimeoutFn } from '@vueuse/core'
@@ -13,13 +14,15 @@ import { computed, ref, shallowRef, watch } from 'vue'
 
 import {
   applyResolvedTheme,
+  createTheme,
   DEFAULT_CUSTOM_THEME_COLOR,
   DEFAULT_THEME_COLOR,
   DEFAULT_THEME_MODE,
+  defaultThemePresetId,
   isThemeColorId,
   isThemeMode,
+  isThemePresetId,
   normalizeThemeCustomization,
-  resolveTheme,
   resolveThemeName,
 } from '@/theme'
 import { normalizeHexColor } from '@/utils/color'
@@ -30,6 +33,7 @@ interface ThemeTransitionOrigin {
 }
 
 interface ThemeConfigurationInput {
+  preset: ThemePresetId
   mode: ThemeMode
   color: ThemeColorId
   customColor: string
@@ -49,6 +53,7 @@ export const useThemeStore = defineStore(
   'theme',
   () => {
     const themeMode = shallowRef<ThemeMode>(DEFAULT_THEME_MODE)
+    const themePreset = shallowRef<ThemePresetId>(defaultThemePresetId)
     const themeColor = shallowRef<ThemeColorId>(DEFAULT_THEME_COLOR)
     const customThemeColor = shallowRef(DEFAULT_CUSTOM_THEME_COLOR)
     const themeCustomization = ref<ThemeCustomization>({})
@@ -62,12 +67,13 @@ export const useThemeStore = defineStore(
 
     const effectiveTheme = computed(() => resolveThemeName(themeMode.value, preferredDark.value))
     const resolvedTheme = computed(() =>
-      resolveTheme(
-        effectiveTheme.value,
-        themeColor.value,
-        customThemeColor.value,
-        themeCustomization.value,
-      ),
+      createTheme({
+        name: effectiveTheme.value,
+        preset: themePreset.value,
+        colorId: themeColor.value,
+        primaryColor: customThemeColor.value,
+        customization: themeCustomization.value,
+      }),
     )
 
     const { start: startFallbackTransitionTimer, stop: stopFallbackTransitionTimer } = useTimeoutFn(
@@ -79,14 +85,16 @@ export const useThemeStore = defineStore(
       { immediate: false },
     )
 
-    watch(resolvedTheme, theme => applyTheme(theme))
+    watch(resolvedTheme, theme => syncTheme(theme))
 
     function initializeTheme(): void {
       normalizePersistedTheme()
-      applyTheme(resolvedTheme.value)
+      syncTheme(resolvedTheme.value)
     }
 
     function normalizePersistedTheme(): void {
+      if (!isThemePresetId(themePreset.value))
+        themePreset.value = defaultThemePresetId
       if (!isThemeMode(themeMode.value))
         themeMode.value = DEFAULT_THEME_MODE
       if (!isThemeColorId(themeColor.value))
@@ -95,7 +103,7 @@ export const useThemeStore = defineStore(
       themeCustomization.value = normalizeThemeCustomization(themeCustomization.value)
     }
 
-    function applyTheme(theme: ResolvedTheme): void {
+    function syncTheme(theme: ResolvedTheme): void {
       if (typeof document === 'undefined')
         return
 
@@ -237,10 +245,11 @@ export const useThemeStore = defineStore(
       event?: MouseEvent,
     ): boolean {
       const customColor = normalizeHexColor(configuration.customColor)
-      if (!isThemeMode(configuration.mode) || !isThemeColorId(configuration.color) || !customColor)
+      if (!isThemePresetId(configuration.preset) || !isThemeMode(configuration.mode) || !isThemeColorId(configuration.color) || !customColor)
         return false
 
       requestThemeTransition(event)
+      themePreset.value = configuration.preset
       themeMode.value = configuration.mode
       themeColor.value = configuration.color
       customThemeColor.value = customColor
@@ -251,6 +260,7 @@ export const useThemeStore = defineStore(
     function resetTheme(event?: MouseEvent): void {
       const unchanged
         = themeMode.value === DEFAULT_THEME_MODE
+          && themePreset.value === defaultThemePresetId
           && themeColor.value === DEFAULT_THEME_COLOR
           && customThemeColor.value === DEFAULT_CUSTOM_THEME_COLOR
           && Object.keys(themeCustomization.value).length === 0
@@ -260,6 +270,7 @@ export const useThemeStore = defineStore(
       }
       requestThemeTransition(event)
       themeMode.value = DEFAULT_THEME_MODE
+      themePreset.value = defaultThemePresetId
       themeColor.value = DEFAULT_THEME_COLOR
       customThemeColor.value = DEFAULT_CUSTOM_THEME_COLOR
       themeCustomization.value = {}
@@ -269,7 +280,9 @@ export const useThemeStore = defineStore(
       if (themeTransitioning.value)
         return
       requestThemeTransition(event)
-      themeMode.value = effectiveTheme.value === 'dark' ? 'light' : 'dark'
+      themeMode.value = effectiveTheme.value === 'dark'
+        ? 'light'
+        : 'dark'
     }
 
     function requestThemeTransition(event?: MouseEvent): void {
@@ -286,6 +299,7 @@ export const useThemeStore = defineStore(
 
     return {
       themeMode,
+      themePreset,
       themeColor,
       customThemeColor,
       themeCustomization,
@@ -306,6 +320,7 @@ export const useThemeStore = defineStore(
       key: 'codex-proxy-rs-theme',
       pick: [
         'themeMode',
+        'themePreset',
         'themeColor',
         'customThemeColor',
         'themeCustomization',
@@ -315,5 +330,5 @@ export const useThemeStore = defineStore(
 )
 
 function themeSignature(theme: ResolvedTheme): string {
-  return `${theme.name}:${theme.colorId}:${theme.seed}:${JSON.stringify(theme.tokens)}`
+  return `${theme.preset}:${theme.name}:${theme.colorId}:${theme.seed}:${JSON.stringify(theme.tokens)}`
 }

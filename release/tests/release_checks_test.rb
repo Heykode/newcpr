@@ -117,7 +117,7 @@ Dir.mktmpdir('release-checks-') do |directory|
     output, error, status = Open3.capture3(environment, 'bash', 'release/publish', '100.0.0')
     assert(status.success?, "publish failed: #{output}#{error}")
     assert(File.exist?(dispatch), 'workflow was not dispatched')
-    assert(git('log', '-1', '--format=%s') == 'chore(release): prepare v100.0.0', 'wrong release commit')
+    assert(git('log', '-1', '--format=%s') == 'chore: bump version to 100.0.0', 'wrong release commit')
     assert(git('status', '--porcelain').empty?, 'release left tracked changes')
     assert(git('rev-parse', 'HEAD') == git('rev-parse', 'v100.0.0^{commit}'), 'tag differs from release commit')
     assert(git('ls-remote', 'origin', 'refs/tags/v100.0.0').split.first == git('rev-parse', 'v100.0.0'), 'tag not pushed')

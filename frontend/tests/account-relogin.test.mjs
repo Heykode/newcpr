@@ -138,21 +138,15 @@ test('account action API sends exact target and supports only read cancellation'
   assert.equal(requests[1].signal, undefined)
 })
 
-test('confirmation cancellation does nothing; confirmed job queues once and refreshes after success', async (t) => {
+test('immediate action queues once with a frozen target and refreshes after success', async (t) => {
   const h = harness(t)
   await h.reply()
-  h.state.request(account)
-  h.state.open.value = false
-  await h.state.confirm()
-  assert.equal(h.writes.length, 0)
-  h.state.request(account)
-  const confirmation = h.state.confirm()
-  await h.state.confirm()
+  const confirmation = h.state.request(account)
+  await h.state.request(account)
   assert.equal(h.writes.length, 1)
   assert.equal(JSON.stringify(h.writes[0].data), JSON.stringify({ entryId: 'entry-a', revision: 1, target: action().target }))
   h.writes[0].resolve()
   await confirmation
-  assert.equal(h.state.open.value, false)
   await h.reply([action({ revision: 2, busy: true, status: 'queued' })])
   assert.equal(h.tick(), 2000)
   await h.reply([action({ revision: 5, status: 'ready', syncedAt: '2026-09-17T01:00:00Z' })])
@@ -163,25 +157,24 @@ test('confirmation cancellation does nothing; confirmed job queues once and refr
   assert.equal(h.reloads(), 1)
 })
 
-test('a stale confirmation never adopts a new material revision or workspace', async (t) => {
+test('a rejected stale target is not silently requeued with fresh credentials', async (t) => {
   const h = harness(t)
   await h.reply()
-  h.state.request(account)
-  h.tick()
+  const submitted = h.state.request(account)
+  h.writes[0].reject(new Error('target changed'))
+  await submitted
   await h.reply([action({ revision: 2, target: { ...action().target, workspace_id: 'workspace-b' } })])
-  assert.equal(h.state.selected.value.action.revision, 1)
-  assert.equal(h.state.selected.value.action.target.workspace_id, 'workspace-a')
-  assert.equal(h.state.confirmDisabled.value, true)
-  await h.state.confirm()
-  assert.equal(h.writes.length, 0)
+  assert.equal(h.writes[0].data.revision, 1)
+  assert.equal(h.writes[0].data.target.workspace_id, 'workspace-a')
+  assert.equal(h.writes.length, 1)
+  assert.equal(h.state.actionError.value, 'target changed')
 })
 
-test('missing material, global pause and busy jobs cannot open confirmation', async (t) => {
+test('missing material, global pause and busy jobs cannot submit', async (t) => {
   const h = harness(t)
   for (const items of [[], [action({ busy: true })], [action({ blockedReason: 'paused' })], [action({ target: null })]]) {
     await h.reply(items)
     h.state.request(account)
-    assert.equal(h.state.open.value, false)
     h.tick()
   }
 })
@@ -193,16 +186,13 @@ test('failed reads fail closed and retry; action errors survive successful polli
   h.reads.at(-1).reject(new Error('offline'))
   await flush()
   h.state.request(account)
-  assert.equal(h.state.open.value, false)
   assert.equal(h.tick(), 5000)
   await h.reply()
-  h.state.request(account)
-  const submitted = h.state.confirm()
+  const submitted = h.state.request(account)
   h.writes[0].reject(new Error('response lost'))
   await submitted
   await h.reply([action({ revision: 2, busy: true, status: 'running' })])
   assert.equal(h.state.actionError.value, 'response lost')
-  assert.equal(h.state.confirmDisabled.value, true)
   h.tick()
   await h.reply([action({ revision: 3, status: 'failed', message: 'verification failed' })])
   assert.equal(h.state.actionError.value, 'response lost')
@@ -221,8 +211,7 @@ test('page changes and disposal fence stale reads and do not cancel accepted wor
   assert.equal(Object.keys(h.state.actions.value).length, 0)
   h.accounts.value = [account]
   await h.reply()
-  h.state.request(account)
-  const submit = h.state.confirm()
+  const submit = h.state.request(account)
   h.scope.stop()
   assert.equal(h.timers.size, 0)
   const reads = h.reads.length
@@ -259,8 +248,8 @@ test('real menu renders relogin only with material and exposes busy and failure 
   async function render(relogin) {
     return renderToString(vue.createSSRApp(component, { account, deleting: false, recovering: false, refreshing: false, testing: false, relogin }))
   }
-  assert.doesNotMatch(await render(), /失效重登|重登处理中/)
-  assert.match(await render(action()), /失效重登/)
+  assert.doesNotMatch(await render(), /立即重登|重登处理中/)
+  assert.match(await render(action()), /立即重登/)
   assert.match(await render(action({ busy: true })), /<button disabled[^>]*>\s*重登处理中\s*<\/button>/)
   assert.match(await render(action({ status: 'failed', message: '<script>failed' })), /&lt;script&gt;failed/)
 })

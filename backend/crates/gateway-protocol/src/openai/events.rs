@@ -332,24 +332,13 @@ pub fn parse_rate_limit_headers(headers: &[(String, String)]) -> Option<ParsedRa
                 .map(|details| (limit_id, details))
         })
         .collect::<BTreeMap<_, _>>();
-    // Generic windows can describe the explicitly active named bucket without
-    // also providing a duplicate set of named headers. Premium is the core tier.
-    if let Some(active) = active_limit
-        .as_ref()
-        .filter(|active| !matches!(active.as_str(), "codex" | "premium"))
-        && limits.get(active).is_none_or(|details| {
-            details.primary.is_none()
-                && details.secondary.is_none()
-                && details.allowed.is_none()
-                && details.limit_reached.is_none()
-        })
+    if let Some(active_limit) = active_limit.as_ref()
+        && active_limit != "codex"
+        && !limits.contains_key(active_limit)
         && let Some(mut details) = limits.remove("codex")
     {
-        details.limit_id = active.clone();
-        if let Some(named) = limits.remove(active) {
-            details.limit_name = named.limit_name.or(details.limit_name);
-        }
-        limits.insert(active.clone(), details);
+        details.limit_id.clone_from(active_limit);
+        limits.insert(active_limit.clone(), details);
     }
     let credits = parse_credits_from_lookup(&normalized);
     let plan_type = lookup_non_empty(&normalized, "x-codex-plan-type");

@@ -1,4 +1,4 @@
-//! Admin-authenticated relogin library. No secret-bearing response DTOs.
+//! Admin-authenticated relogin library; sensitive reads are explicit and no-store.
 
 use super::wire::map_admin_service_error;
 use super::{AdminAuth, AdminEnvelope, AdminError, AdminJson, AdminResponse, AdminSessionState};
@@ -14,6 +14,19 @@ use gateway_admin::model::relogin::{
 };
 use gateway_admin::model::relogin_templates::{ReloginTemplateConfig, ReloginTemplateSelection};
 use serde::Deserialize;
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct HistoryRequest {
+    id: String,
+    before: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct TotpRequest {
+    id: String,
+}
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -111,6 +124,8 @@ where
 {
     Router::new()
         .route("/api/admin/relogin", get(list::<S>))
+        .route("/api/admin/relogin/history", post(history::<S>))
+        .route("/api/admin/relogin/totp", post(totp::<S>))
         .route("/api/admin/relogin/import", post(import::<S>))
         .route("/api/admin/relogin/enroll", post(enroll::<S>))
         .route("/api/admin/relogin/export", post(export::<S>))
@@ -141,6 +156,49 @@ where
             "/api/admin/relogin/accounts/queue",
             post(queue_account::<S>),
         )
+}
+
+async fn history<S>(
+    _: AdminAuth,
+    State(state): State<S>,
+    AdminJson(request): AdminJson<HistoryRequest>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: AdminSessionState + Send + Sync,
+{
+    let result = state
+        .admin_services()
+        .relogin()
+        .history(&request.id, request.before.as_deref())
+        .await
+        .map_err(map_admin_service_error)?;
+    Ok(AdminResponse::new(
+        StatusCode::OK,
+        AdminEnvelope::ok(result),
+    ))
+}
+
+async fn totp<S>(
+    auth: AdminAuth,
+    State(state): State<S>,
+    AdminJson(request): AdminJson<TotpRequest>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: AdminSessionState + Send + Sync,
+{
+    let result = state
+        .admin_services()
+        .relogin()
+        .totp(&request.id, &auth.context().mutation_context())
+        .await
+        .map_err(map_admin_service_error)?;
+    let mut response =
+        AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(result)).into_response();
+    response.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-store"),
+    );
+    Ok(response)
 }
 
 async fn enroll<S>(

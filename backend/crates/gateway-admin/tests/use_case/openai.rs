@@ -459,10 +459,16 @@ async fn principal_rejection_stops_rotation_before_commit_or_success_audit() {
 }
 
 #[tokio::test]
-async fn principal_rejection_stops_reauthorization_before_commit_or_success_audit() {
-    for message in [
-        "新凭据的账号主体与其他新令牌或当前账号不一致，请检查账号后重试",
-        "无法确认新凭据与当前账号的主体连续性，请提供完整账号资料或使用新建授权",
+async fn oauth_preparation_failure_stops_reauthorization_before_commit_or_success_audit() {
+    for (kind, message) in [
+        (
+            ProviderAdminErrorKind::Invalid,
+            "OpenAI 授权返回的凭据不完整或无效",
+        ),
+        (
+            ProviderAdminErrorKind::Conflict,
+            "OpenAI 授权流程正在处理或已被更新，请先检查授权状态",
+        ),
     ] {
         let events = events();
         let provider = FakeProviderAdmin::new("openai", events.clone());
@@ -472,23 +478,23 @@ async fn principal_rejection_stops_reauthorization_before_commit_or_success_audi
             .openai()
             .start_authorization(StartAuthorization {
                 outbound_proxy: None,
-                context: context("principal-reauthorization"),
+                context: context("failed-reauthorization"),
                 name: "reauthorize".to_owned(),
                 reauthorization: Some(ProviderAccountId::new("acct_test").unwrap()),
             })
             .await
             .unwrap();
-        provider.fail_next_with_public_message(ProviderAdminErrorKind::Conflict, message);
+        provider.fail_next_with_public_message(kind, message);
         let error = services
             .openai()
             .complete_authorization(CompleteAuthorization {
                 settings: None,
-                context: context("principal-reauthorization"),
+                context: context("failed-reauthorization"),
                 flow_id: "flow-test".to_owned(),
                 callback_url: "http://localhost/callback?code=test&state=test".to_owned(),
             })
             .await
-            .expect_err("principal rejection must stop the mutation");
+            .expect_err("OAuth preparation failure must stop the mutation");
         assert_eq!(
             recorded(&events),
             [

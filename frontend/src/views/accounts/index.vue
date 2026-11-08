@@ -150,12 +150,7 @@ const {
   actions: reloginActions,
   readError: reloginReadError,
   actionError: reloginActionError,
-  open: reloginOpen,
-  selected: reloginSelected,
-  confirmDisabled: reloginConfirmDisabled,
-  submitting: reloginSubmitting,
   request: requestRelogin,
-  confirm: confirmRelogin,
 } = useAccountRelogin({ accounts, reload: refreshAccountsSilently })
 
 async function applyForecastAccount(account: AccountRow) {
@@ -419,7 +414,10 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
 </script>
 
 <template>
-  <div class="flex min-h-0 w-full flex-col xl:h-full xl:overflow-hidden">
+  <div class="flex min-h-0 w-full flex-col xl:h-[calc(100dvh-3rem)] xl:flex-none!">
+    <p v-if="reloginActionError" role="alert" class="shrink-0 text-cp-sm text-cp-error">
+      {{ reloginActionError }}
+    </p>
     <BasePageHeader
       class="[&>div:first-child]:basis-0"
       :title="t('navigation.accounts')"
@@ -450,7 +448,7 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
     <AccountOverviewCards :summary="accountSummary" :groups="groups" :groups-loading="groupsLoading" />
 
     <BaseCard
-      class="mt-4 flex flex-col xl:h-[calc(100dvh-250px)] xl:min-h-125"
+      class="mt-4 flex flex-col xl:min-h-80 xl:flex-1"
       :class="isMobile ? 'overflow-visible! rounded-none! bg-transparent! p-0! shadow-none!' : undefined"
     >
       <template #header>
@@ -855,34 +853,6 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
       @save="saveBatchEdit"
       @after-leave="clearBatchEdit"
     />
-
-    <BaseConfirmModal
-      v-model="reloginOpen"
-      title="确认失效重登"
-      confirm-text="重登并同步"
-      :loading="reloginSubmitting"
-      :confirm-disabled="reloginConfirmDisabled"
-      @confirm="confirmRelogin"
-    >
-      <dl class="space-y-2 break-all">
-        <div>
-          <dt class="text-cp-text-tertiary">
-            邮箱
-          </dt><dd>{{ reloginSelected?.email }}</dd>
-        </div>
-        <div>
-          <dt class="text-cp-text-tertiary">
-            工作区
-          </dt><dd>{{ reloginSelected?.action.target?.workspace_id }}</dd>
-        </div>
-      </dl>
-      <p v-if="reloginActionError" role="alert" class="mt-3 break-words text-cp-error">
-        {{ reloginActionError }}
-      </p>
-      <p v-else-if="reloginConfirmDisabled" role="alert" class="mt-3 text-cp-warning-text">
-        状态已变化或暂不可用，请关闭后重新确认。
-      </p>
-    </BaseConfirmModal>
 
     <AccountQualitySetup v-if="qualitySetupAccount" v-model="qualitySetupOpen" :account-id="qualitySetupAccount.id" :account-name="qualitySetupAccount.customName || qualitySetupAccount.email || qualitySetupAccount.id" @applied="void refreshAccountsSilently()" />
 

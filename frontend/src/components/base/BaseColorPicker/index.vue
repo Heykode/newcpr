@@ -295,8 +295,8 @@ function normalizedInputColor() {
       </button>
     </template>
 
-    <div class="grid w-76 gap-3 p-3" role="dialog" :aria-label="props.label">
-      <div class="grid h-43 grid-cols-[1fr_14px] gap-2">
+    <div class="grid w-76 max-w-full gap-3 p-3" role="dialog" :aria-label="props.label">
+      <div class="grid h-43 grid-cols-[minmax(0,1fr)_14px] gap-2">
         <div
           ref="svPanel"
           class="base-color-picker__sv relative touch-none overflow-hidden rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-cp-control-outline"
@@ -410,7 +410,7 @@ function normalizedInputColor() {
             {{ inputError }}
           </p>
         </div>
-        <BaseButton size="md" variant="secondary" :disabled="!inputValid" @click="confirm">
+        <BaseButton size="md" variant="primary" :disabled="!inputValid" @click="confirm">
           {{ t('common.actions.confirm') }}
         </BaseButton>
       </div>

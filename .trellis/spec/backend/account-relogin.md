@@ -441,3 +441,29 @@ as fixtures. Deployment and live login acceptance require separate authorization
 On 2026-09-15 one explicitly authorized Free account passed the live Python worker
 through token exchange and usage verification. This does not validate live pool
 push, automatic recovery, Team/Business workspaces or deployed runtime behavior.
+
+## Attempt History and Explicit TOTP Reads
+
+- `ReloginEntry.last_attempt` defaults to absent for old JSONB. The worker starts
+  a distinct UUIDv7 attempt per actual claim/retry. The safe attempt contains source,
+  start/end time, login result/message, account/workspace and separate push outcome.
+  It never contains passwords, TOTP, Token or credential documents.
+- Migration 0087 adds `account_relogin_history(entry_id,id,detail)` with a cascading
+  material foreign key. Save the latest snapshot and historical row in the same
+  existing revision-fenced transaction; batch rollback leaves no phantom history.
+  Reimport preserves history, deletion of material removes it. Business pg_dump
+  includes the new table. Preserve all old migrations and success statistics.
+- `POST /api/admin/relogin/history` accepts `{id,before?}`; return up to 50 descending
+  UUIDv7 records and `nextCursor`. Invalid cursor => invalid request, absent entry =>
+  not found. List `lastAttemptAt` is independent from pool-owned `lastReloginAt`.
+- Preserve preflight push failure semantics: `save_attempt(id,revision,attempt)`
+  changes only the same attempt snapshot/history under CAS without incrementing the
+  library revision or consuming the existing valid push confirmation. Post-commit
+  ambiguity remains uncertain; a history outcome is not proof of pool commitment.
+- `POST /api/admin/relogin/totp` accepts only `{id}`, requires admin auth, audits
+  `view_relogin_2fa` with the entry ID and returns only `{secret}` with `no-store`.
+  Missing/invalid material fails without a secret; audit failure prevents disclosure.
+  This is a deliberate sensitive endpoint, not a change to safe list/export schemas.
+- Cover acquisition failures followed by retries, successful login/failed push and
+  later push success, cancellations, stale revisions, atomic rollback, pagination,
+  material deletion/reimport, explicit secret access and list/history non-disclosure.

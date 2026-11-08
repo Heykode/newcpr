@@ -431,7 +431,14 @@ credential 与 quota 是两组独立事实：credential refresh 不等于 quota 
   RT-only 导入先换取 AT，AT-only 导入没有
   自动续期能力。OAuth 身份只从官方 JWT claims 投影，不信任导入文档顶层身份字段。
 - xAI 使用 OAuth session；API Key 不是受支持的账号 credential。
-- 新账号导入和首次 OAuth 在 credential 提交后尽力读取一次额度；失败只留下观测，不回滚账号事务。
+- 新账号导入和 OAuth complete（包括重新授权）在 credential 提交后尽力读取一次额度；失败只留下观测，不回滚账号事务。
+- 人工 OAuth 按本次 ID token/AT 更新 user/workspace，保留本地槽位名称与设置。身份变化清旧
+  Cookie/principal、额度耗尽与重置证据；普通 RT 续期保留身份和资料。设备重绑、凭据 CAS、
+  State binding revision 在同一 PG 事务内完成，活账号重复身份回滚，目标仅有历史设备归档时允许重绑。
+- `oauth_identity_key` 将本地 ID、上游 user 和 workspace 纳入账号/session-proxy client 的池 key，
+  以及 Session continuation、Guardian 与头像缓存；Excel 复用账号 client，托管 State 保留既有 revision 防线。
+- 图片具名额度按官方 active-limit 规则分桶：只有目标 key 不存在才迁移 generic Codex entry，
+  不增加 premium 或 name-only 特判；图片窗口不能覆盖已有 Codex 周窗口。
 - quota refresh、正常推理返回的 rate-limit headers 和后台健康任务汇入同一额度事实；套餐只用于展示与
   目录 cache 隔离，不创建套餐专属状态机。
 
@@ -479,6 +486,10 @@ HTTP Client 构造失败也不会阻断网关启动。外部解析在已认证�
 
 关闭分为两段：先停止接收新连接并 drain HTTP/WS，再取消并等待 Worker；两段各有独立预算，Compose 的
 `stop_grace_period` 必须覆盖二者之和。超时后只丢弃仍未落盘的可恢复观测，不执行隐式业务重放。
+账号执行租约另由官方 `SchedulingLeaseCleanup` 监督，接入实际 Redis 直接申请/晋升和
+`CapacityWaitCleanupWriter`。停止后取消仍持有 guard 的请求、停止续期、释放本实例 member，
+申请闸门覆盖 Redis 写入至登记；Store 最多 drain 2 秒，Host 外层截止仍可更早终止。
+不可达或预算耗尽时依 TTL 回收，不删除其他实例的租约，也不改变在线严格/优先/宽松调度。
 
 安全边界：
 

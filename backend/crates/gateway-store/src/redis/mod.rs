@@ -23,6 +23,7 @@ mod provider_replay;
 mod provider_session_affinity;
 mod provider_session_exclusion;
 mod runtime_change;
+mod scheduling_cleanup;
 pub(crate) mod worker_lease;
 
 pub use admin_account_runtime::*;

@@ -39,6 +39,8 @@ async fn relogin_every_endpoint_requires_admin_auth_before_reading_material() {
     let fixture = AdminTestFixture::new().await;
     for (path, body) in [
         ("/api/admin/relogin", None),
+        ("/api/admin/relogin/history", Some(json!({"id":"a"}))),
+        ("/api/admin/relogin/totp", Some(json!({"id":"a"}))),
         ("/api/admin/relogin/templates", None),
         (
             "/api/admin/relogin/enroll",
@@ -105,6 +107,11 @@ async fn relogin_rejects_missing_confirmation_versions_and_unknown_fields() {
     let fixture = AdminTestFixture::new().await;
     fixture.auth.insert_session("valid-session");
     for (path, body) in [
+        ("/api/admin/relogin/history", json!({"before": "abc"})),
+        (
+            "/api/admin/relogin/totp",
+            json!({"id": "a", "password": "untrusted"}),
+        ),
         ("/api/admin/relogin/push", json!({"ids":["a"]})),
         (
             "/api/admin/relogin/workspace/resume",

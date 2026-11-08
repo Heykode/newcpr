@@ -9,6 +9,13 @@ use gateway_core::account::{ProviderDeviceCodec, ProviderDeviceCodecError};
 
 use super::*;
 
+#[derive(Clone, Copy)]
+pub(super) enum DeviceRotationPolicy {
+    Credential,
+    WorkspaceSwitch,
+    Reauthorization,
+}
+
 #[derive(Clone, Default)]
 pub(crate) struct DeviceCodecs(Arc<RwLock<BTreeMap<String, Arc<dyn ProviderDeviceCodec>>>>);
 
@@ -207,26 +214,28 @@ impl PgProviderAccountRepository {
                 );
             }
         }
-        self.prepare_rotated_device_with_workspace_policy(
+        self.prepare_rotated_device_with_policy(
             transaction,
             (account_id, expected_revision),
             None,
             None,
             incoming,
-            false,
+            DeviceRotationPolicy::Credential,
         )
         .await
     }
 
-    pub(crate) async fn prepare_rotated_device_with_workspace_policy(
+    pub(super) async fn prepare_rotated_device_with_policy(
         &self,
         transaction: &mut Transaction<'_, Postgres>,
         target: (&str, u64),
         replacement_identity: Option<&ProviderAccountIdentity>,
         replacement_email: Option<&str>,
         incoming: &JsonObject,
-        switch_workspace: bool,
+        policy: DeviceRotationPolicy,
     ) -> StoreResult<JsonObject> {
+        let switch_workspace = matches!(policy, DeviceRotationPolicy::WorkspaceSwitch);
+        let reauthorization = matches!(policy, DeviceRotationPolicy::Reauthorization);
         let (account_id, expected_revision) = target;
         if self.device_codecs.is_empty()? {
             return Ok(incoming.clone());
@@ -263,6 +272,60 @@ impl PgProviderAccountRepository {
             Some(identity) => identity.upstream_account_id(),
             None => old_account.as_deref(),
         };
+        if reauthorization && replacement_identity.is_some() {
+            // The selected local slot keeps its surface ID while OAuth explicitly
+            // changes its owner. Registry, account CAS and State fencing are atomic.
+            let current = row_credential(&row)?;
+            let installation_id = codec
+                .installation_id(&current)
+                .map_err(device_codec_error)?;
+            if let Some(user) = user.filter(|value| !value.is_empty()) {
+                // An explicit OAuth replacement preserves the selected slot's
+                // device. Only a live duplicate may veto it, not a deleted
+                // target's archived device. The account/registry write rolls
+                // back together if later CAS or uniqueness checks fail.
+                sqlx::query(
+                    "delete from provider_device_identities d
+                     where d.provider_kind = $1 and d.upstream_user_id = $2
+                       and d.upstream_account_id = $3
+                       and not exists (
+                         select 1 from provider_accounts a
+                         where a.provider_kind = d.provider_kind
+                           and a.upstream_user_id = d.upstream_user_id
+                           and coalesce(a.upstream_account_id, '') = d.upstream_account_id
+                       )",
+                )
+                .bind(&provider)
+                .bind(user)
+                .bind(account.unwrap_or_default())
+                .execute(&mut **transaction)
+                .await
+                .map_err(|error| {
+                    postgres_unavailable("replace archived OAuth device").with_source(error)
+                })?;
+                if let Some(old_user) = old_user.as_deref().filter(|value| !value.is_empty()) {
+                    rebind_identity(
+                        transaction,
+                        &provider,
+                        old_user,
+                        old_account.as_deref().unwrap_or_default(),
+                        user,
+                        account.unwrap_or_default(),
+                        &installation_id,
+                    )
+                    .await?;
+                }
+                return bind_material(
+                    transaction,
+                    codec.as_ref(),
+                    user,
+                    account,
+                    incoming,
+                    Some(&current),
+                )
+                .await;
+            }
+        }
         if replacement_identity.is_some()
             && !switch_workspace
             && old_account

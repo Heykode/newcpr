@@ -16,7 +16,7 @@ async function main() {
   const base = `http://127.0.0.1:${server.httpServer.address().port}`
   const output = process.env.QA_OUTPUT_DIR
   await mkdir(output, { recursive: true })
-  const browser = await chromium.launch({ headless: true })
+  const browser = await chromium.launch({ headless: true, ...(process.env.CHROME_PATH ? { executablePath: process.env.CHROME_PATH } : {}) })
   try {
     for (const width of [1440, 390]) {
       const page = await browser.newPage({ locale: 'zh-CN', viewport: { width, height: 1000 }, reducedMotion: 'reduce' })
@@ -63,7 +63,7 @@ async function main() {
         return route.fulfill({ json: { code: 200, message: 'ok', data } })
       })
       await page.goto(`${base}/settings`)
-      const interval = page.getByRole('spinbutton', { name: '请求间隔 ms', exact: true })
+      const interval = page.getByRole('spinbutton', { name: '请求间隔（秒）', exact: true })
       await interval.waitFor()
       await interval.fill('123')
       await page.getByRole('radio', { name: '日志清理', exact: true }).click()
@@ -72,6 +72,19 @@ async function main() {
       await confirm.getByRole('button', { name: '继续编辑', exact: true }).click()
       assert.equal(new URL(page.url()).pathname, '/settings')
       assert.equal(await interval.inputValue(), '123')
+      // A sidebar navigation must leave an unsaved-change dialog accessible,
+      // including the mobile overlay/focus trap, and keep the current highlight.
+      if (width < 961)
+        await page.getByRole('button', { name: '打开侧边栏', exact: true }).click()
+      await page.getByRole('navigation').filter({ visible: true }).getByRole('button', { name: '账号管理', exact: true }).click()
+      await confirm.getByRole('button', { name: '继续编辑', exact: true }).click()
+      assert.equal(new URL(page.url()).pathname, '/settings')
+      if (width < 961)
+        await page.getByRole('button', { name: '打开侧边栏', exact: true }).click()
+      const selected = page.getByRole('navigation').filter({ visible: true }).locator('[aria-current="page"]')
+      assert.equal((await selected.textContent()).trim(), '系统设置')
+      if (width < 961)
+        await page.keyboard.press('Escape')
       await page.getByRole('radio', { name: '日志清理', exact: true }).click()
       await confirm.waitFor()
       await page.keyboard.press('Escape')

@@ -55,3 +55,22 @@ test('all theme presets keep equal hover/focus feedback even without decorative 
     }
   }
 })
+
+test('upstream material and complete profiles keep explicit customization last', () => {
+  const { createTheme } = load(resolve(root, 'core/resolve.ts'))
+  const { themeProfiles } = load(resolve(root, 'core/constants.ts'))
+  for (const name of ['light', 'dark']) {
+    for (const colorId of Object.keys(themeProfiles)) {
+      const profile = themeProfiles[colorId]
+      const full = createTheme({ name, colorId, ...profile })
+      assert.equal(full.preset, profile.preset)
+      assert.ok(full.tokens['--cp-card-bg-image'])
+      assert.ok(full.tokens['--cp-layout-sider-bg-image'])
+    }
+    const soft = createTheme({ name, preset: 'soft', customization: { seed: { borderRadius: 7 }, component: { cardBorderRadius: 11 } } })
+    assert.equal(soft.seedTokens.borderRadius, 7)
+    assert.equal(soft.tokens['--cp-card-border-radius'], '11px')
+    assert.equal(createTheme({ name }).preset, 'default')
+    assert.notEqual(createTheme({ name, preset: 'soft' }).tokens['--cp-card-bg-image'], createTheme({ name }).tokens['--cp-card-bg-image'])
+  }
+})

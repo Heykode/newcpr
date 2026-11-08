@@ -1674,9 +1674,10 @@ async fn rotation_accepts_relogin_document_and_preserves_the_device() {
         );
         assert_eq!(facts.email.as_deref(), Some("A@example.com"));
         assert_eq!(facts.plan_type.as_deref(), Some("team"));
-        let identity = facts.replacement_identity.as_ref().unwrap();
-        assert_eq!(identity.upstream_user_id(), "user-A");
-        assert_eq!(identity.upstream_account_id(), Some("A"));
+        assert!(
+            facts.replacement_identity.is_none(),
+            "same identity keeps quota access evidence"
+        );
         let updated = CodexCredentialCodec::decode_complete(
             &gateway_core::account::PlaintextCredential::new(
                 facts
@@ -1922,9 +1923,13 @@ async fn rotation_same_principal_refreshes_metadata_and_preserves_the_device() {
         );
         assert_eq!(facts.email.as_deref(), Some("A@example.com"));
         assert_eq!(facts.plan_type.as_deref(), Some("plus"));
-        let identity = facts.replacement_identity.as_ref().unwrap();
-        assert_eq!(identity.upstream_user_id(), new_user);
-        assert_eq!(identity.upstream_account_id(), Some("A"));
+        if new_user == "user-A" {
+            assert!(facts.replacement_identity.is_none());
+        } else {
+            let identity = facts.replacement_identity.as_ref().unwrap();
+            assert_eq!(identity.upstream_user_id(), new_user);
+            assert_eq!(identity.upstream_account_id(), Some("A"));
+        }
         let raw = facts
             .provider_material
             .clone()
@@ -1952,80 +1957,82 @@ async fn rotation_same_principal_refreshes_metadata_and_preserves_the_device() {
 }
 
 #[tokio::test]
-async fn reauthorization_entry_rejects_conflicts_and_unknown_and_releases_claim() {
-    for (old_user, old_workspace, access, id_token, message) in [
+async fn reauthorization_entry_adopts_new_identity_and_rejects_incomplete_credentials() {
+    use gateway_admin::model::provider_credentials::PreparedAuthorizationCredential;
+    // OAuth follows the selected ID token, with access-token fallback only for
+    // missing fields. Trusted file rotation has its own continuity contract.
+    for (old_user, old_workspace, access, id_token, expected) in [
         (
             Some("user-A"),
             Some("A"),
             "opaque-new".to_owned(),
             anchored_principal_token("A@example.com", Some("user-B"), Some("A")),
-            "账号主体",
+            Some(("user-B", Some("A"))),
         ),
         (
             Some("user-A"),
             Some("A"),
             "opaque-new".to_owned(),
             principal_token(Some("user-B"), Some("B")),
-            "账号主体",
+            Some(("user-B", Some("B"))),
         ),
         (
             Some("user-A"),
             Some("A"),
             principal_token(Some("user-B"), Some("B")),
             principal_token(Some("user-A"), Some("A")),
-            "账号主体",
+            Some(("user-A", Some("A"))),
         ),
         (
             Some("user-A"),
             Some("A"),
             principal_token(Some("user-A"), Some("A")),
             principal_token(Some("user-B"), Some("B")),
-            "账号主体",
+            Some(("user-B", Some("B"))),
         ),
         (
             Some("user-A"),
             Some("A"),
             "opaque-new".to_owned(),
             principal_jwt(json!({})),
-            "无法确认",
+            None,
         ),
         (
             Some("user-A"),
             Some("A"),
             "opaque-new".to_owned(),
             "opaque-id-token".to_owned(),
-            "无法确认",
+            None,
         ),
         (
             Some("user-A"),
             Some("A"),
             "opaque-new".to_owned(),
             principal_jwt(json!({
-                "email": 123,
-                "https://api.openai.com/auth": {"chatgpt_user_id": "user-B"}
+                "email": 123, "https://api.openai.com/auth": {"chatgpt_user_id": "user-B"}
             })),
-            "无法确认",
+            None,
         ),
         (
             Some("user-A"),
             Some("A"),
             "opaque-new".to_owned(),
             principal_token(Some("user-A"), None),
-            "无法确认",
+            Some(("user-A", None)),
         ),
         (
             None,
             None,
             "opaque-new".to_owned(),
             principal_token(Some("user-A"), Some("A")),
-            "无法确认",
+            Some(("user-A", Some("A"))),
         ),
         (
             None,
             Some("A"),
             "opaque-new".to_owned(),
             principal_token(Some("user-A"), Some("A")),
-            "无法确认",
+            Some(("user-A", Some("A"))),
         ),
     ] {
         let store = principal_account(old_user, old_workspace).await;
@@ -2077,7 +2084,7 @@ async fn reauthorization_entry_rejects_conflicts_and_unknown_and_releases_claim(
                 .unwrap()
                 .to_owned()
         };
-        let error = bundle
+        let prepared = bundle
             .admin_provider()
             .complete_authorization(CompleteAuthorization {
                 settings: None,
@@ -2087,25 +2094,51 @@ async fn reauthorization_entry_rejects_conflicts_and_unknown_and_releases_claim(
                     "http://localhost:1455/auth/callback?code=synthetic&state={state}"
                 ),
             })
-            .await
-            .expect_err("wrong or unknown principal cannot be prepared");
-        assert_eq!(error.kind(), ProviderAdminErrorKind::Conflict);
-        assert!(error.public_message().unwrap().contains(message));
-        assert!(!error.public_message().unwrap().contains("无效"));
+            .await;
+        match expected {
+            Some((user, workspace)) => {
+                let prepared = prepared.expect("manual OAuth can replace the selected identity");
+                let PreparedAuthorizationCredential::Reauthorize(rotation) = &prepared.credential
+                else {
+                    panic!("expected reauthorization");
+                };
+                if old_user == Some(user) && old_workspace == workspace {
+                    assert!(rotation.facts().replacement_identity.is_none());
+                } else {
+                    let identity = rotation.facts().replacement_identity.as_ref().unwrap();
+                    assert_eq!(identity.upstream_user_id(), user);
+                    assert_eq!(identity.upstream_account_id(), workspace);
+                }
+                assert!(
+                    pending
+                        .values
+                        .lock()
+                        .unwrap()
+                        .values()
+                        .next()
+                        .unwrap()
+                        .3
+                        .is_some(),
+                    "prepared authorization retains the claim until commit"
+                );
+            }
+            None => {
+                let error = prepared.expect_err("incomplete OAuth credentials cannot be prepared");
+                assert_eq!(error.kind(), ProviderAdminErrorKind::Invalid);
+                let values = pending.values.lock().unwrap();
+                assert_eq!(values.len(), 1);
+                assert!(
+                    values.values().next().unwrap().3.is_none(),
+                    "failed preparation releases its claim"
+                );
+            }
+        }
         let after = store.load_current_credential(&id).await.unwrap();
         assert_eq!(after.account, before.account);
         assert_eq!(
             after.credential.expose_to_provider(),
             before.credential.expose_to_provider()
         );
-        {
-            let values = pending.values.lock().unwrap();
-            assert_eq!(values.len(), 1);
-            assert!(
-                values.values().next().unwrap().3.is_none(),
-                "failed preparation releases its claim"
-            );
-        }
         server.verify().await;
     }
 }
@@ -2201,14 +2234,7 @@ async fn reauthorization_entry_accepts_opaque_access_and_uses_current_revision()
         );
         assert_eq!(facts.email.as_deref(), Some("A@example.com"));
         assert_eq!(facts.plan_type.as_deref(), Some("plus"));
-        assert_eq!(
-            facts
-                .replacement_identity
-                .as_ref()
-                .unwrap()
-                .upstream_user_id(),
-            "user-A"
-        );
+        assert!(facts.replacement_identity.is_none());
         let runtime =
             CodexCredentialCodec::decode(&gateway_core::account::PlaintextCredential::new(
                 facts

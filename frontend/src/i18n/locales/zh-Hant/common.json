@@ -142,6 +142,7 @@
       "small": "小",
       "medium": "中",
       "large": "大"
-    }
+    },
+    "selectPlaceholder": "請選擇"
   }
 }

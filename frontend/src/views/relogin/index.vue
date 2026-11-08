@@ -46,9 +46,15 @@ import { formatDateTime } from '@/utils/date'
 import { DEFAULT_EXCEL_MODELS_INPUT } from '@/utils/excel-defaults'
 import { excelRecoverySettings, excelSettings } from '@/utils/excel-settings'
 import { useAccountSwipeSelect } from '../accounts/composables/useAccountSwipeSelect'
+import ReloginHistoryModal from './components/ReloginHistoryModal.vue'
+import ReloginTotpModal from './components/ReloginTotpModal.vue'
 import { importPreview } from './import-preview'
 import { credentialLabel, matchesPool, poolPresentation, processingStatus, recoveryCountdown, recoveryLabels, retryProgress, shortWorkspace, statusLabels, workspaceChoices, workspaceId } from './presentation'
 
+const historyEntry = shallowRef<ReloginEntry | null>(null)
+const historyOpen = shallowRef(false)
+const totpEntry = shallowRef<ReloginEntry | null>(null)
+const totpOpen = shallowRef(false)
 const entries = shallowRef<ReloginEntry[]>([])
 const loading = shallowRef(false)
 const busy = shallowRef(false)
@@ -123,6 +129,7 @@ const partialSelected = computed(() => !allSelected.value && visible.value.some(
 const columns = defineTableColumns<ReloginEntry>([
   { key: 'selection', kind: 'selection' },
   { key: 'identity', label: '账号', kind: 'identity', size: 'xl', grow: 1 },
+  { key: 'lastAttempt', label: '上次重登时间', kind: 'datetime', size: 'lg' },
   { key: 'plan', label: 'PLAN / 工作区', kind: 'custom', size: 'lg' },
   { key: 'status', label: '处理状态', kind: 'status', size: 'lg' },
   { key: 'credential', label: '本次凭据', kind: 'status' },
@@ -569,6 +576,8 @@ onBeforeUnmount(() => {
     <div v-if="failure || loadFailure" class="max-h-24 shrink-0 overflow-auto whitespace-pre-wrap break-words text-cp-sm text-cp-error" role="alert">
       {{ failure || loadFailure }}
     </div>
+    <ReloginHistoryModal v-model="historyOpen" :entry="historyEntry" @after-leave="!historyOpen && (historyEntry = null)" />
+    <ReloginTotpModal v-model="totpOpen" :entry="totpEntry" @after-leave="!totpOpen && (totpEntry = null)" />
     <section class="flex min-h-48 min-w-0 flex-1 flex-col overflow-hidden border-y border-cp-border bg-cp-bg-container">
       <BaseTable ref="table" class="relogin-table min-h-0 flex-1" :columns="columns" :rows="visible" :selected-row-keys="[...selected]" :loading="loading && !entries.length" column-layout="content" :empty-text="t('appearance.preview.components.noMatchingAccountYet')" @mousedown="onMouseDown">
         <template #header-selection>
@@ -581,9 +590,9 @@ onBeforeUnmount(() => {
           <div class="flex min-w-0 items-center gap-2">
             <span data-swipe-select-handle class="cursor-ns-resize p-1 text-cp-text-tertiary" title="拖动选择"><GripVertical class="size-4" /></span>
             <div class="min-w-0" data-swipe-select-handle>
-              <div class="truncate font-semibold text-cp-text" :title="row.email">
+              <button type="button" class="block max-w-full truncate text-left font-semibold text-cp-link hover:underline disabled:text-cp-text disabled:no-underline" :title="row.hasTotp ? '查看 2FA' : row.email" :disabled="!row.hasTotp" @mousedown.stop @click.stop="totpEntry = row; totpOpen = true">
                 {{ row.email }}
-              </div>
+              </button>
               <div class="truncate text-cp-xs text-cp-text-tertiary" :title="row.message">
                 {{ row.message || '待处理' }}
               </div>
@@ -592,6 +601,12 @@ onBeforeUnmount(() => {
               </div>
             </div>
           </div>
+        </template>
+        <template #lastAttempt="{ row }">
+          <button v-if="row.lastAttemptAt || row.lastReloginAt" type="button" class="whitespace-nowrap text-cp-link hover:underline" title="查看重登详情" @click="historyEntry = row; historyOpen = true">
+            {{ formatDateTime(row.lastAttemptAt || row.lastReloginAt) }}
+          </button>
+          <span v-else class="text-cp-text-tertiary">—</span>
         </template>
         <template #plan="{ row }">
           <div class="w-full min-w-0 overflow-hidden">

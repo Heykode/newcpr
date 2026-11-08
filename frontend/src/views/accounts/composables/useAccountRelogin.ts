@@ -11,21 +11,11 @@ export function useAccountRelogin(options: { accounts: Ref<AccountRow[]>, reload
   const actions = shallowRef<Record<string, AccountReloginAction>>({})
   const readError = shallowRef('')
   const actionError = shallowRef('')
-  const open = shallowRef(false)
-  const selected = shallowRef<{ email: string, action: AccountReloginAction } | null>(null)
   const submit = useAsyncAction()
   const ids = computed(() => options.accounts.value.map(account => account.id))
   let disposed = false
   let controller: AbortController | undefined
   let timer: ReturnType<typeof setTimeout> | undefined
-
-  const confirmDisabled = computed(() => {
-    const snapshot = selected.value?.action
-    const current = snapshot && actions.value[snapshot.accountId]
-    return Boolean(readError.value || !snapshot?.target || !current || current.busy
-      || current.blockedReason || current.entryId !== snapshot.entryId || current.revision !== snapshot.revision
-      || JSON.stringify(current.target) !== JSON.stringify(snapshot.target))
-  })
 
   async function refresh() {
     if (disposed)
@@ -73,34 +63,24 @@ export function useAccountRelogin(options: { accounts: Ref<AccountRow[]>, reload
     }
   }
 
-  function request(account: AccountRow) {
+  async function request(account: AccountRow) {
     const action = actions.value[account.id]
     if (disposed || submit.loading.value || readError.value || !action?.target || action.busy || action.blockedReason)
       return
-    selected.value = { email: account.email ?? account.name, action: { ...action, target: { ...action.target } } }
-    actionError.value = ''
-    open.value = true
-  }
-
-  async function confirm() {
-    const snapshot = selected.value?.action
-    if (disposed || !open.value || confirmDisabled.value || !snapshot?.target)
-      return
-    const target = snapshot.target
+    const snapshot = { ...action, target: { ...action.target } }
     await submit.run(async () => {
       actionError.value = ''
-      await queueAccountRelogin({ entryId: snapshot.entryId, revision: snapshot.revision, target })
+      await queueAccountRelogin({ entryId: snapshot.entryId, revision: snapshot.revision, target: snapshot.target })
       if (disposed)
         return
-      open.value = false
-      // Keep an accepted job busy until the first authoritative status read.
       actions.value = { ...actions.value, [snapshot.accountId]: { ...snapshot, busy: true, status: 'queued', syncedAt: null } }
-      toast.success('已加入重登队列')
+      toast.success('已加入重登队列，成功后自动推送')
       void refresh()
     }, {
       onError: (cause) => {
         if (!disposed) {
           actionError.value = errorMessage(cause, '提交失败，请检查重登状态')
+          toast.error(actionError.value)
           void refresh()
         }
       },
@@ -116,5 +96,5 @@ export function useAccountRelogin(options: { accounts: Ref<AccountRow[]>, reload
     controller?.abort()
     clearTimeout(timer)
   })
-  return { actions, readError, actionError, open, selected, confirmDisabled, submitting: submit.loading, refresh, request, confirm }
+  return { actions, readError, actionError, submitting: submit.loading, refresh, request }
 }

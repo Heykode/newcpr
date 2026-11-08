@@ -43,11 +43,33 @@ export interface ReloginEntry {
   reloginAccountId: string | null
   reloginCount: number | null
   lastReloginAt: string | null
+  lastAttemptAt?: string | null
   verifiedAt: string | null
   expiresAt: string | null
   importedAt?: string | null
   updatedAt: string
 }
+export interface ReloginAttempt {
+  id: string
+  source: 'library' | 'account_menu' | 'automatic' | 'enrollment'
+  startedAt: string
+  finishedAt: string | null
+  result: 'running' | 'succeeded' | 'failed' | 'cancelled' | 'awaiting_workspace'
+  message: string
+  accountId: string | null
+  workspaceId: string | null
+  pushResult: 'not_requested' | 'pending' | 'running' | 'succeeded' | 'failed' | 'uncertain'
+  pushMessage: string
+  pushedAt: string | null
+}
+export interface ReloginHistory { items: ReloginAttempt[], nextCursor: string | null }
+export function getReloginHistory(id: string, before?: string, options: RequestOptions = {}) {
+  return request<ReloginHistory>({ url: '/api/admin/relogin/history', method: 'POST', data: { id, before }, ...options })
+}
+export function getReloginTotp(id: string, options: RequestOptions = {}) {
+  return request<{ secret: string }>({ url: '/api/admin/relogin/totp', method: 'POST', data: { id }, ...options })
+}
+
 export interface ReloginSettings { concurrency: number, paused: boolean, maxRetries: number, retryIntervalSeconds: number }
 export type ReloginSettingsUpdate = Pick<ReloginSettings, 'concurrency' | 'paused'> & Partial<Pick<ReloginSettings, 'maxRetries' | 'retryIntervalSeconds'>>
 export interface ReloginList { settings: ReloginSettings, items: ReloginEntry[] }

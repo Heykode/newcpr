@@ -277,6 +277,7 @@ async fn connect_and_migrate_should_apply_all_migrations_once_and_reopen_cleanly
             "account_purchase_daily_usage",
             "account_purchase_identities",
             "account_relogin_entries",
+            "account_relogin_history",
             "account_relogin_settings",
             "account_relogin_successes",
             "account_relogin_templates",

@@ -2,6 +2,14 @@ export type ThemeMode = 'system' | 'light' | 'dark'
 export type ThemeName = 'light' | 'dark'
 export type ThemeColorPresetId = 'relay-blue' | 'deep-teal' | 'signal-violet' | 'graphite'
 export type ThemeColorId = ThemeColorPresetId | 'custom'
+export type ThemePresetId = 'default' | 'soft'
+
+export interface ThemePreset {
+  id: ThemePresetId
+  colorId: ThemeColorId
+  primaryColor: string
+  customization?: Partial<Record<ThemeName, ThemeCustomization>>
+}
 
 export interface ThemeColorPreset {
   id: ThemeColorPresetId
@@ -44,6 +52,15 @@ export interface ThemeCustomization {
   tokenOverrides?: Partial<ThemeTokens>
 }
 
+export interface ThemeOptions {
+  name?: ThemeName
+  preset?: ThemePresetId
+  colorId?: ThemeColorId
+  /** 自定义配色的主色，仅在 colorId 为 custom 时使用 */
+  primaryColor?: string
+  customization?: ThemeCustomization
+}
+
 export interface ResolvedThemeSeedTokens {
   colorPrimary: string
   colorSuccess: string
@@ -63,6 +80,7 @@ export interface ResolvedThemeSeedTokens {
 
 export interface ResolvedTheme {
   name: ThemeName
+  preset: ThemePresetId
   colorId: ThemeColorId
   seed: string
   seedTokens: ResolvedThemeSeedTokens
@@ -173,11 +191,20 @@ export interface ThemeShadowMap {
   boxShadowTertiary: string
 }
 
+/** 中性填充的派生中间值，不直接暴露为全局 CSS Token。 */
+export interface ThemeFillMap {
+  controlBg: string
+  controlHoverBg: string
+  controlActiveBg: string
+  contentBg: string
+  contentStripeBg: string
+  contentHoverBg: string
+}
+
 export interface ThemeComponentMap {
-  buttonSecondaryBg: string
-  buttonSecondaryHoverBg: string
-  buttonSecondaryActiveBg: string
   menuItemSelectedBg: string
+  menuItemSelectedBgImage: string
+  menuItemSelectedShadow: string
   inputBg: string
   inputHoverBg: string
   inputActiveBg: string
@@ -186,8 +213,15 @@ export interface ThemeComponentMap {
   buttonPrimaryBg: string
   buttonPrimaryHoverBg: string
   buttonPrimaryActiveBg: string
+  buttonSecondaryBg: string
+  buttonSecondaryHoverBg: string
+  buttonSecondaryActiveBg: string
+  iconButtonSecondaryBg: string
+  iconButtonSecondaryHoverBg: string
+  iconButtonSecondaryActiveBg: string
   brandMarkBg: string
   cardBg: string
+  cardBgImage: string
   modalBg: string
   popoverHeaderBg: string
   tableHeaderBg: string
@@ -195,8 +229,10 @@ export interface ThemeComponentMap {
   tableRowStripeBg: string
   tableRowHoverBg: string
   tableRowSelectedBg: string
+  tableRowSelectedHoverBg: string
   progressRemainingColor: string
   layoutSiderBg: string
+  layoutSiderBgImage: string
   cardShadow: string
   popoverShadow: string
   inputShadow: string
@@ -206,6 +242,8 @@ export interface ThemeComponentMap {
   layoutSiderShadow: string
   scrollbarThumbBg: string
   scrollbarThumbHoverBg: string
+  switchUncheckedBg: string
+  switchUncheckedColor: string
 }
 
 export interface FunctionalColorMap {
@@ -277,6 +315,7 @@ export interface ThemeDimensionMap {
   borderRadius: string
   borderRadiusLg: string
   cardBorderRadius: string
+  layoutSiderBorderRadius: string
 }
 
 export interface ThemeMap {

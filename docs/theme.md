@@ -12,7 +12,9 @@
 </div>
 
 在管理端「主题」中调整颜色、字号、圆角和组件样式，保存后应用到当前浏览器。
-设置保存在浏览器本地，不会同步到服务器或其他设备。只想换配色时，选择预置主题即可。
+设置保存在浏览器本地，不会同步到服务器或其他设备。四套完整预设为「星津夜航」「水墨江汀」
+「粉墙回廊」「朱阙金瓦」；选择预设同时应用配色、表面材质与该预设的组件覆盖。
+「默认 / 柔光」材质可独立切换，自定义覆盖始终最后生效。
 
 下文说明实现和扩展方式。颜色使用 Ant Design 十阶色板与项目的明暗角色规则，
 中性表面从背景和文字 Seed 派生；Vue 组件通过 CSS Variables 与 Tailwind CSS 4 使用这些值。
@@ -93,6 +95,7 @@ Seed 是用户配置与持久化的最小事实：
 ```ts
 type ThemeMode = 'system' | 'light' | 'dark'
 type ThemeColorId = 'relay-blue' | 'deep-teal' | 'signal-violet' | 'graphite' | 'custom'
+type ThemePresetId = 'default' | 'soft'
 
 interface ThemeCustomization {
   seed?: Partial<ThemeSeedOverrides>
@@ -111,7 +114,10 @@ interface ThemeCustomization {
 | 组件尺寸 | `tableRowHeight`、`cardBorderRadius` |
 
 持久化键为 `codex-proxy-rs-theme`。Store 不保存完整色板或 CSS Variables，损坏的模式、颜色与自定义值会在
-初始化时规范化并回退到默认配置。
+初始化时规范化并回退到默认配置。旧数据没有 `themePreset` 时补 `default`，保留原自定义覆盖。
+`createTheme({ name, preset, colorId, primaryColor, customization })` 接入官方 UI v0.9.0 的实际
+派生实现；本地 `resolveTheme(...)` 保留兼容入口，Token 仍采用 `--cp-*`，无需迁移旧覆盖键。
+`themeProfiles` 保存完整场景组合，`themePresets` 定义材质基线；编辑器与 Store 使用同一 compiler。
 
 ### Map Token
 
@@ -362,14 +368,23 @@ utility / arbitrary variant；Vue Transition、跨浏览器 Range、动态富文
 - Card 和选项默认不增加装饰性边框；键盘焦点必须保留可见反馈。
 - 阴影保持中性，`shadowStrength` 只调节层级强弱，不给阴影染品牌色。
 
+## 共享侧栏
+
+`BaseSidebar`、`SidebarNav` 与 `SidebarEntry` 移植官方 UI v0.9.0 的实现；`AppSidebar` 提供
+NewCPR 既有 11 个菜单和 footer。保留本地 `collapsed` 外层 API，内部映射到官方 `collapse`。
+路由守卫取消时选中项保持实际路由；手机点击菜单先关闭侧栏遮罩/焦点锁，让离页确认可操作。
+折叠提示使用 `BasePopover` 的 `role="tooltip"`、800ms 延迟与 `enterable=false`；键盘 focus
+仍可维持提示。账号分组继续使用原多文字标签按钮，不套用固定尺寸图标按钮。
+
 ## 扩展指南
 
 ### 增加预置主题
 
 1. 在 `ThemeColorPresetId` 增加稳定 ID。
 2. 在 `THEME_COLOR_PRESETS` 声明名称、描述与主色 Seed。
-3. 不新增页面特判，确认预置可通过同一 `resolveTheme()` 派生。
-4. 在浅色、深色和系统模式下检查文本、浮层、Input、表格与图表。
+3. 在 `themeProfiles` 配置场景的材质和显式覆盖，并提供 `theme-scenes.svg` 及三语言文案。
+4. 不新增页面特判，确认预置可通过同一 `createTheme()` 派生。
+5. 在浅色、深色和系统模式下检查文本、浮层、Input、表格与图表。
 
 ### 增加全局 Seed 或 Alias
 

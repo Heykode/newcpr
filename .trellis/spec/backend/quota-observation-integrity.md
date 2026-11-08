@@ -29,9 +29,16 @@ malformed terminals and explicit failed statuses are not success.
 - Current SSE/WS error headers use the Codex quota whitelist. Exclude plan,
   authentication, Cookies and turn state. Respect SSE event labels when JSON
   omits `type`; do not rewrite downstream error bytes.
-- Generic windows belong to an explicitly active named bucket when no named
-  facts exist, including a name-only descriptor. Keep `premium` as core and
-  preserve existing explicit-bucket and mirrored-window handling.
+- Follow official `e770c94a`: if the active limit is not `codex` and that key
+  is absent from the parsed limits map, move the generic `codex` entry to that
+  active key. Do not special-case `premium`; a name-only entry already present
+  in the map must not trigger the move. Preserve explicit named buckets and
+  mirrored-window handling. Image quota observations must not overwrite the
+  Codex weekly window or independently change its access state.
+- Verify parser positive/negative cases and the Provider-to-Store contract in
+  `image_quota_headers_keep_the_codex_weekly_window_and_access_state`. Updating
+  old premium/name-only expectations requires the fixed official branch above;
+  restoring those old branches to satisfy an old test is incorrect.
 
 ## Reset Facts
 
