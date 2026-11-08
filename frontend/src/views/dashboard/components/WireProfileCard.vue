@@ -175,7 +175,7 @@ const authProtocol = computed(() => {
 const runtimeEnvironment = computed(() => {
   const target = profile.value?.target
   if (!target)
-    return { primary: '—', details: [] as string[], title: '—' }
+    return { primary: '—', details: [] as string[] }
 
   const present = (value: string) => value !== '—' && value.toLowerCase() !== 'unknown'
   const primary = [target.osType, target.osVersion].filter(present).join(' ')
@@ -183,7 +183,6 @@ const runtimeEnvironment = computed(() => {
   return {
     primary: primary || '—',
     details,
-    title: [primary, ...details].filter(Boolean).join(' · '),
   }
 })
 
@@ -248,13 +247,12 @@ function providerLabel(provider: string) {
             <div class="flex min-w-0 flex-wrap items-baseline gap-x-2.5 gap-y-1.5">
               <strong
                 :aria-label="profile.version"
-                class="inline-flex max-w-full min-w-0 items-baseline gap-2 font-mono leading-none tabular-nums"
-                :title="profile.version"
+                class="inline-flex max-w-full min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1 font-mono leading-none tabular-nums"
               >
                 <span class="wrap-break-word text-[27px] leading-[1.05] font-heavy text-cp-text">
                   {{ versionParts.release }}
                 </span>
-                <span v-if="versionParts.prerelease" class="truncate text-cp-sm font-bold text-cp-text-secondary">
+                <span v-if="versionParts.prerelease" class="text-cp-sm font-bold wrap-anywhere text-cp-text-secondary">
                   {{ versionParts.prerelease }}
                 </span>
               </strong>
@@ -278,7 +276,6 @@ function providerLabel(provider: string) {
               </dt>
               <dd
                 class="mt-2 mb-0 truncate font-mono text-cp-lg leading-none font-bold tabular-nums text-cp-text"
-                :title="authProtocol"
               >
                 {{ authProtocol }}
               </dd>
@@ -291,7 +288,6 @@ function providerLabel(provider: string) {
               </dt>
               <dd
                 class="mt-2 mb-0 truncate font-mono text-cp-lg leading-none font-bold tabular-nums text-cp-text"
-                :title="runtimeEnvironment.title"
               >
                 {{ runtimeEnvironment.primary }}
                 <span v-if="runtimeEnvironment.details.length" class="text-cp-xs font-emphasis text-cp-text-secondary">

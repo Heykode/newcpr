@@ -184,6 +184,7 @@
   --shadow-cp-input-hover: var(--cp-input-hover-shadow);
   --shadow-cp-input-active: var(--cp-input-active-shadow);
   --shadow-cp-input-error-active: var(--cp-input-error-active-shadow);
+  --shadow-cp-menu-item-selected: var(--cp-menu-item-selected-shadow);
   --shadow-cp-layout-sider: var(--cp-layout-sider-shadow);
 
   /* 间距与尺寸 */

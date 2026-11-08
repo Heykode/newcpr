@@ -1091,6 +1091,9 @@ impl CodexBackendClient {
         client.profile = self.profile.frozen();
         client.outbound_proxy = account.outbound_proxy().cloned();
         client.egress_key = egress_key(account.id().as_str(), account.outbound_proxy());
+        client
+            .egress_key
+            .push_str(&crate::credential::oauth_identity_key(account));
         client.egress_account = Some(account.clone());
         client.egress_route = None;
         client.attempt_pinned = false;
@@ -1142,6 +1145,9 @@ impl CodexBackendClient {
         )?;
         client.outbound_proxy = Some(lease.proxy().clone());
         client.egress_key = egress_key(account.id().as_str(), Some(lease.proxy()));
+        client
+            .egress_key
+            .push_str(&crate::credential::oauth_identity_key(account));
         client.websocket_origin_key = format!(
             "{}:{}",
             websocket_origin_key(&self.base_url),

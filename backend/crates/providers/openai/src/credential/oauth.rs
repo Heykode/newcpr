@@ -22,8 +22,7 @@ use url::Url;
 use uuid::Uuid;
 
 use super::admin::{
-    CodexCredentialAdmin, CodexCredentialAdminError, PreparedCodexCredentialRotation,
-    UnresolvedCodexOAuthCredential,
+    CodexCredentialAdmin, PreparedCodexCredentialRotation, UnresolvedCodexOAuthCredential,
 };
 use super::recovery_log::{CodexOAuthRecoveryOperation, record_oauth_recovery};
 use super::security::CodexCredentialCodec;
@@ -31,9 +30,7 @@ use super::token_client::{
     AuthorizationCodeExchangeError, AuthorizationCodeExchanger, AuthorizationCodeGrant,
     OFFICIAL_CODEX_OAUTH_CLIENT_ID, OFFICIAL_CODEX_REDIRECT_URI,
 };
-use super::types::{
-    candidate_oauth_metadata, parse_access_token_expiration, parse_chatgpt_jwt_claims,
-};
+use super::types::{parse_access_token_expiration, parse_chatgpt_jwt_claims};
 use crate::transport::profile::CodexWireProfileState;
 
 const AUTHORIZATION_ENDPOINT: &str = "https://auth.openai.com/oauth/authorize";
@@ -328,10 +325,6 @@ pub enum CodexOAuthAdminError {
     NotFound,
     #[error("Codex OAuth operation conflicts with current state")]
     Conflict,
-    #[error("Codex OAuth principal conflicts with the supplied or current identity")]
-    PrincipalConflict,
-    #[error("Codex OAuth principal continuity could not be confirmed")]
-    PrincipalUnconfirmed,
     #[error("Codex OAuth flow expired")]
     FlowExpired,
     #[error("Codex OAuth callback was rejected")]
@@ -522,11 +515,6 @@ impl CodexOAuthAdminService {
         } else {
             None
         };
-        let fallback_refresh_token = current
-            .as_ref()
-            .map(current_oauth_refresh_token)
-            .transpose()?
-            .flatten();
         let (mut secret, id_token) = self
             .exchange_pending(
                 &pending,
@@ -541,44 +529,23 @@ impl CodexOAuthAdminService {
         let mutation = pending.mutation.clone();
         let access_token_expires_at =
             parse_access_token_expiration(secret.access_token.expose_secret());
-        secret.id_token = Some(id_token.clone());
+        let metadata = parse_chatgpt_jwt_claims(id_token.expose_secret())
+            .map_err(|_| CodexOAuthAdminError::TokenRejected)?
+            .with_access_token_fallback(&secret.access_token);
+        secret.id_token = Some(id_token);
         let credential = if let Some(current) = current {
-            let metadata = candidate_oauth_metadata(&secret)
-                .map_err(|()| CodexOAuthAdminError::PrincipalConflict)?;
-            let old_user = current
-                .account
-                .upstream_user_id()
-                .map(str::trim)
-                .filter(|id| !id.is_empty())
-                .map(str::to_owned);
-            let new_user = metadata
-                .chatgpt_user_id
-                .as_deref()
-                .map(str::trim)
-                .filter(|id| !id.is_empty());
             let prepared = self
                 .credentials
-                .prepare_candidate_oauth_rotation(
+                .prepare_oauth_rotation(
                     current,
                     secret,
+                    Some(metadata),
                     access_token_expires_at,
-                    fallback_refresh_token,
+                    None,
                 )
-                .map_err(map_admin_error)?;
-            let (Some(old_user), Some(new_user)) = (old_user.as_deref(), new_user) else {
-                return Err(CodexOAuthAdminError::PrincipalUnconfirmed);
-            };
-            // Interactive reauthorization cannot replace the selected user's identity.
-            // Trusted file import and automatic refresh retain their own contracts.
-            if old_user != new_user {
-                return Err(CodexOAuthAdminError::PrincipalConflict);
-            }
+                .map_err(|_| CodexOAuthAdminError::Credential)?;
             CompletedCodexOAuthCredential::Reauthorize(Box::new(prepared))
         } else {
-            parse_chatgpt_jwt_claims(id_token.expose_secret())
-                .map_err(|_| CodexOAuthAdminError::TokenRejected)?;
-            let metadata = candidate_oauth_metadata(&secret)
-                .map_err(|()| CodexOAuthAdminError::PrincipalConflict)?;
             let account_id = format!("acct_{}", Uuid::now_v7().simple());
             let prepared = self
                 .credentials
@@ -592,7 +559,7 @@ impl CodexOAuthAdminService {
                     next_refresh_at: None,
                     enabled: true,
                 })
-                .map_err(map_admin_error)?;
+                .map_err(|_| CodexOAuthAdminError::Credential)?;
             CompletedCodexOAuthCredential::Create(Box::new(
                 gateway_core::account::NewProviderAccount {
                     model_access: Default::default(),
@@ -742,17 +709,6 @@ impl CodexOAuthAdminService {
         );
         Ok((secret, tokens.id_token))
     }
-}
-
-fn current_oauth_refresh_token(
-    current: &LoadedCredential,
-) -> Result<Option<SecretString>, CodexOAuthAdminError> {
-    let runtime = CodexCredentialCodec::decode(&current.credential)
-        .map_err(|_| CodexOAuthAdminError::Credential)?;
-    Ok(runtime
-        .authentication
-        .oauth()
-        .and_then(|oauth| oauth.refresh_token.clone()))
 }
 
 fn current_installation_id(current: &LoadedCredential) -> Result<String, CodexOAuthAdminError> {
@@ -924,16 +880,6 @@ fn map_authorization_settlement_error(error: CodexOAuthPendingStoreError) -> Adm
         CodexOAuthPendingStoreError::Unavailable => {
             AdminError::unavailable("OpenAI 授权状态存储暂不可用，请稍后重试")
         }
-    }
-}
-
-fn map_admin_error(error: CodexCredentialAdminError) -> CodexOAuthAdminError {
-    match error {
-        CodexCredentialAdminError::PrincipalConflict => CodexOAuthAdminError::PrincipalConflict,
-        CodexCredentialAdminError::PrincipalUnconfirmed => {
-            CodexOAuthAdminError::PrincipalUnconfirmed
-        }
-        _ => CodexOAuthAdminError::Credential,
     }
 }
 

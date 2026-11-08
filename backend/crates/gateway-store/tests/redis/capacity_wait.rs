@@ -993,6 +993,165 @@ async fn capacity_wait_deleted_token_and_mismatched_owner_fail_closed() {
 }
 
 #[tokio::test]
+async fn shutdown_releases_held_direct_and_promoted_leases_only_for_this_instance() {
+    let Some(mut fixture) = Fixture::new().await else {
+        return;
+    };
+    let (other, other_writer) = RedisProviderLeaseCoordinator::new(fixture.repository.clone());
+    let mut held = Vec::new();
+    let mut other_held = Vec::new();
+    let mut cancellations = Vec::new();
+    for pool in [
+        ProviderConcurrencyPool::Shared,
+        ProviderConcurrencyPool::Reserved,
+    ] {
+        for promote in [false, true] {
+            let id = if promote {
+                "shutdown-promoted"
+            } else {
+                "shutdown-direct"
+            };
+            let cancellation = CancellationToken::new();
+            let request = scheduling(id, 2, Duration::ZERO, Duration::from_secs(30))
+                .with_concurrency_pool(pool)
+                .with_cancellation(cancellation.clone());
+            let guard = if promote {
+                let mut waiter = acquired(
+                    fixture
+                        .port
+                        .try_acquire_wait(
+                            wait_request(id, AccountWaitMode::Sticky, 4, Duration::from_secs(10))
+                                .with_concurrency_pool(pool),
+                        )
+                        .await
+                        .unwrap(),
+                );
+                promoted(waiter.try_promote(request).await.unwrap())
+            } else {
+                fast_acquired(fixture.port.try_acquire_scheduling(request).await.unwrap())
+            };
+            held.push(guard);
+            cancellations.push(cancellation);
+            other_held.push(fast_acquired(
+                other
+                    .try_acquire_scheduling(
+                        scheduling(id, 2, Duration::ZERO, Duration::from_secs(30))
+                            .with_concurrency_pool(pool),
+                    )
+                    .await
+                    .unwrap(),
+            ));
+            assert_eq!(fixture.pool_in_flight(id, pool).await, 2);
+        }
+    }
+    // The caller deliberately retains every guard while Store shuts down.
+    fixture.drain().await;
+    assert!(cancellations.iter().all(CancellationToken::is_cancelled));
+    for pool in [
+        ProviderConcurrencyPool::Shared,
+        ProviderConcurrencyPool::Reserved,
+    ] {
+        for id in ["shutdown-direct", "shutdown-promoted"] {
+            assert_eq!(fixture.pool_in_flight(id, pool).await, 1);
+        }
+    }
+    assert!(
+        fixture
+            .port
+            .try_acquire_scheduling(scheduling(
+                "after-shutdown",
+                1,
+                Duration::ZERO,
+                Duration::from_secs(30),
+            ))
+            .await
+            .is_err()
+    );
+    drop(held);
+    drop(other_held);
+    drain(other_writer).await;
+    fixture.finish().await;
+}
+
+#[tokio::test]
+async fn shutdown_waits_for_committed_execution_reply_before_finishing_cleanup() {
+    for promote in [false, true] {
+        let Some(fixture) = Fixture::new().await else {
+            return;
+        };
+        drop(fast_acquired(
+            fixture
+                .port
+                .try_acquire_scheduling(scheduling(
+                    "warm-shutdown",
+                    1,
+                    Duration::ZERO,
+                    Duration::from_secs(30),
+                ))
+                .await
+                .unwrap(),
+        ));
+        let mut proxy = FaultProxy::start(Fault::HoldReply, ScriptTarget::Execution).await;
+        let repository =
+            RedisCredentialLeaseRepository::new(proxy.connection().await, &fixture.namespace)
+                .unwrap();
+        let (port, writer) = RedisProviderLeaseCoordinator::new(repository);
+        let mut waiter = if promote {
+            Some(acquired(
+                port.try_acquire_wait(wait_request(
+                    "shutdown-in-flight",
+                    AccountWaitMode::Sticky,
+                    4,
+                    Duration::from_secs(10),
+                ))
+                .await
+                .unwrap(),
+            ))
+        } else {
+            None
+        };
+        let cancellation = CancellationToken::new();
+        let request = scheduling(
+            "shutdown-in-flight",
+            1,
+            Duration::ZERO,
+            Duration::from_secs(30),
+        )
+        .with_cancellation(cancellation.clone());
+        let mut pending = Box::pin(async {
+            if let Some(waiter) = waiter.as_mut() {
+                promoted(waiter.try_promote(request).await.unwrap())
+            } else {
+                fast_acquired(port.try_acquire_scheduling(request).await.unwrap())
+            }
+        });
+        tokio::select! {
+            _ = &mut pending => panic!("Redis reply must be held"),
+            command = proxy.captured.recv() => { command.expect("committed execution"); }
+        }
+        assert_eq!(fixture.in_flight("shutdown-in-flight").await, 1);
+        let mut draining = Box::pin(drain(writer));
+        assert!(
+            tokio::time::timeout(Duration::from_millis(30), &mut draining)
+                .await
+                .is_err(),
+            "shutdown must wait for acquisition registration"
+        );
+        proxy.resume.notify_one();
+        let held = pending.await;
+        draining.await;
+        assert!(cancellation.is_cancelled());
+        assert_eq!(fixture.in_flight("shutdown-in-flight").await, 0);
+        drop(held);
+        if let Some(waiter) = waiter {
+            waiter.release().await.unwrap();
+        }
+        proxy.finish().await;
+        fixture.finish().await;
+    }
+}
+
+#[tokio::test]
 async fn capacity_wait_unpolled_release_and_promotion_are_owned_and_shutdown_drains() {
     let Some(mut fixture) = Fixture::new().await else {
         return;
@@ -1380,7 +1539,7 @@ async fn capacity_wait_running_writer_cleans_promptly_and_retries_redis_disconne
 }
 
 #[tokio::test]
-async fn capacity_wait_shutdown_keeps_receiving_drops_after_a_long_http_drain() {
+async fn capacity_wait_shutdown_is_bounded_and_releases_execution_before_waiters_return() {
     let Some(mut fixture) = Fixture::new().await else {
         return;
     };
@@ -1449,33 +1608,26 @@ async fn capacity_wait_shutdown_keeps_receiving_drops_after_a_long_http_drain() 
             .await
             .is_err()
     );
-    // A configured HTTP drain may outlive the former Store-only 35-second cutoff.
-    tokio::time::sleep(Duration::from_secs(36)).await;
-    assert!(
-        !worker.is_finished(),
-        "only the outer supervisor may terminate cleanup with live owners"
-    );
-    assert_eq!(fixture.waiting("late-wait").await, 1);
-    assert_eq!(fixture.in_flight("late-execution").await, 1);
-    assert_eq!(fixture.in_flight("late-promoted").await, 1);
-    let started = tokio::time::Instant::now();
-    drop(waiting);
-    drop(execution);
-    drop(promoted_execution);
-    tokio::time::timeout(Duration::from_secs(2), worker)
+    tokio::time::timeout(Duration::from_secs(3), worker)
         .await
-        .expect("late cleanup completes promptly")
-        .expect("join shutdown worker")
-        .expect("shutdown drain");
-    assert!(started.elapsed() < Duration::from_secs(2));
-    assert_eq!(fixture.waiting("late-wait").await, 0);
+        .expect("official bounded Store shutdown")
+        .expect("join")
+        .expect("shutdown");
+    assert_eq!(fixture.waiting("late-wait").await, 1);
     assert_eq!(fixture.in_flight("late-execution").await, 0);
     assert_eq!(fixture.in_flight("late-promoted").await, 0);
+    waiting
+        .release()
+        .await
+        .expect("explicit wait release after shutdown");
+    drop(execution);
+    drop(promoted_execution);
+    assert_eq!(fixture.waiting("late-wait").await, 0);
     fixture.finish().await;
 }
 
 #[tokio::test]
-async fn capacity_wait_unreturned_owner_requires_outer_shutdown_timeout_and_abort() {
+async fn capacity_wait_outer_shutdown_deadline_can_abort_before_the_store_budget() {
     let Some(mut fixture) = Fixture::new().await else {
         return;
     };
@@ -1486,7 +1638,7 @@ async fn capacity_wait_unreturned_owner_requires_outer_shutdown_timeout_and_abor
     let cancellation = CancellationToken::new();
     cancellation.cancel();
     let mut worker = tokio::spawn(async move { writer.run(cancellation.into()).await });
-    // This is a caller-owned deadline, not a standalone daemon shutdown promise.
+    // The Host may impose a deadline shorter than the Store's two-second budget.
     assert!(
         tokio::time::timeout(Duration::from_millis(100), &mut worker)
             .await

@@ -3,6 +3,7 @@ import type {
   ThemeComponentOverrides,
   ThemeCustomization,
   ThemeMode,
+  ThemePresetId,
   ThemeSeedOverrides,
   ThemeTokenName,
   ThemeTokens,
@@ -13,6 +14,7 @@ import {
   EDITABLE_COLOR_TOKEN_NAMES,
   EDITABLE_SHADOW_TOKEN_NAMES,
   THEME_COLOR_PRESETS,
+  themePresets,
 } from './constants'
 
 export function supportsThemeTokenAlpha(name: string): boolean {
@@ -40,6 +42,10 @@ export function isThemeMode(value: unknown): value is ThemeMode {
 
 export function isThemeColorId(value: unknown): value is ThemeColorId {
   return value === 'custom' || THEME_COLOR_PRESETS.some(preset => preset.id === value)
+}
+
+export function isThemePresetId(value: unknown): value is ThemePresetId {
+  return themePresets.some(preset => preset.id === value)
 }
 
 function normalizeThemeSeedOverrides(value: unknown): ThemeSeedOverrides {

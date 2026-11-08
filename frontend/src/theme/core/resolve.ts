@@ -9,12 +9,15 @@ import type {
   ThemeMap,
   ThemeMode,
   ThemeName,
+  ThemeOptions,
+  ThemePresetId,
   ThemeSeedOverrides,
   ThemeTokens,
 } from '../types'
 import { normalizeHexColor } from '../../utils/color'
 import { deriveCustomThemeAppearance } from '../derive/appearance'
 import {
+  deriveLightThemeFillMap,
   deriveThemeAliasMap,
   deriveThemeDataMap,
   deriveThemeLinkMap,
@@ -22,6 +25,7 @@ import {
   deriveThemePrimaryMap,
   deriveThemeSemanticMap,
   deriveThemeSurfaceMap,
+  ensureThemeSurfaceContrast,
 } from '../derive/colors'
 import {
   deriveThemeComponentMap,
@@ -35,9 +39,11 @@ import {
   DEFAULT_DIMENSIONS,
   DEFAULT_SEED_COLORS,
   DEFAULT_THEME_CUSTOMIZATION,
+  defaultThemePresetId,
   LIGHT_CONTAINER_BASE,
   LIGHT_TEXT_BASE,
   THEME_COLOR_PRESETS,
+  themePresets,
 } from './constants'
 import { normalizeThemeCustomization } from './normalize'
 import { createThemeTokens } from './tokens'
@@ -54,34 +60,50 @@ export function resolveThemeSeed(colorId: ThemeColorId, customColor: string): st
   return themeColorPreset(colorId).seed
 }
 
-export function resolveTheme(
-  name: ThemeName,
-  colorId: ThemeColorId,
-  customColor: string,
-  customization: ThemeCustomization = DEFAULT_THEME_CUSTOMIZATION,
-): ResolvedTheme {
-  const seed = resolveThemeSeed(colorId, customColor)
-  const normalizedCustomization = normalizeThemeCustomization(customization)
-  const appearance = colorId === 'custom'
+function resolveThemeInputs({
+  name = 'light',
+  preset = defaultThemePresetId,
+  colorId,
+  primaryColor,
+  customization = DEFAULT_THEME_CUSTOMIZATION,
+}: ThemeOptions) {
+  const selectedPreset = themePresets.find(item => item.id === preset) ?? themePresets[0]!
+  const resolvedColorId = colorId ?? selectedPreset.colorId
+  const seed = resolveThemeSeed(resolvedColorId, primaryColor ?? selectedPreset.primaryColor)
+  const defaults = selectedPreset.customization?.[name]
+  const overrides = normalizeThemeCustomization(customization)
+  // 预设提供基线，用户覆盖始终最后应用；Store 与页面只保存输入配置。
+  const normalizedCustomization: ThemeCustomization = {
+    seed: { ...defaults?.seed, ...overrides.seed },
+    component: { ...defaults?.component, ...overrides.component },
+    tokenOverrides: { ...defaults?.tokenOverrides, ...overrides.tokenOverrides },
+  }
+  const appearance = resolvedColorId === 'custom'
     ? deriveCustomThemeAppearance(name, seed)
-    : themeColorPreset(colorId).appearance?.[name]
+    : themeColorPreset(resolvedColorId).appearance?.[name]
   const seedTokens = resolveThemeSeedTokens(
     name,
     seed,
     normalizedCustomization.seed,
     appearance,
   )
-  const themeMap = deriveThemeMap(name, seed, seedTokens, normalizedCustomization)
+  return { name, seed, seedTokens, preset: selectedPreset.id, colorId: resolvedColorId, customization: normalizedCustomization }
+}
+
+export function createThemeSeedTokens(options: ThemeOptions = {}): ResolvedThemeSeedTokens {
+  return resolveThemeInputs(options).seedTokens
+}
+
+export function createTheme(options: ThemeOptions = {}): ResolvedTheme {
+  const { customization, ...theme } = resolveThemeInputs(options)
+  const themeMap = deriveThemeMap(theme.name, theme.seed, theme.seedTokens, customization, theme.preset)
   const tokensWithOverrides: ThemeTokens = {
     ...createThemeTokens(themeMap),
-    ...normalizedCustomization.tokenOverrides,
+    ...customization.tokenOverrides,
   }
 
   return {
-    name,
-    colorId,
-    seed,
-    seedTokens,
+    ...theme,
     tokens: tokensWithOverrides,
   }
 }
@@ -95,12 +117,15 @@ function deriveThemeMap(
   seed: string,
   seedTokens: ResolvedThemeSeedTokens,
   customization: ThemeCustomization,
+  preset: ThemePresetId,
 ): ThemeMap {
-  const surfaces = deriveThemeSurfaceMap(name, seedTokens)
+  const fills = name === 'light' ? deriveLightThemeFillMap(seedTokens) : null
+  const baseSurfaces = deriveThemeSurfaceMap(name, seedTokens)
+  const primary = deriveThemePrimaryMap(seed, name, baseSurfaces.colorBgContainer)
+  const surfaces = ensureThemeSurfaceContrast(baseSurfaces, fills, primary)
   const aliases = deriveThemeAliasMap(surfaces)
-  const primary = deriveThemePrimaryMap(seed, name, surfaces.colorBgContainer)
   const link = deriveThemeLinkMap(seedTokens.colorLink, name, surfaces.colorBgContainer)
-  const semantics = deriveThemeSemanticMap(name, surfaces, seedTokens)
+  const semantics = deriveThemeSemanticMap(name, surfaces, seedTokens, fills, primary)
 
   return {
     surfaces,
@@ -112,22 +137,22 @@ function deriveThemeMap(
     data: deriveThemeDataMap(aliases, semantics),
     shadows: deriveThemeShadowMap(name, seedTokens.shadowStrength),
     components: deriveThemeComponentMap(
-      name,
       surfaces,
-      aliases,
+      fills,
       primary,
       semantics.error,
       seedTokens.shadowStrength,
+      preset,
     ),
-    dimensions: deriveThemeDimensionMap(seedTokens, customization.component),
+    dimensions: deriveThemeDimensionMap(seedTokens, customization.component, preset),
   }
 }
 
 export function resolveThemeSeedTokens(
   theme: ThemeName,
   colorPrimary: string,
-  overrides: ThemeSeedOverrides | undefined,
-  appearance: ThemeAppearanceSeed | undefined,
+  overrides?: ThemeSeedOverrides,
+  appearance?: ThemeAppearanceSeed,
 ): ResolvedThemeSeedTokens {
   return {
     colorPrimary,
@@ -149,4 +174,9 @@ export function resolveThemeSeedTokens(
     borderRadius: overrides?.borderRadius ?? DEFAULT_DIMENSIONS.borderRadius,
     shadowStrength: overrides?.shadowStrength ?? DEFAULT_DIMENSIONS.shadowStrength,
   }
+}
+
+// Keep existing callers and saved cp token keys on the same upstream compiler.
+export function resolveTheme(name: ThemeName, colorId: ThemeColorId, customColor: string, customization: ThemeCustomization = DEFAULT_THEME_CUSTOMIZATION, preset: ThemePresetId = defaultThemePresetId): ResolvedTheme {
+  return createTheme({ name, colorId, primaryColor: customColor, customization, preset })
 }

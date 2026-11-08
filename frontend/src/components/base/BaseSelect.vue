@@ -5,6 +5,7 @@ import { Check, ChevronDown } from '@lucide/vue'
 import { onClickOutside, useEventListener, useThrottleFn, whenever } from '@vueuse/core'
 import { clamp } from 'es-toolkit'
 import { computed, nextTick, ref, useAttrs, useId, watch } from 'vue'
+import { t } from '@/i18n'
 import { useFormField } from './BaseForm/composables/useFormField'
 
 type SelectSize = 'sm' | 'md' | 'lg'
@@ -31,7 +32,7 @@ const props = withDefaults(
   {
     size: 'md',
     disabled: false,
-    placeholder: '请选择',
+    placeholder: undefined,
     emptyText: '暂无选项',
   },
 )
@@ -299,7 +300,7 @@ useEventListener(window, 'scroll', updatePopoverPositionThrottled, { capture: tr
       @blur="validate('blur')"
     >
       <span class="min-w-0 truncate" :class="selectedOption?.description ? 'max-w-1/2 shrink-0' : 'flex-1'">
-        {{ selectedOption?.label ?? placeholder }}
+        {{ selectedOption?.label ?? placeholder ?? t('common.selectPlaceholder') }}
       </span>
       <span
         v-if="selectedOption?.description"

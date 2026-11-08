@@ -208,7 +208,7 @@ async fn core_credential_cas_preserves_other_observation_clocks_and_disabled_sta
 }
 
 #[tokio::test]
-async fn admin_rotation_keeps_retained_quota_times_and_disabled_identity() {
+async fn admin_rotation_clears_quota_snapshot_and_preserves_access_and_disabled_state() {
     let Some(database) = TestDatabase::create("time_rotation").await else {
         return;
     };
@@ -241,7 +241,12 @@ async fn admin_rotation_keeps_retained_quota_times_and_disabled_identity() {
             "turn_state_binding_revision",
             "access_token_expires_at",
             "credential_observed_at",
+            "provider_quota_json",
+            "quota_observed_at",
         ];
+        assert_eq!(after["provider_quota_json"], Value::Null);
+        assert_eq!(after["quota_observed_at"], Value::Null);
+        assert_eq!(after["quota_access_state"], before["quota_access_state"]);
         assert_eq!(after["enabled"], enabled);
         assert_eq!(after["turn_state_binding_revision"], 2);
         assert_eq!(after["updated_at"], before["updated_at"]);

@@ -1,14 +1,17 @@
 <script setup lang="ts">
 import type { ThemeEditorDraft, ThemeEditorGlobalCategory } from '../composables/useThemeEditor'
-import type { ResolvedTheme, ThemeColorPreset, ThemeColorPresetId, ThemeMode, ThemeSeedOverrides } from '@/theme'
-import { Check, ChevronDown, Laptop, Moon, Sun } from '@lucide/vue'
 
+import type { ResolvedTheme, ThemeColorPresetId, ThemeMode, ThemePresetId, ThemeSeedOverrides } from '@/theme'
+import { Check, ChevronDown, Laptop, Moon, PanelsTopLeft, Sparkles, Sun } from '@lucide/vue'
+
+import { isEqual } from 'es-toolkit'
 import { computed, shallowRef } from 'vue'
+
+import { useI18n } from 'vue-i18n'
 import BaseSegmented from '@/components/base/BaseSegmented.vue'
+import { createThemeSeedTokens, THEME_COLOR_PRESETS, themePresets, themeProfiles } from '@/theme'
 
-import { t } from '@/i18n'
-import { resolveThemeSeedTokens, THEME_COLOR_PRESETS } from '@/theme'
-
+import sceneArtwork from './theme-scenes.svg?no-inline'
 import ThemeColorTokenField from './ThemeColorTokenField.vue'
 import ThemeNumberTokenField from './ThemeNumberTokenField.vue'
 
@@ -20,7 +23,9 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   mode: [value: ThemeMode]
-  preset: [value: ThemeColorPresetId]
+  material: [value: ThemePresetId]
+  resetPrimary: []
+  profile: [value: ThemeColorPresetId]
   primary: [value: string]
   seedColor: [
     key: Exclude<
@@ -36,31 +41,78 @@ const emit = defineEmits<{
   resetSeed: [key: keyof ThemeSeedOverrides]
 }>()
 
+const { t } = useI18n({ useScope: 'global' })
+
 const category = defineModel<ThemeEditorGlobalCategory>('category', { required: true })
 const derivedOpen = shallowRef(false)
 
+const profiles = THEME_COLOR_PRESETS.map((preset) => {
+  const options = { ...themeProfiles[preset.id], colorId: preset.id }
+  const light = createThemeSeedTokens({ ...options, name: 'light' })
+  return {
+    ...preset,
+    paper: light.colorBgBase,
+    accent: light.colorWarning,
+    ink: createThemeSeedTokens({ ...options, name: 'dark' }).colorBgBase,
+  }
+})
+const localizedPresets = computed(() => profiles.map(p => ({
+  ...p,
+  label: t(`appearance.themeColors.${p.id}.label`),
+  description: t(`appearance.themeColors.${p.id}.description`),
+})))
+const activeProfile = computed(() => {
+  const { color, preset, customization } = props.draft
+  if (color !== 'custom' && themeProfiles[color].preset === preset && isEqual(themeProfiles[color].customization, customization))
+    return color
+  return undefined
+})
 const colorPresets = THEME_COLOR_PRESETS.map(preset => preset.seed)
-const categoryOptions = [
-  { label: '颜色', value: 'color' },
-  { label: '尺寸', value: 'size' },
-  { label: '风格', value: 'style' },
-]
-const modeOptions = [
-  { label: '跟随系统', value: 'system', icon: Laptop },
-  { label: '浅色', value: 'light', icon: Sun },
-  { label: '深色', value: 'dark', icon: Moon },
-]
-const presetSwatchesById = new Map(
-  THEME_COLOR_PRESETS.map(preset => [
-    preset.id,
-    [
-      resolveThemeSeedTokens('light', preset.seed, undefined, preset.appearance?.light).colorBgBase,
-      preset.seed,
-      resolveThemeSeedTokens('dark', preset.seed, undefined, preset.appearance?.dark).colorBgBase,
-    ],
-  ]),
-)
-
+const themePresetDetails = computed(() => ({
+  default: {
+    label: t('appearance.themePresets.default.label'),
+    icon: PanelsTopLeft,
+  },
+  soft: {
+    label: t('appearance.themePresets.soft.label'),
+    icon: Sparkles,
+  },
+}))
+const themePresetOptions = computed(() => themePresets.map(preset => ({
+  ...themePresetDetails.value[preset.id],
+  value: preset.id,
+})))
+const categoryOptions = computed(() => ([
+  {
+    label: t('common.fields.color'),
+    value: 'color',
+  },
+  {
+    label: t('appearance.globalTokens.size'),
+    value: 'size',
+  },
+  {
+    label: t('appearance.globalTokens.style'),
+    value: 'style',
+  },
+]))
+const modeOptions = computed(() => ([
+  {
+    label: t('appearance.globalTokens.systemMode'),
+    value: 'system',
+    icon: Laptop,
+  },
+  {
+    label: t('appearance.globalTokens.lightColor'),
+    value: 'light',
+    icon: Sun,
+  },
+  {
+    label: t('appearance.globalTokens.dark'),
+    value: 'dark',
+    icon: Moon,
+  },
+]))
 const semanticColorFields = computed(() =>
   [
     {
@@ -129,10 +181,6 @@ function matches(value: string) {
 function seedOverridden(key: keyof ThemeSeedOverrides) {
   return Object.hasOwn(props.draft.customization.seed ?? {}, key)
 }
-
-function presetSwatches(preset: ThemeColorPreset) {
-  return presetSwatchesById.get(preset.id) ?? [preset.seed]
-}
 </script>
 
 <template>
@@ -148,50 +196,64 @@ function presetSwatches(preset: ThemeColorPreset) {
       />
     </div>
 
+    <section v-if="matches(t('appearance.themePresets.title')) || localizedPresets.some(p => matches(p.label))" class="grid gap-2">
+      <h3 class="m-0 px-1 text-cp font-heavy text-cp-text">
+        {{ t('appearance.themePresets.title') }}
+      </h3>
+      <div class="grid grid-cols-2 gap-2" role="radiogroup" :aria-label="t('appearance.themePresets.title')">
+        <button
+          v-for="preset in localizedPresets"
+          :key="preset.id"
+          type="button"
+          role="radio"
+          class="relative flex min-h-20 flex-col items-stretch justify-between gap-2 rounded-cp-lg bg-cp-fill-quaternary p-2.5 text-left outline-none transition-[background-color,box-shadow] duration-150 hover:bg-cp-bg-text-hover focus-visible:ring-2 focus-visible:ring-cp-control-outline"
+          :class="activeProfile === preset.id ? 'bg-cp-control-item-bg-active shadow-cp-tertiary' : undefined"
+          :aria-checked="activeProfile === preset.id"
+          :aria-label="`${preset.label}: ${preset.description}`"
+          :title="preset.description"
+          @click="emit('profile', preset.id)"
+        >
+          <svg
+            class="block h-11 w-full overflow-hidden rounded-cp-sm"
+            :style="{ 'color': preset.seed, '--scene-paper': preset.paper, '--scene-ink': preset.ink, '--scene-accent': preset.accent }"
+            viewBox="0 0 160 44"
+            preserveAspectRatio="xMidYMid slice"
+            aria-hidden="true"
+          >
+            <use :href="`${sceneArtwork}#${preset.id}`" width="160" height="44" />
+          </svg>
+          <span class="min-w-0 pr-4">
+            <strong class="block text-cp-xs font-heavy text-cp-text">{{ preset.label }}</strong>
+            <span class="mt-0.5 block truncate text-[9px] font-emphasis text-cp-text-quaternary">
+              {{ preset.description }}
+            </span>
+          </span>
+          <Check
+            v-if="activeProfile === preset.id"
+            class="absolute right-2 bottom-2 size-3 text-cp-primary-text"
+            stroke-width="3"
+          />
+        </button>
+      </div>
+    </section>
+
+    <section v-if="matches(t('appearance.themePresets.material'))" class="grid gap-2">
+      <h3 class="m-0 px-1 text-cp font-heavy text-cp-text">
+        {{ t('appearance.themePresets.material') }}
+      </h3>
+      <BaseSegmented
+        :model-value="draft.preset"
+        :label="t('appearance.themePresets.material')"
+        :options="themePresetOptions"
+        class="w-full"
+        @update:model-value="emit('material', $event as ThemePresetId)"
+      />
+    </section>
+
     <BaseSegmented v-model="category" :label="t('appearance.globalTokens.globalTokenClassification')" :options="categoryOptions" class="w-full" />
 
     <template v-if="category === 'color'">
-      <section v-if="matches('预置主题 品牌色 colorPrimary')" class="grid gap-2" aria-labelledby="theme-preset-title">
-        <div class="flex items-center justify-between px-1">
-          <h3 id="theme-preset-title" class="m-0 text-cp font-heavy text-cp-text">
-            {{ t('appearance.globalTokens.brandColor') }}
-          </h3>
-          <code class="font-mono text-[10px] text-cp-text-quaternary">colorPrimary</code>
-        </div>
-        <div class="grid grid-cols-2 gap-2" role="radiogroup" :aria-label="t('appearance.globalTokens.presetThemes')">
-          <button
-            v-for="preset in THEME_COLOR_PRESETS"
-            :key="preset.id"
-            type="button"
-            role="radio"
-            class="relative flex min-h-20 flex-col items-stretch justify-between gap-2 rounded-cp-lg bg-cp-fill-quaternary p-2.5 text-left outline-none transition-[background-color,box-shadow] duration-150 hover:bg-cp-bg-text-hover focus-visible:ring-2 focus-visible:ring-cp-control-outline"
-            :class="draft.color === preset.id ? 'bg-cp-control-item-bg-active shadow-cp-tertiary' : undefined"
-            :aria-checked="draft.color === preset.id"
-            :aria-label="`${preset.label}：${preset.description}`"
-            :title="preset.description"
-            @click="emit('preset', preset.id)"
-          >
-            <span class="flex h-4 overflow-hidden rounded-full shadow-cp-tertiary">
-              <span
-                v-for="swatch in presetSwatches(preset)"
-                :key="swatch"
-                class="flex-1"
-                :style="{ backgroundColor: swatch }"
-              />
-            </span>
-            <span class="min-w-0 pr-4">
-              <strong class="block text-cp-xs font-heavy text-cp-text">{{ preset.label }}</strong>
-              <span class="mt-0.5 block truncate text-[9px] font-emphasis text-cp-text-quaternary">
-                {{ preset.description }}
-              </span>
-            </span>
-            <Check
-              v-if="draft.color === preset.id"
-              class="absolute right-2 bottom-2 size-3 text-cp-primary-text"
-              stroke-width="3"
-            />
-          </button>
-        </div>
+      <section v-if="matches(t('appearance.globalTokens.brandColorLabel'))" class="grid gap-2">
         <ThemeColorTokenField
           :label="t('appearance.globalTokens.brandMainColor')"
           token="colorPrimary"
@@ -200,7 +262,7 @@ function presetSwatches(preset: ThemeColorPreset) {
           :presets="colorPresets"
           :overridden="draft.color === 'custom'"
           @change="emit('primary', $event)"
-          @reset="emit('preset', 'relay-blue')"
+          @reset="emit('resetPrimary')"
         />
       </section>
 
@@ -294,11 +356,6 @@ function presetSwatches(preset: ThemeColorPreset) {
     </section>
 
     <section v-else class="grid gap-2" :aria-label="t('appearance.globalTokens.styleToken')">
-      <div
-        class="rounded-cp-lg bg-cp-primary-container px-3 py-3 text-[10px] leading-normal font-emphasis text-cp-primary-on-container"
-      >
-        固定无边设计；圆角塑形，阴影分层。
-      </div>
       <ThemeNumberTokenField
         :label="t('appearance.globalTokens.universalFillet')"
         token="borderRadius"

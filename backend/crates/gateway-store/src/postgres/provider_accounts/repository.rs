@@ -1,5 +1,6 @@
 //! Pg 账号 repository：Core/Admin 端口实现与 admin 事务。
 
+use super::devices::DeviceRotationPolicy;
 use super::*;
 use gateway_admin::model::accounts::ImportTemplateProxyMode;
 
@@ -88,6 +89,7 @@ pub trait ProviderAccountAdminRepository: Send + Sync {
         &self,
         command: RotateProviderAccount,
         switch_workspace: bool,
+        reauthorization: bool,
     ) -> StoreResult<ProviderAccountAdminRotation>;
 
     async fn batch_update_provider_accounts_admin(
@@ -864,20 +866,23 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
         &self,
         command: RotateProviderAccount,
     ) -> StoreResult<ProviderAccountAdminRotation> {
-        self.rotate_with_workspace_policy(command, false).await
+        self.rotate_with_workspace_policy(command, false, false)
+            .await
     }
 
     async fn switch_relogin_workspace(
         &self,
         command: RotateProviderAccount,
     ) -> StoreResult<ProviderAccountAdminRotation> {
-        self.rotate_with_workspace_policy(command, true).await
+        self.rotate_with_workspace_policy(command, true, false)
+            .await
     }
 
     async fn rotate_with_workspace_policy(
         &self,
         command: RotateProviderAccount,
         switch_workspace: bool,
+        reauthorization: bool,
     ) -> StoreResult<ProviderAccountAdminRotation> {
         let protection_account = command.profile.id.clone();
         command.scope.validate()?;
@@ -933,13 +938,19 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
                 }
             }
             credential.provider_credentials_json = self
-                .prepare_rotated_device_with_workspace_policy(
+                .prepare_rotated_device_with_policy(
                     &mut transaction,
                     (&credential.account_id, credential.expected_revision.get()),
                     command.replacement_identity.as_ref(),
                     command.profile.email.as_deref(),
                     &credential.provider_credentials_json,
-                    switch_workspace,
+                    if reauthorization {
+                        DeviceRotationPolicy::Reauthorization
+                    } else if switch_workspace {
+                        DeviceRotationPolicy::WorkspaceSwitch
+                    } else {
+                        DeviceRotationPolicy::Credential
+                    },
                 )
                 .await?;
             let state_owner = state_retention::StateOwnerSnapshot::capture(
@@ -961,6 +972,7 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
                 &command.profile,
                 command.replacement_identity.as_ref(),
                 &credential,
+                reauthorization,
             )
             .await?;
             self.retain_turn_state(&mut transaction, state_owner)
@@ -1389,6 +1401,7 @@ pub(crate) async fn rotate_provider_account_in_transaction(
     profile: &UpdateProviderAccount,
     replacement_identity: Option<&ProviderAccountIdentity>,
     update: &ProviderCredentialUpdate,
+    preserve_name: bool,
 ) -> StoreResult<Revision> {
     let replace_identity = replacement_identity.is_some();
     let upstream_user_id = replacement_identity.map(ProviderAccountIdentity::upstream_user_id);
@@ -1396,9 +1409,15 @@ pub(crate) async fn rotate_provider_account_in_transaction(
         replacement_identity.and_then(ProviderAccountIdentity::upstream_account_id);
     let next = sqlx::query_scalar::<_, i64>(
         "update provider_accounts
-         set name = case when $14 then name else $4 end,
+         set name = case when $14 or $15 then name else $4 end,
              email = case when $14 then email else $5 end,
              plan_type = case when $14 then plan_type else $6 end,
+             provider_quota_json = case when $14 then provider_quota_json else null end,
+             quota_observed_at = case when $14 then quota_observed_at else null end,
+             quota_access_state = case when $11 then 'unknown' else quota_access_state end,
+             quota_evidence = case when $11 then null else quota_evidence end,
+             quota_access_observed_at = case when $11 then null else quota_access_observed_at end,
+             quota_reset_at = case when $11 then null else quota_reset_at end,
              provider_credentials_json = $7,
              credential_revision = credential_revision + 1,
              turn_state_binding_revision = credential_revision + 1,
@@ -1433,6 +1452,7 @@ pub(crate) async fn rotate_provider_account_in_transaction(
     .bind(upstream_user_id)
     .bind(upstream_account_id)
     .bind(update.preserve_profile)
+    .bind(preserve_name)
     .fetch_optional(&mut **transaction)
     .await
     .map_err(|error| {

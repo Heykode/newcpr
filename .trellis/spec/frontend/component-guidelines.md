@@ -95,3 +95,19 @@ Questions to answer:
   动态规则使用稳定身份，删除前项不能把后项的输入状态移到其他规则。
 - API Key 安装 ID 默认空，生成只填草稿，保存后发送；清空删除该 Key 覆盖。
   代理测试结果放选择器旁，出口 IP 放详情，不新增说明卡片。
+
+### 主题与共享侧栏（官方 UI v0.9.0）
+
+- `createTheme({ name, preset, colorId, primaryColor, customization })` 统一派生。
+  `themeProfiles` 是完整组合，`themePresets` 是独立材质；customization 最后覆盖。
+  持久化键 `codex-proxy-rs-theme` 不变，无 `themePreset` 的旧配置补 `default`。
+- 本地 CSS Token 与直接覆盖键仍为 `--cp-*`。移植官方无前缀 Token 消费者时，
+  同步调整过滤、预览和显示；派生变量列表不得因错误前缀变成空白。
+- `BaseSidebar` 是公共布局；`AppSidebar` 承担本地菜单与路由。
+  `defaultActive` 和 `updateActiveIndex` 必须对应真实路由，拒绝跳转不高亮目标。
+  手机点击菜单先收起遮罩和焦点锁，再等待 route guard，避免离页确认框被遮挡。
+- `BasePopover` 的 `enterable=false` 禁止鼠标驻留，不抹掉键盘 focusin 和离开清理；
+  `role` 只接受 tooltip/dialog。折叠侧栏使用 tooltip，分组 Popover 保留触屏点击。
+- 浏览器验收包含四预设、两材质、明暗、旧存储/保存刷新、自定义覆盖、被取消的导航、
+  手机焦点与真实多分组几何布局。复用 `theme-preview.mjs` 和 `upstream-v3330.mjs`，
+  单次场景扩展放仓库外；仅类型通过不能证明遮挡和重叠不存在。

@@ -726,17 +726,18 @@ OAuth start 使用：
   PAT 格式无效、被上游拒绝、验证服务不可用和身份响应无效，不回显令牌或原始上游响应。
   PAT 不保存附带的 refresh token、ID token 或推测的过期时间，不参加 OAuth RT 刷新；
   失效后需取得新 PAT 再导入。普通 JWT 导入行为不变。
-- 首次 OAuth 保留回调 `state`、PKCE 与官方 token exchange，并持久化 `idToken`、`accessToken`、
-  `refreshToken`。刷新响应中的三个 token 字段均按官方语义独立轮换：返回新值时替换，省略时分别保留
-  现值。重新授权也保留这些回调保护，但必须先检查新凭据与目标账号的主体连续性。回调地址只承载 `code`/`state`，
-  不以 host/path 形式作为拒绝条件。
-- 手工替换 token 和重新授权在写入前检查新 ID/AT，不能用旧 ID token 为未知新凭据背书。
-  用户或 workspace 明确不一致，或缺少足以确认连续性的主体资料时返回 409，旧凭据和设备保持原样。
-  提示无法确认不代表 token 无效；可以使用完整的新凭据资料或新建授权。同主体成功变更保留原设备，
-  更新新凭据中存在的 email/plan，缺失时保留旧值。不按 email 匹配账号，不新增身份网络查询。
-- 账号文件导入和首次 OAuth 创建在 credential 提交后立即尝试一次额度观测。观测失败只记录告警，
-  不回滚已提交的账号；重新授权和手工或后台 RT 刷新不隐式等同于手工额度刷新。
-  正常 RT 刷新保持已有身份与资料，不因 opaque AT 或省略未变 ID token 增加身份验证请求。
+- 首次 OAuth 和人工重新授权保留回调 `state`、PKCE 与官方 token exchange。回调地址只承载
+  `code`/`state`，不以 host/path 形式作为拒绝条件。本次 ID token 优先，缺失字段由本次 AT 补齐。
+- 人工重新授权可以更换选定槽位的上游 user/workspace；必须能从本次凭据取得 user，workspace
+  可缺失。采用本次 email/plan，不补用旧 ID/RT。身份变化清除旧 Cookie/principal、额度快照与
+  耗尽证据，并隔离旧头像、Guardian、WS continuation 和 State；保留本地名称、设置及安装 ID。
+  真实重复账号或提交 revision 冲突仍回滚；仅有已删除账号的设备归档不阻止合法重授权。
+- 本地文件替换/自动重登保留各自的 email/workspace 连续性检查，不将这些额外入口规则套到人工
+  OAuth。普通手工“刷新”和后台 RT exchange 保留已有身份与资料；省略的 token 字段由刷新链路
+  分别保留，不因 opaque AT 增加身份查询。
+- 账号文件导入和 OAuth complete（包括重新授权）在提交后异步尝试初始额度观测。观测失败只记录
+  告警，不回滚账号；普通 RT 续期不等于手工额度刷新。同身份人工重授权清快照但保留额度访问证据，
+  换身份另清旧耗尽/重置事实，新观察再决定新身份可用性。
 - OAuth pending flow 先取得带过期时间的独占 claim，只有账号事务提交成功后才消费。失败会释放 claim，
   但上游 authorization code 本身通常只能交换一次；已完成过 token exchange 时应重新创建 OAuth flow。
 - `GET /accounts/quota` 只读取最后一次落库快照；`POST /accounts/quota/refresh` 才访问上游。access token

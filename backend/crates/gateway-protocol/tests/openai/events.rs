@@ -497,6 +497,7 @@ fn parse_rate_limit_headers_should_extract_primary_and_secondary_windows() {
 #[test]
 fn parse_rate_limit_headers_should_preserve_dynamic_limit_and_account_metadata() {
     let headers = vec![
+        ("x-codex-primary-used-percent".to_owned(), "95".to_owned()),
         (
             "x-codex-other-primary-used-percent".to_owned(),
             "63.5".to_owned(),
@@ -513,6 +514,13 @@ fn parse_rate_limit_headers_should_preserve_dynamic_limit_and_account_metadata()
     ];
 
     let parsed = parse_rate_limit_headers(&headers).expect("rate-limit headers");
+    assert_eq!(
+        parsed.limits["codex"]
+            .primary
+            .expect("core window")
+            .used_percent,
+        95.0
+    );
     let details = parsed.limits.get("codex_other").expect("dynamic limit");
     let credits = parsed.credits.expect("credits");
 
@@ -533,6 +541,38 @@ fn parse_rate_limit_headers_should_preserve_dynamic_limit_and_account_metadata()
             Some("12.50"),
             Some("pro"),
         )
+    );
+}
+
+#[test]
+fn parse_rate_limit_headers_should_assign_generic_windows_to_the_active_limit() {
+    let headers = [
+        ("x-codex-active-limit", "imagegen_premium"),
+        ("x-codex-primary-used-percent", "0"),
+        ("x-codex-primary-window-minutes", "1440"),
+        ("x-codex-primary-reset-at", "1900000000"),
+        ("x-codex-secondary-used-percent", "0"),
+        ("x-codex-secondary-window-minutes", "0"),
+        ("x-codex-secondary-reset-at", ""),
+    ]
+    .map(|(name, value)| (name.to_owned(), value.to_owned()));
+
+    let parsed = parse_rate_limit_headers(&headers).expect("image rate-limit headers");
+    let image = parsed.limits.get("imagegen_premium").expect("image limit");
+    assert_eq!(image.limit_id, "imagegen_premium");
+    assert_eq!(image.key_source, RateLimitKeySource::LimitId);
+    assert_eq!(
+        image.primary,
+        Some(RateLimitWindow {
+            used_percent: 0.0,
+            window_minutes: Some(1440),
+            reset_at: Some(1_900_000_000),
+        })
+    );
+    assert!(!parsed.limits.contains_key("codex"));
+    assert_eq!(
+        parse_rate_limit_headers(&rate_limits_to_header_pairs(&parsed)),
+        Some(parsed)
     );
 }
 
@@ -763,18 +803,21 @@ fn active_only_named_quota_headers_do_not_overwrite_the_core_bucket() {
 }
 
 #[test]
-fn premium_active_quota_remains_the_core_bucket() {
+fn premium_active_quota_uses_the_explicit_bucket() {
     let headers = vec![
         ("x-codex-active-limit".to_owned(), "premium".to_owned()),
         ("x-codex-primary-used-percent".to_owned(), "100".to_owned()),
     ];
     let parsed = parse_rate_limit_headers(&headers).unwrap();
     assert_eq!(parsed.limits.len(), 1);
-    assert_eq!(parsed.limits["codex"].primary.unwrap().used_percent, 100.0);
+    assert_eq!(
+        parsed.limits["premium"].primary.unwrap().used_percent,
+        100.0
+    );
 }
 
 #[test]
-fn active_named_quota_metadata_does_not_hide_generic_windows() {
+fn active_named_quota_metadata_keeps_the_distinct_core_windows() {
     let headers = vec![
         (
             "x-codex-active-limit".to_owned(),
@@ -787,9 +830,9 @@ fn active_named_quota_metadata_does_not_hide_generic_windows() {
         ("x-codex-primary-used-percent".to_owned(), "100".to_owned()),
     ];
     let parsed = parse_rate_limit_headers(&headers).unwrap();
-    assert!(!parsed.limits.contains_key("codex"));
+    assert_eq!(parsed.limits["codex"].primary.unwrap().used_percent, 100.0);
     let named = &parsed.limits["codex_example"];
-    assert_eq!(named.primary.unwrap().used_percent, 100.0);
+    assert!(named.primary.is_none());
     assert_eq!(named.limit_name.as_deref(), Some("Example"));
 }
 

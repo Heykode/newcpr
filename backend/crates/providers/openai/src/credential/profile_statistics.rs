@@ -112,7 +112,7 @@ pub struct CodexCredentialProfileService {
     profile: CodexWireProfileState,
     http: Client,
     base_url: String,
-    avatar_sources: Mutex<HashMap<ProviderAccountId, CachedProfileAvatarSource>>,
+    avatar_sources: Mutex<HashMap<String, CachedProfileAvatarSource>>,
 }
 
 impl CodexCredentialProfileService {
@@ -201,20 +201,33 @@ impl CodexCredentialProfileService {
     ) -> Result<CodexProfileStatistics, CodexProfileStatisticsError> {
         let (authorization, upstream_account_id, account) =
             self.account_authentication(account_id).await?;
+        self.fetch_profile_statistics(&authorization, upstream_account_id.as_deref(), &account)
+            .await
+    }
+
+    async fn fetch_profile_statistics(
+        &self,
+        authorization: &SecretString,
+        upstream_account_id: Option<&str>,
+        account: &gateway_core::account::ProviderAccount,
+    ) -> Result<CodexProfileStatistics, CodexProfileStatisticsError> {
         let request_id = format!("profile_statistics_{}", Uuid::now_v7().simple());
         let statistics = self
             .backend_client()
-            .for_account(&account)
+            .for_account(account)
             .map_err(map_client_error)?
             .fetch_profile_statistics(CodexRequestContext::auxiliary(
                 authorization.expose_secret(),
-                upstream_account_id.as_deref(),
+                upstream_account_id,
                 &request_id,
                 None,
             ))
             .await
             .map_err(map_client_error)?;
-        self.remember_avatar_source(account_id, statistics.image_url.as_deref());
+        self.remember_avatar_source(
+            super::oauth_identity_key(account),
+            statistics.image_url.as_deref(),
+        );
         Ok(statistics)
     }
 
@@ -268,16 +281,16 @@ impl CodexCredentialProfileService {
         &self,
         account_id: &ProviderAccountId,
     ) -> Result<CodexProfileAvatar, CodexProfileAvatarError> {
-        let source = match self.cached_avatar_source(account_id) {
+        let (authorization, upstream_account_id, account) =
+            self.account_authentication(account_id).await?;
+        let source = match self.cached_avatar_source(&super::oauth_identity_key(&account)) {
             Some(source) => source,
             None => self
-                .profile_statistics(account_id)
+                .fetch_profile_statistics(&authorization, upstream_account_id.as_deref(), &account)
                 .await?
                 .image_url
                 .ok_or(CodexProfileAvatarError::Missing)?,
         };
-        let (authorization, upstream_account_id, account) =
-            self.account_authentication(account_id).await?;
         let profile = self.profile.desktop_snapshot();
         let route = self
             .egress_runtime
@@ -314,17 +327,17 @@ impl CodexCredentialProfileService {
         .map_err(map_avatar_fetch_error)
     }
 
-    fn cached_avatar_source(&self, account_id: &ProviderAccountId) -> Option<String> {
+    fn cached_avatar_source(&self, identity: &str) -> Option<String> {
         let now = Instant::now();
         let mut sources = self
             .avatar_sources
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         sources.retain(|_, source| source.expires_at > now);
-        sources.get(account_id).map(|source| source.source.clone())
+        sources.get(identity).map(|source| source.source.clone())
     }
 
-    fn remember_avatar_source(&self, account_id: &ProviderAccountId, source: Option<&str>) {
+    fn remember_avatar_source(&self, identity: String, source: Option<&str>) {
         let now = Instant::now();
         let mut sources = self
             .avatar_sources
@@ -334,7 +347,7 @@ impl CodexCredentialProfileService {
         match source {
             Some(source) => {
                 sources.insert(
-                    account_id.clone(),
+                    identity,
                     CachedProfileAvatarSource {
                         source: source.to_owned(),
                         expires_at: now + PROFILE_AVATAR_SOURCE_TTL,
@@ -342,7 +355,7 @@ impl CodexCredentialProfileService {
                 );
             }
             None => {
-                sources.remove(account_id);
+                sources.remove(&identity);
             }
         }
     }

@@ -419,7 +419,7 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
 </script>
 
 <template>
-  <div class="flex min-h-0 w-full flex-col xl:h-full xl:overflow-hidden">
+  <div class="flex min-h-0 w-full flex-col xl:h-[calc(100dvh-3rem)] xl:flex-none!">
     <BasePageHeader
       class="[&>div:first-child]:basis-0"
       :title="t('navigation.accounts')"
@@ -450,7 +450,7 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
     <AccountOverviewCards :summary="accountSummary" :groups="groups" :groups-loading="groupsLoading" />
 
     <BaseCard
-      class="mt-4 flex flex-col xl:h-[calc(100dvh-250px)] xl:min-h-125"
+      class="mt-4 flex flex-col xl:min-h-80 xl:flex-1"
       :class="isMobile ? 'overflow-visible! rounded-none! bg-transparent! p-0! shadow-none!' : undefined"
     >
       <template #header>

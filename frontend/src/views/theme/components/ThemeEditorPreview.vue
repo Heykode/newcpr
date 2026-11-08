@@ -3,6 +3,7 @@ import type { CSSProperties } from 'vue'
 import type { ThemeEditorPreview } from '../composables/useThemeEditor'
 import type { ThemeName } from '@/theme'
 import { defineAsyncComponent, onBeforeUnmount, onMounted, shallowRef } from 'vue'
+import BaseCard from '@/components/base/BaseCard.vue'
 import BaseSegmented from '@/components/base/BaseSegmented.vue'
 
 import { t } from '@/i18n'
@@ -58,13 +59,13 @@ const previewOptions = [
 
 <template>
   <section class="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-3 overflow-hidden" :aria-label="t('appearance.preview.themeRealTimePreview')">
-    <header class="shrink-0 flex flex-wrap items-center justify-between gap-3 rounded-cp-lg bg-cp-bg-container px-3 py-2.5 shadow-cp-tertiary">
+    <BaseCard as="header" padding="none" class="shrink-0 flex flex-wrap items-center justify-between gap-3 px-3 py-2.5">
       <div>
         <strong class="block text-cp-sm font-heavy text-cp-text">{{ t('appearance.preview.livePreview') }}</strong>
         <span class="mt-0.5 block text-[9px] font-emphasis text-cp-text-quaternary">{{ t('appearance.preview.description') }}</span>
       </div>
       <BaseSegmented v-model="preview" :label="t('appearance.preview.previewType')" size="sm" :options="previewOptions" />
-    </header>
+    </BaseCard>
 
     <ThemePreviewCanvas
       class="h-full min-h-0"

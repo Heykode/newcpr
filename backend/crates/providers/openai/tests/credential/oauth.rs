@@ -576,27 +576,15 @@ impl AuthorizationCodeExchanger for CandidateExchanger {
 }
 
 #[tokio::test]
-async fn reauthorization_checks_candidate_before_reusing_a_missing_refresh_token() {
+async fn reauthorization_updates_identity_without_reusing_a_missing_refresh_token() {
     use gateway_core::account::ProviderAccountStore;
     use secrecy::ExposeSecret;
 
     for (candidate_account, candidate_user, expected_error) in [
-        (
-            "B",
-            Some("user-A"),
-            Some(CodexOAuthAdminError::PrincipalConflict),
-        ),
-        (
-            "A",
-            Some("user-B"),
-            Some(CodexOAuthAdminError::PrincipalConflict),
-        ),
-        ("A", None, Some(CodexOAuthAdminError::PrincipalUnconfirmed)),
-        (
-            "A",
-            Some(""),
-            Some(CodexOAuthAdminError::PrincipalUnconfirmed),
-        ),
+        ("B", Some("user-A"), None),
+        ("A", Some("user-B"), None),
+        ("A", None, Some(CodexOAuthAdminError::Credential)),
+        ("A", Some(""), Some(CodexOAuthAdminError::Credential)),
         ("A", Some("user-A"), None),
     ] {
         let store = Arc::new(MemoryAccountStore::default());
@@ -664,19 +652,16 @@ async fn reauthorization_checks_candidate_before_reusing_a_missing_refresh_token
                 panic!("expected reauthorization");
             };
             assert_eq!(prepared.profile.email.as_deref(), Some("A@example.com"));
-            assert_eq!(prepared.profile.plan_type.as_deref(), Some("pro"));
+            assert_eq!(prepared.profile.plan_type, None);
             let credential = prepared.credential.into_parts().credential;
             let runtime = CodexCredentialCodec::decode(&credential).unwrap();
-            assert_eq!(
+            assert!(
                 runtime
                     .authentication
                     .oauth()
                     .unwrap()
                     .refresh_token
-                    .as_ref()
-                    .unwrap()
-                    .expose_secret(),
-                "rt-old-access"
+                    .is_none()
             );
             assert_eq!(
                 runtime.installation_id,
@@ -692,7 +677,7 @@ async fn reauthorization_checks_candidate_before_reusing_a_missing_refresh_token
 }
 
 #[tokio::test]
-async fn first_exchange_rejects_conflicting_id_and_access_principals() {
+async fn first_exchange_uses_id_token_identity_before_access_token_fallback() {
     use secrecy::ExposeSecret;
     let pending = Arc::new(PendingStore::default());
     let service = CodexOAuthAdminService::new(
@@ -724,7 +709,7 @@ async fn first_exchange_rejects_conflicting_id_and_access_principals() {
         .state
         .expose_secret()
         .to_owned();
-    let error = service
+    let completed = service
         .complete_authorization(CompleteCodexOAuthAuthorization {
             owner_ref: "test-owner".to_owned(),
             flow_id: started.flow_id,
@@ -733,6 +718,92 @@ async fn first_exchange_rejects_conflicting_id_and_access_principals() {
             )),
         })
         .await
-        .unwrap_err();
-    assert!(matches!(error, CodexOAuthAdminError::PrincipalConflict));
+        .unwrap();
+    let CompletedCodexOAuthCredential::Create(created) = completed.credential else {
+        panic!("created credential");
+    };
+    assert_eq!(created.account.upstream_user_id(), Some("user-A"));
+}
+
+#[tokio::test]
+async fn reauthorization_binds_the_selected_slot_to_the_new_oauth_account() {
+    use secrecy::ExposeSecret;
+
+    let store = Arc::new(MemoryAccountStore::default());
+    let account_id = ProviderAccountId::new("acct_reauth").unwrap();
+    store
+        .seed_oauth_credential(ImportCodexOAuthCredential {
+            account_id: account_id.to_string(),
+            name: "local label".into(),
+            secret: secret("original-access"),
+            verified_account: account_profile("workspace-a"),
+            next_refresh_at: None,
+            enabled: true,
+        })
+        .await;
+    let pending = Arc::new(PendingStore::default());
+    let service = CodexOAuthAdminService::new(
+        pending.clone(),
+        Arc::new(Exchanger {
+            id_token: id_token(serde_json::json!({
+                "email": "b@example.com",
+                "https://api.openai.com/auth": {
+                    "chatgpt_user_id": "user-b",
+                    "chatgpt_account_id": "workspace-b",
+                    "chatgpt_plan_type": "plus"
+                }
+            })),
+        }),
+        store,
+        CodexCredentialAdmin,
+        profile(),
+    );
+    let started = service
+        .start_authorization(StartCodexOAuthAuthorization {
+            mutation: reauthorization_mutation(account_id.clone(), "reauth-request"),
+        })
+        .await
+        .unwrap();
+    let state = pending
+        .pending
+        .lock()
+        .unwrap()
+        .as_ref()
+        .unwrap()
+        .state
+        .clone();
+    let completed = service
+        .complete_authorization(CompleteCodexOAuthAuthorization {
+            owner_ref: "test-owner".into(),
+            flow_id: started.flow_id,
+            callback_url: SecretString::from(format!(
+                "http://127.0.0.1:1455/auth/callback?code=browser&state={}",
+                state.expose_secret()
+            )),
+        })
+        .await
+        .unwrap();
+    let CompletedCodexOAuthCredential::Reauthorize(rotation) = completed.credential else {
+        panic!("expected reauthorization")
+    };
+    let identity = rotation.replacement_identity.unwrap();
+    assert_eq!(identity.upstream_user_id(), "user-b");
+    assert_eq!(identity.upstream_account_id(), Some("workspace-b"));
+    assert_eq!(rotation.profile.account_id, account_id);
+    assert_eq!(rotation.profile.name, "local label");
+    assert_eq!(rotation.profile.email.as_deref(), Some("b@example.com"));
+    assert_eq!(rotation.profile.plan_type.as_deref(), Some("plus"));
+    let credential = rotation.credential.into_parts();
+    assert!(!credential.preserve_profile);
+    let runtime = CodexCredentialCodec::decode(&credential.credential).unwrap();
+    assert!(runtime.principal.is_none());
+    assert_eq!(
+        runtime
+            .authentication
+            .oauth()
+            .unwrap()
+            .access_token
+            .expose_secret(),
+        "access-token-from-upstream"
+    );
 }

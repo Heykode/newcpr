@@ -67,6 +67,157 @@ async fn register(repository: &PgProviderAccountRepository) {
 }
 
 #[tokio::test]
+async fn oauth_reauthorization_rebinds_device_preserves_local_settings_and_rolls_back_duplicates() {
+    use gateway_admin::model::provider_credentials::PreparedCredentialRotationFacts;
+    let Some(database) = TestDatabase::create("oauth_reauthorization_device").await else {
+        return;
+    };
+    let repository = PgProviderAccountRepository::new(database.pool.clone());
+    register(&repository).await;
+    let id = "acct_oauth_slot";
+    let mut seed = device_account(id, "old-user", "local-device", "old-token");
+    seed.name = "local name".into();
+    seed.enabled = false;
+    seed.weight = gateway_core::account::AccountWeight::new(17).unwrap();
+    seed.concurrency_limit = gateway_core::account::AccountConcurrencyLimit::new(5);
+    repository.insert_provider_account(seed).await.unwrap();
+    repository
+        .insert_provider_account(device_account(
+            "acct_duplicate",
+            "duplicate-user",
+            "duplicate-device",
+            "duplicate-token",
+        ))
+        .await
+        .unwrap();
+    // A deleted target account's device archive must not veto explicit OAuth
+    // replacement of this slot. A live duplicate above must still roll back.
+    let mut archived = device_account(
+        "acct_archived_target",
+        "new-user",
+        "archived-device",
+        "archived-token",
+    );
+    archived.upstream_account_id = Some("new-workspace".into());
+    repository.insert_provider_account(archived).await.unwrap();
+    repository
+        .delete_provider_accounts_admin(DeleteProviderAccounts {
+            delete_relogin: false,
+            scope: ProviderAccountAdminScope {
+                provider_kind: "openai".into(),
+            },
+            account_ids: vec!["acct_archived_target".into()],
+            audit: audit("archive-target-device", "delete", "acct_archived_target"),
+        })
+        .await
+        .unwrap();
+    sqlx::query(
+        "update provider_accounts set quota_access_state='exhausted',
+        quota_evidence='usage_limit_reached', quota_access_observed_at=now(),
+        updated_at=now() where id=$1",
+    )
+    .bind(id)
+    .execute(&database.pool)
+    .await
+    .unwrap();
+    let store = PgAdminAccountStore::with_repository(
+        database.pool.clone(),
+        repository.clone(),
+        None,
+        super::super::observability_query_budget(),
+    );
+    let context = MutationContext {
+        actor: MutationActor::System,
+        request_id: "oauth-reauthorization".into(),
+    };
+    let provider = ProviderKind::new("openai").unwrap();
+    let account_id = ProviderAccountId::new(id).unwrap();
+    let command = |revision, user: &str, workspace: Option<&str>| AuthorizationCommit {
+        settings: None,
+        pending: PendingAuthorizationMutation::new(
+            provider.clone(),
+            AuthorizationMutationTarget::Reauthorize {
+                account_id: account_id.clone(),
+            },
+            AuthorizationOwnerBinding::from_context(&context),
+        ),
+        credential: AuthorizationCredentialCommit::Reauthorize(PreparedCredentialRotationFacts {
+            preserve_profile: false,
+            account_id: account_id.clone(),
+            provider_kind: provider.clone(),
+            expected_credential_revision: gateway_admin::model::Revision::new(revision).unwrap(),
+            replacement_identity: Some(ProviderAccountIdentity::new(
+                user.into(),
+                workspace.map(str::to_owned),
+            )),
+            name: "stale prepared name".into(),
+            email: Some("new@example.com".into()),
+            plan_type: Some("plus".into()),
+            provider_material: ProviderDocument::new(OpaqueProviderData::new(
+                device_material("local-device", "new-token")
+                    .fields()
+                    .clone(),
+            )),
+            has_refresh_token: true,
+            access_token_expires_at: None,
+            next_refresh_at: None,
+        }),
+    };
+    let before_duplicate = current_revision(&database.pool).await;
+    assert!(
+        store
+            .commit_authorization(
+                command(1, "duplicate-user", Some("workspace-test")),
+                &context
+            )
+            .await
+            .is_err()
+    );
+    assert_eq!(current_revision(&database.pool).await, before_duplicate);
+    assert_device(&repository, id, "local-device", "old-token").await;
+    store
+        .commit_authorization(command(1, "new-user", Some("new-workspace")), &context)
+        .await
+        .unwrap();
+    let record = repository.load_provider_account(id).await.unwrap().unwrap();
+    assert_eq!(record.summary.name, "local name");
+    assert_eq!(record.summary.email.as_deref(), Some("new@example.com"));
+    assert_eq!(record.summary.plan_type.as_deref(), Some("plus"));
+    assert!(!record.summary.enabled);
+    let row: (String, Option<String>, String, i64, i16, i64) = sqlx::query_as(
+        "select upstream_user_id, upstream_account_id, quota_access_state,
+        concurrency_limit, weight, turn_state_binding_revision from provider_accounts where id=$1",
+    )
+    .bind(id)
+    .fetch_one(&database.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        row,
+        (
+            "new-user".into(),
+            Some("new-workspace".into()),
+            "unknown".into(),
+            5,
+            17,
+            2
+        )
+    );
+    assert_device(&repository, id, "local-device", "new-token").await;
+    // Missing workspace is allowed by official OAuth metadata and can later be replaced.
+    store
+        .commit_authorization(command(2, "another-user", None), &context)
+        .await
+        .unwrap();
+    store
+        .commit_authorization(command(3, "final-user", Some("final-workspace")), &context)
+        .await
+        .unwrap();
+    assert_device(&repository, id, "local-device", "new-token").await;
+    database.close().await;
+}
+
+#[tokio::test]
 async fn relogin_workspace_switch_is_atomic_preserves_settings_device_and_fences_conflicts() {
     let Some(database) = TestDatabase::create("relogin_workspace").await else {
         return;

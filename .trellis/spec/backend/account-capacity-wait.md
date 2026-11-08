@@ -228,15 +228,34 @@ Provider `WaitControl::run` 将取消和 deadline 覆盖到账号读取、Store 
 - 满队列、断连或超出 drain 上界时保留告警及 TTL 保守回收，不能声称立即清零，
   也不能绕过并发限制。TTL 不是 Redis 数据丢失后恢复全部在途执行状态的保证。
 
-**停机不变量：** Store worker 进入 stopping 后拒绝新的所有权/
-晋升，继续接受仍存活请求及执行 guard 的迟到 Drop。owner 归零后才关闭 receiver，
-排空输入队列和正在清理的 future；不能在收到共享取消信号时立即关闭，也不能另设 35 秒
-或其他按默认 HTTP drain 推算的固定截止。
-Host 是停机时间的唯一权威：配置的 HTTP drain 结束后，既有 supervisor 使用统一的
-`worker_shutdown_timeout` 绝对截止等待所有任务，逾期 abort 并 join。Store 不复制
-Host 预算、不新增用户设置；保留队列/并发上限、单次 I/O 超时和原 lease 到期约束。
-daemon 单独 `run()` 不承诺自行限时退出，独立调用方须提供外层 timeout/abort。
-Host 强制终止后的残留依原 TTL 保守回收，不承诺立即释放全部槽。
+**停机不变量（官方 `ff1ea921`）：** `SchedulingLeaseCleanup::acquire()` 的读闸门
+覆盖真实 Redis 直接申请/晋升直到 `track(cancellation, release)` 登记。
+`Ownership::supervise` 将精确 owner 与续期任务移入监督释放 future；调用方 guard 仍持有时，
+停机也会取消请求、停止续期并释放本实例的执行 member。
+
+监督器接入原有 `CapacityWaitCleanupWriter` 与 Store bundle/worker。停止后不接受新
+申请或晋升，等待已发出申请登记，并在官方 2 秒预算内 drain 已登记执行和原清理队列；
+owner 全归还可提前结束，超时保留告警和 TTL 回收。未归还等待 guard 不会阻止 worker
+无限退出；显式 `release` 仍可执行。Host 的 `worker_shutdown_timeout` 是外层硬截止，
+可以更早 abort/join，不因本规则改动 HTTP drain 或新增用户配置。
+
+| 校验场景 | 结果 |
+| --- | --- |
+| 直接准入/等待晋升后仍持有 guard | 停机取消请求并清理本实例执行租约 |
+| Redis 已写入，响应尚未返回 | 等待申请闸门完成登记后清理，不漏掉已占槽 |
+| 另一实例仍持有同账号租约 | 不删除另一实例 member，不全局清计数 |
+| Redis 不可用或关闭预算已耗尽 | 告警并依 TTL 回收，不能宣称立即清零 |
+| 停止后新申请/晋升 | 拒绝，不再发出新占槽写入 |
+
+正常/基线/反例：正常停机无需调用方先 Drop 才清理执行；正常 Drop 仍由同一 owner
+释放；反例是复制监督器却没有接到实际 Redis 容量入口，或为了旧测试恢复无限 drain。
+
+必要回归：`shutdown_releases_held_direct_and_promoted_leases_only_for_this_instance`、
+`shutdown_waits_for_committed_execution_reply_before_finishing_cleanup` 和
+`capacity_wait_shutdown_is_bounded_and_releases_execution_before_waiters_return`，使用真实
+隔离 Redis，覆盖 Shared/Reserved、直接/晋升、未返回响应与他实例。
+错误做法是把“Host 有外层截止”推导成 Store 不能有官方自己的 2 秒释放预算；
+正确做法是两个边界各司其职，超时明确依 TTL 兜底。
 
 ## 8. 错误、Native 与协议边界
 
@@ -292,7 +311,7 @@ API 不为账号排队提前提交 SSE 或发送业务 payload。
 | Live 容量 | 上下调及 publication 竞态、缺失失败关闭、凭据 revision 冲突归还槽；容量观测不计 waiter、不重复计算自身 |
 | Redis | 普通池单账号上限、Reserved 免此上限、每 Provider/池/进程总量 1024、晋升/取消释放名额、原子晋升不超卖和独立 member TTL |
 | 取消 | 准入/晋升前中后取消、未 poll future、成功响应丢失、取消先到、重复 release、旧 token 不删新 owner |
-| 停机 P1 | 超过旧 35 秒窗口后请求/执行 guard 才 Drop 仍可清理；存活 owner 未归还不能提前关闭；Store 验证外层 timeout/abort，Host 验证自定义 HTTP drain 后统一限时 abort/join |
+| 停机 P1 | 持有执行 guard、申请响应未返回、本实例与他实例隔离、官方 2 秒预算；Host 外层更短截止仍可 abort/join，失败依 TTL |
 | Native/协议 | 队满/超时不进入 Native 跨号重放；本地无候选等仅按官方 prepare 分支恢复；耗尽等待但立即空闲可准入，换号预算为零仍禁止恢复；等待时零上游调用且无提前 SSE |
 
 对应回归位于 Core `tests/account/selection.rs`、`tests/engine/capacity_wait.rs`、

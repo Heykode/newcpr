@@ -32,6 +32,8 @@ const props = withDefaults(
     disabled?: boolean
     /** 包含 hover 的触发方式打开弹窗的延迟（毫秒）；click 触发不生效。 */
     hoverDelay?: number
+    enterable?: boolean
+    role?: 'tooltip' | 'dialog'
     anchorElement?: HTMLElement | null
     hoverElement?: HTMLElement | null
     animatePosition?: boolean
@@ -41,6 +43,8 @@ const props = withDefaults(
   }>(),
   {
     placement: 'bottom-end',
+    enterable: true,
+    role: undefined,
     trigger: 'click',
     offset: 6,
     disabled: false,
@@ -371,7 +375,12 @@ useEventListener(rootRef, 'click', (event) => {
 })
 useEventListener(rootRef, ['mouseenter', 'focusin'], handleHoverEnter)
 useEventListener(rootRef, ['mouseleave', 'focusout'], handleHoverLeave)
-useEventListener(popoverRef, ['mouseenter', 'focusin'], handleHoverEnter)
+useEventListener(popoverRef, ['mouseenter', 'focusin'], (event) => {
+  if (props.enterable || event.type === 'focusin')
+    handleHoverEnter()
+  else
+    handleHoverLeave()
+})
 useEventListener(popoverRef, ['mouseleave', 'focusout'], handleHoverLeave)
 useEventListener(viewportTarget, 'keydown', (event) => {
   if (event instanceof KeyboardEvent && event.key === 'Escape') {
@@ -426,6 +435,7 @@ onBeforeUnmount(() => {
         <div
           v-if="open"
           ref="popoverRef"
+          :role="role"
           :data-cp-placement="popoverPlacement"
           :class="popoverClasses"
           :style="popoverStyle"

@@ -349,6 +349,13 @@ OpenAI 主动额度重置卡及其消费结果由上游持有，不写入 Postgr
     target: aarch64-apple-darwin
     binary: codex-proxy-rs
     archive: tar.gz
+
+  - os: darwin
+    arch: amd64
+    runner: macos-15-intel
+    target: x86_64-apple-darwin
+    binary: codex-proxy-rs
+    archive: tar.gz
 ```
 
 这些是恢复配置示例，不是第二份生效清单。新增前应重新核对 runner、Rust target
@@ -511,3 +518,10 @@ pg_restore --no-owner --no-privileges --password \
 ### v3.42.2 账号分组布局修复
 
 本版包含 v3.42.1 的全部修复，并恢复账号分组文字标签原有的桌面与手机布局。从 v3.42.0 或 v3.42.1 升级均没有新增数据库迁移，沿用上述普通已验证镜像流程与实例网络策略。版本标签、实际镜像源码和健康检查须分别核对；完整更新见 [版本说明](../release/notes.md#v3422)。
+
+### 发行提交名称
+
+`release/publish` 备版提交使用 `chore: bump version to <version>`；发布通道推进使用
+`chore(release): update release channels to <version>`。恢复同版本发行前同时检查旧标题
+`chore(release): prepare v<version>` 和 `chore(release): v<version>`，即使 tag 已被删除也不能
+重复生成备版提交。没有通道变化时不新增通道提交；实际发行和部署继续遵守既有制品证据流程。

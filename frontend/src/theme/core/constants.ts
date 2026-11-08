@@ -3,7 +3,9 @@ import type {
   ThemeColorPresetId,
   ThemeCustomization,
   ThemeMode,
+  ThemePreset,
   ThemePresetColorName,
+  ThemePresetId,
   ThemeTokenName,
 } from '../types'
 import { presetPrimaryColors } from '@ant-design/colors'
@@ -12,6 +14,25 @@ export const DEFAULT_THEME_MODE: ThemeMode = 'system'
 export const DEFAULT_THEME_COLOR: ThemeColorPresetId = 'relay-blue'
 export const DEFAULT_CUSTOM_THEME_COLOR = '#5983F4'
 export const DEFAULT_THEME_CUSTOMIZATION: ThemeCustomization = {}
+export const defaultThemePresetId: ThemePresetId = 'default'
+
+const softDimensions = {
+  seed: { borderRadius: 13 },
+  component: { cardBorderRadius: 24 },
+}
+
+export const themePresets: readonly ThemePreset[] = [
+  { id: 'default', colorId: DEFAULT_THEME_COLOR, primaryColor: DEFAULT_CUSTOM_THEME_COLOR },
+  {
+    id: 'soft',
+    colorId: DEFAULT_THEME_COLOR,
+    primaryColor: DEFAULT_CUSTOM_THEME_COLOR,
+    customization: {
+      light: softDimensions,
+      dark: softDimensions,
+    },
+  },
+]
 
 export const DEFAULT_SEED_COLORS = {
   colorSuccess: '#12B981',
@@ -43,59 +64,85 @@ export const DEFAULT_DIMENSIONS = {
 export const THEME_COLOR_PRESETS: readonly ThemeColorPreset[] = [
   {
     id: 'relay-blue',
-    label: '中继蓝',
-    description: '石墨表面上的清晰交互信号',
+    label: '星津夜航',
+    description: '星垂海面，帆过深蓝',
     seed: DEFAULT_CUSTOM_THEME_COLOR,
   },
   {
     id: 'deep-teal',
-    label: '深海青',
-    description: '氧化铜落入深水玻璃的冷静层次',
-    seed: '#0E7C72',
+    label: '水墨江汀',
+    description: '远山淡墨，一叶横舟',
+    seed: '#50605E',
     appearance: {
       light: {
-        colorBgBase: '#FBFEFD',
-        colorTextBase: '#122C2A',
+        colorBgBase: '#F8F8F3',
+        colorTextBase: '#282D2C',
       },
       dark: {
-        colorBgBase: '#102321',
-        colorTextBase: '#D7EAE6',
+        colorBgBase: '#202727',
+        colorTextBase: '#E4E7DF',
       },
     },
   },
   {
     id: 'signal-violet',
-    label: '古风色',
-    description: '赭石落在宣纸与松烟墨上的温厚层次',
-    seed: '#A0583D',
+    label: '粉墙回廊',
+    description: '粉墙留光，长廊留白',
+    seed: '#D395A8',
     appearance: {
       light: {
-        colorBgBase: '#F9F3E8',
-        colorTextBase: '#2B211B',
+        colorBgBase: '#FCF6F7',
+        colorTextBase: '#3A2E36',
       },
       dark: {
-        colorBgBase: '#1E1713',
-        colorTextBase: '#EEE3D3',
+        colorBgBase: '#29242A',
+        colorTextBase: '#F1E6E9',
       },
     },
   },
   {
     id: 'graphite',
-    label: '石墨',
-    description: '铅笔粉末与工作室灰纸的材料质感',
-    seed: '#525B66',
+    label: '朱阙金瓦',
+    description: '金瓦出檐，朱柱映阶',
+    seed: '#A34537',
     appearance: {
       light: {
-        colorBgBase: '#FAF9F6',
-        colorTextBase: '#25272B',
+        colorBgBase: '#FBF5E8',
+        colorTextBase: '#3D302A',
       },
       dark: {
-        colorBgBase: '#1B1C1E',
-        colorTextBase: '#E5E1D9',
+        colorBgBase: '#302421',
+        colorTextBase: '#F0E3CD',
       },
     },
   },
 ] as const
+
+/** 完整主题按配色标识索引，配置可直接交给同一编译器或复制为编辑草稿 */
+export const themeProfiles: Readonly<Record<ThemeColorPresetId, { preset: ThemePresetId, customization: ThemeCustomization }>> = {
+  'relay-blue': { preset: 'default', customization: {} },
+  'deep-teal': {
+    preset: 'default',
+    customization: {
+      seed: { colorInfo: '#5F7782', colorSuccess: '#50785C', colorWarning: '#A67A40', controlHeight: 36, borderRadius: 4, shadowStrength: 55 },
+      component: { cardBorderRadius: 6, tableRowHeight: 60 },
+    },
+  },
+  'signal-violet': {
+    preset: 'default',
+    customization: {
+      seed: { colorInfo: '#82719A', colorSuccess: '#458365', colorWarning: '#B78032', fontSize: 14, controlHeight: 42, borderRadius: 5 },
+      component: { cardBorderRadius: 8, tableRowHeight: 68 },
+    },
+  },
+  'graphite': {
+    preset: 'soft',
+    customization: {
+      seed: { colorInfo: '#466D76', colorSuccess: '#537854', colorWarning: '#BD8C3F', controlHeight: 38, borderRadius: 6, shadowStrength: 80 },
+      component: { cardBorderRadius: 12, tableRowHeight: 54 },
+    },
+  },
+}
 
 export const BLACK = '#000000'
 export const WHITE = '#FFFFFF'
@@ -125,16 +172,6 @@ export const DARK_SURFACE_ANCHORS = {
   colorBgSpotlight: '#050913',
 } as const
 
-/** 默认主题组件基准；带色温主题会连续过渡到 Surface 派生结果。 */
-export const LIGHT_COMPONENT_ANCHORS = {
-  inputHoverBg: '#F2F6FA',
-  inputActiveBg: '#F8FAFC',
-} as const
-
-export const DARK_COMPONENT_ANCHORS = {
-  inputActiveBg: '#111D2D',
-} as const
-
 /** 浅色阴影保持中性，不随主题文字色染色。 */
 export const LIGHT_SHADOW_BASE = LIGHT_TEXT_BASE
 
@@ -150,6 +187,9 @@ export const EDITABLE_COLOR_TOKEN_NAMES = new Set<ThemeTokenName>([
   '--cp-button-secondary-bg',
   '--cp-button-secondary-hover-bg',
   '--cp-button-secondary-active-bg',
+  '--cp-icon-button-secondary-bg',
+  '--cp-icon-button-secondary-hover-bg',
+  '--cp-icon-button-secondary-active-bg',
   '--cp-card-bg',
   '--cp-modal-bg',
   '--cp-popover-header-bg',
@@ -158,6 +198,7 @@ export const EDITABLE_COLOR_TOKEN_NAMES = new Set<ThemeTokenName>([
   '--cp-table-row-stripe-bg',
   '--cp-table-row-hover-bg',
   '--cp-table-row-selected-bg',
+  '--cp-table-row-selected-hover-bg',
   '--cp-progress-remaining-color',
   '--cp-layout-sider-bg',
   '--cp-scrollbar-thumb-bg',
@@ -180,4 +221,7 @@ export const ALPHA_COLOR_TOKEN_NAMES = new Set<string>([
   '--cp-button-secondary-bg',
   '--cp-button-secondary-hover-bg',
   '--cp-button-secondary-active-bg',
+  '--cp-icon-button-secondary-bg',
+  '--cp-icon-button-secondary-hover-bg',
+  '--cp-icon-button-secondary-active-bg',
 ] satisfies ThemeTokenName[])

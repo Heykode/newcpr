@@ -142,6 +142,7 @@
       "small": "Small",
       "medium": "Medium",
       "large": "Large"
-    }
+    },
+    "selectPlaceholder": "Select"
   }
 }
