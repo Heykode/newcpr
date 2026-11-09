@@ -643,11 +643,21 @@ pub(super) async fn synchronize_passive_quota_headers(
     quota: &CodexCredentialQuotaService,
     account: &ProviderAccount,
     headers: &[(String, String)],
+    image_endpoint: bool,
     observed_at: SystemTime,
     authority: QuotaRefreshAuthority,
 ) {
-    let Some(observation) = CodexRateLimitObservation::from_headers(headers, observed_at) else {
+    let parsed = if image_endpoint {
+        gateway_protocol::openai::events::parse_image_rate_limit_headers(headers)
+    } else {
+        gateway_protocol::openai::events::parse_rate_limit_headers(headers)
+    };
+    let Some(rate_limits) = parsed else {
         return;
+    };
+    let observation = CodexRateLimitObservation {
+        rate_limits,
+        observed_at,
     };
     synchronize_passive_quota(
         quota,

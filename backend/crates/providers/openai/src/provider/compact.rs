@@ -93,13 +93,14 @@ pub(super) async fn prepare_excel_compact(
 
 pub(super) async fn collect_excel_compact(
     client: &CodexBackendClient,
+    account: &ProviderAccount,
     request: &CodexResponsesRequest,
     context: CodexRequestContext<'_>,
 ) -> Result<CodexBackendJsonResponse, Box<MappedProviderFailure>> {
     let mut response = client
         .create_response_stream_http_sse(request, context)
         .await
-        .map_err(map_handshake_error)?;
+        .map_err(|error| map_handshake_error(error, account))?;
     let mut decoder = CodexCanonicalDecoder::new(request.model());
     let mut bytes = 0_usize;
     while let Some(chunk) = response.body.next().await {

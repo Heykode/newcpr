@@ -70,14 +70,7 @@ function resolveThemeInputs({
   const selectedPreset = themePresets.find(item => item.id === preset) ?? themePresets[0]!
   const resolvedColorId = colorId ?? selectedPreset.colorId
   const seed = resolveThemeSeed(resolvedColorId, primaryColor ?? selectedPreset.primaryColor)
-  const defaults = selectedPreset.customization?.[name]
-  const overrides = normalizeThemeCustomization(customization)
-  // 预设提供基线，用户覆盖始终最后应用；Store 与页面只保存输入配置。
-  const normalizedCustomization: ThemeCustomization = {
-    seed: { ...defaults?.seed, ...overrides.seed },
-    component: { ...defaults?.component, ...overrides.component },
-    tokenOverrides: { ...defaults?.tokenOverrides, ...overrides.tokenOverrides },
-  }
+  const normalizedCustomization = normalizeThemeCustomization(customization)
   const appearance = resolvedColorId === 'custom'
     ? deriveCustomThemeAppearance(name, seed)
     : themeColorPreset(resolvedColorId).appearance?.[name]
@@ -144,7 +137,7 @@ function deriveThemeMap(
       seedTokens.shadowStrength,
       preset,
     ),
-    dimensions: deriveThemeDimensionMap(seedTokens, customization.component, preset),
+    dimensions: deriveThemeDimensionMap(seedTokens, customization.component),
   }
 }
 

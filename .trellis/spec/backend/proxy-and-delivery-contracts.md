@@ -16,6 +16,27 @@
 - Verify real PostgreSQL roundtrips, API fields, reauthorization/relogin, stale
   revision conflicts, import locks and browser cancel/failure/restore/delete flows.
 
+## Connection Test Proxy Diagnostics
+
+- `ProxyConnectionHint` is diagnostic metadata only. It must not affect error
+  kind, send state, retry policy, account switching, quota or account health.
+- Carry hints from HTTP/WS and xAI transport through `ProviderDiagnostic`,
+  both `observe_probe_failure` and `AccountProbeError::from_provider`, Admin
+  events and SSE `proxyHint`.
+  Expose hints only for Provider local failures; upstream/gateway errors stay distinct.
+  Captured upstream status/code/body is upstream evidence even with `NotSent`;
+  the local helper must use the same evidence rule as the main probe path.
+- Use official values `invalid_configuration`, `unreachable`, `tunnel_failed`,
+  `check_proxy`. HTTP connect failures with a selected proxy only suggest checking
+  it; they do not prove the proxy caused the failure. WS hints follow the active
+  dial stage, including timeouts; local target DNS and CA failures must not inherit
+  a stale proxy-stage accusation.
+- NewCPR account and managed exits both carry diagnostics. Keep source-bound
+  IPv6 errors and connection-budget behavior; preserve Excel actual HTTP rejection
+  status when passing the selected account into the shared error mapper.
+- Preparation uses the same safe diagnostic mapper in account exit and Live
+  paths. Never render raw reqwest/URL credentials as a new diagnostic message.
+
 ## Upstream WS Message And Opening Compatibility
 
 - New-chain pool profiles include the effective opening beta feature set and

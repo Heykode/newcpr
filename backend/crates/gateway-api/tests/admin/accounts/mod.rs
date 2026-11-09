@@ -2404,6 +2404,7 @@ mod actions {
             DomainConnectionTestEvent::Failed {
                 source: AccountProbeErrorSource::Upstream,
                 gateway_error_code: GatewayErrorKind::RateLimited,
+                proxy_hint: None,
                 send_state: Some(UpstreamSendState::Sent),
                 message: "upstream unavailable".to_owned(),
                 provider_error_code: Some("usage_exhausted".to_owned()),
@@ -2441,6 +2442,7 @@ mod actions {
                     "type": "error",
                     "source": "upstream",
                     "gatewayErrorCode": "rate_limited",
+                    "proxyHint": null,
                     "sendState": "sent",
                     "error": "upstream unavailable",
                     "providerErrorCode": "usage_exhausted",
@@ -2451,6 +2453,30 @@ mod actions {
                 }),
             ]
         );
+        for hint in [
+            gateway_core::error::ProxyConnectionHint::InvalidConfiguration,
+            gateway_core::error::ProxyConnectionHint::Unreachable,
+            gateway_core::error::ProxyConnectionHint::TunnelFailed,
+            gateway_core::error::ProxyConnectionHint::CheckProxy,
+        ] {
+            let event = AccountConnectionTestEvent::from(DomainConnectionTestEvent::Failed {
+                source: AccountProbeErrorSource::Provider,
+                gateway_error_code: GatewayErrorKind::UpstreamUnavailable,
+                proxy_hint: Some(hint),
+                send_state: Some(UpstreamSendState::NotSent),
+                message: "connection failed".to_owned(),
+                provider_error_code: None,
+                provider_error_type: None,
+                upstream_status: None,
+                upstream_content_type: None,
+                upstream_body: None,
+            })
+            .data;
+            assert_eq!(event["proxyHint"], hint.as_str());
+            assert_eq!(event["source"], "provider");
+            assert_eq!(event["sendState"], "not_sent");
+            assert!(event["upstreamStatus"].is_null());
+        }
     }
 
     #[test]

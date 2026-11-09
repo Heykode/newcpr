@@ -792,6 +792,7 @@ fn local_ws_failures_do_not_penalize_the_proxy() {
     guard.report_websocket_error(&CodexWebSocketExchangeError::SharedConnectFailed);
     assert!(exit.reports.lock().unwrap().is_empty());
     guard.report_websocket_error(&CodexWebSocketExchangeError::ConnectTimeout {
+        proxy_hint: None,
         timeout: Duration::from_secs(1),
     });
     assert_eq!(

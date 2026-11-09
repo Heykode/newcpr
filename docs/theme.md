@@ -14,7 +14,8 @@
 在管理端「主题」中调整颜色、字号、圆角和组件样式，保存后应用到当前浏览器。
 设置保存在浏览器本地，不会同步到服务器或其他设备。四套完整预设为「星津夜航」「水墨江汀」
 「粉墙回廊」「朱阙金瓦」；选择预设同时应用配色、表面材质与该预设的组件覆盖。
-「默认 / 柔光」材质可独立切换，自定义覆盖始终最后生效。
+「默认 / 柔光」材质只影响表面高光、渐变与阴影，不改变配色、圆角、字号或组件尺寸。
+完整预设的显式尺寸覆盖与用户自定义继续生效。
 
 下文说明实现和扩展方式。颜色使用 Ant Design 十阶色板与项目的明暗角色规则，
 中性表面从背景和文字 Seed 派生；Vue 组件通过 CSS Variables 与 Tailwind CSS 4 使用这些值。
@@ -115,9 +116,9 @@ interface ThemeCustomization {
 
 持久化键为 `codex-proxy-rs-theme`。Store 不保存完整色板或 CSS Variables，损坏的模式、颜色与自定义值会在
 初始化时规范化并回退到默认配置。旧数据没有 `themePreset` 时补 `default`，保留原自定义覆盖。
-`createTheme({ name, preset, colorId, primaryColor, customization })` 接入官方 UI v0.9.0 的实际
+`createTheme({ name, preset, colorId, primaryColor, customization })` 接入官方 UI v0.9.1 的实际
 派生实现；本地 `resolveTheme(...)` 保留兼容入口，Token 仍采用 `--cp-*`，无需迁移旧覆盖键。
-`themeProfiles` 保存完整场景组合，`themePresets` 定义材质基线；编辑器与 Store 使用同一 compiler。
+`themeProfiles` 保存完整场景组合，`themePresets` 只定义表面材质；编辑器与 Store 使用同一 compiler。
 
 ### Map Token
 

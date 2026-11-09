@@ -16,22 +16,9 @@ export const DEFAULT_CUSTOM_THEME_COLOR = '#5983F4'
 export const DEFAULT_THEME_CUSTOMIZATION: ThemeCustomization = {}
 export const defaultThemePresetId: ThemePresetId = 'default'
 
-const softDimensions = {
-  seed: { borderRadius: 13 },
-  component: { cardBorderRadius: 24 },
-}
-
 export const themePresets: readonly ThemePreset[] = [
   { id: 'default', colorId: DEFAULT_THEME_COLOR, primaryColor: DEFAULT_CUSTOM_THEME_COLOR },
-  {
-    id: 'soft',
-    colorId: DEFAULT_THEME_COLOR,
-    primaryColor: DEFAULT_CUSTOM_THEME_COLOR,
-    customization: {
-      light: softDimensions,
-      dark: softDimensions,
-    },
-  },
+  { id: 'soft', colorId: DEFAULT_THEME_COLOR, primaryColor: DEFAULT_CUSTOM_THEME_COLOR },
 ]
 
 export const DEFAULT_SEED_COLORS = {
