@@ -324,7 +324,7 @@ pub(super) fn map_repair_failure(error: CodexClientError) -> MappedProviderFailu
     let mut failure = if let Some(upstream) = error.upstream_failure() {
         map_upstream_failure(upstream, None, ReplayBoundary::AfterSemanticOutput)
     } else {
-        map_client_error(error, UpstreamSendState::Sent, false)
+        map_client_error(error, UpstreamSendState::Sent, None)
     };
     failure.http_rejection_status = status;
     classify_failure(failure, true)
@@ -1023,6 +1023,15 @@ mod tests {
             );
             let failure = super::super::compact::collect_excel_compact(
                 &client,
+                &ProviderAccount::new(
+                    gateway_core::account::ProviderAccountId::new("acct_compact").unwrap(),
+                    gateway_core::identity::ProviderKind::new("openai").unwrap(),
+                    "fixture".into(),
+                    None,
+                    "oauth".into(),
+                    gateway_core::account::CredentialRevision::new(1).unwrap(),
+                    None,
+                ),
                 &request,
                 CodexRequestContext::auxiliary(
                     "Bearer fixture",
@@ -1135,6 +1144,15 @@ mod tests {
             );
             let result = super::super::compact::collect_excel_compact(
                 &client,
+                &ProviderAccount::new(
+                    gateway_core::account::ProviderAccountId::new("acct_compact").unwrap(),
+                    gateway_core::identity::ProviderKind::new("openai").unwrap(),
+                    "fixture".into(),
+                    None,
+                    "oauth".into(),
+                    gateway_core::account::CredentialRevision::new(1).unwrap(),
+                    None,
+                ),
                 &request,
                 CodexRequestContext::auxiliary(
                     "Bearer fixture",

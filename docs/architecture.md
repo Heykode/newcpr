@@ -437,8 +437,10 @@ credential 与 quota 是两组独立事实：credential refresh 不等于 quota 
   State binding revision 在同一 PG 事务内完成，活账号重复身份回滚，目标仅有历史设备归档时允许重绑。
 - `oauth_identity_key` 将本地 ID、上游 user 和 workspace 纳入账号/session-proxy client 的池 key，
   以及 Session continuation、Guardian 与头像缓存；Excel 复用账号 client，托管 State 保留既有 revision 防线。
-- 图片具名额度按官方 active-limit 规则分桶：只有目标 key 不存在才迁移 generic Codex entry，
-  不增加 premium 或 name-only 特判；图片窗口不能覆盖已有 Codex 周窗口。
+- 普通 Responses、文本与额度刷新按头名前缀分桶：通用 `x-codex-primary-*`、
+  `x-codex-secondary-*` 更新 Codex 额度，即使 active-limit 为 `premium` 也不迁移。
+  仅图片生成/编辑端点在活动计量项没有独立 key 时迁移通用窗口，成功与失败路径一致；
+  具名额度不覆盖 Codex 周窗口，也不改变账号级套餐访问结论。保留原观测时间和写入权限。
 - quota refresh、正常推理返回的 rate-limit headers 和后台健康任务汇入同一额度事实；套餐只用于展示与
   目录 cache 隔离，不创建套餐专属状态机。
 

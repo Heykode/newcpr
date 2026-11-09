@@ -561,6 +561,7 @@ pub enum AccountConnectionTestEvent {
     Failed {
         source: AccountProbeErrorSource,
         gateway_error_code: GatewayErrorKind,
+        proxy_hint: Option<gateway_core::error::ProxyConnectionHint>,
         send_state: Option<UpstreamSendState>,
         message: String,
         provider_error_code: Option<String>,

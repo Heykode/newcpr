@@ -364,7 +364,7 @@ OpenAI 明确返回 `server_is_overloaded`、`slow_down` 或模型容量不足�
 | `POST` | `/api/admin/accounts/reset-credits` | `{ accountId, creditId?, redeemRequestId }` | 使用 UUIDv4 幂等键消费一张 OpenAI 上游重置卡 |
 | `GET` | `/api/admin/accounts/models` | `accountId` | 优先读取 Provider 模型目录缓存，缺失时有限实时拉取；返回 `{ models, observedAt, observedAtDisplay }` |
 | `POST` | `/api/admin/accounts/models/refresh` | `{ accountId }` | 强制拉取最新模型并覆盖缓存，响应结构与模型目录查询相同 |
-| `GET` | `/api/admin/accounts/connection-test` | `accountId`、`modelId` | 通过 SSE 返回实时连接测试事件，不作为业务 Responses 用量记录 |
+| `POST` | `/api/admin/accounts/connection-test` | JSON：`accountId`、`modelId`、`interface`、`stream`、`prompt` | 通过 SSE 返回实时连接测试事件，不作为业务 Responses 用量记录 |
 | `POST` | `/api/admin/accounts/oauth/start` | `{ provider, name, accountId?, outboundProxyId?, outboundProxyUrl? }` | 创建 OpenAI 或 xAI OAuth flow；`accountId` 表示重新授权 |
 | `POST` | `/api/admin/accounts/oauth/complete` | `{ provider, flowId, callbackUrl, settings? }` | 消费 OAuth callback；首次授权可附带账号设置，重新授权保留原设置 |
 
@@ -540,7 +540,7 @@ concurrent proxy mutations return 409. OAuth commits still reject a deleted, cha
 
 ### 账号连接测试 SSE
 
-`GET /api/admin/accounts/connection-test` 固定探测请求指定的账号，不参与普通账号轮换。成功流沿用
+`POST /api/admin/accounts/connection-test` 通过 JSON 请求体固定探测指定账号（GET 查询参数入口仅供旧客户端兼容），不参与普通账号轮换。成功流沿用
 `test_start`、`request`、`content`、`test_complete` 事件；失败事件为：
 
 ```json
@@ -549,6 +549,7 @@ concurrent proxy mutations return 409. OAuth commits still reject a deleted, cha
   "source": "upstream",
   "gatewayErrorCode": "rate_limited",
   "sendState": "sent",
+  "proxyHint": null,
   "error": "upstream unavailable",
   "providerErrorCode": "usage_exhausted",
   "providerErrorType": "invalid_request_error",
@@ -561,6 +562,9 @@ concurrent proxy mutations return 409. OAuth commits still reject a deleted, cha
 - `source` 为 `gateway`、`provider` 或 `upstream`：分别表示尚未进入 Provider、Provider 本地且未发送、
   已发送/可能已发送或已经捕获到上游事实。
 - `gatewayErrorCode` 是 `GatewayErrorKind` 的稳定机器值，管理端据此生成中文摘要。
+- `proxyHint` 仅在 Provider 发送前失败且有代理诊断时返回：`invalid_configuration` 表示代理配置无效，
+  `unreachable` 表示无法连接代理端点，`tunnel_failed` 表示代理隧道协商失败。
+  `check_proxy` 表示本次使用代理且建连失败，不能据此判定故障在代理；无提示时为 `null`。
 - `sendState` 为 `not_sent`、`sent`、`ambiguous`，非 Provider 错误为 `null`。
 - `error`、`providerErrorCode`、`providerErrorType`、`upstreamStatus`、`upstreamContentType` 和
   `upstreamBody` 是实际捕获的原始诊断字段；缺失时为 `null`，不会由本地猜测或翻译。

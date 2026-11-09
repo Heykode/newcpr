@@ -114,3 +114,7 @@ number, line SHA-256 and entire file SHA-256. A changed file requires fresh revi
 Private blocklist hits and private-key markers cannot be exempted. Never regenerate
 this list automatically from a failed scan or exempt a complete test directory.
 The original business fixtures are preserved to avoid changing their assertions.
+After re-reviewing a changed file, retain records for earlier reviewed file
+versions still reachable in Git history and add the new version's exact records.
+Replacing the historical hashes may pass `staged` while failing `history` or a
+new-branch push; old records do not exempt any changed file or line.

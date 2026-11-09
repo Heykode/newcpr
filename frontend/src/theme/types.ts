@@ -8,7 +8,6 @@ export interface ThemePreset {
   id: ThemePresetId
   colorId: ThemeColorId
   primaryColor: string
-  customization?: Partial<Record<ThemeName, ThemeCustomization>>
 }
 
 export interface ThemeColorPreset {
