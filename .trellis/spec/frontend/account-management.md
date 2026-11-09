@@ -461,6 +461,13 @@ pagination.
   close, fail or clear the next test. Check the captured generation in success,
   error and finally paths.
 - Render validation failures visibly, even before any SSE event exists.
+- Connection-test proxy hints apply only to `source=provider` and
+  `sendState=not_sent`. Use backend `gatewayErrorCode` for other failures;
+  do not override structured classification with an unconditional HTTP-status guess.
+- Store terminal failure text in the log's `failureMessage` and show it once in
+  the status banner. Keep form/model-loading errors in `connectionTestError`.
+  Request payload events mean preparation, not proof the upstream received data.
+  Preserve generation fences and cancellation when changing this presentation.
 - Send diagnostic prompts in a POST body, never in the browser URL. Consume SSE
   with `eventsource-parser`, incremental UTF-8 decoding and an AbortController.
   Do not automatically reconnect or repeat a real diagnostic request.

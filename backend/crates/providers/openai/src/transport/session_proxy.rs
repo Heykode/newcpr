@@ -27,7 +27,7 @@ impl SessionProxyHold {
             E::Upstream(error) if (500..600).contains(&error.status_code) => {
                 SessionProxyOutcome::UpstreamFailure
             }
-            E::Connect(_) | E::ConnectTimeout { .. } => SessionProxyOutcome::NetworkFailure,
+            E::Connect { .. } | E::ConnectTimeout { .. } => SessionProxyOutcome::NetworkFailure,
             E::Transport(_)
             | E::SendTimeout { .. }
             | E::ClosedBeforeTerminal(_)

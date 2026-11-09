@@ -303,7 +303,7 @@ test('premature stream closure and malformed events cannot produce an empty succ
         query.end()
       await result
       assert.equal(query.state.connectionTestStatus.value, 'error')
-      assert.match(query.state.connectionTestError.value, malformed ? /解析失败/ : /未返回完成事件/)
+      assert.match(query.state.connectionTestStatusView.value.description, malformed ? /解析失败/ : /未返回完成事件/)
       assert.equal(query.state.testingConnectionIds.has('account-a'), false)
     }
     finally {
@@ -325,8 +325,8 @@ test('upstream authentication failures tell the administrator how to recover', a
       upstreamStatus: 401,
     })
     await result
-    assert.match(query.state.connectionTestError.value, /刷新 Token/)
-    assert.match(query.state.connectionTestError.value, /重新授权/)
+    assert.match(query.state.connectionTestStatusView.value.description, /刷新 Token/)
+    assert.match(query.state.connectionTestStatusView.value.description, /重新授权/)
   }
   finally {
     query.stop()
@@ -349,5 +349,40 @@ test('model catalog failures are visible before the connection test starts', asy
   }
   finally {
     query.stop()
+  }
+})
+
+test('proxy diagnostics describe only provider failures before sending and appear once', async () => {
+  for (const [event, expected] of [
+    [{ source: 'provider', sendState: 'not_sent', proxyHint: 'invalid_configuration' }, '账号代理配置无效'],
+    [{ source: 'provider', sendState: 'not_sent', proxyHint: 'unreachable' }, '无法连接账号代理'],
+    [{ source: 'provider', sendState: 'not_sent', proxyHint: 'tunnel_failed' }, '未能通过账号代理建立隧道'],
+    [{ source: 'provider', sendState: 'not_sent', proxyHint: 'check_proxy' }, '可在「代理管理」中测试账号代理'],
+    [{ source: 'provider', sendState: 'not_sent' }, '请求未能发往上游'],
+    [{ source: 'upstream', sendState: 'sent', proxyHint: 'check_proxy' }, '上游服务暂时不可用'],
+    [{ source: 'gateway', proxyHint: 'unreachable' }, '上游服务暂时不可用'],
+    [{ source: 'provider', sendState: 'ambiguous', proxyHint: 'check_proxy' }, '上游服务暂时不可用'],
+  ]) {
+    const query = mountTest(new Map(), { autoComplete: false })
+    try {
+      query.state.openConnectionTest({ id: 'account-proxy' })
+      await new Promise(resolve => setImmediate(resolve))
+      const completed = query.state.handleTestConnection()
+      query.send({ type: 'request', payload: { prompt: 'test' } })
+      query.send({ type: 'error', gatewayErrorCode: 'upstream_unavailable', upstreamStatus: 503, ...event })
+      await completed
+      assert.equal(query.state.connectionTestStatus.value, 'error')
+      assert.ok(query.state.connectionTestStatusView.value.description.includes(expected))
+      assert.equal(query.state.connectionTestError.value, '')
+      const failures = query.state.connectionTestLogs.value.filter(log => log.tone === 'danger')
+      assert.equal(failures.length, 1)
+      assert.equal(failures[0].failureMessage, query.state.connectionTestStatusView.value.description)
+      assert.ok(!failures[0].text.includes(expected))
+      assert.equal(JSON.parse(failures[0].detail).proxyHint, event.proxyHint ?? null)
+      assert.equal(query.state.connectionTestLogs.value.find(log => log.key === 'request').text, '准备请求')
+    }
+    finally {
+      query.stop()
+    }
   }
 })

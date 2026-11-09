@@ -35,7 +35,6 @@ const SHADOW_MAP_DERIVERS = {
 export function deriveThemeDimensionMap(
   seedTokens: ResolvedThemeSeedTokens,
   componentOverrides: ThemeComponentOverrides | undefined,
-  preset: ThemePresetId,
 ): ThemeDimensionMap {
   const fontSize = seedTokens.fontSize
   const fontSizeXs = Math.max(9, fontSize - 2)
@@ -72,7 +71,7 @@ export function deriveThemeDimensionMap(
     borderRadius: `${borderRadius}px`,
     borderRadiusLg: `${borderRadius + seedTokens.sizeStep}px`,
     cardBorderRadius: `${cardBorderRadius}px`,
-    layoutSiderBorderRadius: preset === 'soft' ? `${borderRadius + seedTokens.sizeStep * 3}px` : '0px',
+    layoutSiderBorderRadius: '0px',
   }
 }
 

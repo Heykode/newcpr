@@ -818,7 +818,8 @@ async fn account_eviction_should_cancel_a_background_websocket_opening() {
     pool.shutdown().await;
 }
 
-#[tokio::test(start_paused = true)]
+// Real socket EOF must not race Tokio's automatic advancement of a paused clock.
+#[tokio::test]
 async fn pool_shutdown_should_cancel_and_join_a_background_websocket_opening() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();

@@ -6,7 +6,8 @@ use bytes::Bytes;
 use futures::future::BoxFuture;
 
 use crate::error::{
-    ClientVisibleUpstreamResponse, GatewayError, GatewayErrorKind, ProviderError, ProviderErrorKind,
+    ClientVisibleUpstreamResponse, GatewayError, GatewayErrorKind, ProviderError,
+    ProviderErrorKind, ProxyConnectionHint,
 };
 use crate::identity::ProviderKind;
 use crate::routing::UpstreamModelId;
@@ -134,6 +135,7 @@ impl AccountProbeErrorSource {
 #[derive(Debug)]
 pub struct AccountProbeError {
     gateway: GatewayError,
+    pub(super) proxy_hint: Option<ProxyConnectionHint>,
     source: AccountProbeErrorSource,
     send_state: Option<UpstreamSendState>,
     upstream_response: Option<Box<AccountProbeUpstreamResponse>>,
@@ -150,6 +152,7 @@ impl AccountProbeError {
     ) -> Self {
         Self {
             gateway,
+            proxy_hint: None,
             source,
             send_state,
             upstream_response: upstream_response.map(Box::new),
@@ -164,18 +167,28 @@ impl AccountProbeError {
 
     #[must_use]
     pub fn from_provider(error: &ProviderError) -> Self {
+        let has_upstream_facts = error.send_state() != UpstreamSendState::NotSent
+            || error.upstream_status().is_some()
+            || error.upstream_code().is_some()
+            || error.client_visible_upstream_error().is_some()
+            || error.client_visible_upstream_response().is_some();
         let mut probe = Self::new(
             GatewayError::from_provider(error),
-            if error.send_state() == UpstreamSendState::NotSent {
-                AccountProbeErrorSource::Provider
-            } else {
+            if has_upstream_facts {
                 AccountProbeErrorSource::Upstream
+            } else {
+                AccountProbeErrorSource::Provider
             },
             Some(error.send_state()),
             error
                 .client_visible_upstream_response()
                 .map(AccountProbeUpstreamResponse::from_client_response),
         );
+        if probe.source == AccountProbeErrorSource::Provider {
+            probe.proxy_hint = error
+                .diagnostic()
+                .and_then(|diagnostic| diagnostic.proxy_hint());
+        }
         probe.provider_kind = Some(error.kind());
         probe
     }
@@ -193,6 +206,11 @@ impl AccountProbeError {
     #[must_use]
     pub const fn send_state(&self) -> Option<UpstreamSendState> {
         self.send_state
+    }
+
+    #[must_use]
+    pub const fn proxy_hint(&self) -> Option<ProxyConnectionHint> {
+        self.proxy_hint
     }
 
     #[must_use]

@@ -29,16 +29,22 @@ malformed terminals and explicit failed statuses are not success.
 - Current SSE/WS error headers use the Codex quota whitelist. Exclude plan,
   authentication, Cookies and turn state. Respect SSE event labels when JSON
   omits `type`; do not rewrite downstream error bytes.
-- Follow official `e770c94a`: if the active limit is not `codex` and that key
-  is absent from the parsed limits map, move the generic `codex` entry to that
-  active key. Do not special-case `premium`; a name-only entry already present
-  in the map must not trigger the move. Preserve explicit named buckets and
-  mirrored-window handling. Image quota observations must not overwrite the
-  Codex weekly window or independently change its access state.
-- Verify parser positive/negative cases and the Provider-to-Store contract in
-  `image_quota_headers_keep_the_codex_weekly_window_and_access_state`. Updating
-  old premium/name-only expectations requires the fixed official branch above;
-  restoring those old branches to satisfy an old test is incorrect.
+- Follow official `0d444923` (v3.44.0): ordinary Responses, Live, usage refresh
+  and text/compact observations keep generic `x-codex-*` windows in `codex`, even
+  when `x-codex-active-limit` is `premium` or another name. Header prefixes own
+  the buckets; active-limit alone does not reassign ordinary model quota.
+- Only image generation/edit endpoints use `parse_image_rate_limit_headers`.
+  If the active limit is not `codex` and its key is absent, move the generic
+  window to that active key. Preserve explicit named buckets, including a
+  name-only entry. Image observations must not overwrite the Codex weekly
+  window or independently change its access state.
+- Carry the image endpoint context through both successful JSON responses and
+  `OpenAiFailureContext`; preserve capture time and passive-write authority.
+  Excel compact remains text; Excel image follows its image endpoint.
+- Verify parser positive/negative cases, ordinary premium headers exhausting
+  core quota, and image generation/edit success/failure in the existing Provider
+  tests. The old global active-limit reassignment rule is retired; do not restore
+  it to satisfy v3.43.1 assertions.
 
 ## Reset Facts
 

@@ -74,3 +74,20 @@ test('upstream material and complete profiles keep explicit customization last',
     assert.notEqual(createTheme({ name, preset: 'soft' }).tokens['--cp-card-bg-image'], createTheme({ name }).tokens['--cp-card-bg-image'])
   }
 })
+
+test('switching material preserves default and customized component dimensions', () => {
+  const { createTheme } = load(resolve(root, 'core/resolve.ts'))
+  for (const name of ['light', 'dark']) {
+    for (const customization of [{}, { seed: { borderRadius: 7, fontSize: 15 }, component: { cardBorderRadius: 11 } }]) {
+      const plain = createTheme({ name, preset: 'default', customization })
+      const soft = createTheme({ name, preset: 'soft', customization })
+      for (const key of Object.keys(plain.tokens).filter(key => /radius|height|width|padding|gap|font-size/.test(key)))
+        assert.equal(soft.tokens[key], plain.tokens[key], `${name}: ${key}`)
+      assert.notEqual(soft.tokens['--cp-card-bg-image'], plain.tokens['--cp-card-bg-image'])
+    }
+    const soft = createTheme({ name, preset: 'soft' })
+    assert.equal(soft.seedTokens.borderRadius, 8)
+    assert.equal(soft.tokens['--cp-card-border-radius'], '18px')
+    assert.equal(soft.tokens['--cp-layout-sider-border-radius'], '0px')
+  }
+})

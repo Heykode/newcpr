@@ -3,6 +3,7 @@
 use super::*;
 use crate::transport::diagnostics::is_capacity_error;
 use gateway_core::diagnostics::TraceContext;
+use gateway_core::error::ProxyConnectionHint;
 
 /// OpenAI 失败对 Smart 账号分数的结构化 reason 闭集。
 ///
@@ -288,6 +289,7 @@ pub(super) struct OpenAiFailureContext<'a> {
     pub(super) cyber_policy_scope: Option<&'a CodexCyberPolicyScope>,
     pub(super) is_diagnostic: bool,
     pub(super) allows_account_state_mutation: bool,
+    pub(super) image_endpoint: bool,
     pub(super) upstream_model: Option<&'a UpstreamModelId>,
 }
 
@@ -471,6 +473,7 @@ pub(super) async fn apply_failure(
         context.quota,
         account,
         &failure.rate_limit_headers,
+        context.image_endpoint,
         failure.rate_limit_observed_at,
         crate::credential::QuotaRefreshAuthority::PreserveAccess,
     )
@@ -592,7 +595,10 @@ pub(super) fn schedule_authoritative_quota_refresh_after_failure(
     }));
 }
 
-pub(super) fn map_handshake_error(error: CodexClientError) -> MappedProviderFailure {
+pub(super) fn map_handshake_error(
+    error: CodexClientError,
+    account: &ProviderAccount,
+) -> MappedProviderFailure {
     let http_rejection_status = match &error {
         CodexClientError::Upstream {
             status,
@@ -601,7 +607,7 @@ pub(super) fn map_handshake_error(error: CodexClientError) -> MappedProviderFail
         } => Some(status.as_u16()),
         _ => None,
     };
-    let mut failure = map_client_error(error, UpstreamSendState::Ambiguous, true);
+    let mut failure = map_client_error(error, UpstreamSendState::Ambiguous, Some(account));
     failure.http_rejection_status = http_rejection_status;
     failure
 }
@@ -881,7 +887,7 @@ fn continuation_replay_error_detail() -> ClientVisibleUpstreamError {
 pub(super) fn map_stream_error(error: CodexClientError) -> MappedProviderFailure {
     let allows_pre_delivery_retry = stream_transport_allows_pre_delivery_retry(&error);
     let websocket_failure = error.transport() == Some(CodexBackendTransport::WebSocket);
-    let mut failure = map_client_error(error, UpstreamSendState::Sent, false);
+    let mut failure = map_client_error(error, UpstreamSendState::Sent, None);
     failure.websocket_transport_retryable = allows_pre_delivery_retry && websocket_failure;
     if allows_pre_delivery_retry && !websocket_failure {
         failure.error = failure.error.with_pre_delivery_retry();
@@ -929,9 +935,16 @@ pub(super) fn map_canonical_error(
 pub(super) fn map_client_error(
     error: CodexClientError,
     uncertain_state: UpstreamSendState,
-    observe_transport: bool,
+    handshake_account: Option<&ProviderAccount>,
 ) -> MappedProviderFailure {
-    let diagnostic = client_diagnostic(&error);
+    let diagnostic = client_diagnostic(
+        &error,
+        handshake_account.is_some_and(|account| {
+            account.outbound_proxy().is_some()
+                || account.request_proxy_source()
+                    != gateway_core::provider_ports::session_proxy::RequestProxySource::Account
+        }),
+    );
     let raw_upstream_error = match &error {
         CodexClientError::WebSocket(error) => websocket_raw_error(error),
         _ => None,
@@ -965,9 +978,7 @@ pub(super) fn map_client_error(
         }),
         _ => None,
     };
-    let observation = observe_transport
-        .then(|| codex_error_observation(&error))
-        .flatten();
+    let observation = handshake_account.and_then(|_| codex_error_observation(&error));
     if let Some(failure) = error.upstream_failure() {
         return map_upstream_failure(failure, observation, ReplayBoundary::BeforeSemanticOutput);
     }
@@ -1174,7 +1185,10 @@ pub(super) fn map_client_error(
 }
 
 /// 在消费 transport 错误前提取可持久化事实，不能使用可能携带 URL/凭据的 Display。
-pub(super) fn client_diagnostic(error: &CodexClientError) -> Option<ProviderDiagnostic> {
+pub(super) fn client_diagnostic(
+    error: &CodexClientError,
+    uses_account_proxy: bool,
+) -> Option<ProviderDiagnostic> {
     let (stage, code, message) = match error {
         CodexClientError::ConnectionBudgetExhausted => (
             "connect",
@@ -1207,13 +1221,16 @@ pub(super) fn client_diagnostic(error: &CodexClientError) -> Option<ProviderDiag
             } else {
                 ("exchange", "http_transport_failed")
             };
-            return Some(
-                ProviderDiagnostic::new(format!(
-                    "OpenAI HTTP failure: stage={stage}, cause={code}"
-                ))
-                .with_classification(stage, code)
-                .with_io_cause(error),
-            );
+            let diagnostic = ProviderDiagnostic::new(format!(
+                "OpenAI HTTP failure: stage={stage}, cause={code}"
+            ))
+            .with_classification(stage, code)
+            .with_io_cause(error);
+            return Some(if uses_account_proxy && error.is_connect() {
+                diagnostic.with_proxy_hint(ProxyConnectionHint::CheckProxy)
+            } else {
+                diagnostic
+            });
         }
         CodexClientError::StreamIdleTimeout { timeout } => (
             "receive",
@@ -1245,6 +1262,13 @@ pub(super) fn client_diagnostic(error: &CodexClientError) -> Option<ProviderDiag
             "request_compression_failed",
             "OpenAI request compression failed".to_owned(),
         ),
+        CodexClientError::CustomCa(crate::transport::tls::CustomCaError::ProxyConfiguration) => {
+            return Some(
+                ProviderDiagnostic::new("OpenAI account proxy configuration is invalid")
+                    .with_classification("prepare", "account_proxy_invalid")
+                    .with_proxy_hint(ProxyConnectionHint::InvalidConfiguration),
+            );
+        }
         CodexClientError::CustomCa(_) => (
             "prepare",
             "custom_ca_invalid",
@@ -1280,7 +1304,7 @@ pub(super) fn profile_diagnostic(
 
 fn websocket_diagnostic(error: &CodexWebSocketExchangeError) -> ProviderDiagnostic {
     let (stage, code) = match error.diagnostic_cause() {
-        CodexWebSocketExchangeError::Connect(_) => (
+        CodexWebSocketExchangeError::Connect { .. } => (
             "connect",
             error
                 .transport_failure_reason()
@@ -1320,7 +1344,18 @@ fn websocket_diagnostic(error: &CodexWebSocketExchangeError) -> ProviderDiagnost
                 .unwrap_or("websocket_transport_failed"),
         ),
     };
-    websocket_diagnostic_message(error).with_classification(stage, code)
+    let diagnostic = websocket_diagnostic_message(error).with_classification(stage, code);
+    match error.classified() {
+        CodexWebSocketExchangeError::Connect {
+            proxy_hint: Some(hint),
+            ..
+        }
+        | CodexWebSocketExchangeError::ConnectTimeout {
+            proxy_hint: Some(hint),
+            ..
+        } => diagnostic.with_proxy_hint(*hint),
+        _ => diagnostic,
+    }
 }
 
 fn websocket_diagnostic_message(error: &CodexWebSocketExchangeError) -> ProviderDiagnostic {
@@ -1341,7 +1376,7 @@ fn websocket_diagnostic_message(error: &CodexWebSocketExchangeError) -> Provider
     if let Some(reason) = error.transport_failure_reason() {
         if matches!(
             error.diagnostic_cause(),
-            CodexWebSocketExchangeError::Connect(_)
+            CodexWebSocketExchangeError::Connect { .. }
         ) {
             return ProviderDiagnostic::new(format!(
                 "OpenAI WebSocket connection failed before payload send ({reason})"
@@ -1364,13 +1399,13 @@ fn websocket_diagnostic_message(error: &CodexWebSocketExchangeError) -> Provider
         | CodexWebSocketExchangeError::PostSendAmbiguous { .. } => {
             "OpenAI WebSocket transport failed after payload send; result is ambiguous".to_owned()
         }
-        CodexWebSocketExchangeError::Connect(_) => {
+        CodexWebSocketExchangeError::Connect { .. } => {
             "OpenAI WebSocket connection failed before payload send".to_owned()
         }
         CodexWebSocketExchangeError::Egress(error) => {
             format!("OpenAI local egress is unavailable: {error}")
         }
-        CodexWebSocketExchangeError::ConnectTimeout { timeout } => {
+        CodexWebSocketExchangeError::ConnectTimeout { timeout, .. } => {
             format!("OpenAI WebSocket connection timed out after {timeout:?}")
         }
         CodexWebSocketExchangeError::OriginCircuitOpen => {
@@ -1739,7 +1774,7 @@ pub(super) fn websocket_send_state(error: &CodexWebSocketExchangeError) -> Upstr
     match error.classified() {
         CodexWebSocketExchangeError::InvalidRequest(_)
         | CodexWebSocketExchangeError::Egress(_)
-        | CodexWebSocketExchangeError::Connect(_)
+        | CodexWebSocketExchangeError::Connect { .. }
         | CodexWebSocketExchangeError::ConnectTimeout { .. }
         | CodexWebSocketExchangeError::OriginCircuitOpen
         | CodexWebSocketExchangeError::OriginHalfOpenBusy
@@ -1789,7 +1824,7 @@ pub(super) fn websocket_error_kind(error: &CodexWebSocketExchangeError) -> Provi
         CodexWebSocketExchangeError::ConnectionLimitReached(_) => ProviderErrorKind::RateLimited,
         CodexWebSocketExchangeError::Transport(_)
         | CodexWebSocketExchangeError::SendNotStarted
-        | CodexWebSocketExchangeError::Connect(_)
+        | CodexWebSocketExchangeError::Connect { .. }
         | CodexWebSocketExchangeError::PostSendAmbiguous { .. }
         | CodexWebSocketExchangeError::ClosedBeforeTerminal(_)
         | CodexWebSocketExchangeError::StreamEndedBeforeTerminal { .. }

@@ -337,10 +337,7 @@ impl CodexProvider {
             client: self
                 .client_for_request(&context)?
                 .for_account(lease.account())
-                .map_err(|error| {
-                    provider_error(ProviderErrorKind::Unavailable, UpstreamSendState::NotSent)
-                        .with_source(error)
-                })?,
+                .map_err(|error| map_client_error(error, UpstreamSendState::NotSent, None).error)?,
             registry: Arc::clone(&self.live_registry),
             response_origin: self.live_calls_url.clone(),
             endpoint_query: request.query().map(str::to_owned),
@@ -387,6 +384,7 @@ fn cold_live_call_stream(request: ColdLiveCall) -> EventStream {
         let allows_account_state_mutation = request.lease.allows_account_state_mutation();
         let failure_context = OpenAiFailureContext {
             client: &client,
+            image_endpoint: false,
             selector: &request.selector,
             quota: &request.quota,
             response_origin: &request.response_origin,
@@ -448,7 +446,7 @@ fn cold_live_call_stream(request: ColdLiveCall) -> EventStream {
                 error,
             );
         }
-        let response = match attempt.map_err(map_handshake_attempt_error) {
+        let response = match attempt.map_err(|error| map_handshake_attempt_error(error, &active_account)) {
             Ok(response) => response,
             Err(mut failure) => {
                 if let Some(observation) = failure.observation.take() {
@@ -625,7 +623,7 @@ fn map_live_http_error(error: CodexClientError) -> LiveGatewayError {
 
 fn local_live_error(error: CodexClientError, message: &'static str) -> LiveGatewayError {
     // 本地传输异常可能包含 URL 或代理上下文；客户端提示与现有安全诊断各自保留
-    if let Some(diagnostic) = super::failure::client_diagnostic(&error) {
+    if let Some(diagnostic) = super::failure::client_diagnostic(&error, false) {
         tracing::warn!(
             stage = diagnostic.stage(),
             code = diagnostic.code(),

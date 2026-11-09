@@ -561,9 +561,10 @@ pub(super) async fn create_response_attempt(
 
 pub(super) fn map_handshake_attempt_error(
     error: CodexHandshakeAttemptError,
+    account: &ProviderAccount,
 ) -> MappedProviderFailure {
     match error {
-        CodexHandshakeAttemptError::Client(error) => map_handshake_error(error),
+        CodexHandshakeAttemptError::Client(error) => map_handshake_error(error, account),
         CodexHandshakeAttemptError::Provider(failure) => *failure,
         CodexHandshakeAttemptError::Cancelled => MappedProviderFailure::plain(provider_error(
             ProviderErrorKind::Cancelled,
@@ -614,7 +615,7 @@ pub(super) async fn create_json_attempt(
             biased;
             _ = request.context.cancellation().cancelled() => Err(CodexHandshakeAttemptError::Cancelled),
             _ = request.context.deadline().wait() => Err(CodexHandshakeAttemptError::Timeout),
-            response = super::compact::collect_excel_compact(&request.client, excel, request_context) =>
+            response = super::compact::collect_excel_compact(&request.client, account, excel, request_context) =>
                 response.map_err(CodexHandshakeAttemptError::Provider),
         };
     }
@@ -635,6 +636,7 @@ pub(super) async fn create_json_attempt(
 pub(super) fn cold_json_response_stream(request: ColdJsonResponse) -> EventStream {
     Box::pin(async_stream::try_stream! {
         let allows_account_state_mutation = request.lease.allows_account_state_mutation();
+        let image_endpoint = matches!(request.endpoint_path, CODEX_IMAGE_GENERATIONS_PATH | CODEX_IMAGE_EDITS_PATH);
         let failure_context = OpenAiFailureContext {
             client: &request.client,
             selector: &request.selector,
@@ -643,6 +645,7 @@ pub(super) fn cold_json_response_stream(request: ColdJsonResponse) -> EventStrea
             cyber_policy_scope: None,
             is_diagnostic: request.lease.is_diagnostic(),
             allows_account_state_mutation,
+            image_endpoint,
             upstream_model: None,
         };
         let active_account = request.lease.account().clone();
@@ -681,7 +684,7 @@ pub(super) fn cold_json_response_stream(request: ColdJsonResponse) -> EventStrea
             );
         }
         let response = match response.map_err(|error| super::excel::classify_failure(
-            map_handshake_attempt_error(error), request.excel.is_some() || request.excel_image.is_some(),
+            map_handshake_attempt_error(error, &active_account), request.excel.is_some() || request.excel_image.is_some(),
         )) {
             Ok(response) => response,
             Err(mut failure) => {
@@ -740,6 +743,7 @@ pub(super) fn cold_json_response_stream(request: ColdJsonResponse) -> EventStrea
                 &request.quota,
                 &active_account,
                 &response.rate_limit_headers,
+                image_endpoint,
                 response.rate_limit_observed_at,
                 crate::credential::QuotaRefreshAuthority::ObserveAccess,
             )
@@ -775,7 +779,7 @@ pub(super) fn cold_json_response_stream(request: ColdJsonResponse) -> EventStrea
                 yield ProviderEvent::canonical(GatewayEvent::CalculatedCost(cost));
             }
         }
-        if matches!(request.endpoint_path, CODEX_IMAGE_GENERATIONS_PATH | CODEX_IMAGE_EDITS_PATH)
+        if image_endpoint
             && let Some((usage, cost)) = image_response_metering(&request.body, &response.body)
         {
             yield ProviderEvent::canonical(GatewayEvent::Usage(usage));
@@ -856,6 +860,7 @@ pub(super) fn cold_response_stream_once(response: ColdResponse) -> EventStream {
         let allows_account_state_mutation = lease.allows_account_state_mutation();
         let failure_context = OpenAiFailureContext {
             client: &client,
+            image_endpoint: false,
             selector: &selector,
             quota: &quota,
             response_origin: &response_origin,
@@ -927,7 +932,7 @@ pub(super) fn cold_response_stream_once(response: ColdResponse) -> EventStream {
                 error,
             );
         }
-        let response = response.map_err(|error| super::excel::classify_failure(map_handshake_attempt_error(error), request.excel.is_some()));
+        let response = response.map_err(|error| super::excel::classify_failure(map_handshake_attempt_error(error, &active_account), request.excel.is_some()));
         let response = match response {
             Ok(response) => response,
             Err(mut failure) => {

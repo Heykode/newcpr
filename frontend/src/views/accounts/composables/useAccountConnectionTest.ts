@@ -54,6 +54,7 @@ interface ConnectionTestLog {
   text: string
   tone: ConnectionTestLogTone
   detail: string
+  failureMessage?: string
 }
 
 interface ConnectionTestRequestPayload {
@@ -95,6 +96,7 @@ interface ConnectionTestFailureEvent {
   type: 'error'
   source?: ConnectionTestFailureSource
   gatewayErrorCode?: string
+  proxyHint?: string | null
   sendState?: ConnectionTestSendState | null
   error?: string
   providerErrorCode?: string | null
@@ -139,7 +141,7 @@ const CONNECTION_TEST_FAILURE_TEXT: Record<string, string> = {
 
 const CONNECTION_TEST_SOURCE_LABEL: Record<ConnectionTestFailureSource, string> = {
   gateway: '网关校验',
-  provider: 'Provider 本地准备',
+  provider: '发送前失败',
   upstream: '上游响应',
 }
 
@@ -153,18 +155,15 @@ function parseConnectionTestEvent(raw: string): ConnectionTestEvent | null {
 }
 
 function connectionTestFailureText(event: ConnectionTestFailureEvent) {
-  if (event.upstreamStatus === 401 || event.upstreamStatus === 403) {
-    return '账号登录已失效或被上游拒绝，请先刷新 Token；仍失败再重新授权'
-  }
-  if (event.upstreamStatus === 429) {
-    return '账号触发了上游限流，请稍后重试'
-  }
-  if (
-    event.upstreamStatus !== undefined
-    && event.upstreamStatus !== null
-    && event.upstreamStatus >= 500
-  ) {
-    return '上游服务暂时不可用，请稍后重试'
+  if (event.source === 'provider' && event.sendState === 'not_sent') {
+    switch (event.proxyHint) {
+      case 'invalid_configuration': return t('accounts.connectionTest.errors.proxyInvalid')
+      case 'unreachable': return t('accounts.connectionTest.errors.proxyUnreachable')
+      case 'tunnel_failed': return t('accounts.connectionTest.errors.proxyTunnelFailed')
+      case 'check_proxy': return t('accounts.connectionTest.errors.checkProxy')
+    }
+    if (event.gatewayErrorCode === 'upstream_unavailable')
+      return t('accounts.connectionTest.errors.notSent')
   }
   return event.gatewayErrorCode
     ? CONNECTION_TEST_FAILURE_TEXT[event.gatewayErrorCode] || '未分类错误'
@@ -179,6 +178,7 @@ function connectionTestFailureDiagnostics(event: ConnectionTestFailureEvent) {
   return {
     error: event.error ?? null,
     gatewayErrorCode: event.gatewayErrorCode ?? null,
+    proxyHint: event.proxyHint ?? null,
     sendState: event.sendState ?? null,
     upstreamStatus: event.upstreamStatus ?? null,
     providerErrorCode: event.providerErrorCode ?? null,
@@ -249,7 +249,7 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
     if (connectionTestStatus.value === 'error') {
       return {
         label: t('accounts.connectionTest.failed'),
-        description: t('accounts.connectionTest.failedDescription'),
+        description: connectionTestLogs.value.at(-1)?.failureMessage,
         icon: XCircle,
         badge: 'bg-cp-error-container text-cp-error-on-container',
         iconClass: 'text-cp-error',
@@ -382,8 +382,10 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
     message: string,
     detail?: unknown,
   ) {
-    connectionTestError.value = message
-    setConnectionTestLog(key, `${label}：${message}`, 'danger', detail)
+    connectionTestLogs.value.push({
+      ...connectionTestLogItem(key, label, 'danger', detail),
+      failureMessage: message,
+    })
     finishConnectionTest('error')
   }
 
@@ -394,7 +396,7 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
       return
     }
     if (event.type === 'request') {
-      setConnectionTestLog('request', '发起请求', 'info', connectionTestRequestText(event.payload))
+      setConnectionTestLog('request', '准备请求', 'info', connectionTestRequestText(event.payload))
       return
     }
     if (event.type === 'status' && event.text) {
