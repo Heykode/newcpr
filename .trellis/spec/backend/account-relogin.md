@@ -138,6 +138,16 @@ task cancellation and ordinary missing-entry/revision fences.
 - Persist `Pushing` before pool mutation. A crash or ambiguous failure becomes
   `Uncertain`, not an automatic retry. Library and pool commits have distinct owners;
   no distributed transaction or exactly-once claim is made.
+- Successful inference or diagnostic recovery uses the start time of that transport
+  attempt for the credential-state observation, carried through both streaming
+  completion paths. The store must atomically fence that time and credential revision:
+  a response started before a later authentication failure cannot clear it at completion
+  and suppress automatic relogin push. A fresh successful diagnostic after the failure
+  may still restore Ready. Retain disabled/replaced-account and relogin identity guards;
+  do not remove `needs_relogin` checks or add a verification request to every push.
+  This is a local correction to upstream's completion-time recovery, verified against
+  upstream `4bf1208`; it is not an upstream-provided relogin fix. Quota observations,
+  cooldown recovery and session-affinity ownership keep their separate existing rules.
 - A Store conflict is returned only after transaction rollback succeeds. It can restore
   `Ready` for bounded target revalidation/retry; failed rollback or unknown commit
   remains `Pushing`/`Uncertain`. Do not generalize this exception to all failures.

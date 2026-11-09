@@ -895,6 +895,9 @@ pub(super) fn cold_response_stream_once(response: ColdResponse) -> EventStream {
         );
         let request_transport_requirement = transport_requirement(&request);
         let trace = context.trace();
+        // Preserve the start of this transport attempt across streaming and replay.
+        // Completion time must not let an old success erase a newer auth failure.
+        let request_started_at = SystemTime::now();
         let response = create_response_attempt(
             &client,
             &request,
@@ -1377,11 +1380,12 @@ pub(super) fn cold_response_stream_once(response: ColdResponse) -> EventStream {
                 // 完成事件一旦交给下游，Core 可以立刻停止轮询 Provider stream；
                 // 在此之前持久化亲和关系，保证成功请求不会因流被提前 drop 而丢失绑定。
                 if lease.is_diagnostic() {
-                    selector.record_diagnostic_success(&active_account).await;
+                    selector.record_diagnostic_success(&active_account, request_started_at).await;
                 } else {
                     selector
                         .record_success_with_parent_binding(
                             &active_account,
+                            request_started_at,
                             session_affinity_key.as_ref().filter(|_| context.account_selection_policy().openai_account_affinity() != gateway_core::account::AccountAffinity::Preferred),
                             lease.affinity_expected_binding(),
                             lease.guardian_parent_record_key(),
@@ -1537,11 +1541,12 @@ pub(super) fn cold_response_stream_once(response: ColdResponse) -> EventStream {
         if allows_account_state_mutation && completed && terminal_failure.is_none() {
             // 同上：尾部 finish() 也可能产出 completed，亲和记录必须先于任何下游 yield。
             if lease.is_diagnostic() {
-                selector.record_diagnostic_success(&active_account).await;
+                selector.record_diagnostic_success(&active_account, request_started_at).await;
             } else {
                     selector
                         .record_success_with_parent_binding(
                         &active_account,
+                        request_started_at,
                         session_affinity_key.as_ref().filter(|_| context.account_selection_policy().openai_account_affinity() != gateway_core::account::AccountAffinity::Preferred),
                             lease.affinity_expected_binding(),
                         lease.guardian_parent_record_key(),

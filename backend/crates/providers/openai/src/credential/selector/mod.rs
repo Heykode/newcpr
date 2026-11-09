@@ -1742,11 +1742,13 @@ impl CodexCredentialSelector {
     pub async fn record_success(
         &self,
         account: &ProviderAccount,
+        request_started_at: SystemTime,
         session_affinity_key: Option<&ProviderSessionAffinityKey>,
         expected_affinity_account_id: &ProviderAccountId,
     ) {
         self.record_success_with_parent_binding(
             account,
+            request_started_at,
             session_affinity_key,
             &ProviderSessionAffinityBinding::legacy(expected_affinity_account_id.clone()),
             None,
@@ -1758,13 +1760,15 @@ impl CodexCredentialSelector {
     pub(crate) async fn record_success_with_parent_binding(
         &self,
         account: &ProviderAccount,
+        request_started_at: SystemTime,
         _session_affinity_key: Option<&ProviderSessionAffinityKey>,
         _expected_affinity_binding: &ProviderSessionAffinityBinding,
         guardian_parent_record_key: Option<&ProviderSessionAffinityKey>,
         session_binding_ttl: Duration,
     ) {
         if self.excel_auth_block(account).is_none() {
-            self.restore_recoverable_account_state(account, false).await;
+            self.restore_recoverable_account_state(account, request_started_at, false)
+                .await;
         }
         self.risk_recovery
             .lock()
@@ -1796,9 +1800,14 @@ impl CodexCredentialSelector {
         }
     }
 
-    pub async fn record_diagnostic_success(&self, account: &ProviderAccount) {
+    pub async fn record_diagnostic_success(
+        &self,
+        account: &ProviderAccount,
+        request_started_at: SystemTime,
+    ) {
         let block = self.excel_auth_block(account);
-        self.restore_recoverable_account_state(account, true).await;
+        self.restore_recoverable_account_state(account, request_started_at, true)
+            .await;
         if let Some(block) = block
             && let Ok(current) = self.current_account(account.id()).await
             && current.revision() == account.revision()
@@ -1815,6 +1824,7 @@ impl CodexCredentialSelector {
     async fn restore_recoverable_account_state(
         &self,
         account: &ProviderAccount,
+        request_started_at: SystemTime,
         allow_disabled: bool,
     ) {
         let Ok(current) = self.current_account(account.id()).await else {
@@ -1827,7 +1837,10 @@ impl CodexCredentialSelector {
         {
             return;
         }
-        let observed_at = SystemTime::now();
+        // A successful response only proves the credential worked when this attempt
+        // started. The store atomically rejects recovery over a later auth failure,
+        // even if that failure arrives after the account reload above.
+        let observed_at = request_started_at;
         if (allow_disabled || current.credential_state() != CredentialState::Ready)
             && let Err(error) = if allow_disabled {
                 self.repository
@@ -1845,15 +1858,22 @@ impl CodexCredentialSelector {
                     .await
             }
         {
-            tracing::warn!(
-                account_id = %account.id(),
-                error = %error,
-                "OpenAI credential recovery after successful upstream response failed"
-            );
+            if matches!(error, CredentialRepositoryError::RevisionConflict(_)) {
+                tracing::debug!(
+                    account_id = %account.id(),
+                    "Skipped OpenAI credential recovery after a newer account observation"
+                );
+            } else {
+                tracing::warn!(
+                    account_id = %account.id(),
+                    error = %error,
+                    "OpenAI credential recovery after successful upstream response failed"
+                );
+            }
         }
         if let Err(error) = self
             .quota
-            .record_successful_inference(&current, observed_at)
+            .record_successful_inference(&current, SystemTime::now())
             .await
         {
             tracing::warn!(

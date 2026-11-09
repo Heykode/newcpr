@@ -270,7 +270,9 @@ async fn excel_authentication_failure_preserves_existing_refresh_policy_and_fixe
         assert_eq!(updated.revision(), account.revision());
         assert_eq!(updated.responses_upstream(), account.responses_upstream());
         assert_eq!(updated.weight(), account.weight());
-        selector.record_success(&account, None, account.id()).await;
+        selector
+            .record_success(&account, SystemTime::now(), None, account.id())
+            .await;
         assert_eq!(
             store.account("acct_primary").unwrap().credential_state(),
             CredentialState::Expired
@@ -392,7 +394,9 @@ async fn excel_authentication_slow_write_is_bounded_and_diagnostic_can_recover()
     .await
     .unwrap();
     store.pause_state_write.store(false, Ordering::SeqCst);
-    selector.record_diagnostic_success(&account).await;
+    selector
+        .record_diagnostic_success(&account, SystemTime::now())
+        .await;
     let url = Url::parse("https://chatgpt.com/backend-api/codex/responses").unwrap();
     selector
         .select(&SelectCodexCredential {
@@ -862,7 +866,7 @@ async fn record_success_should_not_overwrite_a_newer_session_winner() {
         .expect("seed newer affinity");
 
     selector
-        .record_success(&first, Some(&key), first.id())
+        .record_success(&first, SystemTime::now(), Some(&key), first.id())
         .await;
 
     assert_eq!(
@@ -909,7 +913,12 @@ async fn selector_should_reuse_and_renew_the_account_bound_to_the_same_session()
         vec![Duration::from_secs(24 * 60 * 60)]
     );
     selector
-        .record_success(first.account(), Some(&key), first.account_id())
+        .record_success(
+            first.account(),
+            SystemTime::now(),
+            Some(&key),
+            first.account_id(),
+        )
         .await;
     assert_eq!(
         affinity.renewal_ttls(),
@@ -1067,7 +1076,12 @@ async fn strict_queue_disabled_migrates_busy_owner_before_send() {
         "migration is committed at admission before send"
     );
     selector
-        .record_success(&store.account("acct_first").unwrap(), Some(&key), &bound)
+        .record_success(
+            &store.account("acct_first").unwrap(),
+            SystemTime::now(),
+            Some(&key),
+            &bound,
+        )
         .await;
     assert_eq!(
         affinity.load(&provider, &key).await.unwrap(),
@@ -1624,7 +1638,7 @@ fn successful_upstream_response_recovers_non_quota_terminal_states() {
         let current = store.account("acct_primary").expect("stale account");
         let selector = selector(&store, Arc::new(TestLeaseCoordinator::default()));
 
-        block_on(selector.record_success(&current, None, current.id()));
+        block_on(selector.record_success(&current, SystemTime::now(), None, current.id()));
 
         assert_eq!(
             store
@@ -1633,6 +1647,59 @@ fn successful_upstream_response_recovers_non_quota_terminal_states() {
                 .credential_state(),
             CredentialState::Ready,
             "stale state {stale:?}",
+        );
+    }
+}
+
+#[tokio::test]
+async fn success_recovery_cannot_overwrite_failure_between_reload_and_state_write() {
+    use std::sync::atomic::Ordering;
+
+    for diagnostic in [false, true] {
+        let store = Arc::new(MemoryAccountStore::default());
+        create_account(&store, "acct_primary", "at-primary");
+        let account = store.account("acct_primary").unwrap();
+        persist_credential_state(&store, &account, CredentialState::Expired);
+        let started_at = SystemTime::now();
+        let selector = Arc::new(selector(&store, Arc::new(TestLeaseCoordinator::default())));
+        store.pause_state_write.store(true, Ordering::SeqCst);
+        let pending = tokio::spawn(async move {
+            if diagnostic {
+                selector
+                    .record_diagnostic_success(&account, started_at)
+                    .await;
+            } else {
+                selector
+                    .record_success(&account, started_at, None, account.id())
+                    .await;
+            }
+        });
+        tokio::time::timeout(Duration::from_secs(1), store.state_write_started.notified())
+            .await
+            .unwrap();
+        store.pause_state_write.store(false, Ordering::SeqCst);
+        let current = store.account("acct_primary").unwrap();
+        store
+            .apply_state_change(AccountStateChange {
+                account_id: current.id().clone(),
+                expected_revision: current.revision(),
+                credential_state: CredentialState::Expired,
+                observed_at: SystemTime::now(),
+                error_reason: Some(AccountErrorReason::CredentialExpired),
+                message: Some("token_revoked".to_owned()),
+            })
+            .await
+            .unwrap();
+        let expired = store.account("acct_primary").unwrap();
+        store.state_write_gate.notify_one();
+        tokio::time::timeout(Duration::from_secs(1), pending)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            store.account("acct_primary").unwrap(),
+            expired,
+            "diagnostic={diagnostic}"
         );
     }
 }
@@ -1665,7 +1732,9 @@ async fn diagnostic_success_clears_ready_errors_only_on_the_selected_account() {
         let other = store.account("acct_other").expect("other account");
         let selector = selector(&store, Arc::new(TestLeaseCoordinator::default()));
 
-        selector.record_diagnostic_success(&before).await;
+        selector
+            .record_diagnostic_success(&before, SystemTime::now())
+            .await;
 
         let after = store.account("acct_primary").expect("diagnosed account");
         assert_eq!(after.enabled(), enabled);
@@ -1698,7 +1767,9 @@ async fn diagnostic_success_cannot_overwrite_newer_credential_revision() {
     let current = store.account("acct_primary").expect("invalid account");
     let selector = selector(&store, Arc::new(TestLeaseCoordinator::default()));
 
-    selector.record_diagnostic_success(&before).await;
+    selector
+        .record_diagnostic_success(&before, SystemTime::now())
+        .await;
 
     assert_eq!(
         store.account("acct_primary").expect("fenced account"),
@@ -1976,7 +2047,7 @@ fn cloudflare_challenge_does_not_change_persisted_account_facts() {
             .credential_state(),
         CredentialState::Ready
     );
-    block_on(selector.record_success(lease.account(), None, lease.account_id()));
+    block_on(selector.record_success(lease.account(), SystemTime::now(), None, lease.account_id()));
 }
 
 #[test]
