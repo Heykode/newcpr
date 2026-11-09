@@ -1315,87 +1315,87 @@
     "path": "backend/crates/providers/xai/tests/transport/network.rs",
     "rule": "authenticated-url",
     "line": 36,
-    "file_sha256": "6a8b9cccfc9acf315cf31efd6756b32ec68550fe6c0c96668edf98ad384ea8f6",
+    "file_sha256": "abd6b19214ec525f98a58e2856f79916b2eac39162e4001e8efec8c3a5f18796",
     "line_sha256": "db5e5704b33f31cec217e126622734c6a1da9f478dfe6bfc7944197b592719ad",
     "reason": "Explicit synthetic proxy or local database fixture used by isolated tests, including URL rejection tests."
   },
   {
     "path": "backend/crates/providers/xai/tests/transport/network.rs",
     "rule": "non-example-ip",
-    "line": 850,
-    "file_sha256": "6a8b9cccfc9acf315cf31efd6756b32ec68550fe6c0c96668edf98ad384ea8f6",
+    "line": 845,
+    "file_sha256": "abd6b19214ec525f98a58e2856f79916b2eac39162e4001e8efec8c3a5f18796",
     "line_sha256": "2033d9097d789fb4eed2b21b5a01eb0145e10f75f2f8467ef1150acf7f925a5e",
     "reason": "Synthetic network-policy, forwarding or DNS resolution test; no deployment endpoint."
   },
   {
     "path": "backend/crates/providers/xai/tests/transport/network.rs",
     "rule": "non-example-ip",
-    "line": 851,
-    "file_sha256": "6a8b9cccfc9acf315cf31efd6756b32ec68550fe6c0c96668edf98ad384ea8f6",
+    "line": 846,
+    "file_sha256": "abd6b19214ec525f98a58e2856f79916b2eac39162e4001e8efec8c3a5f18796",
     "line_sha256": "29d81e2ff628a6d92cd9d90361016d7d15585af36dafbd01c39bc9085350ed6d",
     "reason": "Synthetic network-policy, forwarding or DNS resolution test; no deployment endpoint."
   },
   {
     "path": "backend/crates/providers/xai/tests/transport/network.rs",
     "rule": "non-example-ip",
-    "line": 878,
-    "file_sha256": "6a8b9cccfc9acf315cf31efd6756b32ec68550fe6c0c96668edf98ad384ea8f6",
+    "line": 873,
+    "file_sha256": "abd6b19214ec525f98a58e2856f79916b2eac39162e4001e8efec8c3a5f18796",
     "line_sha256": "633b87faae9403ebc883cd526be3f63fcba619f14b0f199b64ecd1c77037c672",
     "reason": "Synthetic network-policy, forwarding or DNS resolution test; no deployment endpoint."
   },
   {
     "path": "backend/crates/providers/xai/tests/transport/network.rs",
     "rule": "non-example-ip",
-    "line": 881,
-    "file_sha256": "6a8b9cccfc9acf315cf31efd6756b32ec68550fe6c0c96668edf98ad384ea8f6",
+    "line": 876,
+    "file_sha256": "abd6b19214ec525f98a58e2856f79916b2eac39162e4001e8efec8c3a5f18796",
     "line_sha256": "db277d270b9478e13bcedcff8464565c90b76cb95d4a3e7943c6c06d04a90c4a",
     "reason": "Synthetic network-policy, forwarding or DNS resolution test; no deployment endpoint."
   },
   {
     "path": "backend/crates/providers/xai/tests/transport/network.rs",
     "rule": "non-example-ip",
-    "line": 889,
-    "file_sha256": "6a8b9cccfc9acf315cf31efd6756b32ec68550fe6c0c96668edf98ad384ea8f6",
+    "line": 884,
+    "file_sha256": "abd6b19214ec525f98a58e2856f79916b2eac39162e4001e8efec8c3a5f18796",
     "line_sha256": "010fed8499bcc9f73dea3feb5c20bf0e285c1ea52f15accef256b827f6aaaf4a",
     "reason": "Synthetic network-policy, forwarding or DNS resolution test; no deployment endpoint."
   },
   {
     "path": "backend/crates/providers/xai/tests/transport/network.rs",
     "rule": "non-example-ip",
-    "line": 897,
-    "file_sha256": "6a8b9cccfc9acf315cf31efd6756b32ec68550fe6c0c96668edf98ad384ea8f6",
+    "line": 892,
+    "file_sha256": "abd6b19214ec525f98a58e2856f79916b2eac39162e4001e8efec8c3a5f18796",
     "line_sha256": "633b87faae9403ebc883cd526be3f63fcba619f14b0f199b64ecd1c77037c672",
     "reason": "Synthetic network-policy, forwarding or DNS resolution test; no deployment endpoint."
   },
   {
     "path": "backend/crates/providers/xai/tests/transport/network.rs",
     "rule": "non-example-ip",
-    "line": 900,
-    "file_sha256": "6a8b9cccfc9acf315cf31efd6756b32ec68550fe6c0c96668edf98ad384ea8f6",
+    "line": 895,
+    "file_sha256": "abd6b19214ec525f98a58e2856f79916b2eac39162e4001e8efec8c3a5f18796",
     "line_sha256": "e3bdf4aa928b4f907700a66d215a91a8151046a067eda3d2e0f19168abcedd0e",
     "reason": "Synthetic network-policy, forwarding or DNS resolution test; no deployment endpoint."
   },
   {
     "path": "backend/crates/providers/xai/tests/transport/network.rs",
     "rule": "non-example-ip",
-    "line": 901,
-    "file_sha256": "6a8b9cccfc9acf315cf31efd6756b32ec68550fe6c0c96668edf98ad384ea8f6",
+    "line": 896,
+    "file_sha256": "abd6b19214ec525f98a58e2856f79916b2eac39162e4001e8efec8c3a5f18796",
     "line_sha256": "005dca5fefcbc8e5d518b6c59d289c1d25f7d8ed10bfc7698b7b0bbd5e2c78f4",
     "reason": "Synthetic network-policy, forwarding or DNS resolution test; no deployment endpoint."
   },
   {
     "path": "backend/crates/providers/xai/tests/transport/network.rs",
     "rule": "non-example-ip",
-    "line": 914,
-    "file_sha256": "6a8b9cccfc9acf315cf31efd6756b32ec68550fe6c0c96668edf98ad384ea8f6",
+    "line": 909,
+    "file_sha256": "abd6b19214ec525f98a58e2856f79916b2eac39162e4001e8efec8c3a5f18796",
     "line_sha256": "a502ee022493b5e891be27fbf87aa830b1adb35f45aa03c5220ee21214c673d5",
     "reason": "Synthetic network-policy, forwarding or DNS resolution test; no deployment endpoint."
   },
   {
     "path": "backend/crates/providers/xai/tests/transport/network.rs",
     "rule": "non-example-ip",
-    "line": 924,
-    "file_sha256": "6a8b9cccfc9acf315cf31efd6756b32ec68550fe6c0c96668edf98ad384ea8f6",
+    "line": 919,
+    "file_sha256": "abd6b19214ec525f98a58e2856f79916b2eac39162e4001e8efec8c3a5f18796",
     "line_sha256": "9e479e1097600c03e5b02a059871972d553af67489633306a1ac5dbb3264de7c",
     "reason": "Synthetic network-policy, forwarding or DNS resolution test; no deployment endpoint."
   },
@@ -2614,5 +2614,93 @@
     "file_sha256": "c9e16d96b97ab6daf606f0c16829a361a79bccd5d7a50ff524307a7197ad747c",
     "line_sha256": "be871b5bb1fb717424afe768be0a94bd16324aa95d478d8be07e11d0ed234c75",
     "reason": "Manually re-reviewed the unchanged loopback configuration rejection fixture against HEAD after updating the OAuth integration test. The embedded password is synthetic parser input; this fixture never connects to a database."
+  },
+  {
+    "path": "backend/crates/providers/xai/tests/transport/network.rs",
+    "rule": "authenticated-url",
+    "line": 36,
+    "file_sha256": "6a8b9cccfc9acf315cf31efd6756b32ec68550fe6c0c96668edf98ad384ea8f6",
+    "line_sha256": "db5e5704b33f31cec217e126622734c6a1da9f478dfe6bfc7944197b592719ad",
+    "reason": "Explicit synthetic proxy or local database fixture used by isolated tests, including URL rejection tests."
+  },
+  {
+    "path": "backend/crates/providers/xai/tests/transport/network.rs",
+    "rule": "non-example-ip",
+    "line": 850,
+    "file_sha256": "6a8b9cccfc9acf315cf31efd6756b32ec68550fe6c0c96668edf98ad384ea8f6",
+    "line_sha256": "2033d9097d789fb4eed2b21b5a01eb0145e10f75f2f8467ef1150acf7f925a5e",
+    "reason": "Synthetic network-policy, forwarding or DNS resolution test; no deployment endpoint."
+  },
+  {
+    "path": "backend/crates/providers/xai/tests/transport/network.rs",
+    "rule": "non-example-ip",
+    "line": 851,
+    "file_sha256": "6a8b9cccfc9acf315cf31efd6756b32ec68550fe6c0c96668edf98ad384ea8f6",
+    "line_sha256": "29d81e2ff628a6d92cd9d90361016d7d15585af36dafbd01c39bc9085350ed6d",
+    "reason": "Synthetic network-policy, forwarding or DNS resolution test; no deployment endpoint."
+  },
+  {
+    "path": "backend/crates/providers/xai/tests/transport/network.rs",
+    "rule": "non-example-ip",
+    "line": 878,
+    "file_sha256": "6a8b9cccfc9acf315cf31efd6756b32ec68550fe6c0c96668edf98ad384ea8f6",
+    "line_sha256": "633b87faae9403ebc883cd526be3f63fcba619f14b0f199b64ecd1c77037c672",
+    "reason": "Synthetic network-policy, forwarding or DNS resolution test; no deployment endpoint."
+  },
+  {
+    "path": "backend/crates/providers/xai/tests/transport/network.rs",
+    "rule": "non-example-ip",
+    "line": 881,
+    "file_sha256": "6a8b9cccfc9acf315cf31efd6756b32ec68550fe6c0c96668edf98ad384ea8f6",
+    "line_sha256": "db277d270b9478e13bcedcff8464565c90b76cb95d4a3e7943c6c06d04a90c4a",
+    "reason": "Synthetic network-policy, forwarding or DNS resolution test; no deployment endpoint."
+  },
+  {
+    "path": "backend/crates/providers/xai/tests/transport/network.rs",
+    "rule": "non-example-ip",
+    "line": 889,
+    "file_sha256": "6a8b9cccfc9acf315cf31efd6756b32ec68550fe6c0c96668edf98ad384ea8f6",
+    "line_sha256": "010fed8499bcc9f73dea3feb5c20bf0e285c1ea52f15accef256b827f6aaaf4a",
+    "reason": "Synthetic network-policy, forwarding or DNS resolution test; no deployment endpoint."
+  },
+  {
+    "path": "backend/crates/providers/xai/tests/transport/network.rs",
+    "rule": "non-example-ip",
+    "line": 897,
+    "file_sha256": "6a8b9cccfc9acf315cf31efd6756b32ec68550fe6c0c96668edf98ad384ea8f6",
+    "line_sha256": "633b87faae9403ebc883cd526be3f63fcba619f14b0f199b64ecd1c77037c672",
+    "reason": "Synthetic network-policy, forwarding or DNS resolution test; no deployment endpoint."
+  },
+  {
+    "path": "backend/crates/providers/xai/tests/transport/network.rs",
+    "rule": "non-example-ip",
+    "line": 900,
+    "file_sha256": "6a8b9cccfc9acf315cf31efd6756b32ec68550fe6c0c96668edf98ad384ea8f6",
+    "line_sha256": "e3bdf4aa928b4f907700a66d215a91a8151046a067eda3d2e0f19168abcedd0e",
+    "reason": "Synthetic network-policy, forwarding or DNS resolution test; no deployment endpoint."
+  },
+  {
+    "path": "backend/crates/providers/xai/tests/transport/network.rs",
+    "rule": "non-example-ip",
+    "line": 901,
+    "file_sha256": "6a8b9cccfc9acf315cf31efd6756b32ec68550fe6c0c96668edf98ad384ea8f6",
+    "line_sha256": "005dca5fefcbc8e5d518b6c59d289c1d25f7d8ed10bfc7698b7b0bbd5e2c78f4",
+    "reason": "Synthetic network-policy, forwarding or DNS resolution test; no deployment endpoint."
+  },
+  {
+    "path": "backend/crates/providers/xai/tests/transport/network.rs",
+    "rule": "non-example-ip",
+    "line": 914,
+    "file_sha256": "6a8b9cccfc9acf315cf31efd6756b32ec68550fe6c0c96668edf98ad384ea8f6",
+    "line_sha256": "a502ee022493b5e891be27fbf87aa830b1adb35f45aa03c5220ee21214c673d5",
+    "reason": "Synthetic network-policy, forwarding or DNS resolution test; no deployment endpoint."
+  },
+  {
+    "path": "backend/crates/providers/xai/tests/transport/network.rs",
+    "rule": "non-example-ip",
+    "line": 924,
+    "file_sha256": "6a8b9cccfc9acf315cf31efd6756b32ec68550fe6c0c96668edf98ad384ea8f6",
+    "line_sha256": "9e479e1097600c03e5b02a059871972d553af67489633306a1ac5dbb3264de7c",
+    "reason": "Synthetic network-policy, forwarding or DNS resolution test; no deployment endpoint."
   }
 ]
