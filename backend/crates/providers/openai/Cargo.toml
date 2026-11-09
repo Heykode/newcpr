@@ -27,7 +27,7 @@ imagesize = "=0.14.0"
 # TLS 依赖按官方 Core 锁文件固定，包含用于约束传递依赖的直接声明。
 # 升级前须重复采样 ClientHello，核对算法、扩展集合及排序约束、key_share 与 ALPN。
 aws-lc-rs = "=1.18.1"
-hyper = { version = "=1.11.1", default-features = false }
+hyper = { version = "=1.12.0", default-features = false }
 hyper-rustls = "=0.27.7"
 hyper-util = { version = "0.1.20", features = ["client-legacy", "http1", "tokio"] }
 # Pin the vendored Linux native-tls backend independently of system OpenSSL.
