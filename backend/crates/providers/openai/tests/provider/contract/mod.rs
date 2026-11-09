@@ -7557,6 +7557,112 @@ async fn quota_limited_account_diagnostic_uses_upstream() {
 }
 
 #[tokio::test]
+async fn late_success_cannot_clear_credential_failure_observed_after_request_started() {
+    use gateway_core::account::AccountStateChange;
+
+    for diagnostic in [false, true] {
+        let store = Arc::new(MemoryAccountStore::default());
+        let account_id = "acct_provider_contract";
+        create_account(&store, account_id).await;
+        let before = store.account(account_id).expect("account");
+        let (base_url, release, started, server) = paused_chunked_sse_server(
+            concat!(
+                "event: response.created\n",
+                "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_scope_capture\",\"model\":\"gpt-5.4\"}}\n\n"
+            ).to_owned(),
+            CAPTURE_COMPLETED_SSE.to_owned(),
+        ).await;
+        let provider = provider_with_base_url(&store, base_url);
+        let attempt = if diagnostic {
+            diagnostic_context("req_late_success", account_id)
+        } else {
+            context("req_late_success", CancellationToken::new())
+        };
+        let completion = tokio::spawn(async move {
+            let mut stream = provider
+                .execute(
+                    planned_request("openai", http_generate_operation()),
+                    attempt,
+                )
+                .await
+                .expect("prepare request");
+            let mut completed = false;
+            while let Some(event) = stream.next().await {
+                completed |= event
+                    .expect("old request still succeeds")
+                    .canonical_facts()
+                    .iter()
+                    .any(|fact| matches!(fact, GatewayEvent::Completed(_)));
+            }
+            assert!(completed);
+        });
+        timeout(Duration::from_secs(5), started)
+            .await
+            .unwrap()
+            .unwrap();
+        store
+            .apply_state_change(AccountStateChange {
+                account_id: before.id().clone(),
+                expected_revision: before.revision(),
+                credential_state: CredentialState::Expired,
+                observed_at: SystemTime::now(),
+                error_reason: Some(AccountErrorReason::CredentialExpired),
+                message: Some("token_revoked".to_owned()),
+            })
+            .await
+            .expect("record a concurrent credential rejection");
+        let expired = store.account(account_id).expect("expired account");
+        release.send(()).expect("release old successful response");
+        timeout(Duration::from_secs(5), completion)
+            .await
+            .unwrap()
+            .unwrap();
+        server.await.unwrap();
+        assert_eq!(
+            store.account(account_id).unwrap(),
+            expired,
+            "diagnostic={diagnostic}: a late success must not suppress automatic relogin"
+        );
+
+        // A new probe issued after the rejection is valid recovery evidence.
+        let probe_server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/codex/responses"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_raw(
+                    format!("event: response.created\ndata: {{\"type\":\"response.created\",\"response\":{{\"id\":\"resp_scope_capture\",\"model\":\"gpt-5.4\"}}}}\n\n{CAPTURE_COMPLETED_SSE}"),
+                    "text/event-stream",
+                ),
+            )
+            .expect(1)
+            .mount(&probe_server)
+            .await;
+        let mut probe = provider_with_base_url(&store, probe_server.uri())
+            .execute(
+                planned_request("openai", http_generate_operation()),
+                diagnostic_context("req_fresh_recovery", account_id),
+            )
+            .await
+            .expect("prepare fresh recovery probe");
+        let mut completed = false;
+        while let Some(event) = probe.next().await {
+            completed |= event
+                .expect("fresh recovery succeeds")
+                .canonical_facts()
+                .iter()
+                .any(|fact| matches!(fact, GatewayEvent::Completed(_)));
+        }
+        assert!(completed);
+        let recovered = store.account(account_id).unwrap();
+        assert_eq!(recovered.credential_state(), CredentialState::Ready);
+        assert_eq!(recovered.last_error_reason(), None);
+        assert_eq!(recovered.last_error_message(), None);
+        assert_eq!(recovered.revision(), before.revision());
+        assert_eq!(recovered.enabled(), before.enabled());
+    }
+}
+
+#[tokio::test]
 async fn successful_response_with_full_subscription_blocks_subsequent_requests() {
     let store = Arc::new(MemoryAccountStore::default());
     let account_id = "acct_success_exhausted";
