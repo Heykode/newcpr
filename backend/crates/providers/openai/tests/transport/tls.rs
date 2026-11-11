@@ -1,4 +1,6 @@
 use std::collections::BTreeMap;
+use std::path::Path;
+use std::process::{Command, Stdio};
 
 use bytes::{Buf as _, Bytes};
 
@@ -688,4 +690,206 @@ fn u16_values(mut bytes: Bytes) -> Vec<u16> {
         values.push(bytes.get_u16());
     }
     values
+}
+
+const CASE_ENV: &str = "CODEX_PROXY_TEST_HTTP_CLIENT_HELLO";
+const CASE_COMPLETED: &str = "http-tls-client-hello-case-completed";
+const REFERENCE_ENV: &str = "CODEX_PROXY_TEST_REFERENCE_BINARY";
+
+#[test]
+#[ignore = "requires CODEX_PROXY_TEST_REFERENCE_BINARY pointing to the official Codex executable"]
+fn client_hellos_should_match_the_official_binary_on_this_platform() {
+    let reference = std::env::var_os(REFERENCE_ENV)
+        .map(std::path::PathBuf::from)
+        .expect("set CODEX_PROXY_TEST_REFERENCE_BINARY to the official Codex executable")
+        .canonicalize()
+        .expect("official Codex executable path");
+    if let Ok(case) = std::env::var(CASE_ENV) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            for sample in 0..3 {
+                let mut expected = capture_official_hello(&reference, case == "websocket").await;
+                let mut actual = if case == "websocket" {
+                    capture_websocket_hello().await
+                } else {
+                    capture_http_hello(provider_openai::transport::build_reqwest_client().unwrap())
+                        .await
+                };
+                // rustls 随机排列扩展，其他字段及各自列表的顺序仍逐项核对
+                if case != "native" {
+                    expected.extensions.sort_unstable();
+                    actual.extensions.sort_unstable();
+                }
+                assert_eq!(actual, expected, "{case} ClientHello sample {sample}");
+            }
+        });
+        println!("\n{CASE_COMPLETED}");
+        return;
+    }
+
+    let version = Command::new(&reference)
+        .arg("--version")
+        .output()
+        .expect("read official Codex version");
+    assert!(version.status.success());
+    println!(
+        "TLS reference: {} on {}-{}",
+        String::from_utf8_lossy(&version.stdout).trim(),
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+    );
+    run_isolated_cases(
+        "transport::tls::client_hellos_should_match_the_official_binary_on_this_platform",
+        &["native", "custom-ca", "websocket"],
+    );
+}
+
+fn run_isolated_cases(test_name: &str, cases: &[&str]) {
+    // Cargo 运行测试时可能注入 SSL_CERT_FILE，生产代码会把它视作自定义 CA 并切到 rustls；
+    // 因此在清理相关环境变量的子进程里验证默认路径
+    let current_exe = std::env::current_exe().expect("current test binary path");
+    let directory = tempfile::tempdir().unwrap();
+    let ca_path = directory.path().join("ca.pem");
+    std::fs::write(
+        &ca_path,
+        super::native_tls::identity().cert.to_pem().unwrap(),
+    )
+    .unwrap();
+    for case in cases {
+        let mut command = Command::new(&current_exe);
+        command
+            .arg("--exact")
+            .arg(test_name)
+            .arg("--include-ignored")
+            .arg("--nocapture")
+            .env(CASE_ENV, case)
+            .env_remove(provider_openai::transport::tls::CODEX_CA_CERT_ENV)
+            .env_remove(provider_openai::transport::tls::SSL_CERT_FILE_ENV);
+        if *case == "custom-ca" {
+            command.env(provider_openai::transport::tls::CODEX_CA_CERT_ENV, &ca_path);
+        }
+        let output = command.output().expect("run isolated TLS ClientHello case");
+        assert!(
+            output.status.success(),
+            "isolated {case} TLS ClientHello case failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert_eq!(
+            stdout
+                .lines()
+                .filter(|line| *line == CASE_COMPLETED)
+                .count(),
+            1,
+            "isolated {case} TLS ClientHello case did not complete exactly once\nstdout:\n{stdout}"
+        );
+    }
+}
+
+async fn capture_official_hello(reference: &Path, websocket: bool) -> ClientHello {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!(
+        "https://localhost:{}/v1",
+        listener.local_addr().unwrap().port()
+    );
+    let directory = tempfile::tempdir().unwrap();
+    // 官方进程只访问本机采集端点，握手后即终止，认证使用无效测试值
+    let mut command = tokio::process::Command::new(reference);
+    command
+        .args([
+            "exec",
+            "--ignore-user-config",
+            "--ignore-rules",
+            "--ephemeral",
+            "--skip-git-repo-check",
+            "--sandbox",
+            "read-only",
+            "--json",
+            "--model",
+            "tls-probe",
+        ])
+        .current_dir(directory.path())
+        .env("CPR_TLS_PROBE_API_KEY", "test-local-handshake-only")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
+    for name in [
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "all_proxy",
+    ] {
+        command.env_remove(name);
+    }
+    for setting in [
+        "model_provider=\"cpr_tls_probe\"".to_owned(),
+        "model_providers.cpr_tls_probe.name=\"CPR TLS Probe\"".to_owned(),
+        format!("model_providers.cpr_tls_probe.base_url=\"{endpoint}\""),
+        "model_providers.cpr_tls_probe.env_key=\"CPR_TLS_PROBE_API_KEY\"".to_owned(),
+        "model_providers.cpr_tls_probe.wire_api=\"responses\"".to_owned(),
+        format!("model_providers.cpr_tls_probe.supports_websockets={websocket}"),
+        "model_providers.cpr_tls_probe.request_max_retries=0".to_owned(),
+        "model_providers.cpr_tls_probe.stream_max_retries=0".to_owned(),
+        "project_doc_max_bytes=0".to_owned(),
+    ] {
+        command.args(["--config", &setting]);
+    }
+    let mut child = command
+        .arg("TLS handshake capture")
+        .spawn()
+        .expect("start official Codex TLS reference");
+    let hello = timeout(Duration::from_secs(30), read_client_hello(listener)).await;
+    let _ = child.kill().await;
+    child
+        .wait()
+        .await
+        .expect("reap official Codex TLS reference");
+    hello.expect("official Codex ClientHello within timeout")
+}
+
+async fn capture_http_hello(client: reqwest::Client) -> ClientHello {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!(
+        "https://localhost:{}/",
+        listener.local_addr().unwrap().port()
+    );
+    let (hello, response) = timeout(Duration::from_secs(10), async {
+        tokio::join!(read_client_hello(listener), client.get(url).send())
+    })
+    .await
+    .expect("HTTP ClientHello within timeout");
+    assert!(
+        response.is_err(),
+        "capture endpoint rejects TLS after ClientHello"
+    );
+    hello
+}
+
+async fn capture_websocket_hello() -> ClientHello {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("wss://localhost:{}/", listener.local_addr().unwrap().port());
+    let connector =
+        provider_openai::transport::tls::maybe_build_rustls_client_config_with_custom_ca()
+            .unwrap()
+            .map(tokio_tungstenite::Connector::Rustls);
+    let (hello, response) = timeout(Duration::from_secs(10), async {
+        tokio::join!(
+            read_client_hello(listener),
+            tokio_tungstenite::connect_async_tls_with_config(url, None, false, connector)
+        )
+    })
+    .await
+    .expect("WebSocket ClientHello within timeout");
+    assert!(
+        response.is_err(),
+        "capture endpoint rejects TLS after ClientHello"
+    );
+    hello
 }

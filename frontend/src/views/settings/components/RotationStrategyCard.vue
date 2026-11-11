@@ -8,6 +8,7 @@ import BaseCard from '@/components/base/BaseCard.vue'
 import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseSwitch from '@/components/base/BaseSwitch.vue'
+import HelpPopover from '@/components/HelpPopover.vue'
 import { t } from '@/i18n'
 
 type RotationOption = (typeof rotationOptions)[number]
@@ -21,12 +22,12 @@ defineProps<{
 const model = defineModel<RotationStrategy | ''>({ required: true })
 const smart = defineModel<SmartSchedulingConfig>('smartScheduling', { required: true })
 const weights = [
-  { key: 'loadWeight', label: '负载权重' },
-  { key: 'quotaWeight', label: '剩余额度权重' },
-  { key: 'healthWeight', label: '健康权重' },
-  { key: 'latencyWeight', label: '首输出延迟权重' },
-  { key: 'resetWeight', label: '额度重置权重' },
-  { key: 'queueWeight', label: '排队压力权重' },
+  { key: 'loadWeight', label: '负载权重', help: 'loadHelp' },
+  { key: 'quotaWeight', label: '剩余额度权重', help: 'quotaHelp' },
+  { key: 'healthWeight', label: '健康权重', help: 'healthHelp' },
+  { key: 'latencyWeight', label: '首输出延迟权重', help: 'latencyHelp' },
+  { key: 'resetWeight', label: '额度重置权重', help: 'resetHelp' },
+  { key: 'queueWeight', label: '排队压力权重', help: 'queueHelp' },
 ] as const
 function setWeight(key: typeof weights[number]['key'], value: string) {
   smart.value = { ...smart.value, [key]: value.trim() === '' ? Number.NaN : Number(value) }
@@ -83,6 +84,9 @@ function setWeight(key: typeof weights[number]['key'], value: string) {
       </div>
       <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         <BaseFormItem v-for="weight in weights" :key="weight.key" :label="weight.label">
+          <template #label-extra>
+            <HelpPopover :label="t('settings.scheduling.about', { label: weight.label })" :content="t(`settings.scheduling.weights.${weight.help}`)" />
+          </template>
           <BaseInput
             :model-value="Number.isFinite(smart[weight.key]) ? String(smart[weight.key]) : ''"
             :aria-label="weight.label"

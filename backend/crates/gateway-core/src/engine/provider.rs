@@ -571,12 +571,8 @@ pub struct ProviderRequest {
 pub struct ProviderRequestObservation {
     /// 独立 Provider 端点声明的请求模型，仅用于观测，不参与文本模型目录路由。
     pub requested_model: Option<PublicModelId>,
-    /// 客户端原始请求中的推理强度。
-    pub reasoning_effort: Option<String>,
-    pub reasoning_preset: Option<String>,
-    pub request_kind: Option<String>,
-    pub subagent_kind: Option<String>,
-    pub compact: bool,
+    /// 所属 Provider 已核实续接会话的旧配置，当前协议决定是否继承。
+    pub previous_reasoning_effort_override: Option<String>,
     pub continuation: ContinuationRequestObservation,
 }
 

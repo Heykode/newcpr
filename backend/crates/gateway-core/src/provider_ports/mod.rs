@@ -258,9 +258,15 @@ impl ProviderSchedulingLeaseRequest {
 }
 
 /// Lease 生命周期由具体 Store guard 管理，Provider 只能持有。
-pub trait ProviderLeaseGuard: Send + Sync + 'static {}
+pub trait ProviderLeaseGuard: Send + Sync + 'static {
+    fn release(self: Box<Self>) -> BoxFuture<'static, Result<(), ProviderStoreError>>;
+}
 
-impl<T> ProviderLeaseGuard for T where T: Send + Sync + 'static {}
+impl ProviderLeaseGuard for () {
+    fn release(self: Box<Self>) -> BoxFuture<'static, Result<(), ProviderStoreError>> {
+        Box::pin(async { Ok(()) })
+    }
+}
 
 pub enum ProviderLeaseAcquisition {
     Acquired(Box<dyn ProviderLeaseGuard>),
@@ -584,8 +590,51 @@ impl fmt::Debug for ProviderSessionAffinityBinding {
     }
 }
 
+/// 发送前核对的会话版本。绑定由调用方构造，以保留本地租约的 generation 合同。
+#[derive(Clone, Copy)]
+pub struct ProviderSessionClaim<'a> {
+    pub key: &'a ProviderSessionAffinityKey,
+    pub expected: Option<&'a ProviderSessionAffinityBinding>,
+    pub binding: &'a ProviderSessionAffinityBinding,
+    pub ttl: Duration,
+}
+
+/// 会话绑定与轮询位置在成功取得账号租约后一起提交。
+#[derive(Clone, Copy)]
+pub enum ProviderAccountAdmission<'a> {
+    Session(ProviderSessionClaim<'a>),
+    RoundRobin {
+        client_key: &'a ClientApiKeyId,
+        cursor: u64,
+        session: Option<ProviderSessionClaim<'a>>,
+    },
+}
+
+impl<'a> ProviderAccountAdmission<'a> {
+    #[must_use]
+    pub const fn session(self) -> Option<ProviderSessionClaim<'a>> {
+        match self {
+            Self::Session(session) => Some(session),
+            Self::RoundRobin { session, .. } => session,
+        }
+    }
+}
+
 /// 可丢失的会话到账号偏好；Provider 负责先把原始会话标识哈希为不透明键。
 pub trait ProviderSessionAffinityPort: Send + Sync {
+    fn round_robin_cursor<'a>(
+        &'a self,
+        provider: &'a ProviderKind,
+        client_key: &'a ClientApiKeyId,
+    ) -> BoxFuture<'a, Result<u64, ProviderStoreError>>;
+
+    /// 冲突时不续期、不推进；调用方必须等待租约释放后重选。
+    fn admit_account<'a>(
+        &'a self,
+        provider: &'a ProviderKind,
+        admission: ProviderAccountAdmission<'a>,
+    ) -> BoxFuture<'a, Result<bool, ProviderStoreError>>;
+
     /// Atomically admit against the exact observed generation (including absence).
     /// A conflict neither changes the owner nor renews its TTL.
     fn admit_binding<'a>(

@@ -3,9 +3,11 @@
 use std::time::Duration;
 
 use gateway_core::account::ProviderAccountId;
+use gateway_core::policy::ClientApiKeyId;
 use gateway_core::provider_ports::{
-    BindingToken, ProviderSessionAffinityBinding, ProviderSessionAffinityKey,
-    ProviderSessionAffinityPort, ProviderSessionAlias, ProviderStoreError, ProviderStoreErrorKind,
+    BindingToken, ProviderAccountAdmission, ProviderSessionAffinityBinding,
+    ProviderSessionAffinityKey, ProviderSessionAffinityPort, ProviderSessionAlias,
+    ProviderSessionClaim, ProviderStoreError, ProviderStoreErrorKind,
 };
 use gateway_core::routing::ProviderKind;
 use redis::aio::ConnectionManager;
@@ -15,14 +17,16 @@ use crate::StoreResult;
 
 use super::{namespace, resource_fingerprint};
 
-const ADMIT_BINDING_SCRIPT: &str = r#"
-local current = redis.call('GET', KEYS[1])
-if (not current and ARGV[1] == '') or current == ARGV[1]
-   or (ARGV[4] ~= '' and current == ARGV[4]) then
-  redis.call('PSETEX', KEYS[1], tonumber(ARGV[3]), ARGV[2])
-  return 1
-end
-return 0
+const CURSOR_TTL_MILLIS: u64 = 24 * 60 * 60 * 1000;
+
+// 先比较全部快照再写入；失去首绑或轮询位置的请求不能续期或消耗名额
+const ADMIT_ACCOUNT_SCRIPT: &str = r#"
+local current = ARGV[2] ~= '' and (redis.call('GET', KEYS[1]) or '') or ''
+if ARGV[2] ~= '' and current ~= ARGV[1] and not (ARGV[7] ~= '' and current == ARGV[7]) then return 0 end
+if ARGV[4] ~= '' and (redis.call('GET', KEYS[#KEYS]) or '0') ~= ARGV[4] then return 0 end
+if ARGV[2] ~= '' then redis.call('PSETEX', KEYS[1], ARGV[3], ARGV[2]) end
+if ARGV[4] ~= '' then redis.call('PSETEX', KEYS[#KEYS], ARGV[6], ARGV[5]) end
+return 1
 "#;
 
 const CLAIM_OR_LOAD_SCRIPT: &str = r#"
@@ -112,6 +116,15 @@ impl RedisProviderSessionAffinityRepository {
         })
     }
 
+    fn cursor_key(
+        &self,
+        provider: &ProviderKind,
+        client_key: &ClientApiKeyId,
+    ) -> Result<String, ProviderStoreError> {
+        super::scheduling_cursor_key(&self.namespace, client_key, provider, "session-cursor")
+            .map_err(|_| provider_invalid("encode provider round robin cursor key"))
+    }
+
     fn key(
         &self,
         provider_kind: &ProviderKind,
@@ -158,15 +171,6 @@ impl ProviderSessionAffinityPort for RedisProviderSessionAffinityRepository {
         Result<Option<ProviderSessionAffinityBinding>, ProviderStoreError>,
     > {
         Box::pin(async move {
-            let ttl_millis = session_affinity_ttl_millis(ttl)?;
-            let expected_raw = expected
-                .map(encode_binding)
-                .transpose()?
-                .unwrap_or_default();
-            // Upgrades may encounter both the original raw ID and the later JSON legacy binding.
-            let expected_legacy = expected
-                .filter(|binding| binding.token().expose_to_store() == "legacy")
-                .map_or("", |binding| binding.account_id().as_str());
             // 同账号命中仅续期；初次认领及换号生成新版本
             let binding = match expected.filter(|binding| {
                 binding.account_id() == account_id && binding.token().expose_to_store() != "legacy"
@@ -177,18 +181,87 @@ impl ProviderSessionAffinityPort for RedisProviderSessionAffinityRepository {
                     BindingToken::generate(),
                 ),
             };
-            let applied = redis::Script::new(ADMIT_BINDING_SCRIPT)
-                .key(self.key(provider_kind, key)?)
-                .arg(expected_raw)
-                .arg(encode_binding(&binding)?)
-                .arg(ttl_millis)
-                .arg(expected_legacy)
-                .invoke_async::<bool>(&mut self.connection.clone())
+            let applied = self
+                .admit_account(
+                    provider_kind,
+                    ProviderAccountAdmission::Session(ProviderSessionClaim {
+                        key,
+                        expected,
+                        binding: &binding,
+                        ttl,
+                    }),
+                )
+                .await?;
+            Ok(applied.then_some(binding))
+        })
+    }
+
+    fn round_robin_cursor<'a>(
+        &'a self,
+        provider: &'a ProviderKind,
+        client_key: &'a ClientApiKeyId,
+    ) -> futures::future::BoxFuture<'a, Result<u64, ProviderStoreError>> {
+        Box::pin(async move {
+            let key = self.cursor_key(provider, client_key)?;
+            redis::cmd("GET")
+                .arg(key)
+                .query_async::<Option<u64>>(&mut self.connection.clone())
+                .await
+                .map(Option::unwrap_or_default)
+                .map_err(|source| {
+                    provider_unavailable("read round robin cursor").with_source(source)
+                })
+        })
+    }
+
+    fn admit_account<'a>(
+        &'a self,
+        provider: &'a ProviderKind,
+        admission: ProviderAccountAdmission<'a>,
+    ) -> futures::future::BoxFuture<'a, Result<bool, ProviderStoreError>> {
+        Box::pin(async move {
+            let script = redis::Script::new(ADMIT_ACCOUNT_SCRIPT);
+            let mut invocation = script.prepare_invoke();
+            if let Some(claim) = admission.session() {
+                invocation
+                    .key(self.key(provider, claim.key)?)
+                    .arg(
+                        claim
+                            .expected
+                            .map(encode_binding)
+                            .transpose()?
+                            .unwrap_or_default(),
+                    )
+                    .arg(encode_binding(claim.binding)?)
+                    .arg(session_affinity_ttl_millis(claim.ttl)?);
+            } else {
+                invocation.arg("").arg("").arg(0);
+            }
+            if let ProviderAccountAdmission::RoundRobin {
+                client_key, cursor, ..
+            } = admission
+            {
+                invocation
+                    .key(self.cursor_key(provider, client_key)?)
+                    .arg(cursor)
+                    .arg(cursor.wrapping_add(1))
+                    .arg(CURSOR_TTL_MILLIS);
+            } else {
+                invocation.arg("").arg("").arg(0);
+            }
+            invocation.arg(
+                admission
+                    .session()
+                    .and_then(|claim| claim.expected)
+                    .filter(|binding| binding.token().expose_to_store() == "legacy")
+                    .map_or("", |binding| binding.account_id().as_str()),
+            );
+            invocation
+                .invoke_async(&mut self.connection.clone())
                 .await
                 .map_err(|source| {
-                    provider_unavailable("admit provider session binding").with_source(source)
-                })?;
-            Ok(applied.then_some(binding))
+                    provider_unavailable("admit provider account").with_source(source)
+                })
         })
     }
 

@@ -63,11 +63,14 @@ Web只展示两个账号等待输入，Key队列仍独立。旧四项仅接受�
 | --- | --- |
 | 请求 tuning、排序策略、请求间隔、可选显式总截止 | 账号存在性、enabled、凭据状态/到期、额度、cooldown、模型支持观测 |
 | `FrozenAccountScope`、required/native owner、Core 排除集 | Provider 会话排除状态、Redis `in_flight`、live 容量及 publication revision |
-| 当前选择的 Universe 和 RR cursor | 返回凭据前的完整账号事实及 runtime credential revision |
+| 当前请求的 Universe | 返回凭据前的完整账号事实、runtime credential revision 及本次准入 RR cursor |
 
 - 分组/Key 配置修改遵循已有新请求生效语义；FrozenAccountScope 不是在途实时撤权系统。
   停用、删除、凭据和健康变化仍阻止新的发送，不能借冻结为已失格账号继续放行。
-- `load_state` 在选择开始读取一次；轮询用只读 `load_signals`，不推进 RR。
+- 执行信号沿 `load_state` / 只读 `load_signals` 读取；每次完整重选重新读取成功分配游标，读取不推进 RR。
+  只有尚未入队、立即取得槽且未命中亲和的 RoundRobin 分配，才原子提交游标和绑定。
+  已入队晋升及排队中找到其他空闲账号不消耗轮询位置；入队前重查发现 Ready 仍属立即分配。
+  绑定/游标 CAS 冲突须等待执行租约实际释放后重选，不占用凭据快照冲突的三次预算。
   已入队后主要重读目标，完整池重载用于有界重选及成功前的容量观测。
 - live 容量必须使用既有 `AccountConcurrencyHandle`；缺失、失效或不可用时拒绝准入，
   不能回退到旧请求的更高上限或无限容量。该句柄含诊断所需账号，不替代资格检查。

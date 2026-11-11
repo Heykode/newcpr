@@ -113,6 +113,7 @@ impl<'a> WaitControl<'a> {
 
 struct WaitingSelection {
     snapshot_retries: u32,
+    assignment_cursor: Option<u64>,
     projection: projection::SelectionProjection,
     follows_root: bool,
     universe: BTreeSet<ProviderAccountId>,
@@ -432,6 +433,7 @@ impl CodexCredentialSelector {
         }
         let mut state = WaitingSelection {
             snapshot_retries: 0,
+            assignment_cursor: None,
             projection,
             follows_root,
             universe,
@@ -546,6 +548,16 @@ impl CodexCredentialSelector {
                     .then(|| state.affinity.preferred_account().cloned())
                     .flatten()
             });
+            state.assignment_cursor = control
+                .run(self.assignment_cursor(
+                    request,
+                    state.observed_affinity_binding.as_ref(),
+                    state.pinned.is_some(),
+                ))
+                .await?;
+            if let Some(cursor) = state.assignment_cursor {
+                state.context.round_robin_cursor = cursor;
+            }
             if state.projection.candidates.is_some() {
                 let limits = self.wait_limits()?;
                 let ready =
@@ -761,6 +773,7 @@ impl CodexCredentialSelector {
                                 &candidate.account,
                                 request,
                                 &mut state,
+                                true,
                             ))
                             .await?
                         {
@@ -1205,6 +1218,7 @@ impl CodexCredentialSelector {
                                 &candidate.account,
                                 request,
                                 state,
+                                true,
                             ))
                             .await?
                         {
@@ -1335,6 +1349,7 @@ impl CodexCredentialSelector {
                                             account,
                                             request,
                                             state,
+                                            false,
                                         )
                                         .await?
                                     {
@@ -1426,6 +1441,7 @@ impl CodexCredentialSelector {
                                         &candidate.account,
                                         request,
                                         state,
+                                        false,
                                     )
                                     .await?
                                 {
@@ -1483,6 +1499,7 @@ impl CodexCredentialSelector {
         acquired_account: &ProviderAccount,
         request: &CredentialSelectionInput<'_>,
         state: &mut WaitingSelection,
+        immediate: bool,
     ) -> Result<Option<CodexCredentialLease>, CredentialSelectionError> {
         let id = acquired_account.id();
         let Some(mut candidate) = self.reload_wait_target(id, request).await? else {
@@ -1663,10 +1680,13 @@ impl CodexCredentialSelector {
                 id,
                 state.pinned.is_some(),
                 None,
+                state
+                    .assignment_cursor
+                    .filter(|_| immediate && state.context.preferred_account.as_ref() != Some(id)),
             )
             .await?
         else {
-            drop(guard);
+            guard.release().await?;
             return Ok(None);
         };
         if state.follows_root

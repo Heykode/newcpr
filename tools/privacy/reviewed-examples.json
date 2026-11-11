@@ -2758,5 +2758,29 @@
     "file_sha256": "1f39f45463f431566c6396f8d821ef3c5ee874bda0f3652885f42c5bdd90458c",
     "line_sha256": "df037a1268a2fe553e47104c6feee56ef05f531030847103b46d3a4582695472",
     "reason": "Manually re-reviewed unchanged synthetic proxy authentication after account-scoped catalog fixture updates; the destination remains an ephemeral loopback listener."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/transport/tls.rs",
+    "rule": "gitleaks:cpr-api-key",
+    "line": 139,
+    "line_sha256": "0c9d5d94fc2f00276883de931fc26f0ced43e5e9a0b7730407fc6b6c869b1e4e",
+    "file_sha256": "fbea0db4945546d0e93aec6038eb188437a93dbdfa27b2e6b6b7e14671ef2092",
+    "reason": "Manually re-reviewed existing Rust key-epoch test function declaration after adding the official binary TLS reference test; not a credential."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/transport/tls.rs",
+    "rule": "authenticated-url",
+    "line": 242,
+    "line_sha256": "9aa104ea897354d3eb1e73d00d4b556f8ca5fb140acba2afb88e290615cc59ac",
+    "file_sha256": "fbea0db4945546d0e93aec6038eb188437a93dbdfa27b2e6b6b7e14671ef2092",
+    "reason": "Manually re-reviewed existing synthetic user/pass HTTPS proxy URL for an ephemeral loopback TLS fixture; no production endpoint or credential."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/transport/tls.rs",
+    "rule": "gitleaks:cpr-api-key",
+    "line": 340,
+    "line_sha256": "1a58dbbe57cd503aa12612f4280a27ea49f813090650ceaf6490c90504084620",
+    "file_sha256": "fbea0db4945546d0e93aec6038eb188437a93dbdfa27b2e6b6b7e14671ef2092",
+    "reason": "Manually re-reviewed existing Rust HTTP/WebSocket certificate test function declaration after adding the official binary TLS reference test; not a credential."
   }
 ]

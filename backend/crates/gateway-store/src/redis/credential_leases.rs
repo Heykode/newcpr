@@ -257,6 +257,20 @@ impl CredentialLeaseGuard {
     }
 }
 
+impl gateway_core::provider_ports::ProviderLeaseGuard for CredentialLeaseGuard {
+    fn release(self: Box<Self>) -> BoxFuture<'static, Result<(), ProviderStoreError>> {
+        Box::pin(async move {
+            (*self).release().await.map(|_| ()).map_err(|source| {
+                ProviderStoreError::new(
+                    ProviderStoreErrorKind::Unavailable,
+                    "release credential lease",
+                )
+                .with_source(source)
+            })
+        })
+    }
+}
+
 impl fmt::Debug for CredentialLeaseGuard {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter

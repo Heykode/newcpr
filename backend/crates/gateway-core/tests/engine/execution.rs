@@ -3446,3 +3446,179 @@ fn quality_stream_preserves_terminal_provider_kind() {
         Some(ProviderErrorKind::QuotaExhausted)
     );
 }
+
+#[test]
+fn request_observation_is_stable_across_candidate_order_and_respects_session_ownership() {
+    for order in [["alpha", "beta"], ["beta", "alpha"]] {
+        for (protocol, state_owner, body, expected) in [
+            (
+                "openai",
+                None,
+                json!({"reasoning":{"effort":"medium"}}),
+                "medium",
+            ),
+            (
+                "anthropic",
+                None,
+                json!({"output_config":{"effort":" Future-Level "}}),
+                "Future-Level",
+            ),
+            (
+                "openai",
+                Some("beta"),
+                json!({"previous_response_id":"resp_previous","reasoning":{"effort":"medium"}}),
+                "high",
+            ),
+            (
+                "openai",
+                Some("unavailable"),
+                json!({"previous_response_id":"resp_previous","reasoning":{"effort":"medium"}}),
+                "medium",
+            ),
+            (
+                "openai",
+                Some("beta"),
+                json!({"previous_response_id":"resp_previous","reasoning":{"effort":"medium"},"input":[{"type":"configuration_update","reasoning":{}}]}),
+                "medium",
+            ),
+        ] {
+            let kinds: Vec<_> = order
+                .iter()
+                .map(|name| ProviderKind::new(*name).unwrap())
+                .collect();
+            let directory = RuntimeAccountDirectory::new(
+                kinds
+                    .iter()
+                    .map(|kind| {
+                        (
+                            ProviderAccountId::new(format!("acct_{}", kind.as_str())).unwrap(),
+                            RuntimeAccount::new(kind.clone(), BTreeSet::new()),
+                        )
+                    })
+                    .collect(),
+            );
+            let snapshot = RuntimeSnapshot::new(
+                ConfigRevision::new(1).unwrap(),
+                AccountSelectionPolicy::new(
+                    RotationStrategy::Smart,
+                    std::num::NonZeroU32::MIN,
+                    Duration::ZERO,
+                ),
+                kinds.clone(),
+                kinds
+                    .into_iter()
+                    .map(|kind| {
+                        ProviderModel::new(
+                            kind,
+                            UpstreamModelId::new("gpt-start").unwrap(),
+                            ModelCapabilities::new(BTreeSet::from([OperationKind::Generate]), None)
+                                .with_upstream_feature_validation(),
+                        )
+                    })
+                    .collect(),
+                vec![ClientPolicy::new(
+                    ClientApiKeyId::new("key_start_test").unwrap(),
+                    PlaintextClientApiKey::new("sk_start_test").unwrap(),
+                    Arc::new(FrozenAccountScope::new(
+                        Arc::new(directory),
+                        ClientRoutingScope::all_accounts(),
+                    )),
+                    true,
+                    RateLimits::unlimited(),
+                )],
+            )
+            .unwrap();
+            let store = Arc::new(TrackingExecutionStore::default());
+            let service =
+                DefaultExecutionService::new(
+                    RuntimeSnapshotHandle::new(snapshot),
+                    store.clone(),
+                    ProviderRegistry::new(order.map(|name| {
+                        Arc::new(SessionObservationProvider(name)) as Arc<dyn Provider>
+                    }))
+                    .unwrap(),
+                    Arc::new(Admissions::default()),
+                    Arc::new(UnusedCircuits),
+                    Arc::new(UnusedContinuation),
+                    Arc::new(RecordingClientApiKeyUsage::default()),
+                );
+            let mut generate = GenerateRequest::from_protocol_payload(
+                ProtocolPayload::json_object(protocol, body.as_object().unwrap().clone())
+                    .unwrap()
+                    .with_context(serde_json::Map::from_iter([(
+                        "turn_metadata".to_owned(),
+                        json!("{\"request_kind\":\"review\"}"),
+                    )])),
+            );
+            if let Some(owner) = state_owner {
+                let state = gateway_core::operation::ProviderSessionState::new(
+                    owner,
+                    serde_json::Map::from_iter([("effort".to_owned(), json!("high"))]),
+                )
+                .unwrap();
+                generate = generate.with_provider_session_state(state);
+            }
+            let mut start = request(&service, ClientTransport::HttpJson);
+            start.operation = Operation::Generate(generate);
+            start.metadata.protocol = protocol.to_owned();
+            let started = block_on(service.start(start)).expect("request observation is recorded");
+            block_on(started.session.detach_finalize());
+            let requests = store.requests.lock().unwrap();
+            let recorded = requests.first().expect("logical request");
+            assert_eq!(
+                recorded.reasoning_effort.as_deref(),
+                Some(expected),
+                "order={order:?}, state={state_owner:?}"
+            );
+            assert_eq!(
+                recorded.request_kind.as_deref(),
+                (protocol == "openai").then_some("review")
+            );
+        }
+    }
+}
+
+struct SessionObservationProvider(&'static str);
+
+#[async_trait]
+impl Provider for SessionObservationProvider {
+    fn name(&self) -> &'static str {
+        self.0
+    }
+
+    fn catalog_generation(&self) -> ProviderCatalogGeneration {
+        ProviderCatalogGeneration::default()
+    }
+
+    fn request_observation(
+        &self,
+        operation: &Operation,
+        _: &ClientApiKeyId,
+    ) -> ProviderRequestObservation {
+        ProviderRequestObservation {
+            previous_reasoning_effort_override: operation
+                .provider_session_state(self.0)
+                .and_then(|state| state.payload().get("effort"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned),
+            ..Default::default()
+        }
+    }
+
+    async fn query_model_capabilities(
+        &self,
+    ) -> Result<Vec<ProviderModelCapabilities>, ProviderError> {
+        Ok(Vec::new())
+    }
+
+    async fn execute(
+        &self,
+        _: ProviderRequest,
+        _: AttemptContext,
+    ) -> Result<ProviderStream, ProviderError> {
+        Err(ProviderError::new(
+            ProviderErrorKind::Unavailable,
+            UpstreamSendState::NotSent,
+        ))
+    }
+}

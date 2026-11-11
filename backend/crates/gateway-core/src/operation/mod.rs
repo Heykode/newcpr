@@ -471,9 +471,7 @@ impl GenerateRequest {
     /// 返回客户端是否请求了图片生成工具。
     #[must_use]
     pub fn image_generation_requested(&self) -> bool {
-        self.payload.source_image_generation
-            || (self.protocol_payload().protocol() == "openai"
-                && requests_image_generation(self.body()))
+        self.payload.source_image_generation || self.payload.wire_facts.image_generation
     }
 
     /// 返回指定 Provider 的连接内会话状态。
@@ -538,34 +536,6 @@ impl fmt::Debug for GenerateRequest {
             .field("protocol_payload", self.protocol_payload())
             .finish()
     }
-}
-
-fn requests_image_generation(body: &Map<String, Value>) -> bool {
-    contains_image_tool(body.get("tools"))
-        || body
-            .get("input")
-            .and_then(Value::as_array)
-            .is_some_and(|items| {
-                items.iter().any(|item| {
-                    item.get("type").and_then(Value::as_str) == Some("additional_tools")
-                        && contains_image_tool(item.get("tools"))
-                })
-            })
-        || body.get("tool_choice").is_some_and(|choice| {
-            is_image_tool(choice)
-                || (choice.get("type").and_then(Value::as_str) == Some("allowed_tools")
-                    && contains_image_tool(choice.get("tools")))
-        })
-}
-
-fn contains_image_tool(value: Option<&Value>) -> bool {
-    value
-        .and_then(Value::as_array)
-        .is_some_and(|tools| tools.iter().any(is_image_tool))
-}
-
-fn is_image_tool(value: &Value) -> bool {
-    value.get("type").and_then(Value::as_str) == Some("image_generation")
 }
 
 /// 使用目标模型的 Provider 原生 Token 计数请求

@@ -536,6 +536,23 @@ events, then use the existing encoder and single execution finalization.
   request or upstream-success feedback is generated; the selected account lease is still released.
 - `/v1/models` and model detail use Anthropic shapes only with anthropic-version or x-api-key headers;
   list defaults to 20, supports 1..1000 and after_id/before_id. Invalid cursors/limits use protocol errors.
-- For native Codex OAuth omit service_tier=auto/default; preserve priority/flex and existing API paths.
-- Excluded products remain peer_link, plugin runtime and upstream API-key account configuration.
+- Native Responses preserve explicit service_tier=auto/default/priority/flex. Only Messages-to-Codex-OAuth conversion omits auto/default after translation; do not restore global stripping in the native normalizer.
+- The approved boundary excludes plugin runtime and upstream API-key accounts, including their dedicated CPR-to-CPR forwarding. Public protocol fixes in mixed commits still apply; historical exclusions do not establish a permanent ban on all peer-related changes.
   Their exclusion does not remove shared native protocol fixes.
+
+### Protocol observations and session ownership (v3.45.2)
+
+- `gateway-protocol::request` owns body/context facts, including image generation,
+  compact, request/subagent kind and reasoning effort. Replacing a body refreshes
+  its facts; context cannot manufacture image generation. Use wire protocol
+  constants independently of Provider identity names.
+- Messages logs explicit `output_config.effort` (trimmed, including unknown strings);
+  a thinking token budget does not invent an effort. Native Responses retain
+  numeric effort observations. `generate=false` determines prewarm; an empty
+  authoritative turn-metadata value must not fall back to a lower-priority alias.
+- Core chooses the explicitly targeted Provider or the candidate that owns actual
+  restored Provider session state, falling back to the first candidate only when
+  no owner exists. Candidate order must not erase or fabricate session settings.
+- Providers supply requested endpoint model, continuation and an optional previous
+  reasoning override from their own real session. They do not reinterpret the
+  common wire facts; xAI cannot inherit an OpenAI session override.

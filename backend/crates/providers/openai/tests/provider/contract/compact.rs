@@ -259,7 +259,7 @@ async fn compact_respects_account_scope_and_client_session_affinity() {
     create_account(&store, "acct_affinity_switch_b").await;
     let key = ClientApiKeyId::new("key_openai_contract").expect("key");
     let observation = provider.request_observation(&operation, &key);
-    assert!(observation.compact);
+    assert!(matches!(operation, Operation::Compact(_)));
     assert_eq!(
         observation.continuation.affinity_hash,
         provider

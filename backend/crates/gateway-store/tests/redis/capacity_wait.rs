@@ -1030,6 +1030,19 @@ async fn shutdown_releases_held_direct_and_promoted_leases_only_for_this_instanc
             } else {
                 fast_acquired(fixture.port.try_acquire_scheduling(request).await.unwrap())
             };
+            guard.release().await.expect("release before reselecting");
+            assert_eq!(fixture.pool_in_flight(id, pool).await, 0);
+            let guard = fast_acquired(
+                fixture
+                    .port
+                    .try_acquire_scheduling(
+                        scheduling(id, 2, Duration::ZERO, Duration::from_secs(30))
+                            .with_concurrency_pool(pool)
+                            .with_cancellation(cancellation.clone()),
+                    )
+                    .await
+                    .unwrap(),
+            );
             held.push(guard);
             cancellations.push(cancellation);
             other_held.push(fast_acquired(

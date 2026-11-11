@@ -1,3 +1,4 @@
+use gateway_protocol::openai::OPENAI_PROTOCOL;
 use std::fmt;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -300,7 +301,7 @@ pub(crate) fn compaction_wire_events(
     );
     Ok(GrokCompactionWireEvents {
         created: ProtocolWireEvent::json_with_sse_metadata(
-            "openai",
+            OPENAI_PROTOCOL,
             Some("response.created".to_owned()),
             json!({
                 "type": "response.created",
@@ -310,7 +311,7 @@ pub(crate) fn compaction_wire_events(
             None,
         )?,
         output_done: ProtocolWireEvent::json_with_sse_metadata(
-            "openai",
+            OPENAI_PROTOCOL,
             Some("response.output_item.done".to_owned()),
             json!({
                 "type": "response.output_item.done",
@@ -321,7 +322,7 @@ pub(crate) fn compaction_wire_events(
             None,
         )?,
         terminal: ProtocolWireEvent::json_with_sse_metadata(
-            "openai",
+            OPENAI_PROTOCOL,
             Some("response.completed".to_owned()),
             json!({
                 "type": "response.completed",

@@ -1629,11 +1629,13 @@ where
         let retry_after_exceeds_limit = error
             .retry_after()
             .is_some_and(|delay| delay > self.plan.max_retry_after());
+        let same_account_retry_blocked = error.same_account_retry_blocked();
         let transport_send_allows_recovery = attempt_send_state != UpstreamSendState::Ambiguous
             || error.kind() == ProviderErrorKind::MessageTooBig;
         let transport_recovery = match error.pre_delivery_retry() {
             Some(crate::error::PreDeliveryRetry::SameAccountConnectionRetry { transport })
-                if !self.replay_barrier_reached
+                if !same_account_retry_blocked
+                    && !self.replay_barrier_reached
                     && !self.delivery_pending
                     && send_state == UpstreamSendState::NotSent
                     && self.continuation_attempt == ContinuationAttempt::None =>
@@ -1648,7 +1650,8 @@ where
             Some(crate::error::PreDeliveryRetry::SameAccountTransportRetry {
                 retry_index,
                 delay,
-            }) if !retry_after_exceeds_limit
+            }) if !same_account_retry_blocked
+                && !retry_after_exceeds_limit
                 && !self.replay_barrier_reached
                 && !self.delivery_pending
                 && transport_send_allows_recovery =>
@@ -1656,7 +1659,8 @@ where
                 Some((AttemptTransport::Retry(retry_index), delay))
             }
             Some(crate::error::PreDeliveryRetry::SameAccountTransportFallback)
-                if !retry_after_exceeds_limit
+                if !same_account_retry_blocked
+                    && !retry_after_exceeds_limit
                     && !self.replay_barrier_reached
                     && !self.delivery_pending
                     && transport_send_allows_recovery =>
@@ -1698,7 +1702,11 @@ where
                 max_delay,
                 jitter,
                 ..
-            }) if ordinary_retry && !suppress_transient_retry && !retry_after_exceeds_limit => {
+            }) if !same_account_retry_blocked
+                && ordinary_retry
+                && !suppress_transient_retry
+                && !retry_after_exceeds_limit =>
+            {
                 let retries = self
                     .transient_retry_counts
                     .entry(current.metadata.provider_account_id().clone())
@@ -1719,7 +1727,8 @@ where
             }
             _ => None,
         };
-        let same_account_retry = error.retries_same_account()
+        let same_account_retry = !same_account_retry_blocked
+            && error.retries_same_account()
             && provider_proved_replay_safe
             && !self.replay_barrier_reached
             && !self.delivery_pending
@@ -1754,6 +1763,7 @@ where
             "reserveConnectionRotation": reserve_connection_rotation,
             "transientRetry": transient_retry.is_some(),
             "retryAfterExceeded": retry_after_exceeds_limit,
+            "sameAccountRetryBlocked": same_account_retry_blocked,
             "maxRetryAfterSeconds": self.plan.max_retry_after().as_secs(),
             "clientRetrySuppressed": suppress_transient_retry,
             "connectionRetry": connection_retry_requested,

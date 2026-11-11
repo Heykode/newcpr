@@ -149,3 +149,52 @@ async fn messages_count_tokens_is_local_and_cancellation_releases_selection() {
     }
     assert!(server.received_requests().await.unwrap().is_empty());
 }
+
+#[tokio::test]
+async fn translated_messages_service_tiers_follow_the_selected_responses_upstream() {
+    for (options, expected) in [
+        (json!({"service_tier":"auto"}), None),
+        (json!({"service_tier":"standard_only"}), None),
+        (json!({"speed":"fast"}), Some("priority")),
+    ] {
+        let server = MockServer::start().await;
+        let store = Arc::new(MemoryAccountStore::default());
+        create_account(&store, "acct_provider_contract").await;
+        Mock::given(method("POST"))
+            .and(path("/codex/responses"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_raw(CAPTURE_COMPLETED_SSE, "text/event-stream"),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let mut body = json!({"model":"gpt-5.4","max_tokens":128,"stream":true,"messages":[{"role":"user","content":"hello"}]});
+        body.as_object_mut()
+            .unwrap()
+            .extend(options.as_object().unwrap().clone());
+        let operation = Operation::Generate(GenerateRequest::from_protocol_payload(
+            ProtocolPayload::json_object("anthropic", body.as_object().unwrap().clone())
+                .unwrap()
+                .with_context(Map::from_iter([("use_websocket".to_owned(), json!(false))])),
+        ));
+        let mut stream = provider_with_base_url(&store, server.uri())
+            .execute(
+                planned_request("openai", operation),
+                context("req_translated_tier", CancellationToken::new()),
+            )
+            .await
+            .unwrap();
+        while let Some(event) = stream.next().await {
+            event.unwrap();
+        }
+        let requests = server.received_requests().await.unwrap();
+        let sent = captured_request_body(&requests[0]);
+        assert_eq!(sent.get("service_tier").and_then(Value::as_str), expected);
+        let hint = expected.map_or_else(
+            || "model=gpt-5.4".to_owned(),
+            |tier| format!("model=gpt-5.4;tier={tier}"),
+        );
+        assert_eq!(requests[0].headers["x-codex-routing-hint"], hint);
+        server.verify().await;
+    }
+}

@@ -162,7 +162,6 @@ fn test_tree_should_match_frozen_rust_mirror() {
         "tests/openai/mod.rs",
         "tests/openai/models.rs",
         "tests/openai/messages.rs",
-        "tests/openai/messages/session.rs",
         "tests/openai/endpoint.rs",
         "tests/openai/responses/http.rs",
         "tests/openai/responses/capacity.rs",

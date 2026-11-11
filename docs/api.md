@@ -160,8 +160,9 @@ BPE tokenizer 估算可提取文本和工具内容。它不发送上游生成请
 
 若客户端自动追加 `/v1/messages`，Base URL 填服务根地址；自动追加 `/responses` 或
 `/chat/completions` 的客户端填带 `/v1` 的地址。浏览器 CORS 允许 `x-api-key`、
-`anthropic-version` 和 `anthropic-beta`。Codex OAuth 出站省略 `service_tier:auto/default`，
-保留有效的 `priority/flex`。
+`anthropic-version` 和 `anthropic-beta`。仅 Messages 转 Codex OAuth 后省略转换得到的
+`service_tier:auto/default`，保留有效的 `priority/flex`；原生 Responses 保留客户端显式档位。
+Messages 请求日志读取显式 `output_config.effort`，不以 thinking token 预算猜测 effort。
 
 ### Live 请求
 
@@ -344,6 +345,8 @@ OpenAI 明确返回 `server_is_overloaded`、`slow_down` 或模型容量不足�
 尚未交付输出的前提下，先做最多 3 次同账号指数退避，再通过现有调度换号。默认间隔从 500ms 开始，
 无有效上游提示时，默认指数退避单次不超过 8 秒；有效 `Retry-After`（秒数或 HTTP 日期，
 包括 0）优先。重试仍受既有次数、活动租约、取消和交付边界约束，不新增换号预算。
+若上游错误包含 `NO_MORE_RETRY`，跳过同账号恢复及等待；是否能换号仍按安全发送、
+已交付输出、续接归属和既有换号次数判断，不能凭这个信号绕过限制。
 容量不足不扣 Smart 账号健康分，不触发 Provider 全局熔断，也不作为账号额度耗尽写入冷却状态。
 最终交付的上游错误仍按上述透明边界保留原始状态码、错误码和正文。
 明确额度耗尽继续走现有账号隔离与安全换号流程，

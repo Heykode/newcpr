@@ -91,6 +91,8 @@ Questions to answer:
   状态和已清楚的交互；详细规则放已有 Popover，关键错误与不可逆后果就近展示。
 - 自编 UI 文案用短语，不用句号、分号；URL、版本、数值、原始日志和用户输入不改。
 - Tooltip 放短名称，Popover 放多段说明或链接，帮助入口兼容键盘与触屏。
+- 官方 ZPopover 的 `reference` 插槽接入本地 BasePopover 时使用 `trigger`；帮助内容保留命名 dialog，
+  图标放既有 FormItem `label-extra`，按现有 BaseIconButton 的 `label`/`size` 接口适配。浏览器须确认入口真实出现且能打开，不能仅凭类型检查。
 - 新增表单项不在尚未编辑时显示必填错误；失焦或提交后提示，提交始终完整验证。
   动态规则使用稳定身份，删除前项不能把后项的输入状态移到其他规则。
 - API Key 安装 ID 默认空，生成只填草稿，保存后发送；清空删除该 Key 覆盖。

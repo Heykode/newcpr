@@ -36,9 +36,11 @@ release.
   import unavailable plugin tooling or replace local authorization boundaries.
 - Apply shared fixes to every actual approved caller, including xAI; an old
   task's exclusion is not a permanent exemption for shared error contracts.
-  Preserve explicit product exclusions (plugin runtime, peer_link, upstream
-  API-key product and cancelled functionality). State the actual excluded entry
-  point; missing same-named files alone do not justify excluding public fixes.
+  Preserve explicit product exclusions (plugin runtime, upstream API-key accounts
+  and their dedicated CPR forwarding, and cancelled functionality). Recheck the
+  current user-approved scope rather than treating historical peer_link exclusions
+  as a permanent ban. State the actual excluded entry point; missing same-named
+  files alone do not justify excluding public fixes.
 
 ## Evidence Before Conclusions
 

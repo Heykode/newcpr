@@ -64,3 +64,24 @@ IPv6 验收项，保留 IPv4 验收；配置备份与恢复信息保存在仓库
 切换复用已验证镜像部署流程和既有优雅退出预算，不中途直接拔掉承载业务的
 网络。检查健康、IPv4 连通、IPv6 路由/地址/连接及受保护服务。外部代理的最终
 出口由代理管理，不因关闭本容器 IPv6 而修改远端代理设置。
+
+## v3.45.2 同平台官方二进制专项测试
+
+采用官方 `1271fa0` 的 `client_hellos_should_match_the_official_binary_on_this_platform`，
+位于 `providers/openai/tests/transport/tls.rs`，默认 ignored，不加入日常 CI 门禁。
+显式提供 `CODEX_PROXY_TEST_REFERENCE_BINARY` 指向同平台官方 Codex 二进制后，
+测试在隔离子进程比较 native HTTP、自定义 CA 和 WebSocket 的实际 ClientHello；
+仅使用本机监听与合成请求，保留当前证书负例及代理/出口测试。
+本地复用既有证书生成器和实际 HTTP builder，不另存固定证书、真实账号或临时脚本。
+
+本轮确认该专项编译通过且保持 ignored，未提供或执行官方参考二进制。
+这不改变上文历史验证结果，也不构成新的二进制指纹完全相同结论。
+
+专项执行（参考二进制路径仅由运行环境提供）：
+
+```sh
+RUST_MIN_STACK=16777216 cargo +1.99.1 test --manifest-path backend/Cargo.toml --locked -p provider-openai --test main transport::tls:: -- --include-ignored --nocapture --test-threads=1
+```
+
+应在发布目标对应的操作系统和架构上执行；每种模式重复三次。默认 HTTP 保留扩展顺序，
+rustls 模式仅规范化随机扩展排列；算法、密钥交换组与 ALPN 内部顺序继续核对。

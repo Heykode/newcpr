@@ -1,5 +1,6 @@
 //! 官方 Grok Responses SSE 到网关 canonical 事件的转换。
 
+use gateway_protocol::openai::OPENAI_PROTOCOL;
 use std::collections::{BTreeMap, BTreeSet};
 
 use gateway_core::error::{
@@ -279,7 +280,7 @@ impl GrokCanonicalDecoder {
                     .is_none_or(|event_type| event_type == "ping")
             {
                 let wire = ProtocolWireEvent::raw_sse(
-                    "openai",
+                    OPENAI_PROTOCOL,
                     bytes::Bytes::from_static(GROK_PING_SSE_COMMENT),
                 )
                 .map_err(|_| protocol_error_marker())?;
@@ -302,7 +303,7 @@ impl GrokCanonicalDecoder {
                     let mut value = transformed.into_value();
                     self.response_transform.resequence_stream_value(&mut value);
                     let wire = ProtocolWireEvent::json_with_sse_metadata(
-                        "openai",
+                        OPENAI_PROTOCOL,
                         None,
                         value,
                         (index == 0).then(|| event.id.clone()).flatten(),
@@ -367,7 +368,7 @@ impl GrokCanonicalDecoder {
                     Some(transformed_type)
                 };
                 let wire = ProtocolWireEvent::json_with_sse_metadata(
-                    "openai",
+                    OPENAI_PROTOCOL,
                     wire_event,
                     value,
                     (index == 0).then(|| event.id.clone()).flatten(),

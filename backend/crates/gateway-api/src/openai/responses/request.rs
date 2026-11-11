@@ -1,5 +1,6 @@
 //! OpenAI Responses JSON 到 Core 路由事实与不透明 wire payload 的单一解码边界。
 
+use gateway_protocol::openai::OPENAI_PROTOCOL;
 use std::{borrow::Cow, fmt, net::IpAddr};
 
 use axum::http::{HeaderMap, HeaderName, HeaderValue};
@@ -14,7 +15,6 @@ use serde_json::{Map, Value};
 
 use super::error::RequestDecodeError;
 
-const OPENAI_PROTOCOL: &str = "openai";
 const OPENAI_SUBAGENT_KEY: &str = "x-openai-subagent";
 const CODEX_TURN_METADATA_KEY: &str = "x-codex-turn-metadata";
 const PASSTHROUGH_HEADERS_CONTEXT_KEY: &str = "opaque_request_headers";

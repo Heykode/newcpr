@@ -6,11 +6,11 @@ use std::time::{Duration, SystemTime};
 
 use futures::executor::block_on;
 use gateway_core::account::{
-    AccountAttemptFeedback, AccountConcurrencyLimit, AccountErrorReason, AccountFeedbackStats,
-    AccountSelectionPolicy, AccountStateChange, AccountWeight, CredentialState, OpaqueProviderData,
-    ProviderAccount, ProviderAccountId, ProviderAccountStore as _, ProviderDeviceCodec,
-    QuotaAccessChange, QuotaAccessState, QuotaEvidence, QuotaObservation, QuotaState,
-    QuotaWriteOutcome, RotationStrategy,
+    AccountAffinity, AccountAttemptFeedback, AccountConcurrencyLimit, AccountErrorReason,
+    AccountFeedbackStats, AccountSelectionPolicy, AccountStateChange, AccountWeight,
+    CredentialState, OpaqueProviderData, ProviderAccount, ProviderAccountId,
+    ProviderAccountStore as _, ProviderDeviceCodec, QuotaAccessChange, QuotaAccessState,
+    QuotaEvidence, QuotaObservation, QuotaState, QuotaWriteOutcome, RotationStrategy,
 };
 use gateway_core::engine::continuation::{
     ContinuationBinding, NativeContinuationPin, PreviousResponseId,
@@ -780,8 +780,8 @@ fn selector_uses_the_account_concurrency_override_for_the_redis_lease() {
     assert_eq!(requests[0].max_concurrent().get(), 7);
 }
 
-#[test]
-fn selector_round_robin_cursor_advances_across_requests() {
+#[tokio::test]
+async fn selector_round_robin_cursor_advances_across_requests() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_first", "at-first");
     create_account(&store, "acct_second", "at-second");
@@ -792,14 +792,16 @@ fn selector_round_robin_cursor_advances_across_requests() {
 
     for _ in 0..4 {
         let attempt = round_robin_attempt();
-        let lease = block_on(selector.select(&SelectCodexCredential {
-            upstream_model: "gpt-5.4",
-            request_url: &request_url,
-            attempt: &attempt,
-            session_affinity_key: None,
-            guardian: false,
-        }))
-        .expect("select round robin account");
+        let lease = selector
+            .select(&SelectCodexCredential {
+                upstream_model: "gpt-5.4",
+                request_url: &request_url,
+                attempt: &attempt,
+                session_affinity_key: None,
+                guardian: false,
+            })
+            .await
+            .expect("select round robin account");
         selected.push(lease.account_id().as_str().to_owned());
     }
 
@@ -4796,4 +4798,203 @@ async fn strict_interval_alone_can_migrate_to_a_ready_account() {
         }
         assert_eq!(leases.capacity.waiting.load(Ordering::SeqCst), 0);
     }
+}
+
+#[tokio::test]
+async fn strict_round_robin_rotates_each_new_session_across_eligible_accounts() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_fallback", "at-fallback");
+    create_account(&store, "acct_first", "at-first");
+    create_account(&store, "acct_second", "at-second");
+    let leases = Arc::new(TestLeaseCoordinator::default());
+    let selector = selector_with_affinity(
+        &store,
+        Arc::clone(&leases),
+        Arc::new(MemorySessionAffinity::default()),
+    );
+    let request_url =
+        Url::parse("https://chatgpt.com/backend-api/codex/responses").expect("request URL");
+
+    assert_eq!(
+        select_strict_round_robin_session(&selector, &request_url, "session-1").await,
+        "acct_fallback"
+    );
+    for _ in 0..5 {
+        assert_eq!(
+            select_strict_round_robin_session(&selector, &request_url, "session-1").await,
+            "acct_fallback"
+        );
+    }
+    assert_eq!(
+        select_strict_round_robin_session(&selector, &request_url, "session-2").await,
+        "acct_first"
+    );
+    assert_eq!(
+        select_strict_round_robin_session(&selector, &request_url, "session-1").await,
+        "acct_fallback"
+    );
+    assert_eq!(
+        select_strict_round_robin_session(&selector, &request_url, "session-3").await,
+        "acct_second"
+    );
+    assert_eq!(
+        select_strict_round_robin_session(&selector, &request_url, "session-4").await,
+        "acct_fallback"
+    );
+}
+
+#[tokio::test]
+async fn round_robin_wait_path_commits_only_before_queue_registration() {
+    use std::sync::atomic::Ordering;
+
+    for scenario in ["immediate", "ready_before_enqueue", "promoted"] {
+        let store = Arc::new(MemoryAccountStore::default());
+        create_account(&store, "acct_primary", "at-primary");
+        let leases = Arc::new(TestLeaseCoordinator::default());
+        leases.capacity.enabled.store(true, Ordering::SeqCst);
+        leases
+            .capacity
+            .set_load("acct_primary", u32::from(scenario != "immediate"));
+        if scenario == "ready_before_enqueue" {
+            let capacity = Arc::clone(&leases.capacity);
+            *leases.capacity.after_state_load.lock().unwrap() = Some(Box::new(move || {
+                capacity.set_load("acct_primary", 0);
+            }));
+        }
+        let affinity = Arc::new(MemorySessionAffinity::default());
+        let selector = selector_with_affinity(&store, Arc::clone(&leases), affinity.clone())
+            .with_account_concurrency(capacity_handle(&["acct_primary"], 1));
+        let attempt = round_robin_attempt().with_request_tuning(capacity_tuning());
+        let selected = capacity_select(&selector, &attempt, None);
+        tokio::pin!(selected);
+        if scenario == "promoted" {
+            tokio::select! {
+                result = &mut selected => panic!("must enter queue: {result:?}"),
+                () = wait_until_queued(&leases) => {}
+            }
+            assert_eq!(
+                affinity
+                    .round_robin_cursor(
+                        &ProviderKind::new("openai").unwrap(),
+                        attempt.client_api_key_ref(),
+                    )
+                    .await
+                    .unwrap(),
+                0
+            );
+            leases.capacity.set_load("acct_primary", 0);
+        }
+        let lease = tokio::time::timeout(Duration::from_secs(2), selected)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(lease.account_id().as_str(), "acct_primary");
+        assert_eq!(
+            affinity
+                .round_robin_cursor(
+                    &ProviderKind::new("openai").unwrap(),
+                    attempt.client_api_key_ref(),
+                )
+                .await
+                .unwrap(),
+            u64::from(scenario != "promoted"),
+            "{scenario}"
+        );
+        assert_eq!(leases.capacity.waiting.load(Ordering::SeqCst), 0);
+    }
+}
+
+async fn select_strict_round_robin_session(
+    selector: &CodexCredentialSelector,
+    request_url: &Url,
+    key: &str,
+) -> String {
+    let attempt = AttemptContext::new(
+        RequestAttemptContext::new(
+            ModelRequestId::new("req_codex_round_robin_session").expect("request id"),
+            ClientApiKeyId::new("key_codex_contract").expect("client key id"),
+        ),
+        NonZeroU32::new(1).expect("attempt"),
+        SystemTime::now() + Duration::from_secs(30),
+        AccountSelectionPolicy::new(
+            RotationStrategy::RoundRobin,
+            NonZeroU32::new(2).expect("concurrency"),
+            Duration::ZERO,
+        )
+        .with_openai_account_affinity(AccountAffinity::Strict),
+        AccountAttemptContext::new(BTreeSet::new(), None, None)
+            .with_account_scope(contract_account_scope()),
+        None,
+        CancellationToken::new(),
+    );
+    let affinity_key = ProviderSessionAffinityKey::try_new(key).expect("affinity key");
+    selector
+        .select(&SelectCodexCredential {
+            upstream_model: "gpt-5.4",
+            request_url,
+            attempt: &attempt,
+            session_affinity_key: Some(&affinity_key),
+            guardian: false,
+        })
+        .await
+        .expect("select round robin session")
+        .account_id()
+        .as_str()
+        .to_owned()
+}
+
+#[tokio::test]
+async fn round_robin_counts_concurrent_first_requests_as_one_session() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_first", "test-first");
+    create_account(&store, "acct_second", "test-second");
+    let leases = Arc::new(TestLeaseCoordinator::default());
+    let affinity = Arc::new(MemorySessionAffinity::with_claim_barrier(2));
+    let selector = selector_with_affinity(&store, leases, affinity.clone());
+    let url = Url::parse(OFFICIAL_CODEX_BASE_URL).unwrap();
+    let mut winners = Vec::new();
+    for key in ["session-1", "session-2"] {
+        let (a, b) = tokio::join!(biased;
+            select_strict_round_robin_session(&selector, &url, key),
+            select_strict_round_robin_session(&selector, &url, key),
+        );
+        assert_eq!(a, b);
+        winners.push(a);
+    }
+    assert_eq!(affinity.binding_count(), 2);
+    assert_ne!(winners[0], winners[1]);
+}
+
+#[tokio::test]
+async fn busy_leases_do_not_consume_the_next_round_robin_assignment() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_first", "test-first");
+    create_account(&store, "acct_second", "test-second");
+    let leases = Arc::new(TestLeaseCoordinator::default());
+    let selector = selector(&store, leases.clone());
+    let url = Url::parse(OFFICIAL_CODEX_BASE_URL).unwrap();
+    let attempt = round_robin_attempt();
+    let key = ProviderSessionAffinityKey::try_new("busy-session").unwrap();
+    *leases.busy.lock().unwrap() = true;
+    let result = selector
+        .select(&SelectCodexCredential {
+            upstream_model: "gpt-5.4",
+            request_url: &url,
+            attempt: &attempt,
+            session_affinity_key: Some(&key),
+            guardian: false,
+        })
+        .await;
+    assert!(
+        matches!(
+            result,
+            Err(CredentialSelectionError::CapacityUnavailable { .. })
+        ),
+        "{result:?}"
+    );
+    *leases.busy.lock().unwrap() = false;
+    assert_eq!(
+        select_strict_round_robin_session(&selector, &url, "available").await,
+        "acct_first"
+    );
 }

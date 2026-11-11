@@ -1,5 +1,6 @@
 //! Codex 的 `gateway-core` Provider adapter。
 
+use gateway_protocol::openai::OPENAI_PROTOCOL;
 use std::collections::BTreeSet;
 use std::fmt;
 use std::num::NonZeroU32;
@@ -392,7 +393,6 @@ impl Provider for CodexProvider {
                 _ => None,
             };
             return ProviderRequestObservation {
-                compact: matches!(operation, Operation::Compact(_)),
                 requested_model: match operation {
                     Operation::Search(request) => {
                         observation::endpoint_requested_model(request.payload())
@@ -413,13 +413,8 @@ impl Provider for CodexProvider {
         let Ok(encoded) = encode_generate_request(request, "observability", None) else {
             return ProviderRequestObservation::default();
         };
-        let previous_session = decode_openai_session_state(request);
-        let semantics = encoded.semantics_with_override(
-            previous_session
-                .as_ref()
-                .and_then(|state| state.reasoning_effort_override.as_deref()),
-        );
-        let reasoning_effort = semantics.reasoning_effort.clone();
+        let previous_reasoning_effort_override =
+            decode_openai_session_state(request).and_then(|state| state.reasoning_effort_override);
         let previous_response_id = encoded.previous_response_id();
         let continuation = ContinuationRequestObservation {
             affinity_hash: derive_codex_session_affinity(&encoded, client_api_key_id)
@@ -431,11 +426,7 @@ impl Provider for CodexProvider {
         };
         ProviderRequestObservation {
             requested_model: None,
-            reasoning_effort,
-            reasoning_preset: semantics.reasoning_preset.map(str::to_owned),
-            request_kind: semantics.request_kind,
-            subagent_kind: semantics.subagent_kind,
-            compact: semantics.compact,
+            previous_reasoning_effort_override,
             continuation,
         }
     }
@@ -536,16 +527,25 @@ impl Provider for CodexProvider {
         };
         let mut messages_translator = None;
         let translated;
-        let generate = if generate.protocol_payload().protocol() == "anthropic" {
+        let generate = if generate.protocol_payload().protocol()
+            == gateway_protocol::anthropic::ANTHROPIC_PROTOCOL
+        {
             let original = generate.protocol_payload().body();
             messages_translator = Some(messages::ResponsesResponseTranslator::new(original));
-            let body = gateway_protocol::anthropic::messages_to_responses_request(original)
+            let mut body = gateway_protocol::anthropic::messages_to_responses_request(original)
                 .map_err(|_| {
                     provider_error(
                         ProviderErrorKind::InvalidRequest,
                         UpstreamSendState::NotSent,
                     )
                 })?;
+            // 仅转换生成的 OAuth 默认档位省略；原生 Responses 保留调用方声明。
+            if matches!(
+                body.get("service_tier").and_then(Value::as_str),
+                Some("auto" | "default")
+            ) {
+                body.shift_remove("service_tier");
+            }
             let mut context = generate.protocol_payload().context().clone();
             messages::retain_target_headers(&mut context);
             translated = Operation::Generate(generate.clone())
@@ -557,7 +557,7 @@ impl Provider for CodexProvider {
                     )
                 })?
                 .translate_protocol_wire(
-                    "openai",
+                    OPENAI_PROTOCOL,
                     serde_json::to_vec(&body)
                         .map_err(|_| {
                             provider_error(ProviderErrorKind::Protocol, UpstreamSendState::NotSent)

@@ -335,6 +335,14 @@ Continuation 仍受原请求的 Client Key、账号范围、Provider 和发送/�
 Preferred 临时借用保留主账号、持续不可用才迁移；Relaxed 共享绑定但不优先选择绑定账号。
 精确 native continuation 有独立 owner；Strict 与当前共享绑定冲突要求完整重放。
 
+RoundRobin 使用按 Client Key 和 Provider 隔离的成功分配游标。立即取得执行槽且未命中亲和时，
+Store 原子比较绑定代次和游标并同时提交；亲和命中、固定账号、租约失败和已入队等待不消耗位置。
+CAS 冲突等待租约释放后重新选择，不挤占凭据快照冲突预算；原取消和截止继续生效。
+
+公共 wire 事实和请求观测由 `gateway-protocol::request` 提取；Provider 只提供实际所属会话的
+旧 reasoning override、端点模型与 continuation。Core 优先采用真实会话 owner，避免候选排列改变日志。
+协议标识常量与 Provider 身份各自使用，Messages effort、预热与图片事实不再由多个 Provider 重复解释。
+
 正常选号按冻结账号 ID 范围读取 Store，冷却与保护状态采用每批最多 128 项的 Redis pipeline，单项错误
 不丢弃邻项事实；NOSCRIPT 只重试未执行项。Provider 的完整候选投影从读取开始保留 200ms，最多 32 项、
 合计 8,192 个候选；同范围填充合并。缓存按 Key、范围、模型、策略、容量池及本地路由/请求资格隔离。
@@ -587,6 +595,12 @@ turn alias、会话恢复或账号状态所有权。Preferred 缓存读写失败
 - `quota_limits` 和 `quota_paused` 贯穿 Store、Admin、选号、等待重查及页面；更新校验配置、
   凭据 revision、观察时间和 merge-base，保留 PR #260 的成功回写时序保护。
 - Cron 预激活、周额度自动重置、错误来源投影和预算重置使用现有运行时与数据层，新增迁移
-  `0088`–`0090`，不重写历史 schema。插件运行时、peer_link、上游 API-key 产品不在本次范围。
+  `0088`–`0090`，不重写历史 schema。插件运行时、上游 API-key 账号及其专属 CPR 互联转发不在当前批准范围；混合提交的公共修复单独接入。
 
 调用落点、已保留差异和验证边界见 [本次合并记录](upstream-v3451-native-parity.md)。
+
+## 官方 v3.45.2 原生接入
+
+成功分配轮询、`NO_MORE_RETRY`、原生 service tier、Messages effort、协议观测归属、
+Codex 异步压缩配置与帮助布局沿上述现有调用链接入；不新增数据库迁移或部署门禁。
+具体源码映射、排除范围和本轮验证边界见 [v3.45.2 合并记录](upstream-v3452-native-parity.md)。

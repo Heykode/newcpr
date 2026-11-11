@@ -2,6 +2,7 @@
 use super::{messages, responses::ResponseEncodeError};
 use bytes::Bytes;
 use gateway_core::event::ProviderEvent;
+use gateway_protocol::anthropic::ANTHROPIC_PROTOCOL;
 use gateway_protocol::{
     anthropic::MessagesAccumulator, openai::sse::encode_sse_event_with_metadata,
 };
@@ -17,7 +18,7 @@ impl MessagesEncoder {
     pub(super) fn push_sse(&mut self, event: &ProviderEvent) -> Vec<Bytes> {
         let Some(wire) = event
             .wire_event()
-            .filter(|wire| wire.protocol() == "anthropic")
+            .filter(|wire| wire.protocol() == ANTHROPIC_PROTOCOL)
         else {
             return Vec::new();
         };
@@ -90,7 +91,7 @@ pub(super) fn collect(
     for wire in events
         .iter()
         .filter_map(ProviderEvent::wire_event)
-        .filter(|wire| wire.protocol() == "anthropic")
+        .filter(|wire| wire.protocol() == ANTHROPIC_PROTOCOL)
     {
         if let Some(raw) = wire.raw_json_body() {
             return serde_json::from_slice(raw).map_err(|_| ResponseEncodeError::Serialization);

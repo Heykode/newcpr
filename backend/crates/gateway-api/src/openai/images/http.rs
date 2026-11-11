@@ -1,5 +1,6 @@
 //! Codex Images 非流式 HTTP adapter。
 
+use gateway_protocol::openai::OPENAI_PROTOCOL;
 use std::net::SocketAddr;
 
 use axum::{
@@ -25,7 +26,6 @@ use crate::openai::{
 
 use super::multipart::decode_edit_form;
 
-const OPENAI_PROTOCOL: &str = "openai";
 const IMAGE_TURN_ID_CONTEXT_KEY: &str = "image_turn_id";
 
 /// `POST /v1/images/generations`。

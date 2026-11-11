@@ -193,3 +193,60 @@ that retired routing behavior.
   independently of the header-authoritative transport `client_turn_id`, matching
   upstream `remember_generate_turn`. A shared transport header cannot merge distinct
   logical turns; different transport headers cannot hide a cross-root logical turn conflict.
+
+## Successful Round-Robin Admission (v3.45.2)
+
+### 1. Scope / Trigger
+
+OpenAI immediate selection and capacity waiting share the official successful
+allocation cursor. Affinity hits must not distort the order of new sessions.
+
+### 2. Signatures
+
+- `ProviderSessionAffinityPort::round_robin_cursor(provider, client_key) -> Result<u64, ProviderStoreError>` (async).
+- `admit_account(provider, ProviderAccountAdmission::{Session, RoundRobin}) -> Result<bool, ProviderStoreError>` (async).
+- `ProviderLeaseGuard::release(self: Box<Self>) -> BoxFuture<'static, Result<(), ProviderStoreError>>`.
+
+### 3. Contracts
+
+- The cursor is scoped to Client Key and Provider, with a 24-hour idle TTL. Read
+  without advancing; atomically compare the observed cursor and session generation
+  before writing either new binding or next cursor.
+- Only an immediate, non-pinned RoundRobin allocation that misses affinity consumes
+  a position. Hits, explicit/diagnostic picks, failed leases, queued promotion and
+  alternate selection after queueing do not consume one. Ready before enqueue is immediate.
+- Keep Strict/Preferred/Relaxed migration rules and Preferred's deterministic order
+  with an existing binding. Optional Preferred cache binding failure can be discarded,
+  but a real RR allocation must still commit the cursor without that claim.
+- Keep local generation tokens and raw-ID/JSON legacy upgrade support. No second
+  binding store is added; a late completion must not restore an old generation.
+
+### 4. Validation & Error Matrix
+
+| Result | Required action |
+| --- | --- |
+| `Ok(true)` | Deliver the admitted lease; cursor/binding changes are atomic |
+| `Ok(false)` | Await actual lease release and refresh selection; do not use the three credential-snapshot retries |
+| Session claim store error | Existing binding-store failure; no selection bypass except optional cache preference |
+| Cursor-only store error / release error | Ordinary Store error; do not claim allocation success |
+| Cancellation / elapsed deadline | Stop under original request control; do not reopen a budget |
+
+### 5. Good / Base / Bad Cases
+
+- Good: two concurrent first requests for one session share one binding and one position.
+- Base: immediate account admission advances once, a later affinity hit advances zero times.
+- Bad: binding or cursor has changed; neither write occurs and the reserved slot is released.
+
+### 6. Tests Required
+
+Keep the official new-session, concurrent-first-request, busy-lease and optional-cache
+regressions. Real Redis `round_robin_commits_only_with_the_current_cursor_and_session_version`
+checks atomic rejection; local `round_robin_wait_path_commits_only_before_queue_registration`
+checks immediate, ready-before-enqueue and promoted branches. Existing dual-pool cleanup
+checks that explicit release makes the slot available before returning.
+
+### 7. Wrong vs Correct
+
+Wrong: increment during snapshot reads, or `drop(guard)` then immediately reselect
+while the slot may remain occupied. Correct: `admit_account(...)` after acquisition;
+on CAS conflict, `guard.release().await?` before refreshing the current selection.

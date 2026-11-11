@@ -17,7 +17,7 @@ impl ResponsesResponseTranslator {
 
 impl NativeResponseTranslator for ResponsesResponseTranslator {
     fn source_protocol(&self) -> &str {
-        PROVIDER_NAME
+        OPENAI_PROTOCOL
     }
     fn target_protocol(&self) -> &str {
         ANTHROPIC_PROTOCOL

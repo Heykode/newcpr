@@ -1,6 +1,6 @@
 //! Codex Provider 测试用内存 ports；不依赖 SQL、Redis 或 secret 加密。
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::num::NonZeroU32;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -936,6 +936,15 @@ struct TestCapacityExecution {
     state: Arc<TestCapacityState>,
     id: ProviderAccountId,
 }
+impl ProviderLeaseGuard for TestCapacityExecution {
+    fn release(self: Box<Self>) -> BoxFuture<'static, Result<(), ProviderStoreError>> {
+        Box::pin(async move {
+            drop(self);
+            Ok(())
+        })
+    }
+}
+
 impl Drop for TestCapacityExecution {
     fn drop(&mut self) {
         let mut signals = self.state.signals.lock().unwrap();
@@ -1211,6 +1220,7 @@ impl ProviderLeasePort for TestLeaseCoordinator {
 
 #[derive(Default)]
 pub(crate) struct MemorySessionAffinity {
+    cursors: Mutex<HashMap<(String, String), u64>>,
     operation_delay: Duration,
     delayed_operation: Option<&'static str>,
     bindings: Mutex<BTreeMap<(String, String), ProviderSessionAffinityBinding>>,
@@ -1301,6 +1311,76 @@ impl MemorySessionAffinity {
 }
 
 impl ProviderSessionAffinityPort for MemorySessionAffinity {
+    fn round_robin_cursor<'a>(
+        &'a self,
+        provider: &'a ProviderKind,
+        key: &'a ClientApiKeyId,
+    ) -> BoxFuture<'a, Result<u64, ProviderStoreError>> {
+        Box::pin(async move {
+            Ok(*self
+                .cursors
+                .lock()
+                .unwrap()
+                .get(&(provider.as_str().to_owned(), key.as_str().to_owned()))
+                .unwrap_or(&0))
+        })
+    }
+    fn admit_account<'a>(
+        &'a self,
+        provider: &'a ProviderKind,
+        admission: gateway_core::provider_ports::ProviderAccountAdmission<'a>,
+    ) -> BoxFuture<'a, Result<bool, ProviderStoreError>> {
+        Box::pin(async move {
+            use gateway_core::provider_ports::ProviderAccountAdmission;
+            let claim = admission.session();
+            if let Some(claim) = claim {
+                self.delay_operation(if claim.expected.is_none() {
+                    "claim"
+                } else {
+                    "renew"
+                })
+                .await;
+                if claim.expected.is_none()
+                    && let Some(barrier) = &self.claim_barrier
+                {
+                    barrier.wait().await;
+                }
+            }
+            let mut bindings = self.bindings.lock().unwrap();
+            let mut cursors = self.cursors.lock().unwrap();
+            let key = claim.map(|claim| {
+                (
+                    provider.as_str().to_owned(),
+                    claim.key.expose_to_store().to_owned(),
+                )
+            });
+            if let (Some(claim), Some(key)) = (claim, &key)
+                && bindings.get(key) != claim.expected
+            {
+                return Ok(false);
+            }
+            if let ProviderAccountAdmission::RoundRobin {
+                client_key, cursor, ..
+            } = admission
+            {
+                let cursor_key = (provider.as_str().to_owned(), client_key.as_str().to_owned());
+                if *cursors.get(&cursor_key).unwrap_or(&0) != cursor {
+                    return Ok(false);
+                }
+                cursors.insert(cursor_key, cursor.wrapping_add(1));
+            }
+            if let (Some(claim), Some(key)) = (claim, key) {
+                bindings.insert(key, claim.binding.clone());
+                if claim.expected.is_none() {
+                    self.claim_ttls.lock().unwrap().push(claim.ttl);
+                } else {
+                    self.renewal_ttls.lock().unwrap().push(claim.ttl);
+                }
+            }
+            Ok(true)
+        })
+    }
+
     fn admit_binding<'a>(
         &'a self,
         provider_kind: &'a ProviderKind,

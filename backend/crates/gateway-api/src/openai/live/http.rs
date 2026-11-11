@@ -1,5 +1,6 @@
 //! Live 通话引导（`POST /v1/live`）与 hangup 的 HTTP adapter。
 
+use gateway_protocol::openai::OPENAI_PROTOCOL;
 use std::net::SocketAddr;
 
 use axum::{
@@ -30,9 +31,6 @@ use crate::{
         with_model_request_id,
     },
 };
-
-/// 引导 wire 事件使用的协议名；与 Provider 侧 `PROVIDER_NAME` 一致。
-const LIVE_PROTOCOL: &str = "openai";
 
 pub(crate) async fn live_call(
     State(state): State<ApiState>,
@@ -341,7 +339,7 @@ fn live_call_body(events: Vec<ProviderEvent>) -> Option<Bytes> {
     let mut raw_events = 0usize;
     for event in events {
         let (_, wire) = event.into_parts();
-        let Some(wire) = wire.filter(|wire| wire.protocol() == LIVE_PROTOCOL) else {
+        let Some(wire) = wire.filter(|wire| wire.protocol() == OPENAI_PROTOCOL) else {
             continue;
         };
         let raw = wire.into_raw_http_body()?;

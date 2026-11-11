@@ -8,6 +8,7 @@ use axum::{
 use gateway_core::engine::execution::{ExecutionSession, StartedExecution};
 use gateway_core::error::{GatewayError, GatewayErrorKind};
 use gateway_core::event::{ProviderEvent, ProviderResponseHeader};
+use gateway_protocol::openai::OPENAI_PROTOCOL;
 
 use super::{
     error::{engine_error_response, gateway_error_from_engine, protocol_error_response},
@@ -74,7 +75,7 @@ fn raw_json_body(events: Vec<ProviderEvent>) -> Option<Bytes> {
     let mut body = None;
     for event in events {
         let (_, wire) = event.into_parts();
-        let Some(wire) = wire.filter(|wire| wire.protocol() == "openai") else {
+        let Some(wire) = wire.filter(|wire| wire.protocol() == OPENAI_PROTOCOL) else {
             continue;
         };
         let Some(raw) = wire.into_raw_json_body() else {

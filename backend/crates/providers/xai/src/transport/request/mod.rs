@@ -1,5 +1,6 @@
 //! OpenAI Responses 请求到官方 Grok Build wire 的转换边界。
 
+use gateway_protocol::openai::OPENAI_PROTOCOL;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
@@ -234,7 +235,7 @@ impl GrokResponsesRequest {
         should_consume_terminal_compaction_trigger: bool,
     ) -> Result<Self, GrokRequestEncodeError> {
         let payload = request.protocol_payload();
-        if payload.protocol() != "openai" {
+        if payload.protocol() != OPENAI_PROTOCOL {
             return Err(GrokRequestEncodeError::InvalidProtocolPayload);
         }
         let mut body = payload.body().clone();

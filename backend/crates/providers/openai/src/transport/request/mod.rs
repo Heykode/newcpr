@@ -1,5 +1,6 @@
 //! 核心 Generate operation 到 Codex Responses wire request 的严格编码。
 
+use gateway_protocol::openai::OPENAI_PROTOCOL;
 pub(crate) mod quota_overdraft;
 mod raw_json;
 
@@ -119,7 +120,7 @@ pub fn encode_generate_request_with_location(
     location: Option<&CodexRequestLocation>,
 ) -> Result<CodexResponsesRequest, CodexRequestEncodeError> {
     let payload = request.protocol_payload();
-    if payload.protocol() != "openai" {
+    if payload.protocol() != OPENAI_PROTOCOL {
         return Err(CodexRequestEncodeError::InvalidProtocolPayload);
     }
     let mut encoded = encode_responses_body(payload.body().clone(), upstream_model, location);

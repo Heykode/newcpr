@@ -63,13 +63,6 @@ pub(crate) fn normalize_reasoning_replay(body: &mut Map<String, Value>) {
 }
 
 pub(crate) fn normalize_codex_oauth_options(body: &mut Map<String, Value>) {
-    // Codex Core 省略默认档位，OAuth 不接受公开 API 的 auto/default 字面值
-    if matches!(
-        body.get("service_tier").and_then(Value::as_str),
-        Some("auto" | "default")
-    ) {
-        body.shift_remove("service_tier");
-    }
     // Codex OAuth 拒绝这些客户端选项，即使采样参数取默认值
     for field in [
         "top_p",

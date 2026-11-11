@@ -688,7 +688,8 @@ impl CodexCredentialSelector {
                 .await;
         }
         let mut universe = None;
-        for retry in 0..=3 {
+        let mut retry = 0;
+        loop {
             let result = self
                 .select_snapshot(
                     request,
@@ -712,12 +713,29 @@ impl CodexCredentialSelector {
                     .select_with_capacity_wait(request, cyber_policy_session_key, universe.as_ref())
                     .await;
             }
+            if matches!(
+                result,
+                Err(CredentialSelectionError::AccountAdmissionChanged)
+            ) {
+                if request.attempt.cancellation().is_cancelled() {
+                    return Err(CredentialSelectionError::Cancelled);
+                }
+                if request.attempt.deadline().is_elapsed() {
+                    break;
+                }
+                tokio::task::yield_now().await;
+                continue;
+            }
             if !matches!(
                 result,
                 Err(CredentialSelectionError::AccountSnapshotChanged)
             ) {
                 return result;
             }
+            if retry == 3 {
+                break;
+            }
+            retry += 1;
             request.attempt.trace().record(
                 "account.snapshot_conflict",
                 serde_json::json!({
@@ -1006,6 +1024,14 @@ impl CodexCredentialSelector {
         } else {
             affinity.bound_binding().cloned()
         };
+        let assignment_cursor = self
+            .assignment_cursor(
+                request,
+                observed_affinity_binding.as_ref(),
+                pinned_account.is_some(),
+            )
+            .await?;
+        let round_robin_cursor = assignment_cursor.unwrap_or(round_robin_cursor);
         let mut shortest_retry = None;
         let mut capacity_unavailable = false;
         let policy = request.attempt.account_selection_policy();
@@ -1184,12 +1210,15 @@ impl CodexCredentialSelector {
                             account.id(),
                             pinned_account.is_some(),
                             queue_rejection,
+                            assignment_cursor.filter(|_| {
+                                selection.preferred() != PreferredAccountSelection::Hit
+                            }),
                         )
                         .await?;
                     let Some(affinity_expected_binding) = admitted else {
-                        drop(guard);
+                        guard.release().await?;
                         self.invalidate_projection(&projection);
-                        return Err(CredentialSelectionError::AccountSnapshotChanged);
+                        return Err(CredentialSelectionError::AccountAdmissionChanged);
                     };
                     let affinity_telemetry =
                         affinity.telemetry(account.id(), request.is_cache_preference());
@@ -2300,6 +2329,8 @@ pub enum CredentialSelectionError {
     InvalidCredential(#[source] Option<gateway_core::error::ErrorSource>),
     #[error("Codex account changed repeatedly during selection")]
     AccountSnapshotChanged,
+    #[error("account admission changed")]
+    AccountAdmissionChanged,
     #[error("Codex account store is unavailable")]
     Store(#[source] Option<gateway_core::error::ErrorSource>),
     #[error("Codex account lease runtime is unavailable")]

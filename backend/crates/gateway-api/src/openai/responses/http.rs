@@ -1,5 +1,6 @@
 //! OpenAI Responses HTTP 与 SSE adapter。
 
+use gateway_protocol::anthropic::ANTHROPIC_PROTOCOL;
 use std::collections::VecDeque;
 use std::convert::Infallible;
 use std::net::{IpAddr, SocketAddr};
@@ -234,7 +235,7 @@ fn encode_collected_events(
         && let Some(raw) = events
             .iter()
             .filter_map(ProviderEvent::wire_event)
-            .filter(|wire| wire.protocol() == "anthropic")
+            .filter(|wire| wire.protocol() == ANTHROPIC_PROTOCOL)
             .find_map(|wire| wire.raw_json_body())
     {
         return Ok(raw.to_vec());

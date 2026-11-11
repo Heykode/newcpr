@@ -36,8 +36,8 @@ This directory contains guidelines for backend development. Fill in each file wi
 | [Client Continuity](./client-continuity.md) | Default/custom UA, durable devices and opt-in IPv6 routes | Integration verification |
 | [Daemon Health](./daemon-health.md) | Successful-work recovery, restart generations and idle health | Isolated regression coverage |
 | [Protocol Compatibility](./protocol-compatibility.md) | Chat delivery, explicit compaction and multipart image boundaries | Local compatibility contracts |
-| [Scheduling Affinity](./scheduling-affinity.md) | Supplemental hints, admission binding and retry/owner precedence | v3.41.2 isolated regression coverage |
-| [账号容量等待](./account-capacity-wait.md) | 单一权威、冻结候选与实时容量、共享截止及取消所有权 | v3.43.1 真实 Redis 及停机回归验证 |
+| [Scheduling Affinity](./scheduling-affinity.md) | Supplemental hints, atomic binding/cursor admission and retry/owner precedence | v3.45.2 isolated regression coverage |
+| [账号容量等待](./account-capacity-wait.md) | 单一权威、冻结候选与实时容量、共享截止及取消所有权 | v3.45.2 真实 Redis、成功分配游标及停机回归验证 |
 | [Native Model Catalog](./native-model-catalog.md) | 账号持久目录、冻结权限、后台聚合与账号出口 | v3.45.1 本地接入 |
 | [账号模型限制](./account-model-access.md) | 人工白黑名单、冻结候选与 State 组合、可选补丁和续期保留 | PR 105 本地适配 |
 | [Account Relogin](./account-relogin.md) | Login library, create-only import, cancellation and ambiguous push fencing | Local tests; one live Free login passed |
