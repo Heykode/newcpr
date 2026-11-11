@@ -5,6 +5,7 @@ mod endpoint;
 mod error;
 mod images;
 mod live;
+mod messages;
 mod models;
 mod responses;
 mod router;

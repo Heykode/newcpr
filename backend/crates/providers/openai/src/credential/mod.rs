@@ -33,8 +33,8 @@ pub use admin::{
     PreparedCodexCredentialRotationGuard,
 };
 pub use catalog::{
-    CodexCatalogScope, CodexCredentialCatalogError, CodexCredentialCatalogService,
-    CodexCredentialCatalogSnapshot, CodexPlanCatalog,
+    CodexAccountCatalog, CodexCatalogScope, CodexCredentialCatalogError,
+    CodexCredentialCatalogService, CodexCredentialCatalogSnapshot,
 };
 pub use cookie::{CodexCookiePolicy, CookiePolicyError};
 pub use oauth::{

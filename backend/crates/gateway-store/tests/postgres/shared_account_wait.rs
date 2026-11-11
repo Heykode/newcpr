@@ -81,6 +81,19 @@ async fn shared_account_wait_migration_retires_split_values_and_preserves_other_
             after["request_tuning_json"],
             Value::Object(expected.clone())
         );
+        sqlx::raw_sql(include_str!(
+            "../../../../migrations/0083_shared_account_wait.sql"
+        ))
+        .execute(&database.pool)
+        .await
+        .unwrap();
+        let repeated: Value =
+            sqlx::query_scalar("select to_jsonb(s) from runtime_settings s where id=1")
+                .fetch_one(&database.pool)
+                .await
+                .unwrap();
+        assert_eq!(after, repeated);
+        super::TEST_MIGRATOR.run(&database.pool).await.unwrap();
         let settings = PgRuntimeSettingsRepository::new(database.pool.clone())
             .load_runtime_settings()
             .await
@@ -95,18 +108,7 @@ async fn shared_account_wait_migration_retires_split_values_and_preserves_other_
                 .account_concurrency_wait_timeout_seconds,
             expected["accountConcurrencyWaitTimeoutSeconds"].as_u64()
         );
-        sqlx::raw_sql(include_str!(
-            "../../../../migrations/0083_shared_account_wait.sql"
-        ))
-        .execute(&database.pool)
-        .await
-        .unwrap();
-        let repeated: Value =
-            sqlx::query_scalar("select to_jsonb(s) from runtime_settings s where id=1")
-                .fetch_one(&database.pool)
-                .await
-                .unwrap();
-        assert_eq!(after, repeated);
+
         database.close().await;
     }
 }

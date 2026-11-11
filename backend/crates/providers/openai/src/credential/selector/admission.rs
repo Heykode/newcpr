@@ -1,6 +1,7 @@
 //! Official admission CAS and persistent-primary migration, using NewCPR binding generations.
 use super::*;
-use gateway_core::account::AccountAffinity;
+use gateway_core::account::{AccountAffinity, RotationStrategy};
+use gateway_core::provider_ports::{BindingToken, ProviderAccountAdmission, ProviderSessionClaim};
 
 impl CodexCredentialSelector {
     pub(super) async fn scoped_accounts(
@@ -9,7 +10,29 @@ impl CodexCredentialSelector {
     ) -> Result<Vec<ProviderAccount>, CredentialSelectionError> {
         if let Some(scope) = request.attempt.account_scope() {
             let ids = scope.allowed_account_ids().cloned().collect::<Vec<_>>();
-            Ok(self.repository.list_for_accounts(&ids).await?)
+            let omissions = request
+                .upstream_model
+                .filter(|_| {
+                    request.responses_model && !request.attempt.is_diagnostic_required_account()
+                })
+                .and_then(|model| {
+                    self.catalog.omissions(model, &ids, |id| {
+                        scope.directory().account(id).is_some_and(|a| {
+                            a.model_access().mode() == AccountModelAccessMode::Allowlist
+                        })
+                    })
+                });
+            if let Some(omissions) = omissions {
+                let provider = gateway_core::routing::ProviderKind::new("openai")
+                    .map_err(|_| CredentialSelectionError::InvalidCredential(None))?;
+                self.repository
+                    .store()
+                    .list_catalog_candidates(&provider, &ids, &omissions)
+                    .await
+                    .map_err(|error| CredentialSelectionError::Store(Some(error.into())))
+            } else {
+                Ok(self.repository.list_for_accounts(&ids).await?)
+            }
         } else {
             Ok(self.repository.list_for_provider().await?)
         }
@@ -39,6 +62,29 @@ impl CodexCredentialSelector {
         }
     }
 
+    pub(super) async fn assignment_cursor(
+        &self,
+        request: &CredentialSelectionInput<'_>,
+        binding: Option<&ProviderSessionAffinityBinding>,
+        pinned: bool,
+    ) -> Result<Option<u64>, CredentialSelectionError> {
+        let policy = request.attempt.account_selection_policy();
+        if request.attempt.is_diagnostic_required_account()
+            || pinned
+            || policy.strategy() != RotationStrategy::RoundRobin
+            || (binding.is_some()
+                && (request.follows_root()
+                    || policy.openai_account_affinity() == AccountAffinity::Preferred))
+        {
+            return Ok(None);
+        }
+        self.session_affinity
+            .round_robin_cursor(&self.provider_kind, request.attempt.client_api_key_ref())
+            .await
+            .map(Some)
+            .map_err(Into::into)
+    }
+
     pub(super) async fn admit_selected_session(
         &self,
         request: &CredentialSelectionInput<'_>,
@@ -46,15 +92,11 @@ impl CodexCredentialSelector {
         account: &ProviderAccountId,
         pinned: bool,
         queue_rejection: Option<gateway_core::concurrency::QueueRejection>,
+        assignment_cursor: Option<u64>,
     ) -> Result<Option<ProviderSessionAffinityBinding>, CredentialSelectionError> {
-        let Some(key) = request
+        let key = request
             .affinity_key()
-            .filter(|_| !request.attempt.is_diagnostic_required_account())
-        else {
-            return Ok(Some(ProviderSessionAffinityBinding::legacy(
-                account.clone(),
-            )));
-        };
+            .filter(|_| !request.attempt.is_diagnostic_required_account());
         let policy = request.attempt.account_selection_policy();
         let mut binding_account = account;
         if policy.openai_account_affinity() == AccountAffinity::Preferred
@@ -79,19 +121,52 @@ impl CodexCredentialSelector {
         if pinned && expected.is_some_and(|binding| binding.account_id() != account) {
             binding_account = expected.expect("observed binding").account_id();
         }
-        let result = tokio::time::timeout(
-            SESSION_AFFINITY_TIMEOUT,
-            self.session_affinity.admit_binding(
-                &self.provider_kind,
-                key,
-                expected,
-                binding_account,
-                policy.openai_session_binding_ttl(),
-            ),
-        )
-        .await
-        .map_err(binding_store_error)
-        .and_then(|result| result.map_err(binding_store_error));
+        let binding = expected
+            .filter(|binding| {
+                binding.account_id() == binding_account
+                    && binding.token().expose_to_store() != "legacy"
+            })
+            .cloned()
+            .unwrap_or_else(|| {
+                ProviderSessionAffinityBinding::new(
+                    binding_account.clone(),
+                    BindingToken::generate(),
+                )
+            });
+        let claim = key.map(|key| ProviderSessionClaim {
+            key,
+            expected,
+            binding: &binding,
+            ttl: policy.openai_session_binding_ttl(),
+        });
+        let admission = match assignment_cursor {
+            Some(cursor) => Some(ProviderAccountAdmission::RoundRobin {
+                client_key: request.attempt.client_api_key_ref(),
+                cursor,
+                session: claim,
+            }),
+            None => claim.map(ProviderAccountAdmission::Session),
+        };
+        let Some(admission) = admission else {
+            return Ok(Some(binding));
+        };
+        let result = self.admit_account(admission).await;
+        let result = match result {
+            Err(_) if request.discard_optional_cache_preference() && claim.is_some() => {
+                if let Some(cursor) = assignment_cursor {
+                    self.admit_account(ProviderAccountAdmission::RoundRobin {
+                        client_key: request.attempt.client_api_key_ref(),
+                        cursor,
+                        session: None,
+                    })
+                    .await
+                } else {
+                    Ok(true)
+                }
+            }
+            result => result,
+        }
+        .map(|admitted| admitted.then_some(binding));
         if let Ok(Some(binding)) = &result
             && let Some(reason) = queue_rejection
             && let Some(previous) =
@@ -114,11 +189,30 @@ impl CodexCredentialSelector {
                 }),
             );
         }
-        match result {
-            Err(_) if request.discard_optional_cache_preference() => Ok(Some(
-                ProviderSessionAffinityBinding::legacy(account.clone()),
-            )),
-            result => result,
+        result
+    }
+
+    async fn admit_account(
+        &self,
+        admission: ProviderAccountAdmission<'_>,
+    ) -> Result<bool, CredentialSelectionError> {
+        let result = tokio::time::timeout(
+            SESSION_AFFINITY_TIMEOUT,
+            self.session_affinity
+                .admit_account(&self.provider_kind, admission),
+        )
+        .await
+        .unwrap_or_else(|source| {
+            Err(ProviderStoreError::caused_by(
+                gateway_core::provider_ports::ProviderStoreErrorKind::Unavailable,
+                "admit provider account",
+                source,
+            ))
+        });
+        if admission.session().is_some() {
+            result.map_err(binding_store_error)
+        } else {
+            result.map_err(Into::into)
         }
     }
 

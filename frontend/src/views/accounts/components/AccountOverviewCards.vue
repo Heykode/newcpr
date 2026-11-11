@@ -84,6 +84,7 @@ const {
       </div>
       <p class="m-0 text-cp-xs text-cp-success-text">
         {{ t('common.status.healthy') }} <strong class="ml-1 font-mono">{{ formatInteger(summary.normal) }}</strong>
+        <span v-if="summary.quotaPaused" class="ml-2 text-cp-warning-text">额度暂停 {{ formatInteger(summary.quotaPaused) }}</span>
       </p>
       <div class="mt-auto flex flex-wrap items-center justify-between gap-1 border-t border-cp-border-secondary pt-1">
         <span class="text-cp-xs text-cp-text-tertiary">分组 {{ displayedCount ? page + 1 : 0 }}/{{ displayedCount ? totalPages : 0 }}</span>

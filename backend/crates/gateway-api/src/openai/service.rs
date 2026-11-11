@@ -1,5 +1,6 @@
 //! OpenAI wire adapter 到 Core 执行用例的唯一映射。
 
+use gateway_protocol::openai::OPENAI_PROTOCOL;
 use std::net::IpAddr;
 use std::sync::Arc;
 
@@ -80,6 +81,7 @@ impl OpenAiService {
         endpoint: &str,
     ) -> Result<StartedExecution, GatewayError> {
         let (operation, metadata) = request.into_parts();
+        let protocol = operation.protocol().to_owned();
         let public_model = PublicModelId::from_client_wire(metadata.requested_model().to_owned())
             .map_err(|_| {
             GatewayError::new(
@@ -99,7 +101,7 @@ impl OpenAiService {
                 public_model,
                 operation,
                 metadata: ExecutionRequestMetadata {
-                    protocol: "openai".to_owned(),
+                    protocol,
                     endpoint: endpoint.to_owned(),
                     transport,
                     stream: metadata.stream(),
@@ -133,7 +135,7 @@ impl OpenAiService {
                 upstream_model,
                 operation,
                 metadata: ExecutionRequestMetadata {
-                    protocol: "openai".to_owned(),
+                    protocol: OPENAI_PROTOCOL.to_owned(),
                     endpoint: endpoint.to_owned(),
                     transport: ClientTransport::HttpJson,
                     stream: false,
@@ -159,7 +161,7 @@ impl OpenAiService {
                 public_model,
                 operation: gateway_core::operation::Operation::Compact(request),
                 metadata: ExecutionRequestMetadata {
-                    protocol: "openai".to_owned(),
+                    protocol: OPENAI_PROTOCOL.to_owned(),
                     endpoint: "/v1/responses/compact".to_owned(),
                     transport: ClientTransport::HttpJson,
                     stream: false,

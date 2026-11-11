@@ -63,11 +63,14 @@ Web只展示两个账号等待输入，Key队列仍独立。旧四项仅接受�
 | --- | --- |
 | 请求 tuning、排序策略、请求间隔、可选显式总截止 | 账号存在性、enabled、凭据状态/到期、额度、cooldown、模型支持观测 |
 | `FrozenAccountScope`、required/native owner、Core 排除集 | Provider 会话排除状态、Redis `in_flight`、live 容量及 publication revision |
-| 当前选择的 Universe 和 RR cursor | 返回凭据前的完整账号事实及 runtime credential revision |
+| 当前请求的 Universe | 返回凭据前的完整账号事实、runtime credential revision 及本次准入 RR cursor |
 
 - 分组/Key 配置修改遵循已有新请求生效语义；FrozenAccountScope 不是在途实时撤权系统。
   停用、删除、凭据和健康变化仍阻止新的发送，不能借冻结为已失格账号继续放行。
-- `load_state` 在选择开始读取一次；轮询用只读 `load_signals`，不推进 RR。
+- 执行信号沿 `load_state` / 只读 `load_signals` 读取；每次完整重选重新读取成功分配游标，读取不推进 RR。
+  只有尚未入队、立即取得槽且未命中亲和的 RoundRobin 分配，才原子提交游标和绑定。
+  已入队晋升及排队中找到其他空闲账号不消耗轮询位置；入队前重查发现 Ready 仍属立即分配。
+  绑定/游标 CAS 冲突须等待执行租约实际释放后重选，不占用凭据快照冲突的三次预算。
   已入队后主要重读目标，完整池重载用于有界重选及成功前的容量观测。
 - live 容量必须使用既有 `AccountConcurrencyHandle`；缺失、失效或不可用时拒绝准入，
   不能回退到旧请求的更高上限或无限容量。该句柄含诊断所需账号，不替代资格检查。
@@ -364,3 +367,16 @@ API 不为账号排队提前提交 SSE 或发送业务 payload。
 - 边界：Reserved 同账号已有一个等待者且普通人数配置为 1，第二个仍可入队；该进程同 Provider/池已有 1024 等待者时拒绝。
 - 错误：把任意三次缓存/容量重查压成 coordinator 故障；正确做法仅对真实快照冲突计三次重试，其余受取消和截止约束。
 - 保留官方风险：strict 子线程等根绑定时可占据 FIFO 队首，执行槽空闲也可能队满。429 分类对齐不等于消除这种阻塞；改变该机制须独立授权、设计和验证。
+
+## 管理员额度暂停（v3.45.1）
+
+`quotaLimits` 为账号通用窗口 1..100 已用比例上限，空对象关闭；`quotaPaused` 与上游耗尽、
+临时限流独立。任一受限窗口达到上限即暂停，恢复须所有受限窗口都有明确低于上限的证据。
+缺失窗口保留既有确认，不能靠元数据覆盖解除暂停。写入检查 limits 和 merge-base CAS；
+保留本地请求起始/捕获时间、credential revision 和旧成功回写保护。
+
+即时候选、队列重扫、等待目标、提升前和取得租约后的重读均复核暂停。
+Strict 子线程跟随根 owner，owner 暂停返回 RequestPolicyDenied，不偷偷借其他账号；
+Preferred/Relaxed 在自身权限及原换号预算内可选择健康候选。固定账号和真实续接 owner
+仍遵守原归属。既有质量复测可诊断暂停账号，普通业务的额度透支不能绕过管理上限。
+保存/清空限制使用当前额度重算；正常 token refresh 保留额度证据，新授权清除旧身份额度。

@@ -70,7 +70,7 @@ const items = computed(() => props.windows.map((window) => {
       class="grid min-w-0 gap-3"
       :class="grouped ? 'grid-cols-2' : 'grid-cols-1'"
     >
-      <div v-for="item in items" :key="item.key" class="grid min-w-0 gap-1.5">
+      <div v-for="item in items" :key="item.key" class="grid min-w-0 content-start gap-1.5">
         <AccountQuotaOverdraftWindowLine
           v-if="item.overdraft?.active"
           :window="item.overdraft"

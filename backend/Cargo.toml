@@ -44,3 +44,7 @@ strip = "symbols"
 lto = "thin"
 codegen-units = 1
 panic = "abort"
+
+[patch.crates-io]
+# Official BEGIN cancellation rollback and SQLite security-version support.
+sqlx = { git = "https://github.com/transact-rs/sqlx", rev = "10462fa4414c6c7f1ed1d39bb31678e3b726878c" }

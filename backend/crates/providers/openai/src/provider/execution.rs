@@ -1,6 +1,7 @@
 //! OpenAI attempt 的选择、发送与响应流执行。
 
 use gateway_core::metering::{CalculatedCost, Usage};
+use gateway_protocol::openai::OPENAI_PROTOCOL;
 
 use super::*;
 
@@ -54,7 +55,7 @@ impl CodexProvider {
         candidate: &ProviderCandidate,
         context: AttemptContext,
     ) -> Result<ProviderStream, ProviderError> {
-        if image.payload().protocol() != PROVIDER_NAME || candidate.upstream_model().is_some() {
+        if image.payload().protocol() != OPENAI_PROTOCOL || candidate.upstream_model().is_some() {
             return Err(provider_error(
                 ProviderErrorKind::InvalidRequest,
                 UpstreamSendState::NotSent,
@@ -107,7 +108,7 @@ impl CodexProvider {
         candidate: &ProviderCandidate,
         context: AttemptContext,
     ) -> Result<ProviderStream, ProviderError> {
-        if search.payload().protocol() != PROVIDER_NAME || candidate.upstream_model().is_some() {
+        if search.payload().protocol() != OPENAI_PROTOCOL || candidate.upstream_model().is_some() {
             return Err(provider_error(
                 ProviderErrorKind::InvalidRequest,
                 UpstreamSendState::NotSent,
@@ -510,7 +511,7 @@ pub(super) fn attach_openai_session_update(
 
 pub(super) fn terminal_response_output(event: &ProviderEvent) -> Option<&[Value]> {
     let wire = event.wire_event()?;
-    if wire.protocol() != PROVIDER_NAME {
+    if wire.protocol() != OPENAI_PROTOCOL {
         return None;
     }
     let event_type = wire
@@ -787,7 +788,7 @@ pub(super) fn cold_json_response_stream(request: ColdJsonResponse) -> EventStrea
                 yield ProviderEvent::canonical(GatewayEvent::CalculatedCost(cost));
             }
         }
-        let wire = ProtocolWireEvent::raw_json(PROVIDER_NAME, response.body).map_err(|_| {
+        let wire = ProtocolWireEvent::raw_json(OPENAI_PROTOCOL, response.body).map_err(|_| {
             provider_error(ProviderErrorKind::Protocol, UpstreamSendState::Sent)
         })?;
         yield ProviderEvent::wire(wire);
@@ -1032,7 +1033,7 @@ pub(super) fn cold_response_stream_once(response: ColdResponse) -> EventStream {
         }
         if request.excel.is_none()
             && let Some(etag) = response.response_metadata.models_etag.as_deref()
-            && let Err(error) = catalog.observe_response_etag(etag)
+            && let Err(error) = catalog.observe_response_etag(&active_account, etag)
         {
             tracing::warn!(
                 error = %error,

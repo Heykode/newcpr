@@ -99,6 +99,18 @@ the retired administrator override cannot disable recovery. Accept historical
 boolean/null overrides on load, but never serialize or apply them.
 See `docs/ws-size-recovery-and-settings-audit.md` for the scoped difference ledger.
 
+## Upstream No-More-Retry Signal (v3.45.2)
+
+`NO_MORE_RETRY` in HTTP error bodies or SSE/WS error response headers is parsed
+by the shared OpenAI protocol helper and carried as `same_account_retry_blocked`
+through transport diagnostics, Provider classification and Core recovery.
+It prevents same-account connection/transport fallback, transient and credential
+retries, including a short Retry-After wait. Keep it in both full failure evidence
+and compact recovery diagnostics. It is not blanket retry prohibition: another
+account still requires the existing safe-send, continuation, output, account-switch
+and request-attempt budgets. The signal cannot override a fixed owner or authorize
+replaying already delivered output.
+
 ## Quota Error Contract
 
 Preserve optional HTTP status and a bounded ASCII error code. Map known states

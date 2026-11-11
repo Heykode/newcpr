@@ -2,6 +2,7 @@
 
 use bytes::Bytes;
 use gateway_core::event::{GatewayEvent, ProtocolWireEvent, ProviderEvent};
+use gateway_protocol::openai::OPENAI_PROTOCOL;
 use gateway_protocol::openai::sse::{
     encode_sse_event_with_metadata, response_failed_sse_data_from_error_event,
 };
@@ -10,8 +11,6 @@ use std::collections::BTreeMap;
 
 use super::error::ResponseEncodeError;
 use crate::openai::error::capacity_error_for_client;
-
-const OPENAI_PROTOCOL: &str = "openai";
 
 /// OpenAI Responses wire 的转发器。
 ///

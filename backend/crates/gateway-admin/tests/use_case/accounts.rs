@@ -804,6 +804,7 @@ impl FakeAccountStore {
 
     fn page_item(account: AccountRecord) -> AccountPageItem {
         let facts = AccountStatusFacts {
+            quota_paused: Default::default(),
             enabled: account.enabled,
             credential_state: account.credential_state,
             access_token_expires_at: account.access_token_expires_at.map(Into::into),
@@ -883,6 +884,7 @@ impl AccountStore for FakeAccountStore {
                 .collect(),
             total,
             summary: AccountSummary {
+                quota_paused: Default::default(),
                 total,
                 normal: 1,
                 quota_exhausted: 0,
@@ -1276,6 +1278,7 @@ impl AccountStore for FakeAccountStore {
     async fn batch_update_accounts(
         &self,
         command: BatchUpdateAccounts,
+        _pauses: gateway_admin::model::accounts::PreparedQuotaPauses,
         context: &MutationContext,
     ) -> AdminStoreResult<AccountsUpdateResult> {
         self.record("store.batch_update_accounts");
@@ -1379,7 +1382,7 @@ impl SettingsStore for StaticSettingsStore {
             max_concurrent_per_account: 1,
             openai_guardian_reserved_concurrency: 0,
             account_warmup_enabled: false,
-            account_warmup_schedule_time: "08:00".to_owned(),
+            account_warmup_cron: "0 8 * * *".to_owned(),
             account_warmup_model: None,
             codex_quota_overdraft_enabled: false,
             codex_quota_overdraft_probe_model: "gpt-6-astra".to_owned(),
@@ -2182,6 +2185,7 @@ async fn accounts_batch_update_should_commit_once_and_notify_each_provider() {
         .batch_update(
             &context("batch-update-request"),
             BatchUpdateAccounts {
+                quota_limits: Default::default(),
                 auto_use_quota_credits: None,
                 excel_recovery: None,
                 purchase_cost: None,
@@ -2404,6 +2408,7 @@ async fn accounts_list_should_degrade_quota_failure_to_empty_window_without_drop
     let events = events();
     let openai = FakeProviderAdmin::new("openai", events.clone());
     openai.set_quota(ProviderQuota {
+        paused_windows: Default::default(),
         credits: None,
         plan_type: None,
         observed_at: Some(Utc::now()),
@@ -2704,6 +2709,7 @@ async fn accounts_list_should_map_unknown_credential_to_error_not_normal() {
 async fn accounts_list_should_not_derive_rate_limited_from_provider_quota_view() {
     let provider = FakeProviderAdmin::new("openai", events());
     provider.set_quota(ProviderQuota {
+        paused_windows: Default::default(),
         credits: None,
         plan_type: None,
         observed_at: Some(Utc::now()),
@@ -2818,6 +2824,7 @@ async fn retired_state_metadata_is_absent_from_account_list_and_detail_in_every_
 async fn accounts_list_should_not_derive_exhaustion_from_provider_quota_view() {
     let provider = FakeProviderAdmin::new("openai", events());
     provider.set_quota(ProviderQuota {
+        paused_windows: Default::default(),
         credits: None,
         plan_type: None,
         observed_at: Some(Utc::now()),
@@ -3553,6 +3560,7 @@ async fn accounts_list_should_attach_local_usage_to_quota_windows() {
     let provider = FakeProviderAdmin::new("openai", events());
     let reset_at = Utc::now() + TimeDelta::hours(1);
     provider.set_quota(ProviderQuota {
+        paused_windows: Default::default(),
         credits: None,
         plan_type: None,
         observed_at: Some(Utc::now()),
@@ -3713,6 +3721,7 @@ async fn accounts_list_should_not_attach_account_usage_to_model_specific_quota_w
     let provider = FakeProviderAdmin::new("openai", events());
     let reset_at = Utc::now() + TimeDelta::days(7);
     provider.set_quota(ProviderQuota {
+        paused_windows: Default::default(),
         credits: None,
         plan_type: None,
         observed_at: Some(Utc::now()),
@@ -4009,6 +4018,7 @@ pub(super) fn document() -> ProviderDocument {
 
 fn empty_quota() -> ProviderQuota {
     ProviderQuota {
+        paused_windows: Default::default(),
         credits: None,
         plan_type: None,
         observed_at: None,
@@ -4072,6 +4082,8 @@ fn account_list_query() -> AccountListQuery {
 pub(super) fn account_record(kind: &str) -> AccountRecord {
     let now = Utc::now();
     AccountRecord {
+        quota_limits: Default::default(),
+        quota_paused: Default::default(),
         auto_use_quota_credits: false,
         outbound_proxy_enabled: true,
         effective_excel_models: Default::default(),

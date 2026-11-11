@@ -87,6 +87,9 @@ pub struct UsageTurnStateSummaryView {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageListRecordView {
+    pub error_origin: &'static str,
+    pub client_status_code: Option<u16>,
+    pub upstream_status_code: Option<u16>,
     pub error_kind: Option<String>,
     pub websocket_close_code: Option<u16>,
     pub continuation_unavailable_reason: Option<String>,
@@ -133,6 +136,7 @@ pub struct UsageListRecordView {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageRecordView {
+    pub error_origin: &'static str,
     pub websocket_close_code: Option<u16>,
     pub continuation_unavailable_reason: Option<String>,
     pub upstream_connection_exit_reason: Option<String>,
@@ -260,7 +264,7 @@ pub struct UsageAttemptView {
     pub transport: String,
     pub send_state: String,
     pub outcome: String,
-    pub downstream_committed: bool,
+    pub downstream_committed: Option<bool>,
     pub status_code: Option<u16>,
     pub provider_error_code: Option<String>,
     pub failure_class: Option<String>,
@@ -441,6 +445,7 @@ pub struct DashboardAccountRequestBucketView {
 pub struct DashboardPoolSummaryView {
     pub total: u64,
     pub normal: u64,
+    pub quota_paused: u64,
     pub quota_exhausted: u64,
     pub rate_limited: u64,
     pub disabled: u64,

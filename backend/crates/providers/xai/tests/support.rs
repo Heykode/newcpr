@@ -255,6 +255,20 @@ impl MemoryProviderAccountStore {
 
 #[async_trait]
 impl ProviderAccountStore for MemoryProviderAccountStore {
+    async fn load_account_catalogs(
+        &self,
+        _provider: &ProviderKind,
+    ) -> Result<Vec<gateway_core::account::StoredAccountCatalog>, StoreError> {
+        Ok(vec![])
+    }
+    async fn save_account_catalog(
+        &self,
+        _observation: &gateway_core::account::AccountCatalogObservation,
+        _document: &[u8],
+    ) -> Result<bool, StoreError> {
+        Ok(false)
+    }
+
     async fn create_account(&self, account: NewProviderAccount) -> Result<(), StoreError> {
         let mut accounts = lock(&self.accounts);
         if accounts.contains_key(account.account.id()) {
@@ -757,6 +771,21 @@ impl MemoryCooldownPort {
 }
 
 impl ProviderSessionAffinityPort for TestSessionAffinity {
+    fn round_robin_cursor<'a>(
+        &'a self,
+        _: &'a ProviderKind,
+        _: &'a gateway_core::policy::ClientApiKeyId,
+    ) -> futures::future::BoxFuture<'a, Result<u64, ProviderStoreError>> {
+        Box::pin(async { panic!("xAI does not use OpenAI round-robin admission") })
+    }
+    fn admit_account<'a>(
+        &'a self,
+        _: &'a ProviderKind,
+        _: gateway_core::provider_ports::ProviderAccountAdmission<'a>,
+    ) -> futures::future::BoxFuture<'a, Result<bool, ProviderStoreError>> {
+        Box::pin(async { panic!("xAI does not use OpenAI account admission") })
+    }
+
     fn admit_binding<'a>(
         &'a self,
         _provider_kind: &'a ProviderKind,

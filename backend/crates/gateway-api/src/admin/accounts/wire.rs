@@ -69,6 +69,7 @@ pub(super) struct ApplyAccountTemplateRequest {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BatchUpdateAccountsRequest {
+    pub quota_limits: Option<gateway_core::account::AccountQuotaLimits>,
     pub auto_use_quota_credits: Option<bool>,
     pub excel_recovery: Option<gateway_admin::model::excel_recovery::ExcelRecoveryConfig>,
     pub purchase_cost: Option<gateway_admin::model::account_purchase::AccountPurchaseUpdate>,
@@ -159,7 +160,8 @@ impl BatchUpdateAccountsRequest {
             self.outbound_proxy_id.clone(),
             self.outbound_proxy_url.clone(),
         )?;
-        if self.auto_use_quota_credits.is_none()
+        if self.quota_limits.is_none()
+            && self.auto_use_quota_credits.is_none()
             && self.excel_recovery.is_none()
             && self.purchase_cost.is_none()
             && self.custom_name.is_none()
@@ -189,6 +191,7 @@ impl BatchUpdateAccountsRequest {
     pub(super) fn into_command(self) -> Result<BatchUpdateAccounts, WireValidationError> {
         self.validate()?;
         Ok(BatchUpdateAccounts {
+            quota_limits: self.quota_limits,
             auto_use_quota_credits: self.auto_use_quota_credits,
             excel_recovery: self.excel_recovery,
             purchase_cost: self.purchase_cost,
@@ -340,6 +343,7 @@ pub struct AccountPageData {
 pub struct AccountSummaryView {
     pub total: u64,
     pub normal: u64,
+    pub quota_paused: u64,
     pub quota_exhausted: u64,
     pub rate_limited: u64,
     pub disabled: u64,
@@ -350,6 +354,8 @@ pub struct AccountSummaryView {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountView {
+    pub quota_limits: gateway_core::account::AccountQuotaLimits,
+    pub quota_limits_supported: bool,
     pub auto_use_quota_credits: bool,
     pub error_protection: Option<gateway_admin::model::accounts::AccountProtectionView>,
     pub custom_name: Option<String>,
@@ -523,6 +529,7 @@ pub struct AccountGroupRefView {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountQuotaView {
+    pub paused_windows: Vec<String>,
     pub refreshed_at_display: String,
     pub refreshed_at_relative: Option<crate::time::RelativeTimeView>,
     pub limit_reached: bool,
@@ -581,6 +588,7 @@ pub struct AccountQuotaCreditsView {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountQuotaWindowView {
+    pub account_wide: bool,
     pub key: String,
     pub group: String,
     pub limit_id: Option<String>,

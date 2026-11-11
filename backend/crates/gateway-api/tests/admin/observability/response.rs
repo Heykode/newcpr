@@ -254,6 +254,7 @@ async fn dashboard_summary_should_include_quota_exhaustion_in_unavailable_headli
         range: TimeRange::new(now - Duration::hours(1), now).expect("dashboard range"),
         totals: Default::default(),
         provider_accounts: AccountPoolMetrics {
+            quota_paused: Default::default(),
             total: 1002,
             normal: 943,
             quota_exhausted: 52,
@@ -496,7 +497,7 @@ async fn usage_detail_should_keep_attempt_snapshot_contract() {
                 upstream_transport: Some("http_sse".to_owned()),
                 upstream_send_state: Some("sent".to_owned()),
                 outcome: gateway_admin::model::observability::RequestOutcome::Failed,
-                downstream_committed: false,
+                downstream_committed: Some(false),
                 status_code: Some(429),
                 provider_error_code: Some("rate_limit".to_owned()),
                 failure_kind: Some("rate_limited".to_owned()),
@@ -1139,6 +1140,9 @@ async fn usage_route_should_expose_table_facts_without_detail_payload() {
         .lock()
         .expect("usage records")
         .push(UsageListRecord {
+            client_status_code: Default::default(),
+            has_upstream_error: Default::default(),
+            upstream_status_code: Default::default(),
             error_kind: None,
             websocket_close_code: None,
             continuation_unavailable_reason: None,

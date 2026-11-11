@@ -549,6 +549,7 @@ mod provider {
     fn account(provider: &str) -> AccountDirectoryItem {
         let now = Utc::now();
         let facts = AccountStatusFacts {
+            quota_paused: Default::default(),
             enabled: true,
             credential_state: CredentialState::Ready,
             access_token_expires_at: None,
@@ -565,6 +566,8 @@ mod provider {
             codex_quota_overdraft: None,
             effective_concurrency_limit: std::num::NonZeroU32::new(3).expect("concurrency limit"),
             account: AccountRecord {
+                quota_limits: Default::default(),
+                quota_paused: Default::default(),
                 auto_use_quota_credits: false,
                 outbound_proxy_enabled: true,
                 effective_excel_models: Default::default(),
@@ -619,6 +622,7 @@ mod provider {
             in_flight: None,
             health_timeline: Vec::new(),
             quota: ProviderQuota {
+                paused_windows: Default::default(),
                 credits: None,
                 plan_type: None,
                 observed_at: None,

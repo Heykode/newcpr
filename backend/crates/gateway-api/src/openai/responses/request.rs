@@ -1,5 +1,6 @@
 //! OpenAI Responses JSON 到 Core 路由事实与不透明 wire payload 的单一解码边界。
 
+use gateway_protocol::openai::OPENAI_PROTOCOL;
 use std::{borrow::Cow, fmt, net::IpAddr};
 
 use axum::http::{HeaderMap, HeaderName, HeaderValue};
@@ -14,7 +15,6 @@ use serde_json::{Map, Value};
 
 use super::error::RequestDecodeError;
 
-const OPENAI_PROTOCOL: &str = "openai";
 const OPENAI_SUBAGENT_KEY: &str = "x-openai-subagent";
 const CODEX_TURN_METADATA_KEY: &str = "x-codex-turn-metadata";
 const PASSTHROUGH_HEADERS_CONTEXT_KEY: &str = "opaque_request_headers";
@@ -295,6 +295,24 @@ pub struct DecodedResponsesRequest {
 }
 
 impl DecodedResponsesRequest {
+    pub(in crate::openai) fn from_protocol_operation(
+        operation: Operation,
+        requested_model: String,
+        stream: bool,
+    ) -> Self {
+        Self {
+            operation,
+            metadata: ResponsesRequestMetadata {
+                requested_model,
+                stream,
+                store: false,
+                continuation: ContinuationIntent::None,
+                client_ip: None,
+                user_agent: None,
+            },
+        }
+    }
+
     /// 附着当前 WebSocket 连接保存的 Provider 私有上一轮状态。
     #[must_use]
     pub fn with_provider_session_state(mut self, state: ProviderSessionState) -> Self {

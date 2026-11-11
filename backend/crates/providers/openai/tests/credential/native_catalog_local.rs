@@ -1,6 +1,5 @@
 use super::catalog::{
-    CLIENT_KEY, OFFICIAL_FIXTURE, client_scope, seed_account, service_with_catalog_cache,
-    wire_profile,
+    OFFICIAL_FIXTURE, client_scope, seed_account, service_with_catalog_cache, wire_profile,
 };
 use crate::support::{MemoryAccountStore, catalog_cache};
 
@@ -27,7 +26,7 @@ use provider_openai::transport::profile::{
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::time::timeout;
-use wiremock::matchers::{header, method, path, query_param};
+use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 struct CatalogEgressStore(Mutex<ProviderEgressConfig>);
@@ -138,7 +137,7 @@ async fn native_catalog_intersects_excel_capabilities_after_cache_without_changi
         .with_excel_models(ExcelModels::try_from(vec!["gpt-5.4".into()]).unwrap());
     replace_account_facts(&store, excel.clone()).await;
     let native_scope = client_scope(std::slice::from_ref(&native));
-    let mixed_scope = client_scope(&[native, excel.clone()]);
+    let mixed_scope = client_scope(&[native.clone(), excel.clone()]);
     let server = MockServer::start().await;
     let mut fixture: Value = serde_json::from_slice(OFFICIAL_FIXTURE).unwrap();
     fixture["models"][0]["multi_agent_version"] = json!("v2");
@@ -151,13 +150,15 @@ async fn native_catalog_intersects_excel_capabilities_after_cache_without_changi
         .mount(&server)
         .await;
     let service = service_with_catalog_cache(&store, server.uri(), catalog_cache());
+    service.refresh_account_catalog(native.id()).await.unwrap();
+    service
+        .invalidate_accounts(&[excel.id().clone()])
+        .await
+        .unwrap();
     let read = |scope| {
         let service = &service;
         async move {
-            let models = service
-                .client_model_catalog(&CLIENT_KEY, scope, "0.154.0")
-                .await
-                .unwrap();
+            let models = service.client_model_catalog(scope).await.unwrap();
             serde_json::from_slice::<Value>(models[0].payload.body()).unwrap()
         }
     };
@@ -218,17 +219,13 @@ async fn native_catalog_excel_switch_does_not_reuse_synthesized_capabilities() {
         .mount(&server)
         .await;
     let service = service_with_catalog_cache(&store, server.uri(), catalog_cache());
-    let models = service
-        .client_model_catalog(&CLIENT_KEY, &scope, "0.154.0")
-        .await
-        .unwrap();
+    service.refresh_account_catalog(account.id()).await.unwrap();
+    let models = service.client_model_catalog(&scope).await.unwrap();
     let descriptor: Value = serde_json::from_slice(models[0].payload.body()).unwrap();
     assert_eq!(descriptor.get("multi_agent_version"), Some(&Value::Null));
     store.set_responses_upstream(account.id().as_str(), ResponsesUpstream::Codex);
-    let models = service
-        .client_model_catalog(&CLIENT_KEY, &scope, "0.154.0")
-        .await
-        .unwrap();
+    service.refresh_account_catalog(account.id()).await.unwrap();
+    let models = service.client_model_catalog(&scope).await.unwrap();
     let descriptor: Value = serde_json::from_slice(models[0].payload.body()).unwrap();
     assert_eq!(descriptor, fixture["models"][0]);
     assert_eq!(
@@ -238,20 +235,18 @@ async fn native_catalog_excel_switch_does_not_reuse_synthesized_capabilities() {
 }
 
 #[tokio::test]
-async fn native_catalog_freezes_effective_custom_profile_and_invalidates_default_release() {
+async fn background_catalog_refresh_freezes_effective_profile_and_preserves_installation_id() {
     let store = Arc::new(MemoryAccountStore::default());
     let account = seed_account(&store, "acct_profile_catalog").await;
     let installation_id = store
         .repository()
         .load_runtime_credential(&account)
         .await
-        .expect("credential")
+        .unwrap()
         .installation_id;
-    let scope = client_scope(&[account]);
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/codex/models"))
-        .and(query_param("client_version", "0.154.0"))
         .respond_with(
             ResponseTemplate::new(200)
                 .set_body_raw(OFFICIAL_FIXTURE, "application/json")
@@ -265,70 +260,59 @@ async fn native_catalog_freezes_effective_custom_profile_and_invalidates_default
     let service = service_with_profile(&store, server.uri(), profile.clone());
     let first = tokio::spawn({
         let service = service.clone();
-        let scope = scope.clone();
-        async move {
-            service
-                .client_model_catalog(&CLIENT_KEY, &scope, "0.154.0")
-                .await
-        }
+        let id = account.id().clone();
+        async move { service.refresh_account_catalog(&id).await }
     });
     timeout(Duration::from_secs(5), async {
-        while server
-            .received_requests()
-            .await
-            .expect("requests")
-            .is_empty()
-        {
-            tokio::time::sleep(Duration::from_millis(1)).await;
+        while server.received_requests().await.unwrap().is_empty() {
+            tokio::task::yield_now().await;
         }
     })
     .await
-    .expect("first request reached loopback");
+    .unwrap();
     let custom = CodexWireProfile::parse_user_agent(
         "Codex Desktop/0.155.1 (Mac OS 15.1; arm64) catalog-contract (Codex Desktop; 26.901.11111)",
     )
-    .expect("custom profile");
+    .unwrap();
     profile
         .apply_override(CodexWireProfileOverride::Custom(Box::new(custom.clone())))
-        .expect("custom override");
-    service
-        .client_model_catalog(&CLIENT_KEY, &scope, "0.154.0")
-        .await
-        .expect("custom");
-    first.await.expect("join").expect("original frozen request");
+        .unwrap();
+    first.await.unwrap().unwrap();
+    service.refresh_account_catalog(account.id()).await.unwrap();
     profile.update_bundled_release(&CodexBundledReleaseProfile {
-        codex_version: "0.156.0".to_owned(),
-        desktop_version: "26.902.11111".to_owned(),
-        desktop_build: "902".to_owned(),
+        codex_version: "0.156.0".into(),
+        desktop_version: "26.902.11111".into(),
+        desktop_build: "902".into(),
         verified_at: Utc::now(),
     });
     service
-        .client_model_catalog(&CLIENT_KEY, &scope, "0.154.0")
+        .client_model_catalog(&client_scope(std::slice::from_ref(&account)))
         .await
-        .expect("default release must not replace custom cache identity");
+        .unwrap();
+    assert_eq!(server.received_requests().await.unwrap().len(), 2);
     profile
         .apply_override(CodexWireProfileOverride::Default)
-        .expect("default");
-    service
-        .client_model_catalog(&CLIENT_KEY, &scope, "0.154.0")
-        .await
-        .expect("new default");
-    let requests = server.received_requests().await.expect("requests");
-    assert_eq!(requests.len(), 3);
+        .unwrap();
+    service.refresh_account_catalog(account.id()).await.unwrap();
+    let requests = server.received_requests().await.unwrap();
     for (request, expected) in requests.iter().zip([initial, custom, profile.snapshot()]) {
         assert_eq!(request.headers["user-agent"], expected.user_agent());
         assert_eq!(request.headers["version"], expected.codex_version);
         assert_eq!(request.headers["originator"], expected.originator);
+        assert_eq!(request.headers["x-codex-installation-id"], installation_id);
         assert_eq!(
             request.headers["authorization"],
             "Bearer access-acct_profile_catalog"
         );
         assert_eq!(
-            request.headers["chatgpt-account-id"],
-            "chatgpt-acct_profile_catalog"
+            request
+                .url
+                .query_pairs()
+                .find(|(key, _)| key == "client_version")
+                .unwrap()
+                .1,
+            expected.codex_version
         );
-        assert_eq!(request.headers["x-codex-installation-id"], installation_id);
-        assert!(!request.headers.contains_key("x-codex-turn-metadata"));
     }
     server.verify().await;
 }
@@ -446,7 +430,7 @@ async fn native_catalog_rechecks_plan_user_account_and_live_eligibility() {
         .await;
     let service = service_with_catalog_cache(&store, server.uri(), catalog_cache());
     service
-        .client_model_catalog(&CLIENT_KEY, &scope, "0.154.0")
+        .refresh_account_catalog(original.id())
         .await
         .expect("original");
     store
@@ -459,7 +443,7 @@ async fn native_catalog_rechecks_plan_user_account_and_live_eligibility() {
         .await
         .expect("plan-only update");
     service
-        .client_model_catalog(&CLIENT_KEY, &scope, "0.154.0")
+        .refresh_account_catalog(original.id())
         .await
         .expect("new plan");
     let changed_user = ProviderAccount::new(
@@ -478,7 +462,7 @@ async fn native_catalog_rechecks_plan_user_account_and_live_eligibility() {
     );
     replace_account_facts(&store, changed_user.clone()).await;
     service
-        .client_model_catalog(&CLIENT_KEY, &scope, "0.154.0")
+        .refresh_account_catalog(original.id())
         .await
         .expect("new user");
     replace_account_facts(
@@ -491,7 +475,7 @@ async fn native_catalog_rechecks_plan_user_account_and_live_eligibility() {
     )
     .await;
     service
-        .client_model_catalog(&CLIENT_KEY, &scope, "0.154.0")
+        .refresh_account_catalog(original.id())
         .await
         .expect("new upstream account");
     assert_eq!(
@@ -506,16 +490,12 @@ async fn native_catalog_rechecks_plan_user_account_and_live_eligibility() {
         .await
         .expect("disable");
     assert!(matches!(
-        service
-            .client_model_catalog(&CLIENT_KEY, &scope, "0.154.0")
-            .await,
+        service.client_model_catalog(&scope).await,
         Err(CodexCredentialCatalogError::NoEligibleCredential)
     ));
     store.delete_account(original.id()).await.expect("delete");
     assert!(matches!(
-        service
-            .client_model_catalog(&CLIENT_KEY, &scope, "0.154.0")
-            .await,
+        service.client_model_catalog(&scope).await,
         Err(CodexCredentialCatalogError::NoEligibleCredential)
     ));
     server.verify().await;
@@ -525,7 +505,6 @@ async fn native_catalog_rechecks_plan_user_account_and_live_eligibility() {
 async fn native_catalog_uses_account_proxy_and_does_not_reuse_direct_catalog() {
     let store = Arc::new(MemoryAccountStore::default());
     let account = seed_account(&store, "acct_catalog_proxy").await;
-    let scope = client_scope(std::slice::from_ref(&account));
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/codex/models"))
@@ -535,7 +514,7 @@ async fn native_catalog_uses_account_proxy_and_does_not_reuse_direct_catalog() {
         .await;
     let service = service_with_catalog_cache(&store, server.uri(), catalog_cache());
     service
-        .client_model_catalog(&CLIENT_KEY, &scope, "0.154.0")
+        .refresh_account_catalog(account.id())
         .await
         .expect("direct");
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("proxy");
@@ -557,7 +536,7 @@ async fn native_catalog_uses_account_proxy_and_does_not_reuse_direct_catalog() {
     });
     timeout(
         Duration::from_secs(5),
-        service.client_model_catalog(&CLIENT_KEY, &scope, "0.154.0"),
+        service.refresh_account_catalog(account.id()),
     )
     .await
     .expect("proxy deadline")
@@ -570,7 +549,7 @@ async fn native_catalog_uses_account_proxy_and_does_not_reuse_direct_catalog() {
         .await
         .expect("proxy captured")
         .expect("join");
-    for (request, version) in requests.iter().zip(["0.154.0", "0.144.0"]) {
+    for (request, version) in requests.iter().zip(["0.144.0", "0.144.0"]) {
         assert!(request.starts_with(&format!(
             "GET {}/codex/models?client_version={version} HTTP/1.1\r\n",
             server.uri()
@@ -589,7 +568,6 @@ async fn native_catalog_uses_account_proxy_and_does_not_reuse_direct_catalog() {
 async fn native_catalog_uses_ipv6_source_and_fences_cached_data_after_route_reload() {
     let store = Arc::new(MemoryAccountStore::default());
     let account = seed_account(&store, "acct_catalog_ipv6").await;
-    let scope = client_scope(std::slice::from_ref(&account));
     let egress_store = Arc::new(CatalogEgressStore(Mutex::new(egress_config(&account))));
     let runtime = CodexEgressRuntime::load(egress_store.clone())
         .await
@@ -610,7 +588,7 @@ async fn native_catalog_uses_ipv6_source_and_fences_cached_data_after_route_relo
     });
     timeout(
         Duration::from_secs(5),
-        service.client_model_catalog(&CLIENT_KEY, &scope, "0.154.0"),
+        service.refresh_account_catalog(account.id()),
     )
     .await
     .expect("catalog deadline")
@@ -633,9 +611,7 @@ async fn native_catalog_uses_ipv6_source_and_fences_cached_data_after_route_relo
     runtime.reload().await.expect("disable source");
     assert!(
         matches!(
-            service
-                .client_model_catalog(&CLIENT_KEY, &scope, "0.154.0")
-                .await,
+            service.refresh_account_catalog(account.id()).await,
             Err(CodexCredentialCatalogError::Upstream {
                 egress: Some(CodexEgressError::SourceDisabled),
                 status: None,
@@ -658,7 +634,6 @@ async fn native_catalog_uses_ipv6_source_and_fences_cached_data_after_route_relo
 async fn native_catalog_explicit_ipv6_never_falls_back_to_ipv4() {
     let store = Arc::new(MemoryAccountStore::default());
     let account = seed_account(&store, "acct_catalog_ipv4").await;
-    let scope = client_scope(std::slice::from_ref(&account));
     let egress_store = Arc::new(CatalogEgressStore(Mutex::new(egress_config(&account))));
     let runtime = CodexEgressRuntime::load(egress_store)
         .await
@@ -675,7 +650,7 @@ async fn native_catalog_explicit_ipv6_never_falls_back_to_ipv4() {
     assert!(matches!(
         timeout(
             Duration::from_secs(5),
-            service.client_model_catalog(&CLIENT_KEY, &scope, "0.154.0")
+            service.refresh_account_catalog(account.id())
         )
         .await
         .expect("deadline"),
@@ -704,108 +679,4 @@ async fn native_catalog_explicit_ipv6_never_falls_back_to_ipv4() {
             .is_err(),
         "no IPv4 payload"
     );
-}
-
-#[tokio::test]
-async fn native_catalog_invalidations_preserve_inflight_bound_and_cancelled_slots_are_reusable() {
-    let store = Arc::new(MemoryAccountStore::default());
-    let account = seed_account(&store, "acct_catalog_inflight").await;
-    let scope = client_scope(&[account]);
-    let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/codex/models"))
-        .respond_with(ResponseTemplate::new(200).set_body_raw(OFFICIAL_FIXTURE, "application/json"))
-        .mount(&server)
-        .await;
-    let service = service_with_catalog_cache(&store, server.uri(), catalog_cache());
-    let versions = (0..32)
-        .map(|index| format!("0.154.{index}"))
-        .collect::<Vec<_>>();
-    let mut requests = versions
-        .iter()
-        .map(|version| Box::pin(service.client_model_catalog(&CLIENT_KEY, &scope, version)))
-        .collect::<Vec<_>>();
-    for request in &mut requests {
-        assert!(futures::poll!(request.as_mut()).is_pending());
-    }
-    assert!(matches!(
-        service
-            .client_model_catalog(&CLIENT_KEY, &scope, "0.155.0")
-            .await,
-        Err(CodexCredentialCatalogError::Cache)
-    ));
-    service
-        .invalidate()
-        .expect("invalidate while requests are pending");
-    assert!(matches!(
-        service
-            .client_model_catalog(&CLIENT_KEY, &scope, "0.155.0")
-            .await,
-        Err(CodexCredentialCatalogError::Cache)
-    ));
-    drop(requests);
-    timeout(
-        Duration::from_secs(5),
-        service.client_model_catalog(&CLIENT_KEY, &scope, "0.155.0"),
-    )
-    .await
-    .expect("deadline")
-    .expect("cancelled owners release cache capacity");
-}
-
-#[tokio::test]
-async fn native_catalog_tries_at_most_three_in_scope_accounts_and_stops_on_first_success() {
-    let store = Arc::new(MemoryAccountStore::default());
-    let mut accounts = Vec::new();
-    for index in 0..4 {
-        accounts.push(seed_account(&store, &format!("acct_catalog_attempt_{index}")).await);
-    }
-    let scope = client_scope(&accounts);
-    let server = MockServer::start().await;
-    for index in 0..3 {
-        Mock::given(method("GET"))
-            .and(path("/codex/models"))
-            .and(header(
-                "authorization",
-                format!("Bearer access-acct_catalog_attempt_{index}"),
-            ))
-            .respond_with(ResponseTemplate::new(503))
-            .expect(1)
-            .mount(&server)
-            .await;
-    }
-    let service = service_with_catalog_cache(&store, server.uri(), catalog_cache());
-    assert!(
-        service
-            .client_model_catalog(&CLIENT_KEY, &scope, "0.154.0")
-            .await
-            .is_err()
-    );
-    assert_eq!(server.received_requests().await.expect("requests").len(), 3);
-    server.verify().await;
-    server.reset().await;
-    for index in 0..2 {
-        let response = if index == 0 {
-            ResponseTemplate::new(503)
-        } else {
-            ResponseTemplate::new(200).set_body_raw(OFFICIAL_FIXTURE, "application/json")
-        };
-        Mock::given(method("GET"))
-            .and(path("/codex/models"))
-            .and(header(
-                "authorization",
-                format!("Bearer access-acct_catalog_attempt_{index}"),
-            ))
-            .respond_with(response)
-            .expect(1)
-            .mount(&server)
-            .await;
-    }
-    service.invalidate().expect("reset failed catalog");
-    service
-        .client_model_catalog(&CLIENT_KEY, &scope, "0.154.0")
-        .await
-        .expect("second account succeeds");
-    assert_eq!(server.received_requests().await.expect("requests").len(), 2);
-    server.verify().await;
 }

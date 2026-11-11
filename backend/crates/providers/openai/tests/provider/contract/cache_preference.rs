@@ -524,3 +524,43 @@ async fn preferred_queued_cache_read_failure_discards_preference_without_rebindi
     assert_eq!(leases.capacity.waiting.load(Ordering::SeqCst), 0);
     assert!(server.received_requests().await.unwrap().is_empty());
 }
+
+#[tokio::test]
+async fn round_robin_retains_the_assignment_when_a_cache_preference_cannot_be_saved() {
+    use gateway_core::account::{AccountAffinity, AccountSelectionPolicy, RotationStrategy};
+    use gateway_core::provider_ports::ProviderSessionAffinityPort;
+
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_affinity").await;
+    let affinity = Arc::new(MemorySessionAffinity::with_claim_barrier(2));
+    let server = MockServer::start().await;
+    let provider = provider_with_affinity_and_base_url(&store, affinity.clone(), server.uri());
+    let attempt = context_with_policy(
+        "req_cache_rr",
+        CancellationToken::new(),
+        contract_account_scope(),
+        AccountSelectionPolicy::new(
+            RotationStrategy::RoundRobin,
+            NonZeroU32::MIN,
+            Duration::ZERO,
+        )
+        .with_openai_account_affinity(AccountAffinity::Preferred),
+    );
+    let key = attempt.client_api_key_ref().clone();
+    let result = provider
+        .execute(planned_request("openai", generate_operation()), attempt)
+        .await
+        .unwrap();
+    assert_eq!(
+        result.metadata().provider_account_id().as_str(),
+        "acct_affinity"
+    );
+    assert_eq!(affinity.binding_count(), 0);
+    assert_eq!(
+        affinity
+            .round_robin_cursor(&ProviderKind::new("openai").unwrap(), &key)
+            .await
+            .unwrap(),
+        1
+    );
+}

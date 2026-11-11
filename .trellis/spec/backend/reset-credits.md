@@ -40,12 +40,12 @@ Reuse AccountsService, existing identity/egress, ledger and three batch executio
 
 ### Signatures
 AdminAuth/no-store GET `/api/admin/accounts/reset-credits/automatic?accountId=...`;
-POST same route: `{accountId,revision,config:{enabled,fiveHourUsedMillis,sevenDayUsedMillis}}`.
+POST same route: `{accountId,revision,config:{enabled,fiveHourUsedMillis,sevenDayUsedMillis,onLowWeeklyQuota,maxWeeklyRemainingPercent}}`.
 Result: `{accountId,revision,config,checkedAt,message}`. Migration 0067 adds policies/jobs.
 Default off, thresholds 100000; integers are thousandths of one percentage point.
 
 ### Contracts
-- Accept zero or 100..100000; zero ignores that window. Both zero skips checks.
+- Legacy mode accepts zero or 100..100000; zero ignores that window. Both zero skips legacy checks.
   Only AccountWide 18000/604800-second windows qualify, not feature buckets.
   Require fresh post-refresh timestamps, finite used percentages and future resets.
 - Durable 120-second check leases, at most three across instances, bounded scans and
@@ -56,7 +56,7 @@ Default off, thresholds 100000; integers are thousandths of one percentage point
 - Freeze earliest eligible card and request ID; recheck policy, identity and manual
   operation fences at queue, claim and consume. Refresh quota again before consume.
   Keep account enablement, ordinary routing and all fingerprint code unchanged.
-- Record last_trigger atomically with begin_consume, not enqueue. Unsent cancellation
+- Legacy mode records last_trigger atomically with begin_consume, not enqueue. Unsent cancellation
   can be checked again. Sent/unknown operations keep the original request. Unchanged
   high usage with a new timestamp cannot spend another card. Confirmed recovery rearms.
 - Unknown results block indefinitely; explicit original-ID resolution remains possible
@@ -78,4 +78,18 @@ Run migration/reopen, API validation and synthetic mobile/desktop UI; no real re
 
 ### Wrong vs Correct
 Wrong: mark a cycle spent at enqueue, suppressing valid checks for days after cancellation.
-Correct: set the fence with the durable consume permit under the ledger lock.
+Correct: legacy mode fences the durable consume permit; weekly mode fences only confirmed redemption under the same ledger lock.
+
+## Weekly remaining quota mode (official v3.45.1)
+
+- `onLowWeeklyQuota` defaults false. When enabled it replaces legacy five-hour, weekly-used
+  and expiring-card triggers. Only AccountWide 604800-second quota with a future reset qualifies.
+- Finite used values are clamped to 0..100; remaining must be strictly below 100 and at or below
+  `maxWeeklyRemainingPercent` (missing threshold means 0). Missing/invalid evidence does not consume.
+- Migration 0090 persists `awaiting_weekly_recovery_since`. Set it only after the matching ledger
+  claim confirms `reset` or `already_redeemed`, never at enqueue/begin. `no_credit` and
+  `nothing_to_reset` permit later checks; ambiguous results retain existing unknown-operation fencing.
+- A fresh observation above the threshold rearms. A moving reset timestamp alone is not recovery.
+  Policy edits on the same identity preserve the fence; explicit reauthorization of changed upstream
+  identity clears old identity's recovery and legacy trigger fences. It does not enable the policy.
+- Reuse existing per-account worker and durable ledger; do not add a second global automation worker.

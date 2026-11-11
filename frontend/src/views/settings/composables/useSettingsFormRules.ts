@@ -31,12 +31,13 @@ export function useSettingsFormRules(form: SettingsForm) {
     'requestTuning.maxAccountSwitches': integer(0, 31),
     'requestTuning.maxRequestAttempts': integer(1, 32),
     'requestTuning.maxRetryAfterSeconds': integer(0, 4_294_967_295),
-    'accountWarmupScheduleTime': {
-      required: true,
-      pattern: /^(?:[01]\d|2[0-3]):[0-5]\d(?:,(?:[01]\d|2[0-3]):[0-5]\d)*$/,
+    'accountWarmupCron': {
+      required: form.accountWarmupEnabled,
+      pattern: /^\S+(?: +\S+){4}$/,
+      max: 255,
       transform: value => value.trim(),
       trigger: ['blur', 'change'],
-      message: '时间须为 HH:MM，多个时间用逗号分隔',
+      message: '请填写五段 Cron 表达式',
     },
     'accountWarmupModel': {
       required: form.accountWarmupEnabled,

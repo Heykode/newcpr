@@ -26,10 +26,18 @@ const CHAT_DELIVERY_ERROR: &str = "The gateway could not deliver the Chat respon
 pub(in crate::openai) enum HttpResponseFormat {
     #[default]
     Responses,
+    Messages,
+    MessageTokenCount,
     Chat {
         include_usage: bool,
         identity: ChatIdentity,
     },
+}
+
+impl HttpResponseFormat {
+    pub(in crate::openai) fn is_messages(&self) -> bool {
+        matches!(self, Self::Messages | Self::MessageTokenCount)
+    }
 }
 
 pub(in crate::openai) struct HttpResponseEncoder {
@@ -37,6 +45,8 @@ pub(in crate::openai) struct HttpResponseEncoder {
     chat: Option<ChatStreamEncoder>,
     chat_identity: Option<ChatIdentity>,
     decoder: SseEventDecoder,
+    messages: Option<super::messages_response::MessagesEncoder>,
+    token_count: bool,
 }
 
 impl HttpResponseEncoder {
@@ -44,7 +54,9 @@ impl HttpResponseEncoder {
         Self {
             responses: OpenAiResponsesEncoder::new(),
             chat: match format {
-                HttpResponseFormat::Responses => None,
+                HttpResponseFormat::Responses
+                | HttpResponseFormat::Messages
+                | HttpResponseFormat::MessageTokenCount => None,
                 HttpResponseFormat::Chat {
                     include_usage,
                     identity,
@@ -52,9 +64,15 @@ impl HttpResponseEncoder {
             },
             chat_identity: match format {
                 HttpResponseFormat::Chat { identity, .. } => Some(identity.clone()),
-                HttpResponseFormat::Responses => None,
+                HttpResponseFormat::Responses
+                | HttpResponseFormat::Messages
+                | HttpResponseFormat::MessageTokenCount => None,
             },
             decoder: SseEventDecoder::default(),
+            messages: format
+                .is_messages()
+                .then(super::messages_response::MessagesEncoder::default),
+            token_count: matches!(format, HttpResponseFormat::MessageTokenCount),
         }
     }
 
@@ -62,10 +80,35 @@ impl HttpResponseEncoder {
         self.chat.is_some()
     }
 
+    pub(in crate::openai) fn requires_terminal_confirmation(&self) -> bool {
+        self.is_chat() || self.messages.is_some()
+    }
+    pub(in crate::openai) fn terminal_bytes(&self) -> Bytes {
+        if self.messages.is_some() {
+            Bytes::new()
+        } else {
+            Bytes::from_static(gateway_protocol::openai::sse::DONE_SSE_FRAME.as_bytes())
+        }
+    }
+    pub(in crate::openai) fn missing_terminal_error(&self) -> GatewayError {
+        if self.is_chat() {
+            HttpEncodeError::ChatDelivery.gateway_error()
+        } else {
+            GatewayError::new(
+                GatewayErrorKind::UpstreamUnavailable,
+                "The upstream message ended without a terminal event.",
+            )
+            .with_client_code("invalid_upstream_response")
+        }
+    }
+
     pub(in crate::openai) fn push_sse(
         &mut self,
         event: &ProviderEvent,
     ) -> Result<Vec<Bytes>, HttpEncodeError> {
+        if let Some(messages) = self.messages.as_mut() {
+            return Ok(messages.push_sse(event));
+        }
         let Some(chat) = self.chat.as_mut() else {
             return Ok(self.responses.push_sse(event));
         };
@@ -88,6 +131,9 @@ impl HttpResponseEncoder {
     }
 
     pub(in crate::openai) fn is_completed(&self) -> bool {
+        if let Some(messages) = &self.messages {
+            return messages.is_completed();
+        }
         self.chat.as_ref().map_or_else(
             || self.responses.is_completed(),
             ChatStreamEncoder::is_completed,
@@ -95,6 +141,9 @@ impl HttpResponseEncoder {
     }
 
     pub(in crate::openai) fn has_wire_failure(&self) -> bool {
+        if let Some(messages) = &self.messages {
+            return messages.has_wire_failure();
+        }
         self.chat.as_ref().map_or_else(
             || self.responses.has_wire_failure(),
             ChatStreamEncoder::has_wire_failure,
@@ -122,6 +171,10 @@ impl HttpResponseEncoder {
         mut self,
         events: &[ProviderEvent],
     ) -> Result<Value, HttpEncodeError> {
+        if self.messages.is_some() {
+            return super::messages_response::collect(events, self.token_count)
+                .map_err(HttpEncodeError::Responses);
+        }
         if let Some(identity) = &self.chat_identity {
             let response =
                 super::responses::collect_response(events).map_err(HttpEncodeError::Responses)?;
@@ -151,7 +204,13 @@ impl HttpResponseEncoder {
     }
 
     pub(in crate::openai) fn error_frame(&self, error: &GatewayError) -> Bytes {
-        let (_, default_type, default_code) = gateway_error_contract(error.kind());
+        let (status, default_type, default_code) = gateway_error_contract(error.kind());
+        if self.messages.is_some() {
+            return super::messages::stream_error(&super::messages::error_payload(
+                &json!({"error":{"message":error.client_message()}}),
+                status,
+            ));
+        }
         let error_type = error.client_error_type().unwrap_or(default_type);
         let code = client_error_code(error.client_error_code().unwrap_or(default_code));
         if self.is_chat() {

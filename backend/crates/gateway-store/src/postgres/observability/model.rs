@@ -354,6 +354,7 @@ pub struct CalculatedUsageBillingFact {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ProviderAccountMetrics {
+    pub quota_paused: u64,
     pub total: u64,
     pub normal: u64,
     pub quota_exhausted: u64,
@@ -499,6 +500,9 @@ pub struct DashboardObservation {
 /// 使用记录列表所需的窄投影；完整执行、路由和客户端详情按 ID 单独读取。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UsageListRecord {
+    pub has_upstream_error: bool,
+    pub client_status_code: Option<u16>,
+    pub upstream_status_code: Option<u16>,
     pub error_kind: Option<String>,
     pub websocket_close_code: Option<u16>,
     pub continuation_unavailable_reason: Option<String>,
@@ -667,7 +671,7 @@ pub struct UsageAttemptObservation {
     pub upstream_transport: Option<String>,
     pub upstream_send_state: Option<String>,
     pub outcome: String,
-    pub downstream_committed: bool,
+    pub downstream_committed: Option<bool>,
     pub status_code: Option<u16>,
     pub provider_error_code: Option<String>,
     pub failure_kind: Option<String>,

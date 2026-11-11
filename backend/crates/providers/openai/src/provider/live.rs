@@ -6,6 +6,7 @@
 //! 后续 sideband / hangup 由 [`CodexLiveGateway`] 用钉住账号的凭据直连
 //! `api.openai.com`；音频不经过网关。
 
+use gateway_protocol::openai::OPENAI_PROTOCOL;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -493,7 +494,7 @@ fn cold_live_call_stream(request: ColdLiveCall) -> EventStream {
 
         let response_meta = ResponseMeta::for_provider_endpoint(&request_id);
         yield ProviderEvent::canonical(GatewayEvent::Started(response_meta.clone()));
-        let wire = ProtocolWireEvent::raw_http_body(PROVIDER_NAME, response.body).map_err(|_| {
+        let wire = ProtocolWireEvent::raw_http_body(OPENAI_PROTOCOL, response.body).map_err(|_| {
             provider_error(ProviderErrorKind::Protocol, UpstreamSendState::Sent)
         })?;
         yield ProviderEvent::wire(wire);

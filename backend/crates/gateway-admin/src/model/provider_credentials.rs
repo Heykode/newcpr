@@ -814,6 +814,7 @@ pub struct ProviderQuotaReadRequest<'a> {
 /// Provider 已解析的 quota 结果及其不透明差异字段。
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProviderQuota {
+    pub paused_windows: Vec<String>,
     /// 上游额度响应明确提供的套餐，可用于补全账号展示。
     pub plan_type: Option<String>,
     pub observed_at: Option<DateTime<Utc>>,

@@ -5,6 +5,7 @@
 //! 账号拨号。上游合同对应官方 Codex 的 realtime_call 与 realtime_websocket：
 //! `POST /v1/live` 引导 WebRTC SDP，`GET /v1/live/{call_id}` 提供事件 sideband。
 
+use gateway_protocol::openai::OPENAI_PROTOCOL;
 mod http;
 mod websocket;
 
@@ -172,7 +173,7 @@ pub(crate) fn live_call_operation(
             "invalid_request",
         ))
     };
-    let payload = RawHttpPayload::new("openai", body).map_err(|_| invalid())?;
+    let payload = RawHttpPayload::new(OPENAI_PROTOCOL, body).map_err(|_| invalid())?;
     ProviderHttpRequest::new(
         LIVE_CALLS_ENDPOINT,
         ProviderHttpMethod::Post,

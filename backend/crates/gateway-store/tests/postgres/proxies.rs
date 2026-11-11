@@ -448,6 +448,7 @@ async fn partial_batch_proxy_updates_preserve_credentials_groups_and_unselected_
         .await
         .unwrap();
     let mut command = BatchUpdateAccounts {
+        quota_limits: Default::default(),
         auto_use_quota_credits: None,
         excel_recovery: None,
         purchase_cost: None,
@@ -471,7 +472,7 @@ async fn partial_batch_proxy_updates_preserve_credentials_groups_and_unselected_
         outbound_proxy: Some(AccountProxySelection::Saved(proxy.id.clone())),
     };
     admin
-        .batch_update_accounts(command.clone(), &context)
+        .batch_update_accounts(command.clone(), Default::default(), &context)
         .await
         .unwrap();
     let after_binding = sqlx::query_scalar::<_, serde_json::Value>(
@@ -487,7 +488,7 @@ async fn partial_batch_proxy_updates_preserve_credentials_groups_and_unselected_
     command.outbound_proxy = None;
     command.concurrency_limit = Some(None);
     admin
-        .batch_update_accounts(command.clone(), &context)
+        .batch_update_accounts(command.clone(), Default::default(), &context)
         .await
         .unwrap();
     let scheduling: Vec<(bool, Option<i64>, i16, String, String)> = sqlx::query_as(
@@ -519,7 +520,7 @@ async fn partial_batch_proxy_updates_preserve_credentials_groups_and_unselected_
     command.group_ids = Some(vec![]);
     command.outbound_proxy = Some(AccountProxySelection::Direct);
     admin
-        .batch_update_accounts(command, &context)
+        .batch_update_accounts(command, Default::default(), &context)
         .await
         .unwrap();
     assert_eq!(store.get(&proxy.id).await.unwrap().account_count, 0);
@@ -1348,6 +1349,7 @@ async fn legacy_urls_join_one_catalog_entry_and_invalid_batch_rolls_back() {
         admin
             .batch_update_accounts(
                 BatchUpdateAccounts {
+                    quota_limits: Default::default(),
                     auto_use_quota_credits: None,
                     excel_recovery: None,
                     purchase_cost: None,
@@ -1372,6 +1374,7 @@ async fn legacy_urls_join_one_catalog_entry_and_invalid_batch_rolls_back() {
                         OutboundProxy::parse("http://127.0.0.1:9090").unwrap()
                     )),
                 },
+                Default::default(),
                 &context()
             )
             .await

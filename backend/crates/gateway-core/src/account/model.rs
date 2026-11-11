@@ -509,10 +509,11 @@ impl QuotaState {
     }
 }
 
-/// 对外唯一的五态账号状态。
+/// 对外唯一的账号状态。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AccountStatus {
     Normal,
+    QuotaPaused,
     QuotaExhausted,
     RateLimited,
     Disabled,
@@ -524,6 +525,7 @@ impl AccountStatus {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Normal => "normal",
+            Self::QuotaPaused => "quota_paused",
             Self::QuotaExhausted => "quota_exhausted",
             Self::RateLimited => "rate_limited",
             Self::Disabled => "disabled",
@@ -535,6 +537,7 @@ impl AccountStatus {
     pub fn parse(value: &str) -> Option<Self> {
         match value {
             "normal" => Some(Self::Normal),
+            "quota_paused" => Some(Self::QuotaPaused),
             "quota_exhausted" => Some(Self::QuotaExhausted),
             "rate_limited" => Some(Self::RateLimited),
             "disabled" => Some(Self::Disabled),
@@ -548,10 +551,11 @@ impl AccountStatus {
     pub const fn sort_rank(self) -> u8 {
         match self {
             Self::Normal => 0,
-            Self::RateLimited => 1,
-            Self::QuotaExhausted => 2,
-            Self::Error => 3,
-            Self::Disabled => 4,
+            Self::QuotaPaused => 1,
+            Self::RateLimited => 2,
+            Self::QuotaExhausted => 3,
+            Self::Error => 4,
+            Self::Disabled => 5,
         }
     }
 }
@@ -594,6 +598,7 @@ impl AccountErrorReason {
 /// 唯一状态解析器的完整输入事实。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountStatusFacts {
+    pub quota_paused: bool,
     pub enabled: bool,
     pub credential_state: CredentialState,
     pub access_token_expires_at: Option<SystemTime>,
@@ -659,6 +664,9 @@ pub fn resolve_account_operational_status(
             rate_limited_until: facts.rate_limited_until,
         };
     }
+    if facts.quota_paused {
+        return status_projection(AccountStatus::QuotaPaused);
+    }
     status_projection(AccountStatus::Normal)
 }
 
@@ -694,6 +702,8 @@ pub struct ProviderAccount {
     excel_403_action: super::Excel403Action,
     concurrency_limit: Option<AccountConcurrencyLimit>,
     weight: AccountWeight,
+    quota_limits: super::AccountQuotaLimits,
+    quota_paused: bool,
     model_access: super::AccountModelAccess,
     credential_state: CredentialState,
     quota: QuotaState,
@@ -709,6 +719,22 @@ pub struct ProviderAccount {
 }
 
 impl ProviderAccount {
+    #[must_use]
+    pub fn with_quota_limits(mut self, limits: super::AccountQuotaLimits, paused: bool) -> Self {
+        // 只有限额账号需要在取得租约前检测额度窗口的并发更新
+        self.quota_paused = paused;
+        self.quota_limits = limits;
+        self
+    }
+    #[must_use]
+    pub const fn quota_limits(&self) -> &super::AccountQuotaLimits {
+        &self.quota_limits
+    }
+    #[must_use]
+    pub const fn quota_paused(&self) -> bool {
+        self.quota_paused
+    }
+
     /// 创建账号快照。
     #[must_use]
     pub fn new(
@@ -741,6 +767,8 @@ impl ProviderAccount {
             excel_403_action: Default::default(),
             concurrency_limit: None,
             weight: AccountWeight::DEFAULT,
+            quota_limits: super::AccountQuotaLimits::disabled(),
+            quota_paused: false,
             model_access: super::AccountModelAccess::all(),
             credential_state: CredentialState::Unknown,
             quota: QuotaState::unknown(),
@@ -1120,6 +1148,7 @@ impl ProviderAccount {
     ) -> AccountStatusProjection {
         resolve_account_status(
             &AccountStatusFacts {
+                quota_paused: self.quota_paused,
                 enabled,
                 credential_state: self.credential_state,
                 access_token_expires_at: self.access_token_expires_at,
@@ -1494,6 +1523,8 @@ pub enum CredentialCasOutcome {
 /// Provider quota 的一次完整观察结果。
 #[derive(Clone, PartialEq)]
 pub struct QuotaObservation {
+    /// Persist the local threshold decision with its observation and policy fence.
+    pub quota_pause: Option<super::QuotaPauseDecision>,
     pub account_id: ProviderAccountId,
     pub expected_revision: CredentialRevision,
     pub quota: OpaqueProviderData,

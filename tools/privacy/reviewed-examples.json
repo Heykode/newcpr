@@ -2702,5 +2702,85 @@
     "file_sha256": "6a8b9cccfc9acf315cf31efd6756b32ec68550fe6c0c96668edf98ad384ea8f6",
     "line_sha256": "9e479e1097600c03e5b02a059871972d553af67489633306a1ac5dbb3264de7c",
     "reason": "Synthetic network-policy, forwarding or DNS resolution test; no deployment endpoint."
+  },
+  {
+    "path": "backend/crates/gateway-admin/tests/model/provider_credentials.rs",
+    "rule": "authenticated-url",
+    "line": 262,
+    "file_sha256": "c390856d125e3e225bfaf97610f79baf574d8ce5c3629f4ca67a413ccaa20a49",
+    "line_sha256": "c85204f4407a8fb3204045ad397ed644fc6cb87825bfac0e6e809b0324b82079",
+    "reason": "Manually re-reviewed the unchanged documentation-domain proxy fixture after quota capability fields were added; no network or real credential is involved."
+  },
+  {
+    "path": "backend/crates/gateway-core/tests/provider_ports/mod.rs",
+    "rule": "non-example-ip",
+    "line": 108,
+    "file_sha256": "a7c41ade6984257a6eea9f859bf54c21d2aac8b70d619156ef2527ea702f30cd",
+    "line_sha256": "05d89b4df3a4f65f2e9099ae7ccd18b0f07bc27a3581c139da0ef893ab85b149",
+    "reason": "Manually re-reviewed the unchanged IPv4-mapped documentation-address rejection fixture after Cron tests were added; local parsing only."
+  },
+  {
+    "path": "backend/crates/gateway-core/tests/provider_ports/mod.rs",
+    "rule": "non-example-ip",
+    "line": 109,
+    "file_sha256": "a7c41ade6984257a6eea9f859bf54c21d2aac8b70d619156ef2527ea702f30cd",
+    "line_sha256": "126f7e34cdcf2e64e4165af6d03bceb76dc979de37bd316e3032c0b0164d7fcb",
+    "reason": "Manually re-reviewed the unchanged link-local IPv6 rejection fixture after Cron tests were added; local parsing only."
+  },
+  {
+    "path": "backend/crates/gateway-core/tests/provider_ports/mod.rs",
+    "rule": "non-example-ip",
+    "line": 110,
+    "file_sha256": "a7c41ade6984257a6eea9f859bf54c21d2aac8b70d619156ef2527ea702f30cd",
+    "line_sha256": "abf54a266f9141c37476c644e9c9a11de98856acf1241ba8b563d7d7e6b5c838",
+    "reason": "Manually re-reviewed the unchanged multicast IPv6 rejection fixture after Cron tests were added; no packets are sent."
+  },
+  {
+    "path": "backend/crates/gateway-core/tests/provider_ports/mod.rs",
+    "rule": "non-example-ip",
+    "line": 111,
+    "file_sha256": "a7c41ade6984257a6eea9f859bf54c21d2aac8b70d619156ef2527ea702f30cd",
+    "line_sha256": "3205b3a46a19d6eb2fea5855b6f7792ada9cf87e5ceb7af955077f4a4b8a5e3d",
+    "reason": "Manually re-reviewed the unchanged site-local IPv6 rejection fixture after Cron tests were added; this is an address-category test."
+  },
+  {
+    "path": "backend/crates/gateway-core/tests/provider_ports/mod.rs",
+    "rule": "non-example-ip",
+    "line": 118,
+    "file_sha256": "a7c41ade6984257a6eea9f859bf54c21d2aac8b70d619156ef2527ea702f30cd",
+    "line_sha256": "866bff72cf6ad4b537e5f863f4ded96b3cf59862650e132cbcde1167ef1d25a6",
+    "reason": "Manually re-reviewed the unchanged documentation and unique-local IPv6 acceptance fixtures after Cron tests were added; no deployed endpoint is represented."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/credential/native_catalog_local.rs",
+    "rule": "authenticated-url",
+    "line": 522,
+    "file_sha256": "1f39f45463f431566c6396f8d821ef3c5ee874bda0f3652885f42c5bdd90458c",
+    "line_sha256": "df037a1268a2fe553e47104c6feee56ef05f531030847103b46d3a4582695472",
+    "reason": "Manually re-reviewed unchanged synthetic proxy authentication after account-scoped catalog fixture updates; the destination remains an ephemeral loopback listener."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/transport/tls.rs",
+    "rule": "gitleaks:cpr-api-key",
+    "line": 139,
+    "line_sha256": "0c9d5d94fc2f00276883de931fc26f0ced43e5e9a0b7730407fc6b6c869b1e4e",
+    "file_sha256": "fbea0db4945546d0e93aec6038eb188437a93dbdfa27b2e6b6b7e14671ef2092",
+    "reason": "Manually re-reviewed existing Rust key-epoch test function declaration after adding the official binary TLS reference test; not a credential."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/transport/tls.rs",
+    "rule": "authenticated-url",
+    "line": 242,
+    "line_sha256": "9aa104ea897354d3eb1e73d00d4b556f8ca5fb140acba2afb88e290615cc59ac",
+    "file_sha256": "fbea0db4945546d0e93aec6038eb188437a93dbdfa27b2e6b6b7e14671ef2092",
+    "reason": "Manually re-reviewed existing synthetic user/pass HTTPS proxy URL for an ephemeral loopback TLS fixture; no production endpoint or credential."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/transport/tls.rs",
+    "rule": "gitleaks:cpr-api-key",
+    "line": 340,
+    "line_sha256": "1a58dbbe57cd503aa12612f4280a27ea49f813090650ceaf6490c90504084620",
+    "file_sha256": "fbea0db4945546d0e93aec6038eb188437a93dbdfa27b2e6b6b7e14671ef2092",
+    "reason": "Manually re-reviewed existing Rust HTTP/WebSocket certificate test function declaration after adding the official binary TLS reference test; not a credential."
   }
 ]

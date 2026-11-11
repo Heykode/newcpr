@@ -35,6 +35,7 @@ fn operational_status_preserves_disabled_account_facts_without_enabling_scheduli
     ] {
         for enabled in [true, false] {
             let facts = AccountStatusFacts {
+                quota_paused: false,
                 enabled,
                 credential_state,
                 access_token_expires_at: Some(now + Duration::from_secs(3600)),

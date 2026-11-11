@@ -1097,3 +1097,15 @@ match window statistics by exact stable window key.
   an old response/afterLeave callback cannot update or erase a reopened modal.
 - Retain existing swipe handles and selection exclusions for interactive buttons.
   Verify real dialogs and the menu at desktop/mobile widths with synthetic data.
+
+## v3.45.1 account controls
+
+- Quota limit editing uses account-wide window keys, retains saved missing-window keys and validates
+  integer 1..100 (empty clears). Save through batchUpdateAccounts, then reload the current account.
+- quota_paused is a distinct scheduling status. Dashboard limited-quota count includes paused and
+  exhausted accounts. Keep local multi-group badges wrapping naturally on desktop and mobile.
+- Concurrency details grow with actual request rows. Keep an accessible modal and viewport scrolling;
+  do not restore a fixed empty inner height to satisfy an older layout assertion.
+- Weekly reset opt-in and threshold remain in the existing per-account AutoReset panel.
+- Warmup uses five-field Cron, disabled/empty after migration 0088. Re-enabling requires a valid Cron;
+  use the existing deployment timezone and durable slot claim. Only clearly idle 0% windows qualify.

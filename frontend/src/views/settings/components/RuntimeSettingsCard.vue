@@ -11,7 +11,9 @@ import BaseForm from '@/components/base/BaseForm/index.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseSegmented from '@/components/base/BaseSegmented.vue'
 import BaseSwitch from '@/components/base/BaseSwitch.vue'
+import HelpPopover from '@/components/HelpPopover.vue'
 import RequestLocationFields from '@/components/RequestLocationFields.vue'
+import { t } from '@/i18n'
 
 defineProps<{ disabled?: boolean, units: RuntimeUnitFields }>()
 const maxConcurrentPerAccount = defineModel<string>('maxConcurrentPerAccount', { required: true })
@@ -285,9 +287,12 @@ const tuningValues = {
     </div>
 
     <div class="mt-4 grid gap-2">
-      <BaseSwitch v-model="requestTuning.switchAccountOnQueueFailure" label="账号排队失败后尝试切换账号" show-label />
+      <div class="flex items-center gap-2">
+        <BaseSwitch v-model="requestTuning.switchAccountOnQueueFailure" label="账号排队失败后尝试切换账号" show-label />
+        <HelpPopover :label="t('settings.concurrency.queueFailureHelpTitle')" :content="[t('settings.concurrency.queueFailureAttempt'), t('settings.concurrency.queueFailureRestrictions')].join('\n\n')" />
+      </div>
       <p class="text-cp-xs text-cp-text-secondary">
-        Key 和账号从各自首次入队独立计时，重试不重置账号预算，总请求期限优先。开关默认关闭；开启后，账号队列满或等待超时仅立即重选一次，不再次排队。严格模式只在新账号准入成功后改绑，固定账号和必须跟随根会话的请求不切换。
+        {{ t('settings.concurrency.queueFailureHelp') }}。Key 和账号从各自首次入队独立计时，重试不重置账号预算，总请求期限优先。开关默认关闭；严格模式只在新账号准入成功后改绑。
       </p>
     </div>
 
@@ -318,7 +323,10 @@ const tuningValues = {
         <BaseFormItem label="真实限流冷却时间" description="收到真实限流后等待多久，单位：秒">
           <BaseInput v-model="tuningValues.rateLimitCooldownSeconds.value" aria-label="真实限流冷却时间" type="number" />
         </BaseFormItem>
-        <BaseFormItem prop="requestTuning.maxRetryAfterSeconds" label="上游建议等待上限（秒）" description="单次 Retry-After 超过此值时尝试安全换号，无法换号则返回原错误；0 不接受正数等待建议">
+        <BaseFormItem prop="requestTuning.maxRetryAfterSeconds" label="上游建议等待上限（秒）">
+          <template #label-extra>
+            <HelpPopover :label="t('settings.concurrency.retryAfter.label')" :content="[t('settings.concurrency.retryAfter.waitLimit'), t('settings.concurrency.retryAfter.zeroLimit'), t('settings.concurrency.retryAfter.switchConditions')].join('\n\n')" />
+          </template>
           <BaseInput v-model="tuningValues.maxRetryAfterSeconds.value" aria-label="上游建议等待上限（秒）" type="number" min="0" max="4294967295" step="1" />
         </BaseFormItem>
         <h3 class="mb-0 mt-3 text-sm font-medium text-cp-text-secondary sm:col-span-2">

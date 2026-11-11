@@ -3,11 +3,12 @@
 use super::*;
 use crate::credential::QuotaRefreshAuthority;
 use crate::transport::CodexRateLimitObservation;
+use gateway_protocol::openai::OPENAI_PROTOCOL;
 
 pub(super) fn endpoint_requested_model(
     payload: &gateway_core::operation::RawJsonPayload,
 ) -> Option<gateway_core::routing::PublicModelId> {
-    if payload.protocol() != PROVIDER_NAME {
+    if payload.protocol() != OPENAI_PROTOCOL {
         return None;
     }
     endpoint_requested_model_body(payload.body())
@@ -684,7 +685,11 @@ pub(super) fn compile_model_capabilities(model: &CodexCatalogModel) -> ProviderM
     // Catalog membership is enough to publish Generate. `supported_in_api` is advisory;
     // the upstream response is authoritative for normal and diagnostic requests.
     let capabilities = ModelCapabilities::new(
-        BTreeSet::from([OperationKind::Generate, OperationKind::Compact]),
+        BTreeSet::from([
+            OperationKind::Generate,
+            OperationKind::Compact,
+            OperationKind::CountTokens,
+        ]),
         None,
     )
     .with_upstream_feature_validation();
@@ -937,6 +942,10 @@ pub(super) fn map_selection_error(error: CredentialSelectionError) -> ProviderEr
                 None => error,
             }
         }
+        CredentialSelectionError::QuotaPolicyFiltered => provider_error(
+            ProviderErrorKind::RequestPolicyDenied,
+            UpstreamSendState::NotSent,
+        ),
         CredentialSelectionError::SessionPolicyRestricted => provider_error(
             ProviderErrorKind::SessionPolicyRestricted,
             UpstreamSendState::NotSent,
@@ -962,6 +971,7 @@ pub(super) fn map_selection_error(error: CredentialSelectionError) -> ProviderEr
         )),
         CredentialSelectionError::InvalidCredential(_)
         | CredentialSelectionError::AccountSnapshotChanged
+        | CredentialSelectionError::AccountAdmissionChanged
         | CredentialSelectionError::Store(_)
         | CredentialSelectionError::Coordinator(_)
         | CredentialSelectionError::CookiePolicy(_) => provider_error(

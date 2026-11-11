@@ -347,6 +347,7 @@ pub trait AccountStore: Send + Sync {
     async fn batch_update_accounts(
         &self,
         command: BatchUpdateAccounts,
+        pauses: crate::model::accounts::PreparedQuotaPauses,
         context: &MutationContext,
     ) -> AdminStoreResult<AccountsUpdateResult>;
 

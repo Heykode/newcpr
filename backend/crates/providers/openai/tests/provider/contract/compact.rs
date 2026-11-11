@@ -259,7 +259,7 @@ async fn compact_respects_account_scope_and_client_session_affinity() {
     create_account(&store, "acct_affinity_switch_b").await;
     let key = ClientApiKeyId::new("key_openai_contract").expect("key");
     let observation = provider.request_observation(&operation, &key);
-    assert!(observation.compact);
+    assert!(matches!(operation, Operation::Compact(_)));
     assert_eq!(
         observation.continuation.affinity_hash,
         provider
@@ -399,7 +399,7 @@ async fn compact_publishes_capability_but_rejects_models_missing_from_valid_cata
         .expect(0)
         .mount(&server)
         .await;
-    let provider = provider_with_base_url(&store, server.uri());
+    let provider = provider_with_loaded_catalog(&store, server.uri()).await;
     let models = provider.query_model_capabilities().await.expect("catalog");
     assert_eq!(models.len(), 1);
     assert!(

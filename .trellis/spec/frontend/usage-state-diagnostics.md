@@ -82,3 +82,10 @@ Bad: showing the account's newest active State as an older request's evidence.
 Wrong: prefetch all raw values, cache them in preferences, or label equal lengths
 as accepted. Correct: keep request-local summaries, fetch only visible detail,
 clear it on dismissal and report observed facts without acceptance claims.
+
+## v3.45.1 error source display
+
+Use saved upstream errors/status/close facts before inferring proxy or connection origin; otherwise
+show unknown. Client HTTP 200 can already be committed before an SSE failure, so display client and
+upstream status separately. Explicit incomplete failures render failed. Attempts remain marked
+incomplete when the backend cannot prove completeness; do not invent a completeness algorithm.

@@ -139,9 +139,12 @@
         "urlFormat": "Enter an HTTP or HTTPS URL without credentials, query parameters, or a fragment",
         "urlRequired": "Enter the full upstream API URL",
         "apiKeyFormat": "API key cannot contain spaces or control characters",
-        "transportRequired": "Select a transport"
+        "transportRequired": "Select a transport",
+        "protocolRequired": "Select an upstream protocol"
       },
-      "apiKeyRequired": "Enter an API key"
+      "apiKeyRequired": "Enter an API key",
+      "protocolLabel": "Upstream protocol",
+      "messagesTransportHelp": "Messages upstreams use HTTP/SSE"
     },
     "batchEdit": {
       "title": "Edit accounts",
@@ -341,8 +344,8 @@
       "jsonDescription": "Paste or upload account JSON to import accounts or update matching credentials",
       "packageDescription": "Paste or upload a CPR account package to import accounts from multiple providers",
       "oauthDescription": "Import a {label} account through browser authorization",
-      "apiKeyDescription": "Connect an upstream service compatible with the OpenAI Responses API",
-      "pasteAccessTokenLineByLineIf": "Paste the Access token line by line. If the Refresh token is not included, it cannot be automatically renewed",
+      "apiKeyDescription": "Connect an upstream service using Responses or Messages",
+      "pasteAccessTokenLineByLineIf": "Paste one access token per line (automatic renewal requires a refresh token)",
       "refreshTokenDescription": "Paste one refresh token per line, access tokens are obtained automatically during import",
       "accountSettings": "Account settings",
       "reauthorizeAccount": "Reauthorize account",
@@ -386,7 +389,7 @@
       "entryProgress": "Entry progress",
       "accountsImported": "Accounts imported: {importedAccounts}",
       "itemProcessingProgress": "Item processing progress",
-      "itemsToBeCheckedMayHaveBeen": "The items to be checked may have been stored in the database. Please check the account first before deciding whether to re-import it",
+      "itemsToBeCheckedMayHaveBeen": "These items may already be saved, so check the accounts before re-importing",
       "filterImportDetails": "Filter import details",
       "thereAreNoItemsToBeProcessed": "There are no items to be processed yet",
       "importEntryResults": "Import entry results",
@@ -526,15 +529,14 @@
         "resetNotNeeded": "This quota window does not need a reset, checking again later",
         "resetIncomplete": "The upstream service did not complete the last automatic reset",
         "scheduleHelp": "Check once a day at a random time, staggered across accounts",
-        "verifyHelp": "Verify reset credits before expiry, automatically skip credits already used elsewhere",
-        "label": "Automatically use expiring reset credits"
+        "verifyHelp": "Recheck the credit and any weekly quota conditions before use",
+        "label": "Automatically use expiring reset credits",
+        "awaitingWeeklyRecovery": "Waiting for weekly quota to recover after the last credit"
       },
       "automaticallyUseResetCard": "Automatically use resets",
       "automaticUsageRules": "Automatic usage rules",
-      "setGlobalLeadTime": "Set global lead time",
       "minutesInAdvance": "{leadMinutes} min in advance",
-      "leadTime": "Lead time",
-      "nextUse": "Next use: {nextConsumeAtDisplay}",
+      "nextUse": "Scheduled expiry use: {nextConsumeAtDisplay}",
       "autoUsageSettingsFailedToLoad": "Auto usage settings failed to load",
       "limitReset": "Limit reset",
       "confirmLastReset": "Confirm last reset",
@@ -573,7 +575,9 @@
       "alreadyProcessed": "This reset was already processed, refresh the reset credit list",
       "noCredits": "No reset credits available",
       "resetNotNeeded": "This quota window does not need a reset",
-      "upstreamDeclined": "The upstream service did not reset the quota: {code}"
+      "upstreamDeclined": "The upstream service did not reset the quota: {code}",
+      "setTiming": "Set when to use credits",
+      "weeklyThreshold": "Weekly quota remaining ≤ {percent}%"
     },
     "status": {
       "accountStatus": "Account status",
@@ -638,6 +642,18 @@
       "pasteAtLeastOne": "Paste at least one {label}",
       "missingProvider": "The import file contains no {provider} accounts",
       "importFilesMustBeJsonObjects": "Import files must be JSON objects"
+    },
+    "quotaLimits": {
+      "badge": "Quota paused",
+      "title": "General quota scheduling limits",
+      "reached": "Scheduling limit reached: {windows}",
+      "expectedReset": "Expected reset",
+      "windowReset": "{window} reset",
+      "recovery": "Wait for usage to reset or adjust the window limit",
+      "help": "Scheduling pauses when any window reaches its limit and resumes when all windows are below their limits",
+      "unlimited": "No limit",
+      "empty": "No general quota windows observed",
+      "invalid": "Enter a whole number from 1 to 100 or leave blank for no limit"
     }
   }
 }

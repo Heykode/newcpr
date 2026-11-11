@@ -139,9 +139,12 @@
         "urlFormat": "請輸入不含認證、查詢參數或片段的 HTTP 或 HTTPS 地址",
         "urlRequired": "請輸入完整的上游 API 地址",
         "apiKeyFormat": "API密鑰不能包含空格或控制字符",
-        "transportRequired": "請選擇傳輸方式"
+        "transportRequired": "請選擇傳輸方式",
+        "protocolRequired": "請選擇上游協議"
       },
-      "apiKeyRequired": "請輸入 API密鑰"
+      "apiKeyRequired": "請輸入 API密鑰",
+      "protocolLabel": "上游協議",
+      "messagesTransportHelp": "Messages 上游使用 HTTP/SSE"
     },
     "batchEdit": {
       "title": "批量編輯賬號",
@@ -341,7 +344,7 @@
       "jsonDescription": "粘貼或上傳賬號 JSON，匹配已有賬號時更新憑據",
       "packageDescription": "粘貼或上傳 CPR 賬號包，一次導入多個平臺賬號",
       "oauthDescription": "通過瀏覽器授權導入 {label} 賬號",
-      "apiKeyDescription": "接入 OpenAI Responses 兼容上游",
+      "apiKeyDescription": "接入 Responses 或 Messages 協議上游",
       "pasteAccessTokenLineByLineIf": "逐行粘貼 Access Token，未包含 Refresh Token 時無法自動續期",
       "refreshTokenDescription": "逐行粘貼 Refresh Token，導入時將自動換取 Access Token",
       "accountSettings": "賬號設置",
@@ -526,15 +529,14 @@
         "resetNotNeeded": "當前額度窗口不需要重置，稍後檢查",
         "resetIncomplete": "上游未完成最近一次自動重置",
         "scheduleHelp": "每天隨機查詢一次，各賬號錯開時間",
-        "verifyHelp": "臨期使用前核對卡片，已在其他地方使用的會自動跳過",
-        "label": "自動使用臨期重置卡"
+        "verifyHelp": "使用前重新核對卡片和適用的週額度條件",
+        "label": "自動使用臨期重置卡",
+        "awaitingWeeklyRecovery": "已用卡，等待週額度恢復"
       },
       "automaticallyUseResetCard": "自動使用重置卡",
       "automaticUsageRules": "自動使用規則",
-      "setGlobalLeadTime": "設置全局提前時間",
       "minutesInAdvance": "提前 {leadMinutes} 分鐘",
-      "leadTime": "提前時間",
-      "nextUse": "下次使用 {nextConsumeAtDisplay}",
+      "nextUse": "臨期用卡時間 {nextConsumeAtDisplay}",
       "autoUsageSettingsFailedToLoad": "自動使用設置加載失敗",
       "limitReset": "額度重置",
       "confirmLastReset": "確認上次重置",
@@ -573,7 +575,9 @@
       "alreadyProcessed": "該重置操作已被處理，請先刷新重置卡列表",
       "noCredits": "當前沒有可用的主動重置卡",
       "resetNotNeeded": "當前額度窗口不需要重置",
-      "upstreamDeclined": "上游未執行額度重置：{code}"
+      "upstreamDeclined": "上游未執行額度重置：{code}",
+      "setTiming": "設定用卡時機",
+      "weeklyThreshold": "剩餘週額度 ≤ {percent}%"
     },
     "status": {
       "accountStatus": "賬號狀態",
@@ -638,6 +642,18 @@
       "pasteAtLeastOne": "請至少粘貼一個 {label}",
       "missingProvider": "批量導入文件不包含 {provider} 賬號文檔",
       "importFilesMustBeJsonObjects": "導入文件必須是 JSON 對象"
+    },
+    "quotaLimits": {
+      "badge": "額度暫停",
+      "title": "通用額度調度上限",
+      "reached": "{windows}已達調度上限",
+      "expectedReset": "預計重置",
+      "windowReset": "{window}預計重置",
+      "recovery": "等待額度恢復，或調整視窗上限",
+      "help": "任一視窗達限即暫停調度，均低於上限後恢復",
+      "unlimited": "不限制",
+      "empty": "沒有已觀測的通用額度視窗",
+      "invalid": "請輸入 1～100 的整數，留空表示不限制"
     }
   }
 }

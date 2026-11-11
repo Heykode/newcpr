@@ -26,7 +26,7 @@ function duration(value: number) {
     <div class="flex flex-wrap items-center justify-between gap-2">
       <BaseSegmented v-model="pool" label="并发池" :options="options" />
     </div>
-    <div class="h-96 max-h-[60dvh] overflow-auto" :aria-busy="loading">
+    <div class="h-auto min-h-[min(60dvh,20rem)] overflow-auto" :aria-busy="loading">
       <p v-if="loading && !data" role="status">
         {{ t('common.status.loading') }}
       </p>

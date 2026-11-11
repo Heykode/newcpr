@@ -48,6 +48,7 @@ async fn model_policy_patch_preserves_identity_state_groups_and_egress() {
         AccountModelAccess::new(AccountModelAccessMode::Denylist, vec!["model-a".into()]).unwrap();
     let store = admin_account_store(&database.pool);
     let command = BatchUpdateAccounts {
+        quota_limits: Default::default(),
         auto_use_quota_credits: None,
         excel_recovery: None,
         purchase_cost: None,
@@ -75,7 +76,7 @@ async fn model_policy_patch_preserves_identity_state_groups_and_egress() {
         request_id: "model-only".into(),
     };
     store
-        .batch_update_accounts(command.clone(), &context)
+        .batch_update_accounts(command.clone(), Default::default(), &context)
         .await
         .unwrap();
     let after: serde_json::Value = sqlx::query_scalar(
@@ -138,6 +139,7 @@ async fn model_policy_patch_preserves_identity_state_groups_and_egress() {
                     ]),
                     ..command.clone()
                 },
+                Default::default(),
                 &context
             )
             .await
@@ -162,6 +164,7 @@ async fn model_policy_patch_preserves_identity_state_groups_and_egress() {
                 model_access: Some(AccountModelAccess::all()),
                 ..command
             },
+            Default::default(),
             &context,
         )
         .await

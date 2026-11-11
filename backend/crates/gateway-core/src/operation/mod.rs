@@ -9,6 +9,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use bytes::Bytes;
+use gateway_protocol::request::{RequestFacts, request_facts};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -24,6 +25,7 @@ pub enum OperationKind {
     Generate,
     /// 图像生成。
     GenerateImage,
+    CountTokens,
     /// Provider 原生 standalone search。
     Search,
     /// 客户端显式请求的上下文压缩，不是自动生成步骤。
@@ -39,6 +41,7 @@ impl OperationKind {
         match self {
             Self::Generate => "generate",
             Self::GenerateImage => "generate_image",
+            Self::CountTokens => "count_tokens",
             Self::Search => "search",
             Self::Compact => "compact",
             Self::ProviderHttp => "provider_http",
@@ -259,6 +262,7 @@ pub struct RawJsonPayload {
     protocol: String,
     body: Bytes,
     context: Map<String, Value>,
+    translated: bool,
 }
 
 impl RawJsonPayload {
@@ -274,6 +278,7 @@ impl RawJsonPayload {
         })?;
         Ok(Self {
             protocol,
+            translated: false,
             body,
             context: Map::new(),
         })
@@ -324,6 +329,9 @@ pub struct GenerateRequest {
 
 #[derive(Clone, PartialEq)]
 struct GeneratePayload {
+    source_image_generation: bool,
+    wire_facts: RequestFacts,
+    source_requirements: Option<CapabilityRequirements>,
     protocol_payload: ProtocolPayload,
     client_turn: Option<ClientTurn>,
     provider_session_state: Option<ProviderSessionState>,
@@ -374,6 +382,9 @@ impl GenerateRequest {
     pub fn from_protocol_payload(protocol_payload: ProtocolPayload) -> Self {
         Self {
             payload: Arc::new(GeneratePayload {
+                source_image_generation: false,
+                wire_facts: request_facts(protocol_payload.protocol(), protocol_payload.body()),
+                source_requirements: None,
                 protocol_payload,
                 client_turn: None,
                 provider_session_state: None,
@@ -439,10 +450,7 @@ impl GenerateRequest {
     /// 返回最大输出 token 数。
     #[must_use]
     pub fn max_output_tokens(&self) -> Option<u64> {
-        self.body()
-            .get("max_output_tokens")
-            .and_then(Value::as_u64)
-            .filter(|tokens| *tokens > 0)
+        self.payload.wire_facts.max_output_tokens
     }
 
     /// 返回客户端提供的 prompt cache 路由键。
@@ -457,23 +465,13 @@ impl GenerateRequest {
     /// 返回原始请求是否要求 Provider 原生 continuation。
     #[must_use]
     pub fn native_continuation_requested(&self) -> bool {
-        self.body()
-            .get("previous_response_id")
-            .and_then(Value::as_str)
-            .is_some()
+        self.payload.wire_facts.native_continuation
     }
 
     /// 返回客户端是否请求了图片生成工具。
     #[must_use]
     pub fn image_generation_requested(&self) -> bool {
-        self.body()
-            .get("tools")
-            .and_then(Value::as_array)
-            .is_some_and(|tools| {
-                tools.iter().any(|tool| {
-                    tool.get("type").and_then(Value::as_str) == Some("image_generation")
-                })
-            })
+        self.payload.source_image_generation || self.payload.wire_facts.image_generation
     }
 
     /// 返回指定 Provider 的连接内会话状态。
@@ -492,39 +490,30 @@ impl GenerateRequest {
     }
 
     fn requirements(&self) -> CapabilityRequirements {
+        if let Some(requirements) = &self.payload.source_requirements {
+            return requirements.clone();
+        }
+        self.wire_capability_requirements()
+    }
+
+    /// 返回当前 wire 的能力要求，不混入转换前或中间件继承的要求
+    #[must_use]
+    pub fn wire_capability_requirements(&self) -> CapabilityRequirements {
+        let facts = self.payload.wire_facts;
         let mut requirements = CapabilityRequirements::new(OperationKind::Generate)
-            .with_requested_output_tokens(self.max_output_tokens());
-        if self
-            .body()
-            .get("tools")
-            .and_then(Value::as_array)
-            .is_some_and(|tools| !tools.is_empty())
-        {
-            requirements = requirements.require(Feature::Tools);
+            .with_requested_output_tokens(facts.max_output_tokens);
+        for (requested, feature) in [
+            (facts.tools, Feature::Tools),
+            (facts.vision, Feature::Vision),
+            (facts.reasoning, Feature::Reasoning),
+            (facts.json_schema, Feature::JsonSchema),
+            (facts.native_continuation, Feature::NativeContinuation),
+        ] {
+            if requested {
+                requirements = requirements.require(feature);
+            }
         }
-        if contains_type(self.body().get("input"), "input_image") {
-            requirements = requirements.require(Feature::Vision);
-        }
-        if self.body().get("reasoning").is_some_and(Value::is_object) {
-            requirements = requirements.require(Feature::Reasoning);
-        }
-        if self
-            .body()
-            .get("text")
-            .and_then(Value::as_object)
-            .and_then(|text| text.get("format"))
-            .and_then(Value::as_object)
-            .and_then(|format| format.get("type"))
-            .and_then(Value::as_str)
-            == Some("json_schema")
-        {
-            requirements = requirements.require(Feature::JsonSchema);
-        }
-        if self.native_continuation_requested() {
-            requirements.require(Feature::NativeContinuation)
-        } else {
-            requirements
-        }
+        requirements
     }
 
     fn body(&self) -> &Map<String, Value> {
@@ -549,18 +538,30 @@ impl fmt::Debug for GenerateRequest {
     }
 }
 
-fn contains_type(value: Option<&Value>, expected: &str) -> bool {
-    match value {
-        Some(Value::Array(values)) => values
-            .iter()
-            .any(|value| contains_type(Some(value), expected)),
-        Some(Value::Object(object)) => {
-            object.get("type").and_then(Value::as_str) == Some(expected)
-                || object
-                    .values()
-                    .any(|value| contains_type(Some(value), expected))
-        }
-        _ => false,
+/// 使用目标模型的 Provider 原生 Token 计数请求
+#[derive(Clone, PartialEq)]
+pub struct TokenCountRequest {
+    payload: RawJsonPayload,
+}
+
+impl TokenCountRequest {
+    #[must_use]
+    pub const fn from_raw_json(payload: RawJsonPayload) -> Self {
+        Self { payload }
+    }
+
+    #[must_use]
+    pub const fn payload(&self) -> &RawJsonPayload {
+        &self.payload
+    }
+}
+
+impl fmt::Debug for TokenCountRequest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("TokenCountRequest")
+            .field("payload", &"<not included in Debug>")
+            .finish()
     }
 }
 
@@ -662,22 +663,48 @@ impl CompactRequest {
 pub struct RawHttpPayload {
     protocol: String,
     body: Bytes,
+    context: Map<String, Value>,
+    translated: bool,
 }
 
 impl RawHttpPayload {
+    /// 创建不透明 HTTP 正文
+    ///
+    /// # Errors
+    ///
+    /// 协议名称为空、过长或含控制字符时返回错误
     pub fn new(protocol: impl Into<String>, body: Bytes) -> Result<Self, OperationError> {
         let protocol = protocol.into();
         validate_text(&protocol, 64, true, None).map_err(|_| OperationError::EmptyField {
             field: "raw_http_payload protocol",
         })?;
-        Ok(Self { protocol, body })
+        Ok(Self {
+            protocol,
+            body,
+            context: Map::new(),
+            translated: false,
+        })
     }
 
+    #[must_use]
     pub fn protocol(&self) -> &str {
         &self.protocol
     }
+
+    #[must_use]
     pub const fn body(&self) -> &Bytes {
         &self.body
+    }
+
+    #[must_use]
+    pub fn with_context(mut self, context: Map<String, Value>) -> Self {
+        self.context = context;
+        self
+    }
+
+    #[must_use]
+    pub const fn context(&self) -> &Map<String, Value> {
+        &self.context
     }
 }
 
@@ -687,6 +714,7 @@ impl fmt::Debug for RawHttpPayload {
             .debug_struct("RawHttpPayload")
             .field("protocol", &self.protocol)
             .field("body", &"<not included in Debug>")
+            .field("context", &"<not included in Debug>")
             .finish()
     }
 }
@@ -825,6 +853,7 @@ pub enum Operation {
     Generate(GenerateRequest),
     /// 图像生成。
     GenerateImage(ImageRequest),
+    CountTokens(TokenCountRequest),
     /// Provider 原生 standalone search。
     Search(StandaloneSearchRequest),
     /// 显式上下文压缩。
@@ -834,6 +863,178 @@ pub enum Operation {
 }
 
 impl Operation {
+    /// 替换协议正文和非 wire 上下文，同时保留 operation 类别、Provider 会话状态与
+    /// 原协议名称
+    /// `body=None` 表示只改上下文，避免无加工路径重新编码正文
+    ///
+    /// # Errors
+    ///
+    /// Generate 的替换正文不是 JSON object 时返回错误；原始 JSON 端点继续按字节保存
+    pub fn replace_protocol_wire(
+        self,
+        body: Option<Bytes>,
+        context: Map<String, Value>,
+    ) -> Result<Self, OperationError> {
+        self.replace_protocol_wire_inner(None, body, context)
+    }
+
+    /// 把一次已选择的协议转换结果写回 operation，同时保留非 wire 上下文和
+    /// Provider 会话状态
+    /// 该方法只验证公共载荷形状，不解释目标协议字段
+    ///
+    /// # Errors
+    ///
+    /// 目标协议名无效，或 Generate 的目标正文不是 JSON object 时返回错误
+    pub fn translate_protocol_wire(
+        self,
+        target_protocol: impl Into<String>,
+        body: Bytes,
+    ) -> Result<Self, OperationError> {
+        let target_protocol = target_protocol.into();
+        validate_text(&target_protocol, 64, true, None).map_err(|_| {
+            OperationError::EmptyField {
+                field: "translated protocol",
+            }
+        })?;
+        if self.protocol() == target_protocol || self.protocol_was_translated() {
+            return Err(OperationError::EmptyField {
+                field: "direct protocol translation",
+            });
+        }
+        let context = match &self {
+            Self::Generate(request) => request.protocol_payload().context().clone(),
+            Self::GenerateImage(request) => request.payload().context().clone(),
+            Self::Search(request) => request.payload().context().clone(),
+            Self::Compact(request) => request.payload().context().clone(),
+            Self::CountTokens(request) => request.payload().context().clone(),
+            Self::ProviderHttp(request) => request.payload().context().clone(),
+        };
+        self.replace_protocol_wire_inner(Some(target_protocol), Some(body), context)
+    }
+
+    fn protocol_was_translated(&self) -> bool {
+        match self {
+            Self::Generate(request) => request.payload.source_requirements.is_some(),
+            Self::GenerateImage(request) => request.payload().translated,
+            Self::Search(request) => request.payload().translated,
+            Self::Compact(request) => request.payload().translated,
+            Self::CountTokens(request) => request.payload().translated,
+            Self::ProviderHttp(request) => request.payload().translated,
+        }
+    }
+
+    fn replace_protocol_wire_inner(
+        self,
+        target_protocol: Option<String>,
+        body: Option<Bytes>,
+        context: Map<String, Value>,
+    ) -> Result<Self, OperationError> {
+        let translating = target_protocol.is_some();
+        match self {
+            Self::Generate(request) => {
+                let source_requirements = translating.then(|| request.requirements());
+                let source_image_generation = translating && request.image_generation_requested();
+                // 修改上下文不改变正文事实；只有新 wire 才需要重新扫描输入
+                let mut payload = Arc::unwrap_or_clone(request.payload);
+                if let Some(body) = body {
+                    let body =
+                        serde_json::from_slice::<Map<String, Value>>(&body).map_err(|_| {
+                            OperationError::EmptyField {
+                                field: "protocol_payload body",
+                            }
+                        })?;
+                    if let Some(protocol) = target_protocol {
+                        payload.protocol_payload.protocol = protocol;
+                    }
+                    payload.wire_facts = request_facts(payload.protocol_payload.protocol(), &body);
+                    payload.protocol_payload.body = body;
+                }
+                payload.protocol_payload.context = context;
+                // 跨协议转换不能抹去已识别的生图权限要求，也不解释目标私有协议
+                payload.source_image_generation |= source_image_generation;
+                if let Some(requirements) = source_requirements {
+                    payload.source_requirements = Some(requirements);
+                }
+                Ok(Self::Generate(GenerateRequest {
+                    payload: Arc::new(payload),
+                }))
+            }
+            Self::GenerateImage(request) => {
+                let payload = request.payload;
+                Ok(Self::GenerateImage(ImageRequest {
+                    kind: request.kind,
+                    payload: RawJsonPayload {
+                        protocol: target_protocol.unwrap_or(payload.protocol),
+                        body: body.unwrap_or(payload.body),
+                        context,
+                        translated: payload.translated || translating,
+                    },
+                }))
+            }
+            Self::Search(request) => {
+                let payload = request.payload;
+                Ok(Self::Search(StandaloneSearchRequest {
+                    payload: RawJsonPayload {
+                        protocol: target_protocol.unwrap_or(payload.protocol),
+                        body: body.unwrap_or(payload.body),
+                        context,
+                        translated: payload.translated || translating,
+                    },
+                }))
+            }
+            Self::Compact(request) => {
+                let payload = request.payload;
+                Ok(Self::Compact(CompactRequest {
+                    payload: RawJsonPayload {
+                        protocol: target_protocol.unwrap_or(payload.protocol),
+                        body: body.unwrap_or(payload.body),
+                        context,
+                        translated: payload.translated || translating,
+                    },
+                }))
+            }
+            Self::CountTokens(request) => {
+                let payload = request.payload;
+                Ok(Self::CountTokens(TokenCountRequest {
+                    payload: RawJsonPayload {
+                        protocol: target_protocol.unwrap_or(payload.protocol),
+                        body: body.unwrap_or(payload.body),
+                        context,
+                        translated: payload.translated || translating,
+                    },
+                }))
+            }
+            Self::ProviderHttp(request) => {
+                let payload = request.payload;
+                Ok(Self::ProviderHttp(ProviderHttpRequest {
+                    endpoint: request.endpoint,
+                    method: request.method,
+                    query: request.query,
+                    headers: request.headers,
+                    payload: RawHttpPayload {
+                        protocol: target_protocol.unwrap_or(payload.protocol),
+                        body: body.unwrap_or(payload.body),
+                        context,
+                        translated: payload.translated || translating,
+                    },
+                }))
+            }
+        }
+    }
+
+    /// 返回协议 adapter 持有的不透明格式标识
+    #[must_use]
+    pub fn protocol(&self) -> &str {
+        match self {
+            Self::Generate(request) => request.protocol_payload().protocol(),
+            Self::GenerateImage(request) => request.payload().protocol(),
+            Self::Search(request) => request.payload().protocol(),
+            Self::Compact(request) => request.payload().protocol(),
+            Self::CountTokens(request) => request.payload().protocol(),
+            Self::ProviderHttp(request) => request.payload().protocol(),
+        }
+    }
+
     /// 附着协议连接持有的 Provider 私有状态；非生成 operation 保持不变。
     #[must_use]
     pub fn with_provider_session_state(self, state: ProviderSessionState) -> Self {
@@ -856,6 +1057,7 @@ impl Operation {
         match self {
             Self::Generate(_) => OperationKind::Generate,
             Self::GenerateImage(_) => OperationKind::GenerateImage,
+            Self::CountTokens(_) => OperationKind::CountTokens,
             Self::Search(_) => OperationKind::Search,
             Self::Compact(_) => OperationKind::Compact,
             Self::ProviderHttp(_) => OperationKind::ProviderHttp,
@@ -868,6 +1070,7 @@ impl Operation {
         match self {
             Self::Generate(request) => request.requirements(),
             Self::GenerateImage(_) => CapabilityRequirements::new(OperationKind::GenerateImage),
+            Self::CountTokens(_) => CapabilityRequirements::new(OperationKind::CountTokens),
             Self::Search(_) => CapabilityRequirements::new(OperationKind::Search),
             Self::Compact(_) => CapabilityRequirements::new(OperationKind::Compact),
             Self::ProviderHttp(_) => CapabilityRequirements::new(OperationKind::ProviderHttp),
@@ -880,7 +1083,9 @@ impl Operation {
         match self {
             Self::Generate(request) => request.image_generation_requested(),
             Self::GenerateImage(_) => true,
-            Self::Search(_) | Self::Compact(_) | Self::ProviderHttp(_) => false,
+            Self::Search(_) | Self::CountTokens(_) | Self::Compact(_) | Self::ProviderHttp(_) => {
+                false
+            }
         }
     }
 
@@ -889,9 +1094,11 @@ impl Operation {
     pub fn provider_session_state(&self, provider: &str) -> Option<&ProviderSessionState> {
         match self {
             Self::Generate(request) => request.provider_session_state(provider),
-            Self::GenerateImage(_) | Self::Search(_) | Self::Compact(_) | Self::ProviderHttp(_) => {
-                None
-            }
+            Self::GenerateImage(_)
+            | Self::Search(_)
+            | Self::CountTokens(_)
+            | Self::Compact(_)
+            | Self::ProviderHttp(_) => None,
         }
     }
 }

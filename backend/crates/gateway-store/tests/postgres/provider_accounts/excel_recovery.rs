@@ -4,6 +4,7 @@ use gateway_core::account::ResponsesUpstream;
 
 fn patch(id: &str) -> BatchUpdateAccounts {
     BatchUpdateAccounts {
+        quota_limits: Default::default(),
         auto_use_quota_credits: None,
         account_ids: vec![id.into()],
         excel_recovery: None,
@@ -52,6 +53,7 @@ async fn seed(db: &TestDatabase, id: &str) {
                 }),
                 ..patch(id)
             },
+            Default::default(),
             &context(),
         )
         .await
@@ -107,6 +109,7 @@ async fn recovery_defaults_omission_validation_and_success_preserve_history() {
                     }),
                     ..patch("acct_recovery")
                 },
+                Default::default(),
                 &context()
             )
             .await
@@ -119,6 +122,7 @@ async fn recovery_defaults_omission_validation_and_success_preserve_history() {
                 weight: Some(gateway_core::account::AccountWeight::DEFAULT),
                 ..patch("acct_recovery")
             },
+            Default::default(),
             &context(),
         )
         .await
@@ -352,6 +356,7 @@ async fn recovery_success_does_not_invalidate_other_accounts_and_new_pause_clear
                 enabled: Some(false),
                 ..patch("acct_one")
             },
+            Default::default(),
             &context(),
         )
         .await
@@ -371,6 +376,7 @@ async fn recovery_success_does_not_invalidate_other_accounts_and_new_pause_clear
                 enabled: Some(true),
                 ..patch("acct_one")
             },
+            Default::default(),
             &context(),
         )
         .await

@@ -199,6 +199,7 @@ impl TraceContext {
             "recovery": {
                 "replaySafe": error.replay_is_safe(),
                 "retryProhibited": error.retry_is_prohibited(),
+                "sameAccountRetryBlocked": error.same_account_retry_blocked(),
                 "sameAccountCredentialRetry": error.retries_same_account(),
                 "intent": error.pre_delivery_retry().map(|intent| format!("{intent:?}")),
                 "continuationFailure": error.continuation_failure().map(|failure| format!("{failure:?}")),
@@ -422,6 +423,18 @@ impl TraceContext {
                 }
                 data["upstreamStatus"] =
                     json!(original.get("upstreamStatus").and_then(Value::as_u64));
+                if let Some(recovery) = original.get("recovery").and_then(Value::as_object) {
+                    let mut kept = json!({});
+                    for key in [
+                        "replaySafe",
+                        "retryProhibited",
+                        "sameAccountRetryBlocked",
+                        "sameAccountCredentialRetry",
+                    ] {
+                        kept[key] = json!(recovery.get(key).and_then(Value::as_bool));
+                    }
+                    data["recovery"] = kept;
+                }
                 if let Some(diagnostic) = original.get("diagnostic").and_then(Value::as_object) {
                     let mut kept = json!({});
                     for (key, limit) in [("stage", 96), ("code", 96), ("message", 256)] {

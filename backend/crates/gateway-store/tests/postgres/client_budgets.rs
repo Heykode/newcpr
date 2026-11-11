@@ -20,6 +20,7 @@ use gateway_store::postgres::{
 };
 
 use super::TestDatabase;
+use gateway_admin::model::client_keys::{ClientKeyBudgetPeriod, ResetClientKeyBudget};
 
 pub(super) fn key_id(key: &str) -> ClientApiKeyId {
     ClientApiKeyId::new(key).unwrap()
@@ -472,7 +473,7 @@ async fn deleting_key_preserves_ledger_and_idempotent_late_settlement() {
 }
 
 #[tokio::test]
-async fn manual_budget_reset_preserves_history_limits_and_window_end_and_fences_late_charges() {
+async fn manual_budget_reset_preserves_history_limits_and_fences_late_charges() {
     use gateway_admin::model::client_keys::{ClientKeyBudgetPeriod, ResetClientKeyBudget};
     let Some(database) = TestDatabase::create("budget_reset").await else {
         return;
@@ -501,7 +502,7 @@ async fn manual_budget_reset_preserves_history_limits_and_window_end_and_fences_
     assert_eq!(after.daily_used_usd.canonical(), "0");
     assert_eq!(after.weekly_used_usd.canonical(), "1");
     assert_eq!(after.limits, before.limits);
-    assert_eq!(after.daily_resets_at, before.daily_resets_at);
+    assert_eq!(after.daily_resets_at, None);
     assert_eq!(after.weekly_resets_at, before.weekly_resets_at);
     store.admit(key_id("key")).await.unwrap();
     store.settle(original).await.unwrap();
@@ -611,5 +612,211 @@ async fn manual_budget_reset_rolls_back_when_audit_fails() {
         "1"
     );
     assert!(store.admit(key_id("key")).await.is_err());
+    database.close().await;
+}
+
+#[tokio::test]
+async fn manual_reset_restarts_selected_windows_only_after_new_usage() {
+    let Some(database) = TestDatabase::create("budget_reset_restart").await else {
+        return;
+    };
+    let store = PgClientBudgetStore::new(database.pool.clone());
+    let admin = PgAdminClientKeyStore::new(database.pool.clone());
+    for (key, period) in [
+        ("daily", ClientKeyBudgetPeriod::Daily),
+        ("weekly", ClientKeyBudgetPeriod::Weekly),
+        ("all", ClientKeyBudgetPeriod::All),
+    ] {
+        seed(&database, key, "10", "20").await;
+        store.admit(key_id(key)).await.unwrap();
+        store.settle(charge(key, key, "1")).await.unwrap();
+        sqlx::query("update client_key_budget_windows set weekly_start = weekly_start - interval '3 days', weekly_end = weekly_end - interval '3 days' where client_api_key_id = $1")
+            .bind(key).execute(&database.pool).await.unwrap();
+        let before = status(&database, key).await;
+        let delayed = charge(key, &format!("{key}-delayed"), "0.5");
+        let old = charge(key, &format!("{key}-old"), "0.7");
+        admin
+            .reset_client_key_budget(
+                ResetClientKeyBudget {
+                    id: key_id(key),
+                    period,
+                },
+                &context(),
+            )
+            .await
+            .unwrap();
+        let reset = status(&database, key).await;
+        // 重置前完成的迟到费用保留历史，但不能开启窗口或重新扣入所选周期
+        store.settle(delayed).await.unwrap();
+        let delayed = status(&database, key).await;
+        assert_eq!(delayed.daily_resets_at, reset.daily_resets_at);
+        assert_eq!(delayed.weekly_resets_at, reset.weekly_resets_at);
+        assert_eq!(
+            delayed.daily_used_usd.canonical(),
+            if period == ClientKeyBudgetPeriod::Weekly {
+                "1.5"
+            } else {
+                "0"
+            }
+        );
+        assert_eq!(
+            delayed.weekly_used_usd.canonical(),
+            if period == ClientKeyBudgetPeriod::Daily {
+                "1.5"
+            } else {
+                "0"
+            }
+        );
+
+        store.admit(key_id(key)).await.unwrap();
+        let restarted = status(&database, key).await;
+        assert_eq!(restarted.daily_resets_at, before.daily_resets_at);
+        if period == ClientKeyBudgetPeriod::Daily {
+            assert_eq!(restarted.weekly_resets_at, before.weekly_resets_at);
+        } else {
+            assert_eq!(
+                restarted.weekly_resets_at.unwrap(),
+                restarted.daily_resets_at.unwrap() + std::time::Duration::from_secs(6 * 86400)
+            );
+            assert_ne!(restarted.weekly_resets_at, before.weekly_resets_at);
+        }
+        // 开启窗口后仍保留重置边界，另一笔重置前的迟到费用也不能重新扣额
+        store.settle(old).await.unwrap();
+        let after_old = status(&database, key).await;
+        assert_eq!(after_old.daily_resets_at, restarted.daily_resets_at);
+        assert_eq!(after_old.weekly_resets_at, restarted.weekly_resets_at);
+        assert_eq!(
+            after_old.daily_used_usd.canonical(),
+            if period == ClientKeyBudgetPeriod::Weekly {
+                "2.2"
+            } else {
+                "0"
+            }
+        );
+        assert_eq!(
+            after_old.weekly_used_usd.canonical(),
+            if period == ClientKeyBudgetPeriod::Daily {
+                "2.2"
+            } else {
+                "0"
+            }
+        );
+        store
+            .settle(charge(key, &format!("{key}-new"), "0.25"))
+            .await
+            .unwrap();
+        let used = status(&database, key).await;
+        assert_eq!(
+            used.daily_used_usd.canonical(),
+            if period == ClientKeyBudgetPeriod::Weekly {
+                "2.45"
+            } else {
+                "0.25"
+            }
+        );
+        assert_eq!(
+            used.weekly_used_usd.canonical(),
+            if period == ClientKeyBudgetPeriod::Daily {
+                "2.45"
+            } else {
+                "0.25"
+            }
+        );
+    }
+    database.close().await;
+}
+
+#[tokio::test]
+async fn manual_reset_excludes_old_completions_but_counts_inflight_requests_after_reset() {
+    let Some(database) = TestDatabase::create("budget_reset_late").await else {
+        return;
+    };
+    seed(&database, "key", "1", "5").await;
+    let store = PgClientBudgetStore::new(database.pool.clone());
+    let admin = PgAdminClientKeyStore::new(database.pool.clone());
+    store.admit(key_id("key")).await.unwrap();
+    store
+        .settle(charge("key", "before-reset", "1.2"))
+        .await
+        .unwrap();
+    let delayed = charge("key", "delayed", "0.3");
+    let reset_context = context();
+    // 无论迟到结算还是重置先取得锁，重置前完成的费用都不应重新进入日额度
+    let (reset, settled) = tokio::join!(
+        admin.reset_client_key_budget(
+            ResetClientKeyBudget {
+                id: key_id("key"),
+                period: ClientKeyBudgetPeriod::Daily
+            },
+            &reset_context
+        ),
+        store.settle(delayed),
+    );
+    reset.unwrap();
+    settled.unwrap();
+    let after = status(&database, "key").await;
+    assert_eq!(after.daily_used_usd.canonical(), "0");
+    assert_eq!(after.weekly_used_usd.canonical(), "1.5");
+    store
+        .settle(charge("key", "completed-after-reset", "0.4"))
+        .await
+        .unwrap();
+    let after = status(&database, "key").await;
+    assert_eq!(after.daily_used_usd.canonical(), "0.4");
+    assert_eq!(after.weekly_used_usd.canonical(), "1.9");
+    database.close().await;
+}
+
+#[tokio::test]
+async fn manual_reset_leaves_unused_and_expired_windows_inactive_and_reports_missing_keys() {
+    let Some(database) = TestDatabase::create("budget_reset_inactive").await else {
+        return;
+    };
+    let store = PgClientBudgetStore::new(database.pool.clone());
+    let admin = PgAdminClientKeyStore::new(database.pool.clone());
+    for key in ["unused", "expired"] {
+        seed(&database, key, "1", "5").await;
+    }
+    store.admit(key_id("expired")).await.unwrap();
+    store.settle(charge("expired", "old", "2")).await.unwrap();
+    sqlx::query("update client_key_budget_windows set daily_end = now() - interval '1 second', weekly_end = now() - interval '1 second'")
+        .execute(&database.pool).await.unwrap();
+    for key in ["unused", "expired"] {
+        admin
+            .reset_client_key_budget(
+                ResetClientKeyBudget {
+                    id: key_id(key),
+                    period: ClientKeyBudgetPeriod::All,
+                },
+                &context(),
+            )
+            .await
+            .unwrap();
+        let after = status(&database, key).await;
+        assert!(after.daily_resets_at.is_none());
+        assert!(after.weekly_resets_at.is_none());
+        assert_eq!(after.daily_used_usd.canonical(), "0");
+    }
+    for key in ["unused", "expired"] {
+        let (start, end): (DateTime<Utc>,DateTime<Utc>) = sqlx::query_as("select weekly_start,weekly_end from client_key_budget_windows where client_api_key_id=$1").bind(key).fetch_one(&database.pool).await.unwrap();
+        assert_eq!(
+            start, end,
+            "reset persists an inactive fence even for an unused key"
+        );
+    }
+    let error = admin
+        .reset_client_key_budget(
+            ResetClientKeyBudget {
+                id: key_id("missing"),
+                period: ClientKeyBudgetPeriod::All,
+            },
+            &context(),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.kind(),
+        gateway_admin::ports::store::AdminStoreErrorKind::NotFound
+    );
     database.close().await;
 }

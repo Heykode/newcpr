@@ -4,7 +4,7 @@ import { computed } from 'vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseModal from '@/components/base/BaseModal/index.vue'
 import { t } from '@/i18n'
-import { usageErrorSummary } from '../utils/errors'
+import { usageErrorOrigin, usageErrorTitle, usageSendStateText } from '../utils/errors'
 import { usageAccountText, usageTransportType } from '../utils/records'
 import RequestDiagnosticsPanel from './RequestDiagnosticsPanel.vue'
 import UsageDetailFieldGrid from './UsageDetailFieldGrid.vue'
@@ -15,7 +15,7 @@ const props = defineProps<{ record: UsageViewModel | null, loading?: boolean, er
 const emit = defineEmits<{ fullDetail: [], retry: [] }>()
 const open = defineModel<boolean>({ default: false })
 const context = computed(() => [
-  { label: '原因分类', value: props.record ? usageErrorSummary(props.record) : null, wrap: true },
+  { label: '错误来源', value: props.record ? usageErrorOrigin(props.record).label : null, wrap: true },
   { label: 'WS 关闭码', value: props.record?.websocketCloseCode },
   { label: '已由后续请求恢复', value: props.record?.recovered ? '是' : '否' },
   { label: '上游错误码', value: props.record?.upstreamError?.code ?? props.record?.errorCode, wrap: true },
@@ -40,7 +40,10 @@ const context = computed(() => [
   { label: '上游请求 ID', value: props.record?.upstreamRequestId, wrap: true, fullWidth: true },
 ])
 const errorMessage = computed(() => {
-  const message = props.record?.message.trim()
+  const upstream = props.record?.upstreamError
+  if (upstream?.message || upstream?.closeReason)
+    return upstream.message || upstream.closeReason
+  const message = props.record?.message.trim().replace(/^OpenAI upstream failure: /, '')
   return message && message !== props.record?.logicalOutcome ? message : '未记录具体错误消息'
 })
 </script>
@@ -51,13 +54,20 @@ const errorMessage = computed(() => {
     <div v-else-if="record" class="grid min-w-0 gap-4">
       <section class="min-w-0 border-l-2 border-cp-error px-3">
         <div class="flex flex-wrap items-center gap-3">
-          <strong>{{ record.logicalOutcome === 'incomplete' ? '响应未完成' : '请求失败' }}</strong>
-          <UsageStatusCodeBadge :status-code="record.statusCode" />
+          <strong>{{ usageErrorTitle(record) }}</strong>
+          <span>{{ usageErrorOrigin(record).label }}</span>
+          <span v-if="record.upstreamStatusCode != null">上游 HTTP <UsageStatusCodeBadge :status-code="record.upstreamStatusCode" /></span>
         </div>
         <p class="mb-0 whitespace-pre-wrap break-all font-mono text-cp-sm text-cp-error-text">
           {{ errorMessage }}
         </p>
       </section>
+      <p v-if="usageErrorOrigin(record).hint" class="m-0 text-cp-sm text-cp-text-secondary">
+        {{ usageErrorOrigin(record).hint }}
+      </p>
+      <p v-if="record.clientTransport === 'http_sse' && record.clientStatusCode != null && record.clientStatusCode >= 200 && record.clientStatusCode < 300" class="m-0 text-cp-sm text-cp-text-secondary">
+        {{ t('usage.error.httpStatusHint') }}
+      </p>
       <UsageDetailFieldGrid :items="context" />
       <section v-if="record.attempts?.length || record.attemptsComplete === false" class="min-w-0">
         <h3 class="text-cp-sm">
@@ -79,7 +89,8 @@ const errorMessage = computed(() => {
                 { label: '上游传输', value: usageTransportType(attempt.transport) },
                 { label: '错误码', value: attempt.providerErrorCode, wrap: true },
                 { label: '失败分类', value: attempt.failureClass, wrap: true },
-                { label: '发送状态', value: attempt.sendState },
+                { label: '发送状态', value: usageSendStateText(attempt.sendState) },
+                { label: '客户端响应', value: attempt.downstreamCommitted == null ? '未记录' : attempt.downstreamCommitted ? '已开始' : '未开始' },
                 { label: '触发方式', value: attempt.trigger },
               ]"
             />

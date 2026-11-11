@@ -490,7 +490,7 @@ impl ResetCreditsStore for PgResetCreditsStore {
         sqlx::query(
             "update account_auto_reset_policies p set last_trigger=j.observation->'triggered'
             from account_auto_reset_jobs j where j.request_id=$1 and p.account_id=j.account_id
-            and p.revision=j.policy_revision",
+            and p.revision=j.policy_revision and coalesce(p.config->>'onLowWeeklyQuota','false')<>'true'",
         )
         .bind(command.redeem_request_id)
         .execute(&mut *tx)
@@ -513,7 +513,8 @@ impl ResetCreditsStore for PgResetCreditsStore {
         claim: Uuid,
         result: Option<&ProviderResetCreditResult>,
     ) -> AdminStoreResult<()> {
-        sqlx::query(
+        let mut tx = self.locked().await?;
+        let changed = sqlx::query(
             "update account_reset_consumptions set status=$3,result=$4,updated_at=now()
             where request_id=$1 and claim_id=$2 and status='running'",
         )
@@ -525,9 +526,20 @@ impl ResetCreditsStore for PgResetCreditsStore {
             "unknown"
         })
         .bind(result.map(encode).transpose()?)
-        .execute(&self.0)
+        .execute(&mut *tx)
         .await
-        .map_err(unavailable)?;
-        Ok(())
+        .map_err(unavailable)?
+        .rows_affected();
+        // Official weekly fence starts only after confirmed consumption. Unknown operations
+        // already block through the durable ledger; a known non-redemption must rearm.
+        if changed == 1
+            && result.is_some_and(|r| matches!(r.code.as_str(), "reset" | "already_redeemed"))
+        {
+            sqlx::query("update account_auto_reset_policies p set awaiting_weekly_recovery_since=now()
+                from account_auto_reset_jobs j where j.request_id=$1 and p.account_id=j.account_id
+                and p.identity=(select identity from account_reset_consumptions where request_id=$1)")
+                .bind(command.redeem_request_id).execute(&mut *tx).await.map_err(unavailable)?;
+        }
+        tx.commit().await.map_err(unavailable)
     }
 }

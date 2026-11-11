@@ -118,6 +118,7 @@ export function writeAccountColumnKeys(keys: string[]): string {
 
 export const statusLabels: Record<AccountStatus, string> = {
   normal: '正常',
+  quota_paused: '额度暂停',
   quota_exhausted: '配额耗尽',
   rate_limited: '限流中',
   disabled: '暂停',
@@ -126,6 +127,7 @@ export const statusLabels: Record<AccountStatus, string> = {
 
 export const statusTones: Record<AccountStatus, 'success' | 'danger' | 'warning' | 'info' | 'normal'> = {
   normal: 'success',
+  quota_paused: 'warning',
   quota_exhausted: 'warning',
   rate_limited: 'warning',
   disabled: 'normal',
@@ -135,6 +137,7 @@ export const statusTones: Record<AccountStatus, 'success' | 'danger' | 'warning'
 export const accountStatusFilterOptions = [
   { label: '全部状态', value: '' },
   { label: statusLabels.normal, value: 'normal' },
+  { label: statusLabels.quota_paused, value: 'quota_paused' },
   { label: statusLabels.quota_exhausted, value: 'quota_exhausted' },
   { label: statusLabels.rate_limited, value: 'rate_limited' },
   { label: statusLabels.disabled, value: 'disabled' },

@@ -1,5 +1,6 @@
 //! Codex Responses 原始 SSE 与 WebSocket 文本的旁路事实解码
 
+use gateway_protocol::openai::OPENAI_PROTOCOL;
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt,
@@ -280,7 +281,7 @@ impl CodexCanonicalDecoder {
             }
             let raw = Bytes::from(raw);
             if events.is_empty() {
-                if let Ok(wire) = ProtocolWireEvent::raw_sse("openai", raw) {
+                if let Ok(wire) = ProtocolWireEvent::raw_sse(OPENAI_PROTOCOL, raw) {
                     output.push(ProviderEvent::wire(wire));
                 }
                 continue;
@@ -323,10 +324,10 @@ impl CodexCanonicalDecoder {
                 );
                 let wire = match raw_sse_frame {
                     Some(RawResponseFrame::Sse(raw)) => {
-                        ProtocolWireEvent::raw_sse("openai", raw).ok()
+                        ProtocolWireEvent::raw_sse(OPENAI_PROTOCOL, raw).ok()
                     }
                     Some(RawResponseFrame::WebSocket(raw)) => {
-                        ProtocolWireEvent::raw_websocket("openai", raw).ok()
+                        ProtocolWireEvent::raw_websocket(OPENAI_PROTOCOL, raw).ok()
                     }
                     None => None,
                 };
@@ -443,12 +444,12 @@ impl CodexCanonicalDecoder {
         let sse_id = event.id;
         match raw_sse_frame {
             Some(RawResponseFrame::WebSocket(raw)) => {
-                ProtocolWireEvent::json("openai", event_type, value)
+                ProtocolWireEvent::json(OPENAI_PROTOCOL, event_type, value)
                     .map(|wire| wire.with_raw_websocket_message(raw))
             }
             Some(RawResponseFrame::Sse(raw_sse_frame)) => {
                 ProtocolWireEvent::json_with_raw_sse_metadata(
-                    "openai",
+                    OPENAI_PROTOCOL,
                     event_type,
                     value,
                     raw_sse_frame,
@@ -457,7 +458,7 @@ impl CodexCanonicalDecoder {
                 )
             }
             None => ProtocolWireEvent::json_with_sse_metadata(
-                "openai",
+                OPENAI_PROTOCOL,
                 event_type,
                 value,
                 sse_id,

@@ -68,6 +68,9 @@ impl PgObservabilityRepository {
                 projection.status = gateway_core::account::AccountStatus::RateLimited;
             }
             match projection.status {
+                gateway_core::account::AccountStatus::QuotaPaused => {
+                    metrics.quota_paused += 1;
+                }
                 gateway_core::account::AccountStatus::Normal => {
                     metrics.normal = metrics.normal.saturating_add(1);
                     normal_accounts.push(account);

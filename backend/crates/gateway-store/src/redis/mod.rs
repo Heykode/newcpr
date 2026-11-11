@@ -346,3 +346,18 @@ pub(crate) fn namespace(value: &str) -> StoreResult<String> {
 pub(crate) const ACCOUNT_STATE_READ_CONCURRENCY: usize = 128;
 
 mod account_error_protection;
+
+fn scheduling_cursor_key(
+    namespace: &str,
+    client_key: &gateway_core::policy::ClientApiKeyId,
+    provider: &gateway_core::routing::ProviderKind,
+    suffix: &str,
+) -> StoreResult<String> {
+    let fingerprint = resource_fingerprint(
+        "provider scheduling cursor",
+        &format!("{}\0{}", client_key.as_str(), provider.as_str()),
+    )?;
+    Ok(format!(
+        "{namespace}:scheduler:client-provider:{{{fingerprint}}}:{suffix}"
+    ))
+}

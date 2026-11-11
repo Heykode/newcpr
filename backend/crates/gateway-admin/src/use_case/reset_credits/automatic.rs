@@ -45,7 +45,7 @@ impl ResetCreditsService {
             .fresh_auto_observation(&id, &check.policy.config)
             .await?;
         let needs_inventory = !observation.triggered.is_empty()
-            || (check.policy.config.expiry_enabled
+            || ((check.policy.config.expiry_enabled || check.policy.config.on_low_weekly_quota)
                 && check.inventory.as_ref().is_none_or(|inventory| {
                     Utc::now() - inventory.checked_at >= chrono::Duration::hours(24)
                         || inventory.credit.as_ref().is_some_and(|credit| {

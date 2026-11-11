@@ -989,6 +989,7 @@ impl ReloginService for DefaultReloginService {
                         .map(|account| {
                             let projection = resolve_account_operational_status(
                                 &AccountStatusFacts {
+                                    quota_paused: account.quota_paused,
                                     enabled: account.enabled,
                                     credential_state: account.credential_state,
                                     access_token_expires_at: account

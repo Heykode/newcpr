@@ -17,6 +17,7 @@ fn month_start() -> NaiveDate {
 
 fn patch(ids: &[&str], amount: Option<&str>, date: Option<NaiveDate>) -> BatchUpdateAccounts {
     BatchUpdateAccounts {
+        quota_limits: Default::default(),
         auto_use_quota_credits: None,
         excel_recovery: None,
         purchase_cost: Some(AccountPurchaseUpdate {
@@ -232,6 +233,7 @@ async fn purchase_cost_survives_reimport_delete_quota_reset_and_log_cleanup() {
     store
         .batch_update_accounts(
             patch(&["acct_purchase_old"], Some("50"), Some(month_start())),
+            Default::default(),
             &context(),
         )
         .await
@@ -316,7 +318,11 @@ async fn purchase_cost_survives_reimport_delete_quota_reset_and_log_cleanup() {
         "205.0000000000"
     );
     store
-        .batch_update_accounts(patch(&["acct_purchase_readded"], None, None), &context())
+        .batch_update_accounts(
+            patch(&["acct_purchase_readded"], None, None),
+            Default::default(),
+            &context(),
+        )
         .await
         .unwrap();
     let cleared = view(&db.pool, "acct_purchase_readded").await;
@@ -326,6 +332,7 @@ async fn purchase_cost_survives_reimport_delete_quota_reset_and_log_cleanup() {
     store
         .batch_update_accounts(
             patch(&["acct_purchase_readded"], Some("0"), None),
+            Default::default(),
             &context(),
         )
         .await
@@ -363,6 +370,7 @@ async fn purchase_months_clamp_without_drifting_and_exclude_prior_cycles() {
     admin_account_store(&db.pool)
         .batch_update_accounts(
             patch(&["acct_purchase_month"], Some("10"), Some(month_start())),
+            Default::default(),
             &context(),
         )
         .await
@@ -419,6 +427,7 @@ async fn purchase_batch_is_atomic_and_does_not_mutate_account_configuration() {
                 Some("50"),
                 Some(month_start()),
             ),
+            Default::default(),
             &context(),
         )
         .await
@@ -431,6 +440,7 @@ async fn purchase_batch_is_atomic_and_does_not_mutate_account_configuration() {
                     Some("999"),
                     None
                 ),
+                Default::default(),
                 &context()
             )
             .await
@@ -483,6 +493,7 @@ async fn purchase_usage_is_exact_under_concurrent_requests_and_rollback() {
     admin_account_store(&db.pool)
         .batch_update_accounts(
             patch(&["acct_purchase_parallel"], Some("1"), Some(month_start())),
+            Default::default(),
             &context(),
         )
         .await
@@ -557,6 +568,7 @@ async fn purchase_inflight_snapshot_survives_workspace_change_and_deleted_accoun
     admin_account_store(&db.pool)
         .batch_update_accounts(
             patch(&["acct_purchase_inflight"], Some("50"), Some(month_start())),
+            Default::default(),
             &context(),
         )
         .await
@@ -659,6 +671,7 @@ async fn purchase_upgrade_does_not_assign_an_old_workspace_history_to_a_new_one(
     admin_account_store(&db.pool)
         .batch_update_accounts(
             patch(&["acct_purchase_rotated"], Some("50"), Some(month_start())),
+            Default::default(),
             &context(),
         )
         .await
@@ -686,6 +699,7 @@ async fn purchase_new_attempt_snapshots_new_workspace_even_when_local_id_is_unch
     store
         .batch_update_accounts(
             patch(&["acct_purchase_retry"], Some("50"), Some(month_start())),
+            Default::default(),
             &context(),
         )
         .await
@@ -714,6 +728,7 @@ async fn purchase_new_attempt_snapshots_new_workspace_even_when_local_id_is_unch
     store
         .batch_update_accounts(
             patch(&["acct_purchase_retry"], Some("50"), Some(month_start())),
+            Default::default(),
             &context(),
         )
         .await
@@ -753,6 +768,7 @@ async fn purchase_late_identity_does_not_claim_unknown_history_is_complete() {
     admin_account_store(&db.pool)
         .batch_update_accounts(
             patch(&["acct_purchase_unknown"], Some("50"), Some(month_start())),
+            Default::default(),
             &context(),
         )
         .await
@@ -821,6 +837,7 @@ async fn purchase_upgrade_backfills_only_proven_history_and_marks_missing_record
     admin_account_store(&db.pool)
         .batch_update_accounts(
             patch(&["acct_purchase_legacy"], Some("50"), Some(month_start())),
+            Default::default(),
             &context(),
         )
         .await

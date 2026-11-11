@@ -197,7 +197,28 @@ impl<T> ResourceLease for T where T: Send + Sync + 'static {}
 ///
 /// 底层 stream 必须是 cold stream：在第一次 poll 前不得发送请求级 handshake
 /// 或业务 payload。这样 Coordinator 可以先持久化 attempt，再越过发送屏障。
+pub trait NativeResponseTranslator: Send + 'static {
+    /// 转换前协议格式
+    fn source_protocol(&self) -> &str;
+
+    /// 转换后协议格式
+    fn target_protocol(&self) -> &str;
+
+    /// 把一个原生响应事件转换为零至多个统一响应事件
+    ///
+    /// # Errors
+    ///
+    /// 原生协议事件无效或转换状态不一致时返回已发送的 Provider 错误
+    fn translate(
+        &mut self,
+        event: &crate::event::ProtocolWireEvent,
+    ) -> Result<Vec<crate::event::ProtocolWireEvent>, ProviderError>;
+}
+
+const MAX_NATIVE_RESPONSE_EVENTS_PER_INPUT: usize = 64;
+
 pub struct ProviderStream {
+    native_response_translator: Option<Box<dyn NativeResponseTranslator>>,
     metadata: ProviderCallMetadata,
     events: EventStream,
     _lease: Box<dyn ResourceLease>,
@@ -322,6 +343,7 @@ impl ProviderStream {
             metadata,
             events: Box::pin(events),
             _lease: Box::new(lease),
+            native_response_translator: None,
             account_feedback: None,
             account_protection: None,
             protection_feedback: None,
@@ -347,6 +369,60 @@ impl ProviderStream {
     ) -> Self {
         self.set_account_feedback(stats, failure_filter);
         self
+    }
+
+    pub fn with_native_response_translator(
+        mut self,
+        translator: impl NativeResponseTranslator,
+    ) -> Self {
+        self.native_response_translator = Some(Box::new(translator));
+        self
+    }
+
+    pub fn translate_native_response(
+        &mut self,
+        mut event: ProviderEvent,
+        terminal: bool,
+    ) -> Result<Vec<ProviderEvent>, ProviderError> {
+        let Some(translator) = self.native_response_translator.as_mut() else {
+            return Ok(vec![event]);
+        };
+        let Some(wire) = event.wire_event() else {
+            return Ok(vec![event]);
+        };
+        if wire.protocol() != translator.source_protocol() {
+            return Err(native_response_protocol_error());
+        }
+        let mut translated = translator.translate(wire)?;
+        if translated.len() > MAX_NATIVE_RESPONSE_EVENTS_PER_INPUT
+            || (terminal && translated.is_empty())
+            || translated
+                .iter()
+                .any(|wire| wire.protocol() != translator.target_protocol())
+        {
+            return Err(native_response_protocol_error());
+        }
+        let Some(last) = translated.pop() else {
+            // wire 转换器可以吞掉纯协议结构事件，但不能连带丢失 Core 已经
+            // 识别出的 usage 等 canonical facts
+            // facts-only 封套仍需交给
+            // 客户端 adapter；没有 facts 时才是真正的零输出
+            event.replace_wire(None);
+            return Ok(event
+                .has_canonical_facts()
+                .then_some(event)
+                .into_iter()
+                .collect());
+        };
+        // 一对多时把 canonical/observation/session 信封放到最后一个 wire；这样
+        // `Completed` 不会在同一源事件的前置输出交付前提前终结 Coordinator
+        let mut events = translated
+            .into_iter()
+            .map(ProviderEvent::wire)
+            .collect::<Vec<_>>();
+        event.replace_wire(Some(last));
+        events.push(event);
+        Ok(events)
     }
 
     fn set_account_feedback(
@@ -495,12 +571,8 @@ pub struct ProviderRequest {
 pub struct ProviderRequestObservation {
     /// 独立 Provider 端点声明的请求模型，仅用于观测，不参与文本模型目录路由。
     pub requested_model: Option<PublicModelId>,
-    /// 客户端原始请求中的推理强度。
-    pub reasoning_effort: Option<String>,
-    pub reasoning_preset: Option<String>,
-    pub request_kind: Option<String>,
-    pub subagent_kind: Option<String>,
-    pub compact: bool,
+    /// 所属 Provider 已核实续接会话的旧配置，当前协议决定是否继承。
+    pub previous_reasoning_effort_override: Option<String>,
     pub continuation: ContinuationRequestObservation,
 }
 
@@ -790,4 +862,12 @@ impl ProviderCatalogPort for ProviderRegistry {
                 .map_err(|_| ProviderCatalogUnavailable)
         })
     }
+}
+
+fn native_response_protocol_error() -> ProviderError {
+    ProviderError::new(
+        ProviderErrorKind::Protocol,
+        crate::upstream::UpstreamSendState::Sent,
+    )
+    .redact_sensitive_context("invalid native response translation")
 }

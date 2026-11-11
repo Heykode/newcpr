@@ -1,5 +1,6 @@
 //! OpenAI 管理边界：Provider preparation 与 Redis OAuth pending 适配。
 
+use gateway_protocol::openai::OPENAI_PROTOCOL;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -179,6 +180,25 @@ impl ProviderAdmin for OpenAiAdminProvider {
             })
     }
 
+    fn account_capabilities(
+        &self,
+        _account_id: &ProviderAccountId,
+        authentication_kind: &str,
+    ) -> gateway_admin::model::accounts::ProviderAccountCapabilities {
+        let oauth = authentication_kind == crate::credential::CODEX_AUTHENTICATION_KIND_OAUTH;
+        gateway_admin::model::accounts::ProviderAccountCapabilities {
+            quota_limits_supported: oauth,
+            quota_credits: oauth,
+            quota: oauth,
+            quota_refresh: oauth,
+            profile: oauth,
+            subscription: oauth,
+            avatar: oauth,
+            reset_credits: oauth,
+            consume_reset_credit: oauth,
+        }
+    }
+
     fn provider_kind(&self) -> &ProviderKind {
         &self.provider_kind
     }
@@ -255,7 +275,7 @@ impl ProviderAdmin for OpenAiAdminProvider {
             crate::credential::token_client::evict_account_token_clients(account_id.as_str());
         }
         self.quota.invalidate_scheduling(account_ids);
-        if let Err(error) = self.catalog.invalidate() {
+        if let Err(error) = self.catalog.invalidate_accounts(account_ids).await {
             tracing::warn!(
                 account_count = account_ids.len(),
                 error = %error,
@@ -625,7 +645,11 @@ impl ProviderAdmin for OpenAiAdminProvider {
                 .await
                 .map_err(map_quota_error)?
         };
-        Ok(project_quota(snapshot, account.quota().is_exhausted()))
+        Ok(project_quota(
+            snapshot,
+            account.quota().is_exhausted(),
+            account.quota_limits(),
+        ))
     }
 
     async fn read_quotas(
@@ -685,6 +709,7 @@ impl ProviderAdmin for OpenAiAdminProvider {
                 Ok(project_quota(
                     snapshot,
                     request.account.quota.is_exhausted(),
+                    &request.account.quota_limits,
                 ))
             })
             .collect()
@@ -1200,6 +1225,7 @@ fn account_matches_record(account: &ProviderAccount, record: &AccountRecord) -> 
 
 fn empty_quota() -> ProviderQuota {
     ProviderQuota {
+        paused_windows: Vec::new(),
         plan_type: None,
         observed_at: None,
         refresh_token_expires_at: None,
@@ -1213,11 +1239,22 @@ fn empty_quota() -> ProviderQuota {
 fn project_quota(
     snapshot: Option<CodexAccountQuotaSnapshot>,
     limit_reached: bool,
+    limits: &gateway_core::account::AccountQuotaLimits,
 ) -> ProviderQuota {
+    let paused_windows = snapshot
+        .as_ref()
+        .map(|s| {
+            s.limit_usage()
+                .filter(|(key, used)| limits.reached(key, Some(*used)))
+                .map(|(key, _)| key.to_owned())
+                .collect()
+        })
+        .unwrap_or_default();
     let mut quota = snapshot
         .map(project_quota_snapshot)
         .unwrap_or_else(empty_quota);
     quota.limit_reached = limit_reached;
+    quota.paused_windows = paused_windows;
     quota
 }
 
@@ -1262,6 +1299,7 @@ fn project_quota_snapshot(snapshot: CodexAccountQuotaSnapshot) -> ProviderQuota 
     // 在窗口全部过期后继续维持限流。
     let limit_reached = quota_windows_limit_reached(&windows);
     ProviderQuota {
+        paused_windows: Vec::new(),
         plan_type: snapshot.plan_type().map(str::to_owned),
         observed_at: Some(DateTime::<Utc>::from(snapshot.observed_at())),
         refresh_token_expires_at: None,
@@ -1703,7 +1741,7 @@ fn build_connection_test_operation_with_effort(
             serde_json::json!({"effort": effort}),
         );
     }
-    let payload = ProtocolPayload::json_object("openai", body)
+    let payload = ProtocolPayload::json_object(OPENAI_PROTOCOL, body)
         .map_err(|_| provider_admin_error(ProviderAdminErrorKind::Invalid))?;
     Ok(Operation::Generate(GenerateRequest::from_protocol_payload(
         payload,

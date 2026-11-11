@@ -89,15 +89,17 @@ pub(crate) async fn load_admin_account_page(
                         and overdraft.credential_revision=a.credential_revision
                         and overdraft.status='passed'
                         and a.quota_access_state='exhausted' and overdraft.account_subject=a.upstream_account_id
-                    ) then 'normal'
+                    ) then case when a.quota_paused then 'quota_paused' else 'normal' end
                     when a.quota_access_state = 'exhausted' then 'quota_exhausted'
                     when a.id = any($1::text[]) then 'rate_limited'
+                    when a.quota_paused then 'quota_paused'
                     else 'normal'
                   end as admin_status
              from provider_accounts a
          ),
          global_summary as (
            select count(*)::bigint as summary_total,
+                  count(*) filter (where admin_status = 'quota_paused')::bigint as summary_quota_paused,
                   count(*) filter (where admin_status = 'normal')::bigint as summary_normal,
                   count(*) filter (where admin_status = 'quota_exhausted')::bigint
                     as summary_quota_exhausted,
@@ -155,10 +157,10 @@ pub(crate) async fn load_admin_account_page(
                 a.concurrency_limit, a.weight, a.model_access_json,
                 a.credential_state, a.quota_access_state, a.quota_evidence,
                 a.quota_access_observed_at, a.quota_reset_at, a.last_error_reason,
-                coalesce((select status = 'passed' and a.quota_access_state='exhausted' and account_subject=a.upstream_account_id from codex_quota_overdraft_states where account_id = a.id and credential_revision = a.credential_revision and config_revision = settings.config_revision and settings.codex_quota_overdraft_enabled), false) as codex_quota_overdraft_passed, a.auto_use_quota_credits,
+                coalesce((select status = 'passed' and a.quota_access_state='exhausted' and account_subject=a.upstream_account_id from codex_quota_overdraft_states where account_id = a.id and credential_revision = a.credential_revision and config_revision = settings.config_revision and settings.codex_quota_overdraft_enabled), false) as codex_quota_overdraft_passed, a.auto_use_quota_credits, a.quota_limits, a.quota_paused,
                 a.last_error_message, a.credential_observed_at, a.created_at, a.updated_at,
                 filtered_total.filtered_total,
-                global_summary.summary_total, global_summary.summary_normal,
+                global_summary.summary_total, global_summary.summary_quota_paused, global_summary.summary_normal,
                 global_summary.summary_quota_exhausted, global_summary.summary_rate_limited,
                 global_summary.summary_disabled, global_summary.summary_error,
                 settings.config_revision
@@ -207,6 +209,7 @@ pub(crate) async fn load_admin_account_page(
     let summary = AccountSummary {
         total: unsigned_metadata(metadata, "summary_total")?,
         normal: unsigned_metadata(metadata, "summary_normal")?,
+        quota_paused: unsigned_metadata(metadata, "summary_quota_paused")?,
         quota_exhausted: unsigned_metadata(metadata, "summary_quota_exhausted")?,
         rate_limited: unsigned_metadata(metadata, "summary_rate_limited")?,
         disabled: unsigned_metadata(metadata, "summary_disabled")?,
@@ -269,7 +272,7 @@ fn admin_account_order(sort: Option<AdminAccountSort>) -> String {
     let expression = match sort.field {
         AdminAccountSortField::Email => "a.email",
         AdminAccountSortField::Status => {
-            "case filtered.admin_status when 'normal' then 0 when 'rate_limited' then 1 when 'quota_exhausted' then 2 when 'error' then 3 else 4 end"
+            "case filtered.admin_status when 'normal' then 0 when 'rate_limited' then 1 when 'quota_exhausted' then 2 when 'quota_paused' then 3 when 'error' then 4 else 5 end"
         }
         AdminAccountSortField::PlanType => "a.plan_type",
         AdminAccountSortField::Usage => "usage.total_tokens",

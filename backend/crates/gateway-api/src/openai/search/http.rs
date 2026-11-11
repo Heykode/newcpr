@@ -1,5 +1,6 @@
 //! Codex standalone search 非流式 HTTP adapter。
 
+use gateway_protocol::openai::OPENAI_PROTOCOL;
 use std::net::SocketAddr;
 
 use axum::{
@@ -18,8 +19,6 @@ use crate::openai::{
     error::gateway_error_response,
     responses::{OpenAiRequestHeaders, request_client_context},
 };
-
-const OPENAI_PROTOCOL: &str = "openai";
 
 /// `POST /v1/alpha/search`。
 pub(crate) async fn standalone_search(

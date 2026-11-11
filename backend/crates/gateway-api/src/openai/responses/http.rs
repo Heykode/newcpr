@@ -1,5 +1,6 @@
 //! OpenAI Responses HTTP 与 SSE adapter。
 
+use gateway_protocol::anthropic::ANTHROPIC_PROTOCOL;
 use std::collections::VecDeque;
 use std::convert::Infallible;
 use std::net::{IpAddr, SocketAddr};
@@ -21,7 +22,6 @@ use gateway_core::engine::{CommitRequirement, EngineError};
 use gateway_core::error::{GatewayError, GatewayErrorKind};
 use gateway_core::event::{ProviderEvent, ProviderResponseHeader};
 use gateway_core::lifecycle::ConnectionGuard;
-use gateway_protocol::openai::sse::DONE_SSE_FRAME;
 
 use crate::ApiState;
 use crate::openai::{
@@ -231,6 +231,15 @@ fn encode_collected_events(
     format: &HttpResponseFormat,
 ) -> Result<Vec<u8>, HttpEncodeError> {
     let response = HttpResponseEncoder::new(format).finish_collected(events)?;
+    if format.is_messages()
+        && let Some(raw) = events
+            .iter()
+            .filter_map(ProviderEvent::wire_event)
+            .filter(|wire| wire.protocol() == ANTHROPIC_PROTOCOL)
+            .find_map(|wire| wire.raw_json_body())
+    {
+        return Ok(raw.to_vec());
+    }
     serde_json::to_vec(&response)
         .map_err(|_| HttpEncodeError::Responses(ResponseEncodeError::Serialization))
 }
@@ -295,7 +304,12 @@ fn encoding_error_response(error: &HttpEncodeError, format: &HttpResponseFormat)
         match (error, format) {
             (HttpEncodeError::Responses(_), _) => StatusCode::INTERNAL_SERVER_ERROR,
             (_, HttpResponseFormat::Responses) => StatusCode::INTERNAL_SERVER_ERROR,
-            (_, HttpResponseFormat::Chat { .. }) => StatusCode::BAD_GATEWAY,
+            (
+                _,
+                HttpResponseFormat::Chat { .. }
+                | HttpResponseFormat::Messages
+                | HttpResponseFormat::MessageTokenCount,
+            ) => StatusCode::BAD_GATEWAY,
         },
         error.protocol_body(),
     )
@@ -315,7 +329,20 @@ pub(in crate::openai) async fn stream_execution_response_as(
     format: HttpResponseFormat,
 ) -> Response {
     let commit = session.response_commit();
-    if matches!(format, HttpResponseFormat::Responses) {
+    if format.is_messages() {
+        super::keepalive::response_with_protocol(
+            async move {
+                crate::openai::messages::project_error_response(
+                    stream_execution_response_inner(session, connection_guard, format).await,
+                )
+                .await
+            },
+            commit,
+            Some(crate::openai::messages::stream_error),
+            Bytes::new(),
+        )
+        .await
+    } else if matches!(format, HttpResponseFormat::Responses) {
         super::keepalive::response(
             stream_execution_response_inner(session, connection_guard, format),
             commit,
@@ -379,7 +406,7 @@ async fn stream_execution_response_inner(
                 // A Chat finish/usage frame is deliverable only after the
                 // execution confirms success, including in the first batch.
                 Ok(encoded)
-                    if encoder.is_chat()
+                    if encoder.requires_terminal_confirmation()
                         && (encoder.is_completed() || encoder.has_wire_failure()) =>
                 {
                     terminal_frames.extend(encoded);
@@ -398,7 +425,7 @@ async fn stream_execution_response_inner(
         }
         // Chat has no wire representation for transport comments/metadata.
         // Consume those without committing a successful downstream response.
-        if matches!(format, HttpResponseFormat::Chat { .. }) && !encoder.is_completed() {
+        if encoder.requires_terminal_confirmation() && !encoder.is_completed() {
             let Some(session) = execution.session_mut() else {
                 return internal_gateway_response("gateway response session is unavailable");
             };
@@ -441,7 +468,8 @@ async fn stream_execution_response_inner(
         return internal_gateway_response("gateway response session is unavailable");
     };
     let mut state = ResponsesStreamState::new(session, encoder, frames, connection_guard);
-    if state.encoder.is_completed() || (state.encoder.is_chat() && state.encoder.has_wire_failure())
+    if state.encoder.is_completed()
+        || (state.encoder.requires_terminal_confirmation() && state.encoder.has_wire_failure())
     {
         state.finish_completed(terminal_frames).await;
     }
@@ -641,16 +669,15 @@ impl ResponsesStreamState {
                     .as_ref()
                     .is_some_and(|session| session.is_finalized());
                 if self.execution_terminal
-                    && (!self.encoder.is_chat()
+                    && (!self.encoder.requires_terminal_confirmation()
                         || self.encoder.is_completed()
                         || self.encoder.has_wire_failure())
                 {
-                    self.pending
-                        .push_back(Bytes::from_static(DONE_SSE_FRAME.as_bytes()));
+                    self.pending.push_back(self.encoder.terminal_bytes());
                     self.output_finished = true;
                 } else {
-                    let error = if self.encoder.is_chat() {
-                        HttpEncodeError::ChatDelivery.gateway_error()
+                    let error = if self.encoder.requires_terminal_confirmation() {
+                        self.encoder.missing_terminal_error()
                     } else {
                         GatewayError::new(
                             GatewayErrorKind::Internal,
@@ -667,8 +694,7 @@ impl ResponsesStreamState {
                     .as_ref()
                     .is_some_and(|session| session.is_finalized());
                 if self.encoder.has_wire_failure() {
-                    self.pending
-                        .push_back(Bytes::from_static(DONE_SSE_FRAME.as_bytes()));
+                    self.pending.push_back(self.encoder.terminal_bytes());
                     self.output_finished = true;
                 } else {
                     self.finish_with_gateway_error(gateway_error_from_engine(&error));
@@ -681,7 +707,7 @@ impl ResponsesStreamState {
         let mut frames = Vec::new();
         for event in events {
             match self.encoder.push_sse(&event) {
-                Ok(encoded) if !self.encoder.is_chat() => {
+                Ok(encoded) if !self.encoder.requires_terminal_confirmation() => {
                     if self.encoder.is_completed() {
                         self.finish_completed(encoded).await;
                         return;
@@ -698,7 +724,7 @@ impl ResponsesStreamState {
             }
         }
         if self.encoder.is_completed()
-            || (self.encoder.is_chat() && self.encoder.has_wire_failure())
+            || (self.encoder.requires_terminal_confirmation() && self.encoder.has_wire_failure())
         {
             self.finish_completed(frames).await;
         } else {
@@ -733,8 +759,7 @@ impl ResponsesStreamState {
                     }
                     self.pending.extend(frames);
                     self.execution_terminal = true;
-                    self.pending
-                        .push_back(Bytes::from_static(DONE_SSE_FRAME.as_bytes()));
+                    self.pending.push_back(self.encoder.terminal_bytes());
                     self.output_finished = true;
                 }
                 Ok(None) => {
@@ -746,7 +771,7 @@ impl ResponsesStreamState {
                     self.finish_with_gateway_error(error);
                 }
                 Ok(Some(event))
-                    if self.encoder.is_chat()
+                    if self.encoder.requires_terminal_confirmation()
                         && event.commit_requirement() == CommitRequirement::AlreadyCommitted =>
                 {
                     for event in event.into_provider_events() {
@@ -786,8 +811,7 @@ impl ResponsesStreamState {
                         .is_some_and(|session| session.is_finalized());
                     if self.encoder.has_wire_failure() && self.encoder.finish_sse().is_ok() {
                         self.pending.extend(frames);
-                        self.pending
-                            .push_back(Bytes::from_static(DONE_SSE_FRAME.as_bytes()));
+                        self.pending.push_back(self.encoder.terminal_bytes());
                         self.output_finished = true;
                     } else {
                         self.finish_with_gateway_error(gateway_error_from_engine(&error));
@@ -807,8 +831,7 @@ impl ResponsesStreamState {
 
     fn finish_with_gateway_error(&mut self, error: GatewayError) {
         self.pending.push_back(self.encoder.error_frame(&error));
-        self.pending
-            .push_back(Bytes::from_static(DONE_SSE_FRAME.as_bytes()));
+        self.pending.push_back(self.encoder.terminal_bytes());
         self.output_finished = true;
     }
 }

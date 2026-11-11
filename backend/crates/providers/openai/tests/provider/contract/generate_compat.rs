@@ -547,3 +547,28 @@ async fn codex_oauth_keeps_explicit_limits_and_context_options() {
         }
     }
 }
+
+#[tokio::test]
+async fn native_responses_preserve_explicit_service_tiers() {
+    for tier in [
+        None,
+        Some(Value::Null),
+        Some(json!("auto")),
+        Some(json!("default")),
+        Some(json!("priority")),
+        Some(json!("flex")),
+    ] {
+        for websocket in [false, true] {
+            let mut body = json!({"model":"gpt-5.4","input":"hello"});
+            if let Some(tier) = &tier {
+                body["service_tier"] = tier.clone();
+            }
+            let sent = capture_downstream_request(body, websocket, false).await;
+            assert_eq!(
+                sent.get("service_tier"),
+                tier.as_ref(),
+                "websocket={websocket}"
+            );
+        }
+    }
+}

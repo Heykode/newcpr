@@ -304,6 +304,7 @@ async fn connect_and_migrate_should_apply_all_migrations_once_and_reopen_cleanly
             "notification_outbox",
             "ops_events",
             "outbound_proxies",
+            "provider_account_model_catalogs",
             "provider_accounts",
             "provider_device_identities",
             "provider_egress_account_overrides",

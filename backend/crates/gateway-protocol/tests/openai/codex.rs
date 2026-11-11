@@ -126,7 +126,7 @@ fn codex_semantics_should_use_protocol_context_before_body_metadata() {
 
 #[test]
 fn codex_semantics_should_detect_ultra_preset_from_proactive_multi_agent() {
-    let body = object(json!({
+    let mut body = object(json!({
         "model": "gpt-test",
         "reasoning": {"effort": "max"},
         "input": [
@@ -146,6 +146,36 @@ fn codex_semantics_should_detect_ultra_preset_from_proactive_multi_agent() {
     assert_eq!(semantics.reasoning_effort.as_deref(), Some("max"));
     assert_eq!(semantics.reasoning_preset, Some("ultra"));
     assert!(!semantics.compact);
+    for (role, message_type, expected) in [
+        ("system", Some("message"), Some("ultra")),
+        ("system", None, None),
+        ("system", Some("function_call"), None),
+        ("user", Some("message"), None),
+        (" system ", Some("message"), None),
+    ] {
+        let mut shaped = body.clone();
+        let item = shaped["input"][0].as_object_mut().unwrap();
+        item.insert("role".to_owned(), json!(role));
+        if let Some(message_type) = message_type {
+            item.insert("type".to_owned(), json!(message_type));
+        } else {
+            item.remove("type");
+        }
+        assert_eq!(
+            codex_responses_request_semantics(&shaped, &Map::new()).reasoning_preset,
+            expected
+        );
+    }
+
+    for (effort, expected_preset) in [("high", None), ("max", Some("ultra"))] {
+        body["input"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"type":"configuration_update","reasoning":{"effort":effort}}));
+        let semantics = codex_responses_request_semantics(&body, &Map::new());
+        assert_eq!(semantics.reasoning_effort.as_deref(), Some(effort));
+        assert_eq!(semantics.reasoning_preset, expected_preset);
+    }
 }
 
 #[test]
@@ -278,4 +308,83 @@ fn account_session_metadata_wins_over_cache_routing_without_changing_transport_i
         )
         .is_none()
     );
+}
+
+#[test]
+fn reasoning_effort_should_observe_unsigned_numbers_without_changing_the_body() {
+    for (effort, expected) in [
+        (json!(0), Some("0")),
+        (json!(64), Some("64")),
+        (json!(u64::MAX), Some("18446744073709551615")),
+        (json!(" high "), Some("high")),
+        (json!(-1), None),
+        (json!(1.5), None),
+        (json!(true), None),
+        (json!(null), None),
+    ] {
+        let body = object(json!({"reasoning":{"effort":effort}}));
+        let semantics = codex_responses_request_semantics(&body, &Map::new());
+        assert_eq!(semantics.reasoning_effort.as_deref(), expected);
+        assert_eq!(body["reasoning"]["effort"], effort);
+    }
+}
+
+#[test]
+fn empty_authoritative_turn_metadata_does_not_fall_back_to_body_aliases() {
+    for (context, body) in [
+        (
+            json!({"turn_metadata":""}),
+            json!({"turnMetadata":"{\"request_kind\":\"review\"}"}),
+        ),
+        (
+            json!({"turn_metadata":" "}),
+            json!({"turnMetadata":"{\"request_kind\":\"review\"}"}),
+        ),
+        (
+            json!({}),
+            json!({"turnMetadata":"","turn_metadata":"{\"request_kind\":\"review\"}"}),
+        ),
+    ] {
+        let semantics = codex_responses_request_semantics(&object(body), &object(context));
+        assert_eq!(semantics.request_kind, None);
+    }
+}
+
+#[test]
+fn request_observation_classifies_prewarm_from_generate() {
+    for (generate, request_kind, expected_kind) in [
+        (Some(json!(false)), None, Some("prewarm")),
+        (Some(json!(false)), Some("prewarm"), Some("prewarm")),
+        (Some(json!(false)), Some("review"), Some("prewarm")),
+        (Some(json!(true)), Some("prewarm"), None),
+        (None, Some("prewarm"), None),
+        (Some(json!(null)), Some("prewarm"), None),
+        (Some(json!("false")), Some("prewarm"), None),
+        (None, Some("review"), Some("review")),
+        (None, None, None),
+    ] {
+        let mut body = Map::from_iter([
+            ("model".to_owned(), json!("gpt-test")),
+            ("input".to_owned(), json!("hello")),
+            ("store".to_owned(), json!(false)),
+        ]);
+        if let Some(generate) = generate {
+            body.insert("generate".to_owned(), generate);
+        }
+        let context = Map::from_iter([(
+            "turn_metadata".to_owned(),
+            Value::String(
+                json!({"request_kind": request_kind, "subagent_kind": "worker"}).to_string(),
+            ),
+        )]);
+        let observation = codex_responses_request_semantics(&body, &context);
+
+        assert_eq!(
+            observation.request_kind.as_deref(),
+            expected_kind,
+            "generate={:?}, request_kind={request_kind:?}",
+            body.get("generate"),
+        );
+        assert_eq!(observation.subagent_kind.as_deref(), Some("worker"));
+    }
 }

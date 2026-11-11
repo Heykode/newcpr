@@ -80,6 +80,9 @@ export interface UsageTurnStateSummary {
 }
 
 export interface UsageListRecord {
+  clientStatusCode: number | null
+  upstreamStatusCode: number | null
+  errorOrigin: 'proxy' | 'upstream' | 'connection' | 'unknown'
   errorKind?: string | null
   websocketCloseCode?: number | null
   continuationUnavailableReason?: string | null
@@ -123,6 +126,7 @@ export interface UsageListRecord {
 }
 
 export interface UsageRecord {
+  errorOrigin: 'proxy' | 'upstream' | 'connection' | 'unknown'
   errorKind?: string | null
   websocketCloseCode?: number | null
   continuationUnavailableReason?: string | null
@@ -201,7 +205,7 @@ export interface UsageAttempt {
   transport: string
   sendState: string
   outcome: string
-  downstreamCommitted: boolean
+  downstreamCommitted: boolean | null
   statusCode: number | null
   providerErrorCode: string | null
   failureClass: string | null

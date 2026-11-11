@@ -398,6 +398,7 @@ async fn preferred_affinity_upgrade_preserves_existing_rows_and_defaults() {
         .execute(&database.pool)
         .await
         .unwrap();
+        super::TEST_MIGRATOR.run(&database.pool).await.unwrap();
         let repository = PgRuntimeSettingsRepository::new(database.pool.clone());
         assert_eq!(
             repository
@@ -554,7 +555,7 @@ fn settings_with_margin(refresh_margin_seconds: u64) -> RuntimeSettingsUpdate {
         max_concurrent_per_account: 3,
         openai_guardian_reserved_concurrency: 0,
         account_warmup_enabled: false,
-        account_warmup_schedule_time: "03:00".to_owned(),
+        account_warmup_cron: "0 3 * * *".to_owned(),
         account_warmup_model: None,
         codex_quota_overdraft_enabled: false,
         codex_quota_overdraft_probe_model: "gpt-6-astra".to_owned(),
@@ -1544,5 +1545,49 @@ async fn v3420_migration_preserves_queue_settings_and_converts_key_installation_
         assert_eq!(profile, expected);
     }
     super::TEST_MIGRATOR.run(&database.pool).await.unwrap();
+    database.close().await;
+}
+
+#[tokio::test]
+async fn cron_upgrade_disables_old_warmup_without_changing_other_settings() {
+    let old = sqlx::migrate::Migrator {
+        migrations: super::TEST_MIGRATOR
+            .iter()
+            .filter(|m| m.version < 88)
+            .cloned()
+            .collect::<Vec<_>>()
+            .into(),
+        ..sqlx::migrate::Migrator::DEFAULT
+    };
+    let Some(database) = TestDatabase::create_with_migrator("cron_upgrade", &old).await else {
+        return;
+    };
+    sqlx::query("update runtime_settings set account_warmup_enabled=true,account_warmup_schedule_time='08:00',account_warmup_model='fixture-model'").execute(&database.pool).await.unwrap();
+    let mut before: Value =
+        sqlx::query_scalar("select to_jsonb(s) from runtime_settings s where id=1")
+            .fetch_one(&database.pool)
+            .await
+            .unwrap();
+    super::TEST_MIGRATOR.run(&database.pool).await.unwrap();
+    let mut after: Value =
+        sqlx::query_scalar("select to_jsonb(s) from runtime_settings s where id=1")
+            .fetch_one(&database.pool)
+            .await
+            .unwrap();
+    assert_eq!(after["account_warmup_enabled"], false);
+    assert_eq!(after["account_warmup_cron"], "");
+    before
+        .as_object_mut()
+        .unwrap()
+        .remove("account_warmup_schedule_time");
+    before["account_warmup_enabled"] = json!(false);
+    after.as_object_mut().unwrap().remove("account_warmup_cron");
+    assert_eq!(before, after);
+    assert!(
+        sqlx::query("update runtime_settings set account_warmup_enabled=true")
+            .execute(&database.pool)
+            .await
+            .is_err()
+    );
     database.close().await;
 }

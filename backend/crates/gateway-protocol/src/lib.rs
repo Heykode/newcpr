@@ -4,3 +4,8 @@
 
 /// OpenAI wire contract。
 pub mod openai;
+
+/// Anthropic Messages wire contract.
+pub mod anthropic;
+/// Protocol-specific request facts.
+pub mod request;

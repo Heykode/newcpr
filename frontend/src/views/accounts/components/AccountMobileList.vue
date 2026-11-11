@@ -51,6 +51,7 @@ const tones = {
   disabled: 'border-l-cp-border',
   error: 'border-l-cp-error',
   rate_limited: 'border-l-cp-warning',
+  quota_paused: 'border-l-cp-warning',
   quota_exhausted: 'border-l-cp-warning',
 }
 

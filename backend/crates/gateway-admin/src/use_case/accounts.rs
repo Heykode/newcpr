@@ -1,5 +1,7 @@
 //! 统一账号目录与跨 Provider 动态分派。
 
+use crate::model::provider_credentials::ProviderQuotaReadRequest;
+
 use std::{collections::BTreeMap, num::NonZeroU32, sync::Arc};
 
 use async_trait::async_trait;
@@ -1016,6 +1018,7 @@ impl AccountsService for DefaultAccountsService {
             self.accounts
                 .batch_update_accounts(
                     BatchUpdateAccounts {
+                        quota_limits: None,
                         auto_use_quota_credits: None,
                         excel_recovery: None,
                         purchase_cost: None,
@@ -1038,6 +1041,7 @@ impl AccountsService for DefaultAccountsService {
                         group_ids: None,
                         outbound_proxy: None,
                     },
+                    Default::default(),
                     context,
                 )
                 .await
@@ -1148,8 +1152,52 @@ impl AccountsService for DefaultAccountsService {
                 Vec<ProviderAccountId>,
             ),
         >::new();
+        let mut pauses = BTreeMap::new();
         for account_id in &account_ids {
-            let (item, provider) = self.provider_for_account(account_id).await?;
+            let (mut item, provider) = self.provider_for_account(account_id).await?;
+            if let Some(limits) = &command.quota_limits {
+                if !provider
+                    .account_capabilities(account_id, &item.account.authentication_kind)
+                    .quota_limits_supported
+                {
+                    return Err(AdminError::invalid("该账号不支持通用额度窗口上限"));
+                }
+                let new_keys = limits
+                    .keys()
+                    .filter(|key| !item.account.quota_limits.contains(key))
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>();
+                if !limits.is_empty() {
+                    item.account.quota_limits = limits.clone();
+                    let quota = provider
+                        .read_quotas(&[ProviderQuotaReadRequest {
+                            account: &item.account,
+                            rolling_usage: None,
+                        }])
+                        .await
+                        .into_iter()
+                        .next()
+                        .ok_or_else(|| AdminError::invalid("缺少账号额度观测结果"))?
+                        .map_err(|error| map_provider_error(error, "provider quota"))?;
+                    if new_keys.iter().any(|key| {
+                        !quota.windows.iter().any(|window| {
+                            window.key == *key
+                                && window.local_usage_attribution
+                                    == QuotaLocalUsageAttribution::AccountWide
+                        })
+                    }) {
+                        return Err(AdminError::invalid("只能设置已观测的通用额度窗口"));
+                    }
+                    pauses.insert(
+                        item.account.id.clone(),
+                        crate::model::accounts::PreparedQuotaPause {
+                            revision: item.account.credential_revision,
+                            observed_at: quota.observed_at,
+                            paused: !quota.paused_windows.is_empty(),
+                        },
+                    );
+                }
+            }
             if command.request_proxy_source.is_some_and(|source| {
                 !source.supports_provider(item.account.provider_kind.as_str())
             }) {
@@ -1213,7 +1261,7 @@ impl AccountsService for DefaultAccountsService {
         let enabled = command.enabled;
         let result = self
             .accounts
-            .batch_update_accounts(command, context)
+            .batch_update_accounts(command, pauses, context)
             .await
             .map_err(|error| map_store_error(error, "provider accounts"))?;
         for (provider, provider_ids, _) in providers.values() {
@@ -1719,6 +1767,7 @@ fn map_reset_credits_error_after_refresh(
 /// 账号目录中单个账号 quota 读取失败时使用的空额度投影。
 fn empty_quota() -> ProviderQuota {
     ProviderQuota {
+        paused_windows: Vec::new(),
         credits: None,
         plan_type: None,
         observed_at: None,

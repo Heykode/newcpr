@@ -81,7 +81,9 @@ impl PgResetCreditsStore {
         }
         let identity = Self::identity(&mut tx, id).await?;
         sqlx::query("insert into account_auto_reset_policies(account_id,revision,config,identity) values($1,$2,$3,$4)
-            on conflict(account_id) do update set revision=$2,config=$3,identity=$4,next_check_at=now(),check_claim=null,check_until=null,inventory=null")
+            on conflict(account_id) do update set revision=$2,config=$3,identity=$4,next_check_at=now(),check_claim=null,check_until=null,inventory=null,
+                last_trigger=case when account_auto_reset_policies.identity=$4 then account_auto_reset_policies.last_trigger else '[]'::jsonb end,
+                awaiting_weekly_recovery_since=case when account_auto_reset_policies.identity=$4 then account_auto_reset_policies.awaiting_weekly_recovery_since else null end")
             .bind(id).bind(revision+1).bind(encode(&config)?).bind(identity).execute(&mut *tx).await.map_err(unavailable)?;
         Self::audit(&mut tx, context, "reset_credits.auto_policy", id).await?;
         let result = Self::read_auto(&mut tx, id).await?;
@@ -103,7 +105,7 @@ impl PgResetCreditsStore {
         let id: Option<String> = sqlx::query_scalar("select p.account_id from account_auto_reset_policies p
             join provider_accounts a on a.id=p.account_id
             where p.config->>'enabled'='true' and p.next_check_at<=now() and (p.check_until is null or p.check_until<=now())
-            and (p.config->>'fiveHourUsedMillis'<>'0' or p.config->>'sevenDayUsedMillis'<>'0' or p.config->>'expiryEnabled'='true')
+            and (p.config->>'fiveHourUsedMillis'<>'0' or p.config->>'sevenDayUsedMillis'<>'0' or p.config->>'expiryEnabled'='true' or p.config->>'onLowWeeklyQuota'='true')
             and a.provider_kind='openai' and a.authentication_kind='oauth' and a.responses_upstream='codex'
             and p.identity=jsonb_build_array(a.provider_kind,a.upstream_user_id,a.upstream_account_id,extract(epoch from a.created_at))
             and not exists(select 1 from account_reset_consumptions c where c.account_id=p.account_id and c.status in ('running','unknown'))
@@ -144,10 +146,10 @@ impl PgResetCreditsStore {
     ) -> AdminStoreResult<()> {
         let mut tx = self.locked().await?;
         let id = &check.policy.account_id;
-        let row: Option<(Value, Value)> = sqlx::query_as("select identity,last_trigger from account_auto_reset_policies
+        let row: Option<(Value, Value, Option<DateTime<Utc>>)> = sqlx::query_as("select identity,last_trigger,awaiting_weekly_recovery_since from account_auto_reset_policies
             where account_id=$1 and revision=$2 and check_claim=$3 and check_until>now() and config->>'enabled'='true'")
             .bind(id).bind(check.policy.revision).bind(check.claim_id).fetch_optional(&mut *tx).await.map_err(unavailable)?;
-        let Some((identity, last_trigger)) = row else {
+        let Some((identity, last_trigger, mut awaiting_weekly_recovery_since)) = row else {
             return Ok(());
         };
         if Self::identity(&mut tx, id).await? != identity
@@ -183,6 +185,19 @@ impl PgResetCreditsStore {
                 && Utc::now() - observation.observed_at <= Duration::seconds(90);
             if blocked || !fresh {
                 message = "额度观测已失效或有其他重置操作，本次未消费".into();
+            } else if check.policy.config.on_low_weekly_quota && observation.all_below {
+                // Official recovery fence requires a newer observation above the trigger,
+                // not merely a changed reset timestamp or a new card.
+                if awaiting_weekly_recovery_since
+                    .is_none_or(|since| observation.observed_at > since)
+                {
+                    awaiting_weekly_recovery_since = None;
+                    previous.clear();
+                }
+            } else if check.policy.config.on_low_weekly_quota
+                && awaiting_weekly_recovery_since.is_some()
+            {
+                message = "等待周额度恢复，未重复消费".into();
             } else if !observation.weekly_condition_met {
                 message = "周剩余额度高于设定值，本次未消费".into();
             } else if observation.all_below && !observation.expiry_triggered {
@@ -227,8 +242,8 @@ impl PgResetCreditsStore {
             }
         }
         sqlx::query("update account_auto_reset_policies set check_claim=null,check_until=null,checked_at=now(),
-            next_check_at=now()+interval '60 seconds',message=$2,last_trigger=$3 where account_id=$1")
-            .bind(id).bind(message).bind(encode(&previous)?).execute(&mut *tx).await.map_err(unavailable)?;
+            next_check_at=now()+interval '60 seconds',message=$2,last_trigger=$3,awaiting_weekly_recovery_since=$4 where account_id=$1")
+            .bind(id).bind(message).bind(encode(&previous)?).bind(awaiting_weekly_recovery_since).execute(&mut *tx).await.map_err(unavailable)?;
         tx.commit().await.map_err(unavailable)
     }
 
@@ -270,6 +285,13 @@ impl PgResetCreditsStore {
                     .any(|w| w.reset_at <= Utc::now()))
         {
             return Err(conflict("自动重置授权或额度观测已失效，本次未消费"));
+        }
+        if policy.config.on_low_weekly_quota {
+            let awaiting: bool = sqlx::query_scalar("select awaiting_weekly_recovery_since is not null from account_auto_reset_policies where account_id=$1")
+                .bind(&id).fetch_one(&mut **tx).await.map_err(unavailable)?;
+            if awaiting {
+                return Err(conflict("等待周额度恢复，未重复消费"));
+            }
         }
         let changed: bool = sqlx::query_scalar(
             "select exists(select 1 from account_reset_consumptions where account_id=$1

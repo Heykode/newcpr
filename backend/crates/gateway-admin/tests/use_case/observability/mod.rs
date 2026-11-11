@@ -1,3 +1,5 @@
+mod errors;
+
 use std::{
     str::FromStr as _,
     sync::{
@@ -1012,7 +1014,7 @@ impl SettingsStore for FixtureSettingsStore {
             max_concurrent_per_account: 1,
             openai_guardian_reserved_concurrency: 0,
             account_warmup_enabled: false,
-            account_warmup_schedule_time: "08:00".to_owned(),
+            account_warmup_cron: "0 8 * * *".to_owned(),
             account_warmup_model: None,
             codex_quota_overdraft_enabled: false,
             codex_quota_overdraft_probe_model: "gpt-6-astra".to_owned(),
@@ -1097,6 +1099,9 @@ fn total_record(
     now: DateTime<Utc>,
 ) -> UsageListRecord {
     UsageListRecord {
+        client_status_code: Default::default(),
+        has_upstream_error: Default::default(),
+        upstream_status_code: Default::default(),
         error_kind: None,
         websocket_close_code: None,
         continuation_unavailable_reason: None,

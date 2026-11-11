@@ -514,23 +514,22 @@ where
         }
         loop {
             match self.pull().await? {
-                PullOutcome::Event(event) => {
-                    self.replay_barrier_reached |= !event.is_replayable_prelude();
-                    if self.downstream_committed_at.is_some() {
-                        return Ok(Some(CoordinatedEvent::single(
-                            event,
-                            CommitRequirement::AlreadyCommitted,
-                        )));
-                    }
-                    self.delivery_pending = true;
-                    self.delivery_has_terminal_fact = event
-                        .canonical_facts()
-                        .iter()
-                        .any(|fact| matches!(fact, GatewayEvent::Completed(_)));
-                    return Ok(Some(CoordinatedEvent::single(
-                        event,
-                        CommitRequirement::CommitBeforeDelivery,
-                    )));
+                PullOutcome::Events(events) => {
+                    self.replay_barrier_reached |=
+                        events.iter().any(|event| !event.is_replayable_prelude());
+                    let requirement = if self.downstream_committed_at.is_some() {
+                        CommitRequirement::AlreadyCommitted
+                    } else {
+                        self.delivery_pending = true;
+                        self.delivery_has_terminal_fact = events.iter().any(|event| {
+                            event
+                                .canonical_facts()
+                                .iter()
+                                .any(|fact| matches!(fact, GatewayEvent::Completed(_)))
+                        });
+                        CommitRequirement::CommitBeforeDelivery
+                    };
+                    return CoordinatedEvent::try_batch(events, requirement).map(Some);
                 }
                 PullOutcome::AttemptDiscarded => {}
                 PullOutcome::TerminalFailure {
@@ -572,7 +571,7 @@ where
         let mut events = Vec::new();
         loop {
             match self.pull().await? {
-                PullOutcome::Event(event) => events.push(event),
+                PullOutcome::Events(next) => events.extend(next),
                 PullOutcome::AttemptDiscarded => events.clear(),
                 PullOutcome::TerminalFailure {
                     error, send_state, ..
@@ -900,15 +899,30 @@ where
                     if !event.has_client_event() {
                         continue;
                     }
-                    if event
+                    let terminal = event
                         .canonical_facts()
                         .iter()
-                        .any(|fact| matches!(fact, GatewayEvent::Completed(_)))
-                        && let Some(guard) = &mut self.client_retry
-                    {
-                        guard.success().await;
+                        .any(|fact| matches!(fact, GatewayEvent::Completed(_)));
+                    let translated = self
+                        .current
+                        .as_mut()
+                        .ok_or(EngineError::NoActiveAttempt)?
+                        .stream
+                        .translate_native_response(event, terminal);
+                    match translated {
+                        Ok(events) if events.is_empty() => continue,
+                        Ok(events) => {
+                            // 成功终态交付后客户端即可续发工具结果，不能等流 EOF 或异步观测再清理
+                            if terminal && let Some(guard) = &mut self.client_retry {
+                                guard.success().await;
+                            }
+                            return Ok(PullOutcome::Events(events));
+                        }
+                        Err(error) => {
+                            self.finish_provider_error(&error).await?;
+                            return Err(provider_engine_error(error));
+                        }
                     }
-                    return Ok(PullOutcome::Event(event));
                 }
                 PollBoundary::Item(Some(Err(error))) => {
                     self.begin_stream_failure(error)?;
@@ -1615,11 +1629,13 @@ where
         let retry_after_exceeds_limit = error
             .retry_after()
             .is_some_and(|delay| delay > self.plan.max_retry_after());
+        let same_account_retry_blocked = error.same_account_retry_blocked();
         let transport_send_allows_recovery = attempt_send_state != UpstreamSendState::Ambiguous
             || error.kind() == ProviderErrorKind::MessageTooBig;
         let transport_recovery = match error.pre_delivery_retry() {
             Some(crate::error::PreDeliveryRetry::SameAccountConnectionRetry { transport })
-                if !self.replay_barrier_reached
+                if !same_account_retry_blocked
+                    && !self.replay_barrier_reached
                     && !self.delivery_pending
                     && send_state == UpstreamSendState::NotSent
                     && self.continuation_attempt == ContinuationAttempt::None =>
@@ -1634,7 +1650,8 @@ where
             Some(crate::error::PreDeliveryRetry::SameAccountTransportRetry {
                 retry_index,
                 delay,
-            }) if !retry_after_exceeds_limit
+            }) if !same_account_retry_blocked
+                && !retry_after_exceeds_limit
                 && !self.replay_barrier_reached
                 && !self.delivery_pending
                 && transport_send_allows_recovery =>
@@ -1642,7 +1659,8 @@ where
                 Some((AttemptTransport::Retry(retry_index), delay))
             }
             Some(crate::error::PreDeliveryRetry::SameAccountTransportFallback)
-                if !retry_after_exceeds_limit
+                if !same_account_retry_blocked
+                    && !retry_after_exceeds_limit
                     && !self.replay_barrier_reached
                     && !self.delivery_pending
                     && transport_send_allows_recovery =>
@@ -1684,7 +1702,11 @@ where
                 max_delay,
                 jitter,
                 ..
-            }) if ordinary_retry && !suppress_transient_retry && !retry_after_exceeds_limit => {
+            }) if !same_account_retry_blocked
+                && ordinary_retry
+                && !suppress_transient_retry
+                && !retry_after_exceeds_limit =>
+            {
                 let retries = self
                     .transient_retry_counts
                     .entry(current.metadata.provider_account_id().clone())
@@ -1705,7 +1727,8 @@ where
             }
             _ => None,
         };
-        let same_account_retry = error.retries_same_account()
+        let same_account_retry = !same_account_retry_blocked
+            && error.retries_same_account()
             && provider_proved_replay_safe
             && !self.replay_barrier_reached
             && !self.delivery_pending
@@ -1740,6 +1763,7 @@ where
             "reserveConnectionRotation": reserve_connection_rotation,
             "transientRetry": transient_retry.is_some(),
             "retryAfterExceeded": retry_after_exceeds_limit,
+            "sameAccountRetryBlocked": same_account_retry_blocked,
             "maxRetryAfterSeconds": self.plan.max_retry_after().as_secs(),
             "clientRetrySuppressed": suppress_transient_retry,
             "connectionRetry": connection_retry_requested,
@@ -2543,7 +2567,7 @@ async fn best_effort_store_write<T>(
 }
 
 enum PullOutcome {
-    Event(ProviderEvent),
+    Events(Vec<ProviderEvent>),
     AttemptDiscarded,
     TerminalFailure {
         events: Vec<ProviderEvent>,

@@ -1,0 +1,12 @@
+{
+  "from_version": "3.43.1",
+  "to_version": "3.45.2",
+  "from_migrations_tree": "b026ee392fcc382c729660b7b1293b53bce4c992",
+  "to_migrations_tree": "8e3e71cda4b02673bbd460c8d8968a5cfaae5c3f",
+  "added": [
+    "0088_account_scheduling_limits_and_cron.sql",
+    "0089_account_model_catalogs.sql",
+    "0090_auto_reset_weekly_recovery.sql"
+  ],
+  "recovery": "manual"
+}

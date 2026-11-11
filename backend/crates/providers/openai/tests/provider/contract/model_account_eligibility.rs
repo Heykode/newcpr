@@ -483,7 +483,7 @@ async fn native_catalog_membership_precedes_weight_and_pin_but_explicit_allowlis
         let leases = Arc::new(TestLeaseCoordinator::default());
         leases.capacity.enabled.store(true, Ordering::SeqCst);
         let affinity = Arc::new(MemorySessionAffinity::default());
-        let provider = super::scheduling::waiting_provider_with_affinity_and_limit(
+        let (provider, catalog, _) = super::scheduling::waiting_provider_with_catalog(
             &store,
             leases.clone(),
             server.uri(),
@@ -491,6 +491,7 @@ async fn native_catalog_membership_precedes_weight_and_pin_but_explicit_allowlis
             affinity.clone(),
             NonZeroU32::MIN,
         );
+        catalog.refresh_catalogs().await.unwrap();
         provider.query_model_capabilities().await.unwrap();
         for (model, expected) in [
             ("gpt-6-luna", "acct_scope_old"),
@@ -676,7 +677,7 @@ async fn native_catalog_membership_precedes_weight_and_pin_but_explicit_allowlis
 }
 
 #[tokio::test]
-async fn unknown_plan_does_not_borrow_shared_catalog_entitlements() {
+async fn unknown_plan_uses_its_own_catalog_entitlements() {
     for wait in [false, true] {
         let store = Arc::new(MemoryAccountStore::default());
         let mut identity = profile("unknown-plan");
@@ -707,21 +708,28 @@ async fn unknown_plan_does_not_borrow_shared_catalog_entitlements() {
             .respond_with(
                 ResponseTemplate::new(200).set_body_raw(CAPTURE_COMPLETED_SSE, "text/event-stream"),
             )
-            .expect(1)
+            .expect(0)
             .mount(&server)
             .await;
-        let provider = provider(&store, Arc::default(), server.uri());
+        let (provider, catalog, _) = super::scheduling::waiting_provider_with_catalog(
+            &store,
+            Arc::default(),
+            server.uri(),
+            Arc::default(),
+            Arc::default(),
+            NonZeroU32::MIN,
+        );
+        catalog.refresh_catalogs().await.unwrap();
         provider.query_model_capabilities().await.unwrap();
-        let mut stream = provider
+        let error = provider
             .execute(
                 planned_request_with_model("openai", operation("gpt-future", false), "gpt-future"),
                 attempt(wait),
             )
             .await
-            .unwrap();
-        while let Some(event) = stream.next().await {
-            event.unwrap();
-        }
+            .err()
+            .expect("own catalog excludes the unknown model even without a plan");
+        assert_eq!(error.kind(), ProviderErrorKind::NoEligibleAccount);
         server.verify().await;
     }
 }
@@ -750,7 +758,15 @@ async fn excel_exemption_follows_the_actual_route_not_the_account_setting() {
             .await;
         let leases = Arc::new(TestLeaseCoordinator::default());
         leases.capacity.enabled.store(true, Ordering::SeqCst);
-        let provider = provider(&store, leases.clone(), server.uri());
+        let (provider, catalog, _) = super::scheduling::waiting_provider_with_catalog(
+            &store,
+            leases.clone(),
+            server.uri(),
+            Arc::default(),
+            Arc::default(),
+            NonZeroU32::MIN,
+        );
+        catalog.refresh_catalogs().await.unwrap();
         provider.query_model_capabilities().await.unwrap();
         let error = provider
             .execute(
@@ -812,7 +828,15 @@ async fn failed_native_catalog_cannot_turn_excel_synthetic_models_into_refusal_e
             .expect(1)
             .mount(&server)
             .await;
-        let provider = provider(&store, Arc::default(), server.uri());
+        let (provider, catalog, _) = super::scheduling::waiting_provider_with_catalog(
+            &store,
+            Arc::default(),
+            server.uri(),
+            Arc::default(),
+            Arc::default(),
+            NonZeroU32::MIN,
+        );
+        catalog.refresh_catalogs().await.unwrap();
         provider.query_model_capabilities().await.unwrap();
         let mut stream = provider
             .execute(
@@ -878,12 +902,15 @@ async fn account_allowlists_override_catalog_omissions_but_weight_affinity_and_p
     store.set_scheduling("acct_scope_new", None, AccountWeight::new(100).unwrap());
     let affinity = Arc::new(MemorySessionAffinity::default());
     let leases = Arc::new(TestLeaseCoordinator::default());
-    let provider = provider_with_affinity_and_base_url_and_leases(
+    let (provider, _, catalog) = provider_services_with_profile(
         &store,
         affinity.clone(),
         native.uri(),
         leases.clone(),
+        u32::try_from(DEFAULT_STREAM_MAX_RETRIES).unwrap(),
+        wire_profile(),
     );
+    catalog.refresh_catalogs().await.unwrap();
     provider.query_model_capabilities().await.unwrap();
     for (model, expected) in [
         ("gpt-6-luna", "acct_scope_new"),

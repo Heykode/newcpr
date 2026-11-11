@@ -14,19 +14,19 @@
     },
     "accountPool": {
       "empty": "No account pool data",
-      "quotaExhausted": "Quota exhausted",
       "rateLimited": "Rate limited",
       "pending": "Pending",
       "issueCountsEmpty": "Disabled: — · Errors: —",
       "availableDescription": "Account is currently available",
-      "exhaustedDescription": "Account quota has been exhausted",
       "limitedDescription": "Account requests are temporarily restricted",
       "issueCounts": "Disabled: {disabled} · Errors: {error}",
       "title": "Account status",
       "description": "Account pool health",
       "healthyRate": "Healthy accounts",
       "distribution": "State distribution",
-      "unavailableCount": "Unavailable: {value}"
+      "unavailableCount": "Unavailable: {value}",
+      "quotaLimited": "Quota limited",
+      "limitedQuotaDescription": "Quota exhausted or scheduling limit reached"
     },
     "activeAccounts": {
       "todayTokens": "Tokens",

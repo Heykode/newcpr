@@ -1,5 +1,6 @@
 //! xAI 管理边界：Provider preparation 与 Redis OAuth pending 适配。
 
+use gateway_protocol::openai::OPENAI_PROTOCOL;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -1147,6 +1148,7 @@ fn project_quota(
         }
     };
     ProviderQuota {
+        paused_windows: Vec::new(),
         credits: None,
         plan_type: None,
         observed_at: snapshot.as_ref().map(GrokQuotaSnapshot::observed_at),
@@ -1344,7 +1346,7 @@ fn build_connection_test_operation(
     );
     body.insert("stream".to_owned(), Value::Bool(true));
     body.insert("store".to_owned(), Value::Bool(false));
-    let payload = ProtocolPayload::json_object("openai", body)
+    let payload = ProtocolPayload::json_object(OPENAI_PROTOCOL, body)
         .map_err(|_| provider_error(ProviderAdminErrorKind::Invalid))?;
     Ok(Operation::Generate(GenerateRequest::from_protocol_payload(
         payload,

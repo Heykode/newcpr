@@ -508,7 +508,7 @@ async fn load_member_facts<'e>(
                 account.weight, account.model_access_json, account.credential_state, account.quota_access_state,
                 account.quota_evidence, account.quota_access_observed_at,
                 account.quota_reset_at, account.last_error_reason,
-                coalesce((select status = 'passed' and account.quota_access_state='exhausted' and account_subject=account.upstream_account_id from codex_quota_overdraft_states where account_id=account.id and credential_revision=account.credential_revision and config_revision=settings.config_revision and settings.codex_quota_overdraft_enabled), false) as codex_quota_overdraft_passed, account.auto_use_quota_credits,
+                coalesce((select status = 'passed' and account.quota_access_state='exhausted' and account_subject=account.upstream_account_id from codex_quota_overdraft_states where account_id=account.id and credential_revision=account.credential_revision and config_revision=settings.config_revision and settings.codex_quota_overdraft_enabled), false) as codex_quota_overdraft_passed, account.auto_use_quota_credits, account.quota_limits, account.quota_paused,
                 account.last_error_message, account.credential_observed_at,
                 account.created_at, account.updated_at, account.relogin_count, account.last_relogin_at,
                 settings.max_concurrent_per_account
@@ -537,6 +537,7 @@ async fn load_member_facts<'e>(
                 group_id,
                 account_id: account.id,
                 status: AccountStatusFacts {
+                    quota_paused: account.quota_paused,
                     enabled: account.enabled,
                     credential_state: account.credential_state,
                     access_token_expires_at: account.access_token_expires_at.map(Into::into),

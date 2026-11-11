@@ -1,6 +1,7 @@
 use super::*;
 use gateway_core::account::{AccountAffinity, AccountSelectionPolicy, RotationStrategy};
 use gateway_core::provider_ports::{ProviderSessionAffinityKey, ProviderSessionAffinityPort};
+use std::sync::atomic::Ordering;
 
 fn mode_context(mode: AccountAffinity) -> AttemptContext {
     AttemptContext::new(
@@ -1177,4 +1178,108 @@ async fn responses_turn_alias_uses_logical_metadata_independently_of_transport_t
             assert!(upstream.received_requests().await.unwrap().is_empty());
         }
     }
+}
+
+#[tokio::test]
+async fn quota_pause_preserves_strict_child_owner_and_other_modes_can_use_backup() {
+    for wait in [false, true] {
+        for mode in [
+            AccountAffinity::Strict,
+            AccountAffinity::Preferred,
+            AccountAffinity::Relaxed,
+        ] {
+            let store = Arc::new(MemoryAccountStore::default());
+            create_account(&store, "acct_scope_old").await;
+            let affinity = Arc::new(MemorySessionAffinity::default());
+            let leases = Arc::new(TestLeaseCoordinator::default());
+            leases.capacity.enabled.store(true, Ordering::SeqCst);
+            let upstream = MockServer::start().await;
+            let provider = super::scheduling::waiting_provider_with_affinity_and_limit(
+                &store,
+                leases.clone(),
+                upstream.uri(),
+                Arc::default(),
+                affinity,
+                NonZeroU32::MIN,
+            );
+            drop(
+                provider
+                    .execute(generate("quota-root", None, None), mode_context(mode))
+                    .await
+                    .unwrap(),
+            );
+            create_account(&store, "acct_scope_new").await;
+            store.set_quota_paused("acct_scope_old", true);
+            let result = provider
+                .execute(
+                    generate("quota-root", Some("child"), None),
+                    mode_context(mode).with_request_tuning(gateway_core::routing::RequestTuning {
+                        account_busy_wait_enabled: wait,
+                        ..Default::default()
+                    }),
+                )
+                .await;
+            if mode == AccountAffinity::Strict {
+                let error = result.err().expect("strict child cannot migrate root");
+                assert_eq!(error.kind(), ProviderErrorKind::RequestPolicyDenied);
+                assert_eq!(error.send_state(), UpstreamSendState::NotSent);
+            } else {
+                assert_eq!(
+                    result.unwrap().metadata().provider_account_id().as_str(),
+                    "acct_scope_new"
+                );
+            }
+            assert_eq!(leases.capacity.waiting.load(Ordering::SeqCst), 0);
+            assert!(upstream.received_requests().await.unwrap().is_empty());
+        }
+    }
+}
+
+#[tokio::test]
+async fn strict_child_wait_rechecks_quota_pause_and_releases_queue_slot() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_scope_old").await;
+    let leases = Arc::new(TestLeaseCoordinator::default());
+    leases.capacity.enabled.store(true, Ordering::SeqCst);
+    let upstream = MockServer::start().await;
+    let provider = super::scheduling::waiting_provider_with_affinity_and_limit(
+        &store,
+        leases.clone(),
+        upstream.uri(),
+        Arc::default(),
+        Arc::default(),
+        NonZeroU32::MIN,
+    );
+    drop(
+        provider
+            .execute(
+                generate("quota-root", None, None),
+                mode_context(AccountAffinity::Strict),
+            )
+            .await
+            .unwrap(),
+    );
+    leases.capacity.set_load("acct_scope_old", 1);
+    let waiting = provider.execute(
+        generate("quota-root", Some("child"), None),
+        mode_context(AccountAffinity::Strict).with_request_tuning(
+            gateway_core::routing::RequestTuning {
+                account_busy_wait_enabled: true,
+                ..Default::default()
+            },
+        ),
+    );
+    tokio::pin!(waiting);
+    tokio::select! {
+        result = &mut waiting => panic!("expected queue: {:?}",result.err()),
+        () = async { while leases.capacity.waiting.load(Ordering::SeqCst) == 0 { tokio::task::yield_now().await; } } => {},
+    }
+    store.set_quota_paused("acct_scope_old", true);
+    let error = timeout(Duration::from_secs(2), waiting)
+        .await
+        .unwrap()
+        .err()
+        .unwrap();
+    assert_eq!(error.kind(), ProviderErrorKind::RequestPolicyDenied);
+    assert_eq!(leases.capacity.waiting.load(Ordering::SeqCst), 0);
 }

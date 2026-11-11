@@ -258,9 +258,15 @@ impl ProviderSchedulingLeaseRequest {
 }
 
 /// Lease 生命周期由具体 Store guard 管理，Provider 只能持有。
-pub trait ProviderLeaseGuard: Send + Sync + 'static {}
+pub trait ProviderLeaseGuard: Send + Sync + 'static {
+    fn release(self: Box<Self>) -> BoxFuture<'static, Result<(), ProviderStoreError>>;
+}
 
-impl<T> ProviderLeaseGuard for T where T: Send + Sync + 'static {}
+impl ProviderLeaseGuard for () {
+    fn release(self: Box<Self>) -> BoxFuture<'static, Result<(), ProviderStoreError>> {
+        Box::pin(async { Ok(()) })
+    }
+}
 
 pub enum ProviderLeaseAcquisition {
     Acquired(Box<dyn ProviderLeaseGuard>),
@@ -584,8 +590,51 @@ impl fmt::Debug for ProviderSessionAffinityBinding {
     }
 }
 
+/// 发送前核对的会话版本。绑定由调用方构造，以保留本地租约的 generation 合同。
+#[derive(Clone, Copy)]
+pub struct ProviderSessionClaim<'a> {
+    pub key: &'a ProviderSessionAffinityKey,
+    pub expected: Option<&'a ProviderSessionAffinityBinding>,
+    pub binding: &'a ProviderSessionAffinityBinding,
+    pub ttl: Duration,
+}
+
+/// 会话绑定与轮询位置在成功取得账号租约后一起提交。
+#[derive(Clone, Copy)]
+pub enum ProviderAccountAdmission<'a> {
+    Session(ProviderSessionClaim<'a>),
+    RoundRobin {
+        client_key: &'a ClientApiKeyId,
+        cursor: u64,
+        session: Option<ProviderSessionClaim<'a>>,
+    },
+}
+
+impl<'a> ProviderAccountAdmission<'a> {
+    #[must_use]
+    pub const fn session(self) -> Option<ProviderSessionClaim<'a>> {
+        match self {
+            Self::Session(session) => Some(session),
+            Self::RoundRobin { session, .. } => session,
+        }
+    }
+}
+
 /// 可丢失的会话到账号偏好；Provider 负责先把原始会话标识哈希为不透明键。
 pub trait ProviderSessionAffinityPort: Send + Sync {
+    fn round_robin_cursor<'a>(
+        &'a self,
+        provider: &'a ProviderKind,
+        client_key: &'a ClientApiKeyId,
+    ) -> BoxFuture<'a, Result<u64, ProviderStoreError>>;
+
+    /// 冲突时不续期、不推进；调用方必须等待租约释放后重选。
+    fn admit_account<'a>(
+        &'a self,
+        provider: &'a ProviderKind,
+        admission: ProviderAccountAdmission<'a>,
+    ) -> BoxFuture<'a, Result<bool, ProviderStoreError>>;
+
     /// Atomically admit against the exact observed generation (including absence).
     /// A conflict neither changes the owner nor renews its TTL.
     fn admit_binding<'a>(
@@ -1561,28 +1610,53 @@ pub trait ProviderRuntimePolicyPort: Send + Sync {
     }
 }
 
+/// 校验五段 Cron 预热计划
+#[must_use]
+pub fn valid_warmup_cron(value: &str) -> bool {
+    parse_warmup_cron(value).is_some()
+}
+
+fn parse_warmup_cron(value: &str) -> Option<cron::Schedule> {
+    if value.len() > 255
+        || value != value.trim()
+        || value.chars().any(char::is_control)
+        || value.split_whitespace().count() != 5
+    {
+        return None;
+    }
+    format!("0 {value}").parse().ok()
+}
+
+/// 账号模型预激活（预热）策略；来源于 `runtime_settings`
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderWarmupPolicy {
     enabled: bool,
-    schedule_time: String,
+    cron: String,
     model: Option<String>,
 }
 
 impl ProviderWarmupPolicy {
+    /// 保存设置与创建预热策略使用相同的时间表和模型约束
+    pub fn validate_values(
+        enabled: bool,
+        cron: &str,
+        model: Option<&str>,
+    ) -> Result<(), &'static str> {
+        if (enabled || !cron.is_empty()) && !valid_warmup_cron(cron) {
+            return Err("account_warmup_cron");
+        }
+        if (enabled && model.is_none()) || !valid_optional_probe_model(model) {
+            return Err("account_warmup_model");
+        }
+        Ok(())
+    }
+
     pub fn try_new(
         enabled: bool,
-        schedule_time: String,
+        cron: String,
         model: Option<String>,
     ) -> Result<Self, ProviderStoreError> {
-        if !valid_warmup_schedule_time(&schedule_time)
-            || (enabled && model.is_none())
-            || model.as_deref().is_some_and(|model| {
-                model.is_empty()
-                    || model.len() > 128
-                    || model != model.trim()
-                    || model.bytes().any(|byte| byte.is_ascii_control())
-            })
-        {
+        if Self::validate_values(enabled, &cron, model.as_deref()).is_err() {
             return Err(ProviderStoreError::new(
                 ProviderStoreErrorKind::InvalidData,
                 "validate warmup policy",
@@ -1590,16 +1664,16 @@ impl ProviderWarmupPolicy {
         }
         Ok(Self {
             enabled,
-            schedule_time,
+            cron,
             model,
         })
     }
 
     #[must_use]
-    pub fn disabled() -> Self {
+    pub const fn disabled() -> Self {
         Self {
             enabled: false,
-            schedule_time: "08:00".to_owned(),
+            cron: String::new(),
             model: None,
         }
     }
@@ -1610,8 +1684,8 @@ impl ProviderWarmupPolicy {
     }
 
     #[must_use]
-    pub fn schedule_time(&self) -> &str {
-        &self.schedule_time
+    pub fn cron(&self) -> &str {
+        &self.cron
     }
 
     #[must_use]
@@ -1619,36 +1693,19 @@ impl ProviderWarmupPolicy {
         self.model.as_deref()
     }
 
+    /// 匹配部署时区中的整分钟时刻，时区重叠及执行去重由 Worker 与存储端口负责
     #[must_use]
-    pub fn scheduled_times(&self) -> Vec<(u32, u32)> {
-        self.schedule_time
-            .split(',')
-            .filter_map(|part| {
-                let mut parts = part.split(':');
-                Some((parts.next()?.parse().ok()?, parts.next()?.parse().ok()?))
-            })
-            .collect()
+    pub fn matches_slot(&self, slot: chrono::NaiveDateTime) -> bool {
+        parse_warmup_cron(&self.cron).is_some_and(|schedule| schedule.includes(slot.and_utc()))
     }
 }
 
-#[must_use]
-pub fn valid_warmup_schedule_time(value: &str) -> bool {
-    if value.is_empty()
-        || value.len() > 255
-        || value != value.trim()
-        || value.chars().any(char::is_control)
-    {
-        return false;
-    }
-    value.split(',').all(|part| {
-        let bytes = part.as_bytes();
-        if bytes.len() != 5 || bytes[2] != b':' {
-            return false;
-        }
-        let (Ok(hour), Ok(minute)) = (part[0..2].parse::<u32>(), part[3..5].parse::<u32>()) else {
-            return false;
-        };
-        hour <= 23 && minute <= 59
+fn valid_optional_probe_model(model: Option<&str>) -> bool {
+    model.is_none_or(|model| {
+        !model.is_empty()
+            && model.len() <= 128
+            && model == model.trim()
+            && !model.bytes().any(|byte| byte.is_ascii_control())
     })
 }
 

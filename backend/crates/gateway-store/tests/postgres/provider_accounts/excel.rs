@@ -32,6 +32,7 @@ async fn request_proxy_source_roundtrip_preserves_native_egress_and_identity() {
         request_id: "excel-exit-regression".into(),
     };
     let patch = BatchUpdateAccounts {
+        quota_limits: Default::default(),
         auto_use_quota_credits: None,
         excel_recovery: None,
         purchase_cost: None,
@@ -55,7 +56,7 @@ async fn request_proxy_source_roundtrip_preserves_native_egress_and_identity() {
         outbound_proxy: None,
     };
     store
-        .batch_update_accounts(patch.clone(), &context)
+        .batch_update_accounts(patch.clone(), Default::default(), &context)
         .await
         .unwrap();
     assert_eq!(
@@ -77,6 +78,7 @@ async fn request_proxy_source_roundtrip_preserves_native_egress_and_identity() {
                 request_proxy_source: None,
                 ..patch.clone()
             },
+            Default::default(),
             &context,
         )
         .await
@@ -110,6 +112,7 @@ async fn request_proxy_source_roundtrip_preserves_native_egress_and_identity() {
                 request_proxy_source: None,
                 ..patch.clone()
             },
+            Default::default(),
             &context,
         )
         .await
@@ -130,6 +133,7 @@ async fn request_proxy_source_roundtrip_preserves_native_egress_and_identity() {
                 request_proxy_source: Some(RequestProxySource::ProxyPool),
                 ..patch
             },
+            Default::default(),
             &context,
         )
         .await
@@ -372,6 +376,7 @@ async fn excel_global_models_resolve_without_rewriting_credentials_or_custom_lis
         request_id: "excel-global".into(),
     };
     let patch = BatchUpdateAccounts {
+        quota_limits: Default::default(),
         auto_use_quota_credits: None,
         excel_recovery: None,
         purchase_cost: None,
@@ -395,7 +400,7 @@ async fn excel_global_models_resolve_without_rewriting_credentials_or_custom_lis
         outbound_proxy: None,
     };
     store
-        .batch_update_accounts(patch.clone(), &context)
+        .batch_update_accounts(patch.clone(), Default::default(), &context)
         .await
         .unwrap();
     store
@@ -411,6 +416,7 @@ async fn excel_global_models_resolve_without_rewriting_credentials_or_custom_lis
                 ),
                 ..patch.clone()
             },
+            Default::default(),
             &context,
         )
         .await
@@ -471,6 +477,7 @@ async fn excel_global_models_resolve_without_rewriting_credentials_or_custom_lis
                 ),
                 ..patch.clone()
             },
+            Default::default(),
             &context,
         )
         .await
@@ -545,6 +552,7 @@ async fn excel_global_models_resolve_without_rewriting_credentials_or_custom_lis
                 ),
                 ..patch
             },
+            Default::default(),
             &context,
         )
         .await
@@ -591,6 +599,7 @@ async fn excel_patch_is_account_local_preserves_credentials_and_omission() {
     ).fetch_one(&database.pool).await.unwrap();
     let store = admin_account_store(&database.pool);
     let command = BatchUpdateAccounts {
+        quota_limits: Default::default(),
         auto_use_quota_credits: None,
         excel_recovery: None,
         purchase_cost: None,
@@ -624,7 +633,7 @@ async fn excel_patch_is_account_local_preserves_credentials_and_omission() {
         request_id: "excel-test".into(),
     };
     store
-        .batch_update_accounts(command.clone(), &context)
+        .batch_update_accounts(command.clone(), Default::default(), &context)
         .await
         .unwrap();
     let after: serde_json::Value = sqlx::query_scalar(
@@ -693,6 +702,7 @@ async fn excel_patch_is_account_local_preserves_credentials_and_omission() {
                 request_proxy_source: Some(Default::default()),
                 ..command.clone()
             },
+            Default::default(),
             &context,
         )
         .await
@@ -706,7 +716,7 @@ async fn excel_patch_is_account_local_preserves_credentials_and_omission() {
             .excel_ignore_encrypted_content()
     );
     store
-        .batch_update_accounts(command.clone(), &context)
+        .batch_update_accounts(command.clone(), Default::default(), &context)
         .await
         .unwrap();
     store
@@ -726,6 +736,7 @@ async fn excel_patch_is_account_local_preserves_credentials_and_omission() {
                 weight: Some(gateway_core::account::AccountWeight::new(2).unwrap()),
                 ..command.clone()
             },
+            Default::default(),
             &context,
         )
         .await
@@ -783,6 +794,7 @@ async fn excel_patch_is_account_local_preserves_credentials_and_omission() {
                 request_proxy_source: None,
                 ..command.clone()
             },
+            Default::default(),
             &context,
         )
         .await
@@ -798,7 +810,7 @@ async fn excel_patch_is_account_local_preserves_credentials_and_omission() {
         disabled.summary.excel_auto_disabled_at
     );
     store
-        .batch_update_accounts(command.clone(), &context)
+        .batch_update_accounts(command.clone(), Default::default(), &context)
         .await
         .unwrap();
     let reopened = repository
@@ -828,6 +840,7 @@ async fn excel_patch_is_account_local_preserves_credentials_and_omission() {
                 enabled: Some(true),
                 ..command.clone()
             },
+            Default::default(),
             &context,
         )
         .await
@@ -870,6 +883,7 @@ async fn excel_patch_is_account_local_preserves_credentials_and_omission() {
                 excel_models: Default::default(),
                 ..command
             },
+            Default::default(),
             &context,
         )
         .await

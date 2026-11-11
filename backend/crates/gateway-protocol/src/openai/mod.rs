@@ -1,6 +1,9 @@
 //! OpenAI wire contract。
 
-/// Codex Responses Lite 的 HTTP 请求头。
+/// OpenAI 线协议载荷与事件的协议标识
+pub const OPENAI_PROTOCOL: &str = "openai";
+
+/// Codex Responses Lite 的 HTTP 请求头
 pub const X_OPENAI_INTERNAL_CODEX_RESPONSES_LITE_HEADER: &str =
     "x-openai-internal-codex-responses-lite";
 /// Codex Responses Lite 在 WebSocket `client_metadata` 中的投影键。

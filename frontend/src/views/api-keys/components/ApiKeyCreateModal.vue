@@ -11,6 +11,7 @@ import BaseForm from '@/components/base/BaseForm/index.vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseModal from '@/components/base/BaseModal/index.vue'
+import HelpPopover from '@/components/HelpPopover.vue'
 import { t } from '@/i18n'
 import { apiKeyFormErrors } from '../utils/formValidation'
 
@@ -89,7 +90,10 @@ watch(open, () => {
         />
       </BaseFormItem>
 
-      <BaseFormItem :error="fieldError('installationSeed')" label="安装种子" description="同一 Key 的种子会与 Key 和账号身份共同派生安装 ID；种子不会直接发送给上游。留空沿用账号安装 ID。">
+      <BaseFormItem :error="fieldError('installationSeed')" :label="t('settings.clientProfile.installationSeed')">
+        <template #label-extra>
+          <HelpPopover :label="t('settings.clientProfile.installationSeed')" :content="t('settings.clientProfile.installationSeedHelp')" />
+        </template>
         <div class="flex items-center gap-2">
           <BaseInput
             v-model="form.installationSeed"

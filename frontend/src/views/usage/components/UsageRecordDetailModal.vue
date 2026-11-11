@@ -2,8 +2,8 @@
 import type { EChartsOption } from 'echarts'
 import type { UsageViewModel } from '../utils/records'
 import { computed } from 'vue'
-
 import BaseButton from '@/components/base/BaseButton.vue'
+
 import BaseModal from '@/components/base/BaseModal/index.vue'
 import { defineTableColumns } from '@/components/base/BaseTable/columns'
 import BaseTable from '@/components/base/BaseTable/index.vue'
@@ -12,6 +12,7 @@ import { chartTooltipStyle } from '@/components/charts/tooltip'
 import { useChartPalette } from '@/composables/useChartPalette'
 import { t } from '@/i18n'
 import { displayValue, fieldLabelClass, fieldValueBaseClass, fieldValueClass } from '../utils/detail'
+import { usageDisplayOutcome } from '../utils/errors'
 import { formatDuration } from '../utils/format'
 import {
   usageAccountText,
@@ -150,7 +151,7 @@ const attemptRows = computed<AttemptRow[]>(() =>
   (props.record?.attempts ?? []).map(attempt => ({
     id: attempt.id,
     attemptIndex: attempt.attemptIndex,
-    outcome: attempt.outcome,
+    outcome: usageDisplayOutcome(attempt.outcome, attempt.providerErrorCode, attempt.failureClass),
     provider: attempt.provider,
     model: attempt.model,
     transport: attempt.transport,

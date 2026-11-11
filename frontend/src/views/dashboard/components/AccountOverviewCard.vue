@@ -79,6 +79,7 @@ const accountStatusCounts = computed(() => {
   if (!p)
     return null
   const normal = p.normal ?? 0
+  const quotaPaused = p.quotaPaused ?? 0
   const quotaExhausted = p.quotaExhausted ?? 0
   const rateLimited = p.rateLimited ?? 0
   const disabled = p.disabled ?? 0
@@ -86,11 +87,12 @@ const accountStatusCounts = computed(() => {
   return {
     total: p.total,
     normal,
+    quotaPaused,
     quotaExhausted,
     rateLimited,
     disabled,
     error,
-    unavailable: quotaExhausted + rateLimited + disabled + error,
+    unavailable: quotaPaused + quotaExhausted + rateLimited + disabled + error,
   }
 })
 
@@ -100,7 +102,7 @@ const statusRows = computed(() => {
   if (!p || !counts) {
     return [
       { label: t('common.status.healthy'), description: t('dashboard.accountPool.empty'), value: '—', tone: 'success', icon: CircleCheck },
-      { label: t('dashboard.accountPool.quotaExhausted'), description: t('dashboard.accountPool.empty'), value: '—', tone: 'warning', icon: TriangleAlert },
+      { label: t('dashboard.accountPool.quotaLimited'), description: t('dashboard.accountPool.empty'), value: '—', tone: 'warning', icon: TriangleAlert },
       { label: t('dashboard.accountPool.rateLimited'), description: t('dashboard.accountPool.empty'), value: '—', tone: 'normal', icon: RefreshCw },
       { label: t('dashboard.accountPool.pending'), description: t('dashboard.accountPool.issueCountsEmpty'), value: '—', tone: 'danger', icon: ShieldAlert },
     ]
@@ -115,9 +117,9 @@ const statusRows = computed(() => {
       icon: CircleCheck,
     },
     {
-      label: t('dashboard.accountPool.quotaExhausted'),
-      description: t('dashboard.accountPool.exhaustedDescription'),
-      value: String(counts.quotaExhausted),
+      label: t('dashboard.accountPool.quotaLimited'),
+      description: t('dashboard.accountPool.limitedQuotaDescription'),
+      value: String(counts.quotaPaused + counts.quotaExhausted),
       tone: 'warning',
       icon: TriangleAlert,
     },
@@ -151,6 +153,7 @@ const statusBars = computed(() => {
     return []
   return [
     { pct: (counts.normal / counts.total) * 100, cls: 'bg-cp-success' },
+    { pct: (counts.quotaPaused / counts.total) * 100, cls: 'bg-cp-warning' },
     { pct: (counts.quotaExhausted / counts.total) * 100, cls: 'bg-cp-warning' },
     { pct: (counts.rateLimited / counts.total) * 100, cls: 'bg-cp-warning' },
     { pct: ((counts.disabled + counts.error) / counts.total) * 100, cls: 'bg-cp-error' },

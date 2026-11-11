@@ -504,9 +504,9 @@ impl SettingsStore for MemorySettingsStore {
             account_warmup_enabled: command
                 .account_warmup_enabled
                 .unwrap_or(settings.account_warmup_enabled),
-            account_warmup_schedule_time: command
-                .account_warmup_schedule_time
-                .unwrap_or_else(|| settings.account_warmup_schedule_time.clone()),
+            account_warmup_cron: command
+                .account_warmup_cron
+                .unwrap_or_else(|| settings.account_warmup_cron.clone()),
             account_warmup_model: command
                 .account_warmup_model
                 .unwrap_or_else(|| settings.account_warmup_model.clone()),
@@ -758,6 +758,7 @@ impl AccountGroupStore for MemoryAccountGroupStore {
                 group_id: group_id(PRIMARY_GROUP_ID),
                 account_id: "acct_group_ready".to_owned(),
                 status: AccountStatusFacts {
+                    quota_paused: Default::default(),
                     enabled: true,
                     credential_state: CredentialState::Ready,
                     access_token_expires_at: None,
@@ -772,6 +773,7 @@ impl AccountGroupStore for MemoryAccountGroupStore {
                 group_id: group_id(PRIMARY_GROUP_ID),
                 account_id: "acct_group_disabled".to_owned(),
                 status: AccountStatusFacts {
+                    quota_paused: Default::default(),
                     enabled: false,
                     credential_state: CredentialState::Ready,
                     access_token_expires_at: None,
@@ -1004,6 +1006,7 @@ impl AccountStore for UnusedStore {
             }],
             total: 1,
             summary: gateway_admin::model::accounts::AccountSummary {
+                quota_paused: Default::default(),
                 total: 1,
                 normal: 1,
                 quota_exhausted: 0,
@@ -1190,6 +1193,7 @@ impl AccountStore for UnusedStore {
     async fn batch_update_accounts(
         &self,
         _: BatchUpdateAccounts,
+        _: gateway_admin::model::accounts::PreparedQuotaPauses,
         _: &MutationContext,
     ) -> AdminStoreResult<AccountsUpdateResult> {
         Err(unavailable("account batch update"))
@@ -1675,7 +1679,7 @@ fn test_runtime_settings() -> RuntimeSettings {
         max_concurrent_per_account: 3,
         openai_guardian_reserved_concurrency: 0,
         account_warmup_enabled: false,
-        account_warmup_schedule_time: "08:00".to_owned(),
+        account_warmup_cron: "0 8 * * *".to_owned(),
         account_warmup_model: None,
         codex_quota_overdraft_enabled: false,
         codex_quota_overdraft_probe_model: "gpt-6-astra".to_owned(),

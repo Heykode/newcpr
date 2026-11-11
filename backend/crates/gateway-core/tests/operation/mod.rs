@@ -225,3 +225,28 @@ fn image_request_should_preserve_generation_and_edit_payloads_opaque() {
     assert!(!format!("{edit:?}").contains("data:image/png"));
 }
 mod provider_http;
+
+#[test]
+fn image_generation_fact_tracks_body_replacement_and_ignores_context() {
+    let operation = Operation::Generate(generate(json!({"input":"hello"})));
+    let operation = operation
+        .replace_protocol_wire(
+            Some(Bytes::from_static(
+                br#"{"tools":[{"type":"image_generation"}]}"#,
+            )),
+            Map::new(),
+        )
+        .unwrap();
+    assert!(operation.image_generation_requested());
+    let operation = operation
+        .replace_protocol_wire(None, Map::from_iter([("tools".to_owned(), json!([]))]))
+        .unwrap();
+    assert!(operation.image_generation_requested());
+    let operation = operation
+        .replace_protocol_wire(
+            Some(Bytes::from_static(br#"{"input":"hello"}"#)),
+            Map::new(),
+        )
+        .unwrap();
+    assert!(!operation.image_generation_requested());
+}

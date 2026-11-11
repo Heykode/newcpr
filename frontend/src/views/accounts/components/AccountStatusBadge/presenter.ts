@@ -40,6 +40,7 @@ export interface AccountStatusPresentation {
 }
 
 export interface AccountStatusPresentationInput {
+  quota?: Account['quota']
   errorProtection?: Account['errorProtection']
   status: AccountStatus
   errorReason: AccountErrorReason | null
@@ -78,6 +79,13 @@ const statusStyles: Record<AccountStatusTone, AccountStatusStyle> = {
 }
 
 const displayDefinitions: Record<AccountStatusDisplayMode, AccountStatusDisplayDefinition> = {
+  quota_paused: {
+    tone: statusTones.quota_paused,
+    label: statusLabels.quota_paused,
+    description: '已达到通用额度窗口的使用上限，暂不参与调度。',
+    recoveryHint: '额度重置并刷新确认后自动恢复，也可调整或移除额度上限。',
+    icon: Gauge,
+  },
   refresh_backoff: {
     tone: 'warning',
     label: '退避中',
@@ -161,8 +169,10 @@ export function resolveAccountStatusPresentation(
     && (!input.errorReason || input.errorReason === 'access_token_expired')
     && nextRefreshTimestamp !== null
     && nextRefreshTimestamp > input.now
-  const mode: AccountStatusDisplayMode = isBackoff ? 'refresh_backoff' : input.status
+  const mode: AccountStatusDisplayMode = isBackoff && input.status !== 'quota_paused' ? 'refresh_backoff' : input.status
   const definition = displayDefinitions[mode]
+  const paused = mode === 'quota_paused' ? input.quota?.pausedWindows.map(key => input.quota?.windows.find(window => window.key === key)).filter(window => window !== undefined) ?? [] : []
+  const description = paused.length ? `已达到 ${paused.map(window => window.labelDisplay).join(' / ')} 使用上限。` : definition.description
   const nextRefreshDisplay = isBackoff ? formatDateTime(nextRefreshTimestamp) : null
   const reasonLabel = input.errorReason ? errorReasonLabels[input.errorReason] : null
   const title = definition.title ?? reasonLabel ?? definition.label
@@ -174,22 +184,22 @@ export function resolveAccountStatusPresentation(
     && input.errorReason
     ? errorRecoveryHints[input.errorReason]
     : definition.recoveryHint
-  const hasDetail = input.status === 'error' || rateLimitRecovery !== null || isBackoff
+  const hasDetail = mode === 'quota_paused' || input.status === 'error' || rateLimitRecovery !== null || isBackoff
   const retry = nextRefreshDisplay ? ` 下次尝试：${nextRefreshDisplay}。` : ''
-  const triggerLabel = `${title}。${definition.description}${retry} 点击或聚焦查看详情。`
+  const triggerLabel = `${title}。${description}${retry} 点击或聚焦查看详情。`
 
   return {
     mode,
     statusStyle: statusStyles[definition.tone],
     label: definition.label,
     title,
-    description: definition.description,
+    description,
     recoveryHint,
     icon: definition.icon,
     hasDetail,
     errorText: input.errorMessage || null,
     nextRefreshDisplay,
-    rateLimitRecovery,
+    rateLimitRecovery: mode === 'quota_paused' ? paused.map(window => `${window.labelDisplay}：${window.resetAtDisplay}`).join(' / ') || null : rateLimitRecovery,
     triggerLabel,
   }
 }

@@ -85,7 +85,7 @@ export function useSettingsForm() {
     maxConcurrentPerAccount: null as number | null,
     openaiGuardianReservedConcurrency: null as number | null,
     accountWarmupEnabled: false,
-    accountWarmupScheduleTime: '08:00',
+    accountWarmupCron: '',
     accountWarmupModel: '',
     codexQuotaOverdraftEnabled: false,
     codexQuotaOverdraftProbeModel: 'gpt-6-astra',
@@ -161,7 +161,7 @@ export function useSettingsForm() {
     form.maxConcurrentPerAccount = data.maxConcurrentPerAccount
     form.openaiGuardianReservedConcurrency = data.openaiGuardianReservedConcurrency ?? 0
     form.accountWarmupEnabled = data.accountWarmupEnabled ?? false
-    form.accountWarmupScheduleTime = data.accountWarmupScheduleTime ?? '08:00'
+    form.accountWarmupCron = data.accountWarmupCron ?? ''
     form.accountWarmupModel = data.accountWarmupModel ?? ''
     form.codexQuotaOverdraftEnabled = data.codexQuotaOverdraftEnabled ?? false
     form.codexQuotaOverdraftProbeModel = data.codexQuotaOverdraftProbeModel?.trim() || 'gpt-6-astra'
@@ -280,9 +280,8 @@ export function useSettingsForm() {
     }
     const openaiGuardianReservedConcurrency = openaiGuardianReservedConcurrencyValue
     const accountWarmupModel = form.accountWarmupModel.trim()
-    if (/^(?:[01]\d|2[0-3]):[0-5]\d(?:,(?:[01]\d|2[0-3]):[0-5]\d)*$/.test(form.accountWarmupScheduleTime.trim()) === false
-      || (form.accountWarmupEnabled && !accountWarmupModel)) {
-      toast.warning('预热时间须为 HH:MM，可填写多个逗号分隔时间；启用时必须填写模型')
+    if (form.accountWarmupEnabled && (!/^\S+(?: +\S+){4}$/.test(form.accountWarmupCron.trim()) || form.accountWarmupCron.trim().length > 255 || !accountWarmupModel)) {
+      toast.warning('启用预热时必须填写五段 Cron 表达式和模型')
       return
     }
     const codexQuotaOverdraftProbeModel = form.codexQuotaOverdraftProbeModel.trim()
@@ -420,7 +419,7 @@ export function useSettingsForm() {
         maxConcurrentPerAccount,
         openaiGuardianReservedConcurrency,
         accountWarmupEnabled: form.accountWarmupEnabled,
-        accountWarmupScheduleTime: form.accountWarmupScheduleTime.trim(),
+        accountWarmupCron: form.accountWarmupCron.trim(),
         accountWarmupModel: accountWarmupModel || null,
         codexQuotaOverdraftEnabled: form.codexQuotaOverdraftEnabled,
         codexQuotaOverdraftProbeModel: effectiveCodexQuotaOverdraftProbeModel,

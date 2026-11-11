@@ -518,3 +518,41 @@ events, then use the existing encoder and single execution finalization.
 - Tests cover typed HTTP classification, HTTP-SSE/WS parameter failures and unchanged
   account health, original response bodies, atomic terminal delivery, complete message
   IDs versus references/opaque history, and lossless versus unrecognized reasoning parts.
+
+## Anthropic Messages ingress (official v3.45.1)
+
+- `/v1/messages` and `/v1/messages/count_tokens` use the official `gateway-protocol::anthropic`
+  validation/converters. Existing Authorization has precedence; x-api-key is a fallback only when
+  Authorization is absent. Errors use the Messages envelope; CORS allows anthropic-version/beta.
+- Native OAuth generation converts Messages to Responses before the existing provider selection
+  and transport chain. Preserve local account identity, egress, leases, Excel and State. Strip
+  Anthropic source headers at the cross-protocol boundary; never select a second account for conversion.
+- Source usage, costs and observations reach Core before response translation. One source event can
+  produce several Messages events; keep canonical completion on the last event only. Streaming ends
+  with message_stop, without OpenAI DONE; verify execution completion before sending that terminal.
+  Raw native JSON and SSE retain their bytes. Earlier message_delta is not itself the success terminal.
+- CountTokens uses the official local BPE path for OAuth, with CPU semaphore, cancellation and deadline.
+  Started/Completed facts share the raw-count envelope to fit the local stream validator. No upstream
+  request or upstream-success feedback is generated; the selected account lease is still released.
+- `/v1/models` and model detail use Anthropic shapes only with anthropic-version or x-api-key headers;
+  list defaults to 20, supports 1..1000 and after_id/before_id. Invalid cursors/limits use protocol errors.
+- Native Responses preserve explicit service_tier=auto/default/priority/flex. Only Messages-to-Codex-OAuth conversion omits auto/default after translation; do not restore global stripping in the native normalizer.
+- The approved boundary excludes plugin runtime and upstream API-key accounts, including their dedicated CPR-to-CPR forwarding. Public protocol fixes in mixed commits still apply; historical exclusions do not establish a permanent ban on all peer-related changes.
+  Their exclusion does not remove shared native protocol fixes.
+
+### Protocol observations and session ownership (v3.45.2)
+
+- `gateway-protocol::request` owns body/context facts, including image generation,
+  compact, request/subagent kind and reasoning effort. Replacing a body refreshes
+  its facts; context cannot manufacture image generation. Use wire protocol
+  constants independently of Provider identity names.
+- Messages logs explicit `output_config.effort` (trimmed, including unknown strings);
+  a thinking token budget does not invent an effort. Native Responses retain
+  numeric effort observations. `generate=false` determines prewarm; an empty
+  authoritative turn-metadata value must not fall back to a lower-priority alias.
+- Core chooses the explicitly targeted Provider or the candidate that owns actual
+  restored Provider session state, falling back to the first candidate only when
+  no owner exists. Candidate order must not erase or fabricate session settings.
+- Providers supply requested endpoint model, continuation and an optional previous
+  reasoning override from their own real session. They do not reinterpret the
+  common wire facts; xAI cannot inherit an OpenAI session override.

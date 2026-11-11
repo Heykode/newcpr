@@ -113,6 +113,7 @@ impl<'a> WaitControl<'a> {
 
 struct WaitingSelection {
     snapshot_retries: u32,
+    assignment_cursor: Option<u64>,
     projection: projection::SelectionProjection,
     follows_root: bool,
     universe: BTreeSet<ProviderAccountId>,
@@ -317,10 +318,7 @@ impl CodexCredentialSelector {
             .required_account()
             .cloned()
             .or_else(|| continuation.clone());
-        let follows_root = pinned.is_none()
-            && request
-                .session_affinity_observation
-                .is_some_and(CodexSessionAffinity::follow_only);
+        let follows_root = pinned.is_none() && request.follows_root();
         let mut affinity = control
             .run(async {
                 self.resolve_session_affinity(
@@ -435,6 +433,7 @@ impl CodexCredentialSelector {
         }
         let mut state = WaitingSelection {
             snapshot_retries: 0,
+            assignment_cursor: None,
             projection,
             follows_root,
             universe,
@@ -528,6 +527,17 @@ impl CodexCredentialSelector {
             control
                 .run(self.reload_wait_exclusions(&mut state, request))
                 .await?;
+            for candidate in &candidates {
+                if !request.attempt.is_quality_retest() && candidate.account.quota_paused() {
+                    if state.follows_root && state.pinned.as_ref() == Some(candidate.account.id()) {
+                        return Err(CredentialSelectionError::QuotaPolicyFiltered);
+                    }
+                    state
+                        .context
+                        .excluded_accounts
+                        .insert(candidate.account.id().clone());
+                }
+            }
             if let Some(pin) = &state.pinned {
                 candidates.retain(|candidate| candidate.account.id() == pin);
             }
@@ -538,6 +548,16 @@ impl CodexCredentialSelector {
                     .then(|| state.affinity.preferred_account().cloned())
                     .flatten()
             });
+            state.assignment_cursor = control
+                .run(self.assignment_cursor(
+                    request,
+                    state.observed_affinity_binding.as_ref(),
+                    state.pinned.is_some(),
+                ))
+                .await?;
+            if let Some(cursor) = state.assignment_cursor {
+                state.context.round_robin_cursor = cursor;
+            }
             if state.projection.candidates.is_some() {
                 let limits = self.wait_limits()?;
                 let ready =
@@ -753,6 +773,7 @@ impl CodexCredentialSelector {
                                 &candidate.account,
                                 request,
                                 &mut state,
+                                true,
                             ))
                             .await?
                         {
@@ -835,6 +856,17 @@ impl CodexCredentialSelector {
             candidates = control
                 .run(self.reload_wait_pool(request, &state.universe))
                 .await?;
+            for candidate in &candidates {
+                if !request.attempt.is_quality_retest() && candidate.account.quota_paused() {
+                    if state.follows_root && state.pinned.as_ref() == Some(candidate.account.id()) {
+                        return Err(CredentialSelectionError::QuotaPolicyFiltered);
+                    }
+                    state
+                        .context
+                        .excluded_accounts
+                        .insert(candidate.account.id().clone());
+                }
+            }
             if let Some(pin) = &state.pinned {
                 candidates.retain(|candidate| candidate.account.id() == pin);
             }
@@ -1129,6 +1161,17 @@ impl CodexCredentialSelector {
         } else {
             None
         };
+        if !request.attempt.is_quality_retest()
+            && candidate
+                .as_ref()
+                .is_some_and(|candidate| candidate.account.quota_paused())
+        {
+            return if state.follows_root {
+                Err(CredentialSelectionError::QuotaPolicyFiltered)
+            } else {
+                Ok(WaitOutcome::Changed)
+            };
+        }
         state.context.now = SystemTime::now();
         control
             .run(self.reload_wait_exclusions(state, request))
@@ -1175,6 +1218,7 @@ impl CodexCredentialSelector {
                                 &candidate.account,
                                 request,
                                 state,
+                                true,
                             ))
                             .await?
                         {
@@ -1305,6 +1349,7 @@ impl CodexCredentialSelector {
                                             account,
                                             request,
                                             state,
+                                            false,
                                         )
                                         .await?
                                     {
@@ -1333,6 +1378,13 @@ impl CodexCredentialSelector {
                     let limits = self.wait_limits()?;
                     state.context.now = SystemTime::now();
                     self.reload_wait_exclusions(state, request).await?;
+                    if !request.attempt.is_quality_retest() && candidate.account.quota_paused() {
+                        return if state.follows_root {
+                            Err(CredentialSelectionError::QuotaPolicyFiltered)
+                        } else {
+                            Ok(WaitOutcome::Changed)
+                        };
+                    }
                     let current_interval = interval_wait_deadline(
                         &candidate,
                         &state.context,
@@ -1389,6 +1441,7 @@ impl CodexCredentialSelector {
                                         &candidate.account,
                                         request,
                                         state,
+                                        false,
                                     )
                                     .await?
                                 {
@@ -1446,6 +1499,7 @@ impl CodexCredentialSelector {
         acquired_account: &ProviderAccount,
         request: &CredentialSelectionInput<'_>,
         state: &mut WaitingSelection,
+        immediate: bool,
     ) -> Result<Option<CodexCredentialLease>, CredentialSelectionError> {
         let id = acquired_account.id();
         let Some(mut candidate) = self.reload_wait_target(id, request).await? else {
@@ -1519,6 +1573,13 @@ impl CodexCredentialSelector {
             }
             Err(error) => return Err(error.into()),
         };
+        if !request.attempt.is_quality_retest() && candidate.account.quota_paused() {
+            drop(guard);
+            if state.follows_root {
+                return Err(CredentialSelectionError::QuotaPolicyFiltered);
+            }
+            return Ok(None);
+        }
         if self.wait_limits()?.revision() != revision {
             drop(guard);
             return Ok(None);
@@ -1619,10 +1680,13 @@ impl CodexCredentialSelector {
                 id,
                 state.pinned.is_some(),
                 None,
+                state
+                    .assignment_cursor
+                    .filter(|_| immediate && state.context.preferred_account.as_ref() != Some(id)),
             )
             .await?
         else {
-            drop(guard);
+            guard.release().await?;
             return Ok(None);
         };
         if state.follows_root

@@ -1346,6 +1346,8 @@ impl AccountStore for PgAdminAccountStore {
         let config_revision = self
             .accounts
             .batch_update_provider_accounts_admin(BatchUpdateProviderAccountsAdmin {
+                pauses: Default::default(),
+                quota_limits: None,
                 auto_use_quota_credits: None,
                 excel_recovery: command.excel_recovery,
                 purchase_cost: command.purchase_cost,
@@ -1423,6 +1425,7 @@ impl AccountStore for PgAdminAccountStore {
     async fn batch_update_accounts(
         &self,
         command: BatchUpdateAccounts,
+        pauses: gateway_admin::model::accounts::PreparedQuotaPauses,
         context: &MutationContext,
     ) -> AdminStoreResult<AccountsUpdateResult> {
         let account_ids = command
@@ -1458,6 +1461,7 @@ impl AccountStore for PgAdminAccountStore {
                 command.auto_use_quota_credits.is_some(),
                 "auto_use_quota_credits",
             ),
+            (command.quota_limits.is_some(), "quota_limits"),
             (command.enabled.is_some(), "enabled"),
             (command.responses_upstream.is_some(), "responses_upstream"),
             (command.excel_models.is_some(), "excel_models"),
@@ -1502,6 +1506,8 @@ impl AccountStore for PgAdminAccountStore {
         let config_revision = self
             .accounts
             .batch_update_provider_accounts_admin(BatchUpdateProviderAccountsAdmin {
+                pauses,
+                quota_limits: command.quota_limits,
                 auto_use_quota_credits: command.auto_use_quota_credits,
                 excel_recovery: command.excel_recovery,
                 purchase_cost: command.purchase_cost,

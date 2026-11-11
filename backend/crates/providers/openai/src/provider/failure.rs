@@ -662,8 +662,8 @@ pub(super) fn apply_websocket_recovery_policy(
     failure: &mut MappedProviderFailure,
     context: WebSocketRecoveryContext<'_>,
 ) {
-    // Flex 拒绝必须直达客户端，不能转换成传输回退。
-    if failure.error.retry_is_prohibited() {
+    // 明确禁止重试，或上游拒绝继续使用当前账号时，不能改写成同账号传输恢复
+    if failure.error.retry_is_prohibited() || failure.error.same_account_retry_blocked() {
         return;
     }
     // 明确账号拒绝走已有换号路径，容量拒绝走请求内退避；两者都不消耗 WS 传输预算。
@@ -1636,6 +1636,10 @@ pub(super) fn map_upstream_failure(
             jitter,
             policy,
         );
+    }
+    if failure.no_more_retry {
+        // 保留耗尽策略供 Core 决定换号或返回错误，但不再对当前账号退避
+        error = error.with_same_account_retry_blocked();
     }
     if let Some(code) = failure.persistable_code() {
         error = error.with_upstream_code(OpaqueUpstreamValue::new(code.to_owned()));
