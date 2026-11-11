@@ -85,7 +85,7 @@ fn update_body() -> Value {
     body["openaiSessionBindingTtlHours"] = json!(24);
     body["openaiGuardianReservedConcurrency"] = json!(0);
     body["accountWarmupEnabled"] = json!(false);
-    body["accountWarmupScheduleTime"] = json!("08:00");
+    body["accountWarmupCron"] = json!("0 8 * * *");
     body["accountWarmupModel"] = Value::Null;
     body["codexQuotaOverdraftEnabled"] = json!(false);
     body["codexQuotaOverdraftProbeModel"] = json!("gpt-6-astra");
@@ -470,7 +470,7 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
         max_concurrent_per_account: 5,
         openai_guardian_reserved_concurrency: 0,
         account_warmup_enabled: false,
-        account_warmup_schedule_time: "08:00".to_owned(),
+        account_warmup_cron: "0 8 * * *".to_owned(),
         account_warmup_model: None,
         codex_quota_overdraft_enabled: false,
         codex_quota_overdraft_probe_model: "gpt-6-astra".to_owned(),
@@ -574,7 +574,7 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
     expected["openaiSessionBindingTtlHours"] = json!(24);
     expected["openaiGuardianReservedConcurrency"] = json!(0);
     expected["accountWarmupEnabled"] = json!(false);
-    expected["accountWarmupScheduleTime"] = json!("08:00");
+    expected["accountWarmupCron"] = json!("0 8 * * *");
     expected["accountWarmupModel"] = Value::Null;
     expected["codexQuotaOverdraftEnabled"] = json!(false);
     expected["codexQuotaOverdraftProbeModel"] = json!("gpt-6-astra");
@@ -648,7 +648,7 @@ fn settings_request_and_response_fields_should_stay_in_lockstep() {
         max_concurrent_per_account: u32::try_from(request.max_concurrent_per_account).expect("u32"),
         openai_guardian_reserved_concurrency: 0,
         account_warmup_enabled: false,
-        account_warmup_schedule_time: "08:00".to_owned(),
+        account_warmup_cron: "0 8 * * *".to_owned(),
         account_warmup_model: None,
         codex_quota_overdraft_enabled: false,
         codex_quota_overdraft_probe_model: "gpt-6-astra".to_owned(),

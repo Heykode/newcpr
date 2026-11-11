@@ -684,7 +684,11 @@ pub(super) fn compile_model_capabilities(model: &CodexCatalogModel) -> ProviderM
     // Catalog membership is enough to publish Generate. `supported_in_api` is advisory;
     // the upstream response is authoritative for normal and diagnostic requests.
     let capabilities = ModelCapabilities::new(
-        BTreeSet::from([OperationKind::Generate, OperationKind::Compact]),
+        BTreeSet::from([
+            OperationKind::Generate,
+            OperationKind::Compact,
+            OperationKind::CountTokens,
+        ]),
         None,
     )
     .with_upstream_feature_validation();
@@ -937,6 +941,10 @@ pub(super) fn map_selection_error(error: CredentialSelectionError) -> ProviderEr
                 None => error,
             }
         }
+        CredentialSelectionError::QuotaPolicyFiltered => provider_error(
+            ProviderErrorKind::RequestPolicyDenied,
+            UpstreamSendState::NotSent,
+        ),
         CredentialSelectionError::SessionPolicyRestricted => provider_error(
             ProviderErrorKind::SessionPolicyRestricted,
             UpstreamSendState::NotSent,

@@ -166,7 +166,11 @@ impl CredentialSelectionInput<'_> {
     }
 
     fn follows_root(&self) -> bool {
-        !self.attempt.is_diagnostic_required_account()
+        self.attempt
+            .account_selection_policy()
+            .openai_account_affinity()
+            == gateway_core::account::AccountAffinity::Strict
+            && !self.attempt.is_diagnostic_required_account()
             && self.attempt.required_account().is_none()
             && matches!(
                 self.attempt.continuation_attempt(),
@@ -650,7 +654,15 @@ impl CodexCredentialSelector {
             }
         });
         result.map_err(|error| {
-            if request.follows_root() {
+            if request.follows_root()
+                && !matches!(
+                    error,
+                    CredentialSelectionError::SessionBound(_)
+                        | CredentialSelectionError::ContinuationOwnerChanged
+                        | CredentialSelectionError::QuotaPolicyFiltered
+                        | CredentialSelectionError::SessionPolicyRestricted
+                )
+            {
                 CredentialSelectionError::SessionBound(Box::new(error))
             } else {
                 error
@@ -692,6 +704,7 @@ impl CodexCredentialSelector {
                     Err(CredentialSelectionError::NoEligibleCredential
                         | CredentialSelectionError::QuotaExhausted
                         | CredentialSelectionError::SessionPolicyRestricted
+                        | CredentialSelectionError::QuotaPolicyFiltered
                         | CredentialSelectionError::CapacityUnavailable { .. })
                 )
             {
@@ -936,18 +949,32 @@ impl CodexCredentialSelector {
         {
             return Err(CredentialSelectionError::ContinuationOwnerChanged);
         }
-        if !diagnostic
-            && pinned_account.is_none()
-            && request
-                .session_affinity_observation
-                .is_some_and(CodexSessionAffinity::follow_only)
-        {
+        if !diagnostic && pinned_account.is_none() && request.follows_root() {
             pinned_account = affinity.bound_account().cloned();
         }
         let cyber_policy_scope = self
             .prepare_cyber_policy_scope(cyber_policy_session_key)
             .await;
         let mut excluded = request.attempt.excluded_accounts().clone();
+        if !diagnostic {
+            for candidate in &candidates {
+                if candidate.account.quota_paused() {
+                    if request
+                        .attempt
+                        .account_selection_policy()
+                        .openai_account_affinity()
+                        == gateway_core::account::AccountAffinity::Strict
+                        && request
+                            .session_affinity_observation
+                            .is_some_and(CodexSessionAffinity::follow_only)
+                        && affinity.bound_account() == Some(candidate.account.id())
+                    {
+                        return Err(CredentialSelectionError::QuotaPolicyFiltered);
+                    }
+                    excluded.insert(candidate.account.id().clone());
+                }
+            }
+        }
         if let Some(state) = cyber_policy_scope
             .as_ref()
             .and_then(|scope| scope.state.as_ref())
@@ -1103,6 +1130,10 @@ impl CodexCredentialSelector {
                     }
                     Err(error) => return Err(error.into()),
                 };
+            if !diagnostic && account.quota_paused() {
+                self.invalidate_projection(&projection);
+                return Err(CredentialSelectionError::AccountSnapshotChanged);
+            }
             match self
                 .leases
                 .try_acquire(ProviderLeaseRequest::Scheduling(
@@ -2063,7 +2094,8 @@ fn affinity_selection_for_bound_account(
     };
     match status {
         AccountStatus::Normal => AffinitySelection::preferred(binding),
-        AccountStatus::QuotaExhausted
+        AccountStatus::QuotaPaused
+        | AccountStatus::QuotaExhausted
         | AccountStatus::RateLimited
         | AccountStatus::Disabled
         | AccountStatus::Error => {
@@ -2082,7 +2114,7 @@ fn affinity_unavailable_reason(
         .status
     {
         AccountStatus::QuotaExhausted => AffinityEscapeReason::QuotaExhausted,
-        AccountStatus::RateLimited => AffinityEscapeReason::Cooldown,
+        AccountStatus::RateLimited | AccountStatus::QuotaPaused => AffinityEscapeReason::Cooldown,
         AccountStatus::Normal => AffinityEscapeReason::SelectionInvariant,
         AccountStatus::Disabled | AccountStatus::Error => AffinityEscapeReason::HardUnavailable,
     }
@@ -2258,6 +2290,8 @@ pub enum CredentialSelectionError {
     NoEligibleCredential,
     #[error("upstream safety policy temporarily excludes accounts for this session")]
     SessionPolicyRestricted,
+    #[error("account quota policy prevents scheduling for this session")]
+    QuotaPolicyFiltered,
     #[error("all eligible Codex accounts have exhausted their quota")]
     QuotaExhausted,
     #[error("Codex account capacity is unavailable")]

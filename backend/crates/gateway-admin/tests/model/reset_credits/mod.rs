@@ -145,6 +145,7 @@ fn automatic_quota(
 ) -> gateway_admin::model::provider_credentials::ProviderQuota {
     use gateway_admin::model::provider_credentials::*;
     ProviderQuota {
+        paused_windows: Default::default(),
         plan_type: None,
         observed_at: Some(now),
         refresh_token_expires_at: None,
@@ -276,5 +277,54 @@ fn automatic_evidence_rejects_stale_partial_named_and_duplicate_windows() {
             .unwrap()
             .triggered
             .is_empty()
+    );
+}
+
+#[test]
+fn low_weekly_mode_uses_official_remaining_boundary_and_ignores_legacy_triggers() {
+    use gateway_admin::model::reset_credits::AutoResetConfig;
+    let now = Utc::now();
+    let mut config = AutoResetConfig {
+        on_low_weekly_quota: true,
+        max_weekly_remaining_percent: Some(20),
+        expiry_enabled: true,
+        ..Default::default()
+    };
+    for (used, expected) in [
+        (0.0, false),
+        (79.99, false),
+        (80.0, true),
+        (100.0, true),
+        (101.0, true),
+        (-1.0, false),
+        (f64::NAN, false),
+    ] {
+        let quota = automatic_quota(now, 100.0, used);
+        let value = config.observation(&quota, now, now).unwrap();
+        assert_eq!(value.weekly_condition_met, expected);
+        assert_eq!(!value.triggered.is_empty(), expected);
+        assert!(!value.expiry_triggered);
+    }
+    config.max_weekly_remaining_percent = Some(100);
+    assert!(
+        !config
+            .observation(&automatic_quota(now, 100.0, 0.0), now, now)
+            .unwrap()
+            .weekly_condition_met
+    );
+    config.max_weekly_remaining_percent = None;
+    assert!(
+        config
+            .observation(&automatic_quota(now, 0.0, 100.0), now, now)
+            .unwrap()
+            .weekly_condition_met
+    );
+    let mut quota = automatic_quota(now, 100.0, 100.0);
+    quota.windows[1].reset_at = Some(now);
+    assert!(
+        !config
+            .observation(&quota, now, now)
+            .unwrap()
+            .weekly_condition_met
     );
 }

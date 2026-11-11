@@ -255,6 +255,20 @@ impl MemoryProviderAccountStore {
 
 #[async_trait]
 impl ProviderAccountStore for MemoryProviderAccountStore {
+    async fn load_account_catalogs(
+        &self,
+        _provider: &ProviderKind,
+    ) -> Result<Vec<gateway_core::account::StoredAccountCatalog>, StoreError> {
+        Ok(vec![])
+    }
+    async fn save_account_catalog(
+        &self,
+        _observation: &gateway_core::account::AccountCatalogObservation,
+        _document: &[u8],
+    ) -> Result<bool, StoreError> {
+        Ok(false)
+    }
+
     async fn create_account(&self, account: NewProviderAccount) -> Result<(), StoreError> {
         let mut accounts = lock(&self.accounts);
         if accounts.contains_key(account.account.id()) {

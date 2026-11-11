@@ -80,6 +80,7 @@ impl OpenAiService {
         endpoint: &str,
     ) -> Result<StartedExecution, GatewayError> {
         let (operation, metadata) = request.into_parts();
+        let protocol = operation.protocol().to_owned();
         let public_model = PublicModelId::from_client_wire(metadata.requested_model().to_owned())
             .map_err(|_| {
             GatewayError::new(
@@ -99,7 +100,7 @@ impl OpenAiService {
                 public_model,
                 operation,
                 metadata: ExecutionRequestMetadata {
-                    protocol: "openai".to_owned(),
+                    protocol,
                     endpoint: endpoint.to_owned(),
                     transport,
                     stream: metadata.stream(),

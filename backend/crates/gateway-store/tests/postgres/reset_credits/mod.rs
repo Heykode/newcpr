@@ -808,3 +808,115 @@ async fn automatic_stale_checks_and_pre_refresh_manual_actions_cannot_enqueue() 
     assert!(store.batches().await.unwrap().is_empty());
     db.close().await;
 }
+
+#[tokio::test]
+async fn weekly_reset_fence_requires_confirmed_consumption_and_fresh_recovery() {
+    let Some(db) = TestDatabase::create("weekly_reset_fence").await else {
+        return;
+    };
+    let store = auto_setup(&db).await;
+    store
+        .save_auto_policy(
+            "acct_reset_1",
+            1,
+            AutoResetConfig {
+                enabled: true,
+                on_low_weekly_quota: true,
+                max_weekly_remaining_percent: Some(20),
+                ..Default::default()
+            },
+            &context(),
+        )
+        .await
+        .unwrap();
+    for code in ["no_credit", "nothing_to_reset", "reset"] {
+        due(&db).await;
+        let check = store.claim_auto_check().await.unwrap().unwrap();
+        let mut observation = evidence(&check);
+        observation.triggered[0].seconds = 604_800;
+        enqueue_auto(&store, &check, observation).await;
+        let (batch, mut item) = store
+            .claim()
+            .await
+            .unwrap()
+            .expect("known non-redemption can retry");
+        let cmd = automatic_command(&item);
+        let ResetConsumePermit::Execute(claim) =
+            store.begin_consume(&cmd, &context()).await.unwrap()
+        else {
+            panic!("execute");
+        };
+        let awaiting: bool = sqlx::query_scalar("select awaiting_weekly_recovery_since is not null from account_auto_reset_policies where account_id='acct_reset_1'").fetch_one(&db.pool).await.unwrap();
+        assert!(!awaiting, "enqueue and permit do not confirm redemption");
+        store
+            .finish_consume(
+                &cmd,
+                claim,
+                Some(&ProviderResetCreditResult {
+                    code: code.into(),
+                    credit: None,
+                }),
+            )
+            .await
+            .unwrap();
+        item.status = ResetItemStatus::Succeeded;
+        store.finish_item(batch.id, item).await.unwrap();
+        let awaiting: bool = sqlx::query_scalar("select awaiting_weekly_recovery_since is not null from account_auto_reset_policies where account_id='acct_reset_1'").fetch_one(&db.pool).await.unwrap();
+        assert_eq!(awaiting, code == "reset");
+    }
+    due(&db).await;
+    let check = store.claim_auto_check().await.unwrap().unwrap();
+    let mut changed_reset = evidence(&check);
+    changed_reset.triggered[0] = AutoResetWindow {
+        seconds: 604_800,
+        reset_at: Utc::now() + Duration::days(7),
+    };
+    enqueue_auto(&store, &check, changed_reset).await;
+    assert!(
+        store.claim().await.unwrap().is_none(),
+        "moving reset timestamp does not prove recovery"
+    );
+    due(&db).await;
+    let check = store.claim_auto_check().await.unwrap().unwrap();
+    let mut recovered = evidence(&check);
+    recovered.triggered.clear();
+    recovered.all_below = true;
+    recovered.weekly_condition_met = false;
+    store
+        .finish_auto_check(&check, Some(recovered), None, "recovered")
+        .await
+        .unwrap();
+    due(&db).await;
+    let check = store.claim_auto_check().await.unwrap().unwrap();
+    enqueue_auto(&store, &check, evidence(&check)).await;
+    assert!(store.claim().await.unwrap().is_some());
+    db.close().await;
+}
+
+#[tokio::test]
+async fn weekly_recovery_fence_survives_policy_edits_but_not_identity_changes() {
+    let Some(db) = TestDatabase::create("weekly_identity").await else {
+        return;
+    };
+    let store = auto_setup(&db).await;
+    sqlx::query("update account_auto_reset_policies set awaiting_weekly_recovery_since=now() where account_id='acct_reset_1'").execute(&db.pool).await.unwrap();
+    store
+        .save_auto_policy("acct_reset_1", 1, AutoResetConfig::default(), &context())
+        .await
+        .unwrap();
+    let fenced:bool=sqlx::query_scalar("select awaiting_weekly_recovery_since is not null from account_auto_reset_policies where account_id='acct_reset_1'").fetch_one(&db.pool).await.unwrap();
+    assert!(fenced);
+    sqlx::query(
+        "update provider_accounts set upstream_user_id='replacement-user' where id='acct_reset_1'",
+    )
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    store
+        .save_auto_policy("acct_reset_1", 2, AutoResetConfig::default(), &context())
+        .await
+        .unwrap();
+    let fenced:bool=sqlx::query_scalar("select awaiting_weekly_recovery_since is not null from account_auto_reset_policies where account_id='acct_reset_1'").fetch_one(&db.pool).await.unwrap();
+    assert!(!fenced);
+    db.close().await;
+}

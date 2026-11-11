@@ -2718,3 +2718,190 @@ async fn seed_calculated_billing_facts(
     .await?;
     Ok(())
 }
+
+#[tokio::test]
+async fn usage_error_origins_agree_for_saved_errors_without_failure_status() {
+    use admin_observability::UsageErrorOrigin::{Unknown, Upstream};
+
+    let Some(database) = TestDatabase::create("usage_error_origins").await else {
+        return;
+    };
+    let now = Utc::now();
+    seed_observability_facts(&database.pool, now).await.unwrap();
+    sqlx::query(
+        "update model_requests
+         set client_status_code = 200, upstream_status_code = 200, error_kind = 'unavailable',
+             error_message = 'Upstream error summary', provider_error_code = null
+         where id = 'req_observe_failed'",
+    )
+    .execute(&database.pool)
+    .await
+    .unwrap();
+    let repository = admin_observability_store(&database.pool);
+    let range =
+        admin_observability::TimeRange::new(now - TimeDelta::hours(1), now + TimeDelta::hours(1))
+            .unwrap();
+    for (error, origin) in [
+        (
+            serde_json::json!({"message":"Upstream unavailable"}),
+            Upstream,
+        ),
+        (serde_json::json!({"type":"server_error"}), Upstream),
+        (
+            serde_json::json!({"type":"server_error","message":"Upstream unavailable"}),
+            Upstream,
+        ),
+        (serde_json::json!({"code":"server_error"}), Upstream),
+        (
+            serde_json::json!({"code":"","type":"","message":""}),
+            Unknown,
+        ),
+        (
+            serde_json::json!({"code":500,"type":null,"message":["Upstream unavailable"]}),
+            Unknown,
+        ),
+        (serde_json::json!({"param":"model"}), Unknown),
+        (
+            serde_json::json!([{"message":"Upstream unavailable"}]),
+            Unknown,
+        ),
+        (serde_json::Value::Null, Unknown),
+    ] {
+        for body in [
+            serde_json::json!({"type":"error","error":error}),
+            serde_json::json!({"type":"response.failed","response":{"error":error}}),
+        ] {
+            let details = serde_json::json!({"upstream":body.to_string()}).to_string();
+            sqlx::query(
+                "update model_requests set raw_upstream_error=$1 where id='req_observe_failed'",
+            )
+            .bind(details)
+            .execute(&database.pool)
+            .await
+            .unwrap();
+            let page = repository
+                .list_usage_records(admin_observability::UsageQuery {
+                    range,
+                    filter: admin_observability::UsageFilter::default(),
+                    record_status: admin_observability::UsageRecordStatus::All,
+                    current_page: 1,
+                    page_size: PageSize::new(10).unwrap(),
+                })
+                .await
+                .unwrap();
+            let list = page
+                .items
+                .iter()
+                .find(|item| item.id == "req_observe_failed")
+                .unwrap();
+            let detail = repository.usage_record_detail(&list.id).await.unwrap();
+            assert_eq!(list.error_code, None);
+            assert_eq!(detail.request.provider_error_code, None);
+            assert_eq!(list.client_status_code, Some(200));
+            assert_eq!(list.upstream_status_code, Some(200));
+            assert_eq!(list.error_origin(), origin, "list: {body}");
+            assert_eq!(detail.request.error_origin(), origin, "detail: {body}");
+        }
+    }
+    database.close().await;
+}
+
+#[tokio::test]
+async fn usage_error_origins_preserve_saved_failure_and_connection_boundaries() {
+    use admin_observability::UsageErrorOrigin::{Connection, Proxy, Unknown, Upstream};
+
+    let Some(database) = TestDatabase::create("usage_failure_origins").await else {
+        return;
+    };
+    let now = Utc::now();
+    seed_observability_facts(&database.pool, now).await.unwrap();
+    sqlx::query(
+        "update model_requests set client_status_code = 500, raw_upstream_error = null,
+             error_message = 'Request failed', provider_error_code = null
+         where id = 'req_observe_failed'",
+    )
+    .execute(&database.pool)
+    .await
+    .unwrap();
+    let repository = admin_observability_store(&database.pool);
+    let range =
+        admin_observability::TimeRange::new(now - TimeDelta::hours(1), now + TimeDelta::hours(1))
+            .unwrap();
+    for (kind, reason, continuation, status, origin) in [
+        ("internal_error", None, None, None, Proxy),
+        ("internal_error", None, None, Some(503_i32), Upstream),
+        ("message_too_big", None, None, None, Upstream),
+        (
+            "continuation_recovery_required",
+            None,
+            Some("transport_payload_too_large"),
+            None,
+            Proxy,
+        ),
+        (
+            "upstream_unavailable",
+            Some("broken_pipe"),
+            None,
+            Some(200),
+            Connection,
+        ),
+        (
+            "upstream_unavailable",
+            Some("unexpected_binary_event"),
+            None,
+            Some(200),
+            Upstream,
+        ),
+        (
+            "upstream_unavailable",
+            Some("local_close"),
+            None,
+            Some(200),
+            Proxy,
+        ),
+        ("upstream_unavailable", None, None, Some(200), Unknown),
+    ] {
+        sqlx::query(
+            "update model_requests set error_kind = $1, upstream_status_code = $2,
+                 upstream_connection_exit_reason = $3, continuation_unavailable_reason = $4,
+                 upstream_connection_id = case when $3::text is null then null else 'conn-failed' end,
+                 upstream_connection_age_ms = case when $3::text is null then null else 100 end,
+                 upstream_connection_idle_ms = case when $3::text is null then null else 0 end
+             where id = 'req_observe_failed'",
+        )
+        .bind(kind)
+        .bind(status)
+        .bind(reason)
+        .bind(continuation)
+        .execute(&database.pool)
+        .await
+        .unwrap();
+        let page = repository
+            .list_usage_records(admin_observability::UsageQuery {
+                range,
+                filter: admin_observability::UsageFilter::default(),
+                record_status: admin_observability::UsageRecordStatus::All,
+                current_page: 1,
+                page_size: PageSize::new(10).unwrap(),
+            })
+            .await
+            .unwrap();
+        let list = page
+            .items
+            .iter()
+            .find(|item| item.id == "req_observe_failed")
+            .unwrap();
+        let detail = repository.usage_record_detail(&list.id).await.unwrap();
+        assert_eq!(
+            list.error_origin(),
+            origin,
+            "list: {kind} / {reason:?} / {continuation:?} / {status:?}"
+        );
+        assert_eq!(
+            detail.request.error_origin(),
+            origin,
+            "detail: {kind} / {reason:?} / {continuation:?} / {status:?}"
+        );
+    }
+    database.close().await;
+}

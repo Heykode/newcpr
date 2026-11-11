@@ -5,6 +5,7 @@ mod fast_mode;
 pub use fast_mode::FastMode;
 mod model;
 mod model_access;
+mod quota_limits;
 mod request_proxy;
 mod responses_upstream;
 pub use model_access::{
@@ -23,10 +24,14 @@ pub use model::*;
 pub use request_proxy::RequestProxySource;
 pub(crate) use selection::smart_score;
 pub use selection::*;
-pub use store::ProviderAccountStore;
+pub use store::{
+    AccountCatalogObservation, AccountCatalogOmissions, ProviderAccountStore, StoredAccountCatalog,
+};
 mod location;
 pub use location::RequestLocation;
 pub mod smart_scheduling;
 
 mod error_protection;
 pub use error_protection::*;
+
+pub use quota_limits::{AccountQuotaLimits, QuotaMergeBase, QuotaPauseDecision};

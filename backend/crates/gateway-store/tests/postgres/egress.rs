@@ -26,6 +26,7 @@ fn context() -> MutationContext {
 
 fn batch(ids: &[&str]) -> gateway_admin::model::accounts::BatchUpdateAccounts {
     gateway_admin::model::accounts::BatchUpdateAccounts {
+        quota_limits: Default::default(),
         auto_use_quota_credits: None,
         excel_recovery: None,
         purchase_cost: None,
@@ -235,7 +236,7 @@ async fn ipv6_batch_modes_preserve_identity_and_fixed_bindings_and_support_inher
         let mut command = batch(&["acct_a", "acct_b"]);
         command.egress_mode = Some(Some(mode));
         accounts
-            .batch_update_accounts(command, &context())
+            .batch_update_accounts(command, Default::default(), &context())
             .await
             .unwrap();
         let current = load(&egress).await;
@@ -262,7 +263,7 @@ async fn ipv6_batch_modes_preserve_identity_and_fixed_bindings_and_support_inher
     let mut omitted = batch(&["acct_a"]);
     omitted.enabled = Some(false);
     accounts
-        .batch_update_accounts(omitted, &context())
+        .batch_update_accounts(omitted, Default::default(), &context())
         .await
         .unwrap();
     assert_eq!(
@@ -272,7 +273,7 @@ async fn ipv6_batch_modes_preserve_identity_and_fixed_bindings_and_support_inher
     let mut inherit = batch(&["acct_a", "acct_b"]);
     inherit.egress_mode = Some(None);
     accounts
-        .batch_update_accounts(inherit, &context())
+        .batch_update_accounts(inherit, Default::default(), &context())
         .await
         .unwrap();
     let current = load(&egress).await;
@@ -321,7 +322,7 @@ async fn ipv6_batch_final_proxy_conflicts_and_mixed_providers_roll_back_every_ch
     conflict.custom_name = Some(Some("must-roll-back".into()));
     assert!(
         accounts
-            .batch_update_accounts(conflict.clone(), &context())
+            .batch_update_accounts(conflict.clone(), Default::default(), &context())
             .await
             .is_err()
     );
@@ -337,14 +338,14 @@ async fn ipv6_batch_final_proxy_conflicts_and_mixed_providers_roll_back_every_ch
     mixed.enabled = Some(false);
     assert!(
         accounts
-            .batch_update_accounts(mixed, &context())
+            .batch_update_accounts(mixed, Default::default(), &context())
             .await
             .is_err()
     );
     assert_eq!(initial.revision, load(&egress).await.revision);
     conflict.outbound_proxy = Some(AccountProxySelection::Direct);
     accounts
-        .batch_update_accounts(conflict, &context())
+        .batch_update_accounts(conflict, Default::default(), &context())
         .await
         .unwrap();
     let current = load(&egress).await;
@@ -360,7 +361,7 @@ async fn ipv6_batch_final_proxy_conflicts_and_mixed_providers_roll_back_every_ch
     common.request_proxy_source = Some(gateway_core::account::RequestProxySource::Account);
     common.outbound_proxy = Some(AccountProxySelection::Direct);
     accounts
-        .batch_update_accounts(common, &context())
+        .batch_update_accounts(common, Default::default(), &context())
         .await
         .unwrap();
     let current = load(&egress).await;

@@ -77,7 +77,8 @@
       },
       "enterApiKeyName": "Please enter API key name",
       "invalidKey": "Use visible HTTP header characters, without spaces or line breaks",
-      "requestsPerMinute": "Requests per minute"
+      "requestsPerMinute": "Requests per minute",
+      "peerSharingHelp": "Share this key’s budget, concurrency limit and RPM with other nodes. Model requests can use OAuth and API accounts in the selected groups"
     },
     "fields": {
       "copyFullKey": "Copy full key",

@@ -518,3 +518,24 @@ events, then use the existing encoder and single execution finalization.
 - Tests cover typed HTTP classification, HTTP-SSE/WS parameter failures and unchanged
   account health, original response bodies, atomic terminal delivery, complete message
   IDs versus references/opaque history, and lossless versus unrecognized reasoning parts.
+
+## Anthropic Messages ingress (official v3.45.1)
+
+- `/v1/messages` and `/v1/messages/count_tokens` use the official `gateway-protocol::anthropic`
+  validation/converters. Existing Authorization has precedence; x-api-key is a fallback only when
+  Authorization is absent. Errors use the Messages envelope; CORS allows anthropic-version/beta.
+- Native OAuth generation converts Messages to Responses before the existing provider selection
+  and transport chain. Preserve local account identity, egress, leases, Excel and State. Strip
+  Anthropic source headers at the cross-protocol boundary; never select a second account for conversion.
+- Source usage, costs and observations reach Core before response translation. One source event can
+  produce several Messages events; keep canonical completion on the last event only. Streaming ends
+  with message_stop, without OpenAI DONE; verify execution completion before sending that terminal.
+  Raw native JSON and SSE retain their bytes. Earlier message_delta is not itself the success terminal.
+- CountTokens uses the official local BPE path for OAuth, with CPU semaphore, cancellation and deadline.
+  Started/Completed facts share the raw-count envelope to fit the local stream validator. No upstream
+  request or upstream-success feedback is generated; the selected account lease is still released.
+- `/v1/models` and model detail use Anthropic shapes only with anthropic-version or x-api-key headers;
+  list defaults to 20, supports 1..1000 and after_id/before_id. Invalid cursors/limits use protocol errors.
+- For native Codex OAuth omit service_tier=auto/default; preserve priority/flex and existing API paths.
+- Excluded products remain peer_link, plugin runtime and upstream API-key account configuration.
+  Their exclusion does not remove shared native protocol fixes.

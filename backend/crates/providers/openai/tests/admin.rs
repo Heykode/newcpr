@@ -861,7 +861,13 @@ async fn openai_admin_provider_projects_cached_quota_models_and_canonical_export
             .is_empty()
     );
     assert!(server.received_requests().await.unwrap().is_empty());
-    catalog_cache.seed("plan:pro", ["gpt-5.4"]);
+    catalog_cache.seed(
+        provider_openai::credential::CodexCatalogScope::for_account(&account)
+            .cache_scope()
+            .unwrap()
+            .as_str(),
+        ["gpt-5.4"],
+    );
     let choices = admin
         .quality_model_choices(&account_id, false)
         .await
@@ -942,6 +948,7 @@ async fn openai_admin_projects_free_plan_from_cached_quota_when_account_claims_o
     let observed_at = SystemTime::now();
     store
         .compare_and_swap_quota(QuotaObservation {
+            quota_pause: Default::default(),
             plan_type: None,
             account_id: account.id().clone(),
             expected_revision: account.revision(),
@@ -1089,6 +1096,7 @@ async fn openai_admin_provider_projects_official_codex_quota_and_independent_buc
     let observed_at = SystemTime::now();
     store
         .compare_and_swap_quota(QuotaObservation {
+            quota_pause: Default::default(),
             plan_type: None,
             account_id: account.id().clone(),
             expected_revision: account.revision(),
@@ -1190,6 +1198,7 @@ async fn openai_admin_keeps_confirmed_exhaustion_separate_from_raw_usage_display
     let observed_at = SystemTime::now();
     store
         .compare_and_swap_quota(QuotaObservation {
+            quota_pause: Default::default(),
             plan_type: None,
             account_id: account.id().clone(),
             expected_revision: account.revision(),
@@ -2464,6 +2473,8 @@ fn provider_ports_with_catalog(
 fn account_record(account: &ProviderAccount) -> AccountRecord {
     let now = Utc::now();
     AccountRecord {
+        quota_limits: Default::default(),
+        quota_paused: Default::default(),
         auto_use_quota_credits: false,
         outbound_proxy_enabled: true,
         effective_excel_models: Default::default(),

@@ -52,14 +52,18 @@ pub(super) async fn reset_client_key_budget(
         ClientKeyBudgetPeriod::Weekly | ClientKeyBudgetPeriod::All
     );
     let reset_at = Utc::now();
-    // 已完成但延迟落盘的旧费用不回扣；不为从未使用的 Key 开启窗口。
+    // 官方重置边界同时收拢起止；首次重置也保存 fence，迟到费用不能重新开启旧窗口。
     sqlx::query(
-        "update client_key_budget_windows set
-         daily_used_usd = case when $2 then 0 else daily_used_usd end,
-         daily_start = case when $2 and daily_end > $4 then $4 else daily_start end,
-         weekly_used_usd = case when $3 then 0 else weekly_used_usd end,
-         weekly_start = case when $3 and weekly_end > $4 then $4 else weekly_start end
-         where client_api_key_id = $1",
+        "insert into client_key_budget_windows
+        (client_api_key_id,daily_start,daily_end,weekly_start,weekly_end)
+        values ($1,$4,$4,$4,$4)
+        on conflict (client_api_key_id) do update set
+        daily_used_usd = case when $2 then 0 else client_key_budget_windows.daily_used_usd end,
+        daily_start = case when $2 then $4 else client_key_budget_windows.daily_start end,
+        daily_end = case when $2 then $4 else client_key_budget_windows.daily_end end,
+        weekly_used_usd = case when $3 then 0 else client_key_budget_windows.weekly_used_usd end,
+        weekly_start = case when $3 then $4 else client_key_budget_windows.weekly_start end,
+        weekly_end = case when $3 then $4 else client_key_budget_windows.weekly_end end",
     )
     .bind(command.id.as_str())
     .bind(daily)
@@ -70,10 +74,18 @@ pub(super) async fn reset_client_key_budget(
     .map_err(|error| postgres_unavailable("reset client budget").with_source(error))?;
     let mut fields = Vec::new();
     if daily {
-        fields.extend(["daily_used_usd".to_owned(), "daily_start".to_owned()]);
+        fields.extend([
+            "daily_used_usd".to_owned(),
+            "daily_start".to_owned(),
+            "daily_end".to_owned(),
+        ]);
     }
     if weekly {
-        fields.extend(["weekly_used_usd".to_owned(), "weekly_start".to_owned()]);
+        fields.extend([
+            "weekly_used_usd".to_owned(),
+            "weekly_start".to_owned(),
+            "weekly_end".to_owned(),
+        ]);
     }
     super::admin_security_audit::insert_admin_audit_event(
         &mut transaction,
@@ -350,10 +362,10 @@ async fn advance_windows(
         select $1, day, day + interval '24 hours', day, day + interval '168 hours'
         from (select date_trunc('day', $2::timestamptz at time zone 'Asia/Shanghai') at time zone 'Asia/Shanghai' as day) d
         on conflict (client_api_key_id) do update set
-            daily_start = case when client_key_budget_windows.daily_end <= $2 and client_key_budget_windows.daily_start <= $3 then greatest(excluded.daily_start, client_key_budget_windows.daily_start) else client_key_budget_windows.daily_start end,
+            daily_start = case when client_key_budget_windows.daily_end <= $2 and client_key_budget_windows.daily_start <= $3 then greatest(excluded.daily_start, client_key_budget_windows.daily_end, client_key_budget_windows.daily_start) else client_key_budget_windows.daily_start end,
             daily_end = case when client_key_budget_windows.daily_end <= $2 and client_key_budget_windows.daily_start <= $3 then excluded.daily_end else client_key_budget_windows.daily_end end,
             daily_used_usd = case when client_key_budget_windows.daily_end <= $2 and client_key_budget_windows.daily_start <= $3 then 0 else client_key_budget_windows.daily_used_usd end,
-            weekly_start = case when client_key_budget_windows.weekly_end <= $2 and client_key_budget_windows.weekly_start <= $3 then greatest(excluded.weekly_start, client_key_budget_windows.weekly_start) else client_key_budget_windows.weekly_start end,
+            weekly_start = case when client_key_budget_windows.weekly_end <= $2 and client_key_budget_windows.weekly_start <= $3 then greatest(excluded.weekly_start, client_key_budget_windows.weekly_end, client_key_budget_windows.weekly_start) else client_key_budget_windows.weekly_start end,
             weekly_end = case when client_key_budget_windows.weekly_end <= $2 and client_key_budget_windows.weekly_start <= $3 then excluded.weekly_end else client_key_budget_windows.weekly_end end,
             weekly_used_usd = case when client_key_budget_windows.weekly_end <= $2 and client_key_budget_windows.weekly_start <= $3 then 0 else client_key_budget_windows.weekly_used_usd end")
         .bind(key).bind(now).bind(used_at).execute(&mut **tx).await?;

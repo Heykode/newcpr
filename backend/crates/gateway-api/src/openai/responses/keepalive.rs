@@ -30,6 +30,21 @@ pub(super) async fn response_with_encoder(
     commit: ResponseCommit,
     error_encoder: Option<fn(&Value) -> Bytes>,
 ) -> Response {
+    response_with_protocol(
+        response,
+        commit,
+        error_encoder,
+        Bytes::from_static(DONE_SSE_FRAME.as_bytes()),
+    )
+    .await
+}
+
+pub(super) async fn response_with_protocol(
+    response: impl Future<Output = Response> + Send + 'static,
+    commit: ResponseCommit,
+    error_encoder: Option<fn(&Value) -> Bytes>,
+    terminal: Bytes,
+) -> Response {
     let mut response = Box::pin(response);
     tokio::select! {
         biased;
@@ -39,7 +54,7 @@ pub(super) async fn response_with_encoder(
     if !commit.record(Some(StatusCode::OK.as_u16())) {
         return response.await;
     }
-    let pending = PendingResponse::Waiting(response, error_encoder);
+    let pending = PendingResponse::Waiting(response, error_encoder, terminal);
     let stream = stream::once(async { Ok::<_, axum::Error>(SSE_KEEPALIVE_FRAME) })
         .chain(stream::try_unfold(pending, PendingResponse::next));
     let mut response = Response::new(Body::from_stream(stream));
@@ -57,7 +72,11 @@ pub(super) async fn response_with_encoder(
 }
 
 enum PendingResponse {
-    Waiting(BoxFuture<'static, Response>, Option<fn(&Value) -> Bytes>),
+    Waiting(
+        BoxFuture<'static, Response>,
+        Option<fn(&Value) -> Bytes>,
+        Bytes,
+    ),
     Streaming(BodyDataStream),
 }
 
@@ -65,7 +84,7 @@ impl PendingResponse {
     async fn next(mut self) -> Result<Option<(Bytes, Self)>, axum::Error> {
         loop {
             match &mut self {
-                Self::Waiting(response, error_encoder) => {
+                Self::Waiting(response, error_encoder, terminal) => {
                     // 心跳只轮询同一个 future，不取消重建首帧等待或插件调用
                     let response = tokio::select! {
                         biased;
@@ -84,7 +103,7 @@ impl PendingResponse {
                     let body = if sse {
                         response.into_body()
                     } else {
-                        stream_failure(response, *error_encoder).await
+                        stream_failure(response, *error_encoder, terminal.clone()).await
                     };
                     // 正式响应的正文已经带有交付期心跳，后续只转交，不叠加定时器
                     self = Self::Streaming(body.into_data_stream());
@@ -101,7 +120,11 @@ impl PendingResponse {
     }
 }
 
-async fn stream_failure(response: Response, error_encoder: Option<fn(&Value) -> Bytes>) -> Body {
+async fn stream_failure(
+    response: Response,
+    error_encoder: Option<fn(&Value) -> Bytes>,
+    terminal: Bytes,
+) -> Body {
     let status = response.status();
     let retry_after = response
         .headers()
@@ -148,6 +171,6 @@ async fn stream_failure(response: Response, error_encoder: Option<fn(&Value) -> 
         Some(encode) => encode(&data).to_vec(),
         None => encode_sse_event("response.failed", &data.to_string()).into_bytes(),
     };
-    event.extend_from_slice(DONE_SSE_FRAME.as_bytes());
+    event.extend_from_slice(&terminal);
     Body::from(event)
 }

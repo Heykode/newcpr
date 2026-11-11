@@ -17,6 +17,44 @@ fn loaded_credential_from_record(
 
 #[async_trait]
 impl ProviderAccountStore for PgProviderAccountRepository {
+    async fn list_catalog_candidates(
+        &self,
+        provider: &ProviderKind,
+        accounts: &[CoreProviderAccountId],
+        omissions: &gateway_core::account::AccountCatalogOmissions,
+    ) -> Result<Vec<CoreProviderAccount>, CoreStoreError> {
+        let ids = accounts
+            .iter()
+            .map(CoreProviderAccountId::as_str)
+            .collect::<Vec<_>>();
+        self.list_provider_account_summaries(
+            Some(provider.as_str()),
+            false,
+            Some(&ids),
+            Some(omissions),
+        )
+        .await
+        .map_err(core_store_error)?
+        .into_iter()
+        .map(core_account_from_summary)
+        .collect()
+    }
+
+    async fn save_account_catalog(
+        &self,
+        observation: &gateway_core::account::AccountCatalogObservation,
+        document: &[u8],
+    ) -> Result<bool, CoreStoreError> {
+        self.save_model_catalog(observation, document).await
+    }
+
+    async fn load_account_catalogs(
+        &self,
+        provider: &ProviderKind,
+    ) -> Result<Vec<gateway_core::account::StoredAccountCatalog>, CoreStoreError> {
+        self.load_model_catalogs(provider).await
+    }
+
     async fn quality_pause_is_owned(
         &self,
         account: &CoreProviderAccountId,
@@ -127,12 +165,17 @@ impl ProviderAccountStore for PgProviderAccountRepository {
             .iter()
             .map(CoreProviderAccountId::as_str)
             .collect::<Vec<_>>();
-        self.list_provider_account_summaries(Some(provider.as_str()), false, Some(&account_ids))
-            .await
-            .map_err(core_store_error)?
-            .into_iter()
-            .map(core_account_from_summary)
-            .collect()
+        self.list_provider_account_summaries(
+            Some(provider.as_str()),
+            false,
+            Some(&account_ids),
+            None,
+        )
+        .await
+        .map_err(core_store_error)?
+        .into_iter()
+        .map(core_account_from_summary)
+        .collect()
     }
 
     async fn list_refresh_candidates(
@@ -258,6 +301,9 @@ impl ProviderAccountStore for PgProviderAccountRepository {
              set name = case when $14 then name else $3 end,
                  email = case when $14 then email else $4 end,
                  plan_type = case when $14 then plan_type else $5 end,
+                 provider_quota_json = case when $14 then provider_quota_json else null end,
+                 quota_observed_at = case when $14 then quota_observed_at else null end,
+                 quota_paused = case when $14 then quota_paused else false end,
                  provider_credentials_json = $6,
                  credential_revision = credential_revision + 1,
                  turn_state_binding_revision = case when $15 and $14
@@ -388,6 +434,7 @@ impl ProviderAccountStore for PgProviderAccountRepository {
                 )
                 .ok_or_else(|| CoreStoreError::new(CoreStoreErrorKind::InvalidData))?;
                 Ok(QuotaObservation {
+                    quota_pause: None,
                     plan_type: row
                         .try_get("plan_type")
                         .map_err(|_| CoreStoreError::new(CoreStoreErrorKind::InvalidData))?,
@@ -406,21 +453,8 @@ impl ProviderAccountStore for PgProviderAccountRepository {
         &self,
         observation: QuotaObservation,
     ) -> Result<QuotaWriteOutcome, CoreStoreError> {
-        let quota = JsonObject::try_from_value(
-            "provider_quota_json",
-            serde_json::Value::Object(observation.quota.into_inner()),
-            QUOTA_MAX_BYTES,
-        )
-        .map_err(core_store_error)?;
         let updated = self
-            .compare_and_swap_provider_quota(
-                observation.account_id.as_str(),
-                Revision::new(observation.expected_revision.get()).map_err(core_store_error)?,
-                quota,
-                DateTime::<Utc>::from(observation.observed_at),
-                observation.state,
-                observation.plan_type.as_deref(),
-            )
+            .compare_and_swap_provider_quota(observation)
             .await
             .map_err(core_store_error)?;
         Ok(if updated {

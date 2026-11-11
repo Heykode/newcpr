@@ -196,7 +196,7 @@ watch(
 
         <AccountWarmupCard
           v-model:enabled="form.accountWarmupEnabled"
-          v-model:schedule-time="form.accountWarmupScheduleTime"
+          v-model:cron="form.accountWarmupCron"
           v-model:model="form.accountWarmupModel"
           :disabled="loading || saving"
         />

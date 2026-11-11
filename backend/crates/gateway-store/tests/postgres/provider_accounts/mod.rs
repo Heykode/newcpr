@@ -188,6 +188,7 @@ async fn custom_names_are_atomic_searchable_and_preserve_account_identity() {
     .unwrap();
     let store = admin_account_store(&database.pool);
     let command = BatchUpdateAccounts {
+        quota_limits: Default::default(),
         auto_use_quota_credits: None,
         excel_recovery: None,
         purchase_cost: None,
@@ -215,7 +216,7 @@ async fn custom_names_are_atomic_searchable_and_preserve_account_identity() {
         request_id: "custom-name-update".into(),
     };
     store
-        .batch_update_accounts(command.clone(), &context)
+        .batch_update_accounts(command.clone(), Default::default(), &context)
         .await
         .unwrap();
     for id in &ids {
@@ -268,6 +269,7 @@ async fn custom_names_are_atomic_searchable_and_preserve_account_identity() {
                     ]),
                     ..command.clone()
                 },
+                Default::default(),
                 &context
             )
             .await
@@ -302,6 +304,7 @@ async fn custom_names_are_atomic_searchable_and_preserve_account_identity() {
                     custom_name: name.clone(),
                     ..command.clone()
                 },
+                Default::default(),
                 &context,
             )
             .await
@@ -624,6 +627,7 @@ async fn explicit_quota_plan_is_fenced_and_survives_token_only_refreshes() {
     let original = repository.get_account(&id).await.unwrap().unwrap();
     let observed_at = SystemTime::now();
     let observation = QuotaObservation {
+        quota_pause: Default::default(),
         account_id: id.clone(),
         expected_revision: original.revision(),
         plan_type: Some("pro".to_owned()),
@@ -887,6 +891,7 @@ async fn core_quota_batch_reads_only_observed_accounts_in_one_contract_call() {
         let observed_at = SystemTime::now();
         let outcome = repository
             .compare_and_swap_quota(QuotaObservation {
+                quota_pause: Default::default(),
                 plan_type: None,
                 account_id: ProviderAccountId::new(id).expect("account id"),
                 expected_revision: revision,
@@ -963,6 +968,7 @@ async fn quota_observation_touch_preserves_quota_state_and_advances_account_upda
     assert_eq!(
         repository
             .compare_and_swap_quota(QuotaObservation {
+                quota_pause: Default::default(),
                 plan_type: None,
                 account_id: account_id.clone(),
                 expected_revision: revision,
@@ -1062,6 +1068,7 @@ async fn delayed_provider_observations_cannot_overwrite_newer_state_or_quota() {
         .expect("older observation time");
 
     let quota = |marker: &str, observed_at| QuotaObservation {
+        quota_pause: Default::default(),
         plan_type: None,
         account_id: account_id.clone(),
         expected_revision: revision,
@@ -2472,6 +2479,7 @@ async fn account_enable_preserves_facts_and_explicit_recovery_clears_them() {
     let observed_at = SystemTime::now();
     repository
         .compare_and_swap_quota(QuotaObservation {
+            quota_pause: Default::default(),
             plan_type: None,
             account_id: ProviderAccountId::new("acct_recovery").expect("account ID"),
             expected_revision: CredentialRevision::new(1).expect("credential revision"),
@@ -2539,6 +2547,7 @@ async fn account_enable_preserves_facts_and_explicit_recovery_clears_them() {
     let enabled = store
         .batch_update_accounts(
             BatchUpdateAccounts {
+                quota_limits: Default::default(),
                 auto_use_quota_credits: None,
                 excel_recovery: None,
                 purchase_cost: None,
@@ -2561,6 +2570,7 @@ async fn account_enable_preserves_facts_and_explicit_recovery_clears_them() {
                 group_ids: None,
                 outbound_proxy: None,
             },
+            Default::default(),
             &MutationContext {
                 actor: MutationActor::System,
                 request_id: "request_account_enable".to_owned(),
@@ -2682,6 +2692,7 @@ async fn terminal_batch_update_replaces_state_and_groups_once_or_rolls_back_ever
     let result = store
         .batch_update_accounts(
             BatchUpdateAccounts {
+                quota_limits: Default::default(),
                 auto_use_quota_credits: None,
                 excel_recovery: None,
                 purchase_cost: None,
@@ -2704,6 +2715,7 @@ async fn terminal_batch_update_replaces_state_and_groups_once_or_rolls_back_ever
                 weight: Some(gateway_core::account::AccountWeight::new(25).expect("weight")),
                 group_ids: Some(vec![AccountGroupId::new(GROUP_ID).expect("group ID")]),
             },
+            Default::default(),
             &context,
         )
         .await
@@ -2736,6 +2748,7 @@ async fn terminal_batch_update_replaces_state_and_groups_once_or_rolls_back_ever
     store
         .batch_update_accounts(
             BatchUpdateAccounts {
+                quota_limits: Default::default(),
                 auto_use_quota_credits: None,
                 excel_recovery: None,
                 purchase_cost: None,
@@ -2761,6 +2774,7 @@ async fn terminal_batch_update_replaces_state_and_groups_once_or_rolls_back_ever
                         .expect("missing group ID"),
                 ]),
             },
+            Default::default(),
             &context,
         )
         .await
@@ -3550,6 +3564,8 @@ async fn provider_account_admin_mutations_are_scoped_audited_and_atomic() {
 
     let revision = repository
         .batch_update_provider_accounts_admin(BatchUpdateProviderAccountsAdmin {
+            pauses: Default::default(),
+            quota_limits: Default::default(),
             auto_use_quota_credits: None,
             excel_recovery: None,
             purchase_cost: None,
@@ -4430,6 +4446,7 @@ async fn disabling_quota_credits_revokes_credit_only_access_even_with_a_late_obs
     };
     let set_policy = async |enabled| {
         let command = BatchUpdateAccounts {
+            quota_limits: Default::default(),
             auto_use_quota_credits: Some(enabled),
             excel_recovery: None,
             purchase_cost: None,
@@ -4453,12 +4470,13 @@ async fn disabling_quota_credits_revokes_credit_only_access_even_with_a_late_obs
             outbound_proxy: None,
         };
         admin
-            .batch_update_accounts(command, &context)
+            .batch_update_accounts(command, Default::default(), &context)
             .await
             .unwrap();
     };
     let observe = async |state: QuotaState| {
         let observation = QuotaObservation {
+            quota_pause: Default::default(),
             plan_type: None,
             account_id: id.clone(),
             expected_revision: before.revision(),

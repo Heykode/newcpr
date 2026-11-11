@@ -37,7 +37,10 @@ pub(crate) fn worker_contributions(
         contributions.push(WorkerContribution::Registration(scheduled_registration(
             refresh_id,
             OAUTH_REFRESH_INTERVAL,
-            Box::new(OpenAiOAuthRefreshTask { service: refresh }),
+            Box::new(OpenAiOAuthRefreshTask {
+                service: refresh,
+                catalog: Arc::clone(&catalog),
+            }),
         )?));
     }
     contributions.extend([
@@ -205,6 +208,7 @@ impl ScheduledTask for OpenAiCliVersionTask {
 }
 
 pub(super) struct OpenAiOAuthRefreshTask {
+    catalog: Arc<CodexCredentialCatalogService>,
     service: Arc<CodexCredentialRefreshService>,
 }
 
@@ -218,6 +222,7 @@ impl ScheduledTask for OpenAiOAuthRefreshTask {
                 tracing::error!(error = %error, "OpenAI OAuth refresh cycle failed");
                 WorkerTaskError::safe("OpenAI OAuth refresh failed").with_source(error)
             })?;
+            let mut changed = Vec::new();
             let mut refreshed = 0_u64;
             let mut invalidated = 0_u64;
             let mut banned = 0_u64;
@@ -229,9 +234,18 @@ impl ScheduledTask for OpenAiOAuthRefreshTask {
             let mut failed_accounts = Vec::new();
             for outcome in &outcomes {
                 match outcome {
-                    CodexCredentialRefreshOutcome::Refreshed { .. } => refreshed += 1,
-                    CodexCredentialRefreshOutcome::Invalidated { .. } => invalidated += 1,
-                    CodexCredentialRefreshOutcome::Banned { .. } => banned += 1,
+                    CodexCredentialRefreshOutcome::Refreshed { account_id, .. } => {
+                        refreshed += 1;
+                        changed.push(account_id);
+                    }
+                    CodexCredentialRefreshOutcome::Invalidated { account_id } => {
+                        invalidated += 1;
+                        changed.push(account_id);
+                    }
+                    CodexCredentialRefreshOutcome::Banned { account_id } => {
+                        banned += 1;
+                        changed.push(account_id);
+                    }
                     CodexCredentialRefreshOutcome::Transient { account_id } => {
                         transient += 1;
                         transient_accounts.push(account_id);
@@ -245,6 +259,21 @@ impl ScheduledTask for OpenAiOAuthRefreshTask {
                         failed_accounts.push(account_id);
                     }
                 }
+            }
+            if !changed.is_empty() {
+                let ids = changed
+                    .into_iter()
+                    .map(|id| gateway_core::account::ProviderAccountId::new(id.as_str()))
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|error| {
+                        WorkerTaskError::safe("OpenAI 账号 ID 无效").with_source(error)
+                    })?;
+                self.catalog
+                    .invalidate_accounts(&ids)
+                    .await
+                    .map_err(|error| {
+                        WorkerTaskError::safe("OpenAI 凭据变更后目录失效失败").with_source(error)
+                    })?;
             }
             if !outcomes.is_empty() {
                 tracing::info!(
@@ -374,11 +403,7 @@ impl ScheduledTask for OpenAiWarmupTask {
             let Some(local_slot) = local_slot else {
                 return Err(WorkerTaskError::safe("OpenAI warmup local time is invalid"));
             };
-            let scheduled = policy
-                .scheduled_times()
-                .into_iter()
-                .any(|(hour, minute)| hour == local_slot.hour() && minute == local_slot.minute());
-            if !scheduled {
+            if !policy.matches_slot(local_slot) {
                 return Ok(());
             }
             let claimed = runtime_policy
@@ -476,16 +501,21 @@ impl DaemonTask for OpenAiCatalogEtagTask {
             loop {
                 tokio::select! {
                     () = cancellation.cancelled() => return Ok(()),
-                    () = self.catalog.wait_for_etag_refresh() => {},
+                    () = self.catalog.wait_for_refresh() => {},
                 };
                 let result = tokio::select! {
                     () = cancellation.cancelled() => return Ok(()),
-                    result = self.catalog.refresh() => result.map(|_| ()),
+                    result = self.catalog.refresh_catalogs() => result.map(|_| ()),
                 };
-                // 失败的 ETag 已重新入队，交回 Host 退避后再领取，避免立即重试
-                result.map_err(|error| {
-                    WorkerTaskError::safe("OpenAI 模型目录 ETag 刷新失败").with_source(error)
-                })?;
+                match result {
+                    Ok(_) | Err(CodexCredentialCatalogError::NoEligibleCredential) => {}
+                    Err(error) => {
+                        self.catalog.schedule_refresh();
+                        return Err(
+                            WorkerTaskError::safe("OpenAI 模型目录刷新失败").with_source(error)
+                        );
+                    }
+                }
                 context.succeeded();
             }
         })

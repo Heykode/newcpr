@@ -34,6 +34,7 @@ use provider_openai::credential::{
     ImportCodexOAuthCredential,
 };
 use secrecy::SecretString;
+use tokio::sync::oneshot;
 
 // Serialize full-size fixtures so their allocations do not consume each other's I/O deadlines.
 pub(crate) static LARGE_PAYLOAD_TEST_LOCK: tokio::sync::Mutex<()> =
@@ -49,8 +50,18 @@ struct StoredAccount {
 
 #[derive(Default)]
 pub(crate) struct MemoryAccountStore {
+    catalogs: Mutex<
+        BTreeMap<
+            ProviderAccountId,
+            (
+                gateway_core::account::AccountCatalogObservation,
+                bytes::Bytes,
+            ),
+        >,
+    >,
     accounts: Mutex<BTreeMap<ProviderAccountId, StoredAccount>>,
     quota_reads: AtomicUsize,
+    next_quota_read: Mutex<Option<(oneshot::Sender<()>, oneshot::Receiver<()>)>>,
     fail_provider_listing: AtomicBool,
     provider_list_reads: AtomicUsize,
     pub(crate) before_provider_list: Mutex<Option<Box<dyn FnOnce() + Send + Sync>>>,
@@ -66,6 +77,36 @@ pub(crate) struct MemoryAccountStore {
 }
 
 impl MemoryAccountStore {
+    pub(crate) fn set_quota_paused(&self, id: &str, paused: bool) {
+        let mut accounts = self.accounts.lock().unwrap();
+        let stored = accounts
+            .get_mut(&ProviderAccountId::new(id).unwrap())
+            .unwrap();
+        stored.account = stored
+            .account
+            .clone()
+            .with_quota_limits(stored.account.quota_limits().clone(), paused);
+    }
+
+    pub(crate) fn hold_next_quota_read(&self) -> (oneshot::Receiver<()>, oneshot::Sender<()>) {
+        let (read, ready) = oneshot::channel();
+        let (release, held) = oneshot::channel();
+        *self.next_quota_read.lock().unwrap() = Some((read, held));
+        (ready, release)
+    }
+
+    pub(crate) fn set_quota_limits(
+        &self,
+        id: &str,
+        limits: gateway_core::account::AccountQuotaLimits,
+    ) {
+        let mut accounts = self.accounts.lock().unwrap();
+        let stored = accounts
+            .get_mut(&ProviderAccountId::new(id).unwrap())
+            .unwrap();
+        stored.account = stored.account.clone().with_quota_limits(limits, false);
+    }
+
     pub(crate) fn enable_quota_credits(&self, id: &str) {
         let mut accounts = self.accounts.lock().unwrap();
         let stored = accounts
@@ -201,16 +242,92 @@ impl MemoryAccountStore {
 
 #[async_trait]
 impl ProviderAccountStore for MemoryAccountStore {
+    async fn load_account_catalogs(
+        &self,
+        provider: &ProviderKind,
+    ) -> Result<Vec<gateway_core::account::StoredAccountCatalog>, StoreError> {
+        let accounts = self.accounts.lock().unwrap();
+        let mut groups = BTreeMap::<bytes::Bytes, Vec<_>>::new();
+        for (id, (observation, document)) in self.catalogs.lock().unwrap().iter() {
+            if accounts.get(id).is_some_and(|row| {
+                row.account.provider() == provider
+                    && row.account.enabled()
+                    && matches!(
+                        row.account.credential_state(),
+                        CredentialState::Ready | CredentialState::Unknown
+                    )
+                    && row
+                        .account
+                        .access_token_expires_at()
+                        .is_none_or(|ts| ts > SystemTime::now())
+                    && row.account.revision() == observation.revision
+                    && row.account.plan_type() == observation.plan.as_deref()
+            }) {
+                groups
+                    .entry(document.clone())
+                    .or_default()
+                    .push(observation.clone());
+            }
+        }
+        Ok(groups
+            .into_iter()
+            .map(
+                |(document, accounts)| gateway_core::account::StoredAccountCatalog {
+                    accounts,
+                    document,
+                },
+            )
+            .collect())
+    }
+    async fn save_account_catalog(
+        &self,
+        observation: &gateway_core::account::AccountCatalogObservation,
+        document: &[u8],
+    ) -> Result<bool, StoreError> {
+        let rows = self.accounts.lock().unwrap();
+        if !rows.get(&observation.account_id).is_some_and(|a| {
+            a.account.revision() == observation.revision
+                && a.account.plan_type() == observation.plan.as_deref()
+        }) {
+            return Ok(false);
+        }
+        self.catalogs.lock().unwrap().insert(
+            observation.account_id.clone(),
+            (observation.clone(), bytes::Bytes::copy_from_slice(document)),
+        );
+        Ok(true)
+    }
+
     async fn list_for_provider_accounts(
         &self,
         provider: &ProviderKind,
         account_ids: &[ProviderAccountId],
     ) -> Result<Vec<ProviderAccount>, StoreError> {
-        Ok(self
-            .list_for_provider(provider)
-            .await?
+        if account_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        if let Some(hook) = self.before_provider_list.lock().unwrap().take() {
+            hook();
+        }
+        self.provider_list_reads.fetch_add(1, Ordering::SeqCst);
+        if self.fail_provider_listing.load(Ordering::SeqCst) {
+            return Err(StoreError::caused_by(
+                StoreErrorKind::Unavailable,
+                std::io::Error::new(
+                    std::io::ErrorKind::ConnectionRefused,
+                    "PRIVATE_DATABASE_CAUSE",
+                ),
+            ));
+        }
+        // 与 Postgres 实现的调度列表语义一致：停用账号不进入常规候选
+        let accounts = self.accounts.lock().unwrap();
+        Ok(account_ids
+            .iter()
+            .collect::<std::collections::BTreeSet<_>>()
             .into_iter()
-            .filter(|account| account_ids.contains(account.id()))
+            .filter_map(|id| accounts.get(id))
+            .filter(|stored| stored.account.provider() == provider && stored.account.enabled())
+            .map(|stored| stored.account.clone())
             .collect())
     }
 
@@ -410,7 +527,9 @@ impl ProviderAccountStore for MemoryAccountStore {
         )
         .with_turn_state_binding_revision(binding);
         stored.credential = credential;
-        stored.quota = None;
+        if !preserve_profile {
+            stored.quota = None;
+        }
         if let Some(observed_at) = state_observed_at {
             stored.state_observed_at = Some(observed_at);
         }
@@ -422,11 +541,19 @@ impl ProviderAccountStore for MemoryAccountStore {
         accounts: &[ProviderAccountId],
     ) -> Result<Vec<QuotaObservation>, StoreError> {
         self.quota_reads.fetch_add(1, Ordering::SeqCst);
-        let stored = self.accounts.lock().expect("account store lock");
-        Ok(accounts
-            .iter()
-            .filter_map(|account| stored.get(account)?.quota.clone())
-            .collect())
+        let result = {
+            let stored = self.accounts.lock().expect("account store lock");
+            accounts
+                .iter()
+                .filter_map(|account| stored.get(account)?.quota.clone())
+                .collect()
+        };
+        let held = self.next_quota_read.lock().unwrap().take();
+        if let Some((read, held)) = held {
+            read.send(()).unwrap();
+            held.await.expect("release quota read");
+        }
+        Ok(result)
     }
 
     async fn compare_and_swap_quota(
@@ -438,6 +565,16 @@ impl ProviderAccountStore for MemoryAccountStore {
             .get_mut(&observation.account_id)
             .ok_or_else(|| store_error(StoreErrorKind::InvalidData))?;
         if stored.account.revision() != observation.expected_revision {
+            return Ok(QuotaWriteOutcome::Conflict);
+        }
+        let current_version = stored.quota.as_ref().map(|quota| quota.observed_at);
+        if observation.quota_pause.as_ref().is_some_and(|decision| {
+            &decision.limits != stored.account.quota_limits()
+                || current_version == Some(observation.observed_at)
+                || decision
+                    .merge_base
+                    .is_some_and(|base| base.observed_at != current_version)
+        }) {
             return Ok(QuotaWriteOutcome::Conflict);
         }
         if stored
@@ -466,8 +603,13 @@ impl ProviderAccountStore for MemoryAccountStore {
                 Some(plan_type.clone()),
             ));
         }
+        let paused = observation
+            .quota_pause
+            .as_ref()
+            .map_or(stored.account.quota_paused(), |v| v.paused);
         stored.quota = Some(observation);
-        stored.account = rebuild_account(&stored.account, replacement);
+        stored.account = rebuild_account(&stored.account, replacement)
+            .with_quota_limits(stored.account.quota_limits().clone(), paused);
         Ok(QuotaWriteOutcome::Updated)
     }
 
@@ -683,6 +825,7 @@ fn rebuild_account(current: &ProviderAccount, rebuild: AccountRebuild) -> Provid
     )
     .with_scheduling(current.concurrency_limit(), current.weight())
     .with_auto_use_quota_credits(current.auto_use_quota_credits())
+    .with_quota_limits(current.quota_limits().clone(), current.quota_paused())
     .with_turn_state_injection_enabled(current.turn_state_injection_enabled())
     .with_turn_state_binding_revision(current.turn_state_binding_revision())
     .with_outbound_proxy(current.outbound_proxy().cloned())

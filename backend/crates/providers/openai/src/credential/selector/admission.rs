@@ -9,7 +9,29 @@ impl CodexCredentialSelector {
     ) -> Result<Vec<ProviderAccount>, CredentialSelectionError> {
         if let Some(scope) = request.attempt.account_scope() {
             let ids = scope.allowed_account_ids().cloned().collect::<Vec<_>>();
-            Ok(self.repository.list_for_accounts(&ids).await?)
+            let omissions = request
+                .upstream_model
+                .filter(|_| {
+                    request.responses_model && !request.attempt.is_diagnostic_required_account()
+                })
+                .and_then(|model| {
+                    self.catalog.omissions(model, &ids, |id| {
+                        scope.directory().account(id).is_some_and(|a| {
+                            a.model_access().mode() == AccountModelAccessMode::Allowlist
+                        })
+                    })
+                });
+            if let Some(omissions) = omissions {
+                let provider = gateway_core::routing::ProviderKind::new("openai")
+                    .map_err(|_| CredentialSelectionError::InvalidCredential(None))?;
+                self.repository
+                    .store()
+                    .list_catalog_candidates(&provider, &ids, &omissions)
+                    .await
+                    .map_err(|error| CredentialSelectionError::Store(Some(error.into())))
+            } else {
+                Ok(self.repository.list_for_accounts(&ids).await?)
+            }
         } else {
             Ok(self.repository.list_for_provider().await?)
         }

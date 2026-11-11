@@ -747,6 +747,8 @@ fn provider_ports_with_catalog(
 fn account_record(account: &ProviderAccount) -> AccountRecord {
     let now = Utc::now();
     AccountRecord {
+        quota_limits: Default::default(),
+        quota_paused: Default::default(),
         auto_use_quota_credits: false,
         outbound_proxy_enabled: true,
         effective_excel_models: Default::default(),

@@ -1561,28 +1561,53 @@ pub trait ProviderRuntimePolicyPort: Send + Sync {
     }
 }
 
+/// 校验五段 Cron 预热计划
+#[must_use]
+pub fn valid_warmup_cron(value: &str) -> bool {
+    parse_warmup_cron(value).is_some()
+}
+
+fn parse_warmup_cron(value: &str) -> Option<cron::Schedule> {
+    if value.len() > 255
+        || value != value.trim()
+        || value.chars().any(char::is_control)
+        || value.split_whitespace().count() != 5
+    {
+        return None;
+    }
+    format!("0 {value}").parse().ok()
+}
+
+/// 账号模型预激活（预热）策略；来源于 `runtime_settings`
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderWarmupPolicy {
     enabled: bool,
-    schedule_time: String,
+    cron: String,
     model: Option<String>,
 }
 
 impl ProviderWarmupPolicy {
+    /// 保存设置与创建预热策略使用相同的时间表和模型约束
+    pub fn validate_values(
+        enabled: bool,
+        cron: &str,
+        model: Option<&str>,
+    ) -> Result<(), &'static str> {
+        if (enabled || !cron.is_empty()) && !valid_warmup_cron(cron) {
+            return Err("account_warmup_cron");
+        }
+        if (enabled && model.is_none()) || !valid_optional_probe_model(model) {
+            return Err("account_warmup_model");
+        }
+        Ok(())
+    }
+
     pub fn try_new(
         enabled: bool,
-        schedule_time: String,
+        cron: String,
         model: Option<String>,
     ) -> Result<Self, ProviderStoreError> {
-        if !valid_warmup_schedule_time(&schedule_time)
-            || (enabled && model.is_none())
-            || model.as_deref().is_some_and(|model| {
-                model.is_empty()
-                    || model.len() > 128
-                    || model != model.trim()
-                    || model.bytes().any(|byte| byte.is_ascii_control())
-            })
-        {
+        if Self::validate_values(enabled, &cron, model.as_deref()).is_err() {
             return Err(ProviderStoreError::new(
                 ProviderStoreErrorKind::InvalidData,
                 "validate warmup policy",
@@ -1590,16 +1615,16 @@ impl ProviderWarmupPolicy {
         }
         Ok(Self {
             enabled,
-            schedule_time,
+            cron,
             model,
         })
     }
 
     #[must_use]
-    pub fn disabled() -> Self {
+    pub const fn disabled() -> Self {
         Self {
             enabled: false,
-            schedule_time: "08:00".to_owned(),
+            cron: String::new(),
             model: None,
         }
     }
@@ -1610,8 +1635,8 @@ impl ProviderWarmupPolicy {
     }
 
     #[must_use]
-    pub fn schedule_time(&self) -> &str {
-        &self.schedule_time
+    pub fn cron(&self) -> &str {
+        &self.cron
     }
 
     #[must_use]
@@ -1619,36 +1644,19 @@ impl ProviderWarmupPolicy {
         self.model.as_deref()
     }
 
+    /// 匹配部署时区中的整分钟时刻，时区重叠及执行去重由 Worker 与存储端口负责
     #[must_use]
-    pub fn scheduled_times(&self) -> Vec<(u32, u32)> {
-        self.schedule_time
-            .split(',')
-            .filter_map(|part| {
-                let mut parts = part.split(':');
-                Some((parts.next()?.parse().ok()?, parts.next()?.parse().ok()?))
-            })
-            .collect()
+    pub fn matches_slot(&self, slot: chrono::NaiveDateTime) -> bool {
+        parse_warmup_cron(&self.cron).is_some_and(|schedule| schedule.includes(slot.and_utc()))
     }
 }
 
-#[must_use]
-pub fn valid_warmup_schedule_time(value: &str) -> bool {
-    if value.is_empty()
-        || value.len() > 255
-        || value != value.trim()
-        || value.chars().any(char::is_control)
-    {
-        return false;
-    }
-    value.split(',').all(|part| {
-        let bytes = part.as_bytes();
-        if bytes.len() != 5 || bytes[2] != b':' {
-            return false;
-        }
-        let (Ok(hour), Ok(minute)) = (part[0..2].parse::<u32>(), part[3..5].parse::<u32>()) else {
-            return false;
-        };
-        hour <= 23 && minute <= 59
+fn valid_optional_probe_model(model: Option<&str>) -> bool {
+    model.is_none_or(|model| {
+        !model.is_empty()
+            && model.len() <= 128
+            && model == model.trim()
+            && !model.bytes().any(|byte| byte.is_ascii_control())
     })
 }
 

@@ -404,6 +404,7 @@ async fn replace_same_window_document(
 ) {
     let outcome = store
         .compare_and_swap_quota(gateway_core::account::QuotaObservation {
+            quota_pause: Default::default(),
             plan_type: None,
             account_id: account.id().clone(),
             expected_revision: account.revision(),

@@ -8,7 +8,7 @@
 
 Codex Proxy RS 是单进程、单副本运行的多 Provider AI 网关，同时提供：
 
-- 面向客户端的 OpenAI Responses、Chat 兼容、Images、standalone Search 和模型目录协议；
+- 面向客户端的 OpenAI Responses、Chat 兼容、Anthropic Messages、Images、standalone Search 和模型目录协议；
 - 面向管理员的 `/api/admin/*` 控制面和 Vue 管理端；
 - OpenAI 与 xAI 两个编译期 Provider；
 - PostgreSQL 持久化、Redis 协调状态以及 S3/R2 数据库备份。
@@ -55,7 +55,7 @@ flowchart LR
 | 路径 | 责任 |
 | --- | --- |
 | `backend/apps/gateway` | 读取顶层配置、连接 Bundle、注册 Provider 与 Worker |
-| `gateway-protocol` | 跨层共享的 OpenAI wire contract、SSE 编解码与无业务 owner 的解析事实，不依赖其他 workspace crate |
+| `gateway-protocol` | 跨层共享的 OpenAI/Anthropic wire contract、SSE 编解码与无业务 owner 的解析事实，不依赖其他 workspace crate |
 | `gateway-core` | operation、canonical event、请求快照、路由、admission、attempt 协调、交付边界和计量 |
 | `gateway-admin` | 管理领域、用例、Provider/Store 端口、审计语义和备份策略 |
 | `gateway-api` | HTTP/WS/SSE 解码与交付、Admin wire、静态管理端；不直接访问 Store 或具体 Provider |
@@ -67,7 +67,7 @@ flowchart LR
 
 依赖方向遵守四条规则：
 
-1. Core 不依赖 HTTP、数据库、Redis 或具体 Provider。
+1. Core 仅新增对无业务 owner 的 gateway-protocol 请求事实的依赖；不依赖 HTTP 服务、数据库、Redis 或具体 Provider。
 2. Provider 之间不互相依赖，也不决定跨 Provider fallback。
 3. API 只调用 Core/Admin 抽象；Store 只实现端口。
 4. 具体实现只在组合根相遇。
@@ -198,7 +198,7 @@ sequenceDiagram
 
 Client Key 鉴权完成后，API adapter 从有界请求头识别 Codex Desktop/CLI，Core 使用同一请求冻结的
 `RuntimeSnapshot` 比较对应最低版本。Desktop 优先于其 User-Agent 内嵌的 CLI/Core 标记；未知客户端不
-应用门禁。低版本或已识别但版本不可用时，在进入 Provider 前返回稳定的 `426` 合同。
+应用门禁。低版本或已识别但版本不可用时，在进入 Provider 前返回稳定的 `400` 合同。
 
 核心不变量：
 
@@ -211,11 +211,12 @@ Client Key 鉴权完成后，API adapter 从有界请求头识别 Codex Desktop/
 - 跨 Provider 只在账号范围和能力都允许，且请求尚未到达上游或已被证明可安全重放时发生。
 - 可恢复观测写入失败不能替换已经确定的客户端协议结果。
 
-Responses 按 Provider 声明的目录完整性编译候选。OpenAI 目录用于发现模型，不作为推理白名单；
-未列出的模型仍可在已授权账号范围内发送，由上游验证。其他声明完整目录的 Provider 保留原准入。
-全局模型映射是精确映射，未命中时模型名原样交给候选 Provider。
-即时选择与并发等待路径不再因 OpenAI 发现目录缺少模型淘汰账号；健康、额度、并发、粘性、
-续接所有权及等待预算不变，也不在推理热路径增加目录查询。
+Responses 按 Provider 声明的目录完整性编译候选。全局模型映射是精确映射，未命中时模型名
+原样交给候选 Provider。OpenAI 在即时和等待选号中检查该账号自己的有效目录：按账号、
+credential revision、套餐取最近 30 分钟证据，已知缺少模型时排除；没有有效证据则交由上游验证。
+人工白名单显式允许目录外模型的合同保留，健康、额度、亲和、续接归属和等待预算仍生效。
+账号目录持久化在 PostgreSQL，后台有界并发刷新；启动恢复和客户端目录读取不等待远端网络。
+Excel 模型合成来源不充当原生模型资格证据，混合目录保留分别检查。
 Images 与 standalone Search 是 OpenAI Provider 自有端点：两者都不参与文本模型映射，只在 Client Key
 的账号范围确实包含 OpenAI 账号时生成单一 OpenAI 候选。Images 不要求模型字段；Search body 中的模型
 及其他字段保持原始 bytes 并由上游解释。
@@ -575,3 +576,17 @@ turn alias、会话恢复或账号状态所有权。Preferred 缓存读写失败
   `index_only` 完成已发布版本的索引，不重复发布。单体安装及现有镜像签名链保持原 owner。
 
 完整范围与接入差异见 [v3.42.0 记录](upstream-v3420-native-parity.md) 和 [v3.42.1 补齐记录](upstream-v3421-native-parity.md)。
+
+## 官方 v3.45.1 原生接入
+
+- Messages 入口完成鉴权、解压和验证后，进入现有 Core 执行链。Provider 将请求转 Responses，
+  使用已选账号的身份、出口、Excel/State 和传输；源用量先记入观测，再由官方转换器生成目标事件。
+  一个源事件可产生多个目标事件，终态只在最后交付；提交/结算失败不能留下成功的 message_stop。
+- CountTokens 也是独立 Operation，复用模型/账号准入，使用有并发界限的本地 tokenizer 任务，
+  支持截止和取消，不调用上游推理、不写入虚假上游成功用量。
+- `quota_limits` 和 `quota_paused` 贯穿 Store、Admin、选号、等待重查及页面；更新校验配置、
+  凭据 revision、观察时间和 merge-base，保留 PR #260 的成功回写时序保护。
+- Cron 预激活、周额度自动重置、错误来源投影和预算重置使用现有运行时与数据层，新增迁移
+  `0088`–`0090`，不重写历史 schema。插件运行时、peer_link、上游 API-key 产品不在本次范围。
+
+调用落点、已保留差异和验证边界见 [本次合并记录](upstream-v3451-native-parity.md)。

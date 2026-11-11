@@ -178,6 +178,14 @@ pub trait ProviderAdmin: Send + Sync {
 
     fn provider_kind(&self) -> &ProviderKind;
 
+    fn account_capabilities(
+        &self,
+        _account_id: &ProviderAccountId,
+        _authentication_kind: &str,
+    ) -> crate::model::accounts::ProviderAccountCapabilities {
+        Default::default()
+    }
+
     async fn relogin(
         &self,
         _request: crate::model::relogin::ReloginRequest,

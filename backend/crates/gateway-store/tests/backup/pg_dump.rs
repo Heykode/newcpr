@@ -110,6 +110,7 @@ async fn dump_process_lifecycle() {
         })
         .await;
         let pid = std::fs::read_to_string(directory.join("pid")).unwrap();
+        #[cfg(target_os = "linux")]
         if mode == "wait" {
             // stdout 明确脱离管道后才取消，避免新版 sleep 重开标准 fd 的差异。
             wait_until(|| {

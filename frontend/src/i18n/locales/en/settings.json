@@ -226,15 +226,15 @@
     "warmup": {
       "title": "Account warmup",
       "description": "Try to start quota windows for idle Codex OAuth accounts",
-      "enableDailyWarmup": "Enable daily warmup",
-      "executionTime": "Execution time",
-      "timesPlaceholder": "HH:MM, separate times with commas",
-      "scheduleLabel": "Daily warmup times",
       "modelLabel": "Warmup model",
       "modelHelp": "Required when enabled, use an available model",
       "modelPlaceholder": "Enter model name",
       "helpTitle": "About account warmup",
-      "help": "Send one request to each idle Codex OAuth account at the scheduled times, starting a quota window is not guaranteed"
+      "help": "Sends a lightweight request to available Codex OAuth accounts, skipping exhausted quotas and confirmed active windows, accounts at 0% may be warmed up, activation is not guaranteed",
+      "enableWarmup": "Enable warmup",
+      "cronExpression": "Cron expression",
+      "cronHelp": "Five fields: minute hour day month weekday",
+      "cronExample": "Uses the deployment time zone, for example 0 8 * * MON-FRI runs at 08:00 on weekdays, at most once per minute"
     },
     "adminApiKey": {
       "adminApiKey": "Admin API key",
@@ -329,9 +329,13 @@
     "quotaReset": {
       "title": "Quota reset credits",
       "enableHelp": "Enable automatic use in the account's Quota reset panel",
-      "description": "Global settings for accounts with automatic use enabled",
+      "description": "How long before expiry to use a reset credit",
       "thresholdHelp": "Skip automatic use when the remaining quota exceeds this threshold, leave blank for no limit",
-      "weeklyQuotaLimit": "Reset credit remaining weekly quota threshold"
+      "weeklyQuotaLimit": "Reset credit remaining weekly quota threshold",
+      "timing": "When to use a credit",
+      "expiryMode": "Before expiry",
+      "weeklyMode": "By weekly quota",
+      "earlyThresholdHelp": "Use at or below this percentage, leave blank or enter 0 to wait until exhausted"
     },
     "advanceUsageTimeMinutes": "Advance usage time (min)",
     "resetCardAdvanceTime": "Reset card advance time",
@@ -638,12 +642,12 @@
       "overloadSettingsRequired": "Complete the overload protection settings",
       "invalidOverloadSettings": "Use a failure threshold of 2–1,000, a counting window of 60–3,600 seconds, and a cooldown of 300–604,800 seconds",
       "invalidProbeModel": "The probe model must be at most 128 characters without control characters",
-      "invalidWarmupTimes": "Use HH:MM for warmup times, for example 08:00 or 08:00,13:00",
       "warmupModelRequired": "Select a model to enable warmup",
       "invalidWarmupModel": "Warmup model name must not exceed 128 characters",
       "settingsSaved": "Settings saved",
       "protectionSettingsRequired": "Complete the error protection settings",
-      "invalidProtectionSettings": "Use a failure threshold of 2–1,000, count validity of 60–3,600 seconds, and a cooldown of 300–604,800 seconds"
+      "invalidProtectionSettings": "Use a failure threshold of 2–1,000, count validity of 60–3,600 seconds, and a cooldown of 300–604,800 seconds",
+      "invalidWarmupCron": "Enter a valid Cron expression"
     },
     "page": {
       "tabs": {

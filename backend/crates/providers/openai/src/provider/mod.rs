@@ -98,12 +98,14 @@ use crate::transport::{
 
 mod cache_diagnostics;
 mod compact;
+mod count_tokens;
 mod encrypted_history;
 mod excel;
 mod execution;
 mod failure;
 mod guardian;
 mod live;
+mod messages;
 mod observation;
 mod quality_probe;
 mod request_proxy;
@@ -441,10 +443,16 @@ impl Provider for CodexProvider {
     async fn query_model_capabilities(
         &self,
     ) -> Result<Vec<ProviderModelCapabilities>, ProviderError> {
-        let snapshot = self.catalog.synchronize().await.map_err(|error| {
-            provider_error(ProviderErrorKind::Unavailable, UpstreamSendState::NotSent)
-                .with_source(error)
-        })?;
+        // 能力发现读取已发布事实；冷启动和配置失效由 Provider 后台任务重建目录
+        let snapshot = self
+            .catalog
+            .cached()
+            .map_err(|_| {
+                provider_error(ProviderErrorKind::Unavailable, UpstreamSendState::NotSent)
+            })?
+            .ok_or_else(|| {
+                provider_error(ProviderErrorKind::Unavailable, UpstreamSendState::NotSent)
+            })?;
         let mut accounts = snapshot.model_catalog_accounts();
         Ok(snapshot
             .models()
@@ -461,10 +469,10 @@ impl Provider for CodexProvider {
 
     async fn query_client_model_catalog(
         &self,
-        client_api_key_id: &gateway_core::policy::ClientApiKeyId,
+        _client_api_key_id: &gateway_core::policy::ClientApiKeyId,
         scope: &gateway_core::account::scope::FrozenAccountScope,
         protocol: &str,
-        client_version: &str,
+        _client_version: &str,
     ) -> Result<
         Option<Vec<gateway_core::routing::ProviderModelDescriptor>>,
         gateway_core::routing::ProviderCatalogUnavailable,
@@ -473,7 +481,7 @@ impl Provider for CodexProvider {
             return Ok(None);
         }
         self.catalog
-            .client_model_catalog(client_api_key_id, scope, client_version)
+            .client_model_catalog(scope)
             .await
             .map(Some)
             .map_err(|_| gateway_core::routing::ProviderCatalogUnavailable)
@@ -503,6 +511,9 @@ impl Provider for CodexProvider {
                 UpstreamSendState::NotSent,
             ));
         }
+        if let Operation::CountTokens(count) = request.operation() {
+            return self.execute_count_tokens(count, candidate, context).await;
+        }
         if let Operation::GenerateImage(image) = request.operation() {
             return self.execute_image(image, candidate, context).await;
         }
@@ -522,6 +533,49 @@ impl Provider for CodexProvider {
                 ProviderErrorKind::Unsupported,
                 UpstreamSendState::NotSent,
             ));
+        };
+        let mut messages_translator = None;
+        let translated;
+        let generate = if generate.protocol_payload().protocol() == "anthropic" {
+            let original = generate.protocol_payload().body();
+            messages_translator = Some(messages::ResponsesResponseTranslator::new(original));
+            let body = gateway_protocol::anthropic::messages_to_responses_request(original)
+                .map_err(|_| {
+                    provider_error(
+                        ProviderErrorKind::InvalidRequest,
+                        UpstreamSendState::NotSent,
+                    )
+                })?;
+            let mut context = generate.protocol_payload().context().clone();
+            messages::retain_target_headers(&mut context);
+            translated = Operation::Generate(generate.clone())
+                .replace_protocol_wire(None, context)
+                .map_err(|_| {
+                    provider_error(
+                        ProviderErrorKind::InvalidRequest,
+                        UpstreamSendState::NotSent,
+                    )
+                })?
+                .translate_protocol_wire(
+                    "openai",
+                    serde_json::to_vec(&body)
+                        .map_err(|_| {
+                            provider_error(ProviderErrorKind::Protocol, UpstreamSendState::NotSent)
+                        })?
+                        .into(),
+                )
+                .map_err(|_| {
+                    provider_error(
+                        ProviderErrorKind::InvalidRequest,
+                        UpstreamSendState::NotSent,
+                    )
+                })?;
+            let Operation::Generate(generate) = &translated else {
+                unreachable!()
+            };
+            generate
+        } else {
+            generate
         };
         let quota_overdraft_probe = generate.codex_quota_overdraft_probe();
         let Some(upstream_model) = candidate.upstream_model() else {
@@ -1053,6 +1107,11 @@ impl Provider for CodexProvider {
             session_capture,
         });
         let stream = ProviderStream::new(metadata, events, lease);
+        let stream = if let Some(translator) = messages_translator.take() {
+            stream.with_native_response_translator(translator)
+        } else {
+            stream
+        };
         Ok(if allows_account_state_mutation {
             stream.with_filtered_account_feedback(
                 Arc::clone(&self.account_feedback),

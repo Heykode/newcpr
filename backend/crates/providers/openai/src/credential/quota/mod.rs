@@ -23,8 +23,8 @@ use futures::StreamExt as _;
 use gateway_core::account::{
     AccountErrorReason, AccountQuotaSignals, CredentialRevision, CredentialState,
     OpaqueProviderData, ProviderAccount, ProviderAccountId, ProviderAccountStore,
-    QuotaAccessChange, QuotaAccessState, QuotaEvidence, QuotaObservation, QuotaObservationTouch,
-    QuotaState, QuotaWriteOutcome,
+    QuotaAccessChange, QuotaAccessState, QuotaEvidence, QuotaMergeBase, QuotaObservation,
+    QuotaObservationTouch, QuotaState, QuotaWriteOutcome,
 };
 use gateway_core::provider_ports::session_proxy::{RequestProxySource, SessionProxyPool};
 use gateway_core::provider_ports::{
@@ -61,6 +61,8 @@ use snapshot::{
     scheduling_signals_from_snapshot,
 };
 
+const QUOTA_MERGE_ATTEMPTS: usize = 3;
+const LIMIT_EVIDENCE_FIELD: &str = "_cpr_quota_limit_evidence";
 pub(crate) const QUOTA_SCHEDULING_TTL: Duration = Duration::from_secs(10 * 60);
 const QUOTA_HYDRATION_FAILURE_TTL: Duration = Duration::from_secs(5);
 const PERIODIC_QUOTA_REFRESH_RETRY_INTERVAL: Duration = Duration::from_secs(30 * 60);
@@ -567,6 +569,51 @@ impl CodexQuotaSchedulingProjection {
     }
 }
 
+enum WarmupDecision<'a> {
+    Ready,
+    Active(&'a CodexQuotaWindow),
+    Exhausted(Option<&'a CodexQuotaWindow>),
+}
+
+fn warmup_account_is_available(account: &ProviderAccount) -> bool {
+    account.authentication_kind() == crate::credential::CODEX_AUTHENTICATION_KIND_OAUTH
+        && account.enabled()
+        && matches!(
+            account.credential_state(),
+            CredentialState::Unknown | CredentialState::Ready
+        )
+}
+
+fn warmup_decision(
+    snapshot: &CodexAccountQuotaSnapshot,
+    now: chrono::DateTime<chrono::Utc>,
+) -> WarmupDecision<'_> {
+    if snapshot.quota().is_exhausted() {
+        return WarmupDecision::Exhausted(None);
+    }
+    if let Some(window) = snapshot.windows().iter().find(|window| {
+        window.is_account_wide()
+            && window.kind() == CodexQuotaWindowKind::Weekly
+            && window.limit_reached()
+    }) {
+        return WarmupDecision::Exhausted(Some(window));
+    }
+
+    // 0% 可能取整，也可能属于空闲窗口；倒计时差值不能证明活跃
+    // 对缺少明确活跃证据的账号允许一次轻量预热
+    if let Some(window) = snapshot.windows().iter().find(|window| {
+        window.is_account_wide()
+            && window.kind() == CodexQuotaWindowKind::ShortTerm
+            && window.used_percent().is_some_and(|used| used > 0.0)
+            && window
+                .reset_at()
+                .is_some_and(|reset| reset > now + chrono::Duration::minutes(30))
+    }) {
+        return WarmupDecision::Active(window);
+    }
+    WarmupDecision::Ready
+}
+
 fn quota_refresh_candidate(
     account: ProviderAccount,
     snapshot: Option<&CodexAccountQuotaSnapshot>,
@@ -579,7 +626,23 @@ fn quota_refresh_candidate(
         let reset_at = account.quota().reset_at();
         return Some((account, reset_at));
     }
-    let reset_at = snapshot?
+    let snapshot = snapshot?;
+    if account.quota_paused() {
+        let reset_at = snapshot
+            .windows()
+            .iter()
+            .filter(|window| {
+                window.is_account_wide()
+                    && account
+                        .quota_limits()
+                        .reached(window.key(), window.used_percent())
+            })
+            .filter_map(CodexQuotaWindow::reset_at)
+            .map(SystemTime::from)
+            .min();
+        return Some((account, reset_at));
+    }
+    let reset_at = snapshot
         .windows()
         .iter()
         .filter(|window| {
@@ -777,14 +840,7 @@ impl CodexCredentialQuotaService {
         model: &str,
     ) -> Result<CodexWarmupSummary, CodexCredentialQuotaError> {
         let mut accounts = self.repository.list_for_provider().await?;
-        accounts.retain(|account| {
-            account.authentication_kind() == crate::credential::CODEX_AUTHENTICATION_KIND_OAUTH
-                && account.enabled()
-                && matches!(
-                    account.credential_state(),
-                    CredentialState::Unknown | CredentialState::Ready
-                )
-        });
+        accounts.retain(warmup_account_is_available);
         let mut summary = CodexWarmupSummary::default();
         if accounts.is_empty() {
             return Ok(summary);
@@ -802,27 +858,44 @@ impl CodexCredentialQuotaService {
             })
             .collect::<BTreeMap<_, _>>();
         let client = self.backend_client();
-        let now = chrono::Utc::now();
-
         for account in accounts {
             if account.quota().is_exhausted() {
                 summary.skipped_exhausted += 1;
+                tracing::info!(
+                    account_id = %account.id(),
+                    observed_at = ?account.quota().observed_at(),
+                    reset_at = ?account.quota().reset_at(),
+                    reason = "quota_exhausted",
+                    "OpenAI account warmup skipped"
+                );
                 continue;
             }
-            if let Some(snapshot) = observed_snapshots.get(account.id()) {
-                if snapshot.windows().iter().any(|window| {
-                    window.kind() == CodexQuotaWindowKind::Weekly && window.limit_reached()
-                }) {
-                    summary.skipped_exhausted += 1;
-                    continue;
-                }
-                if snapshot.windows().iter().any(|window| {
-                    window.kind() == CodexQuotaWindowKind::ShortTerm
-                        && window
-                            .reset_at()
-                            .is_some_and(|reset_at| reset_at > now + chrono::Duration::minutes(30))
-                }) {
-                    summary.skipped_active += 1;
+            if let Some(snapshot) = observed_snapshots
+                .get(account.id())
+                .filter(|snapshot| snapshot.credential_revision() == account.revision())
+            {
+                let skipped = match warmup_decision(snapshot, chrono::Utc::now()) {
+                    WarmupDecision::Ready => None,
+                    WarmupDecision::Active(window) => {
+                        summary.skipped_active += 1;
+                        Some((Some(window), "active_short_window"))
+                    }
+                    WarmupDecision::Exhausted(window) => {
+                        summary.skipped_exhausted += 1;
+                        Some((window, "quota_exhausted"))
+                    }
+                };
+                if let Some((window, reason)) = skipped {
+                    tracing::info!(
+                        account_id = %account.id(),
+                        observed_at = ?chrono::DateTime::<chrono::Utc>::from(snapshot.observed_at()),
+                        window = window.map(CodexQuotaWindow::key),
+                        window_seconds = window.and_then(CodexQuotaWindow::window_seconds),
+                        used_percent = window.and_then(CodexQuotaWindow::used_percent),
+                        reset_at = ?window.and_then(CodexQuotaWindow::reset_at),
+                        reason,
+                        "OpenAI account warmup skipped"
+                    );
                     continue;
                 }
             }
@@ -1305,56 +1378,37 @@ impl CodexCredentialQuotaService {
         summary: &mut CodexQuotaSyncSummary,
         cooldown: Option<&ProviderCooldown>,
     ) -> Result<(), CodexCredentialQuotaError> {
-        let mut object = normalize_quota_window_placeholders(
-            value
-                .as_object()
-                .cloned()
-                .ok_or(CodexCredentialQuotaError::InvalidCredentialData)?,
-        );
-        object.remove(RECOVERY_FIELD);
-        let mut snapshot = parse_account_quota_snapshot(
-            account.id().clone(),
-            account.revision(),
-            observed_at,
-            &Value::Object(object.clone()),
-        )?;
-        let previous = if account.quota().is_exhausted() {
-            self.read_snapshot_for(account).await?
-        } else {
-            None
-        };
-        let state = reconcile_refresh(
-            account.quota(),
-            account.auto_use_quota_credits(),
-            &mut snapshot,
-            previous.as_ref(),
-            &mut object,
-        )?;
-        let snapshot = snapshot.with_quota_state(state);
-        let outcome = self
-            .store
-            .compare_and_swap_quota(QuotaObservation {
-                plan_type: observed_account_plan(account.plan_type(), snapshot.plan_type()),
-                account_id: account.id().clone(),
-                expected_revision: account.revision(),
-                quota: OpaqueProviderData::new(object),
+        match self
+            .persist_fetched_quota(
+                account,
+                value,
                 observed_at,
-                state,
-            })
-            .await?;
-        if outcome == QuotaWriteOutcome::Conflict {
-            summary.stale += 1;
-            return Ok(());
+                QuotaRefreshAuthority::ObserveAccess,
+            )
+            .await
+        {
+            Ok(snapshot) => {
+                self.recover_observed_cooldown(
+                    account,
+                    value,
+                    observed_at,
+                    snapshot.quota(),
+                    cooldown,
+                )
+                .await;
+                if snapshot.quota().is_exhausted() {
+                    summary.exhausted += 1;
+                } else {
+                    summary.updated += 1;
+                }
+                Ok(())
+            }
+            Err(CodexCredentialQuotaError::RevisionConflict) => {
+                summary.stale += 1;
+                Ok(())
+            }
+            Err(error) => Err(error),
         }
-        self.scheduling.observe(&snapshot);
-        self.recover_observed_cooldown(account, value, observed_at, state, cooldown)
-            .await;
-        if snapshot.quota().is_exhausted() {
-            summary.exhausted += 1;
-        } else {
-            summary.updated += 1;
-        }
-        Ok(())
     }
 
     async fn recover_observed_cooldown(
@@ -1410,129 +1464,139 @@ impl CodexCredentialQuotaService {
         if observations.is_empty() {
             return Ok(false);
         }
-        let existing = self
-            .store
-            .get_quotas(std::slice::from_ref(account.id()))
-            .await?
-            .into_iter()
-            .find(|observation| {
-                observation.account_id == *account.id()
-                    && observation.expected_revision == account.revision()
-            });
-        let mut fresh: Vec<_> = observations
-            .iter()
-            .filter(|observation| {
-                existing
-                    .as_ref()
-                    .is_none_or(|existing| observation.observed_at > existing.observed_at)
-            })
-            .collect();
-        fresh.sort_by_key(|observation| observation.observed_at);
-        let Some(observed_at) = fresh.last().map(|observation| observation.observed_at) else {
-            return Ok(false);
-        };
-        let rate_limits: Vec<_> = fresh
-            .into_iter()
-            .map(|observation| {
-                let mut limits = observation.rate_limits.clone();
-                if authority == QuotaRefreshAuthority::PreserveAccess {
-                    limits.plan_type = None;
-                }
-                limits
-            })
-            .collect();
-        let has_quota_facts = rate_limits.iter().any(|observation| {
-            observation
-                .limits
-                .values()
-                .any(|details| passive_rate_limit_snapshot(details).is_some())
-        });
-        let existing_state = existing.as_ref().map(|observation| observation.state);
-        let existing_observed_at = existing.as_ref().map(|observation| observation.observed_at);
-        let current_plan = existing
-            .as_ref()
-            .and_then(|observation| observation.plan_type.as_deref())
-            .or_else(|| account.plan_type());
-        let observed_plan = rate_limits
-            .iter()
-            .rev()
-            .filter_map(|observation| {
-                observation.plan_type.as_deref().filter(|plan| {
-                    !plan.trim().is_empty() && !plan.trim().eq_ignore_ascii_case("unknown")
+        for _ in 0..QUOTA_MERGE_ATTEMPTS {
+            let existing = self
+                .store
+                .get_quotas(std::slice::from_ref(account.id()))
+                .await?
+                .into_iter()
+                .find(|observation| {
+                    observation.account_id == *account.id()
+                        && observation.expected_revision == account.revision()
+                });
+            let mut fresh: Vec<_> = observations
+                .iter()
+                .filter(|observation| {
+                    existing
+                        .as_ref()
+                        .is_none_or(|existing| observation.observed_at > existing.observed_at)
                 })
-            })
-            .next();
-        let plan_type = observed_account_plan(current_plan, observed_plan);
-        let existing = existing
-            .map(|observation| observation.quota.into_inner())
-            .unwrap_or_default();
-        if !has_quota_facts && existing_state.is_none() {
-            return Ok(false);
-        }
-        let prior = existing_state.unwrap_or_else(|| account.quota());
-        let (quota, updated_default) = merge_passive_quota(existing, &rate_limits);
-        let snapshot = parse_account_quota_snapshot(
-            account.id().clone(),
-            account.revision(),
-            observed_at,
-            &Value::Object(quota.clone()),
-        )?;
-        let credit_access = prior.evidence() == Some(QuotaEvidence::CreditsAvailable);
-        let fresh_credits = rate_limits.iter().any(|limits| limits.credits.is_some());
-        // 具名桶和元数据不改变套餐结论；点数不能再用时，仍须撤销原先仅凭点数的放行
-        let subscription = if !updated_default
-            || (snapshot.quota().access() == QuotaAccessState::Unknown
-                && (credit_access || prior.is_exhausted()))
-        {
-            if credit_access {
-                QuotaState::exhausted(
-                    QuotaEvidence::AccountLimitReached,
-                    observed_at,
-                    prior.reset_at(),
-                )
-            } else {
-                prior
+                .collect();
+            fresh.sort_by_key(|observation| observation.observed_at);
+            let Some(observed_at) = fresh.last().map(|observation| observation.observed_at) else {
+                return Ok(false);
+            };
+            let rate_limits: Vec<_> = fresh
+                .into_iter()
+                .map(|observation| {
+                    let mut limits = observation.rate_limits.clone();
+                    if authority == QuotaRefreshAuthority::PreserveAccess {
+                        limits.plan_type = None;
+                    }
+                    limits
+                })
+                .collect();
+            let has_quota_facts = rate_limits.iter().any(|observation| {
+                observation
+                    .limits
+                    .values()
+                    .any(|details| passive_rate_limit_snapshot(details).is_some())
+            });
+            let merge_base = QuotaMergeBase {
+                observed_at: existing.as_ref().map(|obs| obs.observed_at),
+            };
+            let previous = existing.as_ref().and_then(quota_snapshot_from_observation);
+            let existing_state = existing.as_ref().map(|observation| observation.state);
+            let existing_observed_at = existing.as_ref().map(|observation| observation.observed_at);
+            let current_plan = existing
+                .as_ref()
+                .and_then(|observation| observation.plan_type.as_deref())
+                .or_else(|| account.plan_type());
+            let observed_plan = rate_limits
+                .iter()
+                .rev()
+                .filter_map(|observation| {
+                    observation.plan_type.as_deref().filter(|plan| {
+                        !plan.trim().is_empty() && !plan.trim().eq_ignore_ascii_case("unknown")
+                    })
+                })
+                .next();
+            let plan_type = observed_account_plan(current_plan, observed_plan);
+            let existing = existing
+                .map(|observation| observation.quota.into_inner())
+                .unwrap_or_default();
+            if !has_quota_facts && existing_state.is_none() {
+                return Ok(false);
             }
-        } else if snapshot.quota().is_exhausted() {
-            snapshot.quota()
-        } else {
-            QuotaState::allowed(observed_at)
-        };
-        // 套餐刚耗尽时不能拿合并快照里的旧余额作为首次放行依据
-        let state = snapshot.access_with_credits(
-            subscription,
-            account.auto_use_quota_credits()
-                && (credit_access || (updated_default && fresh_credits)),
-        );
-        let state = if authority == QuotaRefreshAuthority::PreserveAccess {
-            prior
-        } else {
-            state
-        };
-        // 元数据更新不刷新额度窗口时钟；访问事实仍保留原始响应采集时间。
-        let observed_at = if has_quota_facts {
-            observed_at
-        } else {
-            existing_observed_at.unwrap_or(observed_at)
-        };
-        let outcome = self
-            .store
-            .compare_and_swap_quota(QuotaObservation {
-                plan_type,
-                account_id: account.id().clone(),
-                expected_revision: account.revision(),
-                quota: OpaqueProviderData::new(quota),
+            let prior = existing_state.unwrap_or_else(|| account.quota());
+            let (mut quota, updated_default) = merge_passive_quota(existing, &rate_limits);
+            let mut snapshot = parse_account_quota_snapshot(
+                account.id().clone(),
+                account.revision(),
                 observed_at,
-                state,
-            })
-            .await?;
-        if outcome == QuotaWriteOutcome::Conflict {
-            return Ok(false);
+                &Value::Object(quota.clone()),
+            )?;
+            snapshot.retain_limit_evidence(account.quota_limits(), previous.as_ref(), &mut quota);
+            let credit_access = prior.evidence() == Some(QuotaEvidence::CreditsAvailable);
+            let fresh_credits = rate_limits.iter().any(|limits| limits.credits.is_some());
+            // 具名桶和元数据不改变套餐结论；点数不能再用时，仍须撤销原先仅凭点数的放行
+            let subscription = if !updated_default
+                || (snapshot.quota().access() == QuotaAccessState::Unknown
+                    && (credit_access || prior.is_exhausted()))
+            {
+                if credit_access {
+                    QuotaState::exhausted(
+                        QuotaEvidence::AccountLimitReached,
+                        observed_at,
+                        prior.reset_at(),
+                    )
+                } else {
+                    prior
+                }
+            } else if snapshot.quota().is_exhausted() {
+                snapshot.quota()
+            } else {
+                QuotaState::allowed(observed_at)
+            };
+            // 套餐刚耗尽时不能拿合并快照里的旧余额作为首次放行依据
+            let state = snapshot.access_with_credits(
+                subscription,
+                account.auto_use_quota_credits()
+                    && (credit_access || (updated_default && fresh_credits)),
+            );
+            let state = if authority == QuotaRefreshAuthority::PreserveAccess {
+                prior
+            } else {
+                state
+            };
+            // 元数据更新不刷新额度窗口时钟；访问事实仍保留原始响应采集时间。
+            let observed_at = if has_quota_facts {
+                observed_at
+            } else {
+                existing_observed_at.unwrap_or(observed_at)
+            };
+            let outcome = self
+                .store
+                .compare_and_swap_quota(QuotaObservation {
+                    quota_pause: has_quota_facts
+                        .then(|| snapshot.pause_decision(account.quota_limits(), Some(merge_base))),
+                    plan_type,
+                    account_id: account.id().clone(),
+                    expected_revision: account.revision(),
+                    quota: OpaqueProviderData::new(quota),
+                    observed_at,
+                    state,
+                })
+                .await?;
+            if outcome == QuotaWriteOutcome::Conflict {
+                continue;
+            }
+            if has_quota_facts {
+                self.scheduling.observe(&snapshot);
+            }
+            return Ok(true);
         }
-        if has_quota_facts {
-            self.scheduling.observe(&snapshot);
-        }
-        Ok(true)
+        Ok(false)
     }
 
     /// 真实 429 的单一事实入口：写入 Redis 临时限流冷却（`until = now + retry_after`）。
@@ -1616,20 +1680,32 @@ impl CodexCredentialQuotaService {
         &self,
         account: &ProviderAccount,
     ) -> Result<Option<CodexAccountQuotaSnapshot>, CodexCredentialQuotaError> {
+        Ok(self.read_snapshot_with_base(account).await?.1)
+    }
+
+    async fn read_snapshot_with_base(
+        &self,
+        account: &ProviderAccount,
+    ) -> Result<(QuotaMergeBase, Option<CodexAccountQuotaSnapshot>), CodexCredentialQuotaError>
+    {
         if account.provider().as_str() != "openai" {
             return Err(CodexCredentialQuotaError::NotFound);
         }
         let account_id = account.id();
-        let Some(observation) = self
+        let observation = self
             .store
             .get_quotas(std::slice::from_ref(account_id))
             .await?
             .into_iter()
-            .next()
-        else {
-            return Ok(None);
+            .next();
+        let base = QuotaMergeBase {
+            observed_at: observation.as_ref().map(|obs| obs.observed_at),
         };
-        self.project_observation(account_id, account.revision(), &observation)
+        let snapshot = match observation {
+            Some(obs) => self.project_observation(account_id, account.revision(), &obs)?,
+            None => None,
+        };
+        Ok((base, snapshot))
     }
 
     pub(crate) fn project_observation(
@@ -1721,81 +1797,115 @@ impl CodexCredentialQuotaService {
                 });
             }
         };
-        let mut object = normalize_quota_window_placeholders(
-            value
-                .as_object()
-                .cloned()
-                .ok_or(CodexCredentialQuotaError::InvalidCredentialData)?,
-        );
-        object.remove(RECOVERY_FIELD);
-        let mut snapshot = parse_account_quota_snapshot(
-            account.id().clone(),
-            account.revision(),
+        let snapshot = self
+            .persist_fetched_quota(&account, &value, observed_at, authority)
+            .await?;
+        self.recover_observed_cooldown(
+            &account,
+            &value,
             observed_at,
-            &Value::Object(object.clone()),
-        )?;
-        let previous = if account.quota().is_exhausted() {
-            self.read_snapshot_for(&account).await?
-        } else {
-            None
-        };
-        let observe_access = matches!(authority, QuotaRefreshAuthority::ObserveAccess)
-            || (account.auto_use_quota_credits() && snapshot.credits_usable());
-        if account.quota().is_exhausted() && !observe_access {
+            snapshot.quota(),
+            cooldown.as_ref(),
+        )
+        .await;
+        Ok(snapshot)
+    }
+
+    async fn persist_fetched_quota(
+        &self,
+        account: &ProviderAccount,
+        value: &Value,
+        observed_at: SystemTime,
+        authority: QuotaRefreshAuthority,
+    ) -> Result<CodexAccountQuotaSnapshot, CodexCredentialQuotaError> {
+        for _ in 0..QUOTA_MERGE_ATTEMPTS {
+            let mut object = normalize_quota_window_placeholders(
+                value
+                    .as_object()
+                    .cloned()
+                    .ok_or(CodexCredentialQuotaError::InvalidCredentialData)?,
+            );
+            object.remove(RECOVERY_FIELD);
+            object.remove(LIMIT_EVIDENCE_FIELD);
+            let mut snapshot = parse_account_quota_snapshot(
+                account.id().clone(),
+                account.revision(),
+                observed_at,
+                &Value::Object(object.clone()),
+            )?;
+            let (merge_base, previous) =
+                if account.quota().is_exhausted() || !account.quota_limits().is_empty() {
+                    let (base, snapshot) = self.read_snapshot_with_base(account).await?;
+                    if base.observed_at.is_some_and(|at| at >= observed_at) {
+                        return Err(CodexCredentialQuotaError::RevisionConflict);
+                    }
+                    (Some(base), snapshot)
+                } else {
+                    (None, None)
+                };
+            // 失败后回读只允许明确可用的点数恢复访问，套餐 allowed 仍可能滞后
+            let observe_access = matches!(authority, QuotaRefreshAuthority::ObserveAccess)
+                || (account.auto_use_quota_credits() && snapshot.credits_usable());
+            if account.quota().is_exhausted() && !observe_access {
+                if self
+                    .store
+                    .touch_quota_observation(QuotaObservationTouch {
+                        account_id: account.id().clone(),
+                        expected_revision: account.revision(),
+                        observed_at,
+                    })
+                    .await?
+                    == QuotaWriteOutcome::Conflict
+                {
+                    return Err(CodexCredentialQuotaError::RevisionConflict);
+                }
+                return Ok(match previous {
+                    Some(previous) => {
+                        let previous = previous.with_observed_at(observed_at);
+                        self.scheduling.observe(&previous);
+                        previous
+                    }
+                    None => snapshot
+                        .with_quota_state(account.quota())
+                        .with_observed_at(observed_at),
+                });
+            }
+            snapshot.retain_limit_evidence(account.quota_limits(), previous.as_ref(), &mut object);
+            let state = if matches!(authority, QuotaRefreshAuthority::PreserveAccess) {
+                snapshot.access_with_credits(account.quota(), account.auto_use_quota_credits())
+            } else {
+                reconcile_refresh(
+                    account.quota(),
+                    account.auto_use_quota_credits(),
+                    &mut snapshot,
+                    previous.as_ref().filter(|_| account.quota().is_exhausted()),
+                    &mut object,
+                )?
+            };
+            let snapshot = snapshot.with_quota_state(state);
             if self
                 .store
-                .touch_quota_observation(QuotaObservationTouch {
+                .compare_and_swap_quota(QuotaObservation {
+                    quota_pause: Some(snapshot.pause_decision(account.quota_limits(), merge_base)),
+                    plan_type: observed_account_plan(account.plan_type(), snapshot.plan_type()),
                     account_id: account.id().clone(),
                     expected_revision: account.revision(),
+                    quota: OpaqueProviderData::new(object),
                     observed_at,
+                    state,
                 })
                 .await?
                 == QuotaWriteOutcome::Conflict
             {
+                if merge_base.is_some() {
+                    continue;
+                }
                 return Err(CodexCredentialQuotaError::RevisionConflict);
             }
-            return Ok(match previous {
-                Some(previous) => {
-                    let previous = previous.with_observed_at(observed_at);
-                    self.scheduling.observe(&previous);
-                    previous
-                }
-                None => snapshot
-                    .with_quota_state(account.quota())
-                    .with_observed_at(observed_at),
-            });
+            self.scheduling.observe(&snapshot);
+            return Ok(snapshot);
         }
-        let state = if matches!(authority, QuotaRefreshAuthority::PreserveAccess) {
-            snapshot.access_with_credits(account.quota(), account.auto_use_quota_credits())
-        } else {
-            reconcile_refresh(
-                account.quota(),
-                account.auto_use_quota_credits(),
-                &mut snapshot,
-                previous.as_ref(),
-                &mut object,
-            )?
-        };
-        let snapshot = snapshot.with_quota_state(state);
-        if self
-            .store
-            .compare_and_swap_quota(QuotaObservation {
-                plan_type: observed_account_plan(account.plan_type(), snapshot.plan_type()),
-                account_id: account.id().clone(),
-                expected_revision: account.revision(),
-                quota: OpaqueProviderData::new(object),
-                observed_at,
-                state,
-            })
-            .await?
-            == QuotaWriteOutcome::Conflict
-        {
-            return Err(CodexCredentialQuotaError::RevisionConflict);
-        }
-        self.scheduling.observe(&snapshot);
-        self.recover_observed_cooldown(&account, &value, observed_at, state, cooldown.as_ref())
-            .await;
-        Ok(snapshot)
+        Err(CodexCredentialQuotaError::RevisionConflict)
     }
 
     async fn persist_credential_failure(

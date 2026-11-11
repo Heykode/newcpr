@@ -824,6 +824,9 @@ enum Script {
         account_id: &'static str,
         items: Vec<Result<ProviderEvent, ProviderError>>,
     },
+    TranslatedStream {
+        items: Vec<Result<ProviderEvent, ProviderError>>,
+    },
     Error(ProviderError),
     WaitExpired(ProviderError),
     Waiting,
@@ -923,6 +926,22 @@ impl Provider for ScriptedProvider {
                     .expect("shared request budget")
                     .expire();
                 Err(error)
+            }
+            Script::TranslatedStream { items } => {
+                let metadata = ProviderCallMetadata::new(
+                    request.candidate().provider().clone(),
+                    request.candidate().upstream_model().cloned().unwrap(),
+                    ProviderAccountId::new("acct_one").unwrap(),
+                    UpstreamTransport::new("http_sse").unwrap(),
+                );
+                Ok(ProviderStream::new(
+                    metadata,
+                    Box::pin(futures::stream::iter(items)),
+                    TrackedLease(Arc::clone(&self.released_leases)),
+                )
+                .with_native_response_translator(MessagesTranslator(
+                    gateway_protocol::anthropic::ResponsesToMessagesStream::new(&Map::new()),
+                )))
             }
             Script::Error(error) => Err(error),
             Script::Pending => futures::future::pending().await,
@@ -7406,4 +7425,114 @@ fn transport_keepalive_cannot_change_an_already_finalized_failure_to_http_200() 
     assert_eq!(state.finalizations[0].outcome, ExecutionOutcome::Failed);
     assert!(!state.finalizations[0].committed);
     assert_eq!(state.recorded_statuses, vec![504]);
+}
+
+struct MessagesTranslator(gateway_protocol::anthropic::ResponsesToMessagesStream);
+impl gateway_core::engine::provider::NativeResponseTranslator for MessagesTranslator {
+    fn source_protocol(&self) -> &str {
+        "openai"
+    }
+    fn target_protocol(&self) -> &str {
+        "anthropic"
+    }
+    fn translate(
+        &mut self,
+        event: &ProtocolWireEvent,
+    ) -> Result<Vec<ProtocolWireEvent>, ProviderError> {
+        let protocol_error =
+            || ProviderError::new(ProviderErrorKind::Protocol, UpstreamSendState::Sent);
+        self.0
+            .push(event.data())
+            .map_err(|_| protocol_error())?
+            .into_iter()
+            .map(|value| {
+                ProtocolWireEvent::json(
+                    "anthropic",
+                    value["type"].as_str().map(str::to_owned),
+                    value,
+                )
+                .map_err(|_| protocol_error())
+            })
+            .collect()
+    }
+}
+
+#[test]
+fn translated_messages_preserve_source_usage_when_observation_writes_fail() {
+    for failure in [
+        None,
+        Some(StoreWriteFailure::Commit),
+        Some(StoreWriteFailure::Finalize),
+    ] {
+        let store = Arc::new(failure.map_or_else(FakeStore::default, FakeStore::failing));
+        let body = json!({"model":"gpt-5","max_tokens":128,"messages":[{"role":"user","content":"hello"}]});
+        let operation = Operation::Generate(GenerateRequest::from_protocol_payload(
+            ProtocolPayload::json_object("anthropic", body.as_object().unwrap().clone()).unwrap(),
+        ));
+        let route_plan = plan(&operation);
+        let meta = ResponseMeta::new("resp_translated", "gpt-5");
+        let source = json!({"type":"response.completed","response":{"id":"resp_translated","model":"gpt-5","status":"completed","output":[{"type":"message","id":"msg_one","role":"assistant","content":[{"type":"output_text","text":"hello"}]}],"usage":{"input_tokens":10,"output_tokens":3,"total_tokens":13}}});
+        let event = ProviderEvent::canonical_with_wire(
+            vec![
+                GatewayEvent::Started(meta.clone()),
+                GatewayEvent::Usage(Usage {
+                    input_tokens: Some(10),
+                    output_tokens: Some(3),
+                    total_tokens: Some(13),
+                    ..Usage::new()
+                }),
+                GatewayEvent::Completed(meta),
+            ],
+            ProtocolWireEvent::json("openai", Some("response.completed".into()), source).unwrap(),
+        );
+        let (coordinator, _, provider) = coordinator_with_store(
+            vec![Script::TranslatedStream {
+                items: vec![Ok(event)],
+            }],
+            store.clone(),
+        );
+        let mut session = block_on(coordinator.start(
+            model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
+            operation,
+            route_plan,
+            None,
+            None,
+            CancellationToken::new(),
+        ))
+        .unwrap();
+        let events = block_on(session.collect_uncommitted()).unwrap();
+        assert!(
+            events.len() > 1,
+            "one source terminal expands before finalization"
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter_map(ProviderEvent::wire_event)
+                .filter(|wire| wire.data()["type"] == "message_stop")
+                .count(),
+            1
+        );
+        assert_eq!(
+            events
+                .last()
+                .unwrap()
+                .canonical_facts()
+                .iter()
+                .filter(|fact| matches!(fact, GatewayEvent::Completed(_)))
+                .count(),
+            1
+        );
+        let result = block_on(session.commit_downstream(Some(200)));
+        result.expect("observation persistence does not block delivery");
+        assert!(session.is_finalized());
+        if failure.is_none() {
+            let state = store.state.lock().unwrap();
+            assert_eq!(state.finalizations.len(), 1);
+            assert_eq!(state.finalizations[0].total_tokens, Some(13));
+            assert_eq!(state.finalizations[0].outcome, ExecutionOutcome::Succeeded);
+        }
+        drop(session);
+        assert_eq!(provider.released_leases.load(Ordering::SeqCst), 1);
+    }
 }

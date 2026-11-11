@@ -11,6 +11,7 @@ import { resolveAccountStatusPresentation } from './presenter'
 const props = withDefaults(
   defineProps<{
     errorProtection?: Account['errorProtection']
+    quota?: Account['quota']
     status: AccountStatus
     errorReason?: AccountErrorReason | null
     errorMessage?: string | null
@@ -34,6 +35,7 @@ const now = useUiClock()
 const presentation = computed(() =>
   resolveAccountStatusPresentation({
     errorProtection: props.errorProtection,
+    quota: props.quota,
     status: props.status,
     errorReason: props.errorReason,
     errorMessage: props.errorMessage,

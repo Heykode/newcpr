@@ -121,6 +121,29 @@ pub(crate) fn authenticate_client(
     Ok(client)
 }
 
+/// Messages accepts x-api-key only when Authorization is absent, as upstream does.
+pub(crate) fn authenticate_messages_client(
+    service: &OpenAiService,
+    headers: &HeaderMap,
+) -> Result<AuthenticatedClient, ClientAccessError> {
+    if headers.contains_key(AUTHORIZATION) {
+        return authenticate_client(service, headers);
+    }
+    let key = headers
+        .get("x-api-key")
+        .ok_or(ClientApiKeyAuthError::MissingAuthorization)?
+        .to_str()
+        .map_err(|_| ClientApiKeyAuthError::MalformedAuthorization)?;
+    let mut headers = headers.clone();
+    headers.insert(
+        AUTHORIZATION,
+        format!("Bearer {key}")
+            .parse()
+            .map_err(|_| ClientApiKeyAuthError::MalformedAuthorization)?,
+    );
+    authenticate_client(service, &headers)
+}
+
 pub(crate) fn client_access_error_response(error: ClientAccessError) -> Response {
     let reason = match &error {
         ClientAccessError::Authentication(error) => error.reason(),

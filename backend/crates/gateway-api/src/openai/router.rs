@@ -22,6 +22,11 @@ use crate::ApiState;
 pub(crate) fn router() -> Router<ApiState> {
     Router::new()
         .route("/v1/chat/completions", post(chat_completions))
+        .route("/v1/messages", post(super::messages::messages))
+        .route(
+            "/v1/messages/count_tokens",
+            post(super::messages::count_tokens),
+        )
         .route("/v1/responses/compact", post(compact_response))
         .route("/v1/images/generations", post(image_generations))
         .route("/v1/images/edits", post(image_edits))

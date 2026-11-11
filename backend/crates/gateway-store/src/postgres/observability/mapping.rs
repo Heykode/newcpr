@@ -278,6 +278,7 @@ pub(crate) const fn admin_account_pool_metrics(
     metrics: ProviderAccountMetrics,
 ) -> admin_observability::AccountPoolMetrics {
     admin_observability::AccountPoolMetrics {
+        quota_paused: metrics.quota_paused,
         total: metrics.total,
         normal: metrics.normal,
         quota_exhausted: metrics.quota_exhausted,
@@ -433,6 +434,9 @@ pub(crate) fn admin_usage_list_record(
         }
     };
     Ok(admin_observability::UsageListRecord {
+        has_upstream_error: record.has_upstream_error,
+        client_status_code: record.client_status_code,
+        upstream_status_code: record.upstream_status_code,
         error_kind: record.error_kind,
         websocket_close_code: record.websocket_close_code,
         continuation_unavailable_reason: record.continuation_unavailable_reason,
@@ -798,6 +802,9 @@ pub(crate) fn usage_list_record_from_row(
     row: &sqlx::postgres::PgRow,
 ) -> StoreResult<UsageListRecord> {
     Ok(UsageListRecord {
+        has_upstream_error: get(row, "has_upstream_error")?,
+        client_status_code: optional_status(row, "client_status_code")?,
+        upstream_status_code: optional_status(row, "upstream_status_code")?,
         error_kind: get(row, "error_kind")?,
         websocket_close_code: get::<Option<String>>(row, "websocket_close_code")?
             .and_then(|code| code.parse().ok()),

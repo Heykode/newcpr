@@ -298,13 +298,40 @@
       "responseIsNotComplete": "响应未完成",
       "requestFailed": "请求失败",
       "requestContext": "请求上下文",
-      "errorLocation": "错误定位",
+      "errorLocation": "关联标识",
       "attempts": "尝试记录",
       "attemptRecordMayBeIncomplete": "尝试记录可能不完整",
       "attempt": "尝试 {index}",
       "diagnosticData": "诊断数据",
       "responseContent": "响应内容",
-      "metadata": "元数据"
+      "metadata": "元数据",
+      "upstreamHttpStatus": "上游 {status}",
+      "clientHttpStatus": "客户端 {status}",
+      "origin": {
+        "proxy": "代理处理",
+        "upstream": "上游响应",
+        "connection": "上游连接",
+        "unknown": "来源未知",
+        "connectionHint": "连接发生错误，现有记录无法确定由哪一方引起",
+        "unknownHint": "现有记录不足以区分代理与上游"
+      },
+      "sendState": {
+        "notSent": "未发送",
+        "sent": "已发送",
+        "ambiguous": "执行结果未确认"
+      },
+      "continuationReason": "续接失败原因",
+      "connectionExitReason": "连接退出原因",
+      "clientResult": "返回客户端",
+      "wsStatus": "错误状态",
+      "noStatus": "未记录状态码",
+      "httpStatusHint": "HTTP 成功状态不代表响应完整，流式请求仍可能在传输中失败",
+      "recoveryExplanation": "已关联到后续成功请求，本条仍保留原始失败结果",
+      "noAttempts": "未记录执行尝试",
+      "clientResponse": "客户端响应",
+      "responseStarted": "已开始",
+      "responseNotStarted": "未开始",
+      "responseNotRecorded": "未记录"
     },
     "insights": {
       "useStatisticalObservations": "使用统计观测"

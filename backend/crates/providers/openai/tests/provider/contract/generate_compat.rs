@@ -547,3 +547,13 @@ async fn codex_oauth_keeps_explicit_limits_and_context_options() {
         }
     }
 }
+
+#[tokio::test]
+async fn default_service_tiers_are_omitted_only_for_codex_defaults() {
+    for tier in ["auto", "default", "priority", "flex"] {
+        let body = json!({"model":"gpt-5.4","input":"hello","service_tier":tier});
+        let sent = capture_downstream_request(body, false, false).await;
+        let expected = (!matches!(tier, "auto" | "default")).then_some(tier);
+        assert_eq!(sent.get("service_tier").and_then(Value::as_str), expected);
+    }
+}

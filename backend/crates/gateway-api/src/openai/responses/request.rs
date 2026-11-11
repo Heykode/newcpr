@@ -295,6 +295,24 @@ pub struct DecodedResponsesRequest {
 }
 
 impl DecodedResponsesRequest {
+    pub(in crate::openai) fn from_protocol_operation(
+        operation: Operation,
+        requested_model: String,
+        stream: bool,
+    ) -> Self {
+        Self {
+            operation,
+            metadata: ResponsesRequestMetadata {
+                requested_model,
+                stream,
+                store: false,
+                continuation: ContinuationIntent::None,
+                client_ip: None,
+                user_agent: None,
+            },
+        }
+    }
+
     /// 附着当前 WebSocket 连接保存的 Provider 私有上一轮状态。
     #[must_use]
     pub fn with_provider_session_state(mut self, state: ProviderSessionState) -> Self {

@@ -48,7 +48,7 @@ pub struct RuntimeSettingsView {
     pub max_concurrent_per_account: u64,
     pub openai_guardian_reserved_concurrency: u64,
     pub account_warmup_enabled: bool,
-    pub account_warmup_schedule_time: String,
+    pub account_warmup_cron: String,
     pub account_warmup_model: Option<String>,
     pub codex_quota_overdraft_enabled: bool,
     pub codex_quota_overdraft_probe_model: String,
@@ -85,7 +85,7 @@ pub struct UpdateRuntimeSettingsRequest {
     pub max_concurrent_per_account: u64,
     pub openai_guardian_reserved_concurrency: Option<u64>,
     pub account_warmup_enabled: Option<bool>,
-    pub account_warmup_schedule_time: Option<String>,
+    pub account_warmup_cron: Option<String>,
     #[serde(default, deserialize_with = "deserialize_probe_proxy_selection")]
     pub account_warmup_model: Option<Option<String>>,
     pub codex_quota_overdraft_enabled: Option<bool>,
@@ -176,20 +176,18 @@ impl UpdateRuntimeSettingsRequest {
                 "openaiGuardianReservedConcurrency",
             ));
         }
-        if self
-            .account_warmup_schedule_time
-            .as_deref()
-            .is_some_and(|value| !gateway_core::provider_ports::valid_warmup_schedule_time(value))
-            || self
-                .account_warmup_model
-                .as_ref()
-                .and_then(Option::as_deref)
-                .is_some_and(|model| {
-                    model.is_empty()
-                        || model.len() > 128
-                        || model != model.trim()
-                        || model.bytes().any(|byte| byte.is_ascii_control())
-                })
+        if self.account_warmup_cron.as_deref().is_some_and(|value| {
+            !value.is_empty() && !gateway_core::provider_ports::valid_warmup_cron(value)
+        }) || self
+            .account_warmup_model
+            .as_ref()
+            .and_then(Option::as_deref)
+            .is_some_and(|model| {
+                model.is_empty()
+                    || model.len() > 128
+                    || model != model.trim()
+                    || model.bytes().any(|byte| byte.is_ascii_control())
+            })
         {
             return Err(WireValidationError::new("accountWarmup"));
         }
@@ -258,7 +256,7 @@ impl UpdateRuntimeSettingsRequest {
                     WireValidationError::new("settingsGuardianReservedConcurrencyOverflow")
                 })?,
             account_warmup_enabled: self.account_warmup_enabled,
-            account_warmup_schedule_time: self.account_warmup_schedule_time,
+            account_warmup_cron: self.account_warmup_cron,
             account_warmup_model: self.account_warmup_model,
             codex_quota_overdraft_enabled: self.codex_quota_overdraft_enabled,
             codex_quota_overdraft_probe_model: self.codex_quota_overdraft_probe_model,
@@ -302,7 +300,7 @@ impl From<RuntimeSettings> for RuntimeSettingsView {
                 settings.openai_guardian_reserved_concurrency,
             ),
             account_warmup_enabled: settings.account_warmup_enabled,
-            account_warmup_schedule_time: settings.account_warmup_schedule_time,
+            account_warmup_cron: settings.account_warmup_cron,
             account_warmup_model: settings.account_warmup_model,
             codex_quota_overdraft_enabled: settings.codex_quota_overdraft_enabled,
             codex_quota_overdraft_probe_model: settings.codex_quota_overdraft_probe_model,

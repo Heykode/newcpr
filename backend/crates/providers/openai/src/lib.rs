@@ -199,6 +199,9 @@ async fn initialize_with_request_tuning_mode(
         Some(runtime) => catalog.with_egress_runtime(Arc::clone(runtime)),
         None => catalog,
     });
+    if let Err(error) = catalog.restore().await {
+        tracing::warn!(%error, "OpenAI stored model catalog could not be restored");
+    }
     let quota = CodexCredentialQuotaService::new(
         repository.clone(),
         profile.clone(),

@@ -49,6 +49,8 @@ pub enum ProviderErrorKind {
     NoEligibleAccount,
     /// 当前会话被先前上游策略拒绝，不能据此判定账号或整个号池故障。
     SessionPolicyRestricted,
+    /// Account policy rejected this request without contacting upstream.
+    RequestPolicyDenied,
     /// Provider 的账号存储、租约协调或本地凭据数据不可用。
     ProviderInfrastructureUnavailable,
     /// 请求超时。
@@ -85,6 +87,7 @@ impl ProviderErrorKind {
             Self::ConcurrencyQueueTimeout => "concurrency_queue_timeout",
             Self::NoEligibleAccount => "no_eligible_account",
             Self::SessionPolicyRestricted => "session_policy_restricted",
+            Self::RequestPolicyDenied => "request_policy_denied",
             Self::ProviderInfrastructureUnavailable => "provider_infrastructure_unavailable",
             Self::Timeout => "timeout",
             Self::Transport => "transport",
@@ -1245,6 +1248,9 @@ impl GatewayError {
     #[must_use]
     pub fn from_provider(error: &ProviderError) -> Self {
         let gateway = match error.kind() {
+            ProviderErrorKind::RequestPolicyDenied => {
+                Self::new(GatewayErrorKind::PolicyDenied, "Request blocked by policy.")
+            }
             ProviderErrorKind::SessionPolicyRestricted => Self::new(
                 GatewayErrorKind::InvalidRequest,
                 "No accounts are available under this conversation's restrictions.",

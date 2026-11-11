@@ -980,7 +980,15 @@ async fn valid_catalog_missing_model_rejects_before_immediate_or_queued_admissio
             .expect(1)
             .mount(&server)
             .await;
-        let provider = waiting_provider(&store, Arc::clone(&leases), server.uri());
+        let (provider, catalog, _) = waiting_provider_with_catalog(
+            &store,
+            Arc::clone(&leases),
+            server.uri(),
+            Arc::default(),
+            Arc::default(),
+            NonZeroU32::MIN,
+        );
+        catalog.refresh_catalogs().await.unwrap();
         provider.query_model_capabilities().await.unwrap();
         let mut attempt = context("req_unlisted_model", CancellationToken::new());
         if queued {
@@ -1514,6 +1522,7 @@ async fn waiting_rechecks_catalog_before_promoting_an_account() {
         Arc::default(),
         NonZeroU32::MIN,
     );
+    catalog.refresh_catalogs().await.unwrap();
     provider.query_model_capabilities().await.unwrap();
     let selected = provider.execute(
         planned_request("openai", Operation::Generate(generation(None, "hello"))),
@@ -1537,7 +1546,10 @@ async fn waiting_rechecks_catalog_before_promoting_an_account() {
         .expect(1)
         .mount(&server)
         .await;
-    catalog.refresh_catalogs().await.unwrap();
+    catalog
+        .refresh_account_catalog(&ProviderAccountId::new("acct_scope_old").unwrap())
+        .await
+        .unwrap();
     leases.capacity.set_load("acct_scope_old", 0);
     let error = timeout(Duration::from_secs(3), selected)
         .await

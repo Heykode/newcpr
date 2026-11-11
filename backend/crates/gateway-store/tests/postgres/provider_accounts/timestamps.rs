@@ -372,14 +372,15 @@ async fn independent_observation_updates_keep_time_and_reject_stale_observations
     let observed = base + TimeDelta::milliseconds(2500);
     assert!(
         repository
-            .compare_and_swap_provider_quota(
-                id,
-                revision,
-                credential_json("synthetic-quota"),
-                observed,
-                QuotaState::unknown(),
-                None,
-            )
+            .compare_and_swap_provider_quota(QuotaObservation {
+                account_id: ProviderAccountId::new(id).unwrap(),
+                expected_revision: CredentialRevision::new(revision.get()).unwrap(),
+                quota: OpaqueProviderData::new(credential_json("synthetic-quota").fields().clone()),
+                quota_pause: None,
+                observed_at: (observed).into(),
+                state: QuotaState::unknown(),
+                plan_type: None,
+            })
             .await
             .unwrap()
     );
@@ -391,14 +392,15 @@ async fn independent_observation_updates_keep_time_and_reject_stale_observations
     );
     assert!(
         !repository
-            .compare_and_swap_provider_quota(
-                id,
-                revision,
-                credential_json("stale-quota"),
-                base,
-                QuotaState::unknown(),
-                None,
-            )
+            .compare_and_swap_provider_quota(QuotaObservation {
+                account_id: ProviderAccountId::new(id).unwrap(),
+                expected_revision: CredentialRevision::new(revision.get()).unwrap(),
+                quota: OpaqueProviderData::new(credential_json("stale-quota").fields().clone()),
+                quota_pause: None,
+                observed_at: (base).into(),
+                state: QuotaState::unknown(),
+                plan_type: None,
+            })
             .await
             .unwrap()
     );
@@ -429,14 +431,15 @@ async fn independent_observation_updates_keep_time_and_reject_stale_observations
     let newest_access = base + TimeDelta::seconds(5);
     assert!(
         repository
-            .compare_and_swap_provider_quota(
-                id,
-                revision,
-                credential_json("newer-quota"),
-                base + TimeDelta::seconds(3),
-                QuotaState::allowed(newest_access.into()),
-                None,
-            )
+            .compare_and_swap_provider_quota(QuotaObservation {
+                account_id: ProviderAccountId::new(id).unwrap(),
+                expected_revision: CredentialRevision::new(revision.get()).unwrap(),
+                quota: OpaqueProviderData::new(credential_json("newer-quota").fields().clone()),
+                quota_pause: None,
+                observed_at: (base + TimeDelta::seconds(3)).into(),
+                state: QuotaState::allowed(newest_access.into()),
+                plan_type: None,
+            })
             .await
             .unwrap()
     );
@@ -453,18 +456,23 @@ async fn independent_observation_updates_keep_time_and_reject_stale_observations
     let reset_at = base + TimeDelta::hours(1);
     assert!(
         repository
-            .compare_and_swap_provider_quota(
-                id,
-                revision,
-                credential_json("fresh-document-stale-access"),
-                base + TimeDelta::seconds(4),
-                QuotaState::exhausted(
+            .compare_and_swap_provider_quota(QuotaObservation {
+                account_id: ProviderAccountId::new(id).unwrap(),
+                expected_revision: CredentialRevision::new(revision.get()).unwrap(),
+                quota: OpaqueProviderData::new(
+                    credential_json("fresh-document-stale-access")
+                        .fields()
+                        .clone()
+                ),
+                quota_pause: None,
+                observed_at: (base + TimeDelta::seconds(4)).into(),
+                state: QuotaState::exhausted(
                     QuotaEvidence::UsageLimitReached,
                     access.into(),
                     Some(reset_at.into()),
                 ),
-                None,
-            )
+                plan_type: None,
+            })
             .await
             .unwrap()
     );

@@ -14,19 +14,19 @@
     },
     "accountPool": {
       "empty": "暂无账号池观测",
-      "quotaExhausted": "配额耗尽",
       "rateLimited": "限流中",
       "pending": "待处理",
       "issueCountsEmpty": "停用 — · 错误 —",
       "availableDescription": "账号当前可用",
-      "exhaustedDescription": "账号额度已耗尽",
       "limitedDescription": "账号请求暂时受限",
       "issueCounts": "停用 {disabled} · 错误 {error}",
       "title": "账号状态",
       "description": "账号池健康结构",
       "healthyRate": "正常率",
       "distribution": "状态分布",
-      "unavailableCount": "不可用 {value}"
+      "unavailableCount": "不可用 {value}",
+      "quotaLimited": "额度受限",
+      "limitedQuotaDescription": "额度耗尽或达到调度上限"
     },
     "activeAccounts": {
       "todayTokens": "Token",

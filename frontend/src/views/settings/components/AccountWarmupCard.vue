@@ -8,7 +8,7 @@ import BaseSwitch from '@/components/base/BaseSwitch.vue'
 import { t } from '@/i18n'
 
 const enabled = defineModel<boolean>('enabled', { required: true })
-const scheduleTime = defineModel<string>('scheduleTime', { required: true })
+const cron = defineModel<string>('cron', { required: true })
 const model = defineModel<string>('model', { required: true })
 </script>
 
@@ -21,20 +21,23 @@ const model = defineModel<string>('model', { required: true })
       <BaseSwitch
         v-model="enabled"
         class="col-span-full justify-self-start"
-        label="启用每日预激活"
+        label="启用预激活"
         show-label
       />
 
       <BaseFormItem
-        prop="accountWarmupScheduleTime"
-        label="执行时间（部署时区）"
-        description="HH:MM；多个时间用英文逗号分隔"
+        prop="accountWarmupCron"
+        label="Cron 表达式（部署时区）"
+        :required="enabled"
+        description="五段 Cron：分 时 日 月 周。例如 0 8 * * * 表示每天 08:00"
       >
         <BaseInput
-          v-model="scheduleTime"
+          v-model="cron"
           :disabled="!enabled"
-          aria-label="每日激活时间"
-          placeholder="08:00"
+          aria-label="预激活 Cron 表达式"
+          placeholder="0 8 * * *"
+          maxlength="255"
+          spellcheck="false"
         >
           <template #prefix>
             <Clock class="size-4" />

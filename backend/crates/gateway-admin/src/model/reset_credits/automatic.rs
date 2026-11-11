@@ -9,6 +9,8 @@ pub struct AutoResetConfig {
     pub seven_day_used_millis: u32,
     #[serde(default)]
     pub expiry_enabled: bool,
+    #[serde(default)]
+    pub on_low_weekly_quota: bool,
     #[serde(default = "default_expiry_lead_minutes")]
     pub expiry_lead_minutes: u32,
     #[serde(default)]
@@ -26,6 +28,7 @@ impl Default for AutoResetConfig {
             five_hour_used_millis: 100_000,
             seven_day_used_millis: 100_000,
             expiry_enabled: false,
+            on_low_weekly_quota: false,
             expiry_lead_minutes: default_expiry_lead_minutes(),
             max_weekly_remaining_percent: None,
         }
@@ -65,6 +68,42 @@ impl AutoResetConfig {
                     && now.signed_duration_since(*at).num_seconds() <= 90
             })
             .ok_or_else(|| AdminError::invalid("没有新鲜的额度观测，本次未消费"))?;
+        if self.on_low_weekly_quota {
+            let window = quota.windows.iter().find(|window| {
+                window.window_seconds == Some(604_800)
+                    && window.local_usage_attribution == QuotaLocalUsageAttribution::AccountWide
+                    && window.reset_at.is_some_and(|end| end > now)
+            });
+            let remaining = window
+                .and_then(|window| window.used_percent)
+                .filter(|used| used.is_finite())
+                .map(|used| 100.0 - used.clamp(0.0, 100.0));
+            let low = remaining.is_some_and(|remaining| {
+                weekly_low(
+                    remaining,
+                    u32::from(self.max_weekly_remaining_percent.unwrap_or(0)),
+                )
+            });
+            let triggered = window
+                .filter(|_| low)
+                .and_then(|window| window.reset_at)
+                .map(|reset_at| {
+                    vec![AutoResetWindow {
+                        seconds: 604_800,
+                        reset_at,
+                    }]
+                })
+                .unwrap_or_default();
+            return Ok(AutoResetObservation {
+                started_at,
+                observed_at,
+                triggered,
+                all_below: remaining.is_some() && !low,
+                expiry_triggered: false,
+                inventory: None,
+                weekly_condition_met: low,
+            });
+        }
         let mut triggered = Vec::new();
         let mut all_below = true;
         for (seconds, threshold) in [
@@ -133,7 +172,8 @@ impl AutoResetConfig {
         credit: &super::super::provider_credentials::ProviderResetCredit,
         now: DateTime<Utc>,
     ) -> bool {
-        self.expiry_enabled
+        !self.on_low_weekly_quota
+            && self.expiry_enabled
             && credit.expires_at.is_some_and(|at| {
                 at > now
                     && at <= now + chrono::Duration::minutes(i64::from(self.expiry_lead_minutes))
@@ -201,4 +241,9 @@ impl AutoResetObservation {
             })
         })
     }
+}
+
+// Official weekly mode never consumes a card for an already full window, including limit 100.
+fn weekly_low(remaining: f64, limit: u32) -> bool {
+    remaining < 100.0 && remaining <= f64::from(limit)
 }

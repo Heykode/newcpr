@@ -35,6 +35,7 @@ use crate::{
 };
 
 use super::{map_provider_error, map_store_error};
+mod errors;
 mod export;
 mod metrics;
 use crate::model::observability::{UsageInsight, UsageInsightMetric};

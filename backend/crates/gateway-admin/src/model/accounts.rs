@@ -207,6 +207,8 @@ pub struct AccountTurnStateSlotStatus {
 /// 账号公共存储投影；Provider 专属字段不进入此结构。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountRecord {
+    pub quota_paused: bool,
+    pub quota_limits: gateway_core::account::AccountQuotaLimits,
     pub auto_use_quota_credits: bool,
     pub custom_name: Option<String>,
     pub id: String,
@@ -423,6 +425,7 @@ pub struct AccountPageItem {
 /// 管理页五态互斥；暂停账号只计入 disabled，不再计入正常或异常状态。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AccountSummary {
+    pub quota_paused: u64,
     pub total: u64,
     pub normal: u64,
     pub quota_exhausted: u64,
@@ -467,6 +470,7 @@ pub struct AccountUpdateResult {
 /// 一批账号可编辑事实的一次性替换命令。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BatchUpdateAccounts {
+    pub quota_limits: Option<gateway_core::account::AccountQuotaLimits>,
     pub auto_use_quota_credits: Option<bool>,
     pub excel_recovery: Option<super::excel_recovery::ExcelRecoveryConfig>,
     pub purchase_cost: Option<super::account_purchase::AccountPurchaseUpdate>,
@@ -581,3 +585,24 @@ pub enum TurnStateProbeOutcome {
     Queued,
     AlreadyRunning,
 }
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct ProviderAccountCapabilities {
+    pub quota_limits_supported: bool,
+    pub quota_credits: bool,
+    pub quota: bool,
+    pub quota_refresh: bool,
+    pub profile: bool,
+    pub subscription: bool,
+    pub avatar: bool,
+    pub reset_credits: bool,
+    pub consume_reset_credit: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreparedQuotaPause {
+    pub observed_at: Option<DateTime<Utc>>,
+    pub revision: Revision,
+    pub paused: bool,
+}
+pub type PreparedQuotaPauses = std::collections::BTreeMap<String, PreparedQuotaPause>;

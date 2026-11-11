@@ -18,7 +18,7 @@ function selectPeriod(value: string) {
   <BaseConfirmModal
     v-model="open"
     title="重置已用额度"
-    description="不改变限额和窗口到期时间，历史费用记录保留。重置后完成的请求仍会计费。"
+    description="保留限额和历史费用记录，清空所选周期用量并结束当前窗口。下一笔新用量重新开启窗口，重置后完成的请求仍会计费。"
     :confirm-text="t('keys.budgetReset.confirmReset')"
     :loading="loading"
     :confirm-disabled="!apiKey"

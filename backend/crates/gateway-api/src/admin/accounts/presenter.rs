@@ -28,6 +28,7 @@ pub(super) fn account_page_data(
         summary: AccountSummaryView {
             total: result.summary.total,
             normal: result.summary.normal,
+            quota_paused: result.summary.quota_paused,
             quota_exhausted: result.summary.quota_exhausted,
             rate_limited: result.summary.rate_limited,
             disabled: result.summary.disabled,
@@ -106,6 +107,9 @@ pub(super) fn account_view(
     quota.overdraft =
         codex_quota_overdraft.map(|state| codex_quota_overdraft_view(state, timezone));
     AccountView {
+        quota_limits: account.quota_limits,
+        quota_limits_supported: account.provider_kind.as_str() == "openai"
+            && account.authentication_kind == "oauth",
         auto_use_quota_credits: account.auto_use_quota_credits,
         error_protection,
         purchase_cost,
@@ -373,6 +377,7 @@ pub(super) fn account_quota_view(
     let rate_limited_until = rate_limited_until.map(|until| timezone_datetime(&until, timezone));
     (
         AccountQuotaView {
+            paused_windows: quota.paused_windows,
             refreshed_at_display,
             refreshed_at_relative: quota
                 .observed_at
@@ -466,7 +471,7 @@ pub(crate) fn quota_window_view_with_timezone(
         limit_id,
         limit_name,
         role,
-        local_usage_attribution: _,
+        local_usage_attribution,
         window_seconds,
         used_percent,
         reset_at,
@@ -478,6 +483,8 @@ pub(crate) fn quota_window_view_with_timezone(
         .as_ref()
         .map_or_else(|| label.clone(), |name| format!("{name} · {label}"));
     AccountQuotaWindowView {
+        account_wide: local_usage_attribution
+            == gateway_admin::model::provider_credentials::QuotaLocalUsageAttribution::AccountWide,
         label_display,
         window_label_display: label,
         key,

@@ -64,6 +64,7 @@ mod core_adapter;
 mod devices;
 mod excel_recovery;
 mod mapping;
+mod model_catalogs;
 mod purchase_costs;
 mod quota_forecast;
 mod quota_learning;

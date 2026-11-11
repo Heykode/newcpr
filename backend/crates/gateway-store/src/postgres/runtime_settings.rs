@@ -35,7 +35,7 @@ pub struct RuntimeSettings {
     pub max_concurrent_per_account: u32,
     pub openai_guardian_reserved_concurrency: u32,
     pub account_warmup_enabled: bool,
-    pub account_warmup_schedule_time: String,
+    pub account_warmup_cron: String,
     pub account_warmup_model: Option<String>,
     pub codex_quota_overdraft_enabled: bool,
     pub codex_quota_overdraft_probe_model: String,
@@ -116,7 +116,7 @@ pub struct RuntimeSettingsUpdate {
     pub max_concurrent_per_account: u32,
     pub openai_guardian_reserved_concurrency: u32,
     pub account_warmup_enabled: bool,
-    pub account_warmup_schedule_time: String,
+    pub account_warmup_cron: String,
     pub account_warmup_model: Option<String>,
     pub codex_quota_overdraft_enabled: bool,
     pub codex_quota_overdraft_probe_model: String,
@@ -179,11 +179,12 @@ impl RuntimeSettingsUpdate {
             || !valid_turn_state_models(&self.turn_state_models)
             || !valid_client_version(self.min_codex_desktop_version.as_deref())
             || !valid_client_version(self.min_codex_cli_version.as_deref())
-            || !gateway_core::provider_ports::valid_warmup_schedule_time(
-                &self.account_warmup_schedule_time,
+            || gateway_core::provider_ports::ProviderWarmupPolicy::validate_values(
+                self.account_warmup_enabled,
+                &self.account_warmup_cron,
+                self.account_warmup_model.as_deref(),
             )
-            || (self.account_warmup_enabled && self.account_warmup_model.is_none())
-            || !valid_warmup_model(self.account_warmup_model.as_deref())
+            .is_err()
             || !valid_required_model_name(&self.codex_quota_overdraft_probe_model)
             || RotationStrategy::parse(&self.rotation_strategy).is_none()
             || !self.request_tuning.validate()
@@ -246,7 +247,7 @@ pub(crate) async fn load_runtime_settings_from_pool(pool: &PgPool) -> StoreResul
                     audit_retention_days, min_codex_desktop_version,
                     min_codex_cli_version, request_tuning_json, updated_at, turn_state_probe_concurrency,
                     openai_guardian_reserved_concurrency,
-                    account_warmup_enabled, account_warmup_schedule_time, account_warmup_model, codex_quota_overdraft_enabled, codex_quota_overdraft_probe_model, openai_session_binding_ttl_hours, openai_account_affinity
+                    account_warmup_enabled, account_warmup_cron, account_warmup_model, codex_quota_overdraft_enabled, codex_quota_overdraft_probe_model, openai_session_binding_ttl_hours, openai_account_affinity
              from runtime_settings where id = 1",
         )
     .fetch_optional(pool)
@@ -301,7 +302,7 @@ impl ProviderRuntimePolicyPort for PgRuntimeSettingsRepository {
                 .map_err(|_| provider_unavailable("load warmup policy"))?;
             ProviderWarmupPolicy::try_new(
                 settings.account_warmup_enabled,
-                settings.account_warmup_schedule_time,
+                settings.account_warmup_cron,
                 settings.account_warmup_model,
             )
         })
@@ -342,7 +343,7 @@ pub(crate) async fn load_runtime_settings_in_transaction(
                 audit_retention_days, min_codex_desktop_version,
                 min_codex_cli_version, request_tuning_json, updated_at, turn_state_probe_concurrency,
                 openai_guardian_reserved_concurrency,
-                account_warmup_enabled, account_warmup_schedule_time, account_warmup_model, codex_quota_overdraft_enabled, codex_quota_overdraft_probe_model, openai_session_binding_ttl_hours, openai_account_affinity
+                account_warmup_enabled, account_warmup_cron, account_warmup_model, codex_quota_overdraft_enabled, codex_quota_overdraft_probe_model, openai_session_binding_ttl_hours, openai_account_affinity
          from runtime_settings where id = 1",
     )
     .fetch_optional(&mut **transaction)
@@ -424,7 +425,7 @@ pub(crate) async fn update_runtime_settings_in_transaction(
                  excel_default_models = $20,
                  openai_guardian_reserved_concurrency = $21,
                  account_warmup_enabled = $22,
-                 account_warmup_schedule_time = $23,
+                 account_warmup_cron = $23,
                  account_warmup_model = $24,
                  codex_quota_overdraft_enabled = $25,
                  codex_quota_overdraft_probe_model = $26,
@@ -459,7 +460,7 @@ pub(crate) async fn update_runtime_settings_in_transaction(
     .bind(update.excel_default_models.as_slice())
     .bind(i64::from(update.openai_guardian_reserved_concurrency))
     .bind(update.account_warmup_enabled)
-    .bind(&update.account_warmup_schedule_time)
+    .bind(&update.account_warmup_cron)
     .bind(update.account_warmup_model.as_deref())
     .bind(update.codex_quota_overdraft_enabled)
     .bind(&update.codex_quota_overdraft_probe_model)
@@ -541,7 +542,7 @@ struct RuntimeSettingsRow {
     updated_at: DateTime<Utc>,
     openai_guardian_reserved_concurrency: i64,
     account_warmup_enabled: bool,
-    account_warmup_schedule_time: String,
+    account_warmup_cron: String,
     account_warmup_model: Option<String>,
     codex_quota_overdraft_enabled: bool,
     codex_quota_overdraft_probe_model: String,
@@ -585,7 +586,7 @@ fn runtime_settings_from_row(row: RuntimeSettingsRow) -> StoreResult<RuntimeSett
             .map_or_else(RequestTuningOverrides::default, |value| value.0),
         openai_guardian_reserved_concurrency: to_u32(row.openai_guardian_reserved_concurrency)?,
         account_warmup_enabled: row.account_warmup_enabled,
-        account_warmup_schedule_time: row.account_warmup_schedule_time,
+        account_warmup_cron: row.account_warmup_cron,
         account_warmup_model: row.account_warmup_model,
         codex_quota_overdraft_enabled: row.codex_quota_overdraft_enabled,
         codex_quota_overdraft_probe_model: row.codex_quota_overdraft_probe_model,
@@ -647,15 +648,6 @@ fn valid_model_name(value: &str, max_len: usize) -> bool {
 
 fn valid_client_version(value: Option<&str>) -> bool {
     value.is_none_or(|value| CodexClientVersion::parse(value).is_ok())
-}
-
-fn valid_warmup_model(value: Option<&str>) -> bool {
-    value.is_none_or(|value| {
-        !value.is_empty()
-            && value.len() <= 128
-            && value == value.trim()
-            && !value.bytes().any(|byte| byte.is_ascii_control())
-    })
 }
 
 fn valid_required_model_name(value: &str) -> bool {

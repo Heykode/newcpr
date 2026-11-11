@@ -14,19 +14,19 @@
     },
     "accountPool": {
       "empty": "暫無賬號池觀測",
-      "quotaExhausted": "配額耗盡",
       "rateLimited": "限流中",
       "pending": "待處理",
       "issueCountsEmpty": "停用 — · 錯誤 —",
       "availableDescription": "賬號當前可用",
-      "exhaustedDescription": "賬號額度已耗盡",
       "limitedDescription": "賬號請求暫時受限",
       "issueCounts": "停用 {disabled} · 錯誤 {error}",
       "title": "賬號狀態",
       "description": "賬號池健康結構",
       "healthyRate": "正常率",
       "distribution": "狀態分佈",
-      "unavailableCount": "不可用 {value}"
+      "unavailableCount": "不可用 {value}",
+      "quotaLimited": "額度受限",
+      "limitedQuotaDescription": "額度耗盡或達到調度上限"
     },
     "activeAccounts": {
       "todayTokens": "Token",

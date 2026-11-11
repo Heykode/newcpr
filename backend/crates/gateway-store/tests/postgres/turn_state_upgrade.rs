@@ -136,6 +136,14 @@ async fn model_access_and_excel_upgrade_default_without_touching_identity_or_inh
             .remove("auto_use_quota_credits"),
         Some(serde_json::json!(false))
     );
+    assert_eq!(
+        after.as_object_mut().unwrap().remove("quota_limits"),
+        Some(serde_json::json!({}))
+    );
+    assert_eq!(
+        after.as_object_mut().unwrap().remove("quota_paused"),
+        Some(serde_json::json!(false))
+    );
     assert_eq!(before, after);
     database.close().await;
 }
@@ -206,6 +214,14 @@ async fn excel_policy_upgrade_preserves_existing_choices_and_pause_diagnostics()
             .as_object_mut()
             .unwrap()
             .remove("auto_use_quota_credits"),
+        Some(serde_json::json!(false))
+    );
+    assert_eq!(
+        after.as_object_mut().unwrap().remove("quota_limits"),
+        Some(serde_json::json!({}))
+    );
+    assert_eq!(
+        after.as_object_mut().unwrap().remove("quota_paused"),
         Some(serde_json::json!(false))
     );
     assert_eq!(before, after);

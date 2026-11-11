@@ -5,7 +5,7 @@ import type { Excel403Action, ExcelRecoveryConfig, ExcelRecoveryView } from '@/u
 import request from '../request'
 
 export type AccountStatus
-  = 'normal' | 'quota_exhausted' | 'rate_limited' | 'disabled' | 'error'
+  = 'normal' | 'quota_paused' | 'quota_exhausted' | 'rate_limited' | 'disabled' | 'error'
 
 export type AccountConcurrencyPool = 'shared' | 'reserved' | 'quality'
 export interface AccountConcurrencyPage {
@@ -34,6 +34,7 @@ export type AccountErrorReason
     | 'account_banned'
 
 export interface AccountQuotaWindow {
+  accountWide: boolean
   key: string
   group: string
   limitId: string | null
@@ -90,6 +91,7 @@ export interface CodexQuotaOverdraftState {
 }
 
 export interface AccountQuota {
+  pausedWindows: string[]
   refreshedAtDisplay: string
   refreshedAtRelative?: import('../time').RelativeTimeView | null
   limitReached: boolean
@@ -217,6 +219,8 @@ export interface AccountHealthBucket {
 export type ResponsesUpstream = 'codex' | 'excel'
 
 export interface Account {
+  quotaLimits: Record<string, number>
+  quotaLimitsSupported: boolean
   autoUseQuotaCredits: boolean
   errorProtection?: { until: string, requiresProbe: boolean, rules: { id: string, name: string }[] } | null
   customName?: string | null
@@ -339,6 +343,7 @@ export interface AccountPageMeta {
 }
 
 export interface AccountSummary {
+  quotaPaused: number
   total: number
   normal: number
   quotaExhausted: number
@@ -552,6 +557,7 @@ interface AccountUpdateParam {
 }
 
 interface AccountBatchUpdateParam {
+  quotaLimits?: Record<string, number>
   autoUseQuotaCredits?: boolean
   purchaseCost?: AccountPurchaseUpdate
   excelRecovery?: ExcelRecoveryConfig
@@ -722,6 +728,10 @@ function stableAvatarVersion(value: string) {
   for (const character of value)
     hash = (hash * 33 + (character.codePointAt(0) ?? 0)) % 2_147_483_647
   return hash.toString(36)
+}
+
+export function getAccountQuota(data: AccountIdParam, options: RequestOptions = {}) {
+  return request<AccountQuotaResponse>({ url: '/api/admin/accounts/quota', method: 'GET', params: data, ...options })
 }
 
 export function refreshAccountQuota(data: AccountIdParam, options: RequestOptions = {}) {

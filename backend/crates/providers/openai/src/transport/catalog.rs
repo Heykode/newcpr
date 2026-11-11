@@ -227,13 +227,39 @@ impl CodexCatalogModel {
 }
 
 /// 一次完整成功的 Codex 远端模型快照。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct CodexModelCatalogSnapshot {
+    document: Bytes,
     models: Vec<CodexCatalogModel>,
     etag: Option<String>,
 }
 
+impl std::fmt::Debug for CodexModelCatalogSnapshot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CodexModelCatalogSnapshot")
+            .field("models", &self.models)
+            .finish_non_exhaustive()
+    }
+}
+
 impl CodexModelCatalogSnapshot {
+    pub(crate) fn into_parts(self) -> (Vec<CodexCatalogModel>, Bytes, Option<String>) {
+        (self.models, self.document, self.etag)
+    }
+
+    pub(crate) fn restore(document: &[u8]) -> Result<Self, CodexModelCatalogError> {
+        match document.split_first() {
+            Some((0, body)) => parse_codex_model_catalog(body, None),
+            // Local managed adapter without a native catalog; never native entitlement evidence.
+            Some((3, [])) => Ok(Self {
+                models: Vec::new(),
+                document: Bytes::from_static(&[3]),
+                etag: None,
+            }),
+            _ => Err(CodexModelCatalogError::InvalidWire),
+        }
+    }
+
     /// 返回本轮全部模型。
     #[must_use]
     pub fn models(&self) -> &[CodexCatalogModel] {
@@ -279,7 +305,7 @@ pub enum CodexModelCatalogError {
     InvalidEtag,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, serde::Serialize)]
 struct CodexModelsWire {
     models: Vec<serde_json::Value>,
 }
@@ -343,6 +369,9 @@ pub fn parse_codex_model_catalog(
         return Err(CodexModelCatalogError::TooManyModels);
     }
 
+    let mut document = vec![0];
+    serde_json::to_writer(&mut document, &wire).map_err(|_| CodexModelCatalogError::InvalidWire)?;
+    let document = Bytes::from(document);
     let etag = etag.map(validate_etag).transpose()?;
     let mut seen = BTreeSet::new();
     let mut models = Vec::with_capacity(wire.models.len());
@@ -362,7 +391,11 @@ pub fn parse_codex_model_catalog(
         }
         models.push(model);
     }
-    Ok(CodexModelCatalogSnapshot { models, etag })
+    Ok(CodexModelCatalogSnapshot {
+        document,
+        models,
+        etag,
+    })
 }
 
 /// Bridge capability, not proof of a particular account's model entitlement.

@@ -126,9 +126,9 @@ impl SettingsStore for AdminSettingsStoreAdapter {
                 account_warmup_enabled: command
                     .account_warmup_enabled
                     .unwrap_or(current.settings.account_warmup_enabled),
-                account_warmup_schedule_time: command
-                    .account_warmup_schedule_time
-                    .unwrap_or(current.settings.account_warmup_schedule_time),
+                account_warmup_cron: command
+                    .account_warmup_cron
+                    .unwrap_or(current.settings.account_warmup_cron),
                 account_warmup_model: command
                     .account_warmup_model
                     .unwrap_or(current.settings.account_warmup_model),
@@ -291,7 +291,7 @@ pub(crate) fn admin_runtime_settings(
         max_concurrent_per_account: settings.max_concurrent_per_account,
         openai_guardian_reserved_concurrency: settings.openai_guardian_reserved_concurrency,
         account_warmup_enabled: settings.account_warmup_enabled,
-        account_warmup_schedule_time: settings.account_warmup_schedule_time,
+        account_warmup_cron: settings.account_warmup_cron,
         account_warmup_model: settings.account_warmup_model,
         codex_quota_overdraft_enabled: settings.codex_quota_overdraft_enabled,
         codex_quota_overdraft_probe_model: settings.codex_quota_overdraft_probe_model,

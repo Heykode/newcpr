@@ -86,7 +86,7 @@ export interface RuntimeSettings {
   maxConcurrentPerAccount: number
   openaiGuardianReservedConcurrency: number
   accountWarmupEnabled: boolean
-  accountWarmupScheduleTime: string
+  accountWarmupCron: string
   accountWarmupModel: string | null
   codexQuotaOverdraftEnabled?: boolean
   codexQuotaOverdraftProbeModel?: string | null

@@ -1819,6 +1819,8 @@ mod response {
             codex_quota_overdraft: None,
             effective_concurrency_limit: std::num::NonZeroU32::new(3).expect("concurrency limit"),
             account: AccountRecord {
+                quota_limits: Default::default(),
+                quota_paused: Default::default(),
                 auto_use_quota_credits: false,
                 outbound_proxy_enabled: true,
                 effective_excel_models: Default::default(),
@@ -1872,6 +1874,7 @@ mod response {
             plan_type_display: None,
             projection: resolve_account_status(
                 &AccountStatusFacts {
+                    quota_paused: Default::default(),
                     enabled: true,
                     credential_state: CredentialState::Ready,
                     access_token_expires_at: None,
@@ -1903,6 +1906,7 @@ mod response {
                 models: vec![],
             }),
             quota: ProviderQuota {
+                paused_windows: Default::default(),
                 credits: None,
                 plan_type: None,
                 observed_at: Some(now),

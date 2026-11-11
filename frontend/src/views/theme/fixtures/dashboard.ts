@@ -112,6 +112,9 @@ function previewUsageRecord(options: PreviewUsageRecordOptions): UsageListRecord
 
   return {
     id: options.id,
+    clientStatusCode: 200,
+    upstreamStatusCode: 200,
+    errorOrigin: 'unknown',
     provider: options.provider,
     authenticationKind: options.authenticationKind,
     accountId: `account_${options.id}`,
@@ -311,6 +314,7 @@ export function createThemeDashboardSummary(): DashboardSummaryResponse {
           key: 'short',
           group: 'shortTerm',
           limitId: null,
+          accountWide: true,
           limitName: null,
           role: 'primary',
           labelDisplay: t('appearance.preview.dashboard.hours'),
@@ -345,6 +349,7 @@ export function createThemeDashboardSummary(): DashboardSummaryResponse {
           key: 'free-rolling-24h',
           group: 'shortTerm',
           limitId: null,
+          accountWide: true,
           limitName: null,
           role: null,
           labelDisplay: '日限额',
@@ -384,6 +389,7 @@ export function createThemeDashboardSummary(): DashboardSummaryResponse {
           key: 'short',
           group: 'shortTerm',
           limitId: null,
+          accountWide: true,
           limitName: null,
           role: 'primary',
           labelDisplay: t('appearance.preview.dashboard.hours'),
@@ -414,6 +420,7 @@ export function createThemeDashboardSummary(): DashboardSummaryResponse {
     poolSummary: {
       total: 52,
       normal: 47,
+      quotaPaused: 0,
       quotaExhausted: 3,
       rateLimited: 1,
       disabled: 0,

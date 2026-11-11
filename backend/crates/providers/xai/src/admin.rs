@@ -1147,6 +1147,7 @@ fn project_quota(
         }
     };
     ProviderQuota {
+        paused_windows: Vec::new(),
         credits: None,
         plan_type: None,
         observed_at: snapshot.as_ref().map(GrokQuotaSnapshot::observed_at),

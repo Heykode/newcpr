@@ -145,14 +145,18 @@ pub(super) const UPSTREAM_RESPONSE_MS_SQL: &str = r#"jsonb_path_query_first(mr.p
 fn usage_list_record_select() -> String {
     format!(
     "select {UPSTREAM_RESPONSE_MS_SQL} as upstream_response_ms, mr.id, mr.outcome, mr.provider_error_code as error_code, mr.error_message, coalesce(mr.client_api_key_name_snapshot, ck.name) as client_api_key_name, mr.billing_snapshot_json,
-            mr.error_kind,
-            case when pg_input_is_valid(mr.raw_upstream_error, 'jsonb') then
-              case when jsonb_typeof(mr.raw_upstream_error::jsonb -> 'upstream') = 'string'
-                and pg_input_is_valid(mr.raw_upstream_error::jsonb ->> 'upstream', 'jsonb') then
-                (select case when jsonb_array_length(codes) = 1 then codes ->> 0 end
-                 from jsonb_path_query_array((mr.raw_upstream_error::jsonb ->> 'upstream')::jsonb,
-                   '$ ? (@.type == \"websocket.close\").code ? (@.type() == \"number\")') as codes)
-              end
+            mr.error_kind, mr.upstream_status_code, mr.client_status_code,
+            exists (
+              select 1 from (values
+                (saved_error.body -> 'code'),
+                (saved_error.body -> 'type'),
+                (saved_error.body -> 'message')
+              ) as field(value)
+              where jsonb_typeof(field.value) = 'string' and field.value <> '\"\"'::jsonb
+            ) as has_upstream_error,
+            case when saved_upstream.body ->> 'type' = 'websocket.close'
+              and jsonb_typeof(saved_upstream.body -> 'code') = 'number'
+              then saved_upstream.body ->> 'code'
             end as websocket_close_code,
             mr.continuation_unavailable_reason, mr.upstream_connection_exit_reason,
             (mr.recovery_request_id is not null and mr.recovered_at is not null) as recovered,
@@ -179,7 +183,18 @@ fn usage_list_record_select() -> String {
             mr.started_at
      from model_requests mr
      left join provider_accounts account on account.id = mr.provider_account_ref
-     left join client_api_keys ck on ck.id = mr.client_api_key_ref")
+     left join client_api_keys ck on ck.id = mr.client_api_key_ref
+     cross join lateral (
+       select case when pg_input_is_valid(mr.raw_upstream_error, 'jsonb') then
+         case when jsonb_typeof(mr.raw_upstream_error::jsonb -> 'upstream') = 'string'
+           and pg_input_is_valid(mr.raw_upstream_error::jsonb ->> 'upstream', 'jsonb')
+           then (mr.raw_upstream_error::jsonb ->> 'upstream')::jsonb
+         end
+       end as body
+     ) saved_upstream
+     cross join lateral (
+       select coalesce(saved_upstream.body -> 'error', saved_upstream.body #> '{{response,error}}') as body
+     ) saved_error")
 }
 
 fn usage_record_detail_select() -> String {
@@ -521,7 +536,7 @@ pub(crate) fn intermediate_attempt_from_row(
         upstream_transport: None,
         upstream_send_state: None,
         outcome: "failed".to_owned(),
-        downstream_committed: false,
+        downstream_committed: None,
         status_code: optional_status(row, "status_code")?,
         provider_error_code: get(row, "provider_error_code")?,
         failure_kind: get(row, "failure_kind")?,
@@ -558,7 +573,7 @@ pub(crate) fn final_attempt_from_request(request: &UsageRecord) -> UsageAttemptO
         upstream_transport: request.upstream_transport.clone(),
         upstream_send_state: Some(request.upstream_send_state.clone()),
         outcome: request.outcome.clone(),
-        downstream_committed: request.downstream_committed_at.is_some(),
+        downstream_committed: Some(request.downstream_committed_at.is_some()),
         status_code: request.upstream_status_code.or(request.client_status_code),
         provider_error_code: request.provider_error_code.clone(),
         failure_kind: request.error_kind.clone(),

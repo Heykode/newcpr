@@ -928,6 +928,11 @@ impl ProviderEvent {
     }
 
     /// 返回协议原生表达。
+    pub fn replace_wire(&mut self, wire: Option<ProtocolWireEvent>) {
+        self.wire = wire.map(Box::new);
+        self.replayable_prelude = false;
+    }
+
     #[must_use]
     pub fn wire_event(&self) -> Option<&ProtocolWireEvent> {
         self.wire.as_deref()
