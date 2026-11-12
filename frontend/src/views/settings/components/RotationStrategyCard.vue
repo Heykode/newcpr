@@ -32,6 +32,14 @@ const weights = [
 function setWeight(key: typeof weights[number]['key'], value: string) {
   smart.value = { ...smart.value, [key]: value.trim() === '' ? Number.NaN : Number(value) }
 }
+const periods = [
+  { key: 'fiveHour', label: 'fiveHour' },
+  { key: 'weekly', label: 'weekly' },
+  { key: 'monthly', label: 'monthly' },
+] as const
+function setWindowWeight(key: typeof periods[number]['key'], value: string) {
+  smart.value = { ...smart.value, resetWindowWeights: { ...smart.value.resetWindowWeights, [key]: value.trim() === '' ? Number.NaN : Number(value) } }
+}
 </script>
 
 <template>
@@ -99,6 +107,19 @@ function setWeight(key: typeof weights[number]['key'], value: string) {
           />
         </BaseFormItem>
       </div>
+      <section class="mt-4 grid gap-3" :aria-label="t('settings.scheduling.windowMode')">
+        <div class="flex items-center gap-1">
+          <h3 class="m-0 text-sm font-medium">
+            {{ t('settings.scheduling.windowMode') }}
+          </h3>
+          <HelpPopover :label="t('settings.scheduling.windowMode')" :content="t('settings.scheduling.windowHelp')" />
+        </div>
+        <div class="grid gap-3 sm:grid-cols-3">
+          <BaseFormItem v-for="period in periods" :key="period.key" :label="t(`settings.scheduling.${period.label}`)">
+            <BaseInput :model-value="Number.isFinite(smart.resetWindowWeights[period.key]) ? String(smart.resetWindowWeights[period.key]) : ''" :aria-label="t(`settings.scheduling.${period.label}`)" type="number" min="0" max="10" step="0.1" :disabled="disabled" @update:model-value="setWindowWeight(period.key, $event)" />
+          </BaseFormItem>
+        </div>
+      </section>
       <BaseSwitch v-model="smart.preferHigherWeight" class="mt-4" :disabled="disabled" label="主动回切高权重账号" show-label />
     </section>
   </BaseCard>

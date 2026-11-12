@@ -9,7 +9,7 @@ import { normalizeHexColor } from '../../utils/color'
 import {
   BLACK,
   DEFAULT_CUSTOM_THEME_COLOR,
-  DEFAULT_DIMENSIONS,
+  DEFAULT_SEED_DIMENSIONS,
   WHITE,
 } from './constants'
 
@@ -135,12 +135,12 @@ export function withAlpha(color: string, alpha: number): string {
 }
 
 export function scaleShadowAlpha(shadow: string, strength: number): string {
-  if (strength === DEFAULT_DIMENSIONS.shadowStrength)
+  if (strength === DEFAULT_SEED_DIMENSIONS.shadowStrength)
     return shadow
   if (strength <= 0)
     return 'none'
 
-  const scale = strength / DEFAULT_DIMENSIONS.shadowStrength
+  const scale = strength / DEFAULT_SEED_DIMENSIONS.shadowStrength
   return shadow.replace(/#([\dA-F]{6})([\dA-F]{2})/gi, (_match, color: string, alpha: string) => {
     const scaledAlpha = Math.min(255, Math.round(Number.parseInt(alpha, 16) * scale))
       .toString(16)

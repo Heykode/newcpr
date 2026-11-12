@@ -48,12 +48,11 @@ function unitField(read: () => number | null, write: (value: number) => void, sc
 }
 
 export function useRuntimeUnits(form: RuntimeForm) {
-  const tuning = (key: 'websocketLargeRequestThresholdBytes' | 'streamPrefetchBytes' | 'websocketMaxAgeMs' | 'websocketStreamIdleTimeoutMs' | 'websocketFailureWindowMs' | 'websocketFailureOpenDurationMs', scale: number) =>
+  const tuning = (key: 'streamPrefetchBytes' | 'websocketMaxAgeMs' | 'websocketStreamIdleTimeoutMs' | 'websocketFailureWindowMs' | 'websocketFailureOpenDurationMs', scale: number) =>
     unitField(() => form.requestTuning[key], (value) => { form.requestTuning[key] = value }, scale)
   const fields = {
     bodyMiB: unitField(() => form.responsesMaxDecompressedBodyBytes, (value) => { form.responsesMaxDecompressedBodyBytes = value }, 1024 * 1024),
     intervalSeconds: unitField(() => form.requestIntervalMs, (value) => { form.requestIntervalMs = value }, 1000),
-    largeRequestMiB: tuning('websocketLargeRequestThresholdBytes', 1024 * 1024),
     prefetchKiB: tuning('streamPrefetchBytes', 1024),
     maxAgeSeconds: tuning('websocketMaxAgeMs', 1000),
     idleSeconds: tuning('websocketStreamIdleTimeoutMs', 1000),

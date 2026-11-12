@@ -683,7 +683,7 @@ async fn generate_compatibility_matches_wire_and_session_facts_in_both_profiles_
                 ] {
                     assert!(captured.get(field).is_none(), "{field}");
                 }
-                assert_eq!(captured["max_output_tokens"], body["max_output_tokens"]);
+                assert!(captured.get("max_output_tokens").is_none());
                 assert!(captured.get("temperature").is_none());
                 assert_eq!(
                     state.payload()["continuation_scope"],

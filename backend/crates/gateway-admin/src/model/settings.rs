@@ -27,7 +27,6 @@ pub struct RequestTuningOverrides {
     pub max_account_switches: Option<u32>,
     pub max_request_attempts: Option<u32>,
     pub websocket_max_retries: Option<u32>,
-    pub websocket_large_request_threshold_bytes: Option<u64>,
     pub stream_prefetch_bytes: Option<u64>,
     pub websocket_max_age_ms: Option<u64>,
     pub websocket_stream_idle_timeout_ms: Option<u64>,
@@ -81,7 +80,9 @@ impl<'de> Deserialize<'de> for RequestTuningOverrides {
             // Retired override: recovery follows the transport contract unconditionally.
             #[serde(rename = "websocketHttpFallbackEnabled")]
             _legacy_websocket_http_fallback_enabled: Option<bool>,
-            websocket_large_request_threshold_bytes: Option<u64>,
+            // Retired: the physical WebSocket handshake advertises its message limit.
+            #[serde(rename = "websocketLargeRequestThresholdBytes")]
+            _legacy_websocket_large_request_threshold_bytes: Option<serde::de::IgnoredAny>,
             stream_prefetch_bytes: Option<u64>,
             websocket_max_age_ms: Option<u64>,
             // Old API clients and persisted settings may carry this removed limit.
@@ -139,7 +140,6 @@ impl<'de> Deserialize<'de> for RequestTuningOverrides {
             max_account_switches: wire.max_account_switches,
             max_request_attempts: wire.max_request_attempts,
             websocket_max_retries: wire.websocket_max_retries,
-            websocket_large_request_threshold_bytes: wire.websocket_large_request_threshold_bytes,
             stream_prefetch_bytes: wire.stream_prefetch_bytes,
             websocket_max_age_ms: wire.websocket_max_age_ms,
             websocket_stream_idle_timeout_ms: wire.websocket_stream_idle_timeout_ms,
@@ -188,7 +188,6 @@ impl RequestTuningOverrides {
     pub const MAX_ACCOUNT_SWITCHES: u32 = 31;
     pub const MAX_REQUEST_ATTEMPTS: u32 = 32;
     pub const MAX_WEBSOCKET_RETRIES: u32 = 100;
-    pub const MAX_WEBSOCKET_LARGE_REQUEST_THRESHOLD_BYTES: u64 = 64 * 1024 * 1024;
     pub const MAX_WEBSOCKET_MAX_AGE_MS: u64 = 86_400_000;
     pub const MAX_WEBSOCKET_IDLE_TIMEOUT_MS: u64 = 86_400_000;
     pub const MAX_WEBSOCKET_FAILURE_THRESHOLD: u32 = 100;
@@ -284,9 +283,6 @@ impl RequestTuningOverrides {
             && self
                 .websocket_max_retries
                 .is_none_or(|value| value <= Self::MAX_WEBSOCKET_RETRIES)
-            && self
-                .websocket_large_request_threshold_bytes
-                .is_none_or(|value| value <= Self::MAX_WEBSOCKET_LARGE_REQUEST_THRESHOLD_BYTES)
             && self
                 .websocket_max_age_ms
                 .is_none_or(|value| (1..=Self::MAX_WEBSOCKET_MAX_AGE_MS).contains(&value))

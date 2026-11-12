@@ -3,13 +3,17 @@ import type { Ipv6EgressConfig } from '@/api/modules/ipv6-egress'
 import type { MihomoStatus } from '@/api/modules/mihomo'
 import type { AccountEgressReadState } from '@/utils/account-egress'
 import type { RequestProxySource } from '@/utils/request-proxy-source'
+import { Wifi } from '@lucide/vue'
 import { computed, onScopeDispose, shallowRef, watch } from 'vue'
 import { getIpv6Egress, ipv6EgressModes } from '@/api/modules/ipv6-egress'
 import { getMihomo } from '@/api/modules/mihomo'
 import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
+import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseSelect from '@/components/base/BaseSelect.vue'
 import { useProxyCatalog } from '@/composables/useProxyCatalog'
 import { t } from '@/i18n'
+import { useAccountProxyTest } from '../composables/useAccountProxyTest'
+import AccountProxyTestBadge from './AccountProxyTestBadge.vue'
 
 const props = withDefaults(defineProps<{
   accountId?: string
@@ -26,7 +30,7 @@ const props = withDefaults(defineProps<{
 const mode = defineModel<string>('mode', { required: true })
 const proxyId = defineModel<string>('proxyId', { required: true })
 const egressMode = defineModel<string>('egressMode', { required: true })
-const { proxies, loading } = useProxyCatalog()
+const { proxies, loading, loadProxies } = useProxyCatalog()
 const localConfig = shallowRef<Ipv6EgressConfig>()
 const localConfigError = shallowRef(false)
 const config = computed(() => props.egressReadState ? props.egressReadState.config : localConfig.value)
@@ -54,7 +58,7 @@ const options = computed(() => [
   ...(mode.value === 'legacy' ? [{ value: 'legacy', label: '保持模板原出口配置' }] : []),
   ...(mode.value === 'proxy_pool' ? [{ value: 'proxy_pool', label: '普通代理池（原设置）', disabled: true }] : []),
   ...(props.preserve ? [{ value: 'preserve', label: '保持当前' }] : []),
-  { value: 'direct', label: '直连', description: '不使用代理' },
+  { value: 'direct', label: t('accounts.proxy.deploymentDefault'), description: t('accounts.proxy.deploymentDefaultHelp') },
   ...proxyOptions.value,
   ...(props.openai
     ? [
@@ -71,7 +75,7 @@ const currentLabel = computed(() => {
   if (props.currentProxyId || props.endpoint)
     return proxies.value.find(proxy => proxy.id === props.currentProxyId)?.name || props.endpoint || '已绑定代理'
   if (!props.openai)
-    return '直连'
+    return t('accounts.proxy.deploymentDefault')
   const override = props.accountId && config.value?.accountOverrides[props.accountId]
   return override ? ipv6EgressModes.find(item => item.value === override)?.label : `跟随全局策略（${globalLabel.value ?? '加载中'}）`
 })
@@ -138,6 +142,23 @@ const ipv6Selection = computed({
     egressMode.value = value
   },
 })
+const selectedProxy = computed(() => mode.value === 'proxy' ? proxies.value.find(proxy => proxy.id === proxyId.value) : undefined)
+const testTarget = computed(() => {
+  if (fieldDisabled.value)
+    return null
+  if (mode.value === 'direct' || selectedProxy.value?.enabled === false)
+    return 'deployment' as const
+  return selectedProxy.value ?? null
+})
+const { result, defaultResult, testing, test } = useAccountProxyTest({
+  target: () => testTarget.value,
+  accountId: () => props.accountId,
+  onConflict: loadProxies,
+  onTested: (record) => {
+    proxies.value = proxies.value.map(proxy => proxy.id === record.id ? record : proxy)
+  },
+})
+const selectedTest = computed(() => result.value ?? (testTarget.value === 'deployment' ? defaultResult.value : selectedProxy.value?.lastTest))
 </script>
 
 <template>
@@ -146,15 +167,21 @@ const ipv6Selection = computed({
       <template v-if="$slots.extra" #extra>
         <slot name="extra" />
       </template>
-      <BaseSelect
-        :key="fieldDisabled ? 'disabled' : 'enabled'"
-        v-model="selection"
-        class="w-full"
-        :options="options"
-        :disabled="fieldDisabled || loading"
-        :placeholder="unresolved ? (egressReadState?.loading ? '正在读取出口…' : '出口读取失败') : '请选择'"
-        :aria-label="t('accounts.proxy.outboundTunnel')"
-      />
+      <div class="flex min-w-0 items-center gap-2">
+        <BaseSelect
+          :key="fieldDisabled ? 'disabled' : 'enabled'"
+          v-model="selection"
+          class="min-w-0 flex-1"
+          :options="options"
+          :disabled="fieldDisabled || loading"
+          :placeholder="unresolved ? (egressReadState?.loading ? '正在读取出口…' : '出口读取失败') : '请选择'"
+          :aria-label="t('accounts.proxy.outboundTunnel')"
+        />
+        <AccountProxyTestBadge v-if="selectedTest && testTarget" :result="selectedTest" />
+        <BaseIconButton v-if="testTarget" class="shrink-0" variant="secondary" :loading="testing" :disabled="testing || loading" :label="t('accounts.proxy.testExit')" @click="test">
+          <Wifi class="size-4" />
+        </BaseIconButton>
+      </div>
     </BaseFormItem>
     <p v-if="unresolved && configError" role="alert" class="m-0 text-cp-xs text-cp-error-text">
       出口配置读取失败，请关闭后重新打开。保存其他设置不会修改出口。

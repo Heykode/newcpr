@@ -36,6 +36,7 @@ fn cases() -> Vec<(Value, Value)> {
             "instructions": "preserve instructions",
             "stream": false,
             "service_tier": tier,
+            "max_tokens": 50,
             "max_output_tokens": 100,
             "temperature": 0.5,
             "max_completion_tokens": 200,
@@ -67,11 +68,15 @@ fn cases() -> Vec<(Value, Value)> {
             .unwrap()
             .entry("store")
             .or_insert(json!(false));
-        expected.as_object_mut().unwrap().remove("temperature");
-        expected
-            .as_object_mut()
-            .unwrap()
-            .remove("prompt_cache_retention");
+        for field in [
+            "temperature",
+            "prompt_cache_retention",
+            "max_tokens",
+            "max_output_tokens",
+            "max_completion_tokens",
+        ] {
+            expected.as_object_mut().unwrap().remove(field);
+        }
         expected["tools"][0]["user_location"] = json!({
             "type": "approximate",
             "country": "US",

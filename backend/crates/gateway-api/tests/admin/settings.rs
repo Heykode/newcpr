@@ -62,7 +62,6 @@ fn update_body() -> Value {
             "maxAccountSwitches": 7,
             "maxRequestAttempts": 8,
             "websocketMaxRetries": 9,
-            "websocketLargeRequestThresholdBytes": 4096,
             "streamPrefetchBytes": 262144,
             "websocketMaxAgeMs": 60000,
             "websocketStreamIdleTimeoutMs": 120000,
@@ -489,7 +488,6 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
             max_account_switches: Some(7),
             max_request_attempts: Some(8),
             websocket_max_retries: Some(9),
-            websocket_large_request_threshold_bytes: Some(4096),
             stream_prefetch_bytes: Some(256 * 1024),
             websocket_max_age_ms: Some(60_000),
             websocket_stream_idle_timeout_ms: Some(120_000),
@@ -549,7 +547,6 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
             "maxAccountSwitches": 7,
             "maxRequestAttempts": 8,
             "websocketMaxRetries": 9,
-            "websocketLargeRequestThresholdBytes": 4096,
             "streamPrefetchBytes": 262144,
             "websocketMaxAgeMs": 60000,
             "websocketStreamIdleTimeoutMs": 120000,
@@ -893,7 +890,7 @@ async fn excel_image_settings_round_trip_and_reject_invalid_origin_without_mutat
 }
 
 #[tokio::test]
-async fn large_request_threshold_round_trips_and_rejects_out_of_range_settings() {
+async fn retired_large_request_threshold_does_not_reappear_in_runtime_settings() {
     let fixture = AdminTestFixture::new().await;
     fixture.auth.insert_session("valid-session");
     for value in [json!(null), json!(0), json!(4096), json!(64 * 1024 * 1024)] {
@@ -913,26 +910,62 @@ async fn large_request_threshold_round_trips_and_rejects_out_of_range_settings()
             .await
             .unwrap();
         let data = response_json(response).await["data"].clone();
+        assert!(
+            data["requestTuning"]
+                .get("websocketLargeRequestThresholdBytes")
+                .is_none()
+        );
+        body["requestTuning"]
+            .as_object_mut()
+            .unwrap()
+            .remove("websocketLargeRequestThresholdBytes");
         assert_eq!(data["requestTuning"], body["requestTuning"]);
         assert_eq!(data["rotationStrategy"], body["rotationStrategy"]);
     }
-    for (value, expected_status) in [
-        (json!(-1), StatusCode::UNPROCESSABLE_ENTITY),
-        (json!(1.5), StatusCode::UNPROCESSABLE_ENTITY),
-        (json!(64 * 1024 * 1024 + 1), StatusCode::BAD_REQUEST),
-    ] {
-        let mut body = update_body();
-        body["requestTuning"]["websocketLargeRequestThresholdBytes"] = value;
+}
+
+#[tokio::test]
+async fn smart_reset_windows_round_trip_and_reject_invalid_weights() {
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.insert_session("valid-session");
+    let mut body = with_current_revision(&fixture, update_body()).await;
+    let smart = json!({
+        "loadWeight": 1.0, "quotaWeight": 0.8, "healthWeight": 1.0,
+        "latencyWeight": 0.5, "resetWeight": 2.0, "queueWeight": 0.0,
+        "preferHigherWeight": true,
+        "resetWindowWeights": {"fiveHour": 1.5, "weekly": 2.0, "monthly": 3.0}
+    });
+    body["requestTuning"]["smartScheduling"] = smart.clone();
+    let response = app(fixture.state())
+        .oneshot(request(
+            Method::POST,
+            "/api/admin/settings/update",
+            Some(body.clone()),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    for field in ["fiveHour", "weekly", "monthly"] {
+        let mut invalid = with_current_revision(&fixture, body.clone()).await;
+        invalid["requestTuning"]["smartScheduling"]["resetWindowWeights"][field] = json!(0.01);
         let response = app(fixture.state())
             .oneshot(request(
                 Method::POST,
                 "/api/admin/settings/update",
-                Some(body),
+                Some(invalid),
             ))
             .await
             .unwrap();
-        assert_eq!(response.status(), expected_status);
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
     }
+    let response = app(fixture.state())
+        .oneshot(request(Method::GET, "/api/admin/settings", None))
+        .await
+        .unwrap();
+    assert_eq!(
+        response_json(response).await["data"]["requestTuning"]["smartScheduling"],
+        smart
+    );
 }
 
 #[tokio::test]

@@ -1,5 +1,3 @@
-use gateway_core::{routing::RequestTuning, runtime::RequestTuningHandle};
-
 use super::*;
 
 fn context() -> CodexRequestContext<'static> {
@@ -49,20 +47,28 @@ struct Observed {
 
 async fn exchange(
     request: &CodexResponsesRequest,
-    tuning: RequestTuning,
+    limit: Option<u64>,
     expected: CodexBackendTransport,
 ) -> (CollectedBackendResponse, Observed) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
-        let (mut stream, _) = timeout(Duration::from_secs(10), listener.accept())
+        let (stream, _) = timeout(Duration::from_secs(10), listener.accept())
             .await
             .unwrap()
             .unwrap();
-        let mut prefix = [0; 1];
-        stream.peek(&mut prefix).await.unwrap();
         if expected == CodexBackendTransport::HttpSse {
-            assert_eq!(&prefix, b"P", "large request must not open a WebSocket");
+            let mut websocket = accept_codex_test_websocket_with(stream, |_, response| {
+                response.headers_mut().insert(
+                    "x-codex-websocket-max-message-bytes",
+                    limit.unwrap().to_string().parse().unwrap(),
+                );
+            })
+            .await;
+            while let Some(Ok(message)) = websocket.next().await {
+                assert!(!message.is_text());
+            }
+            let (mut stream, _) = listener.accept().await.unwrap();
             let raw = read_http_request_with_body(&mut stream).await;
             let split = raw.windows(4).position(|part| part == b"\r\n\r\n").unwrap();
             let headers = String::from_utf8(raw[..split].to_vec()).unwrap();
@@ -81,11 +87,16 @@ async fn exchange(
                 payload_bytes: bytes.len() as u64,
             }
         } else {
-            assert_eq!(&prefix, b"G", "protected request must remain on WebSocket");
             let headers = Arc::new(Mutex::new(String::new()));
             let captured = Arc::clone(&headers);
             let mut websocket =
                 accept_codex_test_websocket_with(stream, move |request, response| {
+                    if let Some(limit) = limit {
+                        response.headers_mut().insert(
+                            "x-codex-websocket-max-message-bytes",
+                            limit.to_string().parse().unwrap(),
+                        );
+                    }
                     *captured.lock().unwrap() = format!("{:?}", request.headers());
                     response.headers_mut().insert(
                         "sec-websocket-extensions",
@@ -115,8 +126,7 @@ async fn exchange(
         format!("http://{addr}"),
         test_wire_profile(),
     )
-    .with_websocket_pool(Arc::clone(&pool))
-    .with_request_tuning(RequestTuningHandle::new(tuning));
+    .with_websocket_pool(Arc::clone(&pool));
     let original = request.body().clone();
     let response = timeout(
         Duration::from_secs(10),
@@ -133,17 +143,9 @@ async fn exchange(
 }
 
 #[tokio::test]
-async fn final_utf8_payload_threshold_selects_transport_before_opening() {
+async fn advertised_limit_preserves_projected_http_and_websocket_payloads() {
     let request = request(json!("\u{4f60}\u{597d}".repeat(2000)));
-    let (_, websocket) = exchange(
-        &request,
-        RequestTuning {
-            websocket_large_request_threshold_bytes: 0,
-            ..RequestTuning::default()
-        },
-        CodexBackendTransport::WebSocket,
-    )
-    .await;
+    let (_, websocket) = exchange(&request, None, CodexBackendTransport::WebSocket).await;
     let size = websocket.payload_bytes;
     assert!(
         size > serde_json::to_string(&websocket.body)
@@ -153,19 +155,10 @@ async fn final_utf8_payload_threshold_selects_transport_before_opening() {
     );
     for (threshold, expected) in [
         (size - 1, CodexBackendTransport::HttpSse),
-        (size, CodexBackendTransport::HttpSse),
+        (size, CodexBackendTransport::WebSocket),
         (size + 1, CodexBackendTransport::WebSocket),
-        (0, CodexBackendTransport::WebSocket),
     ] {
-        let (response, observed) = exchange(
-            &request,
-            RequestTuning {
-                websocket_large_request_threshold_bytes: threshold,
-                ..RequestTuning::default()
-            },
-            expected,
-        )
-        .await;
+        let (response, observed) = exchange(&request, Some(threshold), expected).await;
         assert_eq!(observed.body["input"], websocket.body["input"]);
         assert_eq!(observed.body["tools"], websocket.body["tools"]);
         assert_eq!(observed.body["metadata"], websocket.body["metadata"]);
@@ -186,9 +179,9 @@ async fn final_utf8_payload_threshold_selects_transport_before_opening() {
         if expected == CodexBackendTransport::HttpSse {
             assert_eq!(
                 response.transport_metrics.decision,
-                Some(CodexTransportDecision::HttpLargeRequest)
+                Some(CodexTransportDecision::Http2WebSocketMessageTooLarge)
             );
-            assert_eq!(response.transport_metrics.ws_connect_ms, None);
+            assert!(response.transport_metrics.ws_connect_ms.is_some());
             assert!(
                 observed
                     .headers
@@ -202,223 +195,4 @@ async fn final_utf8_payload_threshold_selects_transport_before_opening() {
             assert!(observed.headers.contains("content-encoding: zstd"));
         }
     }
-}
-
-#[tokio::test]
-async fn normalization_not_incoming_body_size_controls_the_threshold() {
-    let base = request(json!("brief"));
-    let (_, baseline) = exchange(
-        &base,
-        RequestTuning::default(),
-        CodexBackendTransport::WebSocket,
-    )
-    .await;
-    let incoming_size = serde_json::to_vec(base.body()).unwrap().len() as u64;
-    assert!(incoming_size + 1 < baseline.payload_bytes);
-    let (_, observed) = exchange(
-        &base,
-        RequestTuning {
-            websocket_large_request_threshold_bytes: incoming_size + 1,
-            ..RequestTuning::default()
-        },
-        CodexBackendTransport::HttpSse,
-    )
-    .await;
-    assert_eq!(observed.body["input"], baseline.body["input"]);
-    assert!(observed.body["input"].is_array());
-}
-
-#[tokio::test]
-async fn default_threshold_selects_http_even_for_highly_compressible_payload() {
-    let _guard = crate::support::LARGE_PAYLOAD_TEST_LOCK.lock().await;
-    let request = request(json!("x".repeat(16 * 1024 * 1024)));
-    let (response, _) = exchange(
-        &request,
-        RequestTuning::default(),
-        CodexBackendTransport::HttpSse,
-    )
-    .await;
-    assert_eq!(
-        response.transport_metrics.decision,
-        Some(CodexTransportDecision::HttpLargeRequest)
-    );
-}
-
-#[tokio::test]
-async fn native_new_chain_can_use_http_but_warmup_and_persisted_scopes_stay_websocket() {
-    let mut native = request(json!("native"));
-    native.downstream_websocket_connection_id = Some("downstream-connection".to_owned());
-    exchange(
-        &native,
-        RequestTuning {
-            websocket_large_request_threshold_bytes: 1,
-            ..RequestTuning::default()
-        },
-        CodexBackendTransport::HttpSse,
-    )
-    .await;
-    let mut warmup_body = native.body().clone();
-    warmup_body.insert("generate".to_owned(), json!(false));
-    let mut warmup = CodexResponsesRequest::from_body(warmup_body);
-    warmup.use_websocket = true;
-    warmup.local_conversation_id = Some("warmup-conversation".to_owned());
-    let mut cases = vec![warmup];
-    for scope in [
-        PreviousResponseScope::Persisted,
-        PreviousResponseScope::ExternalUnknown,
-    ] {
-        let mut previous = request(json!("continuation"));
-        previous.set_previous_response_id(Some("resp_owned_previous".to_owned()));
-        previous.previous_response_scope = Some(scope);
-        cases.push(previous);
-    }
-    for request in cases {
-        let (_, observed) = exchange(
-            &request,
-            RequestTuning {
-                websocket_large_request_threshold_bytes: 1,
-                ..RequestTuning::default()
-            },
-            CodexBackendTransport::WebSocket,
-        )
-        .await;
-        assert_eq!(
-            observed.body.get("previous_response_id"),
-            request.body().get("previous_response_id")
-        );
-    }
-}
-
-#[tokio::test]
-async fn exact_continuation_cannot_escape_missing_connection_through_size_fallback() {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let mut request = request(json!("continuation"));
-    request.set_previous_response_id(Some("resp_missing_connection".to_owned()));
-    request.previous_response_scope = Some(PreviousResponseScope::ConnectionLocal);
-    let pool = Arc::new(CodexWebSocketPool::default());
-    let backend = CodexBackendClient::new(
-        reqwest::Client::builder().no_proxy().build().unwrap(),
-        format!("http://{}", listener.local_addr().unwrap()),
-        test_wire_profile(),
-    )
-    .with_websocket_pool(Arc::clone(&pool))
-    .with_request_tuning(RequestTuningHandle::new(RequestTuning {
-        websocket_large_request_threshold_bytes: 1,
-        ..RequestTuning::default()
-    }));
-    let error = timeout(
-        Duration::from_secs(5),
-        backend.create_response(&request, context()),
-    )
-    .await
-    .unwrap()
-    .unwrap_err();
-    assert!(matches!(error, CodexClientError::WebSocket(
-        CodexWebSocketExchangeError::ContinuationUnavailable {
-            reason: provider_openai::transport::websocket::PreviousResponseUnavailableReason::TransportPayloadTooLarge
-        }
-    )), "{error:?}");
-    assert!(
-        timeout(Duration::from_millis(50), listener.accept())
-            .await
-            .is_err()
-    );
-    pool.shutdown().await;
-}
-
-#[tokio::test]
-async fn failed_large_http_request_is_not_replayed_over_websocket() {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    let server = tokio::spawn(async move {
-        let (mut stream, _) = listener.accept().await.unwrap();
-        let raw = read_http_request_with_body(&mut stream).await;
-        assert!(raw.starts_with(b"POST "));
-        stream.write_all(b"HTTP/1.1 503 Service Unavailable\r\ncontent-length: 0\r\nconnection: close\r\n\r\n").await.unwrap();
-        assert!(
-            timeout(Duration::from_millis(100), listener.accept())
-                .await
-                .is_err()
-        );
-    });
-    let backend = CodexBackendClient::new(
-        reqwest::Client::builder().no_proxy().build().unwrap(),
-        format!("http://{addr}"),
-        test_wire_profile(),
-    )
-    .with_request_tuning(RequestTuningHandle::new(RequestTuning {
-        websocket_large_request_threshold_bytes: 1,
-        ..RequestTuning::default()
-    }));
-    let error = timeout(
-        Duration::from_secs(5),
-        backend.create_response(&request(json!("failed")), context()),
-    )
-    .await
-    .unwrap()
-    .unwrap_err();
-    assert!(matches!(
-        error,
-        CodexClientError::Upstream {
-            status: reqwest::StatusCode::SERVICE_UNAVAILABLE,
-            ..
-        }
-    ));
-    server.await.unwrap();
-}
-
-#[tokio::test]
-async fn later_independent_small_request_in_same_session_can_use_websocket() {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    let server = tokio::spawn(async move {
-        let (mut http, _) = listener.accept().await.unwrap();
-        let raw = read_http_request_with_body(&mut http).await;
-        assert!(raw.starts_with(b"POST "));
-        write_completed_sse_response(&mut http).await;
-        drop(http);
-        let (stream, _) = listener.accept().await.unwrap();
-        let mut websocket = accept_codex_test_websocket(stream).await;
-        let message = websocket.next().await.unwrap().unwrap();
-        let body: Value = serde_json::from_str(message.to_text().unwrap()).unwrap();
-        assert!(body.get("previous_response_id").is_none());
-        websocket
-            .send(Message::Text(
-                completed_websocket_response("resp_later_small", 3, 1).into(),
-            ))
-            .await
-            .unwrap();
-    });
-    let pool = Arc::new(CodexWebSocketPool::default());
-    let backend = CodexBackendClient::new(
-        reqwest::Client::builder().no_proxy().build().unwrap(),
-        format!("http://{addr}"),
-        test_wire_profile(),
-    )
-    .with_websocket_pool(Arc::clone(&pool))
-    .with_request_tuning(RequestTuningHandle::new(RequestTuning {
-        websocket_large_request_threshold_bytes: 4096,
-        ..RequestTuning::default()
-    }));
-    let large = timeout(
-        Duration::from_secs(10),
-        backend.create_response(&request(json!("x".repeat(8192))), context()),
-    )
-    .await
-    .unwrap()
-    .unwrap();
-    assert_eq!(
-        large.transport_metrics.decision,
-        Some(CodexTransportDecision::HttpLargeRequest)
-    );
-    let small = timeout(
-        Duration::from_secs(10),
-        backend.create_response(&request(json!("small")), context()),
-    )
-    .await
-    .unwrap()
-    .unwrap();
-    assert_eq!(small.transport, CodexBackendTransport::WebSocket);
-    server.await.unwrap();
-    pool.shutdown().await;
 }

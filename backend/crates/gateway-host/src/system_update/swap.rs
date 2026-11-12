@@ -101,7 +101,7 @@ pub(crate) fn rollback_release(config: &SystemUpdateConfig) -> Result<(), Operat
 
 fn replace_dir(current: &Path, backup: &Path, replacement: &Path) -> Result<(), OperationError> {
     if backup.exists() {
-        fs::remove_dir_all(backup)
+        remove_dir_all(backup)
             .map_err(|error| internal("无法移除旧的管理页面文件备份").with_source(error))?;
     }
     if current.exists() {
@@ -145,14 +145,14 @@ fn swap_dir(current: &Path, backup: &Path) -> io::Result<()> {
     }
     let swap = swap_path_for(current);
     if swap.exists() {
-        fs::remove_dir_all(&swap)?;
+        remove_dir_all(&swap)?;
     }
     super::swap_paths::swap_paths(current, backup, &swap, move_dir)
 }
 
 fn restore_dir(current: &Path, backup: &Path) -> io::Result<()> {
     if current.exists() {
-        fs::remove_dir_all(current)?;
+        remove_dir_all(current)?;
     }
     if backup.exists() {
         move_dir(backup, current)?;
@@ -177,18 +177,88 @@ fn move_file(from: &Path, to: &Path) -> io::Result<()> {
 fn move_dir(from: &Path, to: &Path) -> io::Result<()> {
     match fs::rename(from, to) {
         Ok(()) => Ok(()),
-        Err(error) if error.kind() == io::ErrorKind::CrossesDevices => {
+        Err(error)
+            if error.kind() == io::ErrorKind::CrossesDevices
+                || (cfg!(unix) && error.kind() == io::ErrorKind::PermissionDenied) =>
+        {
+            // Unix 跨父目录移动只读目录可能被拒绝，复用保留权限的复制路径
+            // 仅清理源目录时放开写权限，备份与恢复后的目录仍保留原权限
             if let Err(copy_error) = copy_dir_all(from, to) {
-                let _ = fs::remove_dir_all(to);
+                let _ = remove_dir_all(to);
                 return Err(copy_error);
             }
-            fs::remove_dir_all(from)
+            remove_dir_all(from)
         }
-        Err(error) => Err(error),
+        Err(error) => Err(io::Error::new(
+            error.kind(),
+            format!("directory rename failed: {error}"),
+        )),
     }
 }
 
+pub(crate) fn remove_dir_all(path: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    make_directories_writable(path)?;
+    #[cfg(windows)]
+    make_files_writable(path)?;
+    fs::remove_dir_all(path)
+}
+
+#[cfg(windows)]
+fn make_files_writable(path: &Path) -> io::Result<()> {
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink() || (!metadata.is_dir() && !metadata.is_file()) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "release directory contains an unsupported file type",
+        ));
+    }
+    if metadata.is_dir() {
+        for entry in fs::read_dir(path)? {
+            make_files_writable(&entry?.path())?;
+        }
+    } else if metadata.permissions().readonly() {
+        // tar 的 0444 会成为 Windows 只读属性，清理受管备份前必须移除此属性
+        let mut permissions = metadata.permissions();
+        #[expect(
+            clippy::permissions_set_readonly_false,
+            reason = "仅 Windows 清理只读属性，不会放宽 Unix 权限"
+        )]
+        permissions.set_readonly(false);
+        fs::set_permissions(path, permissions)?;
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn make_directories_writable(path: &Path) -> io::Result<()> {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let metadata = fs::symlink_metadata(path)?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "release directory contains an unsupported file type",
+        ));
+    }
+    fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+    for entry in fs::read_dir(path)? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        if file_type.is_dir() {
+            make_directories_writable(&entry.path())?;
+        } else if !file_type.is_file() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "release directory contains an unsupported file type",
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn copy_dir_all(from: &Path, to: &Path) -> io::Result<()> {
+    let permissions = fs::metadata(from)?.permissions();
     fs::create_dir_all(to)?;
     for entry in fs::read_dir(from)? {
         let entry = entry?;
@@ -206,6 +276,7 @@ fn copy_dir_all(from: &Path, to: &Path) -> io::Result<()> {
             ));
         }
     }
+    fs::set_permissions(to, permissions)?;
     Ok(())
 }
 

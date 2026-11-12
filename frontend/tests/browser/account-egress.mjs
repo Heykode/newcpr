@@ -57,6 +57,9 @@ async function main() {
         { id: 'proxy-failed', enabled: true, name: '失败出口', endpoint: 'http://proxy.example:8083', lastTest: { success: false } },
       ], page: { page: 1, pageSize: 200, total: 3, totalPages: 1 } }
     }
+    else if (path === '/api/admin/proxies/probe') {
+      data = { success: true, latencyMs: 1, exitIp: '192.0.2.8', message: 'ok' }
+    }
     else if (path.endsWith('/proxies/mihomo')) {
       data = { installed: true, running: true, nodeStates: [{ name: 'fixture' }] }
     }
@@ -210,9 +213,16 @@ async function main() {
       await dialog.waitFor({ state: 'hidden' })
     }
 
-    for (const [mode, label] of [['direct', '直连'], ['inherit', 'IPv6 地址池'], ['proxy', '同地址不同认证代理']]) {
+    for (const [mode, label] of [['direct', '部署默认出口'], ['inherit', 'IPv6 地址池'], ['proxy', '同地址不同认证代理']]) {
       await first().getByRole('button', { name: '编辑账号', exact: true }).click()
       await choose(label)
+      if (mode === 'direct') {
+        await Promise.all([
+          page.waitForResponse(response => response.url().endsWith('/api/admin/proxies/probe')),
+          dialog.getByRole('button', { name: '测试出口', exact: true }).click(),
+        ])
+        assert.deepEqual(writes.at(-1).body, { proxyUrl: '', useDeploymentProxy: true, detectLocation: false })
+      }
       if (mode === 'inherit')
         await ipv6('跟随全局策略')
       await dialog.getByRole('button', { name: '保存账号设置', exact: true }).click()

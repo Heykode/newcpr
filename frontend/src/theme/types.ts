@@ -15,30 +15,28 @@ export interface ThemeColorPreset {
   label: string
   description: string
   seed: string
-  appearance?: Partial<Record<ThemeName, ThemeAppearanceSeed>>
 }
 
-/** 品牌 Seed 派生出的界面底色与正文基色。 */
-export interface ThemeAppearanceSeed {
-  colorBgBase: string
+export interface ThemeSeedColors {
+  colorSuccess: string
+  colorWarning: string
+  colorError: string
+  colorInfo: string
+  colorLink: string
   colorTextBase: string
+  colorBgBase: string
 }
 
-export interface ThemeSeedOverrides {
-  colorSuccess?: string
-  colorWarning?: string
-  colorError?: string
-  colorInfo?: string
-  colorLink?: string
-  colorTextBase?: string
-  colorBgBase?: string
-  fontSize?: number
-  sizeUnit?: number
-  sizeStep?: number
-  controlHeight?: number
-  borderRadius?: number
-  shadowStrength?: number
+export interface ThemeSeedDimensions {
+  fontSize: number
+  sizeUnit: number
+  sizeStep: number
+  controlHeight: number
+  borderRadius: number
+  shadowStrength: number
 }
+
+export type ThemeSeedOverrides = Partial<ThemeSeedColors & ThemeSeedDimensions>
 
 export interface ThemeComponentOverrides {
   tableRowHeight?: number
@@ -60,21 +58,8 @@ export interface ThemeOptions {
   customization?: ThemeCustomization
 }
 
-export interface ResolvedThemeSeedTokens {
+export interface ResolvedThemeSeedTokens extends ThemeSeedColors, ThemeSeedDimensions {
   colorPrimary: string
-  colorSuccess: string
-  colorWarning: string
-  colorError: string
-  colorInfo: string
-  colorLink: string
-  colorTextBase: string
-  colorBgBase: string
-  fontSize: number
-  sizeUnit: number
-  sizeStep: number
-  controlHeight: number
-  borderRadius: number
-  shadowStrength: number
 }
 
 export interface ResolvedTheme {

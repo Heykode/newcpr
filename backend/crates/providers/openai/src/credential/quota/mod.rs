@@ -353,7 +353,7 @@ struct CodexQuotaRefreshAttempt {
     wall_at: SystemTime,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct CodexQuotaSchedulingEntry {
     version: u64,
     revision: CredentialRevision,
@@ -520,7 +520,7 @@ impl CodexQuotaSchedulingProjection {
             .filter(|entry| {
                 entry.revision == account.revision() && Instant::now() < entry.expires_at
             })
-            .and_then(|entry| entry.signals)
+            .and_then(|entry| entry.signals.clone())
     }
 
     fn reserve_periodic_refreshes(

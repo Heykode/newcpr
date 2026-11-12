@@ -66,7 +66,7 @@ export function accountEgressPatch(draft: AccountEgressDraft, openai: boolean): 
   if (proxyMode === 'preserve')
     return {}
   if (!openai && !['direct', 'proxy'].includes(proxyMode))
-    throw new Error('当前账号平台仅支持服务器直连或指定代理')
+    throw new Error('当前账号平台仅支持部署默认出口或指定代理')
   if (proxyMode === 'mihomo' || proxyMode === 'proxy_pool')
     return { requestProxySource: proxyMode }
   if (proxyMode === 'proxy' && !proxyId.trim())

@@ -203,7 +203,7 @@ async fn runtime_snapshot_compiles_account_busy_wait_defaults_overrides_and_froz
         max_waiting_per_account: 7,
         account_concurrency_wait_timeout_seconds: 120,
         max_request_attempts: 8,
-        websocket_large_request_threshold_bytes: 4096,
+
         stream_prefetch_bytes: 256 * 1024,
         max_retry_after_seconds: 400,
         ..RequestTuning::default()
@@ -231,9 +231,7 @@ async fn runtime_snapshot_compiles_account_busy_wait_defaults_overrides_and_froz
             expected.account_concurrency_wait_timeout_seconds,
         ),
         max_request_attempts: Some(expected.max_request_attempts),
-        websocket_large_request_threshold_bytes: Some(
-            expected.websocket_large_request_threshold_bytes,
-        ),
+
         stream_prefetch_bytes: Some(expected.stream_prefetch_bytes),
         max_retry_after_seconds: Some(expected.max_retry_after_seconds),
         ..Default::default()
@@ -264,7 +262,7 @@ async fn runtime_snapshot_compiles_account_busy_wait_defaults_overrides_and_froz
         openai_location_override_enabled: Some(false),
         account_busy_wait_enabled: Some(false),
         switch_account_on_queue_failure: None,
-        websocket_large_request_threshold_bytes: Some(0),
+
         stream_prefetch_bytes: Some(0),
         max_retry_after_seconds: Some(0),
         ..overrides
@@ -281,7 +279,7 @@ async fn runtime_snapshot_compiles_account_busy_wait_defaults_overrides_and_froz
         RequestTuning {
             openai_location_override_enabled: false,
             account_busy_wait_enabled: false,
-            websocket_large_request_threshold_bytes: 0,
+
             stream_prefetch_bytes: 0,
             max_retry_after_seconds: 0,
             ..expected

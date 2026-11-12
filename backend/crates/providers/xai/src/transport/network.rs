@@ -709,7 +709,12 @@ fn build_official_client(
     dns_policy: GrokDnsResolutionPolicy,
     timeout: Option<Duration>,
 ) -> Result<Client, GrokReqwestTransportBuildError> {
+    let target = Url::parse(&format!("https://{}", dns_policy.allowed_host))
+        .map_err(|_| GrokReqwestTransportBuildError::ClientInitialization)?;
+    let proxy = gateway_egress::for_destination(None, &target)
+        .map_err(|_| GrokReqwestTransportBuildError::ClientInitialization)?;
     let mut builder = Client::builder()
+        // 工作区可能同时启用 native-tls；与官方 Grok CLI 一样显式固定 rustls，避免握手画像漂移
         .use_rustls_tls()
         .redirect(Policy::none())
         .no_proxy()
@@ -721,8 +726,17 @@ fn build_official_client(
         .http2_keep_alive_timeout(HTTP2_KEEP_ALIVE_TIMEOUT)
         .http2_keep_alive_while_idle(true)
         .tcp_nodelay(true)
-        .https_only(true)
-        .dns_resolver(Arc::new(StrictDnsResolver::new(dns_policy)?));
+        .https_only(true);
+    if let Some(proxy) = proxy {
+        // 保留 reqwest 的代理解析语义（socks5 本地解析、socks5h 远端解析）；
+        // 只允许官方 host 的直连 resolver 不能用于解析代理端点
+        builder = builder.proxy(
+            reqwest::Proxy::all(proxy.expose_url())
+                .map_err(|_| GrokReqwestTransportBuildError::ClientInitialization)?,
+        );
+    } else {
+        builder = builder.dns_resolver(Arc::new(StrictDnsResolver::new(dns_policy)?));
+    }
     if let Some(timeout) = timeout {
         builder = builder.timeout(timeout);
     }

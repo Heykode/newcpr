@@ -1,7 +1,6 @@
 import type {
   ResolvedTheme,
   ResolvedThemeSeedTokens,
-  ThemeAppearanceSeed,
   ThemeColorId,
   ThemeColorPreset,
   ThemeColorPresetId,
@@ -14,8 +13,8 @@ import type {
   ThemeSeedOverrides,
   ThemeTokens,
 } from '../types'
+import { pick } from 'es-toolkit'
 import { normalizeHexColor } from '../../utils/color'
-import { deriveCustomThemeAppearance } from '../derive/appearance'
 import {
   deriveLightThemeFillMap,
   deriveThemeAliasMap,
@@ -33,17 +32,15 @@ import {
   deriveThemeShadowMap,
 } from '../derive/components'
 import {
-  DARK_CONTAINER_BASE,
-  DARK_TEXT_BASE,
   DEFAULT_CUSTOM_THEME_COLOR,
-  DEFAULT_DIMENSIONS,
-  DEFAULT_SEED_COLORS,
+  DEFAULT_SEED_DIMENSIONS,
   DEFAULT_THEME_CUSTOMIZATION,
   defaultThemePresetId,
-  LIGHT_CONTAINER_BASE,
-  LIGHT_TEXT_BASE,
+  SEED_COLORS_BY_SCHEME,
   THEME_COLOR_PRESETS,
+  THEME_SEED_COLOR_KEYS,
   themePresets,
+  themeProfiles,
 } from './constants'
 import { normalizeThemeCustomization } from './normalize'
 import { createThemeTokens } from './tokens'
@@ -71,16 +68,28 @@ function resolveThemeInputs({
   const resolvedColorId = colorId ?? selectedPreset.colorId
   const seed = resolveThemeSeed(resolvedColorId, primaryColor ?? selectedPreset.primaryColor)
   const normalizedCustomization = normalizeThemeCustomization(customization)
-  const appearance = resolvedColorId === 'custom'
-    ? deriveCustomThemeAppearance(name, seed)
-    : themeColorPreset(resolvedColorId).appearance?.[name]
-  const seedTokens = resolveThemeSeedTokens(
-    name,
-    seed,
-    normalizedCustomization.seed,
-    appearance,
-  )
+  const seedTokens: ResolvedThemeSeedTokens = {
+    colorPrimary: seed,
+    ...SEED_COLORS_BY_SCHEME[name],
+    ...DEFAULT_SEED_DIMENSIONS,
+    ...normalizedCustomization.seed,
+  }
   return { name, seed, seedTokens, preset: selectedPreset.id, colorId: resolvedColorId, customization: normalizedCustomization }
+}
+
+/** 保留预设未指定的颜色；未编辑的默认值继续跟随明暗模式 */
+export function resolveThemeProfile(colorId: ThemeColorPresetId, currentSeed: ThemeSeedOverrides = {}) {
+  const { preset, customization } = themeProfiles[colorId]
+  return {
+    preset,
+    customization: normalizeThemeCustomization({
+      ...customization,
+      seed: {
+        ...pick(currentSeed, THEME_SEED_COLOR_KEYS),
+        ...customization.seed,
+      },
+    }),
+  }
 }
 
 export function createThemeSeedTokens(options: ThemeOptions = {}): ResolvedThemeSeedTokens {
@@ -138,34 +147,6 @@ function deriveThemeMap(
       preset,
     ),
     dimensions: deriveThemeDimensionMap(seedTokens, customization.component),
-  }
-}
-
-export function resolveThemeSeedTokens(
-  theme: ThemeName,
-  colorPrimary: string,
-  overrides?: ThemeSeedOverrides,
-  appearance?: ThemeAppearanceSeed,
-): ResolvedThemeSeedTokens {
-  return {
-    colorPrimary,
-    colorSuccess: overrides?.colorSuccess ?? DEFAULT_SEED_COLORS.colorSuccess,
-    colorWarning: overrides?.colorWarning ?? DEFAULT_SEED_COLORS.colorWarning,
-    colorError: overrides?.colorError ?? DEFAULT_SEED_COLORS.colorError,
-    colorInfo: overrides?.colorInfo ?? DEFAULT_SEED_COLORS.colorInfo,
-    colorLink: overrides?.colorLink ?? colorPrimary,
-    colorTextBase: overrides?.colorTextBase
-      ?? appearance?.colorTextBase
-      ?? (theme === 'dark' ? DARK_TEXT_BASE : LIGHT_TEXT_BASE),
-    colorBgBase: overrides?.colorBgBase
-      ?? appearance?.colorBgBase
-      ?? (theme === 'dark' ? DARK_CONTAINER_BASE : LIGHT_CONTAINER_BASE),
-    fontSize: overrides?.fontSize ?? DEFAULT_DIMENSIONS.fontSize,
-    sizeUnit: overrides?.sizeUnit ?? DEFAULT_DIMENSIONS.sizeUnit,
-    sizeStep: overrides?.sizeStep ?? DEFAULT_DIMENSIONS.sizeStep,
-    controlHeight: overrides?.controlHeight ?? DEFAULT_DIMENSIONS.controlHeight,
-    borderRadius: overrides?.borderRadius ?? DEFAULT_DIMENSIONS.borderRadius,
-    shadowStrength: overrides?.shadowStrength ?? DEFAULT_DIMENSIONS.shadowStrength,
   }
 }
 

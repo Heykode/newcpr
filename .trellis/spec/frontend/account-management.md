@@ -1109,3 +1109,11 @@ match window statistics by exact stable window key.
 - Weekly reset opt-in and threshold remain in the existing per-account AutoReset panel.
 - Warmup uses five-field Cron, disabled/empty after migration 0088. Re-enabling requires a valid Cron;
   use the existing deployment timezone and durable slot claim. Only clearly idle 0% windows qualify.
+
+### 部署默认出口（官方 v3.46.0）
+
+账号出口选择器的内部 `direct` 值表示清除显式代理并写 `egressMode:unchanged`，保留模板、
+单账号与混合 Provider 批量保存合同；界面展示为“部署默认出口”。实际 HTTP/WS 无显式路由时
+跟随部署代理与绕过规则。探测将该选项映射到 `useDeploymentProxy:true`，强制直连探测独立保留。
+禁止只重命名选项而漏掉 `accountEgressPatch` 的混合批量 OpenAI 覆盖清理；既有
+`mixed providers explicitly choose common exits` 回归必须保留。Mihomo/IPv6 显式选择仍独立。

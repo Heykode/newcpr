@@ -137,13 +137,13 @@ profiles or random fingerprint generation.
   values, `context_management`, local continuation intent and WS store policy;
   do not broaden the existing parameter removals. Body and routing tier hint
   must agree without changing the original request's affinity inputs.
-- Account `outboundProxyId`: omitted preserves, empty string selects direct,
+- Account `outboundProxyId`: omitted preserves, empty string clears the explicit proxy,
   nonempty selects a saved, enabled proxy. Untested and failed last tests do not
   block explicit selection (official parity, 2026-10-30). Do not send a redacted
   display endpoint back as a connection URL when toggling account status.
 - Single-account updates carry the same nullable `egress_mode` as bulk updates and
   commit it with proxy changes, scheduling and audit through the existing transaction.
-  A complete direct/proxy selection (`Account` source, explicit proxy selection,
+  A complete deployment-default/proxy selection (`Account` source, explicit proxy selection,
   `Unchanged` egress) resets OpenAI overrides in mixed batches only; unsupported
   explicit IPv6 policies still fail atomically rather than partially applying.
 - Import `clear_outbound_proxy` defaults false. Explicit true clears URL and saved
@@ -211,16 +211,21 @@ profiles or random fingerprint generation.
   request error, with its raw event/status preserved and no credential mutation
   or replay permission. Keep explicit auth/ban evidence ahead of generic status
   rules and preserve the existing actual-empty-HTTP behavior.
-- Before any WS opening, independent `NewChain` / `WebSocketNewChain` requests at or above
-  `websocket_large_request_threshold_bytes` use the existing HTTP transport.
-  Default is 15 MiB; a zero threshold disables size selection. The retired
-  HTTP fallback override is ignored. Measure the final projected WS JSON UTF-8 bytes before
-  compression. Warmup and every previous response scope retain their existing
-  transport contract; oversized exact continuations fail without reconstructing
-  history. This pre-send choice does not authorize native WS fallback after a
-  failed send. Keep the frozen
-  attempt client, selected account, identity, proxy and original input.
-  Do not persist size selection as a session failure or permanent HTTP mode.
+- Prepare the physical WS connection before reading its advertised maximum message
+  bytes. Measure the final projected JSON UTF-8 bytes before compression; strictly
+  exceeding the limit discards the socket and releases the lease before HTTP
+  fallback or rejection. `NewChain`, `WebSocketNewChain`, `PersistedContinuation`
+  and `ExternalUnknown` may fall back. Exact continuations request client replay;
+  warmup returns `MessageTooBig/NotSent`. Missing/invalid limits mean no precheck.
+  Size rejection must not consume failure budget or establish sticky HTTP mode.
+  Keep the frozen account, identity, selected proxy and original request semantics.
+  See `upstream-hardening.md` for handshake and reconnect boundaries.
+- Shared `gateway_egress::http_client` and `for_destination` use explicit proxies
+  first, then deployment `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` and `NO_PROXY`.
+  Explicit source-bound IPv6 is still an explicit route. `ProbeRoute::Direct` alone
+  bypasses deployment proxy discovery; `Deployment` follows it. API probes accept
+  `useDeploymentProxy:true` with an empty proxy URL, and reject a simultaneous
+  explicit URL. Environment is cached once; changing it requires process restart.
 
 ## 4. Validation & Error Matrix
 
@@ -239,8 +244,12 @@ profiles or random fingerprint generation.
 | WS closes with 1009 before / after HTTP commit | HTTP 413 / streamed error; no replay or account-health penalty |
 | Repeated SSE/WS missing-item errors with explicit 404 | Request-scoped errors; credential state and revision unchanged |
 | Actual empty HTTP 404 / structured auth or ban with 404 | Existing path-block / explicit account-failure classification |
-| Independent new chain at the configured size threshold | HTTP before WS opening; `http_large_request` decision |
-| Zero threshold, fallback disabled, warmup or continuation | Existing transport policy; no size-driven escape |
+| New chain exceeds the physical connection limit | Discard before sending; `http2_ws_message_too_large` HTTP decision |
+| Equal to limit, missing or invalid limit | Continue normal WS transport |
+| Exact continuation / warmup exceeds limit | Client replay required / MessageTooBig; NotSent and no retry |
+| Selected proxy + matching NO_PROXY | Selected proxy still wins |
+| No selected route + environment proxy / NO_PROXY match | Deployment proxy / direct |
+| Explicit direct probe + environment proxy | Direct; never reports the deployment exit |
 | Retryable upstream 401 then local no-account/capacity failure | Local 503 contract; no stale 401 body or events |
 | Retryable upstream 502 then local capacity failure | Preserve original upstream detail and raw response |
 | Inherited account limit + changed global default | Query returns new effective value; override remains null |
@@ -251,7 +260,7 @@ profiles or random fingerprint generation.
 
 - Good: reauthorize through a selected proxy while preserving the new token after
   an unrelated proxy rename.
-- Base: import a direct account without a proxy selection; keep prior behavior.
+- Base: no selected account route follows deployment defaults; without matching proxy configuration it connects directly.
 - Bad: status-toggle writes the masked endpoint and loses proxy authentication.
 - Bad: buffered output forces HTTP for a connection-bound continuation.
 

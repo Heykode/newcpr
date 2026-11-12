@@ -36,10 +36,6 @@ use provider_openai::credential::{
 use secrecy::SecretString;
 use tokio::sync::oneshot;
 
-// Serialize full-size fixtures so their allocations do not consume each other's I/O deadlines.
-pub(crate) static LARGE_PAYLOAD_TEST_LOCK: tokio::sync::Mutex<()> =
-    tokio::sync::Mutex::const_new(());
-
 #[derive(Clone)]
 struct StoredAccount {
     account: ProviderAccount,
@@ -925,6 +921,7 @@ fn empty_capacity_signals() -> AccountRuntimeSignals {
         in_flight: 0,
         last_started_at: None,
         quota_reset_at: None,
+        quota_reset_windows: None,
         quota_remaining_rank: None,
         rate_limited_until: None,
         failure_rate_basis_points: None,
@@ -1068,6 +1065,7 @@ impl ProviderLeasePort for TestLeaseCoordinator {
                                 in_flight: 0,
                                 last_started_at: None,
                                 quota_reset_at: None,
+                                quota_reset_windows: None,
                                 quota_remaining_rank: None,
                                 rate_limited_until: None,
                                 failure_rate_basis_points: None,

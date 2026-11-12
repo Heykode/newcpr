@@ -32,8 +32,8 @@ use crate::transport::{
     response_meta,
     websocket::{
         CodexWebSocketConnection, CodexWebSocketExchangeError, CodexWebSocketPool,
-        CodexWebSocketPoolKey, WEBSOCKET_FAST_PATH_BUDGET, WebSocketFastPath,
-        WebSocketOriginBreaker, execute_prepared_response_create_request_stream,
+        CodexWebSocketPoolKey, PreviousResponseUnavailableReason, WEBSOCKET_FAST_PATH_BUDGET,
+        WebSocketFastPath, WebSocketOriginBreaker, execute_prepared_response_create_request_stream,
         post_send_ambiguous, prepare_response_create_request_with_pool, websocket_audit_dir,
         write_websocket_audit_artifact_from_env_with_timezone,
     },
@@ -52,11 +52,10 @@ impl CodexBackendClient {
         let base_url = base_url.into().trim_end_matches('/').to_string();
         Self {
             routing_affinity: None,
-            session_transport: None,
             connection_budget: None,
             session_proxy: None,
-            direct_client: client.clone(),
-            default_direct_client: false,
+            default_client: client.clone(),
+            uses_deployment_client: false,
             client,
             websocket_origin_key: websocket_origin_key(&base_url),
             outbound_proxy: None,
@@ -655,62 +654,6 @@ impl CodexBackendClient {
             &websocket_request,
         )
         .map_err(CodexClientError::WebSocketEncode)?;
-        let tuning = self.request_tuning();
-        let payload_bytes = websocket_create.payload_text().len() as u64;
-        let oversized = tuning.websocket_large_request_threshold_bytes != 0
-            && payload_bytes >= tuning.websocket_large_request_threshold_bytes;
-        if oversized && requirement == TransportRequirement::ExactWebSocketContinuation {
-            return Err(CodexClientError::WebSocket(
-                CodexWebSocketExchangeError::ContinuationUnavailable {
-                    reason: super::websocket::PreviousResponseUnavailableReason::TransportPayloadTooLarge,
-                },
-            ));
-        }
-        // Only independent new chains can change transport without rebuilding history.
-        let oversized = if matches!(
-            requirement,
-            TransportRequirement::NewChain | TransportRequirement::WebSocketNewChain
-        ) {
-            self.session_transport
-                .as_ref()
-                .map_or(oversized, |(recovery, key)| {
-                    recovery.http_for_full_payload(
-                        key.as_ref(),
-                        payload_bytes as usize,
-                        tuning.websocket_large_request_threshold_bytes as usize,
-                    )
-                })
-        } else {
-            oversized
-        };
-        if oversized
-            && matches!(
-                requirement,
-                TransportRequirement::NewChain | TransportRequirement::WebSocketNewChain
-            )
-        {
-            let decision = CodexTransportDecision::HttpLargeRequest;
-            context.trace.cloned().unwrap_or_default().record(
-                "transport.fallback",
-                serde_json::json!({
-                    "to": "http_sse",
-                    "reason": "websocket_large_request",
-                    "requirement": requirement.as_str(),
-                    "decision": decision.as_str(),
-                    "payloadBytes": payload_bytes,
-                    "thresholdBytes": tuning.websocket_large_request_threshold_bytes,
-                }),
-            );
-            return Ok(PreparedResponseTransport {
-                attempt_client: None,
-                requirement,
-                route: PreparedResponseRoute::Http,
-                metrics: CodexTransportMetrics {
-                    decision: Some(decision),
-                    ..CodexTransportMetrics::default()
-                },
-            });
-        }
         websocket_create.connection.outbound_proxy = self.outbound_proxy.clone();
         super::evidence::record_request(
             &context.trace.cloned().unwrap_or_default(),
@@ -846,6 +789,52 @@ impl CodexBackendClient {
             }
             Err(error) => return Err(websocket_exchange_error_to_client_error(error)),
         };
+        // 按最终出站帧的 UTF-8 字节数判断，握手上限只属于当前物理连接
+        if let Some(limit) = prepared.max_message_bytes()
+            && websocket_create.payload_text().len() > limit
+        {
+            let metrics = CodexTransportMetrics {
+                decision: Some(CodexTransportDecision::Http2WebSocketMessageTooLarge),
+                ws_connect_ms: prepared.connect_elapsed().map(elapsed_duration_millis),
+                transport_decision_wait_ms: Some(elapsed_duration_millis(
+                    prepared.decision_wait_elapsed(),
+                )),
+                ..CodexTransportMetrics::default()
+            };
+            prepared.discard().await;
+            let error = match requirement {
+                TransportRequirement::ExactWebSocketContinuation => {
+                    Some(CodexWebSocketExchangeError::ContinuationUnavailable {
+                        reason: PreviousResponseUnavailableReason::PayloadTooLarge,
+                    })
+                }
+                TransportRequirement::ExplicitWebSocketWarmup => {
+                    Some(CodexWebSocketExchangeError::MessageTooLarge)
+                }
+                TransportRequirement::HttpRequired
+                | TransportRequirement::WebSocketNewChain
+                | TransportRequirement::PersistedContinuation
+                | TransportRequirement::ExternalUnknown
+                | TransportRequirement::NewChain => None,
+            };
+            if let Some(error) = error {
+                return Err(websocket_exchange_error_to_client_error(error));
+            }
+            context.trace.cloned().unwrap_or_default().record(
+                "transport.fallback",
+                serde_json::json!({
+                    "to": "http_sse", "reason": "websocket_message_too_large",
+                    "requirement": requirement.as_str(), "limitBytes": limit,
+                    "payloadBytes": websocket_create.payload_text().len(),
+                }),
+            );
+            return Ok(PreparedResponseTransport {
+                attempt_client: None,
+                requirement,
+                route: PreparedResponseRoute::Http,
+                metrics,
+            });
+        }
         let decision = websocket_success_decision(requirement, &prepared);
         context.trace.cloned().unwrap_or_default().record(
             "transport.prepared",

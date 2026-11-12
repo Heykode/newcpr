@@ -2782,5 +2782,213 @@
     "line_sha256": "1a58dbbe57cd503aa12612f4280a27ea49f813090650ceaf6490c90504084620",
     "file_sha256": "fbea0db4945546d0e93aec6038eb188437a93dbdfa27b2e6b6b7e14671ef2092",
     "reason": "Manually re-reviewed existing Rust HTTP/WebSocket certificate test function declaration after adding the official binary TLS reference test; not a credential."
+  },
+  {
+    "path": "backend/apps/gateway/tests/bootstrap.rs",
+    "rule": "authenticated-url",
+    "line": 394,
+    "file_sha256": "eb2153c098b177b2cf12064c26d340114fa2bd15150a5865677d45eac3e498f5",
+    "line_sha256": "be871b5bb1fb717424afe768be0a94bd16324aa95d478d8be07e11d0ed234c75",
+    "reason": "Re-reviewed for v3.46.0 integration: unchanged synthetic fixture and local-only use. Manually re-reviewed the unchanged loopback configuration rejection fixture against HEAD after updating the OAuth integration test. The embedded password is synthetic parser input; this fixture never connects to a database."
+  },
+  {
+    "path": "backend/crates/gateway-api/tests/admin/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 35,
+    "file_sha256": "0ce10d8a83a3c9d44c20c2ddd305780be3b7a672ccd4778b5578a3cbee5a680e",
+    "line_sha256": "67a2d50bb2845a354154b03afae3748669dd1152f0c944342ec3c3bef3ce984f",
+    "reason": "Re-reviewed for v3.46.0 integration: unchanged synthetic fixture and local-only use. Manually re-reviewed unchanged synthetic credential-marker and reserved proxy.example fixture after direct-probe support; MemoryProxies handles it without a network connection."
+  },
+  {
+    "path": "backend/crates/gateway-api/tests/admin/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 382,
+    "file_sha256": "0ce10d8a83a3c9d44c20c2ddd305780be3b7a672ccd4778b5578a3cbee5a680e",
+    "line_sha256": "0daf5322378ec1f4089cffe5f7839bf43e667f3177f1d4ac94651b4fcd8a7d43",
+    "reason": "Re-reviewed for v3.46.0 integration: unchanged synthetic fixture and local-only use. Manually re-reviewed the same synthetic proxy.example credential assertion after wrapping it in the optional-proxy branch and formatting; SuccessfulProbe is an in-memory stub."
+  },
+  {
+    "path": "backend/crates/gateway-api/tests/admin/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 448,
+    "file_sha256": "0ce10d8a83a3c9d44c20c2ddd305780be3b7a672ccd4778b5578a3cbee5a680e",
+    "line_sha256": "68c0f9074b2a4b0317d8586a6524a6153303a423e298086c96185772796837d3",
+    "reason": "Re-reviewed for v3.46.0 integration: unchanged synthetic fixture and local-only use. Manually re-reviewed unchanged synthetic proxy.example create input after direct-probe adaptation; the admin fixture uses memory storage and no real credentials."
+  },
+  {
+    "path": "backend/crates/gateway-api/tests/admin/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 647,
+    "file_sha256": "0ce10d8a83a3c9d44c20c2ddd305780be3b7a672ccd4778b5578a3cbee5a680e",
+    "line_sha256": "b2d2a8562a4ed48e58c93460d8667865b9a7e1df7b2416d42095ce76b8078f54",
+    "reason": "Re-reviewed for v3.46.0 integration: unchanged synthetic fixture and local-only use. Manually re-reviewed unchanged synthetic unsaved proxy.example probe payload; SuccessfulProbe does not open a network connection."
+  },
+  {
+    "path": "backend/crates/gateway-api/tests/admin/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 688,
+    "file_sha256": "0ce10d8a83a3c9d44c20c2ddd305780be3b7a672ccd4778b5578a3cbee5a680e",
+    "line_sha256": "b2d2a8562a4ed48e58c93460d8667865b9a7e1df7b2416d42095ce76b8078f54",
+    "reason": "Re-reviewed for v3.46.0 integration: unchanged synthetic fixture and local-only use. Manually re-reviewed unchanged synthetic probe isolation fixture; it verifies that an in-memory saved connection is not changed by testing a draft."
+  },
+  {
+    "path": "backend/crates/gateway-api/tests/admin/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 807,
+    "file_sha256": "0ce10d8a83a3c9d44c20c2ddd305780be3b7a672ccd4778b5578a3cbee5a680e",
+    "line_sha256": "6ca8102fb3d417f5b9c43b2b86187c41e05688ea3a984cfa48578f057c3e4d93",
+    "reason": "Re-reviewed for v3.46.0 integration: unchanged synthetic fixture and local-only use. Manually re-reviewed unchanged reserved-domain automatic-location draft fixture after direct-probe support; all credentials and location facts are synthetic."
+  },
+  {
+    "path": "backend/crates/gateway-api/tests/admin/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 925,
+    "file_sha256": "0ce10d8a83a3c9d44c20c2ddd305780be3b7a672ccd4778b5578a3cbee5a680e",
+    "line_sha256": "c36a0dbdd71274dfb45379085d8b6535806e84789a7edb39c1c60e508b0a311b",
+    "reason": "Re-reviewed for v3.46.0 integration: unchanged synthetic fixture and local-only use. Manually re-reviewed unchanged synthetic location probe payload; the reserved proxy.example destination is handled by a mock probe without connecting."
+  },
+  {
+    "path": "backend/crates/gateway-core/tests/provider_ports/mod.rs",
+    "rule": "non-example-ip",
+    "line": 108,
+    "file_sha256": "0bb3d01751971a3308121ba8baeaa6fd832b67b9e18e1889ca3dcb5f8de2eb79",
+    "line_sha256": "05d89b4df3a4f65f2e9099ae7ccd18b0f07bc27a3581c139da0ef893ab85b149",
+    "reason": "Re-reviewed for v3.46.0 integration: unchanged synthetic fixture and local-only use. Manually re-reviewed the unchanged IPv4-mapped documentation-address rejection fixture after Cron tests were added; local parsing only."
+  },
+  {
+    "path": "backend/crates/gateway-core/tests/provider_ports/mod.rs",
+    "rule": "non-example-ip",
+    "line": 109,
+    "file_sha256": "0bb3d01751971a3308121ba8baeaa6fd832b67b9e18e1889ca3dcb5f8de2eb79",
+    "line_sha256": "126f7e34cdcf2e64e4165af6d03bceb76dc979de37bd316e3032c0b0164d7fcb",
+    "reason": "Re-reviewed for v3.46.0 integration: unchanged synthetic fixture and local-only use. Manually re-reviewed the unchanged link-local IPv6 rejection fixture after Cron tests were added; local parsing only."
+  },
+  {
+    "path": "backend/crates/gateway-core/tests/provider_ports/mod.rs",
+    "rule": "non-example-ip",
+    "line": 110,
+    "file_sha256": "0bb3d01751971a3308121ba8baeaa6fd832b67b9e18e1889ca3dcb5f8de2eb79",
+    "line_sha256": "abf54a266f9141c37476c644e9c9a11de98856acf1241ba8b563d7d7e6b5c838",
+    "reason": "Re-reviewed for v3.46.0 integration: unchanged synthetic fixture and local-only use. Manually re-reviewed the unchanged multicast IPv6 rejection fixture after Cron tests were added; no packets are sent."
+  },
+  {
+    "path": "backend/crates/gateway-core/tests/provider_ports/mod.rs",
+    "rule": "non-example-ip",
+    "line": 111,
+    "file_sha256": "0bb3d01751971a3308121ba8baeaa6fd832b67b9e18e1889ca3dcb5f8de2eb79",
+    "line_sha256": "3205b3a46a19d6eb2fea5855b6f7792ada9cf87e5ceb7af955077f4a4b8a5e3d",
+    "reason": "Re-reviewed for v3.46.0 integration: unchanged synthetic fixture and local-only use. Manually re-reviewed the unchanged site-local IPv6 rejection fixture after Cron tests were added; this is an address-category test."
+  },
+  {
+    "path": "backend/crates/gateway-core/tests/provider_ports/mod.rs",
+    "rule": "non-example-ip",
+    "line": 118,
+    "file_sha256": "0bb3d01751971a3308121ba8baeaa6fd832b67b9e18e1889ca3dcb5f8de2eb79",
+    "line_sha256": "866bff72cf6ad4b537e5f863f4ded96b3cf59862650e132cbcde1167ef1d25a6",
+    "reason": "Re-reviewed for v3.46.0 integration: unchanged synthetic fixture and local-only use. Manually re-reviewed the unchanged documentation and unique-local IPv6 acceptance fixtures after Cron tests were added; no deployed endpoint is represented."
+  },
+  {
+    "path": "backend/crates/gateway-host/tests/proxy_probe.rs",
+    "rule": "authenticated-url",
+    "line": 93,
+    "file_sha256": "d6b6520e254ebd862126a52d216f6cf8cdd5caacc7aad98da74b0b563a8cf8e0",
+    "line_sha256": "3f38fe650b6ee1a2a780c28e6a85fc7f3944ed5a6d440efba94da0db6a8757b5",
+    "reason": "Re-reviewed for v3.46.0 integration: unchanged synthetic fixture and local-only use. Manually re-reviewed unchanged user/password fixture after the optional-proxy API adaptation; listeners bind loopback and returned exit addresses are documentation examples."
+  },
+  {
+    "path": "backend/crates/gateway-host/tests/proxy_probe.rs",
+    "rule": "authenticated-url",
+    "line": 270,
+    "file_sha256": "d6b6520e254ebd862126a52d216f6cf8cdd5caacc7aad98da74b0b563a8cf8e0",
+    "line_sha256": "3f38fe650b6ee1a2a780c28e6a85fc7f3944ed5a6d440efba94da0db6a8757b5",
+    "reason": "Re-reviewed for v3.46.0 integration: unchanged synthetic fixture and local-only use. Manually re-reviewed unchanged automatic-location authentication fixture after optional-proxy API adaptation; synthetic credentials authenticate only the ephemeral local MockServer."
+  },
+  {
+    "path": "backend/crates/providers/xai/tests/transport/network.rs",
+    "rule": "authenticated-url",
+    "line": 36,
+    "file_sha256": "dfed7748369711a9f2febb9f9934993edf63608b232d30846db7008487e8456f",
+    "line_sha256": "db5e5704b33f31cec217e126622734c6a1da9f478dfe6bfc7944197b592719ad",
+    "reason": "Re-reviewed for v3.46.0 integration: unchanged synthetic fixture and local-only use. Explicit synthetic proxy or local database fixture used by isolated tests, including URL rejection tests."
+  },
+  {
+    "path": "backend/crates/providers/xai/tests/transport/network.rs",
+    "rule": "non-example-ip",
+    "line": 850,
+    "file_sha256": "dfed7748369711a9f2febb9f9934993edf63608b232d30846db7008487e8456f",
+    "line_sha256": "2033d9097d789fb4eed2b21b5a01eb0145e10f75f2f8467ef1150acf7f925a5e",
+    "reason": "Re-reviewed for v3.46.0 integration: unchanged synthetic fixture and local-only use. Synthetic network-policy, forwarding or DNS resolution test; no deployment endpoint."
+  },
+  {
+    "path": "backend/crates/providers/xai/tests/transport/network.rs",
+    "rule": "non-example-ip",
+    "line": 851,
+    "file_sha256": "dfed7748369711a9f2febb9f9934993edf63608b232d30846db7008487e8456f",
+    "line_sha256": "29d81e2ff628a6d92cd9d90361016d7d15585af36dafbd01c39bc9085350ed6d",
+    "reason": "Re-reviewed for v3.46.0 integration: unchanged synthetic fixture and local-only use. Synthetic network-policy, forwarding or DNS resolution test; no deployment endpoint."
+  },
+  {
+    "path": "backend/crates/providers/xai/tests/transport/network.rs",
+    "rule": "non-example-ip",
+    "line": 878,
+    "file_sha256": "dfed7748369711a9f2febb9f9934993edf63608b232d30846db7008487e8456f",
+    "line_sha256": "633b87faae9403ebc883cd526be3f63fcba619f14b0f199b64ecd1c77037c672",
+    "reason": "Re-reviewed for v3.46.0 integration: unchanged synthetic fixture and local-only use. Synthetic network-policy, forwarding or DNS resolution test; no deployment endpoint."
+  },
+  {
+    "path": "backend/crates/providers/xai/tests/transport/network.rs",
+    "rule": "non-example-ip",
+    "line": 881,
+    "file_sha256": "dfed7748369711a9f2febb9f9934993edf63608b232d30846db7008487e8456f",
+    "line_sha256": "db277d270b9478e13bcedcff8464565c90b76cb95d4a3e7943c6c06d04a90c4a",
+    "reason": "Re-reviewed for v3.46.0 integration: unchanged synthetic fixture and local-only use. Synthetic network-policy, forwarding or DNS resolution test; no deployment endpoint."
+  },
+  {
+    "path": "backend/crates/providers/xai/tests/transport/network.rs",
+    "rule": "non-example-ip",
+    "line": 889,
+    "file_sha256": "dfed7748369711a9f2febb9f9934993edf63608b232d30846db7008487e8456f",
+    "line_sha256": "010fed8499bcc9f73dea3feb5c20bf0e285c1ea52f15accef256b827f6aaaf4a",
+    "reason": "Re-reviewed for v3.46.0 integration: unchanged synthetic fixture and local-only use. Synthetic network-policy, forwarding or DNS resolution test; no deployment endpoint."
+  },
+  {
+    "path": "backend/crates/providers/xai/tests/transport/network.rs",
+    "rule": "non-example-ip",
+    "line": 897,
+    "file_sha256": "dfed7748369711a9f2febb9f9934993edf63608b232d30846db7008487e8456f",
+    "line_sha256": "633b87faae9403ebc883cd526be3f63fcba619f14b0f199b64ecd1c77037c672",
+    "reason": "Re-reviewed for v3.46.0 integration: unchanged synthetic fixture and local-only use. Synthetic network-policy, forwarding or DNS resolution test; no deployment endpoint."
+  },
+  {
+    "path": "backend/crates/providers/xai/tests/transport/network.rs",
+    "rule": "non-example-ip",
+    "line": 900,
+    "file_sha256": "dfed7748369711a9f2febb9f9934993edf63608b232d30846db7008487e8456f",
+    "line_sha256": "e3bdf4aa928b4f907700a66d215a91a8151046a067eda3d2e0f19168abcedd0e",
+    "reason": "Re-reviewed for v3.46.0 integration: unchanged synthetic fixture and local-only use. Synthetic network-policy, forwarding or DNS resolution test; no deployment endpoint."
+  },
+  {
+    "path": "backend/crates/providers/xai/tests/transport/network.rs",
+    "rule": "non-example-ip",
+    "line": 901,
+    "file_sha256": "dfed7748369711a9f2febb9f9934993edf63608b232d30846db7008487e8456f",
+    "line_sha256": "005dca5fefcbc8e5d518b6c59d289c1d25f7d8ed10bfc7698b7b0bbd5e2c78f4",
+    "reason": "Re-reviewed for v3.46.0 integration: unchanged synthetic fixture and local-only use. Synthetic network-policy, forwarding or DNS resolution test; no deployment endpoint."
+  },
+  {
+    "path": "backend/crates/providers/xai/tests/transport/network.rs",
+    "rule": "non-example-ip",
+    "line": 914,
+    "file_sha256": "dfed7748369711a9f2febb9f9934993edf63608b232d30846db7008487e8456f",
+    "line_sha256": "a502ee022493b5e891be27fbf87aa830b1adb35f45aa03c5220ee21214c673d5",
+    "reason": "Re-reviewed for v3.46.0 integration: unchanged synthetic fixture and local-only use. Synthetic network-policy, forwarding or DNS resolution test; no deployment endpoint."
+  },
+  {
+    "path": "backend/crates/providers/xai/tests/transport/network.rs",
+    "rule": "non-example-ip",
+    "line": 924,
+    "file_sha256": "dfed7748369711a9f2febb9f9934993edf63608b232d30846db7008487e8456f",
+    "line_sha256": "9e479e1097600c03e5b02a059871972d553af67489633306a1ac5dbb3264de7c",
+    "reason": "Re-reviewed for v3.46.0 integration: unchanged synthetic fixture and local-only use. Synthetic network-policy, forwarding or DNS resolution test; no deployment endpoint."
   }
 ]

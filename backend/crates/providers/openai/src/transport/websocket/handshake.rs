@@ -1,15 +1,13 @@
 //! Responses WebSocket endpoint、opening handshake 与首帧发送。
 
-use std::time::Duration;
+use std::{error::Error as _, io, time::Duration};
 
 use bytes::Bytes;
 use gateway_core::error::ProxyConnectionHint;
 use gateway_protocol::openai::events;
 use tokio::io::BufWriter;
 use tokio::time::timeout;
-use tokio_tungstenite::{
-    Connector, MaybeTlsStream, client_async_tls_with_config, connect_async_tls_with_config,
-};
+use tokio_tungstenite::{Connector, MaybeTlsStream, client_async_tls_with_config};
 use tungstenite::{
     self, Message,
     extensions::{ExtensionsConfig, compression::deflate::DeflateConfig},
@@ -165,6 +163,11 @@ pub(super) fn websocket_connection_metadata(
     response: &WsResponse<Option<Vec<u8>>>,
 ) -> CodexWebSocketConnectionMetadata {
     CodexWebSocketConnectionMetadata {
+        max_message_bytes: response
+            .headers()
+            .get("x-codex-websocket-max-message-bytes")
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse().ok()),
         routing_affinity: crate::transport::routing_affinity::ChatGptRoutingAffinity::from_response(
             &connection.endpoint,
             response.headers(),
@@ -208,18 +211,6 @@ async fn connect_websocket(
     let mut proxy_hint = None;
     let result = timeout(connect_timeout, async {
         // Match upstream's native connector without bypassing explicit account routes.
-        if connection.outbound_proxy.is_none()
-            && connection.egress_source.is_none()
-            && matches!(
-                tungstenite::proxy::ProxyConfig::from_env(request.uri()),
-                Ok(None)
-            )
-        {
-            let (websocket, response) =
-                connect_async_tls_with_config(request, Some(websocket_config()), false, connector)
-                    .await?;
-            return Ok((Box::new(websocket) as RawWsStream, response));
-        }
         let stream = dial_account(connection, &mut proxy_hint).await?;
         match stream {
             MaybeTlsStream::Plain(tcp) => {
@@ -300,7 +291,15 @@ async fn dial_account(
         _ => host.to_owned(),
     };
     let port = endpoint.port_or_known_default().ok_or_else(invalid)?;
-    let Some(proxy) = connection.outbound_proxy.as_ref() else {
+    *proxy_hint = Some(ProxyConnectionHint::InvalidConfiguration);
+    let proxy = if connection.egress_source.is_some() {
+        connection.outbound_proxy.as_ref()
+    } else {
+        gateway_egress::for_destination(connection.outbound_proxy.as_ref(), &endpoint)
+            .map_err(|_| invalid())?
+    };
+    let Some(proxy) = proxy else {
+        *proxy_hint = None;
         if let Some(source) = connection.egress_source {
             return Ok(MaybeTlsStream::Plain(
                 crate::transport::egress::connect_source_bound(&dns_host, port, source)
@@ -367,39 +366,31 @@ async fn dial_account(
     Ok(stream.into_inner())
 }
 
-async fn connect_tcp(host: &str, port: u16) -> Result<tokio::net::TcpStream, tungstenite::Error> {
+async fn connect_tcp(host: &str, port: u16) -> io::Result<tokio::net::TcpStream> {
     use hyper_util::client::legacy::connect::HttpConnector;
     use tower_service::Service;
 
-    // Reuse Hyper's DNS and Happy Eyeballs connector for explicit direct/proxy endpoints.
+    // 显式直连和代理端点复用 Hyper 的 DNS 与 Happy Eyeballs 连接器
     let authority = host.parse::<std::net::IpAddr>().map_or_else(
         |_| format!("{host}:{port}"),
         |ip| std::net::SocketAddr::new(ip, port).to_string(),
     );
     let uri = format!("http://{authority}")
         .parse::<hyper::Uri>()
-        .map_err(|_| tungstenite::Error::Io(std::io::Error::other("invalid egress endpoint")))?;
+        .map_err(|_| io::Error::other("invalid egress endpoint"))?;
     let mut connector = HttpConnector::new();
     connector
         .call(uri)
         .await
         .map(|stream| stream.into_inner())
         .map_err(|error| {
-            // Preserve the socket failure kind without exposing endpoint details.
-            let kind = std::iter::successors(
-                Some(&error as &(dyn std::error::Error + 'static)),
-                |error| error.source(),
-            )
-            .find_map(|error| {
-                error
-                    .downcast_ref::<std::io::Error>()
-                    .map(std::io::Error::kind)
-            })
-            .unwrap_or(std::io::ErrorKind::Other);
-            tungstenite::Error::Io(std::io::Error::new(
-                kind,
-                "account WebSocket connection failed",
-            ))
+            // 保留系统错误码或 I/O 类型，不把 Hyper 记录的目标地址带入诊断
+            let Some(cause) = error.source().and_then(|e| e.downcast_ref::<io::Error>()) else {
+                return io::Error::other("account WebSocket connection failed");
+            };
+            cause
+                .raw_os_error()
+                .map_or_else(|| cause.kind().into(), io::Error::from_raw_os_error)
         })
 }
 

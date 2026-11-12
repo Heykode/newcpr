@@ -14,6 +14,7 @@ import {
   EDITABLE_COLOR_TOKEN_NAMES,
   EDITABLE_SHADOW_TOKEN_NAMES,
   THEME_COLOR_PRESETS,
+  THEME_SEED_COLOR_KEYS,
   themePresets,
 } from './constants'
 
@@ -53,18 +54,9 @@ function normalizeThemeSeedOverrides(value: unknown): ThemeSeedOverrides {
     return {}
 
   const source = value as Record<string, unknown>
-  const colors = [
-    'colorSuccess',
-    'colorWarning',
-    'colorError',
-    'colorInfo',
-    'colorLink',
-    'colorTextBase',
-    'colorBgBase',
-  ] as const
   const result: ThemeSeedOverrides = {}
 
-  for (const key of colors) {
+  for (const key of THEME_SEED_COLOR_KEYS) {
     const normalized = normalizeHexColor(source[key])
     if (normalized)
       result[key] = normalized

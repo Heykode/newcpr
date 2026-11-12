@@ -4,6 +4,7 @@ use gateway_core::metering::{CalculatedCost, Usage};
 use gateway_protocol::openai::OPENAI_PROTOCOL;
 
 use super::*;
+use crate::transport::CodexTransportDecision;
 
 impl CodexProvider {
     pub(super) async fn resolve_turn_affinity(
@@ -1009,7 +1010,8 @@ pub(super) fn cold_response_stream_once(response: ColdResponse) -> EventStream {
         }
         super::quality_probe::observe(&request, &client, &active_account, &response);
         if let Some(capture) = session_capture.as_mut() {
-            capture.oversized_http = response.transport_metrics.decision == Some(crate::transport::CodexTransportDecision::HttpLargeRequest);
+            capture.oversized_http = response.transport_metrics.decision
+                == Some(CodexTransportDecision::Http2WebSocketMessageTooLarge);
             capture.continuation_scope = Some(if request.excel.is_some() {
                 OpenAiContinuationScope::ReplayRequired
             } else if capture.response_store {

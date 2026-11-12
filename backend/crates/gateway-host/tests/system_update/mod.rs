@@ -322,6 +322,11 @@ async fn restart_should_conflict_while_another_system_operation_is_running() {
 async fn rollback_should_restore_binary_web_and_version_state() {
     let server = MockServer::start().await;
     let fixture = Fixture::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        fs::set_permissions(fixture.web(), fs::Permissions::from_mode(0o555)).unwrap();
+    }
     fixture
         .mount_release(
             &server,
@@ -338,6 +343,18 @@ async fn rollback_should_restore_binary_web_and_version_state() {
             .status,
         SystemOperationStatus::Succeeded
     );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        fs::create_dir_all(fixture.web().join("assets")).unwrap();
+        fs::write(fixture.web().join("assets/new.js"), "new asset").unwrap();
+        fs::set_permissions(
+            fixture.web().join("assets"),
+            fs::Permissions::from_mode(0o550),
+        )
+        .unwrap();
+        fs::set_permissions(fixture.web(), fs::Permissions::from_mode(0o555)).unwrap();
+    }
     service.rollback().await.expect("rollback");
 
     assert_eq!(
@@ -356,6 +373,27 @@ async fn rollback_should_restore_binary_web_and_version_state() {
             .operation
             .status,
         SystemOperationStatus::Succeeded
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        assert_eq!(
+            fs::metadata(fixture.web()).unwrap().permissions().mode() & 0o777,
+            0o555
+        );
+    }
+    // The rolled-back backup is also read-only, including nested assets.
+    // A subsequent update must clean it without changing the restored backup modes.
+    assert_eq!(
+        complete_update(&service, TARGET_VERSION)
+            .await
+            .operation
+            .status,
+        SystemOperationStatus::Succeeded
+    );
+    assert_eq!(
+        fs::read(fixture.web().join("index.html")).unwrap(),
+        b"new-web"
     );
 }
 
@@ -945,6 +983,11 @@ async fn update_should_replace_web_assets_across_filesystems() {
 async fn update_should_restore_web_assets_when_binary_backup_fails() {
     let server = MockServer::start().await;
     let fixture = Fixture::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        fs::set_permissions(fixture.web(), fs::Permissions::from_mode(0o555)).unwrap();
+    }
     fixture
         .mount_release(
             &server,
@@ -966,6 +1009,14 @@ async fn update_should_restore_web_assets_when_binary_backup_fails() {
         fs::read(fixture.web().join("index.html")).expect("web"),
         b"old-web"
     );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        assert_eq!(
+            fs::metadata(fixture.web()).unwrap().permissions().mode() & 0o777,
+            0o555
+        );
+    }
 }
 
 #[tokio::test]

@@ -34,9 +34,9 @@ const options = computed(() => [
       ]
     : []),
   {
-    label: t('accounts.proxy.directConnection'),
+    label: t('accounts.proxy.deploymentDefault'),
     value: 'direct',
-    description: t('accounts.proxy.notUsingProxy'),
+    description: t('accounts.proxy.deploymentDefaultHelp'),
   },
   ...proxies.value.map(proxy => ({
     label: `${proxy.name.trim() || proxy.endpoint}${!proxy.enabled
@@ -77,12 +77,12 @@ const selectedProxy = computed(() => proxies.value.find(proxy => proxy.id === se
 const testTarget = computed(() => {
   if (props.disabled)
     return null
-  // 禁用代理的账号实际走直连，不把该代理自身的测试结果当成账号出口
+  // 禁用代理的账号使用部署默认出口，不把该代理自身的测试结果当成账号出口
   if (selection.value === 'direct' || selectedProxy.value?.enabled === false)
-    return 'direct' as const
+    return 'deployment' as const
   return selectedProxy.value ?? null
 })
-const { result, directResult, testing, test } = useAccountProxyTest({
+const { result, defaultResult, testing, test } = useAccountProxyTest({
   target: () => testTarget.value,
   accountId: () => props.accountId,
   onConflict: loadProxies,
@@ -92,19 +92,19 @@ const { result, directResult, testing, test } = useAccountProxyTest({
       : proxy)
   },
 })
-// 代理复用目录中的最近测试，直连结果只保留在当前账号的编辑过程
+// 代理复用目录中的最近测试，部署默认出口结果只保留在当前账号的编辑过程
 const optionTests = computed<Record<string, OutboundProxyTest | null>>(() => ({
   ...Object.fromEntries(proxies.value.map(proxy => [
     proxy.id,
     proxy.enabled ? proxy.lastTest : null,
   ])),
-  direct: directResult.value,
+  direct: defaultResult.value,
 }))
-const selectedTest = computed(() => result.value ?? (testTarget.value === 'direct'
-  ? directResult.value
+const selectedTest = computed(() => result.value ?? (testTarget.value === 'deployment'
+  ? defaultResult.value
   : optionTests.value[selection.value]))
 const testHint = computed(() => selectedProxy.value?.enabled === false
-  ? t('accounts.proxy.disabledUsesDirect')
+  ? t('accounts.proxy.disabledUsesDefault')
   : selection.value !== 'direct' && !selectedProxy.value
     ? t('accounts.proxy.selectToTest')
     : null)

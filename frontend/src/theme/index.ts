@@ -20,8 +20,8 @@ export {
   createThemeSeedTokens,
   resolveTheme,
   resolveThemeName,
+  resolveThemeProfile,
   resolveThemeSeed,
-  resolveThemeSeedTokens,
   themeColorPreset,
 } from './core/resolve'
 export { createThemeVars, getThemeVarName, themePrefix } from './namespace'
@@ -29,7 +29,6 @@ export { applyResolvedTheme } from './runtime/browser'
 export type {
   ResolvedTheme,
   ResolvedThemeSeedTokens,
-  ThemeAppearanceSeed,
   ThemeColorId,
   ThemeColorPreset,
   ThemeColorPresetId,
@@ -40,6 +39,8 @@ export type {
   ThemeOptions,
   ThemePreset,
   ThemePresetId,
+  ThemeSeedColors,
+  ThemeSeedDimensions,
   ThemeSeedOverrides,
   ThemeTokenName,
   ThemeTokens,

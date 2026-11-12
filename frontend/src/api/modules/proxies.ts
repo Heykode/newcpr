@@ -115,6 +115,7 @@ interface ProxyUpdateParam extends ProxyIdParam, Omit<ProxyCreateParam, 'proxyUr
 }
 
 interface ProxyProbeParam {
+  useDeploymentProxy?: boolean
   proxyUrl: string
   detectLocation?: boolean
 }

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { ThemeEditorDraft, ThemeEditorGlobalCategory } from '../composables/useThemeEditor'
 
-import type { ResolvedTheme, ThemeColorPresetId, ThemeMode, ThemePresetId, ThemeSeedOverrides } from '@/theme'
+import type { ResolvedTheme, ThemeColorPresetId, ThemeMode, ThemePresetId, ThemeSeedColors, ThemeSeedDimensions, ThemeSeedOverrides } from '@/theme'
 import { Check, ChevronDown, Laptop, Moon, PanelsTopLeft, Sparkles, Sun } from '@lucide/vue'
 
 import { isEqual } from 'es-toolkit'
@@ -9,7 +9,7 @@ import { computed, shallowRef } from 'vue'
 
 import { useI18n } from 'vue-i18n'
 import BaseSegmented from '@/components/base/BaseSegmented.vue'
-import { createThemeSeedTokens, THEME_COLOR_PRESETS, themePresets, themeProfiles } from '@/theme'
+import { resolveThemeProfile, THEME_COLOR_PRESETS, themePresets } from '@/theme'
 
 import sceneArtwork from './theme-scenes.svg?no-inline'
 import ThemeColorTokenField from './ThemeColorTokenField.vue'
@@ -27,17 +27,8 @@ const emit = defineEmits<{
   resetPrimary: []
   profile: [value: ThemeColorPresetId]
   primary: [value: string]
-  seedColor: [
-    key: Exclude<
-      keyof ThemeSeedOverrides,
-      'fontSize' | 'sizeUnit' | 'sizeStep' | 'controlHeight' | 'borderRadius' | 'shadowStrength'
-    >,
-    value: string,
-  ]
-  seedNumber: [
-    key: 'fontSize' | 'sizeUnit' | 'sizeStep' | 'controlHeight' | 'borderRadius' | 'shadowStrength',
-    value: number,
-  ]
+  seedColor: [key: keyof ThemeSeedColors, value: string]
+  seedNumber: [key: keyof ThemeSeedDimensions, value: number]
   resetSeed: [key: keyof ThemeSeedOverrides]
 }>()
 
@@ -46,26 +37,17 @@ const { t } = useI18n({ useScope: 'global' })
 const category = defineModel<ThemeEditorGlobalCategory>('category', { required: true })
 const derivedOpen = shallowRef(false)
 
-const profiles = THEME_COLOR_PRESETS.map((preset) => {
-  const options = { ...themeProfiles[preset.id], colorId: preset.id }
-  const light = createThemeSeedTokens({ ...options, name: 'light' })
-  return {
-    ...preset,
-    paper: light.colorBgBase,
-    accent: light.colorWarning,
-    ink: createThemeSeedTokens({ ...options, name: 'dark' }).colorBgBase,
-  }
-})
-const localizedPresets = computed(() => profiles.map(p => ({
+const localizedPresets = computed(() => THEME_COLOR_PRESETS.map(p => ({
   ...p,
   label: t(`appearance.themeColors.${p.id}.label`),
   description: t(`appearance.themeColors.${p.id}.description`),
 })))
 const activeProfile = computed(() => {
   const { color, preset, customization } = props.draft
-  if (color !== 'custom' && themeProfiles[color].preset === preset && isEqual(themeProfiles[color].customization, customization))
-    return color
-  return undefined
+  if (color === 'custom')
+    return undefined
+  const profile = resolveThemeProfile(color, customization.seed)
+  return profile.preset === preset && isEqual(profile.customization, customization) ? color : undefined
 })
 const colorPresets = THEME_COLOR_PRESETS.map(preset => preset.seed)
 const themePresetDetails = computed(() => ({
@@ -215,7 +197,7 @@ function seedOverridden(key: keyof ThemeSeedOverrides) {
         >
           <svg
             class="block h-11 w-full overflow-hidden rounded-cp-sm"
-            :style="{ 'color': preset.seed, '--scene-paper': preset.paper, '--scene-ink': preset.ink, '--scene-accent': preset.accent }"
+            :style="{ color: preset.seed }"
             viewBox="0 0 160 44"
             preserveAspectRatio="xMidYMid slice"
             aria-hidden="true"

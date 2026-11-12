@@ -1077,6 +1077,13 @@ pub(super) fn map_client_error(
                 websocket_error_kind(error),
                 websocket_send_state(error),
             ));
+            if matches!(
+                error.classified(),
+                CodexWebSocketExchangeError::MessageTooLarge
+            ) {
+                // 可回退请求已在 transport 内转为 HTTP，剩余预热请求不能重复发送
+                failure.error = failure.error.with_retry_prohibited();
+            }
             if close_code == Some(1009) {
                 failure.error = failure
                     .error
@@ -1317,6 +1324,7 @@ fn websocket_diagnostic(error: &CodexWebSocketExchangeError) -> ProviderDiagnost
         CodexWebSocketExchangeError::InvalidRequest(_) => ("prepare", "invalid_request"),
         CodexWebSocketExchangeError::SendTimeout { .. } => ("send", "send_timeout"),
         CodexWebSocketExchangeError::SendNotStarted => ("send", "send_not_started"),
+        CodexWebSocketExchangeError::MessageTooLarge => ("prepare", "websocket_message_too_large"),
         CodexWebSocketExchangeError::ReceiveIdleTimeout { .. } => {
             ("receive", "receive_idle_timeout")
         }
@@ -1420,6 +1428,10 @@ fn websocket_diagnostic_message(error: &CodexWebSocketExchangeError) -> Provider
         CodexWebSocketExchangeError::SendNotStarted => {
             "OpenAI WebSocket connection closed before payload send started".to_owned()
         }
+        CodexWebSocketExchangeError::MessageTooLarge => {
+            "OpenAI WebSocket request exceeds the advertised message size limit before send"
+                .to_owned()
+        }
         CodexWebSocketExchangeError::SendTimeout { timeout } => {
             format!("OpenAI WebSocket payload send timed out after {timeout:?}")
         }
@@ -1492,6 +1504,16 @@ fn websocket_raw_error(error: &CodexWebSocketExchangeError) -> Option<RawUpstrea
 pub(super) fn websocket_client_visible_error(
     error: &CodexWebSocketExchangeError,
 ) -> Option<ClientVisibleUpstreamError> {
+    if matches!(
+        error.classified(),
+        CodexWebSocketExchangeError::MessageTooLarge
+    ) {
+        return Some(ClientVisibleUpstreamError::new(
+            "The WebSocket request exceeds the server's message size limit.".to_owned(),
+            Some("websocket_message_too_large".to_owned()),
+            Some("invalid_request_error".to_owned()),
+        ));
+    }
     if let CodexWebSocketExchangeError::ConnectionLimitReached(failure) = error.classified() {
         return Some(ClientVisibleUpstreamError::new(
             failure.message.clone(),
@@ -1784,6 +1806,7 @@ pub(super) fn websocket_send_state(error: &CodexWebSocketExchangeError) -> Upstr
         | CodexWebSocketExchangeError::OriginHalfOpenBusy
         | CodexWebSocketExchangeError::SharedConnectFailed
         | CodexWebSocketExchangeError::SendNotStarted
+        | CodexWebSocketExchangeError::MessageTooLarge
         | CodexWebSocketExchangeError::ContinuationUnavailable { .. } => UpstreamSendState::NotSent,
         CodexWebSocketExchangeError::Upstream(_)
         | CodexWebSocketExchangeError::ConnectionLimitReached(_)
@@ -1810,6 +1833,7 @@ pub(super) fn websocket_error_kind(error: &CodexWebSocketExchangeError) -> Provi
         return ProviderErrorKind::MessageTooBig;
     }
     match error.classified() {
+        CodexWebSocketExchangeError::MessageTooLarge => ProviderErrorKind::MessageTooBig,
         CodexWebSocketExchangeError::InvalidRequest(_)
         | CodexWebSocketExchangeError::Egress(_)
         | CodexWebSocketExchangeError::InvalidSse(_)

@@ -410,15 +410,11 @@ impl OpenAiTokenClient {
             selected.client = client;
             return Ok(selected);
         }
-        let mut builder = Client::builder()
-            .no_proxy()
+        let builder = gateway_egress::http_client(proxy)
+            .map_err(|_| TokenClientBuildError)?
             .redirect(Policy::none())
             .connect_timeout(TOKEN_CONNECT_TIMEOUT)
             .timeout(TOKEN_REQUEST_TIMEOUT);
-        if let Some(proxy) = proxy {
-            builder = builder
-                .proxy(reqwest::Proxy::all(proxy.expose_url()).map_err(|_| TokenClientBuildError)?);
-        }
         let client = build_reqwest_native_client_with_custom_ca(builder)
             .map_err(|_| TokenClientBuildError)?;
         selected.client = token_clients()
@@ -443,9 +439,8 @@ impl OpenAiTokenClient {
         let Some(proxy) = proxy else {
             return Ok(selected);
         };
-        let builder = Client::builder()
-            .no_proxy()
-            .proxy(reqwest::Proxy::all(proxy.expose_url()).map_err(|_| TokenClientBuildError)?)
+        let builder = gateway_egress::http_client(Some(proxy))
+            .map_err(|_| TokenClientBuildError)?
             .redirect(Policy::none())
             .connect_timeout(TOKEN_CONNECT_TIMEOUT)
             .timeout(TOKEN_REQUEST_TIMEOUT);
@@ -550,8 +545,8 @@ pub fn openai_token_client(
     profile: CodexWireProfileState,
 ) -> Result<OpenAiTokenClient, TokenClientBuildError> {
     ensure_rustls_provider();
-    let builder = Client::builder()
-        .no_proxy()
+    let builder = gateway_egress::http_client(None)
+        .map_err(|_| TokenClientBuildError)?
         .redirect(Policy::none())
         .connect_timeout(TOKEN_CONNECT_TIMEOUT)
         .timeout(TOKEN_REQUEST_TIMEOUT);

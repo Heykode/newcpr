@@ -43,6 +43,11 @@ async fn capture_terminal_evidence_survives_fragment_limit_and_redacts_untrusted
         &json!({"decision":"ws_reused","requirement":"new_chain"}),
     );
     observer.fact(
+        "transport.selected",
+        1,
+        &json!({"decision":"http2_ws_message_too_large","requirement":"new_chain"}),
+    );
+    observer.fact(
         "upstream.read.failed",
         1,
         &json!({"failureReason":"normal_close","error":"PRIVATE_FIXTURE","connectionAgeMs":123}),
@@ -63,6 +68,7 @@ async fn capture_terminal_evidence_survives_fragment_limit_and_redacts_untrusted
     for required in [
         "diagnostic.evidence",
         "ws_reused",
+        "http2_ws_message_too_large",
         "normal_close",
         "closeCode\":1000",
         "downstreamCommitted\":true",

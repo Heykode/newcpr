@@ -28,12 +28,20 @@ This contract does not authorize production changes or wholesale upstream merges
 ## 3. Contracts
 
 Smart fields are `loadWeight`, `quotaWeight`, `healthWeight`, `latencyWeight`,
-`resetWeight`, `queueWeight` and `preferHigherWeight`. Defaults are
+`resetWeight`, `queueWeight`, `preferHigherWeight` and `resetWindowWeights`. Defaults are
 `1, 0.8, 1, 0.5, 0, 0, false`. Weights are finite, `0..=10`, in tenths,
 with at least one positive value. Smart and Sticky share scores. Higher
 account-weight switchback is opt-in; required/native/replay owners never
 relax. Queue pressure is read only during fallback wait admission, without
-advancing the round-robin cursor. Expired or unknown quota reset times score zero.
+advancing the round-robin cursor. `resetWindowWeights` contains `fiveHour`, `weekly`,
+`monthly`, each finite `0..=10` in tenths; omission defaults all three to zero.
+A supplied object must contain all three keys. All-zero window weights disable the
+reset dimension and exclude its coefficient from near-best tolerance. For each
+recognized account-wide period, keep the nearest future reset and score
+`H / (H + remaining_seconds)`, with `H = period_seconds / 7`; monthly uses 30 days.
+The weighted average denominator includes all configured periods even when missing.
+Unknown, model-specific, missing and expired windows score zero. Preserve the
+separate `quota_reset_priority` policy's existing single reset timestamp.
 
 The frontend renders these defaults below Smart/Sticky, without a master
 switch, and provides a reset command. Clone nested defaults and saved values.
@@ -85,18 +93,20 @@ Keep raw WS text separate from raw SSE; never infer success from opaque frames.
 Filter protocol metadata headers in active, settlement and idle phases, retaining
 business fields. Do not expose `codex.rate_limits` to downstream clients.
 
-Oversized new chains may use HTTP under the existing fallback settings.
-The default size threshold is 15.5 MiB with recovery below 13.5 MiB; configured
-thresholds retain the same 2 MiB hysteresis and zero disables size routing.
-Measure the final WS frame after identity projection and overdraft injection.
-Keep oversized memory separate from WS failure budgets: successful incremental
-turns must not erase the full-history size decision. After oversized replay has
-completed successfully, request downstream reconnection only after the matching
-terminal has been written and the native input queue is empty. The reconnect
-hint is transient, never persisted, and must not be restricted by client UA.
-Oversized exact continuations fail before sending. A downstream WS delta
-after HTTP `store:false` requires full replay; it is never silently sent as a
-new chain. Keep the separate Excel replay contract.
+The physical WS handshake advertises `x-codex-websocket-max-message-bytes`.
+After preparing the socket, compare the final UTF-8 frame length with that limit;
+only strictly larger frames are rejected. Missing/invalid values impose no local
+limit; zero rejects any nonempty create frame. There is no fixed threshold or
+size hysteresis. The retired saved setting is read and discarded, not serialized.
+Discard the socket and release its lease before fallback: new chains, persisted
+continuations and external-unknown requests may use HTTP; exact connection-local
+continuations return `ClientReplayRequired`, while warmup returns `MessageTooBig`
+with `NotSent`. Preflight rejection consumes no WS failure budget. A new physical
+connection reads its own limit. After successful oversized HTTP fallback, request
+downstream reconnection only after its matching terminal was written and the input
+queue is empty. The hint is transient, never persisted, and not restricted by UA.
+HTTP `store:false` still requires full replay for downstream WS deltas. Existing
+sent-frame 1009 recovery and Excel replay contracts remain separately enforced.
 
 ## 4. Validation Matrix
 
