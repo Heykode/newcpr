@@ -248,6 +248,7 @@ pub struct AccountRuntimeSignals {
     pub in_flight: u32,
     pub last_started_at: Option<SystemTime>,
     pub quota_reset_at: Option<SystemTime>,
+    pub quota_reset_windows: Option<Arc<[AccountQuotaResetWindow]>>,
     /// Provider 归一化的剩余额度基点：0 耗尽，10_000 全部可用。
     pub quota_remaining_rank: Option<u64>,
     pub rate_limited_until: Option<SystemTime>,
@@ -454,6 +455,7 @@ impl AccountRuntimeSignals {
     pub fn with_provider_quota(mut self, quota: Option<AccountQuotaSignals>) -> Self {
         if let Some(quota) = quota {
             self.quota_reset_at = quota.reset_at;
+            self.quota_reset_windows = quota.reset_windows;
             self.quota_remaining_rank = quota.remaining_rank;
         }
         self
@@ -477,9 +479,17 @@ impl AccountRuntimeSignals {
     }
 }
 
+/// Provider 确认为账号通用且属于受支持周期的重置观测。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountQuotaResetWindow {
+    pub period: super::QuotaResetPeriod,
+    pub reset_at: SystemTime,
+}
+
 /// Provider 从私有 quota JSON 投影出的中立调度事实。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountQuotaSignals {
+    reset_windows: Option<Arc<[AccountQuotaResetWindow]>>,
     reset_at: Option<SystemTime>,
     remaining_rank: Option<u64>,
 }
@@ -491,16 +501,23 @@ impl AccountQuotaSignals {
         Self {
             reset_at,
             remaining_rank,
+            reset_windows: None,
         }
     }
 
     #[must_use]
-    pub const fn reset_at(self) -> Option<SystemTime> {
+    pub fn with_reset_windows(mut self, windows: Vec<AccountQuotaResetWindow>) -> Self {
+        self.reset_windows = (!windows.is_empty()).then(|| windows.into());
+        self
+    }
+
+    #[must_use]
+    pub const fn reset_at(&self) -> Option<SystemTime> {
         self.reset_at
     }
 
     #[must_use]
-    pub const fn remaining_rank(self) -> Option<u64> {
+    pub const fn remaining_rank(&self) -> Option<u64> {
         self.remaining_rank
     }
 }
@@ -1146,12 +1163,6 @@ fn configured_smart_score(
             SMART_LATENCY_HALF_SCORE_MS / (SMART_LATENCY_HALF_SCORE_MS + latency as f64)
         });
 
-    let reset = candidate
-        .signals
-        .quota_reset_at
-        .and_then(|at| at.duration_since(now).ok())
-        .filter(|remaining| !remaining.is_zero())
-        .map_or(0.0, |remaining| 3600.0 / (3600.0 + remaining.as_secs_f64()));
     let [
         load_weight,
         quota_weight,
@@ -1164,6 +1175,6 @@ fn configured_smart_score(
         + quota_weight * quota
         + health_weight * failure
         + latency_weight * latency
-        + reset_weight * reset
+        + reset_weight * config.reset_score(&candidate.signals, now)
         + queue_weight / (1.0 + f64::from(waiting_count))
 }

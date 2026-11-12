@@ -120,8 +120,6 @@ pub struct RequestTuning {
     pub max_account_switches: u32,
     pub max_request_attempts: u32,
     pub websocket_max_retries: u32,
-    #[serde(default = "default_websocket_large_request_threshold_bytes")]
-    pub websocket_large_request_threshold_bytes: u64,
     /// 提交前原始上游字节缓冲阈值；零关闭额外缓冲，不限制请求大小。
     #[serde(default = "default_stream_prefetch_bytes")]
     pub stream_prefetch_bytes: u64,
@@ -177,10 +175,6 @@ pub struct RequestTuning {
         alias = "accountConcurrencyWaitTimeoutSeconds"
     )]
     pub account_concurrency_wait_timeout_seconds: u64,
-}
-
-const fn default_websocket_large_request_threshold_bytes() -> u64 {
-    31 * 1024 * 1024 / 2
 }
 
 const fn default_stream_prefetch_bytes() -> u64 {
@@ -254,8 +248,6 @@ impl RequestTuning {
             max_account_switches: DEFAULT_MAX_REQUEST_ATTEMPTS - 1,
             max_request_attempts: DEFAULT_MAX_REQUEST_ATTEMPTS,
             websocket_max_retries: 5,
-            websocket_large_request_threshold_bytes:
-                default_websocket_large_request_threshold_bytes(),
             stream_prefetch_bytes: default_stream_prefetch_bytes(),
             websocket_max_age_ms: 55 * 60 * 1_000,
             websocket_stream_idle_timeout_ms: 300_000,

@@ -281,6 +281,7 @@ async fn connected_with_buffer(
             None,
         ),
         metadata: CodexWebSocketConnectionMetadata {
+            max_message_bytes: None,
             routing_affinity: None,
             session_proxy: None,
             turn_state: None,

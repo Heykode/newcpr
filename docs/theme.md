@@ -116,9 +116,11 @@ interface ThemeCustomization {
 
 持久化键为 `codex-proxy-rs-theme`。Store 不保存完整色板或 CSS Variables，损坏的模式、颜色与自定义值会在
 初始化时规范化并回退到默认配置。旧数据没有 `themePreset` 时补 `default`，保留原自定义覆盖。
-`createTheme({ name, preset, colorId, primaryColor, customization })` 接入官方 UI v0.9.1 的实际
+`createTheme({ name, preset, colorId, primaryColor, customization })` 接入官方 UI `45b076735` 的实际
 派生实现；本地 `resolveTheme(...)` 保留兼容入口，Token 仍采用 `--cp-*`，无需迁移旧覆盖键。
-`themeProfiles` 保存完整场景组合，`themePresets` 只定义表面材质；编辑器与 Store 使用同一 compiler。
+`themeProfiles` 保存字号、尺寸和材质组合，功能色及中性色独立；`themePresets` 只定义表面材质。
+切换预设通过 `resolveThemeProfile` 保留用户已编辑的功能色和中性色，未编辑的背景与文字色继续
+跟随明暗模式。主色不再连带覆盖链接或信息色。编辑器与 Store 使用同一 compiler。
 
 ### Map Token
 

@@ -2,11 +2,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use futures::{StreamExt, stream};
-use gateway_core::{
-    account::{OutboundProxy, ProviderAccountId},
-    routing::ProviderKind,
-    runtime::SnapshotControl,
-};
+use gateway_core::{account::ProviderAccountId, routing::ProviderKind, runtime::SnapshotControl};
 use tokio::sync::Semaphore;
 
 use super::{map_store_error, publish_committed};
@@ -18,7 +14,7 @@ use crate::{
     },
     ports::{
         provider::ProviderAdminRegistry,
-        proxy::{ProxyProbe, ProxyStore},
+        proxy::{ProbeRoute, ProxyProbe, ProxyStore},
         store::AdminStoreErrorKind,
     },
 };
@@ -133,7 +129,7 @@ pub trait ProxiesService: Send + Sync {
     ) -> Result<ProxyRecord, AdminError>;
     async fn probe(
         &self,
-        proxy: Option<&OutboundProxy>,
+        proxy: ProbeRoute<'_>,
         detect_location: bool,
     ) -> Result<ProxyTestResult, AdminError>;
 }
@@ -286,7 +282,7 @@ impl ProxiesService for DefaultProxiesService {
         command.name = validate_name(&command.name)?;
         command.request_location = normalize_location(command.request_location)?;
         command.test = if command.auto_location {
-            Some(self.probe(Some(&command.proxy), true).await?)
+            Some(self.probe(ProbeRoute::Proxy(&command.proxy), true).await?)
         } else {
             None
         };
@@ -323,7 +319,7 @@ impl ProxiesService for DefaultProxiesService {
             if command.auto_location.unwrap_or(current.auto_location)
                 && (!current.auto_location || proxy != &current.proxy)
             {
-                command.test = Some(self.probe(Some(proxy), true).await?);
+                command.test = Some(self.probe(ProbeRoute::Proxy(proxy), true).await?);
             }
         }
         let result = self
@@ -370,7 +366,10 @@ impl ProxiesService for DefaultProxiesService {
         }
         let result = self
             .probe
-            .test(Some(&record.proxy), record.auto_location || detect_location)
+            .test(
+                ProbeRoute::Proxy(&record.proxy),
+                record.auto_location || detect_location,
+            )
             .await;
         let mutation = self
             .store
@@ -385,7 +384,7 @@ impl ProxiesService for DefaultProxiesService {
 
     async fn probe(
         &self,
-        proxy: Option<&OutboundProxy>,
+        proxy: ProbeRoute<'_>,
         detect_location: bool,
     ) -> Result<ProxyTestResult, AdminError> {
         let _permit = self.test_slots.try_acquire().map_err(|_| {

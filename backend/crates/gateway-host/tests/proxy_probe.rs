@@ -21,7 +21,10 @@ async fn dual_stack_latency_measures_the_selected_exit_without_the_other_family_
             format!("{}/v4", server.uri()),
             format!("{}/v6", server.uri()),
         )
-        .test(Some(&OutboundProxy::parse(&server.uri()).unwrap()), false)
+        .test(
+            ProbeRoute::Proxy(&OutboundProxy::parse(&server.uri()).unwrap()),
+            false,
+        )
         .await;
         assert!(result.success);
         assert_eq!(result.exit_ipv4.is_some(), working_family == "v4");
@@ -31,7 +34,10 @@ async fn dual_stack_latency_measures_the_selected_exit_without_the_other_family_
     }
 }
 
-use gateway_admin::{model::proxies::ProxyLocationDetection, ports::proxy::ProxyProbe};
+use gateway_admin::{
+    model::proxies::ProxyLocationDetection,
+    ports::proxy::{ProbeRoute, ProxyProbe},
+};
 use gateway_core::account::OutboundProxy;
 use gateway_host::proxy_probe::HttpProxyProbe;
 use serde_json::json;
@@ -87,7 +93,7 @@ async fn proxy_probe_supports_both_proxy_and_exit_address_families() {
             OutboundProxy::parse(&format!("http://user:password@{}", proxy_server.address()))
                 .unwrap();
         let result = HttpProxyProbe::new("http://unresolvable.invalid/ip")
-            .test(Some(&proxy), false)
+            .test(ProbeRoute::Proxy(&proxy), false)
             .await;
         assert!(
             result.success,
@@ -114,7 +120,7 @@ async fn proxy_probe_rejects_auth_errors_redirects_and_invalid_or_oversized_resp
             .await;
         let result = HttpProxyProbe::new("http://unresolvable.invalid/ip")
             .test(
-                Some(&OutboundProxy::parse(&proxy_server.uri()).unwrap()),
+                ProbeRoute::Proxy(&OutboundProxy::parse(&proxy_server.uri()).unwrap()),
                 false,
             )
             .await;
@@ -135,7 +141,7 @@ async fn unavailable_proxy_never_falls_back_to_direct_connection() {
     let proxy = OutboundProxy::parse(&format!("http://{}", unused.local_addr().unwrap())).unwrap();
     drop(unused);
     let result = HttpProxyProbe::new(target.uri())
-        .test(Some(&proxy), false)
+        .test(ProbeRoute::Proxy(&proxy), false)
         .await;
     assert!(!result.success);
 }
@@ -150,7 +156,10 @@ async fn invalid_certificate_configuration_should_not_fall_back_or_expose_detail
         .await;
     let result = HttpProxyProbe::new(target.uri())
         .with_client_builder(|_| Err("private-certificate-path"))
-        .test(Some(&OutboundProxy::parse(&target.uri()).unwrap()), false)
+        .test(
+            ProbeRoute::Proxy(&OutboundProxy::parse(&target.uri()).unwrap()),
+            false,
+        )
         .await;
     assert!(!result.success);
     assert!(!result.message.contains("private-certificate-path"));
@@ -175,7 +184,7 @@ async fn dual_stack_proxy_probe_reports_both_addresses_when_available() {
         format!("{}/v4", proxy_server.uri()),
         format!("{}/v6", proxy_server.uri()),
     )
-    .test(Some(&proxy), false)
+    .test(ProbeRoute::Proxy(&proxy), false)
     .await;
 
     assert!(result.success);
@@ -203,7 +212,7 @@ async fn dual_stack_proxy_probe_reports_single_stack_when_only_one_succeeds() {
         format!("{}/v4", proxy_server.uri()),
         format!("{}/v6", proxy_server.uri()),
     )
-    .test(Some(&proxy), false)
+    .test(ProbeRoute::Proxy(&proxy), false)
     .await;
 
     assert!(result.success);
@@ -260,7 +269,7 @@ async fn automatic_location_is_opt_in_and_queries_the_measured_ip_through_the_sa
         let proxy =
             OutboundProxy::parse(&format!("http://user:password@{}", proxy_server.address()))
                 .unwrap();
-        let result = probe.test(Some(&proxy), enabled).await;
+        let result = probe.test(ProbeRoute::Proxy(&proxy), enabled).await;
         assert!(result.success);
         assert_eq!(builds.load(Ordering::SeqCst), 1 + usize::from(enabled));
         if enabled {
@@ -311,7 +320,7 @@ async fn dual_stack_location_requires_success_for_both_and_a_common_timezone() {
         let result = HttpProxyProbe::new_dual("http://exit.invalid/v4", "http://exit.invalid/v6")
             .with_location_endpoint("http://location.invalid/geo")
             .test(
-                Some(&OutboundProxy::parse(&proxy_server.uri()).unwrap()),
+                ProbeRoute::Proxy(&OutboundProxy::parse(&proxy_server.uri()).unwrap()),
                 true,
             )
             .await;
@@ -354,7 +363,7 @@ async fn automatic_location_rejects_incomplete_untrusted_and_oversized_results()
         let result = HttpProxyProbe::new("http://exit.invalid/exit")
             .with_location_endpoint("http://location.invalid/geo")
             .test(
-                Some(&OutboundProxy::parse(&proxy_server.uri()).unwrap()),
+                ProbeRoute::Proxy(&OutboundProxy::parse(&proxy_server.uri()).unwrap()),
                 true,
             )
             .await;
@@ -388,7 +397,7 @@ async fn geo_lookup_never_connects_directly_when_the_proxy_rejects_it() {
     let result = HttpProxyProbe::new("http://exit.invalid/exit")
         .with_location_endpoint(location_server.uri())
         .test(
-            Some(&OutboundProxy::parse(&proxy_server.uri()).unwrap()),
+            ProbeRoute::Proxy(&OutboundProxy::parse(&proxy_server.uri()).unwrap()),
             true,
         )
         .await;
@@ -421,9 +430,12 @@ async fn automatic_location_timeout_preserves_connectivity_without_retry() {
     let probe = HttpProxyProbe::new("http://exit.invalid/exit")
         .with_location_endpoint("http://location.invalid/geo");
     let proxy = OutboundProxy::parse(&proxy_server.uri()).unwrap();
-    let result = tokio::time::timeout(Duration::from_secs(10), probe.test(Some(&proxy), true))
-        .await
-        .expect("location query must have its own bounded timeout");
+    let result = tokio::time::timeout(
+        Duration::from_secs(10),
+        probe.test(ProbeRoute::Proxy(&proxy), true),
+    )
+    .await
+    .expect("location query must have its own bounded timeout");
     assert!(result.success);
     assert_eq!(result.exit_ipv4, Some("203.0.113.8".parse().unwrap()));
     assert!(matches!(
@@ -431,4 +443,115 @@ async fn automatic_location_timeout_preserves_connectivity_without_retry() {
         ProxyLocationDetection::Failed { .. }
     ));
     proxy_server.verify().await;
+}
+
+#[tokio::test]
+async fn deployment_proxy_routes_managed_http_and_account_probes() {
+    use std::time::Duration;
+
+    if let Ok(origin) = std::env::var("CPR_TEST_EGRESS_ORIGIN") {
+        let selected =
+            OutboundProxy::parse(&std::env::var("CPR_TEST_EGRESS_SELECTED").unwrap()).unwrap();
+        let outside = origin.replace("127.0.0.1", "localhost");
+        let http = |url: String, proxy: Option<&OutboundProxy>| {
+            let client = gateway_egress::http_client(proxy)
+                .unwrap()
+                .timeout(Duration::from_secs(2))
+                .build()
+                .unwrap();
+            async move { client.get(url).send().await.unwrap().status().as_u16() }
+        };
+        let probe = HttpProxyProbe::new(&outside);
+        let observed = |result: gateway_admin::model::proxies::ProxyTestResult| {
+            result.exit_ipv4.unwrap().octets()[3]
+        };
+        assert_eq!(observed(probe.test(ProbeRoute::Direct, false).await), 1);
+        assert_eq!(http(origin.clone(), Some(&selected)).await, 203);
+        assert_eq!(http(origin, None).await, 200);
+        let expect_env = std::env::var("CPR_TEST_EXPECT_ENV").unwrap() == "1";
+        assert_eq!(
+            http(outside, None).await,
+            if expect_env { 202 } else { 200 }
+        );
+        assert_eq!(
+            observed(probe.test(ProbeRoute::Deployment, false).await),
+            if expect_env { 2 } else { 1 }
+        );
+        println!("checked managed egress");
+        return;
+    }
+
+    let origin = MockServer::start().await;
+    let env = MockServer::start().await;
+    let selected = MockServer::start().await;
+    for (server, code, ip) in [
+        (&origin, 200, "192.0.2.1"),
+        (&env, 202, "192.0.2.2"),
+        (&selected, 203, "192.0.2.3"),
+    ] {
+        Mock::given(any())
+            .respond_with(ResponseTemplate::new(code).set_body_json(serde_json::json!({"ip": ip})))
+            .mount(server)
+            .await;
+    }
+    for mode in ["uppercase", "lowercase", "all", "bypass", "cgi", "none"] {
+        let mut command = tokio::process::Command::new(std::env::current_exe().unwrap());
+        for name in [
+            "HTTP_PROXY",
+            "HTTPS_PROXY",
+            "ALL_PROXY",
+            "NO_PROXY",
+            "REQUEST_METHOD",
+        ] {
+            command
+                .env_remove(name)
+                .env_remove(name.to_ascii_lowercase());
+        }
+        command.env("NO_PROXY", "127.0.0.0/8");
+        match mode {
+            "uppercase" => {
+                command.env("HTTP_PROXY", env.uri());
+            }
+            "lowercase" => {
+                command.env("http_proxy", env.uri());
+            }
+            "all" => {
+                command.env("ALL_PROXY", env.uri());
+            }
+            "bypass" => {
+                command.env("HTTP_PROXY", env.uri()).env("NO_PROXY", "*");
+            }
+            "cgi" => {
+                command
+                    .env("HTTP_PROXY", env.uri())
+                    .env("REQUEST_METHOD", "GET");
+            }
+            _ => {}
+        }
+        command.env(
+            "CPR_TEST_EXPECT_ENV",
+            if matches!(mode, "uppercase" | "lowercase" | "all") {
+                "1"
+            } else {
+                "0"
+            },
+        );
+        let output = command
+            .args([
+                "--exact",
+                "proxy_probe::deployment_proxy_routes_managed_http_and_account_probes",
+                "--nocapture",
+            ])
+            .env("CPR_TEST_EGRESS_ORIGIN", origin.uri())
+            .env("CPR_TEST_EGRESS_SELECTED", selected.uri())
+            .output()
+            .await
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(String::from_utf8_lossy(&output.stdout).contains("checked managed egress"));
+    }
 }

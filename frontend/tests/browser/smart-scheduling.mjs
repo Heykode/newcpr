@@ -45,6 +45,12 @@ async function main() {
       }
       assert.equal(await load.inputValue(), '1')
       assert.equal(await page.getByRole('spinbutton', { name: '剩余额度权重' }).inputValue(), '0.8')
+      for (const name of ['5 小时', '周', '月']) {
+        const window = page.getByRole('spinbutton', { name, exact: true })
+        assert.equal(await window.inputValue(), '0')
+        await window.fill('1.5')
+        assert.equal(await window.inputValue(), '1.5')
+      }
       const switchback = page.getByRole('switch', { name: '主动回切高权重账号' })
       assert.equal(await switchback.isChecked(), false)
       await load.fill('2.5')
@@ -52,6 +58,8 @@ async function main() {
       await page.getByRole('button', { name: '恢复默认' }).click()
       assert.equal(await load.inputValue(), '1')
       assert.equal(await switchback.isChecked(), false)
+      for (const name of ['5 小时', '周', '月'])
+        assert.equal(await page.getByRole('spinbutton', { name, exact: true }).inputValue(), '0')
       await page.screenshot({ path: `${output}/smart-${width}.png`, fullPage: true })
       assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth))
       for (const box of await page.getByRole('spinbutton').all()) {

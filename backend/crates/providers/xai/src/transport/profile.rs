@@ -98,10 +98,10 @@ impl OfficialGrokCliReleaseTransport {
     pub fn new() -> Result<Self, GrokCliReleaseError> {
         let endpoint =
             Url::parse(GROK_CLI_RELEASE_URL).map_err(|_| GrokCliReleaseError::InvalidEndpoint)?;
-        let client = Client::builder()
+        let client = gateway_egress::http_client(None)
+            .map_err(|_| GrokCliReleaseError::ClientInitialization)?
             .use_rustls_tls()
             .https_only(true)
-            .no_proxy()
             .redirect(Policy::none())
             .connect_timeout(Duration::from_secs(10))
             .timeout(RELEASE_TIMEOUT)

@@ -147,6 +147,7 @@ fn safe_label(value: &str) -> Option<&str> {
             | "external_unknown"
             | "new_chain"
             | "http_large_request"
+            | "http2_ws_message_too_large"
             | "ws_reused"
             | "ws_connected_fast"
             | "ws_exact_required"

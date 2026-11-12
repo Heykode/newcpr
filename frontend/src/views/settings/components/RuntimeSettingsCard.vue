@@ -332,9 +332,6 @@ const tuningValues = {
         <h3 class="mb-0 mt-3 text-sm font-medium text-cp-text-secondary sm:col-span-2">
           原生 Codex 上游连接
         </h3>
-        <BaseFormItem label="大请求 HTTP 阈值（MiB）">
-          <BaseInput :model-value="units.largeRequestMiB.input.value" aria-label="大请求 HTTP 阈值（MiB）" type="number" min="0" max="64" step="any" @update:model-value="units.largeRequestMiB.setInput" />
-        </BaseFormItem>
         <BaseFormItem label="WebSocket 连接最长寿命" description="单位：秒">
           <BaseInput :model-value="units.maxAgeSeconds.input.value" step="any" aria-label="WebSocket 连接最长寿命" type="number" @update:model-value="units.maxAgeSeconds.setInput" />
         </BaseFormItem>

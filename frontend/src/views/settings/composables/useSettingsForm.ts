@@ -37,7 +37,6 @@ const requestTuningFallbacks: RequestTuning = {
   maxAccountSwitches: 31,
   maxRequestAttempts: 32,
   websocketMaxRetries: 5,
-  websocketLargeRequestThresholdBytes: 15.5 * 1024 * 1024,
   streamPrefetchBytes: 128 * 1024,
   websocketMaxAgeMs: 55 * 60 * 1_000,
   websocketStreamIdleTimeoutMs: 300_000,
@@ -185,7 +184,7 @@ export function useSettingsForm() {
         ]),
       ),
     )
-    form.requestTuning.smartScheduling = { ...form.requestTuning.smartScheduling }
+    form.requestTuning.smartScheduling = { ...form.requestTuning.smartScheduling, resetWindowWeights: { ...defaultSmartScheduling().resetWindowWeights, ...form.requestTuning.smartScheduling.resetWindowWeights } }
     form.requestTuning.openaiRequestLocation = {
       ...(tuning.openaiRequestLocation ?? defaultRequestLocation()),
     }
@@ -352,7 +351,7 @@ export function useSettingsForm() {
       tuning.smartScheduling.resetWeight,
       tuning.smartScheduling.queueWeight,
     ]
-    if (!smartWeights.every(value => Number.isFinite(value) && value >= 0 && value <= 10 && Math.round(value * 10) / 10 === value)
+    if (![...smartWeights, ...Object.values(tuning.smartScheduling.resetWindowWeights)].every(value => Number.isFinite(value) && value >= 0 && value <= 10 && Math.round(value * 10) / 10 === value)
       || !smartWeights.some(value => value > 0)) {
       toast.warning('智能调度权重须为 0–10，最多一位小数，且不能全部为 0')
       return
@@ -381,12 +380,6 @@ export function useSettingsForm() {
       || form.responsesMaxDecompressedBodyBytes < 1
       || form.responsesMaxDecompressedBodyBytes > 256 * 1024 * 1024) {
       toast.warning('请求解压上限须为 1–268435456 的整数字节数')
-      return
-    }
-    if (!Number.isInteger(tuning.websocketLargeRequestThresholdBytes)
-      || tuning.websocketLargeRequestThresholdBytes < 0
-      || tuning.websocketLargeRequestThresholdBytes > 64 * 1024 * 1024) {
-      toast.warning('大请求 HTTP 阈值须为 0–67108864 的整数字节数')
       return
     }
     if (!Number.isInteger(tuning.maxWaitingPerKey) || tuning.maxWaitingPerKey < 0 || tuning.maxWaitingPerKey > 1024
@@ -438,7 +431,7 @@ export function useSettingsForm() {
           excelImageTransport: form.requestTuning.excelImageTransport
             ? { ...form.requestTuning.excelImageTransport }
             : null,
-          smartScheduling: { ...form.requestTuning.smartScheduling },
+          smartScheduling: { ...form.requestTuning.smartScheduling, resetWindowWeights: { ...form.requestTuning.smartScheduling.resetWindowWeights } },
           openaiRequestLocation: { ...requestLocation },
         },
       })

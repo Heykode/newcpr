@@ -60,9 +60,16 @@ pub struct ProxyImportReservation {
     pub guard: Box<dyn ProxyImportGuard>,
 }
 
+#[derive(Clone, Copy)]
+pub enum ProbeRoute<'a> {
+    Direct,
+    Deployment,
+    Proxy(&'a OutboundProxy),
+}
+
 #[async_trait]
 pub trait ProxyProbe: Send + Sync {
-    async fn test(&self, proxy: Option<&OutboundProxy>, detect_location: bool) -> ProxyTestResult;
+    async fn test(&self, proxy: ProbeRoute<'_>, detect_location: bool) -> ProxyTestResult;
 
     async fn test_direct(&self) -> Option<ProxyTestResult> {
         None

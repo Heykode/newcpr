@@ -52,18 +52,20 @@ struct CachedDownloads {
 
 impl RgAdguardClientDistribution {
     pub(crate) fn new() -> Self {
-        let client = Client::builder()
-            .use_rustls_tls()
-            .connect_timeout(Duration::from_secs(5))
-            .timeout(Duration::from_secs(30))
-            .redirect(Policy::none())
-            .build()
-            .inspect_err(|_| {
-                tracing::warn!(
-                    "download resolver HTTP client initialization failed; official downloads will be used"
-                );
-            })
-            .ok();
+        let client = gateway_egress::http_client(None).ok().and_then(|builder| {
+            builder
+                .use_rustls_tls()
+                .connect_timeout(Duration::from_secs(5))
+                .timeout(Duration::from_secs(30))
+                .redirect(Policy::none())
+                .build()
+                .ok()
+        });
+        if client.is_none() {
+            tracing::warn!(
+                "download resolver HTTP client initialization failed; official downloads will be used"
+            );
+        }
         Self {
             client,
             cache: Mutex::new(None),

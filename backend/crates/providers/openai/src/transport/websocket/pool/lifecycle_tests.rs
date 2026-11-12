@@ -139,6 +139,7 @@ fn connection_with_proxy_permit(
             permit,
         ),
         metadata: CodexWebSocketConnectionMetadata {
+            max_message_bytes: None,
             routing_affinity: None,
             session_proxy: None,
             turn_state: None,

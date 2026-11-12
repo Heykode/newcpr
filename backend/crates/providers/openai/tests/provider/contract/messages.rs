@@ -91,7 +91,7 @@ async fn messages_use_selected_oauth_account_and_translate_tools_and_usage() {
     };
     let sent: Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(sent["model"], "gpt-5.4");
-    assert_eq!(sent["max_output_tokens"], 128);
+    assert!(sent.get("max_output_tokens").is_none());
     assert_eq!(sent["tools"][0]["name"], "lookup");
     assert!(wire.headers.get("authorization").is_some());
     assert!(wire.headers.get("anthropic-version").is_none());

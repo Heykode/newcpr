@@ -164,7 +164,6 @@ fn request_tuning_overrides_round_trip_all_live_fields() {
         max_account_switches: Some(7),
         max_request_attempts: Some(8),
         websocket_max_retries: Some(9),
-        websocket_large_request_threshold_bytes: Some(4096),
         stream_prefetch_bytes: Some(256 * 1024),
         websocket_max_age_ms: Some(60_000),
         websocket_stream_idle_timeout_ms: Some(120_000),
@@ -201,12 +200,12 @@ fn request_tuning_overrides_round_trip_all_live_fields() {
             "smartScheduling": {
                 "loadWeight": 1.0, "quotaWeight": 0.8, "healthWeight": 1.0,
                 "latencyWeight": 0.5, "resetWeight": 0.0, "queueWeight": 0.0,
-                "preferHigherWeight": false
+                "preferHigherWeight": false,
+                "resetWindowWeights": {"fiveHour": 0.0, "weekly": 0.0, "monthly": 0.0}
             },
             "maxAccountSwitches": 7,
             "maxRequestAttempts": 8,
             "websocketMaxRetries": 9,
-            "websocketLargeRequestThresholdBytes": 4096,
             "streamPrefetchBytes": 262144,
             "websocketMaxAgeMs": 60000,
             "websocketStreamIdleTimeoutMs": 120000,
@@ -243,9 +242,10 @@ fn request_tuning_overrides_round_trip_all_live_fields() {
     let defaults =
         serde_json::to_value(RequestTuning::default()).expect("serialize runtime defaults");
     assert!(defaults.get("websocketMaxConnecting").is_none());
-    assert_eq!(
-        defaults["websocketLargeRequestThresholdBytes"],
-        31 * 1024 * 1024 / 2
+    assert!(
+        defaults
+            .get("websocketLargeRequestThresholdBytes")
+            .is_none()
     );
     assert_eq!(defaults["openaiLocationOverrideEnabled"], false);
     assert_eq!(defaults["excelImageRelayBytes"], 1024 * 1024 * 1024);
@@ -356,36 +356,22 @@ fn excel_input_limits_are_backward_compatible_with_old_runtime_snapshots() {
 }
 
 #[test]
-fn large_request_threshold_preserves_inheritance_zero_and_legacy_defaults() {
-    let mut legacy = serde_json::to_value(RequestTuning::default()).unwrap();
-    legacy
-        .as_object_mut()
-        .unwrap()
-        .remove("websocketLargeRequestThresholdBytes");
-    assert_eq!(
-        serde_json::from_value::<RequestTuning>(legacy).unwrap(),
-        RequestTuning::default()
-    );
+fn retired_large_request_threshold_is_ignored_on_load_and_not_serialized() {
     for value in [json!(null), json!(0), json!(1), json!(64 * 1024 * 1024)] {
         let wire = json!({"websocketLargeRequestThresholdBytes": value});
         let overrides: RequestTuningOverrides = serde_json::from_value(wire).unwrap();
         assert!(overrides.validate());
-        assert_eq!(
-            serde_json::to_value(overrides).unwrap()["websocketLargeRequestThresholdBytes"],
-            value
-        );
-    }
-    let too_large: RequestTuningOverrides = serde_json::from_value(
-        json!({"websocketLargeRequestThresholdBytes": 64 * 1024 * 1024 + 1}),
-    )
-    .unwrap();
-    assert!(!too_large.validate());
-    for value in [json!(-1), json!(1.5), json!("1024"), json!(true)] {
         assert!(
-            serde_json::from_value::<RequestTuningOverrides>(
-                json!({"websocketLargeRequestThresholdBytes": value}),
-            )
-            .is_err()
+            serde_json::to_value(overrides)
+                .unwrap()
+                .get("websocketLargeRequestThresholdBytes")
+                .is_none()
+        );
+        let mut defaults = serde_json::to_value(RequestTuning::default()).unwrap();
+        defaults["websocketLargeRequestThresholdBytes"] = value;
+        assert_eq!(
+            serde_json::from_value::<RequestTuning>(defaults).unwrap(),
+            RequestTuning::default()
         );
     }
 }

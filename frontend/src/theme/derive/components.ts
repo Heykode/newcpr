@@ -20,7 +20,7 @@ import {
 } from '../core/color'
 import {
   BLACK,
-  DEFAULT_DIMENSIONS,
+  DEFAULT_COMPONENT_DIMENSIONS,
   LIGHT_SHADOW_BASE,
   WHITE,
 } from '../core/constants'
@@ -43,11 +43,11 @@ export function deriveThemeDimensionMap(
   const fontSizeXl = fontSize + 2
   const controlHeight = seedTokens.controlHeight
   const controlHeightStep = Math.max(2, Math.round(seedTokens.sizeStep * 1.5))
-  const tableRowHeight = componentOverrides?.tableRowHeight ?? DEFAULT_DIMENSIONS.tableRowHeight
+  const tableRowHeight = componentOverrides?.tableRowHeight ?? DEFAULT_COMPONENT_DIMENSIONS.tableRowHeight
   const borderRadius = seedTokens.borderRadius
   const radiusStep = Math.max(1, Math.round(seedTokens.sizeStep / 2))
   const cardBorderRadius = componentOverrides?.cardBorderRadius
-    ?? DEFAULT_DIMENSIONS.cardBorderRadius
+    ?? DEFAULT_COMPONENT_DIMENSIONS.cardBorderRadius
 
   return {
     fontSizeXs: `${fontSizeXs}px`,

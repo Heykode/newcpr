@@ -52,18 +52,19 @@ impl CodexCliVersionService {
     pub fn new(
         profile: CodexWireProfileState,
         cache: Arc<dyn ProviderArtifactProfileCachePort>,
-    ) -> Result<Self, reqwest::Error> {
+    ) -> Result<Self, crate::transport::tls::CustomCaError> {
         Ok(Self {
             profile,
             cache,
             releases_url: RELEASES.to_owned(),
             cache_kind: ProviderKind::new("openai-cli-version").expect("static cache scope"),
-            client: Client::builder()
-                .no_proxy()
+            client: gateway_egress::http_client(None)
+                .map_err(|_| crate::transport::tls::CustomCaError::ProxyConfiguration)?
                 .redirect(Policy::none())
                 .timeout(Duration::from_secs(30))
                 .user_agent("NewCPR-version-sync")
-                .build()?,
+                .build()
+                .map_err(crate::transport::tls::CustomCaError::BuildClientWithSystemRoots)?,
             last_attempt: tokio::sync::Mutex::new(None),
         })
     }

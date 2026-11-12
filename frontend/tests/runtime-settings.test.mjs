@@ -62,7 +62,6 @@ test('runtime display units preserve saved bytes and milliseconds without a glob
     const units = query.state.unitFields
     assert.equal(units.intervalSeconds.input.value, '0.05')
     assert.equal(units.bodyMiB.input.value, String(initial.responsesMaxDecompressedBodyBytes / 1048576))
-    assert.equal(units.largeRequestMiB.input.value, '15.5')
     assert.equal(units.maxAgeSeconds.input.value, '3300')
     await query.state.saveSettings()
     assert.equal(query.requests.at(-1).responsesMaxDecompressedBodyBytes, initial.responsesMaxDecompressedBodyBytes)
@@ -70,14 +69,13 @@ test('runtime display units preserve saved bytes and milliseconds without a glob
     assert.equal(Object.hasOwn(query.requests.at(-1), 'disableFast'), false)
     units.intervalSeconds.input.value = '1.001'
     units.bodyMiB.input.value = '1.5'
-    units.largeRequestMiB.input.value = '0'
     units.prefetchKiB.input.value = '0.5'
     units.idleSeconds.input.value = '10.001'
     await query.state.saveSettings()
     const saved = query.requests.at(-1)
     assert.equal(saved.requestIntervalMs, 1001)
     assert.equal(saved.responsesMaxDecompressedBodyBytes, 1572864)
-    assert.equal(saved.requestTuning.websocketLargeRequestThresholdBytes, 0)
+    assert.equal(saved.requestTuning.websocketLargeRequestThresholdBytes, undefined)
     assert.equal(saved.requestTuning.streamPrefetchBytes, 512)
     assert.equal(saved.requestTuning.websocketStreamIdleTimeoutMs, 10001)
   }
@@ -89,7 +87,7 @@ test('unit drafts reject empty and sub-byte or sub-millisecond inputs instead of
   const query = mountSettings(settings(), warning => warnings.push(warning))
   try {
     await query.state.loadSettings()
-    for (const [key, raw] of [['bodyMiB', ''], ['largeRequestMiB', '0.00000001'], ['intervalSeconds', '0.0001'], ['maxAgeSeconds', 'NaN'], ['prefetchKiB', '0.0001']]) {
+    for (const [key, raw] of [['bodyMiB', ''], ['intervalSeconds', '0.0001'], ['maxAgeSeconds', 'NaN'], ['prefetchKiB', '0.0001']]) {
       query.state.unitFields[key].input.value = raw
       await query.state.saveSettings()
       assert.equal(query.requests.length, 0)
@@ -97,7 +95,7 @@ test('unit drafts reject empty and sub-byte or sub-millisecond inputs instead of
       await query.state.loadSettings()
       assert.equal(query.state.unitFields[key].invalid.value, false)
     }
-    assert.equal(warnings.length, 5)
+    assert.equal(warnings.length, 4)
   }
   finally { query.stop() }
 })
@@ -387,25 +385,39 @@ test('smart defaults and drafts are isolated; validation and save reload preserv
   const other = mountSettings(settings())
   try {
     await query.state.loadSettings()
-    const expected = { loadWeight: 1, quotaWeight: 0.8, healthWeight: 1, latencyWeight: 0.5, resetWeight: 0, queueWeight: 0, preferHigherWeight: false }
+    const expected = { loadWeight: 1, quotaWeight: 0.8, healthWeight: 1, latencyWeight: 0.5, resetWeight: 0, queueWeight: 0, preferHigherWeight: false, resetWindowWeights: { fiveHour: 0, weekly: 0, monthly: 0 } }
     assert.deepEqual(JSON.parse(JSON.stringify(query.state.form.requestTuning.smartScheduling)), expected)
     query.state.form.requestTuning.smartScheduling.loadWeight = 2.5
     query.state.form.requestTuning.smartScheduling.preferHigherWeight = true
+    query.state.form.requestTuning.smartScheduling.resetWindowWeights = { fiveHour: 1.5, weekly: 2, monthly: 3 }
     await query.state.saveSettings()
     await query.state.loadSettings()
     assert.equal(query.state.form.requestTuning.smartScheduling.loadWeight, 2.5)
     assert.equal(query.requests.at(-1).requestTuning.smartScheduling.preferHigherWeight, true)
+    assert.deepEqual(JSON.parse(JSON.stringify(query.state.form.requestTuning.smartScheduling.resetWindowWeights)), { fiveHour: 1.5, weekly: 2, monthly: 3 })
     await other.state.loadSettings()
     assert.equal(other.state.form.requestTuning.smartScheduling.loadWeight, 1)
+    assert.deepEqual(JSON.parse(JSON.stringify(other.state.form.requestTuning.smartScheduling.resetWindowWeights)), { fiveHour: 0, weekly: 0, monthly: 0 })
     for (const invalid of [-1, 10.1, 0.01, Number.NaN]) {
       query.state.form.requestTuning.smartScheduling.loadWeight = invalid
       await query.state.saveSettings()
     }
-    for (const key of Object.keys(expected).filter(key => key !== 'preferHigherWeight'))
+    for (const key of Object.keys(expected).filter(key => key !== 'preferHigherWeight' && key !== 'resetWindowWeights'))
       query.state.form.requestTuning.smartScheduling[key] = 0
     await query.state.saveSettings()
     assert.equal(query.requests.length, 1)
     assert.equal(warnings.length, 5)
+    query.state.form.requestTuning.smartScheduling.loadWeight = 1
+    for (const key of ['fiveHour', 'weekly', 'monthly']) {
+      for (const invalid of [-1, 10.1, 0.01, Number.NaN]) {
+        query.state.form.requestTuning.smartScheduling.resetWindowWeights[key] = invalid
+        await query.state.saveSettings()
+      }
+      query.state.form.requestTuning.smartScheduling.resetWindowWeights[key] = 0
+    }
+    assert.equal(query.requests.length, 1)
+    assert.equal(warnings.length, 17)
+    assert.deepEqual(query.requests[0].requestTuning.smartScheduling.resetWindowWeights, { fiveHour: 1.5, weekly: 2, monthly: 3 })
   }
   finally {
     query.stop()
@@ -528,47 +540,15 @@ test('stream prefetch rejects only invalid or inexact byte numbers before saving
   finally { query.stop() }
 })
 
-test('large request threshold inherits defaults and round trips zero and custom bytes', async () => {
-  for (const [overrides, defaults, expected] of [
-    [{}, {}, 15.5 * 1024 * 1024],
-    [{ websocketLargeRequestThresholdBytes: null }, { websocketLargeRequestThresholdBytes: 8192 }, 8192],
-    [{ websocketLargeRequestThresholdBytes: 0 }, { websocketLargeRequestThresholdBytes: 8192 }, 0],
-  ]) {
-    const query = mountSettings({ ...settings(), requestTuning: overrides, requestTuningDefaults: defaults })
-    try {
-      await query.state.loadSettings()
-      assert.equal(query.state.form.requestTuning.websocketLargeRequestThresholdBytes, expected)
-      for (const value of [expected, 0, 4096, 64 * 1024 * 1024]) {
-        query.state.form.requestTuning.websocketLargeRequestThresholdBytes = value
-        await query.state.saveSettings()
-        assert.equal(query.requests.at(-1).requestTuning.websocketLargeRequestThresholdBytes, value)
-        await query.state.loadSettings()
-        assert.equal(query.state.form.requestTuning.websocketLargeRequestThresholdBytes, value)
-      }
-    }
-    finally {
-      query.stop()
-    }
-  }
-})
-
-test('large request threshold rejects invalid byte counts before saving', async () => {
-  const warnings = []
-  const query = mountSettings(settings(), message => warnings.push(message))
+test('retired size threshold is omitted when loading and saving legacy settings', async () => {
+  const query = mountSettings({ ...settings(), requestTuning: { websocketLargeRequestThresholdBytes: 4096 } })
   try {
     await query.state.loadSettings()
-    for (const value of [-1, 1.5, 64 * 1024 * 1024 + 1, Number.NaN, Number.POSITIVE_INFINITY]) {
-      query.state.form.requestTuning.websocketLargeRequestThresholdBytes = value
-      await query.state.saveSettings()
-    }
-    assert.equal(query.requests.length, 0)
-    assert.equal(warnings.length, 5)
-    const component = readFileSync(new URL('../src/views/settings/components/RuntimeSettingsCard.vue', import.meta.url), 'utf8')
-    assert.match(component, /model-value="units\.largeRequestMiB\.input\.value"/)
+    assert.equal(query.state.form.requestTuning.websocketLargeRequestThresholdBytes, undefined)
+    await query.state.saveSettings()
+    assert.equal(query.requests.at(-1).requestTuning.websocketLargeRequestThresholdBytes, undefined)
   }
-  finally {
-    query.stop()
-  }
+  finally { query.stop() }
 })
 
 test('key queue bounds round trip and invalid values cannot be saved', async () => {
@@ -653,11 +633,10 @@ test('inherited runtime defaults never add the removed global WS opening limit',
     assert.equal(query.requests.length, 1)
     assert.deepEqual(query.requests[0].requestTuning, {
       accountErrorProtection: { enabled: false, rules: [], threshold: 12, windowSeconds: 600, durationSeconds: 7200, probeEnabled: true, probeModel: null },
-      smartScheduling: { loadWeight: 1, quotaWeight: 0.8, healthWeight: 1, latencyWeight: 0.5, resetWeight: 0, queueWeight: 0, preferHigherWeight: false },
+      smartScheduling: { loadWeight: 1, quotaWeight: 0.8, healthWeight: 1, latencyWeight: 0.5, resetWeight: 0, queueWeight: 0, preferHigherWeight: false, resetWindowWeights: { fiveHour: 0, weekly: 0, monthly: 0 } },
       maxAccountSwitches: 31,
       maxRequestAttempts: 32,
       websocketMaxRetries: 5,
-      websocketLargeRequestThresholdBytes: 15.5 * 1024 * 1024,
       streamPrefetchBytes: 128 * 1024,
       websocketMaxAgeMs: 55 * 60 * 1_000,
       websocketStreamIdleTimeoutMs: 300_000,
@@ -1039,7 +1018,6 @@ test('editing Excel MiB changes only the intended byte field, not shared or nati
     maxAccountSwitches: 4,
     maxRequestAttempts: 9,
     rateLimitCooldownSeconds: 37,
-    websocketLargeRequestThresholdBytes: 1234567,
     websocketMaxAgeMs: 123456,
     openaiLocationOverrideEnabled: false,
     excelImageTransport: null,

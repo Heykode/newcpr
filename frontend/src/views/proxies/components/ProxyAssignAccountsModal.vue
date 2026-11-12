@@ -142,7 +142,7 @@ async function confirmAssignment() {
         <template #outboundProxy="{ row }">
           <span v-if="row.outboundProxyId === proxy?.id" class="text-cp-success-text">{{ t('proxies.assignment.alreadyAssigned') }}</span>
           <span v-else class="block truncate text-cp-xs text-cp-text-secondary" :title="row.outboundProxyEndpoint ?? undefined">
-            {{ row.outboundProxyEndpoint || t('accounts.proxy.directConnection') }}
+            {{ row.outboundProxyEndpoint || t('accounts.proxy.deploymentDefault') }}
           </span>
         </template>
       </BaseTable>

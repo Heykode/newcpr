@@ -8,8 +8,9 @@ use std::time::{Duration, Instant, SystemTime};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use gateway_core::account::{
-    AccountQuotaSignals, CredentialRevision, CredentialState, OpaqueProviderData, ProviderAccount,
-    ProviderAccountId, QuotaObservation, QuotaState,
+    AccountQuotaResetWindow, AccountQuotaSignals, CredentialRevision, CredentialState,
+    OpaqueProviderData, ProviderAccount, ProviderAccountId, QuotaObservation, QuotaResetPeriod,
+    QuotaState,
 };
 use gateway_core::engine::provider::ProviderCatalogGeneration;
 use gateway_core::provider_ports::{
@@ -208,7 +209,7 @@ struct GrokQuotaProjectionState {
     entries: BTreeMap<ProviderAccountId, GrokQuotaSchedulingEntry>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct GrokQuotaSchedulingEntry {
     version: u64,
     revision: CredentialRevision,
@@ -345,7 +346,7 @@ impl GrokQuotaSchedulingProjection {
             .filter(|entry| {
                 entry.revision == account.revision() && Instant::now() < entry.expires_at
             })
-            .and_then(|entry| entry.signals)
+            .and_then(|entry| entry.signals.clone())
     }
 }
 
@@ -1293,8 +1294,20 @@ fn quota_scheduling_signals(billing: &GrokBillingPresentation) -> Option<Account
         })
         .flatten();
     let reset_at = period_end.filter(|reset_at| *reset_at > now);
-    (remaining_rank.is_some() || reset_at.is_some())
-        .then(|| AccountQuotaSignals::new(reset_at, remaining_rank))
+    (remaining_rank.is_some() || reset_at.is_some()).then(|| {
+        let signals = AccountQuotaSignals::new(reset_at, remaining_rank);
+        let period = match billing.period_kind() {
+            GrokQuotaPeriodKind::Weekly => Some(QuotaResetPeriod::Weekly),
+            GrokQuotaPeriodKind::Monthly => Some(QuotaResetPeriod::Monthly),
+            GrokQuotaPeriodKind::Other => None,
+        };
+        match (period, reset_at) {
+            (Some(period), Some(reset_at)) if billing.has_authoritative_quota() => {
+                signals.with_reset_windows(vec![AccountQuotaResetWindow { period, reset_at }])
+            }
+            _ => signals,
+        }
+    })
 }
 
 /// 把 xAI billing 文档归一化为访问结论。缺少正反证据时返回 Unknown，

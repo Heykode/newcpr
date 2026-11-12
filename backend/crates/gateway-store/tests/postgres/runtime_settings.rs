@@ -1040,10 +1040,12 @@ async fn request_tuning_overrides_should_round_trip() {
             public_url: "https://images.example.com".into(),
         }),
         smart_scheduling: Some(
-            gateway_core::account::smart_scheduling::SmartSchedulingConfig::new(
-                [2.5, 0.4, 1.0, 0.2, 0.5, 0.7],
-                true,
-            )
+            serde_json::from_value(serde_json::json!({
+                "loadWeight": 2.5, "quotaWeight": 0.4, "healthWeight": 1,
+                "latencyWeight": 0.2, "resetWeight": 0.5, "queueWeight": 0.7,
+                "preferHigherWeight": true,
+                "resetWindowWeights": { "fiveHour": 1.5, "weekly": 2, "monthly": 3 }
+            }))
             .unwrap(),
         ),
         openai_request_location: Some(gateway_core::account::RequestLocation::default()),
@@ -1053,7 +1055,7 @@ async fn request_tuning_overrides_should_round_trip() {
         max_account_switches: Some(7),
         max_request_attempts: Some(8),
         websocket_max_retries: Some(9),
-        websocket_large_request_threshold_bytes: Some(4096),
+
         stream_prefetch_bytes: Some(256 * 1024),
         websocket_max_age_ms: Some(60_000),
         websocket_stream_idle_timeout_ms: Some(120_000),

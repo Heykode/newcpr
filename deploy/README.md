@@ -525,3 +525,11 @@ pg_restore --no-owner --no-privileges --password \
 `chore(release): update release channels to <version>`。恢复同版本发行前同时检查旧标题
 `chore(release): prepare v<version>` 和 `chore(release): v<version>`，即使 tag 已被删除也不能
 重复生成备版提交。没有通道变化时不新增通道提交；实际发行和部署继续遵守既有制品证据流程。
+
+## 部署默认出站代理
+
+没有业务显式代理或 IPv6 源地址路由时，HTTP/WS 及版本下载统一读取网关进程的
+`HTTP_PROXY` / `HTTPS_PROXY`，其次 `ALL_PROXY`，并应用 `NO_PROXY`（含对应小写变量）。
+WS/WSS 分别匹配 HTTP/HTTPS；显式代理优先，不受 `NO_PROXY` 绕过。没有适用代理时直连，
+代理连接失败不静默换出口。环境首次读取后缓存，调整后须按既有部署流程重启；本段不授权修改生产配置。
+账号页“部署默认出口”测试会跟随这些配置；设置中的服务器直连探测仍只测直连。

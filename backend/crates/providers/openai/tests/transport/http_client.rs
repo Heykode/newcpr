@@ -2,6 +2,42 @@ use super::*;
 
 #[tokio::test]
 async fn default_http_egress_supports_both_ip_families() {
+    const CASE_ENV: &str = "CPR_TEST_DEFAULT_HTTP_IP_FAMILIES";
+    const CASE_COMPLETED: &str = "default-http-ip-families-completed";
+    if std::env::var_os(CASE_ENV).is_none() {
+        let mut command = tokio::process::Command::new(std::env::current_exe().unwrap());
+        command
+            .args([
+                "--exact",
+                "transport::http_client::default_http_egress_supports_both_ip_families",
+                "--nocapture",
+            ])
+            .env(CASE_ENV, "1");
+        for key in [
+            "HTTP_PROXY",
+            "HTTPS_PROXY",
+            "ALL_PROXY",
+            "NO_PROXY",
+            "http_proxy",
+            "https_proxy",
+            "all_proxy",
+            "no_proxy",
+            "REQUEST_METHOD",
+        ] {
+            command.env_remove(key);
+        }
+        let output = command.output().await.unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(output.status.success(), "{stdout}");
+        assert_eq!(
+            stdout
+                .lines()
+                .filter(|line| *line == CASE_COMPLETED)
+                .count(),
+            1
+        );
+        return;
+    }
     let server = wiremock::MockServer::start().await;
     wiremock::Mock::given(wiremock::matchers::method("GET"))
         .respond_with(wiremock::ResponseTemplate::new(200))
@@ -36,6 +72,7 @@ async fn default_http_egress_supports_both_ip_families() {
         .await;
     assert!(result.unwrap().remote_addr().unwrap().is_ipv6());
     server.await.unwrap();
+    println!("\n{CASE_COMPLETED}");
 }
 
 #[test]

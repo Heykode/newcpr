@@ -14,6 +14,7 @@ export interface SmartSchedulingConfig {
   latencyWeight: number
   resetWeight: number
   queueWeight: number
+  resetWindowWeights: { fiveHour: number, weekly: number, monthly: number }
   preferHigherWeight: boolean
 }
 
@@ -26,6 +27,7 @@ export function defaultSmartScheduling(): SmartSchedulingConfig {
     resetWeight: 0,
     queueWeight: 0,
     preferHigherWeight: false,
+    resetWindowWeights: { fiveHour: 0, weekly: 0, monthly: 0 },
   }
 }
 
@@ -34,7 +36,6 @@ export interface RequestTuning {
   maxAccountSwitches: number
   maxRequestAttempts: number
   websocketMaxRetries: number
-  websocketLargeRequestThresholdBytes: number
   streamPrefetchBytes: number
   websocketMaxAgeMs: number
   websocketStreamIdleTimeoutMs: number

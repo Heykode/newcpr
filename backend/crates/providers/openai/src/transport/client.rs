@@ -345,16 +345,10 @@ fn build_account_http_client_with_timeout(
 
     // a5a844a: 普通 HTTP 的连接池与 TCP/H2 保活沿用 reqwest 默认值。
     // 保留账号出口、TLS、重定向与连接超时策略；源绑定 IPv6 独立管理连接池。
-    let mut builder = Client::builder()
-        .no_proxy()
+    let builder = gateway_egress::http_client(proxy)
+        .map_err(|_| CustomCaError::ProxyConfiguration)?
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(timeout);
-    if let Some(proxy) = proxy {
-        builder = builder.proxy(
-            reqwest::Proxy::all(proxy.expose_url())
-                .map_err(|_| CustomCaError::ProxyConfiguration)?,
-        );
-    }
     let client = build_reqwest_native_client_with_custom_ca(builder)?;
     let mut clients = reqwest_clients()
         .lock()
@@ -387,7 +381,7 @@ fn egress_key(account_id: &str, proxy: Option<&gateway_core::account::OutboundPr
     hash.update([0]);
     hash.update(
         proxy
-            .map_or("direct", |proxy| proxy.expose_url())
+            .map_or("deployment", |proxy| proxy.expose_url())
             .as_bytes(),
     );
     hex::encode(hash.finalize())
@@ -858,12 +852,12 @@ pub enum CodexBackendTransport {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CodexTransportDecision {
     HttpRequired,
-    HttpLargeRequest,
     ReusedWebSocket,
     ConnectedWebSocket,
     ExactWebSocket,
     RequiredWebSocket,
     Http2WebSocketBudgetExhausted,
+    Http2WebSocketMessageTooLarge,
     Http2BreakerOpen,
     Http2PoolUnavailable,
 }
@@ -872,12 +866,12 @@ impl CodexTransportDecision {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::HttpRequired => "http_required",
-            Self::HttpLargeRequest => "http_large_request",
             Self::ReusedWebSocket => "ws_reused",
             Self::ConnectedWebSocket => "ws_connected_fast",
             Self::ExactWebSocket => "ws_exact_required",
             Self::RequiredWebSocket => "ws_required",
             Self::Http2WebSocketBudgetExhausted => "http2_ws_budget_exhausted",
+            Self::Http2WebSocketMessageTooLarge => "http2_ws_message_too_large",
             Self::Http2BreakerOpen => "http2_breaker_open",
             Self::Http2PoolUnavailable => "http2_pool_unavailable",
         }
@@ -966,17 +960,13 @@ pub(super) struct RecoveryAttemptRoute {
 /// Codex HTTP/SSE 上游客户端。
 #[derive(Clone)]
 pub struct CodexBackendClient {
-    pub(super) session_transport: Option<(
-        crate::session_transport::CodexSessionTransportRecovery,
-        Option<gateway_core::provider_ports::ProviderSessionAffinityKey>,
-    )>,
     pub(super) routing_affinity: Option<super::routing_affinity::ChatGptRoutingAffinity>,
     pub(super) connection_budget: Option<gateway_core::engine::connection::ConnectionBudget>,
     pub(super) session_proxy:
         Option<Arc<dyn gateway_core::provider_ports::session_proxy::SessionProxyLease>>,
     pub(super) client: Client,
-    pub(super) direct_client: Client,
-    pub(super) default_direct_client: bool,
+    pub(super) default_client: Client,
+    pub(super) uses_deployment_client: bool,
     pub(super) base_url: String,
     pub(super) profile: CodexWireProfileState,
     pub(super) websocket_pool: Option<Arc<CodexWebSocketPool>>,
@@ -995,15 +985,6 @@ pub struct CodexBackendClient {
 }
 
 impl CodexBackendClient {
-    pub(crate) fn with_session_transport(
-        mut self,
-        recovery: crate::session_transport::CodexSessionTransportRecovery,
-        key: Option<gateway_core::provider_ports::ProviderSessionAffinityKey>,
-    ) -> Self {
-        self.session_transport = Some((recovery, key));
-        self
-    }
-
     pub(crate) fn with_routing_affinity(
         mut self,
         affinity: Option<super::routing_affinity::ChatGptRoutingAffinity>,
@@ -1013,7 +994,7 @@ impl CodexBackendClient {
     }
 
     pub(crate) fn with_default_http_client(mut self) -> Self {
-        self.default_direct_client = true;
+        self.uses_deployment_client = true;
         self
     }
 
@@ -1112,7 +1093,7 @@ impl CodexBackendClient {
                 &profile_identity,
             )?
         } else {
-            self.direct_client.clone()
+            self.default_client.clone()
         };
         Ok(client)
     }
@@ -1204,7 +1185,7 @@ impl CodexBackendClient {
         // Caller-injected clients may carry trust, DNS or other configuration
         // that reqwest cannot clone into a new builder. Only rebuild our own clients.
         if timeout < UPSTREAM_CONNECT_TIMEOUT
-            && (self.default_direct_client || self.outbound_proxy.is_some())
+            && (self.uses_deployment_client || self.outbound_proxy.is_some())
         {
             return Ok(build_account_http_client_with_timeout(
                 self.egress_account

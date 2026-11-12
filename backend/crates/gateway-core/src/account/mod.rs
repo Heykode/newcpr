@@ -30,6 +30,7 @@ pub use store::{
 mod location;
 pub use location::RequestLocation;
 pub mod smart_scheduling;
+pub use smart_scheduling::{QuotaResetPeriod, SmartSchedulingConfig, SmartSchedulingConfigError};
 
 mod error_protection;
 pub use error_protection::*;

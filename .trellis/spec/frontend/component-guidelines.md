@@ -98,10 +98,11 @@ Questions to answer:
 - API Key 安装 ID 默认空，生成只填草稿，保存后发送；清空删除该 Key 覆盖。
   代理测试结果放选择器旁，出口 IP 放详情，不新增说明卡片。
 
-### 主题与共享侧栏（主题对齐官方 UI v0.9.1）
+### 主题与共享侧栏（主题对齐官方 UI 45b076735）
 
 - `createTheme({ name, preset, colorId, primaryColor, customization })` 统一派生。
-  `themeProfiles` 是完整组合，`themePresets` 只控制表面高光、渐变和阴影。
+  `themeProfiles` 提供尺寸/材质组合，`resolveThemeProfile` 保留现有功能色和中性色，
+  未编辑背景/文字使用明暗默认值。主色不连带覆盖信息/链接色。`themePresets` 只控制表面高光、渐变和阴影。
   材质不提供 customization，不改变配色、圆角、字号和尺寸；显式 customization 独立生效。
   无自定义时柔光控件圆角为 8px、卡片 18px、侧栏 0；明暗模式一致。
   持久化键 `codex-proxy-rs-theme` 不变，无 `themePreset` 的旧配置补 `default`。

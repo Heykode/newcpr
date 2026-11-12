@@ -512,10 +512,10 @@ OpenAI 原位替换接受重登文档中的 `email`、`account_id`、`type: code
 升级时从仍保留的有效历史请求补算，已经清理的历史不能恢复；删除后新建的不同账号 ID
 不会自动合并历史。此统计不更改官方额度、消费计算或调度规则。
 
-`outboundProxyId` 绑定已保存且最近测试成功的代理；省略或 `null` 保留当前绑定，空字符串清除绑定。
+`outboundProxyId` 绑定已保存且启用的代理（测试结果不作为绑定准入条件）；省略或 `null` 保留当前绑定，空字符串清除绑定。
 `outboundProxyUrl` 兼容 HTTP、HTTPS、SOCKS5、SOCKS5H 代理 URL，可带用户名和密码；不能与 ID 同时设置。
-编辑时省略或 `null` 表示保持原配置，空字符串表示清除代理并直连。列表和详情只返回
-不含认证信息的 `outboundProxyEndpoint`（直连时为 `null`）；只有显式敏感导出包含完整 URL。
+编辑时省略或 `null` 表示保持原配置，空字符串表示清除显式代理，随后按账号其他出口策略或部署默认出口执行。列表和详情只返回
+不含认证信息的 `outboundProxyEndpoint`（未绑定显式代理时为 `null`）；只有显式敏感导出包含完整 URL。
 指定代理后，推理、OAuth 服务端交换/刷新及账号辅助请求使用同一出口；代理失败不会退回直连。
 浏览器打开的第三方 OAuth 授权页仍使用浏览器自身网络。
 账号出口与连接隔离见 [架构说明](architecture.md#账号出站代理)。
@@ -533,7 +533,7 @@ All endpoints require admin authentication and redact proxy credentials from res
 | `POST` | `/api/admin/proxies/create` | `{ name, proxyUrl }` | `201 { record, configRevision }` |
 | `POST` | `/api/admin/proxies/update` | `{ id, revision, name, enabled?, proxyUrl? }` | `{ record, configRevision }` |
 | `POST` | `/api/admin/proxies/test` | `{ id, revision }` | 最新代理记录 / Proxy record with test result |
-| `POST` | `/api/admin/proxies/probe` | `{ proxyUrl }` | 只探测未保存地址，返回连通性、耗时和出口 IP，不修改代理记录或账号绑定 |
+| `POST` | `/api/admin/proxies/probe` | `{ proxyUrl, useDeploymentProxy?, detectLocation? }` | 探测指定代理；空 URL 默认强制直连，`useDeploymentProxy:true` 则探测部署默认出口，两者不能同时指定 |
 | `POST` | `/api/admin/proxies/delete` | `{ id, revision }` | `{ configRevision }` |
 
 `record` 包含 `id`、`name`、`enabled`、`endpoint`、`hasAuthentication`、`revision`、`accountCount`、
@@ -542,7 +542,7 @@ All endpoints require admin authentication and redact proxy credentials from res
 记录版本过期、重复 URL 返回 409，并发测试满载返回 429。
 
 代理默认启用。省略 `enabled` 保留当前状态；禁用保留连接配置和账号绑定，原本使用该代理的
-后续请求改为直连，且不再使用该代理的地区/时区。重新启用恢复原绑定。禁用代理不可用于新绑定或新授权。
+后续请求改为部署默认出口，且不再使用该代理的地区/时区。重新启用恢复原绑定。禁用代理不可用于新绑定或新授权。
 删除代理在同一事务中解除所有关联账号绑定并写入审计，保留账号凭据、身份和调度参数。
 NewCPR 的托管代理来源保持独立：普通代理池在后台目录刷新后排除禁用节点，不改变正在执行的租约，
 也不改变 Mihomo 来源或 IPv6 配置。
@@ -552,7 +552,7 @@ NewCPR 的托管代理来源保持独立：普通代理池在后台目录刷新�
 不返回账号凭据。默认每页 20 条，按名称、ID 稳定排序；搜索不区分大小写，匹配名称或邮箱的字面子串。
 不存在的代理返回 404，未绑定账号或没有匹配结果时返回空页。数量与当前页来自同一个数据库只读快照。
 
-移除关联账号只清除指定账号的代理绑定与连接地址，使其改为直连，保留凭据、调度参数与分组。
+移除关联账号只清除指定账号的代理绑定与连接地址，使其使用部署默认出口，保留凭据、调度参数与分组。
 若账号已不再绑定请求中的代理，则返回 409；成功后在同一事务中更新配置版本与审计，并发布运行时快照。
 
 更新省略 `proxyUrl` 保留认证；连接配置改变时清除测试结果并更新所有绑定账号。
@@ -1139,6 +1139,16 @@ requestTuning
 缺少版本号的旧页面或脚本需要重新读取设置并携带该字段，不能以服务端当前值代填绕过保护。
 
 `rotationStrategy` 可取 `smart`、`quota_reset_priority`、`round_robin`、`sticky`。
+`requestTuning.smartScheduling.resetWindowWeights` 为 `{ fiveHour, weekly, monthly }`，各项
+接受 0–10、一位小数。省略整个对象补三个 0；显式提供时须包含三项。全部为 0 时额度重置不参与
+评分和近似最优容差；否则对有效的账号通用 5 小时/周/月窗口取加权评分，缺失或过期窗口计零。
+每个周期取最近的未来重置，分数为 `H / (H + 剩余秒数)`，`H=周期秒数/7`，月按 30 天计算。
+模型专属窗口不计入，原 `quota_reset_priority` 策略不变。参数写入现有 JSONB，无需数据库迁移。
+
+Codex Responses 最终 HTTP/WS 请求按官方移除 `max_tokens`、`max_output_tokens`、
+`max_completion_tokens`，不再把这些值当输出上限传给上游；`temperature` 和 `prompt_cache_retention`
+继续移除。此规则不扩展到 xAI、Compact、Images 等其他入口。
+
 两个 `minCodex*Version` 字段为 `string | null`，只设置最低版本，不存在最大版本字段。
 
 三个 OpenAI 调度参数位于设置顶层，不放在 `requestTuning`：Guardian 独立并发初始值 5；
@@ -1219,23 +1229,17 @@ Redis 故障拒绝准入，取消正常释放登记；故障或进程退出时�
 旧四项 sticky/fallback 配置仅接受后丢弃，现行人数与时限以表中两项为准。
 关闭开关不等于配置已兼容旧二进制；降级前按目标版本核对字段并备份设置，保留其他运行设置。
 
-`requestTuning.websocketLargeRequestThresholdBytes` 控制 OpenAI 普通新链的大请求发送前 HTTP 选择：
+OpenAI WS 请求现在按物理连接握手中的 `x-codex-websocket-max-message-bytes` 检查大小：
 
-- 默认 `16252928`（15.5 MiB），允许整数 `0..67108864`；`0` 关闭大小分流，缺失或 `null` 继承默认。已保存的显式配置保持不变。同一线程超过阈值后，完整请求须低于阈值减 2 MiB 才恢复 WS，避免临界大小反复切换。
-- 仅当传输要求为独立新链 `new_chain` 或 `websocket_new_chain` 时生效。
-  比较的是身份投影、协议归一化后的最终 WS JSON UTF-8 字节数，达到阈值即走现有 HTTP/SSE 通道，
-  不建立 WS、不尝试先发送失败再重放。HTTP 沿用选定账号、设备画像、出口与下游交付偏好。
-- 原生 WS 独立首轮可在发送前选择 HTTP；预热及已有响应续链不参与这种分流，
-  精确 WS 续接超过阈值返回续接不可用，不拼接成新 HTTP 请求。
-  不拼接历史，不自动压缩会话。大小偏好保存在有界的线程记忆中；完整请求低于恢复阈值或记忆空闲过期后恢复原策略。
-  大包 HTTP 回复要求完整历史续接时，只有成功终态完整写给客户端、且队列为空，才以正常关闭码通知下游 WS 重连；不打断已排队请求，不依赖客户端 UA。
-- 这是保守路由阈值，不是上游硬限额或 HTTP 无限大小保证。WS 压缩不改变此字节计算。
-  已发送后的 WS 1009 在有效输出前允许有界同账号重试和符合传输条件的 HTTP 回退；
-  不允许换号、精确续接重放或有效输出后重放，其他发送状态不明错误保留原有保护。
-- 诊断 `transport.fallback` 记录 `decision=http_large_request`、`payloadBytes`、`thresholdBytes`
-  和传输要求，不新增正文采集。运行设置仍全量替换，保存时保留其他字段，进行中的请求保持冻结值。
-- 降级到不认识该字段的旧版本前，先备份并从持久化 `requestTuning` 中移除该字段；设为 `0`
-  只关闭功能，不会使旧配置解析器认识该字段。
+- 先完成握手，再比较身份投影和协议归一化后的最终 JSON UTF-8 字节数；严格大于上限才拒绝。
+  等于上限可发送，缺失或无效上限不触发本地大小预检；`0` 拒绝非空请求。压缩不改变计算口径。
+- 超限时先释放连接和租约。新链、可持久化续接和外部未知响应可改走 HTTP；精确连接内续接要求
+  客户端完整重放，显式 WS 预热报消息过大，均不先发送、不消耗 WS 故障重试预算。
+- 不再保存线程固定阈值或大小滞后记忆；后续新物理连接使用自己的握手上限。HTTP 回退保留选定账号、
+  身份、UA 和出口。大包 HTTP 成功后，仍须终态写完且下游队列为空，才通知 WS 客户端重连。
+  HTTP `store:false` 后的增量续接仍要求完整重放。已发送后的 1009 沿用独立的恢复规则。
+- 诊断使用 `http2_ws_message_too_large`，记录 `payloadBytes`、`limitBytes`，不采集正文。
+- 旧 `requestTuning.websocketLargeRequestThresholdBytes` 兼容读取后丢弃，不再展示、生效或重新保存。
 
 `websocketHttpFallbackEnabled` 已退役：兼容读取历史 boolean/null 值，但不再生效、展示或
 保存。故障后的 HTTP 回退按传输要求、错误分类和恢复预算自动判断；必须使用 WS

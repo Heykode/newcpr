@@ -91,3 +91,22 @@ test('switching material preserves default and customized component dimensions',
     assert.equal(soft.tokens['--cp-layout-sider-border-radius'], '0px')
   }
 })
+
+test('changing profiles retains functional colors and follows scheme defaults only when unedited', () => {
+  const { createTheme, resolveThemeProfile } = load(resolve(root, 'core/resolve.ts'))
+  const { SEED_COLORS_BY_SCHEME } = load(resolve(root, 'core/constants.ts'))
+  for (const preset of THEME_COLOR_PRESETS) {
+    for (const name of ['light', 'dark']) {
+      const defaults = createTheme({ name, colorId: preset.id, ...resolveThemeProfile(preset.id) })
+      for (const [key, value] of Object.entries(SEED_COLORS_BY_SCHEME[name]))
+        assert.equal(defaults.seedTokens[key], value)
+      const seed = { colorSuccess: '#225577', colorBgBase: '#334455', colorLink: '#556677', borderRadius: 99 }
+      const profile = resolveThemeProfile(preset.id, seed)
+      const custom = createTheme({ name, colorId: preset.id, ...profile })
+      for (const key of ['colorSuccess', 'colorBgBase', 'colorLink'])
+        assert.equal(custom.seedTokens[key], seed[key])
+      assert.notEqual(custom.seedTokens.borderRadius, 99)
+      assert.equal(seed.borderRadius, 99)
+    }
+  }
+})
