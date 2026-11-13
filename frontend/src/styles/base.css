@@ -103,3 +103,21 @@
     background: transparent;
   }
 }
+
+@layer base {
+  input:disabled,
+  textarea:disabled {
+    caret-color: transparent;
+    cursor: not-allowed;
+  }
+}
+
+/* Default widths yield to caller utilities and inline styles. */
+@layer components {
+  .cp-input,
+  .cp-input-tag,
+  .cp-select,
+  .cp-textarea {
+    width: 100%;
+  }
+}

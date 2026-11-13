@@ -177,7 +177,8 @@ impl UpdateRuntimeSettingsRequest {
             ));
         }
         if self.account_warmup_cron.as_deref().is_some_and(|value| {
-            !value.is_empty() && !gateway_core::provider_ports::valid_warmup_cron(value)
+            gateway_core::provider_ports::ProviderWarmupPolicy::validate_values(false, value, None)
+                .is_err()
         }) || self
             .account_warmup_model
             .as_ref()

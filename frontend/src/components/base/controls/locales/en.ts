@@ -1,0 +1,35 @@
+export default {
+  name: 'en',
+  common: {
+    confirm: 'Confirm',
+    cancel: 'Cancel',
+    close: 'Close',
+    remove: 'Remove',
+    loading: 'Loading',
+    empty: 'No data',
+    value: 'Value',
+  },
+  select: {
+    placeholder: 'Select',
+    empty: 'No options',
+    clear: 'Clear selection',
+    search: 'Search options',
+    searchPlaceholder: 'Filter by name',
+    noMatches: 'No matches',
+    remove: (label: string) => `Remove ${label}`,
+    more: (count: number) => `Show ${count} more selected ${count === 1 ? 'option' : 'options'}`,
+    remaining: 'More selected options',
+  },
+  inputNumber: {
+    decrease: (label: string) => `Decrease ${label}`,
+    increase: (label: string) => `Increase ${label}`,
+  },
+  input: {
+    moreTags: (count: number) => `Show ${count} more ${count === 1 ? 'tag' : 'tags'}`,
+    remainingTags: 'More tags',
+    clear: 'Clear input',
+    content: 'content',
+    show: (label: string) => `Show ${label}`,
+    hide: (label: string) => `Hide ${label}`,
+  },
+}

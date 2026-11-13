@@ -36,6 +36,7 @@ import {
   DEFAULT_SEED_DIMENSIONS,
   DEFAULT_THEME_CUSTOMIZATION,
   defaultThemePresetId,
+  PRESET_SURFACE_BACKGROUNDS,
   SEED_COLORS_BY_SCHEME,
   THEME_COLOR_PRESETS,
   THEME_SEED_COLOR_KEYS,
@@ -98,7 +99,7 @@ export function createThemeSeedTokens(options: ThemeOptions = {}): ResolvedTheme
 
 export function createTheme(options: ThemeOptions = {}): ResolvedTheme {
   const { customization, ...theme } = resolveThemeInputs(options)
-  const themeMap = deriveThemeMap(theme.name, theme.seed, theme.seedTokens, customization, theme.preset)
+  const themeMap = deriveThemeMap(theme, customization)
   const tokensWithOverrides: ThemeTokens = {
     ...createThemeTokens(themeMap),
     ...customization.tokenOverrides,
@@ -115,14 +116,13 @@ export function themeColorPreset(id: ThemeColorPresetId): ThemeColorPreset {
 }
 
 function deriveThemeMap(
-  name: ThemeName,
-  seed: string,
-  seedTokens: ResolvedThemeSeedTokens,
+  { name, seed, seedTokens, colorId, preset }: Omit<ResolvedTheme, 'tokens'>,
   customization: ThemeCustomization,
-  preset: ThemePresetId,
 ): ThemeMap {
-  const fills = name === 'light' ? deriveLightThemeFillMap(seedTokens) : null
-  const baseSurfaces = deriveThemeSurfaceMap(name, seedTokens)
+  // 预设底色只参与表面派生，显式设置的背景优先，编辑器与持久化的 Seed 保持不变
+  const background = customization.seed?.colorBgBase ?? PRESET_SURFACE_BACKGROUNDS[colorId]?.[name] ?? seedTokens.colorBgBase
+  const fills = name === 'light' ? deriveLightThemeFillMap(background, seedTokens.colorTextBase) : null
+  const baseSurfaces = deriveThemeSurfaceMap(name, background, seedTokens.colorTextBase)
   const primary = deriveThemePrimaryMap(seed, name, baseSurfaces.colorBgContainer)
   const surfaces = ensureThemeSurfaceContrast(baseSurfaces, fills, primary)
   const aliases = deriveThemeAliasMap(surfaces)
@@ -145,6 +145,7 @@ function deriveThemeMap(
       semantics.error,
       seedTokens.shadowStrength,
       preset,
+      customization.tokenOverrides?.['--cp-input-bg'],
     ),
     dimensions: deriveThemeDimensionMap(seedTokens, customization.component),
   }

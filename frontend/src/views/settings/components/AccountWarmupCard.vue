@@ -4,11 +4,12 @@ import BaseCard from '@/components/base/BaseCard.vue'
 import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
 import BaseForm from '@/components/base/BaseForm/index.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
+import BaseInputTag from '@/components/base/BaseInputTag.vue'
 import BaseSwitch from '@/components/base/BaseSwitch.vue'
 import { t } from '@/i18n'
 
 const enabled = defineModel<boolean>('enabled', { required: true })
-const cron = defineModel<string>('cron', { required: true })
+const cron = defineModel<string[]>('cron', { required: true })
 const model = defineModel<string>('model', { required: true })
 </script>
 
@@ -29,20 +30,21 @@ const model = defineModel<string>('model', { required: true })
         prop="accountWarmupCron"
         label="Cron 表达式（部署时区）"
         :required="enabled"
-        description="五段 Cron：分 时 日 月 周。例如 0 8 * * * 表示每天 08:00"
+        description="回车添加规则，支持多个；按部署时区执行，同一分钟只预热一次"
       >
-        <BaseInput
+        <BaseInputTag
           v-model="cron"
           :disabled="!enabled"
           aria-label="预激活 Cron 表达式"
           placeholder="0 8 * * *"
-          maxlength="255"
+          collapse-tags
+          collapse-tags-tooltip
           spellcheck="false"
         >
           <template #prefix>
             <Clock class="size-4" />
           </template>
-        </BaseInput>
+        </BaseInputTag>
       </BaseFormItem>
 
       <BaseFormItem

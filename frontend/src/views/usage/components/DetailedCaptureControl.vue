@@ -102,7 +102,7 @@ function edit() {
   void cleanup.refresh()
   open.value = true
 }
-function selectPolicy(value: string) {
+function selectPolicy(value: string | undefined) {
   if (draft.value && (value === 'stop' || value === 'overwrite'))
     draft.value.quotaPolicy = value
 }

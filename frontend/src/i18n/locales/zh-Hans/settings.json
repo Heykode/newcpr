@@ -241,8 +241,8 @@
       "help": "向可用的 Codex OAuth 账号发送轻量请求，跳过额度耗尽和已确认活跃的窗口，0% 账号允许预热，不保证窗口成功启动",
       "enableWarmup": "启用预热",
       "cronExpression": "Cron 表达式",
-      "cronHelp": "五段表达式：分 时 日 月 星期",
-      "cronExample": "按部署时区执行，例如 0 8 * * MON-FRI 表示工作日 08:00，同一分钟只执行一次"
+      "cronHelp": "回车添加 Tag，支持多个",
+      "scheduleHelp": "按部署时区执行，同一分钟只预热一次"
     },
     "adminApiKey": {
       "adminApiKey": "管理员 API密钥",
@@ -660,7 +660,8 @@
       "settingsSaved": "设置已保存",
       "protectionSettingsRequired": "请完整填写错误保护参数",
       "invalidProtectionSettings": "失败阈值应为 2～1000，计数有效期为 60～3600 秒，冷却时长为 300～604800 秒",
-      "invalidWarmupCron": "请输入有效的 Cron 表达式"
+      "invalidWarmupCron": "请输入有效的 Cron 表达式",
+      "warmupCronTooLong": "总长度不能超过 255 字节"
     },
     "page": {
       "tabs": {

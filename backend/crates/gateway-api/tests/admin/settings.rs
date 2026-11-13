@@ -1274,3 +1274,27 @@ async fn admin_auth_should_accept_a_configured_request_id_header_name() {
 
     assert_eq!(response.status(), StatusCode::OK);
 }
+
+#[test]
+fn settings_request_validates_multiple_warmup_rules_in_partial_updates() {
+    for (cron, valid) in [
+        ("", true),
+        ("0 8 * * MON-FRI", true),
+        ("0 8 * * *;30 13 * * *", true),
+        ("60 8 * * *", false),
+        ("0 8 * * *;60 13 * * *", false),
+        ("0 8 * * *;", false),
+        ("0 8 * * *;;30 13 * * *", false),
+        ("0 8 * * *\n30 13 * * *", false),
+        ("0 8 * * *\r\n30 13 * * *", false),
+    ] {
+        let mut body = update_body();
+        body["accountWarmupCron"] = json!(cron);
+        let request: UpdateRuntimeSettingsRequest = serde_json::from_value(body).unwrap();
+        assert_eq!(request.validate().is_ok(), valid, "{cron:?}");
+    }
+    let mut body = update_body();
+    body["accountWarmupCron"] = json!(["* * * * *"; 26].join(";"));
+    let request: UpdateRuntimeSettingsRequest = serde_json::from_value(body).unwrap();
+    assert!(request.validate().is_err());
+}

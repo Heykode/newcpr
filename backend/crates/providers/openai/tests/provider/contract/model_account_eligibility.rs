@@ -912,6 +912,13 @@ async fn account_allowlists_override_catalog_omissions_but_weight_affinity_and_p
     );
     catalog.refresh_catalogs().await.unwrap();
     provider.query_model_capabilities().await.unwrap();
+    // 待刷新期间继续以该账号最近成功目录过滤，权重和亲和不能覆盖资格。
+    assert!(
+        catalog
+            .observe_response_etag(&store.account("acct_scope_new").unwrap(), "new")
+            .unwrap()
+    );
+
     for (model, expected) in [
         ("gpt-6-luna", "acct_scope_new"),
         ("gpt-6-astra", "acct_provider_contract"),
@@ -1037,4 +1044,90 @@ async fn account_allowlists_override_catalog_omissions_but_weight_affinity_and_p
     assert_eq!(sent.len(), 5);
     assert!(sent.iter().any(|model| model == "gpt-6.1-sol"));
     assert!(sent.iter().any(|model| model == "custom-unlisted"));
+}
+
+#[tokio::test]
+async fn expired_native_catalog_keeps_exclusions_until_a_successful_refresh() {
+    use gateway_core::account::AccountCatalogObservation;
+    for wait in [false, true] {
+        let store = Arc::new(MemoryAccountStore::default());
+        create_account(&store, "acct_scope_old").await;
+        let account = store.account("acct_scope_old").unwrap();
+        let document = [
+            &[0_u8][..],
+            br#"{"models":[{"slug":"other-model","display_name":"Other"}]}"#,
+        ]
+        .concat();
+        store
+            .save_account_catalog(
+                &AccountCatalogObservation {
+                    account_id: account.id().clone(),
+                    revision: account.revision(),
+                    plan: account.plan_type().map(str::to_owned),
+                    observed_at: SystemTime::now() - Duration::from_secs(3600),
+                    etag: None,
+                },
+                &document,
+            )
+            .await
+            .unwrap();
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/codex/models"))
+            .respond_with(ResponseTemplate::new(503))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/codex/responses"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_raw(CAPTURE_COMPLETED_SSE, "text/event-stream"),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let (provider, catalog, _) = super::scheduling::waiting_provider_with_catalog(
+            &store,
+            Arc::default(),
+            server.uri(),
+            Arc::default(),
+            Arc::default(),
+            NonZeroU32::MIN,
+        );
+        catalog.restore().await.unwrap();
+        // A failed periodic refresh returns the last successful snapshot.
+        catalog.refresh_catalogs().await.unwrap();
+        provider.query_model_capabilities().await.unwrap();
+        let execute = || {
+            provider.execute(
+                planned_request_with_model("openai", operation("gpt-future", false), "gpt-future"),
+                attempt(wait),
+            )
+        };
+        assert_eq!(
+            execute().await.err().unwrap().kind(),
+            ProviderErrorKind::NoEligibleAccount
+        );
+        Mock::given(method("GET"))
+            .and(path("/codex/models"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(
+                    json!({"models":[{"slug":"gpt-future","display_name":"Future"}]}),
+                ),
+            )
+            .with_priority(1)
+            .expect(1)
+            .mount(&server)
+            .await;
+        catalog.refresh_catalogs().await.unwrap();
+        let mut stream = execute().await.unwrap();
+        assert_eq!(
+            stream.metadata().provider_account_id().as_str(),
+            "acct_scope_old"
+        );
+        while let Some(event) = stream.next().await {
+            event.unwrap();
+        }
+        server.verify().await;
+    }
 }

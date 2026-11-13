@@ -1,0 +1,35 @@
+export default {
+  name: 'zh-Hant',
+  common: {
+    confirm: '確認',
+    cancel: '取消',
+    close: '關閉',
+    remove: '移除',
+    loading: '加載中',
+    empty: '暫無數據',
+    value: '數值',
+  },
+  select: {
+    placeholder: '請選擇',
+    empty: '暫無選項',
+    clear: '清空選擇',
+    search: '搜索選項',
+    searchPlaceholder: '輸入名稱篩選',
+    noMatches: '沒有匹配項',
+    remove: (label: string) => `移除 ${label}`,
+    more: (count: number) => `查看其餘 ${count} 個已選項`,
+    remaining: '其餘已選項',
+  },
+  inputNumber: {
+    decrease: (label: string) => `減少${label}`,
+    increase: (label: string) => `增加${label}`,
+  },
+  input: {
+    moreTags: (count: number) => `查看其餘 ${count} 個標籤`,
+    remainingTags: '其餘標籤',
+    clear: '清空輸入',
+    content: '內容',
+    show: (label: string) => `顯示${label}`,
+    hide: (label: string) => `隱藏${label}`,
+  },
+}

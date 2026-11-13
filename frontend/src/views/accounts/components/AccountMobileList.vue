@@ -55,7 +55,7 @@ const tones = {
   quota_exhausted: 'border-l-cp-warning',
 }
 
-function changeSort(key: string) {
+function changeSort(key: string | undefined) {
   emit('sortChange', key ? { key, direction: props.sort?.direction ?? 'asc' } : undefined)
 }
 </script>

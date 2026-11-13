@@ -190,6 +190,7 @@ export interface ThemeComponentMap {
   menuItemSelectedBgImage: string
   menuItemSelectedShadow: string
   inputBg: string
+  inputTagBg: string
   inputHoverBg: string
   inputActiveBg: string
   inputErrorActiveBg: string

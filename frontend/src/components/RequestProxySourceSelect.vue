@@ -10,7 +10,7 @@ const options = computed(() => [
   ...(model.value === 'proxy_pool' ? [{ value: 'proxy_pool', label: '普通代理池（原设置）', disabled: true }] : []),
   ...requestProxySources,
 ])
-function update(value: string) {
+function update(value: string | undefined) {
   if (value === 'account' || value === 'mihomo')
     model.value = value
 }

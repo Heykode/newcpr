@@ -2990,5 +2990,45 @@
     "file_sha256": "dfed7748369711a9f2febb9f9934993edf63608b232d30846db7008487e8456f",
     "line_sha256": "9e479e1097600c03e5b02a059871972d553af67489633306a1ac5dbb3264de7c",
     "reason": "Re-reviewed for v3.46.0 integration: unchanged synthetic fixture and local-only use. Synthetic network-policy, forwarding or DNS resolution test; no deployment endpoint."
+  },
+  {
+    "path": "backend/crates/gateway-core/tests/provider_ports/mod.rs",
+    "rule": "non-example-ip",
+    "line": 108,
+    "file_sha256": "85ae2a8c8c06ba869ea5b5c9586cd5dd83c670ce710a2d10cbd2e9c383009d70",
+    "line_sha256": "05d89b4df3a4f65f2e9099ae7ccd18b0f07bc27a3581c139da0ef893ab85b149",
+    "reason": "Manually re-reviewed for v3.47.0: unchanged mapped documentation-address rejection fixture; local parsing only, no endpoint or network request."
+  },
+  {
+    "path": "backend/crates/gateway-core/tests/provider_ports/mod.rs",
+    "rule": "non-example-ip",
+    "line": 109,
+    "file_sha256": "85ae2a8c8c06ba869ea5b5c9586cd5dd83c670ce710a2d10cbd2e9c383009d70",
+    "line_sha256": "126f7e34cdcf2e64e4165af6d03bceb76dc979de37bd316e3032c0b0164d7fcb",
+    "reason": "Manually re-reviewed for v3.47.0: unchanged synthetic link-local IPv6 rejection fixture; source-category validation only."
+  },
+  {
+    "path": "backend/crates/gateway-core/tests/provider_ports/mod.rs",
+    "rule": "non-example-ip",
+    "line": 110,
+    "file_sha256": "85ae2a8c8c06ba869ea5b5c9586cd5dd83c670ce710a2d10cbd2e9c383009d70",
+    "line_sha256": "abf54a266f9141c37476c644e9c9a11de98856acf1241ba8b563d7d7e6b5c838",
+    "reason": "Manually re-reviewed for v3.47.0: unchanged multicast IPv6 rejection fixture; no packets are sent."
+  },
+  {
+    "path": "backend/crates/gateway-core/tests/provider_ports/mod.rs",
+    "rule": "non-example-ip",
+    "line": 111,
+    "file_sha256": "85ae2a8c8c06ba869ea5b5c9586cd5dd83c670ce710a2d10cbd2e9c383009d70",
+    "line_sha256": "3205b3a46a19d6eb2fea5855b6f7792ada9cf87e5ceb7af955077f4a4b8a5e3d",
+    "reason": "Manually re-reviewed for v3.47.0: unchanged reserved site-local IPv6 rejection fixture; no deployed endpoint."
+  },
+  {
+    "path": "backend/crates/gateway-core/tests/provider_ports/mod.rs",
+    "rule": "non-example-ip",
+    "line": 118,
+    "file_sha256": "85ae2a8c8c06ba869ea5b5c9586cd5dd83c670ce710a2d10cbd2e9c383009d70",
+    "line_sha256": "866bff72cf6ad4b537e5f863f4ded96b3cf59862650e132cbcde1167ef1d25a6",
+    "reason": "Manually re-reviewed for v3.47.0: unchanged documentation and unique-local IPv6 acceptance fixtures; local parsing only."
   }
 ]

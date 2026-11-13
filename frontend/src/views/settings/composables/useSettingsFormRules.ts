@@ -2,6 +2,7 @@ import type { useSettingsForm } from './useSettingsForm'
 import type { FormRule, FormRules } from '@/components/base/BaseForm/types'
 import { computed } from 'vue'
 import { protectionRulesError, trimProtectionText } from '../components/error-protection/form'
+import { validWarmupExpressions, warmupScheduleBytes } from '../utils/warmup-schedule'
 
 type SettingsForm = ReturnType<typeof useSettingsForm>['form']
 
@@ -31,14 +32,18 @@ export function useSettingsFormRules(form: SettingsForm) {
     'requestTuning.maxAccountSwitches': integer(0, 31),
     'requestTuning.maxRequestAttempts': integer(1, 32),
     'requestTuning.maxRetryAfterSeconds': integer(0, 4_294_967_295),
-    'accountWarmupCron': {
-      required: form.accountWarmupEnabled,
-      pattern: /^\S+(?: +\S+){4}$/,
-      max: 255,
-      transform: value => value.trim(),
-      trigger: ['blur', 'change'],
-      message: '请填写五段 Cron 表达式',
-    },
+    'accountWarmupCron': [
+      {
+        validator: (_rule, expressions: string[]) => validWarmupExpressions(expressions, form.accountWarmupEnabled),
+        message: '请输入有效的 Cron 表达式',
+        trigger: ['blur', 'change'],
+      },
+      {
+        validator: (_rule, expressions: string[]) => warmupScheduleBytes(expressions) <= 255,
+        message: '总长度不能超过 255 字节',
+        trigger: ['blur', 'change'],
+      },
+    ],
     'accountWarmupModel': {
       required: form.accountWarmupEnabled,
       whitespace: true,

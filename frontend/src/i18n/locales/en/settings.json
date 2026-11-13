@@ -241,8 +241,8 @@
       "help": "Sends a lightweight request to available Codex OAuth accounts, skipping exhausted quotas and confirmed active windows, accounts at 0% may be warmed up, activation is not guaranteed",
       "enableWarmup": "Enable warmup",
       "cronExpression": "Cron expression",
-      "cronHelp": "Five fields: minute hour day month weekday",
-      "cronExample": "Uses the deployment time zone, for example 0 8 * * MON-FRI runs at 08:00 on weekdays, at most once per minute"
+      "cronHelp": "Press Enter after each tag",
+      "scheduleHelp": "Runs in the deployment time zone, once per matching minute"
     },
     "adminApiKey": {
       "adminApiKey": "Admin API key",
@@ -660,7 +660,8 @@
       "settingsSaved": "Settings saved",
       "protectionSettingsRequired": "Complete the error protection settings",
       "invalidProtectionSettings": "Use a failure threshold of 2–1,000, count validity of 60–3,600 seconds, and a cooldown of 300–604,800 seconds",
-      "invalidWarmupCron": "Enter a valid Cron expression"
+      "invalidWarmupCron": "Enter a valid Cron expression",
+      "warmupCronTooLong": "Keep all rules within 255 bytes"
     },
     "page": {
       "tabs": {
