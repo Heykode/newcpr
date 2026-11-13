@@ -1,14 +1,17 @@
 <script setup lang="ts">
+import type { ComponentSize } from './controls/types'
 import { Minus, Plus } from '@lucide/vue'
 import { computed, useAttrs } from 'vue'
 
 import { useFormField } from './BaseForm/composables/useFormField'
 import BaseIconButton from './BaseIconButton.vue'
+import { getInputClasses } from './controls/input-styles'
 
 defineOptions({ inheritAttrs: false })
 
 const props = withDefaults(
   defineProps<{
+    size?: ComponentSize
     label: string
     min?: number
     max?: number
@@ -17,6 +20,7 @@ const props = withDefaults(
     disabled?: boolean
   }>(),
   {
+    size: 'sm',
     min: undefined,
     max: undefined,
     step: 1,
@@ -64,20 +68,21 @@ function stepBy(direction: -1 | 1) {
 <template>
   <div
     v-bind="rootAttrs"
-    class="inline-flex h-8 items-center rounded-cp bg-cp-fill-tertiary p-0.5 text-cp-text transition-[background-color,box-shadow] duration-150 focus-within:bg-cp-bg-container focus-within:shadow-cp-input-active motion-reduce:transition-none"
+    class="inline-flex items-center"
+    :class="getInputClasses(size, disabled, invalid, { inset: 'item' })"
   >
     <BaseIconButton
       :label="`减少${label}`"
       size="sm"
       variant="ghost"
-      class="size-7!"
+      class="size-(--field-row)!"
       :disabled="!canDecrease"
       @click="stepBy(-1)"
     >
       <Minus class="size-3" />
     </BaseIconButton>
 
-    <span class="inline-flex min-w-0 items-baseline justify-center gap-1 px-1">
+    <span class="inline-flex min-w-0 flex-1 items-baseline justify-center gap-1">
       <input
         v-bind="controlAttrs"
         :id="controlId"
@@ -92,7 +97,8 @@ function stepBy(direction: -1 | 1) {
         :max="max"
         :step="step"
         :disabled="disabled"
-        class="w-9 min-w-0 appearance-[textfield] border-0 bg-transparent p-0 text-right font-mono text-cp-xs font-bold tabular-nums text-cp-text outline-none disabled:text-cp-text-disabled [&::-webkit-inner-spin-button]:m-0 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:m-0 [&::-webkit-outer-spin-button]:appearance-none"
+        class="h-(--field-row) min-w-0 appearance-[textfield] border-0 bg-transparent p-0 font-mono tabular-nums text-cp-text outline-none disabled:text-cp-text-disabled [&::-webkit-inner-spin-button]:m-0 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:m-0 [&::-webkit-outer-spin-button]:appearance-none"
+        :class="size === 'sm' ? 'w-9 text-right font-bold' : 'w-full text-center'"
         @input="updateModel"
         @blur="restoreValue"
       >
@@ -105,7 +111,7 @@ function stepBy(direction: -1 | 1) {
       :label="`增加${label}`"
       size="sm"
       variant="ghost"
-      class="size-7!"
+      class="size-(--field-row)!"
       :disabled="!canIncrease"
       @click="stepBy(1)"
     >

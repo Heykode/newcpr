@@ -28,6 +28,28 @@ const root = fileURLToPath(new URL('../src/theme/', import.meta.url))
 const { resolveTheme } = load(resolve(root, 'core/resolve.ts'))
 const { THEME_COLOR_PRESETS } = load(resolve(root, 'core/constants.ts'))
 
+test('preset surface colors do not rewrite seeds and explicit background still wins', () => {
+  const { createTheme } = load(resolve(root, 'core/resolve.ts'))
+  const { PRESET_SURFACE_BACKGROUNDS } = load(resolve(root, 'core/constants.ts'))
+  for (const name of ['light', 'dark']) {
+    const baseline = createTheme({ name, colorId: 'relay-blue' })
+    for (const colorId of Object.keys(PRESET_SURFACE_BACKGROUNDS)) {
+      const preset = createTheme({ name, colorId })
+      assert.equal(preset.seedTokens.colorBgBase, baseline.seedTokens.colorBgBase)
+      assert.notEqual(preset.tokens['--cp-color-bg-container'], baseline.tokens['--cp-color-bg-container'])
+      const customization = { seed: { colorBgBase: '#234567' } }
+      const custom = createTheme({ name, colorId, customization })
+      assert.equal(custom.seedTokens.colorBgBase, '#234567')
+      assert.equal(custom.tokens['--cp-color-bg-container'], createTheme({ name, colorId: 'relay-blue', customization }).tokens['--cp-color-bg-container'])
+    }
+    const ordinary = createTheme({ name })
+    const custom = createTheme({ name, customization: { tokenOverrides: { '--cp-input-bg': '#BADA5580' } } })
+    assert.equal(custom.tokens['--cp-input-bg'], '#BADA5580')
+    assert.match(custom.tokens['--cp-input-tag-bg'], /^#[\dA-F]{6}$/u)
+    assert.notEqual(custom.tokens['--cp-input-tag-bg'], ordinary.tokens['--cp-input-tag-bg'])
+  }
+})
+
 test('theme overrides allow alpha only for supported controls and retain native namespaces', () => {
   const { normalizeThemeCustomization, supportsThemeTokenAlpha } = load(resolve(root, 'core/normalize.ts'))
   const { createThemeVars } = load(resolve(root, 'namespace.ts'))

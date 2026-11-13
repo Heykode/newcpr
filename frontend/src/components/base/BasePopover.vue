@@ -26,6 +26,7 @@ defineOptions({
 
 const props = withDefaults(
   defineProps<{
+    teleported?: boolean
     placement?: PopoverPlacement
     trigger?: PopoverTrigger
     offset?: number
@@ -42,6 +43,7 @@ const props = withDefaults(
     arrowSurfaceClass?: PopoverArrowSurfaceClass
   }>(),
   {
+    teleported: true,
     placement: 'bottom-end',
     enterable: true,
     role: undefined,
@@ -422,10 +424,10 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div ref="rootRef" class="relative inline-flex overflow-visible" v-bind="attrs">
+  <div ref="rootRef" class="cp-popover relative inline-flex overflow-visible" v-bind="attrs">
     <slot name="trigger" :open="open" :close="closePopover" :toggle="togglePopover" />
 
-    <Teleport to="body">
+    <Teleport to="body" :disabled="!teleported">
       <Transition
         :name="transition"
         @before-enter="restorePosition"

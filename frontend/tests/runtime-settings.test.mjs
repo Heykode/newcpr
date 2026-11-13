@@ -19,13 +19,41 @@ function loadModule(filename, dependencies = {}) {
     TextEncoder,
     structuredClone,
     exports,
-    require: name => dependencies[name] ?? (name === '../components/error-protection/form' ? loadModule(new URL('../src/views/settings/components/error-protection/form.ts', import.meta.url)) : name === '@/utils/excel-defaults' ? loadModule(new URL('../src/utils/excel-defaults.ts', import.meta.url)) : require(name)),
+    require: name => dependencies[name] ?? (name === '../utils/warmup-schedule' ? loadModule(new URL('../src/views/settings/utils/warmup-schedule.ts', import.meta.url)) : name === '../components/error-protection/form' ? loadModule(new URL('../src/views/settings/components/error-protection/form.ts', import.meta.url)) : name === '@/utils/excel-defaults' ? loadModule(new URL('../src/utils/excel-defaults.ts', import.meta.url)) : require(name)),
   }, { filename: String(filename) })
   return exports
 }
 
 const apiErrors = loadModule(new URL('../src/api/error.ts', import.meta.url))
 const asyncUtils = loadModule(new URL('../src/utils/async.ts', import.meta.url))
+
+test('warmup rules retain legacy schedules and roundtrip independent hour/minute pairs', async () => {
+  const warnings = []
+  const query = mountSettings({ ...settings(), accountWarmupEnabled: true, accountWarmupCron: '30 1 * * *', accountWarmupModel: 'fixture-model' }, message => warnings.push(message))
+  try {
+    await query.state.loadSettings()
+    assert.deepEqual(Array.from(query.state.form.accountWarmupCron), ['30 1 * * *'])
+    query.state.form.accountWarmupCron.push('45 8 * * *', '0 0 * * MON,FRI')
+    await query.state.saveSettings()
+    assert.equal(query.requests.at(-1).accountWarmupCron, '30 1 * * *;45 8 * * *;0 0 * * MON,FRI')
+    await query.state.loadSettings()
+    assert.deepEqual(Array.from(query.state.form.accountWarmupCron), ['30 1 * * *', '45 8 * * *', '0 0 * * MON,FRI'])
+    const count = query.requests.length
+    for (const rules of [[], ['0 8 * *'], ['0 8 * * *;'], ['0 8 * * *\n0 9 * * *'], Array.from({ length: 26 }).fill('0 8 * * *')]) {
+      query.state.form.accountWarmupCron = rules
+      await query.state.saveSettings()
+      assert.equal(query.requests.length, count)
+    }
+    assert.equal(warnings.length, 5)
+    query.state.form.accountWarmupEnabled = false
+    query.state.form.accountWarmupCron = []
+    await query.state.saveSettings()
+    assert.equal(query.requests.at(-1).accountWarmupCron, '')
+    await query.state.loadSettings()
+    assert.deepEqual(Array.from(query.state.form.accountWarmupCron), [])
+  }
+  finally { query.stop() }
+})
 
 test('Retry-After limit defaults to 240 and saves zero and custom values without changing queue settings', async () => {
   const warnings = []

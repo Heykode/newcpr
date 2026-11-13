@@ -1,4 +1,5 @@
 import type {
+  ThemeColorId,
   ThemeColorPreset,
   ThemeColorPresetId,
   ThemeComponentOverrides,
@@ -32,6 +33,12 @@ export const LIGHT_CONTAINER_BASE = WHITE
 export const LIGHT_TEXT_BASE = '#0E1726'
 export const DARK_CONTAINER_BASE = '#111A29'
 export const DARK_TEXT_BASE = '#D8E2EE'
+
+export const PRESET_SURFACE_BACKGROUNDS: Partial<Record<ThemeColorId, Record<ThemeName, string>>> = {
+  'deep-teal': { light: '#F8F8F3', dark: '#202727' },
+  'signal-violet': { light: '#FCF6F7', dark: '#29242A' },
+  'graphite': { light: '#FBF5E8', dark: '#302421' },
+}
 
 const lightSeedColors = {
   colorSuccess: '#12B981',

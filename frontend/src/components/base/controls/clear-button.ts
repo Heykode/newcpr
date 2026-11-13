@@ -1,0 +1,1 @@
+export const clearButtonClass = 'inline-flex size-(--field-row) shrink-0 items-center justify-center rounded-cp-sm border-0 bg-transparent p-0 text-cp-text-quaternary outline-none transition-colors hover:bg-cp-fill-secondary hover:text-cp-text-secondary focus-visible:ring-2 focus-visible:ring-cp-control-outline disabled:cursor-not-allowed disabled:text-cp-text-disabled'

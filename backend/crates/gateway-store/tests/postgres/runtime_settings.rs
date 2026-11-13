@@ -521,10 +521,22 @@ async fn warmup_cursor_is_atomic_durable_and_monotonic_across_configuration_upda
     );
     let mut update = settings_with_margin(3_600);
     update.account_warmup_enabled = true;
+    update.account_warmup_cron = "30 1 * * *;45 8 * * *;30 1 * * SUN".to_owned();
     update.account_warmup_model = Some("fixture-model".into());
     update.openai_guardian_reserved_concurrency = 2;
     recreated.update_runtime_settings(update).await.unwrap();
-    assert!(recreated.load_warmup_policy().await.unwrap().enabled());
+    let policy = recreated.load_warmup_policy().await.unwrap();
+    assert!(policy.enabled());
+    assert!(policy.matches_slot(slot));
+    assert!(!policy.matches_slot(slot + TimeDelta::minutes(1)));
+    assert_eq!(
+        recreated
+            .load_runtime_settings()
+            .await
+            .unwrap()
+            .account_warmup_cron,
+        "30 1 * * *;45 8 * * *;30 1 * * SUN"
+    );
     assert!(!recreated.claim_warmup_slot(zone, slot).await.unwrap());
     assert!(
         recreated

@@ -6,7 +6,7 @@ import { EXCEL_403_OPTIONS } from '@/utils/excel-settings'
 defineProps<{ disabled?: boolean }>()
 const model = defineModel<Excel403Action>({ required: true })
 
-function update(value: string) {
+function update(value: string | undefined) {
   if (value === 'none' || value === 'pause_account' || value === 'disable_excel')
     model.value = value
 }

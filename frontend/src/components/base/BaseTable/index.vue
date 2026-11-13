@@ -277,7 +277,7 @@ defineExpose({
                   v-for="(column, columnIndex) in computedColumns"
                   :key="column.key"
                   :data-column-key="column.key"
-                  class="min-w-0 transition-[background-color] duration-150 ease-out motion-reduce:transition-none"
+                  class="min-w-0"
                   :class="[
                     column.paddingClass ?? cellPaddingClass,
                     bodyTextClass,

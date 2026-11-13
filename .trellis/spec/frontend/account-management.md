@@ -1107,8 +1107,13 @@ match window statistics by exact stable window key.
 - Concurrency details grow with actual request rows. Keep an accessible modal and viewport scrolling;
   do not restore a fixed empty inner height to satisfy an older layout assertion.
 - Weekly reset opt-in and threshold remain in the existing per-account AutoReset panel.
-- Warmup uses five-field Cron, disabled/empty after migration 0088. Re-enabling requires a valid Cron;
-  use the existing deployment timezone and durable slot claim. Only clearly idle 0% windows qualify.
+- Warmup edits a `string[]` with `BaseInputTag`; read legacy/saved strings by splitting on `;`,
+  and persist independent five-field rules joined by `;` (255 UTF-8 bytes total). Commas remain
+  field lists. Enter and blur commit drafts before save; invalid/empty rules and line breaks are rejected.
+  Enabling requires a rule and model; disabled/empty is allowed. Migration 0088 disabled the old
+  single-time plan, but the multi-rule update preserves existing Cron. Runtime matches any rule
+  using the existing deployment timezone and durable minute claim; overlapping rules do not
+  duplicate a warmup. Only clearly idle 0% windows qualify.
 
 ### 部署默认出口（官方 v3.46.0）
 

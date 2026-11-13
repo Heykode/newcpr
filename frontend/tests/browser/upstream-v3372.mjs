@@ -13,7 +13,7 @@ import NumberInput from '/src/components/base/BaseNumberInput.vue'
 import Group from '/src/views/account-groups/components/AccountGroupFormModal.vue'
 import Proxy from '/src/views/proxies/components/ProxyFormModal.vue'
 import Health from '/src/views/dashboard/components/RequestHealthTimelineCard.vue'
-import {renderReleaseNotes} from '/src/layout/components/SystemUpdateModal/markdown.ts'
+import Markdown from '/src/components/base/BaseMarkdown/index.vue'
 import {resolveTheme,applyResolvedTheme} from '/src/theme/index.ts'
 import '/src/styles/index.css'
 import {setLocale} from '/src/i18n/index.ts'
@@ -38,7 +38,7 @@ createApp({render:()=>h('main',{style:'padding:16px;max-width:900px;margin:auto'
  h(Group,{modelValue:open.value,'onUpdate:modelValue':v=>open.value=v,form:group,'onUpdate:form':v=>Object.assign(group,v),group:null,saving:false,onSave:()=>window.qa.saves++}),
  h(Proxy,{modelValue:proxyOpen.value,'onUpdate:modelValue':v=>proxyOpen.value=v,proxy:null,saving:false,testing:false,...proxy,...Object.fromEntries(Object.keys(proxy).map(k=>['onUpdate:'+k,v=>proxy[k]=v])),onSave:()=>window.qa.saves++}),
  h(Health,{timeline:{title:'请求健康度',description:'',points:[],reliabilityDisplay:'--',successRequests:0,failedRequests:0,incompleteRequests:0}}),
- h('div',{class:'release-notes',innerHTML:renderReleaseNotes('> [!WARNING]\\n> 发布提示\\n\\n<script>alert(1)</script>')})
+ h(Markdown,{class:'release-notes',source:('> [!WARNING]\\n> 发布提示\\n\\n<script>alert(1)</script>')})
 ])}).mount('#app')
 await nextTick()
 window.qa.form=form.value

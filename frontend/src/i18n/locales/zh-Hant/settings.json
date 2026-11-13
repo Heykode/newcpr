@@ -241,8 +241,8 @@
       "help": "向可用的 Codex OAuth 帳號傳送輕量請求，略過額度耗盡和已確認活躍的視窗，0% 帳號允許預熱，不保證視窗成功啟動",
       "enableWarmup": "啟用預熱",
       "cronExpression": "Cron 表達式",
-      "cronHelp": "五段表達式：分 時 日 月 星期",
-      "cronExample": "按部署時區執行，例如 0 8 * * MON-FRI 表示工作日 08:00，同一分鐘只執行一次"
+      "cronHelp": "按 Enter 新增 Tag，支援多個",
+      "scheduleHelp": "依部署時區執行，同一分鐘只預熱一次"
     },
     "adminApiKey": {
       "adminApiKey": "管理員 API密鑰",
@@ -660,7 +660,8 @@
       "settingsSaved": "設置已保存",
       "protectionSettingsRequired": "請完整填寫錯誤保護參數",
       "invalidProtectionSettings": "失敗閾值應爲 2～1000，計數有效期爲 60～3600 秒，冷卻時長爲 300～604800 秒",
-      "invalidWarmupCron": "請輸入有效的 Cron 表達式"
+      "invalidWarmupCron": "請輸入有效的 Cron 表達式",
+      "warmupCronTooLong": "總長度不可超過 255 位元組"
     },
     "page": {
       "tabs": {

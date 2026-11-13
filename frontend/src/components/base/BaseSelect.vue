@@ -1,376 +1,296 @@
-<script setup lang="ts">
-import type { CSSProperties } from 'vue'
-
-import { Check, ChevronDown } from '@lucide/vue'
-import { onClickOutside, useEventListener, useThrottleFn, whenever } from '@vueuse/core'
-import { clamp } from 'es-toolkit'
-import { computed, nextTick, ref, useAttrs, useId, watch } from 'vue'
-import { t } from '@/i18n'
+<script setup lang="ts" generic="Multiple extends boolean = false, Value extends string | number = string">
+import type { SelectEmits, SelectOption, SelectProps, SelectSize, SelectSlots, SelectValue } from './controls/select-types'
+import { ChevronDown, LoaderCircle, X } from '@lucide/vue'
+import { useEventListener } from '@vueuse/core'
+import { computed, provide, useAttrs, useTemplateRef, watch } from 'vue'
+import Empty from './BaseEmpty.vue'
 import { useFormField } from './BaseForm/composables/useFormField'
-
-type SelectSize = 'sm' | 'md' | 'lg'
-
-export interface SelectOption {
-  label: string
-  value: string
-  description?: string
-  disabled?: boolean
-}
+import { formFieldKey } from './BaseForm/context'
+import Scrollbar from './BaseScrollbar.vue'
+import { clearButtonClass } from './controls/clear-button'
+import { getInputClasses, inputFieldClass } from './controls/input-styles'
+import { useLocale } from './controls/locale'
+import SelectTags from './controls/SelectTags.vue'
+import { useSelect } from './controls/useSelect'
 
 defineOptions({
   inheritAttrs: false,
 })
 
 const props = withDefaults(
-  defineProps<{
-    options: SelectOption[]
-    size?: SelectSize
-    disabled?: boolean
-    placeholder?: string
-    emptyText?: string
-  }>(),
+  defineProps<SelectProps<Multiple, Value>>(),
   {
     size: 'md',
     disabled: false,
-    placeholder: undefined,
-    emptyText: '暂无选项',
+    maxCollapseTags: 1,
   },
 )
 
-const model = defineModel<string>({ required: true })
+const emit = defineEmits<SelectEmits<Multiple, Value>>()
+
+defineSlots<SelectSlots<Value>>()
+
+const locale = useLocale()
+
+const model = defineModel<SelectValue<Multiple, Value>>({ required: true })
 const attrs = useAttrs()
-const { controlId, invalid, describedBy, ariaRequired, validate } = useFormField(attrs)
-
-const rootRef = ref<HTMLElement | null>(null)
-const triggerRef = ref<HTMLButtonElement | null>(null)
-const popoverRef = ref<HTMLElement | null>(null)
-const open = ref(false)
-const activeIndex = ref(-1)
-const popoverStyle = ref<CSSProperties>({})
-const popoverPlacement = ref<'top' | 'bottom'>('bottom')
-const selectId = `base-select-${useId()}`
-const rootAttrs = computed(() => ({ class: attrs.class, style: attrs.style }))
-const triggerAttrs = computed(() =>
-  Object.fromEntries(
-    Object.entries(attrs).filter(
-      ([key]) => !['class', 'style', 'id', 'aria-describedby', 'aria-invalid', 'aria-required'].includes(key),
-    ),
-  ),
-)
-
-const sizeConfig: Record<
-  SelectSize,
-  {
-    trigger: string
-    option: string
-    icon: number
-  }
-> = {
-  md: {
-    trigger: 'h-cp-control px-3.5 pr-9 text-cp rounded-cp',
-    option: 'h-8.5 px-3 text-cp',
-    icon: 16,
+const rootRef = useTemplateRef<HTMLElement>('rootRef')
+const triggerRef = useTemplateRef<HTMLButtonElement | HTMLInputElement>('triggerRef')
+const controlRef = useTemplateRef<HTMLElement>('controlRef')
+const popoverRef = useTemplateRef<HTMLElement>('popoverRef')
+const listboxRef = useTemplateRef<HTMLElement>('listboxRef')
+const scrollbarRef = useTemplateRef<InstanceType<typeof Scrollbar>>('scrollbarRef')
+const { controlId, invalid, describedBy, ariaRequired, rootAttrs, controlAttrs, validate } = useFormField(attrs)
+const {
+  selectId,
+  open,
+  search,
+  activeIndex,
+  popoverStyle,
+  popoverMaxHeight,
+  popoverPlacement,
+  selectedValues,
+  selectedOptions,
+  selectionLabel,
+  displayed,
+  selectedOption,
+  optionId,
+  toggleMenu,
+  openMenu,
+  closeMenu,
+  handleTriggerKeydown,
+  removeOption,
+  handleOptionFocus,
+  chooseOption,
+  handleEscape,
+} = useSelect(props, model, { rootRef, triggerRef, controlRef, popoverRef, listboxRef, scrollbarRef }, {
+  change(value) {
+    emit('change', value)
+    validate('change')
   },
-  sm: {
-    trigger: 'h-cp-control-sm px-2.5 pr-7 text-xs rounded-cp',
-    option: 'h-8 px-2.5 text-xs',
-    icon: 14,
+  removeTag(value) {
+    emit('removeTag', value)
   },
-  lg: {
-    trigger: 'h-cp-control-lg px-4 pr-10 text-cp-lg rounded-cp',
-    option: 'h-10 px-3.5 text-cp-lg',
-    icon: 17,
+})
+// 下拉面板和标签操作属于内部辅助控件，不继承选择字段的身份与校验状态
+provide(formFieldKey, null)
+const hasTags = computed(() => props.multiple && selectedOptions.value.length > 0)
+const canClear = computed(() => props.clearable && selectedValues.value.length > 0 && !props.disabled)
+const fieldAttrs = computed(() => ({
+  ...controlAttrs.value,
+  'disabled': props.disabled,
+  'role': 'combobox',
+  'aria-expanded': open.value,
+  'aria-controls': open.value ? `${selectId}-listbox` : undefined,
+  'aria-activedescendant': open.value && activeIndex.value >= 0 ? optionId(activeIndex.value) : undefined,
+  'aria-describedby': describedBy.value,
+  'aria-invalid': invalid.value || undefined,
+  'aria-required': ariaRequired.value,
+}) as const)
+const query = computed({
+  get: () => search.value,
+  set(value: string) {
+    void openMenu()
+    search.value = value
+    emit('queryChange', value)
   },
-}
-
-const selectedOption = computed(() => props.options.find(option => option.value === model.value))
-
-const triggerClasses = computed(() => [
-  'relative inline-flex w-full min-w-0 items-center gap-2 overflow-visible border-0 text-left font-emphasis leading-none shadow-cp-input outline-none transition-[background-color,box-shadow,color] duration-[160ms]',
-  sizeConfig[props.size].trigger,
-  props.disabled
-    ? 'cursor-not-allowed bg-cp-bg-container-disabled text-cp-text-disabled shadow-none'
-    : invalid.value
-      ? 'cursor-pointer bg-(--cp-input-error-active-bg) text-cp-error-on-container shadow-cp-input-error-active'
-      : open.value
-        ? 'cursor-pointer bg-(--cp-input-active-bg) text-cp-text shadow-cp-input-active'
-        : [
-            'cursor-pointer bg-[var(--cp-input-bg)] text-cp-text',
-            'hover:not-focus-visible:bg-[var(--cp-input-hover-bg)] hover:not-focus-visible:shadow-cp-input-hover',
-            'focus-visible:bg-(--cp-input-active-bg) focus-visible:shadow-cp-input-active',
-          ],
-])
-
-const popoverClasses = computed(() => [
-  'fixed z-50 flex flex-col gap-1 rounded-cp-lg border-0 bg-cp-bg-elevated p-1 shadow-cp-popover',
-  props.options.length > 6 ? 'cp-scrollbar overflow-y-auto' : 'overflow-visible',
-])
-
-function optionId(index: number) {
-  return `${selectId}-option-${index}`
-}
-
-function enabledIndexes() {
-  return props.options.flatMap((option, index) => (option.disabled ? [] : [index]))
-}
-
-function selectedIndex() {
-  return props.options.findIndex(option => option.value === model.value)
-}
-
-function setActiveToSelected() {
-  const selected = selectedIndex()
-  if (selected >= 0 && !props.options[selected]?.disabled) {
-    activeIndex.value = selected
+})
+useEventListener(controlRef, 'click', (event) => {
+  if (!props.filterable || props.disabled || !(event.target instanceof Element) || event.target.closest('button, .cp-popover'))
     return
-  }
-
-  activeIndex.value = enabledIndexes()[0] ?? -1
+  triggerRef.value?.focus()
+  if (event.target.closest('[data-select-indicator]'))
+    toggleMenu()
+  else void openMenu()
+})
+const sizeConfig: Record<SelectSize, { option: string, icon: number }> = {
+  sm: { option: 'h-8 px-2.5 text-xs', icon: 14 },
+  md: { option: 'h-8.5 px-3 text-cp', icon: 16 },
+  lg: { option: 'h-10 px-3.5 text-cp-lg', icon: 17 },
 }
 
-function updatePopoverPosition() {
-  if (!open.value || !triggerRef.value)
-    return
-
-  const rect = triggerRef.value.getBoundingClientRect()
-  const gap = 6
-  const estimatedMenuHeight = clamp(props.options.length * 34 + 8, 42, 244)
-  const belowSpace = window.innerHeight - rect.bottom - gap
-  const aboveSpace = rect.top - gap
-  const placeAbove = belowSpace < estimatedMenuHeight && aboveSpace > belowSpace
-  popoverPlacement.value = placeAbove ? 'top' : 'bottom'
-  const availableHeight = Math.max(placeAbove ? aboveSpace : belowSpace, 120)
-  const maxHeight = clamp(estimatedMenuHeight, 0, availableHeight)
-  const top = placeAbove
-    ? Math.max(8, rect.top - maxHeight - gap)
-    : Math.min(rect.bottom + gap, window.innerHeight - maxHeight - 8)
-  const left = clamp(rect.left, 8, window.innerWidth - rect.width - 8)
-
-  popoverStyle.value = {
-    left: `${left}px`,
-    top: `${top}px`,
-    width: `${rect.width}px`,
-    maxHeight: `${maxHeight}px`,
-  }
-}
-
-const updatePopoverPositionThrottled = useThrottleFn(updatePopoverPosition, 32, true)
-
-async function openMenu() {
-  if (props.disabled || open.value)
-    return
-
-  open.value = true
-  setActiveToSelected()
-  await nextTick()
-  updatePopoverPosition()
-}
-
-function closeMenu() {
-  open.value = false
-}
-
-function toggleMenu() {
-  if (open.value) {
-    closeMenu()
-    return
-  }
-
-  void openMenu()
-}
-
-function moveActive(delta: number) {
-  const indexes = enabledIndexes()
-  if (indexes.length === 0)
-    return
-
-  const current = indexes.indexOf(activeIndex.value)
-  const next = current === -1 ? (delta > 0 ? 0 : indexes.length - 1) : current + delta
-  activeIndex.value = indexes[(next + indexes.length) % indexes.length]
-}
-
-function chooseOption(option: SelectOption, index: number) {
-  if (option.disabled)
-    return
-
-  model.value = option.value
-  void validate('change')
-  activeIndex.value = index
-  closeMenu()
-}
-
-function chooseActive() {
-  const option = props.options[activeIndex.value]
-  if (!option)
-    return
-
-  chooseOption(option, activeIndex.value)
-}
-
-function handleTriggerKeydown(event: KeyboardEvent) {
-  if (props.disabled)
-    return
-
-  if (event.key === 'ArrowDown') {
-    event.preventDefault()
-    if (!open.value) {
-      void openMenu()
-      return
-    }
-    moveActive(1)
-    return
-  }
-
-  if (event.key === 'ArrowUp') {
-    event.preventDefault()
-    if (!open.value) {
-      void openMenu()
-      return
-    }
-    moveActive(-1)
-    return
-  }
-
-  if (event.key === 'Enter' || event.key === ' ') {
-    event.preventDefault()
-    if (!open.value) {
-      void openMenu()
-      return
-    }
-    chooseActive()
-    return
-  }
-
-  if (event.key === 'Escape') {
-    closeMenu()
-  }
-}
-
-function optionClasses(option: SelectOption, index: number) {
+function optionClasses(option: SelectOption<Value>, index: number) {
   return [
-    'flex w-full touch-manipulation items-center gap-2 rounded-cp-sm border-0 px-3 text-left font-emphasis leading-none outline-none transition-colors motion-reduce:transition-none',
+    'flex w-full shrink-0 touch-manipulation items-center gap-2 rounded-cp-sm border-0 px-3 text-left font-emphasis leading-none outline-none transition-colors motion-reduce:transition-none',
     sizeConfig[props.size].option,
     option.disabled
       ? 'cursor-not-allowed bg-transparent text-cp-text-disabled'
-      : option.value === model.value
+      : selectedValues.value.includes(option.value)
         ? 'cursor-pointer bg-cp-control-item-bg-active text-cp-primary-text'
         : activeIndex.value === index
           ? 'cursor-pointer bg-cp-bg-text-hover text-cp-text'
           : 'cursor-pointer bg-transparent text-cp-text hover:bg-cp-bg-text-hover',
   ]
 }
-
-whenever(open, async () => {
-  await nextTick()
-  updatePopoverPosition()
-})
-
-watch(
-  () => [props.options, model.value],
-  () => {
-    if (!open.value)
-      return
-    setActiveToSelected()
-  },
-)
-
-onClickOutside(rootRef, closeMenu, { ignore: [popoverRef] })
-useEventListener(window, 'resize', updatePopoverPositionThrottled)
-useEventListener(window, 'scroll', updatePopoverPositionThrottled, { capture: true })
+watch(open, visible => emit('visibleChange', visible))
+function clear() {
+  const value = (props.multiple ? [] : undefined) as SelectValue<Multiple, Value>
+  model.value = value
+  emit('change', value)
+  emit('clear')
+  validate('change')
+  triggerRef.value?.focus()
+}
+defineExpose({ focus: () => triggerRef.value?.focus(), blur: () => triggerRef.value?.blur(), clear, open: openMenu, close: closeMenu })
 </script>
 
 <template>
-  <div ref="rootRef" class="relative inline-block text-left" v-bind="rootAttrs">
-    <button
-      v-bind="triggerAttrs"
-      :id="controlId"
-      ref="triggerRef"
-      type="button"
-      :class="triggerClasses"
-      :disabled="disabled"
-      role="combobox"
-      :aria-expanded="open"
-      :aria-controls="`${selectId}-listbox`"
-      :aria-activedescendant="open && activeIndex >= 0 ? optionId(activeIndex) : undefined"
-      :aria-describedby="describedBy"
-      :aria-invalid="invalid || undefined"
-      :aria-required="ariaRequired"
-      @click="toggleMenu"
-      @keydown="handleTriggerKeydown"
-      @blur="validate('blur')"
+  <div ref="rootRef" class="cp-select relative inline-block min-w-0 text-left" v-bind="rootAttrs">
+    <div
+      ref="controlRef"
+      class="group/select relative flex w-full items-center gap-2 text-left font-emphasis leading-none"
+      :class="getInputClasses(size, disabled, invalid, { open, inset: hasTags ? 'item' : 'text', trailing: true })"
+      :style="{ anchorName: `--${selectId}` }"
     >
-      <span class="min-w-0 truncate" :class="selectedOption?.description ? 'max-w-1/2 shrink-0' : 'flex-1'">
-        {{ selectedOption?.label ?? placeholder ?? t('common.selectPlaceholder') }}
-      </span>
-      <span
-        v-if="selectedOption?.description"
-        :title="selectedOption.description"
-        class="min-w-0 flex-1 truncate text-xs font-normal"
-        :class="disabled ? 'text-cp-text-disabled' : 'text-cp-text-tertiary'"
+      <button
+        v-if="!filterable"
+        v-bind="fieldAttrs"
+        :id="controlId"
+        ref="triggerRef"
+        type="button"
+        class="absolute inset-0 size-full cursor-pointer rounded-cp border-0 bg-transparent p-0 text-inherit outline-none disabled:cursor-not-allowed"
+        @click="toggleMenu"
+        @focus="emit('focus', $event)"
+        @blur="emit('blur', $event); validate('blur')"
+        @keydown="handleTriggerKeydown"
       >
-        {{ selectedOption.description }}
+        <span class="sr-only">{{ selectionLabel || (placeholder ?? locale.select.placeholder) }}</span>
+      </button>
+      <div class="pointer-events-none relative flex min-w-0 flex-1 flex-wrap items-center gap-1">
+        <SelectTags
+          v-if="hasTags"
+          :options="selectedOptions"
+          :size="size === 'sm' ? 'sm' : 'md'"
+          :disabled="disabled"
+          :collapse="collapseTags"
+          :tooltip="collapseTagsTooltip"
+          :limit="maxCollapseTags"
+          :menu-open="open"
+          @remove="removeOption"
+          @focus-control="triggerRef?.focus()"
+        />
+        <input
+          v-if="filterable"
+          v-bind="fieldAttrs"
+          :id="controlId"
+          ref="triggerRef"
+          v-model="query"
+          type="text"
+          autocomplete="off"
+          aria-autocomplete="list"
+          :placeholder="hasTags ? undefined : selectedOption?.label ?? placeholder ?? locale.select.placeholder"
+          class="pointer-events-auto w-0 min-w-[3ch] flex-[1_1_3ch] truncate p-0 placeholder:font-emphasis"
+          :class="[inputFieldClass, selectedOption && !open && !disabled && 'placeholder:text-cp-text!', disabled && 'placeholder:text-cp-text-disabled!']"
+          @focus="emit('focus', $event)"
+          @blur="emit('blur', $event); validate('blur')"
+          @keydown="handleTriggerKeydown"
+        >
+        <span
+          v-else-if="!hasTags"
+          aria-hidden="true"
+          class="min-w-0 truncate"
+          :class="[selectedOption?.description ? 'max-w-1/2 shrink-0' : 'flex-1', !disabled && !selectedOption && 'text-cp-text-quaternary']"
+        >
+          {{ selectedOption?.label ?? placeholder ?? locale.select.placeholder }}
+        </span>
+        <span
+          v-if="selectedOption?.description && !(filterable && open)"
+          :title="selectedOption.description"
+          class="min-w-0 flex-1 truncate font-normal"
+          :class="disabled ? 'text-cp-text-disabled' : 'text-cp-text-tertiary'"
+        >
+          {{ selectedOption.description }}
+        </span>
+      </div>
+      <span
+        data-select-indicator
+        class="relative inline-grid size-(--field-row) shrink-0 place-items-center"
+        :class="filterable && !disabled ? 'cursor-pointer' : 'pointer-events-none'"
+      >
+        <ChevronDown
+          aria-hidden="true"
+          class="pointer-events-none transition-transform motion-reduce:transition-none"
+          :class="[disabled ? 'text-cp-text-disabled' : open ? 'rotate-180 text-cp-primary-text' : 'text-cp-text-quaternary', canClear && !open && 'group-focus-within/select:opacity-0 group-hover/select:opacity-0']"
+          :size="sizeConfig[size].icon"
+        />
+        <button
+          v-if="canClear && !open"
+          type="button"
+          :aria-label="locale.select.clear"
+          :class="clearButtonClass"
+          class="pointer-events-none absolute inset-0 opacity-0 group-focus-within/select:pointer-events-auto group-focus-within/select:opacity-100 group-hover/select:pointer-events-auto group-hover/select:opacity-100"
+          @mousedown.prevent
+          @click.stop="clear"
+        >
+          <X :size="14" />
+        </button>
       </span>
-      <ChevronDown
-        class="pointer-events-none absolute top-1/2 right-3 -translate-y-1/2 transition-transform"
-        :class="
-          disabled ? 'text-cp-text-disabled' : open ? 'rotate-180 text-cp-primary-text' : 'text-cp-text-quaternary'
-        "
-        :size="sizeConfig[size].icon"
-      />
-    </button>
+    </div>
 
     <Teleport to="body">
-      <Transition name="cp-slide-fade">
+      <Transition
+        name="cp-slide-fade"
+      >
         <div
           v-if="open"
-          :id="`${selectId}-listbox`"
           ref="popoverRef"
+          data-cp-overlay
           :data-cp-placement="popoverPlacement"
-          :class="popoverClasses"
+          class="fixed z-50 rounded-cp-lg border-0 bg-cp-bg-elevated shadow-cp-popover"
           :style="popoverStyle"
-          role="listbox"
-          :aria-labelledby="controlId"
         >
-          <div
-            v-if="options.length === 0"
-            class="flex h-8.5 items-center rounded-cp-sm px-3 text-cp leading-none font-emphasis text-cp-text-quaternary"
-          >
-            {{ emptyText }}
-          </div>
-
-          <template v-else>
-            <button
-              v-for="(option, index) in options"
-              :id="optionId(index)"
-              :key="option.value"
-              type="button"
-              role="option"
-              :aria-selected="option.value === model"
-              :disabled="option.disabled"
-              :class="optionClasses(option, index)"
-              @mouseenter="activeIndex = option.disabled ? activeIndex : index"
-              @focus="activeIndex = option.disabled ? activeIndex : index"
-              @mousedown.prevent
-              @click="chooseOption(option, index)"
+          <Scrollbar ref="scrollbarRef" :max-height="popoverMaxHeight" class="rounded-cp-lg">
+            <div
+              :id="`${selectId}-listbox`"
+              ref="listboxRef"
+              class="flex flex-col gap-1 p-1"
+              role="listbox"
+              :aria-labelledby="controlId"
+              :aria-multiselectable="multiple || undefined"
+              :aria-busy="loading || undefined"
             >
-              <slot name="option" :option="option" :selected="option.value === model">
-                <span class="min-w-0 truncate" :class="option.description ? 'max-w-1/2 shrink-0' : 'flex-1'">{{ option.label }}</span>
-                <span
-                  v-if="option.description"
-                  :title="option.description"
-                  class="min-w-0 flex-1 truncate text-xs font-normal"
-                  :class="option.disabled ? 'text-cp-text-disabled' : 'text-cp-text-tertiary'"
+              <div v-if="displayed.length === 0" class="shrink-0">
+                <slot name="empty" :search="search">
+                  <Empty :title="loading ? locale.common.loading : search ? locale.select.noMatches : (emptyText ?? locale.select.empty)" size="sm" surface="none" role="status">
+                    <template v-if="loading" #icon>
+                      <LoaderCircle :size="18" class="animate-spin text-cp-text-quaternary motion-reduce:animate-none" />
+                    </template>
+                  </Empty>
+                </slot>
+              </div>
+
+              <template v-else>
+                <button
+                  v-for="(option, index) in displayed"
+                  :id="optionId(index)"
+                  :key="option.value"
+                  type="button"
+                  role="option"
+                  :aria-selected="selectedValues.includes(option.value)"
+                  tabindex="-1"
+                  :disabled="option.disabled"
+                  :class="optionClasses(option, index)"
+                  @mouseenter="activeIndex = option.disabled ? activeIndex : index"
+                  @focus="handleOptionFocus(index)"
+                  @mousedown.prevent
+                  @click="chooseOption(option, index)"
+                  @keydown.esc="handleEscape"
                 >
-                  {{ option.description }}
-                </span>
-              </slot>
-              <Check
-                v-if="option.value === model"
-                class="shrink-0 text-cp-primary-text"
-                :size="size === 'sm' ? 13 : size === 'lg' ? 17 : 15"
-              />
-            </button>
-          </template>
+                  <slot name="option" :option="option" :index="index" :selected="selectedValues.includes(option.value)" :disabled="Boolean(option.disabled)">
+                    <span class="min-w-0 truncate" :class="option.description ? 'max-w-1/2 shrink-0' : 'flex-1'">{{ option.label }}</span>
+                    <span
+                      v-if="option.description"
+                      :title="option.description"
+                      class="min-w-0 flex-1 truncate font-normal"
+                      :class="option.disabled ? 'text-cp-text-disabled' : 'text-cp-text-tertiary'"
+                    >
+                      {{ option.description }}
+                    </span>
+                  </slot>
+                </button>
+              </template>
+            </div>
+          </Scrollbar>
         </div>
       </Transition>
     </Teleport>

@@ -367,7 +367,7 @@ onScopeDispose(() => {
           </template>
         </BaseInput>
         <BaseSelect v-if="tab === 'nodes'" v-model="nodeSource" class="w-48" aria-label="节点来源" :options="sourceOptions" />
-        <BaseSelect v-model="nodeState" class="w-40" aria-label="节点状态" :options="[{ value: 'all', label: '所有状态' }, { value: 'ready', label: '已启用' }, { value: 'disabled', label: '已停用' }, { value: 'failed', label: '探测失败' }, { value: 'blocked', label: '地区未准入' }]" />
+        <BaseSelect v-model="nodeState" class="w-40" aria-label="节点状态" :options="[{ value: 'all' as const, label: '所有状态' }, { value: 'ready' as const, label: '已启用' }, { value: 'disabled' as const, label: '已停用' }, { value: 'failed' as const, label: '探测失败' }, { value: 'blocked' as const, label: '地区未准入' }]" />
       </div>
       <div class="mb-3 flex flex-wrap items-center gap-3">
         <BaseButton :disabled="batchRunning || !targets.length" @click="checkBatch(false)">

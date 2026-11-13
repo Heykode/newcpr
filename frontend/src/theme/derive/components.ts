@@ -11,6 +11,7 @@ import type {
   ThemeShadowMap,
   ThemeSurfaceMap,
 } from '../types'
+import { FastColor } from '@ant-design/fast-color'
 import {
   compositeOnBackground,
   ensureContrast,
@@ -25,7 +26,7 @@ import {
   WHITE,
 } from '../core/constants'
 
-type SurfaceComponentMap = Omit<ThemeComponentMap, `buttonPrimary${string}` | `switchUnchecked${string}` | 'tableRowSelectedHoverBg'>
+type SurfaceComponentMap = Omit<ThemeComponentMap, `buttonPrimary${string}` | `switchUnchecked${string}` | 'tableRowSelectedHoverBg' | 'inputBg' | 'inputTagBg'>
 
 const SHADOW_MAP_DERIVERS = {
   light: deriveLightShadowMap,
@@ -105,16 +106,23 @@ export function deriveThemeComponentMap(
   error: FunctionalColorMap,
   shadowStrength: number,
   preset: ThemePresetId,
+  inputBgOverride?: string,
 ): ThemeComponentMap {
   // 明暗模式共用组件合同，各自保留适合宿主表面的填充配方。
   const components = fills
     ? deriveLightComponentMap(surfaces, fills, primary, error, shadowStrength)
     : deriveDarkComponentMap(surfaces, primary, error, shadowStrength)
+  const inputBg = inputBgOverride ?? fills?.controlBg ?? mix(surfaces.colorBgContainer, surfaces.colorFillSecondary, 0.375)
+  // 先把输入框的透明填充合成为实色，再仅降低明度，浮层中的标签不会因底层表面不同而变色。
+  const inputTone = new FastColor(compositeOnBackground(inputBg, surfaces.colorBgContainer)).toHsl()
+  const inputTagBg = new FastColor({ ...inputTone, l: Math.max(0, inputTone.l - (fills ? 0.04 : 0.02)) }).toHexString().toUpperCase()
   const buttonPrimaryBg = ensureContrast(primary.colorPrimary, primary.colorTextLightSolid, 4.5)
   // 关闭态复用主题的中性轮廓色，与卡片区分但不额外加深。
   const switchUncheckedBg = surfaces.colorBorder
   return {
     ...components,
+    inputBg,
+    inputTagBg,
     ...(preset === 'soft' ? deriveSoftSurfaceMap(surfaces, shadowStrength, fills === null) : {}),
     switchUncheckedBg,
     switchUncheckedColor: ensureContrast(surfaces.colorTextSecondary, switchUncheckedBg, 4.5),
@@ -154,7 +162,6 @@ function deriveDarkComponentMap(
     menuItemSelectedBg: surfaces.colorBgTextHover,
     menuItemSelectedBgImage: 'none',
     menuItemSelectedShadow: 'none',
-    inputBg: mix(surfaces.colorBgContainer, surfaces.colorFillSecondary, 0.375),
     inputHoverBg: inputInteractionBg,
     inputActiveBg: inputInteractionBg,
     inputErrorActiveBg: error.container,
@@ -198,7 +205,6 @@ function deriveLightComponentMap(
     iconButtonSecondaryBg: fills.controlBg,
     iconButtonSecondaryHoverBg: fills.controlHoverBg,
     iconButtonSecondaryActiveBg: fills.controlActiveBg,
-    inputBg: fills.controlBg,
     inputHoverBg: surfaces.colorBgContainer,
     inputActiveBg: surfaces.colorBgContainer,
     inputErrorActiveBg: error.container,

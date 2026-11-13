@@ -1,0 +1,35 @@
+export default {
+  name: 'zh-Hans',
+  common: {
+    confirm: '确认',
+    cancel: '取消',
+    close: '关闭',
+    remove: '移除',
+    loading: '加载中',
+    empty: '暂无数据',
+    value: '数值',
+  },
+  select: {
+    placeholder: '请选择',
+    empty: '暂无选项',
+    clear: '清空选择',
+    search: '搜索选项',
+    searchPlaceholder: '输入名称筛选',
+    noMatches: '没有匹配项',
+    remove: (label: string) => `移除 ${label}`,
+    more: (count: number) => `查看其余 ${count} 个已选项`,
+    remaining: '其余已选项',
+  },
+  inputNumber: {
+    decrease: (label: string) => `减少${label}`,
+    increase: (label: string) => `增加${label}`,
+  },
+  input: {
+    moreTags: (count: number) => `查看其余 ${count} 个标签`,
+    remainingTags: '其余标签',
+    clear: '清空输入',
+    content: '内容',
+    show: (label: string) => `显示${label}`,
+    hide: (label: string) => `隐藏${label}`,
+  },
+}

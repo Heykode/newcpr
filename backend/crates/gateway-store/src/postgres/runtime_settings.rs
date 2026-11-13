@@ -302,7 +302,7 @@ impl ProviderRuntimePolicyPort for PgRuntimeSettingsRepository {
                 .map_err(|_| provider_unavailable("load warmup policy"))?;
             ProviderWarmupPolicy::try_new(
                 settings.account_warmup_enabled,
-                settings.account_warmup_cron,
+                &settings.account_warmup_cron,
                 settings.account_warmup_model,
             )
         })

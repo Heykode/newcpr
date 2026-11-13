@@ -49,7 +49,7 @@ const taskOptions = computed(() => props.tasks.map(task => ({
           size="sm"
           :aria-label="t('accounts.importTasks.switchImportTasks')"
           class="w-full min-w-0"
-          @update:model-value="emit('select', $event)"
+          @update:model-value="$event !== undefined && emit('select', $event)"
         />
       </div>
       <TaskDetail v-if="detail" :task="detail" :stopping="stopping" @stop="emit('stop')" @view-accounts="emit('viewAccounts')" />

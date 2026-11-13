@@ -45,7 +45,7 @@ function automatic(enabled: boolean) {
         <BaseSelect aria-label="平台" :model-value="preset.platform" :disabled="disabled" :options="[{ label: 'macOS', value: 'macos' }, { label: 'Linux', value: 'linux' }, { label: 'Windows', value: 'windows' }]" @update:model-value="value => target(preset!.client, value as 'macos' | 'linux' | 'windows')" />
       </BaseFormItem>
       <BaseFormItem label="架构">
-        <BaseSelect aria-label="架构" :model-value="preset.arch ?? selected?.defaults.arch ?? ''" :disabled="disabled" :options="[{ label: 'arm64', value: 'arm64' }, { label: 'x86_64', value: 'x86_64' }]" @update:model-value="value => change({ arch: value })" />
+        <BaseSelect aria-label="架构" :model-value="preset.arch ?? selected?.defaults.arch ?? ''" :disabled="disabled" :options="[{ label: 'arm64', value: 'arm64' as const }, { label: 'x86_64', value: 'x86_64' as const }]" @update:model-value="value => change({ arch: value })" />
       </BaseFormItem>
       <BaseFormItem v-if="preset.client === 'cli'" label="CLI 入口">
         <BaseSelect aria-label="CLI 入口" :model-value="preset.cliEntry ?? ''" :disabled="disabled" :options="[{ label: '默认', value: '' }, { label: 'TUI', value: 'tui' }, { label: 'Exec', value: 'exec' }]" @update:model-value="value => change({ cliEntry: value ? value as 'tui' | 'exec' : null, originator: null })" />

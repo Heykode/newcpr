@@ -29,8 +29,8 @@ let controller: AbortController | undefined
 let generation = 0
 const selected = computed(() => (model.value.accountIds || model.value.accountId || '').split(',').filter(Boolean))
 const activeCount = computed(() => Object.entries(model.value).filter(([key, value]) => value && key !== 'view').length)
-function set(key: keyof UsageFilterDraft, value: string) {
-  model.value = { ...model.value, [key]: value }
+function set(key: keyof UsageFilterDraft, value: string | undefined) {
+  model.value = { ...model.value, [key]: value ?? '' }
 }
 async function loadAccounts() {
   const current = ++generation

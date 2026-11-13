@@ -1,8 +1,11 @@
 <script setup lang="ts">
-import { computed, useAttrs } from 'vue'
+import type { ComponentSize } from './controls/types'
+import { Eye, EyeOff, X } from '@lucide/vue'
+import { computed, nextTick, shallowRef, useAttrs, useTemplateRef, watch } from 'vue'
 import { useFormField } from './BaseForm/composables/useFormField'
-
-type InputSize = 'sm' | 'md' | 'lg'
+import { clearButtonClass } from './controls/clear-button'
+import { getInputClasses, inputFieldClass } from './controls/input-styles'
+import { useLocale } from './controls/locale'
 
 defineOptions({ inheritAttrs: false })
 
@@ -11,7 +14,9 @@ const props = withDefaults(
     placeholder?: string
     type?: string
     disabled?: boolean
-    size?: InputSize
+    clearable?: boolean
+    showPassword?: boolean
+    size?: ComponentSize
   }>(),
   {
     placeholder: '',
@@ -21,38 +26,42 @@ const props = withDefaults(
   },
 )
 
+const emit = defineEmits<{
+  input: [value: string]
+  change: [value: string]
+  clear: []
+  focus: [event: FocusEvent]
+  blur: [event: FocusEvent]
+}>()
+
+defineSlots<{ prefix?: () => unknown, suffix?: () => unknown }>()
+
+const locale = useLocale()
+
 const model = defineModel<string>({ default: '' })
 const attrs = useAttrs()
-const { controlId, invalid, describedBy, required, ariaRequired, validate } = useFormField(attrs)
-
-const rootAttrs = computed(() => ({ class: attrs.class, style: attrs.style }))
-const controlAttrs = computed(() =>
-  Object.fromEntries(
-    Object.entries(attrs).filter(
-      ([key]) => !['class', 'style', 'id', 'aria-describedby', 'aria-invalid', 'aria-required'].includes(key),
-    ),
-  ),
-)
-
-const sizeClasses: Record<InputSize, string> = {
-  sm: 'h-cp-control-sm gap-2 px-3 text-xs',
-  md: 'h-cp-control gap-2.5 px-3.5 text-cp',
-  lg: 'h-cp-control-lg gap-3 px-4 text-cp-lg',
+const { controlId, invalid, describedBy, required, ariaRequired, rootAttrs, controlAttrs, validate } = useFormField(attrs)
+watch(model, () => {
+  void validate('change')
+})
+const inputRef = useTemplateRef<HTMLInputElement>('input')
+const passwordVisible = shallowRef(false)
+const composing = shallowRef(false)
+const inputType = computed(() => props.showPassword ? passwordVisible.value ? 'text' : 'password' : props.type)
+function focus() {
+  inputRef.value?.focus()
 }
+function clear() {
+  model.value = ''
+  emit('input', '')
+  emit('change', '')
+  emit('clear')
+  focus()
+}
+defineExpose({ focus, blur: () => inputRef.value?.blur(), select: () => inputRef.value?.select(), clear })
 
-const containerClasses = computed(() => [
-  'relative inline-flex w-full min-w-0 items-center overflow-visible rounded-cp border-0 text-cp-text shadow-cp-input transition-[background-color,box-shadow,color] duration-[160ms] motion-reduce:transition-none',
-  sizeClasses[props.size],
-  props.disabled
-    ? 'cursor-not-allowed bg-cp-bg-container-disabled text-cp-text-disabled shadow-none'
-    : invalid.value
-      ? 'bg-(--cp-input-error-active-bg) shadow-cp-input-error-active'
-      : [
-          'bg-[var(--cp-input-bg)]',
-          'hover:not-focus-within:bg-[var(--cp-input-hover-bg)] hover:not-focus-within:shadow-cp-input-hover',
-          'focus-within:bg-(--cp-input-active-bg) focus-within:shadow-cp-input-active',
-        ],
-])
+const showClear = computed(() => Boolean(props.clearable && model.value && !props.disabled && (attrs.readonly === undefined || attrs.readonly === false)))
+const containerClasses = computed(() => getInputClasses(props.size, props.disabled, invalid.value, { trailing: Boolean(showClear.value || props.showPassword) }))
 
 const iconClasses = computed(() => [
   'inline-flex shrink-0',
@@ -60,62 +69,109 @@ const iconClasses = computed(() => [
 ])
 
 function updateModel(event: Event) {
-  model.value = (event.target as HTMLInputElement).value
-  void validate('change')
+  if (composing.value)
+    return
+  const value = (event.target as HTMLInputElement).value
+  if (value !== model.value) {
+    model.value = value
+    emit('input', value)
+  }
+}
+
+function handleChange(event: Event) {
+  updateModel(event)
+  emit('change', (event.target as HTMLInputElement).value)
+}
+
+function finishComposition(event: CompositionEvent) {
+  composing.value = false
+  // 浏览器可能紧接着发送 input，等模型同步后再补齐没有 input 的情况
+  queueMicrotask(() => {
+    void nextTick(() => updateModel(event))
+  })
 }
 
 function syncAutofill(event: AnimationEvent) {
-  if (event.animationName === 'base-input-autofill-sync')
+  if (event.animationName === 'cp-input-autofill-sync')
     updateModel(event)
 }
 </script>
 
 <template>
-  <div v-bind="rootAttrs" class="min-w-0">
-    <span :class="containerClasses">
+  <div v-bind="rootAttrs" class="cp-input min-w-0">
+    <span class="group/input relative inline-flex w-full items-center gap-2" :class="containerClasses">
       <span v-if="$slots.prefix" :class="iconClasses">
         <slot name="prefix" />
       </span>
       <input
         v-bind="controlAttrs"
         :id="controlId"
+        ref="input"
         :value="model"
-        class="base-input__field h-full min-w-0 flex-1 border-0 bg-transparent font-emphasis leading-[1.15] text-cp-text outline-0 placeholder:text-cp-text-quaternary disabled:cursor-not-allowed disabled:text-cp-text-disabled [&[type=number]]:appearance-[textfield] [&[type=number]::-webkit-inner-spin-button]:m-0 [&[type=number]::-webkit-inner-spin-button]:appearance-none [&[type=number]::-webkit-outer-spin-button]:m-0 [&[type=number]::-webkit-outer-spin-button]:appearance-none"
+        class="cp-input__field"
+        :class="inputFieldClass"
         :placeholder="placeholder"
-        :type="type"
+        :type="inputType"
         :disabled="disabled"
-        :required="required || undefined"
+        :required="required"
         :aria-describedby="describedBy"
         :aria-invalid="invalid || undefined"
         :aria-required="ariaRequired"
         @animationstart="syncAutofill"
-        @change="updateModel"
+        @change="handleChange"
         @input="updateModel"
-        @blur="validate('blur')"
+        @compositionstart="composing = true"
+        @compositionend="finishComposition"
+        @focus="emit('focus', $event)"
+        @blur="emit('blur', $event); validate('blur')"
       >
       <span v-if="$slots.suffix" :class="iconClasses">
         <slot name="suffix" />
       </span>
+      <button
+        v-if="showClear"
+        type="button"
+        :aria-label="locale.input.clear"
+        :class="clearButtonClass"
+        class="pointer-events-none opacity-0 group-focus-within/input:pointer-events-auto group-focus-within/input:opacity-100 group-hover/input:pointer-events-auto group-hover/input:opacity-100"
+        @mousedown.prevent
+        @click="clear"
+      >
+        <X :size="14" />
+      </button>
+      <button
+        v-if="showPassword"
+        type="button"
+        :class="clearButtonClass"
+        class="cp-input__password-toggle"
+        :aria-label="(passwordVisible ? locale.input.hide : locale.input.show)(typeof attrs['aria-label'] === 'string' ? attrs['aria-label'] : locale.input.content)"
+        :aria-pressed="passwordVisible"
+        :disabled="disabled"
+        @mousedown.prevent
+        @click="passwordVisible = !passwordVisible"
+      >
+        <EyeOff v-if="passwordVisible" :size="14" /><Eye v-else :size="14" />
+      </button>
     </span>
   </div>
 </template>
 
-<style scoped>
-.base-input__field:-webkit-autofill,
-.base-input__field:-webkit-autofill:hover,
-.base-input__field:-webkit-autofill:focus,
-.base-input__field:autofill {
-  animation-name: base-input-autofill-sync;
+<!-- Keep this namespaced animation unscoped: animationstart exposes its compiled name. -->
+<style>
+.cp-input__field:-webkit-autofill,
+.cp-input__field:-webkit-autofill:hover,
+.cp-input__field:-webkit-autofill:focus,
+.cp-input__field:autofill {
+  animation-name: cp-input-autofill-sync;
   animation-duration: 1ms;
   background-clip: text !important;
-  caret-color: var(--cp-color-text);
   -webkit-background-clip: text !important;
   -webkit-text-fill-color: var(--cp-color-text) !important;
   -webkit-box-shadow: none !important;
   box-shadow: none !important;
 }
 
-@keyframes base-input-autofill-sync {
+@keyframes cp-input-autofill-sync {
   from {
     opacity: 1;
   }

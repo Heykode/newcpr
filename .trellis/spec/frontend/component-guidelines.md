@@ -98,7 +98,7 @@ Questions to answer:
 - API Key 安装 ID 默认空，生成只填草稿，保存后发送；清空删除该 Key 覆盖。
   代理测试结果放选择器旁，出口 IP 放详情，不新增说明卡片。
 
-### 主题与共享侧栏（主题对齐官方 UI 45b076735）
+### 主题与共享侧栏（主题对齐官方 UI 68458e62e）
 
 - `createTheme({ name, preset, colorId, primaryColor, customization })` 统一派生。
   `themeProfiles` 提供尺寸/材质组合，`resolveThemeProfile` 保留现有功能色和中性色，
@@ -106,6 +106,8 @@ Questions to answer:
   材质不提供 customization，不改变配色、圆角、字号和尺寸；显式 customization 独立生效。
   无自定义时柔光控件圆角为 8px、卡片 18px、侧栏 0；明暗模式一致。
   持久化键 `codex-proxy-rs-theme` 不变，无 `themePreset` 的旧配置补 `default`。
+- 预设底色仅参与表面派生，不写回 seed；显式 `colorBgBase` 优先。输入标签底色从
+  输入背景合成为实色后派生，包含用户的 `--cp-input-bg` 覆盖。
 - 本地 CSS Token 与直接覆盖键仍为 `--cp-*`。移植官方无前缀 Token 消费者时，
   同步调整过滤、预览和显示；派生变量列表不得因错误前缀变成空白。
 - `BaseSidebar` 是公共布局；`AppSidebar` 承担本地菜单与路由。
@@ -116,3 +118,20 @@ Questions to answer:
 - 浏览器验收包含四预设、两材质、明暗、旧存储/保存刷新、自定义覆盖、被取消的导航、
   手机焦点与真实多分组几何布局。复用 `theme-preview.mjs` 和 `upstream-v3330.mjs`，
   单次场景扩展放仓库外；仅类型通过不能证明遮挡和重叠不存在。
+
+### 输入控件（官方 UI v0.11.0）
+
+- Input、Textarea、Select、InputTag、NumberInput 共用 `controls/input-styles.ts` 的行高、
+  内缩、禁用和错误状态。尺寸接现有 `sm/md/lg`；NumberInput 默认仍为 `sm`。
+  输入/标签/选择器的默认宽度放在组件层，让调用方宽度类可以覆盖。
+- `BaseSelect` 保留官方字符串/数字泛型、单选/多选、搜索/remote、清空、折叠标签、
+  键盘导航和禁用选项。单选清空返回 `undefined`，页面接入时保留其空筛选或不接受清空的业务合同，
+  不把共享控件缩成仅字符串、不支持清空的实现。
+- `BaseInput` 的自动填充 CSS 动画和监听名称必须一致；专属 `cp-input__field` 选择器的
+  动画样式不使用 scoped 名称改写。验证浏览器真实动画事件同步 model，不只派发 input。
+- `BaseInputTag` 支持回车/空格提交、失焦保存、IME、退格删除、最大数量、只读/禁用、
+  拖拽排序及折叠弹层。溢出标签的 Popover 使用本地 `trigger` 插槽和 `teleported=false`，
+  内部焦点移动不误提交；`BasePopover` 默认仍 Teleport。
+- 账号分组继续使用既有多文字标签布局，不能因为输入控件标签更新改成图标叠加。
+- 浏览器检查实际设置保存重读、标签及选择器键盘/手机交互；旧测试辅助导入和
+  schema 要同步，不以还原旧组件行为通过检查。

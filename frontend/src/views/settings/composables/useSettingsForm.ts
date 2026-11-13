@@ -5,8 +5,8 @@ import { computed, reactive, ref, shallowRef } from 'vue'
 import { getSettings, updateSettings } from '@/api'
 import { defaultRequestLocation } from '@/api/modules/proxies'
 import { defaultSmartScheduling } from '@/api/modules/settings'
-
 import { ApiError } from '@/api/request'
+
 import { toast } from '@/components/base/BaseToast'
 import { useAsyncAction } from '@/composables/useAsyncAction'
 import { t } from '@/i18n'
@@ -15,6 +15,7 @@ import { DEFAULT_EXCEL_MODELS, DEFAULT_EXCEL_MODELS_INPUT } from '@/utils/excel-
 import { normalizeRequestLocation, requestLocationError } from '@/utils/location'
 import { parseExcelModels } from '@/views/accounts/utils/schedulingForm'
 import { cloneProtectionRules, protectionSettingsError, trimProtectionText } from '../components/error-protection/form'
+import { validWarmupExpressions, warmupScheduleBytes } from '../utils/warmup-schedule'
 import { useExcelImageSettings } from './useExcelImageSettings'
 import { useRuntimeUnits } from './useRuntimeUnits'
 
@@ -84,7 +85,7 @@ export function useSettingsForm() {
     maxConcurrentPerAccount: null as number | null,
     openaiGuardianReservedConcurrency: null as number | null,
     accountWarmupEnabled: false,
-    accountWarmupCron: '',
+    accountWarmupCron: [] as string[],
     accountWarmupModel: '',
     codexQuotaOverdraftEnabled: false,
     codexQuotaOverdraftProbeModel: 'gpt-6-astra',
@@ -160,7 +161,7 @@ export function useSettingsForm() {
     form.maxConcurrentPerAccount = data.maxConcurrentPerAccount
     form.openaiGuardianReservedConcurrency = data.openaiGuardianReservedConcurrency ?? 0
     form.accountWarmupEnabled = data.accountWarmupEnabled ?? false
-    form.accountWarmupCron = data.accountWarmupCron ?? ''
+    form.accountWarmupCron = data.accountWarmupCron ? data.accountWarmupCron.split(';') : []
     form.accountWarmupModel = data.accountWarmupModel ?? ''
     form.codexQuotaOverdraftEnabled = data.codexQuotaOverdraftEnabled ?? false
     form.codexQuotaOverdraftProbeModel = data.codexQuotaOverdraftProbeModel?.trim() || 'gpt-6-astra'
@@ -279,8 +280,10 @@ export function useSettingsForm() {
     }
     const openaiGuardianReservedConcurrency = openaiGuardianReservedConcurrencyValue
     const accountWarmupModel = form.accountWarmupModel.trim()
-    if (form.accountWarmupEnabled && (!/^\S+(?: +\S+){4}$/.test(form.accountWarmupCron.trim()) || form.accountWarmupCron.trim().length > 255 || !accountWarmupModel)) {
-      toast.warning('启用预热时必须填写五段 Cron 表达式和模型')
+    if (!validWarmupExpressions(form.accountWarmupCron, form.accountWarmupEnabled)
+      || warmupScheduleBytes(form.accountWarmupCron) > 255
+      || (form.accountWarmupEnabled && !accountWarmupModel)) {
+      toast.warning('请填写有效的预热 Cron 规则和模型，规则总长度不超过 255 字节')
       return
     }
     const codexQuotaOverdraftProbeModel = form.codexQuotaOverdraftProbeModel.trim()
@@ -412,7 +415,7 @@ export function useSettingsForm() {
         maxConcurrentPerAccount,
         openaiGuardianReservedConcurrency,
         accountWarmupEnabled: form.accountWarmupEnabled,
-        accountWarmupCron: form.accountWarmupCron.trim(),
+        accountWarmupCron: form.accountWarmupCron.join(';'),
         accountWarmupModel: accountWarmupModel || null,
         codexQuotaOverdraftEnabled: form.codexQuotaOverdraftEnabled,
         codexQuotaOverdraftProbeModel: effectiveCodexQuotaOverdraftProbeModel,

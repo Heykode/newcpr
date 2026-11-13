@@ -54,8 +54,8 @@ const selection = computed<OutboundUserAgentSelection>(() => editor.value !== 'c
   : useDefault.value
     ? { mode: 'default' }
     : { mode: autoVersion.value ? 'custom-auto-version' : 'custom', userAgent: custom.value })
-function changeEditor(value: string) {
-  if (busy.value || !settings.value)
+function changeEditor(value: string | undefined) {
+  if (busy.value || !settings.value || value === undefined)
     return
   editor.value = value
   preview.value = null

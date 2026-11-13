@@ -52,7 +52,7 @@ const ACTIVITY_LEVEL_MIX = {
 const SURFACE_MAP_DERIVERS = {
   light: deriveNeutralLightSurfaceMap,
   dark: deriveNeutralDarkSurfaceMap,
-} satisfies Record<ThemeName, (seedTokens: ResolvedThemeSeedTokens) => ThemeSurfaceMap>
+} satisfies Record<ThemeName, (background: string, colorText: string) => ThemeSurfaceMap>
 
 const LIGHT_SURFACE_MIX = {
   secondary: 0.09,
@@ -70,16 +70,16 @@ const LIGHT_FILL_OPACITIES = {
   contentHoverBg: [0.09, LIGHT_SURFACE_MIX.tertiary],
 } satisfies Record<keyof ThemeFillMap, [number, number]>
 
-export function deriveLightThemeFillMap(seedTokens: ResolvedThemeSeedTokens): ThemeFillMap {
+export function deriveLightThemeFillMap(background: string, colorText: string): ThemeFillMap {
   const appearanceInfluence = deriveSurfaceAppearanceInfluence(
-    seedTokens.colorBgBase,
-    seedTokens.colorTextBase,
+    background,
+    colorText,
     LIGHT_CONTAINER_BASE,
     LIGHT_TEXT_BASE,
   )
   const fillColor = mix(
-    mixColorTone(WHITE, seedTokens.colorTextBase, 0.5),
-    seedTokens.colorTextBase,
+    mixColorTone(WHITE, colorText, 0.5),
+    colorText,
     appearanceInfluence,
   )
   const fills = {} as ThemeFillMap
@@ -117,9 +117,10 @@ function themeTextBackgrounds(surfaces: ThemeSurfaceMap, fills: ThemeFillMap | n
 
 export function deriveThemeSurfaceMap(
   theme: ThemeName,
-  seedTokens: ResolvedThemeSeedTokens,
+  background: string,
+  colorText: string,
 ): ThemeSurfaceMap {
-  return SURFACE_MAP_DERIVERS[theme](seedTokens)
+  return SURFACE_MAP_DERIVERS[theme](background, colorText)
 }
 
 export function ensureThemeSurfaceContrast(
@@ -280,10 +281,9 @@ export function deriveThemeDataMap(
 }
 
 function deriveNeutralDarkSurfaceMap(
-  seedTokens: ResolvedThemeSeedTokens,
+  background: string,
+  colorText: string,
 ): ThemeSurfaceMap {
-  const background = seedTokens.colorBgBase
-  const colorText = seedTokens.colorTextBase
   const appearanceInfluence = deriveSurfaceAppearanceInfluence(
     background,
     colorText,
@@ -404,10 +404,9 @@ function deriveNeutralDarkSurfaceMap(
 }
 
 function deriveNeutralLightSurfaceMap(
-  seedTokens: ResolvedThemeSeedTokens,
+  background: string,
+  colorText: string,
 ): ThemeSurfaceMap {
-  const background = seedTokens.colorBgBase
-  const colorText = seedTokens.colorTextBase
   const appearanceInfluence = deriveSurfaceAppearanceInfluence(
     background,
     colorText,
