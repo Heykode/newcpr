@@ -171,12 +171,12 @@ editing prior entries.
 - Preserve valid active installation IDs. Ambiguous existing archives fail
   validation instead of silently changing devices. Deployment preflight must
   detect this condition before restarting production.
-- Official v3.39.1 supersedes the earlier installation-header omission. Model
-  HTTP/WS and Live send `context.installation_id`, matching account-owned body
-  metadata. Drop downstream copies, then use the durable selected identity;
-  never generate a new device. Missing values are omitted, explicit empty values
-  remain explicit, and invalid header values fail before connecting. Account and
-  OAuth headers retain their separate protocol builders.
+- Official v3.48.0 removes `x-codex-installation-id` from Responses HTTP/WS and
+  model catalog requests, including downstream passthrough copies. The durable
+  selected installation still scopes account correlations and body metadata.
+  Independent JSON and Live endpoints explicitly retain the account installation
+  header; their absent/empty/invalid header-value rules remain unchanged.
+  Account and OAuth headers retain separate builders.
 - Account/import/delete and affinity mutations share transactions. Acquire the
   egress settings fence before device/account locks; preserve existing managed
   proxy/config revision lock order.
@@ -502,10 +502,10 @@ App `loopback_reauthorization_rebinds_selected_account_and_rejects_incomplete_id
   must release its resources. Use cached async construction so cold native trust
   loading does not block a runtime worker; hot requests should hit bounded caches.
 - QX application policy uses plain JSON; Native retains zstd, independently of
-  TLS and UA. Managed identity headers apply after passthrough. The approved QX
-  policy derives account/key-scoped IDs and sets cache=thread on the outbound
-  copy only; Native preserves explicit caches. Never create another device or
-  feed the projected cache back into account scheduling.
+  TLS and UA. Managed identity headers apply after passthrough. Account/key-scoped
+  correlation mapping applies only to the outbound copy. Explicit cache keys map
+  independently, preserving equal originals across sessions; omitted keys remain
+  omitted. Never force cache=thread or feed a projected cache into scheduling.
 - Account scoping must also normalize an opaque
   `x-codex-turn-metadata` passthrough mirror before header projection, including
   when the account is otherwise the same. A downstream installation alias in
@@ -514,9 +514,9 @@ App `loopback_reauthorization_rebinds_selected_account_and_rejects_incomplete_id
   must use the existing ASCII JSON representation. Escaped Unicode is wire
   representation only; parsing it upstream must retain the original Unicode
   values.
-- Model HTTP/WS and Live share the account-owned installation header contract
-  above, following official v3.39.1. Existing WS openings do not change per frame.
-  Test real Provider header/body agreement after account scoping.
+- Responses HTTP/WS omit the installation header under v3.48.0; independent JSON
+  and Live retain it. Existing WS openings do not change per frame. Test both
+  header absence/presence and preserved body identity at the real Provider path.
 - Auxiliary service factories must use `profile.frozen()`, not
   `CodexWireProfileState::new(profile.snapshot())`: the latter turns the selected
   CLI profile into the default and loses the independent Desktop fallback.
@@ -553,8 +553,9 @@ App `loopback_reauthorization_rebinds_selected_account_and_rejects_incomplete_id
   Keep legacy mode semantics, migration 0012, and frozen auxiliary Desktop state.
 - Derive QX session/thread from length-prefixed, domain-separated SHA-256 over
   trusted Key ID, durable installation, workspace, and original anchors. Preserve
-  raw seeds across projection and owned session restoration. UUIDv7-shaped output
-  is deterministic, not a timestamp or an upstream credential.
+  raw seeds across projection and owned session restoration. Genuine RFC4122
+  UUIDv7 inputs preserve their first six timestamp bytes and scope the random
+  portion; other inputs use deterministic UUIDv4, without invented timestamps.
 - Pool key equality/hash, routing owners, logical matches and tombstones include
   a non-reversible caller-scope digest. QX opening profiles also include projected
   session/thread; new threads must not inherit another opening's immutable headers.
@@ -823,14 +824,20 @@ Correct: use the pump's recorded reason while preserving transport recovery rule
 Adapt upstream `7a60bc6d` and `28fa655c2` at the outbound-copy boundary, with the
 turn-preservation correction from `6b4b8faa` integrated in NewCPR v3.30.0. Keep the
 existing length-prefixed `cpr-qx-account-identity-v1` hash, trusted Key scope,
-durable installation, account, session/thread anchors and UUID shape. Scheduling
+durable installation, account and original session/thread anchors. v3.48.0 uses
+one correlation domain for equal references and preserves genuine UUIDv7 time. Scheduling
 receives the original request. UA, TLS, account device and egress policy do not
 derive from the additional turn fields.
 
-- Session and thread aliases share their respective namespace. Parent,
-  root and fork thread references map to the matching thread. Window generations
-  retain the established thread-plus-generation contract. Do not hash the already
-  projected prompt cache key a second time.
+- Equal original session/thread/parent/cache references use the same mapping.
+  Only `window_id`, `x-codex-window-id` and `codexWindowId` with a UUID plus a
+  canonical u64 suffix preserve a composite thread window. `context_window_id`
+  is independent; malformed windows map as opaque values. Do not force metadata
+  aliases onto a different root identity or hash an already projected value.
+- Preserve an explicit prompt cache key independently from thread identity; equal
+  explicit keys may share across sessions within the same account/Key scope.
+  Omitted keys remain omitted. Local frozen seeds still stabilize wire session
+  headers and owned replay, but must not synthesize an outbound cache key.
 - Turn, parent-turn and root-turn IDs stay unchanged in headers, outer metadata
   and historical `internal_chat_message_metadata_passthrough.turn_id`.
   The private `correlation_originals` map stores mapped-to-original identifier

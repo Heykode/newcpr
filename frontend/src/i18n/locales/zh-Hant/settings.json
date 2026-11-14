@@ -332,7 +332,7 @@
       "retentionDaysLabel": "歷史保留天數"
     },
     "retentionDays": "保留天數",
-    "enterDays": "請輸入 1–31 天",
+    "enterDays": "請輸入正整數天數",
     "day": "天",
     "location": {
       "requestLocationOverride": "請求位置覆蓋",
@@ -649,7 +649,7 @@
       "invalidBodyLimit": "Responses 解壓上限應爲有效的正整數（MiB）",
       "invalidQuotaThreshold": "剩餘周額度上限應爲 0～100 的整數，留空表示不限制",
       "invalidResetLeadTime": "重置卡提前使用時間應爲 1～1440 分鐘的整數",
-      "invalidRetention": "歷史保留天數應爲 1–31 的整數",
+      "invalidRetention": "歷史保留天數應爲正整數",
       "invalidQueueSettings": "隊列容量應爲 0～1000 的整數，排隊超時應爲 1～120 秒的整數",
       "invalidClientVersion": "請修正客戶端最低版本格式",
       "overloadSettingsRequired": "請完整填寫過載保護參數",

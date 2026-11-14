@@ -69,9 +69,10 @@ impl PgLogCleanupStore {
                 let selection = job.config.selection(category);
                 if !selection.selected {
                     job.category_index += 1;
-                } else {
-                    let cutoff =
-                        job.cutoff_at - Duration::days(i64::from(selection.retention_days));
+                } else if let Some(cutoff) = job
+                    .cutoff_at
+                    .checked_sub_signed(Duration::days(i64::from(selection.retention_days)))
+                {
                     // Failed SQL rolls back to this savepoint before recording the error.
                     let mut batch_tx = tx.begin().await.map_err(unavailable)?;
                     let result = if job.capture_only && category == CleanupCategory::Captures {
@@ -115,6 +116,9 @@ impl PgLogCleanupStore {
                             }
                         }
                     }
+                } else {
+                    // A window outside Chrono's range covers all stored records.
+                    job.category_index += 1;
                 }
             }
             if job.category_index >= CleanupCategory::ALL.len() {
@@ -150,6 +154,30 @@ impl PgLogCleanupStore {
         category: CleanupCategory,
         cutoff: DateTime<Utc>,
     ) -> AdminStoreResult<CleanupBatch> {
+        // As upstream: skip empty/fully retained history before binding a possibly
+        // pre-PostgreSQL date. File/capture stores own their non-SQL boundaries.
+        let oldest_sql = match category {
+            CleanupCategory::Requests => Some(
+                "select least((select completed_at from model_requests where outcome <> 'running' order by completed_at limit 1), (select created_at from ops_events where model_request_id is null order by created_at limit 1))",
+            ),
+            CleanupCategory::Audit => {
+                Some("select created_at from admin_audit_events order by created_at limit 1")
+            }
+            _ => None,
+        };
+        if let Some(sql) = oldest_sql {
+            let oldest: Option<DateTime<Utc>> = sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
+                .fetch_optional(&mut **tx)
+                .await
+                .map_err(cleanup_query_error)?
+                .flatten();
+            if oldest.is_none_or(|oldest| oldest >= cutoff) {
+                return Ok(CleanupBatch {
+                    removed: 0,
+                    complete: true,
+                });
+            }
+        }
         match category {
             CleanupCategory::Requests => {
                 let requests = sqlx::query(

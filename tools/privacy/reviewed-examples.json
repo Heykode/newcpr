@@ -3030,5 +3030,13 @@
     "file_sha256": "85ae2a8c8c06ba869ea5b5c9586cd5dd83c670ce710a2d10cbd2e9c383009d70",
     "line_sha256": "866bff72cf6ad4b537e5f863f4ded96b3cf59862650e132cbcde1167ef1d25a6",
     "reason": "Manually re-reviewed for v3.47.0: unchanged documentation and unique-local IPv6 acceptance fixtures; local parsing only."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/credential/native_catalog_local.rs",
+    "rule": "authenticated-url",
+    "line": 541,
+    "file_sha256": "33159b269324b1f7c7f32867c6a136f6e7eaf413f01be632fed9a9e697120e40",
+    "line_sha256": "df037a1268a2fe553e47104c6feee56ef05f531030847103b46d3a4582695472",
+    "reason": "Manually re-reviewed for v3.48.0 after global-profile constructor and header assertions changed: byte-identical synthetic proxy authentication fixture, explicitly bound to an ephemeral loopback listener; no production endpoint or credential."
   }
 ]

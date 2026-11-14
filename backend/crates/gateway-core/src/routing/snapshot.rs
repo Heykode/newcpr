@@ -28,6 +28,7 @@ const MAXIMUM_SNAPSHOT_STABILITY_ATTEMPTS: usize = 4;
 /// Store 在一个一致性读取中提供的调度设置事实。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SnapshotSettingsFacts {
+    request_profiles: BTreeMap<ProviderKind, crate::account::OpaqueProviderData>,
     account_error_protection: crate::account::AccountErrorProtection,
     excel_image_transport: Option<super::ExcelImageTransport>,
     responses_max_decompressed_body_bytes: u64,
@@ -51,6 +52,15 @@ pub struct SnapshotSettingsFacts {
 }
 
 impl SnapshotSettingsFacts {
+    #[must_use]
+    pub fn with_request_profiles(
+        mut self,
+        profiles: BTreeMap<ProviderKind, crate::account::OpaqueProviderData>,
+    ) -> Self {
+        self.request_profiles = profiles;
+        self
+    }
+
     #[must_use]
     pub fn with_account_error_protection(
         mut self,
@@ -94,6 +104,7 @@ impl SnapshotSettingsFacts {
         min_codex_cli_version: Option<String>,
     ) -> Self {
         Self {
+            request_profiles: BTreeMap::new(),
             account_error_protection: Default::default(),
             excel_image_transport: None,
             responses_max_decompressed_body_bytes:
@@ -762,6 +773,7 @@ async fn compile_runtime_snapshot(
             .with_model_catalog_accounts(catalog_accounts)
             .with_min_codex_client_versions(min_client_versions)
             .with_account_error_protection(facts.settings.account_error_protection)
+            .with_request_profiles(facts.settings.request_profiles)
             .with_request_tuning(request_tuning)
             .with_excel_image_transport(facts.settings.excel_image_transport)
             .with_openai_turn_state_policy(turn_state_policy)
@@ -779,6 +791,7 @@ type ModelCatalogAccounts = BTreeMap<ProviderKind, BTreeMap<String, BTreeSet<Pro
 /// 数据面使用的不可变配置快照。
 #[derive(Debug, Clone)]
 pub struct RuntimeSnapshot {
+    request_profiles: BTreeMap<ProviderKind, crate::account::OpaqueProviderData>,
     account_error_protection: Arc<crate::account::CompiledAccountErrorProtection>,
     excel_image_transport: Option<super::ExcelImageTransport>,
     codex_quota_overdraft_enabled: bool,
@@ -804,6 +817,15 @@ pub struct RuntimeSnapshot {
 }
 
 impl RuntimeSnapshot {
+    #[must_use]
+    pub fn with_request_profiles(
+        mut self,
+        profiles: BTreeMap<ProviderKind, crate::account::OpaqueProviderData>,
+    ) -> Self {
+        self.request_profiles = profiles;
+        self
+    }
+
     #[must_use]
     pub fn with_account_error_protection(
         mut self,
@@ -948,6 +970,7 @@ impl RuntimeSnapshot {
         client_policy_map.retain(|_, policy| policy.enabled());
 
         Ok(Self {
+            request_profiles: BTreeMap::new(),
             account_error_protection: Arc::new(
                 crate::account::AccountErrorProtection::default().compile(),
             ),
@@ -1292,13 +1315,13 @@ impl RuntimeSnapshot {
         operation: &Operation,
         context: &RoutingContext,
     ) -> Result<RoutingPlan, RoutingError> {
-        self.plan_inner(
-            public_model,
-            operation,
-            self.all_account_scope(),
-            context,
-            false,
-        )
+        // 探测没有 Client Key，沿用同一发布快照的全局画像
+        let scope = self
+            .all_account_scope()
+            .as_ref()
+            .clone()
+            .with_request_profiles(self.request_profiles.clone());
+        self.plan_inner(public_model, operation, Arc::new(scope), context, false)
     }
 
     fn plan_inner(

@@ -172,7 +172,7 @@ impl RuntimeSettingsUpdate {
             || self.responses_max_decompressed_body_bytes == 0
             || self.responses_max_decompressed_body_bytes
                 > gateway_admin::model::settings::MAX_RESPONSES_MAX_DECOMPRESSED_BODY_BYTES
-            || self.usage_retention_days < 31
+            || self.usage_retention_days == 0
             || self.ops_event_retention_days == 0
             || self.audit_retention_days == 0
             || !valid_model_mappings(&self.model_mappings)
@@ -261,6 +261,32 @@ pub(crate) async fn load_runtime_settings_from_pool(pool: &PgPool) -> StoreResul
 }
 
 impl ProviderRuntimePolicyPort for PgRuntimeSettingsRepository {
+    fn load_request_profile<'a>(
+        &'a self,
+        provider: &'a gateway_core::routing::ProviderKind,
+    ) -> futures::future::BoxFuture<
+        'a,
+        Result<Option<gateway_core::account::OpaqueProviderData>, ProviderStoreError>,
+    > {
+        Box::pin(async move {
+            let document = sqlx::query_scalar::<
+                _,
+                Option<sqlx::types::Json<serde_json::Map<String, serde_json::Value>>>,
+            >(
+                "select configuration_json from provider_outbound_user_agents where provider_kind = $1 and mode = 'configuration'",
+            )
+            .bind(provider.as_str())
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|source| {
+                provider_unavailable("load Provider request profile").with_source(source)
+            })?;
+            Ok(document
+                .flatten()
+                .map(|document| gateway_core::account::OpaqueProviderData::new(document.0)))
+        })
+    }
+
     fn load_user_agent_override<'a>(
         &'a self,
         provider_kind: &'a gateway_core::routing::ProviderKind,

@@ -1298,3 +1298,52 @@ fn settings_request_validates_multiple_warmup_rules_in_partial_updates() {
     let request: UpdateRuntimeSettingsRequest = serde_json::from_value(body).unwrap();
     assert!(request.validate().is_err());
 }
+
+#[tokio::test]
+async fn request_retention_round_trips_and_invalid_days_do_not_replace_it() {
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.insert_session("valid-session");
+    let mut body = with_current_revision(&fixture, update_body()).await;
+    for days in [1, 30, 31, 32, 365, 3650, 3651, u32::MAX] {
+        body["usageRetentionDays"] = json!(days);
+        let response = app(fixture.state())
+            .oneshot(request(
+                Method::POST,
+                "/api/admin/settings/update",
+                Some(body.clone()),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let saved = response_json(response).await;
+        assert_eq!(saved["data"]["usageRetentionDays"], days);
+        body["configRevision"] = saved["data"]["configRevision"].clone();
+    }
+    for (days, expected_status) in [
+        (json!(0), StatusCode::BAD_REQUEST),
+        (json!(u64::from(u32::MAX) + 1), StatusCode::BAD_REQUEST),
+        (json!(-1), StatusCode::UNPROCESSABLE_ENTITY),
+        (json!(1.5), StatusCode::UNPROCESSABLE_ENTITY),
+        (json!(null), StatusCode::UNPROCESSABLE_ENTITY),
+    ] {
+        body["usageRetentionDays"] = days;
+        let response = app(fixture.state())
+            .oneshot(request(
+                Method::POST,
+                "/api/admin/settings/update",
+                Some(body.clone()),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected_status);
+    }
+    let response = app(fixture.state())
+        .oneshot(request(Method::GET, "/api/admin/settings", None))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response_json(response).await["data"]["usageRetentionDays"],
+        u32::MAX
+    );
+}

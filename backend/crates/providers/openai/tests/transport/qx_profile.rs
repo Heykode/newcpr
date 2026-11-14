@@ -142,7 +142,7 @@ fn assert_identity_header(name: &str, value: Option<&str>, qx: bool) {
         "thread-id" => Some("existing-thread"),
         "x-client-request-id" => Some("existing-thread"),
         "x-codex-turn-metadata" => Some(TURN_METADATA),
-        "x-codex-installation-id" => Some(INSTALLATION_ID),
+        "x-codex-installation-id" => None,
         "session_id" => Some("existing-session"),
         _ => panic!("unexpected fixture header"),
     };
@@ -408,11 +408,6 @@ async fn both_profiles_use_selected_installation_headers_over_http_and_ws() {
                 let body_before = request.body().clone();
                 let mut context = identity_context("selected-device");
                 context.installation_id = installation;
-                if installation.is_some_and(|value| value.contains('\r')) {
-                    assert!(backend.create_response(&request, context).await.is_err());
-                    assert_eq!(request.body(), &body_before);
-                    continue;
-                }
                 let server = async {
                     let (mut stream, _) = listener.accept().await.unwrap();
                     if websocket {
@@ -423,7 +418,7 @@ async fn both_profiles_use_selected_installation_headers_over_http_and_ws() {
                                         .headers()
                                         .get("x-codex-installation-id")
                                         .map(|value| value.to_str().unwrap()),
-                                    installation.map(str::trim)
+                                    None
                                 );
                                 assert!(!request.headers().contains_key("x-injected"));
                                 response.headers_mut().insert(
@@ -437,10 +432,7 @@ async fn both_profiles_use_selected_installation_headers_over_http_and_ws() {
                         let raw = read_http_request_with_body(&mut stream).await;
                         let end = raw.windows(4).position(|part| part == b"\r\n\r\n").unwrap();
                         let head = std::str::from_utf8(&raw[..end]).unwrap();
-                        assert_eq!(
-                            read_header_value(head, "x-codex-installation-id"),
-                            installation.map(str::trim)
-                        );
+                        assert_eq!(read_header_value(head, "x-codex-installation-id"), None);
                         assert_eq!(read_header_value(head, "x-injected"), None);
                         assert_eq!(
                             head.lines()
@@ -448,7 +440,7 @@ async fn both_profiles_use_selected_installation_headers_over_http_and_ws() {
                                     .to_ascii_lowercase()
                                     .starts_with("x-codex-installation-id:"))
                                 .count(),
-                            usize::from(installation.is_some())
+                            0
                         );
                         assert_eq!(read_header_value(head, "content-encoding"), None);
                         assert_body(

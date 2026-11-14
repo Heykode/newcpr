@@ -207,7 +207,7 @@ async fn direct_http_accounts_share_the_pool_without_sharing_request_headers() {
             headers["x-codex-turn-state"],
             format!("synthetic-state-{id}")
         );
-        assert_eq!(headers["x-codex-installation-id"], id);
+        assert!(!headers.contains_key("x-codex-installation-id"));
     }
     let last = &connection_ids[3].1;
     assert_eq!(last["chatgpt-account-id"], "direct-b");

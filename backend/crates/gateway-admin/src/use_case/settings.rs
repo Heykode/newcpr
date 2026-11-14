@@ -138,7 +138,7 @@ fn validate_settings(command: &ReplaceRuntimeSettings) -> Result<(), AdminError>
                 value > 0
                     && value <= crate::model::settings::MAX_RESPONSES_MAX_DECOMPRESSED_BODY_BYTES
             })
-        && command.usage_retention_days >= 31
+        && command.usage_retention_days > 0
         && command.ops_event_retention_days > 0
         && command.audit_retention_days > 0
         && command.turn_state_probe_proxy_id.as_ref().is_none_or(|id| {

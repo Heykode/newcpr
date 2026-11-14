@@ -35,8 +35,8 @@ impl<'a> AccountCorrelation<'a> {
         self
     }
 
-    // Keep the established session/thread algorithm, including its domain and UUID shape.
-    pub(super) fn derive(self, kind: &str, anchor: &str) -> String {
+    // One mapping domain preserves equal references across session/thread/cache fields.
+    pub(super) fn derive(self, anchor: &str) -> String {
         let anchor = self
             .originals
             .and_then(|originals| originals.get(anchor))
@@ -44,7 +44,7 @@ impl<'a> AccountCorrelation<'a> {
         let mut hash = Sha256::new();
         for part in [
             "cpr-qx-account-identity-v1",
-            kind,
+            "correlation",
             self.key,
             self.installation,
             self.account,
@@ -54,7 +54,16 @@ impl<'a> AccountCorrelation<'a> {
             hash.update(part.as_bytes());
         }
         let mut bytes: [u8; 16] = hash.finalize()[..16].try_into().expect("SHA-256 prefix");
-        bytes[6] = (bytes[6] & 0x0f) | 0x70;
+        if let Some(id) = uuid::Uuid::parse_str(anchor).ok().filter(|id| {
+            id.get_version() == Some(uuid::Version::SortRand)
+                && id.get_variant() == uuid::Variant::RFC4122
+        }) {
+            // Official UUIDv7: keep creation time and scope only its random component.
+            bytes[..6].copy_from_slice(&id.as_bytes()[..6]);
+            bytes[6] = (bytes[6] & 0x0f) | 0x70;
+        } else {
+            bytes[6] = (bytes[6] & 0x0f) | 0x40;
+        }
         bytes[8] = (bytes[8] & 0x3f) | 0x80;
         let mapped = uuid::Uuid::from_bytes(bytes).to_string();
         if let Some(originals) = self.mapped {
@@ -69,39 +78,55 @@ impl<'a> AccountCorrelation<'a> {
         if value.is_empty() {
             return None;
         }
-        let kind = match name {
-            "session_id" | "session-id" | "sessionId" => "session",
-            "thread_id"
-            | "thread-id"
-            | "threadId"
-            | "conversation_id"
-            | "conversationId"
-            | "parent_thread_id"
-            | "parentThreadId"
-            | "x-codex-parent-thread-id"
-            | "forked_from_thread_id"
-            | "forkedFromThreadId"
-            | "root_thread_id"
-            | "rootThreadId"
-            | "x-client-request-id"
-            | "client_request_id"
-            | "prompt_cache_key" => "thread",
-            "window_id" | "context_window_id" | "contextWindowId" | "codexWindowId"
-            | "x-codex-window-id" => {
-                let (thread, generation) = value
-                    .rsplit_once(':')
-                    .and_then(|(thread, generation)| {
-                        generation
-                            .parse::<u64>()
-                            .ok()
-                            .map(|generation| (thread, generation))
-                    })
-                    .unwrap_or((value, 0));
-                return Some(format!("{}:{generation}", self.derive("thread", thread)));
+        if !matches!(
+            name,
+            "session_id"
+                | "session-id"
+                | "sessionId"
+                | "thread_id"
+                | "thread-id"
+                | "threadId"
+                | "conversation_id"
+                | "conversationId"
+                | "parent_thread_id"
+                | "parentThreadId"
+                | "x-codex-parent-thread-id"
+                | "forked_from_thread_id"
+                | "forkedFromThreadId"
+                | "root_thread_id"
+                | "rootThreadId"
+                | "x-client-request-id"
+                | "client_request_id"
+                | "prompt_cache_key"
+                | "window_id"
+                | "context_window_id"
+                | "contextWindowId"
+                | "codexWindowId"
+                | "x-codex-window-id"
+        ) {
+            return None;
+        }
+        let original = self
+            .originals
+            .and_then(|values| values.get(value))
+            .map_or(value, String::as_str);
+        // Only official composite windows carry a thread UUID and a canonical u64.
+        if matches!(name, "window_id" | "x-codex-window-id" | "codexWindowId")
+            && let Some((thread_id, number)) = original.split_once(':')
+            && uuid::Uuid::parse_str(thread_id).is_ok()
+            && number
+                .parse::<u64>()
+                .is_ok_and(|value| value.to_string() == number)
+        {
+            let mapped = format!("{}:{number}", self.derive(thread_id));
+            if let Some(originals) = self.mapped {
+                originals
+                    .borrow_mut()
+                    .insert(mapped.clone(), original.to_owned());
             }
-            _ => return None,
-        };
-        Some(self.derive(kind, value))
+            return Some(mapped);
+        }
+        Some(self.derive(original))
     }
 
     pub(crate) fn scope_fields(self, object: &mut Map<String, Value>) {

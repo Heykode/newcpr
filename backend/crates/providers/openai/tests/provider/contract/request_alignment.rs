@@ -215,20 +215,17 @@ async fn capture(
             captured_request_body(&requests[0]),
         )
     };
-    assert!(
-        body["prompt_cache_key"]
-            .as_str()
-            .is_some_and(|value| !value.is_empty())
-    );
+    match original.get("prompt_cache_key") {
+        Some(value) => {
+            assert_ne!(&body["prompt_cache_key"], value);
+            assert!(uuid::Uuid::parse_str(body["prompt_cache_key"].as_str().unwrap()).is_ok());
+        }
+        None => assert!(body.get("prompt_cache_key").is_none()),
+    }
     for name in ["authorization", "chatgpt-account-id", "session_id"] {
         assert!(!headers[name].is_empty(), "{name}");
     }
-    assert_eq!(
-        headers["x-codex-installation-id"],
-        body["client_metadata"]["x-codex-installation-id"]
-            .as_str()
-            .unwrap()
-    );
+    assert!(!headers.contains_key("x-codex-installation-id"));
     let selected = accounts
         .repository()
         .load_runtime_credential(&accounts.account(account_id).unwrap())

@@ -338,6 +338,7 @@ fn provider_services_with_profile(
         http.clone(),
         base_url.clone(),
         catalog_cache(),
+        crate::support::runtime_policy(),
     ));
     let quota = Arc::new(CodexCredentialQuotaService::new(
         store.repository(),
@@ -1137,7 +1138,31 @@ fn captured_header_values(request: &wiremock::Request, name: &str) -> Vec<Vec<u8
         .collect()
 }
 
-fn assert_account_installation_header(request: &wiremock::Request) {
+fn assert_account_installation_body(request: &wiremock::Request) {
+    assert!(captured_header_values(request, "x-codex-installation-id").is_empty());
+    let body = captured_request_body(request);
+    let mut installation = None;
+    for pointer in [
+        "/installation_id",
+        "/client_metadata/installation_id",
+        "/client_metadata/x-codex-installation-id",
+    ] {
+        if let Some(value) = body.pointer(pointer) {
+            let value = value.as_str().expect("selected account installation");
+            uuid::Uuid::parse_str(value).expect("selected account installation");
+            if let Some(expected) = installation {
+                assert_eq!(value, expected, "{pointer}");
+            }
+            installation = Some(value);
+        }
+    }
+    assert!(
+        installation.is_some(),
+        "body preserves an installation identity"
+    );
+}
+
+fn assert_auxiliary_installation_header(request: &wiremock::Request) {
     let headers = captured_header_values(request, "x-codex-installation-id");
     assert_eq!(headers.len(), 1);
     let installation = std::str::from_utf8(&headers[0]).unwrap();
@@ -4165,7 +4190,7 @@ async fn same_account_scope_preserves_future_protocol_shapes() {
     );
     assert!(body.pointer("/client_metadata/installation_id").is_none());
     assert!(body["client_metadata"]["x-codex-installation-id"].is_string());
-    assert_account_installation_header(&request);
+    assert_account_installation_body(&request);
 }
 
 #[tokio::test]
@@ -4707,7 +4732,7 @@ async fn cross_account_scope_removes_only_account_bound_body_fields() {
         .expect("projected conversation");
     assert_ne!(projected, "client-correlation");
     assert!(uuid::Uuid::parse_str(projected).is_ok());
-    assert_eq!(body["prompt_cache_key"], projected);
+    assert!(body.get("prompt_cache_key").is_none());
     assert_eq!(request.headers["thread-id"], projected);
     assert_eq!(
         body.get("client_metadata"),
@@ -4715,7 +4740,7 @@ async fn cross_account_scope_removes_only_account_bound_body_fields() {
     );
     assert_eq!(body.get("future_field"), Some(&json!({"keep": true})));
     assert!(body["installation_id"].is_string());
-    assert_account_installation_header(&request);
+    assert_account_installation_body(&request);
     assert_ne!(
         body.get("installation_id"),
         Some(&json!("client-installation"))
@@ -4791,7 +4816,7 @@ async fn cross_account_body_uses_stored_identity_without_a_standalone_device_hea
     assert_eq!(requests.len(), 1);
     let request = &requests[0];
     let body = captured_request_body(request);
-    assert_account_installation_header(request);
+    assert_account_installation_body(request);
     for pointer in [
         "/installation_id",
         "/client_metadata/installation_id",
@@ -9201,3 +9226,5 @@ fn request_observation_only_inherits_native_openai_session_configuration() {
         );
     }
 }
+
+mod correlation;
