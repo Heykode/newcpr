@@ -24,6 +24,47 @@ def profile():
 
 
 class DeployTests(unittest.TestCase):
+    def test_excel_91_bridge_requires_exact_source_and_identical_excel_sql(self):
+        _, proof, _ = fixtures()
+        plan = json.loads((deploy.ROOT / "deploy/upgrades/v3.49.0.json").read_text())
+        plan.update(from_source_commit=SOURCE, from_version="1.1.0", to_version=proof["version"],
+                    from_migrations_tree=MIGRATIONS, to_migrations_tree=MIGRATIONS)
+        labels = {"org.opencontainers.image.revision": SOURCE, "org.opencontainers.image.version": "1.1.0"}
+        target = "e" * 40
+        old = "backend/migrations/0091_openai_excel_credentials.sql"
+        new = "backend/migrations/0092_openai_excel_credentials.sql"
+        additions = ["backend/migrations/" + name for name in plan["added"]]
+        changed_excel = False
+
+        def git(*args):
+            if args[0] == "show":
+                return json.dumps(plan)
+            if args[0] == "rev-parse":
+                return MIGRATIONS
+            if args[0] == "diff":
+                return "\n".join(["M\tbackend/migrations/.frozen-sha256",
+                                  "M\tbackend/migrations/README.md", "R100\t" + old + "\t" + new,
+                                  *("A\t" + path for path in additions)])
+            return old if args[3] == SOURCE else "\n".join(sorted([new, *additions]))
+
+        def blob(args):
+            if changed_excel and args[-1] == target + ":" + new:
+                return b"select 2;\n"
+            return b"select 1;\n"
+
+        with patch.object(images, "git", side_effect=git), \
+                patch.object(deploy.subprocess, "check_output", side_effect=blob):
+            result = deploy.reviewed_upgrade("v3.49.0", labels, proof, target)
+            self.assertEqual([item["version"] for item in result["migration_sql"]], [91, 92, 93])
+            self.assertEqual(result["before"]["91"], result["after"]["92"])
+            changed_excel = True
+            with self.assertRaises(images.Unavailable):
+                deploy.reviewed_upgrade("v3.49.0", labels, proof, target)
+            changed_excel = False
+            plan["from_source_commit"] = target
+            with self.assertRaises(images.Unavailable):
+                deploy.reviewed_upgrade("v3.49.0", labels, proof, target)
+
     def test_profile(self):
         self.assertEqual(deploy.validate_profile(profile()), profile())
 

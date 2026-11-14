@@ -184,6 +184,17 @@ Before porting an upstream change:
 
 ## Migration, Backup, and Version Notes
 
+Before promising deployability, inspect the actual running image revision and
+SQLx migration history. A version label alone can hide a deployed development
+branch whose migration numbers differ from main. Never renumber main's frozen SQL
+or rewrite the running ledger to make a deployment check pass. The reviewed
+Excel-91 bridge uses a genuinely initialized mainline database, copies and checks
+all business rows and sequences with accounting triggers disabled during copy,
+validates constraints and the exact settings transformation, then atomically
+exchanges database names after draining the application. Preserve the original
+database, require explicit migration authorization, and record actual downtime.
+Ordinary upgrades must not silently enter this exceptional path.
+
 Before applying a database migration:
 
 1. Identify the current schema and migration freeze digest.
