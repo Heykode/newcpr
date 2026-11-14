@@ -1,7 +1,7 @@
 use super::{candidate, candidate_with_concurrency, context};
 use gateway_core::account::{
     AccountQuotaResetWindow, AccountSelector, QuotaResetPeriod, RotationStrategy,
-    smart_scheduling::SmartSchedulingConfig,
+    scheduling::SmartSchedulingConfig,
 };
 use serde_json::json;
 use std::time::Duration;

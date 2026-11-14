@@ -3017,7 +3017,7 @@ async fn immediate_saturation_and_lease_race_without_hint_remain_capacity_errors
 
 #[tokio::test]
 async fn strict_binding_precedes_smart_switchback_weight_on_both_paths() {
-    use gateway_core::account::smart_scheduling::SmartSchedulingConfig;
+    use gateway_core::account::scheduling::SmartSchedulingConfig;
     for waiting in [false, true] {
         for (switchback, required, expected) in [
             (false, false, "acct_original"),

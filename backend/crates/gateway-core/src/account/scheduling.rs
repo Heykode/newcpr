@@ -1,4 +1,4 @@
-//! 智能调度参数；固定十分位保证快照可精确比较，浮点数只用于 wire 与评分
+//! 账号调度参数与共享重置窗口评分；固定十分位保证快照可精确比较，浮点数只用于 wire 与评分
 
 use std::time::SystemTime;
 
@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 #[serde(into = "SmartSchedulingValues")]
 pub struct SmartSchedulingConfig {
     weights: [u8; 6],
-    reset_windows: [u8; 3],
+    reset_windows: ResetWindowWeights,
     prefer_higher_weight: bool,
 }
 
@@ -31,9 +31,9 @@ impl QuotaResetPeriod {
     }
 }
 
-fn weight_tenths(value: f64, field: &'static str) -> Result<u8, SmartSchedulingConfigError> {
+fn weight_tenths(value: f64, field: &'static str) -> Result<u8, SchedulingConfigError> {
     if !(0.0..=10.0).contains(&value) || (value * 10.0).round() / 10.0 != value {
-        return Err(SmartSchedulingConfigError::InvalidWeight(field));
+        return Err(SchedulingConfigError::InvalidWeight(field));
     }
     Ok((value * 10.0).round() as u8)
 }
@@ -56,7 +56,7 @@ impl Default for SmartSchedulingConfig {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-pub enum SmartSchedulingConfigError {
+pub enum SchedulingConfigError {
     #[error("{0} must be between 0 and 10 with at most one decimal place")]
     InvalidWeight(&'static str),
     #[error("at least one smart scheduling weight must be positive")]
@@ -67,7 +67,7 @@ impl SmartSchedulingConfig {
     pub const fn defaults() -> Self {
         Self {
             weights: [10, 8, 10, 5, 0, 0],
-            reset_windows: [0; 3],
+            reset_windows: ResetWindowWeights { weights: [0; 3] },
             prefer_higher_weight: false,
         }
     }
@@ -80,7 +80,7 @@ impl SmartSchedulingConfig {
     pub fn new(
         weights: [f64; 6],
         prefer_higher_weight: bool,
-    ) -> Result<Self, SmartSchedulingConfigError> {
+    ) -> Result<Self, SchedulingConfigError> {
         let mut tenths = [0; 6];
         for (index, field) in [
             "loadWeight",
@@ -96,7 +96,7 @@ impl SmartSchedulingConfig {
             tenths[index] = weight_tenths(weights[index], field)?;
         }
         if tenths == [0; 6] {
-            return Err(SmartSchedulingConfigError::EmptyWeights);
+            return Err(SchedulingConfigError::EmptyWeights);
         }
         Ok(Self {
             weights: tenths,
@@ -111,35 +111,14 @@ impl SmartSchedulingConfig {
     }
 
     fn reset_enabled(self) -> bool {
-        self.weights[4] > 0 && self.reset_windows != [0; 3]
+        self.weights[4] > 0 && self.reset_windows.enabled()
     }
 
     pub(crate) fn reset_score(self, signals: &AccountRuntimeSignals, now: SystemTime) -> f64 {
         if !self.reset_enabled() {
             return 0.0;
         }
-        let mut scores = [0.0_f64; 3];
-        for window in signals.quota_reset_windows.as_deref().unwrap_or_default() {
-            let Ok(remaining) = window.reset_at.duration_since(now) else {
-                continue;
-            };
-            if remaining.is_zero() {
-                continue;
-            }
-            let half = f64::from(window.period.seconds()) / 7.0;
-            let score = half / (half + remaining.as_secs_f64());
-            // 同一周期只计最近的有效重置，避免重复额度桶叠加得分
-            let slot = &mut scores[window.period as usize];
-            *slot = slot.max(score);
-        }
-        // 缺失周期得零分，分母固定，避免少报窗口反而提高排名
-        let weights = self.reset_windows.map(f64::from);
-        scores
-            .into_iter()
-            .zip(weights)
-            .map(|(score, w)| score * w)
-            .sum::<f64>()
-            / weights.into_iter().sum::<f64>()
+        self.reset_windows.score(signals, now)
     }
 
     pub(crate) fn score_tolerance(self) -> f64 {
@@ -172,14 +151,14 @@ struct SmartSchedulingValues {
 
 #[derive(Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct ResetWindowWeights {
+struct ResetWindowValues {
     five_hour: f64,
     weekly: f64,
     monthly: f64,
 }
 
 impl TryFrom<SmartSchedulingValues> for SmartSchedulingConfig {
-    type Error = SmartSchedulingConfigError;
+    type Error = SchedulingConfigError;
 
     fn try_from(value: SmartSchedulingValues) -> Result<Self, Self::Error> {
         let mut config = Self::new(
@@ -193,12 +172,7 @@ impl TryFrom<SmartSchedulingValues> for SmartSchedulingConfig {
             ],
             value.prefer_higher_weight,
         )?;
-        let windows = value.reset_window_weights;
-        config.reset_windows = [
-            weight_tenths(windows.five_hour, "fiveHour")?,
-            weight_tenths(windows.weekly, "weekly")?,
-            weight_tenths(windows.monthly, "monthly")?,
-        ];
+        config.reset_windows = value.reset_window_weights;
         Ok(config)
     }
 }
@@ -221,11 +195,85 @@ impl From<SmartSchedulingConfig> for SmartSchedulingValues {
             reset_weight,
             queue_weight,
             prefer_higher_weight: value.prefer_higher_weight,
-            reset_window_weights: ResetWindowWeights {
-                five_hour: f64::from(value.reset_windows[0]) / 10.0,
-                weekly: f64::from(value.reset_windows[1]) / 10.0,
-                monthly: f64::from(value.reset_windows[2]) / 10.0,
-            },
+            reset_window_weights: value.reset_windows,
+        }
+    }
+}
+
+/// 两种调度策略共用的重置窗口系数，各策略独立持有配置
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[serde(into = "ResetWindowValues")]
+pub struct ResetWindowWeights {
+    weights: [u8; 3],
+}
+
+impl ResetWindowWeights {
+    pub const fn defaults() -> Self {
+        Self { weights: [0; 3] }
+    }
+
+    /// 顺序为 5 小时、周、月；全零表示未指定窗口
+    pub fn new(weights: [f64; 3]) -> Result<Self, SchedulingConfigError> {
+        Ok(Self {
+            weights: [
+                weight_tenths(weights[0], "fiveHour")?,
+                weight_tenths(weights[1], "weekly")?,
+                weight_tenths(weights[2], "monthly")?,
+            ],
+        })
+    }
+
+    pub(crate) fn enabled(self) -> bool {
+        self.weights != [0; 3]
+    }
+
+    pub(crate) fn score(self, signals: &AccountRuntimeSignals, now: SystemTime) -> f64 {
+        if !self.enabled() {
+            return 0.0;
+        }
+        let mut scores = [0.0_f64; 3];
+        for window in signals.quota_reset_windows.as_deref().unwrap_or_default() {
+            let Ok(remaining) = window.reset_at.duration_since(now) else {
+                continue;
+            };
+            if remaining.is_zero() {
+                continue;
+            }
+            let half = f64::from(window.period.seconds()) / 7.0;
+            let score = half / (half + remaining.as_secs_f64());
+            // 同一周期只计最近的有效重置，避免重复额度桶叠加得分
+            let slot = &mut scores[window.period as usize];
+            *slot = slot.max(score);
+        }
+        // 缺失周期得零分，分母固定，避免少报窗口反而提高排名
+        let weights = self.weights.map(f64::from);
+        scores
+            .into_iter()
+            .zip(weights)
+            .map(|(score, w)| score * w)
+            .sum::<f64>()
+            / weights.into_iter().sum::<f64>()
+    }
+}
+
+impl<'de> Deserialize<'de> for ResetWindowWeights {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // 与智能调度一致，先恢复 flatten 缓冲的小数再校验
+        let value = serde_json::Value::deserialize(deserializer)?;
+        let values =
+            serde_json::from_value::<ResetWindowValues>(value).map_err(serde::de::Error::custom)?;
+        Self::new([values.five_hour, values.weekly, values.monthly])
+            .map_err(serde::de::Error::custom)
+    }
+}
+
+impl From<ResetWindowWeights> for ResetWindowValues {
+    fn from(value: ResetWindowWeights) -> Self {
+        let [five_hour, weekly, monthly] = value.weights.map(|weight| f64::from(weight) / 10.0);
+        Self {
+            five_hour,
+            weekly,
+            monthly,
         }
     }
 }

@@ -158,7 +158,7 @@
       "quotaGroup": "Quota",
       "queueGroup": "Queue",
       "windowMode": "Reset window weights",
-      "windowHelp": "Higher weights give a window more influence on the reset score. Set a weight to 0 to ignore that window.",
+      "windowHelp": "Higher weights give a window more influence on the reset score; set a weight to 0 to ignore that window",
       "fiveHour": "5 hours",
       "weekly": "Weekly",
       "monthly": "Monthly",
@@ -181,7 +181,6 @@
       },
       "enterValueFromToUpToOne": "Please enter a value from 0 to 10, up to one decimal place",
       "description": "Adjust account selection preferences",
-      "enabledHelp": "Applies when smart scheduling is enabled",
       "about": "About {label}",
       "zeroWeightHelp": "Set to 0 to exclude a factor from scoring",
       "weightsRequired": "At least one weight must be greater than 0"
@@ -366,12 +365,13 @@
       "smartSchedulingSettings": "Smart scheduling settings",
       "smartLabel": "Smart",
       "smartDescription": "Adjustable weights for load, remaining quota, health, and latency",
-      "quotaResetLabel": "Soonest reset",
+      "quotaResetLabel": "Quota scheduling",
       "quotaResetDescription": "Use remaining quota on accounts closest to reset",
       "roundRobinLabel": "Round robin",
       "roundRobinDescription": "Cycle through available accounts in order",
       "stickyLabel": "Sticky",
-      "stickyDescription": "Reuse the most recent account until unavailable"
+      "stickyDescription": "Reuse the most recent account until unavailable",
+      "quotaResetPrioritySettings": "Quota scheduling settings"
     },
     "access": {
       "accessRestrictions": "Access restrictions",
@@ -766,6 +766,10 @@
     "units": {
       "seconds": "seconds",
       "inSeconds": "{label} (seconds)"
+    },
+    "resetPriority": {
+      "description": "Rank by reset times and weights of the selected windows",
+      "windowHelp": "Weights control each window's relative influence; 0 ignores a window, and all zeros use the earliest valid reset time"
     }
   }
 }

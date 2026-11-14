@@ -1387,6 +1387,7 @@ impl SettingsStore for StaticSettingsStore {
             codex_quota_overdraft_enabled: false,
             codex_quota_overdraft_probe_model: "gpt-6-astra".to_owned(),
             request_interval_ms: 0,
+            quota_reset_window_weights: Default::default(),
             rotation_strategy: RotationStrategy::Smart,
             openai_account_affinity: Default::default(),
             openai_session_binding_ttl_hours: 24,
