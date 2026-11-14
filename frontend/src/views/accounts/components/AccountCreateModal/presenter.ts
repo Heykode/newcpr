@@ -34,7 +34,7 @@ export function resolveAccountCreatePresentation(input: AccountCreatePresentatio
     isXai: provider === 'xai',
     isBatch: provider === 'batch',
     modeOptions: provider === 'openai' && form.credentialTarget === 'excel'
-      ? modeOptions.openai.filter(option => ['oauth', 'json'].includes(option.value))
+      ? modeOptions.openai.filter(option => ['oauth', 'json', 'two_fa'].includes(option.value))
       : resolveModeOptions(provider),
     modal: resolveModal(input, provider, configuring),
     oauth: resolveOAuth(provider, oauthAuthUrl, form.credentialTarget),

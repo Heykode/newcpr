@@ -108,6 +108,7 @@ export function useAccountOnboarding(options: {
             settings: accountImportSettings(createForm.value, 'openai'),
             outboundProxyId: createForm.value.proxyMode === 'proxy' ? createForm.value.proxyId.trim() : undefined,
             qualityTemplate: accountImportQualityTemplate(createForm.value),
+            credentialTarget: createForm.value.credentialTarget,
           })
           enrollmentIds.value = [...new Set([...enrollmentIds.value, ...result.ids])]
           showCreateModal.value = false
@@ -347,7 +348,7 @@ export function useAccountOnboarding(options: {
       createForm.value.oauthFlowId = ''
       createForm.value.oauthAuthUrl = ''
       createForm.value.oauthCallback = ''
-      if (createForm.value.credentialTarget === 'excel' && !['oauth', 'json'].includes(createForm.value.mode))
+      if (createForm.value.credentialTarget === 'excel' && !['oauth', 'json', 'two_fa'].includes(createForm.value.mode))
         createForm.value.mode = 'oauth'
       if (reauthorizingAccount.value && createForm.value.credentialTarget !== 'excel')
         createForm.value.mode = 'oauth'

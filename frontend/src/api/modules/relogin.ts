@@ -115,8 +115,16 @@ export function getRelogin(options: RequestOptions = {}) {
 export function importRelogin(text: string, replaceExisting: boolean) {
   return request<{ imported: number }>({ url: '/api/admin/relogin/import', method: 'POST', data: { text, replaceExisting } })
 }
-export function enrollRelogin(data: { text: string, replaceExisting: boolean, settings: import('./accounts').AccountImportSettings, outboundProxyId?: string, qualityTemplate?: Pick<import('./quality-ops').QualityRuleTemplate, 'id' | 'revision'> }) {
-  return request<{ ids: string[] }>({ url: '/api/admin/relogin/enroll', method: 'POST', data })
+export function enrollRelogin(data: { text: string, replaceExisting: boolean, settings: import('./accounts').AccountImportSettings, outboundProxyId?: string, qualityTemplate?: Pick<import('./quality-ops').QualityRuleTemplate, 'id' | 'revision'>, credentialTarget?: CredentialTarget }) {
+  const { credentialTarget, ...requestData } = data
+  return request<{ ids: string[] }>({
+    url: '/api/admin/relogin/enroll',
+    method: 'POST',
+    data: {
+      ...requestData,
+      ...(credentialTarget && credentialTarget !== 'codex' ? { credentialTarget } : {}),
+    },
+  })
 }
 export function exportRelogin(ids: string[], format: 'json' | 'two_fa', credentialTarget: CredentialSelection = 'codex') {
   return request<{ files: { name: string, content: string }[], skipped?: { id: string, credentialTarget: CredentialTarget, message: string }[] }>({ url: '/api/admin/relogin/export', method: 'POST', data: { ids, format, ...(credentialTarget !== 'codex' ? { credentialTarget } : {}), confirm: 'export_sensitive_relogin' }, timeout: 120000 })

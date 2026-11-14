@@ -285,6 +285,7 @@ test('2FA enrollment submits one durable intent and clears secrets after accepta
   assert.equal(h.submissions.length, 0)
   assert.equal(h.enrollments.length, 1)
   assert.equal(h.enrollments[0].outboundProxyId, 'proxy-fixture')
+  assert.equal(h.enrollments[0].credentialTarget, 'codex')
   assert.equal(h.enrollments[0].replaceExisting, true)
   assert.equal('template' in h.enrollments[0], false)
   assert.deepEqual(h.enrollments[0].qualityTemplate, { id: 'quality-template', revision: 4 })
@@ -296,6 +297,16 @@ test('2FA enrollment submits one durable intent and clears secrets after accepta
   assert.notEqual(h.state.createForm.value.importTexts.two_fa, '')
   h.state.clearCreate()
   assert.equal(h.state.createForm.value.importTexts.two_fa, '')
+})
+
+test('Excel 2FA enrollment targets the independent Excel credential channel', async (t) => {
+  const h = mountOnboarding(t)
+  h.input('openai', 'two_fa', 'test@example.invalid----test-password----JBSWY3DPEHPK3PXP')
+  h.state.createForm.value.credentialTarget = 'excel'
+  await h.state.handleCreate()
+  assert.equal(h.enrollments.length, 1)
+  assert.equal(h.enrollments[0].credentialTarget, 'excel')
+  assert.equal(h.submissions.length, 0)
 })
 
 test('2FA import keeps cost entered before template and provider selection', async (t) => {

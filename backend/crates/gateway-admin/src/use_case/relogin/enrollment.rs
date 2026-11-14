@@ -121,12 +121,18 @@ impl DefaultReloginService {
         }
         if let Some(enrollment) = enrollment {
             for (entry, _) in &mut changes {
-                workspace::prepare_queue(entry, &pool, ReloginWorkspaceMode::Original)?;
-                entry.automatic_job = false;
-                entry.manual_push_context = None;
-                entry.enrollment = Some(enrollment.clone());
-                entry.status = ReloginStatus::Queued;
-                entry.message = "等待登录验证并入池".to_owned();
+                let mut channel = entry.clone().project_channel(self.credential_target);
+                workspace::prepare_queue(&mut channel, &pool, ReloginWorkspaceMode::Original)?;
+                channel.automatic_job = false;
+                channel.manual_push_context = None;
+                channel.enrollment = Some(enrollment.clone());
+                channel.status = ReloginStatus::Queued;
+                channel.message = "等待登录验证并入池".to_owned();
+                if self.credential_target == gateway_core::account::CredentialTarget::Codex {
+                    *entry = channel;
+                } else {
+                    entry.excel = Some(channel.channel_state());
+                }
             }
         }
         let ids = changes.iter().map(|(entry, _)| entry.id.clone()).collect();

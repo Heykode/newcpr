@@ -20,6 +20,29 @@ fn intent() -> ReloginEnrollment {
 const MATERIAL: &str = "test@example.invalid----test-only-password----JBSWY3DPEHPK3PXP";
 
 #[tokio::test]
+async fn excel_enrollment_is_stored_in_the_independent_channel() {
+    let h = Harness::new(vec![]).await;
+    let enrollment = intent();
+    let excel = h
+        .services
+        .relogin()
+        .credential_channel(gateway_core::account::CredentialTarget::Excel)
+        .unwrap();
+    let ids = excel
+        .enroll(MATERIAL, false, enrollment.clone())
+        .await
+        .unwrap();
+    let row = h.row(&ids[0]).await;
+    assert!(
+        row.enrollment.is_none(),
+        "Codex enrollment state must remain untouched"
+    );
+    let channel = row.excel.expect("Excel enrollment channel");
+    assert_eq!(channel.status, ReloginStatus::Queued);
+    assert_eq!(channel.enrollment.unwrap().config, enrollment.config);
+}
+
+#[tokio::test]
 async fn bulk_enrollment_does_not_copy_one_custom_name_to_all_accounts() {
     let h = Harness::new(vec![]).await;
     let text =

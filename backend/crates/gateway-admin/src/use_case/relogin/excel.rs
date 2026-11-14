@@ -148,11 +148,25 @@ impl DefaultReloginService {
             }
             None
         };
-        let mut settings = if target.is_none() {
-            template.map(ReloginTemplateConfig::settings).transpose()?
+        let enrollment_settings = if target.is_none() {
+            if let Some(enrollment) = &entry.enrollment {
+                self.store()?
+                    .validate_template_references(&enrollment.config)
+                    .await
+                    .map_err(super::super::account_templates::template_error)?;
+                Some(enrollment.settings()?)
+            } else {
+                None
+            }
         } else {
             None
         };
+        let mut settings = if target.is_none() {
+            enrollment_settings.or(template.map(ReloginTemplateConfig::settings).transpose()?)
+        } else {
+            None
+        };
+        let preserve_enrollment_settings = target.is_none() && entry.enrollment.is_some();
         if target.is_none() && custom_name.is_some() && settings.is_none() {
             settings = Some(crate::model::accounts::AccountImportSettings {
                 template_proxy_mode: None,
@@ -179,11 +193,19 @@ impl DefaultReloginService {
         }
         if let Some(settings) = &mut settings {
             settings.custom_name = custom_name.map(str::to_owned);
-            settings.responses_upstream = Some(gateway_core::account::ResponsesUpstream::Codex);
+            if !preserve_enrollment_settings {
+                settings.responses_upstream = Some(gateway_core::account::ResponsesUpstream::Codex);
+            }
         }
         let outbound_proxy_id = target
             .is_none()
-            .then(|| template.and_then(|value| value.outbound_proxy_id.as_deref()))
+            .then(|| {
+                entry
+                    .enrollment
+                    .as_ref()
+                    .and_then(|enrollment| enrollment.config.outbound_proxy_id.as_deref())
+                    .or_else(|| template.and_then(|value| value.outbound_proxy_id.as_deref()))
+            })
             .flatten();
         let reservation =
             super::super::import_proxy_binding(self.proxies.as_ref(), outbound_proxy_id).await?;

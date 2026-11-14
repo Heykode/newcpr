@@ -139,6 +139,21 @@ async fn relogin_credential_selection_is_typed_and_keeps_default_codex_compatibl
             expected_status
         );
     }
+    for target in [None, Some("codex"), Some("excel")] {
+        let mut body = json!({
+            "text":"test@example.invalid----test-only-password----JBSWY3DPEHPK3PXP",
+            "settings": {"enabled":true,"concurrencyLimit":null,"weight":1,"groupIds":[]}
+        });
+        if let Some(target) = target {
+            body["credentialTarget"] = json!(target);
+        }
+        assert_eq!(
+            request(&fixture, "/api/admin/relogin/enroll", Some(body), true)
+                .await
+                .0,
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+    }
 }
 
 #[tokio::test]

@@ -43,6 +43,8 @@ struct EnrollRequest {
     text: String,
     #[serde(default)]
     replace_existing: bool,
+    #[serde(default)]
+    credential_target: CredentialTarget,
     settings: super::accounts::AccountImportSettingsRequest,
     outbound_proxy_id: Option<String>,
     quality_template: Option<gateway_admin::model::quality_ops::QualityTemplateSelection>,
@@ -234,9 +236,19 @@ where
     )
     .map_err(map_admin_service_error)?
     .with_quality_template(request.quality_template);
-    let ids = state
-        .admin_services()
-        .relogin()
+    let selected = (request.credential_target != CredentialTarget::Codex)
+        .then(|| {
+            state
+                .admin_services()
+                .relogin()
+                .credential_channel(request.credential_target)
+        })
+        .transpose()
+        .map_err(map_admin_service_error)?;
+    let service = selected
+        .as_deref()
+        .unwrap_or(state.admin_services().relogin());
+    let ids = service
         .enroll(&request.text, request.replace_existing, enrollment)
         .await
         .map_err(map_admin_service_error)?;
