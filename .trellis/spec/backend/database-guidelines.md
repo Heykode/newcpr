@@ -51,6 +51,37 @@ the host clock.
 
 (To be filled by the team)
 
+### Deployed Excel-91 Branch To Mainline
+
+1. **Scope / trigger:** only the exact source revision and migration trees in
+   `deploy/upgrades/v3.49.0.json`. A matching application version alone is insufficient.
+2. **Signatures:** `release/deploy.py --migration-plan v3.49.0`; the reviewed plan's
+   `mode=excel-91-database-copy` invokes `schema_bridge.prepare` and `switch` inside
+   the existing deployment lock. The ordinary application migrator is unchanged.
+3. **Contracts:** preserve frozen SQL and the source ledger. After graceful drain,
+   set the dedicated source database default to read-only, execute all target SQL
+   in an empty database before recording checksums, copy every business table and
+   sequence while disabling target accounting triggers, and verify row counts,
+   fingerprints, sequences, foreign keys and restored triggers. Reapply only the
+   reviewed retention SQL to imported settings and check their complete expected
+   value. Rename both databases in one maintenance transaction, retain the source,
+   and keep the configured database name and protected containers unchanged.
+4. **Validation / errors:** wrong source, locale, capacity, unknown columns or
+   metadata stop before copying. Remaining writers, copy errors, fingerprint or
+   constraint mismatches stop before database-name exchange. Any failure after
+   drain requires manual recovery; never automatically restart an old binary.
+5. **Cases:** ordinary mainline schemas use existing migration plans. Excel-91
+   needs explicit migration authorization and this reviewed path. `--prepare`
+   performs no migration or switch; `--skip-backup` does not skip data verification
+   or delete the retained source database.
+6. **Tests:** isolated PostgreSQL covers real legacy-to-mainline SQL, Codex/Excel
+   rows, cumulative costs, generated sequences, short retention transformation,
+   corrupted-copy rejection, read-only source, and atomic rename collision.
+   Deployment tests check exact source/SQL and failure without old-image restart.
+7. **Wrong / correct:** editing the live checksum to suppress SQLx failure is
+   forbidden. Initialize and verify the canonical schema in an independent
+   database, preserving the original ledger and data for reviewed recovery.
+
 ---
 
 ## Naming Conventions
