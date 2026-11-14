@@ -323,10 +323,13 @@ async fn initialize_with_request_tuning_mode(
         desktop_release_status,
         config.timezone,
     );
-    let admin_provider: Arc<dyn ProviderAdmin> = Arc::new(match &egress_runtime {
+    let admin_provider = match &egress_runtime {
         Some(runtime) => admin_provider.with_egress_runtime(Arc::clone(runtime)),
         None => admin_provider,
-    });
+    }
+    .with_excel_pending(ports.oauth_pending());
+    let excel_refresh = admin_provider.excel_refresh_service();
+    let admin_provider: Arc<dyn ProviderAdmin> = Arc::new(admin_provider);
     let mut worker_contributions = provider::worker_contributions(
         refresh,
         quota,
@@ -337,6 +340,12 @@ async fn initialize_with_request_tuning_mode(
         config.timezone,
     )
     .map_err(|_| OpenAiInitializeError::Worker)?;
+    if config.oauth_refresh_enabled() {
+        worker_contributions.push(
+            provider::excel_refresh_worker(excel_refresh)
+                .map_err(|_| OpenAiInitializeError::Worker)?,
+        );
+    }
     worker_contributions.push(
         provider::cli_version_worker(cli_version).map_err(|_| OpenAiInitializeError::Worker)?,
     );

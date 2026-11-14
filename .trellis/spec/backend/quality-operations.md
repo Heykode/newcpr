@@ -85,7 +85,7 @@ AdminAuth/no-store POST `/api/admin/quality-ops/models` takes
 `ProviderAdmin::quality_model_choices(account_id, exact)` owns provider-specific discovery.
 
 ### Contracts
-One explicit account reads its own native catalog/egress. Excel uses configured models,
+One explicit account reads its own native catalog/egress. Excel uses its actual BPS catalog,
 never Codex fallback. Aggregate reads are cache-only, with 100 candidates per page and
 no pool-wide HTTP fanout. Only exact evidence supplies reasoningEfforts; aggregate is null.
 An absent in-memory snapshot is not proof of an empty backing cache: fall back to
@@ -281,7 +281,7 @@ scope, cached_account_models for aggregate scopes.
   original directory, other accounts, ordinary requests and client catalogs retain
   their policies; missing/out-of-scope accounts cannot gain access. This does not
   grant upstream model entitlement. Native state probes alone bypass the Excel route;
-  answer checks and judges keep model-specific Excel routing.
+  answer checks and judges keep their frozen account route.
 - Provider transport, credentials, fingerprint, UA,
   egress and request interval remain authoritative. Quality checks bypass business
   concurrency and local user-facing model policy; only target retests additionally
@@ -462,27 +462,23 @@ scope, cached_account_models for aggregate scopes.
 - Definite incorrect/degraded results and a completed explicit overload sequence
   invoke the configured policy. Other inconclusive, request errors and cancelled
   rounds do not. Existing auth and quota feedback remains unchanged.
-- Enabling Excel validates current identity, OAuth type, model allowlist, credentials,
-  quota and scheduling, and fences relevant account/proxy/UA/egress policy changes.
-  Do not use the global config revision as a fence: independent concurrent account
-  actions must not invalidate each other. A 403-disabled Excel marker vetoes auto-enable.
-- Account route mutation, audit/config publication, recovery ownership and result
-  commit are transactional. Enabling Excel no longer pauses native state probes.
+- Automatic route changes are retired. Legacy `EnableExcel` returns
+  `route_switch_requires_confirmation` without changing settings, enabled state or
+  credentials. A template that changes the account route returns the same outcome.
+  Ordinary account administration remains the explicit route selection mechanism.
+- Quality result persistence remains transactional. Native state probes continue
+  independently of the selected ordinary request route.
   Only Core's trusted probe operation can set `native_quality_probe`; selector
   route freeze and actual execution both use Codex. Client JSON, judges and answer
   checks cannot acquire this override.
-- `disableExcelOnNativeRecovery` defaults false when absent from persisted config;
-  new applicable UI drafts explicitly enable it. It is valid only for state probes
-  using enable_excel or apply_account_template. Persist `recovery.excel_owner`
-  only when this rule switches Codex to Excel, after its audit/config publication.
-  Record account identity, model and relevant policy scope, including account audit
-  revision. Correct native results may close that route only when all still match.
-  Manual/preexisting Excel, policy/identity edits, 403 protection and late results
-  must not be overwritten. Excel-only ownership cannot restore a whole template or
-  clear 403 markers; full template recovery uses its separate template_owner snapshot.
-  While ownership matches, degraded rounds do not repeatedly reapply the template.
-  Rule model/mode/action/template edits release ownership; frequency or recovery
-  checkbox edits preserve it. Closing Excel leaves the rule active for future cycles.
+- Old `excel_owner` and cross-route template ownership are released without
+  switching the account or restoring old shared settings. Legacy recovery fields
+  remain decodable but cannot authorize a route change. Same-route ordinary
+  template recovery retains its existing ownership and revision fences.
+- An answer check using Excel pauses only its sidecar for DisableScheduling.
+  RemoveGroups and ApplyAccountTemplate return `excel_shared_action_blocked`, since
+  those shared settings also govern Codex. Recovery releases only that same
+  sidecar's still-owned quality suspension; independent 403/manual pauses survive.
 - Changing detection mode clears the latest rule verdict but retains mode snapshots
   in historical runs. Keep existing owned scheduling/group recovery behavior intact.
 
@@ -509,28 +505,17 @@ The regression asserts the reason, verdict, diagnostic and absence of retry inte
 - Evidence is scoped to account identity and the existing outbound/policy action
   scope. A changed identity, UA, proxy or egress policy cannot inherit old progress.
   Saving any rule clears progress without queueing an immediate detection.
-- Reaching the threshold calls the existing Excel enable policy, including its
-  403 veto, model/account guards and audit. Native probes continue; only the separate
-  explicit native-recovery option may reverse their owned Excel route.
+- Reaching a legacy enable-Excel threshold reports
+  `route_switch_requires_confirmation`; it never changes the account switch.
+  Same-route template actions still use the threshold and their own guards.
 - No migration is required for the JSON addition, but old strict-config binaries
   still require stored-config reconciliation before a downgrade.
 
-## Native Recovery Threshold
+## Retired Route Recovery
 
-- Optional `excelRecoveryThreshold` accepts 1–100; missing/null keeps the legacy
-  single-success behavior and is omitted on serialization. New UI drafts set 2.
-- Count correct native rounds in `quality_rules.recovery.excel_pass_streak` only
-  after existing lease/revision/identity/model/Excel-owner guards. An incorrect
-  or explicit overloaded round resets the count; other unknown/request errors
-  neither increment nor reset it. Preserve an existing reset count as JSON zero.
-- Before the threshold, persist `excel_recovery_counted`; at the threshold, reuse
-  existing fenced Excel close/audit logic. Never close a manually enabled route,
-  clear an independent 403 pause or restore the rest of a remediation template.
-- Rule saves and ownership record/release clear the healthy count. Threshold-only
-  edits preserve valid route ownership while invalidating previous-round evidence.
-  Count survives store restarts; no schema migration or probe-wire change is needed.
-- Regressions cover old-rule single-success behavior, two normal rounds, unknown/error
-  holds, incorrect resets, persistence, threshold edits and stale-result fencing.
+`excelRecoveryThreshold` and `disableExcelOnNativeRecovery` remain legacy decoding
+fields. Native results no longer close Excel. Regressions must prove old ownership
+is released without changing route, credentials, shared scheduling or groups.
 
 ## Account Template Remediation
 
@@ -538,7 +523,7 @@ The regression asserts the reason, verdict, diagnostic and absence of retry inte
 - `apply_account_template` is a quality failure action, not a new scheduler or
   request path. It applies the existing full template only after the confirmed
   incorrect-round threshold or the fixed-two-round explicit overload sequence.
-  Excel on/off is determined by that template.
+  The template must preserve the currently selected account route.
 
 ### 2. Signatures
 - `QualityRuleConfig.failure_template: Option<ReloginTemplate>` serializes as
@@ -565,8 +550,7 @@ The regression asserts the reason, verdict, diagnostic and absence of retry inte
   mutation, config publication, audit and result share one transaction.
 - Reuse `excel_streak` and `excelFailureThreshold` for pure incorrect rounds;
   the shared overload sequence can satisfy the trigger independently. Successful
-  template application clears old recovery and records route ownership if it newly
-  enables Excel for a native probe. Current template applications record before/after
+  same-route template application clears old recovery and records before/after
   allowlisted settings in template_owner; an opted-in autoRestore can restore those
   settings after a correct round only while scope/identity/model/after still match.
   Preserve credentials, fingerprint and independent availability guards. Historic
@@ -584,9 +568,10 @@ The regression asserts the reason, verdict, diagnostic and absence of retry inte
 - Success: `template_applied`; retain historical paused-action labels for old runs.
 
 ### 5. Good / Base / Bad Cases
-- Good: a confirmed degraded OAuth account receives the selected Excel/IPv6
+- Good: a confirmed degraded Codex account receives a same-route IPv6/settings
   template after three incorrect rounds, with all settings published together.
-- Base: old `enable_excel`, `none`, pause and remove-groups rules stay compatible.
+- Base: old `enable_excel` reports explicit confirmation required; none and ordinary
+  same-route actions keep their existing behavior.
 - Bad: a template with enabled=true revives a 403-paused or invalid account.
 
 ### 6. Tests Required

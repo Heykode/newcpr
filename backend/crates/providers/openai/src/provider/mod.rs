@@ -119,7 +119,9 @@ use execution::*;
 pub use failure::openai_failure_affects_account_score;
 use failure::*;
 use observation::*;
-pub(crate) use workers::{cli_version_worker, profile_release_worker, worker_contributions};
+pub(crate) use workers::{
+    cli_version_worker, excel_refresh_worker, profile_release_worker, worker_contributions,
+};
 
 const PROVIDER_NAME: &str = "openai";
 const HTTP_SSE_TRANSPORT: &str = "http_sse";
@@ -787,13 +789,7 @@ impl Provider for CodexProvider {
         let account_selection_wait_ms =
             u64::try_from(selection_started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
         let lease = Arc::new(lease);
-        let responses_upstream = if context.is_native_quality_probe() {
-            gateway_core::account::ResponsesUpstream::Codex
-        } else {
-            lease
-                .account()
-                .responses_upstream_for_model(upstream_model.as_str())
-        };
+        let responses_upstream = lease.selected_route();
         let excel = responses_upstream == gateway_core::account::ResponsesUpstream::Excel;
         if previous_session
             .as_ref()
@@ -1006,11 +1002,15 @@ impl Provider for CodexProvider {
             })
             .map_err(|_| provider_error(ProviderErrorKind::Protocol, UpstreamSendState::NotSent))?,
         )
-        .with_credential_revision(lease.account().revision())
         .with_selection_observation(ProviderSelectionObservation::new(
             account_selection_wait_ms,
             lease.capacity_snapshot(),
         ));
+        let metadata = if excel {
+            metadata
+        } else {
+            metadata.with_credential_revision(lease.account().revision())
+        };
         let response_store = upstream_request.store();
         let session_capture = (upstream_request.quality_probe.is_none()
             && (!continuation_requested || previous_session.is_some()))
@@ -1108,7 +1108,7 @@ impl Provider for CodexProvider {
         } else {
             stream
         };
-        Ok(if allows_account_state_mutation {
+        Ok(if allows_account_state_mutation && !excel {
             stream.with_filtered_account_feedback(
                 Arc::clone(&self.account_feedback),
                 openai_failure_affects_account_score,

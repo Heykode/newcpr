@@ -74,6 +74,11 @@ pub(super) async fn apply(
         return Ok(None);
     };
     let owner: Ownership = serde_json::from_value(value.clone()).map_err(unavailable)?;
+    if owner.before["account"]["responses_upstream"] != owner.after["account"]["responses_upstream"]
+    {
+        release(tx, &claim.rule.id).await?;
+        return Ok(Some("template_recovery_released"));
+    }
     sqlx::query("select id from provider_egress_settings where id=1 for update")
         .execute(&mut **tx)
         .await

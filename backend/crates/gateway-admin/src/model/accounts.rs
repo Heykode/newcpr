@@ -207,6 +207,7 @@ pub struct AccountTurnStateSlotStatus {
 /// 账号公共存储投影；Provider 专属字段不进入此结构。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountRecord {
+    pub excel_credential: Option<gateway_core::account::ExcelCredentialMetadata>,
     pub quota_paused: bool,
     pub quota_limits: gateway_core::account::AccountQuotaLimits,
     pub auto_use_quota_credits: bool,
@@ -257,7 +258,25 @@ pub struct AccountRecord {
     pub updated_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone)]
+pub struct ExcelCredentialImportTarget {
+    pub account_id: String,
+    /// None only permits the first Excel authorization for this account.
+    pub expected_revision: Option<gateway_core::account::CredentialRevision>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ExcelCredentialImportResult {
+    pub account: AccountRecord,
+    pub config_revision: Revision,
+}
+
 impl AccountRecord {
+    #[must_use]
+    pub fn has_codex_credential(&self) -> bool {
+        self.authentication_kind != "none"
+    }
+
     /// Keep saved bindings for administration; disabled proxies are direct at runtime.
     #[must_use]
     pub fn effective_outbound_proxy(&self) -> Option<&gateway_core::account::OutboundProxy> {
@@ -530,6 +549,7 @@ impl ConnectionTestEndpoint {
 /// 账号连接测试命令。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountConnectionTest {
+    pub responses_upstream: Option<gateway_core::account::ResponsesUpstream>,
     pub account_id: gateway_core::account::ProviderAccountId,
     pub upstream_model: gateway_core::routing::UpstreamModelId,
     pub endpoint: ConnectionTestEndpoint,
@@ -550,6 +570,7 @@ pub enum AccountConnectionTestEvent {
     Started {
         model: String,
         endpoint: ConnectionTestEndpoint,
+        responses_upstream: Option<gateway_core::account::ResponsesUpstream>,
     },
     Request {
         model: String,

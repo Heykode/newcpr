@@ -36,6 +36,7 @@ pub(crate) async fn login(
         "password": request.password,
         "mfa_secret": request.mfa_secret,
         "workspace_id": request.workspace_id,
+        "credential_target": request.credential_target,
         "proxy": request.outbound_proxy.as_ref().map(|proxy| proxy.expose_url()),
     }))
     .map_err(|_| error("重登请求编码失败"))?;
@@ -132,6 +133,30 @@ pub(crate) async fn login(
         .and_then(Value::as_object)
         .cloned()
         .ok_or_else(|| error("重登缺少凭据"))?;
+    if request.credential_target == gateway_core::account::CredentialTarget::Excel {
+        let data = super::excel::ExcelCredentialCodec::import_document(&document)
+            .map_err(|_| error("Excel 凭据身份或授权类型无效，未推送"))?;
+        data.ensure_usable()
+            .map_err(|_| error("Excel 凭据已过期，未推送"))?;
+        let email = data.email.ok_or_else(|| error("Excel 凭据缺少邮箱"))?;
+        if !email.eq_ignore_ascii_case(&request.email)
+            || request
+                .workspace_id
+                .as_ref()
+                .is_some_and(|id| id != &data.chatgpt_account_id)
+        {
+            return Err(error("Excel 重登身份与原账号不一致"));
+        }
+        return Ok(ReloginCredential {
+            document,
+            email,
+            workspace_id: data.chatgpt_account_id,
+            user_id: data.user_id,
+            plan_type: data.plan_type.ok_or_else(|| error("Excel 凭据缺少套餐"))?,
+            expires_at: data.expires_at,
+            verified_at: chrono::Utc::now(),
+        });
+    }
     let prepared = provider
         .prepare_import(PrepareCredentialImport {
             default_outbound_proxy: request.outbound_proxy,

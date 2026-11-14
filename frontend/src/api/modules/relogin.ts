@@ -2,6 +2,9 @@ import type { RequestOptions } from '../request'
 import type { AccountTemplateSelection } from './account-templates'
 import request from '../request'
 
+export type CredentialTarget = 'codex' | 'excel'
+export type CredentialSelection = CredentialTarget | 'all'
+
 export type ReloginStatus = 'pending' | 'queued' | 'running' | 'awaiting_workspace' | 'ready' | 'pushing' | 'uncertain' | 'failed'
 export interface ReloginWorkspaceChoice { id: string, name: string, planType: string }
 export type ReloginWorkspaceMode = 'original' | 'highest'
@@ -12,6 +15,7 @@ export interface ReloginPushTarget extends ReloginPushSelection {
   available: boolean
 }
 export interface ReloginPoolAccount {
+  hasCredential?: boolean
   id: string
   workspaceId: string | null
   planType: string | null
@@ -21,6 +25,8 @@ export interface ReloginPoolAccount {
   errorMessage: string | null
 }
 export interface ReloginEntry {
+  credentialTarget?: CredentialTarget
+  excel?: ReloginEntry
   id: string
   revision: number
   email: string
@@ -50,6 +56,7 @@ export interface ReloginEntry {
   updatedAt: string
 }
 export interface ReloginAttempt {
+  credentialTarget?: CredentialTarget
   id: string
   source: 'library' | 'account_menu' | 'automatic' | 'enrollment'
   startedAt: string
@@ -73,15 +80,18 @@ export function getReloginTotp(id: string, options: RequestOptions = {}) {
 export interface ReloginSettings { concurrency: number, paused: boolean, maxRetries: number, retryIntervalSeconds: number }
 export type ReloginSettingsUpdate = Pick<ReloginSettings, 'concurrency' | 'paused'> & Partial<Pick<ReloginSettings, 'maxRetries' | 'retryIntervalSeconds'>>
 export interface ReloginList { settings: ReloginSettings, items: ReloginEntry[] }
-export interface ReloginBatchResult { id: string, success: boolean, message: string }
+export interface ReloginBatchResult { id: string, success: boolean, message: string, credentialTarget?: CredentialTarget }
 
 export interface ReloginTarget {
+  credential_target?: CredentialTarget
   account_id: string
   credential_revision: number
   user_id: string
   workspace_id: string
 }
 export interface AccountReloginAction {
+  credentialTarget?: CredentialTarget
+  excel?: AccountReloginAction
   accountId: string
   entryId: string
   revision: number
@@ -95,7 +105,7 @@ export interface AccountReloginAction {
 export function getAccountReloginActions(ids: string[], options: RequestOptions = {}) {
   return request<AccountReloginAction[]>({ url: '/api/admin/relogin/accounts/query', method: 'POST', data: { ids }, ...options })
 }
-export function queueAccountRelogin(data: { entryId: string, revision: number, target: ReloginTarget }) {
+export function queueAccountRelogin(data: { entryId: string, revision: number, target: ReloginTarget, additionalTarget?: ReloginTarget }) {
   return request<void>({ url: '/api/admin/relogin/accounts/queue', method: 'POST', data })
 }
 
@@ -108,28 +118,28 @@ export function importRelogin(text: string, replaceExisting: boolean) {
 export function enrollRelogin(data: { text: string, replaceExisting: boolean, settings: import('./accounts').AccountImportSettings, outboundProxyId?: string, qualityTemplate?: Pick<import('./quality-ops').QualityRuleTemplate, 'id' | 'revision'> }) {
   return request<{ ids: string[] }>({ url: '/api/admin/relogin/enroll', method: 'POST', data })
 }
-export function exportRelogin(ids: string[], format: 'json' | 'two_fa') {
-  return request<{ files: { name: string, content: string }[] }>({ url: '/api/admin/relogin/export', method: 'POST', data: { ids, format, confirm: 'export_sensitive_relogin' }, timeout: 120000 })
+export function exportRelogin(ids: string[], format: 'json' | 'two_fa', credentialTarget: CredentialSelection = 'codex') {
+  return request<{ files: { name: string, content: string }[], skipped?: { id: string, credentialTarget: CredentialTarget, message: string }[] }>({ url: '/api/admin/relogin/export', method: 'POST', data: { ids, format, ...(credentialTarget !== 'codex' ? { credentialTarget } : {}), confirm: 'export_sensitive_relogin' }, timeout: 120000 })
 }
-export function queueRelogin(ids: string[], workspaceMode: ReloginWorkspaceMode = 'original') {
-  return request<ReloginBatchResult[]>({ url: '/api/admin/relogin/queue', method: 'POST', data: { ids, workspaceMode } })
+export function queueRelogin(ids: string[], workspaceMode: ReloginWorkspaceMode = 'original', credentialTarget: CredentialSelection = 'codex') {
+  return request<ReloginBatchResult[]>({ url: '/api/admin/relogin/queue', method: 'POST', data: { ids, workspaceMode, ...(credentialTarget !== 'codex' ? { credentialTarget } : {}) } })
 }
-export function pushRelogin(rows: Pick<ReloginEntry, 'id' | 'revision'>[], template?: AccountTemplateSelection, customName?: string, selections?: Record<string, ReloginPushSelection>, newAccountExcel?: import('@/utils/excel-settings').ExcelSettings) {
+export function pushRelogin(rows: Pick<ReloginEntry, 'id' | 'revision'>[], template?: AccountTemplateSelection, customName?: string, selections?: Record<string, ReloginPushSelection>, newAccountExcel?: import('@/utils/excel-settings').ExcelSettings, credentialTarget: CredentialSelection = 'codex') {
   const ids = rows.map(row => row.id)
   const revisions = Object.fromEntries(rows.map(row => [row.id, row.revision]))
-  return request<ReloginBatchResult[]>({ url: '/api/admin/relogin/push', method: 'POST', data: { ids, revisions, ...(template ? { template } : {}), ...(customName ? { customName } : {}), ...(selections ? { selections } : {}), ...(newAccountExcel ? { newAccountExcel } : {}) }, timeout: 120000 })
+  return request<ReloginBatchResult[]>({ url: '/api/admin/relogin/push', method: 'POST', data: { ids, revisions, ...(credentialTarget !== 'codex' ? { credentialTarget } : {}), ...(template ? { template } : {}), ...(customName ? { customName } : {}), ...(selections ? { selections } : {}), ...(newAccountExcel ? { newAccountExcel } : {}) }, timeout: 120000 })
 }
 export function deleteRelogin(ids: string[]) {
   return request<void>({ url: '/api/admin/relogin/delete', method: 'POST', data: { ids } })
 }
-export function setReloginAutomatic(ids: string[], enabled: boolean) {
-  return request<void>({ url: '/api/admin/relogin/automatic', method: 'POST', data: { ids, enabled } })
+export function setReloginAutomatic(ids: string[], enabled: boolean, credentialTarget: CredentialTarget = 'codex') {
+  return request<void>({ url: '/api/admin/relogin/automatic', method: 'POST', data: { ids, enabled, ...(credentialTarget !== 'codex' ? { credentialTarget } : {}) } })
 }
-export function setReloginWorkspace(id: string, workspaceId: string | null) {
-  return request<void>({ url: '/api/admin/relogin/workspace', method: 'POST', data: { id, workspaceId } })
+export function setReloginWorkspace(id: string, workspaceId: string | null, credentialTarget: CredentialTarget = 'codex') {
+  return request<void>({ url: '/api/admin/relogin/workspace', method: 'POST', data: { id, workspaceId, ...(credentialTarget !== 'codex' ? { credentialTarget } : {}) } })
 }
-export function resumeReloginWorkspace(id: string, revision: number, workspaceId: string) {
-  return request<void>({ url: '/api/admin/relogin/workspace/resume', method: 'POST', data: { id, revision, workspaceId } })
+export function resumeReloginWorkspace(id: string, revision: number, workspaceId: string, credentialTarget: CredentialTarget = 'codex') {
+  return request<void>({ url: '/api/admin/relogin/workspace/resume', method: 'POST', data: { id, revision, workspaceId, ...(credentialTarget !== 'codex' ? { credentialTarget } : {}) } })
 }
 export function configureRelogin(data: ReloginSettingsUpdate) {
   return request<void>({ url: '/api/admin/relogin/settings', method: 'POST', data })

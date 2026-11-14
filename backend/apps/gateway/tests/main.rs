@@ -140,9 +140,44 @@ fn is_exact_test_cfg(attribute: &Attribute) -> bool {
             .is_ok_and(|condition| condition == "test")
 }
 
+// Exact external private tests keep token parsing and request metadata helpers private.
+const EXTERNAL_PRIVATE_TESTS: &[(&str, &str, &str, &str, &str)] = &[
+    (
+        "crates/providers/openai",
+        "credential/excel/oauth.rs",
+        "tests",
+        "../../../tests/credential/excel_oauth.rs",
+        "credential/excel_oauth.rs",
+    ),
+    (
+        "crates/providers/openai",
+        "transport/excel/mod.rs",
+        "metadata_tests",
+        "../../../tests/transport/excel_metadata.rs",
+        "transport/excel_metadata.rs",
+    ),
+];
+
 // These tests need private clock/lease state; never expose production APIs for them.
 fn is_audited_private_test(member: &str, relative: &Path, item: &Item) -> bool {
     let attrs = item_attrs(item);
+    if let Item::Mod(module) = item
+        && module.content.is_none()
+        && matches!(module.vis, syn::Visibility::Inherited)
+        && attrs.len() == 2
+        && attrs.iter().any(is_exact_test_cfg)
+        && EXTERNAL_PRIVATE_TESTS.iter().any(|(owner, source, name, path, _)| {
+            *owner == member && relative == Path::new(source) && module.ident == *name
+                && attrs.iter().any(|attribute| {
+                    if !attribute.path().is_ident("path") { return false; }
+                    matches!(&attribute.meta, Meta::NameValue(value)
+                        if matches!(&value.value, syn::Expr::Lit(value)
+                            if matches!(&value.lit, syn::Lit::Str(value) if value.value() == *path)))
+                })
+        })
+    {
+        return true;
+    }
     if !attrs.iter().any(is_exact_test_cfg)
         || attrs.iter().any(|attr| {
             attr.path().is_ident("path")
@@ -386,6 +421,30 @@ fn has_unaudited_test_hooks(member: &str, relative: &Path, syntax: &syn::File) -
         }
     }
     visitor.found
+}
+
+#[test]
+fn external_private_tests_only_accept_the_exact_audited_owner_and_path() {
+    for (member, source, name, path, _) in EXTERNAL_PRIVATE_TESTS {
+        let valid = format!("#[cfg(test)] #[path = {path:?}] mod {name};");
+        assert!(!has_unaudited_test_hooks(
+            member,
+            Path::new(source),
+            &syn::parse_file(&valid).unwrap()
+        ));
+        for invalid in [
+            valid.replace(path, "../../../tests/other.rs"),
+            valid.replace("mod ", "pub mod "),
+            valid.replace("#[cfg(test)]", ""),
+            valid.replace(";", " {}"),
+        ] {
+            assert!(has_unaudited_test_hooks(
+                member,
+                Path::new(source),
+                &syn::parse_file(&invalid).unwrap()
+            ));
+        }
+    }
 }
 
 #[derive(Default)]

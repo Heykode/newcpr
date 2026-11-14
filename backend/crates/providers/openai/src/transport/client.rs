@@ -502,6 +502,10 @@ pub enum CodexClientError {
     /// 模型目录不是一个完整、安全的官方快照。
     #[error("invalid Codex model catalog: {0}")]
     ModelCatalog(#[from] super::catalog::CodexModelCatalogError),
+    #[error("Excel model catalog validation failed")]
+    ExcelCatalog,
+    #[error("The selected model is not available in this account's Excel model catalog")]
+    ExcelModelUnsupported,
     /// HTTP/SSE 上游在空闲窗口内没有发送任何数据。
     #[error("upstream HTTP/SSE stream idle for {timeout:?}")]
     StreamIdleTimeout {
@@ -574,6 +578,10 @@ impl fmt::Debug for CodexClientError {
                 .debug_tuple("CodexClientError::ModelCatalog")
                 .field(error)
                 .finish(),
+            Self::ExcelCatalog => formatter.write_str("CodexClientError::ExcelCatalog"),
+            Self::ExcelModelUnsupported => {
+                formatter.write_str("CodexClientError::ExcelModelUnsupported")
+            }
             Self::StreamIdleTimeout { timeout } => formatter
                 .debug_struct("CodexClientError::StreamIdleTimeout")
                 .field("timeout", timeout)
@@ -613,13 +621,15 @@ impl CodexClientError {
             Self::Http(_)
             | Self::StreamIdleTimeout { .. }
             | Self::InvalidSse(_)
-            | Self::ModelCatalog(_) => Some(CodexBackendTransport::HttpSse),
+            | Self::ModelCatalog(_)
+            | Self::ExcelCatalog => Some(CodexBackendTransport::HttpSse),
             Self::HttpJson(_) => Some(CodexBackendTransport::HttpJson),
             Self::WebSocket(_) => Some(CodexBackendTransport::WebSocket),
             Self::Upstream { transport, .. } | Self::ErrorBodyRead { transport, .. } => {
                 Some(*transport)
             }
             Self::ConnectionBudgetExhausted
+            | Self::ExcelModelUnsupported
             | Self::CustomCa(_)
             | Self::Egress(_)
             | Self::InvalidHeaderName(_)

@@ -42,6 +42,7 @@ function mountTest(storage, options = {}) {
       },
     },
     '@/api': {
+      getExcelModels: options.getExcelModels ?? (async () => ({ models: [{ id: 'excel-model' }] })),
       getAccountModels: options.getAccountModels ?? (async () => ({ models: [{ id: 'test-model', label: 'Test Model' }] })),
       refreshAccountModels: async () => ({ models: [{ id: 'test-model' }] }),
     },
@@ -98,6 +99,45 @@ test('connection test normalizes corrupt and legacy settings before rendering', 
       query.stop()
     }
   }
+})
+
+test('Excel tests use the real catalog and freeze the selected route without inventing allowed models', async () => {
+  const calls = []
+  const query = mountTest(new Map(), {
+    getAccountModels: assert.fail,
+    getExcelModels: async (id) => {
+      calls.push(id)
+      return { models: [{ id: 'excel-model' }, { id: 'blocked-model' }] }
+    },
+  })
+  try {
+    const account = { id: 'excel-account', provider: 'openai', responsesUpstream: 'excel', modelAccess: { mode: 'allowlist', models: ['excel-model', 'not-open-upstream'] } }
+    query.state.openConnectionTest(account)
+    account.responsesUpstream = 'codex'
+    await new Promise(resolve => setImmediate(resolve))
+    assert.deepEqual(calls, ['excel-account'])
+    assert.deepEqual(Array.from(query.state.connectionTestModelOptions.value, row => row.value), ['excel-model'])
+    await query.state.handleTestConnection()
+    assert.equal(query.requests[0].responsesUpstream, 'excel')
+    assert.equal(query.requests[0].modelId, 'excel-model')
+  }
+  finally { query.stop() }
+})
+
+test('unavailable Excel catalog does not substitute a Codex model list', async () => {
+  const query = mountTest(new Map(), {
+    getAccountModels: assert.fail,
+    getExcelModels: async () => { throw new Error('Excel authorization required') },
+  })
+  try {
+    query.state.openConnectionTest({ id: 'excel-account', provider: 'openai', responsesUpstream: 'excel' })
+    await new Promise(resolve => setImmediate(resolve))
+    assert.match(query.state.connectionTestError.value, /Excel authorization required/)
+    assert.equal(query.state.connectionTestModelOptions.value.length, 0)
+    await query.state.handleTestConnection()
+    assert.equal(query.requests.length, 0)
+  }
+  finally { query.stop() }
 })
 
 test('new test selects an available Astra model in the actual request, not just a placeholder', async () => {

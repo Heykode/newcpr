@@ -6,6 +6,7 @@ pub(crate) fn admin_account_record(
     summary: ProviderAccountSummary,
 ) -> AdminStoreResult<AccountRecord> {
     Ok(AccountRecord {
+        excel_credential: summary.excel_credential,
         quota_paused: summary.quota_paused,
         quota_limits: summary.quota_limits,
         auto_use_quota_credits: summary.auto_use_quota_credits,

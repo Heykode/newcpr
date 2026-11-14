@@ -152,7 +152,7 @@ test('Excel warning supports legacy pause data without marking clean accounts', 
     assert.match(mark(html, 'avatar'), /data-account-excel-status="default"/)
     assert.ok(mark(html, 'avatar').includes(stablePresetVisualToneClass(account.id)))
   }
-  assert.match(await render({ excelModeDisabledAt: '2026-09-27T00:00:00Z' }), />\s*Excel 403 自动关闭\s*</)
+  assert.match(await render({ excelModeDisabledAt: '2026-09-27T00:00:00Z' }), />\s*Excel 403 历史记录\s*</)
 })
 
 test('retired State fields never alter avatars or enable Excel', async () => {
@@ -222,6 +222,6 @@ test('Excel marker reflects only the saved mode, not scheduling, model scope or 
     })
     assert.doesNotMatch(html, /data-account-excel-mark|data-icon="Table2"/)
     assert.match(mark(html, 'avatar'), /data-account-excel-status="warning"/)
-    assert.match(html, />\s*Excel 403 自动关闭\s*</)
+    assert.match(html, />\s*Excel 403 历史记录\s*</)
   }
 })

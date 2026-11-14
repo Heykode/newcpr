@@ -49,25 +49,16 @@ HTTP/SSE, downstream WS, tools, images, route fences and replay persistence.
 - `AttemptContext::{provider_route, freeze_provider_route}` is execution-local.
 - `ProviderReplayPort` stores opaque bounded records; Redis namespace is separate.
 - `transport/excel` owns protocol translation, not account selection.
-- `ExcelModels` is a validated exact list (fallback astra/sol/terra, maximum 64).
-  Migration 0040 adds it without rewriting 0039. Omission preserves; empty clears.
-  Freeze the model-resolved route, not just the account toggle.
-- Migration 0041 adds global `excelDefaultModels` and account `excelModelsFollowGlobal`.
-  Existing accounts preserve their stored custom list; new accounts follow global.
-  Read stored and effective models in the same account query; only effective models
-  enter Core snapshots. Global saves publish the existing configuration revision.
-  Omission preserves; list-only legacy writes select custom. Following global never
-  clears the stored custom list. Do not change credential or identity revisions.
-- Templates carry optional Excel fields. Old templates omit them; import remains
-  opt-in. Relogin `newAccountExcel` overrides templates only for new accounts.
-  Existing and automatic relogin preserve Excel settings and credential CAS fences.
-- Share the three-model frontend fallback across settings/edit/batch/template/import/
-  relogin. Stored values, including empty and migration-seeded lists, always win.
-  Never rewrite applied migrations merely to replace a presentation fallback.
+- Independent credentials and routing follow [the dual-credential contract](./excel-dual-credentials.md).
+  The account switch freezes the route for every ordinary model. Migration 0040/0041
+  model fields remain readable for compatibility but never select a route or prove
+  model access. Use the actual BPS catalog intersected with shared account policy.
+  Do not expose the deprecated model-routing inputs in settings/edit/templates.
 
 ## 3. Contracts
 
-Only OpenAI OAuth may select Excel. Omission preserves an existing selection.
+Only OpenAI OAuth or an Excel-only shell with valid independent Excel credentials
+may select Excel. Omission preserves an existing selection.
 Do not reset credentials, scheduling, group membership or proxies on toggle.
 Preserve Core scoring and capacity; both selectors must filter by frozen route.
 No retry can cross Codex/Excel. No Excel upstream WS or Codex Cookie/State.
@@ -97,7 +88,8 @@ blocks require new credentials or successful diagnostics. Expiry of a runtime bl
 does not clear persisted credential state. Normal late successes cannot clear an
 active block; diagnostics compare the observed block before clearing. This local
 fallback is not a distributed replacement for the existing state store.
-Keep 403 auto-disable unchanged; do not add #105 group migration.
+403 handling is channel-local under the independent credential contract; never
+disable shared scheduling, move groups or switch to Codex automatically.
 
 ## 4. Validation Matrix
 
@@ -224,9 +216,9 @@ normal error/401/403 handling. Diagnostics contain no ciphertext. Excel-only mod
 descriptors explicitly null both multi-agent encrypted capability fields; native
 catalog capabilities remain unchanged.
 For mixed pools apply the restriction after raw catalog caching using the frozen
-client scope plus enabled OAuth Excel model policy, not the sampled metadata
+client scope plus selected Excel route and actual catalog, not the sampled metadata
 account alone. Temporary credential/quota failures must not re-enable v2. Include
-Excel mode/model selection in catalog-only cache keys so switching off recovers
+Excel route/credential selection in catalog-only cache keys so switching off recovers
 the native document; do not change inference cache keys or account selection.
 
 Official v3.39.0 search activation supersedes the old Sub2API #117 field stripping.
@@ -326,9 +318,9 @@ memory budget remains 1024 MiB even when disk capacity increases.
 Legacy true means pause, false means none; reject conflicting dual-field updates.
 Omitted values preserve settings. Migration 0049 backfills legacy policy and stores
 mode-disable diagnostics separately from pause diagnostics. Never modify frozen migrations.
-Disable-mode changes only the subsequent route to Codex, preserving enabled,
-quality pause ownership, credential/identity and billing preferences. It never replays
-the failed request. Pause-mode retains the existing behavior described below.
+Both legacy action values now suspend only the independent Excel sidecar. Preserve
+the account switch, shared enabled state, Codex credentials/State and billing
+preferences. Neither action replays the failed request or switches to Codex.
 New database rows and new template/import forms default cache-write billing on;
 existing values and historical usage are untouched. Routing off must not clear that
 preference, and only actual Excel execution reads it. Ordinary edits must not reset it.
@@ -339,20 +331,18 @@ HTTP stage; a 403 encoded in an HTTP200 SSE payload cannot. Exclude
 `basispoints_model_access_changed`. Clear retry/account-failure intents only
 on this opted-in path, preserve the current response evidence, and never
 replay the current request through another protocol.
-Store locks config then account and conditionally changes `enabled` to false
-for the current credential revision/type/flags and an enabled or quality-owned paused
-row. In the latter case the independent HTTP 403 pause takes ownership, preventing
-quality auto-recovery from undoing it. Config revision increments in that transaction
-exactly once. Preserve the Excel route, credentials,
-quotas, model list, other options and opt-in flag. No Codex fallback or in-flight
-cancellation. Resume uses the existing manual scheduling control, not a timer.
+Store locks the parent then the Excel sidecar and conditionally sets sidecar
+`suspended=true` under the Excel credential revision. The HTTP 403 suspension clears
+sidecar quality ownership so quality recovery cannot undo the independent pause.
+Publish the configuration revision while preserving the parent account and Codex
+state. Manual Excel recovery or explicitly opted-in Excel recovery may release it.
+No Codex fallback or cancellation of an already-started request is implied.
 Keep legacy `excelAutoDisableOn403` and `excelAutoDisabledAt` wire/storage names
 for compatibility; do not rewrite historical Codex auto-disable records as pauses.
 Mainline adds the diagnostic timestamp in migration 0047; retain 0046 quality
 operations unchanged. Unpublished Excel branch migration numbers are not reusable.
-Clear the timestamp on explicit scheduling resume/admin recovery or an actual route
-change, not on re-saving the same Excel route. Manual Excel-off clears the subordinate
-flag, while automatic pause preserves it. The two-second bounded write outlives
+Clear active Excel pause facts through the explicit Excel recovery path, not a
+Codex recovery or shared scheduling toggle. The two-second bounded write outlives
 client cancellation; failures must not replace the original upstream error.
 No per-account polling or credential guardian is introduced.
 
@@ -574,8 +564,8 @@ deadline, TTL and write-result semantics. Stale-revision/expired writes do not
 rotate it. Missing legacy tokens cannot authorize recovery. Random generations
 also fence delete/recreate ABA; model scopes and normal successful-clear behavior
 remain unchanged.
-Only Excel-enabled accounts participate in this new quota-reset recovery;
-ordinary Codex accounts neither read nor clear cooldowns via this path.
+With independent credentials, Codex quota observations never release an Excel
+pause or clear its cooldown. Excel recovery validates the Excel slot separately.
 
 Contracts: per-image/total bytes each allow up to 128 MiB, disk storage up to
 16 GiB and 65536 entries. Validate effective defaults plus overrides using
@@ -595,7 +585,7 @@ Restart changes the random signing key: links are not persistent hosting.
 | Opt-in HTTP403 disables Excel | Store timestamp in the same fenced transaction |
 | Excel explicitly reopened | Clear timestamp, preserve credential revision |
 | Unrelated patch | Preserve diagnostic time |
-| Fresh explicit zero usage in both 5h/7d windows, allowed and not reached | Clear only the pre-fetch observed cooldown |
+| Fresh explicit zero Codex usage in both 5h/7d windows | No Excel recovery or cooldown mutation |
 | New cooldown/revision or stale/partial/nonzero quota | Do not clear |
 | Model-scoped cooldown | Do not clear via account reset recovery |
 | Expired image with an active download | Hide new reads, retain permits until body drops |

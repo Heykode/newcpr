@@ -114,6 +114,9 @@ function mountOnboarding(t, api = {}, globals = {}) {
   const created = []
   const oauthStarts = []
   const oauthCompletions = []
+  const excelImports = []
+  const excelOAuthStarts = []
+  const excelOAuthCompletions = []
   const enrollments = []
   const qualityApplications = []
   let reloads = 0
@@ -132,6 +135,18 @@ function mountOnboarding(t, api = {}, globals = {}) {
       async completeAccountOAuth(input) {
         oauthCompletions.push(structuredClone(input))
         return { accountId: 'account-existing' }
+      },
+      async importExcelCredential(input) {
+        excelImports.push(structuredClone(input))
+        return api.importExcel ? api.importExcel(input) : { accountIds: ['account-excel'], credentialTarget: 'excel' }
+      },
+      async startExcelOAuth(input) {
+        excelOAuthStarts.push(structuredClone(input))
+        return { flowId: 'excel-flow', authorizationUrl: 'https://example.invalid/excel-oauth' }
+      },
+      async completeExcelOAuth(input) {
+        excelOAuthCompletions.push(structuredClone(input))
+        return { accountIds: ['account-excel'], credentialTarget: 'excel' }
       },
     },
     '@/api/request': { ApiError: class ApiError extends Error {} },
@@ -163,8 +178,102 @@ function mountOnboarding(t, api = {}, globals = {}) {
     if (mode !== 'oauth')
       state.createForm.value.importTexts[mode] = value
   }
-  return { state, input, submissions, created, oauthStarts, oauthCompletions, enrollments, qualityApplications, notifications, reloads: () => reloads }
+  return { state, input, submissions, created, oauthStarts, oauthCompletions, excelImports, excelOAuthStarts, excelOAuthCompletions, enrollments, qualityApplications, notifications, reloads: () => reloads }
 }
+
+test('mixed exports route Excel documents outside the Codex import queue', async (t) => {
+  const h = mountOnboarding(t)
+  const excel = { schema_version: 1, type: 'cpa-bps', access_token: 'excel-synthetic' }
+  const codex = { type: 'codex', access_token: 'codex-synthetic' }
+  h.input('batch', 'json', JSON.stringify({ documents: [
+    { provider: 'openai', credentialTarget: 'excel', document: excel },
+    { provider: 'openai', credentialTarget: 'codex', document: codex },
+  ] }))
+  await h.state.handleCreate()
+  assert.equal(h.excelImports.length, 1)
+  assert.deepEqual(h.excelImports[0].data, excel)
+  assert.equal(h.submissions.length, 1)
+  assert.equal(h.submissions[0].items.length, 1)
+  assert.deepEqual(h.submissions[0].items[0].data, codex)
+  assert.equal('credentialTarget' in h.submissions[0].items[0], false)
+  assert.equal(h.reloads(), 1)
+})
+
+test('flat typed documents select their credential target and reject conflicting wrappers', async (t) => {
+  for (const [type, selected, expected] of [['cpa-bps', 'codex', 'excel'], ['codex', 'excel', 'codex']]) {
+    const h = mountOnboarding(t)
+    h.input('openai', 'json', JSON.stringify({ type, access_token: 'synthetic' }))
+    h.state.createForm.value.credentialTarget = selected
+    await h.state.handleCreate()
+    assert.equal(h.excelImports.length, expected === 'excel' ? 1 : 0)
+    assert.equal(h.submissions.length, expected === 'codex' ? 1 : 0)
+  }
+  for (const [type, credentialTarget] of [['cpa-bps', 'codex'], ['codex', 'excel']]) {
+    const h = mountOnboarding(t)
+    h.input('openai', 'json', JSON.stringify({ provider: 'openai', credentialTarget, document: { type } }))
+    await h.state.handleCreate()
+    assert.equal(h.excelImports.length, 0)
+    assert.equal(h.submissions.length, 0)
+    assert.equal(h.notifications.errors.length, 1)
+  }
+})
+
+test('mixed import retries preserve accepted Excel progress and Codex task identity', async (t) => {
+  let attempts = 0
+  const h = mountOnboarding(t, { create: async () => {
+    if (++attempts === 1)
+      throw new Error('synthetic queue failure')
+    return task()
+  } })
+  h.input('batch', 'json', JSON.stringify({ documents: [
+    { provider: 'openai', document: { type: 'cpa-bps', access_token: 'excel-synthetic' } },
+    { provider: 'openai', document: { type: 'codex', access_token: 'codex-synthetic' } },
+  ] }))
+  await h.state.handleCreate()
+  assert.equal(h.state.showCreateModal.value, true)
+  await h.state.handleCreate()
+  assert.equal(h.excelImports.length, 1)
+  assert.equal(h.submissions.length, 2)
+  assert.equal(h.submissions[0].submissionId, h.submissions[1].submissionId)
+  assert.equal(h.state.showCreateModal.value, false)
+})
+
+test('Excel OAuth and reauthorization use independent APIs without applying shared templates', async (t) => {
+  const h = mountOnboarding(t)
+  h.input('openai', 'oauth')
+  h.state.createForm.value.credentialTarget = 'excel'
+  h.state.createForm.value.qualityTemplate = { id: 'quality-template', revision: 4, name: '监测模板', config: {} }
+  await h.state.handleAuthorizeOAuth()
+  h.state.createForm.value.oauthCallback = 'https://example.invalid/callback?code=synthetic'
+  await h.state.handleCreate()
+  assert.equal(h.excelOAuthStarts.length, 1)
+  assert.equal(h.excelOAuthCompletions.length, 1)
+  assert.equal(h.oauthStarts.length, 0)
+  assert.equal(h.oauthCompletions.length, 0)
+  assert.equal(h.qualityApplications.length, 0)
+  assert.equal(h.notifications.warnings.length, 1)
+  h.state.openReauthorizeAccount({ id: 'account-existing', provider: 'openai', name: 'Existing', responsesUpstream: 'codex' }, 'excel')
+  await flush()
+  assert.equal(h.excelOAuthStarts[1].accountId, 'account-existing')
+  h.state.createForm.value.oauthCallback = 'https://example.invalid/callback?code=synthetic-again'
+  await h.state.handleCreate()
+  assert.equal(h.excelOAuthCompletions[1].settings, undefined)
+  assert.equal(h.oauthCompletions.length, 0)
+})
+
+test('existing Excel JSON replacement captures the selected account and slot revision only', async (t) => {
+  const h = mountOnboarding(t)
+  h.state.openReauthorizeAccount({ id: 'account-existing', provider: 'openai', name: 'Existing', responsesUpstream: 'excel', excelCredential: { revision: 7 } }, 'excel')
+  await flush()
+  h.state.createForm.value.mode = 'json'
+  h.state.createForm.value.importTexts.json = JSON.stringify({ type: 'cpa-bps', access_token: 'synthetic-excel' })
+  await h.state.handleCreate()
+  assert.equal(h.excelImports.length, 1)
+  assert.deepEqual(h.excelImports[0], { data: { type: 'cpa-bps', access_token: 'synthetic-excel' }, accountId: 'account-existing', expectedRevision: 7 })
+  assert.equal(h.submissions.length, 0)
+  assert.equal(h.oauthCompletions.length, 0)
+  assert.equal(h.excelOAuthCompletions.length, 0)
+})
 
 test('2FA enrollment submits one durable intent and clears secrets after acceptance', async (t) => {
   const h = mountOnboarding(t)

@@ -5,14 +5,17 @@ use serde_json::{Value, json};
 const GROUP: &str = "grp_00000000000000000000000000000001";
 
 async fn template(db: &TestDatabase) -> ReloginTemplate {
+    sqlx::query("insert into openai_excel_credentials(account_id,upstream_user_id,upstream_account_id,credential_json,credential_observed_at)
+        select id,upstream_user_id,upstream_account_id,'{}',now() from provider_accounts where provider_kind='openai' on conflict do nothing")
+        .execute(&db.pool).await.unwrap();
     sqlx::query("insert into account_groups(id,name,color,enabled,created_at,updated_at) values($1,'Template group','#FFFFFFFF',true,now(),now())")
         .bind(GROUP).execute(&db.pool).await.unwrap();
     let template: ReloginTemplate = serde_json::from_value(json!({
         "id": "quality-template", "revision": 1,
         "config": {
-            "name": "Excel remediation", "enabled": true, "concurrencyLimit": 7,
+            "name": "Account remediation", "enabled": true, "concurrencyLimit": 7,
             "weight": 19, "groupIds": [GROUP], "outboundProxyId": null,
-            "responsesUpstream": "excel", "excelModelsFollowGlobal": false,
+            "responsesUpstream": null, "excelModelsFollowGlobal": false,
             "excelModels": ["fixture-model"], "excelCacheCreationAsInput": false,
             "excelIgnoreEncryptedContent": true, "excel403Action": "pause_account",
             "egressMode": "unchanged"
@@ -54,6 +57,74 @@ async fn snapshot(db: &TestDatabase) -> Value {
         'groups',(select coalesce(jsonb_agg(g order by g.account_group_id),'[]') from account_group_accounts g where g.provider_account_id=a.id),
         'egress',(select to_jsonb(o) from provider_egress_account_overrides o where o.provider_account_id=a.id)) from provider_accounts a where a.id='acct_quality_a'")
         .fetch_one(&db.pool).await.unwrap()
+}
+
+#[tokio::test]
+async fn quality_templates_cannot_switch_the_credential_entry() {
+    use gateway_core::account::ResponsesUpstream;
+    for current in [ResponsesUpstream::Codex, ResponsesUpstream::Excel] {
+        let Some(db) = TestDatabase::create("quality_template_route_guard").await else {
+            return;
+        };
+        let store = setup(&db).await;
+        sqlx::query("update provider_accounts set responses_upstream=$1 where id='acct_quality_a'")
+            .bind(current.as_str())
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        let mut template = template(&db).await;
+        template.config.responses_upstream = Some(match current {
+            ResponsesUpstream::Codex => ResponsesUpstream::Excel,
+            ResponsesUpstream::Excel => ResponsesUpstream::Codex,
+        });
+        sqlx::query("update account_relogin_templates set config=$1 where id=$2")
+            .bind(serde_json::to_value(&template.config).unwrap())
+            .bind(&template.id)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        let mut cfg = config("acct_quality_a");
+        cfg.detection_mode = QualityDetectionMode::StateProbe;
+        cfg.failure_action = QualityFailureAction::ApplyAccountTemplate;
+        cfg.failure_template = Some(template);
+        let rule = store
+            .save(None, None, cfg, Utc::now(), &context())
+            .await
+            .unwrap();
+        let before = snapshot(&db).await;
+        let run = scheduled_round(&store, &rule, &[QualityVerdict::Incorrect]).await;
+        assert_eq!(
+            run.action.as_deref(),
+            Some("route_switch_requires_confirmation")
+        );
+        assert_eq!(snapshot(&db).await, before);
+        db.close().await;
+    }
+}
+
+#[tokio::test]
+async fn legacy_template_recovery_does_not_restore_a_different_entry() {
+    let Some(db) = TestDatabase::create("quality_template_legacy_route").await else {
+        return;
+    };
+    let store = setup(&db).await;
+    let template = template(&db).await;
+    let mut cfg = config("acct_quality_a");
+    cfg.failure_action = QualityFailureAction::ApplyAccountTemplate;
+    cfg.failure_template = Some(template);
+    cfg.auto_restore = true;
+    let rule = store
+        .save(None, None, cfg, Utc::now(), &context())
+        .await
+        .unwrap();
+    scheduled_round(&store, &rule, &[QualityVerdict::Incorrect]).await;
+    sqlx::query("update quality_rules set recovery=jsonb_set(recovery,'{template_owner,before,account,responses_upstream}','\"excel\"') where id=$1")
+        .bind(&rule.id).execute(&db.pool).await.unwrap();
+    let before = snapshot(&db).await;
+    let run = scheduled_round(&store, &rule, &[QualityVerdict::Correct]).await;
+    assert_eq!(run.action.as_deref(), Some("template_recovery_released"));
+    assert_eq!(snapshot(&db).await, before);
+    db.close().await;
 }
 
 #[tokio::test]
@@ -227,9 +298,12 @@ async fn template_threshold_snapshot_and_complete_application_are_atomic() {
     assert_eq!(account["enabled"], true);
     assert_eq!(account["concurrency_limit"], 7);
     assert_eq!(account["weight"], 19);
-    assert_eq!(account["responses_upstream"], "excel");
-    assert_eq!(account["excel_models"], json!(["fixture-model"]));
-    assert_eq!(account["excel_models_follow_global"], false);
+    assert_eq!(account["responses_upstream"], "codex");
+    assert_eq!(account["excel_models"], before["account"]["excel_models"]);
+    assert_eq!(
+        account["excel_models_follow_global"],
+        before["account"]["excel_models_follow_global"]
+    );
     assert_eq!(account["excel_cache_creation_as_input"], false);
     assert_eq!(account["excel_ignore_encrypted_content"], true);
     assert_eq!(account["request_proxy_source"], "mihomo");
@@ -823,8 +897,21 @@ async fn template_vetoes_preexisting_403_and_stale_claims_but_allows_independent
         return;
     };
     let store = setup(&db).await;
+    sqlx::query(
+        "update provider_accounts set responses_upstream='excel' where id='acct_quality_a'",
+    )
+    .execute(&db.pool)
+    .await
+    .unwrap();
     let template = template(&db).await;
-    let rule = save(&store, &template, 1).await;
+    let mut cfg = config("acct_quality_a");
+    cfg.detection_mode = QualityDetectionMode::StateProbe;
+    cfg.failure_action = QualityFailureAction::ApplyAccountTemplate;
+    cfg.failure_template = Some(template);
+    let rule = store
+        .save(None, None, cfg, Utc::now(), &context())
+        .await
+        .unwrap();
     sqlx::query(
         "update provider_accounts set excel_mode_disabled_at=now() where id='acct_quality_a'",
     )
@@ -1210,6 +1297,8 @@ async fn ordinary_account_edits_preserve_template_recovery_only_for_unchanged_po
         }
         let expected = if matches!(change, "name" | "unchanged") {
             "template_restored"
+        } else if change == "route" {
+            "excel_shared_action_blocked"
         } else {
             "template_recovery_released"
         };

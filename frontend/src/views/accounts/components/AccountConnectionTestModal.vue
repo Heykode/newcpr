@@ -20,6 +20,7 @@ defineProps<{
   account: ConnectionTest['testingAccount']['value']
   status: ConnectionTest['connectionTestStatus']['value']
   model: string
+  route: 'codex' | 'excel' | null
   logs: ConnectionTest['connectionTestLogs']['value']
   error: string
   startedAt: string
@@ -76,6 +77,9 @@ function connectionLogClass(tone: string) {
       </section>
 
       <section class="rounded-cp-card bg-cp-fill-quaternary px-4 py-3">
+        <p v-if="route" class="mb-3 text-cp-sm font-emphasis">
+          {{ route === 'excel' ? 'Excel' : 'Codex' }} 入口
+        </p>
         <div class="grid gap-3">
           <div class="flex min-h-8 items-center justify-between gap-3">
             <span class="text-cp-sm font-heavy text-cp-text-quaternary">

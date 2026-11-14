@@ -128,6 +128,7 @@ pub(crate) fn parse_error_reason(value: Option<String>) -> StoreResult<Option<Ac
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderAccountSummary {
+    pub excel_credential: Option<gateway_core::account::ExcelCredentialMetadata>,
     pub quota_paused: bool,
     pub quota_limits: gateway_core::account::AccountQuotaLimits,
     pub auto_use_quota_credits: bool,
@@ -480,6 +481,7 @@ impl ProviderAccountStateUpdate {
 }
 
 pub(crate) const ACCOUNT_SELECT: &str = "select
+            (select to_jsonb(e) - 'credential_json' - 'quota_json' from openai_excel_credentials e where e.account_id = provider_accounts.id) as excel_credential_json,
             coalesce((select enabled from outbound_proxies where outbound_proxies.id = provider_accounts.outbound_proxy_id), true) as outbound_proxy_enabled,
             coalesce((select max_websocket_connections from outbound_proxies where outbound_proxies.id = provider_accounts.outbound_proxy_id), 0) as max_websocket_connections,
             (select case when auto_location then detected_location_json -> 'location' else request_location_json end from outbound_proxies where outbound_proxies.id = provider_accounts.outbound_proxy_id and enabled) as request_location_json,
@@ -494,6 +496,7 @@ pub(crate) const ACCOUNT_SELECT: &str = "select
      from provider_accounts where id = $1";
 
 pub(crate) const ACCOUNT_SELECT_BY_IDS: &str = "select
+            (select to_jsonb(e) - 'credential_json' - 'quota_json' from openai_excel_credentials e where e.account_id = provider_accounts.id) as excel_credential_json,
             coalesce((select enabled from outbound_proxies where outbound_proxies.id = provider_accounts.outbound_proxy_id), true) as outbound_proxy_enabled,
             coalesce((select max_websocket_connections from outbound_proxies where outbound_proxies.id = provider_accounts.outbound_proxy_id), 0) as max_websocket_connections,
             (select case when auto_location then detected_location_json -> 'location' else request_location_json end from outbound_proxies where outbound_proxies.id = provider_accounts.outbound_proxy_id and enabled) as request_location_json,
@@ -510,6 +513,7 @@ pub(crate) const ACCOUNT_SELECT_BY_IDS: &str = "select
      order by id";
 
 pub(crate) const REFRESH_CANDIDATES_SELECT: &str = "select
+            (select to_jsonb(e) - 'credential_json' - 'quota_json' from openai_excel_credentials e where e.account_id = provider_accounts.id) as excel_credential_json,
             coalesce((select enabled from outbound_proxies where outbound_proxies.id = provider_accounts.outbound_proxy_id), true) as outbound_proxy_enabled,
             coalesce((select max_websocket_connections from outbound_proxies where outbound_proxies.id = provider_accounts.outbound_proxy_id), 0) as max_websocket_connections,
             (select case when auto_location then detected_location_json -> 'location' else request_location_json end from outbound_proxies where outbound_proxies.id = provider_accounts.outbound_proxy_id and enabled) as request_location_json,
@@ -592,6 +596,7 @@ pub(crate) fn core_account_from_summary(
         summary.upstream_account_id,
         summary.plan_type,
     )
+    .with_excel_credential(summary.excel_credential)
     .with_account_facts(
         summary.enabled,
         summary.credential_state,
@@ -663,6 +668,7 @@ pub(crate) fn account_summary_from_row(
         .and_then(AccountWeight::new)
         .ok_or_else(|| invalid("invalid weight"))?;
     Ok(ProviderAccountSummary {
+        excel_credential: super::excel_credentials::metadata_from_account_row(&row)?,
         quota_paused: status.quota_paused,
         quota_limits: get::<sqlx::types::Json<gateway_core::account::AccountQuotaLimits>>(
             &row,

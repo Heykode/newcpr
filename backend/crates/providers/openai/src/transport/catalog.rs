@@ -398,20 +398,20 @@ pub fn parse_codex_model_catalog(
     })
 }
 
-/// Bridge capability, not proof of a particular account's model entitlement.
-pub(crate) fn excel_bridge_model(model: &str) -> Result<CodexCatalogModel, CodexModelCatalogError> {
+/// Advertise only the model and reasoning levels returned by this account's BPS catalog.
+pub(crate) fn excel_bridge_model(
+    model: &crate::credential::excel::ExcelModel,
+) -> Result<CodexCatalogModel, CodexModelCatalogError> {
     let body = serde_json::json!({
         "models": [{
-            "slug": model,
-            "display_name": model,
+            "slug": model.id,
+            "display_name": if model.label.is_empty() { &model.id } else { &model.label },
             "description": "Excel bridge; availability is checked by the upstream on each request.",
             "source": "excel_bridge",
             "multi_agent_version": null,
             "multi_agent_reasoning_effort": null,
             "supported_in_api": true,
-            "supported_reasoning_levels": [
-                {"effort": "low"}, {"effort": "medium"}, {"effort": "high"}, {"effort": "xhigh"}
-            ],
+            "supported_reasoning_levels": model.efforts.iter().map(|effort| serde_json::json!({"effort": effort})).collect::<Vec<_>>(),
             "input_modalities": ["text", "image"],
             "supports_search_tool": false,
             "support_verbosity": false,

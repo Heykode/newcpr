@@ -8,6 +8,7 @@ where
     S: AdminSessionState + Clone + Send + Sync + 'static,
 {
     Router::new()
+        .merge(excel::router::<S>())
         .merge(import_tasks::router::<S>())
         .route("/api/admin/accounts", get(list_accounts::<S>))
         .route(
@@ -431,18 +432,40 @@ where
 async fn recover_account<S>(
     auth: AdminAuth,
     State(state): State<S>,
-    AdminJson(request): AdminJson<AccountActionRequest>,
+    AdminJson(request): AdminJson<AccountRecoverRequest>,
 ) -> Result<impl IntoResponse, AdminError>
 where
     S: AdminSessionState + Send + Sync,
 {
-    let account_id = request.into_id().map_err(map_wire_error)?;
-    let result = state
-        .admin_services()
-        .accounts()
-        .recover(&auth.context().mutation_context(), account_id)
-        .await
-        .map_err(map_service_error)?;
+    let account_id = AccountActionRequest {
+        account_id: request.account_id,
+    }
+    .into_id()
+    .map_err(map_wire_error)?;
+    let context = auth.context().mutation_context();
+    let result = if request.credential_target == gateway_core::account::CredentialTarget::Excel {
+        let revision = request
+            .expected_revision
+            .and_then(|value| gateway_core::account::CredentialRevision::new(value).ok())
+            .ok_or_else(|| {
+                AdminError::invalid_request(
+                    StatusCode::BAD_REQUEST,
+                    "缺少 Excel 凭据版本，请刷新后重试",
+                )
+            })?;
+        state
+            .admin_services()
+            .accounts()
+            .recover_excel(&context, account_id, revision)
+            .await
+    } else {
+        state
+            .admin_services()
+            .accounts()
+            .recover(&context, account_id)
+            .await
+    }
+    .map_err(map_service_error)?;
     let data = account_refresh_data(result, Utc::now(), state.deployment_timezone());
     Ok(AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(data)))
 }

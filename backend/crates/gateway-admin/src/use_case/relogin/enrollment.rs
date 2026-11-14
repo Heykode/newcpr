@@ -61,7 +61,7 @@ impl DefaultReloginService {
         for input in inputs {
             if let Some(old) = existing.get(&input.email) {
                 let mut entry = old.clone();
-                Self::stop(&gate, &mut entry);
+                Self::stop_all(&gate, &mut entry);
                 entry.password = input.password;
                 entry.mfa_secret = input.mfa_secret;
                 entry.automatic_attempts = 0;
@@ -86,6 +86,8 @@ impl DefaultReloginService {
                 changes.push((entry, Some(expected)));
             } else {
                 let entry = ReloginEntry {
+                    excel: None,
+                    credential_target: gateway_core::account::CredentialTarget::Codex,
                     last_attempt: None,
                     id: format!("relogin_{}", uuid::Uuid::now_v7().simple()),
                     revision: 1,

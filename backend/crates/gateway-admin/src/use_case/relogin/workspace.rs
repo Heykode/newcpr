@@ -29,7 +29,7 @@ pub(super) fn prepare_queue(
         }
         matches
             .into_iter()
-            .map(ReloginTarget::from_account)
+            .map(|account| ReloginTarget::from_account_for_target(account, entry.credential_target))
             .collect::<Result<Vec<_>, _>>()?
     } else {
         Vec::new()
@@ -116,6 +116,11 @@ pub(super) fn confirm_target(
     if selection.switch_workspace != (target.workspace_id != credential.workspace_id) {
         return Err(AdminError::conflict(
             "工作区切换确认不匹配，请刷新后重新确认",
+        ));
+    }
+    if entry.credential_target == CredentialTarget::Excel && selection.switch_workspace {
+        return Err(AdminError::conflict(
+            "Excel 凭据只能推送到相同工作区，请选择对应账号或新建账号",
         ));
     }
     entry.target = Some(target.clone());

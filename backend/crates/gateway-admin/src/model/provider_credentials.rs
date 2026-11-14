@@ -177,6 +177,24 @@ pub struct PreparedCredentialImport {
     pub credentials: Vec<PreparedCredentialCreate>,
 }
 
+/// Excel OAuth uses the same protected pending lifecycle but its own credential store.
+pub struct PreparedExcelAuthorizationCommit {
+    pub pending: PendingAuthorizationMutation,
+    pub credential: PreparedCredentialCreate,
+    pub target: Option<super::accounts::ExcelCredentialImportTarget>,
+    pub authorization_guard: Box<dyn AuthorizationCommitGuard>,
+}
+
+impl fmt::Debug for PreparedExcelAuthorizationCommit {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PreparedExcelAuthorizationCommit")
+            .field("pending", &self.pending)
+            .field("credential", &"[PREPARED]")
+            .finish()
+    }
+}
+
 /// Admin 交给 Store 的导入事务命令。
 #[derive(Debug, Clone, PartialEq)]
 pub struct CredentialImportCommit {

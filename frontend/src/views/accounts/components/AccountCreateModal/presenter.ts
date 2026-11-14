@@ -33,9 +33,11 @@ export function resolveAccountCreatePresentation(input: AccountCreatePresentatio
     configuring,
     isXai: provider === 'xai',
     isBatch: provider === 'batch',
-    modeOptions: resolveModeOptions(provider),
+    modeOptions: provider === 'openai' && form.credentialTarget === 'excel'
+      ? modeOptions.openai.filter(option => ['oauth', 'json'].includes(option.value))
+      : resolveModeOptions(provider),
     modal: resolveModal(input, provider, configuring),
-    oauth: resolveOAuth(provider, oauthAuthUrl),
+    oauth: resolveOAuth(provider, oauthAuthUrl, form.credentialTarget),
     importInput: resolveImportInput(form, provider),
     canSubmit: canSubmit(input, provider, oauthAuthUrl),
     submitLabel: resolveSubmitLabel(input),
@@ -65,7 +67,7 @@ function resolveModal(
   if (input.reauthorizing) {
     const providerName = provider === 'xai' ? 'xAI' : 'OpenAI'
     return {
-      title: '重新授权账号',
+      title: provider === 'openai' ? `重新授权 ${input.form.credentialTarget === 'excel' ? 'Excel' : 'Codex'}` : '重新授权账号',
       description: `${input.account?.email || input.account?.name || providerName} · 完成授权后更新账号凭据`,
       tone: 'info' as const,
       size: 'md' as const,
@@ -73,7 +75,9 @@ function resolveModal(
   }
 
   let description = '粘贴或上传包含 OAuth Token 的 JSON，匹配已有账号时更新凭据'
-  if (provider === 'batch')
+  if (provider === 'openai' && input.form.credentialTarget === 'excel' && input.form.mode === 'json')
+    description = '按用户和工作区保存 Excel 凭据；已有 Excel 凭据请从该账号的重新授权入口更新'
+  else if (provider === 'batch')
     description = '粘贴或上传 CPR 账号包，一次导入多个平台账号'
   else if (provider === 'xai' && input.form.mode === 'oauth')
     description = '通过浏览器授权导入 xAI 账号'
@@ -89,14 +93,14 @@ function resolveModal(
     description = '登录验证成功后自动入池，同时保存失效重登资料；已有账号仅更新凭据'
 
   return {
-    title: '导入账号',
+    title: provider === 'openai' && input.form.credentialTarget === 'excel' ? '获取 Excel 凭据' : '导入账号',
     description,
     tone: 'info' as const,
     size: 'md' as const,
   }
 }
 
-function resolveOAuth(provider: AccountCreateProvider | undefined, authUrl: string) {
+function resolveOAuth(provider: AccountCreateProvider | undefined, authUrl: string, target: 'codex' | 'excel') {
   if (provider === 'xai') {
     return {
       authUrl,
@@ -108,7 +112,9 @@ function resolveOAuth(provider: AccountCreateProvider | undefined, authUrl: stri
   return {
     authUrl,
     callbackLabel: '回调地址',
-    callbackPlaceholder: 'http://localhost:1455/auth/callback?code=...&state=...',
+    callbackPlaceholder: target === 'excel'
+      ? 'https://bps.openai.com/basispoints/extension/…/auth/callback?code=...&state=...'
+      : 'http://localhost:1455/auth/callback?code=...&state=...',
   }
 }
 
@@ -147,6 +153,13 @@ function resolveImportInput(
       uploadable: true,
     }
   }
+  if (provider === 'openai' && form.credentialTarget === 'excel') {
+    return {
+      label: 'Excel 凭据文件',
+      placeholder: '粘贴 type 为 cpa-bps，包含 access_token 的 JSON 内容',
+      uploadable: true,
+    }
+  }
   return {
     label: '账号文件',
     placeholder: '粘贴包含 accessToken 或 refreshToken（可含 idToken）的 JSON 内容',
@@ -157,6 +170,8 @@ function resolveImportInput(
 function resolveSubmitLabel(
   input: AccountCreatePresentationInput,
 ) {
+  if (input.form.provider === 'openai' && input.form.credentialTarget === 'excel' && input.form.mode === 'json')
+    return input.reauthorizing ? '更新 Excel 凭据' : '保存 Excel 凭据'
   if (input.reauthorizing)
     return '完成重新授权'
   if (input.form.mode === 'oauth')

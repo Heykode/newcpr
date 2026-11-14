@@ -107,6 +107,55 @@ pub struct PgProviderAccountRepository {
 }
 
 impl PgProviderAccountRepository {
+    pub(super) async fn apply_excel_shell_settings(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        id: &str,
+        settings: &AccountImportSettings,
+    ) -> StoreResult<()> {
+        let ids = vec![id.to_owned()];
+        let direct = settings
+            .clear_outbound_proxy
+            .then_some(gateway_admin::model::proxies::AccountProxySelection::Direct);
+        update_provider_accounts_scheduling_in_transaction(
+            tx,
+            &ids,
+            AccountSchedulingPatch {
+                egress_mode: settings.egress_mode,
+                enabled: Some(settings.enabled),
+                explicit_scheduling_intent: true,
+                concurrency_limit: Some(settings.concurrency_limit),
+                weight: Some(settings.weight),
+                turn_state_injection_enabled: settings.turn_state_injection_enabled,
+                responses_upstream: settings.responses_upstream,
+                excel_models: None,
+                excel_models_follow_global: None,
+                excel_cache_creation_as_input: settings.excel_cache_creation_as_input,
+                excel_ignore_encrypted_content: settings.excel_ignore_encrypted_content,
+                request_proxy_source: settings.request_proxy_source,
+                excel_auto_disable_on_403: settings.excel_auto_disable_on_403,
+                excel_403_action: settings.excel_403_action,
+                model_access: settings.model_access.as_ref(),
+                outbound_proxy: direct.as_ref(),
+            },
+        )
+        .await?;
+        if let Some(name) =
+            gateway_admin::model::accounts::normalize_custom_name(settings.custom_name.as_deref())
+                .map_err(|_| invalid("invalid custom account name"))?
+        {
+            update_custom_name_in_transaction(tx, &ids, Some(&name)).await?;
+        }
+        replace_account_group_assignments_in_transaction(tx, &ids, &settings.group_ids).await?;
+        if let Some(cost) = &settings.purchase_cost {
+            super::purchase_costs::update(tx, &ids, cost).await?;
+        }
+        if let Some(config) = settings.excel_recovery {
+            super::excel_recovery::update(tx, &ids, config).await?;
+        }
+        super::super::synchronize_account_egress_in_transaction(tx, &ids).await
+    }
+
     pub async fn compare_and_swap_provider_quota(
         &self,
         observation: QuotaObservation,
@@ -199,6 +248,7 @@ impl PgProviderAccountRepository {
         omissions: Option<&gateway_core::account::AccountCatalogOmissions>,
     ) -> StoreResult<Vec<ProviderAccountSummary>> {
         let mut query = sqlx::QueryBuilder::<Postgres>::new("select
+                    (select to_jsonb(e) - 'credential_json' - 'quota_json' from openai_excel_credentials e where e.account_id = provider_accounts.id) as excel_credential_json,
                     coalesce((select enabled from outbound_proxies where outbound_proxies.id = provider_accounts.outbound_proxy_id), true) as outbound_proxy_enabled,
             coalesce((select max_websocket_connections from outbound_proxies where outbound_proxies.id = provider_accounts.outbound_proxy_id), 0) as max_websocket_connections,
             (select case when auto_location then detected_location_json -> 'location' else request_location_json end from outbound_proxies where outbound_proxies.id = provider_accounts.outbound_proxy_id and enabled) as request_location_json,
@@ -1359,20 +1409,20 @@ pub(crate) async fn upsert_provider_account_in_transaction(
            upstream_user_id,
            (coalesce(upstream_account_id, ''))
          ) do update set
-           name = excluded.name,
+           name = case when provider_accounts.authentication_kind='none' then provider_accounts.name else excluded.name end,
            email = excluded.email,
            plan_type = excluded.plan_type,
            authentication_kind = excluded.authentication_kind,
            provider_credentials_json = excluded.provider_credentials_json,
-           outbound_proxy_url = case when $22 then provider_accounts.outbound_proxy_url else coalesce(excluded.outbound_proxy_url, provider_accounts.outbound_proxy_url) end,
-           outbound_proxy_id = case when $22 then provider_accounts.outbound_proxy_id else coalesce(excluded.outbound_proxy_id, provider_accounts.outbound_proxy_id) end,
+           outbound_proxy_url = case when $22 or provider_accounts.authentication_kind='none' then provider_accounts.outbound_proxy_url else coalesce(excluded.outbound_proxy_url, provider_accounts.outbound_proxy_url) end,
+           outbound_proxy_id = case when $22 or provider_accounts.authentication_kind='none' then provider_accounts.outbound_proxy_id else coalesce(excluded.outbound_proxy_id, provider_accounts.outbound_proxy_id) end,
            credential_revision = provider_accounts.credential_revision + 1,
            turn_state_binding_revision = provider_accounts.credential_revision + 1,
            has_refresh_token = excluded.has_refresh_token,
            access_token_expires_at = excluded.access_token_expires_at,
            next_refresh_at = excluded.next_refresh_at,
-           enabled = excluded.enabled,
-           model_access_json = coalesce($21, provider_accounts.model_access_json),
+           enabled = case when provider_accounts.authentication_kind='none' then provider_accounts.enabled else excluded.enabled end,
+           model_access_json = case when provider_accounts.authentication_kind='none' then provider_accounts.model_access_json else coalesce($21, provider_accounts.model_access_json) end,
            credential_state = excluded.credential_state,
            provider_quota_json = null,
            quota_access_state = 'unknown',
@@ -1448,6 +1498,7 @@ pub(crate) async fn rotate_provider_account_in_transaction(
     let next = sqlx::query_scalar::<_, i64>(
         "update provider_accounts
          set name = case when $14 or $15 then name else $4 end,
+             authentication_kind = case when provider_kind='openai' and authentication_kind='none' then 'oauth' else authentication_kind end,
              email = case when $14 then email else $5 end,
              plan_type = case when $14 then plan_type else $6 end,
              provider_quota_json = case when $14 then provider_quota_json else null end,
@@ -1474,6 +1525,8 @@ pub(crate) async fn rotate_provider_account_in_transaction(
              updated_at = greatest(now(), updated_at)
          where id = $1 and provider_kind = $2
            and credential_revision = $3
+           and not exists(select 1 from openai_excel_credentials e where e.account_id=provider_accounts.id
+             and $11::boolean and (e.upstream_user_id is distinct from $12::text or e.upstream_account_id is distinct from $13::text))
          returning credential_revision",
     )
     .bind(&update.account_id)
@@ -1658,6 +1711,27 @@ async fn update_provider_accounts_scheduling_in_transaction(
             if request_proxy_source.is_some_and(|source| !source.supports_provider(&provider)) {
                 return Err(invalid("request proxy pools require an OpenAI account"));
             }
+        }
+    }
+    if responses_upstream == Some(gateway_core::account::ResponsesUpstream::Excel) {
+        let valid_ids: Vec<String> = sqlx::query_scalar(
+            "select x.account_id from openai_excel_credentials x
+             join provider_accounts a on a.id=x.account_id
+             where a.id=any($1::text[]) and a.provider_kind='openai'
+               and x.upstream_user_id=a.upstream_user_id
+               and x.upstream_account_id is not distinct from a.upstream_account_id
+               and x.credential_state='ready'
+               and (x.access_token_expires_at is null or x.access_token_expires_at>now())
+             for share of x",
+        )
+        .bind(account_ids)
+        .fetch_all(&mut **transaction)
+        .await
+        .map_err(|error| {
+            postgres_unavailable("validate Excel credential before enabling").with_source(error)
+        })?;
+        if valid_ids.len() != account_ids.len() {
+            return Err(invalid("开启 Excel 入口前，请先获取有效的独立 Excel 凭据"));
         }
     }
     let (proxy_id, proxy) = match outbound_proxy {

@@ -147,6 +147,15 @@ pub trait AccountsService: Send + Sync {
         account_id: ProviderAccountId,
     ) -> Result<AccountRefreshResult, AdminError>;
 
+    async fn recover_excel(
+        &self,
+        _context: &MutationContext,
+        _account_id: ProviderAccountId,
+        _expected_revision: gateway_core::account::CredentialRevision,
+    ) -> Result<AccountRefreshResult, AdminError> {
+        Err(AdminError::invalid("Excel 恢复不可用"))
+    }
+
     async fn update(
         &self,
         context: &MutationContext,
@@ -878,15 +887,8 @@ impl AccountsService for DefaultAccountsService {
         }
         let exported_ids = account_ids.clone();
         let mut grouped = BTreeMap::<ProviderKind, Vec<ProviderAccountId>>::new();
-        let mut relogin_candidates = Vec::new();
         for account_id in account_ids {
             let account = self.load_account(&account_id).await?;
-            if account.account.provider_kind.as_str() == "openai"
-                && account.account.authentication_kind == "oauth"
-                && let Some(email) = account.account.email.clone()
-            {
-                relogin_candidates.push((account_id.clone(), email));
-            }
             grouped
                 .entry(account.account.provider_kind)
                 .or_default()
@@ -916,44 +918,6 @@ impl AccountsService for DefaultAccountsService {
                     .map_err(|error| map_provider_error(error, "provider account export"))?,
             );
         }
-        let mut relogin = Vec::new();
-        if let Some(store) = self.relogin_store.as_deref() {
-            let entries = store
-                .entries()
-                .await
-                .map_err(|error| map_store_error(error, "account relogin export"))?;
-            let mut audited = Vec::new();
-            for (account_id, email) in relogin_candidates {
-                let Some(entry) = entries
-                    .iter()
-                    .find(|entry| entry.email.eq_ignore_ascii_case(&email))
-                else {
-                    continue;
-                };
-                if entry.validate_totp().is_err() {
-                    continue;
-                }
-                audited.push(entry.id.clone());
-                relogin.push(crate::model::provider_credentials::AccountExportRelogin {
-                    account_id,
-                    email: entry.email.clone(),
-                    password: entry.password.clone(),
-                    mfa_secret: entry.mfa_secret.clone(),
-                });
-            }
-            audited.sort();
-            audited.dedup();
-            if !audited.is_empty() {
-                store
-                    .record_export(
-                        &audited,
-                        crate::model::relogin::ReloginExportFormat::Json,
-                        context,
-                    )
-                    .await
-                    .map_err(|error| map_store_error(error, "account relogin export audit"))?;
-            }
-        }
         self.accounts
             .record_credential_export(&exported_ids, context)
             .await
@@ -961,7 +925,7 @@ impl AccountsService for DefaultAccountsService {
         Ok(AccountExportBundle {
             exported_at: Utc::now(),
             documents,
-            relogin,
+            relogin: Vec::new(),
         })
     }
 
@@ -994,6 +958,28 @@ impl AccountsService for DefaultAccountsService {
         Ok(AccountRefreshResult {
             config_revision: result.config_revision,
             account,
+        })
+    }
+
+    async fn recover_excel(
+        &self,
+        context: &MutationContext,
+        account_id: ProviderAccountId,
+        expected_revision: gateway_core::account::CredentialRevision,
+    ) -> Result<AccountRefreshResult, AdminError> {
+        let (_, provider) = self.provider_for_account(&account_id).await?;
+        let result = self
+            .accounts
+            .recover_excel_account(&account_id, expected_revision, context)
+            .await
+            .map_err(|error| map_store_error(error, "Excel credential recovery"))?;
+        provider
+            .account_facts_changed(std::slice::from_ref(&account_id))
+            .await;
+        publish_committed(self.snapshot.as_ref(), result.config_revision).await?;
+        Ok(AccountRefreshResult {
+            config_revision: result.config_revision,
+            account: self.load_directory_item(&account_id, false).await?,
         })
     }
 
@@ -1680,10 +1666,25 @@ impl AccountsService for DefaultAccountsService {
             endpoint,
             input_text,
             stream,
+            responses_upstream: requested_route,
         } = command;
         let (stored, provider) = self.provider_for_account(&account_id).await?;
         let account = stored.account;
         let model = upstream_model.as_str().to_owned();
+        let responses_upstream =
+            (account.provider_kind.as_str() == "openai").then_some(account.responses_upstream);
+        if requested_route.is_some() && requested_route != responses_upstream {
+            return Err(AdminError::conflict("账号入口已变化，请重新打开连接测试"));
+        }
+        let target = responses_upstream.map_or_else(
+            || account_id.clone().into(),
+            |route| {
+                gateway_core::engine::probe::AccountProbeTarget::ConnectionTestRoute(
+                    account_id.clone(),
+                    route,
+                )
+            },
+        );
         let operation = provider
             .connection_test_operation_with_options(&upstream_model, &input_text, endpoint, stream)
             .map_err(|error| map_provider_error(error, "provider connection test"))?;
@@ -1691,6 +1692,7 @@ impl AccountsService for DefaultAccountsService {
             AccountConnectionTestEvent::Started {
                 model: model.clone(),
                 endpoint,
+                responses_upstream,
             },
             AccountConnectionTestEvent::Request {
                 model,
@@ -1704,7 +1706,7 @@ impl AccountsService for DefaultAccountsService {
         let terminal = futures::stream::once(async move {
             let result = probe
                 .probe(AccountProbeRequest {
-                    target: account_id.into(),
+                    target,
                     provider_kind: account.provider_kind,
                     upstream_model,
                     operation,

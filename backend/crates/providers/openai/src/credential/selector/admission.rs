@@ -106,6 +106,7 @@ impl CodexCredentialSelector {
                 || !self
                     .preferred_primary_needs_migration(
                         primary,
+                        request,
                         Duration::from_secs(
                             request
                                 .attempt
@@ -220,6 +221,7 @@ impl CodexCredentialSelector {
     async fn preferred_primary_needs_migration(
         &self,
         binding: &ProviderSessionAffinityBinding,
+        request: &CredentialSelectionInput<'_>,
         recovery_window: Duration,
     ) -> Result<bool, CredentialSelectionError> {
         let Some(account) = self
@@ -229,6 +231,9 @@ impl CodexCredentialSelector {
             .await
             .map_err(|source| CredentialSelectionError::Store(Some(source.into())))?
         else {
+            return Ok(true);
+        };
+        let Some(account) = Self::project_request_account(account, request) else {
             return Ok(true);
         };
         if !account.enabled()

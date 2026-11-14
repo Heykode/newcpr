@@ -609,13 +609,14 @@ async fn exports_require_selected_rows_and_never_login_implicitly() {
         .unwrap();
     assert_eq!(output.files.len(), 1);
     assert_eq!(output.files[0].content.trim(), MATERIAL);
-    assert!(
-        h.services
-            .relogin()
-            .export(&ids, ReloginExportFormat::Json, &context("export"))
-            .await
-            .is_err()
-    );
+    let missing = h
+        .services
+        .relogin()
+        .export(&ids, ReloginExportFormat::Json, &context("export"))
+        .await
+        .unwrap();
+    assert!(missing.files.is_empty());
+    assert_eq!(missing.skipped.len(), 1);
     assert!(h.provider.relogin_requests.lock().unwrap().is_empty());
     h.ready(&id).await;
     let output = h

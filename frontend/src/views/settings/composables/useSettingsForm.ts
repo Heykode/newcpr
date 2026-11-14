@@ -11,9 +11,7 @@ import { toast } from '@/components/base/BaseToast'
 import { useAsyncAction } from '@/composables/useAsyncAction'
 import { t } from '@/i18n'
 import { errorMessage } from '@/utils/async'
-import { DEFAULT_EXCEL_MODELS, DEFAULT_EXCEL_MODELS_INPUT } from '@/utils/excel-defaults'
 import { normalizeRequestLocation, requestLocationError } from '@/utils/location'
-import { parseExcelModels } from '@/views/accounts/utils/schedulingForm'
 import { cloneProtectionRules, protectionSettingsError, trimProtectionText } from '../components/error-protection/form'
 import { validWarmupExpressions, warmupScheduleBytes } from '../utils/warmup-schedule'
 import { useExcelImageSettings } from './useExcelImageSettings'
@@ -77,7 +75,6 @@ export function useSettingsForm() {
   const mappings = ref<Array<{ requestedModel: string, upstreamModel: string }>>([])
   const form = reactive({
     accountErrorProtection: defaultProtection(),
-    excelDefaultModels: DEFAULT_EXCEL_MODELS_INPUT,
     responsesMaxDecompressedBodyBytes: 64 * 1024 * 1024,
     openaiAccountAffinity: 'strict' as AccountAffinity,
     refreshMarginSeconds: null as number | null,
@@ -152,7 +149,6 @@ export function useSettingsForm() {
 
   function applySettings(data: Awaited<ReturnType<typeof getSettings>>) {
     configRevision.value = data.configRevision
-    form.excelDefaultModels = (data.excelDefaultModels ?? DEFAULT_EXCEL_MODELS).join(', ')
     form.responsesMaxDecompressedBodyBytes
       = data.responsesMaxDecompressedBodyBytes ?? 64 * 1024 * 1024
     form.openaiAccountAffinity = data.openaiAccountAffinity ?? 'strict'
@@ -250,11 +246,6 @@ export function useSettingsForm() {
       return
     if (excelImages.errors.value.length) {
       toast.warning(excelImages.errors.value[0])
-      return
-    }
-    const excelDefaultModels = parseExcelModels(form.excelDefaultModels)
-    if (excelDefaultModels === null) {
-      toast.warning('Excel 模型名称不合法，或超过 64 个')
       return
     }
     if (form.openaiAccountAffinity !== 'strict' && form.openaiAccountAffinity !== 'relaxed' && form.openaiAccountAffinity !== 'preferred') {
@@ -407,7 +398,6 @@ export function useSettingsForm() {
     await saveAction.run(async () => {
       const result = await updateSettings({
         configRevision: configRevision.value,
-        excelDefaultModels,
         responsesMaxDecompressedBodyBytes: form.responsesMaxDecompressedBodyBytes,
         modelMappings: mappingPayload(),
         refreshMarginSeconds,

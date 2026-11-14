@@ -45,10 +45,13 @@ impl ScheduledTask for ReloginWorker {
             if self.0.store.is_none() {
                 return Ok(());
             }
-            self.0
-                .cycle(context.cancellation())
-                .await
-                .map_err(|_| WorkerTaskError::safe("relogin cycle failed"))
+            let excel = self.0.for_target(CredentialTarget::Excel);
+            tokio::try_join!(
+                self.0.cycle(context.cancellation()),
+                excel.cycle(context.cancellation()),
+            )
+            .map(|_| ())
+            .map_err(|_| WorkerTaskError::safe("relogin cycle failed"))
         })
     }
 }
@@ -133,14 +136,16 @@ impl DefaultReloginService {
             let pool = self.pool().await?;
             // No jobs survive process shutdown. Never leave a persisted running row stuck forever.
             for entry in &mut entries {
-                if entry.status == ReloginStatus::Pushing && !gate.active.contains_key(&entry.email)
-                {
+                let channel_active = gate
+                    .active
+                    .get(&entry.email)
+                    .is_some_and(|active| active.credential_target == self.credential_target);
+                if entry.status == ReloginStatus::Pushing && !channel_active {
                     entry.status = ReloginStatus::Uncertain;
                     entry.message = "上次推送结果未确认，请检查号池并重新获取凭证".to_owned();
                     self.save(entry).await?;
                 }
-                if entry.status == ReloginStatus::Running && !gate.active.contains_key(&entry.email)
-                {
+                if entry.status == ReloginStatus::Running && !channel_active {
                     entry.status = ReloginStatus::Failed;
                     entry.message = "上次重登已中断，未确认推送结果".to_owned();
                     entry.next_attempt_at = Some(
@@ -199,11 +204,16 @@ impl DefaultReloginService {
                         }) else {
                             continue;
                         };
-                        if entry.synced_at.is_some() || !recovery::same_attempt(&entry, account) {
+                        if (entry.status == ReloginStatus::Ready && entry.synced_at.is_some())
+                            || !recovery::same_attempt(&entry, account)
+                        {
                             entry.automatic_attempts = 0;
                             entry.next_attempt_at = None;
                         }
-                        entry.target = Some(ReloginTarget::from_account(account)?);
+                        entry.target = Some(ReloginTarget::from_account_for_target(
+                            account,
+                            self.credential_target,
+                        )?);
                         entry.automatic_job = true;
                         entry.workspace_mode = ReloginWorkspaceMode::Original;
                         entry.workspace_targets.clear();
@@ -302,6 +312,7 @@ impl DefaultReloginService {
                     None
                 };
                 let request = ReloginRequest {
+                    credential_target: self.credential_target,
                     email: entry.email.clone(),
                     password: entry.password.clone(),
                     mfa_secret: entry.mfa_secret.clone(),
@@ -332,8 +343,6 @@ impl DefaultReloginService {
                 }
                 entry.attempted_target = entry.target.clone();
                 entry.stop_reason = None;
-                entry.synced_at = None;
-                entry.credential = None;
                 entry.status = ReloginStatus::Running;
                 entry.message = "正在登录并验证工作区".to_owned();
                 self.save(&mut entry).await?;
@@ -345,6 +354,7 @@ impl DefaultReloginService {
                 gate.active.insert(
                     entry.email.clone(),
                     ActiveLogin {
+                        credential_target: self.credential_target,
                         cancellation: cancellation.clone(),
                         owner: Arc::downgrade(owner),
                     },
@@ -388,7 +398,15 @@ impl DefaultReloginService {
         else {
             return Ok(());
         };
-        if current.revision != entry.revision || cancellation.is_cancelled() {
+        // Saving the other credential channel advances the shared row revision.
+        // Only this attempt and its login material fence its settlement.
+        if current.status != ReloginStatus::Running
+            || current.last_attempt.as_ref().map(|attempt| &attempt.id)
+                != entry.last_attempt.as_ref().map(|attempt| &attempt.id)
+            || current.password != entry.password
+            || current.mfa_secret != entry.mfa_secret
+            || cancellation.is_cancelled()
+        {
             return Ok(());
         }
         let retry_interval = chrono::Duration::seconds(i64::from(

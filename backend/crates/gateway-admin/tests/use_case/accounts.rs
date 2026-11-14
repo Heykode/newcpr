@@ -406,6 +406,35 @@ impl ProviderAdmin for FakeProviderAdmin {
         })
     }
 
+    async fn prepare_excel_import(
+        &self,
+        command: PrepareCredentialImport,
+    ) -> Result<PreparedCredentialImport, ProviderAdminError> {
+        self.record("provider.prepare_excel_import");
+        self.require_available()?;
+        let credential = self
+            .relogin_result
+            .lock()
+            .unwrap()
+            .clone()
+            .ok_or_else(|| ProviderAdminError::new(ProviderAdminErrorKind::Invalid))?;
+        let mut prepared = prepared_create_with_id(
+            self.kind.clone(),
+            "acct_excel_prepared",
+            "prepared-excel-import",
+        );
+        prepared.authentication_kind = "excel_oauth".into();
+        prepared.email = Some(credential.email);
+        prepared.upstream_user_id = Some(credential.user_id);
+        prepared.upstream_account_id = Some(credential.workspace_id);
+        prepared.plan_type = Some(credential.plan_type);
+        prepared.provider_material = command.document;
+        Ok(PreparedCredentialImport {
+            provider_kind: self.kind.clone(),
+            credentials: vec![prepared],
+        })
+    }
+
     async fn start_authorization(
         &self,
         pending: PendingAuthorizationMutation,
@@ -669,6 +698,8 @@ pub(super) struct FakeAccountStore {
         Mutex<Vec<gateway_admin::model::excel_recovery::ExcelRecoveryOutcome>>,
     events: EventLog,
     pub(super) accounts: Mutex<Vec<AccountRecord>>,
+    pub(super) excel_import_targets:
+        Mutex<Vec<Option<gateway_admin::model::accounts::ExcelCredentialImportTarget>>>,
     account_after_probe: Mutex<Option<AccountRecord>>,
     fail_commit: Mutex<bool>,
     pub(super) rotation_updates: Mutex<Vec<AccountRecord>>,
@@ -707,6 +738,7 @@ impl FakeAccountStore {
         Arc::new(Self {
             events,
             accounts: Mutex::new(vec![account]),
+            excel_import_targets: Mutex::default(),
             deletion_library: Mutex::default(),
             recovery_claim: Mutex::default(),
             recovery_current: std::sync::atomic::AtomicBool::new(true),
@@ -1143,6 +1175,91 @@ impl AccountStore for FakeAccountStore {
         let result = self.commit_credential_import(command, context).await?;
         self.accounts.lock().unwrap().extend(additions);
         Ok(result)
+    }
+
+    async fn commit_excel_credential_import(
+        &self,
+        prepared: PreparedCredentialCreate,
+        target: Option<gateway_admin::model::accounts::ExcelCredentialImportTarget>,
+        _settings: Option<gateway_admin::model::accounts::AccountImportSettings>,
+        context: &MutationContext,
+    ) -> AdminStoreResult<gateway_admin::model::accounts::ExcelCredentialImportResult> {
+        self.record("store.commit_excel_import");
+        self.record_context(context);
+        self.require_commit()?;
+        let mut accounts = self.accounts.lock().unwrap();
+        let position = accounts.iter().position(|account| match &target {
+            Some(target) => account.id == target.account_id,
+            None => {
+                account.upstream_user_id == prepared.upstream_user_id
+                    && account.upstream_account_id == prepared.upstream_account_id
+            }
+        });
+        let position = match position {
+            Some(position) => position,
+            None if target.is_some() => {
+                return Err(AdminStoreError::new(
+                    AdminStoreErrorKind::NotFound,
+                    "Excel",
+                    "account missing",
+                ));
+            }
+            None => {
+                let mut account = account_record("openai");
+                account.id = prepared.account_id.to_string();
+                account.authentication_kind = "none".into();
+                account.credential_state = CredentialState::Unknown;
+                account.has_refresh_token = false;
+                account.email = prepared.email.clone();
+                account.upstream_user_id = prepared.upstream_user_id.clone();
+                account.upstream_account_id = prepared.upstream_account_id.clone();
+                accounts.push(account);
+                accounts.len() - 1
+            }
+        };
+        let account = &mut accounts[position];
+        let current = account
+            .excel_credential
+            .as_ref()
+            .map(|excel| excel.revision);
+        let expected = target.as_ref().and_then(|target| target.expected_revision);
+        if current != expected
+            || account.upstream_user_id != prepared.upstream_user_id
+            || account.upstream_account_id != prepared.upstream_account_id
+        {
+            return Err(AdminStoreError::new(
+                AdminStoreErrorKind::Conflict,
+                "Excel",
+                "credential changed",
+            ));
+        }
+        account.excel_credential = Some(gateway_core::account::ExcelCredentialMetadata {
+            revision: gateway_core::account::CredentialRevision::new(
+                current.map_or(1, |value| value.get() + 1),
+            )
+            .unwrap(),
+            state: prepared.credential_state,
+            upstream_user_id: prepared.upstream_user_id.unwrap(),
+            upstream_account_id: prepared.upstream_account_id,
+            email: prepared.email,
+            plan_type: prepared.plan_type,
+            access_token_expires_at: prepared.access_token_expires_at.map(Into::into),
+            has_refresh_token: prepared.has_refresh_token,
+            next_refresh_at: prepared.next_refresh_at.map(Into::into),
+            observed_at: prepared.credential_observed_at.into(),
+            last_error_reason: None,
+            last_error_message: None,
+            suspended: false,
+            refresh_attempted: false,
+            quota: QuotaState::unknown(),
+        });
+        self.excel_import_targets.lock().unwrap().push(target);
+        Ok(
+            gateway_admin::model::accounts::ExcelCredentialImportResult {
+                account: account.clone(),
+                config_revision: revision(2),
+            },
+        )
     }
 
     async fn commit_authorization(
@@ -1651,6 +1768,37 @@ async fn quality_model_suggestions_preserve_exact_account_capabilities_and_bound
 }
 
 #[tokio::test]
+async fn connection_test_rejects_a_changed_openai_entry_before_running() {
+    use gateway_core::account::ResponsesUpstream;
+    for current in [ResponsesUpstream::Codex, ResponsesUpstream::Excel] {
+        let provider = FakeProviderAdmin::new("openai", events());
+        let mut account = account_record("openai");
+        account.responses_upstream = current;
+        let store = FakeAccountStore::with_account(account, events());
+        let services = accounts_service(provider, store).await;
+        let stale = match current {
+            ResponsesUpstream::Codex => ResponsesUpstream::Excel,
+            ResponsesUpstream::Excel => ResponsesUpstream::Codex,
+        };
+        let result = services
+            .accounts()
+            .test_connection(gateway_admin::model::accounts::AccountConnectionTest {
+                account_id: ProviderAccountId::new("acct_test").unwrap(),
+                responses_upstream: Some(stale),
+                upstream_model: UpstreamModelId::new("requested-model").unwrap(),
+                endpoint: gateway_admin::model::accounts::ConnectionTestEndpoint::Responses,
+                input_text: "Keep this prompt".into(),
+                stream: true,
+            })
+            .await;
+        let Err(error) = result else {
+            panic!("a changed entry must reject before probing");
+        };
+        assert_eq!(error.kind(), gateway_admin::model::AdminErrorKind::Conflict);
+    }
+}
+
+#[tokio::test]
 async fn connection_test_preserves_request_settings() {
     let provider = FakeProviderAdmin::new("xai", events());
     let store = FakeAccountStore::with_account(account_record("xai"), events());
@@ -1659,6 +1807,7 @@ async fn connection_test_preserves_request_settings() {
         .accounts()
         .test_connection(gateway_admin::model::accounts::AccountConnectionTest {
             account_id: ProviderAccountId::new("acct_test").expect("id"),
+            responses_upstream: None,
             upstream_model: UpstreamModelId::new("requested-model").expect("model"),
             endpoint: gateway_admin::model::accounts::ConnectionTestEndpoint::Responses,
             input_text: "Keep this prompt".to_owned(),
@@ -1671,6 +1820,13 @@ async fn connection_test_preserves_request_settings() {
     assert!(matches!(&events[1], AccountConnectionTestEvent::Request {
         model, input_text, stream: true, store: false, ..
     } if model == "requested-model" && input_text == "Keep this prompt"));
+    assert!(matches!(
+        &events[0],
+        AccountConnectionTestEvent::Started {
+            responses_upstream: None,
+            ..
+        }
+    ));
     assert!(matches!(
         events.last(),
         Some(AccountConnectionTestEvent::Completed {})
@@ -1695,6 +1851,7 @@ async fn connection_test_should_probe_unavailable_account() {
         .test_connection(gateway_admin::model::accounts::AccountConnectionTest {
             account_id: ProviderAccountId::new("acct_test").expect("account ID"),
             upstream_model: gateway_core::routing::UpstreamModelId::new("grok-4.5").expect("model"),
+            responses_upstream: None,
             endpoint: gateway_admin::model::accounts::ConnectionTestEndpoint::Responses,
             input_text: "Reply with exactly OK.".to_owned(),
             stream: true,
@@ -1736,6 +1893,7 @@ async fn connection_test_rate_limited_probe_returns_provider_failure() {
             account_id: ProviderAccountId::new("acct_test").expect("account ID"),
             upstream_model: gateway_core::routing::UpstreamModelId::new("grok-4.5").expect("model"),
             endpoint: gateway_admin::model::accounts::ConnectionTestEndpoint::Responses,
+            responses_upstream: None,
             input_text: "Reply with exactly OK.".to_owned(),
             stream: true,
         })
@@ -1773,6 +1931,7 @@ async fn connection_test_should_preserve_disabled_account_status() {
             upstream_model: gateway_core::routing::UpstreamModelId::new("grok-4.5").expect("model"),
             endpoint: gateway_admin::model::accounts::ConnectionTestEndpoint::Responses,
             input_text: "Reply with exactly OK.".to_owned(),
+            responses_upstream: None,
             stream: true,
         })
         .await
@@ -1814,7 +1973,7 @@ async fn accounts_export_should_pass_store_loaded_timestamps_and_material_to_pro
 }
 
 #[tokio::test]
-async fn accounts_export_should_include_matching_valid_relogin_material() {
+async fn accounts_export_excludes_password_and_totp_material() {
     let provider = FakeProviderAdmin::new("openai", events());
     let store = FakeAccountStore::new("openai", events());
     let mut account = store.accounts.lock().expect("accounts")[0].clone();
@@ -1847,11 +2006,7 @@ async fn accounts_export_should_include_matching_valid_relogin_material() {
         .await
         .expect("export credentials with relogin material");
 
-    assert_eq!(result.relogin.len(), 1);
-    assert_eq!(result.relogin[0].email, "export@example.invalid");
-    assert_eq!(result.relogin[0].password, "secret-password");
-    assert_eq!(result.relogin[0].mfa_secret, "JBSWY3DPEHPK3PXP");
-    assert!(!format!("{:?}", result.relogin[0]).contains("secret-password"));
+    assert!(result.relogin.is_empty());
 }
 
 #[tokio::test]
@@ -4082,6 +4237,7 @@ fn account_list_query() -> AccountListQuery {
 pub(super) fn account_record(kind: &str) -> AccountRecord {
     let now = Utc::now();
     AccountRecord {
+        excel_credential: None,
         quota_limits: Default::default(),
         quota_paused: Default::default(),
         auto_use_quota_credits: false,

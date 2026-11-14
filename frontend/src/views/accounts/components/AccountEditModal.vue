@@ -11,7 +11,6 @@ import BaseModal from '@/components/base/BaseModal/index.vue'
 import ProviderIconGroup from '@/components/ProviderIconGroup.vue'
 import { t } from '@/i18n'
 import { formatDateTime } from '@/utils/date'
-import { DEFAULT_EXCEL_MODELS_INPUT } from '@/utils/excel-defaults'
 import { excelRecoveryResultLabel } from '@/utils/excel-settings'
 import AccountIdentityCell from './AccountIdentityCell.vue'
 import AccountPlanBadge from './AccountPlanBadge.vue'
@@ -36,8 +35,6 @@ const purchaseAmount = defineModel<string>('purchaseAmount', { default: '' })
 const purchaseCycleStart = defineModel<string>('purchaseCycleStart', { default: '' })
 const enabled = defineModel<boolean>('enabled', { required: true })
 const excelEnabled = defineModel<boolean>('excelEnabled', { default: false })
-const excelModels = defineModel<string>('excelModels', { default: DEFAULT_EXCEL_MODELS_INPUT })
-const excelModelsFollowGlobal = defineModel<boolean>('excelModelsFollowGlobal', { default: true })
 const excelCacheCreationAsInput = defineModel<boolean>('excelCacheCreationAsInput', { default: false })
 const excelIgnoreEncryptedContent = defineModel<boolean>('excelIgnoreEncryptedContent', { default: false })
 const requestProxySource = defineModel<import('@/utils/request-proxy-source').RequestProxySource>('requestProxySource', { default: 'account' })
@@ -68,18 +65,19 @@ async function requestSave() {
   >
     <div v-if="account" class="grid gap-5">
       <div
-        class="flex flex-wrap items-center justify-between gap-4 rounded-cp bg-cp-fill-quaternary px-4 py-3.5"
+        class="flex flex-col items-stretch justify-between gap-3 rounded-cp bg-cp-fill-quaternary px-4 py-3.5 sm:flex-row sm:items-center sm:gap-4"
       >
         <AccountIdentityCell
           class="min-w-0 flex-1"
           :account="account"
           size="lg"
         />
-        <div class="flex shrink-0 items-center gap-3">
+        <div class="flex shrink-0 items-center justify-end gap-3">
           <AccountPlanBadge :plan-type="account.planType" :plan-type-display="account.planTypeDisplay" size="sm" />
           <ProviderIconGroup
             :provider="account.provider"
-            :authentication-kind="account.authenticationKind"
+            :provider-label="account.provider === 'openai' && account.responsesUpstream === 'excel' ? 'Excel' : undefined"
+            :authentication-kind="account.responsesUpstream === 'excel' && account.excelCredential ? 'oauth' : account.authenticationKind === 'none' ? undefined : account.authenticationKind"
           />
         </div>
       </div>
@@ -89,8 +87,6 @@ async function requestSave() {
         v-model:custom-name="customName"
         v-model:enabled="enabled"
         v-model:excel-enabled="excelEnabled"
-        v-model:excel-models="excelModels"
-        v-model:excel-models-follow-global="excelModelsFollowGlobal"
         v-model:excel-cache-creation-as-input="excelCacheCreationAsInput"
         v-model:excel-ignore-encrypted-content="excelIgnoreEncryptedContent"
         v-model:request-proxy-source="requestProxySource"
@@ -109,7 +105,7 @@ async function requestSave() {
         model-access-available
         :groups="groups"
         :groups-loading="groupsLoading"
-        :excel-available="account.provider === 'openai' && account.authenticationKind === 'oauth'"
+        :excel-available="account.provider === 'openai' && ['oauth', 'none'].includes(account.authenticationKind)"
         :request-proxy-available="account.provider === 'openai'"
         :preserve-proxy="false"
         :egress-read-state="egressReadState"
@@ -122,7 +118,7 @@ async function requestSave() {
       <div v-if="account.excelRecovery && account.provider === 'openai'" class="grid gap-1 text-cp-xs text-cp-text-secondary">
         <span>Excel 恢复探测：{{ excelRecoveryResultLabel(account.excelRecovery.lastResult) }}</span>
         <span v-if="account.excelRecovery.lastProbeAt">上次：{{ formatDateTime(account.excelRecovery.lastProbeAt) }} · {{ account.excelRecovery.lastModel }}</span>
-        <span v-if="account.excelRecovery.enabled && !account.enabled && account.responsesUpstream === 'excel'">下次计划：{{ formatDateTime(account.excelRecovery.nextProbeAt) }}（凭据有效时执行，扫描或排队可能延后）</span>
+        <span v-if="account.excelRecovery.enabled && account.enabled && account.excelCredential?.suspended && account.responsesUpstream === 'excel'">下次计划：{{ formatDateTime(account.excelRecovery.nextProbeAt) }}（凭据有效时执行，扫描或排队可能延后）</span>
       </div>
     </div>
 

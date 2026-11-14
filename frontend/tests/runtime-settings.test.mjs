@@ -197,7 +197,7 @@ test('Excel relay requires a public HTTPS origin before settings can be saved', 
   }
 })
 
-test('Excel global defaults fill omission without replacing saved or explicitly empty models', async () => {
+test('Excel legacy global model lists are omitted from new settings writes', async () => {
   for (const models of [undefined, [], ['custom-model'], ['gpt-5.6-sol', 'gpt-6-astra']]) {
     const initial = settings()
     if (models !== undefined)
@@ -205,10 +205,9 @@ test('Excel global defaults fill omission without replacing saved or explicitly 
     const query = mountSettings(initial)
     try {
       await query.state.loadSettings()
-      const expected = models ?? ['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra']
-      assert.equal(query.state.form.excelDefaultModels, expected.join(', '))
+      assert.equal('excelDefaultModels' in query.state.form, false)
       await query.state.saveSettings()
-      assert.deepEqual(query.requests[0].excelDefaultModels, expected)
+      assert.equal('excelDefaultModels' in query.requests[0], false)
     }
     finally {
       query.stop()
@@ -453,24 +452,16 @@ test('smart defaults and drafts are isolated; validation and save reload preserv
   }
 })
 
-test('global Excel defaults roundtrip exact models including explicit empty and reject invalid IDs', async () => {
+test('retired Excel model settings do not block saving shared runtime configuration', async () => {
   const warnings = []
   const query = mountSettings(settings(), message => warnings.push(message))
   try {
     await query.state.loadSettings()
-    assert.equal(query.state.form.excelDefaultModels, 'gpt-6-astra, gpt-5.6-sol, gpt-5.6-terra')
-    query.state.form.excelDefaultModels = 'gpt-6-astra, gpt-6-astra'
-    await query.state.saveSettings()
-    assert.deepEqual(query.requests.at(-1).excelDefaultModels, ['gpt-6-astra'])
     query.state.form.excelDefaultModels = 'invalid/model'
     await query.state.saveSettings()
     assert.equal(query.requests.length, 1)
-    assert.equal(warnings.length, 1)
-    query.state.form.excelDefaultModels = ''
-    await query.state.saveSettings()
-    assert.deepEqual(query.requests.at(-1).excelDefaultModels, [])
-    await query.state.loadSettings()
-    assert.equal(query.state.form.excelDefaultModels, '')
+    assert.equal(warnings.length, 0)
+    assert.equal('excelDefaultModels' in query.requests.at(-1), false)
   }
   finally { query.stop() }
 })
@@ -1013,7 +1004,8 @@ test('Excel controls are isolated and shared retries remain in the common config
   }
   assert.match(page, /v-show="configurationScope === 'common'"/)
   assert.match(page, /v-show="configurationScope === 'excel'"/)
-  assert.equal((page.match(/v-model:models="form\.excelDefaultModels"/g) ?? []).length, 1)
+  assert.doesNotMatch(page, /excelDefaultModels/)
+  assert.doesNotMatch(excel, /Excel 默认模型列表/)
   assert.match(page, /保存全部设置/)
   assert.match(excel, /链接有效期不是模型记忆图片的时长/)
 })

@@ -136,6 +136,7 @@ impl ResponsesUpstream {
 
     #[must_use]
     pub fn supports_account(self, provider: &str, authentication_kind: &str) -> bool {
-        self == Self::Codex || (provider == "openai" && authentication_kind == "oauth")
+        self == Self::Codex
+            || (provider == "openai" && matches!(authentication_kind, "oauth" | "none"))
     }
 }

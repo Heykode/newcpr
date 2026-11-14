@@ -1,5 +1,6 @@
 import type { Ref } from 'vue'
 import type { AccountImportTask, getAccounts } from '@/api'
+import type { CredentialSelection } from '@/api/modules/relogin'
 import type { RequestOptions } from '@/api/request'
 import dayjs from 'dayjs'
 import { onScopeDispose, ref, watch } from 'vue'
@@ -7,10 +8,13 @@ import {
   batchUpdateAccounts,
   deleteAccounts,
   exportAccounts,
+  exportExcelCredential,
   getAccountModelCatalog,
+  getExcelModels,
   recoverAccount,
   refreshAccount,
   refreshAccountQuota,
+  refreshExcelCredential,
   updateAccount,
 } from '@/api'
 import { toast } from '@/components/base/BaseToast'
@@ -49,6 +53,9 @@ export function useAccountMutations(options: {
   }, { flush: 'sync' })
   const showSingleDeleteModal = ref(false)
   const showExportModal = ref(false)
+  const exportCredentialSelection = ref<CredentialSelection>('codex')
+  const exportAccountCount = ref(0)
+  let pendingExportAccounts: AccountRow[] = []
   const pendingDeleteAccount = ref<AccountRow | null>(null)
   const recoveringAccounts = useIdSet<string>()
   const refreshingAccounts = useIdSet<string>()
@@ -160,22 +167,46 @@ export function useAccountMutations(options: {
       toast.warning('请选择要导出的账号')
       return
     }
+    pendingExportAccounts = accountsById(selected).map(account => ({ ...account }))
+    exportAccountCount.value = pendingExportAccounts.length
     showExportModal.value = true
   }
 
   async function confirmExportAccounts() {
     if (exportingAccounts.value)
       return
-    const selected = [...options.selectedIds.value]
+    const selected = pendingExportAccounts
+    const selection = exportCredentialSelection.value
     await exportingAccountsAction.run(
       async () => {
-        const payload = await exportAccounts({
-          accountIds: selected.join(','),
-          confirm: 'export_sensitive_accounts',
-        })
+        const documents: unknown[] = []
+        const failures: string[] = []
+        for (const account of selected) {
+          if (selection !== 'excel' && account.hasCodexCredential !== false) {
+            try {
+              const payload = await exportAccounts({ accountIds: account.id, confirm: 'export_sensitive_accounts' }, { silent: true })
+              if (!payload || typeof payload !== 'object' || !('documents' in payload) || !Array.isArray(payload.documents))
+                throw new Error('凭据导出格式不正确')
+              documents.push(...payload.documents)
+            }
+            catch (error) { failures.push(`${account.email || account.id} Codex：${errorMessage(error)}`) }
+          }
+          if (selection !== 'codex' && account.excelCredential) {
+            try {
+              documents.push(await exportExcelCredential(account.id, { silent: true }))
+            }
+            catch (error) { failures.push(`${account.email || account.id} Excel：${errorMessage(error)}`) }
+          }
+        }
+        if (!documents.length)
+          throw new Error(failures.join('\n') || '所选账号没有对应凭据')
+        const payload = { exportedAt: new Date().toISOString(), documents }
         const fileName = `cpr-accounts-selected-${selected.length}-${dayjs().format('YYYY-MM-DD')}.json`
         await queueDownloadJson(payload, fileName)
-        toast.success(`已导出 ${selected.length} 个账号`)
+        if (failures.length)
+          toast.warning(`已导出可用凭据，${failures.length} 项失败：${failures.join('\n')}`)
+        else
+          toast.success(`已导出 ${documents.length} 份凭据`)
         showExportModal.value = false
       },
       { errorText: '导出失败' },
@@ -183,8 +214,16 @@ export function useAccountMutations(options: {
   }
 
   async function handleRefresh(accountId: string) {
+    const account = options.accounts.value.find(item => item.id === accountId)
+    const excel = account?.responsesUpstream === 'excel'
     await refreshingAccounts.run(accountId, async () => {
       try {
+        if (excel) {
+          await withMinimumDuration(() => refreshExcelCredential(accountId))
+          await loadAccounts()
+          toast.success('Excel 凭据已刷新')
+          return
+        }
         const result = await withMinimumDuration(() =>
           refreshAccount({
             accountId,
@@ -213,6 +252,13 @@ export function useAccountMutations(options: {
       const controller = new AbortController()
       catalogDownloads.set(accountId, controller)
       try {
+        if (account.responsesUpstream === 'excel') {
+          const result = await getExcelModels(accountId, { silent: true, signal: controller.signal })
+          await queueDownloadJson(result, `cpr-excel-model-catalog-${accountId.replace(/[^\w-]/g, '-')}.json`, controller.signal)
+          if (!controller.signal.aborted)
+            toast.success(`已导出 ${result.models.length} 个 Excel 模型`)
+          return
+        }
         const result = await getAccountModelCatalog(
           { accountId },
           { silent: true, signal: controller.signal },
@@ -245,6 +291,10 @@ export function useAccountMutations(options: {
   }
 
   async function handleRefreshQuota(accountId: string) {
+    if (options.accounts.value.find(account => account.id === accountId)?.responsesUpstream === 'excel') {
+      toast.warning('Excel 额度由实际请求更新')
+      return
+    }
     await refreshingQuotaAccounts.run(accountId, async () => {
       try {
         const previous = options.accounts.value.find(account => account.id === accountId)
@@ -283,8 +333,12 @@ export function useAccountMutations(options: {
   }
 
   async function handleToggleExcel(account: AccountRow, enabled: boolean) {
-    if (account.provider !== 'openai' || account.authenticationKind !== 'oauth')
+    if (account.provider !== 'openai' || !['oauth', 'none'].includes(account.authenticationKind))
       return
+    if (enabled && (!account.excelCredential || account.excelCredential.state !== 'ready')) {
+      toast.warning('请先获取有效的 Excel 凭据')
+      return
+    }
     await togglingExcelAccountIds.run(account.id, async () => {
       const responsesUpstream = enabled ? 'excel' : 'codex'
       try {
@@ -292,17 +346,19 @@ export function useAccountMutations(options: {
         const current = options.accounts.value.find(item => item.id === account.id)
         if (current)
           await options.replaceAccount({ ...current, responsesUpstream })
-        toast.success(enabled ? 'Excel 入口已开启' : '已恢复 Codex 入口')
+        toast.success(enabled ? 'Excel 入口已开启' : account.hasCodexCredential === false ? 'Excel 入口已关闭，账号缺少 Codex 凭据' : '已恢复 Codex 入口')
       }
       catch {}
     })
   }
 
   async function handleRecover(accountId: string) {
+    const frozen = options.accounts.value.find(account => account.id === accountId)
+    const credentialTarget = frozen?.responsesUpstream === 'excel' ? 'excel' : 'codex'
     await recoveringAccounts.run(accountId, async () => {
       try {
         const previous = options.accounts.value.find(account => account.id === accountId)
-        const result = await withMinimumDuration(() => recoverAccount({ accountId }))
+        const result = await withMinimumDuration(() => recoverAccount({ accountId, credentialTarget, expectedRevision: frozen?.excelCredential?.revision }))
         const remainsVisible = await options.replaceAccount(result.account, { authoritative: true, previous })
         if (!remainsVisible) {
           const selectedIds = new Set(options.selectedIds.value)
@@ -361,6 +417,8 @@ export function useAccountMutations(options: {
     deletingCount,
     showSingleDeleteModal,
     showExportModal,
+    exportCredentialSelection,
+    exportAccountCount,
     pendingDeleteAccount,
     recoveringAccountIds,
     refreshingAccountIds,

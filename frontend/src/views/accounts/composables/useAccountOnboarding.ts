@@ -3,8 +3,11 @@ import type { AccountImportTask, getAccounts } from '@/api'
 import { computed, onScopeDispose, ref, shallowRef, watch } from 'vue'
 import {
   completeAccountOAuth,
+  completeExcelOAuth,
   createAccountImportTask,
+  importExcelCredential,
   startAccountOAuth,
+  startExcelOAuth,
 } from '@/api'
 import { applyQualityTemplate } from '@/api/modules/quality-ops'
 import { enrollRelogin } from '@/api/modules/relogin'
@@ -21,6 +24,7 @@ type ImportProvider = 'openai' | 'xai'
 
 interface MixedImportDocument {
   provider: ImportProvider
+  credentialTarget?: 'codex' | 'excel'
   document: Record<string, unknown>
 }
 
@@ -42,6 +46,7 @@ export function useAccountOnboarding(options: {
   const createForm = ref(emptyAccountCreateForm())
   let submissionIds: string[] = []
   let submittedBatches = 0
+  let importedExcelEntries = 0
   let oauthExpiryTimer: ReturnType<typeof setTimeout> | undefined
   function clearOAuthExpiry() {
     clearTimeout(oauthExpiryTimer)
@@ -55,6 +60,7 @@ export function useAccountOnboarding(options: {
   function clearSubmission() {
     submissionIds = []
     submittedBatches = 0
+    importedExcelEntries = 0
     submissionKey = undefined
   }
 
@@ -111,9 +117,16 @@ export function useAccountOnboarding(options: {
         const documents = createForm.value.provider === 'batch'
           ? parseMixedImportDocuments(parseImportJson(createForm.value.importTexts.json))
           : accountImportDocuments(requireImportProvider(createForm.value.provider), mode, createForm.value.importTexts[mode])
-        const entries = documents.flatMap(splitAccountDocuments)
+        const entries = documents.flatMap(splitAccountDocuments).map(entry => ({
+          ...entry,
+          credentialTarget: entry.credentialTarget ?? (entry.provider === 'openai' ? createForm.value.credentialTarget : 'codex'),
+        }))
+        const existingAccount = reauthorizingAccount.value
+        if (existingAccount && (entries.length !== 1 || entries[0]?.credentialTarget !== 'excel'))
+          throw new Error('请导入当前账号的一份 Excel 凭据')
         const items = entries.map(entry => ({
           provider: entry.provider,
+          credentialTarget: entry.credentialTarget,
           data: entry.document,
           ...(createForm.value.importTemplate ? { template: accountImportTemplate(createForm.value, entry.provider), templateSettingsOverride: true } : {}),
           ...(createForm.value.qualityTemplate ? { qualityTemplate: accountImportQualityTemplate(createForm.value) } : {}),
@@ -123,11 +136,26 @@ export function useAccountOnboarding(options: {
         const encoded = JSON.stringify(items, (_key, value: unknown) => isRecord(value)
           ? Object.fromEntries(Object.keys(value).sort().map(key => [key, value[key]]))
           : value)
-        const batches = accountImportBatches<typeof items[number]>(JSON.parse(encoded))
+        const codexItems = items.filter(item => item.credentialTarget !== 'excel').map(({ credentialTarget: _target, ...item }) => item)
+        const excelItems = items.filter(item => item.credentialTarget === 'excel')
+        const batches = accountImportBatches(codexItems)
         if (submissionKey !== encoded) {
           submissionIds = batches.map(() => generateSubmissionId())
           submittedBatches = 0
+          importedExcelEntries = 0
           submissionKey = encoded
+        }
+        // Keep accepted Excel items out of retries when a later item or task fails.
+        for (let index = importedExcelEntries; index < excelItems.length; index++) {
+          const item = excelItems[index]!
+          await importExcelCredential({
+            data: item.data,
+            ...(existingAccount
+              ? { accountId: existingAccount.id, expectedRevision: existingAccount.excelCredential?.revision }
+              : { settings: item.settings, outboundProxyId: item.outboundProxyId }),
+          })
+          if (submissionKey === encoded)
+            importedExcelEntries = index + 1
         }
         // Preserve IDs and successful progress if a later submission needs retrying.
         const batchIds = submissionIds
@@ -141,7 +169,9 @@ export function useAccountOnboarding(options: {
         showCreateModal.value = false
         if (lastTask)
           options.onImportTaskCreated(lastTask)
-        toast.success('导入任务已创建')
+        if (excelItems.length)
+          await options.reload()
+        toast.success(existingAccount ? 'Excel 凭据已更新' : excelItems.length ? `已导入 ${excelItems.length} 份 Excel 凭据${lastTask ? '，其他凭据导入任务已创建' : ''}` : '导入任务已创建')
       },
     )
   }
@@ -157,7 +187,8 @@ export function useAccountOnboarding(options: {
         const proxyError = accountProxyError(createForm.value)
         if (!account && proxyError)
           throw new Error(proxyError)
-        const result = await startAccountOAuth({
+        const start = createForm.value.provider === 'openai' && createForm.value.credentialTarget === 'excel' ? startExcelOAuth : startAccountOAuth
+        const result = await start({
           ...input,
           outboundProxyId: !account && createForm.value.proxyMode === 'proxy' ? createForm.value.proxyId.trim() : undefined,
           ...(account
@@ -200,14 +231,22 @@ export function useAccountOnboarding(options: {
             ? '请粘贴 OAuth 回调地址、含 code 和 state 的查询字符串或授权码'
             : '请粘贴 OAuth 回调地址')
         }
-        const result = await completeAccountOAuth({
+        const excel = createForm.value.provider === 'openai' && createForm.value.credentialTarget === 'excel'
+        const command = {
           provider: createForm.value.provider,
           flowId: createForm.value.oauthFlowId,
           callbackUrl,
           settings: reauthorizingAccount.value ? undefined : accountImportSettings(createForm.value),
-        })
-        let templateWarning = ''
-        if (!reauthorizingAccount.value && createForm.value.qualityTemplate) {
+        }
+        const result = excel
+          ? await completeExcelOAuth({ flowId: command.flowId, callbackUrl: command.callbackUrl, settings: command.settings }).then(result => ({ accountId: result.accountIds[0] }))
+          : await completeAccountOAuth(command)
+        if (!result.accountId)
+          throw new Error('授权返回缺少账号标识')
+        let templateWarning = !reauthorizingAccount.value && excel && createForm.value.qualityTemplate
+          ? 'Excel 凭据已保存；监测模板请在账号保存后单独设置'
+          : ''
+        if (!reauthorizingAccount.value && !excel && createForm.value.qualityTemplate) {
           try {
             const template = createForm.value.qualityTemplate
             const applied = await applyQualityTemplate({
@@ -224,10 +263,12 @@ export function useAccountOnboarding(options: {
         }
         await finishCreate(
           reauthorizingAccount.value
-            ? '账号重新授权成功'
-            : createForm.value.provider === 'xai'
-              ? 'xAI OAuth 账号已添加'
-              : 'OpenAI OAuth 账号已添加',
+            ? `${excel ? 'Excel' : createForm.value.provider === 'openai' ? 'Codex' : 'xAI'} 凭据已更新`
+            : excel
+              ? 'Excel 凭据已保存'
+              : createForm.value.provider === 'xai'
+                ? 'xAI OAuth 账号已添加'
+                : 'OpenAI OAuth 账号已添加',
           templateWarning,
         )
       },
@@ -241,7 +282,7 @@ export function useAccountOnboarding(options: {
     showCreateModal.value = true
   }
 
-  function openReauthorizeAccount(account: AccountRow) {
+  function openReauthorizeAccount(account: AccountRow, credentialTarget: 'codex' | 'excel' = account.responsesUpstream === 'excel' ? 'excel' : 'codex') {
     if (account.provider !== 'openai' && account.provider !== 'xai')
       return
     clearSubmission()
@@ -251,6 +292,7 @@ export function useAccountOnboarding(options: {
       provider: account.provider,
       step: 'import',
       mode: 'oauth',
+      credentialTarget: account.provider === 'openai' ? credentialTarget : 'codex',
     }
     showCreateModal.value = true
     void handleAuthorizeOAuth()
@@ -284,6 +326,7 @@ export function useAccountOnboarding(options: {
             ? 'direct'
             : createForm.value.proxyMode,
         mode: createForm.value.provider === 'batch' ? 'json' : 'oauth',
+        credentialTarget: provider === 'openai' ? createForm.value.credentialTarget : 'codex',
         importTexts: { access_token: '', refresh_token: '', json: '', two_fa: '' },
         replaceExisting2fa: false,
         oauthFlowId: '',
@@ -298,11 +341,16 @@ export function useAccountOnboarding(options: {
     [
       () => createForm.value.proxyMode,
       () => createForm.value.proxyMode === 'proxy' ? createForm.value.proxyId.trim() : '',
+      () => createForm.value.credentialTarget,
     ],
     () => {
       createForm.value.oauthFlowId = ''
       createForm.value.oauthAuthUrl = ''
       createForm.value.oauthCallback = ''
+      if (createForm.value.credentialTarget === 'excel' && !['oauth', 'json'].includes(createForm.value.mode))
+        createForm.value.mode = 'oauth'
+      if (reauthorizingAccount.value && createForm.value.credentialTarget !== 'excel')
+        createForm.value.mode = 'oauth'
     },
     { flush: 'sync' },
   )
@@ -389,7 +437,12 @@ function providerImportDocuments(value: unknown, provider: ImportProvider): Mixe
   }
   if (!isRecord(value))
     throw new Error('导入文件必须是 JSON object')
-  return [{ provider, document: value }]
+  if (isSupportedProvider(value.provider) && isRecord(value.document)) {
+    if (value.provider !== provider)
+      throw new Error('导入文件的平台与当前选择不一致')
+    return [typedImportDocument(provider, value.document, value.credentialTarget)]
+  }
+  return [typedImportDocument(provider, value)]
 }
 
 function parseMixedImportDocuments(value: unknown): MixedImportDocument[] {
@@ -405,10 +458,25 @@ function parseMixedImportDocuments(value: unknown): MixedImportDocument[] {
       throw new Error('批量导入文件包含无效的 Provider 文档')
     if (!isRecord(entry.document))
       throw new Error('批量导入文件包含无效的 Provider 文档')
-    documents.push({ provider, document: entry.document })
+    documents.push(typedImportDocument(provider, entry.document, entry.credentialTarget))
   }
 
   if (documents.length === 0)
     throw new Error('批量文件没有可导入的账号文档')
   return documents
+}
+
+function typedImportDocument(provider: ImportProvider, document: Record<string, unknown>, target?: unknown): MixedImportDocument {
+  if (target !== undefined && target !== 'codex' && target !== 'excel')
+    throw new Error('导入文件包含无效的凭据类型')
+  const excelDocument = document.type === 'cpa-bps' || document.type === 'excel'
+  const codexDocument = document.type === 'codex'
+  if (target === 'codex' && excelDocument)
+    throw new Error('Excel 凭据不能标记为 Codex')
+  if (target === 'excel' && codexDocument)
+    throw new Error('Codex 凭据不能标记为 Excel')
+  const credentialTarget = excelDocument ? 'excel' : codexDocument ? 'codex' : target
+  if (credentialTarget === 'excel' && provider !== 'openai')
+    throw new Error('Excel 凭据仅支持 OpenAI 账号')
+  return { provider, document, ...(credentialTarget ? { credentialTarget } : {}) }
 }

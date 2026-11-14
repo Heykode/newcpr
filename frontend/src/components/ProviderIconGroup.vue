@@ -6,6 +6,7 @@ import { formatProviderLabel } from '@/utils/providers'
 const props = withDefaults(
   defineProps<{
     provider?: string | null
+    providerLabel?: string
     authenticationKind?: string | null
     size?: 'xs' | 'sm' | 'md'
   }>(),
@@ -33,7 +34,7 @@ const iconClass = computed(() => {
   return props.size === 'sm' ? 'size-3' : 'size-4'
 })
 
-const providerLabel = computed(() => formatProviderLabel(props.provider, '未知平台'))
+const providerLabel = computed(() => props.providerLabel || formatProviderLabel(props.provider, '未知平台'))
 
 const authenticationLabel = computed(() => {
   if (normalizedAuthenticationKind.value === 'oauth')
