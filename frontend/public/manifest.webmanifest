@@ -1,0 +1,15 @@
+{
+  "id": "/",
+  "name": "NewCPR",
+  "short_name": "NewCPR",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}

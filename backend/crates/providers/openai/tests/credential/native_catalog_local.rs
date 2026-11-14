@@ -72,6 +72,7 @@ fn service_with_profile(
             .expect("client"),
         url,
         catalog_cache(),
+        crate::support::runtime_policy(),
     )
 }
 
@@ -250,7 +251,7 @@ async fn catalog_switch_uses_the_selected_credential_and_keeps_native_descriptor
 }
 
 #[tokio::test]
-async fn background_catalog_refresh_freezes_effective_profile_and_preserves_installation_id() {
+async fn background_catalog_refresh_freezes_effective_profile_without_installation_header() {
     let store = Arc::new(MemoryAccountStore::default());
     let account = seed_account(&store, "acct_profile_catalog").await;
     let installation_id = store
@@ -314,7 +315,16 @@ async fn background_catalog_refresh_freezes_effective_profile_and_preserves_inst
         assert_eq!(request.headers["user-agent"], expected.user_agent());
         assert_eq!(request.headers["version"], expected.codex_version);
         assert_eq!(request.headers["originator"], expected.originator);
-        assert_eq!(request.headers["x-codex-installation-id"], installation_id);
+        assert!(!request.headers.contains_key("x-codex-installation-id"));
+        assert_eq!(
+            store
+                .repository()
+                .load_runtime_credential(&account)
+                .await
+                .unwrap()
+                .installation_id,
+            installation_id
+        );
         assert_eq!(
             request.headers["authorization"],
             "Bearer access-acct_profile_catalog"
@@ -426,7 +436,16 @@ async fn account_catalog_export_freezes_current_profile_and_keeps_custom_selecti
             request.headers["chatgpt-account-id"],
             "chatgpt-acct_export_profile"
         );
-        assert_eq!(request.headers["x-codex-installation-id"], installation_id);
+        assert!(!request.headers.contains_key("x-codex-installation-id"));
+        assert_eq!(
+            store
+                .repository()
+                .load_runtime_credential(&account)
+                .await
+                .unwrap()
+                .installation_id,
+            installation_id
+        );
     }
     server.verify().await;
 }

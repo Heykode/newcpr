@@ -65,3 +65,48 @@ async fn retention_cycle_should_stop_at_the_batch_budget() {
     assert_eq!(remaining, 3);
     database.close().await;
 }
+
+#[tokio::test]
+async fn positive_retention_cleans_only_expired_records_without_date_overflow() {
+    let Some(database) = TestDatabase::create("retention_positive_days").await else {
+        return;
+    };
+    let now = Utc::now();
+    for (id, age) in [("old", 400), ("month", 40), ("recent", 1)] {
+        let at = now - ChronoDuration::days(age);
+        sqlx::query("insert into model_requests (
+            id,client_api_key_ref,config_revision,protocol,operation,endpoint,client_transport,
+            outcome,client_status_code,started_at,deadline_at,completed_at,downstream_committed_at,routing_scope
+        ) values ($1,'fixture-key',1,'openai','responses','/v1/responses','http_sse',
+            'succeeded',200,$2,$2,$2,$2,'all')")
+            .bind(id).bind(at).execute(&database.pool).await.unwrap();
+    }
+    let repository = PgRetentionRepository::new(database.pool.clone());
+    for (days, expected_deleted) in [
+        (u32::MAX, 0),
+        (10_000_000, 0),
+        (3651, 0),
+        (365, 1),
+        (32, 1),
+        (1, 0),
+    ] {
+        let report = repository
+            .apply_retention(
+                now,
+                RuntimeRetentionSettings {
+                    usage_retention_days: days,
+                    ops_event_retention_days: days,
+                    audit_retention_days: days,
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(report.model_requests, expected_deleted, "days={days}");
+    }
+    let remaining: Vec<String> = sqlx::query_scalar("select id from model_requests order by id")
+        .fetch_all(&database.pool)
+        .await
+        .unwrap();
+    assert_eq!(remaining, ["recent"]);
+    database.close().await;
+}

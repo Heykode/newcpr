@@ -11,7 +11,7 @@ separate from local synthetic tests.
 ## 2. Signatures
 
 - `CredentialTarget::{Codex, Excel}` and `CredentialSelection::{Codex, Excel, All}`.
-- Migration `0091_openai_excel_credentials.sql` adds `openai_excel_credentials`.
+- Migration `0092_openai_excel_credentials.sql` adds `openai_excel_credentials`.
   Keep applied migrations and their frozen hashes unchanged.
 - `POST /api/admin/accounts/excel/import`: `data`, optional `accountId`,
   `expectedRevision`, `outboundProxyId`, `settings`; returns `accountIds` and

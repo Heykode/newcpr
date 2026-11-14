@@ -189,6 +189,7 @@ fn selector_with_runtime(
         http,
         OFFICIAL_CODEX_BASE_URL.to_owned(),
         catalog_cache(),
+        crate::support::runtime_policy(),
     ));
     CodexCredentialSelector::new(
         ProviderKind::new("openai").expect("provider"),

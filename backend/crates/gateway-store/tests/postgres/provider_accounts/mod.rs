@@ -1799,6 +1799,53 @@ async fn terminal_admin_list_filters_and_sorts_before_pagination_with_retained_u
         ["acct_charlie", "acct_beta"]
     );
 
+    // The retained usage sort must accept the entire public u32 day domain.
+    for (days, expected_first) in [
+        (1_i64, "acct_charlie"),
+        (3651, "acct_beta"),
+        (10_000_000, "acct_beta"),
+        (i64::from(u32::MAX), "acct_beta"),
+    ] {
+        sqlx::query("update runtime_settings set usage_retention_days=$1")
+            .bind(days)
+            .execute(&database.pool)
+            .await
+            .unwrap();
+        for field in [AccountSortField::Usage, AccountSortField::LastUsedAt] {
+            let page = store
+                .list_accounts(
+                    AccountListQuery {
+                        page: 1,
+                        page_size: PageSize::new(2).unwrap(),
+                        provider_kind: None,
+                        group_filter: None,
+                        search: None,
+                        status: None,
+                        plan_type: None,
+                        sort: Some(AccountSort {
+                            field,
+                            direction: SortDirection::Desc,
+                        }),
+                    },
+                    Default::default(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                page.items[0].account.id.as_str(),
+                if field == AccountSortField::Usage {
+                    expected_first
+                } else {
+                    "acct_beta"
+                }
+            );
+        }
+    }
+    sqlx::query("update runtime_settings set usage_retention_days=31")
+        .execute(&database.pool)
+        .await
+        .unwrap();
+
     let last_used_page = store
         .list_accounts(
             AccountListQuery {

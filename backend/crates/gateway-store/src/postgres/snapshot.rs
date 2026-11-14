@@ -21,6 +21,8 @@ use super::ClientApiKeySnapshot;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SnapshotRuntimeSettings {
+    pub request_profiles:
+        BTreeMap<gateway_core::routing::ProviderKind, gateway_core::account::OpaqueProviderData>,
     pub responses_max_decompressed_body_bytes: u64,
     pub openai_account_affinity: gateway_core::account::AccountAffinity,
     pub codex_quota_overdraft_enabled: bool,
@@ -162,6 +164,7 @@ impl SnapshotStorePort for PgRuntimeSnapshotRepository {
                 data.settings.min_codex_desktop_version,
                 data.settings.min_codex_cli_version,
             )
+            .with_request_profiles(data.settings.request_profiles)
             .with_responses_max_decompressed_body_bytes(
                 data.settings.responses_max_decompressed_body_bytes,
             )
@@ -362,6 +365,8 @@ async fn load_settings(
 ) -> StoreResult<(Revision, SnapshotRuntimeSettings)> {
     #[derive(sqlx::FromRow)]
     struct SettingsRow {
+        request_profiles:
+            sqlx::types::Json<BTreeMap<String, serde_json::Map<String, serde_json::Value>>>,
         config_revision: i64,
         refresh_margin_seconds: i64,
         refresh_concurrency: i64,
@@ -380,7 +385,8 @@ async fn load_settings(
         codex_quota_overdraft_probe_model: String,
     }
     let row = sqlx::query_as::<_, SettingsRow>(
-        "select config_revision, refresh_margin_seconds, refresh_concurrency,
+        "select coalesce((select jsonb_object_agg(provider_kind, configuration_json) from provider_outbound_user_agents where mode = 'configuration'), '{}'::jsonb) as request_profiles,
+                config_revision, refresh_margin_seconds, refresh_concurrency,
                 max_concurrent_per_account, request_interval_ms, rotation_strategy,
                 model_mappings_json, min_codex_desktop_version,
                 min_codex_cli_version, request_tuning_json,
@@ -399,6 +405,7 @@ async fn load_settings(
     Ok((
         revision_from_i64(row.config_revision)?,
         SnapshotRuntimeSettings {
+            request_profiles: super::client_keys::decode_request_profiles(row.request_profiles.0)?,
             openai_account_affinity: gateway_core::account::AccountAffinity::parse(
                 &row.openai_account_affinity,
             )

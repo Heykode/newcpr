@@ -2118,6 +2118,11 @@ fn map_quota_error(error: CodexCredentialQuotaError) -> ProviderAdminError {
     use CodexCredentialQuotaError as Error;
     use ProviderAdminErrorKind as Kind;
     let (kind, public_message, upstream_message) = match error {
+        Error::Profile(source) => {
+            return provider_admin_error(Kind::Unavailable)
+                .with_public_message("OpenAI 账号预热客户端身份不可用")
+                .with_source(source);
+        }
         Error::InvalidCredentialData => (
             Kind::Invalid,
             "OpenAI 额度查询凭据无效，请检查账号授权",
@@ -2286,6 +2291,11 @@ fn map_catalog_error(error: CodexCredentialCatalogError) -> ProviderAdminError {
         Error::InvalidEtag => (Kind::Invalid, "OpenAI 模型目录版本标识无效，请重新查询"),
         Error::NoEligibleCredential => (Kind::NotFound, "没有可用于查询 OpenAI 模型的账号"),
         Error::ConcurrentUpdate => (Kind::Conflict, "OpenAI 模型目录正在更新，请稍后重试"),
+        Error::Profile(source) => {
+            return provider_admin_error(Kind::Unavailable)
+                .with_public_message("OpenAI 模型查询的客户端画像不可用，请检查全局客户端配置")
+                .with_source(source);
+        }
         Error::Cache => (Kind::Unavailable, "OpenAI 模型目录缓存暂不可用"),
         Error::Upstream { status, .. } => {
             let message = match status {

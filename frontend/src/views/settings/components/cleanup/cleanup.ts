@@ -1,7 +1,7 @@
 import type { CleanupCategory, CleanupConfig } from '@/api/modules/log-cleanup'
 
 export const cleanupCategories: { key: CleanupCategory, label: string, min: number, max: number }[] = [
-  { key: 'requests', label: '请求日志（含索引）', min: 1, max: 3650 },
+  { key: 'requests', label: '请求日志（含索引）', min: 1, max: 0xFFFF_FFFF },
   { key: 'files', label: '运行日志', min: 1, max: 3650 },
   { key: 'captures', label: '错误采集记录', min: 1, max: 30 },
   { key: 'audit', label: '管理员操作日志', min: 1, max: 3650 },
@@ -14,8 +14,9 @@ export function cleanupBytes(bytes: number | null | undefined): string {
   const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1000)), 4)
   return `${(bytes / (1000 ** index)).toFixed(2)} ${['B', 'KB', 'MB', 'GB', 'TB'][index]}`
 }
-export function cleanupCutoff(at: string, days: number): string {
-  return new Date(new Date(at).getTime() - days * 86400000).toISOString()
+export function cleanupCutoff(at: string, days: number): string | null {
+  const cutoff = new Date(new Date(at).getTime() - days * 86400000)
+  return Number.isFinite(cutoff.getTime()) ? cutoff.toISOString() : null
 }
 export function cleanupValidation(config: CleanupConfig): string {
   if (!cleanupCategories.some(({ key }) => config[key].selected))

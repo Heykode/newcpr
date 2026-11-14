@@ -207,7 +207,7 @@ async fn direct_http_accounts_share_the_pool_without_sharing_request_headers() {
             headers["x-codex-turn-state"],
             format!("synthetic-state-{id}")
         );
-        assert_eq!(headers["x-codex-installation-id"], id);
+        assert!(!headers.contains_key("x-codex-installation-id"));
     }
     let last = &connection_ids[3].1;
     assert_eq!(last["chatgpt-account-id"], "direct-b");
@@ -768,13 +768,20 @@ async fn runtime_teardown_case(shared_account: bool) {
         .unwrap()
         .unwrap();
     let client = build_account_http_client(&account_b, None, "runtime-fixture").unwrap();
-    let mut response = timeout(
-        Duration::from_secs(5),
-        client.get(format!("{url}/stream")).send(),
-    )
+    let mut response = timeout(Duration::from_secs(5), async {
+        loop {
+            let response = client.get(format!("{url}/stream")).send().await.unwrap();
+            if !shared_account || response.headers()["x-test-connection"] == warm_connection {
+                break response;
+            }
+            // Reading the warm body does not await the pool's asynchronous return.
+            // Discard cold connections until the shared-runtime precondition is observed.
+            drop(response);
+            tokio::task::yield_now().await;
+        }
+    })
     .await
-    .unwrap()
-    .unwrap();
+    .expect("the shared test client must reuse the warmed connection before runtime teardown");
     assert_eq!(
         response.headers()["x-test-connection"] == warm_connection,
         shared_account

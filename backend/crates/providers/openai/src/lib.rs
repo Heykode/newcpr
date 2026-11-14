@@ -194,6 +194,7 @@ async fn initialize_with_request_tuning_mode(
         http.clone(),
         config.base_url().to_owned(),
         ports.catalog_cache(),
+        Arc::clone(&runtime_policy),
     );
     let catalog = Arc::new(match &egress_runtime {
         Some(runtime) => catalog.with_egress_runtime(Arc::clone(runtime)),

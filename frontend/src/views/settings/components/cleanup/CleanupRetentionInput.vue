@@ -22,7 +22,7 @@ const days = computed({
 
 <template>
   <div role="group" :aria-label="`${label}保留设置`" class="grid min-w-0 justify-items-start gap-3">
-    <BaseNumberInput v-model="days" :label="`${label}保留天数`" unit="天" :min="1" :max="max" :disabled="disabled || all" class="max-w-full" />
+    <BaseNumberInput v-model="days" :label="`${label}保留天数`" unit="天" :min="1" :max="max" :disabled="disabled || all" :size="max > 3650 ? 'md' : 'sm'" :class="max > 3650 ? 'w-44 max-w-full' : 'max-w-full'" />
     <BaseCheckbox v-model="all" label="全部清理" show-label :disabled="disabled" />
   </div>
 </template>

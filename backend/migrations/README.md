@@ -30,6 +30,17 @@ sha256sum --check --strict .frozen-sha256
 CI 还会检查是否遗漏新 SQL 文件，并在 PR 中检查清单只增不改。
 遇到 checksum 不一致，先核对运行版本和文件来源；不要修改数据库中的 checksum 来绕过校验。
 
+## Excel 独立凭据迁移
+
+主线永久保留 `0091_usage_retention_days.sql`；Excel 独立凭据使用
+`0092_openai_excel_credentials.sql`，其 SQL 字节与已部署开发分支原 `0091` 完全一致。
+新库和原主线库依次执行 retention 91、Excel 92。
+
+迁移执行器保持主线行为，不按运行中数据库猜测或切换迁移顺序。已运行开发分支
+Excel `0091` 的数据库与主线 `0091` checksum 不同，不能直接使用此版本启动或升级。
+该实例需要单独审查其真实来源 schema 和数据迁移计划；不得改写迁移台账或 checksum
+绕过校验，也不得把主线合并当作已授权执行数据库升级。
+
 ## 亲和模式升级兼容
 
 `0068_preferred_account_affinity.sql` 仅扩大亲和模式的允许值，保留现有
@@ -99,3 +110,8 @@ export CPR_TEST_REDIS_URL='redis://:<password>@127.0.0.1:6379'
 `0087_account_relogin_history.sql` 新增逐次重登历史表，与资料表通过外键关联，删除资料
 时级联删除历史；不回填旧尝试，不改变号池成功次数、身份或调度。业务备份自动包含此表。
 旧二进制不记录此历史；部署和回退遵循迁移感知流程，不删除历史表来绕过升级校验。
+
+`0091_usage_retention_days.sql` 放宽 runtime usage/ops/audit 窗口为正数，不改旧迁移。
+已有清理配置为 1..30 天时同步 usage/ops 窗口并推进配置版本；0 全清、31 天以上及
+其他已保存设置保留。迁移本身不删除历史。旧二进制拒绝小于 31 天的 runtime usage
+窗口，不能在采用短窗口后直接回滚旧镜像；发布必须使用审核后的迁移感知部署方案。

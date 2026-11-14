@@ -175,7 +175,7 @@ only when that cleanup future finishes.
 
 ### 1. 范围与触发条件
 
-迁移 `0091_openai_excel_credentials.sql` 为同一 OpenAI 用户和 workspace
+迁移 `0092_openai_excel_credentials.sql` 为同一 OpenAI 用户和 workspace
 增加独立 Excel 凭据。账号代理、模型访问策略、分组、权重和并发仍由
 `provider_accounts` 统一管理。不得把 Codex token 复制成 Excel token。
 

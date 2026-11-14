@@ -692,6 +692,14 @@ async fn group_costs(
     let statement = format!(
         "with requested_groups(group_id) as (
            select unnest($1::text[])
+         ), retained as (
+           select case when usage_retention_days::numeric * 86400 >= extract(epoch from (now() - earliest.started_at))
+                       then earliest.started_at
+                       else now() - make_interval(secs => usage_retention_days::double precision * 86400)
+                  end as usage_start
+             from runtime_settings
+             cross join (select least((select started_at from model_requests order by started_at, id limit 1), now()) as started_at) earliest
+            where id = 1
          )
          select requested_groups.group_id,
                 coalesce(sum(mr.cost_amount) filter (
@@ -700,18 +708,17 @@ async fn group_costs(
                 ), 0)::text as today_usd,
                 coalesce(sum(mr.cost_amount), 0)::text as retained_total_usd
          from requested_groups
-         cross join runtime_settings settings
+         cross join retained
          left join model_requests mr
            on exists (
              select 1 from account_group_accounts membership
               where membership.account_group_id = requested_groups.group_id
                 and membership.provider_account_id = mr.provider_account_ref
            )
-          and mr.started_at >= now() - make_interval(days => settings.usage_retention_days::int)
+          and mr.started_at >= retained.usage_start
           and {completed_usage}
           and mr.cost_currency = 'USD'
           and mr.cost_amount is not null
-         where settings.id = 1
          group by requested_groups.group_id"
     );
     // 动态片段仅为共享的固定 usage-fact predicate；group IDs 仍使用 bind。

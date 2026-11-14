@@ -2,7 +2,7 @@
 
 ## 来源与调用路径
 
-固定参考为官方 v3.47.0 `e1f84c210b5bc7423cec011a65e0fc2310e24aad`。
+固定参考为官方 v3.48.0 `975b73b33b6d247fbe08a9a23e88066467e71d7a`。
 `GET /v1/models?client_version=...` → `ExecutionService::client_model_catalog` →
 `CodexCredentialCatalogService::client_model_catalog`，只读已发布快照和本地账号事实。
 后台 `restore` / `refresh_catalogs` 负责持久目录恢复、发现与发布。
@@ -33,25 +33,30 @@
 
 ## 本地必要接入
 
-- 获取目录仍使用选中账号已有 installation ID、冻结 effective profile、代理、CA 和 IPv6；
-  活动 IPv6 失败不能偷偷走 IPv4。网络/客户端画像不再成为模型权限缓存维度。
-- Excel 配置模型作为独立 adapter 来源，scope 额外包含 Excel 模型配置。
-  原生 marker 0 文档与纯 Excel marker 3 文档分开；合成模型不能成为原生账号权限证据。
-  混合目录依据原始文档的 native IDs 检查原生资格，不能因为含 Excel 模型而跳过检查。
-  混合文档 hash 含 adapter 内容，因此遗漏筛选用内存检查，不错误套用原生 DB hash 下推。
+- 每轮目录刷新、单账号刷新及管理员导出从 runtime policy 读取当前全局客户端画像并冻结整套身份；
+  使用选中账号凭据、代理、CA 和 IPv6，活动 IPv6 失败不能偷偷走 IPv4。
+  目录请求保留 `version`、`originator` 和匹配的 `client_version`，不发送安装标识头。
+  网络/客户端画像不成为模型权限缓存维度。
+- 本地配置源为 `provider_outbound_user_agents.configuration_json`，只读取 configuration 模式；
+  旧 default/custom/custom-auto-version 沿当前已发布画像。读取/解析失败返回错误，不回退成伪默认。
+  预热复用相同全局选择；诊断从 Core 的配置快照冻结全局画像，不读取任意 Client Key 画像。
+- Excel 目录使用独立 BPS 凭据查询实际 access/models，不再从旧 Excel 静态模型配置合成权限。
+  scope 使用投影后的 Excel 凭据版本、套餐和 `excel-independent-v1` adapter 标识。
+  Excel 成功目录只进入自己的内存/短期缓存，不写入 Codex 的持久目录事实；失败不能回退到
+  Codex 凭据或旧静态模型。原生目录保留自己的账号、凭据版本和套餐权限筛选。
 - Excel 多代理能力按当前授权、启用、实际 Excel 路由和模型政策，显式将对应型号的
   `multi_agent_version`、`multi_agent_reasoning_effort` 设为 null；不得扩展到范围外模型。
   查询仅重读缓存索引中的 Excel 账号；删除账号即使索引尚未刷新，也因账号不存在被排除。
 - Core 继续保留已知 Provider 归属、模型映射、权限、能力及强制/排除 Provider。
   未知模型仅有唯一合格非完整目录 Provider 时可透传，多候选不能猜测。
-  原生 Codex 不接受 Grok；按请求模型实际走 Excel 的路径保留其既有合同。
+  原生 Codex 不接受 Grok；账号入口开关冻结 Excel 路由后，只接受其实际目录与共享模型策略的交集。
 - 新模型发现、上游透传和本地价格独立；不以缺少定价认定请求不支持。
 - 管理端观察时间来自实际成功目录；无时间返回 null，不把读取缓存当作新观测。
 
 ## 验证
 
 官方账号级并集、身份/套餐变化、候选替补、启动持久恢复、并发发布、万账号恢复与遗漏筛选；
-本地代理/IPv6/installation、Excel 混合目录、未知套餐自身权限、排队提升前重查、管理员导出。
+本地代理/IPv6/installation、Excel 独立目录、未知套餐自身权限、排队提升前重查、管理员导出。
 API 同时验证普通 OpenAI 列表、Codex 目录和显式 Anthropic 头下的分页/详情。
 不把 mock 上游通过写成真实上游或生产验收。
 
@@ -71,9 +76,9 @@ API 同时验证普通 OpenAI 列表、Codex 目录和显式 Anthropic 头下的
 
 ### Contracts
 
-只加载指定账号的凭据，允许显式指定已停用账号但不启用它。冻结当前 effective
+只加载指定账号的凭据，允许显式指定已停用账号但不启用它。从持久化全局选择冻结
 profile，保留原账号代理、IPv6、CA 和 15 秒超时。不得读取其他账号补结果、
-回退套餐缓存、发布全局目录或生成模型调用。安装号头遵循既有共享构建器合同，固定使用选中账号的持久身份。
+回退套餐缓存、发布全局目录或生成模型调用。目录不发送安装标识头；读取目录不改写账号的持久设备身份。
 保留原生对象未知字段、null、嵌套结构和模型数组顺序。
 
 ### Validation & Error Matrix

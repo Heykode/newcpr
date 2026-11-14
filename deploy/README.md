@@ -71,6 +71,17 @@ UID/GID 和 mode，因此配置由当前用户持有，并只向容器组 `10001
 
 ## 启动
 
+### 安装管理端应用
+
+使用 Chrome、Edge 等支持 PWA 的浏览器访问管理端，可通过地址栏或浏览器菜单安装
+NewCPR，之后以独立窗口打开首页，沿用现有登录流程。
+
+安装要求 HTTPS，或本机的 `http://localhost`、`http://127.0.0.1`；普通 HTTP 局域网
+地址不满足条件。入口是否出现还取决于浏览器、访问交互及是否已安装。应用仍需联网
+访问网关，不提供离线使用，也不新增业务请求缓存。
+
+### 启动服务
+
 ```bash
 docker compose -f deploy/compose.yaml config --quiet
 docker compose -f deploy/compose.yaml pull

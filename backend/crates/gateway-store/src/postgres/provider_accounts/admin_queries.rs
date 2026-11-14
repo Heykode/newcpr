@@ -51,7 +51,7 @@ pub(crate) async fn load_admin_account_page(
                       )), 0)::bigint as total_tokens,
                       max(mr.started_at) as last_used_at
                  from model_requests mr
-                where mr.started_at >= $2 - make_interval(days => settings.usage_retention_days::int)
+                where mr.started_at >= settings.usage_start
                   and mr.started_at < $2
                   and {completed_usage}
                 group by mr.provider_account_ref
@@ -149,8 +149,13 @@ pub(crate) async fn load_admin_account_page(
            select count(*)::bigint as filtered_total from filtered
          ),
          settings as (
-           select config_revision, usage_retention_days, codex_quota_overdraft_enabled
+           select config_revision, codex_quota_overdraft_enabled,
+                  case when usage_retention_days::numeric * 86400 >= extract(epoch from ($2::timestamptz - earliest.started_at))
+                       then earliest.started_at
+                       else $2::timestamptz - make_interval(secs => usage_retention_days::double precision * 86400)
+                  end as usage_start
              from runtime_settings
+             cross join (select least((select started_at from model_requests order by started_at, id limit 1), $2::timestamptz) as started_at) earliest
             where id = 1
          )
          select (select to_jsonb(e) - 'credential_json' - 'quota_json' from openai_excel_credentials e where e.account_id = a.id) as excel_credential_json,

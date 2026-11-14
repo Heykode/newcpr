@@ -302,6 +302,7 @@ async fn connect_and_migrate_should_apply_all_migrations_once_and_reopen_cleanly
             "monitor_account_lifecycles",
             "notification_channels",
             "notification_outbox",
+            "openai_excel_credentials",
             "ops_events",
             "outbound_proxies",
             "provider_account_model_catalogs",
@@ -343,6 +344,113 @@ async fn connect_and_migrate_should_apply_all_migrations_once_and_reopen_cleanly
             "routing_scope",
         ]
     );
+}
+
+#[tokio::test]
+async fn migrate_schema_should_upgrade_mainline_to_excel_once_and_preserve_account_settings() {
+    let mainline = sqlx::migrate::Migrator {
+        migrations: TEST_MIGRATOR
+            .iter()
+            .filter(|migration| migration.version <= 91)
+            .cloned()
+            .collect::<Vec<_>>()
+            .into(),
+        ..sqlx::migrate::Migrator::DEFAULT
+    };
+    let excel = sqlx::migrate::Migrator {
+        migrations: TEST_MIGRATOR
+            .iter()
+            .filter(|migration| migration.version <= 92)
+            .cloned()
+            .collect::<Vec<_>>()
+            .into(),
+        ..sqlx::migrate::Migrator::DEFAULT
+    };
+    let Some(db) = TestDatabase::create_with_migrator("excel_upgrade", &mainline).await else {
+        return;
+    };
+    sqlx::query(
+        "insert into provider_accounts (
+           id, provider_kind, name, authentication_kind, upstream_user_id, upstream_account_id,
+           provider_credentials_json, credential_revision, has_refresh_token, weight, enabled,
+           credential_observed_at, created_at, updated_at
+         ) values (
+           'acct_excel_upgrade', 'openai', 'migration fixture', 'oauth', 'user-fixture',
+           'workspace-fixture', '{\"codex\":\"fixture\"}', 3, true, 7, false, now(), now(), now()
+         )",
+    )
+    .execute(&db.pool)
+    .await
+    .expect("seed existing Codex credential and account settings");
+    sqlx::query(
+        "update runtime_settings
+         set max_concurrent_per_account = 7, usage_retention_days = 4 where id = 1",
+    )
+    .execute(&db.pool)
+    .await
+    .expect("save custom mainline runtime settings");
+    let saved: serde_json::Value = sqlx::query_scalar(
+        "select jsonb_build_object(
+           'account', (select to_jsonb(a) from provider_accounts a where id = 'acct_excel_upgrade'),
+           'settings', (select to_jsonb(s) from runtime_settings s where id = 1),
+           'mainline_migration', (select to_jsonb(m) from _sqlx_migrations m where version = 91)
+         )",
+    )
+    .fetch_one(&db.pool)
+    .await
+    .expect("snapshot existing account, settings and mainline migration");
+    let mut first_ledger = None;
+    for _ in 0..2 {
+        let mut connection = db.pool.acquire().await.expect("migration connection");
+        gateway_store::postgres::migrate_schema(&mut connection, &excel)
+            .await
+            .expect("upgrade or reopen mainline database through production migrator");
+        drop(connection);
+        let retained: serde_json::Value = sqlx::query_scalar(
+            "select jsonb_build_object(
+               'account', (select to_jsonb(a) from provider_accounts a where id = 'acct_excel_upgrade'),
+               'settings', (select to_jsonb(s) from runtime_settings s where id = 1),
+               'mainline_migration', (select to_jsonb(m) from _sqlx_migrations m where version = 91)
+             )",
+        )
+        .fetch_one(&db.pool)
+        .await
+        .expect("read preserved mainline data");
+        assert_eq!(retained, saved);
+        let excel_count: i64 = sqlx::query_scalar("select count(*) from openai_excel_credentials")
+            .fetch_one(&db.pool)
+            .await
+            .expect("new Excel credential table exists");
+        assert_eq!(
+            excel_count, 0,
+            "Codex credentials must not be copied to Excel"
+        );
+        let excel_migration: (bool, Vec<u8>) =
+            sqlx::query_as("select success, checksum from _sqlx_migrations where version = 92")
+                .fetch_one(&db.pool)
+                .await
+                .expect("Excel migration recorded at version 92");
+        let expected_checksum = excel
+            .iter()
+            .find(|migration| migration.version == 92)
+            .expect("frozen Excel migration")
+            .checksum
+            .as_ref();
+        assert!(excel_migration.0);
+        assert_eq!(excel_migration.1, expected_checksum);
+        let ledger: serde_json::Value = sqlx::query_scalar(
+            "select jsonb_agg(to_jsonb(m) order by version) from _sqlx_migrations m",
+        )
+        .fetch_one(&db.pool)
+        .await
+        .expect("snapshot complete migration ledger");
+        if let Some(first) = first_ledger.as_ref() {
+            assert_eq!(&ledger, first, "reopening must not rerun migrations");
+        } else {
+            first_ledger = Some(ledger);
+        }
+    }
+    db.close().await;
 }
 
 #[test]

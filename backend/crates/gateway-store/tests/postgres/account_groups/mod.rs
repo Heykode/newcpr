@@ -588,23 +588,30 @@ async fn group_costs_should_include_statusless_websocket_but_reject_statusless_h
     .await
     .expect("make account group requests statusless");
 
-    let page = groups
-        .list_account_groups(AccountGroupListQuery {
-            page: 1,
-            page_size: PageSize::new(20).expect("page size"),
-            search: None,
-            enabled: None,
-        })
-        .await
-        .expect("list statusless cost group");
+    for days in [1_i64, 31, 3651, 10_000_000, i64::from(u32::MAX)] {
+        sqlx::query("update runtime_settings set usage_retention_days=$1")
+            .bind(days)
+            .execute(&database.pool)
+            .await
+            .unwrap();
+        let page = groups
+            .list_account_groups(AccountGroupListQuery {
+                page: 1,
+                page_size: PageSize::new(20).expect("page size"),
+                search: None,
+                enabled: None,
+            })
+            .await
+            .expect("list statusless cost group");
 
-    assert_eq!(
-        (
-            page.items[0].usage.today_usd.as_str(),
-            page.items[0].usage.retained_total_usd.as_str(),
-        ),
-        ("3.5", "3.5"),
-    );
+        assert_eq!(
+            (
+                page.items[0].usage.today_usd.as_str(),
+                page.items[0].usage.retained_total_usd.as_str(),
+            ),
+            ("3.5", "3.5"),
+        );
+    }
 
     database.close().await;
 }
