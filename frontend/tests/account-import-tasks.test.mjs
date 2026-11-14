@@ -292,7 +292,7 @@ test('2FA enrollment submits one durable intent and clears secrets after accepta
   assert.equal(h.enrollments[0].settings.enabled, true)
   assert.equal(h.enrollments[0].settings.excel403Action, 'disable_excel')
   assert.equal(h.enrollments[0].settings.excelCacheCreationAsInput, true)
-  assert.deepEqual([...h.state.enrollmentIds.value], ['relogin-new'])
+  assert.deepEqual(structuredClone(h.state.enrollments.value), [{ id: 'relogin-new', credentialTarget: 'codex' }])
   assert.equal(h.state.showCreateModal.value, false)
   assert.notEqual(h.state.createForm.value.importTexts.two_fa, '')
   h.state.clearCreate()
@@ -306,7 +306,30 @@ test('Excel 2FA enrollment targets the independent Excel credential channel', as
   await h.state.handleCreate()
   assert.equal(h.enrollments.length, 1)
   assert.equal(h.enrollments[0].credentialTarget, 'excel')
+  assert.deepEqual(structuredClone(h.state.enrollments.value), [{ id: 'relogin-new', credentialTarget: 'excel' }])
   assert.equal(h.submissions.length, 0)
+})
+
+test('2FA progress freezes the accepted channel and keeps both targets for one account', async (t) => {
+  const pending = deferred()
+  const h = mountOnboarding(t, { enroll: () => pending.promise })
+  h.input('openai', 'two_fa', 'test@example.invalid----test-password----JBSWY3DPEHPK3PXP')
+  h.state.createForm.value.credentialTarget = 'excel'
+  const creating = h.state.handleCreate()
+  await flush()
+  h.state.createForm.value.credentialTarget = 'codex'
+  pending.resolve({ ids: ['relogin-new'] })
+  await creating
+  assert.deepEqual(structuredClone(h.state.enrollments.value), [{ id: 'relogin-new', credentialTarget: 'excel' }])
+  for (let i = 0; i < 2; i++) {
+    h.input('openai', 'two_fa', 'test@example.invalid----test-password----JBSWY3DPEHPK3PXP')
+    h.state.createForm.value.credentialTarget = 'codex'
+    await h.state.handleCreate()
+  }
+  assert.deepEqual(structuredClone(h.state.enrollments.value), [
+    { id: 'relogin-new', credentialTarget: 'excel' },
+    { id: 'relogin-new', credentialTarget: 'codex' },
+  ])
 })
 
 test('2FA import keeps cost entered before template and provider selection', async (t) => {
@@ -346,7 +369,7 @@ test('failed enrollment preserves the form without assuming the account was crea
   h.input('openai', 'two_fa', 'test@example.invalid----test-password----JBSWY3DPEHPK3PXP')
   await h.state.handleCreate()
   assert.equal(h.state.showCreateModal.value, true)
-  assert.equal(h.state.enrollmentIds.value.length, 0)
+  assert.equal(h.state.enrollments.value.length, 0)
   assert.equal(h.reloads(), 0)
 })
 

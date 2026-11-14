@@ -12,7 +12,7 @@ use gateway_admin::{
     },
     ports::provider::{ProviderAdmin, ProviderAdminError, ProviderAdminErrorKind},
 };
-use gateway_core::account::OpaqueProviderData;
+use gateway_core::account::{CredentialTarget, OpaqueProviderData};
 use serde_json::Value;
 use std::{process::Stdio, time::Duration};
 use tokio::{
@@ -25,6 +25,40 @@ const MAX_OUTPUT: u64 = 1024 * 1024;
 
 fn error(message: &'static str) -> ProviderAdminError {
     ProviderAdminError::new(ProviderAdminErrorKind::Unavailable).with_public_message(message)
+}
+
+fn excel_failure_message(target: CredentialTarget, payload: &Value) -> Option<&'static str> {
+    if target != CredentialTarget::Excel {
+        return None;
+    }
+    let stage = payload.get("stage").and_then(Value::as_str);
+    // Only fixed messages cross the worker boundary; never echo upstream material.
+    Some(match payload.get("code").and_then(Value::as_str)? {
+        "interaction_required" => match stage {
+            Some("mfa") => "BPS 两步验证需要人工交互，请使用浏览器 OAuth 重新授权",
+            Some("workspace") => "BPS 工作区选择需要人工交互，请使用浏览器 OAuth 重新授权",
+            Some("consent") => "BPS 授权确认需要人工交互，请使用浏览器 OAuth 重新授权",
+            _ => "BPS 授权页面需要人工交互，请使用浏览器 OAuth 重新授权",
+        },
+        "login_loop" => "BPS 授权页面重复跳转，自动登录未完成，请使用浏览器 OAuth 重新授权",
+        "callback_mismatch" | "unexpected_redirect" => {
+            "BPS 授权回调校验失败，未交换或保存凭据，请重新授权"
+        }
+        "verification_failed" => "BPS 凭据已取得，但权限校验未通过，未保存或推送",
+        "invalid_token" => "BPS 令牌类型、身份或有效期校验失败，未保存或推送",
+        "upstream_rejected" | "transport_failed" | "timeout" => match stage {
+            Some("authorize") => "BPS 授权入口请求失败，请检查账号代理或使用浏览器 OAuth 重新授权",
+            Some("password") => "BPS 密码验证请求失败，请检查网络或使用浏览器 OAuth 重新授权",
+            Some("mfa") => "BPS 两步验证请求失败，请检查网络或使用浏览器 OAuth 重新授权",
+            Some("workspace") => "BPS 工作区选择请求失败，请使用浏览器 OAuth 重新授权",
+            Some("consent") => "BPS 授权确认请求失败，请使用浏览器 OAuth 重新授权",
+            Some("token_exchange") => "BPS 授权码交换令牌失败，请检查账号代理并重新授权",
+            Some("credential_validation") => "BPS 凭据校验失败，未保存或推送",
+            Some("access_check") => "BPS 凭据已取得，但权限检查请求失败，未保存或推送",
+            _ => return None,
+        },
+        _ => return None,
+    })
 }
 
 pub(crate) async fn login(
@@ -107,6 +141,9 @@ pub(crate) async fn login(
         };
         if let Some(reason) = stop_reason {
             return Err(error(reason.message()).with_relogin_stop_reason(reason));
+        }
+        if let Some(message) = excel_failure_message(request.credential_target, &payload) {
+            return Err(error(message));
         }
         return Err(error(match payload.get("code").and_then(Value::as_str) {
             Some("runtime_missing") => "重登运行环境缺少 curl_cffi 或 pyotp",
@@ -196,4 +233,82 @@ pub(crate) async fn login(
             .ok_or_else(|| error("凭据缺少有效期"))?,
         verified_at: chrono::Utc::now(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn excel_failures_distinguish_interaction_loop_exchange_and_access() {
+        for (code, stage, expected) in [
+            (
+                "interaction_required",
+                "mfa",
+                "BPS 两步验证需要人工交互，请使用浏览器 OAuth 重新授权",
+            ),
+            (
+                "login_loop",
+                "authorize",
+                "BPS 授权页面重复跳转，自动登录未完成，请使用浏览器 OAuth 重新授权",
+            ),
+            (
+                "upstream_rejected",
+                "token_exchange",
+                "BPS 授权码交换令牌失败，请检查账号代理并重新授权",
+            ),
+            (
+                "transport_failed",
+                "access_check",
+                "BPS 凭据已取得，但权限检查请求失败，未保存或推送",
+            ),
+            (
+                "verification_failed",
+                "access_check",
+                "BPS 凭据已取得，但权限校验未通过，未保存或推送",
+            ),
+        ] {
+            let payload = json!({"ok": false, "code": code, "stage": stage});
+            assert_eq!(
+                excel_failure_message(CredentialTarget::Excel, &payload),
+                Some(expected)
+            );
+            assert_eq!(
+                excel_failure_message(CredentialTarget::Codex, &payload),
+                None
+            );
+        }
+    }
+
+    #[test]
+    fn excel_failure_messages_never_echo_worker_details_or_override_common_errors() {
+        let payload = json!({
+            "code": "interaction_required", "stage": "private-upstream-detail",
+            "message": "private-upstream-detail", "url": "private-upstream-detail",
+        });
+        assert_eq!(
+            excel_failure_message(CredentialTarget::Excel, &payload),
+            Some("BPS 授权页面需要人工交互，请使用浏览器 OAuth 重新授权")
+        );
+        for code in [
+            "password_rejected",
+            "mfa_rejected",
+            "account_banned",
+            "workspace_ambiguous",
+            "unknown",
+        ] {
+            assert_eq!(
+                excel_failure_message(CredentialTarget::Excel, &json!({"code": code})),
+                None
+            );
+        }
+        assert_eq!(
+            excel_failure_message(
+                CredentialTarget::Excel,
+                &json!({"code": "transport_failed", "stage": "private-upstream-detail"})
+            ),
+            None
+        );
+    }
 }

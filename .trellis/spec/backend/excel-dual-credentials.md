@@ -53,6 +53,19 @@ separate from local synthetic tests.
   targets and push settlement are per channel. A failed acquisition retains the
   last cached result. Global pause cancels only running channels, preserving an
   inactive sibling's cached result and pending enrollment intent.
+- Excel password/TOTP login starts directly at the BPS PKCE authorization entry.
+  It must not depend on ChatGPT Web CSRF, session or membership enumeration.
+  Codex keeps its existing Web preflight. Use BPS workspace choices and the issued
+  token identity; never guess a missing workspace or relax a locked target.
+  Browser-only interaction remains an explicit failure, not an automatic bypass.
+- Excel worker failures may report only an allowlisted stage and existing error
+  code. Public messages are static; never persist URLs, response bodies, exception
+  text, passwords, TOTP codes or tokens in diagnostics. Keep Codex error behavior.
+- Enrollment batch writes consume canonical library rows, never channel projections.
+  Excel replacement updates shared login material and only the Excel channel state;
+  preserve the sibling's cache, targets and status. Reject replacement while either
+  channel is active or uncertain. Progress tracks the frozen `(id, credentialTarget)`
+  pair and reads the corresponding channel, including completion and retry state.
 - All operations report per-channel outcomes; success is not rolled back when a
   sibling fails. Codex-first creation may attach Excel only to the same-identity
   account created by that batch. Freeze targets/revisions and never overwrite a
@@ -93,6 +106,10 @@ sidecar CAS, refresh claim, shell promotion, directory projections, quality and
 recovery tests. Run offline Python OAuth tests and the frontend suite, typecheck,
 lint/build plus desktop/mobile synthetic browser checks. Do not count skipped
 database tests or mocked upstream success as live acceptance.
+Cover the complete Python `Login.run()` entry, not only `run_excel_oauth()`, plus
+locked and ambiguous workspaces, failure-stage redaction, existing-material Excel
+replacement with a preserved Codex channel, and independent progress for both
+channels of the same library row.
 
 ## 7. Wrong vs Correct
 

@@ -1,4 +1,5 @@
 import type { AccountImportTask, getAccounts } from '@/api'
+import type { CredentialTarget } from '@/api/modules/relogin'
 
 import { computed, onScopeDispose, ref, shallowRef, watch } from 'vue'
 import {
@@ -37,7 +38,7 @@ export function useAccountOnboarding(options: {
   onImportTaskCreated: (task: AccountImportTask) => void
 }) {
   const createModalOpen = shallowRef(false)
-  const enrollmentIds = shallowRef<string[]>([])
+  const enrollments = shallowRef<{ id: string, credentialTarget: CredentialTarget }[]>([])
   const reauthorizingAccount = shallowRef<AccountRow | null>(null)
   const creatingAccountAction = useAsyncAction()
   const authorizingOAuthAction = useAsyncAction()
@@ -102,15 +103,19 @@ export function useAccountOnboarding(options: {
         if (mode === 'two_fa') {
           if (createForm.value.provider !== 'openai' || reauthorizingAccount.value)
             throw new Error('2FA 导入仅支持新增 OpenAI 账号')
+          const credentialTarget = createForm.value.credentialTarget
           const result = await enrollRelogin({
             text: createForm.value.importTexts.two_fa,
             replaceExisting: createForm.value.replaceExisting2fa,
             settings: accountImportSettings(createForm.value, 'openai'),
             outboundProxyId: createForm.value.proxyMode === 'proxy' ? createForm.value.proxyId.trim() : undefined,
             qualityTemplate: accountImportQualityTemplate(createForm.value),
-            credentialTarget: createForm.value.credentialTarget,
+            credentialTarget,
           })
-          enrollmentIds.value = [...new Set([...enrollmentIds.value, ...result.ids])]
+          enrollments.value = [
+            ...enrollments.value.filter(entry => entry.credentialTarget !== credentialTarget || !result.ids.includes(entry.id)),
+            ...[...new Set(result.ids)].map(id => ({ id, credentialTarget })),
+          ]
           showCreateModal.value = false
           toast.success('2FA 登录入池任务已创建')
           return
@@ -357,7 +362,7 @@ export function useAccountOnboarding(options: {
   )
 
   return {
-    enrollmentIds,
+    enrollments,
     showCreateModal,
     clearCreate,
     reauthorizingAccount,

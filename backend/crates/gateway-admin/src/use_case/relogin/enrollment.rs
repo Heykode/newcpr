@@ -17,7 +17,8 @@ impl DefaultReloginService {
         if enrollment.is_some() && self.store()?.settings().await.map_err(store_error)?.paused {
             return Err(AdminError::conflict("重登队列已暂停，请先恢复队列"));
         }
-        let entries = self.entries().await?;
+        // Batch writes retain canonical rows; only the selected channel is projected.
+        let entries = self.store()?.entries().await.map_err(store_error)?;
         let pool = if enrollment.is_some() {
             self.pool().await?
         } else {
@@ -48,6 +49,11 @@ impl DefaultReloginService {
                 existing.get(&input.email).is_some_and(|entry| {
                     entry.status.active()
                         || entry.status == ReloginStatus::Uncertain
+                        || (self.credential_target == CredentialTarget::Excel
+                            && entry.excel.as_ref().is_some_and(|channel| {
+                                channel.status.active()
+                                    || channel.status == ReloginStatus::Uncertain
+                            }))
                         || gate.active.contains_key(&entry.email)
                 })
             })
@@ -61,21 +67,31 @@ impl DefaultReloginService {
         for input in inputs {
             if let Some(old) = existing.get(&input.email) {
                 let mut entry = old.clone();
-                Self::stop_all(&gate, &mut entry);
+                let mut channel = entry.clone().project_channel(self.credential_target);
+                if self.credential_target == CredentialTarget::Codex {
+                    Self::stop_all(&gate, &mut channel);
+                } else {
+                    Self::stop(&gate, &mut channel);
+                }
+                channel.automatic_attempts = 0;
+                channel.stop_reason = None;
+                channel.next_attempt_at = None;
+                channel.status = ReloginStatus::Pending;
+                channel.credential = None;
+                channel.synced_at = None;
+                channel.target = None;
+                channel.workspace_mode = ReloginWorkspaceMode::Original;
+                channel.workspace_targets.clear();
+                channel.workspace_choices.clear();
+                channel.selected_workspace_id = None;
+                channel.message = "资料已更新，等待处理".to_owned();
+                if self.credential_target == CredentialTarget::Codex {
+                    entry = channel;
+                } else {
+                    entry.excel = Some(channel.channel_state());
+                }
                 entry.password = input.password;
                 entry.mfa_secret = input.mfa_secret;
-                entry.automatic_attempts = 0;
-                entry.stop_reason = None;
-                entry.next_attempt_at = None;
-                entry.status = ReloginStatus::Pending;
-                entry.credential = None;
-                entry.synced_at = None;
-                entry.target = None;
-                entry.workspace_mode = ReloginWorkspaceMode::Original;
-                entry.workspace_targets.clear();
-                entry.workspace_choices.clear();
-                entry.selected_workspace_id = None;
-                entry.message = "资料已更新，等待处理".to_owned();
                 let expected = entry.revision;
                 entry.revision = expected
                     .checked_add(1)

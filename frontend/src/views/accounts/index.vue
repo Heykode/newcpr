@@ -218,7 +218,7 @@ const {
   exportingModelCatalogIds,
   reauthorizingAccount,
   createForm,
-  enrollmentIds,
+  enrollments,
   handleCreate,
   handleAuthorizeOAuth,
   openCreateAccount,
@@ -734,7 +734,7 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
       @test="handleTestConnection()"
     />
 
-    <AccountEnrollmentProgress :ids="enrollmentIds" @completed="refreshAccountsSilently" @dismiss="enrollmentIds = []" />
+    <AccountEnrollmentProgress :enrollments="enrollments" @completed="refreshAccountsSilently" @dismiss="enrollments = []" />
     <AccountImportTasks
       v-model="importTasksOpen"
       :tasks="importTasks"
