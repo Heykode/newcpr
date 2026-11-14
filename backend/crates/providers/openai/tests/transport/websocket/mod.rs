@@ -296,7 +296,7 @@ async fn backend_websocket_should_stream_upstream_for_non_streaming_client_reque
         headers["user-agent"],
         test_wire_profile().snapshot().user_agent()
     );
-    assert_eq!(headers["x-codex-installation-id"], "account-installation");
+    assert!(!headers.contains_key("x-codex-installation-id"));
     assert!(
         !request.stream(),
         "downstream delivery remains non-streaming"
@@ -2501,3 +2501,5 @@ async fn diagnostics_capture_metadata_and_unknown_events_before_normal_close() {
     assert!(!snapshot.to_string().contains("opaque-turn-secret"));
     assert!(!snapshot.to_string().contains("private-data"));
 }
+
+mod cleanup;

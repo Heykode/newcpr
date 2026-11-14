@@ -608,3 +608,16 @@ turn alias、会话恢复或账号状态所有权。Preferred 缓存读写失败
 成功分配轮询、`NO_MORE_RETRY`、原生 service tier、Messages effort、协议观测归属、
 Codex 异步压缩配置与帮助布局沿上述现有调用链接入；不新增数据库迁移或部署门禁。
 具体源码映射、排除范围和本轮验证边界见 [v3.45.2 合并记录](upstream-v3452-native-parity.md)。
+
+## v3.48.0 请求与后台模型操作
+
+Responses 的流式交付在普通、错误和终态的背压等待中响应下游取消和 pool shutdown。
+成功终态先保存续接/归还 socket，失败先丢弃，再交付终态；本地代理会话 hold 同步释放。
+关联标识仅在出站副本映射，保留 UUIDv7 时间和合法窗口结构，显式缓存键不强制等于线程，
+缺失键不补造；HTTP/WS 与模型目录不发送安装标识头，独立 JSON/Live 仍保留。
+
+目录整轮刷新、单账号刷新/导出和预热通过 `ProviderRuntimePolicyPort::load_request_profile`
+读取持久化全局配置；本地 owner 为 `provider_outbound_user_agents`。诊断使用 Core
+已发布快照的同一全局画像。账号凭据、代理、IPv6、CA 继续由已有账号出口负责。
+请求保留期支持完整正 u32 天数；实际清理与直接 SQL 统计都有超大跨度边界，
+不因此引入已暂缓的 analytics worker。后台只增加 PWA manifest，不缓存业务 API 或支持离线操作。

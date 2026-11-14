@@ -1605,3 +1605,62 @@ async fn cron_upgrade_disables_old_warmup_without_changing_other_settings() {
     );
     database.close().await;
 }
+
+#[tokio::test]
+async fn retention_upgrade_preserves_saved_values_and_reconciles_short_cleanup_windows() {
+    let old = sqlx::migrate::Migrator {
+        migrations: super::TEST_MIGRATOR
+            .iter()
+            .filter(|m| m.version < 91)
+            .cloned()
+            .collect::<Vec<_>>()
+            .into(),
+        ..sqlx::migrate::Migrator::DEFAULT
+    };
+    for days in [0_i64, 1, 30, 31, 3650] {
+        let Some(db) = TestDatabase::create_with_migrator("retention_upgrade", &old).await else {
+            return;
+        };
+        sqlx::query("update runtime_settings set usage_retention_days=45, ops_event_retention_days=50 where id=1")
+            .execute(&db.pool).await.unwrap();
+        sqlx::query("update log_cleanup_control set config=jsonb_set(config,'{requests,retentionDays}',to_jsonb($1::bigint)) where singleton")
+            .bind(days).execute(&db.pool).await.unwrap();
+        let before: Value =
+            sqlx::query_scalar("select to_jsonb(s) from runtime_settings s where id=1")
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+        super::TEST_MIGRATOR.run(&db.pool).await.unwrap();
+        let after: Value =
+            sqlx::query_scalar("select to_jsonb(s) from runtime_settings s where id=1")
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+        let mut expected = before;
+        if (1..31).contains(&days) {
+            expected["usage_retention_days"] = json!(days);
+            expected["ops_event_retention_days"] = json!(days);
+            expected["config_revision"] = json!(expected["config_revision"].as_i64().unwrap() + 1);
+        }
+        assert_eq!(after, expected);
+        for value in [1_i64, 30, 31, 3651, i64::from(u32::MAX)] {
+            sqlx::query("update runtime_settings set usage_retention_days=$1 where id=1")
+                .bind(value)
+                .execute(&db.pool)
+                .await
+                .unwrap();
+            let settings = PgRuntimeSettingsRepository::new(db.pool.clone())
+                .load_runtime_settings()
+                .await
+                .unwrap();
+            assert_eq!(i64::from(settings.usage_retention_days), value);
+        }
+        assert!(
+            sqlx::query("update runtime_settings set usage_retention_days=0 where id=1")
+                .execute(&db.pool)
+                .await
+                .is_err()
+        );
+        db.close().await;
+    }
+}

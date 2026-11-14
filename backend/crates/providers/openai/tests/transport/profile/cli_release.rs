@@ -64,6 +64,10 @@ async fn official_cli_cache_updates_entry_headers_together_and_preserves_frozen_
         ..Default::default()
     };
     let frozen = automatic.resolve(&state).unwrap();
+    let mut next = semver::Version::parse(&frozen.codex_version).unwrap();
+    next.patch += 1;
+    let next_sequence = 1 + next.major * 1_000_000 + next.minor * 1_000 + next.patch;
+    let next_version = next.to_string();
     let fixed = ClientProfileSelection {
         version_mode: VersionMode::Fixed,
         codex_version: Some(frozen.codex_version.clone()),
@@ -82,9 +86,11 @@ async fn official_cli_cache_updates_entry_headers_together_and_preserves_frozen_
         .replace_if_newer(
             ProviderArtifactProfile::new(
                 ProviderKind::new("openai-cli-linux-x64").unwrap(),
-                157_001,
+                next_sequence,
                 chrono::Utc::now().into(),
-                OpaqueProviderData::new(json!({"version":"0.157.0"}).as_object().unwrap().clone()),
+                OpaqueProviderData::new(
+                    json!({"version":next_version}).as_object().unwrap().clone(),
+                ),
             ),
             Duration::from_secs(86400),
         )
@@ -99,11 +105,11 @@ async fn official_cli_cache_updates_entry_headers_together_and_preserves_frozen_
         let current = selection.resolve(&state).unwrap();
         let headers = build_codex_model_headers(&current, "Bearer fixture", None).unwrap();
         let expected = format!(
-            "{originator}/0.157.0 (Alpine Linux 3.24.1; x86_64) xterm-256color ({originator}; 0.157.0)"
+            "{originator}/{next_version} (Alpine Linux 3.24.1; x86_64) xterm-256color ({originator}; {next_version})"
         );
         assert_eq!(headers["user-agent"], expected);
         assert_eq!(headers["originator"], originator);
-        assert_eq!(headers["version"], "0.157.0");
+        assert_eq!(headers["version"], next_version.as_str());
     }
     assert_eq!(
         fixed.resolve(&state).unwrap().user_agent(),
@@ -113,7 +119,6 @@ async fn official_cli_cache_updates_entry_headers_together_and_preserves_frozen_
         custom.resolve(&state).unwrap().user_agent(),
         frozen.user_agent()
     );
-    assert_eq!(frozen.codex_version, "0.155.0");
 
     // 缓存恢复与启动种子构成观察历史，滞后档位据此钉住上一版。
     let lagged = ClientProfileSelection {
@@ -122,7 +127,7 @@ async fn official_cli_cache_updates_entry_headers_together_and_preserves_frozen_
     };
     assert_eq!(
         lagged.resolve(&state).unwrap().user_agent(),
-        "codex-tui/0.155.0 (Alpine Linux 3.24.1; x86_64) xterm-256color (codex-tui; 0.155.0)"
+        frozen.user_agent()
     );
 
     let restarted = CodexWireProfileState::new(super::wire_profile());

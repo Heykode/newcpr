@@ -117,11 +117,6 @@ impl CodexBackendClient {
         let mut headers =
             build_codex_model_headers(profile, context.authorization, context.account_id)?;
         insert_optional_header(&mut headers, "cookie", context.cookie_header)?;
-        insert_optional_header(
-            &mut headers,
-            "x-codex-installation-id",
-            context.installation_id,
-        )?;
         Ok(headers)
     }
 

@@ -273,8 +273,11 @@ Responses 不透传下游的逐跳头、反代元数据（如 `cf-*`、`x-forwar
 按官方 v3.39.1 保留 `traceparent`、`tracestate`、`sentry-trace`、`baggage` 及对应
 `ws_request_header_*` 副本，包含重复头、client metadata 和对象/字符串 turn metadata。
 `x-openai-fedramp` 按业务头透传；地域及账号路由头仍以部署配置为准。
-模型请求和 Live 的 `x-codex-installation-id` 使用账号持久设备号，与正文身份一致，
-不接受下游伪造值。会话/Key 隔离、turn 引用和加密内容继续遵守原有协议合同。
+按官方 v3.48.0，Responses HTTP/WS 和模型目录请求不发送 `x-codex-installation-id`；
+独立 JSON、Live 端点仍显式使用账号的有效安装身份，不接受下游伪造值。
+正文设备身份和账号/Key 隔离保留。真实 UUIDv7 关联标识保留创建时间，其他值使用稳定 UUIDv4；
+合法 UUID 加规范 u64 的窗口保留后缀，context window 独立映射。显式缓存键独立于线程，
+同 scope 的相同原值映射相同；没有传缓存键时不补造。turn 引用和加密内容保持原值。
 同一轮全量请求可回传已记录且归属匹配的上游 turn-state，包括失败响应提供的值；
 此证明不授予未知 response ID 或其他账号状态的使用权。
 
@@ -861,6 +864,13 @@ OAuth start 使用：
 QX 兼容并不表示 TLS 指纹逐项等价；设备档案和精确 WS 续接身份保持原有权威。
 详细格式、分请求类型的边界与回退方式见 [QX 兼容画像](qx-compatible-profile.md)。
 
+完整预设配置由现有 `provider_outbound_user_agents.configuration_json` 保存；后台模型目录
+发现、手动刷新、导出及定时预热，每轮读取并冻结当前全局画像，版本参数与请求头使用
+同一份身份，不借用单个 Key 的覆盖。管理端账号连接诊断从本次发布快照取得全局画像。
+旧 `default`、`custom` 和自动同步版本模式继续通过已发布画像生效；读取或解析失败
+会返回错误，不静默切换成另一套客户端身份。OAuth、额度查询及其他 Desktop 专属操作
+继续使用各自的协议画像。
+
 ### OpenAI 个人信息
 
 `GET /api/admin/accounts/personal-info?accountId=...` 需要管理员会话，当前由 OpenAI/Codex OAuth
@@ -1106,6 +1116,8 @@ HTTP 返回 `429`，`error.code` 为 `key_daily_budget_exceeded` 或 `key_weekly
 历史迁移 0088 曾关闭旧的单时间计划；本次多规则更新不清空现有 Cron。只对明确空闲窗口
 预热，真实 0% 用量允许检查，未知用量不能当作空闲。
 
+预热每轮采用当前 OpenAI 全局客户端身份，保留实际选中账号的凭据和出口。
+
 
 | 方法 | 路由 | 说明 |
 | --- | --- | --- |
@@ -1155,6 +1167,13 @@ Codex Responses 最终 HTTP/WS 请求按官方移除 `max_tokens`、`max_output_
 继续移除。此规则不扩展到 xAI、Compact、Images 等其他入口。
 
 两个 `minCodex*Version` 字段为 `string | null`，只设置最低版本，不存在最大版本字段。
+
+`usageRetentionDays` 默认 31，支持 `1..=4294967295` 的整数天数，不再设 31/3650 天
+业务上限。极大天数超出可表示日期时保留现有历史，不发生日期溢出。
+日志清理页的 `requests.retentionDays=0` 是独立的显式全部清理选择；运行设置的
+`usageRetentionDays=0` 仍非法。迁移 0091 将已保存的 1–30 天请求清理期限同步到统计
+保留设置，其余选择保留，迁移本身不删除历史。运行日志、审计及详细采集的分类设置
+仍遵循各自边界，详见 [日志清理](log-cleanup.md)。
 
 三个 OpenAI 调度参数位于设置顶层，不放在 `requestTuning`：Guardian 独立并发初始值 5；
 会话绑定有效期默认 24 小时、范围 1–720；亲和模式默认 `strict`，可选 `preferred`、`relaxed`。
