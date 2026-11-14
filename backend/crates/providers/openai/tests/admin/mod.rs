@@ -1,3 +1,5 @@
+mod excel;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU32;
 use std::sync::{Arc, Mutex};
@@ -118,7 +120,7 @@ async fn openai_bundle_exposes_one_core_provider_and_drains_worker_contributions
     assert_eq!(bundle.core_provider().name(), "openai");
     assert_eq!(bundle.admin_provider().provider_kind().as_str(), "openai");
     let contributions = bundle.take_worker_contributions();
-    assert_eq!(contributions.len(), 8);
+    assert_eq!(contributions.len(), 9);
     for owner in ["openai-cli-release", "openai-platform-desktop-release"] {
         let worker = contributions
             .iter()
@@ -143,6 +145,22 @@ async fn openai_bundle_exposes_one_core_provider_and_drains_worker_contributions
             "each instance must publish its local profile"
         );
     }
+    let excel_worker = contributions
+        .iter()
+        .find_map(|contribution| match contribution {
+            WorkerContribution::Registration(registration)
+                if registration.id.owner() == "openai-excel" =>
+            {
+                Some(registration)
+            }
+            _ => None,
+        })
+        .expect("independent Excel refresh worker");
+    assert_eq!(excel_worker.id.kind(), WorkerKind::OAuthRefresh);
+    let WorkerRunnable::Scheduled { schedule, .. } = &excel_worker.runnable else {
+        panic!("Excel refresh must be scheduled");
+    };
+    assert_eq!(schedule.interval(), Duration::from_secs(30));
     assert!(contributions.iter().all(|contribution| match contribution {
         WorkerContribution::Registration(registration) =>
             !registration.id.owner().starts_with("openai-turn-state"),
@@ -2467,6 +2485,7 @@ fn provider_ports_with_catalog(
 fn account_record(account: &ProviderAccount) -> AccountRecord {
     let now = Utc::now();
     AccountRecord {
+        excel_credential: account.excel_credential().cloned(),
         quota_limits: Default::default(),
         quota_paused: Default::default(),
         auto_use_quota_credits: false,

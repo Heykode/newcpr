@@ -35,20 +35,13 @@ impl CodexCredentialCatalogService {
             for a in group.accounts {
                 let Some(account) = current.get(&a.account_id).filter(|account| {
                     account.revision() == a.revision
+                        && account.responses_upstream() == ResponsesUpstream::Codex
+                        && account.has_codex_credential()
                         && eligible_catalog_account(account, SystemTime::now())
                 }) else {
                     continue;
                 };
-                let content = if account.responses_upstream()
-                    == gateway_core::account::ResponsesUpstream::Excel
-                {
-                    Arc::new(CatalogContent::new(
-                        adapter_catalog_models(models.clone(), account)?,
-                        &group.document,
-                    ))
-                } else {
-                    native_content.clone()
-                };
+                let content = native_content.clone();
                 if content.models.is_empty() {
                     continue;
                 }
@@ -94,9 +87,10 @@ impl CodexCredentialCatalogService {
             .inspect_err(|_| self.schedule_refresh())?;
         self.record_excel_accounts(&current, false)?;
         let current = current
-            .iter()
+            .into_iter()
+            .filter_map(active_catalog_account)
             .filter(|a| eligible_catalog_account(a, SystemTime::now()))
-            .map(CodexCatalogScope::for_account)
+            .map(|account| CodexCatalogScope::for_account(&account))
             .collect::<BTreeSet<_>>();
         let _writer = self
             .publication
@@ -258,6 +252,7 @@ impl CodexCredentialCatalogService {
         self.record_excel_accounts(&accounts, true)?;
         let current: BTreeMap<_, _> = accounts
             .into_iter()
+            .filter_map(active_catalog_account)
             .filter(|a| eligible_catalog_account(a, now))
             .map(|a| (CodexCatalogScope::for_account(&a), a))
             .collect();

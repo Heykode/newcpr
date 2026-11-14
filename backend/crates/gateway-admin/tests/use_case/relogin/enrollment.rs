@@ -1,4 +1,5 @@
 use super::*;
+use gateway_core::account::CredentialTarget;
 
 fn purchase_cost(amount: &str) -> gateway_admin::model::account_purchase::AccountPurchaseUpdate {
     gateway_admin::model::account_purchase::AccountPurchaseUpdate {
@@ -18,6 +19,122 @@ fn intent() -> ReloginEnrollment {
 }
 
 const MATERIAL: &str = "test@example.invalid----test-only-password----JBSWY3DPEHPK3PXP";
+
+#[tokio::test]
+async fn excel_enrollment_is_stored_in_the_independent_channel() {
+    let h = Harness::new(vec![]).await;
+    let enrollment = intent();
+    let excel = h
+        .services
+        .relogin()
+        .credential_channel(gateway_core::account::CredentialTarget::Excel)
+        .unwrap();
+    let ids = excel
+        .enroll(MATERIAL, false, enrollment.clone())
+        .await
+        .unwrap();
+    let row = h.row(&ids[0]).await;
+    assert!(
+        row.enrollment.is_none(),
+        "Codex enrollment state must remain untouched"
+    );
+    let channel = row.excel.expect("Excel enrollment channel");
+    assert_eq!(channel.status, ReloginStatus::Queued);
+    assert_eq!(channel.enrollment.unwrap().config, enrollment.config);
+}
+
+#[tokio::test]
+async fn excel_enrollment_replacement_preserves_the_complete_codex_channel() {
+    for has_excel in [false, true] {
+        let h = Harness::new(vec![]).await;
+        let id = h.import("test@example.invalid").await;
+        h.ready(&id).await;
+        let mut before = h.row(&id).await;
+        before.manual_push_context = Some(context("pending-codex-push"));
+        before.enrollment = Some(intent());
+        if has_excel {
+            before.excel = Some(ReloginChannelState {
+                status: ReloginStatus::Failed,
+                credential: Some(credential()),
+                automatic_attempts: 2,
+                stop_reason: Some(ReloginStopReason::WorkspaceUnavailable),
+                next_attempt_at: Some(Utc::now() + Duration::seconds(30)),
+                synced_at: Some(Utc::now()),
+                selected_workspace_id: Some("workspace-other".into()),
+                manual_push_context: Some(context("previous-excel-push")),
+                enrollment: Some(intent()),
+                ..ReloginChannelState::default()
+            });
+        }
+        h.store.save(&before, Some(before.revision)).await.unwrap();
+        let codex = serde_json::to_value(before.channel_state()).unwrap();
+        let excel = h
+            .services
+            .relogin()
+            .credential_channel(CredentialTarget::Excel)
+            .unwrap();
+        let ids = excel
+            .enroll(
+                &MATERIAL.replace("test-only-password", "updated-test-only-password"),
+                true,
+                intent(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(ids, vec![id.clone()]);
+        let after = h.row(&id).await;
+        assert_eq!(after.credential_target, CredentialTarget::Codex);
+        assert_eq!(serde_json::to_value(after.channel_state()).unwrap(), codex);
+        assert_eq!(after.revision, before.revision + 1);
+        assert_eq!(after.password, "updated-test-only-password");
+        assert_eq!(after.mfa_secret, before.mfa_secret);
+        let channel = after.excel.unwrap();
+        assert_eq!(channel.status, ReloginStatus::Queued);
+        assert_eq!(channel.enrollment.unwrap().config, intent().config);
+        assert!(channel.credential.is_none());
+        assert_eq!(channel.automatic_attempts, 0);
+        assert!(channel.stop_reason.is_none());
+        assert!(channel.next_attempt_at.is_none());
+        assert!(channel.synced_at.is_none());
+        assert!(channel.selected_workspace_id.is_none());
+        assert!(channel.manual_push_context.is_none());
+    }
+}
+
+#[tokio::test]
+async fn excel_enrollment_replacement_rejects_active_or_uncertain_channels_without_changes() {
+    for target in [CredentialTarget::Codex, CredentialTarget::Excel] {
+        for status in [
+            ReloginStatus::Queued,
+            ReloginStatus::Running,
+            ReloginStatus::Pushing,
+            ReloginStatus::Uncertain,
+        ] {
+            let h = Harness::new(vec![]).await;
+            let id = h.import("test@example.invalid").await;
+            let mut before = h.row(&id).await;
+            if target == CredentialTarget::Codex {
+                before.status = status;
+            } else {
+                before.excel = Some(ReloginChannelState {
+                    status,
+                    ..ReloginChannelState::default()
+                });
+            }
+            h.store.save(&before, Some(before.revision)).await.unwrap();
+            let excel = h
+                .services
+                .relogin()
+                .credential_channel(CredentialTarget::Excel)
+                .unwrap();
+            assert!(excel.enroll(MATERIAL, true, intent()).await.is_err());
+            assert_eq!(
+                serde_json::to_value(h.row(&id).await).unwrap(),
+                serde_json::to_value(before).unwrap()
+            );
+        }
+    }
+}
 
 #[tokio::test]
 async fn bulk_enrollment_does_not_copy_one_custom_name_to_all_accounts() {
@@ -609,13 +726,14 @@ async fn exports_require_selected_rows_and_never_login_implicitly() {
         .unwrap();
     assert_eq!(output.files.len(), 1);
     assert_eq!(output.files[0].content.trim(), MATERIAL);
-    assert!(
-        h.services
-            .relogin()
-            .export(&ids, ReloginExportFormat::Json, &context("export"))
-            .await
-            .is_err()
-    );
+    let missing = h
+        .services
+        .relogin()
+        .export(&ids, ReloginExportFormat::Json, &context("export"))
+        .await
+        .unwrap();
+    assert!(missing.files.is_empty());
+    assert_eq!(missing.skipped.len(), 1);
     assert!(h.provider.relogin_requests.lock().unwrap().is_empty());
     h.ready(&id).await;
     let output = h

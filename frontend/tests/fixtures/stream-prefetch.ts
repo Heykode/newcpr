@@ -26,11 +26,9 @@ async function mount() {
           'onUpdate:requestTuning': (value) => { form.requestTuning = value },
         }),
         h(ExcelSettingsCard, {
-          'models': form.excelDefaultModels,
           'requestTuning': form.requestTuning,
           'images': excelImages,
           'units': unitFields,
-          'onUpdate:models': (value) => { form.excelDefaultModels = value },
           'onUpdate:requestTuning': (value) => { form.requestTuning = value },
         }),
         h('output', { 'data-testid': 'saved-bytes' }, String(form.requestTuning.streamPrefetchBytes)),

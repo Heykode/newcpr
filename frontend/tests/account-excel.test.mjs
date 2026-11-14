@@ -59,7 +59,7 @@ test('Excel editor preserves omitted values and sends only an explicit route cha
   }))
   state.open(accounts.value[0])
   assert.equal(state.excelEnabled.value, true)
-  assert.equal(state.excelModels.value, 'gpt-6-astra, gpt-5.6-sol, gpt-5.6-terra')
+  assert.equal('excelModels' in state, false)
   await state.save()
   assert.equal(Object.hasOwn(updates[0], 'responsesUpstream'), false)
   assert.equal(Object.hasOwn(updates[0], 'excelRecovery'), false)
@@ -77,63 +77,48 @@ test('Excel editor preserves omitted values and sends only an explicit route cha
   state.excelEnabled.value = true
   await state.save()
   assert.equal(Object.hasOwn(updates[3], 'responsesUpstream'), false)
+  accounts.value[0].authenticationKind = 'none'
+  state.open(accounts.value[0])
+  state.excelEnabled.value = true
+  await state.save()
+  assert.equal(updates.at(-1).responsesUpstream, 'excel')
   accounts.value[0].authenticationKind = 'oauth'
-  state.open(accounts.value[0])
-  state.excelModels.value = 'gpt-5.6-sol, gpt-6-astra, gpt-5.6-sol'
-  await state.save()
-  assert.deepEqual(updates[4].excelModels, ['gpt-5.6-sol', 'gpt-6-astra'])
-  state.open(accounts.value[0])
-  state.excelModels.value = ''
-  await state.save()
-  assert.deepEqual(updates[5].excelModels, [])
-  state.open(accounts.value[0])
-  state.excelModels.value = 'invalid/model'
-  await state.save()
-  assert.equal(updates.length, 6)
-  state.excelModelsFollowGlobal.value = true
-  await state.save()
-  assert.equal(updates[6].excelModelsFollowGlobal, true)
-  assert.equal('excelModels' in updates[6], false)
   accounts.value[0].excelModelsFollowGlobal = true
-  accounts.value[0].excelModels = ['gpt-5.6-sol']
+  accounts.value[0].excelModels = ['invalid/model']
   state.open(accounts.value[0])
   await state.save()
-  assert.equal('excelModelsFollowGlobal' in updates[7], false)
-  state.open(accounts.value[0])
-  state.excelModelsFollowGlobal.value = false
-  await state.save()
-  assert.equal(updates[8].excelModelsFollowGlobal, false)
-  assert.deepEqual(updates[8].excelModels, ['gpt-5.6-sol'])
+  assert.equal('excelModelsFollowGlobal' in updates.at(-1), false)
+  assert.equal('excelModels' in updates.at(-1), false)
   state.open(accounts.value[0])
   assert.equal(state.excelCacheCreationAsInput.value, false)
-  assert.equal('excelCacheCreationAsInput' in updates[8], false)
+  assert.equal('excelCacheCreationAsInput' in updates.at(-1), false)
   state.excelEnabled.value = true
   state.excelCacheCreationAsInput.value = true
   await state.save()
-  assert.equal(updates[9].excelCacheCreationAsInput, true)
-  assert.equal(updates[9].responsesUpstream, 'excel')
+  assert.equal(updates.at(-1).excelCacheCreationAsInput, true)
+  assert.equal(updates.at(-1).responsesUpstream, 'excel')
   state.open(accounts.value[0])
   assert.equal(state.excel403Action.value, 'none')
   state.excelEnabled.value = true
   state.excel403Action.value = 'pause_account'
   await state.save()
-  assert.equal(updates[10].excel403Action, 'pause_account')
+  assert.equal(updates.at(-1).excel403Action, 'pause_account')
   accounts.value[0].responsesUpstream = 'excel'
   accounts.value[0].excel403Action = 'pause_account'
   state.open(accounts.value[0])
   state.excelEnabled.value = false
   await state.save()
-  assert.equal(updates[11].responsesUpstream, 'codex')
-  assert.equal(updates[11].excel403Action, 'none')
+  assert.equal(updates.at(-1).responsesUpstream, 'codex')
+  assert.equal(updates.at(-1).excel403Action, 'none')
   state.open(accounts.value[0])
   state.excelCacheCreationAsInput.value = true
   state.excelEnabled.value = false
   await state.save()
-  assert.equal(updates[12].excelCacheCreationAsInput, true)
+  assert.equal(updates.at(-1).excelCacheCreationAsInput, true)
   state.open(accounts.value[0])
   state.excel403Action.value = 'disable_excel'
   await state.save()
-  assert.equal(updates[13].excel403Action, 'disable_excel')
+  assert.equal(updates.at(-1).excel403Action, 'disable_excel')
   state.open(accounts.value[0])
   assert.equal(state.excelIgnoreEncryptedContent.value, false)
   state.excelIgnoreEncryptedContent.value = true
@@ -160,7 +145,7 @@ test('Excel editor preserves omitted values and sends only an explicit route cha
   assert.equal('excelIgnoreEncryptedContent' in updates.at(-1), false)
 })
 
-test('Excel import defaults preserve, explicit global follows, mixed providers stay isolated', () => {
+test('Excel import respects route settings without a separate model list', () => {
   const scheduling = load('../src/views/accounts/utils/schedulingForm.ts')
   const creation = load('../src/views/accounts/components/AccountCreateModal/model.ts', {
     '@/utils/excel-settings': load('../src/utils/excel-settings.ts', { '@/views/accounts/utils/schedulingForm': scheduling }),
@@ -170,13 +155,11 @@ test('Excel import defaults preserve, explicit global follows, mixed providers s
   })
   const form = creation.emptyAccountCreateForm()
   form.provider = 'openai'
-  assert.equal(form.excelModelsFollowGlobal, true)
-  assert.equal(form.excelModels, 'gpt-6-astra, gpt-5.6-sol, gpt-5.6-terra')
   assert.equal('responsesUpstream' in creation.accountImportSettings(form), false)
   form.applyExcel = true
   form.excelEnabled = true
   let settings = creation.accountImportSettings(form)
-  assert.equal(settings.excelModelsFollowGlobal, true)
+  assert.equal('excelModelsFollowGlobal' in settings, false)
   assert.equal(settings.responsesUpstream, 'excel')
   assert.equal('excelModels' in settings, false)
   assert.equal(settings.excelCacheCreationAsInput, true)
@@ -189,7 +172,7 @@ test('Excel import defaults preserve, explicit global follows, mixed providers s
   form.excelModelsFollowGlobal = false
   form.excelModels = 'gpt-5.6-sol, gpt-6-astra'
   settings = creation.accountImportSettings(form)
-  assert.equal(JSON.stringify(settings.excelModels), '["gpt-5.6-sol","gpt-6-astra"]')
+  assert.equal('excelModels' in settings, false)
   form.excelEnabled = false
   assert.equal(creation.accountImportSettings(form).excelCacheCreationAsInput, true)
 })

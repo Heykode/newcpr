@@ -1696,7 +1696,7 @@ async fn quota_reset_weights_upgrade_and_persist_through_runtime_snapshot() {
     let old = sqlx::migrate::Migrator {
         migrations: super::TEST_MIGRATOR
             .iter()
-            .filter(|migration| migration.version < 92)
+            .filter(|migration| migration.version < 93)
             .cloned()
             .collect::<Vec<_>>()
             .into(),

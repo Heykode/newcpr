@@ -997,11 +997,31 @@ pub(super) fn map_client_error(
         | CodexClientError::RequestBodyEncode(_)
         | CodexClientError::RequestCompression(_)
         | CodexClientError::ModelCatalog(_)
+        | CodexClientError::ExcelCatalog
         | CodexClientError::Egress(_)
         | CodexClientError::CustomCa(_) => MappedProviderFailure::plain(provider_error(
             ProviderErrorKind::Protocol,
             UpstreamSendState::NotSent,
         )),
+        CodexClientError::ExcelModelUnsupported => MappedProviderFailure::plain(
+            provider_error(
+                ProviderErrorKind::InvalidRequest,
+                UpstreamSendState::NotSent,
+            )
+            .with_status(400)
+            .with_retry_prohibited()
+            .with_upstream_code(gateway_core::error::OpaqueUpstreamValue::new(
+                "excel_model_unsupported",
+            ))
+            .with_client_visible_upstream_error(
+                gateway_core::error::ClientVisibleUpstreamError::new(
+                    error.to_string(),
+                    Some("excel_model_unsupported".into()),
+                    Some("invalid_request_error".into()),
+                )
+                .with_param("model"),
+            ),
+        ),
         CodexClientError::StreamIdleTimeout { .. } => MappedProviderFailure::plain(provider_error(
             ProviderErrorKind::Timeout,
             UpstreamSendState::Sent,
@@ -1289,6 +1309,10 @@ pub(super) fn client_diagnostic(
             "model_catalog_invalid",
             "OpenAI model catalog validation failed".to_owned(),
         ),
+        CodexClientError::ExcelCatalog => ("prepare", "excel_catalog_invalid", error.to_string()),
+        CodexClientError::ExcelModelUnsupported => {
+            ("prepare", "excel_model_unsupported", error.to_string())
+        }
         CodexClientError::Upstream { .. } => return None,
     };
     Some(ProviderDiagnostic::new(message).with_classification(stage, code))

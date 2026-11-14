@@ -33,6 +33,7 @@ async function main() {
     const submissions = []
     const exports = []
     let stage = 'queued'
+    let credentialTarget = 'codex'
     let reloginPage = false
     let accountReads = 0
     page.on('pageerror', error => errors.push(error.message))
@@ -45,23 +46,30 @@ async function main() {
       accountReads++
       return route.continue()
     })
-    await page.route('**/dev/api/admin/relogin', route => fulfill(route, {
-      settings: { concurrency: 1, paused: false, maxRetries: 2, retryIntervalSeconds: 30 },
-      items: reloginPage
-        ? reloginEntries
-        : [{
-            ...reloginEntries[0],
-            id: 'enrollment-fixture',
-            email: 'import@example.invalid',
-            status: stage === 'synced' ? 'ready' : stage,
-            enrollmentPending: stage !== 'synced',
-            poolStatus: stage === 'synced' ? 'synced' : 'not_in_pool',
-            message: stage === 'synced' ? '凭据已同步到号池' : '等待登录验证并入池',
-            recovery: { state: stage === 'failed' ? 'cooldown' : stage, message: '上次登录失败，等待重试', retryAt: null },
-          }],
-    }))
+    await page.route('**/dev/api/admin/relogin', (route) => {
+      const enrollment = {
+        ...reloginEntries[0],
+        id: 'enrollment-fixture',
+        email: 'import@example.invalid',
+        status: stage === 'synced' ? 'ready' : stage,
+        enrollmentPending: stage !== 'synced',
+        poolStatus: stage === 'synced' ? 'synced' : 'absent',
+        message: stage === 'synced' ? '凭据已同步到号池' : '等待登录验证并入池',
+        recovery: { state: stage === 'failed' ? 'cooldown' : stage, message: '上次登录失败，等待重试', retryAt: null },
+      }
+      return fulfill(route, {
+        settings: { concurrency: 1, paused: false, maxRetries: 2, retryIntervalSeconds: 30 },
+        items: reloginPage
+          ? reloginEntries
+          : [credentialTarget === 'excel'
+              ? { ...enrollment, status: 'ready', enrollmentPending: false, poolStatus: 'synced', message: 'Codex 已同步', excel: { ...enrollment, credentialTarget: 'excel' } }
+              : enrollment],
+      })
+    })
     await page.route('**/dev/api/admin/relogin/enroll', (route) => {
-      submissions.push(route.request().postDataJSON())
+      const body = route.request().postDataJSON()
+      submissions.push(body)
+      credentialTarget = body.credentialTarget ?? 'codex'
       return fulfill(route, { ids: ['enrollment-fixture'] })
     })
     await page.route('**/dev/api/admin/relogin/export', (route) => {
@@ -78,12 +86,12 @@ async function main() {
     await page.goto(`${base}/accounts`)
     await page.getByRole('button', { name: '导入账号', exact: true }).click()
     const dialog = page.getByRole('dialog')
-    await dialog.getByRole('button', { name: 'OpenAI', exact: true }).click()
+    await dialog.getByRole('button', { name: 'Codex', exact: true }).click()
     await dialog.getByRole('checkbox', { name: '指定 Excel 设置', exact: true }).locator('..').click()
     assert.equal(await dialog.getByRole('switch', { name: '缓存写入按普通输入计费', exact: true }).isChecked(), true)
     await dialog.getByRole('switch', { name: '切换 Excel 入口', exact: true }).locator('..').click()
     await dialog.getByRole('combobox', { name: 'Excel遇到HTTP 403', exact: true }).click()
-    await page.getByRole('option', { name: '关闭Excel模式', exact: true }).click()
+    await page.getByRole('option', { name: '暂停 Excel 链路（兼容旧配置）', exact: true }).click()
     await dialog.getByRole('button', { name: '继续导入', exact: true }).click()
     await dialog.getByRole('radio', { name: '2FA', exact: true }).click()
     const material = [
@@ -128,11 +136,39 @@ async function main() {
     await page.waitForTimeout(500)
     assert.ok(accountReads > beforeCompletion, 'settled enrollment refreshes the pool')
     await page.getByRole('button', { name: '导入账号', exact: true }).click()
-    await dialog.getByRole('button', { name: 'OpenAI', exact: true }).click()
+    await dialog.getByRole('button', { name: 'Codex', exact: true }).click()
     await dialog.getByRole('button', { name: '继续导入', exact: true }).click()
     await dialog.getByRole('radio', { name: '2FA', exact: true }).click()
     assert.equal(await dialog.getByRole('textbox', { name: '2FA 账号', exact: true }).inputValue(), '')
     await dialog.getByRole('button', { name: '关闭', exact: true }).click()
+    await dialog.waitFor({ state: 'hidden' })
+    await progress.getByRole('button', { name: '收起', exact: true }).click()
+    await progress.waitFor({ state: 'hidden' })
+    await page.getByRole('button', { name: '导入账号', exact: true }).click()
+    await dialog.getByRole('button', { name: 'Codex', exact: true }).click()
+    await dialog.getByRole('button', { name: '继续导入', exact: true }).click()
+    await dialog.getByRole('radio', { name: 'Excel', exact: true }).click()
+    await dialog.getByRole('radio', { name: '2FA', exact: true }).click()
+    await dialog.getByRole('textbox', { name: '2FA 账号', exact: true }).fill(material)
+    stage = 'failed'
+    await dialog.getByRole('button', { name: '登录并导入', exact: true }).click()
+    await dialog.waitFor({ state: 'hidden' })
+    assert.equal(submissions.at(-1).credentialTarget, 'excel')
+    await progress.getByText('上次登录失败，等待重试', { exact: true }).waitFor()
+    await progress.getByText(/0\/1 已入池/).waitFor()
+    assert.equal(await progress.getByText('Codex 已同步', { exact: true }).count(), 0)
+    await progress.getByText('import@example.invalid · Excel', { exact: true }).waitFor()
+    for (const width of [1440, 390, 320]) {
+      await page.setViewportSize({ width, height: 900 })
+      assert.ok(await progress.evaluate(element => element.scrollWidth <= element.clientWidth + 1))
+      await progress.scrollIntoViewIfNeeded()
+      await page.screenshot({ path: `${output}/excel-progress-${width}.png` })
+    }
+    const beforeExcelCompletion = accountReads
+    stage = 'synced'
+    await progress.getByText(/1\/1 已入池/).waitFor({ timeout: 10000 })
+    await page.waitForTimeout(500)
+    assert.ok(accountReads > beforeExcelCompletion, 'Excel settlement refreshes the pool independently')
     reloginPage = true
     await page.setViewportSize({ width: 1440, height: 900 })
     await page.goto(`${base}/relogin`)
@@ -163,7 +199,7 @@ async function main() {
     }
     assert.equal(exports.length, 2)
     assert.deepEqual(errors, [])
-    process.stdout.write('Passed 2FA enrollment, defaults, double-click guard, settlement refresh, secret clearing, selected exports and mobile layouts.\n')
+    process.stdout.write('Passed Codex/Excel 2FA enrollment, channel-specific progress, defaults, double-click guard, settlement refresh, secret clearing, selected exports and mobile layouts.\n')
   }
   catch (error) {
     const page = browser?.contexts()[0]?.pages()[0]

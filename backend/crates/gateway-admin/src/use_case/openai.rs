@@ -28,6 +28,55 @@ use super::{
 /// OpenAI 固定管理路由消费的服务。
 #[async_trait]
 pub trait OpenAiService: Send + Sync {
+    async fn import_excel_document(
+        &self,
+        _command: ImportCredentials,
+        _target: Option<crate::model::accounts::ExcelCredentialImportTarget>,
+    ) -> Result<Vec<crate::model::accounts::AccountRecord>, AdminError> {
+        Err(AdminError::invalid(
+            "Excel credential import is unavailable",
+        ))
+    }
+
+    async fn start_excel_authorization(
+        &self,
+        _command: StartAuthorization,
+    ) -> Result<AuthorizationStarted, AdminError> {
+        Err(AdminError::invalid("Excel authorization is unavailable"))
+    }
+
+    async fn complete_excel_authorization(
+        &self,
+        _command: CompleteAuthorization,
+    ) -> Result<Vec<crate::model::accounts::AccountRecord>, AdminError> {
+        Err(AdminError::invalid("Excel authorization is unavailable"))
+    }
+
+    async fn refresh_excel_credential(
+        &self,
+        _account_id: &ProviderAccountId,
+    ) -> Result<(), AdminError> {
+        Err(AdminError::invalid(
+            "Excel credential refresh is unavailable",
+        ))
+    }
+
+    async fn excel_models(
+        &self,
+        _account_id: &ProviderAccountId,
+    ) -> Result<crate::model::provider_credentials::ProviderModels, AdminError> {
+        Err(AdminError::invalid("Excel model catalog is unavailable"))
+    }
+
+    async fn export_excel_credential(
+        &self,
+        _account_id: &ProviderAccountId,
+    ) -> Result<crate::model::provider_credentials::ProviderDocument, AdminError> {
+        Err(AdminError::invalid(
+            "Excel credential export is unavailable",
+        ))
+    }
+
     async fn list(&self, query: CredentialListQuery) -> Result<CredentialPage, AdminError>;
     async fn details(
         &self,
@@ -142,6 +191,157 @@ impl DefaultOpenAiService {
 
 #[async_trait]
 impl OpenAiService for DefaultOpenAiService {
+    async fn import_excel_document(
+        &self,
+        command: ImportCredentials,
+        target: Option<crate::model::accounts::ExcelCredentialImportTarget>,
+    ) -> Result<Vec<crate::model::accounts::AccountRecord>, AdminError> {
+        let reservation = super::import_proxy_binding(
+            self.proxies.as_ref(),
+            command.outbound_proxy_id.as_deref(),
+        )
+        .await?;
+        let prepared = self
+            .provider
+            .prepare_excel_import(PrepareCredentialImport {
+                default_outbound_proxy: reservation
+                    .as_ref()
+                    .map(|value| value.binding.proxy.clone()),
+                document: command.document,
+            })
+            .await
+            .map_err(|error| map_provider_error(error, "Excel credential import"))?;
+        validate_prepared_import(
+            self.provider.provider_kind(),
+            &prepared,
+            "Excel credential import",
+        )?;
+        if prepared.credentials.len() != 1 {
+            return Err(AdminError::invalid(
+                "Excel import must contain exactly one credential",
+            ));
+        }
+        let credential = prepared
+            .credentials
+            .into_iter()
+            .next()
+            .ok_or_else(|| AdminError::invalid("Excel credential is missing"))?;
+        if credential.authentication_kind != "excel_oauth" {
+            return Err(AdminError::invalid(
+                "Independent Excel authorization is required",
+            ));
+        }
+        let result = self
+            .accounts
+            .commit_excel_credential_import(credential, target, command.settings, &command.context)
+            .await
+            .map_err(|error| map_store_error(error, "Excel credential import"))?;
+        drop(reservation);
+        let id = ProviderAccountId::new(result.account.id.clone())
+            .map_err(|_| AdminError::invalid("Invalid account identity"))?;
+        self.provider.account_facts_changed(&[id]).await;
+        publish_committed(self.snapshot.as_ref(), result.config_revision).await?;
+        Ok(vec![result.account])
+    }
+
+    async fn start_excel_authorization(
+        &self,
+        command: StartAuthorization,
+    ) -> Result<AuthorizationStarted, AdminError> {
+        let pending = pending_authorization(
+            self.accounts.as_ref(),
+            self.proxies.as_ref(),
+            self.provider.provider_kind(),
+            &command,
+            "Excel credential",
+        )
+        .await?;
+        self.provider
+            .start_excel_authorization(pending)
+            .await
+            .map_err(|error| map_provider_error(error, "Excel authorization"))
+    }
+
+    async fn complete_excel_authorization(
+        &self,
+        mut command: CompleteAuthorization,
+    ) -> Result<Vec<crate::model::accounts::AccountRecord>, AdminError> {
+        let context = command.context.clone();
+        let settings = command.settings.take();
+        let prepared = self
+            .provider
+            .complete_excel_authorization(command)
+            .await
+            .map_err(|error| map_provider_error(error, "Excel authorization"))?;
+        let valid = prepared.pending.provider_kind() == self.provider.provider_kind()
+            && prepared.pending.owner_binding().matches_context(&context)
+            && prepared.credential.provider_kind == *self.provider.provider_kind()
+            && prepared.credential.authentication_kind == "excel_oauth";
+        if !valid {
+            prepared.authorization_guard.abort().await?;
+            return Err(AdminError::conflict(
+                "Excel authorization ownership does not match",
+            ));
+        }
+        let result = self
+            .accounts
+            .commit_excel_credential_import(
+                prepared.credential,
+                prepared.target,
+                settings,
+                &context,
+            )
+            .await;
+        match result {
+            Ok(result) => {
+                prepared.authorization_guard.commit().await?;
+                let id = ProviderAccountId::new(result.account.id.clone())
+                    .map_err(|_| AdminError::invalid("Invalid account identity"))?;
+                self.provider.account_facts_changed(&[id]).await;
+                publish_committed(self.snapshot.as_ref(), result.config_revision).await?;
+                Ok(vec![result.account])
+            }
+            Err(error) => {
+                prepared.authorization_guard.abort().await?;
+                Err(map_store_error(error, "Excel authorization"))
+            }
+        }
+    }
+
+    async fn refresh_excel_credential(
+        &self,
+        account_id: &ProviderAccountId,
+    ) -> Result<(), AdminError> {
+        self.provider
+            .refresh_excel_credential(account_id)
+            .await
+            .map_err(|error| map_provider_error(error, "Excel refresh"))?;
+        self.provider
+            .account_facts_changed(std::slice::from_ref(account_id))
+            .await;
+        Ok(())
+    }
+
+    async fn excel_models(
+        &self,
+        account_id: &ProviderAccountId,
+    ) -> Result<crate::model::provider_credentials::ProviderModels, AdminError> {
+        self.provider
+            .excel_models(account_id)
+            .await
+            .map_err(|error| map_provider_error(error, "Excel models"))
+    }
+
+    async fn export_excel_credential(
+        &self,
+        account_id: &ProviderAccountId,
+    ) -> Result<crate::model::provider_credentials::ProviderDocument, AdminError> {
+        self.provider
+            .export_excel_credential(account_id)
+            .await
+            .map_err(|error| map_provider_error(error, "Excel export"))
+    }
+
     async fn list(&self, query: CredentialListQuery) -> Result<CredentialPage, AdminError> {
         self.accounts
             .list_credentials(self.provider.provider_kind(), query)

@@ -242,6 +242,7 @@ async fn free_excel_image_account_keeps_its_separate_route() {
             enabled: true,
         })
         .await;
+    store.seed_excel_credential("acct_free_excel_image", true);
     store.set_responses_upstream(
         "acct_free_excel_image",
         gateway_core::account::ResponsesUpstream::Excel,

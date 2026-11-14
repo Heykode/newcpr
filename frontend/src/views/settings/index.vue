@@ -244,7 +244,6 @@ watch(
       </div>
       <div v-show="configurationScope === 'excel'" class="min-w-0" role="region" aria-label="Excel 配置">
         <ExcelSettingsCard
-          v-model:models="form.excelDefaultModels"
           v-model:request-tuning="form.requestTuning"
           :images="excelImages"
           :units="unitFields"

@@ -157,6 +157,35 @@ test('immediate action queues once with a frozen target and refreshes after succ
   assert.equal(h.reloads(), 1)
 })
 
+test('account-menu Excel and both selections freeze independent credential versions', async (t) => {
+  const h = harness(t)
+  const codex = action()
+  const excel = action({ credentialTarget: 'excel', target: { ...codex.target, credential_target: 'excel', credential_revision: 7 } })
+  await h.reply([{ ...codex, excel }])
+  const pending = h.state.request({ ...account, responsesUpstream: 'excel' })
+  assert.equal(h.writes[0].data.target.credential_target, 'excel')
+  assert.equal(h.writes[0].data.target.credential_revision, 7)
+  assert.equal(h.writes[0].data.additionalTarget, undefined)
+  h.writes[0].resolve()
+  await pending
+  await h.reply([{ ...codex, excel }])
+  const both = h.state.request(account, 'all')
+  assert.equal(h.writes[1].data.target.credential_revision, 1)
+  assert.equal(h.writes[1].data.additionalTarget.credential_revision, 7)
+  assert.equal(h.writes[1].data.additionalTarget.credential_target, 'excel')
+  h.writes[1].resolve()
+  await both
+})
+
+test('Excel settlement refreshes the account without reporting a Codex failure', async (t) => {
+  const h = harness(t)
+  await h.reply([action({ excel: action({ credentialTarget: 'excel', busy: true, status: 'running' }) })])
+  assert.equal(h.tick(), 2000)
+  await h.reply([action({ excel: action({ credentialTarget: 'excel', status: 'ready', syncedAt: '2026-11-14T00:00:00Z' }) })])
+  assert.equal(h.reloads(), 1)
+  assert.match(h.notices[0], /Excel/)
+})
+
 test('a rejected stale target is not silently requeued with fresh credentials', async (t) => {
   const h = harness(t)
   await h.reply()
@@ -248,8 +277,8 @@ test('real menu renders relogin only with material and exposes busy and failure 
   async function render(relogin) {
     return renderToString(vue.createSSRApp(component, { account, deleting: false, recovering: false, refreshing: false, testing: false, relogin }))
   }
-  assert.doesNotMatch(await render(), /立即重登|重登处理中/)
-  assert.match(await render(action()), /立即重登/)
-  assert.match(await render(action({ busy: true })), /<button disabled[^>]*>\s*重登处理中\s*<\/button>/)
+  assert.doesNotMatch(await render(), /重登 Codex|Codex 重登中/)
+  assert.match(await render(action()), /重登 Codex/)
+  assert.match(await render(action({ busy: true })), /<button disabled[^>]*>\s*Codex 重登中\s*<\/button>/)
   assert.match(await render(action({ status: 'failed', message: '<script>failed' })), /&lt;script&gt;failed/)
 })

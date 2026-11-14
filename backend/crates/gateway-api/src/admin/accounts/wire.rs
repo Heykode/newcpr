@@ -354,6 +354,9 @@ pub struct AccountSummaryView {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountView {
+    pub has_codex_credential: bool,
+    pub excel_credential: Option<ExcelCredentialView>,
+    pub excel_migration_required: bool,
     pub quota_limits: gateway_core::account::AccountQuotaLimits,
     pub quota_limits_supported: bool,
     pub auto_use_quota_credits: bool,
@@ -417,6 +420,20 @@ pub struct AccountView {
     pub cumulative_costs: Vec<CurrencyCostView>,
     pub excel_recovery: Option<gateway_admin::model::excel_recovery::ExcelRecoveryView>,
     pub purchase_cost: Option<gateway_admin::model::account_purchase::AccountPurchaseView>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExcelCredentialView {
+    pub revision: u64,
+    pub state: String,
+    pub has_refresh_token: bool,
+    pub access_token_expires_at: Option<DateTime<Utc>>,
+    pub next_refresh_at: Option<DateTime<Utc>>,
+    pub suspended: bool,
+    pub refresh_attempted: bool,
+    pub error_reason: Option<String>,
+    pub error_message: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -795,6 +812,15 @@ pub struct AccountActionRequest {
     pub account_id: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AccountRecoverRequest {
+    pub account_id: String,
+    #[serde(default)]
+    pub credential_target: gateway_core::account::CredentialTarget,
+    pub expected_revision: Option<u64>,
+}
+
 impl AccountActionRequest {
     pub fn validate(&self) -> Result<(), WireValidationError> {
         require_account_id(&self.account_id, "accountId")
@@ -901,6 +927,8 @@ impl AccountRefreshRequest {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AccountTestQuery {
+    #[serde(default)]
+    pub responses_upstream: Option<gateway_core::account::ResponsesUpstream>,
     pub account_id: String,
     pub model_id: String,
     #[serde(default = "default_connection_test_interface")]
@@ -945,6 +973,7 @@ impl AccountTestQuery {
             _ => return Err(WireValidationError::new("interface")),
         };
         Ok(gateway_admin::model::accounts::AccountConnectionTest {
+            responses_upstream: self.responses_upstream,
             account_id: ProviderAccountId::new(self.account_id)
                 .map_err(|_| WireValidationError::new("accountId"))?,
             upstream_model: UpstreamModelId::new(self.model_id)
@@ -1311,12 +1340,22 @@ pub struct AccountConnectionTestEvent {
 impl From<DomainConnectionTestEvent> for AccountConnectionTestEvent {
     fn from(event: DomainConnectionTestEvent) -> Self {
         let data = match event {
-            DomainConnectionTestEvent::Started { model, endpoint } => serde_json::json!({
-                "type": "test_start",
-                "model": model,
-                "interface": endpoint.as_str(),
-                "text": format!("正在连接上游 {}", endpoint.label())
-            }),
+            DomainConnectionTestEvent::Started {
+                model,
+                endpoint,
+                responses_upstream,
+            } => {
+                let mut data = serde_json::json!({
+                    "type": "test_start",
+                    "model": model,
+                    "interface": endpoint.as_str(),
+                    "text": format!("正在连接上游 {}", endpoint.label())
+                });
+                if let Some(route) = responses_upstream {
+                    data["responses_upstream"] = serde_json::json!(route.as_str());
+                }
+                data
+            }
             DomainConnectionTestEvent::Request {
                 model,
                 input_text,

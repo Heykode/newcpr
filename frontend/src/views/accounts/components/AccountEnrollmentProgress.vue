@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import type { ReloginEntry } from '@/api/modules/relogin'
+import type { CredentialTarget, ReloginEntry } from '@/api/modules/relogin'
 import { onScopeDispose, shallowRef, watch } from 'vue'
 import { getRelogin } from '@/api/modules/relogin'
 import BaseButton from '@/components/base/BaseButton.vue'
 import { errorMessage } from '@/utils/async'
 
-const props = defineProps<{ ids: string[] }>()
+const props = defineProps<{ enrollments: { id: string, credentialTarget: CredentialTarget }[] }>()
 const emit = defineEmits<{ completed: [], dismiss: [] }>()
 const rows = shallowRef<ReloginEntry[]>([])
 const failure = shallowRef('')
@@ -16,6 +16,10 @@ const completed = new Set<string>()
 
 function waitingForRetry(row: ReloginEntry) {
   return row.enrollmentPending && ['waiting', 'cooldown'].includes(row.recovery?.state ?? '')
+}
+
+function rowKey(row: Pick<ReloginEntry, 'id' | 'credentialTarget'>) {
+  return `${row.id}:${row.credentialTarget}`
 }
 
 function stop() {
@@ -30,18 +34,22 @@ async function refresh(run: number) {
     const data = await getRelogin({ silent: true, signal: controller.signal })
     if (run !== version)
       return
-    rows.value = data.items.filter(row => props.ids.includes(row.id))
+    rows.value = props.enrollments.flatMap((enrollment) => {
+      const entry = data.items.find(row => row.id === enrollment.id)
+      const channel = enrollment.credentialTarget === 'excel' ? entry?.excel : entry
+      return channel ? [{ ...channel, credentialTarget: enrollment.credentialTarget }] : []
+    })
     failure.value = data.settings.paused ? '重登队列已暂停，恢复后继续执行' : ''
     let changed = false
     for (const row of rows.value) {
-      if (row.poolStatus === 'synced' && !completed.has(row.id)) {
-        completed.add(row.id)
+      if (row.poolStatus === 'synced' && !completed.has(rowKey(row))) {
+        completed.add(rowKey(row))
         changed = true
       }
     }
     if (changed)
       emit('completed')
-    if (rows.value.some(row => ['pending', 'queued', 'running', 'pushing'].includes(row.status) || waitingForRetry(row) || (row.status === 'ready' && row.enrollmentPending)))
+    if (rows.value.length < props.enrollments.length || rows.value.some(row => ['pending', 'queued', 'running', 'pushing'].includes(row.status) || waitingForRetry(row) || (row.status === 'ready' && row.enrollmentPending)))
       timer = setTimeout(() => void refresh(run), 2000)
   }
   catch (error) {
@@ -52,18 +60,26 @@ async function refresh(run: number) {
   }
 }
 
-watch(() => props.ids, () => {
+watch(() => props.enrollments, (enrollments, previous = []) => {
   stop()
-  if (props.ids.length)
+  for (const enrollment of enrollments) {
+    if (!previous.includes(enrollment))
+      completed.delete(rowKey(enrollment))
+  }
+  if (!enrollments.length)
+    completed.clear()
+  rows.value = []
+  failure.value = ''
+  if (props.enrollments.length)
     void refresh(version)
 }, { immediate: true })
 onScopeDispose(stop)
 </script>
 
 <template>
-  <section v-if="ids.length" class="shrink-0 border-y border-cp-border py-3" aria-label="2FA导入进度">
+  <section v-if="enrollments.length" class="shrink-0 border-y border-cp-border py-3" aria-label="2FA导入进度">
     <div class="flex items-center justify-between gap-3">
-      <span class="text-cp-sm font-medium">2FA导入 · {{ rows.filter(row => row.poolStatus === 'synced').length }}/{{ ids.length }} 已入池</span>
+      <span class="text-cp-sm font-medium">2FA导入 · {{ rows.filter(row => row.poolStatus === 'synced').length }}/{{ enrollments.length }} 已入池</span>
       <div class="flex items-center gap-3">
         <RouterLink to="/relogin" class="text-cp-sm text-cp-primary-text">
           查看失效重登
@@ -77,8 +93,8 @@ onScopeDispose(stop)
       {{ failure }}
     </p>
     <div class="mt-2 max-h-36 overflow-y-auto">
-      <div v-for="row in rows" :key="row.id" class="flex flex-wrap justify-between gap-x-4 gap-y-1 py-1 text-cp-sm">
-        <span class="break-all">{{ row.email }}</span>
+      <div v-for="row in rows" :key="rowKey(row)" class="flex flex-wrap justify-between gap-x-4 gap-y-1 py-1 text-cp-sm">
+        <span class="break-all">{{ row.email }} · {{ row.credentialTarget === 'excel' ? 'Excel' : 'Codex' }}</span>
         <span :class="waitingForRetry(row) ? 'text-cp-warning' : row.status === 'failed' || row.status === 'uncertain' ? 'text-cp-error' : 'text-cp-text-secondary'">{{ waitingForRetry(row) ? row.recovery?.message : row.message || row.status }}</span>
       </div>
     </div>

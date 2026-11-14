@@ -123,108 +123,123 @@ async fn write_catalog(stream: &mut tokio::net::TcpStream) {
 }
 
 #[tokio::test]
-async fn native_catalog_intersects_excel_capabilities_after_cache_without_changing_routing() {
-    use gateway_core::account::{
-        AccountModelAccess, AccountModelAccessMode, CredentialState, ExcelModels, QuotaState,
-        ResponsesUpstream,
-    };
+async fn excel_catalog_uses_independent_access_and_never_the_legacy_model_list() {
+    use gateway_core::account::ResponsesUpstream;
     use serde_json::{Value, json};
 
     let store = Arc::new(MemoryAccountStore::default());
-    let native = seed_account(&store, "acct_a_native_capabilities").await;
-    let excel = seed_account(&store, "acct_z_excel_capabilities")
-        .await
-        .with_responses_upstream(ResponsesUpstream::Excel)
-        .with_excel_models(ExcelModels::try_from(vec!["gpt-5.4".into()]).unwrap());
-    replace_account_facts(&store, excel.clone()).await;
-    let native_scope = client_scope(std::slice::from_ref(&native));
-    let mixed_scope = client_scope(&[native.clone(), excel.clone()]);
+    seed_account(&store, "acct_excel_catalog").await;
+    store.seed_excel_credential("acct_excel_catalog", true);
+    store.set_responses_upstream("acct_excel_catalog", ResponsesUpstream::Excel);
+    let account = store.account("acct_excel_catalog").unwrap();
+    let native_before = account.clone().with_excel_credential(None);
+    let scope = client_scope(std::slice::from_ref(&account));
     let server = MockServer::start().await;
-    let mut fixture: Value = serde_json::from_slice(OFFICIAL_FIXTURE).unwrap();
-    fixture["models"][0]["multi_agent_version"] = json!("v2");
-    fixture["models"][0]["multi_agent_reasoning_effort"] = json!("xhigh");
-    let original = fixture["models"][0].clone();
     Mock::given(method("GET"))
-        .and(path("/codex/models"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(fixture))
+        .and(path("/basispoints/api/responses/access"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "allowed":true, "model_catalog":{"models":[
+                {"id":"gpt-5.4","label":"GPT 5.4","efforts":[{"value":"high"}]},
+                {"id":"gpt-5.6-sol","model_picker_enabled":false}
+            ]}
+        })))
         .expect(1)
         .mount(&server)
         .await;
     let service = service_with_catalog_cache(&store, server.uri(), catalog_cache());
-    service.refresh_account_catalog(native.id()).await.unwrap();
-    service
-        .invalidate_accounts(&[excel.id().clone()])
-        .await
-        .unwrap();
-    let read = |scope| {
-        let service = &service;
-        async move {
-            let models = service.client_model_catalog(scope).await.unwrap();
-            serde_json::from_slice::<Value>(models[0].payload.body()).unwrap()
-        }
-    };
-    assert_eq!(read(&native_scope).await, original);
-    let mut restricted = original.clone();
-    restricted["multi_agent_version"] = Value::Null;
-    restricted["multi_agent_reasoning_effort"] = Value::Null;
-    assert_eq!(read(&mixed_scope).await, restricted);
-    assert_eq!(read(&native_scope).await, original);
-
-    // A temporary credential failure must not advertise v2 for an Excel route.
-    let expired = excel.clone().with_account_facts(
-        true,
-        CredentialState::Expired,
-        QuotaState::unknown(),
-        None,
-        None,
+    let catalog = service.refresh_account_catalog(account.id()).await.unwrap();
+    assert_eq!(catalog.models(), ["gpt-5.4"]);
+    let models = service.client_model_catalog(&scope).await.unwrap();
+    assert_eq!(models.len(), 1);
+    let document: Value = serde_json::from_slice(models[0].payload.body()).unwrap();
+    assert_eq!(document["source"], "excel_bridge");
+    assert_eq!(document["multi_agent_version"], Value::Null);
+    let current = store.account(account.id().as_str()).unwrap();
+    assert_eq!(current.with_excel_credential(None), native_before);
+    assert!(
+        store
+            .load_account_catalogs(account.provider())
+            .await
+            .unwrap()
+            .is_empty(),
+        "BPS catalogs must not overwrite persisted Codex snapshots"
     );
-    replace_account_facts(&store, expired).await;
-    assert_eq!(read(&mixed_scope).await, restricted);
-    store.set_enabled(excel.id(), false).await.unwrap();
-    assert_eq!(read(&mixed_scope).await, original);
-    replace_account_facts(
-        &store,
-        excel.clone().with_model_access(
-            AccountModelAccess::new(AccountModelAccessMode::Denylist, vec!["gpt-5.4".into()])
-                .unwrap(),
-        ),
-    )
-    .await;
-    assert_eq!(read(&mixed_scope).await, original);
-    replace_account_facts(&store, excel.clone()).await;
-    assert_eq!(read(&mixed_scope).await, restricted);
-    store.set_responses_upstream(excel.id().as_str(), ResponsesUpstream::Codex);
-    assert_eq!(read(&mixed_scope).await, original);
-    assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    let request = server.received_requests().await.unwrap().remove(0);
+    assert!(
+        request.headers["authorization"]
+            .to_str()
+            .unwrap()
+            .starts_with("Bearer e30.")
+    );
+    assert_eq!(request.headers["x-basispoints-auth-mode"], "chatgpt");
+    assert!(request.url.query().unwrap().contains("include_models=true"));
+
+    let restored = service_with_catalog_cache(&store, server.uri(), catalog_cache());
+    restored.restore().await.unwrap();
+    assert!(
+        restored.cached().unwrap().is_none(),
+        "Excel restarts must fetch real access again"
+    );
 }
 
 #[tokio::test]
-async fn native_catalog_excel_switch_does_not_reuse_synthesized_capabilities() {
-    use gateway_core::account::{ExcelModels, ResponsesUpstream};
-    use serde_json::{Value, json};
-
+async fn excel_catalog_failure_does_not_fabricate_models_or_fall_back_to_codex() {
+    use gateway_core::account::ResponsesUpstream;
     let store = Arc::new(MemoryAccountStore::default());
-    let account = seed_account(&store, "acct_excel_catalog_switch")
-        .await
-        .with_responses_upstream(ResponsesUpstream::Excel)
-        .with_excel_models(ExcelModels::try_from(vec!["gpt-5.4".into()]).unwrap());
-    replace_account_facts(&store, account.clone()).await;
+    let account = seed_account(&store, "acct_excel_catalog_failed").await;
+    store.set_responses_upstream(account.id().as_str(), ResponsesUpstream::Excel);
+    let server = MockServer::start().await;
+    let service = service_with_catalog_cache(&store, server.uri(), catalog_cache());
+    assert!(service.refresh_account_catalog(account.id()).await.is_err());
+    assert!(server.received_requests().await.unwrap().is_empty());
+    store.seed_excel_credential(account.id().as_str(), true);
+    Mock::given(path("/basispoints/api/responses/access"))
+        .respond_with(ResponseTemplate::new(403))
+        .expect(1)
+        .mount(&server)
+        .await;
+    assert!(service.refresh_account_catalog(account.id()).await.is_err());
+    assert!(service.cached().unwrap().is_none());
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 1);
+    assert!(
+        !requests
+            .iter()
+            .any(|request| request.url.path().contains("codex"))
+    );
+}
+
+#[tokio::test]
+async fn catalog_switch_uses_the_selected_credential_and_keeps_native_descriptors() {
+    use gateway_core::account::ResponsesUpstream;
+    use serde_json::{Value, json};
+    let store = Arc::new(MemoryAccountStore::default());
+    let account = seed_account(&store, "acct_excel_catalog_switch").await;
+    store.seed_excel_credential(account.id().as_str(), true);
+    store.set_responses_upstream(account.id().as_str(), ResponsesUpstream::Excel);
     let scope = client_scope(std::slice::from_ref(&account));
+    let server = MockServer::start().await;
+    Mock::given(path("/basispoints/api/responses/access"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "allowed":true,"model_catalog":{"models":[{"id":"gpt-5.4"}]}
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
     let mut fixture: Value = serde_json::from_slice(OFFICIAL_FIXTURE).unwrap();
     fixture["models"][0]["multi_agent_version"] = json!("v2");
-    fixture["models"][0]["multi_agent_reasoning_effort"] = json!("xhigh");
-    let server = MockServer::start().await;
     Mock::given(path("/codex/models"))
         .respond_with(ResponseTemplate::new(200).set_body_json(fixture.clone()))
-        .expect(2)
+        .expect(1)
         .mount(&server)
         .await;
     let service = service_with_catalog_cache(&store, server.uri(), catalog_cache());
     service.refresh_account_catalog(account.id()).await.unwrap();
-    let models = service.client_model_catalog(&scope).await.unwrap();
-    let descriptor: Value = serde_json::from_slice(models[0].payload.body()).unwrap();
-    assert_eq!(descriptor.get("multi_agent_version"), Some(&Value::Null));
     store.set_responses_upstream(account.id().as_str(), ResponsesUpstream::Codex);
+    service
+        .invalidate_accounts(&[account.id().clone()])
+        .await
+        .unwrap();
     service.refresh_account_catalog(account.id()).await.unwrap();
     let models = service.client_model_catalog(&scope).await.unwrap();
     let descriptor: Value = serde_json::from_slice(models[0].payload.body()).unwrap();

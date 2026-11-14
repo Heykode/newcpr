@@ -46,7 +46,7 @@ of Smart's nested weights. Both share `account::scheduling::ResetWindowWeights`.
 Nonzero coefficients select the highest reset score without near-tie rotation;
 all-zero preserves earliest-reset sorting. Eligibility, account weight tiers and
 affinity are applied first; equal scores retain utilization/last-use/account-ID ties.
-Migration 0092 adds all-zero JSONB settings without rewriting other values. API
+Migration 0093 adds all-zero JSONB settings without rewriting other values. API
 updates require all three fields and reject null, unknown keys and invalid numbers;
 `quotaResetWindowWeightsDefaults` is response-only. Store, frozen plans and UI must
 roundtrip both independent sets across strategy changes.

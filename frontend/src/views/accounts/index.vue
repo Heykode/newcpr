@@ -13,6 +13,7 @@ import BaseCheckbox from '@/components/base/BaseCheckbox.vue'
 import BaseConfirmModal from '@/components/base/BaseConfirmModal.vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BasePageHeader from '@/components/base/BasePageHeader.vue'
+import BaseSegmented from '@/components/base/BaseSegmented.vue'
 import BaseTablePagination from '@/components/base/BaseTable/BaseTablePagination.vue'
 import BaseTable from '@/components/base/BaseTable/index.vue'
 import { toast } from '@/components/base/BaseToast'
@@ -202,6 +203,8 @@ const {
   deletingCount,
   showSingleDeleteModal,
   showExportModal,
+  exportCredentialSelection,
+  exportAccountCount,
   pendingDeleteAccount,
   recoveringAccountIds,
   refreshingAccountIds,
@@ -215,7 +218,7 @@ const {
   exportingModelCatalogIds,
   reauthorizingAccount,
   createForm,
-  enrollmentIds,
+  enrollments,
   handleCreate,
   handleAuthorizeOAuth,
   openCreateAccount,
@@ -245,6 +248,7 @@ const {
   testingAccount,
   connectionTestStatus,
   connectionTestModel,
+  connectionTestRoute,
   connectionTestLogs,
   connectionTestError,
   connectionTestStartedAt,
@@ -285,8 +289,6 @@ const {
   requestProxyAvailable: batchRequestProxyAvailable,
   schedulingEnabled: batchSchedulingEnabled,
   excelEnabled: batchExcelEnabled,
-  excelModels: batchExcelModels,
-  excelModelsFollowGlobal: batchExcelModelsFollowGlobal,
   excelCacheCreationAsInput: batchExcelCacheCreationAsInput,
   excelIgnoreEncryptedContent: batchExcelIgnoreEncryptedContent,
   requestProxySource: batchRequestProxySource,
@@ -297,7 +299,6 @@ const {
   updateExcelCacheCreationAsInput: batchUpdateExcelCacheCreationAsInput,
   updateExcelIgnoreEncryptedContent: batchUpdateExcelIgnoreEncryptedContent,
   updateExcel403Action: batchUpdateExcel403Action,
-  updateExcelModels: batchUpdateExcelModels,
   concurrencyLimit: batchConcurrencyLimit,
   weight: batchWeight,
   modelAccess: batchModelAccess,
@@ -334,8 +335,6 @@ const {
   editingAccount,
   schedulingEnabled,
   excelEnabled,
-  excelModels,
-  excelModelsFollowGlobal,
   excelCacheCreationAsInput,
   excelIgnoreEncryptedContent,
   requestProxySource,
@@ -636,7 +635,10 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
               <AccountPurchaseCell :cost="row.purchaseCost" :align="isMobile ? 'right' : 'center'" />
             </template>
             <template #resetCredits="{ row }">
-              <AccountResetCreditCell :inventory="resetInventory[row.id]" :supported="row.provider === 'openai'" />
+              <AccountResetCreditCell
+                :inventory="resetInventory[row.id]"
+                :supported="row.provider === 'openai' && row.responsesUpstream !== 'excel' && row.hasCodexCredential !== false"
+              />
             </template>
 
             <template #actions="{ row }">
@@ -723,6 +725,7 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
       :refreshing-models="refreshingConnectionTestModels"
       :logs="connectionTestLogs"
       :model="connectionTestModel"
+      :route="connectionTestRoute"
       :model-options="connectionTestModelOptions"
       :started-at="connectionTestStartedAt"
       :status="connectionTestStatus"
@@ -731,7 +734,7 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
       @test="handleTestConnection()"
     />
 
-    <AccountEnrollmentProgress :ids="enrollmentIds" @completed="refreshAccountsSilently" @dismiss="enrollmentIds = []" />
+    <AccountEnrollmentProgress :enrollments="enrollments" @completed="refreshAccountsSilently" @dismiss="enrollments = []" />
     <AccountImportTasks
       v-model="importTasksOpen"
       :tasks="importTasks"
@@ -769,8 +772,6 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
       v-model="showEditModal"
       v-model:enabled="schedulingEnabled"
       v-model:excel-enabled="excelEnabled"
-      v-model:excel-models="excelModels"
-      v-model:excel-models-follow-global="excelModelsFollowGlobal"
       v-model:excel-cache-creation-as-input="excelCacheCreationAsInput"
       v-model:excel-ignore-encrypted-content="excelIgnoreEncryptedContent"
       v-model:request-proxy-source="requestProxySource"
@@ -816,9 +817,7 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
       v-model="showBatchEditModal"
       v-model:enabled="batchSchedulingEnabled"
       v-model:excel-enabled="batchExcelEnabled"
-      v-model:excel-models="batchExcelModels"
       v-model:request-proxy-source="batchRequestProxySource"
-      v-model:excel-models-follow-global="batchExcelModelsFollowGlobal"
       v-model:excel-cache-creation-as-input="batchExcelCacheCreationAsInput"
       v-model:excel-ignore-encrypted-content="batchExcelIgnoreEncryptedContent"
       v-model:excel-403-action="batchExcel403Action"
@@ -828,7 +827,6 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
       v-model:update-excel-ignore-encrypted-content="batchUpdateExcelIgnoreEncryptedContent"
       v-model:update-excel-403-action="batchUpdateExcel403Action"
       v-model:update-excel-recovery="batchUpdateExcelRecovery"
-      v-model:update-excel-models="batchUpdateExcelModels"
       v-model:concurrency-limit="batchConcurrencyLimit"
       v-model:weight="batchWeight"
       v-model:model-access="batchModelAccess"
@@ -865,8 +863,9 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
       :loading="exportingAccounts"
       @confirm="confirmExportAccounts"
     >
-      <p class="m-0">
-        确定导出选中的 {{ selectedIds.size }} 个账号吗？文件包含访问凭据，以及存在时对应的 2FA 资料。
+      <BaseSegmented v-model="exportCredentialSelection" label="导出凭据类型" :disabled="exportingAccounts" :options="[{ value: 'codex', label: 'Codex' }, { value: 'excel', label: 'Excel' }, { value: 'all', label: '全部' }]" />
+      <p class="mt-3 mb-0">
+        导出选中的 {{ exportAccountCount }} 个账号已有的对应凭据
       </p>
     </BaseConfirmModal>
 

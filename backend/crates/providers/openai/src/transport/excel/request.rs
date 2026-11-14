@@ -153,6 +153,12 @@ pub(crate) fn prepare_request(
     let mut metadata = Map::new();
     if let Some(values) = source.get("metadata").and_then(Value::as_object) {
         for (key, value) in values {
+            if matches!(
+                key.as_str(),
+                "task_id" | "turn_id" | "agent_iteration" | "bps_tools_version_id"
+            ) {
+                continue;
+            }
             if value.is_string() || value.is_number() || value.is_boolean() {
                 let text = value
                     .as_str()

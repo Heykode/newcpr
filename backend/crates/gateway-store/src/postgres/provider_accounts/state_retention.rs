@@ -37,7 +37,7 @@ impl StateOwnerSnapshot {
         sqlx::query(
             "select id, provider_kind, upstream_user_id, upstream_account_id, plan_type,
                     turn_state_binding_revision, provider_credentials_json
-             from provider_accounts where id = $1 for update",
+             from provider_accounts where id = $1 and authentication_kind <> 'none' for update",
         )
         .bind(id)
         .fetch_optional(&mut **transaction)
@@ -56,7 +56,7 @@ impl StateOwnerSnapshot {
             "select id, provider_kind, upstream_user_id, upstream_account_id, plan_type,
                     turn_state_binding_revision, provider_credentials_json
              from provider_accounts
-             where provider_kind = $1 and upstream_user_id = $2
+             where provider_kind = $1 and upstream_user_id = $2 and authentication_kind <> 'none'
                and coalesce(upstream_account_id, '') = coalesce($3, '') for update",
         )
         .bind(&account.provider_kind)

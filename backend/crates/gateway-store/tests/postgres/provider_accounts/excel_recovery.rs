@@ -2,7 +2,7 @@ use super::*;
 use gateway_admin::model::excel_recovery::{ExcelRecoveryConfig, ExcelRecoveryOutcome};
 use gateway_core::account::ResponsesUpstream;
 
-fn patch(id: &str) -> BatchUpdateAccounts {
+pub(super) fn patch(id: &str) -> BatchUpdateAccounts {
     BatchUpdateAccounts {
         quota_limits: Default::default(),
         auto_use_quota_credits: None,
@@ -41,11 +41,17 @@ async fn seed(db: &TestDatabase, id: &str) {
         .insert_provider_account(account(id, id))
         .await
         .unwrap();
+    super::excel_credentials::seed_sidecar(db, id).await;
+    sqlx::query("update openai_excel_credentials set suspended=true where account_id=$1")
+        .bind(id)
+        .execute(&db.pool)
+        .await
+        .unwrap();
     admin_account_store(&db.pool)
         .batch_update_accounts(
             BatchUpdateAccounts {
                 auto_use_quota_credits: None,
-                enabled: Some(false),
+                enabled: Some(true),
                 responses_upstream: Some(ResponsesUpstream::Excel),
                 excel_recovery: Some(ExcelRecoveryConfig {
                     enabled: true,
@@ -68,7 +74,7 @@ async fn due(db: &TestDatabase) {
 }
 
 async fn enabled(db: &TestDatabase, id: &str) -> bool {
-    sqlx::query_scalar("select enabled from provider_accounts where id=$1")
+    sqlx::query_scalar("select not suspended from openai_excel_credentials where account_id=$1")
         .bind(id)
         .fetch_one(&db.pool)
         .await
@@ -196,9 +202,11 @@ async fn recovery_failures_and_stale_results_never_enable_accounts() {
         "update account_excel_recovery set enabled=false,generation=generation+1 where account_id='acct_fence'",
         "update provider_accounts set responses_upstream='codex' where id='acct_fence'",
         "update runtime_settings set refresh_concurrency=refresh_concurrency+1 where id=1",
-        "update provider_accounts set credential_state='invalid' where id='acct_fence'",
+        "update openai_excel_credentials set credential_state='invalid' where account_id='acct_fence'",
+        "update openai_excel_credentials set quality_pause_owner='quality-fixture' where account_id='acct_fence'",
     ] {
-        sqlx::query("update provider_accounts set responses_upstream='excel',credential_state='ready' where id='acct_fence'").execute(&db.pool).await.unwrap();
+        sqlx::query("update provider_accounts set enabled=true,responses_upstream='excel',credential_state='ready' where id='acct_fence'").execute(&db.pool).await.unwrap();
+        sqlx::query("update openai_excel_credentials set credential_state='ready',suspended=true,quality_pause_owner=null where account_id='acct_fence'").execute(&db.pool).await.unwrap();
         sqlx::query("update account_excel_recovery set enabled=true where account_id='acct_fence'")
             .execute(&db.pool)
             .await
@@ -219,6 +227,21 @@ async fn recovery_failures_and_stale_results_never_enable_accounts() {
         );
         assert!(!enabled(&db, "acct_fence").await);
     }
+    db.close().await;
+}
+
+#[tokio::test]
+async fn recovery_does_not_claim_excel_quality_owned_pause() {
+    let Some(db) = TestDatabase::create("excel_recovery_quality_owner").await else {
+        return;
+    };
+    let store = admin_account_store(&db.pool);
+    seed(&db, "acct_quality_pause").await;
+    due(&db).await;
+    sqlx::query("update openai_excel_credentials set quality_pause_owner='quality-fixture' where account_id='acct_quality_pause'")
+        .execute(&db.pool).await.unwrap();
+    assert!(store.claim_excel_recovery().await.unwrap().is_none());
+    assert!(!enabled(&db, "acct_quality_pause").await);
     db.close().await;
 }
 
@@ -295,19 +318,15 @@ async fn recovery_keeps_failed_model_and_skips_unavailable_credentials() {
     let store = admin_account_store(&db.pool);
     sqlx::query("update account_excel_recovery set failed_model='missing_model' where account_id='acct_model'").execute(&db.pool).await.unwrap();
     due(&db).await;
-    assert!(
-        store.claim_excel_recovery().await.unwrap().is_none(),
-        "do not use another model to manufacture recovery"
-    );
+    let claim = store.claim_excel_recovery().await.unwrap().unwrap();
     assert_eq!(
-        store
-            .load_excel_recovery(&["acct_model".into()])
-            .await
-            .unwrap()["acct_model"]
-            .last_result
-            .as_deref(),
-        Some("model_unavailable")
+        claim.model, "missing_model",
+        "never substitute another model for the failed model"
     );
+    store
+        .finish_excel_recovery(&claim, ExcelRecoveryOutcome::RequestFailed)
+        .await
+        .unwrap();
     sqlx::query(
         "update account_excel_recovery set failed_model=null where account_id='acct_model'",
     )
@@ -315,8 +334,8 @@ async fn recovery_keeps_failed_model_and_skips_unavailable_credentials() {
     .await
     .unwrap();
     for sql in [
-        "update provider_accounts set credential_state='invalid' where id='acct_model'",
-        "update provider_accounts set credential_state='ready',access_token_expires_at=now()-interval '1 second' where id='acct_model'",
+        "update openai_excel_credentials set credential_state='invalid' where account_id='acct_model'",
+        "update openai_excel_credentials set credential_state='ready',access_token_expires_at=now()-interval '1 second' where account_id='acct_model'",
     ] {
         sqlx::query(sql).execute(&db.pool).await.unwrap();
         due(&db).await;

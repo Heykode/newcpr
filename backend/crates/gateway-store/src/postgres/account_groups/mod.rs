@@ -17,7 +17,7 @@ use gateway_admin::{
     },
     ports::store::{AccountGroupStore, AdminStoreError, AdminStoreResult},
 };
-use gateway_core::{account::AccountStatusFacts, routing::AccountGroupId};
+use gateway_core::routing::AccountGroupId;
 use sqlx::{PgPool, Postgres, QueryBuilder, Row as _, Transaction};
 
 use crate::{
@@ -495,6 +495,7 @@ async fn load_member_facts<'e>(
         .collect::<Vec<_>>();
     let rows = sqlx::query(
         "select membership.account_group_id,
+                (select to_jsonb(e) - 'credential_json' - 'quota_json' from openai_excel_credentials e where e.account_id=account.id) as excel_credential_json,
                 account.id, account.provider_kind, account.name, account.custom_name, account.email,
                 account.upstream_user_id, account.upstream_account_id, account.plan_type,
                 coalesce((select enabled from outbound_proxies where outbound_proxies.id = account.outbound_proxy_id), true) as outbound_proxy_enabled,
@@ -533,19 +534,11 @@ async fn load_member_facts<'e>(
             )
             .map_err(|_| invalid("invalid default account concurrency"))?;
             let account = account_summary_from_row(row)?;
+            let status = account.active_status_facts();
             Ok(AccountGroupMemberFact {
                 group_id,
                 account_id: account.id,
-                status: AccountStatusFacts {
-                    quota_paused: account.quota_paused,
-                    enabled: account.enabled,
-                    credential_state: account.credential_state,
-                    access_token_expires_at: account.access_token_expires_at.map(Into::into),
-                    quota: account.quota,
-                    rate_limited_until: None,
-                    last_error_reason: account.last_error_reason,
-                    last_error_message: account.last_error_message,
-                },
+                status,
                 total_slots: account
                     .concurrency_limit
                     .map_or(default_slots, |limit| u64::from(limit.get())),

@@ -134,14 +134,6 @@ onScopeDispose(() => controller?.abort())
           {{ selected.config.responsesUpstream === 'excel' ? '开启' : '关闭' }}
         </dd>
       </template>
-      <template v-if="selected.config.excelModelsFollowGlobal != null || selected.config.excelModels != null">
-        <dt class="text-cp-text-secondary">
-          Excel 模型
-        </dt>
-        <dd class="m-0 break-all">
-          {{ selected.config.excelModelsFollowGlobal ? '跟随全局' : (selected.config.excelModels ?? []).join(', ') || '无' }}
-        </dd>
-      </template>
       <template v-if="selected.config.excelCacheCreationAsInput != null">
         <dt>缓存写入按输入计费</dt>
         <dd>{{ selected.config.excelCacheCreationAsInput ? '开启' : '关闭' }}</dd>

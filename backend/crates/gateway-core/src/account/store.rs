@@ -39,6 +39,70 @@ pub struct AccountCatalogOmissions {
 /// `provider_accounts` 的数据库中立端口。
 #[async_trait]
 pub trait ProviderAccountStore: Send + Sync {
+    async fn list_due_excel_credentials(
+        &self,
+        _limit: u32,
+        _now: std::time::SystemTime,
+    ) -> Result<Vec<ProviderAccountId>, StoreError> {
+        Ok(Vec::new())
+    }
+
+    /// Persist before sending a rotating refresh token. A revision may be attempted once.
+    async fn claim_excel_refresh(
+        &self,
+        _account: &ProviderAccountId,
+        _expected_revision: CredentialRevision,
+    ) -> Result<bool, StoreError> {
+        Err(StoreError::new(crate::error::StoreErrorKind::InvalidState))
+    }
+
+    async fn load_current_excel_credential(
+        &self,
+        _account: &ProviderAccountId,
+    ) -> Result<super::LoadedExcelCredential, StoreError> {
+        Err(StoreError::new(crate::error::StoreErrorKind::InvalidState))
+    }
+
+    async fn load_excel_credential(
+        &self,
+        account: &ProviderAccountId,
+        expected_revision: CredentialRevision,
+    ) -> Result<super::LoadedExcelCredential, StoreError> {
+        let loaded = self.load_current_excel_credential(account).await?;
+        if loaded.metadata.revision != expected_revision {
+            return Err(StoreError::new(crate::error::StoreErrorKind::Conflict));
+        }
+        Ok(loaded)
+    }
+
+    async fn compare_and_swap_excel_credential(
+        &self,
+        _update: super::ExcelCredentialCasUpdate,
+    ) -> Result<CredentialCasOutcome, StoreError> {
+        Err(StoreError::new(crate::error::StoreErrorKind::InvalidState))
+    }
+
+    async fn apply_excel_state_change(
+        &self,
+        _change: AccountStateChange,
+    ) -> Result<(), StoreError> {
+        Err(StoreError::new(crate::error::StoreErrorKind::InvalidState))
+    }
+
+    async fn apply_excel_diagnostic_state_change(
+        &self,
+        change: AccountStateChange,
+    ) -> Result<(), StoreError> {
+        self.apply_excel_state_change(change).await
+    }
+
+    async fn compare_and_swap_excel_quota(
+        &self,
+        _observation: QuotaObservation,
+    ) -> Result<QuotaWriteOutcome, StoreError> {
+        Err(StoreError::new(crate::error::StoreErrorKind::InvalidState))
+    }
+
     /// Only an active quality job may retest its own scheduling pause.
     async fn quality_pause_is_owned(
         &self,

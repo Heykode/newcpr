@@ -29,6 +29,7 @@ use std::{
     sync::{Arc, Mutex, atomic::Ordering},
 };
 
+mod dual_credentials;
 mod enrollment;
 mod recovery;
 mod workspace;
@@ -59,15 +60,20 @@ impl ReloginStore for MemoryStore {
     ) -> AdminStoreResult<()> {
         let mut rows = self.rows.lock().unwrap();
         let row = rows.get_mut(id).ok_or_else(conflict)?;
+        let previous =
+            if attempt.credential_target == gateway_core::account::CredentialTarget::Excel {
+                &mut row.excel.as_mut().ok_or_else(conflict)?.last_attempt
+            } else {
+                &mut row.last_attempt
+            };
         if row.revision != revision
-            || row
-                .last_attempt
+            || previous
                 .as_ref()
                 .is_none_or(|previous| previous.id != attempt.id)
         {
             return Err(conflict());
         }
-        row.last_attempt = Some(attempt.clone());
+        *previous = Some(attempt.clone());
         self.history
             .lock()
             .unwrap()
@@ -190,6 +196,13 @@ impl ReloginStore for MemoryStore {
         let mut history = self.history.lock().unwrap();
         for (entry, _) in entries {
             if let Some(attempt) = &entry.last_attempt {
+                history.insert((entry.id.clone(), attempt.id.clone()), attempt.clone());
+            }
+            if let Some(attempt) = entry
+                .excel
+                .as_ref()
+                .and_then(|excel| excel.last_attempt.as_ref())
+            {
                 history.insert((entry.id.clone(), attempt.id.clone()), attempt.clone());
             }
         }
@@ -668,12 +681,28 @@ async fn relogin_excel_override_applies_to_new_accounts_and_overrides_template_m
     assert!(result[0].success, "{result:?}");
     let mut expected = template.config.settings().unwrap();
     expected.responses_upstream = Some(ResponsesUpstream::Excel);
-    expected.excel_models_follow_global = Some(true);
+    expected.excel_models_follow_global = None;
     expected.excel_cache_creation_as_input = Some(true);
     expected.excel_ignore_encrypted_content = Some(false);
     expected.excel_auto_disable_on_403 = Some(false);
     expected.excel_models = None;
     assert_eq!(h.accounts.import_settings(), vec![Some(expected)]);
+}
+
+#[test]
+fn relogin_excel_options_accept_route_without_legacy_model_settings() {
+    use gateway_admin::model::relogin_templates::ExcelImportSettings;
+    for value in [
+        serde_json::json!({"responsesUpstream":"excel"}),
+        serde_json::json!({"responsesUpstream":"excel","excelModelsFollowGlobal":false}),
+    ] {
+        let settings: ExcelImportSettings = serde_json::from_value(value).unwrap();
+        settings.validate().unwrap();
+        let mut target = template_config().settings().unwrap();
+        settings.apply(&mut target);
+        assert!(target.excel_models.is_none());
+        assert!(target.excel_models_follow_global.is_none());
+    }
 }
 
 #[test]

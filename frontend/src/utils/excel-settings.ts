@@ -1,5 +1,3 @@
-import { parseExcelModels } from '@/views/accounts/utils/schedulingForm'
-
 export type Excel403Action = 'none' | 'pause_account' | 'disable_excel'
 
 export interface ExcelRecoveryConfig {
@@ -24,7 +22,7 @@ export function excelRecoveryResultLabel(result: string | null): string {
     cancelled: '探测已取消',
     interrupted: '上次探测中断，等待下次计划',
     superseded: '配置已变化，旧结果未应用',
-    model_unavailable: '原失败模型不在 Excel 模型列表，未换模型探测',
+    model_unavailable: '原失败模型当前不可用，未换模型探测',
   } as Record<string, string>)[result ?? ''] ?? '尚未探测'
 }
 
@@ -38,8 +36,8 @@ export function excelRecoverySettings(enabled: boolean, interval: string): Excel
 
 export const EXCEL_403_OPTIONS = [
   { value: 'none', label: '不自动处理' },
-  { value: 'pause_account', label: '暂停账号调度' },
-  { value: 'disable_excel', label: '关闭Excel模式' },
+  { value: 'pause_account', label: '暂停 Excel 链路' },
+  { value: 'disable_excel', label: '暂停 Excel 链路（兼容旧配置）' },
 ]
 
 export function accountExcel403Action(account: { excel403Action?: Excel403Action | null, excelAutoDisableOn403?: boolean | null }): Excel403Action {
@@ -53,21 +51,14 @@ export function excel403ActionLabel(action: Excel403Action): string {
 export interface ExcelSettings {
   excelRecovery?: ExcelRecoveryConfig
   responsesUpstream: 'codex' | 'excel'
-  excelModelsFollowGlobal: boolean
   excelCacheCreationAsInput?: boolean
   excel403Action?: Excel403Action
-  excelModels?: string[]
 }
 
-export function excelSettings(enabled: boolean, followGlobal: boolean, input: string, cacheCreationAsInput?: boolean, action?: Excel403Action): ExcelSettings {
-  const models = followGlobal ? undefined : parseExcelModels(input)
-  if (models === null)
-    throw new Error('Excel 模型最多 64 个，每个名称最多 128 个字母、数字、点、下划线或连字符')
+export function excelSettings(enabled: boolean, _followGlobal: boolean, _input: string, cacheCreationAsInput?: boolean, action?: Excel403Action): ExcelSettings {
   return {
     responsesUpstream: enabled ? 'excel' : 'codex',
-    excelModelsFollowGlobal: followGlobal,
     ...(cacheCreationAsInput !== undefined ? { excelCacheCreationAsInput: cacheCreationAsInput } : {}),
     ...(action !== undefined ? { excel403Action: enabled ? action : 'none' } : {}),
-    ...(models !== undefined ? { excelModels: models } : {}),
   }
 }

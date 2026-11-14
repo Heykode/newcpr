@@ -75,8 +75,12 @@ use crate::transport::{
 const PROVIDER_NAME: &str = "openai";
 const PENDING_DOCUMENT_SCHEMA_VERSION: u64 = 3;
 
+mod excel;
+
 /// OpenAI 对终态 Admin port 的唯一实现。
 pub(crate) struct OpenAiAdminProvider {
+    excel: Arc<crate::credential::excel::ExcelCredentialService>,
+    excel_pending: Option<Arc<dyn OAuthPendingFlowPort>>,
     egress_runtime: Option<Arc<crate::transport::egress::CodexEgressRuntime>>,
     provider_kind: ProviderKind,
     profile: CodexWireProfileState,
@@ -111,6 +115,12 @@ impl OpenAiAdminProvider {
         timezone: DeploymentTimeZone,
     ) -> Self {
         Self {
+            excel: Arc::new(crate::credential::excel::ExcelCredentialService::new(
+                Arc::clone(&accounts),
+                profile.clone(),
+                None,
+            )),
+            excel_pending: None,
             egress_runtime: None,
             provider_kind,
             profile,
@@ -131,8 +141,24 @@ impl OpenAiAdminProvider {
         mut self,
         runtime: Arc<crate::transport::egress::CodexEgressRuntime>,
     ) -> Self {
+        self.excel = Arc::new(crate::credential::excel::ExcelCredentialService::new(
+            Arc::clone(&self.accounts),
+            self.profile.clone(),
+            Some(Arc::clone(&runtime)),
+        ));
         self.egress_runtime = Some(runtime);
         self
+    }
+
+    pub(crate) fn with_excel_pending(mut self, port: Arc<dyn OAuthPendingFlowPort>) -> Self {
+        self.excel_pending = Some(port);
+        self
+    }
+
+    pub(crate) fn excel_refresh_service(
+        &self,
+    ) -> Arc<crate::credential::excel::ExcelCredentialService> {
+        Arc::clone(&self.excel)
     }
 
     async fn reload_egress(&self) -> Result<(), ProviderAdminError> {
@@ -167,6 +193,63 @@ impl OpenAiAdminProvider {
 
 #[async_trait]
 impl ProviderAdmin for OpenAiAdminProvider {
+    async fn prepare_excel_import(
+        &self,
+        command: PrepareCredentialImport,
+    ) -> Result<PreparedCredentialImport, ProviderAdminError> {
+        self.prepare_excel_document(command).await
+    }
+
+    async fn start_excel_authorization(
+        &self,
+        pending: PendingAuthorizationMutation,
+    ) -> Result<AuthorizationStarted, ProviderAdminError> {
+        self.start_excel_flow(pending).await
+    }
+
+    async fn complete_excel_authorization(
+        &self,
+        command: CompleteAuthorization,
+    ) -> Result<
+        gateway_admin::model::provider_credentials::PreparedExcelAuthorizationCommit,
+        ProviderAdminError,
+    > {
+        self.complete_excel_flow(command).await
+    }
+
+    async fn refresh_excel_credential(
+        &self,
+        account_id: &ProviderAccountId,
+    ) -> Result<(), ProviderAdminError> {
+        self.account(account_id).await?;
+        self.excel
+            .refresh(account_id)
+            .await
+            .map_err(excel::map_error)
+    }
+
+    async fn excel_models(
+        &self,
+        account_id: &ProviderAccountId,
+    ) -> Result<ProviderModels, ProviderAdminError> {
+        self.read_excel_models(account_id).await
+    }
+
+    async fn export_excel_credential(
+        &self,
+        account_id: &ProviderAccountId,
+    ) -> Result<ProviderDocument, ProviderAdminError> {
+        self.account(account_id).await?;
+        let data = self
+            .excel
+            .load(account_id)
+            .await
+            .map_err(excel::map_error)?;
+        Ok(ProviderDocument::new(OpaqueProviderData::new(
+            data.export_document().map_err(excel::map_error)?,
+        )))
+    }
+
     fn validate_key_client_profile(
         &self,
         profile: &OpaqueProviderData,
@@ -554,6 +637,11 @@ impl ProviderAdmin for OpenAiAdminProvider {
         validate_account_record(&command.account, &self.provider_kind)?;
         let account_id = ProviderAccountId::new(command.account.id.clone())
             .map_err(|_| provider_admin_error(ProviderAdminErrorKind::Invalid))?;
+        if command.account.authentication_kind == "none" {
+            return self
+                .prepare_codex_shell_promotion(command, &account_id)
+                .await;
+        }
         let current = self
             .accounts
             .load_current_credential(&account_id)
@@ -996,6 +1084,71 @@ impl ProviderAdmin for OpenAiAdminProvider {
             account_ids,
             document: ProviderDocument::new(OpaqueProviderData::new(document)),
         })
+    }
+}
+
+struct CodexShellPromotionGuard;
+
+impl CredentialCommitGuard for CodexShellPromotionGuard {
+    fn finish(self: Box<Self>) {}
+}
+
+impl OpenAiAdminProvider {
+    async fn prepare_codex_shell_promotion(
+        &self,
+        command: PrepareCredentialRotation,
+        account_id: &ProviderAccountId,
+    ) -> Result<PreparedCredentialRotation, ProviderAdminError> {
+        let current = self.account(account_id).await?;
+        if current.has_codex_credential()
+            || current.revision().get() != command.account.credential_revision.get()
+        {
+            return Err(provider_admin_error(ProviderAdminErrorKind::Conflict));
+        }
+        let secret = rotation_secret(command.provider_material)?;
+        let metadata = candidate_oauth_metadata(&secret)
+            .map_err(|_| provider_admin_error(ProviderAdminErrorKind::Invalid))?;
+        if metadata.chatgpt_user_id.as_deref() != current.upstream_user_id()
+            || metadata.chatgpt_account_id.as_deref() != current.upstream_account_id()
+            || current.upstream_user_id().is_none()
+            || current.upstream_account_id().is_none()
+            || secret.refresh_token.is_none()
+            || crate::credential::excel::identity_from_access_token(
+                secret.access_token.expose_secret(),
+            )
+            .is_some()
+        {
+            return Err(provider_admin_error(ProviderAdminErrorKind::Conflict)
+                .with_public_message("Codex 凭据必须与账号现有用户和工作区一致"));
+        }
+        let expiry = parse_access_token_expiration(secret.access_token.expose_secret())
+            .filter(|expiry| *expiry > Utc::now())
+            .ok_or_else(|| provider_admin_error(ProviderAdminErrorKind::Invalid))?;
+        let material = crate::credential::CodexCredentialCodec::encode_unresolved(
+            &secret,
+            uuid::Uuid::new_v4().to_string(),
+            Vec::new(),
+        )
+        .map_err(|_| provider_admin_error(ProviderAdminErrorKind::Invalid))?;
+        Ok(PreparedCredentialRotation::new(
+            PreparedCredentialRotationFacts {
+                preserve_profile: true,
+                account_id: account_id.clone(),
+                provider_kind: self.provider_kind.clone(),
+                expected_credential_revision: command.account.credential_revision,
+                replacement_identity: None,
+                name: command.account.name,
+                email: metadata.email,
+                plan_type: metadata.chatgpt_plan_type,
+                provider_material: ProviderDocument::new(OpaqueProviderData::new(
+                    material.into_inner(),
+                )),
+                has_refresh_token: true,
+                access_token_expires_at: Some(expiry),
+                next_refresh_at: None,
+            },
+            Box::new(CodexShellPromotionGuard),
+        ))
     }
 }
 

@@ -53,11 +53,7 @@ pub(super) fn view(
     now: DateTime<Utc>,
 ) -> RecoveryView {
     let mut result = eligibility(entry, pool, settings, now);
-    result.retries_used = if entry.synced_at.is_none() {
-        entry.automatic_attempts.saturating_sub(1)
-    } else {
-        0
-    };
+    result.retries_used = entry.automatic_attempts.saturating_sub(1);
     result.max_retries = settings.max_retries;
     result
 }
@@ -132,7 +128,7 @@ fn eligibility(
             RecoveryView::new("unsupported_error", "当前异常不属于可自动重登的凭据过期")
         };
     }
-    if entry.status == ReloginStatus::Ready
+    if matches!(entry.status, ReloginStatus::Ready | ReloginStatus::Failed)
         && entry
             .credential
             .as_ref()
@@ -144,7 +140,7 @@ fn eligibility(
     }
     // A successful delivery, or a genuinely new auth binding, ends the old retry budget.
     // Routine Cookie revisions still match the captured authentication generation.
-    if entry.synced_at.is_none()
+    if !(entry.status == ReloginStatus::Ready && entry.synced_at.is_some())
         && same_attempt(entry, account)
         && let Some(wait) = retry_wait(entry, settings, now)
     {

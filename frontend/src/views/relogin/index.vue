@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import type { AccountTemplate } from '@/api/modules/account-templates'
-import type { ReloginBatchResult, ReloginEntry, ReloginPushSelection, ReloginWorkspaceMode } from '@/api/modules/relogin'
-import type { Excel403Action } from '@/utils/excel-settings'
+import type { CredentialSelection, CredentialTarget, ReloginBatchResult, ReloginEntry, ReloginPushSelection, ReloginWorkspaceMode } from '@/api/modules/relogin'
 import { CheckCheck, Download, GripVertical, LayoutTemplate, Pause, Play, RefreshCw, Save, Search, Settings2, Trash2, Upload, X } from '@lucide/vue'
 import { useIntervalFn, useNow } from '@vueuse/core'
 
@@ -27,6 +26,7 @@ import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseModal from '@/components/base/BaseModal/index.vue'
+import BaseSegmented from '@/components/base/BaseSegmented.vue'
 import BaseSelect from '@/components/base/BaseSelect.vue'
 import BaseSwitch from '@/components/base/BaseSwitch.vue'
 import BaseTablePagination from '@/components/base/BaseTable/BaseTablePagination.vue'
@@ -34,17 +34,12 @@ import { defineTableColumns } from '@/components/base/BaseTable/columns'
 import BaseTable from '@/components/base/BaseTable/index.vue'
 import BaseTextarea from '@/components/base/BaseTextarea.vue'
 import { toast } from '@/components/base/BaseToast'
-import Excel403ActionSelect from '@/components/Excel403ActionSelect.vue'
-import ExcelModelFields from '@/components/ExcelModelFields.vue'
-import ExcelRecoveryFields from '@/components/ExcelRecoveryFields.vue'
 import ReloginCountCell from '@/components/ReloginCountCell.vue'
 import { useDownload } from '@/composables/useDownload'
 import { t } from '@/i18n'
 import { normalizeAccountName } from '@/utils/account-name'
 import { errorMessage } from '@/utils/async'
 import { formatDateTime } from '@/utils/date'
-import { DEFAULT_EXCEL_MODELS_INPUT } from '@/utils/excel-defaults'
-import { excelRecoverySettings, excelSettings } from '@/utils/excel-settings'
 import { useAccountSwipeSelect } from '../accounts/composables/useAccountSwipeSelect'
 import ReloginHistoryModal from './components/ReloginHistoryModal.vue'
 import ReloginTotpModal from './components/ReloginTotpModal.vue'
@@ -56,6 +51,28 @@ const historyOpen = shallowRef(false)
 const totpEntry = shallowRef<ReloginEntry | null>(null)
 const totpOpen = shallowRef(false)
 const entries = shallowRef<ReloginEntry[]>([])
+const credentialView = shallowRef<CredentialTarget>('codex')
+const credentialOptions = [{ value: 'codex', label: 'Codex' }, { value: 'excel', label: 'Excel' }]
+const selectionOptions = [...credentialOptions, { value: 'all', label: '全部' }]
+function channelRow(row: ReloginEntry, target: CredentialTarget): ReloginEntry {
+  if (target === 'codex')
+    return row
+  return row.excel ?? { ...row, credentialTarget: 'excel', credentialStatus: 'none', status: 'pending', poolStatus: 'absent', automatic: false, message: '', verifiedAt: null, expiresAt: null }
+}
+const viewEntries = computed(() => entries.value.map(row => channelRow(row, credentialView.value)))
+function credentialSummary(id: string, target: CredentialTarget) {
+  const source = entries.value.find(row => row.id === id)
+  if (!source)
+    return '未获取'
+  const row = channelRow(source, target)
+  if (row.credentialStatus === 'expired')
+    return '已过期'
+  if (row.poolStatus === 'synced')
+    return '已同步'
+  if (row.credentialStatus === 'verified')
+    return '待推送'
+  return row.poolAccounts?.some(account => account.hasCredential) ? '已有凭据' : '未获取'
+}
 const loading = shallowRef(false)
 const busy = shallowRef(false)
 const failure = shallowRef('')
@@ -64,11 +81,13 @@ const selected = ref(new Set<string>())
 const exportOpen = shallowRef(false)
 const exportFormat = shallowRef<'json' | 'two_fa'>('json')
 const exportIds = shallowRef<string[]>([])
+const exportCredential = shallowRef<CredentialSelection>('codex')
 const { downloadText } = useDownload()
 
 function confirmExport(format: 'json' | 'two_fa') {
   exportIds.value = [...selected.value]
   exportFormat.value = format
+  exportCredential.value = credentialView.value
   exportOpen.value = exportIds.value.length > 0 && exportIds.value.length <= 200
 }
 
@@ -77,12 +96,17 @@ async function executeExport() {
     return
   busy.value = true
   try {
-    const result = await exportRelogin(exportIds.value, exportFormat.value)
+    const result = await exportRelogin(exportIds.value, exportFormat.value, exportCredential.value)
+    if (!result.files.length)
+      throw new Error(result.skipped?.[0]?.message || '没有可导出的凭据')
     for (const file of result.files)
       await downloadText(file.content, file.name, exportFormat.value === 'json' ? 'application/json;charset=utf-8' : 'text/plain;charset=utf-8')
     exportOpen.value = false
     exportIds.value = []
-    toast.success('资料已导出')
+    if (result.skipped?.length)
+      toast.warning(`已导出可用凭据，跳过 ${result.skipped.length} 项`)
+    else
+      toast.success('资料已导出')
   }
   catch (error) { toast.error(errorMessage(error, '导出失败')) }
   finally { busy.value = false }
@@ -116,7 +140,7 @@ const poolOptions = [
 ]
 const autoOptions = [{ value: '', label: '全部自动重登' }, { value: 'on', label: '允许自动重登' }, { value: 'off', label: '关闭自动重登' }]
 const plans = computed(() => [{ value: '', label: '全部 PLAN' }, ...[...new Set(entries.value.map(row => row.planType).filter((value): value is string => !!value))].sort().map(value => ({ value, label: value.toUpperCase() }))])
-const filtered = computed(() => entries.value.filter(row =>
+const filtered = computed(() => viewEntries.value.filter(row =>
   row.email.toLowerCase().includes(search.value.trim().toLowerCase())
   && (!plan.value || row.planType === plan.value)
   && (!status.value || processingStatus(row).key === status.value)
@@ -234,7 +258,7 @@ function selectPage(checked: boolean) {
 function batchReport(results: ReloginBatchResult[]) {
   const failed = results.filter(item => !item.success)
   if (failed.length) {
-    failure.value = failed.map(item => `${entries.value.find(row => row.id === item.id)?.email ?? item.id}：${item.message}`).join('\n')
+    failure.value = failed.map(item => `${entries.value.find(row => row.id === item.id)?.email ?? item.id} [${item.credentialTarget === 'excel' ? 'Excel' : 'Codex'}]：${item.message}`).join('\n')
     toast.warning(`${results.length - failed.length} 项完成，${failed.length} 项未完成`)
   }
   else {
@@ -243,21 +267,24 @@ function batchReport(results: ReloginBatchResult[]) {
 }
 const queueOpen = shallowRef(false)
 const queuedIds = shallowRef<string[]>([])
+const queueCredential = shallowRef<CredentialSelection>('codex')
 const queueMode = shallowRef<ReloginWorkspaceMode>('highest')
 const queueOptions = [{ value: 'highest', label: '最高套餐' }, { value: 'original', label: '原工作区' }]
 function queue(ids: string[]) {
   queuedIds.value = [...ids]
-  queueMode.value = 'highest'
+  queueMode.value = 'original'
+  queueCredential.value = credentialView.value
   queueOpen.value = true
 }
 function executeQueue() {
   return action(async () => {
-    batchReport(await queueRelogin(queuedIds.value, queueMode.value))
+    batchReport(await queueRelogin(queuedIds.value, queueMode.value, queueCredential.value))
     queueOpen.value = false
   })
 }
 function changeAutomatic(ids: string[], enabled: boolean) {
-  return action(() => setReloginAutomatic(ids, enabled))
+  const target = credentialView.value
+  return action(() => setReloginAutomatic(ids, enabled, target))
 }
 function configure(nextPaused = paused.value) {
   const value = Number(concurrency.value)
@@ -342,31 +369,24 @@ const confirming = shallowRef(false)
 const templatesOpen = shallowRef(false)
 const selectedTemplate = shallowRef<AccountTemplate | null>(null)
 const batchCustomName = shallowRef('')
-const applyExcel = shallowRef(false)
-const excelEnabled = shallowRef(false)
-const excelCacheCreationAsInput = shallowRef(true)
-const excel403Action = shallowRef<Excel403Action>('none')
-const excelRecoveryEnabled = shallowRef(false)
-const excelRecoveryInterval = shallowRef('60')
-const excelModelsFollowGlobal = shallowRef(true)
-const excelModels = shallowRef(DEFAULT_EXCEL_MODELS_INPUT)
+const pushCredential = shallowRef<CredentialSelection>('codex')
 const confirmMode = shallowRef<'push' | 'delete'>('push')
-const pendingRows = shallowRef<ReloginEntry[]>([])
+const pendingSources = shallowRef<ReloginEntry[]>([])
+const pendingRows = computed(() => pendingSources.value.map(row => channelRow(row, pushCredential.value === 'excel' ? 'excel' : 'codex')))
 const pushAccounts = ref<Record<string, string>>({})
+watch(pushCredential, () => {
+  pushAccounts.value = Object.fromEntries(pendingRows.value.map((row) => {
+    const targets = row.pushTargets?.filter(target => target.available) ?? []
+    return [row.id, targets.length === 1 ? targets[0]!.accountId : '']
+  }))
+})
 function confirm(mode: 'push' | 'delete', ids: string[]) {
   failure.value = ''
   selectedTemplate.value = null
   batchCustomName.value = ''
-  applyExcel.value = false
-  excelEnabled.value = false
-  excelCacheCreationAsInput.value = true
-  excel403Action.value = 'none'
-  excelRecoveryEnabled.value = false
-  excelRecoveryInterval.value = '60'
-  excelModelsFollowGlobal.value = true
-  excelModels.value = DEFAULT_EXCEL_MODELS_INPUT
+  pushCredential.value = credentialView.value
   confirmMode.value = mode
-  pendingRows.value = entries.value.filter(row => ids.includes(row.id)).map(row => ({ ...row }))
+  pendingSources.value = entries.value.filter(row => ids.includes(row.id)).map(row => ({ ...row, ...(row.excel ? { excel: { ...row.excel } } : {}) }))
   pushAccounts.value = Object.fromEntries(pendingRows.value.map((row) => {
     const targets = row.pushTargets?.filter(target => target.available) ?? []
     return [row.id, targets.length === 1 ? targets[0]!.accountId : '']
@@ -374,9 +394,9 @@ function confirm(mode: 'push' | 'delete', ids: string[]) {
   confirming.value = pendingRows.value.length > 0
 }
 function canPush(row: ReloginEntry) {
-  return row.status === 'ready' && row.credentialStatus === 'verified' && row.poolStatus !== 'synced'
+  return ['ready', 'failed'].includes(row.status) && row.credentialStatus === 'verified' && row.poolStatus !== 'synced'
 }
-const pushable = computed(() => pendingRows.value.filter(canPush))
+const pushable = computed(() => pendingRows.value.filter(row => canPush(row) || (pushCredential.value === 'all' && !!row.excel && canPush(row.excel))))
 const newPushCount = computed(() => pushable.value.filter(row => row.poolAccountIds.length === 0).length)
 function requiresPushTarget(row: ReloginEntry) {
   return row.workspaceMode === 'highest' && (row.pushTargets?.length ?? 0) > 0
@@ -408,13 +428,7 @@ function executeConfirmed() {
         if (requiresPushTarget(row) && target)
           selections[row.id] = { accountId: target.accountId, switchWorkspace: target.switchWorkspace }
       }
-      const newAccountExcel = newPushCount.value > 0 && applyExcel.value
-        ? {
-            ...excelSettings(excelEnabled.value, excelModelsFollowGlobal.value, excelModels.value, excelCacheCreationAsInput.value, excel403Action.value),
-            excelRecovery: excelRecoverySettings(excelRecoveryEnabled.value, excelRecoveryInterval.value),
-          }
-        : undefined
-      batchReport(await pushRelogin(pushable.value, template, customName, Object.keys(selections).length ? selections : undefined, newAccountExcel))
+      batchReport(await pushRelogin(pushable.value, template, customName, Object.keys(selections).length ? selections : undefined, undefined, pushCredential.value))
     }
     else {
       await deleteRelogin(pendingRows.value.map(row => row.id))
@@ -452,9 +466,9 @@ function saveWorkspace() {
     workspaceError.value = ''
     try {
       if (row.status === 'awaiting_workspace')
-        await resumeReloginWorkspace(row.id, row.revision, workspace.value)
+        await resumeReloginWorkspace(row.id, row.revision, workspace.value, row.credentialTarget ?? 'codex')
       else
-        await setReloginWorkspace(row.id, workspace.value.trim() || null)
+        await setReloginWorkspace(row.id, workspace.value.trim() || null, row.credentialTarget ?? 'codex')
       editing.value = false
     }
     catch (error) {
@@ -496,6 +510,7 @@ onBeforeUnmount(() => {
         <h1 class="m-0 text-xl font-bold text-cp-text">
           {{ t('navigation.relogin') }}
         </h1>
+        <BaseSegmented v-model="credentialView" label="凭据入口" :options="credentialOptions" :disabled="busy" />
         <BaseIconButton label="刷新重登列表" :loading="loading" :disabled="busy" @click="reload()">
           <RefreshCw class="size-4" />
         </BaseIconButton>
@@ -628,6 +643,8 @@ onBeforeUnmount(() => {
           <span v-if="row.recovery?.retryAt" class="block whitespace-normal break-words text-cp-xs tabular-nums text-cp-text-tertiary">{{ recoveryCountdown(row, now.getTime()) }}</span>
         </template>
         <template #credential="{ row }">
+          <span class="block whitespace-normal break-words text-cp-xs">Codex：{{ credentialSummary(row.id, 'codex') }}</span>
+          <span class="block whitespace-normal break-words text-cp-xs">Excel：{{ credentialSummary(row.id, 'excel') }}</span>
           <span class="block whitespace-normal break-words" :class="row.credentialStatus === 'verified' ? 'text-cp-success' : row.credentialStatus === 'expired' ? 'text-cp-warning' : 'text-cp-text-tertiary'" :title="row.verifiedAt ? `本次缓存凭据验证于 ${formatDateTime(row.verifiedAt)}；不代表已推送或号池当前正常` : '尚未通过重登获取新的 JSON；与号池已有凭据无关'">{{ credentialLabel(row) }}</span>
         </template>
         <template #pool="{ row }">
@@ -717,11 +734,17 @@ onBeforeUnmount(() => {
       </template>
     </BaseModal>
     <BaseConfirmModal v-model="exportOpen" :title="exportFormat === 'json' ? '导出JSON' : '导出2FA'" :loading="busy" @confirm="executeExport">
+      <BaseFormItem v-if="exportFormat === 'json'" label="导出凭据">
+        <BaseSegmented v-model="exportCredential" label="导出凭据类型" :options="selectionOptions" :disabled="busy" />
+      </BaseFormItem>
       <p class="m-0 text-cp-sm">
         将导出所选 {{ exportIds.length }} 条资料，文件包含{{ exportFormat === 'json' ? '访问凭据' : '邮箱、密码和2FA密钥' }}，请妥善保管。
       </p>
     </BaseConfirmModal>
     <BaseConfirmModal v-model="queueOpen" title="确认重登" :loading="busy" @confirm="executeQueue">
+      <BaseFormItem label="获取凭据">
+        <BaseSegmented v-model="queueCredential" label="重登凭据类型" :options="selectionOptions" :disabled="busy" />
+      </BaseFormItem>
       <BaseFormItem label="本次登录工作区">
         <BaseSelect v-model="queueMode" :options="queueOptions" aria-label="本次登录工作区" :disabled="busy" />
       </BaseFormItem>
@@ -730,6 +753,9 @@ onBeforeUnmount(() => {
       </p>
     </BaseConfirmModal>
     <BaseConfirmModal v-model="confirming" :title="confirmMode === 'push' ? '确认推送到号池' : '删除重登资料'" :destructive="confirmMode === 'delete'" :loading="busy" :confirm-disabled="confirmMode === 'push' && (!pushable.length || pushSelectionMissing)" @confirm="executeConfirmed">
+      <BaseFormItem v-if="confirmMode === 'push'" label="推送凭据">
+        <BaseSegmented v-model="pushCredential" label="推送凭据类型" :options="selectionOptions" :disabled="busy" />
+      </BaseFormItem>
       <p v-if="failure" class="mt-0 whitespace-pre-wrap break-words text-cp-sm text-cp-error" role="alert">
         {{ failure }}
       </p>
@@ -740,25 +766,6 @@ onBeforeUnmount(() => {
         新增 {{ newPushCount }} 项，更新已有账号 {{ pushable.length - newPushCount }} 项，跳过 {{ pendingRows.length - pushable.length }} 项。
       </p>
       <AccountTemplatePicker v-if="confirming && confirmMode === 'push' && newPushCount > 0" v-model="selectedTemplate" :disabled="busy" />
-      <div v-if="confirmMode === 'push' && newPushCount > 0" class="my-4 grid min-w-0 gap-3">
-        <BaseCheckbox v-model="applyExcel" label="指定新账号 Excel 设置（优先于模板）" show-label :disabled="busy" />
-        <template v-if="applyExcel">
-          <div class="flex items-center justify-between gap-3">
-            <span class="text-cp-sm">Excel 入口</span>
-            <BaseSwitch v-model="excelEnabled" label="切换新账号 Excel 入口" :disabled="busy" />
-          </div>
-          <BaseFormItem label="Excel 模型">
-            <ExcelModelFields v-model:follow-global="excelModelsFollowGlobal" v-model:models="excelModels" :disabled="busy" />
-          </BaseFormItem>
-          <BaseFormItem label="缓存写入按普通输入计费">
-            <BaseSwitch v-model="excelCacheCreationAsInput" label="新账号缓存写入按普通输入计费" :disabled="busy || !excelEnabled" />
-          </BaseFormItem>
-          <BaseFormItem label="Excel遇到HTTP 403">
-            <Excel403ActionSelect v-model="excel403Action" :disabled="busy || !excelEnabled" />
-          </BaseFormItem>
-          <ExcelRecoveryFields v-model:enabled="excelRecoveryEnabled" v-model:interval="excelRecoveryInterval" :disabled="busy" />
-        </template>
-      </div>
       <BaseFormItem v-if="confirmMode === 'push' && newPushCount > 0" label="本批账号名称（选填）">
         <BaseInput v-model="batchCustomName" aria-label="本批账号名称" placeholder="默认名称" :disabled="busy" />
       </BaseFormItem>

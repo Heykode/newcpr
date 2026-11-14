@@ -7,6 +7,7 @@ async fn excel_omission_is_opt_in_before_generate_websocket_and_compact_preparat
         for mode in ["http", "websocket", "compact"] {
             let store = Arc::new(MemoryAccountStore::default());
             create_account(&store, "acct_provider_contract").await;
+            store.seed_excel_credential("acct_provider_contract", true);
             store.set_responses_upstream("acct_provider_contract", ResponsesUpstream::Excel);
             store.set_excel_encrypted_content_policy(
                 "acct_provider_contract",

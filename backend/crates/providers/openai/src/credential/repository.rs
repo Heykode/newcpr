@@ -6,12 +6,13 @@ use std::time::SystemTime;
 use gateway_core::account::{
     AccountErrorReason, AccountStateChange, CredentialCasOutcome, CredentialCasUpdate,
     CredentialRevision, CredentialState, LoadedCredential, ProviderAccount, ProviderAccountId,
-    ProviderAccountStore, ProviderAccountUpdate, ProviderRefreshQuery,
+    ProviderAccountStore, ProviderAccountUpdate, ProviderRefreshQuery, ResponsesUpstream,
 };
 use gateway_core::routing::ProviderKind;
 use secrecy::ExposeSecret;
 use thiserror::Error;
 
+use super::excel::ExcelCredentialCodec;
 use super::security::{CodexCredentialCodec, CodexCredentialDataError, CodexRuntimeCredential};
 use super::types::{CodexCredentialData, CodexOAuthSecret};
 
@@ -165,6 +166,12 @@ impl CodexCredentialRepository {
         &self,
         account: &ProviderAccount,
     ) -> Result<CodexRuntimeCredential, CredentialRepositoryError> {
+        if account.credential_route() == ResponsesUpstream::Excel {
+            return self
+                .reload_selected_credential(account)
+                .await
+                .map(|(_, runtime)| runtime);
+        }
         if account.provider().as_str() != PROVIDER_NAME {
             return Err(CredentialRepositoryError::InvalidCredentialData(None));
         }
@@ -182,6 +189,9 @@ impl CodexCredentialRepository {
         &self,
         account: &ProviderAccount,
     ) -> Result<CodexCredentialData, CredentialRepositoryError> {
+        if account.credential_route() != ResponsesUpstream::Codex {
+            return Err(CredentialRepositoryError::InvalidCredentialData(None));
+        }
         let loaded = self
             .store
             .load_credential(account.id(), account.revision())
@@ -195,6 +205,33 @@ impl CodexCredentialRepository {
     ) -> Result<(ProviderAccount, CodexRuntimeCredential), CredentialRepositoryError> {
         if account.provider().as_str() != PROVIDER_NAME {
             return Err(CredentialRepositoryError::InvalidCredentialData(None));
+        }
+        if account.credential_route() == ResponsesUpstream::Excel {
+            let loaded = self
+                .store
+                .load_excel_credential(account.id(), account.credential_revision())
+                .await?;
+            let current = loaded
+                .account
+                .for_credential_route(ResponsesUpstream::Excel)
+                .ok_or(CredentialRepositoryError::RevisionConflict(None))?;
+            if !only_quota_observation_advanced(account, &current) {
+                return Err(CredentialRepositoryError::RevisionConflict(None));
+            }
+            let data = ExcelCredentialCodec::decode(&loaded.credential).map_err(|source| {
+                CredentialRepositoryError::InvalidCredentialData(Some(source.into()))
+            })?;
+            data.ensure_usable().map_err(|source| {
+                CredentialRepositoryError::InvalidCredentialData(Some(source.into()))
+            })?;
+            data.matches_identity(&super::excel::ExcelIdentity {
+                user_id: current.upstream_user_id().unwrap_or_default().to_owned(),
+                account_id: current.upstream_account_id().unwrap_or_default().to_owned(),
+            })
+            .map_err(|source| {
+                CredentialRepositoryError::InvalidCredentialData(Some(source.into()))
+            })?;
+            return Ok((current, data.runtime()));
         }
         let loaded = self
             .store
@@ -212,6 +249,9 @@ impl CodexCredentialRepository {
         account: &ProviderAccount,
         data: CodexCredentialData,
     ) -> Result<CredentialRevision, CredentialRepositoryError> {
+        if account.credential_route() != ResponsesUpstream::Codex {
+            return Err(CredentialRepositoryError::InvalidCredentialData(None));
+        }
         let has_refresh_token = data.has_refresh_token();
         let credential = CodexCredentialCodec::encode_complete(data)?;
         let current = self
@@ -273,16 +313,19 @@ impl CodexCredentialRepository {
         } else {
             error_reason.or_else(|| credential_state.error_reason())
         };
-        self.store
-            .apply_state_change(AccountStateChange {
-                account_id: account.id().clone(),
-                expected_revision: account.revision(),
-                credential_state,
-                observed_at,
-                error_reason,
-                message,
-            })
-            .await?;
+        let change = AccountStateChange {
+            account_id: account.id().clone(),
+            expected_revision: account.credential_revision(),
+            credential_state,
+            observed_at,
+            error_reason,
+            message,
+        };
+        if account.credential_route() == ResponsesUpstream::Excel {
+            self.store.apply_excel_state_change(change).await?;
+        } else {
+            self.store.apply_state_change(change).await?;
+        }
         Ok(())
     }
 
@@ -301,17 +344,33 @@ impl CodexCredentialRepository {
         } else {
             error_reason.or_else(|| credential_state.error_reason())
         };
-        self.store
-            .apply_diagnostic_state_change(AccountStateChange {
-                account_id: account.id().clone(),
-                expected_revision: account.revision(),
-                credential_state,
-                observed_at,
-                error_reason,
-                message,
-            })
-            .await?;
+        let change = AccountStateChange {
+            account_id: account.id().clone(),
+            expected_revision: account.credential_revision(),
+            credential_state,
+            observed_at,
+            error_reason,
+            message,
+        };
+        if account.credential_route() == ResponsesUpstream::Excel {
+            self.store
+                .apply_excel_diagnostic_state_change(change)
+                .await?;
+        } else {
+            self.store.apply_diagnostic_state_change(change).await?;
+        }
         Ok(())
+    }
+
+    pub(crate) async fn current_selected_account(
+        &self,
+        selected: &ProviderAccount,
+    ) -> Result<Option<ProviderAccount>, CredentialRepositoryError> {
+        Ok(self
+            .store
+            .get_account(selected.id())
+            .await?
+            .and_then(|current| current.for_credential_route(selected.credential_route())))
     }
 }
 
@@ -328,7 +387,7 @@ pub(super) fn only_quota_observation_advanced(
     selected: &ProviderAccount,
     current: &ProviderAccount,
 ) -> bool {
-    if selected == current {
+    if selected.same_credential_snapshot(current) {
         return true;
     }
     let (before, after) = (selected.quota(), current.quota());
@@ -340,13 +399,13 @@ pub(super) fn only_quota_observation_advanced(
     {
         return false;
     }
-    current.clone().with_account_facts(
+    selected.same_credential_snapshot(&current.clone().with_account_facts(
         current.enabled(),
         current.credential_state(),
         before,
         current.last_error_reason(),
         current.last_error_message().map(str::to_owned),
-    ) == *selected
+    ))
 }
 
 fn cas_revision(

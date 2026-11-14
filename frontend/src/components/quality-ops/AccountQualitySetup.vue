@@ -115,7 +115,7 @@ onScopeDispose(() => {
         </p>
       </div>
       <p v-if="selected" class="text-cp-text-secondary">
-        {{ selected.config.failureAction === 'apply_account_template' ? `异常时应用：${selected.config.failureTemplate?.config.name ?? '账号模板'}` : selected.config.failureAction === 'disable_scheduling' ? '异常时暂停调度' : selected.config.failureAction === 'remove_groups' ? '异常时移出指定分组' : selected.config.failureAction === 'enable_excel' ? '异常时开启 Excel' : '仅检测，不自动处置' }}；{{ selected.config.autoRestore ? '允许自动恢复原配置' : '不自动恢复原配置' }}。确认后开启定时检测。
+        {{ selected.config.failureAction === 'apply_account_template' ? `异常时应用：${selected.config.failureTemplate?.config.name ?? '账号模板'}` : selected.config.failureAction === 'disable_scheduling' ? '异常时暂停当前链路' : selected.config.failureAction === 'remove_groups' ? '异常时移出指定分组' : selected.config.failureAction === 'enable_excel' ? '需手动切换 Excel（旧规则）' : '仅检测，不自动处置' }}；{{ selected.config.autoRestore ? '允许自动恢复原配置' : '不自动恢复原配置' }}。确认后开启定时检测。
       </p>
       <p v-if="error" role="alert" class="break-words text-cp-error">
         {{ error }}

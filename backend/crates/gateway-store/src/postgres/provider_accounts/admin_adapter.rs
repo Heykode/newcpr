@@ -511,6 +511,92 @@ impl PgAdminAccountStore {
 
 #[async_trait]
 impl AccountStore for PgAdminAccountStore {
+    async fn recover_excel_account(
+        &self,
+        account_id: &CoreProviderAccountId,
+        expected_revision: CoreCredentialRevision,
+        context: &MutationContext,
+    ) -> AdminStoreResult<AccountUpdateResult> {
+        let mut tx = self.pool.begin().await.map_err(|_| {
+            AdminStoreError::new(
+                AdminStoreErrorKind::Unavailable,
+                ENTITY,
+                "Excel recovery unavailable",
+            )
+        })?;
+        let revision = bump_config_revision_in_transaction(&mut tx)
+            .await
+            .map_err(|e| admin_store_error(ENTITY, e))?;
+        let affected = sqlx::query("update openai_excel_credentials set suspended=false,quality_pause_owner=null,
+            last_error_reason=case when credential_state='ready' then null else last_error_reason end,
+            last_error_message=case when credential_state='ready' then null else last_error_message end,
+            updated_at=greatest(now(),updated_at) where account_id=$1 and credential_revision=$2")
+            .bind(account_id.as_str()).bind(to_i64(expected_revision.get()).map_err(|e| admin_store_error(ENTITY,e))?)
+            .execute(&mut *tx).await.map_err(|_| AdminStoreError::new(AdminStoreErrorKind::Unavailable,ENTITY,"Excel recovery unavailable"))?;
+        if affected.rows_affected() != 1 {
+            return Err(AdminStoreError::new(
+                AdminStoreErrorKind::Conflict,
+                ENTITY,
+                "Excel credential changed",
+            ));
+        }
+        sqlx::query("update provider_accounts set excel_auto_disabled_at=null,excel_mode_disabled_at=null,updated_at=greatest(now(),updated_at) where id=$1")
+            .bind(account_id.as_str()).execute(&mut *tx).await.map_err(|_| AdminStoreError::new(AdminStoreErrorKind::Unavailable,ENTITY,"Excel recovery unavailable"))?;
+        append_admin_audit_event_in_transaction(
+            &mut tx,
+            mutation_audit(
+                context,
+                "recover_excel",
+                "provider_account",
+                account_id.as_str(),
+                vec!["excel_status".into()],
+            ),
+            revision,
+        )
+        .await
+        .map_err(|e| admin_store_error(ENTITY, e))?;
+        tx.commit().await.map_err(|_| {
+            AdminStoreError::new(
+                AdminStoreErrorKind::Unavailable,
+                ENTITY,
+                "Excel recovery unavailable",
+            )
+        })?;
+        Ok(AccountUpdateResult {
+            config_revision: admin_revision(revision)?,
+            account_id: account_id.clone(),
+        })
+    }
+
+    async fn commit_excel_credential_import(
+        &self,
+        prepared: PreparedCredentialCreate,
+        target: Option<gateway_admin::model::accounts::ExcelCredentialImportTarget>,
+        settings: Option<AccountImportSettings>,
+        context: &MutationContext,
+    ) -> AdminStoreResult<gateway_admin::model::accounts::ExcelCredentialImportResult> {
+        self.accounts
+            .import_excel(prepared, target, settings, context)
+            .await
+    }
+
+    async fn load_excel_credential_for_export(
+        &self,
+        account_id: &CoreProviderAccountId,
+    ) -> AdminStoreResult<gateway_core::account::LoadedExcelCredential> {
+        self.accounts.load_excel(account_id).await.map_err(|error| {
+            AdminStoreError::new(
+                if error.kind() == CoreStoreErrorKind::Conflict {
+                    AdminStoreErrorKind::Conflict
+                } else {
+                    AdminStoreErrorKind::Unavailable
+                },
+                "Excel credential",
+                "Excel credential unavailable",
+            )
+        })
+    }
+
     async fn load_turn_state_status(
         &self,
         account_ids: &[String],
@@ -673,7 +759,8 @@ impl AccountStore for PgAdminAccountStore {
                             .map(|state| state.scheduling_until(now.into())),
                     ),
                 );
-                if summary.enabled
+                if summary.responses_upstream != gateway_core::account::ResponsesUpstream::Excel
+                    && summary.enabled
                     && !matches!(
                         projection.status,
                         gateway_core::account::AccountStatus::Error
@@ -736,7 +823,8 @@ impl AccountStore for PgAdminAccountStore {
             now.into(),
             rate_limited_until.max(protection),
         );
-        if record.summary.enabled
+        if record.summary.responses_upstream != gateway_core::account::ResponsesUpstream::Excel
+            && record.summary.enabled
             && !matches!(
                 projection.status,
                 gateway_core::account::AccountStatus::Error

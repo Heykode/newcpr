@@ -22,6 +22,7 @@ impl DefaultReloginService {
             })
             .collect::<Result<Vec<_>, _>>()?;
         let mut files = Vec::new();
+        let mut skipped = Vec::new();
         match format {
             ReloginExportFormat::TwoFa => {
                 let mut lines = Vec::with_capacity(selected.len());
@@ -41,6 +42,7 @@ impl DefaultReloginService {
                 let pool = self.pool().await?;
                 let mut documents = Vec::with_capacity(selected.len());
                 for entry in selected {
+                    let outcome: Result<serde_json::Value, AdminError> = async {
                     let target = if let Some(target) = &entry.target {
                         Some(
                             pool.iter()
@@ -68,7 +70,13 @@ impl DefaultReloginService {
                             }
                         }
                     };
-                    let document = if let Some(account) = target {
+                    let target = target.filter(|account| account.authentication_kind != "none");
+                    let document = if let Some(account) = target.filter(|_| self.credential_target == CredentialTarget::Excel) {
+                        let id = ProviderAccountId::new(account.id.clone())
+                            .map_err(|_| AdminError::internal("账号 ID 无效"))?;
+                        self.openai.export_excel_credential(&id).await?
+                            .into_provider_data().into_inner()
+                    } else if let Some(account) = target {
                         let id = ProviderAccountId::new(account.id.clone())
                             .map_err(|_| AdminError::internal("账号 ID 无效"))?;
                         let credentials = self
@@ -102,19 +110,37 @@ impl DefaultReloginService {
                             })?;
                         credential.document.clone()
                     };
-                    documents.push(serde_json::json!({"provider": "openai", "document": document}));
+                    Ok(if self.credential_target == CredentialTarget::Excel {
+                        serde_json::json!({"provider": "openai", "credentialTarget": "excel", "document": document})
+                    } else {
+                        serde_json::json!({"provider": "openai", "document": document})
+                    })
+                    }.await;
+                    match outcome {
+                        Ok(document) => documents.push(document),
+                        Err(error) => skipped.push(ReloginExportSkipped {
+                            id: entry.id.clone(),
+                            credential_target: self.credential_target,
+                            message: error.message().to_owned(),
+                        }),
+                    }
                 }
-                files.push(ReloginExportFile {
-                    name: "relogin-accounts.json".to_owned(),
+                if !documents.is_empty() {
+                    files.push(ReloginExportFile {
+                    name: match self.credential_target {
+                        CredentialTarget::Codex => "relogin-accounts.json",
+                        CredentialTarget::Excel => "relogin-excel-accounts.json",
+                    }.to_owned(),
                     content: serde_json::to_string_pretty(&serde_json::json!({"exportedAt": Utc::now().to_rfc3339(), "documents": documents}))
                         .map_err(|_| AdminError::internal("JSON 导出失败"))?,
                 });
+                }
             }
         }
         self.store()?
             .record_export(ids, format, context)
             .await
             .map_err(store_error)?;
-        Ok(ReloginExport { files })
+        Ok(ReloginExport { files, skipped })
     }
 }

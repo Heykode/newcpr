@@ -690,6 +690,8 @@ pub struct ProviderAccount {
     upstream_account_id: Option<String>,
     plan_type: Option<String>,
     authentication_kind: String,
+    excel_credential: Option<super::ExcelCredentialMetadata>,
+    credential_route: super::ResponsesUpstream,
     revision: CredentialRevision,
     turn_state_binding_revision: CredentialRevision,
     enabled: bool,
@@ -720,6 +722,89 @@ pub struct ProviderAccount {
 
 impl ProviderAccount {
     #[must_use]
+    pub fn with_excel_credential(
+        mut self,
+        credential: Option<super::ExcelCredentialMetadata>,
+    ) -> Self {
+        self.excel_credential = credential;
+        self
+    }
+
+    #[must_use]
+    pub const fn excel_credential(&self) -> Option<&super::ExcelCredentialMetadata> {
+        self.excel_credential.as_ref()
+    }
+
+    #[must_use]
+    pub fn has_codex_credential(&self) -> bool {
+        self.authentication_kind != "none"
+    }
+
+    /// Project one credential without changing the logical account or its shared policy.
+    #[must_use]
+    pub fn for_credential_route(mut self, route: super::ResponsesUpstream) -> Option<Self> {
+        match route {
+            super::ResponsesUpstream::Codex if !self.has_codex_credential() => return None,
+            super::ResponsesUpstream::Excel if self.excel_credential.is_none() => return None,
+            _ => {}
+        }
+        self.credential_route = route;
+        Some(self)
+    }
+
+    #[must_use]
+    pub const fn credential_route(&self) -> super::ResponsesUpstream {
+        self.credential_route
+    }
+
+    /// Compare active credential facts and shared policy, ignoring the inactive credential.
+    #[must_use]
+    pub fn same_credential_snapshot(&self, current: &Self) -> bool {
+        if self.credential_route != current.credential_route {
+            return false;
+        }
+        let mut current = current.clone();
+        match self.credential_route {
+            super::ResponsesUpstream::Codex => {
+                current.excel_credential = self.excel_credential.clone();
+            }
+            super::ResponsesUpstream::Excel => {
+                current.email = self.email.clone();
+                current.plan_type = self.plan_type.clone();
+                current.authentication_kind = self.authentication_kind.clone();
+                current.revision = self.revision;
+                current.turn_state_binding_revision = self.turn_state_binding_revision;
+                current.credential_state = self.credential_state;
+                current.quota = self.quota;
+                current.quota_paused = self.quota_paused;
+                current.codex_quota_overdraft_passed = self.codex_quota_overdraft_passed;
+                current.last_error_reason = self.last_error_reason;
+                current.last_error_message = self.last_error_message.clone();
+                current.access_token_expires_at = self.access_token_expires_at;
+                current.next_refresh_at = self.next_refresh_at;
+                current.has_refresh_token = self.has_refresh_token;
+            }
+        }
+        *self == current
+    }
+
+    /// Credential material has its own fence; `revision` still fences shared account edits.
+    #[must_use]
+    pub const fn credential_revision(&self) -> CredentialRevision {
+        match self.selected_excel_credential() {
+            Some(excel) => excel.revision,
+            None => self.revision,
+        }
+    }
+
+    const fn selected_excel_credential(&self) -> Option<&super::ExcelCredentialMetadata> {
+        match self.credential_route {
+            super::ResponsesUpstream::Excel => self.excel_credential.as_ref(),
+            super::ResponsesUpstream::Codex => None,
+        }
+    }
+
+    #[must_use]
     pub fn with_quota_limits(mut self, limits: super::AccountQuotaLimits, paused: bool) -> Self {
         // 只有限额账号需要在取得租约前检测额度窗口的并发更新
         self.quota_paused = paused;
@@ -732,7 +817,10 @@ impl ProviderAccount {
     }
     #[must_use]
     pub const fn quota_paused(&self) -> bool {
-        self.quota_paused
+        match self.selected_excel_credential() {
+            Some(excel) => excel.suspended,
+            None => self.quota_paused,
+        }
     }
 
     /// 创建账号快照。
@@ -755,6 +843,8 @@ impl ProviderAccount {
             upstream_account_id: None,
             plan_type: None,
             authentication_kind,
+            excel_credential: None,
+            credential_route: super::ResponsesUpstream::Codex,
             revision,
             turn_state_binding_revision: revision,
             enabled: true,
@@ -853,6 +943,15 @@ impl ProviderAccount {
         last_error_message: Option<String>,
     ) -> Self {
         self.enabled = enabled;
+        if self.credential_route == super::ResponsesUpstream::Excel
+            && let Some(excel) = self.excel_credential.as_mut()
+        {
+            excel.state = credential_state;
+            excel.quota = quota;
+            excel.last_error_reason = last_error_reason;
+            excel.last_error_message = last_error_message;
+            return self;
+        }
         self.credential_state = if self.upstream_user_id.is_some() {
             credential_state
         } else {
@@ -969,14 +1068,8 @@ impl ProviderAccount {
     }
 
     #[must_use]
-    pub fn responses_upstream_for_model(&self, model: &str) -> super::ResponsesUpstream {
-        if self.responses_upstream == super::ResponsesUpstream::Excel
-            && self.excel_models.contains(model)
-        {
-            super::ResponsesUpstream::Excel
-        } else {
-            super::ResponsesUpstream::Codex
-        }
+    pub const fn responses_upstream_for_model(&self, _model: &str) -> super::ResponsesUpstream {
+        self.responses_upstream
     }
 
     #[must_use]
@@ -1027,37 +1120,58 @@ impl ProviderAccount {
 
     #[must_use]
     pub fn email(&self) -> Option<&str> {
-        self.email.as_deref()
+        match self.selected_excel_credential() {
+            Some(excel) => excel.email.as_deref(),
+            None => self.email.as_deref(),
+        }
     }
 
     #[must_use]
     pub fn upstream_user_id(&self) -> Option<&str> {
-        self.upstream_user_id.as_deref()
+        match self.selected_excel_credential() {
+            Some(excel) => Some(excel.upstream_user_id.as_str()),
+            None => self.upstream_user_id.as_deref(),
+        }
     }
 
     #[must_use]
     pub fn upstream_account_id(&self) -> Option<&str> {
-        self.upstream_account_id.as_deref()
+        match self.selected_excel_credential() {
+            Some(excel) => excel.upstream_account_id.as_deref(),
+            None => self.upstream_account_id.as_deref(),
+        }
     }
 
     #[must_use]
     pub fn plan_type(&self) -> Option<&str> {
-        self.plan_type.as_deref()
+        match self.selected_excel_credential() {
+            Some(excel) => excel.plan_type.as_deref(),
+            None => self.plan_type.as_deref(),
+        }
     }
 
     #[must_use]
     pub fn authentication_kind(&self) -> &str {
-        &self.authentication_kind
+        match self.selected_excel_credential() {
+            Some(_) => "oauth",
+            None => &self.authentication_kind,
+        }
     }
 
     #[must_use]
     pub const fn credential_state(&self) -> CredentialState {
-        self.credential_state
+        match self.selected_excel_credential() {
+            Some(excel) => excel.state,
+            None => self.credential_state,
+        }
     }
 
     #[must_use]
     pub const fn quota(&self) -> QuotaState {
-        self.quota
+        match self.selected_excel_credential() {
+            Some(excel) => excel.quota,
+            None => self.quota,
+        }
     }
 
     #[must_use]
@@ -1068,17 +1182,24 @@ impl ProviderAccount {
 
     #[must_use]
     pub const fn codex_quota_overdraft_passed(&self) -> bool {
-        self.codex_quota_overdraft_passed
+        matches!(self.credential_route, super::ResponsesUpstream::Codex)
+            && self.codex_quota_overdraft_passed
     }
 
     #[must_use]
     pub const fn last_error_reason(&self) -> Option<AccountErrorReason> {
-        self.last_error_reason
+        match self.selected_excel_credential() {
+            Some(excel) => excel.last_error_reason,
+            None => self.last_error_reason,
+        }
     }
 
     #[must_use]
     pub fn last_error_message(&self) -> Option<&str> {
-        self.last_error_message.as_deref()
+        match self.selected_excel_credential() {
+            Some(excel) => excel.last_error_message.as_deref(),
+            None => self.last_error_message.as_deref(),
+        }
     }
 
     #[must_use]
@@ -1106,18 +1227,27 @@ impl ProviderAccount {
 
     #[must_use]
     pub const fn access_token_expires_at(&self) -> Option<SystemTime> {
-        self.access_token_expires_at
+        match self.selected_excel_credential() {
+            Some(excel) => excel.access_token_expires_at,
+            None => self.access_token_expires_at,
+        }
     }
 
     /// 返回瞬态 OAuth 刷新失败后的最早重试时刻；正常账号为 `None`。
     #[must_use]
     pub const fn next_refresh_at(&self) -> Option<SystemTime> {
-        self.next_refresh_at
+        match self.selected_excel_credential() {
+            Some(excel) => excel.next_refresh_at,
+            None => self.next_refresh_at,
+        }
     }
 
     #[must_use]
     pub const fn has_refresh_token(&self) -> bool {
-        self.has_refresh_token
+        match self.selected_excel_credential() {
+            Some(excel) => excel.has_refresh_token,
+            None => self.has_refresh_token,
+        }
     }
 
     /// An upstream-rejected OAuth token may recover without changing manual enable intent.
@@ -1148,14 +1278,14 @@ impl ProviderAccount {
     ) -> AccountStatusProjection {
         resolve_account_status(
             &AccountStatusFacts {
-                quota_paused: self.quota_paused,
+                quota_paused: self.quota_paused(),
                 enabled,
-                credential_state: self.credential_state,
-                access_token_expires_at: self.access_token_expires_at,
-                quota: self.quota,
+                credential_state: self.credential_state(),
+                access_token_expires_at: self.access_token_expires_at(),
+                quota: self.quota(),
                 rate_limited_until,
-                last_error_reason: self.last_error_reason,
-                last_error_message: self.last_error_message.clone(),
+                last_error_reason: self.last_error_reason(),
+                last_error_message: self.last_error_message().map(str::to_owned),
             },
             now,
         )

@@ -4,6 +4,7 @@ mod admin;
 mod affinity;
 mod catalog;
 mod cookie;
+pub mod excel;
 mod oauth;
 mod profile_statistics;
 mod quota;

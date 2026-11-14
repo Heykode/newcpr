@@ -67,6 +67,7 @@ const MAX_AVATAR_VERSION_BYTES: usize = 32;
 const MAX_CONNECTION_TEST_PROMPT_BYTES: usize = 4096;
 
 mod credentials;
+mod excel;
 mod handlers;
 mod import_tasks;
 mod presenter;

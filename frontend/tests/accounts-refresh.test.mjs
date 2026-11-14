@@ -831,7 +831,7 @@ function toggleHarness(harness, row) {
   const writes = []
   const selectedIds = vue.ref(new Set([row.id, 'acct_other_page']))
   const asyncUtils = loadModule(new URL('../src/utils/async.ts', import.meta.url), {})
-  const notifications = { toast: { success() {}, error() {} } }
+  const notifications = { toast: { success() {}, error() {}, warning() {} } }
   const actions = loadModule(new URL('../src/composables/useAsyncAction.ts', import.meta.url), {
     'vue': vue,
     '@/api/request': { ApiError: class extends Error {} },
@@ -890,6 +890,7 @@ for (const enabled of [false, true]) {
       ...initial.items[0],
       provider: 'openai',
       authenticationKind: 'oauth',
+      excelCredential: { state: 'ready', revision: 1 },
       enabled: true,
       responsesUpstream: enabled ? 'codex' : 'excel',
       concurrencyLimit: 2,

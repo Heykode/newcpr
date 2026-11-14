@@ -10,10 +10,12 @@ pub(super) async fn update(
     config: ExcelRecoveryConfig,
 ) -> StoreResult<()> {
     config.validate().map_err(invalid)?;
-    let invalid_target: bool = sqlx::query_scalar("select exists(select 1 from provider_accounts where id=any($1::text[]) and (provider_kind<>'openai' or authentication_kind<>'oauth'))")
+    let invalid_target: bool = sqlx::query_scalar("select exists(select 1 from provider_accounts a where id=any($1::text[]) and (provider_kind<>'openai' or not exists(select 1 from openai_excel_credentials x where x.account_id=a.id)))")
         .bind(ids).fetch_one(&mut **tx).await.map_err(|_| postgres_unavailable("validate Excel recovery"))?;
     if invalid_target {
-        return Err(invalid("Excel recovery requires OpenAI OAuth accounts"));
+        return Err(invalid(
+            "Excel recovery requires an independent Excel credential",
+        ));
     }
     sqlx::query("insert into account_excel_recovery(account_id,enabled,interval_minutes,next_probe_at)
         select id,$2,$3,now()+make_interval(mins=>$3) from provider_accounts where id=any($1::text[])
@@ -58,14 +60,15 @@ async fn scope(
     tx: &mut Transaction<'_, Postgres>,
     id: &str,
 ) -> StoreResult<Option<serde_json::Value>> {
-    sqlx::query_scalar("select jsonb_build_array(e.revision,a.credential_revision,a.enabled,a.responses_upstream,
+    sqlx::query_scalar("select jsonb_build_array(e.revision,a.credential_revision,x.credential_revision,x.suspended,a.enabled,a.responses_upstream,
         a.upstream_user_id,a.upstream_account_id,a.excel_403_action,a.excel_auto_disabled_at,
         a.excel_models_follow_global,case when a.excel_models_follow_global then s.excel_default_models else a.excel_models end,
         a.request_proxy_source,a.outbound_proxy_id,p.revision,a.model_access_json,u.mode,u.custom_user_agent,u.configuration_json,u.updated_at,
-        a.excel_cache_creation_as_input,a.excel_ignore_encrypted_content,a.quality_pause_owner,
+        a.excel_cache_creation_as_input,a.excel_ignore_encrypted_content,x.quality_pause_owner,
         (select max(config_revision) from admin_audit_events where entity_kind='provider_account' and entity_ref=a.id),
         case when a.outbound_proxy_id is null then coalesce(o.mode,e.default_mode) else null end)
         from provider_accounts a cross join runtime_settings s cross join provider_egress_settings e
+        join openai_excel_credentials x on x.account_id=a.id
         left join outbound_proxies p on p.id=a.outbound_proxy_id
         left join provider_outbound_user_agents u on u.provider_kind=a.provider_kind
         left join provider_egress_account_overrides o on o.provider_account_id=a.id
@@ -92,23 +95,22 @@ pub(super) async fn claim(pool: &PgPool) -> StoreResult<Option<ExcelRecoveryClai
     let Some(slot) = slot else {
         return Ok(None);
     };
-    let row=sqlx::query("select r.account_id,r.generation,a.credential_revision,s.config_revision,
-        coalesce(r.failed_model,(case when a.excel_models_follow_global then s.excel_default_models else a.excel_models end)[1]) as model,
-        case when a.excel_models_follow_global then s.excel_default_models else a.excel_models end as models
-        from account_excel_recovery r join provider_accounts a on a.id=r.account_id cross join runtime_settings s
-        where s.id=1 and r.enabled and not a.enabled and a.responses_upstream='excel'
-        and a.provider_kind='openai' and a.authentication_kind='oauth' and a.quality_pause_owner is null
-        and a.credential_state='ready' and (a.access_token_expires_at is null or a.access_token_expires_at>now())
+    let row=sqlx::query("select r.account_id,r.generation,x.credential_revision,s.config_revision,
+        coalesce(r.failed_model,case when a.model_access_json->>'mode'='whitelist' then a.model_access_json->'models'->>0 end,s.excel_default_models[1]) as model
+        from account_excel_recovery r join provider_accounts a on a.id=r.account_id
+        join openai_excel_credentials x on x.account_id=a.id cross join runtime_settings s
+        where s.id=1 and r.enabled and a.enabled and x.suspended and a.responses_upstream='excel'
+        and a.provider_kind='openai' and x.quality_pause_owner is null
+        and x.credential_state='ready' and (x.access_token_expires_at is null or x.access_token_expires_at>now())
         and r.next_probe_at<=now() and (r.lease_until is null or r.lease_until<=now())
-        order by r.next_probe_at,r.account_id limit 1 for update of a,r skip locked")
+        order by r.next_probe_at,r.account_id limit 1 for update of a,r,x skip locked")
         .fetch_optional(&mut *tx).await.map_err(|_| postgres_unavailable("claim Excel recovery"))?;
     let Some(row) = row else {
         return Ok(None);
     };
     let id: String = get(&row, "account_id")?;
     let model: Option<String> = get(&row, "model")?;
-    let models: Vec<String> = get(&row, "models")?;
-    let Some(model) = model.filter(|m| !m.trim().is_empty() && models.contains(m)) else {
+    let Some(model) = model.filter(|m| !m.trim().is_empty()) else {
         sqlx::query("update account_excel_recovery set last_result='model_unavailable',next_probe_at=now()+make_interval(mins=>interval_minutes) where account_id=$1")
             .bind(&id).execute(&mut *tx).await.map_err(|_| postgres_unavailable("defer recovery model"))?;
         tx.commit()
@@ -145,9 +147,10 @@ async fn matches(
     claim: &ExcelRecoveryClaim,
 ) -> StoreResult<bool> {
     let current:bool=sqlx::query_scalar("select exists(select 1 from account_excel_recovery r join provider_accounts a on a.id=r.account_id
+        join openai_excel_credentials x on x.account_id=a.id
         where r.account_id=$1 and r.generation=$2 and r.lease_id=$3 and r.lease_until>now() and r.enabled
-        and not a.enabled and a.responses_upstream='excel' and a.quality_pause_owner is null
-        and a.credential_state='ready' and (a.access_token_expires_at is null or a.access_token_expires_at>now()))")
+        and a.enabled and x.suspended and a.responses_upstream='excel' and x.quality_pause_owner is null
+        and x.credential_state='ready' and (x.access_token_expires_at is null or x.access_token_expires_at>now()))")
         .bind(&claim.account_id).bind(claim.generation).bind(&claim.lease_id).fetch_one(&mut **tx).await.map_err(|_| postgres_unavailable("validate recovery claim"))?;
     Ok(current && scope(tx, &claim.account_id).await?.as_ref() == Some(&claim.scope))
 }
@@ -178,7 +181,9 @@ pub(super) async fn finish(
     let valid = matches(&mut tx, claim).await?;
     let restored = valid && outcome == ExcelRecoveryOutcome::Recovered;
     if restored {
-        sqlx::query("update provider_accounts set enabled=true,excel_auto_disabled_at=null,updated_at=greatest(now(),updated_at)
+        sqlx::query("update openai_excel_credentials set suspended=false,updated_at=greatest(now(),updated_at)
+            where account_id=$1").bind(&claim.account_id).execute(&mut *tx).await.map_err(|_| postgres_unavailable("restore Excel scheduling"))?;
+        sqlx::query("update provider_accounts set excel_auto_disabled_at=null,updated_at=greatest(now(),updated_at)
             where id=$1").bind(&claim.account_id).execute(&mut *tx).await.map_err(|_| postgres_unavailable("restore Excel scheduling"))?;
         let revision = bump_config_revision_in_transaction(&mut tx).await?;
         append_admin_audit_event_in_transaction(

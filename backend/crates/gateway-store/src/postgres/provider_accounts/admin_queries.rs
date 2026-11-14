@@ -77,6 +77,13 @@ pub(crate) async fn load_admin_account_page(
            select a.id, a.enabled,
                   case
                     when not a.enabled then 'disabled'
+                    when a.responses_upstream='excel' then case
+                      when x.suspended then 'disabled'
+                      when x.account_id is null or x.credential_state<>'ready'
+                        or x.access_token_expires_at <= $2 then 'error'
+                      when x.quota_access_state='exhausted' then 'quota_exhausted'
+                      when a.quota_paused then 'quota_paused'
+                      else 'normal' end
                     when a.credential_state <> 'ready'
                       or a.access_token_expires_at <= $2 then 'error'
                     when ($11::jsonb ->> a.id)::bigint = a.credential_revision then 'rate_limited'
@@ -96,6 +103,7 @@ pub(crate) async fn load_admin_account_page(
                     else 'normal'
                   end as admin_status
              from provider_accounts a
+             left join openai_excel_credentials x on x.account_id=a.id
          ),
          global_summary as (
            select count(*)::bigint as summary_total,
@@ -150,7 +158,8 @@ pub(crate) async fn load_admin_account_page(
              cross join (select least((select started_at from model_requests order by started_at, id limit 1), $2::timestamptz) as started_at) earliest
             where id = 1
          )
-         select coalesce((select enabled from outbound_proxies where outbound_proxies.id = a.outbound_proxy_id), true) as outbound_proxy_enabled,
+         select (select to_jsonb(e) - 'credential_json' - 'quota_json' from openai_excel_credentials e where e.account_id = a.id) as excel_credential_json,
+            coalesce((select enabled from outbound_proxies where outbound_proxies.id = a.outbound_proxy_id), true) as outbound_proxy_enabled,
             coalesce((select max_websocket_connections from outbound_proxies where outbound_proxies.id = a.outbound_proxy_id), 0) as max_websocket_connections,
             (select case when auto_location then detected_location_json -> 'location' else request_location_json end from outbound_proxies where outbound_proxies.id = a.outbound_proxy_id and enabled) as request_location_json,
                 a.outbound_proxy_id, a.outbound_proxy_url, a.id, a.provider_kind, a.name, a.custom_name, a.email, a.upstream_user_id,
@@ -284,7 +293,9 @@ fn admin_account_order(sort: Option<AdminAccountSort>) -> String {
         AdminAccountSortField::LastUsedAt => "usage.last_used_at",
         AdminAccountSortField::ReloginCount => "a.relogin_count",
         AdminAccountSortField::CreatedAt => "a.created_at",
-        AdminAccountSortField::ExpiresAt => "a.access_token_expires_at",
+        AdminAccountSortField::ExpiresAt => {
+            "case when a.responses_upstream='excel' then (select access_token_expires_at from openai_excel_credentials where account_id=a.id) else a.access_token_expires_at end"
+        }
     };
     match sort.direction {
         AdminSortDirection::Asc => format!("{expression} asc nulls first, a.id asc"),

@@ -51,6 +51,8 @@ async fn relogin_seconds_upgrade_converts_defaults_and_preserves_custom_duration
 
 fn entry(id: &str, email: &str) -> ReloginEntry {
     ReloginEntry {
+        excel: None,
+        credential_target: Default::default(),
         last_attempt: None,
         imported_at: Some(chrono::Utc::now()),
         id: id.into(),
@@ -98,7 +100,7 @@ async fn shared_template_import_settings_apply_to_new_and_existing_accounts() {
         "concurrencyLimit": 4, "groupIds": [], "outboundProxyId": null,
         "turnStateInjectionEnabled": true,
         "modelAccess": {"mode": "denylist", "models": ["model-template"]},
-        "responsesUpstream": "excel", "excelModelsFollowGlobal": true,
+        "responsesUpstream": "codex", "excelModelsFollowGlobal": true,
         "excelCacheCreationAsInput": false, "excelIgnoreEncryptedContent": true
     }))
     .unwrap();
@@ -131,7 +133,10 @@ async fn shared_template_import_settings_apply_to_new_and_existing_accounts() {
                     responses_upstream, excel_cache_creation_as_input, excel_ignore_encrypted_content
              from provider_accounts where id=$1"
         ).bind(id).fetch_one(&database.pool).await.unwrap();
-        assert_eq!(row, (false, Some(4), 23, true, "excel".into(), false, true));
+        assert_eq!(
+            row,
+            (false, Some(4), 23, true, "codex".into(), false, false)
+        );
         let current = repository.load_provider_account(id).await.unwrap().unwrap();
         assert_eq!(
             Some(current.summary.model_access),
@@ -180,8 +185,8 @@ async fn shared_template_import_settings_apply_to_new_and_existing_accounts() {
                 if index == 0 { Some(4) } else { None },
                 if index == 0 { 23 } else { 31 },
                 true,
-                "excel".into(),
-                true
+                "codex".into(),
+                false
             )
         );
         assert_eq!(
@@ -1152,5 +1157,71 @@ async fn relogin_history_is_atomic_paginated_and_removed_with_material() {
     );
     store.delete(&row.id, row.revision).await.unwrap();
     assert!(store.history(&row.id, None, 50).await.unwrap().is_empty());
+    database.close().await;
+}
+
+#[tokio::test]
+async fn relogin_dual_credentials_and_channel_history_survive_store_restart() {
+    use gateway_admin::model::relogin::ReloginCredential;
+    use gateway_core::account::CredentialTarget;
+    let Some(database) = TestDatabase::create("relogin_dual_credentials").await else {
+        return;
+    };
+    let store = PgReloginStore::new(database.pool.clone());
+    let mut row = entry("dual-entry", "dual@example.invalid");
+    let credential = |target: &str| ReloginCredential {
+        document: serde_json::json!({"synthetic":target})
+            .as_object()
+            .unwrap()
+            .clone(),
+        email: "dual@example.invalid".into(),
+        user_id: "dual-user".into(),
+        workspace_id: "dual-workspace".into(),
+        plan_type: "pro".into(),
+        expires_at: chrono::Utc::now() + chrono::TimeDelta::hours(1),
+        verified_at: chrono::Utc::now(),
+    };
+    row.begin_attempt();
+    row.status = ReloginStatus::Ready;
+    row.credential = Some(credential("codex"));
+    row.update_attempt();
+    let mut excel = row.clone().project_channel(CredentialTarget::Excel);
+    excel.begin_attempt();
+    excel.status = ReloginStatus::Ready;
+    excel.credential = Some(credential("excel"));
+    excel.message = "Excel ready".into();
+    excel.update_attempt();
+    row.excel = Some(excel.channel_state());
+    let expected = serde_json::to_value(&row).unwrap();
+    store.save(&row, None).await.unwrap();
+
+    let reopened = PgReloginStore::new(database.pool.clone());
+    let loaded = reopened.entries().await.unwrap().remove(0);
+    assert_eq!(serde_json::to_value(&loaded).unwrap(), expected);
+    let history = reopened.history(&row.id, None, 50).await.unwrap();
+    assert_eq!(history.len(), 2);
+    assert!(
+        history
+            .iter()
+            .any(|attempt| attempt.credential_target == CredentialTarget::Codex)
+    );
+    assert!(
+        history
+            .iter()
+            .any(|attempt| attempt.credential_target == CredentialTarget::Excel)
+    );
+
+    let mut updated = loaded.clone();
+    updated.excel.as_mut().unwrap().status = ReloginStatus::Failed;
+    updated.excel.as_mut().unwrap().message = "Excel rejected".into();
+    updated.revision += 1;
+    reopened
+        .save(&updated, Some(loaded.revision))
+        .await
+        .unwrap();
+    let current = store.entries().await.unwrap().remove(0);
+    assert_eq!(current.status, ReloginStatus::Ready);
+    assert_eq!(current.credential.unwrap().document["synthetic"], "codex");
+    assert_eq!(current.excel.unwrap().status, ReloginStatus::Failed);
     database.close().await;
 }

@@ -122,6 +122,44 @@ pub trait ProviderEgressStore: Send + Sync {
 /// 账号目录与公共账号写操作。
 #[async_trait]
 pub trait AccountStore: Send + Sync {
+    async fn recover_excel_account(
+        &self,
+        _account_id: &gateway_core::account::ProviderAccountId,
+        _expected_revision: gateway_core::account::CredentialRevision,
+        _context: &MutationContext,
+    ) -> AdminStoreResult<crate::model::accounts::AccountUpdateResult> {
+        Err(AdminStoreError::new(
+            AdminStoreErrorKind::Unavailable,
+            "Excel credential",
+            "Excel recovery unavailable",
+        ))
+    }
+
+    async fn commit_excel_credential_import(
+        &self,
+        _prepared: crate::model::provider_credentials::PreparedCredentialCreate,
+        _target: Option<crate::model::accounts::ExcelCredentialImportTarget>,
+        _settings: Option<crate::model::accounts::AccountImportSettings>,
+        _context: &MutationContext,
+    ) -> AdminStoreResult<crate::model::accounts::ExcelCredentialImportResult> {
+        Err(AdminStoreError::new(
+            AdminStoreErrorKind::Unavailable,
+            "Excel credential",
+            "Excel import unavailable",
+        ))
+    }
+
+    async fn load_excel_credential_for_export(
+        &self,
+        _account_id: &gateway_core::account::ProviderAccountId,
+    ) -> AdminStoreResult<gateway_core::account::LoadedExcelCredential> {
+        Err(AdminStoreError::new(
+            AdminStoreErrorKind::Unavailable,
+            "Excel credential",
+            "Excel export unavailable",
+        ))
+    }
+
     async fn load_turn_state_status(
         &self,
         _account_ids: &[String],

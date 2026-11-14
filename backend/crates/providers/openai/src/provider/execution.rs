@@ -197,10 +197,8 @@ impl CodexProvider {
         let lease = Arc::new(lease);
         let mut excel = if request.endpoint_path
             == crate::transport::endpoints::CODEX_RESPONSES_COMPACT_PATH
-            && request.upstream_model.as_ref().is_some_and(|model| {
-                lease.account().responses_upstream_for_model(model.as_str())
-                    == gateway_core::account::ResponsesUpstream::Excel
-            }) {
+            && lease.selected_route() == gateway_core::account::ResponsesUpstream::Excel
+        {
             Some(
                 super::compact::prepare_excel_compact(
                     &request.body,
@@ -216,8 +214,7 @@ impl CodexProvider {
         };
         let excel_image =
             if crate::transport::excel::image_generation::is_image_path(request.endpoint_path)
-                && lease.account().responses_upstream()
-                    == gateway_core::account::ResponsesUpstream::Excel
+                && lease.selected_route() == gateway_core::account::ResponsesUpstream::Excel
             {
                 if !matches!(
                     lease.authentication(),
@@ -261,11 +258,16 @@ impl CodexProvider {
                 transport,
             ),
         }
-        .with_credential_revision(lease.account().revision())
         .with_selection_observation(ProviderSelectionObservation::new(
             account_selection_wait_ms,
             lease.capacity_snapshot(),
         ));
+        let metadata = if lease.selected_route() == gateway_core::account::ResponsesUpstream::Excel
+        {
+            metadata
+        } else {
+            metadata.with_credential_revision(lease.account().revision())
+        };
         // Standalone Provider 端点没有可证明的账号 owner；Search metadata 必须按
         // 跨账号输入收敛到当前 lease，不能沿用下游声明的账号或 installation identity。
         let installation_id = self
@@ -324,8 +326,10 @@ impl CodexProvider {
             excel,
             excel_image,
         });
+        let use_codex_feedback =
+            lease.selected_route() == gateway_core::account::ResponsesUpstream::Codex;
         let stream = ProviderStream::new(metadata, events, lease);
-        Ok(if allows_account_state_mutation {
+        Ok(if allows_account_state_mutation && use_codex_feedback {
             stream.with_filtered_account_feedback(
                 Arc::clone(&self.account_feedback),
                 openai_failure_affects_account_score,

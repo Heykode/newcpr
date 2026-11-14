@@ -36,6 +36,8 @@ use provider_openai::credential::{
 use secrecy::SecretString;
 use tokio::sync::oneshot;
 
+mod excel;
+
 #[derive(Clone)]
 struct StoredAccount {
     account: ProviderAccount,
@@ -46,6 +48,8 @@ struct StoredAccount {
 
 #[derive(Default)]
 pub(crate) struct MemoryAccountStore {
+    excel_credentials:
+        Mutex<BTreeMap<ProviderAccountId, gateway_core::account::PlaintextCredential>>,
     catalogs: Mutex<
         BTreeMap<
             ProviderAccountId,
@@ -238,6 +242,84 @@ impl MemoryAccountStore {
 
 #[async_trait]
 impl ProviderAccountStore for MemoryAccountStore {
+    async fn load_excel_credential(
+        &self,
+        account: &ProviderAccountId,
+        expected: CredentialRevision,
+    ) -> Result<gateway_core::account::LoadedExcelCredential, StoreError> {
+        self.credential_loads.fetch_add(1, Ordering::SeqCst);
+        let hook = self.before_credential_load.lock().unwrap().take();
+        if let Some(hook) = hook {
+            hook();
+        }
+        let loaded = self.load_current_excel_credential(account).await?;
+        if loaded.metadata.revision != expected {
+            return Err(store_error(StoreErrorKind::Conflict));
+        }
+        Ok(loaded)
+    }
+
+    async fn load_current_excel_credential(
+        &self,
+        id: &ProviderAccountId,
+    ) -> Result<gateway_core::account::LoadedExcelCredential, StoreError> {
+        let account = self
+            .account(id.as_str())
+            .ok_or_else(|| store_error(StoreErrorKind::InvalidData))?;
+        let metadata = account
+            .excel_credential()
+            .cloned()
+            .ok_or_else(|| store_error(StoreErrorKind::InvalidData))?;
+        let credential = self
+            .excel_credentials
+            .lock()
+            .unwrap()
+            .get(id)
+            .cloned()
+            .ok_or_else(|| store_error(StoreErrorKind::InvalidData))?;
+        Ok(gateway_core::account::LoadedExcelCredential {
+            account,
+            metadata,
+            credential,
+        })
+    }
+
+    async fn apply_excel_state_change(&self, change: AccountStateChange) -> Result<(), StoreError> {
+        self.write_excel_state(change, false).await
+    }
+
+    async fn apply_excel_diagnostic_state_change(
+        &self,
+        change: AccountStateChange,
+    ) -> Result<(), StoreError> {
+        self.write_excel_state(change, true).await
+    }
+
+    async fn compare_and_swap_excel_quota(
+        &self,
+        observation: QuotaObservation,
+    ) -> Result<QuotaWriteOutcome, StoreError> {
+        let mut accounts = self.accounts.lock().unwrap();
+        let stored = accounts
+            .get_mut(&observation.account_id)
+            .ok_or_else(|| store_error(StoreErrorKind::InvalidData))?;
+        let mut excel = stored
+            .account
+            .excel_credential()
+            .cloned()
+            .ok_or_else(|| store_error(StoreErrorKind::InvalidData))?;
+        if excel.revision != observation.expected_revision
+            || excel
+                .quota
+                .observed_at()
+                .is_some_and(|current| current > observation.observed_at)
+        {
+            return Ok(QuotaWriteOutcome::Conflict);
+        }
+        excel.quota = observation.state;
+        stored.account = stored.account.clone().with_excel_credential(Some(excel));
+        Ok(QuotaWriteOutcome::Updated)
+    }
     async fn load_account_catalogs(
         &self,
         provider: &ProviderKind,
@@ -820,10 +902,18 @@ fn rebuild_account(current: &ProviderAccount, rebuild: AccountRebuild) -> Provid
         rebuild.last_error_message,
     )
     .with_scheduling(current.concurrency_limit(), current.weight())
+    .with_model_access(current.model_access().clone())
     .with_auto_use_quota_credits(current.auto_use_quota_credits())
     .with_quota_limits(current.quota_limits().clone(), current.quota_paused())
     .with_turn_state_injection_enabled(current.turn_state_injection_enabled())
     .with_turn_state_binding_revision(current.turn_state_binding_revision())
+    .with_excel_credential(current.excel_credential().cloned())
+    .with_responses_upstream(current.responses_upstream())
+    .with_excel_models(current.excel_models().clone())
+    .with_excel_cache_creation_as_input(current.excel_cache_creation_as_input())
+    .with_excel_ignore_encrypted_content(current.excel_ignore_encrypted_content())
+    .with_request_proxy_source(current.request_proxy_source())
+    .with_excel_403_action(current.excel_403_action())
     .with_outbound_proxy(current.outbound_proxy().cloned())
     .with_request_location(current.request_location().cloned())
     .with_refresh_schedule(rebuild.has_refresh_token, rebuild.next_refresh_at)

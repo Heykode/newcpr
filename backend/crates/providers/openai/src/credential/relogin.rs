@@ -12,7 +12,7 @@ use gateway_admin::{
     },
     ports::provider::{ProviderAdmin, ProviderAdminError, ProviderAdminErrorKind},
 };
-use gateway_core::account::OpaqueProviderData;
+use gateway_core::account::{CredentialTarget, OpaqueProviderData};
 use serde_json::Value;
 use std::{process::Stdio, time::Duration};
 use tokio::{
@@ -27,6 +27,40 @@ fn error(message: &'static str) -> ProviderAdminError {
     ProviderAdminError::new(ProviderAdminErrorKind::Unavailable).with_public_message(message)
 }
 
+fn excel_failure_message(target: CredentialTarget, payload: &Value) -> Option<&'static str> {
+    if target != CredentialTarget::Excel {
+        return None;
+    }
+    let stage = payload.get("stage").and_then(Value::as_str);
+    // Only fixed messages cross the worker boundary; never echo upstream material.
+    Some(match payload.get("code").and_then(Value::as_str)? {
+        "interaction_required" => match stage {
+            Some("mfa") => "BPS 两步验证需要人工交互，请使用浏览器 OAuth 重新授权",
+            Some("workspace") => "BPS 工作区选择需要人工交互，请使用浏览器 OAuth 重新授权",
+            Some("consent") => "BPS 授权确认需要人工交互，请使用浏览器 OAuth 重新授权",
+            _ => "BPS 授权页面需要人工交互，请使用浏览器 OAuth 重新授权",
+        },
+        "login_loop" => "BPS 授权页面重复跳转，自动登录未完成，请使用浏览器 OAuth 重新授权",
+        "callback_mismatch" | "unexpected_redirect" => {
+            "BPS 授权回调校验失败，未交换或保存凭据，请重新授权"
+        }
+        "verification_failed" => "BPS 凭据已取得，但权限校验未通过，未保存或推送",
+        "invalid_token" => "BPS 令牌类型、身份或有效期校验失败，未保存或推送",
+        "upstream_rejected" | "transport_failed" | "timeout" => match stage {
+            Some("authorize") => "BPS 授权入口请求失败，请检查账号代理或使用浏览器 OAuth 重新授权",
+            Some("password") => "BPS 密码验证请求失败，请检查网络或使用浏览器 OAuth 重新授权",
+            Some("mfa") => "BPS 两步验证请求失败，请检查网络或使用浏览器 OAuth 重新授权",
+            Some("workspace") => "BPS 工作区选择请求失败，请使用浏览器 OAuth 重新授权",
+            Some("consent") => "BPS 授权确认请求失败，请使用浏览器 OAuth 重新授权",
+            Some("token_exchange") => "BPS 授权码交换令牌失败，请检查账号代理并重新授权",
+            Some("credential_validation") => "BPS 凭据校验失败，未保存或推送",
+            Some("access_check") => "BPS 凭据已取得，但权限检查请求失败，未保存或推送",
+            _ => return None,
+        },
+        _ => return None,
+    })
+}
+
 pub(crate) async fn login(
     provider: &OpenAiAdminProvider,
     request: ReloginRequest,
@@ -36,6 +70,7 @@ pub(crate) async fn login(
         "password": request.password,
         "mfa_secret": request.mfa_secret,
         "workspace_id": request.workspace_id,
+        "credential_target": request.credential_target,
         "proxy": request.outbound_proxy.as_ref().map(|proxy| proxy.expose_url()),
     }))
     .map_err(|_| error("重登请求编码失败"))?;
@@ -107,6 +142,9 @@ pub(crate) async fn login(
         if let Some(reason) = stop_reason {
             return Err(error(reason.message()).with_relogin_stop_reason(reason));
         }
+        if let Some(message) = excel_failure_message(request.credential_target, &payload) {
+            return Err(error(message));
+        }
         return Err(error(match payload.get("code").and_then(Value::as_str) {
             Some("runtime_missing") => "重登运行环境缺少 curl_cffi 或 pyotp",
             Some("password_rejected") => "账号密码被拒绝，请检查资料或账号状态",
@@ -132,6 +170,30 @@ pub(crate) async fn login(
         .and_then(Value::as_object)
         .cloned()
         .ok_or_else(|| error("重登缺少凭据"))?;
+    if request.credential_target == gateway_core::account::CredentialTarget::Excel {
+        let data = super::excel::ExcelCredentialCodec::import_document(&document)
+            .map_err(|_| error("Excel 凭据身份或授权类型无效，未推送"))?;
+        data.ensure_usable()
+            .map_err(|_| error("Excel 凭据已过期，未推送"))?;
+        let email = data.email.ok_or_else(|| error("Excel 凭据缺少邮箱"))?;
+        if !email.eq_ignore_ascii_case(&request.email)
+            || request
+                .workspace_id
+                .as_ref()
+                .is_some_and(|id| id != &data.chatgpt_account_id)
+        {
+            return Err(error("Excel 重登身份与原账号不一致"));
+        }
+        return Ok(ReloginCredential {
+            document,
+            email,
+            workspace_id: data.chatgpt_account_id,
+            user_id: data.user_id,
+            plan_type: data.plan_type.ok_or_else(|| error("Excel 凭据缺少套餐"))?,
+            expires_at: data.expires_at,
+            verified_at: chrono::Utc::now(),
+        });
+    }
     let prepared = provider
         .prepare_import(PrepareCredentialImport {
             default_outbound_proxy: request.outbound_proxy,

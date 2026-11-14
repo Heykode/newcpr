@@ -17,6 +17,13 @@ AUTH = "https://auth.openai.com"
 WEB = "https://chatgpt.com"
 CLIENT = "app_EMoamEEZ73f0CkXaXp7hrann"
 CALLBACK = "http://localhost:1455/auth/callback"
+EXCEL_CLIENT = "app_fnr0pYvVwwFDocDumLG3H2Bp"
+EXCEL_CALLBACK = "https://bps.openai.com/basispoints/extension/360590d7-f8f9-4d88-bf75-0edfe0a4b9f3/auth/callback"
+EXCEL_ACCESS = "https://bps.openai.com/basispoints/api/responses/access?include_models=true"
+EXCEL_FAILURE_STAGES = frozenset({
+    "authorize", "password", "mfa", "workspace", "consent", "token_exchange",
+    "credential_validation", "access_check",
+})
 # Business policy, not a universal comparison of subscriptions.
 PLAN_PRIORITY = {
     "enterprise": 60, "edu": 55, "business": 50,
@@ -138,6 +145,8 @@ def unique_choice(data, scalar_keys, list_keys, id_keys):
 
 class Login:
     def __init__(self, request):
+        if request.get("credential_target", "codex") not in ("codex", "excel"):
+            raise LoginError("invalid_material")
         secret = request.get("mfa_secret")
         if (not request.get("password") or not isinstance(secret, str)
                 or not 16 <= len(secret) <= 128 or len(secret) % 8 not in (0, 2, 4, 5, 7)
@@ -217,6 +226,31 @@ class Login:
             data.update(page["payload"])
         return data
 
+    def select_excel_workspace(self, choices):
+        preferred = self.selected["id"] if self.selected else self.request.get("workspace_id")
+        if choices is None:
+            if preferred:
+                return self.selected or {"id": preferred, "plan": None}
+            raise LoginError("workspace_unknown")
+        if not isinstance(choices, list):
+            raise LoginError("workspace_unknown")
+        accounts = []
+        for choice in choices:
+            if not isinstance(choice, dict):
+                raise LoginError("workspace_unknown")
+            identifier = choice.get("id") or choice.get("workspace_id") or choice.get("account_id")
+            if (not isinstance(identifier, str) or not identifier or len(identifier) > 128
+                    or any(char.isspace() or not char.isprintable() for char in identifier)):
+                raise LoginError("workspace_unknown")
+            accounts.append({"id": identifier, "plan_type": choice.get("plan_type"),
+                             "name": choice.get("name")})
+        if not preferred and len({account["id"] for account in accounts}) == 1:
+            preferred = accounts[0]["id"]
+        selected = select_workspace(accounts, preferred)
+        if self.selected and not selected["plan"]:
+            selected["plan"] = self.selected["plan"]
+        return selected
+
     def flow(self, url, oauth=False, state=None):
         response = self.fetch("GET", url)
         counts = {}
@@ -232,7 +266,17 @@ class Login:
             if location:
                 location = urljoin(str(response.url), location)
                 parsed = urlparse(location)
-                if (oauth and parsed.scheme == "http" and parsed.hostname == "localhost"
+                if oauth and self.request.get("credential_target") == "excel":
+                    callback = urlparse(EXCEL_CALLBACK)
+                    if (parsed.scheme == callback.scheme and parsed.netloc == callback.netloc
+                            and parsed.path == callback.path and not parsed.fragment):
+                        query = parse_qs(parsed.query, keep_blank_values=True)
+                        if (query.get("state") != [state] or len(query.get("code", [])) != 1
+                                or not query["code"][0] or "error" in query):
+                            raise LoginError("callback_mismatch")
+                        return query["code"][0]
+                if (oauth and self.request.get("credential_target", "codex") == "codex"
+                        and parsed.scheme == "http" and parsed.hostname == "localhost"
                         and parsed.port == 1455 and parsed.path == "/auth/callback"
                         and not parsed.username and not parsed.password and not parsed.fragment):
                     query = parse_qs(parsed.query)
@@ -268,6 +312,8 @@ class Login:
                 endpoint = "/api/accounts/password/verify"
                 payload = {"password": self.request["password"]}
             elif page_type == "mfa_challenge":
+                if self.request.get("credential_target") == "excel":
+                    self.stage = "mfa"
                 factor = data.get("factor_id")
                 factors = data.get("factors") or data.get("mfa_challenge_factors") or []
                 if not factor:
@@ -283,7 +329,14 @@ class Login:
                                "sign_in_with_chatgpt_codex_consent", "codex_consent"):
                 choices = data.get("workspaces") or data.get("workspace_choices") or data.get("available_workspaces")
                 preferred = self.selected["id"] if self.selected else self.request.get("workspace_id")
-                if oauth:
+                if oauth and self.request.get("credential_target") == "excel":
+                    self.stage = "workspace"
+                    # BPS authorizes directly, without ChatGPT Web membership enumeration.
+                    choices = next((data[key] for key in ("workspaces", "workspace_choices", "available_workspaces")
+                                    if key in data), None)
+                    self.selected = self.select_excel_workspace(choices)
+                    workspace = self.selected["id"]
+                elif oauth:
                     if not preferred:
                         raise LoginError("workspace_unknown")
                     workspace = preferred
@@ -297,6 +350,8 @@ class Login:
                 endpoint = "/api/accounts/workspace/select"
                 payload = {"workspace_id": workspace}
             elif page_type in ("sign_in_with_chatgpt_codex_organization", "codex_organization"):
+                if self.request.get("credential_target") == "excel":
+                    self.stage = "workspace"
                 endpoint = "/api/accounts/organization/select"
                 payload = {
                     "org_id": unique_choice(data, ("current_organization_id", "organization_id", "org_id"),
@@ -306,6 +361,8 @@ class Login:
                                                 ("projects", "project_choices"), ("id", "project_id")),
                 }
             elif page_type == "choose_an_account":
+                if self.request.get("credential_target") == "excel":
+                    self.stage = "authorize"
                 endpoint = "/api/accounts/session/select"
                 # session_id identifies this authorization flow, not a login choice.
                 payload = {"session_id": unique_choice(data, ("selected_session_id",),
@@ -324,6 +381,16 @@ class Login:
                 "/api/accounts/session/select": "/choose-an-account",
                 "/api/accounts/consent/grant": "/consent",
             }[endpoint]
+            if self.request.get("credential_target") == "excel":
+                self.stage = {
+                    "/api/accounts/authorize/continue": "authorize",
+                    "/api/accounts/password/verify": "password",
+                    "/api/accounts/mfa/verify": "mfa",
+                    "/api/accounts/workspace/select": "workspace",
+                    "/api/accounts/organization/select": "workspace",
+                    "/api/accounts/session/select": "authorize",
+                    "/api/accounts/consent/grant": "consent",
+                }[endpoint]
             response = self.fetch(
                 "POST", AUTH + endpoint,
                 **({"json": payload} if payload is not None else {}),
@@ -332,6 +399,8 @@ class Login:
         raise LoginError("login_loop")
 
     def run(self):
+        if self.request.get("credential_target") == "excel":
+            return self.run_excel_oauth()
         csrf = self.body(self.fetch("GET", WEB + "/api/auth/csrf")).get("csrfToken")
         if not csrf:
             raise LoginError("csrf_missing")
@@ -405,6 +474,72 @@ class Login:
         document.update({"email": email, "account_id": workspace, "type": "codex"})
         return {"ok": True, "document": document}
 
+    def run_excel_oauth(self):
+        self.stage = "authorize"
+        verifier = secrets.token_urlsafe(32)
+        challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")
+        state = secrets.token_urlsafe(32)
+        authorize = AUTH + "/api/accounts/authorize?" + urlencode({
+            "client_id": EXCEL_CLIENT, "response_type": "code", "redirect_uri": EXCEL_CALLBACK,
+            "scope": "openid offline_access email profile organization.read", "state": state,
+            "code_challenge": challenge, "code_challenge_method": "S256",
+            "audience": "https://api.openai.com/v1", "platform": "PC",
+        })
+        code = self.flow(authorize, oauth=True, state=state)
+        self.stage = "token_exchange"
+        tokens = self.body(self.fetch("POST", AUTH + "/oauth/token", data={
+            "grant_type": "authorization_code", "client_id": EXCEL_CLIENT,
+            "code": code, "redirect_uri": EXCEL_CALLBACK, "code_verifier": verifier,
+        }))
+        self.stage = "credential_validation"
+        access = claims(tokens.get("access_token", ""))
+        auth = access.get("https://api.openai.com/auth", {})
+        if (access.get("client_id") or access.get("azp")) != EXCEL_CLIENT:
+            raise LoginError("invalid_token")
+        workspace = auth.get("chatgpt_account_id")
+        user = auth.get("chatgpt_user_id") or auth.get("user_id")
+        profile = access.get("https://api.openai.com/profile", {})
+        identity = claims(tokens["id_token"]) if tokens.get("id_token") else {}
+        email = profile.get("email") or access.get("email") or identity.get("email")
+        id_auth = identity.get("https://api.openai.com/auth", {})
+        expected_workspace = self.selected["id"] if self.selected else self.request.get("workspace_id")
+        if (not isinstance(workspace, str) or not workspace or not isinstance(user, str) or not user
+                or (expected_workspace and workspace != expected_workspace)
+                or str(email).lower() != self.request["email"].lower()
+                or (id_auth.get("chatgpt_account_id") and id_auth["chatgpt_account_id"] != workspace)
+                or (id_auth.get("chatgpt_user_id") and id_auth["chatgpt_user_id"] != user)):
+            raise LoginError("identity_mismatch")
+        plan = normalize_plan(auth.get("chatgpt_plan_type"))
+        if not plan or (self.selected and self.selected["plan"] and plan != self.selected["plan"]):
+            raise LoginError("plan_mismatch")
+        if (not tokens.get("refresh_token") or access.get("exp", 0) <= time.time() + 30
+                or str(tokens.get("token_type", "")).lower() != "bearer"):
+            raise LoginError("invalid_token")
+        # Only this fixed endpoint accepts BPS credentials; callback URLs are never fetched.
+        self.stage = "access_check"
+        if time.monotonic() > self.deadline:
+            raise LoginError("timeout")
+        response = self.session.request("GET", EXCEL_ACCESS, headers={
+            "Authorization": "Bearer " + tokens["access_token"],
+            "Chatgpt-Account-Id": workspace, "X-Openai-Account-Id": workspace,
+            "X-Openai-Account-User-Id": user, "X-Basispoints-Auth-Mode": "chatgpt",
+            "X-Openai-Internal-Basispoints-Client-Product": "basispoints-excel-plugin",
+            "X-Openai-Internal-Basispoints-Client-Agent-Profile": "excel",
+            "Origin": "https://bps.openai.com", "User-Agent": "Mozilla/5.0",
+            "Accept": "application/json", "Accept-Encoding": "identity",
+        }, timeout=5, proxy=self.proxy, verify=True, allow_redirects=False)
+        if response.status_code != 200 or len(response.content) > 2 * 1024 * 1024:
+            raise LoginError("verification_failed")
+        catalog = self.body(response)
+        if (catalog.get("allowed") is not True
+                or not isinstance(catalog.get("model_catalog"), dict)
+                or not isinstance(catalog["model_catalog"].get("models"), list)):
+            raise LoginError("verification_failed")
+        document = {key: tokens[key] for key in ("access_token", "refresh_token", "id_token") if tokens.get(key)}
+        document.update({"email": email, "chatgpt_account_id": workspace, "user_id": user,
+                         "type": "cpa-bps"})
+        return {"ok": True, "document": document}
+
 
 def main():
     login = None
@@ -424,6 +559,9 @@ def main():
     finally:
         if login:
             login.session.close()
+    if (login and login.request.get("credential_target") == "excel" and not result.get("ok")
+            and getattr(login, "stage", None) in EXCEL_FAILURE_STAGES):
+        result["stage"] = login.stage
     print(json.dumps(result, separators=(",", ":")), flush=True)
 
 

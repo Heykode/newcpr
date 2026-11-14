@@ -82,13 +82,12 @@ test('templates roundtrip scheduling, groups and proxy without sharing mutable a
   form.groupIds.push('group-b')
   assert.deepEqual(config.groupIds, ['group-a'])
   const blank = templateForm()
-  assert.equal(blank.excelModels, 'gpt-6-astra, gpt-5.6-sol, gpt-5.6-terra')
+  assert.equal('excelModels' in blank, false)
   blank.name = '  Defaults  '
   assert.deepEqual(JSON.parse(JSON.stringify(templateConfig(blank))), {
     name: 'Defaults',
     enabled: true,
     responsesUpstream: 'codex',
-    excelModelsFollowGlobal: true,
     excelCacheCreationAsInput: true,
     excelIgnoreEncryptedContent: false,
     excel403Action: 'none',
@@ -134,7 +133,7 @@ test('recovery templates preserve legacy omissions and explicitly roundtrip enab
   assert.deepEqual(structuredClone(templateConfig(legacy).excelRecovery), { enabled: false, intervalMinutes: 60 })
 })
 
-test('Excel templates preserve legacy omission and roundtrip global/custom/empty lists', () => {
+test('Excel templates preserve route settings and discard legacy model lists', () => {
   const legacy = templateConfig(templateForm({ name: 'Legacy' }))
   assert.equal('responsesUpstream' in legacy, false)
   assert.equal('excelModelsFollowGlobal' in legacy, false)
@@ -142,7 +141,7 @@ test('Excel templates preserve legacy omission and roundtrip global/custom/empty
   form.name = 'Excel'
   form.excelEnabled = true
   assert.equal(templateConfig(form).responsesUpstream, 'excel')
-  assert.equal(templateConfig(form).excelModelsFollowGlobal, true)
+  assert.equal('excelModelsFollowGlobal' in templateConfig(form), false)
   assert.equal('excelModels' in templateConfig(form), false)
   assert.equal(templateConfig(form).excelCacheCreationAsInput, true)
   form.excelCacheCreationAsInput = true
@@ -155,15 +154,10 @@ test('Excel templates preserve legacy omission and roundtrip global/custom/empty
   assert.equal(templateConfig(form).excel403Action, 'none')
   assert.equal(templateConfig(form).excelCacheCreationAsInput, true)
   form.excelEnabled = true
-  form.excelModelsFollowGlobal = false
-  form.excelModels = 'gpt-6-astra, gpt-6-astra'
-  assert.equal(JSON.stringify(templateConfig(form).excelModels), '["gpt-6-astra"]')
-  form.excelModels = ''
-  assert.equal(JSON.stringify(templateConfig(form).excelModels), '[]')
-  form.excelModels = 'invalid/model'
-  assert.throws(() => templateConfig(form))
-  form.excelModelsFollowGlobal = true
-  assert.doesNotThrow(() => templateConfig(form))
+  const old = templateForm({ name: 'Old model list', excelModelsFollowGlobal: false, excelModels: ['invalid/model'] })
+  assert.equal(old.applyExcel, false)
+  assert.equal('excelModels' in templateConfig(old), false)
+  assert.equal('excelModelsFollowGlobal' in templateConfig(old), false)
 })
 
 test('template validation reuses account scheduling limits and rejects missing proxy and invalid names', () => {
@@ -212,6 +206,7 @@ test('push snapshots template revision and remains backward compatible without o
   }))
   await api.pushRelogin([{ id: 'old', revision: 9 }])
   assert.equal('template' in calls[1].data, false)
+  assert.equal(calls[1].data.credentialTarget, undefined)
   const templates = load('../src/api/modules/account-templates.ts', {
     '../request': async request => calls.push(request),
   })

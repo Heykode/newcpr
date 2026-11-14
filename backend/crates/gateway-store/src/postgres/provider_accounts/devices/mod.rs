@@ -57,6 +57,7 @@ impl PgProviderAccountRepository {
             "select upstream_user_id, upstream_account_id, provider_credentials_json
              from provider_accounts
              where provider_kind = $1 and upstream_user_id is not null
+               and authentication_kind <> 'none'
              order by id for update",
         )
         .bind(codec.provider_kind())
@@ -92,6 +93,9 @@ impl PgProviderAccountRepository {
         transaction: &mut Transaction<'_, Postgres>,
         incoming: &NewProviderAccount,
     ) -> StoreResult<JsonObject> {
+        if incoming.authentication_kind == "none" {
+            return Ok(incoming.provider_credentials_json.clone());
+        }
         let Some(codec) = self.device_codecs.get(&incoming.provider_kind)? else {
             return Ok(incoming.provider_credentials_json.clone());
         };
@@ -111,7 +115,7 @@ impl PgProviderAccountRepository {
         lock_device_mutation(transaction).await?;
         let row = sqlx::query(
             "select provider_credentials_json from provider_accounts
-             where provider_kind = $1 and upstream_user_id = $2
+             where provider_kind = $1 and upstream_user_id = $2 and authentication_kind <> 'none'
                and coalesce(upstream_account_id, '') = $3 for update",
         )
         .bind(&incoming.provider_kind)
@@ -157,6 +161,7 @@ impl PgProviderAccountRepository {
               and d.upstream_user_id = a.upstream_user_id
               and d.upstream_account_id = a.upstream_account_id
              where a.id = $1 and a.credential_revision = $2
+               and a.authentication_kind <> 'none'
                and a.upstream_user_id <> '' and a.upstream_account_id <> ''",
         )
         .bind(account_id)
@@ -242,7 +247,7 @@ impl PgProviderAccountRepository {
         }
         lock_device_mutation(transaction).await?;
         let row = sqlx::query(
-            "select provider_kind, upstream_user_id, upstream_account_id, email,
+            "select provider_kind, authentication_kind, upstream_user_id, upstream_account_id, email,
                     provider_credentials_json
              from provider_accounts where id = $1 and credential_revision = $2 for update",
         )
@@ -272,6 +277,17 @@ impl PgProviderAccountRepository {
             Some(identity) => identity.upstream_account_id(),
             None => old_account.as_deref(),
         };
+        if get::<String>(&row, "authentication_kind")? == "none" {
+            if user != old_user.as_deref() || account != old_account.as_deref() {
+                return Err(device_conflict(
+                    "Codex authorization must match the Excel account workspace",
+                ));
+            }
+            let user = user
+                .filter(|v| !v.is_empty())
+                .ok_or_else(|| invalid("missing shell identity"))?;
+            return bind_material(transaction, codec.as_ref(), user, account, incoming, None).await;
+        }
         if reauthorization && replacement_identity.is_some() {
             // The selected local slot keeps its surface ID while OAuth explicitly
             // changes its owner. Registry, account CAS and State fencing are atomic.
@@ -401,7 +417,7 @@ impl PgProviderAccountRepository {
         let rows = sqlx::query(
             "select provider_kind, upstream_user_id, upstream_account_id,
                     provider_credentials_json
-             from provider_accounts where id = any($1::text[]) order by id for update",
+             from provider_accounts where id = any($1::text[]) and authentication_kind <> 'none' order by id for update",
         )
         .bind(account_ids)
         .fetch_all(&mut **transaction)

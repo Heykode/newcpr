@@ -17,6 +17,70 @@ fn loaded_credential_from_record(
 
 #[async_trait]
 impl ProviderAccountStore for PgProviderAccountRepository {
+    async fn list_due_excel_credentials(
+        &self,
+        limit: u32,
+        now: std::time::SystemTime,
+    ) -> Result<Vec<CoreProviderAccountId>, CoreStoreError> {
+        let ids: Vec<String> = sqlx::query_scalar("select e.account_id from openai_excel_credentials e join provider_accounts a on a.id=e.account_id
+            where a.enabled and e.has_refresh_token and e.refresh_attempt_revision is null
+              and e.credential_state in ('unknown','ready','expired')
+              and (e.next_refresh_at <= $1 or (e.next_refresh_at is null and e.access_token_expires_at <= $1))
+              and a.upstream_user_id=e.upstream_user_id and a.upstream_account_id is not distinct from e.upstream_account_id
+            order by coalesce(e.next_refresh_at,e.access_token_expires_at),e.account_id limit $2")
+            .bind(DateTime::<Utc>::from(now)).bind(i64::from(limit.min(200)))
+            .fetch_all(&self.pool).await.map_err(|error| CoreStoreError::caused_by(CoreStoreErrorKind::Unavailable,error))?;
+        ids.into_iter()
+            .map(|id| {
+                CoreProviderAccountId::new(id)
+                    .map_err(|_| CoreStoreError::new(CoreStoreErrorKind::InvalidData))
+            })
+            .collect()
+    }
+
+    async fn load_current_excel_credential(
+        &self,
+        account: &CoreProviderAccountId,
+    ) -> Result<gateway_core::account::LoadedExcelCredential, CoreStoreError> {
+        self.load_excel(account).await
+    }
+
+    async fn claim_excel_refresh(
+        &self,
+        account: &CoreProviderAccountId,
+        revision: CoreCredentialRevision,
+    ) -> Result<bool, CoreStoreError> {
+        self.claim_excel_refresh_once(account, revision).await
+    }
+
+    async fn compare_and_swap_excel_credential(
+        &self,
+        update: gateway_core::account::ExcelCredentialCasUpdate,
+    ) -> Result<CredentialCasOutcome, CoreStoreError> {
+        self.cas_excel(update).await
+    }
+
+    async fn apply_excel_state_change(
+        &self,
+        change: AccountStateChange,
+    ) -> Result<(), CoreStoreError> {
+        self.write_excel_state(change, false).await
+    }
+
+    async fn apply_excel_diagnostic_state_change(
+        &self,
+        change: AccountStateChange,
+    ) -> Result<(), CoreStoreError> {
+        self.write_excel_state(change, true).await
+    }
+
+    async fn compare_and_swap_excel_quota(
+        &self,
+        observation: QuotaObservation,
+    ) -> Result<QuotaWriteOutcome, CoreStoreError> {
+        self.write_excel_quota(observation).await
+    }
+
     async fn list_catalog_candidates(
         &self,
         provider: &ProviderKind,
@@ -62,7 +126,10 @@ impl ProviderAccountStore for PgProviderAccountRepository {
         sqlx::query_scalar(
             "select exists(select 1 from provider_accounts a join quality_rules q
             on q.id=a.quality_pause_owner and q.account_id=a.id
-            where a.id=$1 and not a.enabled and q.enabled and q.lease_until>now())",
+            where a.id=$1 and not a.enabled and q.enabled and q.lease_until>now())
+            or exists(select 1 from provider_accounts a join openai_excel_credentials e on e.account_id=a.id
+              join quality_rules q on q.id=e.quality_pause_owner and q.account_id=a.id
+              where a.id=$1 and a.enabled and e.suspended and q.enabled and q.lease_until>now())",
         )
         .bind(account.as_str())
         .fetch_one(&self.pool)
@@ -590,6 +657,9 @@ impl ProviderAccountStore for PgProviderAccountRepository {
         {
             return Ok(false);
         }
+        let Some(excel) = account.excel_credential() else {
+            return Ok(false);
+        };
         let mut transaction =
             self.pool.begin().await.map_err(|error| {
                 CoreStoreError::caused_by(CoreStoreErrorKind::Unavailable, error)
@@ -599,28 +669,46 @@ impl ProviderAccountStore for PgProviderAccountRepository {
             .execute(&mut *transaction)
             .await
             .map_err(|error| CoreStoreError::caused_by(CoreStoreErrorKind::Unavailable, error))?;
+        sqlx::query("select id from provider_accounts where id=$1 for update")
+            .bind(account.id().as_str())
+            .execute(&mut *transaction)
+            .await
+            .map_err(|error| CoreStoreError::caused_by(CoreStoreErrorKind::Unavailable, error))?;
+        sqlx::query(
+            "select account_id from openai_excel_credentials where account_id=$1 for update",
+        )
+        .bind(account.id().as_str())
+        .execute(&mut *transaction)
+        .await
+        .map_err(|error| CoreStoreError::caused_by(CoreStoreErrorKind::Unavailable, error))?;
         let changed = sqlx::query(
             "update provider_accounts
-             set enabled = case when $3 = 'pause_account' then false else enabled end,
-                 responses_upstream = case when $3 = 'disable_excel' then 'codex' else responses_upstream end,
-                 excel_auto_disabled_at = case when $3 = 'pause_account' then now() else excel_auto_disabled_at end,
-                 excel_403_warning_at = case when $3 = 'pause_account' then coalesce(excel_403_warning_at, now()) else excel_403_warning_at end,
+             set excel_auto_disabled_at = now(),
+                 excel_403_warning_at = coalesce(excel_403_warning_at, now()),
                  excel_mode_disabled_at = case when $3 = 'disable_excel' then now() else excel_mode_disabled_at end,
                  updated_at = greatest(now(), updated_at)
              where id = $1 and credential_revision = $2
-               and provider_kind = 'openai' and authentication_kind = 'oauth'
+               and provider_kind = 'openai'
                and responses_upstream = 'excel' and excel_403_action = $3
-               and (enabled or quality_pause_owner is not null)",
+               and enabled and exists(select 1 from openai_excel_credentials e where e.account_id=provider_accounts.id
+                 and e.credential_revision=$4 and (not e.suspended or e.quality_pause_owner is not null))",
         )
         .bind(account.id().as_str())
         .bind(to_i64(account.revision().get()).map_err(core_store_error)?)
         .bind(account.excel_403_action().as_str())
+        .bind(to_i64(excel.revision.get()).map_err(core_store_error)?)
         .execute(&mut *transaction)
         .await
         .map_err(|error| CoreStoreError::caused_by(CoreStoreErrorKind::Unavailable, error))?
         .rows_affected()
             > 0;
         if changed {
+            {
+                sqlx::query("update openai_excel_credentials set suspended=true,quality_pause_owner=null,updated_at=greatest(now(),updated_at)
+                    where account_id=$1 and credential_revision=$2")
+                    .bind(account.id().as_str()).bind(to_i64(excel.revision.get()).map_err(core_store_error)?)
+                    .execute(&mut *transaction).await.map_err(|error| CoreStoreError::caused_by(CoreStoreErrorKind::Unavailable,error))?;
+            }
             if !model.is_empty()
                 && account.excel_403_action() == gateway_core::account::Excel403Action::PauseAccount
             {

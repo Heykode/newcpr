@@ -424,14 +424,11 @@ async fn oauth_format_compatibility_preserves_http_websocket_identity_and_source
 #[tokio::test]
 async fn excel_omission_option_does_not_change_native_http_or_websocket_wire_or_identity() {
     for websocket in [false, true] {
-        for excel_account in [false, true] {
+        for has_excel_credential in [false, true] {
             let store = Arc::new(MemoryAccountStore::default());
             create_account(&store, "acct_provider_contract").await;
-            if excel_account {
-                store.set_responses_upstream(
-                    "acct_provider_contract",
-                    gateway_core::account::ResponsesUpstream::Excel,
-                );
+            if has_excel_credential {
+                store.seed_excel_credential("acct_provider_contract", true);
             }
             let runtime = tempfile::tempdir().unwrap();
             let body = json!({"model":"gpt-5.4","session_id":"native-encrypted-fixture","input":[
@@ -447,7 +444,7 @@ async fn excel_omission_option_does_not_change_native_http_or_websocket_wire_or_
                 true,
             )
             .await;
-            // The Excel account's different model list intentionally routes this model natively.
+            // Stored Excel material and its omission option do not alter the disabled route.
             store.set_excel_encrypted_content_policy(
                 "acct_provider_contract",
                 true,

@@ -459,7 +459,7 @@ fn integration_tests_mirror_production_module_tree() {
         let production = module_layouts(&member_root.join("src"), &["lib.rs", "main.rs"]);
         let tests = module_layouts(&tests_root, &["main.rs"]);
         for (module, test_layout) in tests {
-            if module == Path::new("support") {
+            if module.starts_with(Path::new("support")) {
                 continue;
             }
 
@@ -528,6 +528,9 @@ fn assert_module_tree(root: &Path, crate_roots: &[&str]) {
         {
             continue;
         }
+        if audited_external_private_test(root, relative) {
+            continue;
+        }
 
         let file_name = relative
             .file_name()
@@ -592,6 +595,39 @@ fn assert_module_tree(root: &Path, crate_roots: &[&str]) {
             root.join(relative).display()
         );
     }
+}
+
+fn audited_external_private_test(root: &Path, relative: &Path) -> bool {
+    let Some((member, owner, module, included_path, _)) = super::EXTERNAL_PRIVATE_TESTS
+        .iter()
+        .find(|(member, _, _, _, test)| {
+            root.ends_with(Path::new(member).join("tests")) && relative == Path::new(test)
+        })
+    else {
+        return false;
+    };
+    let owner_path = backend_root().join(member).join("src").join(owner);
+    let included = owner_path
+        .parent()
+        .unwrap()
+        .join(included_path)
+        .canonicalize()
+        .expect("audited private test target");
+    assert_eq!(included, root.join(relative).canonicalize().unwrap());
+    let syntax = syn::parse_file(&fs::read_to_string(owner_path).unwrap()).unwrap();
+    let declarations = syntax
+        .items
+        .iter()
+        .filter(|item| {
+            matches!(item, syn::Item::Mod(value) if value.ident == *module)
+                && super::is_audited_private_test(member, Path::new(owner), item)
+        })
+        .count();
+    assert_eq!(
+        declarations, 1,
+        "external private tests require their exact audited owner"
+    );
+    true
 }
 
 fn external_module_declaration_count(path: &Path, module_name: &str) -> usize {
