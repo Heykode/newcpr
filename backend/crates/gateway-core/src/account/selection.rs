@@ -90,7 +90,8 @@ pub fn parse_openai_session_binding_ttl_hours(hours: u32) -> Option<Duration> {
 pub struct AccountSelectionPolicy {
     queue_policy: ConcurrencyQueuePolicy,
     switch_account_on_queue_failure: bool,
-    smart_scheduling: super::smart_scheduling::SmartSchedulingConfig,
+    smart_scheduling: super::scheduling::SmartSchedulingConfig,
+    quota_reset_window_weights: super::ResetWindowWeights,
     strategy: RotationStrategy,
     max_concurrent_per_account: NonZeroU32,
     request_interval: Duration,
@@ -100,6 +101,20 @@ pub struct AccountSelectionPolicy {
 }
 
 impl AccountSelectionPolicy {
+    #[must_use]
+    pub const fn with_quota_reset_window_weights(
+        mut self,
+        weights: super::ResetWindowWeights,
+    ) -> Self {
+        self.quota_reset_window_weights = weights;
+        self
+    }
+
+    #[must_use]
+    pub const fn quota_reset_window_weights(self) -> super::ResetWindowWeights {
+        self.quota_reset_window_weights
+    }
+
     #[must_use]
     pub const fn new(
         strategy: RotationStrategy,
@@ -112,7 +127,8 @@ impl AccountSelectionPolicy {
                 timeout: Duration::from_secs(30),
             },
             switch_account_on_queue_failure: false,
-            smart_scheduling: super::smart_scheduling::SmartSchedulingConfig::defaults(),
+            smart_scheduling: super::scheduling::SmartSchedulingConfig::defaults(),
+            quota_reset_window_weights: super::ResetWindowWeights::defaults(),
             strategy,
             max_concurrent_per_account,
             request_interval,
@@ -214,13 +230,13 @@ impl AccountSelectionPolicy {
 
     pub const fn with_smart_scheduling(
         mut self,
-        config: super::smart_scheduling::SmartSchedulingConfig,
+        config: super::scheduling::SmartSchedulingConfig,
     ) -> Self {
         self.smart_scheduling = config;
         self
     }
 
-    pub const fn smart_scheduling(self) -> super::smart_scheduling::SmartSchedulingConfig {
+    pub const fn smart_scheduling(self) -> super::scheduling::SmartSchedulingConfig {
         self.smart_scheduling
     }
 
@@ -912,24 +928,31 @@ impl AccountSelector {
         let candidate = match context.policy.strategy() {
             RotationStrategy::QuotaResetPriority => {
                 eligible.sort_by(|left, right| {
-                    (
-                        left.signals.quota_reset_at.is_none(),
-                        left.signals.quota_reset_at,
-                    )
-                        .cmp(&(
-                            right.signals.quota_reset_at.is_none(),
-                            right.signals.quota_reset_at,
-                        ))
-                        .then_with(|| {
-                            utilization_at_limit(left, limit(left))
-                                .total_cmp(&utilization_at_limit(right, limit(right)))
-                        })
-                        .then_with(|| {
-                            left.signals
-                                .last_started_at
-                                .cmp(&right.signals.last_started_at)
-                        })
-                        .then_with(|| left.account.id().cmp(right.account.id()))
+                    let windows = context.policy.quota_reset_window_weights();
+                    if windows.enabled() {
+                        windows
+                            .score(&right.signals, context.now)
+                            .total_cmp(&windows.score(&left.signals, context.now))
+                    } else {
+                        (
+                            left.signals.quota_reset_at.is_none(),
+                            left.signals.quota_reset_at,
+                        )
+                            .cmp(&(
+                                right.signals.quota_reset_at.is_none(),
+                                right.signals.quota_reset_at,
+                            ))
+                    }
+                    .then_with(|| {
+                        utilization_at_limit(left, limit(left))
+                            .total_cmp(&utilization_at_limit(right, limit(right)))
+                    })
+                    .then_with(|| {
+                        left.signals
+                            .last_started_at
+                            .cmp(&right.signals.last_started_at)
+                    })
+                    .then_with(|| left.account.id().cmp(right.account.id()))
                 });
                 eligible.first().copied()?
             }
@@ -1139,7 +1162,7 @@ fn configured_smart_score(
     candidate: &AccountCandidate,
     limit: NonZeroU32,
     now: SystemTime,
-    config: super::smart_scheduling::SmartSchedulingConfig,
+    config: super::scheduling::SmartSchedulingConfig,
     waiting_count: u32,
 ) -> f64 {
     let load = 1.0 - utilization_at_limit(candidate, limit).clamp(0.0, 1.0);

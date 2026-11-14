@@ -517,6 +517,7 @@ impl SettingsStore for MemorySettingsStore {
                 .codex_quota_overdraft_probe_model
                 .unwrap_or_else(|| settings.codex_quota_overdraft_probe_model.clone()),
             request_interval_ms: command.request_interval_ms,
+            quota_reset_window_weights: command.quota_reset_window_weights,
             rotation_strategy: command.rotation_strategy,
             min_codex_desktop_version: command.min_codex_desktop_version,
             min_codex_cli_version: command.min_codex_cli_version,
@@ -1684,6 +1685,7 @@ fn test_runtime_settings() -> RuntimeSettings {
         codex_quota_overdraft_enabled: false,
         codex_quota_overdraft_probe_model: "gpt-6-astra".to_owned(),
         request_interval_ms: 50,
+        quota_reset_window_weights: Default::default(),
         rotation_strategy: RotationStrategy::Smart,
         min_codex_desktop_version: None,
         min_codex_cli_version: None,

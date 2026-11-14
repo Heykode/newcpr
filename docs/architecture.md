@@ -485,6 +485,10 @@ Worker 由各 Bundle 贡献、由 Host 统一监督：
   普通页面只读共享结果，手动请求与正在运行的采样合并，不修改账号、调度或计费事实；
 - Provider：credential refresh、quota/catalog 健康和官方版本/etag 检查。
 
+OpenAI 客户端版本在启动时检查，此后每次检查完成一小时再检查。CLI 新预设与旧自定义
+UA 自动同步共用官方 npm 版本服务；固定 UA 保持原值。同版本缓存每天续期、保留 30 天，
+续期保留原核验时间；失败保留当前画像并在下轮重试。CLI/平台画像在每个进程更新本地状态。
+
 周期任务的 Redis lease 只保证单周期互斥，不构成多副本 leader 选举。备份 daemon 依赖单副本部署边界，
 自更新也只替换处理请求的当前进程，因此整个应用必须保持单副本。
 分组监控同样依赖该单副本边界。其采样失败保留旧快照和真实采样时间，下一轮重试，
@@ -621,3 +625,11 @@ Responses 的流式交付在普通、错误和终态的背压等待中响应下�
 已发布快照的同一全局画像。账号凭据、代理、IPv6、CA 继续由已有账号出口负责。
 请求保留期支持完整正 u32 天数；实际清理与直接 SQL 统计都有超大跨度边界，
 不因此引入已暂缓的 analytics worker。后台只增加 PWA manifest，不缓存业务 API 或支持离线操作。
+
+### v3.49.0 调度与 Messages 接入
+
+Core 的 `account::scheduling::ResetWindowWeights` 统一实现重置评分。独立额度策略
+从 runtime_settings JSONB 经 Store、SnapshotSettingsFacts 到冻结的 AccountSelectionPolicy；
+全零保留原排序，非零严格比较窗口得分，不覆盖智能调度的系数。已有亲和与资格规则先执行。
+Messages 在转换为 Responses 之前解析 Claude 显式会话，按 Client Key 派生独立亲和键。
+选号和安全诊断使用相同身份；后续复用既有租约、绑定和换号流程，不生成原生 turn 归属。

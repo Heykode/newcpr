@@ -153,6 +153,11 @@ WebSocket message 和 frame 不设置网关私有长度上限；协议可接受�
 无法对应的扩展字段可能降级，保留全部 Responses 语义时应使用 Responses 入口。
 每轮上下文由客户端提交，Messages 不提供服务端历史续接或 WebSocket 入口。
 
+会话亲和优先读取 `x-claude-code-session-id`，再读取 `metadata.user_id` JSON 字符串的
+`session_id`，最后兼容旧 `_session_<id>` 后缀。会话最多 256 字节且不含控制字符。
+相同 Client Key 下沿用 `openaiAccountAffinity` 模式及现有换号预算；不同 Key 隔离。
+普通用户标识和对话正文不绑定账号，也不建立 Codex turn 或原生续接归属。
+
 `/v1/messages/count_tokens` 使用同一鉴权、模型及账号准入，将 Messages 内容投影后由本地
 BPE tokenizer 估算可提取文本和工具内容。它不发送上游生成请求，不产生上游成功用量反馈，
 不保证涵盖图片、音频、二进制文档及隐藏推理成本，也不等同于最终账单。
@@ -1141,6 +1146,7 @@ openaiSessionBindingTtlHours
 openaiAccountAffinity
 requestIntervalMs
 rotationStrategy
+quotaResetWindowWeights
 minCodexDesktopVersion
 minCodexCliVersion
 usageRetentionDays
@@ -1160,7 +1166,14 @@ requestTuning
 接受 0–10、一位小数。省略整个对象补三个 0；显式提供时须包含三项。全部为 0 时额度重置不参与
 评分和近似最优容差；否则对有效的账号通用 5 小时/周/月窗口取加权评分，缺失或过期窗口计零。
 每个周期取最近的未来重置，分数为 `H / (H + 剩余秒数)`，`H=周期秒数/7`，月按 30 天计算。
-模型专属窗口不计入，原 `quota_reset_priority` 策略不变。参数写入现有 JSONB，无需数据库迁移。
+模型专属窗口不计入。智能调度参数保存在现有 `requestTuning` JSONB 中。
+
+`quota_reset_priority` 使用独立的顶层 `quotaResetWindowWeights`，同样包含
+`fiveHour`、`weekly`、`monthly`，各项为 0–10、最多一位小数。非全零时严格按重置得分
+排序，不混入智能调度分数或近似同分轮换；全零保持原最早重置时间排序。
+两组权重分别保存，切换策略不相互覆盖。更新设置必须提交完整三项，缺失/null/未知字段
+或非法数字返回 422；读取额外返回只读 `quotaResetWindowWeightsDefaults`，不可回传。
+迁移 0092 新增全零默认列，保留既有设置。资格、账号权重层和亲和仍优先于排序。
 
 Codex Responses 最终 HTTP/WS 请求按官方移除 `max_tokens`、`max_output_tokens`、
 `max_completion_tokens`，不再把这些值当输出上限传给上游；`temperature` 和 `prompt_cache_retention`

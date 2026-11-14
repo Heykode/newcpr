@@ -4,7 +4,7 @@ import type { AccountAffinity, RequestTuning } from '@/api/modules/settings'
 import { computed, reactive, ref, shallowRef } from 'vue'
 import { getSettings, updateSettings } from '@/api'
 import { defaultRequestLocation } from '@/api/modules/proxies'
-import { defaultSmartScheduling } from '@/api/modules/settings'
+import { defaultResetWindowWeights, defaultSmartScheduling } from '@/api/modules/settings'
 import { ApiError } from '@/api/request'
 
 import { toast } from '@/components/base/BaseToast'
@@ -89,6 +89,8 @@ export function useSettingsForm() {
     requestIntervalMs: null as number | null,
     openaiSessionBindingTtlHours: null as number | null,
     rotationStrategy: '' as RotationStrategy | '',
+    quotaResetWindowWeights: defaultResetWindowWeights(),
+    quotaResetWindowWeightsDefaults: defaultResetWindowWeights(),
     minCodexDesktopVersion: '',
     minCodexCliVersion: '',
     usageRetentionDays: 31,
@@ -164,6 +166,8 @@ export function useSettingsForm() {
     form.requestIntervalMs = data.requestIntervalMs
     form.openaiSessionBindingTtlHours = data.openaiSessionBindingTtlHours ?? 24
     form.rotationStrategy = data.rotationStrategy
+    form.quotaResetWindowWeights = { ...data.quotaResetWindowWeights }
+    form.quotaResetWindowWeightsDefaults = { ...data.quotaResetWindowWeightsDefaults }
     form.minCodexDesktopVersion = data.minCodexDesktopVersion ?? ''
     form.minCodexCliVersion = data.minCodexCliVersion ?? ''
     form.usageRetentionDays = data.usageRetentionDays
@@ -337,6 +341,10 @@ export function useSettingsForm() {
       }
       tuning.excelImageTransport = { mode: 'relay', publicUrl: origin }
     }
+    if (!Object.values(form.quotaResetWindowWeights).every(value => Number.isFinite(value) && value >= 0 && value <= 10 && Math.round(value * 10) / 10 === value)) {
+      toast.warning('额度调度系数须为 0–10，最多一位小数')
+      return
+    }
     const smartWeights = [
       tuning.smartScheduling.loadWeight,
       tuning.smartScheduling.quotaWeight,
@@ -413,6 +421,7 @@ export function useSettingsForm() {
         openaiSessionBindingTtlHours: ttlHours,
         openaiAccountAffinity: form.openaiAccountAffinity,
         rotationStrategy,
+        quotaResetWindowWeights: { ...form.quotaResetWindowWeights },
         minCodexDesktopVersion: form.minCodexDesktopVersion.trim() || null,
         minCodexCliVersion: form.minCodexCliVersion.trim() || null,
         usageRetentionDays: form.usageRetentionDays,

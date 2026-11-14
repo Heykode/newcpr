@@ -121,6 +121,30 @@ async fn openai_bundle_exposes_one_core_provider_and_drains_worker_contributions
     assert_eq!(bundle.admin_provider().provider_kind().as_str(), "openai");
     let contributions = bundle.take_worker_contributions();
     assert_eq!(contributions.len(), 9);
+    for owner in ["openai-cli-release", "openai-platform-desktop-release"] {
+        let worker = contributions
+            .iter()
+            .find_map(|contribution| match contribution {
+                WorkerContribution::Registration(registration)
+                    if registration.id.owner() == owner =>
+                {
+                    Some(registration)
+                }
+                _ => None,
+            })
+            .expect("client release worker");
+        let WorkerRunnable::Scheduled {
+            schedule, lease, ..
+        } = &worker.runnable
+        else {
+            panic!("client release worker must be scheduled");
+        };
+        assert_eq!(schedule.interval(), Duration::from_secs(3600));
+        assert!(
+            lease.is_none(),
+            "each instance must publish its local profile"
+        );
+    }
     let excel_worker = contributions
         .iter()
         .find_map(|contribution| match contribution {
@@ -137,31 +161,6 @@ async fn openai_bundle_exposes_one_core_provider_and_drains_worker_contributions
         panic!("Excel refresh must be scheduled");
     };
     assert_eq!(schedule.interval(), Duration::from_secs(30));
-    assert!(contributions.iter().any(|contribution| matches!(contribution,
-        WorkerContribution::Registration(registration) if registration.id.owner() == "openai-platform-releases"
-    )));
-    let cli_worker = contributions
-        .iter()
-        .find_map(|contribution| match contribution {
-            WorkerContribution::Registration(registration)
-                if registration.id.owner() == "openai-cli-version" =>
-            {
-                Some(registration)
-            }
-            _ => None,
-        })
-        .expect("CLI version reconciliation worker");
-    let WorkerRunnable::Scheduled {
-        schedule, lease, ..
-    } = &cli_worker.runnable
-    else {
-        panic!("CLI version reconciliation must be scheduled");
-    };
-    assert_eq!(schedule.interval(), Duration::from_secs(60));
-    assert!(
-        lease.is_none(),
-        "each instance must load the cached version"
-    );
     assert!(contributions.iter().all(|contribution| match contribution {
         WorkerContribution::Registration(registration) =>
             !registration.id.owner().starts_with("openai-turn-state"),

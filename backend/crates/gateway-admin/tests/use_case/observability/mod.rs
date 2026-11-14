@@ -1019,6 +1019,7 @@ impl SettingsStore for FixtureSettingsStore {
             codex_quota_overdraft_enabled: false,
             codex_quota_overdraft_probe_model: "gpt-6-astra".to_owned(),
             request_interval_ms: 0,
+            quota_reset_window_weights: Default::default(),
             rotation_strategy: RotationStrategy::Smart,
             min_codex_desktop_version: None,
             min_codex_cli_version: None,

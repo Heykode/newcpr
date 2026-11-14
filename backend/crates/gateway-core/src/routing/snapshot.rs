@@ -41,6 +41,7 @@ pub struct SnapshotSettingsFacts {
     codex_quota_overdraft_probe_model: String,
     request_interval_ms: u64,
     rotation_strategy: String,
+    quota_reset_window_weights: crate::account::ResetWindowWeights,
     model_mappings: BTreeMap<String, String>,
     min_codex_desktop_version: Option<String>,
     min_codex_cli_version: Option<String>,
@@ -52,6 +53,15 @@ pub struct SnapshotSettingsFacts {
 }
 
 impl SnapshotSettingsFacts {
+    #[must_use]
+    pub const fn with_quota_reset_window_weights(
+        mut self,
+        weights: crate::account::ResetWindowWeights,
+    ) -> Self {
+        self.quota_reset_window_weights = weights;
+        self
+    }
+
     #[must_use]
     pub fn with_request_profiles(
         mut self,
@@ -119,6 +129,7 @@ impl SnapshotSettingsFacts {
             request_location: None,
             request_interval_ms,
             rotation_strategy: rotation_strategy.into(),
+            quota_reset_window_weights: Default::default(),
             model_mappings,
             min_codex_desktop_version,
             min_codex_cli_version,
@@ -695,6 +706,7 @@ async fn compile_runtime_snapshot(
         timeout: Duration::from_secs(request_tuning.account_concurrency_wait_timeout_seconds),
     })
     .with_smart_scheduling(request_tuning.smart_scheduling)
+    .with_quota_reset_window_weights(facts.settings.quota_reset_window_weights)
     .with_openai_account_affinity(facts.settings.openai_account_affinity)
     .with_openai_session_binding_ttl(
         crate::account::parse_openai_session_binding_ttl_hours(
