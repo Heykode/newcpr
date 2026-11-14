@@ -164,6 +164,45 @@ function quotaAccount(windows, usage = {}) {
   }
 }
 
+test('active Excel quota summary never renders cached Codex quota or credit controls', async (context) => {
+  const account = {
+    ...quotaAccount([quotaWindow(30)]),
+    provider: 'openai',
+    responsesUpstream: 'codex',
+    hasCodexCredential: true,
+    excelCredential: { state: 'ready' },
+  }
+  const { root, props } = mountComponent(context, 'AccountQuotaSummaryCell/index.vue', { account })
+  assert.match(textContent(root), /Codex 点数/)
+  assert.ok(forecastButton(root))
+
+  props.value = { account: { ...account, responsesUpstream: 'excel' } }
+  await nextTick()
+  assert.match(textContent(root), /Excel OAuth.*Excel 额度尚未观测/)
+  assert.doesNotMatch(textContent(root), /Codex 点数|预计周额度|5H|透支/)
+  assert.equal(descendants(root, node => node.props.role === 'progressbar').length, 0)
+
+  props.value = { account }
+  await nextTick()
+  assert.match(textContent(root), /Codex 点数/)
+  assert.ok(forecastButton(root))
+})
+
+test('Excel-only shell displays missing Codex credentials without an internal none label', (context) => {
+  const { root } = mountComponent(context, 'AccountQuotaSummaryCell/index.vue', {
+    account: {
+      ...quotaAccount([]),
+      provider: 'openai',
+      authenticationKind: 'none',
+      hasCodexCredential: false,
+      responsesUpstream: 'codex',
+      excelCredential: { state: 'ready' },
+    },
+  })
+  assert.match(textContent(root), /缺少 Codex 凭据/)
+  assert.doesNotMatch(textContent(root), /none|Codex 点数|预计周额度/)
+})
+
 function assertSummaryRows(root, expected) {
   const triggers = descendants(root, node => node.tag === 'button' && node.props['aria-haspopup'] === 'dialog' && /^查看.*详情$/.test(node.props['aria-label'] ?? ''))
   assert.equal(triggers.length, 1)

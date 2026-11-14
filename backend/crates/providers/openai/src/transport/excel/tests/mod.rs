@@ -1,3 +1,4 @@
+mod access;
 mod recovery;
 
 use super::*;
@@ -282,8 +283,16 @@ async fn excel_encrypted_recovery_cancellation_stops_pending_http_rejection() {
 
 #[test]
 fn excel_catalog_explicitly_overrides_encrypted_multi_agent_capabilities_only() {
-    let model = crate::transport::catalog::excel_bridge_model(VERIFIED_MODEL).unwrap();
+    let model =
+        crate::transport::catalog::excel_bridge_model(&crate::credential::excel::ExcelModel {
+            id: VERIFIED_MODEL.into(),
+            label: "Account model".into(),
+            efforts: vec!["high".into()],
+        })
+        .unwrap();
+    assert_eq!(model.capabilities().reasoning_efforts(), ["high"]);
     let descriptor: Value = serde_json::from_slice(model.document().body()).unwrap();
+    assert_eq!(descriptor["display_name"], "Account model");
     assert_eq!(descriptor.get("multi_agent_version"), Some(&Value::Null));
     assert_eq!(
         descriptor.get("multi_agent_reasoning_effort"),

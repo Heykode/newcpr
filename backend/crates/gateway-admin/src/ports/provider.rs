@@ -169,6 +169,51 @@ impl ProviderAdminError {
 /// 全部由 [`crate::ports::store::AccountStore`] 提交。运行时资源通知只在事务成功后发生。
 #[async_trait]
 pub trait ProviderAdmin: Send + Sync {
+    async fn prepare_excel_import(
+        &self,
+        _command: PrepareCredentialImport,
+    ) -> Result<PreparedCredentialImport, ProviderAdminError> {
+        Err(ProviderAdminError::new(ProviderAdminErrorKind::Unsupported))
+    }
+
+    async fn start_excel_authorization(
+        &self,
+        _pending: PendingAuthorizationMutation,
+    ) -> Result<AuthorizationStarted, ProviderAdminError> {
+        Err(ProviderAdminError::new(ProviderAdminErrorKind::Unsupported))
+    }
+
+    async fn complete_excel_authorization(
+        &self,
+        _command: CompleteAuthorization,
+    ) -> Result<
+        crate::model::provider_credentials::PreparedExcelAuthorizationCommit,
+        ProviderAdminError,
+    > {
+        Err(ProviderAdminError::new(ProviderAdminErrorKind::Unsupported))
+    }
+
+    async fn refresh_excel_credential(
+        &self,
+        _account_id: &ProviderAccountId,
+    ) -> Result<(), ProviderAdminError> {
+        Err(ProviderAdminError::new(ProviderAdminErrorKind::Unsupported))
+    }
+
+    async fn excel_models(
+        &self,
+        _account_id: &ProviderAccountId,
+    ) -> Result<ProviderModels, ProviderAdminError> {
+        Err(ProviderAdminError::new(ProviderAdminErrorKind::Unsupported))
+    }
+
+    async fn export_excel_credential(
+        &self,
+        _account_id: &ProviderAccountId,
+    ) -> Result<ProviderDocument, ProviderAdminError> {
+        Err(ProviderAdminError::new(ProviderAdminErrorKind::Unsupported))
+    }
+
     fn validate_key_client_profile(
         &self,
         _profile: &gateway_core::account::OpaqueProviderData,

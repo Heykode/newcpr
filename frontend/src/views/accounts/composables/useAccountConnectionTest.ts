@@ -4,7 +4,7 @@ import { useLocalStorage } from '@vueuse/core'
 
 import { clamp } from 'es-toolkit'
 import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
-import { getAccountModels, refreshAccountModels } from '@/api'
+import { getAccountModels, getExcelModels, refreshAccountModels } from '@/api'
 import { streamAccountConnectionTest } from '@/api/modules/account-connection-test'
 import { toast } from '@/components/base/BaseToast'
 import { useIdSet } from '@/composables/useIdSet'
@@ -66,6 +66,7 @@ interface ConnectionTestStartEvent {
   type: 'test_start'
   text?: string
   model?: string
+  responses_upstream?: 'codex' | 'excel' | null
 }
 
 interface ConnectionTestRequestEvent {
@@ -193,6 +194,7 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
   const testingAccount = shallowRef<Account | null>(null)
   const connectionTestStatus = shallowRef<ConnectionTestStatus>('idle')
   const connectionTestModel = shallowRef('')
+  const connectionTestRoute = shallowRef<'codex' | 'excel' | null>(null)
   const connectionTestContent = shallowRef('')
   const connectionTestLogs = ref<ConnectionTestLog[]>([])
   const connectionTestError = shallowRef('')
@@ -266,13 +268,14 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
 
   function openConnectionTest(account: Account) {
     abortConnectionTest()
-    testingAccount.value = account
+    testingAccount.value = { ...account }
+    connectionTestRoute.value = account.provider === 'openai' ? account.responsesUpstream === 'excel' ? 'excel' : 'codex' : null
     connectionTestSelectedModel.value = ''
     connectionTestModelOptions.value = []
     refreshingConnectionTestModels.value = false
     showConnectionTestModal.value = true
     resetConnectionTest()
-    void loadConnectionTestModels(account)
+    void loadConnectionTestModels(testingAccount.value)
   }
 
   function resetConnectionTest() {
@@ -392,7 +395,8 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
   function handleConnectionTestEvent(event: ConnectionTestEvent) {
     if (event.type === 'test_start') {
       connectionTestModel.value = event.model || connectionTestModel.value
-      appendConnectionTestLog(`开始测试 ${connectionTestModel.value || '未选择模型'}`, 'info')
+      connectionTestRoute.value = event.responses_upstream ?? connectionTestRoute.value
+      appendConnectionTestLog(`开始测试 ${connectionTestRoute.value === 'excel' ? 'Excel' : connectionTestRoute.value === 'codex' ? 'Codex' : ''} ${connectionTestModel.value || '未选择模型'}`, 'info')
       return
     }
     if (event.type === 'request') {
@@ -452,7 +456,9 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
     loadingConnectionTestModels.value = true
     connectionTestError.value = ''
     try {
-      const result = await getAccountModels({ accountId: account.id }, { silent: true })
+      const result = account.responsesUpstream === 'excel'
+        ? await getExcelModels(account.id, { silent: true })
+        : await getAccountModels({ accountId: account.id }, { silent: true })
       if (request !== connectionTestModelRequest)
         return
       applyConnectionTestModels(result.models, account)
@@ -475,10 +481,21 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
   function applyConnectionTestModels(catalog: AccountModelsResponse['models'], account: Account, preserveSelection = false) {
     const previousSelection = preserveSelection ? connectionTestSelectedModel.value : ''
     const labels = new Map(catalog.map(model => [model.id, model.label || model.id]))
-    if (account.modelAccess?.mode === 'allowlist') {
+    if (account.responsesUpstream !== 'excel' && account.modelAccess?.mode === 'allowlist') {
       for (const id of account.modelAccess.models) {
         if (!labels.has(id))
           labels.set(id, id)
+      }
+    }
+    if (account.responsesUpstream === 'excel' && account.modelAccess?.mode !== 'all') {
+      const restriction = account.modelAccess
+      if (restriction) {
+        for (const id of labels.keys()) {
+          if ((restriction.mode === 'allowlist' && !restriction.models.includes(id))
+            || (restriction.mode === 'denylist' && restriction.models.includes(id))) {
+            labels.delete(id)
+          }
+        }
       }
     }
     connectionTestModelOptions.value = Array.from(labels, ([value, label]) => ({ value, label }))
@@ -495,7 +512,9 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
     refreshingConnectionTestModels.value = true
     connectionTestError.value = ''
     try {
-      const result = await refreshAccountModels({ accountId: account.id }, { silent: true })
+      const result = account.responsesUpstream === 'excel'
+        ? await getExcelModels(account.id, { silent: true })
+        : await refreshAccountModels({ accountId: account.id }, { silent: true })
       if (request !== connectionTestModelRequest)
         return
       applyConnectionTestModels(result.models, account, true)
@@ -567,6 +586,7 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
             interface: settings.endpoint,
             stream: settings.stream,
             prompt: settings.prompt,
+            responsesUpstream: account.provider === 'openai' ? account.responsesUpstream === 'excel' ? 'excel' : 'codex' : undefined,
           }, run.controller.signal, (raw) => {
             if (generation !== connectionTestGeneration || connectionTestRun !== run)
               return
@@ -616,6 +636,7 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
     testingAccount,
     connectionTestStatus,
     connectionTestModel,
+    connectionTestRoute,
     connectionTestLogs,
     connectionTestError,
     connectionTestStartedAt,

@@ -21,6 +21,7 @@ use crate::{
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AccountProbeTarget {
     ConnectionTest(ProviderAccountId),
+    ConnectionTestRoute(ProviderAccountId, crate::account::ResponsesUpstream),
     FreezeRecovery(ProviderAccountId),
 }
 
@@ -33,16 +34,31 @@ impl From<ProviderAccountId> for AccountProbeTarget {
 impl AccountProbeTarget {
     pub fn account_id(&self) -> &ProviderAccountId {
         match self {
-            Self::ConnectionTest(account) | Self::FreezeRecovery(account) => account,
+            Self::ConnectionTest(account)
+            | Self::ConnectionTestRoute(account, _)
+            | Self::FreezeRecovery(account) => account,
         }
     }
 
-    pub(super) fn into_selection(self) -> (ProviderAccountId, AccountEligibilityPolicy) {
+    pub(super) fn into_selection(
+        self,
+    ) -> (
+        ProviderAccountId,
+        AccountEligibilityPolicy,
+        Option<crate::account::ResponsesUpstream>,
+    ) {
         match self {
             Self::ConnectionTest(account) => {
-                (account, AccountEligibilityPolicy::BypassForDiagnostic)
+                (account, AccountEligibilityPolicy::BypassForDiagnostic, None)
             }
-            Self::FreezeRecovery(account) => (account, AccountEligibilityPolicy::FreezeRecovery),
+            Self::ConnectionTestRoute(account, route) => (
+                account,
+                AccountEligibilityPolicy::BypassForDiagnostic,
+                Some(route),
+            ),
+            Self::FreezeRecovery(account) => {
+                (account, AccountEligibilityPolicy::FreezeRecovery, None)
+            }
         }
     }
 }

@@ -40,23 +40,23 @@
 - 本地配置源为 `provider_outbound_user_agents.configuration_json`，只读取 configuration 模式；
   旧 default/custom/custom-auto-version 沿当前已发布画像。读取/解析失败返回错误，不回退成伪默认。
   预热复用相同全局选择；诊断从 Core 的配置快照冻结全局画像，不读取任意 Client Key 画像。
-- Excel 配置模型作为独立 adapter 来源，scope 额外包含 Excel 模型配置。
-  原生 marker 0 文档与纯 Excel marker 3 文档分开；合成模型不能成为原生账号权限证据。
-  混合目录依据原始文档的 native IDs 检查原生资格，不能因为含 Excel 模型而跳过检查。
-  混合文档 hash 含 adapter 内容，因此遗漏筛选用内存检查，不错误套用原生 DB hash 下推。
+- Excel 目录使用独立 BPS 凭据查询实际 access/models，不再从旧 Excel 静态模型配置合成权限。
+  scope 使用投影后的 Excel 凭据版本、套餐和 `excel-independent-v1` adapter 标识。
+  Excel 成功目录只进入自己的内存/短期缓存，不写入 Codex 的持久目录事实；失败不能回退到
+  Codex 凭据或旧静态模型。原生目录保留自己的账号、凭据版本和套餐权限筛选。
 - Excel 多代理能力按当前授权、启用、实际 Excel 路由和模型政策，显式将对应型号的
   `multi_agent_version`、`multi_agent_reasoning_effort` 设为 null；不得扩展到范围外模型。
   查询仅重读缓存索引中的 Excel 账号；删除账号即使索引尚未刷新，也因账号不存在被排除。
 - Core 继续保留已知 Provider 归属、模型映射、权限、能力及强制/排除 Provider。
   未知模型仅有唯一合格非完整目录 Provider 时可透传，多候选不能猜测。
-  原生 Codex 不接受 Grok；按请求模型实际走 Excel 的路径保留其既有合同。
+  原生 Codex 不接受 Grok；账号入口开关冻结 Excel 路由后，只接受其实际目录与共享模型策略的交集。
 - 新模型发现、上游透传和本地价格独立；不以缺少定价认定请求不支持。
 - 管理端观察时间来自实际成功目录；无时间返回 null，不把读取缓存当作新观测。
 
 ## 验证
 
 官方账号级并集、身份/套餐变化、候选替补、启动持久恢复、并发发布、万账号恢复与遗漏筛选；
-本地代理/IPv6/installation、Excel 混合目录、未知套餐自身权限、排队提升前重查、管理员导出。
+本地代理/IPv6/installation、Excel 独立目录、未知套餐自身权限、排队提升前重查、管理员导出。
 API 同时验证普通 OpenAI 列表、Codex 目录和显式 Anthropic 头下的分页/详情。
 不把 mock 上游通过写成真实上游或生产验收。
 

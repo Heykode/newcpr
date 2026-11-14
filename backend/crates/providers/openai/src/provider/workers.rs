@@ -134,6 +134,31 @@ pub(crate) fn cli_version_worker(
     ))
 }
 
+pub(crate) fn excel_refresh_worker(
+    service: Arc<crate::credential::excel::ExcelCredentialService>,
+) -> Result<WorkerContribution, WorkerDefinitionError> {
+    Ok(WorkerContribution::Registration(scheduled_registration(
+        WorkerId::try_new(WorkerKind::OAuthRefresh, "openai-excel")?,
+        OAUTH_REFRESH_INTERVAL,
+        Box::new(ExcelRefreshTask { service }),
+    )?))
+}
+
+struct ExcelRefreshTask {
+    service: Arc<crate::credential::excel::ExcelCredentialService>,
+}
+
+impl ScheduledTask for ExcelRefreshTask {
+    fn run_cycle(&self, context: WorkerCycleContext) -> BoxFuture<'_, Result<(), WorkerTaskError>> {
+        Box::pin(async move {
+            tokio::select! {
+                () = context.cancellation().cancelled() => Ok(()),
+                result = self.service.refresh_due() => result.map_err(|_| WorkerTaskError::safe("Excel credential refresh failed")),
+            }
+        })
+    }
+}
+
 struct OpenAiCliVersionTask {
     service: crate::transport::profile::cli_version::CodexCliVersionService,
 }

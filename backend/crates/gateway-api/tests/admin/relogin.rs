@@ -103,6 +103,60 @@ async fn relogin_sensitive_export_requires_explicit_confirmation() {
 }
 
 #[tokio::test]
+async fn relogin_credential_selection_is_typed_and_keeps_default_codex_compatible() {
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.insert_session("valid-session");
+    for target in [None, Some("codex"), Some("excel"), Some("all")] {
+        for (path, mut body) in [
+            ("/api/admin/relogin/queue", json!({"ids":["a"]})),
+            (
+                "/api/admin/relogin/push",
+                json!({"ids":["a"],"revisions":{"a":1}}),
+            ),
+        ] {
+            if let Some(target) = target {
+                body["credentialTarget"] = json!(target);
+            }
+            assert_eq!(
+                request(&fixture, path, Some(body), true).await.0,
+                StatusCode::SERVICE_UNAVAILABLE
+            );
+        }
+    }
+    for (target, expected_status) in [
+        (json!("unknown"), StatusCode::UNPROCESSABLE_ENTITY),
+        (json!(true), StatusCode::BAD_REQUEST),
+    ] {
+        assert_eq!(
+            request(
+                &fixture,
+                "/api/admin/relogin/queue",
+                Some(json!({"ids":["a"],"credentialTarget":target})),
+                true
+            )
+            .await
+            .0,
+            expected_status
+        );
+    }
+    for target in [None, Some("codex"), Some("excel")] {
+        let mut body = json!({
+            "text":"test@example.invalid----test-only-password----JBSWY3DPEHPK3PXP",
+            "settings": {"enabled":true,"concurrencyLimit":null,"weight":1,"groupIds":[]}
+        });
+        if let Some(target) = target {
+            body["credentialTarget"] = json!(target);
+        }
+        assert_eq!(
+            request(&fixture, "/api/admin/relogin/enroll", Some(body), true)
+                .await
+                .0,
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+    }
+}
+
+#[tokio::test]
 async fn relogin_rejects_missing_confirmation_versions_and_unknown_fields() {
     let fixture = AdminTestFixture::new().await;
     fixture.auth.insert_session("valid-session");

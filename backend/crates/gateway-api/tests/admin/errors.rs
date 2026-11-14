@@ -566,6 +566,7 @@ mod provider {
             codex_quota_overdraft: None,
             effective_concurrency_limit: std::num::NonZeroU32::new(3).expect("concurrency limit"),
             account: AccountRecord {
+                excel_credential: None,
                 quota_limits: Default::default(),
                 quota_paused: Default::default(),
                 auto_use_quota_credits: false,

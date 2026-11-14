@@ -2,6 +2,7 @@
 //! Account selection, authorization, egress and execution remain CPR-owned.
 //! Feature: excel-upstream. Removal boundaries: docs/excel-removal.md.
 
+mod access;
 mod catalog;
 pub(crate) mod diagnostics;
 pub(super) mod encrypted;
@@ -20,6 +21,9 @@ pub(crate) mod image_relay;
 #[cfg(test)]
 mod image_tests;
 pub(crate) mod images;
+#[cfg(test)]
+#[path = "../../../tests/transport/excel_metadata.rs"]
+mod metadata_tests;
 #[cfg(test)]
 mod protocol_compat_tests;
 pub(super) mod recovery;
@@ -62,50 +66,20 @@ pub(crate) const RESPONSES_PATH: &str = "/basispoints/api/responses";
 
 pub(crate) fn request_headers(
     context: crate::transport::CodexRequestContext<'_>,
-    user_agent: &str,
+    _user_agent: &str,
 ) -> Result<reqwest::header::HeaderMap, reqwest::header::InvalidHeaderValue> {
-    use reqwest::header::{HeaderMap, HeaderValue};
-    let mut headers = HeaderMap::new();
-    let mut authorization = HeaderValue::from_str(context.authorization)?;
-    authorization.set_sensitive(true);
-    headers.insert("authorization", authorization);
-    for (key, value) in [
-        ("chatgpt-account-id", context.account_id.unwrap_or("")),
-        ("x-openai-account-id", context.account_id.unwrap_or("")),
-        ("user-agent", user_agent),
-    ] {
-        headers.insert(key, HeaderValue::from_str(value)?);
-    }
-    for (key, value) in [
-        ("accept", "text/event-stream"),
-        ("accept-encoding", "identity"),
-        ("content-type", "application/json"),
-        ("origin", "https://bps.openai.com"),
-        ("x-basispoints-auth-mode", "chatgpt"),
-        (
-            "x-openai-internal-basispoints-client-agent-profile",
-            "excel",
-        ),
-        ("x-openai-internal-basispoints-client-editor", "excel"),
-        ("x-openai-internal-basispoints-client-host", "office"),
-        ("x-openai-internal-basispoints-client-platform", "excel"),
-        ("x-openai-internal-basispoints-client-platform-class", "PC"),
-        (
-            "x-openai-internal-basispoints-client-product",
-            "basispoints-excel-plugin",
-        ),
-        ("x-openai-internal-basispoints-client-runtime", "desktop"),
-        ("x-openai-internal-basispoints-office-host", "Excel"),
-        ("x-openai-internal-basispoints-office-platform", "PC"),
-        ("x-stainless-arch", "unknown"),
-        ("x-stainless-lang", "js"),
-        ("x-stainless-os", "Unknown"),
-        ("x-stainless-package-version", "6.31.0"),
-        ("x-stainless-retry-count", "0"),
-        ("x-stainless-runtime", "browser:chrome"),
-    ] {
-        headers.insert(key, HeaderValue::from_static(value));
-    }
+    use reqwest::header::HeaderValue;
+    let identity = context
+        .authorization
+        .strip_prefix("Bearer ")
+        .and_then(crate::credential::excel::identity_from_access_token);
+    let mut headers = crate::credential::excel::request_headers(
+        context.authorization,
+        context.account_id.unwrap_or(""),
+        identity.as_ref().map(|identity| identity.user_id.as_str()),
+        "text/event-stream",
+    )?;
+    headers.insert("content-type", HeaderValue::from_static("application/json"));
     Ok(headers)
 }
 

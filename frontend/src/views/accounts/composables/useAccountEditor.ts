@@ -10,11 +10,10 @@ import { toast } from '@/components/base/BaseToast'
 import { useAsyncAction } from '@/composables/useAsyncAction'
 import { accountEgressFromAccount, accountEgressPatch, sameAccountEgress } from '@/utils/account-egress'
 import { normalizeAccountName } from '@/utils/account-name'
-import { DEFAULT_EXCEL_MODELS, DEFAULT_EXCEL_MODELS_INPUT } from '@/utils/excel-defaults'
 import { accountExcel403Action, excelRecoverySettings } from '@/utils/excel-settings'
 import { accountModelAccessError } from '../utils/modelAccess'
 import { purchaseCostPatch, trimAmount } from '../utils/purchaseCost'
-import { concurrencyLimitInput, parseAccountSchedulingForm, parseExcelModels } from '../utils/schedulingForm'
+import { concurrencyLimitInput, parseAccountSchedulingForm } from '../utils/schedulingForm'
 
 type AccountRow = Awaited<ReturnType<typeof getAccounts>>['items'][number]
 
@@ -33,8 +32,6 @@ export function useAccountEditor(options: {
   const schedulingEnabled = shallowRef(true)
   const excelEnabled = shallowRef(false)
   let initialExcelEnabled = false
-  const excelModels = shallowRef(DEFAULT_EXCEL_MODELS_INPUT)
-  const excelModelsFollowGlobal = shallowRef(true)
   const excelCacheCreationAsInput = shallowRef(false)
   const excelIgnoreEncryptedContent = shallowRef(false)
   const requestProxySource = shallowRef<import('@/utils/request-proxy-source').RequestProxySource>('account')
@@ -45,8 +42,6 @@ export function useAccountEditor(options: {
   let initialExcelCacheCreationAsInput = false
   let initialExcelIgnoreEncryptedContent = false
   let initialExcel403Action: Excel403Action = 'none'
-  let initialExcelModelsFollowGlobal = true
-  let initialExcelModels = ''
   const concurrencyLimit = shallowRef('')
   const weight = shallowRef('1')
   const modelAccess = ref<AccountModelAccess | undefined>()
@@ -109,8 +104,6 @@ export function useAccountEditor(options: {
     schedulingEnabled.value = account.enabled
     excelEnabled.value = account.responsesUpstream === 'excel'
     initialExcelEnabled = excelEnabled.value
-    excelModels.value = (account.excelModels ?? DEFAULT_EXCEL_MODELS).join(', ')
-    excelModelsFollowGlobal.value = account.excelModelsFollowGlobal ?? false
     excelCacheCreationAsInput.value = account.excelCacheCreationAsInput ?? false
     excelIgnoreEncryptedContent.value = account.excelIgnoreEncryptedContent ?? false
     requestProxySource.value = account.requestProxySource ?? 'account'
@@ -121,8 +114,6 @@ export function useAccountEditor(options: {
     initialExcelCacheCreationAsInput = excelCacheCreationAsInput.value
     initialExcelIgnoreEncryptedContent = excelIgnoreEncryptedContent.value
     initialExcel403Action = excel403Action.value
-    initialExcelModelsFollowGlobal = excelModelsFollowGlobal.value
-    initialExcelModels = excelModels.value
     concurrencyLimit.value = concurrencyLimitInput(account.concurrencyLimit)
     weight.value = String(account.weight)
     modelAccess.value = account.modelAccess
@@ -144,12 +135,8 @@ export function useAccountEditor(options: {
       return
     }
     const scheduling = parseAccountSchedulingForm(concurrencyLimit.value, weight.value)
-    const excelAvailable = editingAccount.value?.provider === 'openai' && editingAccount.value.authenticationKind === 'oauth'
-    const models = !excelAvailable || excelModelsFollowGlobal.value ? [] : parseExcelModels(excelModels.value)
-    if (models === null) {
-      toast.warning('Excel 模型最多 64 个，每个名称最多 128 个字母、数字、点、下划线或连字符')
-      return
-    }
+    const excelAvailable = editingAccount.value?.provider === 'openai'
+      && ['oauth', 'none'].includes(editingAccount.value.authenticationKind)
     if (!scheduling.valid) {
       toast.warning(scheduling.message)
       return
@@ -176,15 +163,8 @@ export function useAccountEditor(options: {
         payload.customName = name
       if (modelAccess.value && JSON.stringify(modelAccess.value) !== initialModelAccess)
         payload.modelAccess = { ...modelAccess.value, models: [...modelAccess.value.models] }
-      if (editingAccount.value?.provider === 'openai' && editingAccount.value.authenticationKind === 'oauth'
-        && excelEnabled.value !== initialExcelEnabled) {
+      if (excelAvailable && excelEnabled.value !== initialExcelEnabled) {
         payload.responsesUpstream = excelEnabled.value ? 'excel' : 'codex'
-      }
-      if (excelAvailable && (excelModelsFollowGlobal.value !== initialExcelModelsFollowGlobal
-        || (!excelModelsFollowGlobal.value && excelModels.value !== initialExcelModels))) {
-        payload.excelModelsFollowGlobal = excelModelsFollowGlobal.value
-        if (!excelModelsFollowGlobal.value)
-          payload.excelModels = models
       }
       if (excelAvailable && excelCacheCreationAsInput.value !== initialExcelCacheCreationAsInput)
         payload.excelCacheCreationAsInput = excelCacheCreationAsInput.value
@@ -216,8 +196,6 @@ export function useAccountEditor(options: {
     schedulingEnabled.value = true
     excelEnabled.value = false
     initialExcelEnabled = false
-    excelModels.value = DEFAULT_EXCEL_MODELS_INPUT
-    excelModelsFollowGlobal.value = true
     excelCacheCreationAsInput.value = false
     excelIgnoreEncryptedContent.value = false
     requestProxySource.value = 'account'
@@ -228,8 +206,6 @@ export function useAccountEditor(options: {
     initialExcelCacheCreationAsInput = false
     initialExcelIgnoreEncryptedContent = false
     initialExcel403Action = 'none'
-    initialExcelModelsFollowGlobal = true
-    initialExcelModels = ''
     concurrencyLimit.value = ''
     weight.value = '1'
     modelAccess.value = undefined
@@ -245,8 +221,6 @@ export function useAccountEditor(options: {
     editingAccount,
     schedulingEnabled,
     excelEnabled,
-    excelModels,
-    excelModelsFollowGlobal,
     excelCacheCreationAsInput,
     excelIgnoreEncryptedContent,
     requestProxySource,

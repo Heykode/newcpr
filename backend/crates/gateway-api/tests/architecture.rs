@@ -35,6 +35,7 @@ fn source_tree_should_match_frozen_machine_manifest() {
     let mut expected = vec![
         "src/admin/account_groups.rs",
         "src/admin/accounts/credentials.rs",
+        "src/admin/accounts/excel.rs",
         "src/admin/accounts/handlers.rs",
         "src/admin/accounts/import_tasks.rs",
         "src/admin/accounts/mod.rs",

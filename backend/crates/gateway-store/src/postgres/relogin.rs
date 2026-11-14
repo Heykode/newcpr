@@ -51,7 +51,12 @@ async fn save_row(
     if result.rows_affected() != 1 {
         return Err(conflict());
     }
-    if let Some(attempt) = &entry.last_attempt {
+    for attempt in entry.last_attempt.iter().chain(
+        entry
+            .excel
+            .as_ref()
+            .and_then(|channel| channel.last_attempt.as_ref()),
+    ) {
         sqlx::query(
             "insert into account_relogin_history (entry_id,id,detail) values ($1,$2,$3)
             on conflict (entry_id,id) do update set detail=excluded.detail",
@@ -76,8 +81,12 @@ impl ReloginStore for PgReloginStore {
     ) -> AdminStoreResult<()> {
         let mut transaction = self.pool.begin().await.map_err(unavailable)?;
         let detail = serde_json::to_value(attempt).map_err(unavailable)?;
-        let result = sqlx::query("update account_relogin_entries set material=jsonb_set(material,'{last_attempt}',$3) where id=$1 and revision=$2 and material->'last_attempt'->>'id'=$4")
-            .bind(id).bind(i64::try_from(revision).map_err(unavailable)?).bind(&detail).bind(&attempt.id)
+        let path: Vec<&str> = match attempt.credential_target {
+            gateway_core::account::CredentialTarget::Codex => vec!["last_attempt"],
+            gateway_core::account::CredentialTarget::Excel => vec!["excel", "last_attempt"],
+        };
+        let result = sqlx::query("update account_relogin_entries set material=jsonb_set(material,$5::text[],$3) where id=$1 and revision=$2 and (material #> $5::text[])->>'id'=$4")
+            .bind(id).bind(i64::try_from(revision).map_err(unavailable)?).bind(&detail).bind(&attempt.id).bind(path)
             .execute(&mut *transaction).await.map_err(unavailable)?;
         if result.rows_affected() != 1 {
             return Err(conflict());

@@ -1,3 +1,4 @@
+mod dual_credentials;
 mod scheduling_projection;
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU32;
@@ -51,6 +52,12 @@ fn create_account(store: &Arc<MemoryAccountStore>, id: &str, token: &str) {
         next_refresh_at: Some(chrono::Utc::now() + chrono::Duration::minutes(30)),
         enabled: true,
     }));
+}
+
+fn create_excel_account(store: &Arc<MemoryAccountStore>, id: &str, token: &str) {
+    create_account(store, id, token);
+    store.seed_excel_credential(id, true);
+    store.set_responses_upstream(id, gateway_core::account::ResponsesUpstream::Excel);
 }
 
 fn contract_account_scope() -> Arc<FrozenAccountScope> {
@@ -203,15 +210,19 @@ fn persist_credential_state(
     account: &ProviderAccount,
     credential_state: CredentialState,
 ) {
-    block_on(store.apply_state_change(AccountStateChange {
+    let change = AccountStateChange {
         account_id: account.id().clone(),
-        expected_revision: account.revision(),
+        expected_revision: account.credential_revision(),
         credential_state,
         observed_at: SystemTime::now(),
         error_reason: credential_state.error_reason(),
         message: None,
-    }))
-    .expect("persist credential state");
+    };
+    if account.credential_route() == gateway_core::account::ResponsesUpstream::Excel {
+        block_on(store.apply_excel_state_change(change)).expect("persist Excel state");
+    } else {
+        block_on(store.apply_state_change(change)).expect("persist credential state");
+    }
 }
 
 fn persist_quota_exhaustion(
@@ -229,6 +240,27 @@ fn persist_quota_exhaustion(
         ),
     }))
     .expect("persist quota exhaustion");
+}
+
+fn persist_excel_quota_exhaustion(
+    store: &MemoryAccountStore,
+    account: &ProviderAccount,
+    reset_at: Option<SystemTime>,
+) {
+    block_on(store.compare_and_swap_excel_quota(QuotaObservation {
+        quota_pause: None,
+        account_id: account.id().clone(),
+        expected_revision: account.credential_revision(),
+        quota: OpaqueProviderData::new(serde_json::Map::new()),
+        plan_type: account.plan_type().map(str::to_owned),
+        observed_at: SystemTime::now(),
+        state: QuotaState::exhausted(
+            QuotaEvidence::UsageLimitReached,
+            SystemTime::now(),
+            reset_at,
+        ),
+    }))
+    .expect("persist Excel quota exhaustion");
 }
 
 #[tokio::test]
@@ -250,11 +282,15 @@ async fn excel_authentication_failure_preserves_existing_refresh_policy_and_fixe
             })
             .await;
         let selector = Arc::new(selector(&store, Arc::new(TestLeaseCoordinator::default())));
-        let account = store.account("acct_primary").unwrap();
+        let account = store.seed_excel_credential("acct_primary", refreshable);
         selector
             .record_excel_authentication_failure(&account, revoked, false)
             .await;
-        let updated = store.account("acct_primary").unwrap();
+        let updated = store.excel_account("acct_primary");
+        assert_eq!(
+            store.account("acct_primary").unwrap().credential_state(),
+            CredentialState::Ready
+        );
         assert_eq!(updated.credential_state(), CredentialState::Expired);
         assert_eq!(
             updated.last_error_reason(),
@@ -275,7 +311,7 @@ async fn excel_authentication_failure_preserves_existing_refresh_policy_and_fixe
             .record_success(&account, SystemTime::now(), None, account.id())
             .await;
         assert_eq!(
-            store.account("acct_primary").unwrap().credential_state(),
+            store.excel_account("acct_primary").credential_state(),
             CredentialState::Expired
         );
     }
@@ -285,10 +321,10 @@ async fn excel_authentication_failure_preserves_existing_refresh_policy_and_fixe
 async fn excel_authentication_state_write_survives_cancelled_request() {
     use std::sync::atomic::Ordering;
     let store = Arc::new(MemoryAccountStore::default());
-    create_account(&store, "acct_primary", "fixture");
+    create_excel_account(&store, "acct_primary", "fixture");
     store.pause_state_write.store(true, Ordering::SeqCst);
     let selector = Arc::new(selector(&store, Arc::new(TestLeaseCoordinator::default())));
-    let account = store.account("acct_primary").unwrap();
+    let account = store.excel_account("acct_primary");
     let waiter = tokio::spawn(async move {
         selector
             .record_excel_authentication_failure(&account, false, false)
@@ -301,8 +337,7 @@ async fn excel_authentication_state_write_survives_cancelled_request() {
     assert!(waiter.await.unwrap_err().is_cancelled());
     store.state_write_gate.notify_one();
     tokio::time::timeout(Duration::from_secs(1), async {
-        while store.account("acct_primary").unwrap().credential_state() != CredentialState::Expired
-        {
+        while store.excel_account("acct_primary").credential_state() != CredentialState::Expired {
             tokio::task::yield_now().await;
         }
     })
@@ -315,13 +350,13 @@ async fn excel_authentication_failed_write_blocks_both_selectors_and_new_credent
     use std::sync::atomic::Ordering;
     for waiting in [false, true] {
         let store = Arc::new(MemoryAccountStore::default());
-        create_account(&store, "acct_primary", "old-fixture");
+        create_excel_account(&store, "acct_primary", "old-fixture");
         store.fail_state_write.store(true, Ordering::SeqCst);
         let selector = Arc::new(
             selector(&store, Arc::new(TestLeaseCoordinator::default()))
                 .with_account_concurrency(capacity_handle(&["acct_primary"], 2)),
         );
-        let old = store.account("acct_primary").unwrap();
+        let old = store.excel_account("acct_primary");
         selector
             .record_excel_authentication_failure(&old, false, false)
             .await;
@@ -351,16 +386,7 @@ async fn excel_authentication_failed_write_blocks_both_selectors_and_new_credent
             result.is_err(),
             "rejected credentials were scheduled, waiting={waiting}"
         );
-        store
-            .repository()
-            .rotate_refreshed_oauth_secret(
-                &old,
-                secret("new-fixture"),
-                Some(SystemTime::now() + Duration::from_secs(3600)),
-                None,
-            )
-            .await
-            .unwrap();
+        store.seed_excel_credential("acct_primary", true);
         // A late error for the old request must not block the new credential revision.
         selector
             .record_excel_authentication_failure(&old, false, false)
@@ -375,7 +401,8 @@ async fn excel_authentication_failed_write_blocks_both_selectors_and_new_credent
             })
             .await
             .unwrap();
-        assert!(lease.account().revision() > old.revision());
+        assert!(lease.account().credential_revision() > old.credential_revision());
+        assert_eq!(lease.account().revision(), old.revision());
         assert_eq!(lease.account_id(), old.id());
     }
 }
@@ -384,10 +411,10 @@ async fn excel_authentication_failed_write_blocks_both_selectors_and_new_credent
 async fn excel_authentication_slow_write_is_bounded_and_diagnostic_can_recover() {
     use std::sync::atomic::Ordering;
     let store = Arc::new(MemoryAccountStore::default());
-    create_account(&store, "acct_primary", "fixture");
+    create_excel_account(&store, "acct_primary", "fixture");
     store.pause_state_write.store(true, Ordering::SeqCst);
     let selector = Arc::new(selector(&store, Arc::new(TestLeaseCoordinator::default())));
-    let account = store.account("acct_primary").unwrap();
+    let account = store.excel_account("acct_primary");
     tokio::time::timeout(
         Duration::from_secs(3),
         selector.record_excel_authentication_failure(&account, false, false),
@@ -416,12 +443,12 @@ async fn excel_authentication_failed_persistence_has_bounded_refreshable_runtime
     use std::sync::atomic::Ordering;
     for revoked in [false, true] {
         let store = Arc::new(MemoryAccountStore::default());
-        create_account(&store, "acct_primary", "fixture");
+        create_excel_account(&store, "acct_primary", "fixture");
         store.fail_state_write.store(true, Ordering::SeqCst);
         let selector = Arc::new(selector(&store, Arc::new(TestLeaseCoordinator::default())));
         selector
             .record_excel_authentication_failure(
-                &store.account("acct_primary").unwrap(),
+                &store.excel_account("acct_primary"),
                 revoked,
                 false,
             )
@@ -445,9 +472,9 @@ async fn excel_authentication_failed_persistence_has_bounded_refreshable_runtime
 async fn excel_authentication_later_generic_401_does_not_downgrade_revocation() {
     use std::sync::atomic::Ordering;
     let store = Arc::new(MemoryAccountStore::default());
-    create_account(&store, "acct_primary", "fixture");
+    create_excel_account(&store, "acct_primary", "fixture");
     let selector = Arc::new(selector(&store, Arc::new(TestLeaseCoordinator::default())));
-    let account = store.account("acct_primary").unwrap();
+    let account = store.excel_account("acct_primary");
     selector
         .record_excel_authentication_failure(&account, true, false)
         .await;
@@ -455,7 +482,7 @@ async fn excel_authentication_later_generic_401_does_not_downgrade_revocation() 
         .record_excel_authentication_failure(&account, false, false)
         .await;
     assert_eq!(
-        store.account("acct_primary").unwrap().last_error_reason(),
+        store.excel_account("acct_primary").last_error_reason(),
         Some(AccountErrorReason::CredentialExpired)
     );
     // Keep only the runtime fence to verify it cannot turn into a timed block.
@@ -673,10 +700,10 @@ fn selector_uses_frozen_global_account_policy_for_lease() {
 }
 
 #[test]
-fn excel_route_fence_excludes_codex_retries_and_unselected_models() {
+fn excel_route_fence_excludes_codex_retries_without_legacy_model_routing() {
     use gateway_core::account::ResponsesUpstream;
     let store = Arc::new(MemoryAccountStore::default());
-    create_account(&store, "acct_primary", "fixture-primary");
+    create_excel_account(&store, "acct_primary", "fixture-primary");
     create_account(&store, "acct_other", "fixture-other");
     store.set_responses_upstream("acct_primary", ResponsesUpstream::Excel);
     let selector = selector(&store, Arc::new(TestLeaseCoordinator::default()));
@@ -708,13 +735,13 @@ fn excel_route_fence_excludes_codex_retries_and_unselected_models() {
     store.set_responses_upstream("acct_primary", ResponsesUpstream::Excel);
     assert!(
         block_on(selector.select(&SelectCodexCredential {
-            upstream_model: "unverified-model",
+            upstream_model: "another-model",
             request_url: &url,
             attempt: &attempt,
             session_affinity_key: None,
             guardian: false,
         }))
-        .is_err()
+        .is_ok()
     );
 }
 
@@ -722,9 +749,9 @@ fn excel_route_fence_excludes_codex_retries_and_unselected_models() {
 async fn excel_model_routes_match_with_and_without_capacity_wait() {
     use std::sync::atomic::Ordering;
     for waiting in [false, true] {
-        for (model, route) in [("gpt-5.4", "codex"), ("gpt-5.6-sol", "excel")] {
+        for (model, route) in [("gpt-5.4", "excel"), ("gpt-5.6-sol", "excel")] {
             let store = Arc::new(MemoryAccountStore::default());
-            create_account(&store, "acct_primary", "fixture-primary");
+            create_excel_account(&store, "acct_primary", "fixture-primary");
             store.set_responses_upstream(
                 "acct_primary",
                 gateway_core::account::ResponsesUpstream::Excel,

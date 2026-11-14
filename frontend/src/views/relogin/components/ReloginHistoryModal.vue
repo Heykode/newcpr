@@ -80,7 +80,7 @@ function afterLeave() {
           <span :class="item.result === 'succeeded' ? 'text-cp-success' : item.result === 'failed' ? 'text-cp-error' : 'text-cp-text-secondary'">{{ results[item.result] }}</span>
         </div>
         <p class="mt-1 text-cp-xs text-cp-text-tertiary">
-          {{ sources[item.source] }}<span v-if="item.finishedAt"> · 完成 {{ formatDateTime(item.finishedAt) }}</span>
+          {{ item.credentialTarget === 'excel' ? 'Excel' : 'Codex' }} · {{ sources[item.source] }}<span v-if="item.finishedAt"> · 完成 {{ formatDateTime(item.finishedAt) }}</span>
         </p>
         <p v-if="item.message" class="mt-2 whitespace-pre-wrap break-words text-cp-sm">
           {{ item.message }}

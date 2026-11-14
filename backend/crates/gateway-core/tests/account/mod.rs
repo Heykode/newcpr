@@ -1,3 +1,4 @@
+mod dual_credentials;
 mod location;
 mod model_access;
 mod proxy;

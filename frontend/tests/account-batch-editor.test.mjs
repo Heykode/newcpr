@@ -9,7 +9,7 @@ import * as vue from 'vue'
 import { createTestRequire as createRequire } from './helpers/i18n.mjs'
 
 const require = createRequire(import.meta.url)
-const updateFields = ['updateEnabled', 'updateExcelEnabled', 'updateExcelModels', 'updateConcurrencyLimit', 'updateWeight', 'updateGroups', 'updateProxy', 'updateCustomName', 'updateModelAccess']
+const updateFields = ['updateEnabled', 'updateExcelEnabled', 'updateConcurrencyLimit', 'updateWeight', 'updateGroups', 'updateProxy', 'updateCustomName', 'updateModelAccess']
 
 function loadModule(filename, dependencies = {}) {
   const exports = {}
@@ -282,27 +282,20 @@ test('encrypted content omission needs fresh batch opt-in and clears when Excel 
   assert.equal(requests.at(-1).excelIgnoreEncryptedContent, false)
 })
 
-test('Excel batch defaults preserve saved and empty lists and reset every opt-in on reopen', async (t) => {
-  const { state, accounts, requests } = mountEditor(t, { accounts: [account('account-a', { excelModels: undefined, responsesUpstream: 'excel' })] })
+test('Excel batch ignores legacy model lists and resets opt-ins on reopen', async (t) => {
+  const { state, requests } = mountEditor(t, { accounts: [account('account-a', { excelModels: ['invalid/model'], responsesUpstream: 'excel' })] })
   state.open()
-  assert.equal(state.excelModels.value, 'gpt-6-astra, gpt-5.6-sol, gpt-5.6-terra')
+  assert.equal('excelModels' in state, false)
   state.excel403Action.value = 'pause_account'
   state.updateExcel403Action.value = true
-  state.updateExcelModels.value = true
   state.showBatchEditModal.value = false
   await vue.nextTick()
   state.open()
   assertNoUpdates(state)
   assert.equal(state.excel403Action.value, 'none')
-  accounts.value[0].excelModels = ['custom-model']
-  state.open()
-  assert.equal(state.excelModels.value, 'custom-model')
-  accounts.value[0].excelModels = []
-  state.open()
-  assert.equal(state.excelModels.value, '')
-  state.updateExcelModels.value = true
+  state.updateWeight.value = true
   await state.save()
-  assert.deepEqual(requests[0], { accountIds: ['account-a'], excelModelsFollowGlobal: false, excelModels: [] })
+  assert.deepEqual(requests[0], { accountIds: ['account-a'], weight: 17 })
 })
 
 test('Excel 403 setting saves on its own only after explicit batch opt-in', async (t) => {
@@ -370,33 +363,15 @@ function assertNoRequest(editor) {
   assert.equal(editor.state.saving.value, false)
 }
 
-test('Excel model lists require opt-in and can be cleared without changing the route', async (t) => {
-  const editor = mountEditor(t)
+test('Excel-only shells support explicit batch route changes', async (t) => {
+  const editor = mountEditor(t, { accounts: [account('account-a', { authenticationKind: 'none' })] })
   const { state } = editor
   state.open()
-  state.excelModels.value = 'invalid/model'
-  state.updateWeight.value = true
+  assert.equal(state.excelAvailable.value, true)
+  state.updateExcelEnabled.value = true
+  state.excelEnabled.value = true
   await state.save()
-  assert.deepEqual(editor.requests[0], { accountIds: ['account-a'], weight: 17 })
-  await vue.nextTick()
-  editor.selectedIds.value = new Set(['account-a'])
-  state.open()
-  assertNoUpdates(state)
-  state.updateExcelModels.value = true
-  state.excelModels.value = 'gpt-5.6-sol, gpt-6-astra, gpt-5.6-sol'
-  await state.save()
-  assert.deepEqual(editor.requests[1], {
-    accountIds: ['account-a'],
-    excelModels: ['gpt-5.6-sol', 'gpt-6-astra'],
-    excelModelsFollowGlobal: false,
-  })
-  await vue.nextTick()
-  editor.selectedIds.value = new Set(['account-a'])
-  state.open()
-  state.updateExcelModels.value = true
-  state.excelModels.value = ''
-  await state.save()
-  assert.deepEqual(editor.requests[2], { accountIds: ['account-a'], excelModels: [], excelModelsFollowGlobal: false })
+  assert.deepEqual(editor.requests[0], { accountIds: ['account-a'], responsesUpstream: 'excel' })
 })
 
 test('model restrictions are opt-in, validate only when checked and clear explicitly', async (t) => {
@@ -623,7 +598,6 @@ test('every single field and combination sends exactly the opted-in patch after 
   const patches = [
     { enabled: false },
     { responsesUpstream: 'codex', excelIgnoreEncryptedContent: false },
-    { excelModels: ['gpt-5.6-sol'], excelModelsFollowGlobal: false },
     { concurrencyLimit: 6 },
     { weight: 23 },
     { groupIds: ['group-new', 'group-other'] },

@@ -318,6 +318,13 @@ impl CodexBackendClient {
         }
         let profile = self.profile.snapshot();
         let excel = upstream_request.excel.as_ref();
+        if let Some(prepared) = excel
+            && self.egress_account.as_ref().is_some_and(|account| {
+                account.credential_route() == gateway_core::account::ResponsesUpstream::Excel
+            })
+        {
+            self.validate_excel_model(context, prepared).await?;
+        }
         let mut headers = if excel.is_some() {
             super::excel::request_headers(context, &profile.user_agent())?
         } else {

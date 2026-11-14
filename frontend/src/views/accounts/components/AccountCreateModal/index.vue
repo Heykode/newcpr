@@ -66,7 +66,9 @@ const view = computed(() => resolveAccountCreatePresentation({
 const mode = computed({
   get: () => form.value.mode,
   set: (value: string) => {
-    if (!props.reauthorizing && view.value.modeOptions.some(option => option.value === value))
+    const canSwitchMode = !props.reauthorizing
+      || (form.value.provider === 'openai' && form.value.credentialTarget === 'excel')
+    if (canSwitchMode && view.value.modeOptions.some(option => option.value === value))
       form.value.mode = value as AccountImportMode
   },
 })
@@ -106,14 +108,14 @@ async function continueToImport() {
     <div class="grid gap-4">
       <div
         v-if="reauthorizing && account"
-        class="flex flex-wrap items-center justify-between gap-4 rounded-cp bg-cp-fill-quaternary px-4 py-3.5"
+        class="flex flex-col items-start justify-between gap-4 rounded-cp bg-cp-fill-quaternary px-4 py-3.5 sm:flex-row sm:items-center"
       >
         <AccountIdentityCell
-          class="min-w-0 flex-1"
+          class="min-w-0 w-full sm:w-auto sm:flex-1"
           :account="account"
           size="lg"
         />
-        <div class="flex shrink-0 items-center gap-3">
+        <div class="flex shrink-0 items-center gap-3 self-end sm:self-auto">
           <AccountPlanBadge
             :plan-type="account.planType"
             :plan-type-display="account.planTypeDisplay"
@@ -121,6 +123,7 @@ async function continueToImport() {
           />
           <ProviderIconGroup
             :provider="account.provider"
+            :provider-label="form.credentialTarget === 'excel' ? 'Excel' : undefined"
             :authentication-kind="account.authenticationKind"
           />
           <BaseIconButton
@@ -152,7 +155,14 @@ async function continueToImport() {
       </p>
       <template v-if="!view.configuring">
         <BaseSegmented
-          v-if="!reauthorizing && !view.isBatch"
+          v-if="form.provider === 'openai'"
+          v-model="form.credentialTarget"
+          label="凭据类型"
+          :options="[{ label: 'Codex', value: 'codex' }, { label: 'Excel', value: 'excel' }]"
+          :disabled="busy"
+        />
+        <BaseSegmented
+          v-if="(!reauthorizing || (form.provider === 'openai' && form.credentialTarget === 'excel')) && !view.isBatch"
           v-model="mode"
           :label="t('accounts.onboarding.howToAddAccount')"
           :options="view.modeOptions"
@@ -163,7 +173,7 @@ async function continueToImport() {
           v-if="mode === 'oauth'"
           v-model="form.oauthCallback"
           :auth-url="view.oauth.authUrl"
-          :panel-title="`${view.isXai ? 'xAI' : 'OpenAI'} OAuth ${reauthorizing ? '重新授权' : '授权'}`"
+          :panel-title="`${view.isXai ? 'xAI' : form.credentialTarget === 'excel' ? 'Excel' : 'Codex'} OAuth ${reauthorizing ? '重新授权' : '授权'}`"
           :panel-description="view.isXai ? '生成并打开授权链接、完成浏览器授权、粘贴回调地址或授权码' : '生成并打开授权链接、完成浏览器授权、粘贴回调地址'"
           :loading="oauthLoading"
           :callback-label="view.oauth.callbackLabel"

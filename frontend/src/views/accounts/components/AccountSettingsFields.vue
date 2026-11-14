@@ -12,11 +12,9 @@ import BaseForm from '@/components/base/BaseForm/index.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseSwitch from '@/components/base/BaseSwitch.vue'
 import Excel403ActionSelect from '@/components/Excel403ActionSelect.vue'
-import ExcelModelFields from '@/components/ExcelModelFields.vue'
 import ExcelRecoveryFields from '@/components/ExcelRecoveryFields.vue'
 import { t } from '@/i18n'
 import { normalizeAccountName } from '@/utils/account-name'
-import { DEFAULT_EXCEL_MODELS_INPUT } from '@/utils/excel-defaults'
 import { accountModelAccessError } from '../utils/modelAccess'
 import AccountModelAccessField from './AccountModelAccessField.vue'
 import AccountOutboundField from './AccountOutboundField.vue'
@@ -46,8 +44,6 @@ const customName = defineModel<string>('customName', { default: '' })
 const updateCustomName = defineModel<boolean>('updateCustomName', { default: false })
 const enabled = defineModel<boolean>('enabled', { required: true })
 const excelEnabled = defineModel<boolean>('excelEnabled', { default: false })
-const excelModels = defineModel<string>('excelModels', { default: DEFAULT_EXCEL_MODELS_INPUT })
-const excelModelsFollowGlobal = defineModel<boolean>('excelModelsFollowGlobal', { default: true })
 const excelCacheCreationAsInput = defineModel<boolean>('excelCacheCreationAsInput', { default: false })
 const excelIgnoreEncryptedContent = defineModel<boolean>('excelIgnoreEncryptedContent', { default: false })
 const requestProxySource = defineModel<import('@/utils/request-proxy-source').RequestProxySource>('requestProxySource', { default: 'account' })
@@ -58,7 +54,6 @@ const excelRecoveryInterval = defineModel<string>('excelRecoveryInterval', { def
 const updateExcelRecovery = defineModel<boolean>('updateExcelRecovery', { default: false })
 const updateExcelCacheCreationAsInput = defineModel<boolean>('updateExcelCacheCreationAsInput', { default: false })
 const updateExcel403Action = defineModel<boolean>('updateExcel403Action', { default: false })
-const updateExcelModels = defineModel<boolean>('updateExcelModels', { default: false })
 const concurrencyLimit = defineModel<string>('concurrencyLimit', { required: true })
 const weight = defineModel<string>('weight', { required: true })
 const modelAccess = defineModel<AccountModelAccess | undefined>('modelAccess')
@@ -150,17 +145,6 @@ defineExpose({ validate: () => formRef.value?.validate().catch(() => false) })
         :disabled="disabled || (batch && !updateExcelEnabled)"
       />
     </div>
-
-    <BaseFormItem v-if="excelAvailable" label="Excel 模型">
-      <template v-if="batch" #extra>
-        <BaseCheckbox v-model="updateExcelModels" label="应用 Excel 模型更改" title="应用 Excel 模型更改" :disabled="disabled" />
-      </template>
-      <ExcelModelFields
-        v-model:models="excelModels"
-        v-model:follow-global="excelModelsFollowGlobal"
-        :disabled="disabled || (batch && !updateExcelModels)"
-      />
-    </BaseFormItem>
 
     <BaseFormItem v-if="excelAvailable" label="Excel 缓存写入按普通输入计费">
       <template v-if="batch" #extra>

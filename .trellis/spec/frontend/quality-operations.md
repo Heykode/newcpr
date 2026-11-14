@@ -157,8 +157,9 @@ Wrong: enforce predefined selection. Correct: suggestions assist the existing st
 ## Detection Rules
 
 - New remediation uses `apply_account_template` and the shared versioned
-  `AccountTemplatePicker`, with a full-settings summary. Show `enable_excel` only
-  when editing that legacy action; never silently convert a saved rule.
+  `AccountTemplatePicker`, with a full-settings summary. Legacy `enable_excel`
+  remains visible only when editing an old action and is labelled as requiring
+  manual route confirmation. It is not a new-action choice.
 - Single/bulk edits reuse the existing threshold. `failureTemplate` is opt-in in
   batch patches: preserve per-rule selections when unchecked, reject missing
   templates for the selected action. Full-template autoRestore requires explicit opt-in
@@ -233,14 +234,11 @@ Wrong: enforce predefined selection. Correct: suggestions assist the existing st
 - Render probe normal/suspect/inconclusive labels from the persisted run mode,
   with transport/status/length evidence and a clear heuristic limitation. Never
   render raw State or Cookie. Cancelled or paused states remain neutral.
-- Legacy `enable_excel` is available in both modes and disables whole-config restore.
-  State-probe template/Excel actions offer `disableExcelOnNativeRecovery`, checked
-  in new drafts only; saved configs missing it remain false. Normalize it off for
-  answer or unrelated actions. The enabled option shows `excelRecoveryThreshold`.
-  Mirror it through templates, groups and selective bulk patches. Explain native
-  probing continues after Excel, and recovery closes only this rule's unchanged
-  owned route, never the rest of its template or manual/403 suspension.
-  Retain historical pause labels; new Excel activation does not pause the rule.
+- Automatic route activation/recovery is retired. Preserve historical labels and
+  decoding, but do not present a new automatic Excel-switch action. Display
+  `route_switch_requires_confirmation` explicitly. Excel answer checks can pause
+  their own credential slot; shared settings actions display
+  `excel_shared_action_blocked`. Neither action changes the Codex slot.
 - Browser regressions cover mode switching, preserved question drafts, judge-free
   saves, Excel action, paused results and 1440/390/320px probe panels.
 

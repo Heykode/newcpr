@@ -169,6 +169,7 @@ pub struct AccountAttemptContext {
     quality_retest: bool,
     native_quality_probe: bool,
     excel_recovery_revision: Option<u64>,
+    credential_route: Option<crate::account::ResponsesUpstream>,
     account_scope: Option<Arc<crate::account::scope::FrozenAccountScope>>,
 }
 
@@ -189,6 +190,7 @@ impl AccountAttemptContext {
             quality_retest: false,
             native_quality_probe: false,
             excel_recovery_revision: None,
+            credential_route: None,
             account_scope: None,
         }
     }
@@ -202,7 +204,7 @@ impl AccountAttemptContext {
         target: impl Into<probe::AccountProbeTarget>,
         state_owner: Option<ProviderAccountStateOwner>,
     ) -> Self {
-        let (required_account, eligibility) = target.into().into_selection();
+        let (required_account, eligibility, credential_route) = target.into().into_selection();
         Self {
             excluded_accounts,
             required_account: Some(required_account),
@@ -213,6 +215,7 @@ impl AccountAttemptContext {
             quality_retest: false,
             native_quality_probe: false,
             excel_recovery_revision: None,
+            credential_route,
             account_scope: None,
         }
     }
@@ -225,6 +228,11 @@ impl AccountAttemptContext {
     ) -> Self {
         self.account_scope = Some(scope);
         self
+    }
+
+    #[must_use]
+    pub const fn credential_route(&self) -> Option<crate::account::ResponsesUpstream> {
+        self.credential_route
     }
 
     /// 标记本请求已对即将选择的固定账号执行过一次凭据恢复。
@@ -694,6 +702,11 @@ impl AttemptContext {
     #[must_use]
     pub const fn account_state_owner(&self) -> Option<&ProviderAccountStateOwner> {
         self.account.state_owner()
+    }
+
+    #[must_use]
+    pub const fn credential_route(&self) -> Option<crate::account::ResponsesUpstream> {
+        self.account.credential_route()
     }
 
     /// 同一请求是否已经为当前固定账号执行过一次 OAuth 恢复。

@@ -3034,6 +3034,14 @@
   {
     "path": "backend/crates/providers/openai/tests/credential/native_catalog_local.rs",
     "rule": "authenticated-url",
+    "line": 537,
+    "file_sha256": "a352c32f464a8a7bddbe3b4fc379876e4aad5efba072447723a913222db712ac",
+    "line_sha256": "df037a1268a2fe553e47104c6feee56ef05f531030847103b46d3a4582695472",
+    "reason": "Manually and independently re-reviewed the unchanged synthetic proxy-auth fixture after independent Excel catalog tests changed the file. Its destination is an ephemeral loopback listener; no real endpoint or credential is represented."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/credential/native_catalog_local.rs",
+    "rule": "authenticated-url",
     "line": 541,
     "file_sha256": "33159b269324b1f7c7f32867c6a136f6e7eaf413f01be632fed9a9e697120e40",
     "line_sha256": "df037a1268a2fe553e47104c6feee56ef05f531030847103b46d3a4582695472",
@@ -3054,5 +3062,13 @@
     "file_sha256": "0786704c6852b28ef6c62ff0744d9bae11caebc5897f39d8f5b11c27653df417",
     "line_sha256": "814069861c50b1e716f26a23b5af8033d740a1f95e5c875d570e4a9476b9bbb5",
     "reason": "Re-reviewed unchanged synthetic authenticated URL rejection fixture after removing a stale default profile assertion."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/credential/native_catalog_local.rs",
+    "rule": "authenticated-url",
+    "line": 556,
+    "file_sha256": "c975ba0d03a54b02fd6aaf5338823400b276d7d6ca4a037182b89ed9660936fe",
+    "line_sha256": "df037a1268a2fe553e47104c6feee56ef05f531030847103b46d3a4582695472",
+    "reason": "Independently re-reviewed after merging native profile updates with independent Excel catalogs: unchanged synthetic authentication fixture, ephemeral IPv4 loopback proxy and local MockServer only; no real upstream or credential."
   }
 ]

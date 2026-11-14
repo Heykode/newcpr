@@ -1,6 +1,6 @@
 import type { Ref } from 'vue'
 import type { AccountRow } from '../constants'
-import type { AccountReloginAction } from '@/api/modules/relogin'
+import type { AccountReloginAction, CredentialSelection, CredentialTarget } from '@/api/modules/relogin'
 import { computed, onScopeDispose, shallowRef, watch } from 'vue'
 import { getAccountReloginActions, queueAccountRelogin } from '@/api/modules/relogin'
 import { toast } from '@/components/base/BaseToast'
@@ -37,14 +37,19 @@ export function useAccountRelogin(options: { accounts: Ref<AccountRow[]>, reload
       let changed = false
       for (const action of result) {
         const previous = actions.value[action.accountId]
-        if (previous && ((previous.busy && !action.busy) || previous.syncedAt !== action.syncedAt)) {
+        for (const target of ['codex', 'excel'] as const) {
+          const before = target === 'codex' ? previous : previous?.excel
+          const after = target === 'codex' ? action : action.excel
+          if (!before || !after || (!(before.busy && !after.busy) && before.syncedAt === after.syncedAt))
+            continue
           changed = true
-          if (previous.busy && !action.busy) {
+          if (before.busy && !after.busy) {
             const email = options.accounts.value.find(account => account.id === action.accountId)?.email ?? action.accountId
-            if (action.status === 'ready' && action.syncedAt)
-              toast.success(`${email}：凭据已同步`)
-            else if (action.status === 'failed' || action.status === 'uncertain')
-              toast.error(`${email}：${action.message}`)
+            const label = target === 'excel' ? 'Excel' : 'Codex'
+            if (after.status === 'ready' && after.syncedAt)
+              toast.success(`${email} ${label}：凭据已同步`)
+            else if (after.status === 'failed' || after.status === 'uncertain')
+              toast.error(`${email} ${label}：${after.message}`)
           }
         }
       }
@@ -59,21 +64,33 @@ export function useAccountRelogin(options: { accounts: Ref<AccountRow[]>, reload
     }
     finally {
       if (!disposed && !current.signal.aborted)
-        timer = setTimeout(() => void refresh(), readError.value ? 5000 : Object.values(actions.value).some(action => action.busy) ? 2000 : 15000)
+        timer = setTimeout(() => void refresh(), readError.value ? 5000 : Object.values(actions.value).some(action => action.busy || action.excel?.busy) ? 2000 : 15000)
     }
   }
 
-  async function request(account: AccountRow) {
+  async function request(account: AccountRow, selection: CredentialSelection = account.responsesUpstream === 'excel' ? 'excel' : 'codex') {
     const action = actions.value[account.id]
-    if (disposed || submit.loading.value || readError.value || !action?.target || action.busy || action.blockedReason)
+    if (disposed || submit.loading.value || readError.value || !action)
       return
-    const snapshot = { ...action, target: { ...action.target } }
+    const targets: CredentialTarget[] = selection === 'all' ? ['codex', 'excel'] : [selection]
+    const channels = targets.map(target => target === 'codex' ? action : action.excel)
+    if (channels.some(channel => !channel?.target || channel.busy || channel.blockedReason))
+      return
+    const snapshots = channels.map(channel => ({ ...channel!, target: { ...channel!.target! } }))
+    const first = snapshots[0]!
     await submit.run(async () => {
       actionError.value = ''
-      await queueAccountRelogin({ entryId: snapshot.entryId, revision: snapshot.revision, target: snapshot.target })
+      await queueAccountRelogin({ entryId: first.entryId, revision: action.revision, target: first.target, additionalTarget: snapshots[1]?.target })
       if (disposed)
         return
-      actions.value = { ...actions.value, [snapshot.accountId]: { ...snapshot, busy: true, status: 'queued', syncedAt: null } }
+      let next = { ...action }
+      for (const target of targets) {
+        if (target === 'codex')
+          next = { ...next, busy: true, status: 'queued' }
+        else if (next.excel)
+          next.excel = { ...next.excel, busy: true, status: 'queued' }
+      }
+      actions.value = { ...actions.value, [account.id]: next }
       toast.success('已加入重登队列，成功后自动推送')
       void refresh()
     }, {

@@ -12,6 +12,7 @@ use futures::{StreamExt, stream};
 use gateway_core::account::AccountCatalogObservation;
 use gateway_core::account::{
     CredentialRevision, CredentialState, OpaqueProviderData, ProviderAccount, ProviderAccountId,
+    ResponsesUpstream,
 };
 use gateway_core::provider_ports::{
     ProviderCatalogCacheKey, ProviderCatalogCachePort, ProviderCatalogScope,
@@ -59,10 +60,9 @@ impl CodexCatalogScope {
     pub fn for_account(account: &ProviderAccount) -> Self {
         Self {
             account_id: account.id().clone(),
-            revision: account.revision(),
-            adapter: (account.responses_upstream()
-                == gateway_core::account::ResponsesUpstream::Excel)
-                .then(|| account.excel_models().as_slice().join("\0")),
+            revision: account.credential_revision(),
+            adapter: (account.credential_route() == ResponsesUpstream::Excel)
+                .then(|| "excel-independent-v1".to_owned()),
             plan: account
                 .plan_type()
                 .map(str::trim)
@@ -420,7 +420,13 @@ impl CodexCredentialCatalogService {
             }
         }
         let ids = candidates.into_iter().collect::<Vec<_>>();
-        let mut accounts = self.repository.list_for_accounts(&ids).await?;
+        let mut accounts = self
+            .repository
+            .list_for_accounts(&ids)
+            .await?
+            .into_iter()
+            .filter_map(active_catalog_account)
+            .collect::<Vec<_>>();
         let now = SystemTime::now();
         // 代表账号刚被停用或轮换时，仅这一次扩大本地资格查询，仍不查询上游
         if accounts.len() != ids.len()
@@ -437,7 +443,13 @@ impl CodexCredentialCatalogService {
                 .filter(|s| scope.allows(&s.account_id))
                 .map(|s| s.account_id.clone())
                 .collect::<Vec<_>>();
-            accounts = self.repository.list_for_accounts(&ids).await?;
+            accounts = self
+                .repository
+                .list_for_accounts(&ids)
+                .await?
+                .into_iter()
+                .filter_map(active_catalog_account)
+                .collect();
         }
         let mut selected = BTreeMap::new();
         let mut available = false;
@@ -488,16 +500,22 @@ impl CodexCredentialCatalogService {
             .filter(|id| scope.allows(id))
             .cloned()
             .collect::<Vec<_>>();
-        let excel_accounts = self.repository.list_for_accounts(&excel_ids).await?;
+        let excel_accounts = self
+            .repository
+            .list_for_accounts(&excel_ids)
+            .await?
+            .into_iter()
+            .filter_map(active_catalog_account)
+            .collect::<Vec<_>>();
         let excel_models = excel_accounts
             .iter()
             .filter(|a| {
-                a.enabled()
-                    && a.responses_upstream() == gateway_core::account::ResponsesUpstream::Excel
+                eligible_catalog_account(a, now) && a.credential_route() == ResponsesUpstream::Excel
             })
             .flat_map(|a| {
-                a.excel_models()
-                    .as_slice()
+                snapshot
+                    .account_models(a)
+                    .unwrap_or_default()
                     .iter()
                     .filter(|model| {
                         a.model_access().allows(model) && scope.allows_model(a.id(), model)
@@ -537,7 +555,9 @@ impl CodexCredentialCatalogService {
         let Some(snapshot) = self.cached()? else {
             return Ok(None);
         };
-        Ok(snapshot.account_models(account).map(<[String]>::to_vec))
+        let account = active_catalog_account(account.clone())
+            .ok_or(CodexCredentialCatalogError::NoEligibleCredential)?;
+        Ok(snapshot.account_models(&account).map(<[String]>::to_vec))
     }
 
     pub(crate) fn scheduling_exclusions(
@@ -610,6 +630,8 @@ impl CodexCredentialCatalogService {
             .filter(|account| account.provider().as_str() == "openai")
             .ok_or(CodexCredentialCatalogError::NoEligibleCredential)?;
         self.record_excel_accounts(std::slice::from_ref(&account), false)?;
+        let account = active_catalog_account(account)
+            .ok_or(CodexCredentialCatalogError::NoEligibleCredential)?;
         let scope = CodexCatalogScope::for_account(&account);
         let client = self.discovery_client().await?;
         let revision = self.state_revision()?;
@@ -643,12 +665,13 @@ impl CodexCredentialCatalogService {
             observed_at,
             etag: etag.clone().or(fetched.etag),
         };
-        if !self
-            .repository
-            .store()
-            .save_account_catalog(&observed, &fetched.document)
-            .await
-            .map_err(|_| CodexCredentialCatalogError::Cache)?
+        if account.credential_route() == ResponsesUpstream::Codex
+            && !self
+                .repository
+                .store()
+                .save_account_catalog(&observed, &fetched.document)
+                .await
+                .map_err(|_| CodexCredentialCatalogError::Cache)?
         {
             return Err(CodexCredentialCatalogError::ConcurrentUpdate);
         }
@@ -681,7 +704,9 @@ impl CodexCredentialCatalogService {
         account: &ProviderAccount,
     ) -> Result<(Vec<CodexCatalogModel>, SystemTime), CodexCredentialCatalogError> {
         let client = self.discovery_client().await?;
-        let fetched = self.fetch_account_models(&client, account).await?;
+        let account = active_catalog_account(account.clone())
+            .ok_or(CodexCredentialCatalogError::NoEligibleCredential)?;
+        let fetched = self.fetch_account_models(&client, &account).await?;
         if fetched.models.is_empty() {
             return Err(CodexCredentialCatalogError::NoEligibleCredential);
         }
@@ -693,7 +718,9 @@ impl CodexCredentialCatalogService {
         &self,
         account: &ProviderAccount,
     ) -> Result<Option<CodexAccountCatalog>, CodexCredentialCatalogError> {
-        let scope = CodexCatalogScope::for_account(account);
+        let account = active_catalog_account(account.clone())
+            .ok_or(CodexCredentialCatalogError::NoEligibleCredential)?;
+        let scope = CodexCatalogScope::for_account(&account);
         let key = scope.cache_scope()?;
         if let Some(snapshot) = self.cached()?
             && let Some(entry) = snapshot.entries.get(&scope)
@@ -757,6 +784,36 @@ impl CodexCredentialCatalogService {
                 .authentication
                 .authorization_header()
                 .map_err(|_| CodexCredentialCatalogError::InvalidCredentialData)?;
+            if account.credential_route() == ResponsesUpstream::Excel {
+                let excel_models = client
+                    .for_account(account)
+                    .map_err(catalog_client_error)?
+                    .fetch_excel_models_with_context(
+                        CodexRequestContext::auxiliary(
+                            authorization.expose_secret(),
+                            account.upstream_account_id(),
+                            &request_id,
+                            None,
+                        ),
+                        None,
+                    )
+                    .await
+                    .map_err(catalog_client_error)?;
+                let document = serde_json::to_vec(&excel_models)
+                    .map_err(|_| CodexCredentialCatalogError::InvalidCredentialData)?;
+                let models = excel_models
+                    .iter()
+                    .map(|model| {
+                        crate::transport::catalog::excel_bridge_model(model)
+                            .map_err(|_| CodexCredentialCatalogError::InvalidCredentialData)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                return Ok(FetchedAccountModels {
+                    models,
+                    document: document.into(),
+                    etag: None,
+                });
+            }
             let result = client
                 .for_account(account)
                 .map_err(catalog_client_error)?
@@ -770,18 +827,7 @@ impl CodexCredentialCatalogService {
                     None,
                 )
                 .await;
-            let (models, document, etag) = match result {
-                Ok(snapshot) => snapshot.into_parts(),
-                Err(_)
-                    if account.responses_upstream()
-                        == gateway_core::account::ResponsesUpstream::Excel
-                        && !account.excel_models().as_slice().is_empty() =>
-                {
-                    (Vec::new(), bytes::Bytes::from_static(&[3]), None)
-                }
-                Err(error) => return Err(catalog_client_error(error)),
-            };
-            let models = adapter_catalog_models(models, account)?;
+            let (models, document, etag) = result.map_err(catalog_client_error)?.into_parts();
             Ok(FetchedAccountModels {
                 models,
                 document,
@@ -885,6 +931,10 @@ fn validate_response_etag(etag: &str) -> Result<(), CodexCredentialCatalogError>
 
 fn eligible_catalog_account(account: &ProviderAccount, now: SystemTime) -> bool {
     account.enabled()
+        && (account.credential_route() != ResponsesUpstream::Excel
+            || account
+                .excel_credential()
+                .is_some_and(|excel| !excel.suspended))
         && account
             .access_token_expires_at()
             .is_none_or(|expires_at| expires_at > now)
@@ -892,6 +942,11 @@ fn eligible_catalog_account(account: &ProviderAccount, now: SystemTime) -> bool 
             account.credential_state(),
             CredentialState::Unknown | CredentialState::Ready
         )
+}
+
+fn active_catalog_account(account: ProviderAccount) -> Option<ProviderAccount> {
+    let route = account.responses_upstream();
+    account.for_credential_route(route)
 }
 
 fn catalog_client_error(error: crate::transport::CodexClientError) -> CodexCredentialCatalogError {
@@ -915,26 +970,6 @@ fn is_bridge_model(model: &CodexCatalogModel) -> bool {
     serde_json::from_slice::<serde_json::Value>(model.document().body())
         .ok()
         .is_some_and(|value| value["source"] == "excel_bridge")
-}
-
-fn adapter_catalog_models(
-    mut models: Vec<CodexCatalogModel>,
-    account: &ProviderAccount,
-) -> Result<Vec<CodexCatalogModel>, CodexCredentialCatalogError> {
-    if account.responses_upstream() == gateway_core::account::ResponsesUpstream::Excel {
-        models.retain(|model| {
-            !account
-                .excel_models()
-                .contains(model.request_model().as_str())
-        });
-        for model in account.excel_models().as_slice() {
-            models.push(
-                crate::transport::catalog::excel_bridge_model(model)
-                    .map_err(|_| CodexCredentialCatalogError::InvalidCredentialData)?,
-            );
-        }
-    }
-    Ok(models)
 }
 
 fn excel_catalog_capabilities(

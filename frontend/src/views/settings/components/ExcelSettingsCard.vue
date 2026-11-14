@@ -8,10 +8,8 @@ import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
 import BaseForm from '@/components/base/BaseForm/index.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseSelect from '@/components/base/BaseSelect.vue'
-import { DEFAULT_EXCEL_MODELS_INPUT } from '@/utils/excel-defaults'
 
 const props = defineProps<{ disabled?: boolean, images: ExcelImageSettings, units: RuntimeUnitFields }>()
-const models = defineModel<string>('models', { required: true })
 const requestTuning = defineModel<RequestTuning>('requestTuning', { required: true })
 const { mode: imageMode, relayUrl: imageRelayUrl, fields } = props.images
 const warningFields = fields.filter(field => field.section === 'warn')
@@ -41,17 +39,6 @@ const totalSizeHint = computed(() => requestTuning.value.excelImageLimitPolicy =
         </BaseFormItem>
       </BaseForm>
     </section>
-    <section aria-labelledby="excel-default-models-title">
-      <h3 id="excel-default-models-title" class="mb-3 mt-0 text-sm font-medium text-cp-text-secondary">
-        默认模型
-      </h3>
-      <BaseForm class="max-w-6xl sm:grid-cols-2">
-        <BaseFormItem label="Excel 默认模型列表" description="英文逗号分隔。仅用于选择继承全局模型的账号，不会自动开启账号 Excel 模式。">
-          <BaseInput v-model="models" aria-label="Excel 默认模型列表" :placeholder="DEFAULT_EXCEL_MODELS_INPUT" :disabled="disabled" />
-        </BaseFormItem>
-      </BaseForm>
-    </section>
-
     <section class="mt-5 border-t border-cp-border pt-4" aria-labelledby="excel-image-transport-title">
       <h3 id="excel-image-transport-title" class="mb-3 mt-0 text-sm font-medium text-cp-text-secondary">
         图片传输

@@ -13,6 +13,7 @@ type AccountRow = Awaited<ReturnType<typeof getAccounts>>['items'][number]
 type AccountIdentity = Pick<AccountRow, 'id' | 'email' | 'planType' | 'planTypeDisplay'>
   & Partial<Pick<AccountRow, 'customName'>>
   & Partial<Pick<AccountRow, 'provider' | 'authenticationKind'>>
+  & Partial<Pick<AccountRow, 'hasCodexCredential' | 'excelCredential' | 'excelMigrationRequired'>>
   & Partial<Pick<AccountRow, 'accountId'>>
   & Partial<Pick<AccountRow, 'qualityMonitoring'>>
   & Partial<Pick<AccountRow, 'enabled' | 'status' | 'errorReason'>>
@@ -68,6 +69,16 @@ const secondaryClass = computed(() =>
 )
 
 const metaGapClass = computed(() => props.metaSize === 'xs' ? 'gap-1' : 'gap-1.5')
+const hasCodexCredential = computed(() => props.account.hasCodexCredential ?? props.account.authenticationKind !== 'none')
+const excelCredentialLabel = computed(() => {
+  if (!props.account.excelCredential)
+    return props.account.excelMigrationRequired ? 'Excel 待授权' : null
+  if (props.account.excelCredential.suspended)
+    return 'Excel 已暂停'
+  if (props.account.excelCredential.refreshAttempted)
+    return 'Excel 待重新授权'
+  return '已有 Excel 凭据'
+})
 
 const verifiedExcelRecovery = computed(() => {
   const recoveredAt = props.account.excelRecovery?.recoveredAt
@@ -120,6 +131,7 @@ const avatarDescription = computed(() => {
         <ProviderIconGroup
           v-if="account.provider"
           :provider="account.provider"
+          :provider-label="account.provider === 'openai' && account.responsesUpstream === 'excel' ? 'Excel' : undefined"
           size="md"
         />
         <span v-else class="font-extrabold">{{ displayTitle.slice(0, 1).toUpperCase() }}</span>
@@ -183,12 +195,24 @@ const avatarDescription = computed(() => {
         v-if="account.responsesUpstream !== 'excel' && account.excelModeDisabledAt"
         class="mt-0.5 text-cp-xs text-cp-text-secondary"
         :class="mobile ? 'col-span-2 col-start-2' : undefined"
-        :title="`Excel 上游返回 HTTP 403，自动关闭于 ${formatDateTime(account.excelModeDisabledAt)}`"
+        :title="`Excel 上游返回 HTTP 403，记录于 ${formatDateTime(account.excelModeDisabledAt)}`"
       >
-        Excel 403 自动关闭
+        Excel 403 历史记录
       </div>
       <div v-if="account.qualityMonitoring && !mobile">
         <AccountQualityMonitorBadge :account-id="account.id" :monitor="account.qualityMonitoring" />
+      </div>
+      <div
+        v-if="account.provider === 'openai'"
+        class="mt-0.5 flex min-w-0 flex-wrap gap-x-2 gap-y-0.5 text-cp-xs text-cp-text-tertiary"
+        :class="mobile ? 'col-span-2 col-start-2' : undefined"
+        data-account-credential-status
+      >
+        <span v-if="hasCodexCredential" class="whitespace-nowrap">已有 Codex 凭据</span>
+        <span v-else class="whitespace-nowrap text-cp-warning">缺少 Codex 凭据</span>
+        <span v-if="excelCredentialLabel" class="whitespace-nowrap" :class="account.excelCredential?.suspended || account.excelMigrationRequired ? 'text-cp-warning' : undefined">
+          {{ excelCredentialLabel }}
+        </span>
       </div>
     </div>
   </div>

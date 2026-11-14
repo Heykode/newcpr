@@ -1,7 +1,6 @@
 import type { AccountTemplateConfig } from '@/api/modules/account-templates'
 import type { Excel403Action } from '@/utils/excel-settings'
 import { accountEgressPatch, accountIpv6Modes } from '@/utils/account-egress'
-import { DEFAULT_EXCEL_MODELS } from '@/utils/excel-defaults'
 import { accountExcel403Action, excelRecoverySettings, excelSettings } from '@/utils/excel-settings'
 import { accountModelAccessError } from '@/views/accounts/utils/modelAccess'
 import { parseAccountSchedulingForm } from '@/views/accounts/utils/schedulingForm'
@@ -35,7 +34,7 @@ export function templateForm(config?: AccountTemplateConfig) {
     name: config?.name ?? '',
     modelAccess: config?.modelAccess ? { ...config.modelAccess, models: [...config.modelAccess.models] } : undefined,
     enabled: config?.enabled ?? true,
-    applyExcel: config === undefined || config.responsesUpstream != null || config.excelModelsFollowGlobal != null || config.excelModels != null,
+    applyExcel: config === undefined || config.responsesUpstream != null,
     excelEnabled: config?.responsesUpstream === 'excel',
     requestProxySource: config?.requestProxySource ?? 'account',
     excelCacheCreationAsInput: config ? config.excelCacheCreationAsInput ?? false : true,
@@ -44,8 +43,6 @@ export function templateForm(config?: AccountTemplateConfig) {
     excelRecoveryEnabled: config?.excelRecovery?.enabled ?? false,
     excelRecoveryInterval: String(config?.excelRecovery?.intervalMinutes ?? 60),
     preserveExcelRecovery: config !== undefined && config.excelRecovery == null,
-    excelModelsFollowGlobal: config?.excelModelsFollowGlobal ?? config?.excelModels == null,
-    excelModels: (config?.excelModels ?? DEFAULT_EXCEL_MODELS).join(', '),
     concurrencyLimit: config?.concurrencyLimit == null ? '' : String(config.concurrencyLimit),
     weight: String(config?.weight ?? 1),
     groupIds: [...(config?.groupIds ?? [])],
@@ -78,7 +75,7 @@ export function templateConfig(form: ReturnType<typeof templateForm>): AccountTe
     enabled: form.enabled,
     ...(form.applyExcel
       ? {
-          ...excelSettings(form.excelEnabled, form.excelModelsFollowGlobal, form.excelModels, form.excelCacheCreationAsInput, form.excel403Action),
+          ...excelSettings(form.excelEnabled, true, '', form.excelCacheCreationAsInput, form.excel403Action),
           excelIgnoreEncryptedContent: form.excelEnabled && form.excelIgnoreEncryptedContent,
           ...(!form.preserveExcelRecovery || form.excelRecoveryEnabled || form.excelRecoveryInterval !== '60'
             ? { excelRecovery: excelRecoverySettings(form.excelRecoveryEnabled, form.excelRecoveryInterval) }

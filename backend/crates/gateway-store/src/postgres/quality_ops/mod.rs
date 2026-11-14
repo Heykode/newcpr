@@ -11,6 +11,7 @@ use gateway_admin::{
 };
 use sqlx::{PgPool, Row as _};
 
+mod excel_policy;
 mod group_rules;
 mod native_recovery;
 mod overload_streak;
@@ -176,7 +177,9 @@ async fn action_scope(
          a.outbound_proxy_id,p.revision,a.model_access_json,u.mode,u.custom_user_agent,u.configuration_json,
          (select max(config_revision) from admin_audit_events
           where entity_kind='provider_account' and entity_ref=a.id),
-         case when a.outbound_proxy_id is null then coalesce(o.mode,e.default_mode) else null end)
+         case when a.outbound_proxy_id is null then coalesce(o.mode,e.default_mode) else null end,
+         (select jsonb_build_array(x.credential_revision,x.suspended,x.quality_pause_owner)
+          from openai_excel_credentials x where x.account_id=a.id))
          from provider_accounts a cross join runtime_settings s
          left join outbound_proxies p on p.id=a.outbound_proxy_id
          left join provider_outbound_user_agents u on u.provider_kind=a.provider_kind
@@ -257,12 +260,12 @@ impl PgQualityOpsStore {
         {
             let valid: bool = sqlx::query_scalar(
                 "select exists(select 1 from provider_accounts a where id=$1
-                 and provider_kind='openai' and authentication_kind='oauth'
-                 and (not $2 or $3=any(case when excel_models_follow_global then
-                 (select excel_default_models from runtime_settings where id=1) else excel_models end)))")
-                .bind(&config.account_id)
-                .bind(config.failure_action == QualityFailureAction::EnableExcel)
-                .bind(&config.model).fetch_one(&mut *tx).await.map_err(unavailable)?;
+                 and provider_kind='openai' and authentication_kind='oauth')",
+            )
+            .bind(&config.account_id)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(unavailable)?;
             if !valid {
                 return Err(conflict());
             }

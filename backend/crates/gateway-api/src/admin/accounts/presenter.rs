@@ -95,23 +95,89 @@ pub(super) fn account_view(
     } = item;
     let status = projection.status.as_str().to_owned();
     let rate_limited_until = projection.rate_limited_until.map(DateTime::<Utc>::from);
-    let expires_at = account
-        .access_token_expires_at
+    let excel_active =
+        account.responses_upstream == gateway_core::account::ResponsesUpstream::Excel;
+    let active_expires_at = if excel_active {
+        account
+            .excel_credential
+            .as_ref()
+            .and_then(|e| e.access_token_expires_at)
+            .map(DateTime::<Utc>::from)
+    } else {
+        account.access_token_expires_at
+    };
+    let active_next_refresh_at = if excel_active {
+        account
+            .excel_credential
+            .as_ref()
+            .and_then(|e| e.next_refresh_at)
+            .map(DateTime::<Utc>::from)
+    } else {
+        account.next_refresh_at
+    };
+    let expires_at = active_expires_at
         .as_ref()
         .map(|value| timezone_rfc3339(value, timezone));
     let added_at = timezone_rfc3339(&account.created_at, timezone);
     let updated_at = timezone_rfc3339(&account.updated_at, timezone);
+    let quota = if excel_active {
+        ProviderQuota {
+            paused_windows: Vec::new(),
+            credits: None,
+            plan_type: account
+                .excel_credential
+                .as_ref()
+                .and_then(|e| e.plan_type.clone()),
+            observed_at: account
+                .excel_credential
+                .as_ref()
+                .and_then(|e| e.quota.observed_at())
+                .map(Into::into),
+            refresh_token_expires_at: None,
+            windows: Vec::new(),
+            limit_reached: account
+                .excel_credential
+                .as_ref()
+                .is_some_and(|e| e.quota.is_exhausted()),
+            provider_data: None,
+        }
+    } else {
+        quota
+    };
     let usage = account_usage_view(usage, quota.usage_window(), now, timezone);
     let (mut quota, refresh_token_expires_at) =
         account_quota_view(quota, rate_limited_until, now, timezone);
-    quota.overdraft =
-        codex_quota_overdraft.map(|state| codex_quota_overdraft_view(state, timezone));
+    quota.overdraft = if excel_active {
+        None
+    } else {
+        codex_quota_overdraft.map(|state| codex_quota_overdraft_view(state, timezone))
+    };
     AccountView {
+        has_codex_credential: account.has_codex_credential(),
+        excel_migration_required: account.responses_upstream
+            == gateway_core::account::ResponsesUpstream::Excel
+            && account.excel_credential.is_none(),
+        excel_credential: account
+            .excel_credential
+            .as_ref()
+            .map(|excel| ExcelCredentialView {
+                revision: excel.revision.get(),
+                state: excel.state.as_str().to_owned(),
+                has_refresh_token: excel.has_refresh_token,
+                access_token_expires_at: excel.access_token_expires_at.map(Into::into),
+                next_refresh_at: excel.next_refresh_at.map(Into::into),
+                suspended: excel.suspended,
+                refresh_attempted: excel.refresh_attempted,
+                error_reason: excel
+                    .last_error_reason
+                    .map(|reason| reason.as_str().to_owned()),
+                error_message: excel.last_error_message.clone(),
+            }),
         quota_limits: account.quota_limits,
         quota_limits_supported: account.provider_kind.as_str() == "openai"
             && account.authentication_kind == "oauth",
         auto_use_quota_credits: account.auto_use_quota_credits,
-        error_protection,
+        error_protection: if excel_active { None } else { error_protection },
         purchase_cost,
         excel_recovery,
         id: account.id.clone(),
@@ -136,7 +202,14 @@ pub(super) fn account_view(
         plan_type: account.plan_type,
         plan_type_display: plan_type_display.unwrap_or_else(|| "未知套餐".to_owned()),
         authentication_kind: account.authentication_kind,
-        has_refresh_token: account.has_refresh_token,
+        has_refresh_token: if excel_active {
+            account
+                .excel_credential
+                .as_ref()
+                .is_some_and(|e| e.has_refresh_token)
+        } else {
+            account.has_refresh_token
+        },
         relogin_count: account.relogin_count,
         last_relogin_at: account
             .last_relogin_at
@@ -228,14 +301,11 @@ pub(super) fn account_view(
             .as_ref()
             .map(|proxy| proxy.endpoint()),
         access_token_expires_at: expires_at,
-        access_token_expires_at_display: account
-            .access_token_expires_at
+        access_token_expires_at_display: active_expires_at
             .as_ref()
             .map(|value| timezone_datetime(value, timezone)),
         refresh_token_expires_at,
-        next_refresh_at: account
-            .next_refresh_at
-            .map(|value| timezone_rfc3339(&value, timezone)),
+        next_refresh_at: active_next_refresh_at.map(|value| timezone_rfc3339(&value, timezone)),
         added_at,
         added_at_display: timezone_datetime(&account.created_at, timezone),
         updated_at,

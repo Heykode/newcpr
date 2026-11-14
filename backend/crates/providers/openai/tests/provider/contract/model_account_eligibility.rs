@@ -135,6 +135,7 @@ async fn grok_never_acquires_native_oauth_in_either_selector_or_transport() {
             let store = Arc::new(MemoryAccountStore::default());
             create_account(&store, "acct_scope_old").await;
             if excel_enabled {
+                store.seed_excel_credential("acct_scope_old", true);
                 store.set_responses_upstream("acct_scope_old", ResponsesUpstream::Excel);
                 store.set_excel_encrypted_content_policy(
                     "acct_scope_old",
@@ -164,12 +165,22 @@ async fn grok_never_acquires_native_oauth_in_either_selector_or_transport() {
                             attempt(wait),
                         )
                         .await;
-                    let error = result.err().expect("native OAuth cannot serve Grok");
-                    assert_eq!(error.kind(), ProviderErrorKind::NoEligibleAccount);
-                    assert_eq!(error.send_state(), UpstreamSendState::NotSent);
+                    if excel_enabled {
+                        if let Ok(stream) = result {
+                            assert_eq!(stream.metadata().transport().as_str(), "excel_http_sse");
+                            // BPS access validates its actual catalog before sending payloads.
+                            drop(stream);
+                        }
+                    } else {
+                        let error = result.err().expect("native OAuth cannot serve Grok");
+                        assert_eq!(error.kind(), ProviderErrorKind::NoEligibleAccount);
+                        assert_eq!(error.send_state(), UpstreamSendState::NotSent);
+                    }
                 }
             }
-            assert!(leases.requests.lock().unwrap().is_empty());
+            if !excel_enabled {
+                assert!(leases.requests.lock().unwrap().is_empty());
+            }
             assert_eq!(leases.capacity.waiting.load(Ordering::SeqCst), 0);
             assert!(upstream.received_requests().await.unwrap().is_empty());
         }
@@ -214,17 +225,18 @@ async fn unlisted_native_models_still_reach_upstream_and_complete() {
 }
 
 #[tokio::test]
-async fn model_guard_preserves_configured_excel_preparation_in_both_selectors() {
+async fn excel_switch_prepares_all_compatible_models_in_both_selectors() {
     for wait in [false, true] {
         for websocket in [false, true] {
-            for model in ["gpt-5.4", "grok-configured"] {
+            for model in ["gpt-5.4", "gpt-6-astra"] {
                 let store = Arc::new(MemoryAccountStore::default());
                 create_account(&store, "acct_scope_old").await;
+                store.seed_excel_credential("acct_scope_old", true);
                 store.set_responses_upstream("acct_scope_old", ResponsesUpstream::Excel);
                 store.set_excel_encrypted_content_policy(
                     "acct_scope_old",
                     false,
-                    vec!["gpt-5.4".to_owned(), "grok-configured".to_owned()],
+                    vec!["gpt-5.4".to_owned()],
                 );
                 let leases = Arc::new(TestLeaseCoordinator::default());
                 leases.capacity.enabled.store(true, Ordering::SeqCst);
@@ -734,10 +746,11 @@ async fn unknown_plan_uses_its_own_catalog_entitlements() {
     }
 }
 #[tokio::test]
-async fn excel_exemption_follows_the_actual_route_not_the_account_setting() {
+async fn excel_catalog_uses_bps_access_and_legacy_model_subset_never_routes_to_codex() {
     for wait in [false, true] {
         let store = Arc::new(MemoryAccountStore::default());
         create_account(&store, "acct_scope_old").await;
+        store.seed_excel_credential("acct_scope_old", true);
         store.set_responses_upstream("acct_scope_old", ResponsesUpstream::Excel);
         store.set_excel_encrypted_content_policy(
             "acct_scope_old",
@@ -747,10 +760,12 @@ async fn excel_exemption_follows_the_actual_route_not_the_account_setting() {
         store.set_scheduling("acct_scope_old", None, AccountWeight::new(100).unwrap());
         let server = MockServer::start().await;
         Mock::given(method("GET"))
-            .and(path("/codex/models"))
+            .and(path("/basispoints/api/responses/access"))
             .respond_with(
                 ResponseTemplate::new(200).set_body_json(
-                    json!({"models":[{"slug":"other-model","display_name":"Other"}]}),
+                    json!({"allowed":true,"model_catalog":{"models":[
+                        {"id":"gpt-5.4","label":"GPT 5.4","model_picker_enabled":true,"policy":{"state":"enabled"},"efforts":[]}
+                    ],"restricted_models":[]}}),
                 ),
             )
             .expect(1)
@@ -768,23 +783,26 @@ async fn excel_exemption_follows_the_actual_route_not_the_account_setting() {
         );
         catalog.refresh_catalogs().await.unwrap();
         provider.query_model_capabilities().await.unwrap();
-        let error = provider
+        let stream = provider
             .execute(
                 planned_request_with_model("openai", operation("gpt-future", false), "gpt-future"),
                 attempt(wait),
             )
             .await
-            .err()
-            .expect("native route still requires native catalog eligibility");
-        assert_eq!(error.kind(), ProviderErrorKind::NoEligibleAccount);
-        assert!(leases.requests.lock().unwrap().is_empty());
+            .expect("models outside the legacy subset retain the Excel route");
+        assert_eq!(stream.metadata().transport().as_str(), "excel_http_sse");
+        // Live access is revalidated when the lazy stream is polled.
+        drop(stream);
+        for signal in leases.capacity.signals.lock().unwrap().values_mut() {
+            signal.last_started_at = None;
+        }
         let stream = provider
             .execute(
                 planned_request_with_model("openai", operation("gpt-5.4", false), "gpt-5.4"),
                 attempt(wait),
             )
             .await
-            .expect("configured Excel route retains its own model contract");
+            .expect("Excel route retains its own model contract");
         assert_eq!(stream.metadata().transport().as_str(), "excel_http_sse");
         assert_eq!(
             stream.metadata().provider_account_id().as_str(),
@@ -799,14 +817,16 @@ async fn excel_exemption_follows_the_actual_route_not_the_account_setting() {
                 .iter()
                 .all(|request| request.method == "GET")
         );
+        server.verify().await;
     }
 }
 
 #[tokio::test]
-async fn failed_native_catalog_cannot_turn_excel_synthetic_models_into_refusal_evidence() {
+async fn failed_excel_catalog_never_falls_back_to_native_requests() {
     for wait in [false, true] {
         let store = Arc::new(MemoryAccountStore::default());
         create_account(&store, "acct_scope_old").await;
+        store.seed_excel_credential("acct_scope_old", true);
         store.set_responses_upstream("acct_scope_old", ResponsesUpstream::Excel);
         store.set_excel_encrypted_content_policy(
             "acct_scope_old",
@@ -815,7 +835,7 @@ async fn failed_native_catalog_cannot_turn_excel_synthetic_models_into_refusal_e
         );
         let server = MockServer::start().await;
         Mock::given(method("GET"))
-            .and(path("/codex/models"))
+            .and(path("/basispoints/api/responses/access"))
             .respond_with(ResponseTemplate::new(503))
             .expect(1)
             .mount(&server)
@@ -825,7 +845,7 @@ async fn failed_native_catalog_cannot_turn_excel_synthetic_models_into_refusal_e
             .respond_with(
                 ResponseTemplate::new(200).set_body_raw(CAPTURE_COMPLETED_SSE, "text/event-stream"),
             )
-            .expect(1)
+            .expect(0)
             .mount(&server)
             .await;
         let (provider, catalog, _) = super::scheduling::waiting_provider_with_catalog(
@@ -836,18 +856,16 @@ async fn failed_native_catalog_cannot_turn_excel_synthetic_models_into_refusal_e
             Arc::default(),
             NonZeroU32::MIN,
         );
-        catalog.refresh_catalogs().await.unwrap();
-        provider.query_model_capabilities().await.unwrap();
-        let mut stream = provider
+        assert!(catalog.refresh_catalogs().await.is_err());
+        let stream = provider
             .execute(
                 planned_request_with_model("openai", operation("gpt-future", false), "gpt-future"),
                 attempt(wait),
             )
             .await
-            .expect("missing native evidence permits upstream validation");
-        while let Some(event) = stream.next().await {
-            event.unwrap();
-        }
+            .expect("catalog failure retains the Excel route for live validation");
+        assert_eq!(stream.metadata().transport().as_str(), "excel_http_sse");
+        drop(stream);
         server.verify().await;
     }
 }
