@@ -110,6 +110,10 @@ Cover the complete Python `Login.run()` entry, not only `run_excel_oauth()`, plu
 locked and ambiguous workspaces, failure-stage redaction, existing-material Excel
 replacement with a preserved Codex channel, and independent progress for both
 channels of the same library row.
+Keep Rust relogin diagnostic tests in the external integration-test tree. Exercise
+the public relogin boundary with an isolated worker process; do not add inline
+production test hooks, change the parent process environment or relax architecture
+checks to access a private error mapper.
 
 ## 7. Wrong vs Correct
 
