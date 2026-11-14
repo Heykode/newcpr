@@ -93,6 +93,7 @@
 | OpenAI `tests/credential/catalog/mod.rs`、`contract/mod.rs`、`oauth.rs`、`quota/warmup.rs` | 接新构造参数、当前全局画像和端点安装身份规则；本地 `native_catalog_local.rs` 核对实际出口 |
 | OpenAI `tests/provider/contract/mod.rs`、`cookies.rs`、`tests/support.rs` | 本地共享 Provider 构造器及 support 接 runtime policy；cookie 测试沿共享构造器，不复制官方拆分目录 |
 | 本地 Linux `tests/provider/live.rs` | 将同原值 session/thread 必须不同的旧断言改为相等；继续验证 bootstrap、sideband 和 hangup 的画像冻结、关联连续性、凭据及代理刷新 |
+| 本地 `tests/transport/account_proxy.rs` | 修复旧运行时夹具把响应读完当成连接已回池的时序竞争；在既有超时内观察真实连接复用后再关闭运行时，保留共享/隔离正反例，生产缓存代码不变 |
 | OpenAI `tests/transport/profile/{cli_release,selection}.rs`、`platform_release/{mod,artifact}.rs` | 更新基线和官方平台正反例；CLI 后继版本测试从当前基线构造，避免过时固定版本倒逼生产回退 |
 | Admin `tests/model/retention.rs`、API `tests/admin/settings.rs` | 本地清理模型测试和 API 正 u32 边界；wire u64 解析与业务 u32 验证分别断言 |
 | Core `tests/engine/execution/mod.rs` | 本地 `tests/engine/execution.rs` 验证真实 diagnostic plan 携带全局画像 |

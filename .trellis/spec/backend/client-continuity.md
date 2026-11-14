@@ -725,7 +725,10 @@ App `loopback_reauthorization_rebinds_selected_account_and_rejects_incomplete_id
 - Quota seed helpers need the same isolation as conversation fixtures. Test two
   helper instances for distinct account IDs, and characterize runtime teardown
   with a held real response: a deliberately shared ID loses its old-runtime
-  connection, while a distinct ID's response finishes. Do not change production
+  connection, while a distinct ID's response finishes. Before shutting down the
+  owner runtime, verify that the shared fixture actually reused the warmed
+  connection; consuming a response body does not await asynchronous pool return.
+  Do not change production
   account identity or pool keys to compensate for independent test runtimes.
 
 ## 15. Committed Configuration Without Catalog Waits
