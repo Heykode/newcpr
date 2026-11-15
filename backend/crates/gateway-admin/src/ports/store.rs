@@ -566,6 +566,18 @@ pub trait AccountGroupStore: Send + Sync {
         Ok(())
     }
 
+    async fn cancel_notification_delivery(
+        &self,
+        _delivery_id: &str,
+        _observed_at: DateTime<Utc>,
+    ) -> AdminStoreResult<()> {
+        Err(AdminStoreError::new(
+            AdminStoreErrorKind::Unavailable,
+            "notification cancellation",
+            "not supported",
+        ))
+    }
+
     async fn enqueue_test_notification(
         &self,
         _delivery: ClaimedNotificationDelivery,

@@ -19,6 +19,7 @@ use crate::{
     postgres_unavailable,
 };
 
+mod bark;
 mod incidents;
 
 #[derive(Clone)]
@@ -156,14 +157,16 @@ impl PgNotificationRepository {
         let revision = bump_config_revision_in_transaction(&mut tx).await?;
         let recipients = serde_json::to_value(&policy.email_recipients)
             .map_err(|_| postgres_unavailable("encode group alert recipients"))?;
+        let schedule = serde_json::to_value(&policy.bark_schedule)
+            .map_err(|_| postgres_unavailable("encode Bark schedule"))?;
         let row = sqlx::query(
             "insert into account_group_alert_policies (
                group_id,enabled,concurrency_enabled,concurrency_threshold,concurrency_confirmation_seconds,
                eta_enabled,eta_threshold_minutes,eta_confirmation_seconds,
                quota_zero_enabled,quota_zero_confirmation_seconds,
                availability_enabled,availability_confirmation_seconds,
-               email_enabled,email_recipients_json,bark_enabled,bark_level,bark_sound,bark_volume,bark_call,updated_at)
-             values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,now())
+               email_enabled,email_recipients_json,bark_enabled,bark_level,bark_sound,bark_volume,bark_call,bark_schedule_json,updated_at)
+             values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,now())
              on conflict(group_id) do update set
                enabled=excluded.enabled,concurrency_enabled=excluded.concurrency_enabled,
                concurrency_threshold=excluded.concurrency_threshold,
@@ -177,7 +180,7 @@ impl PgNotificationRepository {
                email_enabled=excluded.email_enabled,email_recipients_json=excluded.email_recipients_json,
                bark_enabled=excluded.bark_enabled,bark_level=excluded.bark_level,
                bark_sound=excluded.bark_sound,bark_volume=excluded.bark_volume,
-               bark_call=excluded.bark_call,updated_at=excluded.updated_at returning *",
+               bark_call=excluded.bark_call,bark_schedule_json=excluded.bark_schedule_json,updated_at=excluded.updated_at returning *",
         )
         .bind(policy.group_id.as_str())
         .bind(policy.enabled)
@@ -198,6 +201,7 @@ impl PgNotificationRepository {
         .bind(policy.bark_sound)
         .bind(policy.bark_volume.map(i64::from))
         .bind(policy.bark_call)
+        .bind(schedule)
         .fetch_one(&mut *tx)
         .await
         .map_err(|_| postgres_unavailable("replace group alert policy"))?;
@@ -243,7 +247,7 @@ impl PgNotificationRepository {
                and (test or not exists (
                  select 1 from account_group_alert_incidents i
                  where i.group_id=o.group_id and i.condition_kind=o.condition_kind
-                   and i.activated_at=o.created_at))",
+                   and i.activated_at=o.incident_activated_at))",
         )
         .bind(now)
         .bind(now - Duration::minutes(5))
@@ -310,6 +314,20 @@ impl PgNotificationRepository {
         Ok(())
     }
 
+    pub async fn cancel_delivery(&self, id: &str, now: DateTime<Utc>) -> StoreResult<()> {
+        sqlx::query(
+            "update notification_outbox set status='cancelled',finished_at=$2,
+                    claim_started_at=null,error_summary='Bark reminder rule no longer active'
+                    where id=$1 and status in ('pending','sending')",
+        )
+        .bind(id)
+        .bind(now)
+        .execute(&self.pool)
+        .await
+        .map_err(|_| postgres_unavailable("cancel obsolete Bark delivery"))?;
+        Ok(())
+    }
+
     pub async fn enqueue_test(
         &self,
         delivery: ClaimedNotificationDelivery,
@@ -338,7 +356,7 @@ impl PgNotificationRepository {
     }
 }
 
-async fn enqueue_observation(
+async fn enqueue_email_observation(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     observation: &AlertObservation,
     now: DateTime<Utc>,
@@ -360,25 +378,8 @@ async fn enqueue_observation(
             bark_sound: observation.bark_sound.clone(),
             bark_volume: observation.bark_volume,
             bark_call: observation.bark_call,
-            test: false,
-        };
-        insert_delivery(&mut **tx, &delivery, now).await?;
-    }
-    if observation.bark_enabled
-        && !incidents::target_enqueued(tx, observation.group_id.as_str(), "bark", "default").await?
-    {
-        let delivery = ClaimedNotificationDelivery {
-            id: uuid::Uuid::now_v7().to_string(),
-            group_id: Some(observation.group_id.clone()),
-            condition: Some(observation.kind),
-            channel: NotificationChannelKind::Bark,
-            target: "default".to_owned(),
-            subject: format!("CPR 分组预警：{}", observation.group_name),
-            body: observation.summary.clone(),
-            bark_level: observation.bark_level,
-            bark_sound: observation.bark_sound.clone(),
-            bark_volume: observation.bark_volume,
-            bark_call: observation.bark_call,
+            bark_rule_key: None,
+            incident_activated_at: Some(now),
             test: false,
         };
         insert_delivery(&mut **tx, &delivery, now).await?;
@@ -397,10 +398,11 @@ where
     sqlx::query(
         "insert into notification_outbox(
            id,group_id,condition_kind,channel,target,subject,body,bark_level,bark_sound,
-           bark_volume,bark_call,test,status,attempts,next_attempt_at,created_at,claim_started_at)
+           bark_volume,bark_call,test,status,attempts,next_attempt_at,created_at,claim_started_at,
+           incident_activated_at,bark_rule_key)
          values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,
            case when $12 then 'sending' else 'pending' end,
-           case when $12 then 1 else 0 end,$13,$13,case when $12 then $13 else null end)",
+           case when $12 then 1 else 0 end,$13,$13,case when $12 then $13 else null end,$14,$15)",
     )
     .bind(&delivery.id)
     .bind(delivery.group_id.as_ref().map(AccountGroupId::as_str))
@@ -415,6 +417,8 @@ where
     .bind(delivery.bark_call)
     .bind(delivery.test)
     .bind(now)
+    .bind(delivery.incident_activated_at)
+    .bind(&delivery.bark_rule_key)
     .execute(executor)
     .await
     .map_err(|_| postgres_unavailable("enqueue notification delivery"))?;
@@ -584,6 +588,11 @@ fn policy_from_row(row: &sqlx::postgres::PgRow) -> StoreResult<GroupAlertPolicy>
         bark_call: row
             .try_get("bark_call")
             .map_err(|_| postgres_unavailable("decode bark policy"))?,
+        bark_schedule: serde_json::from_value(
+            row.try_get("bark_schedule_json")
+                .map_err(|_| postgres_unavailable("decode Bark schedule"))?,
+        )
+        .map_err(|_| postgres_unavailable("decode Bark schedule"))?,
         updated_at: row
             .try_get("updated_at")
             .map_err(|_| postgres_unavailable("decode alert policy"))?,
@@ -647,6 +656,12 @@ fn claimed_from_row(row: &sqlx::postgres::PgRow) -> StoreResult<ClaimedNotificat
         test: row
             .try_get("test")
             .map_err(|_| postgres_unavailable("decode delivery"))?,
+        bark_rule_key: row
+            .try_get("bark_rule_key")
+            .map_err(|_| postgres_unavailable("decode Bark delivery rule"))?,
+        incident_activated_at: row
+            .try_get("incident_activated_at")
+            .map_err(|_| postgres_unavailable("decode delivery incident"))?,
     })
 }
 

@@ -34,6 +34,7 @@ fn episode_observation(group_id: AccountGroupId, kind: AlertConditionKind) -> Al
         bark_sound: None,
         bark_volume: 5,
         bark_call: false,
+        bark_rule_key: None,
         summary: "synthetic episode".to_owned(),
     }
 }
@@ -364,6 +365,363 @@ async fn channels_are_write_only_and_group_policy_round_trips() {
         .unwrap();
     assert_eq!(saved.group_id, group_id);
     assert_eq!(repository.load_policy(&group_id).await.unwrap(), saved);
+    policy.bark_schedule.default_enabled = false;
+    policy
+        .bark_schedule
+        .rules
+        .push(gateway_admin::model::notifications::BarkScheduleRule {
+            id: "night".to_owned(),
+            name: "Night".to_owned(),
+            enabled: true,
+            start_time: "23:30".to_owned(),
+            end_time: "09:00".to_owned(),
+            level: Some(BarkLevel::Critical),
+            sound: None,
+            volume: Some(8),
+            call: Some(true),
+        });
+    repository
+        .replace_policy(policy.clone(), &context())
+        .await
+        .unwrap();
+    assert_eq!(
+        repository
+            .load_policy(&group_id)
+            .await
+            .unwrap()
+            .bark_schedule,
+        policy.bark_schedule
+    );
+    let other_group = group(&db.pool).await;
+    assert!(
+        repository
+            .load_policy(&other_group)
+            .await
+            .unwrap()
+            .bark_schedule
+            .rules
+            .is_empty()
+    );
+    db.close().await;
+}
+
+#[tokio::test]
+async fn bark_escalation_is_once_per_incident_and_keeps_original_activation() {
+    let Some(db) = TestDatabase::create("bark_escalation").await else {
+        return;
+    };
+    let repository = PgNotificationRepository::new(db.pool.clone());
+    let mut observation =
+        episode_observation(group(&db.pool).await, AlertConditionKind::Concurrency);
+    let base = Utc::now();
+    repository
+        .apply_observations(&[observation.clone()], base)
+        .await
+        .unwrap();
+    while let Some(delivery) = repository.claim_delivery(base).await.unwrap() {
+        repository
+            .finish_delivery(&delivery.id, true, None, base)
+            .await
+            .unwrap();
+    }
+    observation.bark_level = BarkLevel::Critical;
+    observation.bark_volume = 8;
+    observation.bark_call = true;
+    let rows = [observation.clone()];
+    let (one, two) = tokio::join!(
+        repository.apply_observations(&rows, base + Duration::seconds(10)),
+        repository.apply_observations(&rows, base + Duration::seconds(10))
+    );
+    one.unwrap();
+    two.unwrap();
+    let escalated = repository
+        .claim_delivery(base + Duration::seconds(10))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(escalated.channel, NotificationChannelKind::Bark);
+    assert_eq!(escalated.bark_level, BarkLevel::Critical);
+    assert_eq!(
+        escalated.incident_activated_at.unwrap().timestamp_micros(),
+        base.timestamp_micros()
+    );
+    repository
+        .finish_delivery(&escalated.id, true, None, base + Duration::seconds(10))
+        .await
+        .unwrap();
+    assert_eq!(
+        repository.recent_deliveries(None, 100).await.unwrap().len(),
+        3
+    );
+    observation.bark_sound = Some("different-sound".to_owned());
+    repository
+        .apply_observations(&[observation.clone()], base + Duration::seconds(20))
+        .await
+        .unwrap();
+    observation.bark_level = BarkLevel::Active;
+    repository
+        .apply_observations(&[observation.clone()], base + Duration::seconds(30))
+        .await
+        .unwrap();
+    assert!(
+        repository
+            .claim_delivery(base + Duration::seconds(30))
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        repository.recent_deliveries(None, 100).await.unwrap().len(),
+        3
+    );
+    observation.active = false;
+    for second in [40, 50, 60, 70] {
+        repository
+            .apply_observations(&[observation.clone()], base + Duration::seconds(second))
+            .await
+            .unwrap();
+    }
+    observation.active = true;
+    repository
+        .apply_observations(&[observation], base + Duration::seconds(80))
+        .await
+        .unwrap();
+    assert_eq!(
+        repository.recent_deliveries(None, 100).await.unwrap().len(),
+        5
+    );
+    db.close().await;
+}
+
+#[tokio::test]
+async fn quiet_period_then_window_sends_without_reconfirming_or_repeating_email() {
+    let Some(db) = TestDatabase::create("bark_quiet_window").await else {
+        return;
+    };
+    let repository = PgNotificationRepository::new(db.pool.clone());
+    let mut observation = episode_observation(group(&db.pool).await, AlertConditionKind::Eta);
+    let base = Utc::now();
+    observation.bark_enabled = false;
+    repository
+        .apply_observations(&[observation.clone()], base)
+        .await
+        .unwrap();
+    let email = repository.claim_delivery(base).await.unwrap().unwrap();
+    assert_eq!(email.channel, NotificationChannelKind::Email);
+    repository
+        .finish_delivery(&email.id, true, None, base)
+        .await
+        .unwrap();
+    observation.bark_enabled = true;
+    repository
+        .apply_observations(&[observation.clone()], base + Duration::seconds(10))
+        .await
+        .unwrap();
+    let bark = repository
+        .claim_delivery(base + Duration::seconds(10))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(bark.channel, NotificationChannelKind::Bark);
+    assert_eq!(
+        bark.incident_activated_at.unwrap().timestamp_micros(),
+        base.timestamp_micros()
+    );
+    // The sender rechecked the clock after claim and found that the window ended.
+    repository
+        .cancel_delivery(&bark.id, base + Duration::seconds(11))
+        .await
+        .unwrap();
+    observation.bark_enabled = false;
+    repository
+        .apply_observations(&[observation.clone()], base + Duration::seconds(20))
+        .await
+        .unwrap();
+    assert!(
+        repository
+            .claim_delivery(base + Duration::seconds(20))
+            .await
+            .unwrap()
+            .is_none()
+    );
+    observation.bark_enabled = true;
+    repository
+        .apply_observations(&[observation.clone()], base + Duration::seconds(30))
+        .await
+        .unwrap();
+    let resumed = repository
+        .claim_delivery(base + Duration::seconds(30))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_ne!(
+        resumed.id, bark.id,
+        "an unsent, cancelled reminder can resume next window"
+    );
+    repository
+        .finish_delivery(&resumed.id, true, None, base + Duration::seconds(30))
+        .await
+        .unwrap();
+    repository
+        .apply_observations(&[observation], base + Duration::seconds(40))
+        .await
+        .unwrap();
+    let deliveries = repository.recent_deliveries(None, 100).await.unwrap();
+    assert_eq!(
+        deliveries
+            .iter()
+            .filter(|row| row.channel == "email")
+            .count(),
+        1
+    );
+    assert_eq!(
+        deliveries.iter().filter(|row| row.status == "sent").count(),
+        2
+    );
+    assert_eq!(
+        deliveries
+            .iter()
+            .filter(|row| row.status == "cancelled")
+            .count(),
+        1
+    );
+    db.close().await;
+}
+
+#[tokio::test]
+async fn bark_retry_is_bounded_and_stronger_rule_supersedes_unsent_reminder() {
+    let Some(db) = TestDatabase::create("bark_retry_rules").await else {
+        return;
+    };
+    let repository = PgNotificationRepository::new(db.pool.clone());
+    let mut observation = episode_observation(group(&db.pool).await, AlertConditionKind::QuotaZero);
+    observation.email_recipients.clear();
+    let base = Utc::now();
+    repository
+        .apply_observations(&[observation.clone()], base)
+        .await
+        .unwrap();
+    let first = repository.claim_delivery(base).await.unwrap().unwrap();
+    repository
+        .finish_delivery(&first.id, false, Some("synthetic failure"), base)
+        .await
+        .unwrap();
+    observation.bark_level = BarkLevel::Critical;
+    repository
+        .apply_observations(&[observation.clone()], base + Duration::seconds(10))
+        .await
+        .unwrap();
+    let stronger = repository
+        .claim_delivery(base + Duration::seconds(10))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_ne!(first.id, stronger.id);
+    assert_eq!(stronger.bark_level, BarkLevel::Critical);
+    let records = repository.recent_deliveries(None, 10).await.unwrap();
+    assert_eq!(
+        records
+            .iter()
+            .find(|row| row.id == first.id)
+            .unwrap()
+            .status,
+        "cancelled"
+    );
+    repository
+        .finish_delivery(
+            &stronger.id,
+            false,
+            Some("synthetic failure"),
+            base + Duration::seconds(10),
+        )
+        .await
+        .unwrap();
+    for retry in 1..5 {
+        let now = base + Duration::seconds(10 + retry * 60);
+        let claimed = repository.claim_delivery(now).await.unwrap().unwrap();
+        assert_eq!(claimed.id, stronger.id);
+        repository
+            .finish_delivery(&claimed.id, false, Some("synthetic failure"), now)
+            .await
+            .unwrap();
+    }
+    repository
+        .apply_observations(&[observation], base + Duration::seconds(260))
+        .await
+        .unwrap();
+    assert!(
+        repository
+            .claim_delivery(base + Duration::seconds(600))
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let records = repository.recent_deliveries(None, 10).await.unwrap();
+    assert_eq!(records.len(), 2);
+    assert_eq!(
+        records
+            .iter()
+            .find(|row| row.id == stronger.id)
+            .unwrap()
+            .attempts,
+        5
+    );
+    db.close().await;
+}
+
+#[tokio::test]
+async fn bark_schedule_upgrade_preserves_legacy_policy_and_pending_delivery() {
+    let old = sqlx::migrate::Migrator {
+        migrations: super::TEST_MIGRATOR
+            .iter()
+            .filter(|migration| migration.version < 95)
+            .cloned()
+            .collect::<Vec<_>>()
+            .into(),
+        ..sqlx::migrate::Migrator::DEFAULT
+    };
+    let Some(db) = TestDatabase::create_with_migrator("bark_schedule_upgrade", &old).await else {
+        return;
+    };
+    let id = group(&db.pool).await;
+    let now = Utc::now();
+    sqlx::query("insert into account_group_alert_policies(group_id,enabled,concurrency_threshold,bark_enabled,updated_at)
+                 values($1,true,88,true,$2)")
+        .bind(id.as_str()).bind(now).execute(&db.pool).await.unwrap();
+    sqlx::query("insert into account_group_alert_incidents(group_id,condition_kind,first_active_at,activated_at,updated_at)
+                 values($1,'concurrency',$2,$2,$2)")
+        .bind(id.as_str()).bind(now).execute(&db.pool).await.unwrap();
+    sqlx::query("insert into notification_outbox(id,group_id,condition_kind,channel,target,subject,body,next_attempt_at,created_at)
+                 values('legacy-bark',$1,'concurrency','bark','default','Synthetic','Synthetic',$2,$2)")
+        .bind(id.as_str()).bind(now).execute(&db.pool).await.unwrap();
+    super::TEST_MIGRATOR.run(&db.pool).await.unwrap();
+    let repository = PgNotificationRepository::new(db.pool.clone());
+    let policy = repository.load_policy(&id).await.unwrap();
+    assert!(policy.enabled && policy.bark_enabled && policy.bark_schedule.default_enabled);
+    assert_eq!(policy.concurrency.threshold, 88.0);
+    assert!(policy.bark_schedule.rules.is_empty());
+    let legacy = repository.claim_delivery(now).await.unwrap().unwrap();
+    assert_eq!(legacy.id, "legacy-bark");
+    assert_eq!(
+        legacy.incident_activated_at.unwrap().timestamp_micros(),
+        now.timestamp_micros()
+    );
+    assert!(legacy.bark_rule_key.is_none());
+    repository
+        .finish_delivery(&legacy.id, true, None, now)
+        .await
+        .unwrap();
+    let mut observation = episode_observation(id, AlertConditionKind::Concurrency);
+    observation.email_recipients.clear();
+    repository
+        .apply_observations(&[observation], now + Duration::seconds(10))
+        .await
+        .unwrap();
+    assert_eq!(
+        repository.recent_deliveries(None, 100).await.unwrap().len(),
+        1,
+        "legacy sent reminder still deduplicates"
+    );
     db.close().await;
 }
 
@@ -390,6 +748,7 @@ async fn alert_incident_confirms_once_recovers_and_retries_targets_independently
         bark_sound: Some("alarm".to_owned()),
         bark_volume: 8,
         bark_call: true,
+        bark_rule_key: None,
         summary: "synthetic alert".to_owned(),
     };
     repository
@@ -558,6 +917,8 @@ async fn test_delivery_is_claimed_directly_and_failure_does_not_retry() {
                 bark_sound: None,
                 bark_volume: 5,
                 bark_call: false,
+                bark_rule_key: None,
+                incident_activated_at: None,
                 test: true,
             },
             now,
@@ -605,6 +966,7 @@ async fn concurrent_first_observations_enqueue_only_once_and_recovery_cancels_pe
         bark_sound: None,
         bark_volume: 5,
         bark_call: false,
+        bark_rule_key: None,
         summary: "synthetic zero quota".to_owned(),
     };
     let rows = [observation.clone()];
@@ -683,6 +1045,7 @@ async fn pending_confirmation_requires_continuous_abnormal_samples() {
         bark_sound: None,
         bark_volume: 5,
         bark_call: false,
+        bark_rule_key: None,
         summary: "synthetic concurrency".to_owned(),
     };
     repository

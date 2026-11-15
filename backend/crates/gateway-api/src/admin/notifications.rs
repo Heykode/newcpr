@@ -7,9 +7,9 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use gateway_admin::model::notifications::{
-    AlertConditionPolicy, BarkChannelView, BarkLevel, GroupAlertPolicy, NotificationChannelKind,
-    NotificationChannelsView, ReplaceNotificationChannels, SmtpChannelView, SmtpSecurity,
-    StoredBarkChannel, StoredSmtpChannel, TestNotificationCommand,
+    AlertConditionPolicy, BarkChannelView, BarkLevel, BarkSchedule, GroupAlertPolicy,
+    NotificationChannelKind, NotificationChannelsView, ReplaceNotificationChannels,
+    SmtpChannelView, SmtpSecurity, StoredBarkChannel, StoredSmtpChannel, TestNotificationCommand,
 };
 use gateway_core::routing::AccountGroupId;
 use secrecy::SecretString;
@@ -226,6 +226,7 @@ struct PolicyView {
     bark_sound: Option<String>,
     bark_volume: Option<u8>,
     bark_call: Option<bool>,
+    bark_schedule: BarkSchedule,
     updated_at: DateTime<Utc>,
 }
 #[derive(Serialize, Deserialize)]
@@ -269,6 +270,7 @@ impl From<GroupAlertPolicy> for PolicyView {
             bark_sound: value.bark_sound,
             bark_volume: value.bark_volume,
             bark_call: value.bark_call,
+            bark_schedule: value.bark_schedule,
             updated_at: value.updated_at,
         }
     }
@@ -290,6 +292,7 @@ struct ReplacePolicyRequest {
     bark_sound: Option<String>,
     bark_volume: Option<u8>,
     bark_call: Option<bool>,
+    bark_schedule: Option<BarkSchedule>,
 }
 impl ReplacePolicyRequest {
     fn command(self) -> Result<GroupAlertPolicy, AdminError> {
@@ -314,6 +317,7 @@ impl ReplacePolicyRequest {
             bark_sound: optional(self.bark_sound),
             bark_volume: self.bark_volume,
             bark_call: self.bark_call,
+            bark_schedule: self.bark_schedule.unwrap_or_default(),
             updated_at: Utc::now(),
         })
     }
@@ -406,11 +410,23 @@ where
 async fn replace_policy<S>(
     auth: AdminAuth,
     State(state): State<S>,
-    AdminJson(request): AdminJson<ReplacePolicyRequest>,
+    AdminJson(mut request): AdminJson<ReplacePolicyRequest>,
 ) -> Result<impl IntoResponse, AdminError>
 where
     S: AdminSessionState + Send + Sync,
 {
+    // Older clients do not know the schedule field; keep the saved policy when omitted.
+    if request.bark_schedule.is_none() {
+        request.bark_schedule = Some(
+            state
+                .admin_services()
+                .notifications()
+                .policy(&group_id(&request.group_id)?)
+                .await
+                .map_err(map_admin_service_error)?
+                .bark_schedule,
+        );
+    }
     let result = state
         .admin_services()
         .notifications()

@@ -14,6 +14,7 @@ import { toast } from '@/components/base/BaseToast'
 import { t } from '@/i18n'
 import { errorMessage } from '@/utils/async'
 import { barkLevelHints, barkLevelOptions } from '@/utils/notification-presentation'
+import BarkScheduleEditor from './BarkScheduleEditor.vue'
 import { monitorSnapshotExpired } from './group-monitor-presentation'
 
 const props = defineProps<{ group: AccountGroup | null, sampledAt?: string, stale?: boolean, now?: number }>()
@@ -39,6 +40,7 @@ const form = reactive<GroupAlertPolicy>({
   barkSound: null,
   barkVolume: null,
   barkCall: null,
+  barkSchedule: { timezone: 'Asia/Shanghai', defaultEnabled: true, rules: [] },
   updatedAt: '',
 })
 
@@ -194,7 +196,7 @@ watch([open, () => props.group?.id], ([visible]) => {
             <BellRing class="size-4" /><b class="flex-1">Bark 提醒</b><span class="text-cp-xs" :class="barkReady ? 'text-cp-success-text' : 'text-cp-warning-text'">{{ barkReady ? '已配置' : '未配置' }}</span>
           </div>
           <div class="mt-2 flex items-center justify-between">
-            <BaseSwitch v-model="form.barkEnabled" label="启用 Bark" /><BaseButton size="sm" :disabled="!barkReady" :loading="testing === 'bark'" @click="test('bark')">
+            <BaseSwitch v-model="form.barkEnabled" label="启用 Bark" /><BaseButton size="sm" aria-label="测试当前 Bark 规则" :disabled="!barkReady" :loading="testing === 'bark'" @click="test('bark')">
               <template #icon>
                 <Send class="size-3.5" />
               </template>{{ t('settings.backup.storage.test') }}
@@ -232,6 +234,7 @@ watch([open, () => props.group?.id], ([visible]) => {
           </div>
         </section>
       </div>
+      <BarkScheduleEditor v-model="form.barkSchedule" :default-volume="form.barkVolume ?? channels?.bark.volume ?? 5" />
       <p v-if="stale || expired" class="text-cp-xs text-cp-warning-text" role="status">
         {{ expired ? '监控采样已过期，等待更新' : '数据未更新，当前保留上次观测' }}
       </p>

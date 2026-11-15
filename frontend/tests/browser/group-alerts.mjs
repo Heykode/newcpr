@@ -44,9 +44,13 @@ async function main() {
     barkSound: null,
     barkVolume: null,
     barkCall: null,
+    barkSchedule: { timezone: 'Asia/Shanghai', defaultEnabled: true, rules: [] },
     updatedAt: new Date().toISOString(),
   })
   const page = await browser.newPage({ reducedMotion: 'reduce' })
+  await page.addInitScript(() => {
+    Object.defineProperty(crypto, 'randomUUID', { value: undefined, configurable: true })
+  })
   page.on('pageerror', error => errors.push(error.message))
   await page.route('**/dev/api/**', async (route) => {
     const req = route.request()
@@ -98,6 +102,8 @@ async function main() {
       const body = req.postDataJSON()
       assert.equal(Object.hasOwn(body, 'updatedAt'), false)
       saves.push(body)
+      if (failSave)
+        return route.fulfill({ status: 400, json: { code: 400, message: 'Synthetic policy save failure', data: null } })
       const saved = { ...body, updatedAt: new Date().toISOString() }
       policies.set(body.groupId, saved)
       return ok(saved)
@@ -276,6 +282,66 @@ async function main() {
     await openPolicy(groups[0])
     assert.equal(await concurrencyThreshold.inputValue(), '85', 'reopening the first group restores its own threshold')
     assert.equal(policies.get(groups[1].id).concurrency.threshold, 75, 'saving the first group does not replace another group policy')
+    await dialog.getByRole('switch', { name: '启用默认时段提醒', exact: true }).press('Space')
+    await dialog.getByLabel('提醒时区', { exact: true }).fill('Asia/Shanghai')
+    await dialog.getByRole('button', { name: '添加提醒时段', exact: true }).click()
+    const firstRule = dialog.getByRole('region', { name: 'Bark 时段 1', exact: true })
+    await firstRule.getByLabel('时段名称', { exact: true }).fill('夜间重要警告')
+    await firstRule.getByLabel('开始时间', { exact: true }).fill('23:30')
+    await firstRule.getByLabel('结束时间', { exact: true }).fill('09:00')
+    await choose(firstRule, '时段提醒等级', '重要警告（静音仍响铃）')
+    await choose(firstRule, '时段响铃时长', '持续响铃约 30 秒')
+    await firstRule.getByRole('switch', { name: '自定义时段重要警告音量', exact: true }).press('Space')
+    await firstRule.getByRole('spinbutton', { name: '时段重要警告音量', exact: true }).fill('8')
+    await dialog.getByRole('button', { name: '添加提醒时段', exact: true }).click()
+    const secondRule = dialog.getByRole('region', { name: 'Bark 时段 2', exact: true })
+    await secondRule.getByLabel('时段名称', { exact: true }).fill('日间普通提醒')
+    await choose(secondRule, '时段提醒等级', '普通提醒')
+    await secondRule.getByRole('button', { name: '上移时段 2', exact: true }).click()
+    assert.equal(await firstRule.getByLabel('时段名称', { exact: true }).inputValue(), '日间普通提醒')
+    await firstRule.getByRole('button', { name: '下移时段 1', exact: true }).click()
+    failSave = true
+    await savePolicy()
+    await page.waitForFunction(() => document.body.textContent.includes('Synthetic policy save failure'))
+    assert.equal(policies.get(groups[0].id).barkSchedule.rules.length, 0, 'failed save does not change stored rules')
+    assert.equal(await firstRule.getByLabel('时段名称', { exact: true }).inputValue(), '夜间重要警告')
+    assert.equal(await firstRule.getByLabel('开始时间', { exact: true }).inputValue(), '23:30')
+    assert.equal(await firstRule.getByRole('spinbutton', { name: '时段重要警告音量', exact: true }).inputValue(), '8')
+    assert.equal(await secondRule.getByLabel('时段名称', { exact: true }).inputValue(), '日间普通提醒')
+    assert.equal(await dialog.getByRole('switch', { name: '启用默认时段提醒', exact: true }).isChecked(), false)
+    failSave = false
+    await savePolicy()
+    const savedSchedule = policies.get(groups[0].id).barkSchedule
+    assert.equal(savedSchedule.defaultEnabled, false)
+    assert.equal(savedSchedule.timezone, 'Asia/Shanghai')
+    assert.equal(savedSchedule.rules.length, 2)
+    assert.equal(new Set(savedSchedule.rules.map(rule => rule.id)).size, 2)
+    assert.deepEqual(savedSchedule.rules.map(({ startTime, endTime, level, volume, call }) => ({ startTime, endTime, level, volume, call })), [
+      { startTime: '23:30', endTime: '09:00', level: 'critical', volume: 8, call: true },
+      { startTime: '09:00', endTime: '18:00', level: 'active', volume: null, call: null },
+    ])
+    await dialog.getByRole('button', { name: '取消', exact: true }).click()
+    await openPolicy(groups[0])
+    assert.equal(await firstRule.getByLabel('开始时间', { exact: true }).inputValue(), '23:30')
+    await dialog.getByRole('button', { name: '取消', exact: true }).click()
+    for (const theme of ['light', 'dark']) {
+      await page.goto(`${origin}/tests/fixtures/group-alerts.html?theme=${theme}`)
+      await openPolicy(groups[0])
+      for (const width of [1440, 390, 320]) {
+        await page.setViewportSize({ width, height: 900 })
+        await firstRule.scrollIntoViewIfNeeded()
+        assert.ok(await dialog.evaluate(el => el.scrollWidth <= el.clientWidth), `schedule modal fits ${width}px`)
+        assert.ok(await firstRule.evaluate(el => el.scrollWidth <= el.clientWidth), `schedule inputs fit ${width}px`)
+        await page.screenshot({ path: `${output}/schedule-${theme}-${width}.png` })
+      }
+      await dialog.getByRole('button', { name: '取消', exact: true }).click()
+    }
+    await openPolicy(groups[0])
+    await firstRule.getByRole('button', { name: '删除时段 1', exact: true }).click()
+    await savePolicy()
+    assert.equal(policies.get(groups[0].id).barkSchedule.rules[0].name, '日间普通提醒')
+    assert.equal(policies.get(groups[1].id).barkSchedule.defaultEnabled, true)
+    assert.equal(policies.get(groups[1].id).barkSchedule.rules.length, 0, 'schedules are isolated per group')
     await dialog.getByRole('button', { name: '取消', exact: true }).click()
     failLoad = true
     await page.getByRole('button', { name: `设置 ${groups[0].name} 预警`, exact: true }).click()
@@ -308,7 +374,7 @@ async function main() {
     await page.getByText('监控更新失败', { exact: true }).waitFor()
     await third.getByText('消耗采样中', { exact: true }).waitFor()
     assert.deepEqual(errors, [])
-    process.stdout.write(`${JSON.stringify({ screenshots: 26, saves: saves.length, tests: tests.length, pageErrors: errors })}\n`)
+    process.stdout.write(`${JSON.stringify({ screenshots: 32, saves: saves.length, tests: tests.length, pageErrors: errors })}\n`)
   }
   finally {
     await browser.close()

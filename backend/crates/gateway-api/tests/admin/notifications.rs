@@ -86,6 +86,10 @@ async fn group_policy_defaults_are_strict_and_unknown_fields_are_rejected() {
     assert_eq!(value["data"]["enabled"], false);
     assert_eq!(value["data"]["concurrency"]["threshold"], 90.0);
     assert_eq!(value["data"]["eta"]["threshold"], 10.0);
+    assert_eq!(
+        value["data"]["barkSchedule"],
+        json!({"timezone":"Asia/Shanghai","defaultEnabled":true,"rules":[]})
+    );
 
     let rejected = app.oneshot(request(Method::POST, "/api/admin/notifications/channels/update", Some(json!({
         "smtp": { "enabled": false, "host": "", "port": 587, "security": "starttls", "username": null, "password": null, "passwordSet": false, "fromName": null, "fromEmail": null },
@@ -93,6 +97,46 @@ async fn group_policy_defaults_are_strict_and_unknown_fields_are_rejected() {
         "unexpected": true
     })))).await.unwrap();
     assert_eq!(rejected.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[tokio::test]
+async fn group_schedule_rejects_invalid_timezone_and_unknown_nested_fields() {
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.insert_session("valid-session");
+    let app = app(fixture.state());
+    let response = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            &format!("/api/admin/account-groups/alert-policy?groupId={PRIMARY_GROUP_ID}"),
+            None,
+        ))
+        .await
+        .unwrap();
+    let mut policy = json_body(response).await["data"].clone();
+    policy.as_object_mut().unwrap().remove("updatedAt");
+    policy["barkSchedule"]["timezone"] = json!("invalid/timezone");
+    let invalid = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/admin/account-groups/alert-policy/update",
+            Some(policy.clone()),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
+    policy["barkSchedule"]["timezone"] = json!("Asia/Shanghai");
+    policy["barkSchedule"]["unexpected"] = json!(true);
+    let invalid = app
+        .oneshot(request(
+            Method::POST,
+            "/api/admin/account-groups/alert-policy/update",
+            Some(policy),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(invalid.status(), StatusCode::UNPROCESSABLE_ENTITY);
 }
 
 #[tokio::test]
