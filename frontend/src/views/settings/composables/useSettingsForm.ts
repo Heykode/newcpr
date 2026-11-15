@@ -4,14 +4,16 @@ import type { AccountAffinity, RequestTuning } from '@/api/modules/settings'
 import { computed, reactive, ref, shallowRef } from 'vue'
 import { getSettings, updateSettings } from '@/api'
 import { defaultRequestLocation } from '@/api/modules/proxies'
-import { defaultResetWindowWeights, defaultSmartScheduling } from '@/api/modules/settings'
+import { defaultSmartScheduling } from '@/api/modules/settings'
 import { ApiError } from '@/api/request'
 
 import { toast } from '@/components/base/BaseToast'
 import { useAsyncAction } from '@/composables/useAsyncAction'
 import { t } from '@/i18n'
 import { errorMessage } from '@/utils/async'
+import { DEFAULT_EXCEL_MODELS, DEFAULT_EXCEL_MODELS_INPUT } from '@/utils/excel-defaults'
 import { normalizeRequestLocation, requestLocationError } from '@/utils/location'
+import { parseExcelModels } from '@/views/accounts/utils/schedulingForm'
 import { cloneProtectionRules, protectionSettingsError, trimProtectionText } from '../components/error-protection/form'
 import { validWarmupExpressions, warmupScheduleBytes } from '../utils/warmup-schedule'
 import { useExcelImageSettings } from './useExcelImageSettings'
@@ -75,6 +77,7 @@ export function useSettingsForm() {
   const mappings = ref<Array<{ requestedModel: string, upstreamModel: string }>>([])
   const form = reactive({
     accountErrorProtection: defaultProtection(),
+    excelDefaultModels: DEFAULT_EXCEL_MODELS_INPUT,
     responsesMaxDecompressedBodyBytes: 64 * 1024 * 1024,
     openaiAccountAffinity: 'strict' as AccountAffinity,
     refreshMarginSeconds: null as number | null,
@@ -89,8 +92,6 @@ export function useSettingsForm() {
     requestIntervalMs: null as number | null,
     openaiSessionBindingTtlHours: null as number | null,
     rotationStrategy: '' as RotationStrategy | '',
-    quotaResetWindowWeights: defaultResetWindowWeights(),
-    quotaResetWindowWeightsDefaults: defaultResetWindowWeights(),
     minCodexDesktopVersion: '',
     minCodexCliVersion: '',
     usageRetentionDays: 31,
@@ -151,6 +152,7 @@ export function useSettingsForm() {
 
   function applySettings(data: Awaited<ReturnType<typeof getSettings>>) {
     configRevision.value = data.configRevision
+    form.excelDefaultModels = (data.excelDefaultModels ?? DEFAULT_EXCEL_MODELS).join(', ')
     form.responsesMaxDecompressedBodyBytes
       = data.responsesMaxDecompressedBodyBytes ?? 64 * 1024 * 1024
     form.openaiAccountAffinity = data.openaiAccountAffinity ?? 'strict'
@@ -166,8 +168,6 @@ export function useSettingsForm() {
     form.requestIntervalMs = data.requestIntervalMs
     form.openaiSessionBindingTtlHours = data.openaiSessionBindingTtlHours ?? 24
     form.rotationStrategy = data.rotationStrategy
-    form.quotaResetWindowWeights = { ...data.quotaResetWindowWeights }
-    form.quotaResetWindowWeightsDefaults = { ...data.quotaResetWindowWeightsDefaults }
     form.minCodexDesktopVersion = data.minCodexDesktopVersion ?? ''
     form.minCodexCliVersion = data.minCodexCliVersion ?? ''
     form.usageRetentionDays = data.usageRetentionDays
@@ -250,6 +250,11 @@ export function useSettingsForm() {
       return
     if (excelImages.errors.value.length) {
       toast.warning(excelImages.errors.value[0])
+      return
+    }
+    const excelDefaultModels = parseExcelModels(form.excelDefaultModels)
+    if (excelDefaultModels === null) {
+      toast.warning('Excel 模型名称不合法，或超过 64 个')
       return
     }
     if (form.openaiAccountAffinity !== 'strict' && form.openaiAccountAffinity !== 'relaxed' && form.openaiAccountAffinity !== 'preferred') {
@@ -341,10 +346,6 @@ export function useSettingsForm() {
       }
       tuning.excelImageTransport = { mode: 'relay', publicUrl: origin }
     }
-    if (!Object.values(form.quotaResetWindowWeights).every(value => Number.isFinite(value) && value >= 0 && value <= 10 && Math.round(value * 10) / 10 === value)) {
-      toast.warning('额度调度系数须为 0–10，最多一位小数')
-      return
-    }
     const smartWeights = [
       tuning.smartScheduling.loadWeight,
       tuning.smartScheduling.quotaWeight,
@@ -406,6 +407,7 @@ export function useSettingsForm() {
     await saveAction.run(async () => {
       const result = await updateSettings({
         configRevision: configRevision.value,
+        excelDefaultModels,
         responsesMaxDecompressedBodyBytes: form.responsesMaxDecompressedBodyBytes,
         modelMappings: mappingPayload(),
         refreshMarginSeconds,
@@ -421,7 +423,6 @@ export function useSettingsForm() {
         openaiSessionBindingTtlHours: ttlHours,
         openaiAccountAffinity: form.openaiAccountAffinity,
         rotationStrategy,
-        quotaResetWindowWeights: { ...form.quotaResetWindowWeights },
         minCodexDesktopVersion: form.minCodexDesktopVersion.trim() || null,
         minCodexCliVersion: form.minCodexCliVersion.trim() || null,
         usageRetentionDays: form.usageRetentionDays,

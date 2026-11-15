@@ -23,8 +23,8 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use gateway_core::{
     account::{
-        AccountStatusFacts, CredentialSelection, CredentialTarget, OpaqueProviderData,
-        ProviderAccountId, resolve_account_operational_status,
+        AccountStatusFacts, OpaqueProviderData, ProviderAccountId,
+        resolve_account_operational_status,
     },
     lifecycle::CancellationToken,
     runtime::SnapshotControl,
@@ -34,7 +34,6 @@ use std::{collections::BTreeMap, sync::Arc};
 use tokio::sync::Mutex;
 
 mod enrollment;
-mod excel;
 mod export;
 mod history;
 mod recovery;
@@ -47,9 +46,6 @@ const MAX_ROTATION_ATTEMPTS: usize = 3;
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReloginView {
-    pub credential_target: CredentialTarget,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub excel: Option<Box<ReloginView>>,
     pub id: String,
     pub revision: u64,
     pub email: String,
@@ -82,7 +78,6 @@ pub struct ReloginView {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReloginPoolAccountView {
-    pub has_credential: bool,
     pub id: String,
     pub workspace_id: Option<String>,
     pub plan_type: Option<String>,
@@ -102,7 +97,6 @@ pub struct ReloginList {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReloginBatchResult {
-    pub credential_target: CredentialTarget,
     pub id: String,
     pub success: bool,
     pub message: String,
@@ -111,9 +105,6 @@ pub struct ReloginBatchResult {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountReloginAction {
-    pub credential_target: CredentialTarget,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub excel: Option<Box<AccountReloginAction>>,
     pub account_id: String,
     pub entry_id: String,
     pub revision: u64,
@@ -127,12 +118,6 @@ pub struct AccountReloginAction {
 
 #[async_trait]
 pub trait ReloginService: Send + Sync {
-    fn credential_channel(
-        &self,
-        _target: CredentialTarget,
-    ) -> Result<Arc<dyn ReloginService>, AdminError> {
-        Err(AdminError::invalid("该重登入口不可用"))
-    }
     async fn history(&self, id: &str, before: Option<&str>) -> Result<ReloginHistory, AdminError>;
     async fn totp(&self, id: &str, context: &MutationContext) -> Result<ReloginTotp, AdminError>;
     async fn push_with_template(
@@ -155,19 +140,6 @@ pub trait ReloginService: Send + Sync {
         target: &ReloginTarget,
         context: &MutationContext,
     ) -> Result<(), AdminError>;
-    async fn queue_account_channels(
-        &self,
-        entry_id: &str,
-        revision: u64,
-        targets: &[ReloginTarget],
-        context: &MutationContext,
-    ) -> Result<(), AdminError> {
-        if targets.len() != 1 {
-            return Err(AdminError::invalid("该重登入口不支持多凭据任务"));
-        }
-        self.queue_account(entry_id, revision, &targets[0], context)
-            .await
-    }
     async fn import(&self, text: &str, replace: bool) -> Result<usize, AdminError>;
     async fn enroll(
         &self,
@@ -198,21 +170,6 @@ pub trait ReloginService: Send + Sync {
         selections: &BTreeMap<String, ReloginPushSelection>,
         context: &MutationContext,
     ) -> Result<Vec<ReloginBatchResult>, AdminError>;
-    async fn push_channels(
-        &self,
-        ids: &[String],
-        revisions: &BTreeMap<String, u64>,
-        new_account: crate::model::relogin_templates::ReloginNewAccountOptions,
-        selections: &BTreeMap<String, ReloginPushSelection>,
-        credential_selection: CredentialSelection,
-        context: &MutationContext,
-    ) -> Result<Vec<ReloginBatchResult>, AdminError> {
-        if credential_selection != CredentialSelection::Codex {
-            return Err(AdminError::invalid("该凭据推送入口不可用"));
-        }
-        self.push_with_selection(ids, revisions, new_account, selections, context)
-            .await
-    }
     async fn push(
         &self,
         ids: &[String],
@@ -245,12 +202,10 @@ struct Gate {
 }
 
 struct ActiveLogin {
-    credential_target: CredentialTarget,
     cancellation: CancellationToken,
     owner: std::sync::Weak<()>,
 }
 
-#[derive(Clone)]
 pub(crate) struct DefaultReloginService {
     store: Option<Arc<dyn ReloginStore>>,
     accounts: Arc<dyn AccountStore>,
@@ -261,8 +216,7 @@ pub(crate) struct DefaultReloginService {
     templates: Arc<dyn super::account_templates::AccountTemplatesService>,
     quality_ops: Option<Arc<super::quality_ops::QualityOpsService>>,
     proxies: Arc<dyn crate::ports::proxy::ProxyStore>,
-    gate: Arc<Mutex<Gate>>,
-    credential_target: CredentialTarget,
+    gate: Mutex<Gate>,
 }
 
 impl DefaultReloginService {
@@ -283,8 +237,7 @@ impl DefaultReloginService {
             templates,
             quality_ops: None,
             proxies: stores.proxies(),
-            gate: Arc::new(Mutex::new(Gate::default())),
-            credential_target: CredentialTarget::Codex,
+            gate: Mutex::new(Gate::default()),
         }
     }
 
@@ -304,25 +257,11 @@ impl DefaultReloginService {
     }
 
     async fn entries(&self) -> Result<Vec<ReloginEntry>, AdminError> {
-        Ok(self
-            .store()?
-            .entries()
-            .await
-            .map_err(store_error)?
-            .into_iter()
-            .map(|entry| entry.project_channel(self.credential_target))
-            .collect())
-    }
-
-    fn for_target(&self, credential_target: CredentialTarget) -> Self {
-        Self {
-            credential_target,
-            ..self.clone()
-        }
+        self.store()?.entries().await.map_err(store_error)
     }
 
     async fn pool(&self) -> Result<Vec<AccountRecord>, AdminError> {
-        let mut pool = self
+        Ok(self
             .accounts
             .list_credentials(
                 self.provider.provider_kind(),
@@ -334,31 +273,7 @@ impl DefaultReloginService {
             )
             .await
             .map_err(store_error)?
-            .items;
-        if self.credential_target == CredentialTarget::Excel {
-            for account in &mut pool {
-                if let Some(excel) = &account.excel_credential {
-                    account.authentication_kind = "oauth".to_owned();
-                    account.credential_state = excel.state;
-                    account.access_token_expires_at = excel.access_token_expires_at.map(Into::into);
-                    account.has_refresh_token = excel.has_refresh_token;
-                    account.last_error_reason = excel.last_error_reason;
-                    account.last_error_message = excel.last_error_message.clone();
-                    account.quota = excel.quota;
-                    account.quota_paused = excel.suspended;
-                } else {
-                    account.authentication_kind = "none".to_owned();
-                    account.credential_state = CredentialState::Unknown;
-                    account.access_token_expires_at = None;
-                    account.has_refresh_token = false;
-                    account.last_error_reason = None;
-                    account.last_error_message = None;
-                    account.quota = gateway_core::account::QuotaState::unknown();
-                    account.quota_paused = false;
-                }
-            }
-        }
-        Ok(pool)
+            .items)
     }
 
     async fn save(&self, entry: &mut ReloginEntry) -> Result<(), AdminError> {
@@ -369,27 +284,8 @@ impl DefaultReloginService {
             .ok_or_else(|| AdminError::internal("重登资料版本超出范围"))?;
         entry.updated_at = Utc::now();
         entry.update_attempt();
-        let stored = if self.credential_target == CredentialTarget::Excel {
-            let mut canonical = self
-                .store()?
-                .entries()
-                .await
-                .map_err(store_error)?
-                .into_iter()
-                .find(|value| value.id == entry.id)
-                .ok_or_else(|| AdminError::conflict("重登资料已删除"))?;
-            if canonical.revision != expected {
-                return Err(AdminError::conflict("重登资料已变化，请重新获取"));
-            }
-            canonical.excel = Some(entry.channel_state());
-            canonical.revision = entry.revision;
-            canonical.updated_at = entry.updated_at;
-            canonical
-        } else {
-            entry.clone()
-        };
         self.store()?
-            .save(&stored, Some(expected))
+            .save(entry, Some(expected))
             .await
             .map_err(store_error)
     }
@@ -397,9 +293,7 @@ impl DefaultReloginService {
     fn stop(gate: &Gate, entry: &mut ReloginEntry) {
         entry.manual_push_context = None;
         entry.enrollment = None;
-        if let Some(active) = gate.active.get(&entry.email)
-            && active.credential_target == entry.credential_target
-        {
+        if let Some(active) = gate.active.get(&entry.email) {
             active.cancellation.cancel();
         }
         if entry.status.active() {
@@ -413,15 +307,6 @@ impl DefaultReloginService {
                 attempt.finished_at = Some(Utc::now());
                 attempt.push_result = ReloginPushResult::NotRequested;
             }
-        }
-    }
-
-    fn stop_all(gate: &Gate, entry: &mut ReloginEntry) {
-        Self::stop(gate, entry);
-        let mut excel = entry.clone().project_channel(CredentialTarget::Excel);
-        Self::stop(gate, &mut excel);
-        if entry.excel.is_some() || excel.status != ReloginStatus::Pending {
-            entry.excel = Some(excel.channel_state());
         }
     }
 
@@ -599,16 +484,11 @@ impl DefaultReloginService {
         new_account_excel: Option<&ExcelImportSettings>,
         context: &MutationContext,
     ) -> Result<(), AdminError> {
-        if self.credential_target == CredentialTarget::Excel {
-            return self
-                .push_excel_checked(entry, template, custom_name, context)
-                .await;
-        }
         entry.validate_totp()?;
         if entry.manual_push_context.is_some() && entry.target.is_none() {
             return Err(AdminError::conflict("指定账号任务缺少目标，不能新建账号"));
         }
-        if !matches!(entry.status, ReloginStatus::Ready | ReloginStatus::Failed) {
+        if entry.status != ReloginStatus::Ready {
             return Err(AdminError::conflict("请先成功获取新凭据"));
         }
         let credential = entry
@@ -828,7 +708,7 @@ pub fn matching_accounts<'a>(
 ) -> Vec<&'a AccountRecord> {
     pool.iter()
         .filter(|account| {
-            matches!(account.authentication_kind.as_str(), "oauth" | "none")
+            account.authentication_kind == "oauth"
                 && account
                     .email
                     .as_ref()
@@ -857,7 +737,7 @@ pub fn select_target(
     }
     matches
         .first()
-        .map(|account| ReloginTarget::from_account_for_target(account, entry.credential_target))
+        .map(|account| ReloginTarget::from_account(account))
         .transpose()
 }
 
@@ -885,13 +765,11 @@ fn statistics_account<'a>(
 fn result(id: String, outcome: Result<(), AdminError>) -> ReloginBatchResult {
     match outcome {
         Ok(()) => ReloginBatchResult {
-            credential_target: CredentialTarget::Codex,
             id,
             success: true,
             message: "完成".to_owned(),
         },
         Err(error) => ReloginBatchResult {
-            credential_target: CredentialTarget::Codex,
             id,
             success: false,
             message: error.message().to_owned(),
@@ -901,22 +779,6 @@ fn result(id: String, outcome: Result<(), AdminError>) -> ReloginBatchResult {
 
 #[async_trait]
 impl ReloginService for DefaultReloginService {
-    fn credential_channel(
-        &self,
-        target: CredentialTarget,
-    ) -> Result<Arc<dyn ReloginService>, AdminError> {
-        Ok(Arc::new(self.for_target(target)))
-    }
-    async fn queue_account_channels(
-        &self,
-        entry_id: &str,
-        revision: u64,
-        targets: &[ReloginTarget],
-        context: &MutationContext,
-    ) -> Result<(), AdminError> {
-        self.queue_account_channels_checked(entry_id, revision, targets, context)
-            .await
-    }
     async fn history(&self, id: &str, before: Option<&str>) -> Result<ReloginHistory, AdminError> {
         self.read_history(id, before).await
     }
@@ -938,16 +800,12 @@ impl ReloginService for DefaultReloginService {
             .filter(|entry| entry.validate_totp().is_ok())
             .map(|entry| (entry.email.to_ascii_lowercase(), entry))
             .collect();
-        let mut actions: Vec<AccountReloginAction> = pool
+        Ok(pool
             .iter()
-            .filter(|account| {
-                ids.contains(&account.id)
-                    && matches!(account.authentication_kind.as_str(), "oauth" | "none")
-            })
+            .filter(|account| ids.contains(&account.id) && account.authentication_kind == "oauth")
             .filter_map(|account| {
                 let entry = by_email.get(&account.email.as_ref()?.to_ascii_lowercase())?;
-                let target =
-                    ReloginTarget::from_account_for_target(account, self.credential_target);
+                let target = ReloginTarget::from_account(account);
                 let busy = entry.status.active() || gate.active.contains_key(&entry.email);
                 let blocked_reason = if settings.paused {
                     Some("重登队列已暂停".to_owned())
@@ -965,8 +823,6 @@ impl ReloginService for DefaultReloginService {
                         && account.upstream_account_id.as_ref() == Some(&target.workspace_id)
                 });
                 Some(AccountReloginAction {
-                    credential_target: self.credential_target,
-                    excel: None,
                     account_id: account.id.clone(),
                     entry_id: entry.id.clone(),
                     revision: entry.revision,
@@ -986,21 +842,7 @@ impl ReloginService for DefaultReloginService {
                     synced_at: owns_result.then_some(entry.synced_at).flatten(),
                 })
             })
-            .collect();
-        drop(gate);
-        if self.credential_target == CredentialTarget::Codex {
-            let mut excel: BTreeMap<_, _> = self
-                .for_target(CredentialTarget::Excel)
-                .account_actions(ids)
-                .await?
-                .into_iter()
-                .map(|action| (action.account_id.clone(), action))
-                .collect();
-            for action in &mut actions {
-                action.excel = excel.remove(&action.account_id).map(Box::new);
-            }
-        }
-        Ok(actions)
+            .collect())
     }
 
     async fn queue_account(
@@ -1047,6 +889,8 @@ impl ReloginService for DefaultReloginService {
         entry.automatic_job = false;
         entry.manual_push_context = Some(context.clone());
         entry.enrollment = None;
+        entry.credential = None;
+        entry.synced_at = None;
         entry.status = ReloginStatus::Queued;
         entry.message = "等待重登，验证后同步到指定账号".to_owned();
         self.save(&mut entry).await
@@ -1068,7 +912,7 @@ impl ReloginService for DefaultReloginService {
             .map_err(store_error)?;
         let settings = self.store()?.settings().await.map_err(store_error)?;
         let now = Utc::now();
-        let mut items: Vec<ReloginView> = entries
+        let items = entries
             .into_iter()
             .map(|entry| {
                 let recovery = recovery::view(&entry, &pool, &settings, now);
@@ -1102,8 +946,6 @@ impl ReloginService for DefaultReloginService {
                 };
                 let push_targets = workspace::push_targets(&entry, &pool);
                 ReloginView {
-                    credential_target: self.credential_target,
-                    excel: None,
                     workspace_mode: entry.workspace_mode,
                     push_targets,
                     recovery,
@@ -1154,12 +996,10 @@ impl ReloginService for DefaultReloginService {
                                         .access_token_expires_at
                                         .map(Into::into),
                                     quota: account.quota,
-                                    rate_limited_until: (self.credential_target
-                                        == CredentialTarget::Codex)
-                                        .then(|| {
-                                            runtime.rate_limited_until.get(&account.id).copied()
-                                        })
-                                        .flatten()
+                                    rate_limited_until: runtime
+                                        .rate_limited_until
+                                        .get(&account.id)
+                                        .copied()
                                         .map(Into::into),
                                     last_error_reason: account.last_error_reason,
                                     last_error_message: account.last_error_message.clone(),
@@ -1167,7 +1007,6 @@ impl ReloginService for DefaultReloginService {
                                 now.into(),
                             );
                             ReloginPoolAccountView {
-                                has_credential: account.authentication_kind != "none",
                                 id: account.id.clone(),
                                 workspace_id: account.upstream_account_id.clone(),
                                 plan_type: account.plan_type.clone(),
@@ -1194,19 +1033,6 @@ impl ReloginService for DefaultReloginService {
                 }
             })
             .collect();
-        if self.credential_target == CredentialTarget::Codex {
-            let mut excel: BTreeMap<_, _> = self
-                .for_target(CredentialTarget::Excel)
-                .list()
-                .await?
-                .items
-                .into_iter()
-                .map(|item| (item.id.clone(), item))
-                .collect();
-            for item in &mut items {
-                item.excel = excel.remove(&item.id).map(Box::new);
-            }
-        }
         Ok(ReloginList { settings, items })
     }
 
@@ -1260,12 +1086,7 @@ impl ReloginService for DefaultReloginService {
                     .cloned()
                     .ok_or_else(|| AdminError::not_found("资料不存在"))?;
                 entry.validate_totp()?;
-                if entry.status.active()
-                    || gate
-                        .active
-                        .get(&entry.email)
-                        .is_some_and(|active| active.credential_target == self.credential_target)
-                {
+                if entry.status.active() || gate.active.contains_key(&entry.email) {
                     return Err(AdminError::conflict("账号已有活动任务"));
                 }
                 workspace::prepare_queue(&mut entry, &pool, mode)?;
@@ -1322,23 +1143,6 @@ impl ReloginService for DefaultReloginService {
         selections: &BTreeMap<String, ReloginPushSelection>,
         context: &MutationContext,
     ) -> Result<Vec<ReloginBatchResult>, AdminError> {
-        let selection = match self.credential_target {
-            CredentialTarget::Codex => CredentialSelection::Codex,
-            CredentialTarget::Excel => CredentialSelection::Excel,
-        };
-        self.push_channels(ids, revisions, new_account, selections, selection, context)
-            .await
-    }
-
-    async fn push_channels(
-        &self,
-        ids: &[String],
-        revisions: &BTreeMap<String, u64>,
-        new_account: crate::model::relogin_templates::ReloginNewAccountOptions,
-        selections: &BTreeMap<String, ReloginPushSelection>,
-        credential_selection: CredentialSelection,
-        context: &MutationContext,
-    ) -> Result<Vec<ReloginBatchResult>, AdminError> {
         let crate::model::relogin_templates::ReloginNewAccountOptions {
             template,
             custom_name,
@@ -1357,69 +1161,31 @@ impl ReloginService for DefaultReloginService {
         let entries = self.entries().await?;
         let mut results = Vec::new();
         for id in ids {
-            let confirmed = entries.iter().find(|entry| &entry.id == id);
-            let mut created_account: Option<ReloginTarget> = None;
-            for &target in credential_selection.targets() {
-                let channel = self.for_target(target);
-                let outcome = async {
-                    let confirmed = confirmed.ok_or_else(|| AdminError::not_found("资料不存在"))?;
-                    if revisions.get(id) != Some(&confirmed.revision) {
-                        return Err(AdminError::conflict("资料已变化，请刷新列表后重新确认推送"));
-                    }
-                    let mut entry = channel
-                        .entries()
-                        .await?
-                        .into_iter()
-                        .find(|entry| &entry.id == id)
-                        .ok_or_else(|| AdminError::not_found("资料不存在"))?;
-                    workspace::confirm_target(&mut entry, selections.get(id))?;
-                    if target == CredentialTarget::Excel
-                        && entry.target.is_none()
-                        && let (Some(created), Some(credential)) =
-                            (&created_account, &entry.credential)
-                        && credential.user_id == created.user_id
-                        && credential.workspace_id == created.workspace_id
-                    {
-                        entry.target = Some(created.clone());
-                        channel.save(&mut entry).await?;
-                    }
-                    let creating_codex =
-                        target == CredentialTarget::Codex && entry.target.is_none();
-                    if entry.enrollment.take().is_some() {
-                        channel.save(&mut entry).await?;
-                    }
-                    channel
-                        .push_entry_with_template(
-                            &mut entry,
-                            template.as_ref().map(|template| &template.config),
-                            custom_name.as_deref(),
-                            new_account_excel.as_ref(),
-                            context,
-                        )
-                        .await?;
-                    if creating_codex && let Some(synced) = &entry.target {
-                        let id = ProviderAccountId::new(synced.account_id.clone())
-                            .map_err(|_| AdminError::internal("账号 ID 无效"))?;
-                        if let Some(details) = self
-                            .accounts
-                            .credential_details(self.provider.provider_kind(), &id)
+            let outcome = match entries.iter().find(|entry| &entry.id == id) {
+                Some(entry) if revisions.get(id) == Some(&entry.revision) => {
+                    let mut entry = entry.clone();
+                    match workspace::confirm_target(&mut entry, selections.get(id)) {
+                        Ok(()) => {
+                            // A new explicit push supersedes the original import settings.
+                            if entry.enrollment.take().is_some() {
+                                self.save(&mut entry).await?;
+                            }
+                            self.push_entry_with_template(
+                                &mut entry,
+                                template.as_ref().map(|template| &template.config),
+                                custom_name.as_deref(),
+                                new_account_excel.as_ref(),
+                                context,
+                            )
                             .await
-                            .map_err(store_error)?
-                            && details.credential.excel_credential.is_none()
-                        {
-                            created_account = Some(ReloginTarget::from_account_for_target(
-                                &details.credential,
-                                CredentialTarget::Excel,
-                            )?);
                         }
+                        Err(error) => Err(error),
                     }
-                    Ok(())
                 }
-                .await;
-                let mut item = result(id.clone(), outcome);
-                item.credential_target = target;
-                results.push(item);
-            }
+                Some(_) => Err(AdminError::conflict("资料已变化，请刷新列表后重新确认推送")),
+                None => Err(AdminError::not_found("资料不存在")),
+            };
+            results.push(result(id.clone(), outcome));
         }
         Ok(results)
     }
@@ -1438,10 +1204,8 @@ impl ReloginService for DefaultReloginService {
                 "OpenAI credential",
             )
             .await?;
-            if matches!(
-                details.credential.authentication_kind.as_str(),
-                "oauth" | "none"
-            ) && let Some(email) = details.credential.email
+            if details.credential.authentication_kind == "oauth"
+                && let Some(email) = details.credential.email
             {
                 emails.push(email);
             }
@@ -1472,7 +1236,7 @@ impl ReloginService for DefaultReloginService {
             .into_iter()
             .filter(|entry| ids.contains(&entry.id))
         {
-            Self::stop_all(&gate, &mut entry);
+            Self::stop(&gate, &mut entry);
             self.store()?
                 .delete(&entry.id, entry.revision)
                 .await
@@ -1572,25 +1336,13 @@ impl ReloginService for DefaultReloginService {
             .await
             .map_err(store_error)?;
         if settings.paused {
-            for mut entry in self.entries().await?.into_iter().filter(|entry| {
-                entry.status == ReloginStatus::Running
-                    || entry
-                        .excel
-                        .as_ref()
-                        .is_some_and(|excel| excel.status == ReloginStatus::Running)
-            }) {
-                if entry.status == ReloginStatus::Running {
-                    Self::stop(&gate, &mut entry);
-                }
-                if entry
-                    .excel
-                    .as_ref()
-                    .is_some_and(|excel| excel.status == ReloginStatus::Running)
-                {
-                    let mut excel = entry.clone().project_channel(CredentialTarget::Excel);
-                    Self::stop(&gate, &mut excel);
-                    entry.excel = Some(excel.channel_state());
-                }
+            for mut entry in self
+                .entries()
+                .await?
+                .into_iter()
+                .filter(|entry| entry.status == ReloginStatus::Running)
+            {
+                Self::stop(&gate, &mut entry);
                 self.save(&mut entry).await?;
             }
         }

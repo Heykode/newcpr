@@ -19,10 +19,7 @@ const emit = defineEmits<{
   forecastRequested: [account: AccountRow]
 }>()
 
-const isExcel = computed(() => props.account.provider === 'openai' && props.account.responsesUpstream === 'excel')
-const hasCodexCredential = computed(() => props.account.hasCodexCredential ?? props.account.authenticationKind !== 'none')
-const showCodexQuota = computed(() => props.account.provider === 'openai' && !isExcel.value && hasCodexCredential.value)
-const quotaWindows = computed(() => isExcel.value || (props.account.provider === 'openai' && !hasCodexCredential.value) ? [] : props.account.quota.windows)
+const quotaWindows = computed(() => props.account.quota.windows)
 const now = useUiClock()
 const weeklyForecast = computed(() => weeklyForecastPresentation(props.account.usage, now.value.getTime()))
 const visibleQuotaWindows = computed(() => visibleSummaryQuotaWindows(quotaWindows.value))
@@ -35,10 +32,6 @@ const recentUsageEntry = computed(() => recentlyUsedQuotaEntry(
 const additionalEntryCount = computed(() => Math.max(summaryEntries.value.length - 1, 0))
 const usdCost = computed(() => props.account.usage.costs.find(cost => cost.currency.toUpperCase() === 'USD'))
 const accountTypeLabel = computed(() => {
-  if (isExcel.value)
-    return props.account.excelCredential ? 'Excel OAuth' : 'Excel 待授权'
-  if (props.account.provider === 'openai' && !hasCodexCredential.value)
-    return '缺少 Codex 凭据'
   if (props.account.authenticationKind === 'oauth')
     return 'OAuth'
   if (props.account.authenticationKind === 'api_key')
@@ -72,7 +65,7 @@ const accountTypeLabel = computed(() => {
       </span>
     </div>
     <AccountQuotaOverdraftStatus
-      v-if="showCodexQuota && account.quota.overdraft"
+      v-if="account.provider === 'openai' && account.quota.overdraft"
       :state="account.quota.overdraft"
     />
     <template v-if="summaryEntries.length > 0">
@@ -94,11 +87,10 @@ const accountTypeLabel = computed(() => {
         </span>
       </div>
     </template>
-    <span v-else-if="isExcel" class="text-cp-xs text-cp-text-tertiary">Excel 额度尚未观测</span>
     <AccountUsageWindow v-else variant="compact" />
     <div :class="comfortable ? 'flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1' : 'contents'" :data-account-inline-billing="comfortable || undefined">
       <AccountQuotaCredits
-        v-if="showCodexQuota"
+        v-if="account.provider === 'openai'"
         :account="account"
         :class="comfortable ? 'max-w-full' : undefined"
         compact
@@ -112,7 +104,6 @@ const accountTypeLabel = computed(() => {
           消费：{{ usdCost?.estimatedAmountDisplay ?? '—' }}
         </span>
         <button
-          v-if="account.provider !== 'openai' || showCodexQuota"
           type="button"
           class="min-w-0 cursor-pointer text-left wrap-anywhere text-cp-primary-text underline decoration-dotted underline-offset-2"
           aria-haspopup="dialog"

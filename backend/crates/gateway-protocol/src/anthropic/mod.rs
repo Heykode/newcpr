@@ -5,7 +5,6 @@ mod content;
 mod error;
 mod request;
 mod response;
-mod session;
 mod stream;
 mod thinking;
 mod tools;
@@ -21,7 +20,6 @@ pub use request::{
 pub use response::{
     messages_to_responses_event, messages_to_responses_response, responses_to_messages_response,
 };
-pub use session::claude_session_id;
 pub use stream::{
     MessagesAccumulator, MessagesToResponsesStream, ResponsesToMessagesStream,
     message_to_stream_events,

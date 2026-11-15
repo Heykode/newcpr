@@ -15,12 +15,10 @@ impl CodexCredentialSelector {
     ) -> HashMap<ProviderAccountId, Option<SystemTime>> {
         let ids = accounts
             .iter()
-            .filter(|account| account.credential_route() == ResponsesUpstream::Codex)
             .map(|account| account.id().clone())
             .collect::<Vec<_>>();
         let revisions = accounts
             .iter()
-            .filter(|account| account.credential_route() == ResponsesUpstream::Codex)
             .map(|account| (account.id().clone(), account.revision()))
             .collect::<Vec<_>>();
         let native = accounts
@@ -120,9 +118,6 @@ impl CodexCredentialSelector {
         account: &ProviderAccount,
         model: &UpstreamModelId,
     ) -> Result<(), ProviderStoreError> {
-        if account.credential_route() != ResponsesUpstream::Codex {
-            return Ok(());
-        }
         let now = SystemTime::now();
         self.cooldowns
             .put_scoped_if_later(ProviderScopedCooldown::new(

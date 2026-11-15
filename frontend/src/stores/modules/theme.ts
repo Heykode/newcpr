@@ -130,7 +130,6 @@ export const useThemeStore = defineStore(
 
     function commitTheme(theme: ResolvedTheme): void {
       applyResolvedTheme(document.documentElement, theme)
-      document.querySelector('meta[name="theme-color"]')?.setAttribute('content', getComputedStyle(document.documentElement).getPropertyValue('--cp-color-bg-container').trim())
       appliedThemeSignature = themeSignature(theme)
       themeRevision.value += 1
     }

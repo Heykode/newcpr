@@ -2,13 +2,12 @@ import { isRecord } from '@/utils/object'
 
 export interface ImportDocument {
   provider: 'openai' | 'xai'
-  credentialTarget?: 'codex' | 'excel'
   document: Record<string, unknown>
 }
 
 export function splitAccountDocuments(entry: ImportDocument): ImportDocument[] {
   // xAI owns refresh-token deduplication across the complete document.
-  if (entry.provider !== 'openai' || entry.credentialTarget === 'excel')
+  if (entry.provider !== 'openai')
     return [entry]
   const document = entry.document
   const data = isRecord(document.data) && Array.isArray(document.data.accounts) ? document.data : document
@@ -20,7 +19,7 @@ export function splitAccountDocuments(entry: ImportDocument): ImportDocument[] {
       const key = isRecord(account) ? account.proxy_key : undefined
       item.proxies = data.proxies.filter(proxy => typeof key === 'string' && isRecord(proxy) && proxy.proxy_key === key)
     }
-    return { ...entry, document: data === document ? item : { ...document, data: item } }
+    return { provider: entry.provider, document: data === document ? item : { ...document, data: item } }
   })
 }
 

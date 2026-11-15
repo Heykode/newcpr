@@ -219,19 +219,6 @@ export interface AccountHealthBucket {
 export type ResponsesUpstream = 'codex' | 'excel'
 
 export interface Account {
-  hasCodexCredential?: boolean
-  excelMigrationRequired?: boolean
-  excelCredential?: {
-    revision: number
-    state: string
-    hasRefreshToken: boolean
-    accessTokenExpiresAt: string | null
-    nextRefreshAt: string | null
-    suspended: boolean
-    refreshAttempted: boolean
-    errorReason: string | null
-    errorMessage: string | null
-  } | null
   quotaLimits: Record<string, number>
   quotaLimitsSupported: boolean
   autoUseQuotaCredits: boolean
@@ -701,7 +688,7 @@ export function requestAccountTurnStateProbe(
   })
 }
 
-export function recoverAccount(data: AccountIdParam & { credentialTarget?: 'codex' | 'excel', expectedRevision?: number }, options: RequestOptions = {}) {
+export function recoverAccount(data: AccountIdParam, options: RequestOptions = {}) {
   return request<AccountRefreshResponse>({
     url: '/api/admin/accounts/recover',
     method: 'POST',
@@ -888,77 +875,6 @@ export function completeAccountOAuth(data: AccountOAuthCompleteParam, options: R
     url: '/api/admin/accounts/oauth/complete',
     method: 'POST',
     data,
-    ...options,
-  })
-}
-
-export interface ExcelCredentialCommitResponse {
-  accountIds: string[]
-  credentialTarget: 'excel'
-}
-
-export interface ExcelCredentialExport {
-  provider: 'openai'
-  credentialTarget: 'excel'
-  document: Record<string, unknown>
-}
-
-export function importExcelCredential(data: {
-  data: Record<string, unknown>
-  accountId?: string
-  expectedRevision?: number
-  outboundProxyId?: string
-  settings?: AccountImportSettings
-}, options: RequestOptions = {}) {
-  return request<ExcelCredentialCommitResponse>({
-    url: '/api/admin/accounts/excel/import',
-    method: 'POST',
-    data,
-    ...options,
-  })
-}
-
-export function startExcelOAuth(data: AccountOAuthStartParam, options: RequestOptions = {}) {
-  return request<AccountOAuthStartResponse>({
-    url: '/api/admin/accounts/excel/oauth/start',
-    method: 'POST',
-    data,
-    ...options,
-  })
-}
-
-export function completeExcelOAuth(data: Omit<AccountOAuthCompleteParam, 'provider'>, options: RequestOptions = {}) {
-  return request<ExcelCredentialCommitResponse>({
-    url: '/api/admin/accounts/excel/oauth/complete',
-    method: 'POST',
-    data,
-    ...options,
-  })
-}
-
-export function refreshExcelCredential(accountId: string, options: RequestOptions = {}) {
-  return request<{ accountId: string, credentialTarget: 'excel' }>({
-    url: '/api/admin/accounts/excel/refresh',
-    method: 'POST',
-    data: { accountId },
-    ...options,
-  })
-}
-
-export function getExcelModels(accountId: string, options: RequestOptions = {}) {
-  return request<AccountModelsResponse>({
-    url: '/api/admin/accounts/excel/models',
-    method: 'GET',
-    params: { accountId },
-    ...options,
-  })
-}
-
-export function exportExcelCredential(accountId: string, options: RequestOptions = {}) {
-  return request<ExcelCredentialExport>({
-    url: '/api/admin/accounts/excel/export',
-    method: 'GET',
-    params: { accountId },
     ...options,
   })
 }

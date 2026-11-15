@@ -623,7 +623,7 @@ async fn movable_waiters_use_other_accounts_even_before_queue_promotion() {
                 Duration::ZERO,
             )
             .with_smart_scheduling(
-                gateway_core::account::scheduling::SmartSchedulingConfig::new(
+                gateway_core::account::smart_scheduling::SmartSchedulingConfig::new(
                     [0.0, 0.0, 1.0, 0.0, 0.0, 0.2],
                     true,
                 )

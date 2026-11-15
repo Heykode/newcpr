@@ -7,7 +7,6 @@ use std::{
 
 mod auth_recovery;
 mod excel;
-mod excel_credentials;
 mod excel_recovery;
 mod model_access;
 mod quota_forecast;

@@ -7,12 +7,6 @@ export type RotationStrategy = 'smart' | 'quota_reset_priority' | 'round_robin' 
 
 export type ExcelImageTransport = { mode: 'native' } | { mode: 'relay', publicUrl: string }
 
-export interface ResetWindowWeights { fiveHour: number, weekly: number, monthly: number }
-
-export function defaultResetWindowWeights(): ResetWindowWeights {
-  return { fiveHour: 0, weekly: 0, monthly: 0 }
-}
-
 export interface SmartSchedulingConfig {
   loadWeight: number
   quotaWeight: number
@@ -20,7 +14,7 @@ export interface SmartSchedulingConfig {
   latencyWeight: number
   resetWeight: number
   queueWeight: number
-  resetWindowWeights: ResetWindowWeights
+  resetWindowWeights: { fiveHour: number, weekly: number, monthly: number }
   preferHigherWeight: boolean
 }
 
@@ -33,7 +27,7 @@ export function defaultSmartScheduling(): SmartSchedulingConfig {
     resetWeight: 0,
     queueWeight: 0,
     preferHigherWeight: false,
-    resetWindowWeights: defaultResetWindowWeights(),
+    resetWindowWeights: { fiveHour: 0, weekly: 0, monthly: 0 },
   }
 }
 
@@ -100,8 +94,6 @@ export interface RuntimeSettings {
   requestIntervalMs: number
   openaiSessionBindingTtlHours: number
   rotationStrategy: RotationStrategy
-  quotaResetWindowWeights: ResetWindowWeights
-  quotaResetWindowWeightsDefaults: ResetWindowWeights
   minCodexDesktopVersion: string | null
   minCodexCliVersion: string | null
   usageRetentionDays: number
@@ -152,7 +144,7 @@ export function getSettings(options: RequestOptions = {}) {
   })
 }
 
-type UpdateSettingsParam = Omit<RuntimeSettings, 'updatedAt' | 'requestTuningDefaults' | 'quotaResetWindowWeightsDefaults'>
+type UpdateSettingsParam = Omit<RuntimeSettings, 'updatedAt' | 'requestTuningDefaults'>
 
 export function updateSettings(data: UpdateSettingsParam, options: RequestOptions = {}) {
   return request<RuntimeSettings>({

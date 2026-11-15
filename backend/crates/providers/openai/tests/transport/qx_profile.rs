@@ -48,6 +48,7 @@ fn client_version_sync_preserves_environment_and_frozen_request_identity() {
             user_agent: ua.to_owned(),
         })
         .unwrap();
+    assert!(!profile.cli_sync_enabled());
     assert_eq!(profile.snapshot().user_agent(), ua);
     for version in ["0.200.0", "0.200.0-alpha.1"] {
         profile
@@ -87,6 +88,7 @@ fn desktop_version_sync_uses_paired_artifact_without_changing_custom_environment
     assert_eq!(effective.desktop_version, "26.1001.12345");
     assert_eq!(effective.os_version, "26.4.1");
     assert_eq!(effective.terminal, "xterm-256color");
+    assert!(!profile.cli_sync_enabled());
 }
 
 fn select_profile(profile: &CodexWireProfileState, qx: bool) {

@@ -1,8 +1,6 @@
 //! Provider 账号领域、持久化端口与同一 target 内的账号选择。
 
 mod error;
-mod excel_credentials;
-pub use excel_credentials::*;
 mod fast_mode;
 pub use fast_mode::FastMode;
 mod model;
@@ -31,10 +29,8 @@ pub use store::{
 };
 mod location;
 pub use location::RequestLocation;
-pub mod scheduling;
-pub use scheduling::{
-    QuotaResetPeriod, ResetWindowWeights, SchedulingConfigError, SmartSchedulingConfig,
-};
+pub mod smart_scheduling;
+pub use smart_scheduling::{QuotaResetPeriod, SmartSchedulingConfig, SmartSchedulingConfigError};
 
 mod error_protection;
 pub use error_protection::*;

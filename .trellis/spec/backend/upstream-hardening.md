@@ -40,16 +40,8 @@ reset dimension and exclude its coefficient from near-best tolerance. For each
 recognized account-wide period, keep the nearest future reset and score
 `H / (H + remaining_seconds)`, with `H = period_seconds / 7`; monthly uses 30 days.
 The weighted average denominator includes all configured periods even when missing.
-Unknown, model-specific, missing and expired windows score zero. The separate
-`quota_reset_priority` policy uses top-level `quotaResetWindowWeights`, independent
-of Smart's nested weights. Both share `account::scheduling::ResetWindowWeights`.
-Nonzero coefficients select the highest reset score without near-tie rotation;
-all-zero preserves earliest-reset sorting. Eligibility, account weight tiers and
-affinity are applied first; equal scores retain utilization/last-use/account-ID ties.
-Migration 0093 adds all-zero JSONB settings without rewriting other values. API
-updates require all three fields and reject null, unknown keys and invalid numbers;
-`quotaResetWindowWeightsDefaults` is response-only. Store, frozen plans and UI must
-roundtrip both independent sets across strategy changes.
+Unknown, model-specific, missing and expired windows score zero. Preserve the
+separate `quota_reset_priority` policy's existing single reset timestamp.
 
 The frontend renders these defaults below Smart/Sticky, without a master
 switch, and provides a reset command. Clone nested defaults and saved values.

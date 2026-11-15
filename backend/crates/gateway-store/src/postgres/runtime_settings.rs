@@ -41,7 +41,6 @@ pub struct RuntimeSettings {
     pub codex_quota_overdraft_probe_model: String,
     pub request_interval_ms: u64,
     pub rotation_strategy: String,
-    pub quota_reset_window_weights: gateway_core::account::ResetWindowWeights,
     pub model_mappings: BTreeMap<String, String>,
     pub min_codex_desktop_version: Option<String>,
     pub min_codex_cli_version: Option<String>,
@@ -123,7 +122,6 @@ pub struct RuntimeSettingsUpdate {
     pub codex_quota_overdraft_probe_model: String,
     pub request_interval_ms: u64,
     pub rotation_strategy: String,
-    pub quota_reset_window_weights: gateway_core::account::ResetWindowWeights,
     pub model_mappings: BTreeMap<String, String>,
     pub min_codex_desktop_version: Option<String>,
     pub min_codex_cli_version: Option<String>,
@@ -245,7 +243,7 @@ pub(crate) async fn load_runtime_settings_from_pool(pool: &PgPool) -> StoreResul
     let row = sqlx::query_as::<_, RuntimeSettingsRow>(
             "select config_revision, admin_api_key, turn_state_injection_enabled, excel_default_models, turn_state_models, turn_state_probe_proxy_id, responses_max_decompressed_body_bytes, refresh_margin_seconds,
                     refresh_concurrency, max_concurrent_per_account, request_interval_ms,
-                    rotation_strategy, quota_reset_window_weights_json, model_mappings_json, usage_retention_days, ops_event_retention_days,
+                    rotation_strategy, model_mappings_json, usage_retention_days, ops_event_retention_days,
                     audit_retention_days, min_codex_desktop_version,
                     min_codex_cli_version, request_tuning_json, updated_at, turn_state_probe_concurrency,
                     openai_guardian_reserved_concurrency,
@@ -367,7 +365,7 @@ pub(crate) async fn load_runtime_settings_in_transaction(
     let row = sqlx::query_as::<_, RuntimeSettingsRow>(
         "select config_revision, admin_api_key, turn_state_injection_enabled, excel_default_models, turn_state_models, turn_state_probe_proxy_id, responses_max_decompressed_body_bytes, refresh_margin_seconds,
                 refresh_concurrency, max_concurrent_per_account, request_interval_ms,
-                rotation_strategy, quota_reset_window_weights_json, model_mappings_json, usage_retention_days, ops_event_retention_days,
+                rotation_strategy, model_mappings_json, usage_retention_days, ops_event_retention_days,
                 audit_retention_days, min_codex_desktop_version,
                 min_codex_cli_version, request_tuning_json, updated_at, turn_state_probe_concurrency,
                 openai_guardian_reserved_concurrency,
@@ -459,7 +457,6 @@ pub(crate) async fn update_runtime_settings_in_transaction(
                  codex_quota_overdraft_probe_model = $26,
                  openai_session_binding_ttl_hours = coalesce($27, openai_session_binding_ttl_hours),
                  openai_account_affinity = coalesce($28, openai_account_affinity),
-                 quota_reset_window_weights_json = $29,
                  updated_at = now()
 	             where id = 1
 	             returning config_revision",
@@ -495,7 +492,6 @@ pub(crate) async fn update_runtime_settings_in_transaction(
     .bind(&update.codex_quota_overdraft_probe_model)
     .bind(update.openai_session_binding_ttl_hours.map(i64::from))
     .bind(update.openai_account_affinity.map(|mode| mode.as_str()))
-    .bind(sqlx::types::Json(update.quota_reset_window_weights))
     .fetch_optional(&mut **transaction)
     .await
     .map_err(|error| postgres_unavailable("update runtime settings in transaction").with_source(error))?
@@ -562,7 +558,6 @@ struct RuntimeSettingsRow {
     max_concurrent_per_account: i64,
     request_interval_ms: i64,
     rotation_strategy: String,
-    quota_reset_window_weights_json: sqlx::types::Json<gateway_core::account::ResetWindowWeights>,
     model_mappings_json: sqlx::types::Json<BTreeMap<String, String>>,
     usage_retention_days: i64,
     ops_event_retention_days: i64,
@@ -606,7 +601,6 @@ fn runtime_settings_from_row(row: RuntimeSettingsRow) -> StoreResult<RuntimeSett
         max_concurrent_per_account: to_u32(row.max_concurrent_per_account)?,
         request_interval_ms: to_u64(row.request_interval_ms)?,
         rotation_strategy: row.rotation_strategy,
-        quota_reset_window_weights: row.quota_reset_window_weights_json.0,
         model_mappings: row.model_mappings_json.0,
         usage_retention_days: to_u32(row.usage_retention_days)?,
         ops_event_retention_days: to_u32(row.ops_event_retention_days)?,

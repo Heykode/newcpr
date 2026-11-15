@@ -208,9 +208,6 @@ class Rollout:
         if self.upgrade:
             import migration_backup
             migration_backup.prepare(self)
-            if self.upgrade.get("mode") == "excel-91-database-copy":
-                import schema_bridge
-                schema_bridge.prepare(self)
 
     def check_unchanged(self):
         if inspect(self.profile["container"])["Id"] != self.old["Id"]:
@@ -241,11 +238,6 @@ class Rollout:
         monitor.start()
         started = time.monotonic()
         try:
-            if self.upgrade and self.upgrade.get("mode") == "excel-91-database-copy":
-                import schema_bridge
-                # Stopping the old application already requires manual recovery on failure.
-                switched = True
-                result["database_bridge"] = schema_bridge.switch(self)
             os.replace(self.pending, self.compose)
             switched = True
             print("Verified image ready; switching application only. Backup mode: "

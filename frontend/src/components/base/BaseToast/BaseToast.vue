@@ -40,7 +40,7 @@ const colorClasses = {
 
 <template>
   <Teleport to="body">
-    <div class="app-notifications pointer-events-none fixed inset-x-3 top-3 z-9999 flex flex-col items-end gap-3 sm:inset-x-auto sm:top-6 sm:right-6">
+    <div class="pointer-events-none fixed inset-x-3 top-3 z-9999 flex flex-col items-end gap-3 sm:inset-x-auto sm:top-6 sm:right-6">
       <TransitionGroup name="toast" tag="div" class="flex flex-col gap-3">
         <article
           v-for="message in toast.messages"

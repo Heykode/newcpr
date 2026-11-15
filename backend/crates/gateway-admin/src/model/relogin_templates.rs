@@ -21,7 +21,6 @@ pub struct ExcelImportSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub excel_recovery: Option<super::excel_recovery::ExcelRecoveryConfig>,
     pub responses_upstream: gateway_core::account::ResponsesUpstream,
-    #[serde(default = "default_follow_global")]
     pub excel_models_follow_global: bool,
     #[serde(default = "default_cache_creation_as_input")]
     pub excel_cache_creation_as_input: bool,
@@ -46,6 +45,9 @@ impl ExcelImportSettings {
             self.excel_auto_disable_on_403,
         )
         .map_err(AdminError::invalid)?;
+        if !self.excel_models_follow_global && self.excel_models.is_none() {
+            return Err(AdminError::invalid("自定义模式必须提供 Excel 模型列表"));
+        }
         Ok(())
     }
 
@@ -69,14 +71,16 @@ impl ExcelImportSettings {
         settings.excel_auto_disable_on_403 =
             Some(action == gateway_core::account::Excel403Action::PauseAccount);
         settings.excel_403_action = self.excel_403_action;
+        settings.excel_models_follow_global = Some(self.excel_models_follow_global);
+        settings.excel_models = if self.excel_models_follow_global {
+            None
+        } else {
+            self.excel_models.clone()
+        };
     }
 }
 
 fn default_cache_creation_as_input() -> bool {
-    true
-}
-
-fn default_follow_global() -> bool {
     true
 }
 
@@ -165,8 +169,8 @@ impl ReloginTemplateConfig {
             enabled: self.enabled,
             turn_state_injection_enabled: self.turn_state_injection_enabled,
             responses_upstream: self.responses_upstream,
-            excel_models: None,
-            excel_models_follow_global: None,
+            excel_models: self.excel_models.clone(),
+            excel_models_follow_global: self.excel_models_follow_global,
             excel_cache_creation_as_input: self.excel_cache_creation_as_input,
             excel_ignore_encrypted_content: self.excel_ignore_encrypted_content,
             request_proxy_source: self.request_proxy_source,

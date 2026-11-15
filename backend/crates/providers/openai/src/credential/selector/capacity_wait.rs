@@ -1039,21 +1039,23 @@ impl CodexCredentialSelector {
         let mut candidates = Vec::new();
         let mut accounts = accounts
             .into_iter()
-            .filter_map(|account| Self::project_request_account(account, request))
             .filter(|account| self.account_in_scope(account, request))
             .collect::<Vec<_>>();
         self.retain_model_eligible(&mut accounts, request);
-        self.prepare_route_scheduling(&accounts).await;
+        self.quota.prepare_scheduling(&accounts).await;
         let cooldowns = self.scheduling_cooldowns(&accounts, request).await;
         for account in accounts {
             let cooldown = cooldowns.get(account.id()).copied().flatten();
+            let health = self
+                .account_feedback
+                .scheduling_signals(&self.provider_kind, account.id());
             let signals = signals
                 .get(account.id())
                 .cloned()
-                .ok_or(CredentialSelectionError::Coordinator(None))?;
-            let signals = self
-                .route_scheduling_signals(&account, signals)
-                .with_rate_limit(cooldown);
+                .ok_or(CredentialSelectionError::Coordinator(None))?
+                .with_provider_quota(self.quota.scheduling_signals(&account))
+                .with_rate_limit(cooldown)
+                .with_runtime_health(health.0, health.1);
             let signals = quality_selection_signals(signals, request.attempt.is_quality_check());
             candidates.push(AccountCandidate { account, signals });
         }
@@ -1584,8 +1586,10 @@ impl CodexCredentialSelector {
         }
         if self
             .repository
-            .current_selected_account(&candidate.account)
-            .await?
+            .store()
+            .get_account(id)
+            .await
+            .map_err(|source| CredentialSelectionError::Store(Some(source.into())))?
             .as_ref()
             .is_none_or(|current| !only_quota_observation_advanced(&candidate.account, current))
         {
@@ -1715,7 +1719,6 @@ impl CodexCredentialSelector {
             return Ok(None);
         }
         Ok(Some(CodexCredentialLease {
-            selected_route: candidate.account.credential_route(),
             session_binding_ttl: request
                 .attempt
                 .account_selection_policy()

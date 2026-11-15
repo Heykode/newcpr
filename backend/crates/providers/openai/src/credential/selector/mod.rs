@@ -11,7 +11,6 @@ use gateway_core::account::{
     AccountFeedbackStats, AccountModelAccessMode, AccountRuntimeSignals, AccountSchedulingBlocker,
     AccountSelectionContext, AccountSelector, AccountStatus, CredentialState,
     PreferredAccountSelection, ProviderAccount, ProviderAccountId, QuotaEvidence,
-    ResponsesUpstream,
 };
 use gateway_core::engine::{AttemptContext, ContinuationAttempt};
 use gateway_core::provider_ports::{
@@ -44,7 +43,6 @@ mod capacity_wait;
 mod excel_auth;
 mod model_eligibility;
 mod projection;
-mod route_state;
 
 pub use capacity_wait::AccountWaitFailure;
 
@@ -436,14 +434,6 @@ impl CodexCredentialSelector {
     ) -> bool {
         let upstream = Self::request_upstream(account, request);
         account.provider() == &self.provider_kind
-            && match upstream {
-                ResponsesUpstream::Codex => account.has_codex_credential(),
-                ResponsesUpstream::Excel => account.excel_credential().is_some(),
-            }
-            && (request.attempt.is_diagnostic_required_account()
-                || request.attempt.is_quality_retest()
-                || upstream != ResponsesUpstream::Excel
-                || !account.excel_credential().is_some_and(|excel| excel.suspended))
             // Model-resolved Excel routes retain their own eligibility contract.
             && !(upstream == gateway_core::account::ResponsesUpstream::Codex
                 && account.authentication_kind() == CODEX_AUTHENTICATION_KIND_OAUTH
@@ -469,7 +459,7 @@ impl CodexCredentialSelector {
                 .attempt
                 .excel_recovery_revision()
                 .is_none_or(|revision| {
-                    account.credential_revision().get() == revision
+                    account.revision().get() == revision
                         && account.responses_upstream()
                             == gateway_core::account::ResponsesUpstream::Excel
                         && upstream == gateway_core::account::ResponsesUpstream::Excel
@@ -517,11 +507,12 @@ impl CodexCredentialSelector {
     ) -> gateway_core::account::ResponsesUpstream {
         if request.attempt.is_native_quality_probe() {
             gateway_core::account::ResponsesUpstream::Codex
+        } else if request.image_request {
+            account.responses_upstream()
+        } else if let Some(model) = request.upstream_model {
+            account.responses_upstream_for_model(model)
         } else {
-            request
-                .attempt
-                .credential_route()
-                .unwrap_or_else(|| account.responses_upstream())
+            gateway_core::account::ResponsesUpstream::Codex
         }
     }
 
@@ -655,7 +646,7 @@ impl CodexCredentialSelector {
         }.and_then(|lease| {
             if request
                 .attempt
-                .freeze_provider_route(lease.selected_route().as_str())
+                .freeze_provider_route(Self::request_upstream(lease.account(), request).as_str())
             {
                 Ok(lease)
             } else {
@@ -809,7 +800,6 @@ impl CodexCredentialSelector {
         }
         let mut accounts = accounts
             .into_iter()
-            .filter_map(|account| Self::project_request_account(account, request))
             .filter(|account| self.account_in_scope(account, request))
             .collect::<Vec<_>>();
         self.retain_model_eligible(&mut accounts, request);
@@ -843,7 +833,7 @@ impl CodexCredentialSelector {
         });
         accounts.retain(|account| universe.contains(account.id()));
         if !diagnostic {
-            self.prepare_route_scheduling(&accounts).await;
+            self.quota.prepare_scheduling(&accounts).await;
         }
         let rate_limits = if diagnostic {
             HashMap::new()
@@ -867,8 +857,14 @@ impl CodexCredentialSelector {
         let mut candidates = accounts
             .into_iter()
             .map(|account| {
-                let signals = scheduling.signals().get(account.id()).cloned().unwrap_or(
-                    AccountRuntimeSignals {
+                let health = self
+                    .account_feedback
+                    .scheduling_signals(&self.provider_kind, account.id());
+                let signals = scheduling
+                    .signals()
+                    .get(account.id())
+                    .cloned()
+                    .unwrap_or(AccountRuntimeSignals {
                         in_flight: 0,
                         last_started_at: None,
                         quota_reset_at: None,
@@ -877,11 +873,10 @@ impl CodexCredentialSelector {
                         rate_limited_until: None,
                         failure_rate_basis_points: None,
                         first_output_latency_ms: None,
-                    },
-                );
-                let signals = self
-                    .route_scheduling_signals(&account, signals)
-                    .with_rate_limit(rate_limits.get(account.id()).copied().flatten());
+                    })
+                    .with_provider_quota(self.quota.scheduling_signals(&account))
+                    .with_rate_limit(rate_limits.get(account.id()).copied().flatten())
+                    .with_runtime_health(health.0, health.1);
                 let signals = quality_selection_signals(signals, quality);
                 AccountCandidate { account, signals }
             })
@@ -1195,7 +1190,12 @@ impl CodexCredentialSelector {
                     excluded.insert(account.id().clone());
                 }
                 ProviderLeaseAcquisition::Acquired(guard) => {
-                    let current = self.repository.current_selected_account(&account).await?;
+                    let current = self
+                        .repository
+                        .store()
+                        .get_account(account.id())
+                        .await
+                        .map_err(|source| CredentialSelectionError::Store(Some(source.into())))?;
                     if current
                         .as_ref()
                         .is_none_or(|current| !only_quota_observation_advanced(&account, current))
@@ -1307,7 +1307,6 @@ impl CodexCredentialSelector {
                         return Err(CredentialSelectionError::AccountSnapshotChanged);
                     }
                     return Ok(CodexCredentialLease {
-                        selected_route: account.credential_route(),
                         session_binding_ttl: policy.openai_session_binding_ttl(),
                         installation_id: runtime.installation_id,
                         account,
@@ -1664,40 +1663,6 @@ impl CodexCredentialSelector {
     ) -> Result<(), CredentialSelectionError> {
         let now = SystemTime::now();
         let message = message.filter(|value| !value.trim().is_empty());
-        if account.credential_route() == ResponsesUpstream::Excel {
-            match failure {
-                CodexAccountFailure::QuotaExhausted => {
-                    return self
-                        .record_excel_quota(
-                            account,
-                            gateway_core::account::QuotaState::exhausted(
-                                QuotaEvidence::PaymentRequired,
-                                now,
-                                None,
-                            ),
-                            now,
-                        )
-                        .await;
-                }
-                CodexAccountFailure::UsageLimitExhausted { reset_at } => {
-                    return self
-                        .record_excel_quota(
-                            account,
-                            gateway_core::account::QuotaState::exhausted(
-                                QuotaEvidence::UsageLimitReached,
-                                now,
-                                reset_at,
-                            ),
-                            now,
-                        )
-                        .await;
-                }
-                CodexAccountFailure::RateLimited { .. }
-                | CodexAccountFailure::CloudflareChallenge { .. }
-                | CodexAccountFailure::CloudflarePathBlocked => return Ok(()),
-                _ => {}
-            }
-        }
         match failure {
             CodexAccountFailure::CredentialExpired => {
                 let refreshable = account.authentication_kind() == CODEX_AUTHENTICATION_KIND_OAUTH
@@ -1866,12 +1831,10 @@ impl CodexCredentialSelector {
             self.restore_recoverable_account_state(account, request_started_at, false)
                 .await;
         }
-        if account.credential_route() == ResponsesUpstream::Codex {
-            self.risk_recovery
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .remove(account.id().as_str());
-        }
+        self.risk_recovery
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(account.id().as_str());
         if let Some(parent_key) = guardian_parent_record_key {
             match tokio::time::timeout(
                 SESSION_AFFINITY_TIMEOUT,
@@ -1907,19 +1870,16 @@ impl CodexCredentialSelector {
         self.restore_recoverable_account_state(account, request_started_at, true)
             .await;
         if let Some(block) = block
-            && let Ok(Some(current)) = self.repository.current_selected_account(account).await
+            && let Ok(current) = self.current_account(account.id()).await
             && current.revision() == account.revision()
-            && current.credential_revision() == account.credential_revision()
             && current.credential_state() == CredentialState::Ready
         {
             self.clear_excel_auth_block(account, block);
         }
-        if account.credential_route() == ResponsesUpstream::Codex {
-            self.risk_recovery
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .remove(account.id().as_str());
-        }
+        self.risk_recovery
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(account.id().as_str());
     }
 
     async fn restore_recoverable_account_state(
@@ -1928,12 +1888,11 @@ impl CodexCredentialSelector {
         request_started_at: SystemTime,
         allow_disabled: bool,
     ) {
-        let Ok(Some(current)) = self.repository.current_selected_account(account).await else {
+        let Ok(current) = self.current_account(account.id()).await else {
             return;
         };
         if current.provider() != &self.provider_kind
             || current.revision() != account.revision()
-            || current.credential_revision() != account.credential_revision()
             || (!allow_disabled && !current.enabled())
             || (!allow_disabled && self.excel_auth_block(&current).is_some())
         {
@@ -1972,16 +1931,6 @@ impl CodexCredentialSelector {
                     "OpenAI credential recovery after successful upstream response failed"
                 );
             }
-        }
-        if current.credential_route() == ResponsesUpstream::Excel {
-            let _ = self
-                .record_excel_quota(
-                    &current,
-                    gateway_core::account::QuotaState::allowed(request_started_at),
-                    request_started_at,
-                )
-                .await;
-            return;
         }
         if let Err(error) = self
             .quota
@@ -2026,12 +1975,6 @@ impl CodexCredentialSelector {
         response_origin: &Url,
         headers: &[String],
     ) -> Result<CodexCookieCaptureOutcome, CredentialSelectionError> {
-        if account.credential_route() != ResponsesUpstream::Codex {
-            return Ok(CodexCookieCaptureOutcome {
-                credential_revision: None,
-                rejected: 0,
-            });
-        }
         let parsed = self.cookie_policy.parse_response_headers(
             account.id().as_str(),
             account.revision().get(),
@@ -2238,7 +2181,6 @@ impl fmt::Debug for CodexCredentialSelector {
 }
 
 pub struct CodexCredentialLease {
-    selected_route: ResponsesUpstream,
     session_binding_ttl: Duration,
     account: ProviderAccount,
     authentication: CodexRuntimeAuthentication,
@@ -2255,11 +2197,6 @@ pub struct CodexCredentialLease {
 }
 
 impl CodexCredentialLease {
-    #[must_use]
-    pub const fn selected_route(&self) -> ResponsesUpstream {
-        self.selected_route
-    }
-
     pub(crate) const fn session_binding_ttl(&self) -> Duration {
         self.session_binding_ttl
     }

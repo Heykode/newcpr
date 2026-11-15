@@ -23,7 +23,7 @@ pub const MAX_RESPONSES_MAX_DECOMPRESSED_BODY_BYTES: u64 =
 pub struct RequestTuningOverrides {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub account_error_protection: Option<gateway_core::account::AccountErrorProtection>,
-    pub smart_scheduling: Option<gateway_core::account::scheduling::SmartSchedulingConfig>,
+    pub smart_scheduling: Option<gateway_core::account::smart_scheduling::SmartSchedulingConfig>,
     pub max_account_switches: Option<u32>,
     pub max_request_attempts: Option<u32>,
     pub websocket_max_retries: Option<u32>,
@@ -72,7 +72,8 @@ impl<'de> Deserialize<'de> for RequestTuningOverrides {
         #[serde(rename_all = "camelCase", deny_unknown_fields)]
         struct Wire {
             account_error_protection: Option<gateway_core::account::AccountErrorProtection>,
-            smart_scheduling: Option<gateway_core::account::scheduling::SmartSchedulingConfig>,
+            smart_scheduling:
+                Option<gateway_core::account::smart_scheduling::SmartSchedulingConfig>,
             max_account_switches: Option<u32>,
             max_request_attempts: Option<u32>,
             websocket_max_retries: Option<u32>,
@@ -338,7 +339,6 @@ pub struct RuntimeSettings {
     pub codex_quota_overdraft_probe_model: String,
     pub request_interval_ms: u64,
     pub rotation_strategy: RotationStrategy,
-    pub quota_reset_window_weights: gateway_core::account::ResetWindowWeights,
     pub min_codex_desktop_version: Option<String>,
     pub min_codex_cli_version: Option<String>,
     pub usage_retention_days: u32,
@@ -373,7 +373,6 @@ pub struct ReplaceRuntimeSettings {
     pub codex_quota_overdraft_probe_model: Option<String>,
     pub request_interval_ms: u64,
     pub rotation_strategy: RotationStrategy,
-    pub quota_reset_window_weights: gateway_core::account::ResetWindowWeights,
     pub min_codex_desktop_version: Option<String>,
     pub min_codex_cli_version: Option<String>,
     pub usage_retention_days: u32,

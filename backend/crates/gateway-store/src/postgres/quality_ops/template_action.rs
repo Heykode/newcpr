@@ -56,6 +56,32 @@ async fn references_valid(
     Ok(true)
 }
 
+async fn excel_model_allowed(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    config: &QualityRuleConfig,
+    template: &ReloginTemplate,
+) -> AdminStoreResult<bool> {
+    sqlx::query_scalar(
+        "select $2=any(case when $3 is true or
+        ($3::boolean is null and $4::text[] is null and a.excel_models_follow_global)
+        then s.excel_default_models else coalesce($4::text[],a.excel_models) end)
+        from provider_accounts a cross join runtime_settings s where a.id=$1 and s.id=1",
+    )
+    .bind(&config.account_id)
+    .bind(&config.model)
+    .bind(template.config.excel_models_follow_global)
+    .bind(
+        template
+            .config
+            .excel_models
+            .as_ref()
+            .map(|models| models.as_slice()),
+    )
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(unavailable)
+}
+
 pub(super) async fn validate_for_save(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     config: &QualityRuleConfig,
@@ -71,10 +97,12 @@ pub(super) async fn validate_for_save(
         return Err(invalid("模板中的分组或代理已不可用，请编辑模板"));
     }
     if template.config.responses_upstream == Some(ResponsesUpstream::Excel) {
-        let supported: bool = sqlx::query_scalar("select exists(select 1 from provider_accounts where id=$1 and provider_kind='openai' and authentication_kind in ('oauth','none'))")
+        let supported: bool = sqlx::query_scalar("select exists(select 1 from provider_accounts where id=$1 and provider_kind='openai' and authentication_kind='oauth')")
             .bind(&config.account_id).fetch_one(&mut **tx).await.map_err(unavailable)?;
-        if !supported {
-            return Err(invalid("模板的 Excel 入口仅支持 OpenAI 账号"));
+        if !supported || !excel_model_allowed(tx, config, template).await? {
+            return Err(invalid(
+                "模板开启Excel时需要OpenAI OAuth账号，且检测模型必须在应用后的Excel模型范围内",
+            ));
         }
     }
     Ok(())
@@ -122,14 +150,6 @@ pub(super) async fn apply(
     if identity != claim.account_identity {
         return Ok("identity_changed");
     }
-    let current_route: String = row.try_get("responses_upstream").map_err(unavailable)?;
-    if template
-        .config
-        .responses_upstream
-        .is_some_and(|route| route.as_str() != current_route)
-    {
-        return Ok("route_switch_requires_confirmation");
-    }
     if !row.try_get::<bool, _>("enabled").map_err(unavailable)?
         || row
             .try_get::<String, _>("credential_state")
@@ -156,13 +176,17 @@ pub(super) async fn apply(
             == "excel",
         |mode| mode == ResponsesUpstream::Excel,
     );
-    if excel
-        && row
+    if excel {
+        if row
             .try_get::<Option<DateTime<Utc>>, _>("excel_mode_disabled_at")
             .map_err(unavailable)?
             .is_some()
-    {
-        return Ok("excel_blocked_403");
+        {
+            return Ok("excel_blocked_403");
+        }
+        if !excel_model_allowed(tx, &claim.rule.config, &template).await? {
+            return Ok("excel_blocked_model");
+        }
     }
     let before = super::template_recovery::snapshot(tx, &claim.rule.config.account_id).await?;
     // A settings conflict must still persist the quality result, without partial mutations.

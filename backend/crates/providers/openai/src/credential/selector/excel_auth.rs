@@ -22,9 +22,7 @@ impl CodexCredentialSelector {
         revoked: bool,
         diagnostic: bool,
     ) {
-        if account.credential_route() != ResponsesUpstream::Excel
-            || (!diagnostic && !account.enabled())
-        {
+        if !diagnostic && !account.enabled() {
             return;
         }
         let revoked = self.block_excel_authentication(account, revoked);
@@ -56,11 +54,11 @@ impl CodexCredentialSelector {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let revoked = revoked
-            || blocks.get(account.id()).is_some_and(|current| {
-                current.revision == account.credential_revision() && current.revoked
-            });
+            || blocks
+                .get(account.id())
+                .is_some_and(|current| current.revision == account.revision() && current.revoked);
         let block = ExcelAuthBlock {
-            revision: account.credential_revision(),
+            revision: account.revision(),
             observed_at: SystemTime::now(),
             revoked,
             until: (!revoked && account.has_refresh_token())
@@ -74,16 +72,13 @@ impl CodexCredentialSelector {
     }
 
     pub(super) fn excel_auth_block(&self, account: &ProviderAccount) -> Option<ExcelAuthBlock> {
-        if account.credential_route() != ResponsesUpstream::Excel {
-            return None;
-        }
         self.excel_auth_blocks
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(account.id())
             .copied()
             .filter(|block| {
-                account.credential_revision() <= block.revision
+                account.revision() <= block.revision
                     && block
                         .until
                         .is_none_or(|until| until > tokio::time::Instant::now())
@@ -100,16 +95,12 @@ impl CodexCredentialSelector {
         }
         let revisions = accounts
             .iter()
-            .filter_map(|account| {
-                account
-                    .excel_credential()
-                    .map(|excel| (account.id(), excel.revision))
-            })
+            .map(|account| (account.id(), account.revision()))
             .collect::<HashMap<_, _>>();
         blocks.retain(|id, block| {
             revisions
                 .get(id)
-                .is_none_or(|revision| *revision <= block.revision)
+                .is_some_and(|revision| *revision <= block.revision)
                 && block
                     .until
                     .is_none_or(|until| until > tokio::time::Instant::now())

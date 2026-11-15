@@ -84,7 +84,6 @@ mod guardian_routing;
 mod identity_isolation;
 mod image_account_eligibility;
 mod messages;
-mod messages_affinity;
 mod metadata_recovery;
 mod model_account_eligibility;
 mod native_encrypted_history;

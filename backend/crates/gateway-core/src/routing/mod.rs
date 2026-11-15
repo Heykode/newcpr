@@ -116,7 +116,7 @@ impl OpenAiTurnStatePolicy {
 #[serde(rename_all = "camelCase")]
 pub struct RequestTuning {
     #[serde(default)]
-    pub smart_scheduling: crate::account::scheduling::SmartSchedulingConfig,
+    pub smart_scheduling: crate::account::smart_scheduling::SmartSchedulingConfig,
     pub max_account_switches: u32,
     pub max_request_attempts: u32,
     pub websocket_max_retries: u32,
@@ -244,7 +244,7 @@ impl RequestTuning {
     #[must_use]
     pub const fn defaults() -> Self {
         Self {
-            smart_scheduling: crate::account::scheduling::SmartSchedulingConfig::defaults(),
+            smart_scheduling: crate::account::smart_scheduling::SmartSchedulingConfig::defaults(),
             max_account_switches: DEFAULT_MAX_REQUEST_ATTEMPTS - 1,
             max_request_attempts: DEFAULT_MAX_REQUEST_ATTEMPTS,
             websocket_max_retries: 5,

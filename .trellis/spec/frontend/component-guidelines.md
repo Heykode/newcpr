@@ -135,13 +135,3 @@ Questions to answer:
 - 账号分组继续使用既有多文字标签布局，不能因为输入控件标签更新改成图标叠加。
 - 浏览器检查实际设置保存重读、标签及选择器键盘/手机交互；旧测试辅助导入和
   schema 要同步，不以还原旧组件行为通过检查。
-
-### PWA window controls overlay
-
-Follow the official display-mode/geometrychange flow: a draggable blank titlebar,
-settled visual viewport height, body inset, full-height page slot, mobile sidebar
-and toast offset. Use local cp theme tokens and update theme-color on theme commit.
-Normal browser tabs have no inset. Check actual browser geometry at short and mobile
-viewports after resize/zoom; CSS class assertions alone cannot establish no overlap.
-Quota-reset settings share the three-window input component with Smart, but each
-strategy keeps its own object and reset defaults. Keep the existing inline layout.

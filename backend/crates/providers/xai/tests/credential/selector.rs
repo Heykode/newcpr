@@ -1555,7 +1555,7 @@ fn queue_request(fixture: &SelectorFixture, timeout: Duration) -> GrokSessionSel
                 timeout,
             })
             .with_smart_scheduling(
-                gateway_core::account::scheduling::SmartSchedulingConfig::new(
+                gateway_core::account::smart_scheduling::SmartSchedulingConfig::new(
                     [1.0, 0.8, 1.0, 0.5, 1.0, 1.0],
                     false,
                 )
@@ -1598,7 +1598,7 @@ async fn smart_queue_weight_changes_the_selected_wait_queue_and_respects_require
                         timeout: Duration::from_secs(2),
                     })
                     .with_smart_scheduling(
-                        gateway_core::account::scheduling::SmartSchedulingConfig::new(
+                        gateway_core::account::smart_scheduling::SmartSchedulingConfig::new(
                             [0.0, 0.0, 1.0, 0.0, 0.0, queue_weight],
                             false,
                         )

@@ -17,7 +17,6 @@ export type AccountImportMode = 'oauth' | 'access_token' | 'refresh_token' | 'js
 export type AccountImportInputMode = Exclude<AccountImportMode, 'oauth'>
 
 export interface AccountCreateForm {
-  credentialTarget: 'codex' | 'excel'
   importTemplate: AccountTemplate | null
   qualityTemplate: QualityRuleTemplate | null
   templateEgress?: { draft: AccountEgressDraft, patch: AccountEgressPatch }
@@ -54,7 +53,6 @@ export interface AccountCreateForm {
 
 export function emptyAccountCreateForm(): AccountCreateForm {
   return {
-    credentialTarget: 'codex',
     importTemplate: null,
     qualityTemplate: null,
     purchaseAmount: '',

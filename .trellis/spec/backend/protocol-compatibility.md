@@ -530,13 +530,6 @@ events, then use the existing encoder and single execution finalization.
 - Native OAuth generation converts Messages to Responses before the existing provider selection
   and transport chain. Preserve local account identity, egress, leases, Excel and State. Strip
   Anthropic source headers at the cross-protocol boundary; never select a second account for conversion.
-- Before conversion, resolve explicit Claude sessions with the official parser:
-  `x-claude-code-session-id`, then JSON `metadata.user_id.session_id`, then legacy
-  `_session_<id>`. Enforce 256 bytes/no control characters. Hash with Client Key in
-  the `claude-session` namespace; ordinary user IDs and content do not bind accounts.
-  Selection and safe observation use that same identity. Apply existing affinity
-  modes/retry budgets; do not create OpenAI turn aliases, root ownership or native
-  continuation state. There is no plugin attempt-rewrite path in this runtime.
 - Source usage, costs and observations reach Core before response translation. One source event can
   produce several Messages events; keep canonical completion on the last event only. Streaming ends
   with message_stop, without OpenAI DONE; verify execution completion before sending that terminal.

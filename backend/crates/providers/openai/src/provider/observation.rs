@@ -625,9 +625,7 @@ pub(super) async fn synchronize_passive_quota(
     rate_limits: &[CodexRateLimitObservation],
     authority: QuotaRefreshAuthority,
 ) {
-    if account.credential_route() != gateway_core::account::ResponsesUpstream::Codex
-        || rate_limits.is_empty()
-    {
+    if rate_limits.is_empty() {
         return;
     }
     if let Err(error) = quota

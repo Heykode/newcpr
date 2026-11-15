@@ -13,7 +13,6 @@ use gateway_admin::model::relogin::{
     ReloginPushSelection, ReloginSettingsUpdate, ReloginTarget, ReloginWorkspaceMode,
 };
 use gateway_admin::model::relogin_templates::{ReloginTemplateConfig, ReloginTemplateSelection};
-use gateway_core::account::{CredentialSelection, CredentialTarget};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -43,8 +42,6 @@ struct EnrollRequest {
     text: String,
     #[serde(default)]
     replace_existing: bool,
-    #[serde(default)]
-    credential_target: CredentialTarget,
     settings: super::accounts::AccountImportSettingsRequest,
     outbound_proxy_id: Option<String>,
     quality_template: Option<gateway_admin::model::quality_ops::QualityTemplateSelection>,
@@ -56,8 +53,6 @@ struct ExportRequest {
     ids: Vec<String>,
     format: gateway_admin::model::relogin::ReloginExportFormat,
     confirm: String,
-    #[serde(default)]
-    credential_target: CredentialSelection,
 }
 
 #[derive(Debug, Deserialize)]
@@ -72,8 +67,6 @@ struct QueueRequest {
     ids: Vec<String>,
     #[serde(default)]
     workspace_mode: ReloginWorkspaceMode,
-    #[serde(default)]
-    credential_target: CredentialSelection,
 }
 
 #[derive(Debug, Deserialize)]
@@ -82,14 +75,11 @@ struct AccountQueueRequest {
     entry_id: String,
     revision: u64,
     target: ReloginTarget,
-    additional_target: Option<ReloginTarget>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct PushRequest {
-    #[serde(default)]
-    credential_target: CredentialSelection,
     new_account_excel: Option<gateway_admin::model::relogin_templates::ExcelImportSettings>,
     custom_name: Option<String>,
     ids: Vec<String>,
@@ -111,8 +101,6 @@ struct TemplateSaveRequest {
 struct AutomaticRequest {
     ids: Vec<String>,
     enabled: bool,
-    #[serde(default)]
-    credential_target: CredentialTarget,
 }
 
 #[derive(Debug, Deserialize)]
@@ -120,8 +108,6 @@ struct AutomaticRequest {
 struct WorkspaceRequest {
     id: String,
     workspace_id: Option<String>,
-    #[serde(default)]
-    credential_target: CredentialTarget,
 }
 
 #[derive(Debug, Deserialize)]
@@ -130,8 +116,6 @@ struct WorkspaceResumeRequest {
     id: String,
     revision: u64,
     workspace_id: String,
-    #[serde(default)]
-    credential_target: CredentialTarget,
 }
 
 pub fn router<S>() -> Router<S>
@@ -236,19 +220,9 @@ where
     )
     .map_err(map_admin_service_error)?
     .with_quality_template(request.quality_template);
-    let selected = (request.credential_target != CredentialTarget::Codex)
-        .then(|| {
-            state
-                .admin_services()
-                .relogin()
-                .credential_channel(request.credential_target)
-        })
-        .transpose()
-        .map_err(map_admin_service_error)?;
-    let service = selected
-        .as_deref()
-        .unwrap_or(state.admin_services().relogin());
-    let ids = service
+    let ids = state
+        .admin_services()
+        .relogin()
         .enroll(&request.text, request.replace_existing, enrollment)
         .await
         .map_err(map_admin_service_error)?;
@@ -272,47 +246,16 @@ where
             "请先确认导出敏感资料",
         ));
     }
-    let mut data = gateway_admin::model::relogin::ReloginExport {
-        files: Vec::new(),
-        skipped: Vec::new(),
-    };
-    let targets = if request.format == gateway_admin::model::relogin::ReloginExportFormat::TwoFa {
-        CredentialSelection::Codex.targets()
-    } else {
-        request.credential_target.targets()
-    };
-    for &target in targets {
-        let selected = (target != CredentialTarget::Codex)
-            .then(|| state.admin_services().relogin().credential_channel(target))
-            .transpose()
-            .map_err(map_admin_service_error)?;
-        let service = selected
-            .as_deref()
-            .unwrap_or(state.admin_services().relogin());
-        match service
-            .export(
-                &request.ids,
-                request.format,
-                &auth.context().mutation_context(),
-            )
-            .await
-        {
-            Ok(exported) => {
-                data.files.extend(exported.files);
-                data.skipped.extend(exported.skipped);
-            }
-            Err(error) if !data.files.is_empty() => {
-                data.skipped.extend(request.ids.iter().map(|id| {
-                    gateway_admin::model::relogin::ReloginExportSkipped {
-                        id: id.clone(),
-                        credential_target: target,
-                        message: error.message().to_owned(),
-                    }
-                }));
-            }
-            Err(error) => return Err(map_admin_service_error(error)),
-        }
-    }
+    let data = state
+        .admin_services()
+        .relogin()
+        .export(
+            &request.ids,
+            request.format,
+            &auth.context().mutation_context(),
+        )
+        .await
+        .map_err(map_admin_service_error)?;
     let mut response = AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(data)).into_response();
     response.headers_mut().insert(
         axum::http::header::CACHE_CONTROL,
@@ -349,15 +292,13 @@ async fn queue_account<S>(
 where
     S: AdminSessionState + Send + Sync,
 {
-    let mut targets = vec![request.target];
-    targets.extend(request.additional_target);
     state
         .admin_services()
         .relogin()
-        .queue_account_channels(
+        .queue_account(
             &request.entry_id,
             request.revision,
-            &targets,
+            &request.target,
             &auth.context().mutation_context(),
         )
         .await
@@ -409,37 +350,12 @@ async fn queue<S>(
 where
     S: AdminSessionState + Send + Sync,
 {
-    let mut result = Vec::new();
-    for &target in request.credential_target.targets() {
-        let selected = (target != CredentialTarget::Codex)
-            .then(|| state.admin_services().relogin().credential_channel(target))
-            .transpose()
-            .map_err(map_admin_service_error)?;
-        let service = selected
-            .as_deref()
-            .unwrap_or(state.admin_services().relogin());
-        let mut items = match service
-            .queue_with_workspace(&request.ids, request.workspace_mode)
-            .await
-        {
-            Ok(items) => items,
-            Err(error) if !result.is_empty() => request
-                .ids
-                .iter()
-                .map(|id| gateway_admin::ReloginBatchResult {
-                    id: id.clone(),
-                    credential_target: target,
-                    success: false,
-                    message: error.message().to_owned(),
-                })
-                .collect(),
-            Err(error) => return Err(map_admin_service_error(error)),
-        };
-        for item in &mut items {
-            item.credential_target = target;
-        }
-        result.extend(items);
-    }
+    let result = state
+        .admin_services()
+        .relogin()
+        .queue_with_workspace(&request.ids, request.workspace_mode)
+        .await
+        .map_err(map_admin_service_error)?;
     Ok(AdminResponse::new(
         StatusCode::OK,
         AdminEnvelope::ok(result),
@@ -457,7 +373,7 @@ where
     let result = state
         .admin_services()
         .relogin()
-        .push_channels(
+        .push_with_selection(
             &request.ids,
             &request.revisions,
             gateway_admin::model::relogin_templates::ReloginNewAccountOptions {
@@ -466,7 +382,6 @@ where
                 excel: request.new_account_excel,
             },
             &request.selections,
-            request.credential_target,
             &auth.context().mutation_context(),
         )
         .await
@@ -555,18 +470,9 @@ async fn automatic<S>(
 where
     S: AdminSessionState + Send + Sync,
 {
-    let selected = (request.credential_target != CredentialTarget::Codex)
-        .then(|| {
-            state
-                .admin_services()
-                .relogin()
-                .credential_channel(request.credential_target)
-        })
-        .transpose()
-        .map_err(map_admin_service_error)?;
-    selected
-        .as_deref()
-        .unwrap_or(state.admin_services().relogin())
+    state
+        .admin_services()
+        .relogin()
         .automatic(&request.ids, request.enabled)
         .await
         .map_err(map_admin_service_error)?;
@@ -581,18 +487,9 @@ async fn workspace<S>(
 where
     S: AdminSessionState + Send + Sync,
 {
-    let selected = (request.credential_target != CredentialTarget::Codex)
-        .then(|| {
-            state
-                .admin_services()
-                .relogin()
-                .credential_channel(request.credential_target)
-        })
-        .transpose()
-        .map_err(map_admin_service_error)?;
-    selected
-        .as_deref()
-        .unwrap_or(state.admin_services().relogin())
+    state
+        .admin_services()
+        .relogin()
         .workspace(&request.id, request.workspace_id)
         .await
         .map_err(map_admin_service_error)?;
@@ -607,18 +504,9 @@ async fn resume_workspace<S>(
 where
     S: AdminSessionState + Send + Sync,
 {
-    let selected = (request.credential_target != CredentialTarget::Codex)
-        .then(|| {
-            state
-                .admin_services()
-                .relogin()
-                .credential_channel(request.credential_target)
-        })
-        .transpose()
-        .map_err(map_admin_service_error)?;
-    selected
-        .as_deref()
-        .unwrap_or(state.admin_services().relogin())
+    state
+        .admin_services()
+        .relogin()
         .resume_workspace(&request.id, request.revision, &request.workspace_id)
         .await
         .map_err(map_admin_service_error)?;

@@ -6,7 +6,6 @@ use gateway_admin::{
 };
 use gateway_store::postgres::quality_ops::PgQualityOpsStore;
 
-mod excel_isolation;
 mod group_safety;
 mod groups;
 mod native_recovery;
@@ -756,8 +755,6 @@ async fn quality_recovery_never_undoes_an_independent_excel_403_pause() {
     let store = setup(&db).await;
     sqlx::query("update provider_accounts set responses_upstream='excel',excel_auto_disable_on_403=true, excel_403_action='pause_account' where id='acct_quality_a'")
         .execute(&db.pool).await.unwrap();
-    sqlx::query("insert into openai_excel_credentials(account_id,upstream_user_id,credential_json,credential_observed_at) values('acct_quality_a','acct_quality_a','{}',now())")
-        .execute(&db.pool).await.unwrap();
     let mut config = config("acct_quality_a");
     config.failure_action = QualityFailureAction::DisableScheduling;
     config.auto_restore = true;
@@ -781,15 +778,8 @@ async fn quality_recovery_never_undoes_an_independent_excel_403_pause() {
     assert!(repository.apply_excel_403_action(&account).await.unwrap());
     assert!(!repository.apply_excel_403_action(&account).await.unwrap());
     let run = scheduled_round(&store, &rule, &[Correct]).await;
-    assert_eq!(run.action.as_deref(), Some("excel_quality_no_change"));
-    assert!(enabled(&db).await);
-    let suspended: bool = sqlx::query_scalar(
-        "select suspended from openai_excel_credentials where account_id='acct_quality_a'",
-    )
-    .fetch_one(&db.pool)
-    .await
-    .unwrap();
-    assert!(suspended);
+    assert_eq!(run.action.as_deref(), Some("ownership_released"));
+    assert!(!enabled(&db).await);
     db.close().await;
 }
 

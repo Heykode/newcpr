@@ -251,27 +251,6 @@ pub(crate) fn derive_previous_response_id_hash(
     hex::encode(hasher.finalize())
 }
 
-/// Messages identities participate only in account affinity, never OpenAI turn ownership.
-pub(crate) fn derive_messages_session_affinity(
-    payload: &gateway_core::operation::ProtocolPayload,
-    client_api_key_id: &ClientApiKeyId,
-) -> Option<CodexSessionAffinity> {
-    if payload.protocol() != gateway_protocol::anthropic::ANTHROPIC_PROTOCOL {
-        return None;
-    }
-    let passthrough = crate::transport::request::decode_passthrough_headers(payload.context());
-    let header = passthrough
-        .get("x-claude-code-session-id")
-        .and_then(|value| value.to_str().ok());
-    let session = gateway_protocol::anthropic::claude_session_id(payload.body(), header)?;
-    session_affinity(
-        "claude-session",
-        session.clone(),
-        Some(session),
-        client_api_key_id,
-    )
-}
-
 pub(crate) fn derive_codex_session_affinity(
     request: &CodexResponsesRequest,
     client_api_key_id: &ClientApiKeyId,

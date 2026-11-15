@@ -33,7 +33,6 @@ pub type ModelMappings = BTreeMap<String, String>;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeSettingsView {
-    pub quota_reset_window_weights_defaults: gateway_core::account::ResetWindowWeights,
     pub config_revision: u64,
     pub turn_state_injection_enabled: bool,
     pub turn_state_models: Vec<String>,
@@ -55,7 +54,6 @@ pub struct RuntimeSettingsView {
     pub codex_quota_overdraft_probe_model: String,
     pub request_interval_ms: u64,
     pub rotation_strategy: String,
-    pub quota_reset_window_weights: gateway_core::account::ResetWindowWeights,
     pub min_codex_desktop_version: Option<String>,
     pub min_codex_cli_version: Option<String>,
     pub usage_retention_days: u64,
@@ -94,7 +92,6 @@ pub struct UpdateRuntimeSettingsRequest {
     pub codex_quota_overdraft_probe_model: Option<String>,
     pub request_interval_ms: u64,
     pub rotation_strategy: String,
-    pub quota_reset_window_weights: gateway_core::account::ResetWindowWeights,
     pub min_codex_desktop_version: Option<String>,
     pub min_codex_cli_version: Option<String>,
     pub usage_retention_days: u64,
@@ -265,7 +262,6 @@ impl UpdateRuntimeSettingsRequest {
             codex_quota_overdraft_enabled: self.codex_quota_overdraft_enabled,
             codex_quota_overdraft_probe_model: self.codex_quota_overdraft_probe_model,
             request_interval_ms: self.request_interval_ms,
-            quota_reset_window_weights: self.quota_reset_window_weights,
             rotation_strategy: RotationStrategy::parse(&self.rotation_strategy)
                 .ok_or_else(|| WireValidationError::new("rotationStrategy"))?,
             min_codex_desktop_version: self.min_codex_desktop_version,
@@ -311,8 +307,6 @@ impl From<RuntimeSettings> for RuntimeSettingsView {
             codex_quota_overdraft_probe_model: settings.codex_quota_overdraft_probe_model,
             request_interval_ms: settings.request_interval_ms,
             rotation_strategy: settings.rotation_strategy.as_str().to_owned(),
-            quota_reset_window_weights: settings.quota_reset_window_weights,
-            quota_reset_window_weights_defaults: Default::default(),
             min_codex_desktop_version: settings.min_codex_desktop_version,
             min_codex_cli_version: settings.min_codex_cli_version,
             usage_retention_days: u64::from(settings.usage_retention_days),

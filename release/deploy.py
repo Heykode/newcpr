@@ -21,7 +21,6 @@ import egress_check
 DEPLOY_FILES = [
     "release/deploy.py", "release/verified_image.py", "deploy/rollout.py",
     "deploy/migration_backup.py", "deploy/egress_check.py",
-    "deploy/schema_bridge.py",
 ]
 
 
@@ -118,22 +117,6 @@ def reviewed_upgrade(name, old_labels, proof, commit):
     if documentation not in ([], ["README.md"]):
         raise images.Unavailable("Only the migration README may be reviewed as documentation")
     expected.update("M\tbackend/migrations/" + item for item in documentation)
-    bridge = plan.get("mode") == "excel-91-database-copy"
-    if plan.get("mode") not in (None, "excel-91-database-copy"):
-        raise images.Unavailable("Unknown migration deployment mode")
-    if bridge:
-        if (plan.get("from_source_commit") != source
-                or plan["added"] != ["0091_usage_retention_days.sql",
-                                      "0093_quota_reset_window_weights.sql"]):
-            raise images.Unavailable("Database copy differs from the reviewed Excel-91 source")
-        old_sql = subprocess.check_output([
-            "git", "show", source + ":backend/migrations/0091_openai_excel_credentials.sql"])
-        new_sql = subprocess.check_output([
-            "git", "show", commit + ":backend/migrations/0092_openai_excel_credentials.sql"])
-        if old_sql != new_sql:
-            raise images.Unavailable("Excel migration SQL changed across the database copy")
-        expected.add("R100\tbackend/migrations/0091_openai_excel_credentials.sql"
-                     "\tbackend/migrations/0092_openai_excel_credentials.sql")
     if set(changes) != expected:
         raise images.Unavailable("Migration changes differ from the reviewed additions")
     # Preserve exact bytes: git() strips trailing whitespace, SQLx checksums do not.
@@ -145,16 +128,7 @@ def reviewed_upgrade(name, old_labels, proof, commit):
             ).hexdigest()
             for path in paths if path.endswith(".sql")
         }
-    result = {**plan, "before": checksums(source), "after": checksums(commit)}
-    if bridge:
-        paths = images.git("ls-tree", "-r", "--name-only", commit, "backend/migrations").splitlines()
-        result["migration_sql"] = [{
-            "version": int(Path(path).name.split("_", 1)[0]),
-            "description": Path(path).stem.split("_", 1)[1].replace("_", " "),
-            "sql": subprocess.check_output(["git", "show", commit + ":" + path]).decode(),
-            "checksum": result["after"][str(int(Path(path).name.split("_", 1)[0]))],
-        } for path in paths if path.endswith(".sql")]
-    return result
+    return {**plan, "before": checksums(source), "after": checksums(commit)}
 
 
 def require_target_ci(repository, commit):
@@ -242,7 +216,6 @@ def run(profile, commit, apply, migration_plan=None, *, prepare=False, staged=No
         subprocess.run([
             "scp", *transfer, str(request_path), str(ROOT / "deploy/rollout.py"),
             str(ROOT / "deploy/migration_backup.py"), str(ROOT / "deploy/egress_check.py"),
-            str(ROOT / "deploy/schema_bridge.py"),
             host + ":" + remote + "/",
         ], check=True)
         if prepare:

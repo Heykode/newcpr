@@ -119,7 +119,7 @@ use execution::*;
 pub use failure::openai_failure_affects_account_score;
 use failure::*;
 use observation::*;
-pub(crate) use workers::{ClientReleaseServices, excel_refresh_worker, worker_contributions};
+pub(crate) use workers::{cli_version_worker, profile_release_worker, worker_contributions};
 
 const PROVIDER_NAME: &str = "openai";
 const HTTP_SSE_TRANSPORT: &str = "http_sse";
@@ -410,20 +410,6 @@ impl Provider for CodexProvider {
                 ..Default::default()
             };
         };
-        if request.protocol_payload().protocol() == gateway_protocol::anthropic::ANTHROPIC_PROTOCOL
-        {
-            return ProviderRequestObservation {
-                continuation: ContinuationRequestObservation {
-                    affinity_hash: crate::credential::derive_messages_session_affinity(
-                        request.protocol_payload(),
-                        client_api_key_id,
-                    )
-                    .and_then(|affinity| affinity.persistence_hash().map(ToOwned::to_owned)),
-                    ..Default::default()
-                },
-                ..Default::default()
-            };
-        }
         let Ok(encoded) = encode_generate_request(request, "observability", None) else {
             return ProviderRequestObservation::default();
         };
@@ -539,16 +525,6 @@ impl Provider for CodexProvider {
                 UpstreamSendState::NotSent,
             ));
         };
-        let is_messages = generate.protocol_payload().protocol()
-            == gateway_protocol::anthropic::ANTHROPIC_PROTOCOL;
-        // Capture explicit source-protocol identity before conversion drops metadata.
-        let messages_affinity = crate::credential::derive_messages_session_affinity(
-            generate.protocol_payload(),
-            context.client_api_key_ref(),
-        )
-        .map(|affinity| {
-            affinity.with_policy(context.account_selection_policy().openai_account_affinity())
-        });
         let mut messages_translator = None;
         let translated;
         let generate = if generate.protocol_payload().protocol()
@@ -743,21 +719,21 @@ impl Provider for CodexProvider {
                 crate::transport::request::clear_turn_state(&mut upstream_request);
             }
         }
-        let session_affinity = (!is_messages)
-            .then(|| derive_codex_session_affinity(&upstream_request, context.client_api_key_ref()))
-            .flatten()
-            .map(|affinity| {
-                let turn_alias = affinity.key().and_then(|_| {
-                    gateway_protocol::openai::codex_turn_id(
-                        generate.protocol_payload().body(),
-                        generate.protocol_payload().context(),
-                    )
-                    .and_then(|turn| derive_turn_alias(&turn, context.client_api_key_ref()))
-                });
-                affinity
-                    .with_turn_alias(turn_alias)
-                    .with_policy(context.account_selection_policy().openai_account_affinity())
-            });
+        let session_affinity =
+            derive_codex_session_affinity(&upstream_request, context.client_api_key_ref()).map(
+                |affinity| {
+                    let turn_alias = affinity.key().and_then(|_| {
+                        gateway_protocol::openai::codex_turn_id(
+                            generate.protocol_payload().body(),
+                            generate.protocol_payload().context(),
+                        )
+                        .and_then(|turn| derive_turn_alias(&turn, context.client_api_key_ref()))
+                    });
+                    affinity
+                        .with_turn_alias(turn_alias)
+                        .with_policy(context.account_selection_policy().openai_account_affinity())
+                },
+            );
         // Restored and native owners take precedence over a client turn alias.
         let session_affinity = if previous_session.is_some()
             || continuation_requested
@@ -771,11 +747,10 @@ impl Provider for CodexProvider {
         let cyber_policy_session_key =
             derive_codex_cyber_policy_session_key(&upstream_request, context.client_api_key_ref());
         let guardian = upstream_request.guardian_parent_thread_id().is_some();
-        let cache_preference = (!is_messages
-            && session_affinity
-                .as_ref()
-                .and_then(CodexSessionAffinity::key)
-                .is_none()
+        let cache_preference = (session_affinity
+            .as_ref()
+            .and_then(CodexSessionAffinity::key)
+            .is_none()
             && previous_session.is_none()
             && context.account_selection_policy().openai_account_affinity()
                 != gateway_core::account::AccountAffinity::Relaxed
@@ -789,7 +764,6 @@ impl Provider for CodexProvider {
             .as_ref()
             .filter(|affinity| affinity.key().is_some() || guardian)
             .or(cache_preference.as_ref())
-            .or(messages_affinity.as_ref())
             .or(session_affinity.as_ref());
         let transport_affinity_key =
             derive_codex_transport_key(&upstream_request, context.client_api_key_ref());
@@ -813,7 +787,13 @@ impl Provider for CodexProvider {
         let account_selection_wait_ms =
             u64::try_from(selection_started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
         let lease = Arc::new(lease);
-        let responses_upstream = lease.selected_route();
+        let responses_upstream = if context.is_native_quality_probe() {
+            gateway_core::account::ResponsesUpstream::Codex
+        } else {
+            lease
+                .account()
+                .responses_upstream_for_model(upstream_model.as_str())
+        };
         let excel = responses_upstream == gateway_core::account::ResponsesUpstream::Excel;
         if previous_session
             .as_ref()
@@ -1026,15 +1006,11 @@ impl Provider for CodexProvider {
             })
             .map_err(|_| provider_error(ProviderErrorKind::Protocol, UpstreamSendState::NotSent))?,
         )
+        .with_credential_revision(lease.account().revision())
         .with_selection_observation(ProviderSelectionObservation::new(
             account_selection_wait_ms,
             lease.capacity_snapshot(),
         ));
-        let metadata = if excel {
-            metadata
-        } else {
-            metadata.with_credential_revision(lease.account().revision())
-        };
         let response_store = upstream_request.store();
         let session_capture = (upstream_request.quality_probe.is_none()
             && (!continuation_requested || previous_session.is_some()))
@@ -1132,7 +1108,7 @@ impl Provider for CodexProvider {
         } else {
             stream
         };
-        Ok(if allows_account_state_mutation && !excel {
+        Ok(if allows_account_state_mutation {
             stream.with_filtered_account_feedback(
                 Arc::clone(&self.account_feedback),
                 openai_failure_affects_account_score,

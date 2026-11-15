@@ -8,7 +8,6 @@ export interface AccountConnectionTestRequest {
   interface: 'responses'
   stream: boolean
   prompt: string
-  responsesUpstream?: 'codex' | 'excel'
 }
 
 export async function streamAccountConnectionTest(

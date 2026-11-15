@@ -6,9 +6,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::collections::BTreeSet;
 
-mod channels;
-pub use channels::ReloginChannelState;
-
 pub const MAX_ENTRIES: usize = 10_000;
 pub const MAX_BATCH: usize = 500;
 pub const MAX_IMPORT_BYTES: usize = 512 * 1024;
@@ -24,15 +21,6 @@ pub enum ReloginExportFormat {
 #[serde(rename_all = "camelCase")]
 pub struct ReloginExport {
     pub files: Vec<ReloginExportFile>,
-    pub skipped: Vec<ReloginExportSkipped>,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ReloginExportSkipped {
-    pub id: String,
-    pub credential_target: gateway_core::account::CredentialTarget,
-    pub message: String,
 }
 
 #[derive(Serialize)]
@@ -146,8 +134,6 @@ pub struct ReloginCredential {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ReloginTarget {
-    #[serde(default)]
-    pub credential_target: gateway_core::account::CredentialTarget,
     pub account_id: String,
     pub credential_revision: u64,
     pub user_id: String,
@@ -156,26 +142,13 @@ pub struct ReloginTarget {
 
 impl ReloginTarget {
     pub fn matches_account(&self, account: &AccountRecord) -> bool {
-        if self.credential_target == gateway_core::account::CredentialTarget::Excel {
-            return self.account_id == account.id
-                && !self.user_id.is_empty()
-                && !self.workspace_id.is_empty()
-                && account.provider_kind.as_str() == "openai"
-                && account.upstream_user_id.as_ref() == Some(&self.user_id)
-                && account.upstream_account_id.as_ref() == Some(&self.workspace_id)
-                && account
-                    .excel_credential
-                    .as_ref()
-                    .map_or(0, |value| value.revision.get())
-                    == self.credential_revision;
-        }
         // Binding changes are stamped with their resulting credential revision.
         // This also fences legacy targets without storing another generation.
         self.account_id == account.id
             && !self.user_id.is_empty()
             && !self.workspace_id.is_empty()
             && account.provider_kind.as_str() == "openai"
-            && matches!(account.authentication_kind.as_str(), "oauth" | "none")
+            && account.authentication_kind == "oauth"
             && account.upstream_user_id.as_ref() == Some(&self.user_id)
             && account.upstream_account_id.as_ref() == Some(&self.workspace_id)
             && account.turn_state_binding_revision.get() <= self.credential_revision
@@ -183,23 +156,9 @@ impl ReloginTarget {
     }
 
     pub fn from_account(account: &AccountRecord) -> Result<Self, AdminError> {
-        Self::from_account_for_target(account, gateway_core::account::CredentialTarget::Codex)
-    }
-
-    pub fn from_account_for_target(
-        account: &AccountRecord,
-        credential_target: gateway_core::account::CredentialTarget,
-    ) -> Result<Self, AdminError> {
         Ok(Self {
-            credential_target,
             account_id: account.id.clone(),
-            credential_revision: match credential_target {
-                gateway_core::account::CredentialTarget::Codex => account.credential_revision.get(),
-                gateway_core::account::CredentialTarget::Excel => account
-                    .excel_credential
-                    .as_ref()
-                    .map_or(0, |value| value.revision.get()),
-            },
+            credential_revision: account.credential_revision.get(),
             user_id: account
                 .upstream_user_id
                 .clone()
@@ -342,11 +301,6 @@ pub struct ReloginEntry {
     pub updated_at: DateTime<Utc>,
     #[serde(default)]
     pub last_attempt: Option<ReloginAttempt>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub excel: Option<ReloginChannelState>,
-    /// Runtime projection only. Stored top-level fields always belong to Codex.
-    #[serde(skip)]
-    pub credential_target: gateway_core::account::CredentialTarget,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -383,8 +337,6 @@ pub enum ReloginPushResult {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReloginAttempt {
-    #[serde(default)]
-    pub credential_target: gateway_core::account::CredentialTarget,
     pub id: String,
     pub source: ReloginAttemptSource,
     pub started_at: DateTime<Utc>,
@@ -423,7 +375,6 @@ impl ReloginEntry {
             ReloginAttemptSource::Library
         };
         self.last_attempt = Some(ReloginAttempt {
-            credential_target: self.credential_target,
             id: uuid::Uuid::now_v7().simple().to_string(),
             source,
             started_at: Utc::now(),
@@ -679,7 +630,6 @@ pub fn validate_ids(ids: &[String]) -> Result<(), AdminError> {
 }
 
 pub struct ReloginRequest {
-    pub credential_target: gateway_core::account::CredentialTarget,
     pub email: String,
     pub password: String,
     pub mfa_secret: String,

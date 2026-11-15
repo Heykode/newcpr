@@ -133,19 +133,15 @@ editing prior entries.
   default profile. Parsing custom text is not artifact or TLS verification.
 - `custom-auto-version` is an explicit opt-in, preserving the original custom
   environment and persisted UA. Existing custom selections stay pinned. CLI/Exec
-  uses the shared official npm release service, validating stable versions and
-  matching platform dependencies without prereleases or version regression.
+  resolves stable `rust-v` releases every six hours, with bounded fetch, list
+  fallback, no prereleases or version regression and a separate cached version.
   A failed lookup retains the current profile. Update both CLI version positions;
   Desktop uses the verified bundled Core/Desktop tuple instead. Never substitute
   CLI release numbers into the Desktop application version. Freeze the resolved
   version with the existing request snapshot, including HTTP/WS fallback.
   Each process reconciles the shared CLI cache without a leader lease, so a
-  local profile cannot remain stale behind another instance. CLI and platform
-  release checks run at startup and one hour after each completed check. The
-  former GitHub `rust-v` fetcher is retired; only its validated legacy cache is
-  read during upgrade. Same-version cache renewal runs daily, retains the
-  original verification time and uses the 30-day TTL. Failed writes do not
-  advance the renewal cursor; Redis CAS and in-memory publication reject downgrades.
+  local profile cannot remain stale behind another instance. Network checks
+  remain six-hourly; Redis CAS keeps the cached version monotonic.
   Migration 0071 only expands the allowed mode; it does not rewrite existing
   selections. Old binaries cannot interpret the new mode once opted in.
 - Desktop artifact scanning follows official CPR `d83d3eb8`: only the nested

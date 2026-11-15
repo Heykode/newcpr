@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { rotationOptions } from '../constants'
-import type { ResetWindowWeights, SmartSchedulingConfig } from '@/api/modules/settings'
+import type { SmartSchedulingConfig } from '@/api/modules/settings'
 import { RotateCcw } from '@lucide/vue'
 import { defaultSmartScheduling } from '@/api/modules/settings'
 import BaseButton from '@/components/base/BaseButton.vue'
@@ -10,7 +10,6 @@ import BaseInput from '@/components/base/BaseInput.vue'
 import BaseSwitch from '@/components/base/BaseSwitch.vue'
 import HelpPopover from '@/components/HelpPopover.vue'
 import { t } from '@/i18n'
-import ResetWindowWeightsFields from './ResetWindowWeightsFields.vue'
 
 type RotationOption = (typeof rotationOptions)[number]
 type RotationStrategy = RotationOption['value']
@@ -18,12 +17,10 @@ type RotationStrategy = RotationOption['value']
 defineProps<{
   options: readonly RotationOption[]
   disabled?: boolean
-  quotaResetDefaults: ResetWindowWeights
 }>()
 
 const model = defineModel<RotationStrategy | ''>({ required: true })
 const smart = defineModel<SmartSchedulingConfig>('smartScheduling', { required: true })
-const quota = defineModel<ResetWindowWeights>('quotaResetWindowWeights', { required: true })
 const weights = [
   { key: 'loadWeight', label: '负载权重', help: 'loadHelp' },
   { key: 'quotaWeight', label: '剩余额度权重', help: 'quotaHelp' },
@@ -34,6 +31,14 @@ const weights = [
 ] as const
 function setWeight(key: typeof weights[number]['key'], value: string) {
   smart.value = { ...smart.value, [key]: value.trim() === '' ? Number.NaN : Number(value) }
+}
+const periods = [
+  { key: 'fiveHour', label: 'fiveHour' },
+  { key: 'weekly', label: 'weekly' },
+  { key: 'monthly', label: 'monthly' },
+] as const
+function setWindowWeight(key: typeof periods[number]['key'], value: string) {
+  smart.value = { ...smart.value, resetWindowWeights: { ...smart.value.resetWindowWeights, [key]: value.trim() === '' ? Number.NaN : Number(value) } }
 }
 </script>
 
@@ -102,22 +107,20 @@ function setWeight(key: typeof weights[number]['key'], value: string) {
           />
         </BaseFormItem>
       </div>
-      <ResetWindowWeightsFields v-model="smart.resetWindowWeights" class="mt-4" :disabled="disabled" :help="t('settings.scheduling.windowHelp')" />
+      <section class="mt-4 grid gap-3" :aria-label="t('settings.scheduling.windowMode')">
+        <div class="flex items-center gap-1">
+          <h3 class="m-0 text-sm font-medium">
+            {{ t('settings.scheduling.windowMode') }}
+          </h3>
+          <HelpPopover :label="t('settings.scheduling.windowMode')" :content="t('settings.scheduling.windowHelp')" />
+        </div>
+        <div class="grid gap-3 sm:grid-cols-3">
+          <BaseFormItem v-for="period in periods" :key="period.key" :label="t(`settings.scheduling.${period.label}`)">
+            <BaseInput :model-value="Number.isFinite(smart.resetWindowWeights[period.key]) ? String(smart.resetWindowWeights[period.key]) : ''" :aria-label="t(`settings.scheduling.${period.label}`)" type="number" min="0" max="10" step="0.1" :disabled="disabled" @update:model-value="setWindowWeight(period.key, $event)" />
+          </BaseFormItem>
+        </div>
+      </section>
       <BaseSwitch v-model="smart.preferHigherWeight" class="mt-4" :disabled="disabled" label="主动回切高权重账号" show-label />
-    </section>
-    <section v-if="model === 'quota_reset_priority'" aria-label="额度调度参数" class="mt-5 border-t border-cp-border pt-4">
-      <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <h3 class="m-0 text-sm font-medium">
-          {{ t('settings.rotation.quotaResetPrioritySettings') }}
-        </h3>
-        <BaseButton :disabled="disabled" @click="quota = { ...quotaResetDefaults }">
-          <template #icon>
-            <RotateCcw class="size-4" />
-          </template>
-          {{ t('appearance.settings.restoreDefault') }}
-        </BaseButton>
-      </div>
-      <ResetWindowWeightsFields v-model="quota" :disabled="disabled" :help="t('settings.resetPriority.windowHelp')" />
     </section>
   </BaseCard>
 </template>

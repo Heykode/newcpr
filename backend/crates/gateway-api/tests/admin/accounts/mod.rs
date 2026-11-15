@@ -1495,11 +1495,9 @@ mod response {
             gateway_api::admin::settings::RuntimeSettingsView::from(current),
         )
         .expect("runtime settings JSON");
-        for read_only_field in ["updatedAt", "quotaResetWindowWeightsDefaults"] {
-            body.as_object_mut()
-                .expect("runtime settings object")
-                .remove(read_only_field);
-        }
+        body.as_object_mut()
+            .expect("runtime settings object")
+            .remove("updatedAt");
         body["maxConcurrentPerAccount"] = json!(limit);
         gateway_api::admin::settings::router::<AdminTestState>()
             .with_state(fixture.state())
@@ -1821,7 +1819,6 @@ mod response {
             codex_quota_overdraft: None,
             effective_concurrency_limit: std::num::NonZeroU32::new(3).expect("concurrency limit"),
             account: AccountRecord {
-                excel_credential: None,
                 quota_limits: Default::default(),
                 quota_paused: Default::default(),
                 auto_use_quota_credits: false,
@@ -2394,7 +2391,6 @@ mod actions {
     fn connection_test_events_should_preserve_the_existing_frontend_contract() {
         let events = [
             DomainConnectionTestEvent::Started {
-                responses_upstream: None,
                 model: "grok-4.5".to_owned(),
                 endpoint: ConnectionTestEndpoint::Responses,
             },
