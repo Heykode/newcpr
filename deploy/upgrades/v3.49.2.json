@@ -1,0 +1,8 @@
+{
+  "from_version": "3.49.1",
+  "to_version": "3.49.2",
+  "from_migrations_tree": "c41f65502840fa60653d094bd92e45259dc328f0",
+  "to_migrations_tree": "264f7329a279254ddd3c97d4306fccbbde7df3fa",
+  "added": ["0095_group_bark_schedules.sql"],
+  "recovery": "manual"
+}
