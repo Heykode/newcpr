@@ -19,6 +19,9 @@
 
 ## Mobile Account Cards
 
+- Selection-only toolbar actions, including batch quality checks, use their natural
+  width at every breakpoint. Do not restore full-width triggers on mobile or tablet;
+  the parent toolbar owns wrapping. Verify the selected state, not only an empty selection.
 - Below 768px, render `AccountMobileList` instead of `BaseTable`, never both hidden
   trees. The page still owns querying, refresh, selection, expansion and mutations.
   Resizing must not issue list requests or clear selected/expanded account IDs.
@@ -1122,3 +1125,16 @@ match window statistics by exact stable window key.
 跟随部署代理与绕过规则。探测将该选项映射到 `useDeploymentProxy:true`，强制直连探测独立保留。
 禁止只重命名选项而漏掉 `accountEgressPatch` 的混合批量 OpenAI 覆盖清理；既有
 `mixed providers explicitly choose common exits` 回归必须保留。Mihomo/IPv6 显式选择仍独立。
+
+
+## Account Query Toolbar
+
+- Keep labeled search, status, group, plan and provider filters separate from list
+  tools. Applied filters have individual removal and a reset action; preserve the
+  selected sort, selection and existing server paging/debounce contracts.
+- Filters wrap according to usable width. List column preferences, template tools,
+  batch controls and imports remain available on desktop and mobile. Never replace
+  authoritative account filtering with filtering only the currently loaded page.
+- Mobile and desktop representation switches keep using the same account handlers.
+  Browser coverage verifies search removal, plan reset, retained sort, pagination,
+  selection, groups, quota refresh and account actions.

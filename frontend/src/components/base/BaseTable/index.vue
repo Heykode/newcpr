@@ -211,7 +211,7 @@ defineExpose({
         horizontal
         @scroll="handleTableScroll"
       >
-        <table ref="table" class="table-fixed border-separate border-spacing-0 text-left" :style="resolvedTableStyle">
+        <table ref="table" class="cp-data-table table-fixed border-separate border-spacing-0 text-left" :style="resolvedTableStyle">
           <colgroup>
             <col v-for="column in computedColumns" :key="column.key" :style="columnStyle(column, computedColumns, columnLayout)">
           </colgroup>

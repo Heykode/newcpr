@@ -85,9 +85,9 @@ onScopeDispose(() => {
 </script>
 
 <template>
-  <BasePopover v-model="open" class="w-full xl:w-auto" :disabled="disabled || applying">
+  <BasePopover v-model="open" class="w-auto max-w-full" :disabled="disabled || applying">
     <template #trigger>
-      <BaseButton class="w-full whitespace-nowrap xl:w-auto" :disabled="disabled" :loading="applying" aria-label="账号模板">
+      <BaseButton class="whitespace-nowrap" :disabled="disabled" :loading="applying" aria-label="账号模板">
         <LayoutTemplate class="size-4" />
         账号模板
         <ChevronDown class="size-3.5" />

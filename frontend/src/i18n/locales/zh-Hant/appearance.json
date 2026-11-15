@@ -225,6 +225,10 @@
       "shadowIntensity": "陰影強度"
     },
     "themeColors": {
+      "qianxing": {
+        "label": "千行暖白",
+        "description": "暖白紙面，陶土色點綴"
+      },
       "relay-blue": {
         "label": "星津夜航",
         "description": "星垂海面，帆過深藍"

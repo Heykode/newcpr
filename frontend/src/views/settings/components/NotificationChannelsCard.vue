@@ -33,7 +33,7 @@ const lastTest = computed(() => {
   const test = form.lastTest
   if (!test)
     return '尚未测试'
-  const status = { sent: '成功', failed: '失败', sending: '发送中', pending: '等待发送' }[test.status]
+  const status = { sent: '成功', failed: '失败', sending: '发送中', pending: '等待发送', cancelled: '已取消' }[test.status]
   return `${test.channel === 'email' ? 'SMTP' : 'Bark'} 测试${status} · ${new Date(test.finishedAt ?? test.createdAt).toLocaleString()}`
 })
 

@@ -33,6 +33,15 @@ Missing Gitleaks, binary content, oversized files and unsupported Git entries fa
 closed. Matching values are never printed. Gitleaks inline allow comments and
 candidate ignore/config files cannot suppress the scan.
 
+The only binary exception is a manually reviewed WOFF2 font recorded in
+`policy.json` under `reviewed_font_assets`, with its exact public font path,
+SHA-256, byte length and review reason. The source and license must be verified
+before adding a record; never generate records from scanner failures. A changed
+or relocated font requires fresh review. This suppresses only that asset's
+`binary-needs-review` finding; path checks, private markers, Gitleaks, Git identity
+and history checks remain active. Malformed records fail closed. Font policy and
+checker changes require independent review like other privacy policy changes.
+
 Use the exact reviewed Gitleaks download/checksum process supplied by the tool's
 official releases; this repository does not download or execute binaries automatically.
 

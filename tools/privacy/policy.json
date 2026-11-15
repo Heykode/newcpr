@@ -28,6 +28,14 @@
     ".dump", ".bak", ".log", ".zip", ".tar", ".gz", ".7z"
   ],
   "public_email_domains": ["users.noreply.github.com"],
+  "reviewed_font_assets": [
+    {
+      "path": "frontend/public/fonts/qx-display.woff2",
+      "sha256": "4e582f2db87b543f1aa7b8afd1fc3abb6114acca9ebbfc85cd1fb0b6aa18fbe0",
+      "size": 809468,
+      "reason": "Manually reviewed QX Display Bold font, byte-identical to Heykode/newapi-qx at 30a42cb239ccf80a727f69b6a5620cdccf471aff, web/public/brand/QXDisplayBold.woff2 (Git blob d0f0e32c9020be82d50d39c34afb007dbdf0d012). Font names and glyph inventory inspected; no WOFF metadata or private data. The matching OFL license is distributed beside it."
+    }
+  ],
   "reviewed_commit_identities": [
     {
       "commit": "05fc728b3b29f6caea614e8898d677c26dc3d4ff",

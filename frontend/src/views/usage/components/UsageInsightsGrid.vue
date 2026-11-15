@@ -33,24 +33,19 @@ const shownCost = computed(() => costView(props.cost.data))
 
 <template>
   <section
-    class="mt-5 grid grid-cols-1 gap-3 xl:auto-rows-[minmax(24.25rem,auto)] xl:grid-cols-2"
+    class="usage-insights mt-4 grid grid-cols-1 gap-4"
     :aria-label="t('usage.insights.useStatisticalObservations')"
   >
     <UsageHealthCard
+      class="usage-health"
       :health="health.data?.data ?? emptyOverview().health"
       :granularity="health.data?.granularity ?? ''"
       :loading="health.loading"
       :error="health.error"
     />
-    <UsageDiagnosticCard
-      v-model:dimension="diagnosticDimension"
-      :diagnostics="diagnostics.data ?? { ...emptyDiagnostics(), dimension: diagnosticDimension }"
-      :loading="diagnostics.loading"
-      :error="diagnostics.error"
-      @page-change="$emit('diagnosticPageChange', $event)"
-    />
     <UsagePerformanceCard
       v-model:view="performanceViewName"
+      class="usage-performance"
       :performance="shownPerformance"
       :activity="metricActivity(performance.data)"
       :loading="performance.loading"
@@ -58,10 +53,56 @@ const shownCost = computed(() => costView(props.cost.data))
     />
     <UsageCostCard
       v-model:view="costViewName"
+      class="usage-cost"
       :cost="shownCost"
       :activity="metricActivity(cost.data)"
       :loading="cost.loading"
       :error="cost.error"
     />
+    <UsageDiagnosticCard
+      v-model:dimension="diagnosticDimension"
+      class="usage-diagnostics"
+      :diagnostics="diagnostics.data ?? { ...emptyDiagnostics(), dimension: diagnosticDimension }"
+      :loading="diagnostics.loading"
+      :error="diagnostics.error"
+      @page-change="$emit('diagnosticPageChange', $event)"
+    />
   </section>
 </template>
+
+<style scoped>
+@media (min-width: 1100px) {
+  .usage-insights {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .usage-health {
+    grid-area: 1 / 1 / auto / -1;
+  }
+  .usage-performance {
+    grid-area: 2 / 1;
+  }
+  .usage-cost {
+    grid-area: 2 / 2;
+  }
+  .usage-diagnostics {
+    grid-area: 3 / 1 / auto / -1;
+  }
+}
+@media (min-width: 1600px) {
+  .usage-insights {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .usage-health {
+    grid-area: 1 / 1;
+  }
+  .usage-performance {
+    grid-area: 1 / 2;
+  }
+  .usage-cost {
+    grid-area: 1 / 3;
+  }
+  .usage-diagnostics {
+    grid-area: 2 / 1 / auto / -1;
+  }
+}
+</style>

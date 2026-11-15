@@ -153,6 +153,71 @@ class ContentTests(unittest.TestCase):
     def test_binary_rejected(self):
         self.assertEqual(guard.content_findings("data", b"\0\1", [])[0].rule, "binary-needs-review")
 
+    def font_record(self, data):
+        return {
+            "path": "frontend/public/fonts/test.woff2",
+            "sha256": hashlib.sha256(data).hexdigest(),
+            "size": len(data),
+            "reason": "Synthetic asset for exact-match regression tests",
+        }
+
+    def test_reviewed_font_requires_exact_path_hash_and_size(self):
+        data = b"wOF2\0synthetic-font"
+        record = self.font_record(data)
+        for name, contents, overrides, accepted in (
+            (record["path"], data, {}, True),
+            (record["path"], data + b"extra", {}, False),
+            (record["path"], data[:-1] + b"X", {}, False),
+            ("frontend/public/fonts/other.woff2", data, {}, False),
+            (record["path"], data, {"size": len(data) + 1}, False),
+        ):
+            with self.subTest(name=name, contents=contents, overrides=overrides):
+                policy = {**guard.POLICY, "reviewed_font_assets": [{**record, **overrides}]}
+                with patch.object(guard, "POLICY", policy), patch.object(guard, "blob", return_value=contents), patch.object(guard, "gitleaks", return_value=[]) as scanner:
+                    findings = guard.scan([(name, "100644", "test-oid")], [])
+                    self.assertEqual(not findings, accepted)
+                    scanner.assert_called_once_with([(name, contents)])
+
+    def test_reviewed_font_policy_is_optional_and_fails_closed(self):
+        data = b"wOF2\0synthetic-font"
+        record = self.font_record(data)
+        policy = {key: value for key, value in guard.POLICY.items() if key != "reviewed_font_assets"}
+        with patch.object(guard, "POLICY", policy):
+            self.assertEqual(guard.reviewed_font_assets(), set())
+        for items in (
+            None, "invalid", [None], [record, record],
+            [{**record, "path": "frontend/public/fonts/*.woff2"}],
+            [{**record, "path": "frontend/public/fonts/../test.woff2"}],
+            [{**record, "sha256": "short"}], [{**record, "size": True}],
+            [{**record, "size": 0}], [{**record, "size": guard.POLICY["max_file_bytes"] + 1}],
+            [{**record, "reason": ""}], [{**record, "reason": "line\nbreak"}],
+            [{**record, "extra": "not-supported"}],
+        ):
+            with patch.object(guard, "POLICY", {**policy, "reviewed_font_assets": items}):
+                with self.assertRaises(guard.CheckError):
+                    guard.reviewed_font_assets()
+
+    def test_reviewed_font_does_not_suppress_private_markers_or_gitleaks(self):
+        marker = "private-font-marker"
+        key = "-----BEGIN " + "RSA PRIVATE KEY-----"
+        for encoding in ("utf-8", "utf-16-le", "utf-16-be"):
+            data = b"wOF2\0\0" + (marker + "\n" + key).encode(encoding)
+            record = self.font_record(data)
+            leaked = guard.Finding(record["path"], 1, "gitleaks:test-token")
+            with patch.object(guard, "POLICY", {**guard.POLICY, "reviewed_font_assets": [record]}), patch.object(guard, "blob", return_value=data), patch.object(guard, "gitleaks", return_value=[leaked]):
+                rules = {finding.rule for finding in guard.scan([(record["path"], "100644", "test-oid")], [marker])}
+                self.assertEqual(rules, {"private-blocklist", "private-key", "gitleaks:test-token"})
+
+    def test_reviewed_font_does_not_exempt_paths_modes_or_messages(self):
+        data = b"wOF2\0synthetic-font"
+        record = self.font_record(data)
+        name = record["path"]
+        policy = {**guard.POLICY, "reviewed_font_assets": [record]}
+        with patch.object(guard, "POLICY", policy), patch.object(guard, "blob", return_value=data), patch.object(guard, "gitleaks", return_value=[]):
+            self.assertIn("private-blocklist", {finding.rule for finding in guard.scan([(name, "100644", "test-oid")], ["test.woff2"])})
+            self.assertIn("link-or-special-file", {finding.rule for finding in guard.scan([(name, "120000", "test-oid")], [])})
+            self.assertIn("binary-needs-review", {finding.rule for finding in guard.scan([], [], [(name, data)])})
+
     def test_report_never_prints_private_filename(self):
         stream = io.StringIO()
         with redirect_stderr(stream):

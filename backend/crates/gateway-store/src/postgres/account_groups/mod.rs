@@ -207,6 +207,17 @@ impl AccountGroupStore for PgAccountGroupRepository {
             .map_err(|error| admin_store_error("notification delivery", error))
     }
 
+    async fn cancel_notification_delivery(
+        &self,
+        delivery_id: &str,
+        observed_at: chrono::DateTime<chrono::Utc>,
+    ) -> AdminStoreResult<()> {
+        super::PgNotificationRepository::new(self.pool.clone())
+            .cancel_delivery(delivery_id, observed_at)
+            .await
+            .map_err(|error| admin_store_error("notification cancellation", error))
+    }
+
     async fn enqueue_test_notification(
         &self,
         delivery: gateway_admin::model::notifications::ClaimedNotificationDelivery,

@@ -1,4 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg">
+  <symbol id="qianxing" viewBox="0 0 160 44">
+    <path fill="#FBFAF7" d="M0 0h160v44H0z"/><path fill="#F0ECE5" d="M0 0h36v44H0z"/>
+    <rect x="44" y="9" width="72" height="5" rx="2" fill="#302E29"/><rect x="44" y="21" width="44" height="16" rx="4" fill="currentColor"/>
+    <rect x="94" y="21" width="58" height="16" rx="4" fill="#E3DED5"/>
+  </symbol>
   <symbol id="relay-blue" viewBox="0 0 160 44" preserveAspectRatio="xMidYMid slice" style="--scene-paper: #FFFFFF; --scene-ink: #111A29">
     <path fill="var(--scene-ink)" d="M0 0h160v44H0z"/>
     <path fill="currentColor" opacity=".3" d="M0 34q25-4 56-1t58-1q25-2 46 0v12H0z"/>

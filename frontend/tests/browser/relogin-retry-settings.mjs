@@ -100,7 +100,7 @@ async function main() {
     assert.ok(await uncertain.getByRole('button', { name: '推送', exact: true }).isDisabled())
     for (const width of [1440, 390, 320]) {
       await page.setViewportSize({ width, height: 900 })
-      const cell = stopped.locator('[data-column-key="status"]')
+      const cell = width < 768 ? page.getByRole('region', { name: '重登账号 manual_required@example.invalid', exact: true }) : stopped.locator('[data-column-key="status"]')
       await cell.scrollIntoViewIfNeeded()
       assert.ok(await cell.evaluate(node => [...node.children].every(child => child.scrollWidth <= child.clientWidth + 1)))
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1))

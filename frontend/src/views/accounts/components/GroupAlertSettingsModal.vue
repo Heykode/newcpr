@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { AccountGroup, BarkLevel, GroupAlertPolicy, GroupMonitorItem, NotificationChannels } from '@/api'
+import type { AccountGroup, BarkLevel, GroupAlertPolicy, NotificationChannels } from '@/api'
 import { BellRing, ChevronDown, Mail, Send } from '@lucide/vue'
 import { computed, reactive, ref, watch } from 'vue'
 import { getGroupAlertPolicy, getNotificationChannels, testNotification, updateGroupAlertPolicy } from '@/api'
@@ -14,16 +14,16 @@ import { toast } from '@/components/base/BaseToast'
 import { t } from '@/i18n'
 import { errorMessage } from '@/utils/async'
 import { barkLevelHints, barkLevelOptions } from '@/utils/notification-presentation'
-import { monitorMoney, monitorSnapshotExpired } from './group-monitor-presentation'
+import BarkScheduleEditor from './BarkScheduleEditor.vue'
+import { monitorSnapshotExpired } from './group-monitor-presentation'
 
-const props = defineProps<{ group: AccountGroup | null, snapshot?: GroupMonitorItem, sampledAt?: string, stale?: boolean, now?: number }>()
+const props = defineProps<{ group: AccountGroup | null, sampledAt?: string, stale?: boolean, now?: number }>()
 const open = defineModel<boolean>({ default: false })
 const loading = ref(false)
 const loaded = ref(false)
 const saving = ref(false)
 const testing = ref<'email' | 'bark' | null>(null)
 const advancedOpen = ref(false)
-const explanationOpen = ref(false)
 const channels = ref<NotificationChannels | null>(null)
 const recipientsText = ref('')
 const form = reactive<GroupAlertPolicy>({
@@ -40,6 +40,7 @@ const form = reactive<GroupAlertPolicy>({
   barkSound: null,
   barkVolume: null,
   barkCall: null,
+  barkSchedule: { timezone: 'Asia/Shanghai', defaultEnabled: true, rules: [] },
   updatedAt: '',
 })
 
@@ -195,7 +196,7 @@ watch([open, () => props.group?.id], ([visible]) => {
             <BellRing class="size-4" /><b class="flex-1">Bark 提醒</b><span class="text-cp-xs" :class="barkReady ? 'text-cp-success-text' : 'text-cp-warning-text'">{{ barkReady ? '已配置' : '未配置' }}</span>
           </div>
           <div class="mt-2 flex items-center justify-between">
-            <BaseSwitch v-model="form.barkEnabled" label="启用 Bark" /><BaseButton size="sm" :disabled="!barkReady" :loading="testing === 'bark'" @click="test('bark')">
+            <BaseSwitch v-model="form.barkEnabled" label="启用 Bark" /><BaseButton size="sm" aria-label="测试当前 Bark 规则" :disabled="!barkReady" :loading="testing === 'bark'" @click="test('bark')">
               <template #icon>
                 <Send class="size-3.5" />
               </template>{{ t('settings.backup.storage.test') }}
@@ -233,32 +234,10 @@ watch([open, () => props.group?.id], ([visible]) => {
           </div>
         </section>
       </div>
-      <details class="border-b border-cp-border-secondary pb-3" :open="explanationOpen" @toggle="explanationOpen = ($event.target as HTMLDetailsElement).open">
-        <summary class="cursor-pointer text-cp-sm font-heavy">
-          监控口径
-        </summary>
-        <div class="mt-2 space-y-2 text-cp-xs text-cp-text-secondary">
-          <p v-if="stale" class="text-cp-warning-text">
-            数据未更新，当前保留上次观测。
-          </p>
-          <p v-if="expired" class="text-cp-warning-text">
-            监控采样已过期，等待更新。
-          </p>
-          <p>额度估算覆盖 {{ snapshot?.estimatedAccounts ?? 0 }} / {{ snapshot?.eligibleAccounts ?? 0 }} 个可调度账号。消费增长至少 $5 且用量增长至少 3 个百分点后，保存该账号的额度；此前沿用同 Provider、套餐及窗口最近最多 3 份已学习额度的平均值，删除账号不清空参考。剩余按自身未用比例计算，多窗口取最小值，不含未来重置补充。</p>
-          <p v-if="snapshot?.remainingStatus === 'partial'">
-            部分可调度账号暂无有效额度估值，当前仅汇总已可计算账号。
-          </p>
-          <p v-if="snapshot?.lowSample">
-            样本较少，估算可能波动。
-          </p>
-          <p>预计过期额度依据同 Provider、同套餐最近最多 5 个未恢复失效账号的平均寿命，有第 1 个样本就开始估算。恢复后撤销样本；普通 Token 到期、限流和额度耗尽不计死亡。全部超出时显示“已超平均寿命”，缺少寿命或消耗数据时分别显示对应状态。过期额度不从剩余额度扣除，也不参与可支撑时间计算。</p>
-          <p>每分钟消耗为当前分组账号最近 60 秒已完成推理请求的已记录 USD，共享账号的消耗可出现在多个分组。</p>
-          <p>可支撑时间按共享账号在所有分组的消耗 {{ monitorMoney(snapshot?.quotaConsumeUsdPerMinute, 'unknown', 4) }} /分计算。</p>
-          <p>并发为本组 API Key 的当前占用 /（本组占用 + 可调度账号的共享空位）。其他组占用共享账号时，本组可用上限随之减少。Key 绑定多个组时占用可能重叠，不同分组的额度及并发不可直接相加。</p>
-          <p>预计过期额度仅供参考，不参与预警。</p>
-          <p>持续异常只通知一次，连续恢复 30 秒后才会重新允许通知。</p>
-        </div>
-      </details>
+      <BarkScheduleEditor v-model="form.barkSchedule" :default-volume="form.barkVolume ?? channels?.bark.volume ?? 5" />
+      <p v-if="stale || expired" class="text-cp-xs text-cp-warning-text" role="status">
+        {{ expired ? '监控采样已过期，等待更新' : '数据未更新，当前保留上次观测' }}
+      </p>
     </fieldset>
     <template #footer>
       <div class="flex justify-end gap-2">

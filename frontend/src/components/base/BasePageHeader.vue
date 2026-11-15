@@ -7,15 +7,15 @@ defineProps<{
 
 <template>
   <header
-    class="flex min-h-17 shrink-0 flex-wrap items-start justify-between gap-x-4 gap-y-3"
+    class="flex shrink-0 flex-wrap items-center justify-between gap-x-4 gap-y-3 pb-5"
   >
     <div class="min-w-0 flex-1 basis-64">
-      <h1 class="m-0 text-[34px] leading-[1.15] font-extrabold text-cp-text">
+      <h1 class="m-0 font-display text-[25px] leading-tight tracking-tight text-cp-text sm:text-[28px]">
         {{ title }}
       </h1>
       <p
         v-if="description || $slots.description"
-        class="mt-2.5 mb-0 flex items-center gap-2 text-cp-xl leading-[1.15] font-semibold text-cp-text-secondary"
+        class="mt-1.5 mb-0 flex items-center gap-2 text-cp-sm leading-relaxed text-cp-text-secondary"
       >
         <slot name="description">
           {{ description }}
@@ -24,7 +24,7 @@ defineProps<{
     </div>
     <div
       v-if="$slots.actions"
-      class="mt-0.5 flex shrink-0 items-center justify-end gap-2"
+      class="mt-0.5 flex max-w-full flex-wrap items-center gap-2"
     >
       <slot name="actions" />
     </div>

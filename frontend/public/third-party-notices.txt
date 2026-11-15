@@ -31,3 +31,9 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
+
+## QX Display
+
+标题字体使用 QX Display，派生自 Douyin Sans，采用 SIL Open Font License 1.1。
+完整许可随应用分发于 `fonts/ofl-douyin-sans.txt`；字体本地分发于
+`fonts/qx-display.woff2`。正文使用系统字体。

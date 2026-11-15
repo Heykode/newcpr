@@ -428,6 +428,46 @@ preserves acquisition mode and targets; push is a separate confirmation.
   changes still cancel/fence old work, clear cached credentials and require a fresh login;
   upstream ownership and locked-target checks remain authoritative.
 
+## Account Name and Credential Preview
+
+### 1. Scope / Trigger
+The relogin presentation follows current pool names and offers explicit 2FA/JSON viewing.
+This changes display metadata and UI entry points, not matching or worker eligibility.
+
+### 2. Signatures
+- `GET /api/admin/relogin` adds `items[].displayName: string | null`.
+- Viewing uses the existing `POST /api/admin/relogin/export` with one selected ID,
+  `format: two_fa | json` and `confirm: export_sensitive_relogin`.
+
+### 3. Contracts
+Resolve `displayName` from the existing `statistics_account` result, preferring
+`custom_name` to provider `name`. Do not persist a second name or pick the first
+same-email workspace. The frontend falls back to email; normal list polling reflects renames.
+The dialog displays the export content unchanged, including the full three-field
+2FA line. JSON retains existing pool credential selection and audit/no-store behavior.
+Close, account change, tab change and unmount abort old reads and discard content.
+Mobile cards emit the same queue/push/workspace/delete and selection actions as the table.
+
+### 4. Validation & Error Matrix
+Ambiguous or changed pool identity => null name, email fallback. Invalid 2FA or
+unavailable JSON => existing export error; never trigger a login to fill the preview.
+No sensitive fields enter list metadata, browser persistence or ordinary logs.
+
+### 5. Good / Base / Bad Cases
+Good: a pool rename appears on refresh and the JSON tab displays current export data.
+Base: old servers without displayName use email. Bad: selecting an arbitrary same-email
+account, synthesizing credentials, or letting a late response replace another tab.
+
+### 6. Tests Required
+Extend the existing identity/workspace statistics test for ambiguous, renamed,
+provider-name fallback and changed-identity results. Browser coverage exercises full
+copy text, tab/account/close races, name search, mobile actions and existing confirmations.
+
+### 7. Wrong vs Correct
+Wrong: adapt worker status or queue/push rules to simplify a card. Correct: reuse the
+existing presentation helpers and handlers; template management remains in accounts,
+while create-only push retains its template picker and existing-account settings.
+
 ## Verification
 
 ### Interactive OAuth Reauthorization

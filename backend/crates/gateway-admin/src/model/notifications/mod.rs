@@ -2,6 +2,9 @@ use chrono::{DateTime, Utc};
 use gateway_core::routing::AccountGroupId;
 use secrecy::SecretString;
 
+mod bark_schedule;
+pub use bark_schedule::{BarkSchedule, BarkScheduleRule, ResolvedBarkRule, bark_delivery_key};
+
 /// Shared by configuration writes and delivery of previously saved keys.
 #[must_use]
 pub fn normalized_bark_device_key(value: &str) -> Option<&str> {
@@ -42,7 +45,8 @@ impl SmtpSecurity {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum BarkLevel {
     Passive,
     Active,
@@ -216,6 +220,7 @@ pub struct GroupAlertPolicy {
     pub bark_sound: Option<String>,
     pub bark_volume: Option<u8>,
     pub bark_call: Option<bool>,
+    pub bark_schedule: BarkSchedule,
     pub updated_at: DateTime<Utc>,
 }
 
@@ -252,6 +257,7 @@ impl GroupAlertPolicy {
             bark_sound: None,
             bark_volume: None,
             bark_call: None,
+            bark_schedule: BarkSchedule::default(),
             updated_at: now,
         }
     }
@@ -273,6 +279,7 @@ pub struct AlertObservation {
     pub bark_sound: Option<String>,
     pub bark_volume: u8,
     pub bark_call: bool,
+    pub bark_rule_key: Option<String>,
     pub summary: String,
 }
 
@@ -305,6 +312,8 @@ pub struct ClaimedNotificationDelivery {
     pub bark_sound: Option<String>,
     pub bark_volume: u8,
     pub bark_call: bool,
+    pub bark_rule_key: Option<String>,
+    pub incident_activated_at: Option<DateTime<Utc>>,
     pub test: bool,
 }
 

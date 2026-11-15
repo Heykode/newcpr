@@ -45,7 +45,7 @@ function togglePasswordVisible(): void {
   <BaseCard
     as="form"
     padding="none"
-    class="login-form relative grid w-[min(440px,100%)] gap-2.5 rounded-lg px-7.5 pt-6.5 pb-6 min-[980px]:min-h-120 max-[560px]:gap-4 max-[560px]:p-5.5"
+    class="login-form relative grid w-[min(440px,100%)] gap-6 rounded-cp-card p-8 max-[560px]:gap-5 max-[560px]:p-6"
     @submit.prevent="emit('submit')"
   >
     <div class="login-form-line" />
@@ -57,9 +57,9 @@ function togglePasswordVisible(): void {
         </BaseMotionIcon>
         <span class="grid min-w-0 gap-1">
           <strong
-            class="text-[17px] leading-[1.12] font-semibold text-(--cp-login-brand-title-color) max-[560px]:text-cp-xl"
+            class="font-display text-xl leading-tight text-(--cp-login-brand-title-color)"
           >
-            Codex Proxy RS
+            New CPR
           </strong>
           <span class="font-mono text-[10px] leading-[1.2] font-normal text-(--cp-login-brand-caption-color)">
             ADMIN REALM
@@ -87,7 +87,7 @@ function togglePasswordVisible(): void {
       >
         {{ t('auth.title') }}
       </h1>
-      <p class="m-0 -ml-2 text-sm leading-[1.45] font-normal text-(--cp-login-description-color) max-[560px]:py-2">
+      <p class="m-0 mt-2 text-sm leading-relaxed text-(--cp-login-description-color)">
         {{ t('auth.welcome') }}
       </p>
     </section>
@@ -176,17 +176,8 @@ function togglePasswordVisible(): void {
   --cp-box-shadow: none;
   --cp-control-height: 43px;
 
-  background:
-    linear-gradient(
-      118deg,
-      var(--cp-login-panel-bg-start),
-      var(--cp-login-panel-bg-middle) 56%,
-      var(--cp-login-panel-bg-end)
-    ),
-    var(--cp-login-panel-bg-middle);
-  box-shadow: 0 18px 38px -20px var(--cp-login-panel-shadow-color);
-  backdrop-filter: blur(18px) saturate(1.08);
-  -webkit-backdrop-filter: blur(18px) saturate(1.08);
+  background: var(--cp-card-bg);
+  box-shadow: var(--cp-card-shadow);
 }
 
 .login-form-line {

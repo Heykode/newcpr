@@ -109,9 +109,9 @@ onScopeDispose(() => {
 </script>
 
 <template>
-  <BasePopover v-model="open" class="w-full xl:w-auto" :disabled="disabled || busy">
+  <BasePopover v-model="open" class="w-auto max-w-full" :disabled="disabled || busy">
     <template #trigger>
-      <BaseButton class="w-full whitespace-nowrap xl:w-auto" :disabled="disabled" :loading="busy" aria-label="监测模板">
+      <BaseButton class="whitespace-nowrap" :disabled="disabled" :loading="busy" aria-label="监测模板">
         <Activity class="size-4" />监测模板<ChevronDown class="size-3.5" />
       </BaseButton>
     </template>

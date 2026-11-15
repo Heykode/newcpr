@@ -277,10 +277,34 @@ def gitleaks(records):
     return findings
 
 
+def reviewed_font_assets():
+    items = POLICY.get("reviewed_font_assets", [])
+    if not isinstance(items, list):
+        raise CheckError("Reviewed font assets are invalid.")
+    assets = set()
+    for item in items:
+        if not isinstance(item, dict) or set(item) != {"path", "sha256", "size", "reason"}:
+            raise CheckError("Reviewed font assets are invalid.")
+        name, digest, size, reason = (item[key] for key in ("path", "sha256", "size", "reason"))
+        if (
+            not isinstance(name, str)
+            or not re.fullmatch(r"frontend/public/fonts/[A-Za-z0-9][A-Za-z0-9._-]*\.woff2", name)
+            or not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest)
+            or type(size) is not int or not 0 < size <= POLICY["max_file_bytes"]
+            or not isinstance(reason, str) or not reason.strip()
+            or any(ord(char) < 32 for char in reason)
+            or (name, digest, size) in assets
+        ):
+            raise CheckError("Reviewed font assets are invalid.")
+        assets.add((name, digest, size))
+    return assets
+
+
 def scan(entries, private_literals, messages=()):
     records = []
     findings = []
     seen = set()
+    fonts = reviewed_font_assets()
     for name, mode, oid in entries:
         if (name, oid) in seen:
             continue
@@ -290,7 +314,17 @@ def scan(entries, private_literals, messages=()):
             findings.append(Finding(name, 0, "link-or-special-file"))
             continue
         data = blob(oid)
-        findings.extend(unreviewed(name, data, content_findings(name, data, private_literals)))
+        content = content_findings(name, data, private_literals)
+        if (name, hashlib.sha256(data).hexdigest(), len(data)) in fonts:
+            content = [finding for finding in content if finding.rule != "binary-needs-review"]
+            # Exact asset review never suppresses explicit private markers.
+            for encoding in ("utf-8", "utf-16-le", "utf-16-be"):
+                readable = data.decode(encoding, errors="ignore")
+                if any(value in readable.casefold() for value in private_literals):
+                    content.append(Finding(name, 0, "private-blocklist"))
+                if PRIVATE_KEY.search(readable):
+                    content.append(Finding(name, 0, "private-key"))
+        findings.extend(unreviewed(name, data, content))
         records.append((name, data))
     for name, data in messages:
         findings.extend(content_findings(name, data, private_literals))

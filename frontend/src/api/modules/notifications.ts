@@ -9,7 +9,7 @@ export interface NotificationDeliveryRecord {
   groupId: string | null
   channel: 'email' | 'bark'
   target: string
-  status: 'pending' | 'sending' | 'sent' | 'failed'
+  status: 'pending' | 'sending' | 'sent' | 'failed' | 'cancelled'
   test: boolean
   attempts: number
   error: string | null
@@ -63,7 +63,26 @@ export interface GroupAlertPolicy {
   barkSound: string | null
   barkVolume: number | null
   barkCall: boolean | null
+  barkSchedule: BarkSchedule
   updatedAt: string
+}
+
+export interface BarkScheduleRule {
+  id: string
+  name: string
+  enabled: boolean
+  startTime: string
+  endTime: string
+  level: BarkLevel | null
+  sound: string | null
+  volume: number | null
+  call: boolean | null
+}
+
+export interface BarkSchedule {
+  timezone: string
+  defaultEnabled: boolean
+  rules: BarkScheduleRule[]
 }
 
 export function getNotificationChannels(options: RequestOptions = {}) {

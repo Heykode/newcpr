@@ -108,6 +108,7 @@ pub(super) async fn apply_observations(
         .await
         .map_err(|_| postgres_unavailable("update group alert recovery"))?;
         let mut confirmed = Vec::new();
+        let mut bark_candidate = None;
         for observation in observations {
             let previous = incidents
                 .iter()
@@ -152,9 +153,18 @@ pub(super) async fn apply_observations(
             .execute(&mut *tx)
             .await
             .map_err(|_| postgres_unavailable("save group alert incident"))?;
+            if is_active
+                && observation.bark_enabled
+                && let Some(activated_at) = activated
+            {
+                bark_candidate.get_or_insert((observation, activated_at));
+            }
         }
         for observation in confirmed {
-            super::enqueue_observation(&mut tx, observation, now).await?;
+            super::enqueue_email_observation(&mut tx, observation, now).await?;
+        }
+        if let Some((observation, activated_at)) = bark_candidate {
+            super::bark::enqueue_current(&mut tx, observation, activated_at, now).await?;
         }
     }
     tx.commit()
@@ -178,7 +188,7 @@ pub(super) async fn target_enqueued(
            select 1 from notification_outbox o
            join account_group_alert_incidents i
              on i.group_id=o.group_id and i.condition_kind=o.condition_kind
-               and i.activated_at=o.created_at
+               and i.activated_at=o.incident_activated_at
            where o.group_id=$1 and o.channel=$2 and o.target=$3 and not o.test)",
     )
     .bind(group_id)

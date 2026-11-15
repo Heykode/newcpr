@@ -10,7 +10,6 @@ import BaseCard from '@/components/base/BaseCard.vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BasePageHeader from '@/components/base/BasePageHeader.vue'
 import BaseSegmented from '@/components/base/BaseSegmented.vue'
-import BaseSelect from '@/components/base/BaseSelect.vue'
 import BaseTableColumnSettings from '@/components/base/BaseTable/BaseTableColumnSettings.vue'
 import BaseTablePagination from '@/components/base/BaseTable/BaseTablePagination.vue'
 import { useTableColumns } from '@/components/base/BaseTable/useTableColumns'
@@ -29,7 +28,7 @@ import { useUsageFilters } from './composables/useUsageFilters'
 import { useUsageRecordDetail } from './composables/useUsageRecordDetail'
 import { useUsageRecordsTable } from './composables/useUsageRecordsTable'
 import { useUsageTimeRange } from './composables/useUsageTimeRange'
-import { usageRecordColumns, usageTimeRangeOptions } from './constants'
+import { usageRecordColumns } from './constants'
 
 const { draft, error: filterError, filters, errorFilters } = useUsageFilters()
 const recordView = computed({
@@ -120,7 +119,6 @@ watch(timeRange, () => {
   <div class="w-full">
     <BasePageHeader title="使用统计" :description="t('usage.page.description')">
       <template #actions>
-        <BaseSelect v-model="timeRange" :options="usageTimeRangeOptions" class="w-34" />
         <ProviderFilterSegmented
           v-model="providerQuery"
           :disabled="refreshingList"
@@ -128,6 +126,10 @@ watch(timeRange, () => {
         />
       </template>
     </BasePageHeader>
+
+    <BaseCard padding="compact" class="mb-4 overflow-visible!">
+      <UsageQueryFilters v-model="draft" :range="timeRangeParams" :errors="recordView === 'errors'" :error="filterError" />
+    </BaseCard>
 
     <UsageSummaryCards :summary="summary.data" :loading="summary.loading" :error="summary.error" />
     <UsageInsightsGrid
@@ -147,11 +149,11 @@ watch(timeRange, () => {
       <template #header>
         <div class="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h2 class="m-0 text-xl leading-[1.15] font-heavy text-cp-text">
+            <h2 class="m-0 text-base leading-snug font-semibold text-cp-text">
               {{ t('usage.page.requestDetails') }}
             </h2>
             <p
-              class="mt-1.75 mb-0 text-cp leading-[1.15] font-emphasis text-cp-text-secondary"
+              class="mt-1 mb-0 text-cp-sm leading-relaxed text-cp-text-secondary"
             >
               {{ t('usage.page.recordsDescription') }}
             </p>
@@ -164,7 +166,6 @@ watch(timeRange, () => {
       </template>
 
       <template #body>
-        <UsageQueryFilters v-model="draft" :range="timeRangeParams" :errors="recordView === 'errors'" :error="filterError" />
         <div
           v-show="recordView === 'success'"
           class="grid min-h-130 min-w-0 flex-1 grid-rows-[auto_minmax(0,1fr)] gap-3"

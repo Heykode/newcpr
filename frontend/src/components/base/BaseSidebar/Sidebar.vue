@@ -15,8 +15,8 @@ withDefaults(defineProps<{
   defaultActive: '',
   defaultOpeneds: () => [],
   collapse: false,
-  width: '251px',
-  collapseWidth: '88px',
+  width: '212px',
+  collapseWidth: '72px',
 })
 
 const emit = defineEmits<{
@@ -41,21 +41,21 @@ defineExpose({
 
 <template>
   <aside
-    class="relative flex h-full min-h-0 shrink-0 flex-col overflow-hidden rounded-e-(--cp-layout-sider-border-radius) bg-(--cp-layout-sider-bg) bg-(image:--cp-layout-sider-bg-image) shadow-cp-layout-sider transition-[width,flex-basis] duration-340 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none"
+    class="relative flex h-full min-h-0 shrink-0 flex-col overflow-hidden rounded-e-(--cp-layout-sider-border-radius) border-r border-cp-border-secondary bg-(--cp-layout-sider-bg) bg-(image:--cp-layout-sider-bg-image) shadow-cp-layout-sider transition-[width,flex-basis] duration-340 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none"
     :style="{ width: collapse ? collapseWidth : width, flexBasis: collapse ? collapseWidth : width }"
   >
     <div
       v-if="$slots['brand-icon'] || $slots.brand"
-      class="mx-4 mt-6 grid h-12 shrink-0 items-center"
+      class="mx-4 mt-5 mb-3 grid h-12 shrink-0 items-center"
       :class="[
-        $slots['brand-icon'] ? 'grid-cols-[44px_minmax(0,1fr)]' : 'grid-cols-1',
-        collapse ? 'w-11 self-center' : 'self-stretch gap-3',
+        $slots['brand-icon'] ? 'grid-cols-[32px_minmax(0,1fr)]' : 'grid-cols-1',
+        collapse ? 'w-8 self-center' : 'self-stretch gap-2.5',
       ]"
     >
       <slot name="brand-icon" :collapse="collapse" />
       <span
         v-if="$slots.brand"
-        class="grid min-w-33 content-center overflow-hidden whitespace-nowrap transition-[opacity,translate] duration-200 motion-reduce:transition-none"
+        class="grid min-w-0 content-center overflow-hidden whitespace-nowrap transition-[opacity,translate] duration-200 motion-reduce:transition-none"
         :class="collapse ? 'pointer-events-none -translate-x-1.5 opacity-0' : 'translate-x-0 opacity-100'"
         :inert="collapse"
         :aria-hidden="collapse || undefined"
@@ -76,7 +76,7 @@ defineExpose({
       @close="(index, path) => emit('close', index, path)"
     />
 
-    <div v-if="$slots.footer" class="mx-4 mb-6 shrink-0" :class="collapse ? 'min-w-11 self-center' : 'self-stretch'">
+    <div v-if="$slots.footer" class="mx-3 mb-4 shrink-0 border-t border-cp-border-secondary pt-3" :class="collapse ? 'min-w-10 self-center' : 'self-stretch'">
       <slot name="footer" :collapse="collapse" />
     </div>
   </aside>

@@ -1,7 +1,7 @@
 use std::{collections::BTreeSet, sync::Arc};
 
 use async_trait::async_trait;
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use secrecy::{ExposeSecret as _, SecretString};
 
 use crate::{
@@ -12,7 +12,7 @@ use crate::{
             AlertConditionKind, AlertObservation, ClaimedNotificationDelivery, GroupAlertPolicy,
             NotificationChannelKind, NotificationChannelsView, NotificationDeliveryRecord,
             ReplaceNotificationChannels, StoredNotificationChannels, TestNotificationCommand,
-            normalized_bark_device_key,
+            bark_delivery_key, normalized_bark_device_key,
         },
     },
     ports::{
@@ -72,6 +72,17 @@ impl DefaultNotificationsService {
 
     async fn deliver(&self, claimed: ClaimedNotificationDelivery) -> Result<(), AdminError> {
         let result = self.send(&claimed).await;
+        if matches!(result, Ok(false)) {
+            self.groups
+                .cancel_notification_delivery(&claimed.id, Utc::now())
+                .await
+                .map_err(|error| map_store_error(error, "notification cancellation"))?;
+            return if claimed.test {
+                Err(AdminError::invalid("Bark 提醒时段或规则已变化，请重新测试"))
+            } else {
+                Ok(())
+            };
+        }
         self.groups
             .finish_notification_delivery(
                 &claimed.id,
@@ -81,11 +92,13 @@ impl DefaultNotificationsService {
             )
             .await
             .map_err(|error| map_store_error(error, "notification delivery"))?;
-        result
+        result.map(|_| ())
     }
 
-    async fn send(&self, claimed: &ClaimedNotificationDelivery) -> Result<(), AdminError> {
-        if !claimed.test {
+    async fn send(&self, claimed: &ClaimedNotificationDelivery) -> Result<bool, AdminError> {
+        let policy = if !claimed.test
+            || (claimed.channel == NotificationChannelKind::Bark && claimed.group_id.is_some())
+        {
             let id = claimed
                 .group_id
                 .as_ref()
@@ -104,15 +117,37 @@ impl DefaultNotificationsService {
                 }
                 NotificationChannelKind::Bark => policy.bark_enabled,
             };
-            if !policy.enabled || !condition_enabled || !route_enabled {
+            if !claimed.test && (!policy.enabled || !condition_enabled || !route_enabled) {
                 return Err(AdminError::invalid("分组通知已关闭"));
             }
-        }
+            Some(policy)
+        } else {
+            None
+        };
         let channels = self
             .settings
             .load_notification_channels()
             .await
             .map_err(|error| map_store_error(error, "notification channels"))?;
+        if claimed.channel == NotificationChannelKind::Bark
+            && let Some(policy) = policy
+        {
+            let key = claimed.bark_rule_key.clone().unwrap_or_else(|| {
+                bark_delivery_key(
+                    "default",
+                    claimed.bark_level,
+                    claimed.bark_sound.as_deref(),
+                    claimed.bark_volume,
+                    claimed.bark_call,
+                )
+            });
+            if policy
+                .bark_rule_at(&channels.bark.view, Utc::now())
+                .is_none_or(|rule| rule.fingerprint() != key)
+            {
+                return Ok(false);
+            }
+        }
         let result = match claimed.channel {
             NotificationChannelKind::Email => {
                 if !channels.smtp.view.enabled {
@@ -165,7 +200,9 @@ impl DefaultNotificationsService {
                     .await
             }
         };
-        result.map_err(|error| AdminError::unavailable(error.to_string()))
+        result
+            .map(|()| true)
+            .map_err(|error| AdminError::unavailable(error.to_string()))
     }
 }
 
@@ -263,6 +300,20 @@ impl NotificationsService for DefaultNotificationsService {
             Some(id) => Some(self.policy(id).await?),
             None => None,
         };
+        let bark_rule = if command.channel == NotificationChannelKind::Bark {
+            policy
+                .as_ref()
+                .map(|policy| {
+                    policy
+                        .bark_rule_at(&channels.bark.view, Utc::now())
+                        .ok_or_else(|| {
+                            AdminError::invalid("当前为 Bark 免打扰时段，请在提醒时段测试")
+                        })
+                })
+                .transpose()?
+        } else {
+            None
+        };
         let delivery = ClaimedNotificationDelivery {
             id: id.clone(),
             group_id: command.group_id,
@@ -275,22 +326,24 @@ impl NotificationsService for DefaultNotificationsService {
             },
             subject: "CPR 通知测试".to_owned(),
             body: "通知渠道连接正常。这是一条测试通知。".to_owned(),
-            bark_level: policy
+            bark_level: bark_rule
                 .as_ref()
-                .and_then(|p| p.bark_level)
+                .map(|rule| rule.level)
                 .unwrap_or(channels.bark.view.level),
-            bark_sound: policy
+            bark_sound: bark_rule
                 .as_ref()
-                .and_then(|p| p.bark_sound.clone())
+                .and_then(|rule| rule.sound.clone())
                 .or(channels.bark.view.sound),
-            bark_volume: policy
+            bark_volume: bark_rule
                 .as_ref()
-                .and_then(|p| p.bark_volume)
+                .map(|rule| rule.volume)
                 .unwrap_or(channels.bark.view.volume),
-            bark_call: policy
+            bark_call: bark_rule
                 .as_ref()
-                .and_then(|p| p.bark_call)
+                .map(|rule| rule.call)
                 .unwrap_or(channels.bark.view.call),
+            bark_rule_key: bark_rule.as_ref().map(|rule| rule.fingerprint()),
+            incident_activated_at: None,
             test: true,
         };
         self.groups
@@ -328,7 +381,12 @@ impl NotificationsService for DefaultNotificationsService {
                 .load_group_alert_policy(&item.group.id)
                 .await
                 .map_err(|error| map_store_error(error, "group alert policy"))?;
-            observations.extend(group_observations(item, &policy, &channels));
+            observations.extend(group_observations(
+                item,
+                &policy,
+                &channels,
+                report.generated_at,
+            ));
         }
         self.groups
             .apply_group_alert_observations(&observations, report.generated_at)
@@ -356,23 +414,29 @@ fn group_observations(
     item: &GroupMonitorItem,
     policy: &GroupAlertPolicy,
     channels: &StoredNotificationChannels,
+    now: DateTime<Utc>,
 ) -> Vec<AlertObservation> {
     let email_recipients = if policy.enabled && policy.email_enabled && smtp_ready(channels) {
         policy.email_recipients.clone()
     } else {
         Vec::new()
     };
-    let bark_enabled = policy.enabled
+    let bark_configured = policy.enabled
         && policy.bark_enabled
         && channels.bark.view.enabled
         && channels.bark.view.device_key_set;
-    let level = policy.bark_level.unwrap_or(channels.bark.view.level);
-    let sound = policy
-        .bark_sound
-        .clone()
-        .or_else(|| channels.bark.view.sound.clone());
-    let volume = policy.bark_volume.unwrap_or(channels.bark.view.volume);
-    let call = policy.bark_call.unwrap_or(channels.bark.view.call);
+    let bark_rule = policy.bark_rule_at(&channels.bark.view, now);
+    let bark_enabled = bark_configured && bark_rule.is_some();
+    let level = bark_rule
+        .as_ref()
+        .map_or(channels.bark.view.level, |rule| rule.level);
+    let sound = bark_rule.as_ref().and_then(|rule| rule.sound.clone());
+    let volume = bark_rule
+        .as_ref()
+        .map_or(channels.bark.view.volume, |rule| rule.volume);
+    let call = bark_rule
+        .as_ref()
+        .map_or(channels.bark.view.call, |rule| rule.call);
     let concurrency = item.used_slots.and_then(|used| {
         (item.total_slots > 0).then_some(used as f64 * 100.0 / item.total_slots as f64)
     });
@@ -412,7 +476,7 @@ fn group_observations(
         .map(|(kind, condition, current, active)| {
             let enabled = policy.enabled
                 && condition.enabled
-                && (!email_recipients.is_empty() || bark_enabled);
+                && (!email_recipients.is_empty() || bark_configured);
             // Keep unknown observations so they interrupt confirmation and recovery.
             AlertObservation {
                 group_id: item.group.id.clone(),
@@ -429,6 +493,7 @@ fn group_observations(
                 bark_sound: sound.clone(),
                 bark_volume: volume,
                 bark_call: call,
+                bark_rule_key: bark_rule.as_ref().map(|rule| rule.fingerprint()),
                 summary: alert_summary(item, kind, current, condition.threshold),
             }
         })
@@ -530,6 +595,7 @@ fn validate_channels(command: &ReplaceNotificationChannels) -> Result<(), AdminE
 }
 
 fn normalize_policy(policy: &mut GroupAlertPolicy) -> Result<(), AdminError> {
+    policy.bark_schedule.normalize()?;
     if !(0.0 < policy.concurrency.threshold && policy.concurrency.threshold <= 100.0)
         || !(0.0..=525_600.0).contains(&policy.eta.threshold)
         || policy.bark_volume.is_some_and(|volume| volume > 10)

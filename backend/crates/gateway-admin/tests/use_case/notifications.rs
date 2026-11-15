@@ -26,20 +26,41 @@ use gateway_core::routing::AccountGroupId;
 use secrecy::{ExposeSecret as _, SecretString};
 
 struct NotificationStore {
-    policy: GroupAlertPolicy,
+    policy: Mutex<GroupAlertPolicy>,
+    policy_after_test_enqueue: Option<GroupAlertPolicy>,
     channels: StoredNotificationChannels,
     observations: Mutex<Vec<AlertObservation>>,
     saved: Mutex<Option<ReplaceNotificationChannels>>,
     finished: Mutex<Vec<(bool, Option<String>)>>,
+    claimed: Mutex<Option<ClaimedNotificationDelivery>>,
+    cancelled: Mutex<Vec<String>>,
 }
 
 #[async_trait]
 impl AccountGroupStore for NotificationStore {
+    async fn claim_notification_delivery(
+        &self,
+        _: DateTime<Utc>,
+    ) -> AdminStoreResult<Option<ClaimedNotificationDelivery>> {
+        Ok(self.claimed.lock().unwrap().take())
+    }
+
+    async fn cancel_notification_delivery(
+        &self,
+        id: &str,
+        _: DateTime<Utc>,
+    ) -> AdminStoreResult<()> {
+        self.cancelled.lock().unwrap().push(id.to_owned());
+        Ok(())
+    }
     async fn enqueue_test_notification(
         &self,
         delivery: ClaimedNotificationDelivery,
         _: DateTime<Utc>,
     ) -> AdminStoreResult<String> {
+        if let Some(policy) = &self.policy_after_test_enqueue {
+            *self.policy.lock().unwrap() = policy.clone();
+        }
         Ok(delivery.id)
     }
 
@@ -61,8 +82,9 @@ impl AccountGroupStore for NotificationStore {
         &self,
         group_id: &AccountGroupId,
     ) -> AdminStoreResult<GroupAlertPolicy> {
-        assert_eq!(group_id, &self.policy.group_id);
-        Ok(self.policy.clone())
+        let policy = self.policy.lock().unwrap();
+        assert_eq!(group_id, &policy.group_id);
+        Ok(policy.clone())
     }
 
     async fn apply_group_alert_observations(
@@ -198,11 +220,14 @@ async fn observe(
     channels: StoredNotificationChannels,
 ) -> Vec<AlertObservation> {
     let store = Arc::new(NotificationStore {
-        policy,
+        policy: Mutex::new(policy),
+        policy_after_test_enqueue: None,
         channels,
         observations: Mutex::new(Vec::new()),
         saved: Mutex::new(None),
         finished: Mutex::new(Vec::new()),
+        claimed: Mutex::new(None),
+        cancelled: Mutex::new(Vec::new()),
     });
     let services = super::AdminHarness::new()
         .settings(store.clone())
@@ -372,11 +397,14 @@ async fn display_only_snapshots_never_trigger_or_recover_alerts() {
     policy.enabled = true;
     policy.bark_enabled = true;
     let store = Arc::new(NotificationStore {
-        policy,
+        policy: Mutex::new(policy),
+        policy_after_test_enqueue: None,
         channels: channels(true),
         observations: Mutex::new(Vec::new()),
         saved: Mutex::new(None),
         finished: Mutex::new(Vec::new()),
+        claimed: Mutex::new(None),
+        cancelled: Mutex::new(Vec::new()),
     });
     let services = super::AdminHarness::new()
         .settings(store.clone())
@@ -405,11 +433,14 @@ async fn notification_save_normalizes_bark_only_and_persists_safe_delivery_failu
     configured.smtp.view.password_set = true;
     configured.bark.device_key = Some(SecretString::from("synthetic-existing"));
     let store = Arc::new(NotificationStore {
-        policy: GroupAlertPolicy::defaults(item().group.id, Utc::now()),
+        policy: Mutex::new(GroupAlertPolicy::defaults(item().group.id, Utc::now())),
+        policy_after_test_enqueue: None,
         channels: configured.clone(),
         observations: Mutex::new(Vec::new()),
         saved: Mutex::new(None),
         finished: Mutex::new(Vec::new()),
+        claimed: Mutex::new(None),
+        cancelled: Mutex::new(Vec::new()),
     });
     let services = super::AdminHarness::new()
         .settings(store.clone())
@@ -472,5 +503,241 @@ async fn notification_save_normalizes_bark_only_and_persists_safe_delivery_failu
     assert_eq!(
         *store.finished.lock().unwrap(),
         vec![(false, Some(error.message().to_owned()))]
+    );
+}
+
+fn night_rule() -> gateway_admin::model::notifications::BarkScheduleRule {
+    gateway_admin::model::notifications::BarkScheduleRule {
+        id: "night".to_owned(),
+        name: "Night".to_owned(),
+        enabled: true,
+        start_time: "23:30".to_owned(),
+        end_time: "09:00".to_owned(),
+        level: Some(BarkLevel::Critical),
+        sound: Some("alarm".to_owned()),
+        volume: Some(8),
+        call: Some(true),
+    }
+}
+
+#[test]
+fn bark_schedules_match_timezone_midnight_boundaries_and_list_priority() {
+    let mut policy = GroupAlertPolicy::defaults(item().group.id, Utc::now());
+    let channel = channels(true).bark.view;
+    let at = |time: &str| time.parse::<DateTime<Utc>>().unwrap();
+    assert_eq!(
+        policy
+            .bark_rule_at(&channel, at("2026-11-15T15:29:00Z"))
+            .unwrap()
+            .id,
+        "default"
+    );
+    policy.bark_schedule.rules.push(night_rule());
+    policy.bark_schedule.default_enabled = false;
+    policy.bark_schedule.normalize().unwrap();
+    assert!(
+        policy
+            .bark_rule_at(&channel, at("2026-11-15T15:29:00Z"))
+            .is_none()
+    );
+    for time in [
+        "2026-11-15T15:30:00Z",
+        "2026-11-15T16:00:00Z",
+        "2026-11-16T00:59:59Z",
+    ] {
+        let rule = policy.bark_rule_at(&channel, at(time)).unwrap();
+        assert_eq!(rule.id, "night");
+        assert_eq!(
+            (rule.level, rule.volume, rule.call),
+            (BarkLevel::Critical, 8, true)
+        );
+    }
+    assert!(
+        policy
+            .bark_rule_at(&channel, at("2026-11-16T01:00:00Z"))
+            .is_none()
+    );
+    let mut overlapping = night_rule();
+    overlapping.id = "overlap".to_owned();
+    overlapping.level = Some(BarkLevel::Active);
+    policy.bark_schedule.rules.insert(0, overlapping);
+    assert_eq!(
+        policy
+            .bark_rule_at(&channel, at("2026-11-15T16:00:00Z"))
+            .unwrap()
+            .id,
+        "overlap"
+    );
+    policy.bark_schedule.rules[0].enabled = false;
+    assert_eq!(
+        policy
+            .bark_rule_at(&channel, at("2026-11-15T16:00:00Z"))
+            .unwrap()
+            .id,
+        "night"
+    );
+    policy.bark_schedule.timezone = "America/New_York".to_owned();
+    // Both occurrences of a repeated DST clock minute select the same presentation.
+    let first = policy
+        .bark_rule_at(&channel, at("2026-11-01T05:30:00Z"))
+        .unwrap();
+    let second = policy
+        .bark_rule_at(&channel, at("2026-11-01T06:30:00Z"))
+        .unwrap();
+    assert_eq!(first.fingerprint(), second.fingerprint());
+}
+
+#[test]
+fn bark_schedule_validation_rejects_ambiguous_and_unbounded_inputs() {
+    let mut schedule = gateway_admin::model::notifications::BarkSchedule::default();
+    schedule.rules.push(night_rule());
+    for value in ["9:00", "24:00", "09:60", "invalid"] {
+        let mut invalid = schedule.clone();
+        invalid.rules[0].start_time = value.to_owned();
+        assert!(invalid.normalize().is_err());
+    }
+    let mut invalid = schedule.clone();
+    invalid.rules[0].end_time = invalid.rules[0].start_time.clone();
+    assert!(invalid.normalize().is_err());
+    let mut invalid = schedule.clone();
+    invalid.rules.push(night_rule());
+    assert!(invalid.normalize().is_err());
+    let mut invalid = schedule.clone();
+    invalid.rules[0].volume = Some(11);
+    assert!(invalid.normalize().is_err());
+    let mut invalid = schedule.clone();
+    invalid.timezone = "invalid/timezone".to_owned();
+    assert!(invalid.normalize().is_err());
+    let mut invalid = schedule.clone();
+    invalid.rules = (0..25)
+        .map(|index| {
+            let mut rule = night_rule();
+            rule.id = format!("rule-{index}");
+            rule
+        })
+        .collect();
+    assert!(invalid.normalize().is_err());
+    let mut policy = GroupAlertPolicy::defaults(item().group.id, Utc::now());
+    policy.bark_level = Some(BarkLevel::Critical);
+    policy.bark_volume = Some(7);
+    let channel = channels(true).bark.view;
+    let rule = policy.bark_rule_at(&channel, Utc::now()).unwrap();
+    assert_eq!((rule.level, rule.volume), (BarkLevel::Critical, 7));
+    assert!(
+        BarkLevel::Critical.delivery_strength(0, false)
+            > BarkLevel::TimeSensitive.delivery_strength(10, true)
+    );
+}
+
+#[tokio::test]
+async fn quiet_bark_period_keeps_monitor_confirmation_and_email_routes() {
+    let mut policy = GroupAlertPolicy::defaults(item().group.id, Utc::now());
+    policy.enabled = true;
+    policy.bark_enabled = true;
+    policy.email_enabled = true;
+    policy.email_recipients = vec!["ops@example.com".to_owned()];
+    policy.bark_schedule.default_enabled = false;
+    let rows = observe(item(), policy, channels(true)).await;
+    let concurrency = rows
+        .iter()
+        .find(|row| row.kind == AlertConditionKind::Concurrency)
+        .unwrap();
+    assert!(concurrency.active && concurrency.enabled);
+    assert!(!concurrency.bark_enabled);
+    assert_eq!(concurrency.confirmation_seconds, 20);
+    assert_eq!(concurrency.email_recipients, ["ops@example.com"]);
+}
+
+#[tokio::test]
+async fn dispatch_cancels_out_of_period_reminder_and_quiet_test_never_sends() {
+    let mut policy = GroupAlertPolicy::defaults(item().group.id, Utc::now());
+    policy.enabled = true;
+    policy.bark_enabled = true;
+    policy.bark_schedule.default_enabled = false;
+    let store = Arc::new(NotificationStore {
+        claimed: Mutex::new(Some(ClaimedNotificationDelivery {
+            id: "queued-before-quiet".to_owned(),
+            group_id: Some(policy.group_id.clone()),
+            condition: Some(AlertConditionKind::Concurrency),
+            channel: NotificationChannelKind::Bark,
+            target: "default".to_owned(),
+            subject: "Synthetic".to_owned(),
+            body: "Synthetic".to_owned(),
+            bark_level: BarkLevel::Active,
+            bark_sound: None,
+            bark_volume: 5,
+            bark_call: false,
+            bark_rule_key: None,
+            incident_activated_at: Some(Utc::now()),
+            test: false,
+        })),
+        policy: Mutex::new(policy),
+        policy_after_test_enqueue: None,
+        channels: channels(true),
+        observations: Mutex::new(Vec::new()),
+        saved: Mutex::new(None),
+        finished: Mutex::new(Vec::new()),
+        cancelled: Mutex::new(Vec::new()),
+    });
+    let services = super::AdminHarness::new()
+        .settings(store.clone())
+        .account_groups(store.clone())
+        .build()
+        .await;
+    assert!(services.notifications().dispatch_one().await.unwrap());
+    assert_eq!(*store.cancelled.lock().unwrap(), ["queued-before-quiet"]);
+    assert!(
+        store.finished.lock().unwrap().is_empty(),
+        "cancelled is not delivered or a transport failure"
+    );
+    let group_id = store.policy.lock().unwrap().group_id.clone();
+    let error = services
+        .notifications()
+        .test(TestNotificationCommand {
+            channel: NotificationChannelKind::Bark,
+            target: "default".to_owned(),
+            group_id: Some(group_id),
+        })
+        .await
+        .unwrap_err();
+    assert!(error.message().contains("免打扰"));
+    assert!(store.finished.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn group_bark_test_rechecks_rule_after_enqueue_and_reports_cancellation() {
+    let policy = GroupAlertPolicy::defaults(item().group.id, Utc::now());
+    let group_id = policy.group_id.clone();
+    let mut quiet = policy.clone();
+    quiet.bark_schedule.default_enabled = false;
+    let store = Arc::new(NotificationStore {
+        policy: Mutex::new(policy),
+        policy_after_test_enqueue: Some(quiet),
+        channels: channels(true),
+        observations: Mutex::new(Vec::new()),
+        saved: Mutex::new(None),
+        finished: Mutex::new(Vec::new()),
+        claimed: Mutex::new(None),
+        cancelled: Mutex::new(Vec::new()),
+    });
+    let services = super::AdminHarness::new()
+        .settings(store.clone())
+        .account_groups(store.clone())
+        .build()
+        .await;
+    let error = services
+        .notifications()
+        .test(TestNotificationCommand {
+            channel: NotificationChannelKind::Bark,
+            target: "default".to_owned(),
+            group_id: Some(group_id),
+        })
+        .await
+        .unwrap_err();
+    assert!(error.message().contains("规则已变化"));
+    assert_eq!(store.cancelled.lock().unwrap().len(), 1);
+    assert!(
+        store.finished.lock().unwrap().is_empty(),
+        "a cancelled test must not be reported as sent"
     );
 }

@@ -205,6 +205,29 @@ async function main() {
       await check(first())
       await selectAll()
       assert.equal(await page.locator('[data-account-card][data-selected]').count(), 3)
+      const accountTools = page.getByRole('group', { name: '账号操作', exact: true })
+      const qualityMenu = accountTools.getByRole('button', { name: '质量检测', exact: true })
+      for (const width of [320, 390, 1024, 1280, 1440]) {
+        await page.setViewportSize({ width, height: 900 })
+        const toolbarBox = await accountTools.boundingBox()
+        const qualityBox = await qualityMenu.boundingBox()
+        assert.ok(qualityBox.width < 200 && qualityBox.width < toolbarBox.width * 0.8, `quality menu keeps its natural width at ${width}px`)
+        assert.ok(await accountTools.evaluate(el => el.scrollWidth <= el.clientWidth + 1), `selected toolbar fits at ${width}px`)
+        assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), `selected page fits at ${width}px`)
+        if (width >= 1280) {
+          const batchBox = await accountTools.getByRole('button', { name: '批量操作', exact: true }).boundingBox()
+          assert.ok(Math.abs(batchBox.y + batchBox.height / 2 - qualityBox.y - qualityBox.height / 2) <= 1, 'batch tools share a row when space permits')
+        }
+        await accountTools.screenshot({ path: `${output}/selected-tools-${width}.png` })
+      }
+      await qualityMenu.click()
+      const qualityOptions = page.getByRole('group', { name: '批量质量检测', exact: true })
+      await qualityOptions.getByRole('button', { name: '批量开启', exact: true }).waitFor()
+      await qualityOptions.getByRole('button', { name: '批量关闭', exact: true }).waitFor()
+      await page.keyboard.press('Escape')
+      await qualityOptions.waitFor({ state: 'hidden' })
+      assert.equal(writes.length, 0, 'opening quality operations never mutates accounts')
+      await page.setViewportSize({ width: 390, height: 844 })
       await page.getByRole('button', { name: '下一页', exact: true }).click()
       await page.locator(`[data-account-card="${rows[3].id}"]`).waitFor()
       await check(page.locator(`[data-account-card="${rows[3].id}"]`))
@@ -292,6 +315,20 @@ async function main() {
       await searched
       await page.waitForFunction(() => document.querySelectorAll('[data-account-card]').length === 1)
       assert.equal(await page.locator('[data-account-card]').count(), 1)
+      await page.getByRole('button', { name: '清除搜索筛选', exact: true }).click()
+      await page.waitForFunction(() => document.querySelectorAll('[data-account-card]').length === 3)
+      assert.equal(reads.at(-1).page, '1', 'clearing search returns to the first page')
+      await page.getByRole('combobox', { name: '按套餐筛选', exact: true }).click()
+      await Promise.all([
+        page.waitForResponse(response => response.url().includes('/api/admin/accounts?') && response.url().includes('planType=plus')),
+        page.getByRole('option', { name: 'Plus', exact: true }).click(),
+      ])
+      await Promise.all([
+        page.waitForResponse(response => response.url().includes('/api/admin/accounts?') && !new URL(response.url()).searchParams.has('planType')),
+        page.getByRole('button', { name: '重置账号筛选', exact: true }).click(),
+      ])
+      assert.equal(reads.at(-1).sortDirection, 'desc', 'resetting filters preserves the chosen sort')
+      assert.equal(await page.getByRole('button', { name: '清除套餐筛选', exact: true }).count(), 0)
       empty = true
       await page.reload()
       await page.getByText('暂无账号数据', { exact: true }).waitFor()

@@ -60,7 +60,7 @@ const { allSelected, indeterminate, selectedRowKeys, toggleSelection, toggleAll 
     />
 
     <BaseCard
-      class="mt-5 flex h-[calc(100dvh-136px)] min-h-125 flex-col"
+      class="mt-5 flex h-[calc(100dvh-196px)] min-h-125 flex-col"
     >
       <template #header>
         <AccountGroupFilters

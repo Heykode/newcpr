@@ -57,6 +57,7 @@ export const useThemeStore = defineStore(
     const themeColor = shallowRef<ThemeColorId>(DEFAULT_THEME_COLOR)
     const customThemeColor = shallowRef(DEFAULT_CUSTOM_THEME_COLOR)
     const themeCustomization = ref<ThemeCustomization>({})
+    const themeDesignVersion = shallowRef(0)
     const themeRevision = shallowRef(0)
     const themeTransitioning = shallowRef(false)
     const preferredDark = usePreferredDark()
@@ -101,6 +102,15 @@ export const useThemeStore = defineStore(
         themeColor.value = DEFAULT_THEME_COLOR
       customThemeColor.value = normalizeHexColor(customThemeColor.value) ?? DEFAULT_CUSTOM_THEME_COLOR
       themeCustomization.value = normalizeThemeCustomization(themeCustomization.value)
+      // Upgrade only the untouched former default once; saved custom themes stay intact.
+      if (themeDesignVersion.value < 1) {
+        if (themeColor.value === 'relay-blue' && themePreset.value === 'default'
+          && customThemeColor.value === DEFAULT_CUSTOM_THEME_COLOR
+          && Object.keys(themeCustomization.value).length === 0) {
+          themeColor.value = DEFAULT_THEME_COLOR
+        }
+        themeDesignVersion.value = 1
+      }
     }
 
     function syncTheme(theme: ResolvedTheme): void {
@@ -304,6 +314,7 @@ export const useThemeStore = defineStore(
       themeColor,
       customThemeColor,
       themeCustomization,
+      themeDesignVersion,
       themeRevision,
       themeTransitioning,
       effectiveTheme,
@@ -325,6 +336,7 @@ export const useThemeStore = defineStore(
         'themeColor',
         'customThemeColor',
         'themeCustomization',
+        'themeDesignVersion',
       ],
     },
   },
