@@ -1273,13 +1273,19 @@ async fn usage_metric_reads_only_load_concurrency_and_caches_by_metric_and_full_
     use gateway_admin::model::observability::{UsageInsightData, UsageInsightMetric as M};
     let range = observation_range(Utc::now());
     let store = Arc::new(FixtureObservabilityStore::new(range));
+    store.overview.lock().unwrap().analytics.generated_at -= Duration::seconds(2);
     store.billing_stream_fails.store(true, Ordering::Relaxed);
     let services = observability_services_with_calculated_billing(Arc::clone(&store)).await;
     let service = services.observability();
     let first = service.usage_metric(range, UsageFilter::default(), M::Latency);
     let second = service.usage_metric(range, UsageFilter::default(), M::Latency);
     let (first, second) = tokio::join!(first, second);
-    assert_eq!(first.unwrap(), second.unwrap());
+    let first = first.unwrap();
+    let mut second = second.unwrap();
+    // 缓存命中按生成时间累计 lag，业务结果和其他元信息保持相同。
+    assert!(second.analytics.lag_seconds >= 2);
+    second.analytics.lag_seconds = first.analytics.lag_seconds;
+    assert_eq!(first, second);
     assert_eq!(store.metric_summary_calls.load(Ordering::Relaxed), 1);
     for metric in [M::Health, M::FirstToken, M::Throughput, M::Scheduling] {
         service

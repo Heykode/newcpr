@@ -211,6 +211,9 @@ Permanent billing and account identities remain separate authoritative data.
 - Counts, tokens and amounts remain exact. Histograms are approximate with explicit metadata;
   official tests permit 3% relative error. Narrow summaries omit unused distributions;
   insights and selected metric queries supply the relevant full distributions.
+- Cache hits increase lagSeconds from generatedAt even when data is unchanged. Cache
+  coalescing tests compare business values and generation separately from elapsed age;
+  use an explicitly aged fixture, not an assumption that the test finishes within one second.
 - Account health timelines retain failures/noncompletion and their five-minute resolution.
   Source search and protocol-specific prewarm/quality exclusions keep NewCPR predicates.
   Retention triggers retract derived facts; permanent ledgers are never recomputed by analytics.
