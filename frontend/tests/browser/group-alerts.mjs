@@ -148,6 +148,7 @@ async function main() {
         await page.getByRole('button', { name: `设置 ${groups[0].name} 预警`, exact: true }).click()
         const dialog = page.getByRole('dialog')
         await dialog.getByLabel('收件地址', { exact: true }).waitFor()
+        assert.equal(await dialog.getByText('监控口径', { exact: true }).count(), 0)
         await dialog.getByText('继承全局 · 重要警告（静音仍响铃）', { exact: true }).waitFor()
         await dialog.getByRole('button', { name: /提醒等级与铃声/u }).click()
         await dialog.getByRole('combobox', { name: '响铃时长' }).waitFor()
@@ -220,6 +221,18 @@ async function main() {
       await response
       await page.waitForFunction(() => !document.querySelector('[role="dialog"] fieldset').disabled)
     }
+    const openPolicy = async (group) => {
+      const response = page.waitForResponse((result) => {
+        const url = new URL(result.url())
+        return url.pathname.endsWith('/account-groups/alert-policy') && url.searchParams.get('groupId') === group.id
+      })
+      await page.getByRole('button', { name: `设置 ${group.name} 预警`, exact: true }).click()
+      await response
+      await page.waitForFunction(() => {
+        const fieldset = document.querySelector('[role="dialog"] fieldset')
+        return fieldset && !fieldset.disabled
+      })
+    }
     await dialog.getByLabel('收件地址', { exact: true }).waitFor()
     await savePolicy()
     await page.waitForFunction(() => document.body.textContent.includes('分组预警设置已保存'))
@@ -250,6 +263,19 @@ async function main() {
     await savePolicy()
     for (const key of ['barkLevel', 'barkVolume', 'barkCall'])
       assert.equal(policies.get(groups[0].id)[key], null)
+    const concurrencyThreshold = dialog.getByRole('spinbutton', { name: '并发达到阈值', exact: true })
+    await concurrencyThreshold.fill('85')
+    await savePolicy()
+    await dialog.getByRole('button', { name: '取消', exact: true }).click()
+    await page.setViewportSize({ width: 1440, height: 900 })
+    await openPolicy(groups[1])
+    assert.equal(await concurrencyThreshold.inputValue(), '90', 'another group retains its own default threshold')
+    await concurrencyThreshold.fill('75')
+    await savePolicy()
+    await dialog.getByRole('button', { name: '取消', exact: true }).click()
+    await openPolicy(groups[0])
+    assert.equal(await concurrencyThreshold.inputValue(), '85', 'reopening the first group restores its own threshold')
+    assert.equal(policies.get(groups[1].id).concurrency.threshold, 75, 'saving the first group does not replace another group policy')
     await dialog.getByRole('button', { name: '取消', exact: true }).click()
     failLoad = true
     await page.getByRole('button', { name: `设置 ${groups[0].name} 预警`, exact: true }).click()

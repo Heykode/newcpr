@@ -130,7 +130,7 @@ const {
         <RefreshCw class="size-3.5" />
       </BaseIconButton>
     </div>
-    <GroupAlertSettingsModal v-model="alertOpen" :group="alertGroup" :snapshot="alertGroup ? records.get(alertGroup.id) : undefined" :sampled-at="alertGroup ? sampleTimes.get(alertGroup.id) : undefined" :stale="stale" :now="now" />
+    <GroupAlertSettingsModal v-model="alertOpen" :group="alertGroup" :sampled-at="alertGroup ? sampleTimes.get(alertGroup.id) : undefined" :stale="stale" :now="now" />
   </div>
 </template>
 

@@ -9,9 +9,9 @@ const emit = defineEmits<{ change: [enabled: boolean] }>()
 </script>
 
 <template>
-  <BasePopover class="w-full xl:w-auto" :disabled="disabled || loading">
+  <BasePopover class="shrink-0" :disabled="disabled || loading">
     <template #trigger="{ open }">
-      <BaseButton class="w-full whitespace-nowrap xl:w-auto" :disabled="disabled" :loading="loading" :aria-expanded="open" aria-label="质量检测">
+      <BaseButton class="whitespace-nowrap" :disabled="disabled" :loading="loading" :aria-expanded="open" aria-label="质量检测">
         <ClipboardCheck class="size-4" />质量检测<ChevronDown class="size-3.5" />
       </BaseButton>
     </template>

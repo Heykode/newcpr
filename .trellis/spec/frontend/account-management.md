@@ -19,6 +19,9 @@
 
 ## Mobile Account Cards
 
+- Selection-only toolbar actions, including batch quality checks, use their natural
+  width at every breakpoint. Do not restore full-width triggers on mobile or tablet;
+  the parent toolbar owns wrapping. Verify the selected state, not only an empty selection.
 - Below 768px, render `AccountMobileList` instead of `BaseTable`, never both hidden
   trees. The page still owns querying, refresh, selection, expansion and mutations.
   Resizing must not issue list requests or clear selected/expanded account IDs.

@@ -111,6 +111,8 @@ function resetFilters() {
     </div>
     <div
       class="flex w-full min-w-0 flex-wrap items-center gap-2 border-t border-cp-border-secondary pt-3"
+      role="group"
+      aria-label="账号操作"
     >
       <span class="mr-auto text-cp-xs text-cp-text-secondary" aria-live="polite">{{ selectedCount ? `已选择 ${selectedCount} 个账号` : '账号工具' }}</span>
       <BasePopover v-if="!hideColumns" placement="bottom-start">
