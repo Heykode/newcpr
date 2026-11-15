@@ -75,24 +75,24 @@ fn wire_identity(
         .unwrap_or_else(|| identity_seed(request, context.request_id));
     let account = context.account_id.unwrap_or_default();
     let scope = AccountCorrelation::new(key, installation, account);
-    let session = scope.derive(&seed.session);
-    let thread = scope.derive(&seed.thread);
-    let window = [context.codex_window_id, request.codex_window_id.as_deref()]
+    let derive = |kind: &str, anchor: &str| scope.derive(kind, anchor);
+    let session = derive("session", &seed.session);
+    let thread = derive("thread", &seed.thread);
+    let generation = [context.codex_window_id, request.codex_window_id.as_deref()]
         .into_iter()
         .flatten()
-        .find(|value| !value.is_empty())
-        .and_then(|value| scope.field("x-codex-window-id", value))
-        .unwrap_or_else(|| format!("{thread}:0"));
+        .find_map(window_generation)
+        .unwrap_or(0);
     let parent = [
         context.parent_thread_id,
         request.parent_thread_id.as_deref(),
     ]
     .into_iter()
     .find_map(nonblank)
-    .map(|parent| scope.derive(parent));
+    .map(|parent| derive("thread", parent));
     Some(WireIdentity {
         session,
-        window,
+        window: format!("{thread}:{generation}"),
         thread,
         parent,
     })
@@ -109,7 +109,12 @@ pub fn project_response_request(
         .get_or_insert_with(|| identity_seed(request, context.request_id));
     let mapped = std::cell::RefCell::new(std::collections::BTreeMap::new());
     if let Some(scope) = correlation_scope(request, context) {
-        project_body(projected.body_mut(), scope.recording(&mapped));
+        project_body(
+            projected.body_mut(),
+            request,
+            context,
+            scope.recording(&mapped),
+        );
         projected.correlation_originals = mapped.into_inner();
     }
     projected
@@ -123,17 +128,30 @@ pub(crate) fn project_response_body(
     let Some(scope) = correlation_scope(request, context) else {
         return;
     };
-    project_body(body, scope);
+    project_body(body, request, context, scope);
 }
 
-fn project_body(body: &mut Map<String, Value>, scope: AccountCorrelation<'_>) {
+fn project_body(
+    body: &mut Map<String, Value>,
+    request: &CodexResponsesRequest,
+    context: CodexRequestContext<'_>,
+    scope: AccountCorrelation<'_>,
+) {
+    let Some(ids) = wire_identity(request, context) else {
+        return;
+    };
     scope.scope_input(body);
-    project_identity_fields(body, scope);
+    project_identity_fields(body, &ids, scope);
+    // The cache key is already projected by wire_identity; never hash it twice.
+    body.insert(
+        "prompt_cache_key".to_owned(),
+        Value::String(ids.thread.clone()),
+    );
     if let Some(metadata) = body
         .get_mut("client_metadata")
         .and_then(Value::as_object_mut)
     {
-        project_identity_fields(metadata, scope);
+        project_identity_fields(metadata, &ids, scope);
     }
 }
 
@@ -151,20 +169,70 @@ fn correlation_scope<'a>(
     )
 }
 
-fn project_identity_fields(fields: &mut Map<String, Value>, scope: AccountCorrelation<'_>) {
-    scope.scope_fields(fields);
+fn project_identity_fields(
+    fields: &mut Map<String, Value>,
+    ids: &WireIdentity,
+    scope: AccountCorrelation<'_>,
+) {
+    project_flat_identity(fields, ids, scope);
     for key in ["turn_metadata", "turnMetadata", "x-codex-turn-metadata"] {
         match fields.get_mut(key) {
-            Some(Value::Object(metadata)) => scope.scope_fields(metadata),
+            Some(Value::Object(metadata)) => project_flat_identity(metadata, ids, scope),
             Some(Value::String(raw)) => {
                 if let Ok(Value::Object(mut metadata)) = serde_json::from_str(raw) {
-                    scope.scope_fields(&mut metadata);
+                    project_flat_identity(&mut metadata, ids, scope);
                     if let Some(encoded) = super::request::encode_turn_metadata(&metadata) {
                         *raw = encoded;
                     }
                 }
             }
             _ => {}
+        }
+    }
+}
+
+fn project_flat_identity(
+    fields: &mut Map<String, Value>,
+    ids: &WireIdentity,
+    scope: AccountCorrelation<'_>,
+) {
+    scope.scope_fields(fields);
+    for (names, value) in [
+        (
+            &["session_id", "session-id", "sessionId"][..],
+            Some(ids.session.as_str()),
+        ),
+        (
+            &[
+                "thread_id",
+                "thread-id",
+                "threadId",
+                "conversation_id",
+                "conversationId",
+            ][..],
+            Some(ids.thread.as_str()),
+        ),
+        (
+            &["x-client-request-id", "client_request_id"][..],
+            Some(ids.thread.as_str()),
+        ),
+        (
+            &["x-codex-window-id", "window_id"][..],
+            Some(ids.window.as_str()),
+        ),
+        (
+            &["x-codex-parent-thread-id", "parent_thread_id"][..],
+            ids.parent.as_deref(),
+        ),
+    ] {
+        for name in names {
+            if fields.contains_key(*name) {
+                if let Some(value) = value {
+                    fields.insert((*name).to_owned(), Value::String(value.to_owned()));
+                } else {
+                    fields.remove(*name);
+                }
+            }
         }
     }
 }
@@ -183,6 +251,12 @@ pub fn apply_response_headers(
     context: CodexRequestContext<'_>,
 ) -> CodexClientResult<()> {
     headers.remove("x-codex-installation-id");
+    if let Some(installation) = context.installation_id {
+        headers.insert(
+            HeaderName::from_static("x-codex-installation-id"),
+            HeaderValue::from_str(installation)?,
+        );
+    }
     let conversation = protocol_value(request.client_conversation_id.as_deref());
     let ids = wire_identity(request, context);
     let session = ids
@@ -219,13 +293,18 @@ pub fn apply_response_headers(
         .into_iter()
         .find_map(protocol_value)
     });
-    let window = if let Some(ids) = &ids {
-        Some(HeaderValue::from_str(&ids.window)?)
-    } else {
-        [context.codex_window_id, request.codex_window_id.as_deref()]
-            .into_iter()
-            .find_map(protocol_value)
-    };
+    let window = thread
+        .as_ref()
+        .and_then(|thread| thread.to_str().ok())
+        .map(|thread| {
+            let generation = [context.codex_window_id, request.codex_window_id.as_deref()]
+                .into_iter()
+                .flatten()
+                .find_map(window_generation)
+                .unwrap_or(0);
+            HeaderValue::from_str(&format!("{thread}:{generation}"))
+        })
+        .transpose()?;
     for (name, value) in [
         ("session-id", session.clone()),
         ("session_id", session),
@@ -251,7 +330,7 @@ pub fn apply_response_headers(
             .and_then(|value| value.to_str().ok())
             && let Ok(Value::Object(mut fields)) = serde_json::from_str::<Value>(raw)
         {
-            project_identity_fields(&mut fields, scope);
+            project_identity_fields(&mut fields, &ids, scope);
             if let Some(raw) = super::request::encode_turn_metadata(&fields) {
                 headers.insert("x-codex-turn-metadata", HeaderValue::from_str(&raw)?);
             }
@@ -273,4 +352,9 @@ fn protocol_value(value: Option<&str>) -> Option<HeaderValue> {
     let header = HeaderValue::from_str(value).ok()?;
     header.to_str().ok()?;
     Some(header)
+}
+
+fn window_generation(value: &str) -> Option<u64> {
+    let (_, generation) = value.trim().rsplit_once(':')?;
+    generation.trim().parse().ok()
 }

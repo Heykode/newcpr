@@ -28,9 +28,7 @@ fn log_cleanup_validates_windows_and_calendar_schedule() {
         Utc.with_ymd_and_hms(2026, 1, 1, 4, 0, 0).unwrap()
     );
     config.requests.retention_days = 3651;
-    config.validate().unwrap();
-    config.requests.retention_days = u32::MAX;
-    config.validate().unwrap();
+    assert!(config.validate().is_err());
     config.requests.retention_days = 0;
     config.files.retention_days = 0;
     config.captures.retention_days = 0;

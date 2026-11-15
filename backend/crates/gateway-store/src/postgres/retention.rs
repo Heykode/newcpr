@@ -120,7 +120,7 @@ impl RetentionRepository for PgRetentionRepository {
         now: DateTime<Utc>,
         settings: RuntimeRetentionSettings,
     ) -> StoreResult<RetentionReport> {
-        if settings.usage_retention_days == 0
+        if settings.usage_retention_days < 31
             || settings.ops_event_retention_days == 0
             || settings.audit_retention_days == 0
         {
@@ -137,10 +137,9 @@ impl RetentionRepository for PgRetentionRepository {
                  where ctid in (
                    select ctid from model_requests
                     where outcome <> 'running'
-                      and completed_at < $1
-                    limit $2
+                      and completed_at < $1 - ($2 * interval '1 day')
+                    limit $3
                  )",
-                "select completed_at from model_requests where outcome <> 'running' order by completed_at limit 1",
                 settings.usage_retention_days,
                 "delete expired model requests",
             ),
@@ -149,10 +148,9 @@ impl RetentionRepository for PgRetentionRepository {
                  where ctid in (
                    select ctid from ops_events
                     where model_request_id is null
-                      and created_at < $1
-                    limit $2
+                      and created_at < $1 - ($2 * interval '1 day')
+                    limit $3
                  )",
-                "select created_at from ops_events where model_request_id is null order by created_at limit 1",
                 settings.ops_event_retention_days,
                 "delete expired ops events",
             ),
@@ -160,10 +158,9 @@ impl RetentionRepository for PgRetentionRepository {
                 "delete from admin_audit_events
                  where ctid in (
                    select ctid from admin_audit_events
-                    where created_at < $1
-                    limit $2
+                    where created_at < $1 - ($2 * interval '1 day')
+                    limit $3
                  )",
-                "select created_at from admin_audit_events order by created_at limit 1",
                 settings.audit_retention_days,
                 "delete expired admin audit events",
             ),
@@ -211,7 +208,6 @@ impl RetentionRepository for PgRetentionRepository {
 
 struct RetentionTarget {
     delete_sql: &'static str,
-    oldest_sql: &'static str,
     retention_days: u32,
     label: &'static str,
     deleted: u64,
@@ -219,15 +215,9 @@ struct RetentionTarget {
 }
 
 impl RetentionTarget {
-    const fn new(
-        delete_sql: &'static str,
-        oldest_sql: &'static str,
-        retention_days: u32,
-        label: &'static str,
-    ) -> Self {
+    const fn new(delete_sql: &'static str, retention_days: u32, label: &'static str) -> Self {
         Self {
             delete_sql,
-            oldest_sql,
             retention_days,
             label,
             deleted: 0,
@@ -242,18 +232,9 @@ async fn purge_batch(
     now: DateTime<Utc>,
     batch_rows: u32,
 ) -> StoreResult<u64> {
-    let oldest: Option<DateTime<Utc>> = sqlx::query_scalar(target.oldest_sql)
-        .fetch_optional(pool)
-        .await
-        .map_err(|_| postgres_unavailable(target.label))?;
-    let Some(cutoff) = now
-        .checked_sub_signed(chrono::TimeDelta::days(i64::from(target.retention_days)))
-        .filter(|cutoff| oldest.is_some_and(|oldest| oldest < *cutoff))
-    else {
-        return Ok(0);
-    };
     sqlx::query(target.delete_sql)
-        .bind(cutoff)
+        .bind(now)
+        .bind(i64::from(target.retention_days))
         .bind(i64::from(batch_rows))
         .execute(pool)
         .await

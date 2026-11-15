@@ -895,7 +895,6 @@ pub(super) fn waiting_provider_with_catalog(
         http.clone(),
         base_url.clone(),
         catalog_cache(),
-        crate::support::runtime_policy(),
     ));
     let cooldowns = Arc::new(MemoryCooldownPort::new());
     let quota = Arc::new(CodexCredentialQuotaService::new(

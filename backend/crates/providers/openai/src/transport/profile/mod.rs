@@ -20,7 +20,6 @@ use url::Url;
 
 use self::desktop_artifact::{CodexDesktopArtifactError, fetch_codex_core_version};
 
-pub(crate) mod baseline;
 pub mod cli_release;
 pub mod cli_version;
 pub mod desktop_artifact;

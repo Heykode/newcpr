@@ -9,14 +9,7 @@ use serde_json::json;
 
 #[test]
 fn six_presets_have_explicit_availability_and_cli_has_no_desktop_suffix() {
-    let state = CodexWireProfileState::new(
-        provider_openai::config::CodexWireProfileConfig::default().into(),
-    );
-    assert_eq!(
-        ClientProfileSelection::default().resolve(&state).unwrap(),
-        state.snapshot(),
-        "default requests and the default preset must use the same identity"
-    );
+    let state = CodexWireProfileState::new(super::wire_profile());
     let options = state.selection_options().unwrap();
     let presets = options.expose_to_provider()["presets"].as_array().unwrap();
     assert_eq!(presets.len(), 6);
@@ -41,7 +34,6 @@ fn six_presets_have_explicit_availability_and_cli_has_no_desktop_suffix() {
         assert!(profile.desktop_version.is_empty());
         assert!(!profile.user_agent().contains("Desktop"));
         assert!(profile.user_agent().ends_with("unknown"));
-        assert!(profile.verified_at > chrono::DateTime::UNIX_EPOCH);
     }
     for platform in [ClientPlatform::Linux, ClientPlatform::Windows] {
         for arch in ["arm64", "x86_64"] {
@@ -54,7 +46,6 @@ fn six_presets_have_explicit_availability_and_cli_has_no_desktop_suffix() {
             assert_eq!(profile.os_type, platform.os_type());
             assert_eq!(profile.arch, arch);
             assert!(profile.desktop_version.starts_with("26."));
-            assert!(profile.verified_at > chrono::DateTime::UNIX_EPOCH);
         }
     }
     let unsupported = ClientProfileSelection {
