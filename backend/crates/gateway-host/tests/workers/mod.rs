@@ -18,7 +18,7 @@ use gateway_host::workers::{WorkerStartError, WorkerSupervisor};
 use tokio::sync::Notify;
 mod recovery;
 
-const ACTIVE_KINDS: [WorkerKind; 8] = [
+const ACTIVE_KINDS: [WorkerKind; 9] = [
     WorkerKind::OAuthRefresh,
     WorkerKind::QuotaCatalogHealth,
     WorkerKind::RuntimeSnapshotReconciliation,
@@ -27,6 +27,7 @@ const ACTIVE_KINDS: [WorkerKind; 8] = [
     WorkerKind::Retention,
     WorkerKind::Backup,
     WorkerKind::AccountImport,
+    WorkerKind::RequestAnalytics,
 ];
 
 #[derive(Clone)]
@@ -388,7 +389,11 @@ async fn only_database_fact_reasons_can_disable_nonexistent_workers() {
 
 #[tokio::test]
 async fn registry_refuses_start_when_any_real_owner_kind_is_missing() {
-    for required in [WorkerKind::Retention, WorkerKind::AccountImport] {
+    for required in [
+        WorkerKind::Retention,
+        WorkerKind::AccountImport,
+        WorkerKind::RequestAnalytics,
+    ] {
         let plan = complete_plan(Vec::new())
             .into_iter()
             .filter(|item| item.kind() != required)
