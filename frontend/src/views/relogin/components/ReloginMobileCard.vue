@@ -89,7 +89,7 @@ defineEmits<{
         </dd>
       </div>
     </dl>
-    <div v-if="row.recovery?.message || retryProgress(row)" class="mb-3 rounded-cp bg-cp-fill-quaternary p-3 text-cp-xs text-cp-text-secondary">
+    <div v-if="row.recovery?.state !== 'idle' && (row.recovery?.message || retryProgress(row))" class="mb-3 rounded-cp bg-cp-fill-quaternary p-3 text-cp-xs text-cp-text-secondary">
       <p class="m-0 break-words">
         {{ row.recovery?.message }}
       </p>
