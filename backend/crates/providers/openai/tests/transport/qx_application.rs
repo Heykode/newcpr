@@ -88,14 +88,14 @@ fn resolved_ids_override_passthrough_without_mutating_body_or_continuation() {
         headers.insert(name, HeaderValue::from_static(value));
     }
     apply_response_headers(&mut headers, &request, context).unwrap();
-    assert_header(&headers, "x-codex-installation-id", INSTALLATION);
+    assert!(!headers.contains_key("x-codex-installation-id"));
     for (name, expected) in [
         ("session-id", "cpr-session"),
         ("session_id", "cpr-session"),
         ("thread-id", "cpr-thread"),
         ("x-client-request-id", "cpr-thread"),
         ("conversation_id", "cpr-thread"),
-        ("x-codex-window-id", "cpr-thread:42"),
+        ("x-codex-window-id", "foreign:prefix:00042"),
         ("x-codex-beta-features", "remote_compaction_v2"),
         ("x-codex-turn-state", "opaque-state"),
         ("x-codex-turn-metadata", "{\"turn_id\":\"original-turn\"}"),
@@ -200,19 +200,23 @@ fn invalid_protocol_ids_fall_back_without_rejecting_the_body() {
 }
 
 #[test]
-fn window_generation_uses_resolved_context_then_request_and_u64_bounds() {
+fn unscoped_windows_preserve_original_values_without_inventing_thread_references() {
     for (context_window, request_window, expected) in [
-        (Some("other:0009"), Some("other:7"), "thread:9"),
-        (Some("bad"), Some("old:0007"), "thread:7"),
-        (Some("old:-1"), None, "thread:0"),
-        (Some("old:18446744073709551616"), None, "thread:0"),
+        (Some("other:0009"), Some("other:7"), Some("other:0009")),
+        (Some("bad"), Some("old:0007"), Some("bad")),
+        (Some("old:-1"), None, Some("old:-1")),
+        (
+            Some("old:18446744073709551616"),
+            None,
+            Some("old:18446744073709551616"),
+        ),
         (
             Some("old:18446744073709551615"),
             None,
-            "thread:18446744073709551615",
+            Some("old:18446744073709551615"),
         ),
-        (Some("old:"), None, "thread:0"),
-        (None, None, "thread:0"),
+        (Some("old:"), None, Some("old:")),
+        (None, None, None),
     ] {
         let mut request = request();
         request.codex_window_id = request_window.map(str::to_owned);
@@ -221,7 +225,12 @@ fn window_generation_uses_resolved_context_then_request_and_u64_bounds() {
         context.codex_window_id = context_window;
         let mut headers = HeaderMap::new();
         apply_response_headers(&mut headers, &request, context).unwrap();
-        assert_header(&headers, "x-codex-window-id", expected);
+        assert_eq!(
+            headers
+                .get("x-codex-window-id")
+                .map(|value| value.to_str().unwrap()),
+            expected
+        );
     }
 }
 
@@ -269,7 +278,7 @@ fn invalid_installation_identity_cannot_inject_headers() {
         HeaderValue::from_static("downstream-device"),
     );
     let body_before = request.body().clone();
-    assert!(apply_response_headers(&mut headers, &request, context).is_err());
+    apply_response_headers(&mut headers, &request, context).unwrap();
     assert!(!headers.contains_key("x-codex-installation-id"));
     assert_eq!(headers["x-custom"], "preserve");
     assert_eq!(request.body(), &body_before);
@@ -403,7 +412,9 @@ fn correlation_turns_match_headers_history_and_metadata_without_touching_opaque_
 fn correlation_parent_thread_and_desktop_git_references_use_existing_thread_domain() {
     let parent = scoped_request("key-a");
     let projected_parent = project_response_request(&parent, context());
-    let parent_thread = projected_parent.prompt_cache_key().unwrap();
+    let parent_thread = projected_parent.body()["client_metadata"]["thread_id"]
+        .as_str()
+        .unwrap();
     let mut child = scoped_request("key-a");
     child.client_thread_id = Some("child-thread".into());
     child.parent_thread_id = Some("original-thread".into());
@@ -479,12 +490,23 @@ fn account_scoped_projection_is_stable_and_does_not_feed_back_into_local_identit
     let session = headers["session-id"].to_str().unwrap();
     assert_ne!(thread, "original-thread");
     assert_ne!(session, thread);
-    assert_eq!(uuid::Uuid::parse_str(thread).unwrap().get_version_num(), 7);
-    assert_eq!(projected.prompt_cache_key(), Some(thread));
+    assert_eq!(uuid::Uuid::parse_str(thread).unwrap().get_version_num(), 4);
+    assert_ne!(projected.prompt_cache_key(), Some(thread));
+    assert_eq!(
+        uuid::Uuid::parse_str(projected.prompt_cache_key().unwrap())
+            .unwrap()
+            .get_version_num(),
+        4
+    );
     assert_eq!(projected.body()["client_metadata"]["thread_id"], thread);
     assert_eq!(projected.body()["client_metadata"]["session_id"], session);
     assert_eq!(headers["x-client-request-id"], thread);
-    assert_eq!(headers["x-codex-window-id"], format!("{thread}:4"));
+    let window = headers["x-codex-window-id"].to_str().unwrap();
+    assert_eq!(uuid::Uuid::parse_str(window).unwrap().get_version_num(), 4);
+    assert_eq!(
+        projected.body()["client_metadata"]["x-codex-window-id"],
+        window
+    );
     assert_eq!(projected.body()["input"], before["input"]);
     assert_eq!(
         projected.body()["client_metadata"]["other"],
@@ -567,7 +589,7 @@ fn cache_only_clients_already_get_stable_scoped_session_headers() {
 }
 
 #[test]
-fn explicit_thread_wins_over_cache_and_changing_turns() {
+fn explicit_cache_is_independent_from_thread_and_changing_turns() {
     let first = scoped_request("key-a");
     let mut body = first.body().clone();
     body.insert(
@@ -579,9 +601,13 @@ fn explicit_thread_wins_over_cache_and_changing_turns() {
     next.client_api_key_id = first.client_api_key_id.clone();
     next.client_session_id = first.client_session_id.clone();
     next.client_thread_id = first.client_thread_id.clone();
-    assert_eq!(
+    assert_ne!(
         project_response_request(&first, context()).prompt_cache_key(),
         project_response_request(&next, context()).prompt_cache_key(),
+    );
+    assert_eq!(
+        scoped_thread(&first, context()),
+        scoped_thread(&next, context())
     );
 }
 
@@ -597,22 +623,22 @@ fn weak_content_seed_handles_equivalent_input_but_does_not_merge_empty_requests(
         request.client_api_key_id = Some("key-a".to_owned());
         request
     };
-    let string = project_response_request(&make(json!("hello")), context());
-    let array = project_response_request(
-        &make(json!([{"role":"user","content":[{"type":"input_text","text":"hello"}]}])),
-        context(),
+    let string = make(json!("hello"));
+    let array = make(json!([{"role":"user","content":[{"type":"input_text","text":"hello"}]}]));
+    assert_eq!(
+        scoped_thread(&string, context()),
+        scoped_thread(&array, context())
     );
-    assert_eq!(string.prompt_cache_key(), array.prompt_cache_key());
     assert_ne!(
-        string.prompt_cache_key(),
-        project_response_request(&make(json!("other")), context()).prompt_cache_key()
+        scoped_thread(&string, context()),
+        scoped_thread(&make(json!("other")), context())
     );
     let empty = make(json!([]));
     let mut next = context();
     next.request_id = "different-request";
     assert_ne!(
-        project_response_request(&empty, context()).prompt_cache_key(),
-        project_response_request(&empty, next).prompt_cache_key()
+        scoped_thread(&empty, context()),
+        scoped_thread(&empty, next)
     );
 }
 
@@ -673,4 +699,10 @@ fn qx_projection_preserves_ascii_turn_metadata_without_losing_unicode() {
         );
     }
     assert_eq!(projected.body()["input"], request.body()["input"]);
+}
+
+fn scoped_thread(request: &CodexResponsesRequest, context: CodexRequestContext<'_>) -> String {
+    let mut headers = HeaderMap::new();
+    apply_response_headers(&mut headers, request, context).unwrap();
+    headers["thread-id"].to_str().unwrap().to_owned()
 }

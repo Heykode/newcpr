@@ -53,6 +53,7 @@ fn update_body() -> Value {
         "maxConcurrentPerAccount": 5,
         "requestIntervalMs": 25,
         "rotationStrategy": "round_robin",
+        "quotaResetWindowWeights": {"fiveHour": 0.0, "weekly": 0.0, "monthly": 0.0},
         "minCodexDesktopVersion": "26.825.6671",
         "minCodexCliVersion": "0.40.0",
         "usageRetentionDays": 32,
@@ -474,6 +475,7 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
         codex_quota_overdraft_enabled: false,
         codex_quota_overdraft_probe_model: "gpt-6-astra".to_owned(),
         request_interval_ms: 25,
+        quota_reset_window_weights: Default::default(),
         rotation_strategy: RotationStrategy::RoundRobin,
         min_codex_desktop_version: Some("26.825.6671".to_owned()),
         min_codex_cli_version: Some("0.40.0".to_owned()),
@@ -538,6 +540,7 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
         "maxConcurrentPerAccount": 5,
         "requestIntervalMs": 25,
         "rotationStrategy": "round_robin",
+        "quotaResetWindowWeights": {"fiveHour": 0.0, "weekly": 0.0, "monthly": 0.0},
         "minCodexDesktopVersion": "26.825.6671",
         "minCodexCliVersion": "0.40.0",
         "usageRetentionDays": 32,
@@ -577,6 +580,8 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
     expected["codexQuotaOverdraftProbeModel"] = json!("gpt-6-astra");
     expected["requestTuning"]["excelImageTransport"] = json!({"mode":"native"});
     expected["requestTuning"]["excelImageRelayBytes"] = json!(67108864);
+    expected["quotaResetWindowWeightsDefaults"] =
+        json!({"fiveHour": 0.0, "weekly": 0.0, "monthly": 0.0});
     expected["requestTuning"]["smartScheduling"] = Value::Null;
     expected["requestTuning"]["excelImageRelayRequests"] = json!(128);
     expected["requestTuning"]["excelImageRelayDownloads"] = json!(32);
@@ -650,6 +655,7 @@ fn settings_request_and_response_fields_should_stay_in_lockstep() {
         codex_quota_overdraft_enabled: false,
         codex_quota_overdraft_probe_model: "gpt-6-astra".to_owned(),
         request_interval_ms: request.request_interval_ms,
+        quota_reset_window_weights: Default::default(),
         rotation_strategy: RotationStrategy::parse(&request.rotation_strategy)
             .expect("fixture rotation strategy"),
         min_codex_desktop_version: request.min_codex_desktop_version,
@@ -671,6 +677,7 @@ fn settings_request_and_response_fields_should_stay_in_lockstep() {
             .collect();
     let mut expected_fields = request_fields;
     expected_fields.insert("updatedAt".to_owned());
+    expected_fields.insert("quotaResetWindowWeightsDefaults".to_owned());
 
     assert_eq!(response_fields, expected_fields);
 }
@@ -1297,4 +1304,127 @@ fn settings_request_validates_multiple_warmup_rules_in_partial_updates() {
     body["accountWarmupCron"] = json!(["* * * * *"; 26].join(";"));
     let request: UpdateRuntimeSettingsRequest = serde_json::from_value(body).unwrap();
     assert!(request.validate().is_err());
+}
+
+#[tokio::test]
+async fn request_retention_round_trips_and_invalid_days_do_not_replace_it() {
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.insert_session("valid-session");
+    let mut body = with_current_revision(&fixture, update_body()).await;
+    for days in [1, 30, 31, 32, 365, 3650, 3651, u32::MAX] {
+        body["usageRetentionDays"] = json!(days);
+        let response = app(fixture.state())
+            .oneshot(request(
+                Method::POST,
+                "/api/admin/settings/update",
+                Some(body.clone()),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let saved = response_json(response).await;
+        assert_eq!(saved["data"]["usageRetentionDays"], days);
+        body["configRevision"] = saved["data"]["configRevision"].clone();
+    }
+    for (days, expected_status) in [
+        (json!(0), StatusCode::BAD_REQUEST),
+        (json!(u64::from(u32::MAX) + 1), StatusCode::BAD_REQUEST),
+        (json!(-1), StatusCode::UNPROCESSABLE_ENTITY),
+        (json!(1.5), StatusCode::UNPROCESSABLE_ENTITY),
+        (json!(null), StatusCode::UNPROCESSABLE_ENTITY),
+    ] {
+        body["usageRetentionDays"] = days;
+        let response = app(fixture.state())
+            .oneshot(request(
+                Method::POST,
+                "/api/admin/settings/update",
+                Some(body.clone()),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected_status);
+    }
+    let response = app(fixture.state())
+        .oneshot(request(Method::GET, "/api/admin/settings", None))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response_json(response).await["data"]["usageRetentionDays"],
+        u32::MAX
+    );
+}
+
+#[tokio::test]
+async fn quota_reset_weights_are_independent_complete_and_round_trip() {
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.insert_session("valid-session");
+    let weights = json!({"fiveHour": 0.1, "weekly": 10.0, "monthly": 2.5});
+    let mut valid = with_current_revision(&fixture, update_body()).await;
+    valid["quotaResetWindowWeights"] = weights.clone();
+    let response = app(fixture.state())
+        .oneshot(request(
+            Method::POST,
+            "/api/admin/settings/update",
+            Some(valid.clone()),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let response = app(fixture.state())
+        .oneshot(request(Method::GET, "/api/admin/settings", None))
+        .await
+        .unwrap();
+    let data = response_json(response).await;
+    assert_eq!(data["data"]["quotaResetWindowWeights"], weights);
+    assert_eq!(
+        data["data"]["quotaResetWindowWeightsDefaults"],
+        json!({"fiveHour":0.0,"weekly":0.0,"monthly":0.0})
+    );
+    assert_eq!(data["data"]["requestTuning"], valid["requestTuning"]);
+    for invalid in [
+        Value::Null,
+        json!({}),
+        json!({"fiveHour":1,"weekly":2}),
+        json!({"fiveHour":0,"weekly":0,"monthly":0,"extra":1}),
+        json!({"fiveHour":-0.1,"weekly":0,"monthly":0}),
+        json!({"fiveHour":10.1,"weekly":0,"monthly":0}),
+        json!({"fiveHour":0.01,"weekly":0,"monthly":0}),
+    ] {
+        let mut body = with_current_revision(&fixture, valid.clone()).await;
+        body["quotaResetWindowWeights"] = invalid;
+        let response = app(fixture.state())
+            .oneshot(request(
+                Method::POST,
+                "/api/admin/settings/update",
+                Some(body),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    }
+    for readonly in [false, true] {
+        let mut body = with_current_revision(&fixture, valid.clone()).await;
+        if readonly {
+            body["quotaResetWindowWeightsDefaults"] = weights.clone();
+        } else {
+            body.as_object_mut()
+                .unwrap()
+                .remove("quotaResetWindowWeights");
+        }
+        let response = app(fixture.state())
+            .oneshot(request(
+                Method::POST,
+                "/api/admin/settings/update",
+                Some(body),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    }
+    let response = app(fixture.state())
+        .oneshot(request(Method::GET, "/api/admin/settings", None))
+        .await
+        .unwrap();
+    assert_eq!(response_json(response).await["data"], data["data"]);
 }

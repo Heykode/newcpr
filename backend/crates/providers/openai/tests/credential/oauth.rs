@@ -227,6 +227,8 @@ async fn empty_oauth_name_should_survive_authorization_and_token_exchange() {
 
 #[tokio::test]
 async fn authorize_url_matches_the_official_desktop_parameter_contract() {
+    let wire_profile = profile();
+    let desktop_version = wire_profile.snapshot().desktop_version;
     let service = CodexOAuthAdminService::new(
         Arc::new(PendingStore::default()),
         Arc::new(Exchanger {
@@ -234,7 +236,7 @@ async fn authorize_url_matches_the_official_desktop_parameter_contract() {
         }),
         Arc::new(MemoryAccountStore::default()),
         CodexCredentialAdmin,
-        profile(),
+        wire_profile,
     );
     let started = service
         .start_authorization(StartCodexOAuthAuthorization {
@@ -335,7 +337,7 @@ async fn authorize_url_matches_the_official_desktop_parameter_contract() {
     );
     assert_eq!(
         parameters.get("codex_app_version").map(String::as_str),
-        Some("26.901.51231")
+        Some(desktop_version.as_str())
     );
     let surface_stable_id = parameters
         .get("source_surface_stable_id")

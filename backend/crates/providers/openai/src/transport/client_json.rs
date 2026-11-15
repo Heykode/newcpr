@@ -14,7 +14,9 @@ use super::{
     },
     diagnostics::CodexUpstreamSendPhase,
     endpoints::endpoint_url,
-    headers::{append_passthrough_headers, insert_optional_protocol_header},
+    headers::{
+        append_passthrough_headers, insert_optional_header, insert_optional_protocol_header,
+    },
     response_meta,
 };
 
@@ -30,6 +32,11 @@ impl CodexBackendClient {
     ) -> CodexClientResult<CodexBackendJsonResponse> {
         let profile = self.profile.snapshot();
         let mut headers = self.model_request_headers(&profile, context)?;
+        insert_optional_header(
+            &mut headers,
+            "x-codex-installation-id",
+            context.installation_id,
+        )?;
         append_passthrough_headers(&mut headers, passthrough_headers);
         // Standalone endpoints have no proven owner for client continuation identity.
         headers.remove("x-codex-turn-state");

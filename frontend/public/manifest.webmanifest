@@ -1,0 +1,16 @@
+{
+  "id": "/",
+  "name": "NewCPR",
+  "short_name": "NewCPR",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["window-controls-overlay"],
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}

@@ -1,6 +1,15 @@
 //! OpenAI Provider 向 Host 贡献的后台 worker。
 
 use super::*;
+use crate::transport::profile::cli_release::CliReleaseService;
+use crate::transport::profile::platform_release::PlatformDesktopReleaseService;
+
+pub(crate) struct ClientReleaseServices {
+    pub desktop: Arc<CodexDesktopReleaseService>,
+    pub cli: Arc<CliReleaseService>,
+    pub platforms: Arc<PlatformDesktopReleaseService>,
+}
+
 use chrono::{Timelike as _, Utc};
 use gateway_core::time::DeploymentTimeZone;
 
@@ -22,7 +31,7 @@ pub(crate) fn worker_contributions(
     catalog: Arc<CodexCredentialCatalogService>,
     quota_refresh_policy: CodexQuotaRefreshPolicy,
     oauth_refresh_enabled: bool,
-    desktop_release: Arc<CodexDesktopReleaseService>,
+    releases: ClientReleaseServices,
     timezone: DeploymentTimeZone,
 ) -> Result<Vec<WorkerContribution>, WorkerDefinitionError> {
     let refresh_id = WorkerId::try_new(WorkerKind::OAuthRefresh, PROVIDER_NAME)?;
@@ -44,6 +53,23 @@ pub(crate) fn worker_contributions(
         )?));
     }
     contributions.extend([
+        WorkerContribution::Registration(profile_registration(
+            WorkerId::try_new(
+                WorkerKind::QuotaCatalogHealth,
+                "openai-platform-desktop-release",
+            )?,
+            APPCAST_POLL_INTERVAL,
+            Box::new(OpenAiPlatformDesktopReleaseTask {
+                service: releases.platforms,
+            }),
+        )?),
+        WorkerContribution::Registration(profile_registration(
+            WorkerId::try_new(WorkerKind::QuotaCatalogHealth, "openai-cli-release")?,
+            APPCAST_POLL_INTERVAL,
+            Box::new(OpenAiCliReleaseTask {
+                service: releases.cli,
+            }),
+        )?),
         WorkerContribution::Registration(scheduled_registration(
             quota_id,
             QUOTA_CHECK_INTERVAL,
@@ -81,7 +107,7 @@ pub(crate) fn worker_contributions(
             desktop_release_id,
             APPCAST_POLL_INTERVAL,
             Box::new(OpenAiDesktopReleaseTask {
-                service: desktop_release,
+                service: releases.desktop,
             }),
         )?),
     ]);
@@ -111,100 +137,16 @@ pub(super) fn scheduled_registration(
     )
 }
 
-pub(crate) fn cli_version_worker(
-    service: crate::transport::profile::cli_version::CodexCliVersionService,
-) -> Result<WorkerContribution, WorkerDefinitionError> {
-    let schedule = WorkerSchedule::try_new(
-        Duration::from_secs(60),
-        WORKER_INITIAL_BACKOFF,
-        WORKER_MAXIMUM_BACKOFF,
-        WORKER_LEASE_TTL,
-        WORKER_LEASE_RENEWAL,
-    )?;
-    Ok(WorkerContribution::Registration(
-        WorkerRegistration::try_new(
-            WorkerId::try_new(WorkerKind::QuotaCatalogHealth, "openai-cli-version")?,
-            WorkerRunnable::Scheduled {
-                schedule,
-                // Every instance must publish the shared cache into its local profile.
-                lease: None,
-                task: Box::new(OpenAiCliVersionTask { service }),
-            },
-        )?,
-    ))
-}
-
-struct OpenAiCliVersionTask {
-    service: crate::transport::profile::cli_version::CodexCliVersionService,
-}
-
-pub(crate) fn profile_release_worker(
-    desktop: crate::transport::profile::platform_release::PlatformDesktopReleaseService,
-    cli: crate::transport::profile::cli_release::CliReleaseService,
-) -> Result<WorkerContribution, WorkerDefinitionError> {
-    let schedule = WorkerSchedule::try_new(
-        Duration::from_secs(60),
-        WORKER_INITIAL_BACKOFF,
-        WORKER_MAXIMUM_BACKOFF,
-        WORKER_LEASE_TTL,
-        WORKER_LEASE_RENEWAL,
-    )?;
-    Ok(WorkerContribution::Registration(
-        WorkerRegistration::try_new(
-            WorkerId::try_new(WorkerKind::QuotaCatalogHealth, "openai-platform-releases")?,
-            WorkerRunnable::Scheduled {
-                schedule,
-                lease: None,
-                task: Box::new(ProfileReleaseTask {
-                    desktop,
-                    cli,
-                    last_check: tokio::sync::Mutex::new(None),
-                }),
-            },
-        )?,
-    ))
-}
-
-struct ProfileReleaseTask {
-    desktop: crate::transport::profile::platform_release::PlatformDesktopReleaseService,
-    cli: crate::transport::profile::cli_release::CliReleaseService,
-    last_check: tokio::sync::Mutex<Option<std::time::Instant>>,
-}
-
-impl ScheduledTask for ProfileReleaseTask {
-    fn run_cycle(&self, context: WorkerCycleContext) -> BoxFuture<'_, Result<(), WorkerTaskError>> {
-        Box::pin(async move {
-            tokio::select! {
-                () = context.cancellation().cancelled() => {},
-                () = async {
-                    self.desktop.restore().await;
-                    self.cli.restore().await;
-                    let mut last = self.last_check.lock().await;
-                    if last.is_some_and(|last| last.elapsed() < Duration::from_secs(6 * 60 * 60)) { return; }
-                    *last = Some(std::time::Instant::now());
-                    self.desktop.refresh().await;
-                    if let Err(error) = self.cli.refresh().await {
-                        tracing::warn!(%error, "OpenAI CLI release check failed");
-                    }
-                } => {},
-            }
-            Ok(())
-        })
+fn profile_registration(
+    id: WorkerId,
+    interval: Duration,
+    task: Box<dyn ScheduledTask>,
+) -> Result<WorkerRegistration, WorkerDefinitionError> {
+    let mut registration = scheduled_registration(id, interval, task)?;
+    if let WorkerRunnable::Scheduled { lease, .. } = &mut registration.runnable {
+        *lease = None;
     }
-}
-
-impl ScheduledTask for OpenAiCliVersionTask {
-    fn run_cycle(&self, context: WorkerCycleContext) -> BoxFuture<'_, Result<(), WorkerTaskError>> {
-        Box::pin(async move {
-            tokio::select! {
-                () = context.cancellation().cancelled() => {},
-                result = self.service.refresh() => if let Err(reason) = result {
-                    tracing::warn!(reason, "OpenAI CLI version check failed");
-                },
-            }
-            Ok(())
-        })
-    }
+    Ok(registration)
 }
 
 pub(super) struct OpenAiOAuthRefreshTask {
@@ -518,6 +460,39 @@ impl DaemonTask for OpenAiCatalogEtagTask {
                 }
                 context.succeeded();
             }
+        })
+    }
+}
+
+struct OpenAiCliReleaseTask {
+    service: Arc<CliReleaseService>,
+}
+
+impl ScheduledTask for OpenAiCliReleaseTask {
+    fn run_cycle(&self, context: WorkerCycleContext) -> BoxFuture<'_, Result<(), WorkerTaskError>> {
+        Box::pin(async move {
+            tokio::select! {
+                () = context.cancellation().cancelled() => {},
+                result = async { self.service.restore().await; self.service.refresh().await } => {
+                    if let Err(error) = result { tracing::warn!(error = %error, "OpenAI CLI release check failed"); }
+                }
+            }
+            Ok(())
+        })
+    }
+}
+
+struct OpenAiPlatformDesktopReleaseTask {
+    service: Arc<PlatformDesktopReleaseService>,
+}
+impl ScheduledTask for OpenAiPlatformDesktopReleaseTask {
+    fn run_cycle(&self, context: WorkerCycleContext) -> BoxFuture<'_, Result<(), WorkerTaskError>> {
+        Box::pin(async move {
+            tokio::select! {
+                () = context.cancellation().cancelled() => {},
+                () = async { self.service.restore().await; self.service.refresh().await } => {},
+            }
+            Ok(())
         })
     }
 }

@@ -203,6 +203,8 @@ impl CodexQuotaSyncSummary {
 
 #[derive(Debug, Error)]
 pub enum CodexCredentialQuotaError {
+    #[error("Codex warmup client profile is unavailable")]
+    Profile(#[source] gateway_core::error::ErrorSource),
     #[error("Codex quota response is invalid")]
     InvalidCredentialData,
     #[error("Codex OAuth access token must be refreshed before querying quota")]
@@ -857,7 +859,17 @@ impl CodexCredentialQuotaService {
                     .map(|snapshot| (observation.account_id.clone(), snapshot))
             })
             .collect::<BTreeMap<_, _>>();
-        let client = self.backend_client();
+        let profile = match &self.runtime_policy {
+            Some(policy) => self
+                .profile
+                .resolve_global_request_profile(policy.as_ref())
+                .await
+                .map_err(CodexCredentialQuotaError::Profile)?,
+            None => self.profile.snapshot(),
+        };
+        let client = self
+            .backend_client()
+            .with_request_profile(CodexWireProfileState::new(profile));
         for account in accounts {
             if account.quota().is_exhausted() {
                 summary.skipped_exhausted += 1;

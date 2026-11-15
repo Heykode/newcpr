@@ -178,8 +178,8 @@ async fn fast_group_policy_only_changes_the_supported_top_level_service_tier() {
         );
         let thread = body["client_metadata"]["thread_id"].as_str().unwrap();
         assert_ne!(thread, "root", "target account identity must remain scoped");
-        assert_eq!(uuid::Uuid::parse_str(thread).unwrap().get_version_num(), 7);
-        assert_eq!(body["prompt_cache_key"], thread);
+        assert_eq!(uuid::Uuid::parse_str(thread).unwrap().get_version_num(), 4);
+        assert_ne!(body["prompt_cache_key"], thread);
         assert_eq!(body["client_metadata"]["service_tier"], "nested-keep");
         let mut baseline = baseline.as_object().unwrap().clone();
         let mut business_body = body.as_object().unwrap().clone();

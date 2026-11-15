@@ -28,6 +28,13 @@ pub struct ObservabilityConnection {
     connection: Option<PoolConnection<Postgres>>,
     permit: Option<OwnedSemaphorePermit>,
     original_statement_timeout: Option<String>,
+    query_timeout: Duration,
+}
+
+impl ObservabilityConnection {
+    pub(crate) fn query_timeout(&self) -> Duration {
+        self.query_timeout
+    }
 }
 
 impl Deref for ObservabilityConnection {
@@ -210,6 +217,7 @@ impl ObservabilityQueryBudget {
             connection: Some(connection),
             permit: Some(permit),
             original_statement_timeout: None,
+            query_timeout: self.query_timeout,
         };
         let original: String = sqlx::query_scalar("show statement_timeout")
             .fetch_one(&mut *connection)

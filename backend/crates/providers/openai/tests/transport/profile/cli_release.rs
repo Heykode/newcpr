@@ -64,6 +64,10 @@ async fn official_cli_cache_updates_entry_headers_together_and_preserves_frozen_
         ..Default::default()
     };
     let frozen = automatic.resolve(&state).unwrap();
+    let mut next = semver::Version::parse(&frozen.codex_version).unwrap();
+    next.patch += 1;
+    let next_sequence = 1 + next.major * 1_000_000 + next.minor * 1_000 + next.patch;
+    let next_version = next.to_string();
     let fixed = ClientProfileSelection {
         version_mode: VersionMode::Fixed,
         codex_version: Some(frozen.codex_version.clone()),
@@ -77,14 +81,16 @@ async fn official_cli_cache_updates_entry_headers_together_and_preserves_frozen_
     ))
     .unwrap();
 
-    // 复用官方版本服务的恢复入口，模拟每日检查已核验并写入的下一份发布资料
+    // 复用官方版本服务的恢复入口，模拟版本检查已核验并写入的下一份发布资料
     cache
         .replace_if_newer(
             ProviderArtifactProfile::new(
                 ProviderKind::new("openai-cli-linux-x64").unwrap(),
-                157_001,
+                next_sequence,
                 chrono::Utc::now().into(),
-                OpaqueProviderData::new(json!({"version":"0.157.0"}).as_object().unwrap().clone()),
+                OpaqueProviderData::new(
+                    json!({"version":next_version}).as_object().unwrap().clone(),
+                ),
             ),
             Duration::from_secs(86400),
         )
@@ -99,11 +105,11 @@ async fn official_cli_cache_updates_entry_headers_together_and_preserves_frozen_
         let current = selection.resolve(&state).unwrap();
         let headers = build_codex_model_headers(&current, "Bearer fixture", None).unwrap();
         let expected = format!(
-            "{originator}/0.157.0 (Alpine Linux 3.24.1; x86_64) xterm-256color ({originator}; 0.157.0)"
+            "{originator}/{next_version} (Alpine Linux 3.24.1; x86_64) xterm-256color ({originator}; {next_version})"
         );
         assert_eq!(headers["user-agent"], expected);
         assert_eq!(headers["originator"], originator);
-        assert_eq!(headers["version"], "0.157.0");
+        assert_eq!(headers["version"], next_version.as_str());
     }
     assert_eq!(
         fixed.resolve(&state).unwrap().user_agent(),
@@ -113,7 +119,6 @@ async fn official_cli_cache_updates_entry_headers_together_and_preserves_frozen_
         custom.resolve(&state).unwrap().user_agent(),
         frozen.user_agent()
     );
-    assert_eq!(frozen.codex_version, "0.155.0");
 
     // 缓存恢复与启动种子构成观察历史，滞后档位据此钉住上一版。
     let lagged = ClientProfileSelection {
@@ -122,7 +127,7 @@ async fn official_cli_cache_updates_entry_headers_together_and_preserves_frozen_
     };
     assert_eq!(
         lagged.resolve(&state).unwrap().user_agent(),
-        "codex-tui/0.155.0 (Alpine Linux 3.24.1; x86_64) xterm-256color (codex-tui; 0.155.0)"
+        frozen.user_agent()
     );
 
     let restarted = CodexWireProfileState::new(super::wire_profile());
@@ -134,4 +139,277 @@ async fn official_cli_cache_updates_entry_headers_together_and_preserves_frozen_
         automatic.resolve(&restarted).unwrap(),
         automatic.resolve(&state).unwrap()
     );
+}
+
+struct CliTransport {
+    version: std::sync::Mutex<String>,
+}
+
+impl provider_openai::transport::profile::cli_release::CliReleaseTransport for CliTransport {
+    fn fetch(
+        &self,
+    ) -> futures::future::BoxFuture<
+        '_,
+        Result<String, provider_openai::transport::profile::cli_release::CliReleaseError>,
+    > {
+        Box::pin(async move { Ok(self.version.lock().unwrap().clone()) })
+    }
+}
+
+#[derive(Default)]
+struct CliCache {
+    writes: std::sync::Mutex<std::collections::BTreeMap<String, usize>>,
+    failing_target: std::sync::Mutex<Option<String>>,
+}
+
+impl gateway_core::provider_ports::ProviderArtifactProfileCachePort for CliCache {
+    fn replace_if_newer(
+        &self,
+        profile: gateway_core::provider_ports::ProviderArtifactProfile,
+        _ttl: std::time::Duration,
+    ) -> futures::future::BoxFuture<
+        '_,
+        Result<bool, gateway_core::provider_ports::ProviderStoreError>,
+    > {
+        Box::pin(async move {
+            *self
+                .writes
+                .lock()
+                .unwrap()
+                .entry(profile.provider_kind().as_str().to_owned())
+                .or_default() += 1;
+            if self.failing_target.lock().unwrap().as_deref()
+                == Some(profile.provider_kind().as_str())
+            {
+                return Err(gateway_core::provider_ports::ProviderStoreError::new(
+                    gateway_core::provider_ports::ProviderStoreErrorKind::Unavailable,
+                    "write CLI fixture",
+                ));
+            }
+            Ok(true)
+        })
+    }
+
+    fn read<'a>(
+        &'a self,
+        _provider: &'a gateway_core::routing::ProviderKind,
+    ) -> futures::future::BoxFuture<
+        'a,
+        Result<
+            Option<gateway_core::provider_ports::ProviderArtifactProfile>,
+            gateway_core::provider_ports::ProviderStoreError,
+        >,
+    > {
+        Box::pin(async { Ok(None) })
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn unchanged_cli_release_only_renews_cache_daily_and_preserves_verification_time() {
+    use provider_openai::transport::profile::{
+        CodexWireProfileState,
+        cli_release::CliReleaseService,
+        selection::{ClientKind, ClientPlatform},
+    };
+    use std::{sync::Arc, time::Duration};
+    let state = CodexWireProfileState::new(super::wire_profile());
+    let cache = Arc::new(CliCache::default());
+    let transport = Arc::new(CliTransport {
+        version: std::sync::Mutex::new("1.0.0".to_owned()),
+    });
+    let service = CliReleaseService::with_transport(
+        gateway_core::routing::ProviderKind::new("openai").unwrap(),
+        state.clone(),
+        cache.clone(),
+        transport,
+    );
+    service.refresh().await.unwrap();
+    let verified = state
+        .client_release(ClientKind::Cli, ClientPlatform::Linux, "x86_64")
+        .unwrap();
+    tokio::time::advance(Duration::from_secs(3600)).await;
+    service.refresh().await.unwrap();
+    assert!(
+        cache
+            .writes
+            .lock()
+            .unwrap()
+            .values()
+            .all(|count| *count == 1)
+    );
+    tokio::time::advance(Duration::from_secs(23 * 3600)).await;
+    service.refresh().await.unwrap();
+    assert!(
+        cache
+            .writes
+            .lock()
+            .unwrap()
+            .values()
+            .all(|count| *count == 2)
+    );
+    assert_eq!(
+        state
+            .client_release(ClientKind::Cli, ClientPlatform::Linux, "x86_64")
+            .unwrap(),
+        verified
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn cli_partial_cache_failure_retries_the_same_release_without_republishing_other_targets() {
+    use provider_openai::transport::profile::{
+        CodexWireProfileState,
+        cli_release::CliReleaseService,
+        selection::{ClientKind, ClientPlatform},
+    };
+    use std::{sync::Arc, time::Duration};
+    let state = CodexWireProfileState::new(super::wire_profile());
+    let original = state
+        .client_release(ClientKind::Cli, ClientPlatform::Linux, "x86_64")
+        .unwrap();
+    let cache = Arc::new(CliCache::default());
+    *cache.failing_target.lock().unwrap() = Some("openai-cli-linux-x64".to_owned());
+    let transport = Arc::new(CliTransport {
+        version: std::sync::Mutex::new("1.0.0".to_owned()),
+    });
+    let service = CliReleaseService::with_transport(
+        gateway_core::routing::ProviderKind::new("openai").unwrap(),
+        state.clone(),
+        cache.clone(),
+        transport,
+    );
+    service.refresh().await.unwrap();
+    assert_eq!(
+        state
+            .client_release(ClientKind::Cli, ClientPlatform::Linux, "x86_64")
+            .unwrap(),
+        original
+    );
+    assert!(
+        state
+            .client_release_status(ClientKind::Cli, ClientPlatform::Linux, "x86_64")
+            .1
+            .is_some()
+    );
+    *cache.failing_target.lock().unwrap() = None;
+    tokio::time::advance(Duration::from_secs(3600)).await;
+    service.refresh().await.unwrap();
+    assert_eq!(
+        state
+            .client_release(ClientKind::Cli, ClientPlatform::Linux, "x86_64")
+            .unwrap()
+            .codex_version,
+        "1.0.0"
+    );
+    assert!(
+        state
+            .client_release_status(ClientKind::Cli, ClientPlatform::Linux, "x86_64")
+            .1
+            .is_none()
+    );
+    let writes = cache.writes.lock().unwrap();
+    assert_eq!(writes["openai-cli-linux-x64"], 2);
+    assert!(
+        writes
+            .iter()
+            .filter(|(key, _)| key.as_str() != "openai-cli-linux-x64")
+            .all(|(_, count)| *count == 1)
+    );
+}
+
+#[tokio::test]
+async fn official_cli_service_updates_opt_in_legacy_ua_without_changing_fixed_or_downgrading() {
+    use gateway_core::provider_ports::ProviderUserAgentOverride;
+    use provider_openai::transport::profile::{
+        CodexWireProfileState, cli_release::CliReleaseService,
+    };
+    use std::sync::{Arc, Mutex};
+    let state = CodexWireProfileState::new(super::wire_profile());
+    let original = "codex-tui/0.154.0 (Ubuntu 24.4.0; x86_64) xterm-256color (codex-tui; 0.154.0)";
+    let transport = Arc::new(CliTransport {
+        version: Mutex::new("1.0.0".into()),
+    });
+    let cache = Arc::new(CliCache::default());
+    let service = CliReleaseService::with_transport(
+        gateway_core::routing::ProviderKind::new("openai").unwrap(),
+        state.clone(),
+        cache,
+        transport.clone(),
+    );
+    state
+        .apply_user_agent_override(&ProviderUserAgentOverride::Custom {
+            user_agent: original.into(),
+        })
+        .unwrap();
+    service.refresh().await.unwrap();
+    assert_eq!(state.snapshot().user_agent(), original);
+    state
+        .apply_user_agent_override(&ProviderUserAgentOverride::CustomAutoVersion {
+            user_agent: original.into(),
+        })
+        .unwrap();
+    let expected = original.replace("0.154.0", "1.0.0");
+    assert_eq!(state.snapshot().user_agent(), expected);
+    for version in ["0.155.0", "invalid", "1.1.0-alpha.1"] {
+        *transport.version.lock().unwrap() = version.into();
+        let _ = service.refresh().await;
+        assert_eq!(state.snapshot().user_agent(), expected);
+    }
+    state
+        .apply_user_agent_override(&ProviderUserAgentOverride::Custom {
+            user_agent: original.into(),
+        })
+        .unwrap();
+    assert_eq!(state.snapshot().user_agent(), original);
+}
+
+#[tokio::test]
+async fn legacy_cli_cache_restore_requires_its_original_sequence_validation() {
+    use gateway_core::{
+        account::OpaqueProviderData,
+        provider_ports::{
+            ProviderArtifactProfile, ProviderArtifactProfileCachePort, ProviderUserAgentOverride,
+        },
+        routing::ProviderKind,
+    };
+    use provider_openai::transport::profile::{
+        CodexWireProfileState, cli_release::CliReleaseService,
+    };
+    use std::{sync::Arc, time::Duration};
+    let original = "codex-tui/0.154.0 (Ubuntu 24.4.0; x86_64) xterm-256color (codex-tui; 0.154.0)";
+    for (sequence, version, expected) in [
+        (160_000_000, "0.160.0", "0.160.0"),
+        (160_000_001, "0.160.0", "0.154.0"),
+        (160_000_000, "0.160.0-alpha.1", "0.154.0"),
+    ] {
+        let state = CodexWireProfileState::new(super::wire_profile());
+        state
+            .apply_user_agent_override(&ProviderUserAgentOverride::CustomAutoVersion {
+                user_agent: original.into(),
+            })
+            .unwrap();
+        let cache = Arc::new(super::ArtifactProfiles::default());
+        cache
+            .replace_if_newer(
+                ProviderArtifactProfile::new(
+                    ProviderKind::new("openai-cli-version").unwrap(),
+                    sequence,
+                    std::time::SystemTime::now(),
+                    OpaqueProviderData::new(
+                        json!({"version":version}).as_object().unwrap().clone(),
+                    ),
+                ),
+                Duration::from_secs(86_400),
+            )
+            .await
+            .unwrap();
+        CliReleaseService::new(ProviderKind::new("openai").unwrap(), state.clone(), cache)
+            .unwrap()
+            .restore()
+            .await;
+        assert_eq!(
+            state.snapshot().user_agent(),
+            original.replace("0.154.0", expected)
+        );
+    }
 }

@@ -47,6 +47,7 @@ async fn completed_usage_projections_should_accept_statusless_websocket_but_reje
         .await;
     finalize_request_without_client_status(&database.pool, "req_statusless_http", started_at).await;
 
+    super::drain_analytics(&database.pool).await;
     let repository = observability_repository(&database.pool);
     let page = repository
         .list_usage_records(usage_query(started_at, UsageRecordFilter::default()))
@@ -525,6 +526,7 @@ async fn diagnostics_should_group_same_email_accounts_by_stable_ref() {
         .await
         .expect("delete provider accounts");
 
+    super::drain_analytics(&database.pool).await;
     let repository = observability_repository(&database.pool);
     let diagnostics = repository
         .usage_diagnostics(
@@ -599,6 +601,7 @@ async fn diagnostics_should_fallback_to_name_then_ref_for_missing_snapshots() {
         .expect("insert legacy request without live account");
     finalize_request(&database.pool, "req_snap_legacy", started_at).await;
 
+    super::drain_analytics(&database.pool).await;
     let repository = observability_repository(&database.pool);
     let diagnostics = repository
         .usage_diagnostics(
@@ -667,6 +670,7 @@ async fn diagnostics_should_keep_labels_from_the_same_latest_snapshot() {
         .expect("insert newer account snapshot");
     finalize_request(&database.pool, "req_snapshot_history_new", started_at).await;
 
+    super::drain_analytics(&database.pool).await;
     let diagnostics = observability_repository(&database.pool)
         .usage_diagnostics(
             range_around(started_at),
@@ -729,6 +733,7 @@ async fn failure_diagnostics_should_only_include_errored_requests() {
     .await
     .expect("mark request failed");
 
+    super::drain_analytics(&database.pool).await;
     let repository = observability_repository(&database.pool);
     let diagnostics = repository
         .usage_diagnostics(
@@ -796,6 +801,7 @@ async fn model_diagnostics_should_exclude_provider_endpoints_without_a_model() {
     )
     .await;
 
+    super::drain_analytics(&database.pool).await;
     let diagnostics = observability_repository(&database.pool)
         .usage_diagnostics(
             range_around(started_at),
@@ -844,6 +850,7 @@ async fn tokenless_provider_endpoints_should_remain_in_health_but_not_usage_reco
         .expect("insert search request");
     finalize_request(&database.pool, "req_snap_search", started_at).await;
 
+    super::drain_analytics(&database.pool).await;
     let repository = observability_repository(&database.pool);
     let page = repository
         .list_usage_records(usage_query(started_at, UsageRecordFilter::default()))
@@ -906,7 +913,9 @@ async fn api_key_diagnostics_keeps_snapshot_after_delete_and_falls_back_for_lega
         .await
         .expect("set request b latency");
 
+    super::drain_analytics(&database.pool).await;
     let repository = observability_repository(&database.pool);
+    super::drain_analytics(&database.pool).await;
     let diagnostics = repository
         .usage_diagnostics(
             range_around(started_at),
@@ -921,12 +930,14 @@ async fn api_key_diagnostics_keeps_snapshot_after_delete_and_falls_back_for_lega
     assert_eq!(diagnostics[0].key, "key_diag");
     assert_eq!(diagnostics[0].name, "My Key");
     assert_eq!(diagnostics[0].request_count, 2);
-    assert_eq!(diagnostics[0].latency_p95_ms, Some(1950));
+    // 官方预聚合直方图允许 3% 分位误差；计数和费用仍精确。
+    assert!(diagnostics[0].latency_p95_ms.unwrap().abs_diff(1950) <= 1950 * 3 / 100);
 
     sqlx::query("delete from client_api_keys where id = 'key_diag'")
         .execute(&database.pool)
         .await
         .expect("delete api key");
+    super::drain_analytics(&database.pool).await;
     let diagnostics = repository
         .usage_diagnostics(
             range_around(started_at),
@@ -948,6 +959,7 @@ async fn api_key_diagnostics_keeps_snapshot_after_delete_and_falls_back_for_lega
     .execute(&database.pool)
     .await
     .expect("simulate legacy rows without a key name snapshot");
+    super::drain_analytics(&database.pool).await;
     let diagnostics = repository
         .usage_diagnostics(
             range_around(started_at),

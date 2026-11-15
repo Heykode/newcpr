@@ -653,3 +653,5 @@ fn map_provider_registry_error(error: ProviderAdminError) -> AdminError {
     };
     AdminError::new(kind, "Provider 注册表初始化失败")
 }
+
+pub use use_case::observability::ProviderUsageBillingProjector;

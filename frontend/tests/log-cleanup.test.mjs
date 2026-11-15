@@ -21,6 +21,7 @@ test('occupancy distinguishes failed measurement from real zero and uses decimal
 })
 test('cleanup confirmation uses a frozen cutoff, not the current browser clock', () => {
   assert.equal(cleanupCutoff('2026-09-30T00:00:00Z', 31), '2026-08-30T00:00:00.000Z')
+  assert.equal(cleanupCutoff('2026-09-30T00:00:00Z', 0xFFFF_FFFF), null)
 })
 test('day inputs start at one while clear-all keeps the compatible zero encoding', () => {
   const config = Object.fromEntries(cleanupCategories.map(({ key, min }) => [key, { selected: true, retentionDays: min }]))
@@ -36,7 +37,11 @@ test('day inputs start at one while clear-all keeps the compatible zero encoding
     }
     config[key].retentionDays = 1
   }
-  config.requests.retentionDays = 3651
+  for (const days of [3651, 0xFFFF_FFFF]) {
+    config.requests.retentionDays = days
+    assert.equal(cleanupValidation(config), '')
+  }
+  config.requests.retentionDays = 0x1_0000_0000
   assert.notEqual(cleanupValidation(config), '')
   config.requests.retentionDays = 0
   config.captures.retentionDays = 31

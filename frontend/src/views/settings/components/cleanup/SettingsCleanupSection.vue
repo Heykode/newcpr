@@ -22,7 +22,9 @@ const zones = [
   { label: 'UTC', value: 'UTC' },
   { label: '洛杉矶时间', value: 'America/Los_Angeles' },
 ]
-function date(value: string) {
+function date(value: string | null) {
+  if (value === null)
+    return '超出日期范围（不会删除现存记录）'
   return new Date(value).toLocaleString('zh-CN', { timeZone: draft.value?.timezone || 'Asia/Shanghai', hour12: false })
 }
 </script>
@@ -118,7 +120,7 @@ function date(value: string) {
         <ul class="m-0 grid gap-3 pl-5 text-sm">
           <template v-for="item in cleanupCategories" :key="item.key">
             <li v-if="preview.config[item.key].selected">
-              {{ item.label }}：{{ preview.config[item.key].retentionDays === 0 ? '全部清理已结束历史' : `保留最近${preview.config[item.key].retentionDays}天` }}，清理 {{ date(cleanupCutoff(preview.cutoffAt, preview.config[item.key].retentionDays)) }} 之前的数据
+              {{ item.label }}：{{ preview.config[item.key].retentionDays === 0 ? '全部清理已结束历史' : `保留最近${preview.config[item.key].retentionDays}天` }}，{{ cleanupCutoff(preview.cutoffAt, preview.config[item.key].retentionDays) === null ? '该保留期覆盖全部现存记录，不会删除' : `清理 ${date(cleanupCutoff(preview.cutoffAt, preview.config[item.key].retentionDays))} 之前的数据` }}
             </li>
           </template>
         </ul>

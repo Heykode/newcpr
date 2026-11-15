@@ -28,10 +28,11 @@ pub enum WorkerKind {
     OpsFlush,
     Backup,
     AccountImport,
+    RequestAnalytics,
 }
 
 impl WorkerKind {
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 10] = [
         Self::OAuthRefresh,
         Self::QuotaCatalogHealth,
         Self::RuntimeSnapshotReconciliation,
@@ -41,6 +42,7 @@ impl WorkerKind {
         Self::OpsFlush,
         Self::Backup,
         Self::AccountImport,
+        Self::RequestAnalytics,
     ];
 
     #[must_use]
@@ -55,6 +57,7 @@ impl WorkerKind {
             Self::OpsFlush => "ops_flush",
             Self::Backup => "backup",
             Self::AccountImport => "account_import",
+            Self::RequestAnalytics => "request_analytics",
         }
     }
 }

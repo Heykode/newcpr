@@ -18,7 +18,7 @@ use super::{
     },
     diagnostics::{CodexUpstreamDiagnostics, CodexUpstreamSendPhase},
     endpoints::endpoint_url,
-    headers::is_managed_identity_header,
+    headers::{insert_optional_header, is_managed_identity_header},
     response_meta,
     websocket::CodexWebSocketConnection,
 };
@@ -32,6 +32,11 @@ impl CodexBackendClient {
     ) -> CodexClientResult<HeaderMap> {
         let profile = self.profile.snapshot();
         let mut headers = self.model_request_headers(&profile, context)?;
+        insert_optional_header(
+            &mut headers,
+            "x-codex-installation-id",
+            context.installation_id,
+        )?;
         for header in extra_protocol_headers {
             let name = reqwest::header::HeaderName::from_bytes(header.name().as_bytes())?;
             if is_managed_identity_header(name.as_str())

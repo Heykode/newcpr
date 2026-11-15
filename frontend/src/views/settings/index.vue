@@ -226,7 +226,7 @@ watch(
           @remove-mapping="removeMapping"
         />
 
-        <RotationStrategyCard v-model="form.rotationStrategy" v-model:smart-scheduling="form.requestTuning.smartScheduling" :options="rotationOptions" :disabled="loading || saving" />
+        <RotationStrategyCard v-model="form.rotationStrategy" v-model:smart-scheduling="form.requestTuning.smartScheduling" v-model:quota-reset-window-weights="form.quotaResetWindowWeights" :quota-reset-defaults="form.quotaResetWindowWeightsDefaults" :options="rotationOptions" :disabled="loading || saving" />
 
         <BaseConfirmModal
           v-model="showDeleteAdminKeyModal"

@@ -1307,8 +1307,19 @@ fn diagnostic_probe_keeps_its_local_model_policy_exemption() {
                 ),
         )]),
     )));
+    let profile = gateway_core::account::OpaqueProviderData::new(
+        serde_json::json!({"identity":"global-probe"})
+            .as_object()
+            .unwrap()
+            .clone(),
+    );
+    let snapshot = snapshot.with_request_profiles(BTreeMap::from([(
+        ProviderKind::new("openai").unwrap(),
+        profile.clone(),
+    )]));
     let providers =
-        ProviderRegistry::new([Arc::new(LocalFailingProvider) as Arc<dyn Provider>]).unwrap();
+        ProviderRegistry::new([Arc::new(ProfileCheckingProvider(profile)) as Arc<dyn Provider>])
+            .unwrap();
     let service = DefaultExecutionService::new(
         RuntimeSnapshotHandle::new(snapshot),
         Arc::new(TrackingExecutionStore::default()),
@@ -3620,5 +3631,35 @@ impl Provider for SessionObservationProvider {
             ProviderErrorKind::Unavailable,
             UpstreamSendState::NotSent,
         ))
+    }
+}
+
+struct ProfileCheckingProvider(gateway_core::account::OpaqueProviderData);
+
+#[async_trait]
+impl Provider for ProfileCheckingProvider {
+    fn name(&self) -> &'static str {
+        "openai"
+    }
+
+    fn catalog_generation(&self) -> ProviderCatalogGeneration {
+        ProviderCatalogGeneration::default()
+    }
+
+    async fn query_model_capabilities(
+        &self,
+    ) -> Result<Vec<ProviderModelCapabilities>, ProviderError> {
+        Ok(Vec::new())
+    }
+
+    async fn execute(
+        &self,
+        request: ProviderRequest,
+        context: AttemptContext,
+    ) -> Result<ProviderStream, ProviderError> {
+        assert_eq!(context.request_profile(), Some(&self.0));
+        Arc::new(LocalFailingProvider)
+            .execute(request, context)
+            .await
     }
 }

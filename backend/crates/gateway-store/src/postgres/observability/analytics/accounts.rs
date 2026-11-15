@@ -1,0 +1,653 @@
+//! 账号用量复用汇总并补齐未投影源版本，保持同步查询的精确窗口口径
+
+use super::query::push_summary_buckets;
+use super::*;
+use gateway_admin::model::{
+    account_groups::AccountGroupUsage,
+    accounts::{
+        AccountCost, AccountModelUsage, AccountUsage, AccountUsageWindowQuery,
+        AccountUsageWindowResult,
+    },
+};
+
+type AccountStates = BTreeMap<(String, String), MetricState>;
+
+impl AnalyticsSnapshot<'_> {
+    pub(crate) async fn account_usage_states(
+        &mut self,
+        range: ObservabilityRange,
+        account_ids: &[String],
+    ) -> StoreResult<AccountStates> {
+        self.account_states(range, account_ids, true).await
+    }
+
+    async fn account_states(
+        &mut self,
+        range: ObservabilityRange,
+        account_ids: &[String],
+        by_model: bool,
+    ) -> StoreResult<AccountStates> {
+        let native = self
+            .native_account_states(range, account_ids, by_model)
+            .await?;
+        let mut states = BTreeMap::new();
+        for (key, value) in native {
+            states.insert(
+                (
+                    range.start,
+                    serde_json::to_string(&key)
+                        .map_err(|_| invalid("encode aggregate account key"))?,
+                ),
+                value,
+            );
+        }
+        let filter = UsageRecordFilter::default();
+        self.merge_contributions(
+            super::contributions::ContributionQuery {
+                range,
+                filter: &filter,
+                dimension: None,
+                granularity: None,
+                timezone: Default::default(),
+                account_models: Some(by_model),
+                selection: super::query::ReadSelection {
+                    distributions: super::query::DistributionRead::None,
+                    costs: true,
+                    keys: Some(account_ids),
+                    counters: None,
+                    distribution_names: None,
+                },
+            },
+            &mut states,
+        )
+        .await?;
+        states
+            .into_iter()
+            .map(|((_, key), value)| {
+                Ok((
+                    serde_json::from_str(&key)
+                        .map_err(|_| invalid("decode aggregate account key"))?,
+                    value,
+                ))
+            })
+            .collect()
+    }
+
+    async fn native_account_states(
+        &mut self,
+        range: ObservabilityRange,
+        account_ids: &[String],
+        by_model: bool,
+    ) -> StoreResult<AccountStates> {
+        if account_ids.is_empty() {
+            return Ok(BTreeMap::new());
+        }
+        // 原同步接口在首次回填期间仍可查询；只有完整覆盖的区间才允许用汇总替代源事实
+        if !self.projection_covers(range) {
+            return self
+                .account_fact_states(
+                    "request_analytics_source",
+                    range,
+                    account_ids,
+                    false,
+                    by_model,
+                )
+                .await;
+        }
+        let retained_counter = if by_model {
+            "request_count"
+        } else {
+            "completed_request_count"
+        };
+        let mut states = BTreeMap::new();
+        // 排序与分组费用只需要账号总量，不额外展开模型维度
+        let (collection, model) = if by_model {
+            (
+                "account_model",
+                "coalesce(nullif(dimensions[4],''),dimensions[3])",
+            )
+        } else {
+            ("account", "''::text")
+        };
+        let (hours, quarters) = self.summary_buckets(range, true).await?;
+        for (table, seconds, buckets) in [
+            ("request_analytics_1h", 3600, hours),
+            ("request_analytics_15m", 900, quarters),
+        ] {
+            if buckets.is_empty() {
+                continue;
+            }
+            let mut query = QueryBuilder::<Postgres>::new(format!(
+                "with selected as materialized (select dimensions[1] as account_id,{model} as model,counts,costs,last_used_at from {table} a where collection='{collection}' and schema_version="
+            ));
+            query
+                .push_bind(SCHEMA_VERSION)
+                .push(" and histogram_version=")
+                .push_bind(HISTOGRAM_VERSION)
+                .push(" and dimensions[1]=any(")
+                .push_bind(account_ids)
+                .push("::text[])");
+            push_summary_buckets(&mut query, &buckets, seconds);
+            let counters = usage_counter_names(by_model);
+            // 每行一次展开指标，避免对可能位于 TOAST 的同一 JSON 反复解码
+            query.push(format!(
+                "), totals as (select account_id,model,jsonb_build_object({}) as counts,max(last_used_at) as last_used_at from selected cross join lateral jsonb_to_record(counts) as metric({}) group by account_id,model),
+                currencies as (select account_id,model,c.key,sum(c.value::numeric)::text as amount from selected cross join lateral jsonb_each_text(costs) c where c.key not in ('standard_usd','no_cache_usd') group by account_id,model,c.key),
+                costs as (select account_id,model,jsonb_object_agg(key,amount) as costs from currencies group by account_id,model)
+                select totals.*,coalesce(costs.costs,'{{}}'::jsonb) as costs,'{{}}'::jsonb as distributions from totals left join costs using(account_id,model)",
+                counters.iter().map(|name| format!("'{name}',coalesce(sum(metric.{name}),0)")).collect::<Vec<_>>().join(","),
+                counters.iter().map(|name| format!("{name} numeric")).collect::<Vec<_>>().join(",")
+            ));
+            let rows = query
+                .build()
+                .fetch_all(&mut *self.tx)
+                .await
+                .map_err(|error| {
+                    postgres_unavailable("aggregate account usage summaries").with_source(error)
+                })?;
+            merge_account_rows(&mut states, rows)?;
+        }
+        for (start, end) in self.uncovered_spans(range).await? {
+            let boundary = self
+                .account_fact_states(
+                    "request_analytics_facts",
+                    ObservabilityRange { start, end },
+                    account_ids,
+                    false,
+                    by_model,
+                )
+                .await?;
+            merge_account_states(&mut states, boundary)?;
+        }
+        if !self.has_pending_requests().await? {
+            states.retain(|_, state| state.count(retained_counter) > 0);
+            return Ok(states);
+        }
+        let old = self
+            .account_fact_states(
+                "request_analytics_facts",
+                range,
+                account_ids,
+                true,
+                by_model,
+            )
+            .await?;
+        let current = self
+            .account_fact_states(
+                "request_analytics_source",
+                range,
+                account_ids,
+                true,
+                by_model,
+            )
+            .await?;
+        let mut repair = BTreeSet::new();
+        for (key, previous) in old {
+            let state = states.entry(key.clone()).or_default();
+            for (name, count) in &previous.counts {
+                let value = state.counts.entry(name.clone()).or_default();
+                *value = value
+                    .checked_sub(*count)
+                    .ok_or_else(|| invalid("account usage pending counter underflow"))?;
+            }
+            for (currency, amount) in &previous.costs {
+                let before = state
+                    .costs
+                    .get(currency)
+                    .ok_or_else(|| invalid("account usage pending cost is missing"))?;
+                let before = before
+                    .parse::<gateway_core::metering::Decimal>()
+                    .map_err(|_| invalid("invalid account cost"))?;
+                let removed = amount
+                    .parse::<gateway_core::metering::Decimal>()
+                    .map_err(|_| invalid("invalid pending account cost"))?;
+                let difference = before
+                    .scaled()
+                    .checked_sub(removed.scaled())
+                    .ok_or_else(|| invalid("account usage pending cost underflow"))?;
+                let value = gateway_core::metering::Decimal::from_scaled(difference)
+                    .map_err(|_| invalid("invalid account cost difference"))?;
+                state.costs.insert(currency.clone(), value.canonical());
+            }
+            // 失败终态没有用量极值，更新它们只需调整计数
+            if previous.last_used_at().is_some() {
+                repair.insert(key);
+            }
+        }
+        merge_account_states(&mut states, current)?;
+        // 撤销最大值不能用减法；只对发生源版本替换的账号模型做索引定位
+        let completed = completed_usage_fact_predicate("mr");
+        for (account, model) in repair {
+            let state = states
+                .get_mut(&(account.clone(), model.clone()))
+                .ok_or_else(|| invalid("pending account state disappeared"))?;
+            if state.count(retained_counter) == 0 {
+                *state = MetricState::default();
+                continue;
+            }
+            let statement = format!(
+                "select started_at from model_requests mr where provider_account_ref=$1 and ($2::text is null or coalesce(upstream_model_id,requested_model_id,'')=$2) and started_at >= $3 and started_at < $4 and {completed} and mr.recovered_at is null order by started_at desc,id desc limit 1"
+            );
+            state.last_used_at = sqlx::query_scalar(sqlx::AssertSqlSafe(statement))
+                .bind(&account)
+                .bind(by_model.then_some(&model))
+                .bind(range.start)
+                .bind(range.end)
+                .fetch_optional(&mut *self.tx)
+                .await
+                .map_err(|error| {
+                    postgres_unavailable("repair account latest usage").with_source(error)
+                })?;
+            let zero_currencies = state
+                .costs
+                .iter()
+                .filter(|(_, amount)| amount.as_str() == "0")
+                .map(|(currency, _)| currency.clone())
+                .collect::<Vec<_>>();
+            for currency in zero_currencies {
+                let statement = format!(
+                    "select exists(select 1 from model_requests mr where provider_account_ref=$1 and ($2::text is null or coalesce(upstream_model_id,requested_model_id,'')=$2) and started_at >= $3 and started_at < $4 and {completed} and mr.recovered_at is null and cost_currency=$5 and cost_amount is not null)"
+                );
+                let exists: bool = sqlx::query_scalar(sqlx::AssertSqlSafe(statement))
+                    .bind(&account)
+                    .bind(by_model.then_some(&model))
+                    .bind(range.start)
+                    .bind(range.end)
+                    .bind(&currency)
+                    .fetch_one(&mut *self.tx)
+                    .await
+                    .map_err(|error| {
+                        postgres_unavailable("repair account cost coverage").with_source(error)
+                    })?;
+                if !exists {
+                    state.costs.remove(&currency);
+                }
+            }
+        }
+        states.retain(|_, state| state.count(retained_counter) > 0);
+        Ok(states)
+    }
+
+    pub(super) async fn has_pending_requests(&mut self) -> StoreResult<bool> {
+        if self.status.oldest_pending_at.is_none() {
+            return Ok(false);
+        }
+        sqlx::query_scalar("select exists(select 1 from request_analytics_pending_requests)")
+            .fetch_one(&mut *self.tx)
+            .await
+            .map_err(|error| postgres_unavailable("check pending account usage").with_source(error))
+    }
+
+    pub(super) fn projection_covers(&self, range: ObservabilityRange) -> bool {
+        self.status.schema_version == SCHEMA_VERSION as u32
+            && self.status.histogram_version == HISTOGRAM_VERSION as u32
+            && (!self.status.building
+                || (self
+                    .status
+                    .coverage_start
+                    .is_some_and(|start| range.start >= start)
+                    && self.status.coverage_end.is_some()))
+    }
+
+    async fn account_fact_states(
+        &mut self,
+        table: &'static str,
+        range: ObservabilityRange,
+        account_ids: &[String],
+        pending_only: bool,
+        by_model: bool,
+    ) -> StoreResult<AccountStates> {
+        let mut query = QueryBuilder::<Postgres>::new(usage_fact_aggregate_sql(table, by_model));
+        if pending_only {
+            query.push(
+                " join request_analytics_pending_requests pending on pending.request_id=mr.id",
+            );
+        }
+        query
+            .push(" where mr.provider_account_ref=any(")
+            .push_bind(account_ids)
+            .push("::text[]) and mr.started_at >= ")
+            .push_bind(range.start)
+            .push(" and mr.started_at < ")
+            .push_bind(range.end);
+        if !by_model {
+            push_completed_usage_fact_filter(&mut query, "mr");
+        }
+        push_unrecovered_request_filter(&mut query, "mr");
+        query.push(" group by mr.provider_account_ref,mr.cost_currency");
+        if by_model {
+            query.push(",coalesce(mr.upstream_model_id,mr.requested_model_id,'')");
+        }
+        let rows = query
+            .build()
+            .fetch_all(&mut *self.tx)
+            .await
+            .map_err(|error| {
+                postgres_unavailable("aggregate account usage facts").with_source(error)
+            })?;
+        let mut states = BTreeMap::new();
+        merge_account_rows(&mut states, rows)?;
+        Ok(states)
+    }
+}
+
+fn merge_account_rows(
+    states: &mut AccountStates,
+    rows: Vec<sqlx::postgres::PgRow>,
+) -> StoreResult<()> {
+    for row in rows {
+        states
+            .entry((get(&row, "account_id")?, get(&row, "model")?))
+            .or_default()
+            .merge(&MetricState::decode(&row)?)?;
+    }
+    Ok(())
+}
+
+fn merge_account_states(states: &mut AccountStates, incoming: AccountStates) -> StoreResult<()> {
+    for (key, state) in incoming {
+        states.entry(key).or_default().merge(&state)?;
+    }
+    Ok(())
+}
+
+fn usage_counter_names(by_model: bool) -> Vec<String> {
+    let mut names = [
+        "completed_request_count",
+        "image_request_count",
+        "image_request_failed_count",
+        "window_total_tokens",
+        "provider_reported_count",
+        "calculated_count",
+        "unavailable_count",
+    ]
+    .map(str::to_owned)
+    .to_vec();
+    if by_model {
+        names.extend(
+            [
+                "request_count",
+                "success_count",
+                "failure_count",
+                "cancelled_count",
+                "incomplete_count",
+                "caller_error_count",
+            ]
+            .map(str::to_owned),
+        );
+    }
+    for name in super::metrics::TOKEN_METRICS {
+        names.push(name.to_owned());
+        names.push(format!("{name}_known_count"));
+    }
+    names
+}
+
+fn usage_fact_aggregate_sql(table: &str, by_model: bool) -> String {
+    let model = if by_model {
+        "coalesce(mr.upstream_model_id,mr.requested_model_id,'')"
+    } else {
+        "''::text"
+    };
+    let mut counters = vec![
+        "'completed_request_count',count(*) filter(where is_completed_usage)".to_owned(),
+        "'image_request_count',count(*) filter(where is_completed_usage and image_generation_succeeded is true)".to_owned(),
+        "'image_request_failed_count',count(*) filter(where is_completed_usage and image_generation_succeeded is false)".to_owned(),
+        "'window_total_tokens',coalesce(sum(coalesce(total_tokens,coalesce(input_tokens,0)+coalesce(output_tokens,0))) filter(where is_completed_usage),0)".to_owned(),
+    ];
+    if by_model {
+        counters.push("'request_count',count(*)".to_owned());
+        counters.push(
+            "'caller_error_count',count(*) filter(where client_status_code between 400 and 499)"
+                .to_owned(),
+        );
+        for (outcome, name) in [
+            ("succeeded", "success"),
+            ("failed", "failure"),
+            ("cancelled", "cancelled"),
+            ("incomplete", "incomplete"),
+        ] {
+            counters.push(format!(
+                "'{name}_count',count(*) filter(where outcome='{outcome}')"
+            ));
+        }
+    }
+    for name in super::metrics::TOKEN_METRICS {
+        counters.push(format!(
+            "'{name}',coalesce(sum({name}) filter(where is_completed_usage),0),'{name}_known_count',count({name}) filter(where is_completed_usage)"
+        ));
+    }
+    for source in ["provider_reported", "calculated", "unavailable"] {
+        counters.push(format!(
+            "'{source}_count',count(*) filter(where is_completed_usage and cost_source='{source}')"
+        ));
+    }
+    // 排序与分组费用已在 WHERE 限定完整交付，只在模型健康查询中按指标分别筛选
+    let completed = if by_model {
+        completed_usage_fact_predicate("mr")
+    } else {
+        "true".to_owned()
+    };
+    format!("select mr.provider_account_ref as account_id,{model} as model,
+         jsonb_build_object({}) as counts,case when mr.cost_currency is not null and sum(mr.cost_amount) filter(where is_completed_usage) is not null
+           then jsonb_build_object(mr.cost_currency,(sum(mr.cost_amount) filter(where is_completed_usage))::text) else '{{}}'::jsonb end as costs,
+         '{{}}'::jsonb as distributions,max(mr.started_at) filter(where is_completed_usage) as last_used_at
+         from (select mr.*,coalesce(({completed}),false) as is_completed_usage from {table} mr) mr",counters.join(","))
+}
+
+pub(crate) async fn account_usage_windows(
+    connection: &mut ObservabilityConnection,
+    windows: &[AccountUsageWindowQuery],
+) -> StoreResult<Vec<AccountUsageWindowResult>> {
+    let mut snapshot = AnalyticsSnapshot::new_for_accounts(connection).await?;
+    // 相同窗口一次查询所有账号，避免列表逐账号重复读取同一套时间桶
+    let mut grouped = BTreeMap::<(DateTime<Utc>, DateTime<Utc>), BTreeSet<String>>::new();
+    for window in windows {
+        grouped
+            .entry((window.range.start, window.range.end))
+            .or_default()
+            .insert(window.account_id.clone());
+    }
+    let mut results = Vec::with_capacity(windows.len());
+    for ((start, end), accounts) in grouped {
+        let ids = accounts.into_iter().collect::<Vec<_>>();
+        let states = snapshot
+            .account_usage_states(ObservabilityRange { start, end }, &ids)
+            .await?;
+        for window in windows
+            .iter()
+            .filter(|window| window.range.start == start && window.range.end == end)
+        {
+            let mut total = MetricState::default();
+            let mut models = Vec::new();
+            for ((account, model), state) in &states {
+                if account != &window.account_id {
+                    continue;
+                }
+                total.merge(state)?;
+                if !model.is_empty() {
+                    models.push(AccountModelUsage {
+                        success_count: state.count("success_count"),
+                        model: model.clone(),
+                        request_count: state.count("completed_request_count"),
+                        health: state.request_health(),
+                        input_tokens: state.optional_count("input_tokens"),
+                        output_tokens: state.optional_count("output_tokens"),
+                        cached_tokens: state.optional_count("cached_tokens"),
+                        cache_write_tokens: state.optional_count("cache_write_tokens"),
+                        reasoning_tokens: state.optional_count("reasoning_tokens"),
+                        image_input_tokens: state.optional_count("image_input_tokens"),
+                        image_output_tokens: state.optional_count("image_output_tokens"),
+                        total_tokens: Some(state.count("window_total_tokens")),
+                        image_request_count: state.count("image_request_count"),
+                        image_request_failed_count: state.count("image_request_failed_count"),
+                        cost_coverage: admin_cost_coverage(state.coverage()),
+                        costs: account_costs(state)?,
+                        last_used_at: state.last_used_at(),
+                    });
+                }
+            }
+            models.sort_by(|a, b| {
+                b.request_count
+                    .cmp(&a.request_count)
+                    .then(a.model.cmp(&b.model))
+            });
+            results.push(AccountUsageWindowResult {
+                account_id: window.account_id.clone(),
+                key: window.key.clone(),
+                usage: AccountUsage {
+                    account_id: window.account_id.clone(),
+                    request_count: total.count("completed_request_count"),
+                    success_count: total.count("completed_request_count"),
+                    input_tokens: total.optional_count("input_tokens"),
+                    output_tokens: total.optional_count("output_tokens"),
+                    cached_tokens: total.optional_count("cached_tokens"),
+                    cache_write_tokens: total.optional_count("cache_write_tokens"),
+                    reasoning_tokens: total.optional_count("reasoning_tokens"),
+                    image_input_tokens: total.optional_count("image_input_tokens"),
+                    image_output_tokens: total.optional_count("image_output_tokens"),
+                    total_tokens: Some(total.count("window_total_tokens")),
+                    image_request_count: total.count("image_request_count"),
+                    image_request_failed_count: total.count("image_request_failed_count"),
+                    cost_coverage: admin_cost_coverage(total.coverage()),
+                    costs: account_costs(&total)?,
+                    last_used_at: total.last_used_at(),
+                    request_buckets: Vec::new(),
+                    models,
+                },
+            });
+        }
+    }
+    snapshot.finish().await?;
+    results.sort_by(|a, b| a.account_id.cmp(&b.account_id).then(a.key.cmp(&b.key)));
+    Ok(results)
+}
+
+fn account_costs(state: &MetricState) -> StoreResult<Vec<AccountCost>> {
+    state
+        .costs()?
+        .into_iter()
+        .map(|cost| {
+            Ok(AccountCost {
+                currency: cost.currency,
+                amount: cost
+                    .amount
+                    .as_str()
+                    .parse()
+                    .map_err(|_| invalid("invalid account cost"))?,
+            })
+        })
+        .collect::<StoreResult<_>>()
+}
+
+async fn retained_account_usage_range(
+    snapshot: &mut AnalyticsSnapshot<'_>,
+    now: DateTime<Utc>,
+) -> StoreResult<ObservabilityRange> {
+    // 只为实际存在的数据规划时间桶，超长保留期不展开空白历史或溢出日期
+    let (days, earliest): (i64, DateTime<Utc>) = sqlx::query_as(
+        "select usage_retention_days, least(
+            (select started_at from model_requests order by started_at, id limit 1),
+            (select started_at from request_analytics_facts order by started_at, id limit 1),
+            (select bucket_start from request_analytics_1h where collection = 'usage_contribution' order by bucket_start limit 1),
+            $1::timestamptz - interval '1 day'
+         ) from runtime_settings where id = 1",
+    )
+    .bind(now)
+    .fetch_one(&mut *snapshot.tx)
+    .await
+    .map_err(|error| postgres_unavailable("read retained account usage range").with_source(error))?;
+    let duration =
+        TimeDelta::try_days(days).ok_or_else(|| invalid("invalid account usage retention"))?;
+    let start = now
+        .checked_sub_signed(duration)
+        .unwrap_or(earliest)
+        .max(earliest);
+    ObservabilityRange::new(start, now)
+}
+
+pub(crate) async fn account_usage_sort_values(
+    snapshot: &mut AnalyticsSnapshot<'_>,
+    now: DateTime<Utc>,
+) -> StoreResult<(Vec<String>, Vec<i64>, Vec<Option<DateTime<Utc>>>)> {
+    let range = retained_account_usage_range(snapshot, now).await?;
+    let ids: Vec<String> = sqlx::query_scalar("select id from provider_accounts")
+        .fetch_all(&mut *snapshot.tx)
+        .await
+        .map_err(|error| {
+            postgres_unavailable("read account usage sort identities").with_source(error)
+        })?;
+    let mut totals = BTreeMap::<String, MetricState>::new();
+    for ((account, _), state) in snapshot.account_states(range, &ids, false).await? {
+        totals.entry(account).or_default().merge(&state)?;
+    }
+    let mut tokens = Vec::with_capacity(ids.len());
+    let mut latest = Vec::with_capacity(ids.len());
+    for id in &ids {
+        let state = totals.remove(id).unwrap_or_default();
+        tokens.push(
+            i64::try_from(state.count("window_total_tokens"))
+                .map_err(|_| invalid("account usage sort token overflow"))?,
+        );
+        latest.push(state.last_used_at());
+    }
+    Ok((ids, tokens, latest))
+}
+
+pub(crate) async fn account_group_usage(
+    connection: &mut ObservabilityConnection,
+    group_ids: &[String],
+    timezone: gateway_core::time::DeploymentTimeZone,
+) -> StoreResult<BTreeMap<String, AccountGroupUsage>> {
+    if group_ids.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    let mut snapshot = AnalyticsSnapshot::new_for_accounts(connection).await?;
+    let now = Utc::now();
+    let retained = retained_account_usage_range(&mut snapshot, now).await?;
+    let memberships:Vec<(String,String)>=sqlx::query_as("select account_group_id,provider_account_id from account_group_accounts where account_group_id=any($1::text[])").bind(group_ids).fetch_all(&mut *snapshot.tx).await.map_err(|error|postgres_unavailable("read group usage membership").with_source(error))?;
+    let ids = memberships
+        .iter()
+        .map(|(_, account)| account.clone())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let today = ObservabilityRange::new(
+        timezone
+            .day_start(now)
+            .ok_or_else(|| invalid("invalid business date"))?
+            .max(retained.start),
+        now,
+    )?;
+    let retained_states = snapshot.account_states(retained, &ids, false).await?;
+    let today_states = snapshot.account_states(today, &ids, false).await?;
+    let mut results = BTreeMap::new();
+    for group in group_ids {
+        let mut usage = AccountGroupUsage {
+            today_usd: "0".parse().map_err(|_| invalid("invalid zero cost"))?,
+            retained_total_usd: "0".parse().map_err(|_| invalid("invalid zero cost"))?,
+        };
+        for (_, account) in memberships.iter().filter(|(id, _)| id == group) {
+            for (states, total) in [
+                (&retained_states, &mut usage.retained_total_usd),
+                (&today_states, &mut usage.today_usd),
+            ] {
+                for ((id, _), state) in states {
+                    if id == account
+                        && let Some(amount) = state.costs.get("USD")
+                    {
+                        let amount = amount
+                            .parse()
+                            .map_err(|_| invalid("invalid group usage cost"))?;
+                        *total = total
+                            .checked_add(&amount)
+                            .ok_or_else(|| invalid("group usage cost overflow"))?;
+                    }
+                }
+            }
+        }
+        results.insert(group.clone(), usage);
+    }
+    snapshot.finish().await?;
+    Ok(results)
+}

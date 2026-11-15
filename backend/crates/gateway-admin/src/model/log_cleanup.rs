@@ -56,14 +56,14 @@ impl CleanupConfig {
         }
         for category in CleanupCategory::ALL {
             let days = self.selection(category).retention_days;
-            let maximum = if category == CleanupCategory::Captures {
-                30
-            } else {
-                3650
+            let maximum = match category {
+                CleanupCategory::Requests => u32::MAX,
+                CleanupCategory::Captures => 30,
+                CleanupCategory::Files | CleanupCategory::Audit => 3650,
             };
             if days > maximum {
                 return Err(AdminError::invalid(
-                    "保留天数超出范围：请求日志、运行日志和管理员日志0至3650天，采集0至30天",
+                    "保留天数超出范围：请求日志为非负整数，运行日志和管理员日志0至3650天，采集0至30天",
                 ));
             }
         }

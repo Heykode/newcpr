@@ -7,6 +7,7 @@ use super::*;
 
 /// 已完成连接、迁移与 hydration 的 Store 能力集合。
 pub struct StoreBundle {
+    request_analytics: postgres::PgRequestAnalyticsRepository,
     admin_ports: AdminStorePorts,
     core_ports: CoreStorePorts,
     operational_diagnostics: Arc<dyn gateway_core::diagnostics::OperationalDiagnostics>,
@@ -17,6 +18,17 @@ pub struct StoreBundle {
 }
 
 impl StoreBundle {
+    pub fn request_analytics_worker(
+        &self,
+        projector: Arc<dyn gateway_admin::ports::store::UsageBillingProjector>,
+    ) -> StoreResult<WorkerContribution> {
+        workers::request_analytics_worker(
+            self.request_analytics
+                .clone()
+                .with_billing_projector(projector),
+        )
+    }
+
     pub fn operational_diagnostics(
         &self,
     ) -> Arc<dyn gateway_core::diagnostics::OperationalDiagnostics> {
@@ -64,6 +76,11 @@ pub async fn initialize(mut config: StoreConfig) -> StoreResult<StoreBundle> {
         config.pool.acquire_timeout(),
         std::time::Duration::from_secs(config.pool.observability_query_timeout_seconds),
     )?;
+    let request_analytics = postgres::PgRequestAnalyticsRepository::new(
+        pool.clone(),
+        observability_query_budget.clone(),
+    )
+    .with_projection_work_mem_mb(config.pool.analytics_projection_work_mem_mb);
     let redis_client = ::redis::Client::open(config.redis_url()?)
         .map_err(|error| redis_unavailable("create Redis client").with_source(error))?;
     let redis_connection = redis_client
@@ -137,7 +154,10 @@ pub async fn initialize(mut config: StoreConfig) -> StoreResult<StoreBundle> {
                 observability_query_budget.clone(),
             )),
             admin_account_runtime,
-            Arc::new(postgres::PgAccountGroupRepository::new(pool.clone())),
+            Arc::new(
+                postgres::PgAccountGroupRepository::new(pool.clone())
+                    .with_query_budget(observability_query_budget.clone()),
+            ),
             Arc::new(postgres::PgProxyRepository::new(pool.clone())),
         ),
         Arc::new(AdminAuthStoreAdapter {
@@ -149,12 +169,15 @@ pub async fn initialize(mut config: StoreConfig) -> StoreResult<StoreBundle> {
             )?,
         }),
         Arc::new(postgres::PgAdminClientKeyStore::new(pool.clone())),
-        Arc::new(postgres::PgAdminObservabilityStore::new(
-            pool.clone(),
-            Some(credential_leases.clone()),
-            Some(Arc::clone(&cooldowns) as Arc<dyn ProviderCooldownPort>),
-            observability_query_budget,
-        )),
+        Arc::new(
+            postgres::PgAdminObservabilityStore::new(
+                pool.clone(),
+                Some(credential_leases.clone()),
+                Some(Arc::clone(&cooldowns) as Arc<dyn ProviderCooldownPort>),
+                observability_query_budget,
+            )
+            .with_timezone(config.timezone),
+        ),
         Arc::new(AdminSettingsStoreAdapter {
             control_plane: postgres::PgControlPlaneRepository::new(pool.clone()),
             notifications: postgres::PgNotificationRepository::new(pool.clone()),
@@ -297,6 +320,7 @@ pub async fn initialize(mut config: StoreConfig) -> StoreResult<StoreBundle> {
         ));
     }
     Ok(StoreBundle {
+        request_analytics,
         operational_diagnostics,
         admin_ports,
         core_ports,

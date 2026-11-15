@@ -425,10 +425,10 @@ fn compiler_keeps_model_policy_when_applying_group_membership() {
 }
 
 #[test]
-fn smart_settings_are_frozen_in_existing_plans() {
-    use gateway_core::account::smart_scheduling::SmartSchedulingConfig;
+fn scheduling_settings_are_frozen_in_existing_plans() {
+    use gateway_core::account::scheduling::SmartSchedulingConfig;
     use gateway_core::routing::RequestTuning;
-    let make = |number, config| {
+    let make = |number, config, reset_weights| {
         SnapshotFacts::new(
             revision(number),
             revision(number),
@@ -436,7 +436,8 @@ fn smart_settings_are_frozen_in_existing_plans() {
                 .with_request_tuning(RequestTuning {
                     smart_scheduling: config,
                     ..Default::default()
-                }),
+                })
+                .with_quota_reset_window_weights(reset_weights),
             vec![],
             vec![],
             vec![SnapshotProviderAccountFacts::new(
@@ -448,7 +449,11 @@ fn smart_settings_are_frozen_in_existing_plans() {
     };
     let original = SmartSchedulingConfig::default();
     let updated = SmartSchedulingConfig::new([0.0, 2.0, 0.0, 0.0, 0.0, 1.0], true).unwrap();
-    let store = Arc::new(TestSnapshotStore::new(Ok(make(1, original))));
+    let store = Arc::new(TestSnapshotStore::new(Ok(make(
+        1,
+        original,
+        Default::default(),
+    ))));
     let compiler = RuntimeSnapshotCompiler::new(store.clone(), Arc::new(TestCatalog::Unavailable));
     let first = block_on(compiler.compile()).unwrap();
     let plan = first
@@ -459,12 +464,32 @@ fn smart_settings_are_frozen_in_existing_plans() {
             &Default::default(),
         )
         .unwrap();
-    *store.facts.lock().unwrap() = Ok(make(2, updated));
+    *store.facts.lock().unwrap() = Ok(make(
+        2,
+        updated,
+        gateway_core::account::ResetWindowWeights::new([1.0, 0.0, 2.0]).unwrap(),
+    ));
     *store.current_revision.lock().unwrap() = Ok(revision(2));
     let second = block_on(compiler.compile()).unwrap();
     assert_eq!(second.request_tuning().smart_scheduling, updated);
     assert_eq!(plan.account_selection_policy().smart_scheduling(), original);
     assert_eq!(plan.request_tuning().smart_scheduling, original);
+    assert_eq!(
+        plan.account_selection_policy().quota_reset_window_weights(),
+        Default::default()
+    );
+    let next = second
+        .plan(
+            &PublicModelId::new("new-model").unwrap(),
+            &super::operation(),
+            second.all_account_scope(),
+            &Default::default(),
+        )
+        .unwrap();
+    assert_eq!(
+        next.account_selection_policy().quota_reset_window_weights(),
+        gateway_core::account::ResetWindowWeights::new([1.0, 0.0, 2.0]).unwrap()
+    );
 }
 
 #[test]

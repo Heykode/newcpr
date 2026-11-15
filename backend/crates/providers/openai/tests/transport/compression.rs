@@ -129,18 +129,21 @@ async fn http_compression_threshold_preserves_identity_and_bytes_across_profiles
                 read_header_value(head, "user-agent"),
                 Some(user_agent.as_str())
             );
-            assert_eq!(
-                read_header_value(head, "x-codex-installation-id"),
-                compression_context().installation_id
-            );
+            assert_eq!(read_header_value(head, "x-codex-installation-id"), None);
             assert_eq!(
                 read_header_value(head, "chatgpt-account-id"),
                 compression_context().account_id,
             );
             let body: Value = serde_json::from_slice(&decoded).unwrap();
-            assert_eq!(
+            assert_ne!(
                 body["prompt_cache_key"].as_str(),
-                read_header_value(head, "thread-id"),
+                read_header_value(head, "thread-id")
+            );
+            assert_eq!(
+                uuid::Uuid::parse_str(body["prompt_cache_key"].as_str().unwrap())
+                    .unwrap()
+                    .get_version_num(),
+                4
             );
             assert_ne!(body["prompt_cache_key"], "original-cache");
         }

@@ -153,6 +153,11 @@ WebSocket message 和 frame 不设置网关私有长度上限；协议可接受�
 无法对应的扩展字段可能降级，保留全部 Responses 语义时应使用 Responses 入口。
 每轮上下文由客户端提交，Messages 不提供服务端历史续接或 WebSocket 入口。
 
+会话亲和优先读取 `x-claude-code-session-id`，再读取 `metadata.user_id` JSON 字符串的
+`session_id`，最后兼容旧 `_session_<id>` 后缀。会话最多 256 字节且不含控制字符。
+相同 Client Key 下沿用 `openaiAccountAffinity` 模式及现有换号预算；不同 Key 隔离。
+普通用户标识和对话正文不绑定账号，也不建立 Codex turn 或原生续接归属。
+
 `/v1/messages/count_tokens` 使用同一鉴权、模型及账号准入，将 Messages 内容投影后由本地
 BPE tokenizer 估算可提取文本和工具内容。它不发送上游生成请求，不产生上游成功用量反馈，
 不保证涵盖图片、音频、二进制文档及隐藏推理成本，也不等同于最终账单。
@@ -273,8 +278,11 @@ Responses 不透传下游的逐跳头、反代元数据（如 `cf-*`、`x-forwar
 按官方 v3.39.1 保留 `traceparent`、`tracestate`、`sentry-trace`、`baggage` 及对应
 `ws_request_header_*` 副本，包含重复头、client metadata 和对象/字符串 turn metadata。
 `x-openai-fedramp` 按业务头透传；地域及账号路由头仍以部署配置为准。
-模型请求和 Live 的 `x-codex-installation-id` 使用账号持久设备号，与正文身份一致，
-不接受下游伪造值。会话/Key 隔离、turn 引用和加密内容继续遵守原有协议合同。
+按官方 v3.48.0，Responses HTTP/WS 和模型目录请求不发送 `x-codex-installation-id`；
+独立 JSON、Live 端点仍显式使用账号的有效安装身份，不接受下游伪造值。
+正文设备身份和账号/Key 隔离保留。真实 UUIDv7 关联标识保留创建时间，其他值使用稳定 UUIDv4；
+合法 UUID 加规范 u64 的窗口保留后缀，context window 独立映射。显式缓存键独立于线程，
+同 scope 的相同原值映射相同；没有传缓存键时不补造。turn 引用和加密内容保持原值。
 同一轮全量请求可回传已记录且归属匹配的上游 turn-state，包括失败响应提供的值；
 此证明不授予未知 response ID 或其他账号状态的使用权。
 
@@ -861,6 +869,13 @@ OAuth start 使用：
 QX 兼容并不表示 TLS 指纹逐项等价；设备档案和精确 WS 续接身份保持原有权威。
 详细格式、分请求类型的边界与回退方式见 [QX 兼容画像](qx-compatible-profile.md)。
 
+完整预设配置由现有 `provider_outbound_user_agents.configuration_json` 保存；后台模型目录
+发现、手动刷新、导出及定时预热，每轮读取并冻结当前全局画像，版本参数与请求头使用
+同一份身份，不借用单个 Key 的覆盖。管理端账号连接诊断从本次发布快照取得全局画像。
+旧 `default`、`custom` 和自动同步版本模式继续通过已发布画像生效；读取或解析失败
+会返回错误，不静默切换成另一套客户端身份。OAuth、额度查询及其他 Desktop 专属操作
+继续使用各自的协议画像。
+
 ### OpenAI 个人信息
 
 `GET /api/admin/accounts/personal-info?accountId=...` 需要管理员会话，当前由 OpenAI/Codex OAuth
@@ -1106,6 +1121,8 @@ HTTP 返回 `429`，`error.code` 为 `key_daily_budget_exceeded` 或 `key_weekly
 历史迁移 0088 曾关闭旧的单时间计划；本次多规则更新不清空现有 Cron。只对明确空闲窗口
 预热，真实 0% 用量允许检查，未知用量不能当作空闲。
 
+预热每轮采用当前 OpenAI 全局客户端身份，保留实际选中账号的凭据和出口。
+
 
 | 方法 | 路由 | 说明 |
 | --- | --- | --- |
@@ -1129,6 +1146,7 @@ openaiSessionBindingTtlHours
 openaiAccountAffinity
 requestIntervalMs
 rotationStrategy
+quotaResetWindowWeights
 minCodexDesktopVersion
 minCodexCliVersion
 usageRetentionDays
@@ -1148,13 +1166,27 @@ requestTuning
 接受 0–10、一位小数。省略整个对象补三个 0；显式提供时须包含三项。全部为 0 时额度重置不参与
 评分和近似最优容差；否则对有效的账号通用 5 小时/周/月窗口取加权评分，缺失或过期窗口计零。
 每个周期取最近的未来重置，分数为 `H / (H + 剩余秒数)`，`H=周期秒数/7`，月按 30 天计算。
-模型专属窗口不计入，原 `quota_reset_priority` 策略不变。参数写入现有 JSONB，无需数据库迁移。
+模型专属窗口不计入。智能调度参数保存在现有 `requestTuning` JSONB 中。
+
+`quota_reset_priority` 使用独立的顶层 `quotaResetWindowWeights`，同样包含
+`fiveHour`、`weekly`、`monthly`，各项为 0–10、最多一位小数。非全零时严格按重置得分
+排序，不混入智能调度分数或近似同分轮换；全零保持原最早重置时间排序。
+两组权重分别保存，切换策略不相互覆盖。更新设置必须提交完整三项，缺失/null/未知字段
+或非法数字返回 422；读取额外返回只读 `quotaResetWindowWeightsDefaults`，不可回传。
+迁移 0093 新增全零默认列，保留既有设置。资格、账号权重层和亲和仍优先于排序。
 
 Codex Responses 最终 HTTP/WS 请求按官方移除 `max_tokens`、`max_output_tokens`、
 `max_completion_tokens`，不再把这些值当输出上限传给上游；`temperature` 和 `prompt_cache_retention`
 继续移除。此规则不扩展到 xAI、Compact、Images 等其他入口。
 
 两个 `minCodex*Version` 字段为 `string | null`，只设置最低版本，不存在最大版本字段。
+
+`usageRetentionDays` 默认 31，支持 `1..=4294967295` 的整数天数，不再设 31/3650 天
+业务上限。极大天数超出可表示日期时保留现有历史，不发生日期溢出。
+日志清理页的 `requests.retentionDays=0` 是独立的显式全部清理选择；运行设置的
+`usageRetentionDays=0` 仍非法。迁移 0091 将已保存的 1–30 天请求清理期限同步到统计
+保留设置，其余选择保留，迁移本身不删除历史。运行日志、审计及详细采集的分类设置
+仍遵循各自边界，详见 [日志清理](log-cleanup.md)。
 
 三个 OpenAI 调度参数位于设置顶层，不放在 `requestTuning`：Guardian 独立并发初始值 5；
 会话绑定有效期默认 24 小时、范围 1–720；亲和模式默认 `strict`，可选 `preferred`、`relaxed`。

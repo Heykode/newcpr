@@ -378,8 +378,8 @@ fn assert_live_correlation(headers: &reqwest::header::HeaderMap) {
     let thread = headers["thread-id"].to_str().unwrap();
     assert_ne!(thread, "client-session");
     uuid::Uuid::parse_str(thread).unwrap();
-    // 本地关联 ID 按角色分隔；后续请求须分别复用 bootstrap 的 session/thread。
-    assert_ne!(thread, session);
+    // 官方统一映射域：相同原值保持相等，后续请求复用 bootstrap 的关联 ID。
+    assert_eq!(thread, session);
     assert_eq!(headers["openai-alpha"], "live-test");
     assert_eq!(headers["x-openai-fedramp"], "true");
     assert_eq!(

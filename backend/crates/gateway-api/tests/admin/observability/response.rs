@@ -251,6 +251,7 @@ async fn dashboard_summary_should_include_quota_exhaustion_in_unavailable_headli
         .dashboard_observation
         .lock()
         .expect("dashboard observation") = Some(DashboardObservation {
+        analytics: Default::default(),
         range: TimeRange::new(now - Duration::hours(1), now).expect("dashboard range"),
         totals: Default::default(),
         provider_accounts: AccountPoolMetrics {
@@ -334,6 +335,7 @@ async fn dashboard_summary_should_use_lifetime_totals_for_card_footers() {
         .dashboard_observation
         .lock()
         .expect("dashboard observation") = Some(DashboardObservation {
+        analytics: Default::default(),
         range: TimeRange::new(now - Duration::hours(1), now).expect("dashboard range"),
         totals: DashboardTotals {
             request_count: 42,
@@ -405,6 +407,7 @@ async fn dashboard_summary_should_default_to_current_china_day() {
         .dashboard_observation
         .lock()
         .expect("dashboard observation") = Some(DashboardObservation {
+        analytics: Default::default(),
         range: TimeRange::new(now - Duration::hours(1), now).expect("dashboard range"),
         totals: Default::default(),
         provider_accounts: AccountPoolMetrics::default(),
@@ -1415,6 +1418,7 @@ async fn usage_card_routes_return_only_the_selected_metric_and_validate_options(
     };
     {
         let overview = UsageOverview {
+            analytics: Default::default(),
             range,
             requests: metrics.clone(),
             attempts: AttemptMetrics {
@@ -1440,6 +1444,7 @@ async fn usage_card_routes_return_only_the_selected_metric_and_validate_options(
         }];
         *fixture.metric_observation.lock().unwrap() = Some(
             gateway_admin::model::observability::UsageInsightsObservation {
+                costs: Vec::new(),
                 overview,
                 trend,
                 concurrency,
@@ -1500,7 +1505,8 @@ async fn usage_card_routes_return_only_the_selected_metric_and_validate_options(
         assert_eq!(status, StatusCode::OK, "{path}: {value}");
         let result = &value["data"];
         assert_eq!(result["metric"], metric);
-        assert_eq!(result.as_object().unwrap().len(), 3);
+        assert_eq!(result.as_object().unwrap().len(), 4);
+        assert!(result["analytics"].is_object());
         let data = &result["data"];
         if metric == "health" {
             assert_eq!(data[field], expected);

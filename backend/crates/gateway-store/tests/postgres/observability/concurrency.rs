@@ -54,6 +54,7 @@ async fn concurrency_sweeps_overlaps_boundaries_running_and_quality_filters() {
         .await
         .unwrap();
     }
+    drain_analytics(&database.pool).await;
     let repository = observability_repository(&database.pool);
     let points = repository
         .usage_concurrency(range, UsageRecordFilter::default())
@@ -96,6 +97,7 @@ async fn concurrency_sweeps_overlaps_boundaries_running_and_quality_filters() {
             .iter()
             .all(|point| point.average_concurrency == 0.0 && point.peak_concurrency == 0)
     );
+    // Official running-request intervals end at the requested range boundary.
     let future = repository
         .usage_concurrency(
             ObservabilityRange::new(
@@ -110,7 +112,7 @@ async fn concurrency_sweeps_overlaps_boundaries_running_and_quality_filters() {
     assert!(
         future
             .iter()
-            .all(|point| point.average_concurrency == 0.0 && point.peak_concurrency == 0)
+            .all(|point| point.average_concurrency == 1.0 && point.peak_concurrency == 1)
     );
     database.close().await;
 }

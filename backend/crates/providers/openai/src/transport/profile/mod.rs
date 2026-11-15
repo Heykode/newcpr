@@ -20,8 +20,8 @@ use url::Url;
 
 use self::desktop_artifact::{CodexDesktopArtifactError, fetch_codex_core_version};
 
+pub(crate) mod baseline;
 pub mod cli_release;
-pub mod cli_version;
 pub mod desktop_artifact;
 pub mod identity;
 pub mod platform_release;
@@ -33,12 +33,13 @@ pub mod qx;
 /// Codex Desktop 官方 appcast 地址。
 pub const CODEX_DESKTOP_APPCAST_URL: &str =
     "https://persistent.oaistatic.com/codex-app-prod/appcast.xml";
-/// 官方发布元数据检查周期。
-pub const APPCAST_POLL_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
+/// 官方发布元数据检查周期
+pub const APPCAST_POLL_INTERVAL: Duration = Duration::from_secs(60 * 60);
 
 const APPCAST_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_APPCAST_BYTES: usize = 1024 * 1024;
 const ARTIFACT_PROFILE_CACHE_TTL: Duration = Duration::from_secs(30 * 24 * 60 * 60);
+const ARTIFACT_PROFILE_CACHE_RENEW_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 const ARTIFACT_PROFILE_SCHEMA_VERSION: u64 = 1;
 
 pub use gateway_core::account::RequestLocation as CodexRequestLocation;
@@ -77,6 +78,11 @@ pub struct CodexWireProfile {
     pub location: CodexRequestLocation,
     /// 版本元组最后一次经制品核验的时间；不表示 TLS 传输已重新核验。
     pub verified_at: DateTime<Utc>,
+}
+
+fn stable_cli_version(value: &str) -> Option<semver::Version> {
+    let version = semver::Version::parse(value).ok()?;
+    (version.pre.is_empty() && version.build.is_empty()).then_some(version)
 }
 
 impl CodexWireProfile {
@@ -330,7 +336,7 @@ impl CodexWireProfileSelection {
                 } else if let Some(version) = &self.cli_version
                     && semver::Version::parse(&effective.codex_version)
                         .ok()
-                        .zip(cli_version::stable_version(version))
+                        .zip(stable_cli_version(version))
                         .is_none_or(|(current, candidate)| candidate >= current)
                 {
                     effective.set_cli_version(version);
@@ -573,16 +579,8 @@ impl CodexWireProfileState {
         self.apply_user_agent_override(&selection)
     }
 
-    pub fn cli_sync_enabled(&self) -> bool {
-        let selection = self
-            .selection
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        matches!(&selection.mode, CodexWireProfileOverride::CustomAutoVersion(profile) if profile.originator != "Codex Desktop")
-    }
-
     pub fn update_cli_version(&self, version: &str) {
-        let Some(candidate) = cli_version::stable_version(version) else {
+        let Some(candidate) = stable_cli_version(version) else {
             return;
         };
         let mut selection = self
@@ -592,7 +590,7 @@ impl CodexWireProfileState {
         if selection
             .cli_version
             .as_deref()
-            .and_then(cli_version::stable_version)
+            .and_then(stable_cli_version)
             .is_none_or(|current| candidate > current)
         {
             selection.cli_version = Some(candidate.to_string());
@@ -907,6 +905,7 @@ pub struct CodexDesktopReleaseService {
     profile: CodexWireProfileState,
     cache: CodexArtifactProfileCache,
     verified: Arc<RwLock<Option<CodexBundledReleaseProfile>>>,
+    cache_written_at: Arc<RwLock<Option<tokio::time::Instant>>>,
 }
 
 impl CodexDesktopReleaseService {
@@ -927,6 +926,7 @@ impl CodexDesktopReleaseService {
             profile,
             cache,
             verified: Arc::new(RwLock::new(verified)),
+            cache_written_at: Arc::default(),
         }
     }
 
@@ -974,10 +974,24 @@ impl CodexDesktopReleaseService {
                 {
                     return Err(CodexDesktopReleaseError::InconsistentRelease);
                 }
-                if !self.cache.replace_if_newer(&verified).await? {
-                    return Err(CodexDesktopReleaseError::ReleaseRollback);
+                // 轻量检查只推进观察时间，缓存单独按天续期
+                let renewal_due = self
+                    .cache_written_at
+                    .read()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .is_none_or(|written| {
+                        written.elapsed() >= ARTIFACT_PROFILE_CACHE_RENEW_INTERVAL
+                    });
+                if renewal_due {
+                    if !self.cache.replace_if_newer(&verified).await? {
+                        return Err(CodexDesktopReleaseError::ReleaseRollback);
+                    }
+                    *self
+                        .cache_written_at
+                        .write()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                        Some(tokio::time::Instant::now());
                 }
-                self.profile.update_bundled_release(&verified);
                 return Ok(release);
             }
         }
@@ -1008,6 +1022,10 @@ impl CodexDesktopReleaseService {
             .verified
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(published);
+        *self
+            .cache_written_at
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(tokio::time::Instant::now());
         Ok(release)
     }
 }

@@ -572,6 +572,7 @@ fn settings_with_margin(refresh_margin_seconds: u64) -> RuntimeSettingsUpdate {
         codex_quota_overdraft_enabled: false,
         codex_quota_overdraft_probe_model: "gpt-6-astra".to_owned(),
         request_interval_ms: 50,
+        quota_reset_window_weights: Default::default(),
         rotation_strategy: "smart".to_owned(),
         model_mappings: BTreeMap::from([
             ("gpt-5.4".to_owned(), "gpt-5.5".to_owned()),
@@ -1582,7 +1583,18 @@ async fn cron_upgrade_disables_old_warmup_without_changing_other_settings() {
             .fetch_one(&database.pool)
             .await
             .unwrap();
-    super::TEST_MIGRATOR.run(&database.pool).await.unwrap();
+    sqlx::migrate::Migrator {
+        migrations: super::TEST_MIGRATOR
+            .iter()
+            .filter(|m| m.version <= 88)
+            .cloned()
+            .collect::<Vec<_>>()
+            .into(),
+        ..sqlx::migrate::Migrator::DEFAULT
+    }
+    .run(&database.pool)
+    .await
+    .unwrap();
     let mut after: Value =
         sqlx::query_scalar("select to_jsonb(s) from runtime_settings s where id=1")
             .fetch_one(&database.pool)
@@ -1603,5 +1615,129 @@ async fn cron_upgrade_disables_old_warmup_without_changing_other_settings() {
             .await
             .is_err()
     );
+    database.close().await;
+}
+
+#[tokio::test]
+async fn retention_upgrade_preserves_saved_values_and_reconciles_short_cleanup_windows() {
+    let old = sqlx::migrate::Migrator {
+        migrations: super::TEST_MIGRATOR
+            .iter()
+            .filter(|m| m.version < 91)
+            .cloned()
+            .collect::<Vec<_>>()
+            .into(),
+        ..sqlx::migrate::Migrator::DEFAULT
+    };
+    for days in [0_i64, 1, 30, 31, 3650] {
+        let Some(db) = TestDatabase::create_with_migrator("retention_upgrade", &old).await else {
+            return;
+        };
+        sqlx::query("update runtime_settings set usage_retention_days=45, ops_event_retention_days=50 where id=1")
+            .execute(&db.pool).await.unwrap();
+        sqlx::query("update log_cleanup_control set config=jsonb_set(config,'{requests,retentionDays}',to_jsonb($1::bigint)) where singleton")
+            .bind(days).execute(&db.pool).await.unwrap();
+        let before: Value =
+            sqlx::query_scalar("select to_jsonb(s) from runtime_settings s where id=1")
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+        sqlx::migrate::Migrator {
+            migrations: super::TEST_MIGRATOR
+                .iter()
+                .filter(|m| m.version <= 91)
+                .cloned()
+                .collect::<Vec<_>>()
+                .into(),
+            ..sqlx::migrate::Migrator::DEFAULT
+        }
+        .run(&db.pool)
+        .await
+        .unwrap();
+        let after: Value =
+            sqlx::query_scalar("select to_jsonb(s) from runtime_settings s where id=1")
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+        let mut expected = before;
+        if (1..31).contains(&days) {
+            expected["usage_retention_days"] = json!(days);
+            expected["ops_event_retention_days"] = json!(days);
+            expected["config_revision"] = json!(expected["config_revision"].as_i64().unwrap() + 1);
+        }
+        assert_eq!(after, expected);
+        // Runtime repository reads require the current schema after the historical assertion.
+        super::TEST_MIGRATOR.run(&db.pool).await.unwrap();
+        for value in [1_i64, 30, 31, 3651, i64::from(u32::MAX)] {
+            sqlx::query("update runtime_settings set usage_retention_days=$1 where id=1")
+                .bind(value)
+                .execute(&db.pool)
+                .await
+                .unwrap();
+            let settings = PgRuntimeSettingsRepository::new(db.pool.clone())
+                .load_runtime_settings()
+                .await
+                .unwrap();
+            assert_eq!(i64::from(settings.usage_retention_days), value);
+        }
+        assert!(
+            sqlx::query("update runtime_settings set usage_retention_days=0 where id=1")
+                .execute(&db.pool)
+                .await
+                .is_err()
+        );
+        db.close().await;
+    }
+}
+
+#[tokio::test]
+async fn quota_reset_weights_upgrade_and_persist_through_runtime_snapshot() {
+    use gateway_core::account::ResetWindowWeights;
+    let old = sqlx::migrate::Migrator {
+        migrations: super::TEST_MIGRATOR
+            .iter()
+            .filter(|migration| migration.version < 93)
+            .cloned()
+            .collect::<Vec<_>>()
+            .into(),
+        ..sqlx::migrate::Migrator::DEFAULT
+    };
+    let Some(database) = TestDatabase::create_with_migrator("quota_reset_weights", &old).await
+    else {
+        return;
+    };
+    let before: Value = sqlx::query_scalar("select to_jsonb(s) from runtime_settings s where id=1")
+        .fetch_one(&database.pool)
+        .await
+        .unwrap();
+    super::TEST_MIGRATOR.run(&database.pool).await.unwrap();
+    let after: Value = sqlx::query_scalar("select to_jsonb(s) from runtime_settings s where id=1")
+        .fetch_one(&database.pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        after["quota_reset_window_weights_json"],
+        json!({"fiveHour":0,"weekly":0,"monthly":0})
+    );
+    for (field, value) in before.as_object().unwrap() {
+        assert_eq!(&after[field], value, "{field}");
+    }
+    let repository = PgRuntimeSettingsRepository::new(database.pool.clone());
+    let weights = ResetWindowWeights::new([1.5, 2.0, 0.0]).unwrap();
+    for strategy in ["quota_reset_priority", "smart", "sticky"] {
+        let mut update = settings_with_margin(3_600);
+        update.rotation_strategy = strategy.to_owned();
+        update.quota_reset_window_weights = weights;
+        repository.update_runtime_settings(update).await.unwrap();
+        let loaded = repository.load_runtime_settings().await.unwrap();
+        assert_eq!(loaded.quota_reset_window_weights, weights);
+        assert_eq!(loaded.rotation_strategy, strategy);
+        let snapshot = PgRuntimeSnapshotRepository::new(database.pool.clone())
+            .load_runtime_snapshot()
+            .await
+            .unwrap();
+        assert_eq!(snapshot.settings.quota_reset_window_weights, weights);
+        assert_eq!(snapshot.settings.rotation_strategy, strategy);
+    }
     database.close().await;
 }

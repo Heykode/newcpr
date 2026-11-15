@@ -118,11 +118,6 @@ async fn initialize_with_request_tuning_mode(
     let runtime_policy = ports.runtime_policy();
     let credential_state = ports.credential_state();
     let profile = config.wire_profile_state();
-    let cli_version = transport::profile::cli_version::CodexCliVersionService::new(
-        profile.clone(),
-        ports.artifact_profiles(),
-    )
-    .map_err(|_| OpenAiInitializeError::Transport)?;
     let user_agent_override = runtime_policy
         .load_user_agent_override(&provider_kind)
         .await
@@ -194,6 +189,7 @@ async fn initialize_with_request_tuning_mode(
         http.clone(),
         config.base_url().to_owned(),
         ports.catalog_cache(),
+        Arc::clone(&runtime_policy),
     );
     let catalog = Arc::new(match &egress_runtime {
         Some(runtime) => catalog.with_egress_runtime(Arc::clone(runtime)),
@@ -327,23 +323,20 @@ async fn initialize_with_request_tuning_mode(
         Some(runtime) => admin_provider.with_egress_runtime(Arc::clone(runtime)),
         None => admin_provider,
     });
-    let mut worker_contributions = provider::worker_contributions(
+    let worker_contributions = provider::worker_contributions(
         refresh,
         quota,
         catalog,
         config.quota_refresh_policy(),
         config.oauth_refresh_enabled(),
-        desktop_release,
+        provider::ClientReleaseServices {
+            desktop: desktop_release,
+            cli: Arc::new(cli_releases),
+            platforms: Arc::new(platform_releases),
+        },
         config.timezone,
     )
     .map_err(|_| OpenAiInitializeError::Worker)?;
-    worker_contributions.push(
-        provider::cli_version_worker(cli_version).map_err(|_| OpenAiInitializeError::Worker)?,
-    );
-    worker_contributions.push(
-        provider::profile_release_worker(platform_releases, cli_releases)
-            .map_err(|_| OpenAiInitializeError::Worker)?,
-    );
 
     Ok(ProviderBundle {
         image_relay,

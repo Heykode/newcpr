@@ -158,7 +158,7 @@
       "quotaGroup": "額度",
       "queueGroup": "排隊",
       "windowMode": "重置視窗係數",
-      "windowHelp": "係數越大，該窗口越影響重置評分。設為 0 可忽略該窗口。",
+      "windowHelp": "係數越大，該窗口越影響重置評分，設為 0 可忽略該窗口",
       "fiveHour": "5 小時",
       "weekly": "週",
       "monthly": "月",
@@ -181,7 +181,6 @@
       },
       "enterValueFromToUpToOne": "請輸入 0～10 的數值，最多一位小數",
       "description": "調整賬號選擇偏好",
-      "enabledHelp": "僅在啓用智能調度後生效",
       "about": "{label}說明",
       "zeroWeightHelp": "0 表示不參與評分",
       "weightsRequired": "至少一項係數需要大於 0"
@@ -332,7 +331,7 @@
       "retentionDaysLabel": "歷史保留天數"
     },
     "retentionDays": "保留天數",
-    "enterDays": "請輸入 1–31 天",
+    "enterDays": "請輸入正整數天數",
     "day": "天",
     "location": {
       "requestLocationOverride": "請求位置覆蓋",
@@ -366,12 +365,13 @@
       "smartSchedulingSettings": "智能調度設置",
       "smartLabel": "智能調度",
       "smartDescription": "綜合負載、剩餘額度、健康和延遲評分，支持自定義評分偏好",
-      "quotaResetLabel": "額度重置優先",
+      "quotaResetLabel": "額度調度",
       "quotaResetDescription": "優先選擇額度窗口更快重置的賬號，適合在重置前消耗剩餘額度",
       "roundRobinLabel": "輪詢調度",
       "roundRobinDescription": "在可用候選賬號間按順序輪轉，分配結果最可預測",
       "stickyLabel": "粘性調度",
-      "stickyDescription": "優先複用最近使用的賬號，直到不可用後再切換"
+      "stickyDescription": "優先複用最近使用的賬號，直到不可用後再切換",
+      "quotaResetPrioritySettings": "額度調度設置"
     },
     "access": {
       "accessRestrictions": "訪問限制",
@@ -649,7 +649,7 @@
       "invalidBodyLimit": "Responses 解壓上限應爲有效的正整數（MiB）",
       "invalidQuotaThreshold": "剩餘周額度上限應爲 0～100 的整數，留空表示不限制",
       "invalidResetLeadTime": "重置卡提前使用時間應爲 1～1440 分鐘的整數",
-      "invalidRetention": "歷史保留天數應爲 1–31 的整數",
+      "invalidRetention": "歷史保留天數應爲正整數",
       "invalidQueueSettings": "隊列容量應爲 0～1000 的整數，排隊超時應爲 1～120 秒的整數",
       "invalidClientVersion": "請修正客戶端最低版本格式",
       "overloadSettingsRequired": "請完整填寫過載保護參數",
@@ -766,6 +766,10 @@
     "units": {
       "seconds": "秒",
       "inSeconds": "{label}（秒）"
+    },
+    "resetPriority": {
+      "description": "按所選視窗的重置時間和係數排序",
+      "windowHelp": "係數決定各視窗的相對占比，0 表示忽略該視窗，全部為 0 時按最近的有效重置時間排序"
     }
   }
 }

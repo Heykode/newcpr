@@ -355,6 +355,8 @@ function settings() {
     maxConcurrentPerAccount: 5,
     requestIntervalMs: 25,
     rotationStrategy: 'smart',
+    quotaResetWindowWeights: { fiveHour: 0, weekly: 0, monthly: 0 },
+    quotaResetWindowWeightsDefaults: { fiveHour: 0, weekly: 0, monthly: 0 },
     minCodexDesktopVersion: null,
     minCodexCliVersion: null,
     usageRetentionDays: 31,
@@ -1196,3 +1198,35 @@ for (const status of [400, 403, 409, 422]) {
     finally { query.stop() }
   })
 }
+
+test('quota reset weights persist independently across strategies and validate complete numeric drafts', async () => {
+  const warnings = []
+  const query = mountSettings(settings(), message => warnings.push(message))
+  try {
+    await query.state.loadSettings()
+    const smart = JSON.stringify(query.state.form.requestTuning.smartScheduling)
+    const weights = { fiveHour: 0.1, weekly: 10, monthly: 2.5 }
+    Object.assign(query.state.form.quotaResetWindowWeights, weights)
+    for (const strategy of ['quota_reset_priority', 'smart', 'sticky', 'quota_reset_priority']) {
+      query.state.form.rotationStrategy = strategy
+      await query.state.saveSettings()
+      await query.state.loadSettings()
+      assert.deepEqual(query.requests.at(-1).quotaResetWindowWeights, weights)
+      assert.equal(Object.hasOwn(query.requests.at(-1), 'quotaResetWindowWeightsDefaults'), false)
+      assert.equal(JSON.stringify(query.state.form.requestTuning.smartScheduling), smart)
+    }
+    const saved = query.requests.length
+    for (const field of ['fiveHour', 'weekly', 'monthly']) {
+      for (const invalid of [-0.1, 10.1, 0.01, Number.NaN, Infinity, '', null, undefined]) {
+        query.state.form.quotaResetWindowWeights[field] = invalid
+        await query.state.saveSettings()
+        assert.equal(query.requests.length, saved)
+      }
+      query.state.form.quotaResetWindowWeights[field] = weights[field]
+    }
+    assert.equal(warnings.length, 24)
+    await query.state.saveSettings()
+    assert.equal(query.requests.length, saved + 1)
+  }
+  finally { query.stop() }
+})

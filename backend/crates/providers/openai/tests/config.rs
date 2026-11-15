@@ -192,10 +192,6 @@ fn openai_config_defaults_to_the_provider_owned_operating_values() {
             u32::try_from(DEFAULT_STREAM_MAX_RETRIES).expect("default retry budget fits u32"),
         )
     );
-    assert_eq!(
-        config.wire_profile_state().snapshot().user_agent(),
-        "Codex Desktop/0.153.4 (Mac OS 15.7.1; arm64) unknown (Codex Desktop; 26.901.51231)"
-    );
 }
 
 #[test]

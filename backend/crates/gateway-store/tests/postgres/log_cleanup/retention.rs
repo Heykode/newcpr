@@ -1,12 +1,12 @@
 use super::*;
 
 #[tokio::test]
-async fn request_retention_round_trips_without_overwriting_legacy_windows() {
+async fn request_retention_round_trips_and_synchronizes_positive_windows() {
     let Some(db) = TestDatabase::create("cleanup_short_retention").await else {
         return;
     };
     let store = PgLogCleanupStore::new(db.pool.clone(), None, None);
-    for days in [0, 1, 3, 4, 30, 31, 45, 3, 0] {
+    for days in [0, 1, 3, 4, 30, 31, 45, 3651, u32::MAX, 3, 0] {
         let before: (i64, i64) = sqlx::query_as(
             "select usage_retention_days, ops_event_retention_days from runtime_settings where id=1",
         )
@@ -16,9 +16,9 @@ async fn request_retention_round_trips_without_overwriting_legacy_windows() {
         let state = store.state().await.unwrap();
         let mut config = state.config;
         config.requests.retention_days = days;
-        config.files.retention_days = days;
+        config.files.retention_days = days.min(3650);
         config.captures.retention_days = days.min(30);
-        config.audit.retention_days = days;
+        config.audit.retention_days = days.min(3650);
         store
             .configure(
                 CleanupCommand {
@@ -40,7 +40,7 @@ async fn request_retention_round_trips_without_overwriting_legacy_windows() {
         .fetch_one(&db.pool)
         .await
         .unwrap();
-        let expected = if days >= 31 {
+        let expected = if days > 0 {
             (i64::from(days), i64::from(days))
         } else {
             before
@@ -140,6 +140,51 @@ async fn short_retention_manual_and_scheduled_jobs_preserve_recent_and_running_r
                 format!("cleanup-short-{days}-running")
             ]
         );
+    }
+    db.close().await;
+}
+
+#[tokio::test]
+async fn large_retention_keeps_existing_history_without_date_overflow() {
+    let Some(db) = TestDatabase::create("cleanup_large_retention").await else {
+        return;
+    };
+    let store = PgLogCleanupStore::new(db.pool.clone(), None, None);
+    sqlx::query("insert into ops_events(id,level,component,operation,failure_kind,message,created_at) values ('retained-event','error','fixture','fixture','fixture','retained',now()-interval '10 days')")
+        .execute(&db.pool).await.unwrap();
+    // One value fits Chrono but predates PostgreSQL; one exceeds Chrono too.
+    for days in [3651, 10_000_000, u32::MAX] {
+        let mut preview = request_only(&store).await;
+        preview.config.requests.retention_days = days;
+        store
+            .configure(
+                CleanupCommand {
+                    revision: preview.revision,
+                    config: preview.config,
+                },
+                &context(),
+            )
+            .await
+            .unwrap();
+        let saved = store.state().await.unwrap();
+        store
+            .start(
+                CleanupPreview {
+                    revision: saved.revision,
+                    config: saved.config,
+                    cutoff_at: Utc::now(),
+                },
+                &context(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(finish(&store).await.status, CleanupJobStatus::Succeeded);
+        let count: i64 =
+            sqlx::query_scalar("select count(*) from ops_events where id='retained-event'")
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+        assert_eq!(count, 1, "days={days}");
     }
     db.close().await;
 }

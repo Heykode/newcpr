@@ -257,12 +257,7 @@ async fn frozen_request_profile_survives_publication_without_reusing_account_ide
             "acct_profile_second",
             "acct_profile_second",
         ]) {
-            assert_eq!(
-                headers["x-codex-installation-id"],
-                body["client_metadata"]["x-codex-installation-id"]
-                    .as_str()
-                    .unwrap()
-            );
+            assert!(!headers.contains_key("x-codex-installation-id"));
             assert_eq!(headers["traceparent"], "synthetic-trace");
             assert_eq!(headers["tracestate"], "vendor=synthetic");
             assert_eq!(headers["sentry-trace"], "synthetic-trace");
@@ -419,7 +414,7 @@ async fn proxy_location_precedence_preserves_fallback_identity_on_http_and_ws() 
             } else {
                 let requests = http.received_requests().await.unwrap();
                 let body = captured_request_body(&requests[0]);
-                assert_account_installation_header(&requests[0]);
+                assert_account_installation_body(&requests[0]);
                 body
             };
             let selected = store
@@ -813,11 +808,17 @@ async fn qx_provider_projects_http_identity_after_account_selection_with_trusted
         let body = captured_request_body(request);
         let thread = request.headers["thread-id"].to_str().unwrap();
         assert_ne!(thread, "raw-thread");
-        assert_eq!(body["prompt_cache_key"], thread);
+        assert_ne!(body["prompt_cache_key"], thread);
+        assert_eq!(
+            uuid::Uuid::parse_str(body["prompt_cache_key"].as_str().unwrap())
+                .unwrap()
+                .get_version_num(),
+            4
+        );
         assert_eq!(request.headers["x-client-request-id"], thread);
         assert_eq!(request.headers["x-codex-window-id"], format!("{thread}:0"));
         assert_eq!(body["input"][0]["content"][0]["text"], "hello");
-        assert_account_installation_header(request);
+        assert_account_installation_body(request);
         let selected = store
             .repository()
             .load_runtime_credential(&store.account(account).unwrap())
@@ -985,7 +986,7 @@ async fn qx_saved_seed_survives_location_change_without_accepting_a_foreign_key(
         next["client_metadata"]["x-codex-installation-id"]
     );
     for request in &requests {
-        assert_account_installation_header(request);
+        assert_account_installation_body(request);
     }
     for header in ["thread-id", "session-id"] {
         assert_eq!(
@@ -1095,12 +1096,7 @@ async fn provider_websocket_pool_isolates_keys_in_native_and_qx_policies() {
             .unwrap();
         assert_eq!(captures.len(), 2);
         let (opening, frames) = &captures[0];
-        assert_eq!(
-            opening["x-codex-installation-id"],
-            frames[0]["client_metadata"]["x-codex-installation-id"]
-                .as_str()
-                .unwrap()
-        );
+        assert!(!opening.contains_key("x-codex-installation-id"));
         assert_eq!(
             frames.len(),
             2,
@@ -1116,7 +1112,7 @@ async fn provider_websocket_pool_isolates_keys_in_native_and_qx_policies() {
             .await
             .unwrap();
         for (index, (headers, bodies)) in captures.iter().enumerate() {
-            assert_eq!(headers["x-codex-installation-id"], selected.installation_id);
+            assert!(!headers.contains_key("x-codex-installation-id"));
             if index == 0 {
                 assert_eq!(headers["sentry-trace"], "synthetic-trace-0");
                 assert_eq!(headers["baggage"], "sentry-trace_id=synthetic-0");
@@ -1141,11 +1137,14 @@ async fn provider_websocket_pool_isolates_keys_in_native_and_qx_policies() {
             let (first_headers, first_frames) = &captures[0];
             let (other_headers, other_frames) = &captures[1];
             let first_thread = first_headers["thread-id"].to_str().unwrap();
-            assert_eq!(first_frames[0]["prompt_cache_key"], first_thread);
-            assert_eq!(first_frames[1]["prompt_cache_key"], first_thread);
+            assert_ne!(first_frames[0]["prompt_cache_key"], first_thread);
             assert_eq!(
+                first_frames[1]["prompt_cache_key"],
+                first_frames[0]["prompt_cache_key"]
+            );
+            assert_ne!(
                 other_frames[0]["prompt_cache_key"],
-                other_headers["thread-id"].to_str().unwrap()
+                first_frames[0]["prompt_cache_key"]
             );
             assert_ne!(first_headers["thread-id"], other_headers["thread-id"]);
             assert_eq!(
@@ -1316,13 +1315,8 @@ async fn installation_seed_inherits_global_profile_without_changing_account() {
         .iter()
         .map(captured_request_body)
         .collect::<Vec<_>>();
-    for (request, body) in requests.iter().zip(&bodies) {
-        assert_eq!(
-            request.headers["x-codex-installation-id"].to_str().unwrap(),
-            body["client_metadata"]["x-codex-installation-id"]
-                .as_str()
-                .unwrap()
-        );
+    for request in &requests {
+        assert!(!request.headers.contains_key("x-codex-installation-id"));
     }
     let id = |i: usize| &bodies[i]["client_metadata"]["x-codex-installation-id"];
     assert_ne!(id(0), KEY_INSTALLATION_SEED);
@@ -1421,7 +1415,7 @@ async fn websocket_account_scoping_replaces_downstream_installation_header() {
         assert_ne!(installation_id, KEY_INSTALLATION_SEED);
         assert!(uuid::Uuid::parse_str(installation_id).is_ok());
         assert_eq!(body["installation_id"], installation_id);
-        assert_eq!(header["x-codex-installation-id"], installation_id);
+        assert!(!header.contains_key("x-codex-installation-id"));
         for encoded in [
             header["x-codex-turn-metadata"]
                 .to_str()
@@ -1574,8 +1568,10 @@ async fn installation_seed_scopes_http_identity_and_cache_by_key_and_account() {
         .iter()
         .zip(&bodies)
         .map(|(request, body)| {
-            let id = request.headers["x-codex-installation-id"].to_str().unwrap();
-            assert_eq!(id, body["client_metadata"]["x-codex-installation-id"]);
+            assert!(!request.headers.contains_key("x-codex-installation-id"));
+            let id = body["client_metadata"]["x-codex-installation-id"]
+                .as_str()
+                .unwrap();
             assert!(uuid::Uuid::parse_str(id).is_ok());
             assert_ne!(id, KEY_INSTALLATION_SEED);
             assert_ne!(id, other_seed);

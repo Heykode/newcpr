@@ -1,5 +1,7 @@
 use chrono::Utc;
+use gateway_core::provider_ports::ProviderRuntimePolicyPort as _;
 use gateway_core::{provider_ports::ProviderUserAgentOverride, routing::ProviderKind};
+use gateway_store::postgres::RuntimeSnapshotRepository as _;
 use gateway_store::postgres::{
     AdminAuditActorKind, AdminAuditEvent, PgControlPlaneRepository, PgRuntimeSettingsRepository,
     RuntimeSettingsRepository,
@@ -25,6 +27,11 @@ async fn structured_profile_round_trips_without_changing_runtime_settings() {
         };
         repository.replace_user_agent_override(&provider, selection.clone(), audit(&format!("structured-{index}"))).await.unwrap();
         assert_eq!(repository.load_user_agent_override(&provider).await.unwrap(), selection);
+        let loaded = runtime.load_request_profile(&provider).await.unwrap().unwrap();
+        assert_eq!(loaded.expose_to_provider(), document.as_object().unwrap());
+        let snapshot = gateway_store::postgres::PgRuntimeSnapshotRepository::new(database.pool.clone()).load_runtime_snapshot().await.unwrap();
+        assert_eq!(snapshot.settings.request_profiles.get(&provider), Some(&loaded));
+
     }
     let after = runtime.load_runtime_settings().await.unwrap();
     assert_eq!(after.request_tuning, before.request_tuning);
@@ -48,6 +55,13 @@ async fn structured_profile_round_trips_without_changing_runtime_settings() {
     .await
     .unwrap();
     assert!(configuration.is_none());
+    assert!(
+        runtime
+            .load_request_profile(&provider)
+            .await
+            .unwrap()
+            .is_none()
+    );
     database.close().await;
 }
 

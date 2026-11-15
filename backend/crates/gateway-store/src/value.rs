@@ -159,6 +159,12 @@ impl Revision {
 pub struct DecimalAmount(String);
 
 impl DecimalAmount {
+    pub fn checked_add(&self, other: &Self) -> Option<Self> {
+        let left: gateway_core::metering::Decimal = self.0.parse().ok()?;
+        let right: gateway_core::metering::Decimal = other.0.parse().ok()?;
+        left.checked_add(right)?.canonical().parse().ok()
+    }
+
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0

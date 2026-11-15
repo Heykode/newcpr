@@ -40,13 +40,26 @@ mod monitor_snapshots;
 /// Account group store with transactional revision and audit ownership.
 #[derive(Clone)]
 pub struct PgAccountGroupRepository {
+    query_budget: super::ObservabilityQueryBudget,
     pool: PgPool,
 }
 
 impl PgAccountGroupRepository {
+    pub fn with_query_budget(mut self, budget: super::ObservabilityQueryBudget) -> Self {
+        self.query_budget = budget;
+        self
+    }
+
     #[must_use]
-    pub const fn new(pool: PgPool) -> Self {
-        Self { pool }
+    pub fn new(pool: PgPool) -> Self {
+        Self {
+            query_budget: super::ObservabilityQueryBudget::try_new(
+                4,
+                std::time::Duration::from_secs(5),
+            )
+            .expect("positive default budget"),
+            pool,
+        }
     }
 
     async fn current_revision(&self) -> AdminStoreResult<gateway_admin::model::Revision> {
@@ -63,7 +76,7 @@ impl PgAccountGroupRepository {
             .await
             .map_err(|error| admin_store_error(ENTITY, error))?
             .ok_or_else(|| not_found(id.as_str()))?;
-        let costs = group_costs(&self.pool, &[id.as_str().to_owned()])
+        let costs = group_costs(&self.pool, &self.query_budget, &[id.as_str().to_owned()])
             .await
             .map_err(|error| admin_store_error(ENTITY, error))?;
         if let Some(usage) = costs.get(id.as_str()) {
@@ -271,7 +284,7 @@ impl AccountGroupStore for PgAccountGroupRepository {
             .iter()
             .map(|record| record.id.as_str().to_owned())
             .collect::<Vec<_>>();
-        let costs = group_costs(&self.pool, &group_ids)
+        let costs = group_costs(&self.pool, &self.query_budget, &group_ids)
             .await
             .map_err(|error| admin_store_error(ENTITY, error))?;
         for record in &mut items {
@@ -690,65 +703,23 @@ fn group_record(row: &sqlx::postgres::PgRow) -> StoreResult<AccountGroupRecord> 
 
 async fn group_costs(
     pool: &PgPool,
+    budget: &super::ObservabilityQueryBudget,
     group_ids: &[String],
 ) -> StoreResult<BTreeMap<String, AccountGroupUsage>> {
-    if group_ids.is_empty() {
-        return Ok(BTreeMap::new());
-    }
-    let completed_usage = completed_usage_fact_predicate("mr");
-    let statement = format!(
-        "with requested_groups(group_id) as (
-           select unnest($1::text[])
-         )
-         select requested_groups.group_id,
-                coalesce(sum(mr.cost_amount) filter (
-                  where mr.started_at >= date_trunc('day', now() at time zone 'Asia/Shanghai')
-                    at time zone 'Asia/Shanghai'
-                ), 0)::text as today_usd,
-                coalesce(sum(mr.cost_amount), 0)::text as retained_total_usd
-         from requested_groups
-         cross join runtime_settings settings
-         left join model_requests mr
-           on exists (
-             select 1 from account_group_accounts membership
-              where membership.account_group_id = requested_groups.group_id
-                and membership.provider_account_id = mr.provider_account_ref
-           )
-          and mr.started_at >= now() - make_interval(days => settings.usage_retention_days::int)
-          and {completed_usage}
-          and mr.cost_currency = 'USD'
-          and mr.cost_amount is not null
-         where settings.id = 1
-         group by requested_groups.group_id"
-    );
-    // 动态片段仅为共享的固定 usage-fact predicate；group IDs 仍使用 bind。
-    let rows = sqlx::query(sqlx::AssertSqlSafe(statement))
-        .bind(group_ids)
-        .fetch_all(pool)
+    budget
+        .run(
+            pool,
+            "load account group usage",
+            |mut connection| async move {
+                super::observability::analytics::accounts::account_group_usage(
+                    &mut connection,
+                    group_ids,
+                    Default::default(),
+                )
+                .await
+            },
+        )
         .await
-        .map_err(|_| unavailable("load account group costs"))?;
-    rows.into_iter()
-        .map(|row| {
-            let group_id: String = row
-                .try_get("group_id")
-                .map_err(|_| invalid("invalid group ID"))?;
-            let today = row
-                .try_get::<String, _>("today_usd")
-                .map_err(|_| invalid("invalid today cost"))?;
-            let retained_total = row
-                .try_get::<String, _>("retained_total_usd")
-                .map_err(|_| invalid("invalid retained total cost"))?;
-            Ok((
-                group_id,
-                AccountGroupUsage {
-                    today_usd: DecimalAmount::from_str(&today)
-                        .map_err(|_| invalid("invalid today cost"))?,
-                    retained_total_usd: DecimalAmount::from_str(&retained_total)
-                        .map_err(|_| invalid("invalid retained total cost"))?,
-                },
-            ))
-        })
-        .collect()
 }
 
 fn count_value(row: &sqlx::postgres::PgRow, field: &str) -> StoreResult<u64> {

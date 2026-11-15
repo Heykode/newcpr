@@ -21,6 +21,8 @@ use super::ClientApiKeySnapshot;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SnapshotRuntimeSettings {
+    pub request_profiles:
+        BTreeMap<gateway_core::routing::ProviderKind, gateway_core::account::OpaqueProviderData>,
     pub responses_max_decompressed_body_bytes: u64,
     pub openai_account_affinity: gateway_core::account::AccountAffinity,
     pub codex_quota_overdraft_enabled: bool,
@@ -31,6 +33,7 @@ pub struct SnapshotRuntimeSettings {
     pub max_concurrent_per_account: u32,
     pub request_interval_ms: u64,
     pub rotation_strategy: String,
+    pub quota_reset_window_weights: gateway_core::account::ResetWindowWeights,
     pub model_mappings: BTreeMap<String, String>,
     pub min_codex_desktop_version: Option<String>,
     pub min_codex_cli_version: Option<String>,
@@ -162,6 +165,8 @@ impl SnapshotStorePort for PgRuntimeSnapshotRepository {
                 data.settings.min_codex_desktop_version,
                 data.settings.min_codex_cli_version,
             )
+            .with_request_profiles(data.settings.request_profiles)
+            .with_quota_reset_window_weights(data.settings.quota_reset_window_weights)
             .with_responses_max_decompressed_body_bytes(
                 data.settings.responses_max_decompressed_body_bytes,
             )
@@ -362,12 +367,16 @@ async fn load_settings(
 ) -> StoreResult<(Revision, SnapshotRuntimeSettings)> {
     #[derive(sqlx::FromRow)]
     struct SettingsRow {
+        request_profiles:
+            sqlx::types::Json<BTreeMap<String, serde_json::Map<String, serde_json::Value>>>,
         config_revision: i64,
         refresh_margin_seconds: i64,
         refresh_concurrency: i64,
         max_concurrent_per_account: i64,
         request_interval_ms: i64,
         rotation_strategy: String,
+        quota_reset_window_weights_json:
+            sqlx::types::Json<gateway_core::account::ResetWindowWeights>,
         model_mappings_json: sqlx::types::Json<BTreeMap<String, String>>,
         min_codex_desktop_version: Option<String>,
         min_codex_cli_version: Option<String>,
@@ -380,8 +389,9 @@ async fn load_settings(
         codex_quota_overdraft_probe_model: String,
     }
     let row = sqlx::query_as::<_, SettingsRow>(
-        "select config_revision, refresh_margin_seconds, refresh_concurrency,
-                max_concurrent_per_account, request_interval_ms, rotation_strategy,
+        "select coalesce((select jsonb_object_agg(provider_kind, configuration_json) from provider_outbound_user_agents where mode = 'configuration'), '{}'::jsonb) as request_profiles,
+                config_revision, refresh_margin_seconds, refresh_concurrency,
+                max_concurrent_per_account, request_interval_ms, rotation_strategy, quota_reset_window_weights_json,
                 model_mappings_json, min_codex_desktop_version,
                 min_codex_cli_version, request_tuning_json,
                 responses_max_decompressed_body_bytes,
@@ -399,6 +409,7 @@ async fn load_settings(
     Ok((
         revision_from_i64(row.config_revision)?,
         SnapshotRuntimeSettings {
+            request_profiles: super::client_keys::decode_request_profiles(row.request_profiles.0)?,
             openai_account_affinity: gateway_core::account::AccountAffinity::parse(
                 &row.openai_account_affinity,
             )
@@ -411,6 +422,7 @@ async fn load_settings(
             max_concurrent_per_account: to_u32(row.max_concurrent_per_account)?,
             request_interval_ms: to_u64(row.request_interval_ms)?,
             rotation_strategy: row.rotation_strategy,
+            quota_reset_window_weights: row.quota_reset_window_weights_json.0,
             model_mappings: row.model_mappings_json.0,
             min_codex_desktop_version: row.min_codex_desktop_version,
             min_codex_cli_version: row.min_codex_cli_version,

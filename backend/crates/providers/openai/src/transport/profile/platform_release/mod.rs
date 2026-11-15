@@ -3,7 +3,10 @@
 use super::selection::{
     ClientKind, ClientPlatform, ClientProfileSelection, ClientRelease, VersionMode, object,
 };
-use super::{ARTIFACT_PROFILE_CACHE_TTL, CodexWireProfileState};
+use super::{
+    ARTIFACT_PROFILE_CACHE_RENEW_INTERVAL, ARTIFACT_PROFILE_CACHE_TTL, CodexWireProfileState,
+    baseline,
+};
 use chrono::Utc;
 use futures::future::BoxFuture;
 use gateway_core::provider_ports::{ProviderArtifactProfile, ProviderArtifactProfileCachePort};
@@ -135,6 +138,7 @@ pub struct PlatformDesktopReleaseService {
     cache: Arc<dyn ProviderArtifactProfileCachePort>,
     transport: Arc<dyn DesktopArtifactTransport>,
     verified: Mutex<BTreeMap<DesktopTarget, VerifiedArtifact>>,
+    cache_written_at: Mutex<BTreeMap<DesktopTarget, tokio::time::Instant>>,
 }
 impl PlatformDesktopReleaseService {
     pub fn new(
@@ -149,6 +153,7 @@ impl PlatformDesktopReleaseService {
             cache,
             transport,
             verified: Mutex::new(baseline_artifacts()),
+            cache_written_at: Mutex::default(),
         }
     }
     pub async fn restore(&self) {
@@ -210,14 +215,32 @@ impl PlatformDesktopReleaseService {
             .cloned();
         let mut artifact = self
             .transport
-            .fetch(target, previous)
+            .fetch(target, previous.clone())
             .await
             .map_err(|error| error.to_string())?;
         let sequence = sequence(target, &artifact.release).map_err(|error| error.to_string())?;
         if !self.accepts(target, &artifact.release) {
             return Err("官方 Desktop 发布低于当前版本或同构建版本不一致".to_owned());
         }
-        let verified_at = Utc::now();
+        let unchanged = previous
+            .as_ref()
+            .is_some_and(|previous| previous.identity == artifact.identity);
+        if unchanged
+            && self
+                .cache_written_at
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .get(&target)
+                .is_some_and(|written| written.elapsed() < ARTIFACT_PROFILE_CACHE_RENEW_INTERVAL)
+        {
+            return Ok(artifact.release);
+        }
+        // 相同制品只续期缓存，保留实际提取版本时的核验时间
+        let verified_at = if unchanged {
+            artifact.release.verified_at.unwrap_or_else(Utc::now)
+        } else {
+            Utc::now()
+        };
         // 核验时间属于缓存信封，避免同构建重复检查被判定为不同制品
         artifact.release.verified_at = None;
         let payload =
@@ -238,6 +261,10 @@ impl PlatformDesktopReleaseService {
             Ok(false) => return Err("Desktop 发布缓存已更新，等待下次同步".to_owned()),
             Err(_) => return Err("Desktop 发布缓存写入失败".to_owned()),
         }
+        self.cache_written_at
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(target, tokio::time::Instant::now());
         artifact.release.verified_at = Some(verified_at);
         self.verified
             .lock()
@@ -283,43 +310,44 @@ fn sequence(target: DesktopTarget, release: &ClientRelease) -> io::Result<u64> {
 }
 
 fn baseline_artifacts() -> BTreeMap<DesktopTarget, VerifiedArtifact> {
-    // 2026-09-18 分别读取四个官方安装包，版本元组与 ETag 均来自同一个包
-    // 离线可直接选择自动模式；ETag 变化后必须重新核验，不能延用另一平台的版本
-    let identities = [
-        (774_919_598, "\"0x8DF141FFDF86290\""),
-        (771_727_321, "\"0x8DF14202C49201F\""),
-        (417_337_930, "\"0x8DF150AE1091545\""),
-        (395_993_890, "\"0x8DF150ADC810C82\""),
-    ];
-    TARGETS
-        .into_iter()
-        .zip(identities)
-        .map(|(target, (size, etag))| {
-            let (core, version, build) = if target.platform == ClientPlatform::Windows {
-                ("0.154.0-alpha.6.2", "26.908.70816", "9275")
-            } else {
-                ("0.155.0-alpha.9", "26.915.31029", "9771")
-            };
+    [
+        (
+            ClientPlatform::Windows,
+            baseline::WINDOWS_RELEASE,
+            baseline::WINDOWS_ARTIFACTS,
+        ),
+        (
+            ClientPlatform::Linux,
+            baseline::LINUX_RELEASE,
+            baseline::LINUX_ARTIFACTS,
+        ),
+    ]
+    .into_iter()
+    .flat_map(|(platform, release, artifacts)| {
+        artifacts.into_iter().map(move |artifact| {
             (
-                target,
+                DesktopTarget {
+                    platform,
+                    arch: artifact.arch,
+                },
                 VerifiedArtifact {
-                    identity: ArtifactIdentity {
-                        size,
-                        etag: etag.to_owned(),
-                    },
                     release: ClientRelease {
-                        codex_version: core.to_owned(),
-                        desktop_version: Some(version.to_owned()),
-                        desktop_build: Some(build.to_owned()),
-                        verified_at: chrono::DateTime::parse_from_rfc3339("2026-09-18T00:00:00Z")
-                            .ok()
-                            .map(|time| time.with_timezone(&Utc)),
+                        codex_version: release.core.version.to_owned(),
+                        desktop_version: Some(release.version.to_owned()),
+                        desktop_build: Some(release.build.to_owned()),
+                        verified_at: Some(release.core.verified_at()),
+                    },
+                    identity: ArtifactIdentity {
+                        size: artifact.size,
+                        etag: artifact.etag.to_owned(),
                     },
                 },
             )
         })
-        .collect()
+    })
+    .collect()
 }
+
 pub(super) fn seed_releases(state: &CodexWireProfileState) {
     for (target, artifact) in baseline_artifacts() {
         state.seed_client_release(

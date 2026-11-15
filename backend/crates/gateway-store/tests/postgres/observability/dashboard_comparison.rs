@@ -13,6 +13,7 @@ async fn dashboard_comparison_counters_observe_boundaries_and_current_business_f
         .execute(&db.pool)
         .await
         .unwrap();
+    drain_analytics(&db.pool).await;
     let range = admin_observability::TimeRange::new(start, end).unwrap();
     let store = admin_observability_store(&db.pool);
     assert_eq!(
@@ -28,6 +29,7 @@ async fn dashboard_comparison_counters_observe_boundaries_and_current_business_f
         .execute(&db.pool)
         .await
         .unwrap();
+    drain_analytics(&db.pool).await;
     let first = store.dashboard_card_metrics(range).await.unwrap();
     assert_eq!(first.request_count, 1);
     assert_eq!(first.input_tokens, 100);
@@ -37,6 +39,7 @@ async fn dashboard_comparison_counters_observe_boundaries_and_current_business_f
         .execute(&db.pool)
         .await
         .unwrap();
+    drain_analytics(&db.pool).await;
     assert_eq!(
         store
             .dashboard_card_metrics(range)
@@ -47,6 +50,7 @@ async fn dashboard_comparison_counters_observe_boundaries_and_current_business_f
     );
     sqlx::query("update model_requests set request_kind='account_quality_check' where id='req_observe_success'")
         .execute(&db.pool).await.unwrap();
+    drain_analytics(&db.pool).await;
     // A caller-supplied kind alone must not hide real business traffic.
     assert_eq!(
         store
@@ -58,6 +62,7 @@ async fn dashboard_comparison_counters_observe_boundaries_and_current_business_f
     );
     sqlx::query("update model_requests set protocol='admin_quality_check',client_transport='internal' where id='req_observe_success'")
         .execute(&db.pool).await.unwrap();
+    drain_analytics(&db.pool).await;
     assert_eq!(
         store
             .dashboard_card_metrics(range)
@@ -70,6 +75,7 @@ async fn dashboard_comparison_counters_observe_boundaries_and_current_business_f
         recovery_request_id='req_observe_recovery',recovery_attempt_count=1,
         recovery_retry_delay_ms=0,recovery_total_latency_ms=1 where id='req_observe_success'")
         .bind(end).execute(&db.pool).await.unwrap();
+    drain_analytics(&db.pool).await;
     assert_eq!(
         store
             .dashboard_card_metrics(range)
@@ -87,6 +93,7 @@ async fn dashboard_comparison_counters_observe_boundaries_and_current_business_f
     .execute(&db.pool)
     .await
     .unwrap();
+    drain_analytics(&db.pool).await;
     assert_eq!(
         store
             .dashboard_card_metrics(range)

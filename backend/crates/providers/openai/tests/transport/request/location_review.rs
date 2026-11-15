@@ -1,8 +1,10 @@
 //! Location overrides preserve historical dates and unrelated client context.
 
 use provider_openai::transport::{
-    CodexRequestContext, profile::CodexRequestLocation, protocol::responses::CodexResponsesRequest,
-    qx_application::project_response_request,
+    CodexRequestContext,
+    profile::CodexRequestLocation,
+    protocol::responses::CodexResponsesRequest,
+    qx_application::{apply_response_headers, project_response_request},
 };
 
 use super::*;
@@ -35,11 +37,10 @@ fn context(request_id: &str) -> CodexRequestContext<'_> {
     )
 }
 
-fn cache(request: &CodexResponsesRequest, request_id: &str) -> String {
-    project_response_request(request, context(request_id))
-        .prompt_cache_key()
-        .unwrap()
-        .to_owned()
+fn scoped_thread(request: &CodexResponsesRequest, request_id: &str) -> String {
+    let mut headers = reqwest::header::HeaderMap::new();
+    apply_response_headers(&mut headers, request, context(request_id)).unwrap();
+    headers["thread-id"].to_str().unwrap().to_owned()
 }
 
 fn environment(text: &str) -> Value {
@@ -245,25 +246,34 @@ fn marked_environment_rewrites_timezone_and_preserves_date_in_valid_user_xml() {
 }
 
 #[test]
-fn unmarked_plain_chat_keeps_its_cache_across_location_configuration_changes() {
+fn unmarked_plain_chat_keeps_its_thread_across_location_configuration_changes() {
     let body = json!({"input": "hello", "instructions": "be concise"});
     let east = encode(body.clone(), &Default::default());
     let west = encode(body, &west_coast());
     assert_eq!(east.body(), west.body());
-    assert_eq!(cache(&east, "request-a"), cache(&west, "request-b"));
+    assert_eq!(
+        scoped_thread(&east, "request-a"),
+        scoped_thread(&west, "request-b")
+    );
 }
 
 #[test]
-fn unmarked_search_cache_is_repeatable_but_changes_with_configured_location() {
+fn unmarked_search_thread_is_repeatable_but_changes_with_configured_location() {
     let body = json!({"input": "hello", "tools": [{"type": "web_search"}]});
     let east = encode(body.clone(), &Default::default());
     let west = encode(body, &west_coast());
-    assert_eq!(cache(&east, "request-a"), cache(&east, "request-b"));
-    assert_ne!(cache(&east, "request-a"), cache(&west, "request-a"));
+    assert_eq!(
+        scoped_thread(&east, "request-a"),
+        scoped_thread(&east, "request-b")
+    );
+    assert_ne!(
+        scoped_thread(&east, "request-a"),
+        scoped_thread(&west, "request-a")
+    );
 }
 
 #[test]
-fn explicit_identity_keeps_cache_stable_when_search_location_changes() {
+fn explicit_identity_keeps_thread_stable_when_search_location_changes() {
     for marker in [
         "conversation_id",
         "session_id",
@@ -276,8 +286,8 @@ fn explicit_identity_keeps_cache_stable_when_search_location_changes() {
         let west = encode(body, &west_coast());
         assert_ne!(east.body()["tools"], west.body()["tools"]);
         assert_eq!(
-            cache(&east, "request-a"),
-            cache(&west, "request-b"),
+            scoped_thread(&east, "request-a"),
+            scoped_thread(&west, "request-b"),
             "{marker}"
         );
     }
@@ -297,13 +307,19 @@ fn current_overwrite_policy_collapses_location_only_differences_within_one_owner
     let london = make("London");
     let mut tokyo = make("Tokyo");
     assert_eq!(london.body(), tokyo.body());
-    assert_eq!(cache(&london, "request-a"), cache(&tokyo, "request-b"));
+    assert_eq!(
+        scoped_thread(&london, "request-a"),
+        scoped_thread(&tokyo, "request-b")
+    );
     tokyo.client_api_key_id = Some("different-key".to_owned());
-    assert_ne!(cache(&london, "request-a"), cache(&tokyo, "request-b"));
+    assert_ne!(
+        scoped_thread(&london, "request-a"),
+        scoped_thread(&tokyo, "request-b")
+    );
 }
 
 #[test]
-fn current_unmarked_cache_changes_when_an_encoded_environment_crosses_a_date_boundary() {
+fn current_unmarked_thread_changes_when_an_encoded_environment_crosses_a_date_boundary() {
     // Fixed post-encoding dates exercise the real hash without changing the process clock
     // or adding a clock override to production code.
     let make = |date| {
@@ -323,18 +339,25 @@ fn current_unmarked_cache_changes_when_an_encoded_environment_crosses_a_date_bou
     };
     let today = make("2026-09-15");
     let tomorrow = make("2026-09-16");
-    assert_ne!(cache(&today, "request-a"), cache(&tomorrow, "request-b"));
+    assert_ne!(
+        scoped_thread(&today, "request-a"),
+        scoped_thread(&tomorrow, "request-b")
+    );
 
     let retry = project_response_request(&today, context("request-a"));
-    assert_eq!(cache(&today, "request-a"), cache(&retry, "retry"));
+    assert_eq!(
+        scoped_thread(&today, "request-a"),
+        scoped_thread(&retry, "retry")
+    );
     let mut other_account = context("retry");
     other_account.account_id = Some("another-account");
+    let mut headers = reqwest::header::HeaderMap::new();
+    apply_response_headers(&mut headers, &retry, other_account).unwrap();
     assert_ne!(
-        cache(&retry, "retry"),
-        project_response_request(&retry, other_account)
-            .prompt_cache_key()
-            .unwrap()
+        scoped_thread(&retry, "retry"),
+        headers["thread-id"].to_str().unwrap()
     );
+    assert!(retry.prompt_cache_key().is_none());
 }
 
 #[test]
@@ -351,5 +374,8 @@ fn current_first_user_fallback_cannot_distinguish_prompts_after_the_same_environ
     let first = make("first independent question");
     let second = make("different independent question");
     assert_ne!(first.body()["input"], second.body()["input"]);
-    assert_eq!(cache(&first, "request-a"), cache(&second, "request-b"));
+    assert_eq!(
+        scoped_thread(&first, "request-a"),
+        scoped_thread(&second, "request-b")
+    );
 }

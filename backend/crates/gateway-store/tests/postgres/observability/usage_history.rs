@@ -157,6 +157,7 @@ async fn admitted_key_names_survive_rename_delete_and_remain_searchable() {
             errors.items[0].client_api_key_name.as_deref(),
             Some("Original key")
         );
+        drain_analytics(&database.pool).await;
         let diagnostics = repository
             .usage_diagnostics(
                 range,
@@ -169,14 +170,7 @@ async fn admitted_key_names_survive_rename_delete_and_remain_searchable() {
             )
             .await
             .unwrap();
-        assert_eq!(
-            diagnostics.items[0].name,
-            if deleted {
-                "Original key"
-            } else {
-                "Renamed key"
-            }
-        );
+        assert_eq!(diagnostics.items[0].name, "Original key");
     }
     database.close().await;
 }

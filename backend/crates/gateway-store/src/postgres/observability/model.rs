@@ -489,6 +489,7 @@ pub struct DashboardTotals {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DashboardObservation {
+    pub analytics: admin_observability::AnalyticsMetadata,
     pub range: ObservabilityRange,
     pub totals: DashboardTotals,
     pub provider_accounts: ProviderAccountMetrics,
@@ -710,6 +711,7 @@ pub struct ProviderObservation {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UsageOverview {
+    pub analytics: gateway_admin::model::observability::AnalyticsMetadata,
     pub range: ObservabilityRange,
     pub requests: RequestMetrics,
     pub attempts: AttemptMetrics,
@@ -748,6 +750,7 @@ pub struct DiagnosticPageQuery {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiagnosticObservationPage {
+    pub analytics: Option<admin_observability::AnalyticsMetadata>,
     pub total_request_count: u64,
     pub items: Vec<DiagnosticObservation>,
     pub current_page: u32,
@@ -865,4 +868,11 @@ pub trait ObservabilityRepository: Send + Sync {
         page: Option<DiagnosticPageQuery>,
     ) -> StoreResult<DiagnosticObservationPage>;
     async fn list_ops_errors(&self, query: OpsErrorQuery) -> StoreResult<OpsErrorPage>;
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DiagnosticsObservation {
+    pub analytics: admin_observability::AnalyticsMetadata,
+    pub total_request_count: u64,
+    pub items: Vec<DiagnosticObservation>,
 }

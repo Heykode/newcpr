@@ -59,6 +59,7 @@ async fn business_backup_restore_preserves_ledgers_and_global_usage_without_deta
         .await
         .unwrap();
     for (index, id) in ["first", "second"].into_iter().enumerate() {
+        drain_analytics(&db.pool).await;
         let artifact = adapter
             .dump(DumpRequest {
                 backup_id: id.into(),
@@ -110,6 +111,7 @@ async fn business_backup_restore_preserves_ledgers_and_global_usage_without_deta
         .await
         .unwrap();
         assert_eq!(restored_profile, key_profile);
+        drain_analytics(&db.pool).await;
         let restored = repo
             .usage_summary(range, UsageRecordFilter::default())
             .await

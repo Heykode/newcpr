@@ -13,6 +13,9 @@ use uuid::Uuid;
 mod account_groups;
 mod admin_security_audit;
 mod admission_recovery;
+mod analytics;
+mod analytics_buckets;
+mod analytics_reset;
 mod backup;
 mod client_budget_buffer;
 mod client_budgets;
@@ -320,6 +323,14 @@ async fn connect_and_migrate_should_apply_all_migrations_once_and_reopen_cleanly
             "quality_runs",
             "quota_learning_accounts",
             "quota_learning_plan_samples",
+            "request_analytics_15m",
+            "request_analytics_1d_counts",
+            "request_analytics_1h",
+            "request_analytics_build_state",
+            "request_analytics_facts",
+            "request_analytics_pending_buckets",
+            "request_analytics_pending_requests",
+            "request_analytics_source",
             "request_capture_config",
             "request_capture_records",
             "request_capture_tasks",
@@ -355,4 +366,42 @@ fn migrations_should_leave_transaction_ownership_to_sqlx() {
         .count();
 
     assert_eq!(transaction_statements, 0);
+}
+
+pub(super) async fn drain_analytics(pool: &PgPool) {
+    let worker = gateway_store::postgres::PgRequestAnalyticsRepository::new(
+        pool.clone(),
+        observability_query_budget(),
+    )
+    .with_billing_projector(std::sync::Arc::new(TestBillingProjector));
+    for _ in 0..100 {
+        worker
+            .maintain(1000)
+            .await
+            .expect("maintain test analytics");
+        let status = worker.status().await.expect("test analytics status");
+        if !status.building && status.pending_requests == 0 && status.pending_buckets == 0 {
+            return;
+        }
+    }
+    panic!("test analytics did not converge");
+}
+
+struct TestBillingProjector;
+
+impl gateway_admin::ports::store::UsageBillingProjector for TestBillingProjector {
+    fn project(
+        &self,
+        fact: &gateway_admin::model::observability::UsageCalculatedBillingFact,
+    ) -> Result<
+        gateway_admin::model::observability::UsageBillingProjection,
+        gateway_admin::model::AdminError,
+    > {
+        Ok(
+            gateway_admin::model::observability::UsageBillingProjection {
+                standard_amount: Some(fact.total.amount.clone()),
+                no_cache_amount: Some(fact.total.amount.clone()),
+            },
+        )
+    }
 }

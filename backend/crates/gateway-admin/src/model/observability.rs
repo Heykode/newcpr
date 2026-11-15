@@ -17,7 +17,7 @@ pub fn china_day_start(value: DateTime<Utc>) -> DateTime<Utc> {
 }
 
 /// 外部观测查询的 UTC 时间范围。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TimeRange {
     pub start: DateTime<Utc>,
     pub end: DateTime<Utc>,
@@ -39,7 +39,7 @@ impl TimeRange {
 }
 
 /// 请求结果状态。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum RequestOutcome {
     Running,
     Succeeded,
@@ -50,7 +50,7 @@ pub enum RequestOutcome {
 }
 
 /// 未知但有界的请求结果值；私有字段禁止绕过 [`RequestOutcome::new`] 构造。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct OtherRequestOutcome(String);
 
 impl RequestOutcome {
@@ -101,7 +101,7 @@ impl OtherRequestOutcome {
 }
 
 /// 用量记录过滤条件。
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub struct RequestSearchFilter {
     pub account_ids: Vec<String>,
     pub account_search: Option<String>,
@@ -135,7 +135,7 @@ pub struct AccountFilterOption {
     pub deleted: bool,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub struct UsageFilter {
     pub details: RequestSearchFilter,
     pub client_api_key_ref: Option<String>,
@@ -200,7 +200,7 @@ pub struct OpsErrorQuery {
 }
 
 /// 用量诊断维度。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DiagnosticDimension {
     Provider,
     Model,
@@ -344,6 +344,7 @@ pub struct ProviderBillingInput {
 /// 控制面仅保留通用事实，具体 Provider 负责校验已持久化总额并恢复标准费用。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UsageCalculatedBillingFact {
+    pub breakdown: Option<CalculatedBillingBreakdown>,
     pub bucket_start: DateTime<Utc>,
     pub provider_kind: String,
     pub upstream_model_id: String,
@@ -656,6 +657,7 @@ pub struct DashboardTotals {
 /// 仪表盘所需的当前区间事实及全历史累计。
 #[derive(Debug, Clone, PartialEq)]
 pub struct DashboardObservation {
+    pub analytics: AnalyticsMetadata,
     pub range: TimeRange,
     pub totals: DashboardTotals,
     pub provider_accounts: AccountPoolMetrics,
@@ -926,6 +928,7 @@ pub struct ProviderObservation {
 /// 用量总览。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UsageOverview {
+    pub analytics: AnalyticsMetadata,
     pub range: TimeRange,
     pub requests: RequestMetrics,
     pub attempts: AttemptMetrics,
@@ -973,6 +976,7 @@ pub struct DiagnosticPageQuery {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiagnosticObservationPage {
+    pub analytics: Option<AnalyticsMetadata>,
     /// All matching requests, before dimension limits and pagination.
     pub total_request_count: u64,
     pub items: Vec<DiagnosticObservation>,
@@ -1355,6 +1359,7 @@ pub struct UsageInsightsCost {
 /// 用量洞察的完整用例结果；API 只负责标签、时区与字符串格式化。
 #[derive(Debug, Clone, PartialEq)]
 pub struct UsageInsights {
+    pub analytics: AnalyticsMetadata,
     pub granularity: Granularity,
     pub health: UsageInsightsHealth,
     pub performance: UsageInsightsPerformance,
@@ -1393,6 +1398,7 @@ pub struct DiagnosticsItem {
 /// 诊断结果。
 #[derive(Debug, Clone, PartialEq)]
 pub struct DiagnosticsResult {
+    pub analytics: Option<AnalyticsMetadata>,
     pub dimension: DiagnosticDimension,
     pub items: Vec<DiagnosticsItem>,
     pub current_page: u32,
@@ -1474,13 +1480,19 @@ pub enum UsageInsightData {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct UsageInsight {
+    pub analytics: AnalyticsMetadata,
     pub granularity: Granularity,
     pub data: UsageInsightData,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct UsageInsightsObservation {
+    pub costs: Vec<UsageProjectedCostPoint>,
     pub overview: UsageOverview,
     pub trend: Vec<RequestMetricPoint>,
     pub concurrency: Vec<UsageConcurrencyPoint>,
 }
+
+pub use super::analytics::{
+    AnalyticsMetadata, AnalyticsState, UsageBillingProjection, UsageProjectedCostPoint,
+};

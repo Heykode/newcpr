@@ -110,6 +110,7 @@ async fn quota_forecast_excludes_openai_prewarm_but_preserves_inference_and_audi
         .await
         .unwrap();
     assert_eq!(cumulative["acct_prewarm"][0].amount.as_str(), "2");
+    crate::postgres::drain_analytics(&database.pool).await;
     let dashboard = repository.dashboard_summary(range, end).await.unwrap();
     assert_eq!(dashboard.totals.request_count, 3);
     assert_eq!(dashboard.totals.total_tokens, 300);
@@ -158,6 +159,7 @@ async fn quota_forecast_excludes_openai_prewarm_but_preserves_inference_and_audi
             counts,
         );
     }
+    crate::postgres::drain_analytics(&database.pool).await;
     let diagnostics = repository
         .usage_diagnostics(
             range,

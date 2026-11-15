@@ -18,12 +18,13 @@ fn store_config_should_derive_backup_staging_from_runtime_data_dir() {
 }
 
 #[test]
-fn store_pool_config_keeps_the_public_surface_to_connection_pool_limits() {
+fn store_pool_config_defaults_reserve_capacity_and_leave_projection_memory_unchanged() {
     let pool: StorePoolConfig =
         serde_json::from_value(serde_json::json!({})).expect("default pool configuration");
 
     assert_eq!(pool, StorePoolConfig::default());
     assert_eq!(pool.max_connections, 20);
+    assert_eq!(pool.analytics_projection_work_mem_mb, None);
     assert_eq!(pool.acquire_timeout_seconds, 5);
     assert_eq!(pool.observability_query_timeout_seconds, 120);
     assert_eq!(pool.observability_max_connections(), 16);
@@ -84,4 +85,28 @@ fn valid_config() -> StoreConfig {
         },
     }))
     .expect("test Store configuration")
+}
+
+#[test]
+fn analytics_projection_memory_accepts_only_postgresql_bounds() {
+    let root = tempfile::tempdir().unwrap();
+    for (mb, valid) in [
+        (0, false),
+        (1, true),
+        (128, true),
+        (i32::MAX as u32 / 1024, true),
+        (i32::MAX as u32 / 1024 + 1, false),
+        (u32::MAX, false),
+    ] {
+        let mut config: StoreConfig = serde_json::from_value(serde_json::json!({
+            "database": { "url": "postgres://codex_proxy@127.0.0.1:5432/codex_proxy", "password": PASSWORD },
+            "redis": { "url": "redis://127.0.0.1:6379/", "password": PASSWORD },
+            "pool": { "analytics_projection_work_mem_mb": mb }
+        })).unwrap();
+        assert_eq!(
+            config.resolve_and_validate(root.path()).is_ok(),
+            valid,
+            "{mb} MB"
+        );
+    }
 }

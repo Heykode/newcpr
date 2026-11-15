@@ -128,7 +128,7 @@ fn assert_scoped_request(request: &wiremock::Request, account: &str) -> String {
         captured_header_values(request, "chatgpt-account-id"),
         vec![format!("chatgpt-{account}").into_bytes()]
     );
-    assert_account_installation_header(request);
+    assert_auxiliary_installation_header(request);
     let raw = std::str::from_utf8(&request.body).expect("UTF-8 body");
     assert!(!raw.contains("discard-me"), "old account identity survived");
     assert_business_preserved(raw);
@@ -218,7 +218,7 @@ async fn standalone_endpoints_keep_clean_wire_bytes_without_inventing_identity_f
                 .unwrap()
                 .len()
         );
-        assert_account_installation_header(&requests[0]);
+        assert_auxiliary_installation_header(&requests[0]);
         server.verify().await;
     }
 }

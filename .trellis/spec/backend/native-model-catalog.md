@@ -2,7 +2,7 @@
 
 ## 来源与调用路径
 
-固定参考为官方 v3.47.0 `e1f84c210b5bc7423cec011a65e0fc2310e24aad`。
+固定参考为官方 v3.48.0 `975b73b33b6d247fbe08a9a23e88066467e71d7a`。
 `GET /v1/models?client_version=...` → `ExecutionService::client_model_catalog` →
 `CodexCredentialCatalogService::client_model_catalog`，只读已发布快照和本地账号事实。
 后台 `restore` / `refresh_catalogs` 负责持久目录恢复、发现与发布。
@@ -33,8 +33,13 @@
 
 ## 本地必要接入
 
-- 获取目录仍使用选中账号已有 installation ID、冻结 effective profile、代理、CA 和 IPv6；
-  活动 IPv6 失败不能偷偷走 IPv4。网络/客户端画像不再成为模型权限缓存维度。
+- 每轮目录刷新、单账号刷新及管理员导出从 runtime policy 读取当前全局客户端画像并冻结整套身份；
+  使用选中账号凭据、代理、CA 和 IPv6，活动 IPv6 失败不能偷偷走 IPv4。
+  目录请求保留 `version`、`originator` 和匹配的 `client_version`，不发送安装标识头。
+  网络/客户端画像不成为模型权限缓存维度。
+- 本地配置源为 `provider_outbound_user_agents.configuration_json`，只读取 configuration 模式；
+  旧 default/custom/custom-auto-version 沿当前已发布画像。读取/解析失败返回错误，不回退成伪默认。
+  预热复用相同全局选择；诊断从 Core 的配置快照冻结全局画像，不读取任意 Client Key 画像。
 - Excel 配置模型作为独立 adapter 来源，scope 额外包含 Excel 模型配置。
   原生 marker 0 文档与纯 Excel marker 3 文档分开；合成模型不能成为原生账号权限证据。
   混合目录依据原始文档的 native IDs 检查原生资格，不能因为含 Excel 模型而跳过检查。
@@ -71,9 +76,9 @@ API 同时验证普通 OpenAI 列表、Codex 目录和显式 Anthropic 头下的
 
 ### Contracts
 
-只加载指定账号的凭据，允许显式指定已停用账号但不启用它。冻结当前 effective
+只加载指定账号的凭据，允许显式指定已停用账号但不启用它。从持久化全局选择冻结
 profile，保留原账号代理、IPv6、CA 和 15 秒超时。不得读取其他账号补结果、
-回退套餐缓存、发布全局目录或生成模型调用。安装号头遵循既有共享构建器合同，固定使用选中账号的持久身份。
+回退套餐缓存、发布全局目录或生成模型调用。目录不发送安装标识头；读取目录不改写账号的持久设备身份。
 保留原生对象未知字段、null、嵌套结构和模型数组顺序。
 
 ### Validation & Error Matrix
