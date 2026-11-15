@@ -4,7 +4,6 @@ import { Activity, Database, FileText, Timer } from '@lucide/vue'
 import { computed } from 'vue'
 
 import BaseCard from '@/components/base/BaseCard.vue'
-import BaseMotionIcon from '@/components/base/BaseMotionIcon.vue'
 import { t } from '@/i18n'
 
 const props = defineProps<{
@@ -54,25 +53,23 @@ const items = computed(() => [
 </script>
 
 <template>
-  <section class="mt-5 grid shrink-0 grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4" :aria-label="t('usage.usageOverview')">
+  <section class="grid shrink-0 grid-cols-2 gap-3 lg:grid-cols-4" :aria-label="t('usage.usageOverview')">
     <BaseCard
       v-for="item in items"
       :key="item.key"
       as="article"
       padding="compact"
-      class="grid min-h-23 grid-cols-[36px_minmax(0,1fr)] items-stretch gap-3"
+      class="relative flex min-h-29 flex-col gap-3"
     >
-      <BaseMotionIcon class="inline-flex size-9 shrink-0 items-center justify-center rounded-cp" :class="item.tone">
-        <component :is="item.icon" class="size-4.5" />
-      </BaseMotionIcon>
-      <div class="flex min-w-0 flex-col justify-between py-0.5">
-        <span class="block text-cp-sm leading-none font-bold text-cp-text-quaternary">
+      <component :is="item.icon" class="absolute right-4 top-4 size-4 text-cp-text-tertiary" aria-hidden="true" />
+      <div class="flex min-w-0 flex-1 flex-col justify-between gap-2">
+        <span class="block pr-6 text-cp-sm leading-snug text-cp-text-secondary">
           {{ item.label }}
         </span>
-        <strong class="block truncate text-[22px] leading-none font-extrabold text-cp-text">
+        <strong class="block truncate text-[27px] leading-tight font-semibold tracking-tight tabular-nums text-cp-text">
           {{ item.value }}
         </strong>
-        <span class="block truncate text-cp-sm leading-none font-emphasis text-cp-text-secondary">
+        <span class="block text-cp-xs leading-snug text-cp-text-secondary">
           {{ error || item.detail }}
         </span>
       </div>

@@ -49,6 +49,7 @@ pub struct ReloginView {
     pub id: String,
     pub revision: u64,
     pub email: String,
+    pub display_name: Option<String>,
     pub has_totp: bool,
     pub enrollment_pending: bool,
     pub automatic: bool,
@@ -919,6 +920,12 @@ impl ReloginService for DefaultReloginService {
                 let imported_at = entry.import_time();
                 let matches = matching_accounts(&entry, &pool);
                 let statistics = statistics_account(&entry, &matches);
+                let display_name = statistics.map(|account| {
+                    account
+                        .custom_name
+                        .clone()
+                        .unwrap_or_else(|| account.name.clone())
+                });
                 let material_error = entry.validate_totp().err();
                 let has_totp = material_error.is_none();
                 let credential = entry.credential.as_ref().filter(|_| has_totp);
@@ -952,6 +959,7 @@ impl ReloginService for DefaultReloginService {
                     id: entry.id,
                     revision: entry.revision,
                     email: entry.email,
+                    display_name,
                     has_totp,
                     enrollment_pending: entry.enrollment.is_some(),
                     automatic: entry.automatic && has_totp,

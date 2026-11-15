@@ -1,5 +1,9 @@
 import type { ReloginEntry, ReloginPoolAccount, ReloginStatus } from '@/api/modules/relogin'
 
+export function reloginDisplayName(row: ReloginEntry) {
+  return row.displayName?.trim() || row.email
+}
+
 export const statusLabels: Record<ReloginStatus, string> = {
   pending: '待处理',
   queued: '排队中',

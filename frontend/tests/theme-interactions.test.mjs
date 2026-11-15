@@ -66,13 +66,20 @@ test('theme overrides allow alpha only for supported controls and retain native 
   assert.equal(createThemeVars({ 'input-bg': '#11223344' })['--cp-input-bg'], '#11223344')
 })
 
-test('all theme presets keep equal hover/focus feedback even without decorative shadows', () => {
+test('theme presets retain focus feedback even without decorative shadows', () => {
   for (const theme of ['light', 'dark']) {
     for (const preset of THEME_COLOR_PRESETS) {
       const { tokens } = resolveTheme(theme, preset.id, '#1677ff', { seed: { shadowStrength: 0 } })
       assert.equal(tokens['--cp-input-hover-bg'], tokens['--cp-input-active-bg'])
-      assert.equal(tokens['--cp-input-hover-shadow'], tokens['--cp-input-active-shadow'])
-      assert.match(tokens['--cp-input-active-shadow'], /0 0 0 3px/)
+      if (preset.id === 'qianxing') {
+        assert.match(tokens['--cp-input-shadow'], /inset 0 0 0 1px/)
+        assert.match(tokens['--cp-input-active-shadow'], /0 0 0 2px/)
+        assert.notEqual(tokens['--cp-input-active-shadow'], tokens['--cp-input-hover-shadow'])
+      }
+      else {
+        assert.equal(tokens['--cp-input-hover-shadow'], tokens['--cp-input-active-shadow'])
+        assert.match(tokens['--cp-input-active-shadow'], /0 0 0 3px/)
+      }
       assert.notEqual(tokens['--cp-input-error-active-bg'], tokens['--cp-input-active-bg'])
     }
   }
@@ -108,8 +115,8 @@ test('switching material preserves default and customized component dimensions',
       assert.notEqual(soft.tokens['--cp-card-bg-image'], plain.tokens['--cp-card-bg-image'])
     }
     const soft = createTheme({ name, preset: 'soft' })
-    assert.equal(soft.seedTokens.borderRadius, 8)
-    assert.equal(soft.tokens['--cp-card-border-radius'], '18px')
+    assert.equal(soft.seedTokens.borderRadius, 6)
+    assert.equal(soft.tokens['--cp-card-border-radius'], '10px')
     assert.equal(soft.tokens['--cp-layout-sider-border-radius'], '0px')
   }
 })
@@ -120,8 +127,12 @@ test('changing profiles retains functional colors and follows scheme defaults on
   for (const preset of THEME_COLOR_PRESETS) {
     for (const name of ['light', 'dark']) {
       const defaults = createTheme({ name, colorId: preset.id, ...resolveThemeProfile(preset.id) })
-      for (const [key, value] of Object.entries(SEED_COLORS_BY_SCHEME[name]))
-        assert.equal(defaults.seedTokens[key], value)
+      for (const [key, value] of Object.entries(SEED_COLORS_BY_SCHEME[name])) {
+        const expected = preset.id === 'qianxing' && key === 'colorLink'
+          ? preset.seed
+          : preset.id === 'qianxing' && key === 'colorTextBase' ? (name === 'light' ? '#302E29' : '#EEECE5') : value
+        assert.equal(defaults.seedTokens[key], expected)
+      }
       const seed = { colorSuccess: '#225577', colorBgBase: '#334455', colorLink: '#556677', borderRadius: 99 }
       const profile = resolveThemeProfile(preset.id, seed)
       const custom = createTheme({ name, colorId: preset.id, ...profile })

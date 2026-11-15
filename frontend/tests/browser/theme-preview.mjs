@@ -66,6 +66,20 @@ async function main() {
       await page.screenshot({ path: `${output}/theme-${width}.png`, fullPage: true })
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1))
     }
+    const stored = { themeMode: 'light', themePreset: 'default', themeColor: 'relay-blue', customThemeColor: '#5983F4', themeCustomization: {} }
+    for (const [value, expected] of [
+      [stored, 'qianxing'],
+      [{ ...stored, themeCustomization: { seed: { colorBgBase: '#FFF4E0' } } }, 'relay-blue'],
+      [{ ...stored, themeDesignVersion: 1 }, 'relay-blue'],
+      [{ ...stored, themeColor: 'graphite' }, 'graphite'],
+    ]) {
+      await page.evaluate(value => localStorage.setItem('codex-proxy-rs-theme', JSON.stringify(value)), value)
+      await page.reload()
+      await page.waitForFunction(expected => document.documentElement.dataset.themeColor === expected, expected)
+      const persisted = await page.evaluate(() => JSON.parse(localStorage.getItem('codex-proxy-rs-theme')))
+      assert.equal(persisted.themeDesignVersion, 1)
+      assert.deepEqual(persisted.themeCustomization, value.themeCustomization)
+    }
     assert.deepEqual(errors, [])
     process.stdout.write(`${JSON.stringify({ result: 'passed', output })}\n`)
   }

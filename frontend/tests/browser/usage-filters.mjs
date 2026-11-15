@@ -18,7 +18,8 @@ async function main() {
   await mkdir(output, { recursive: true })
   try {
     for (const width of [1440, 390, 320]) {
-      const context = await browser.newContext({ viewport: { width, height: 1000 }, serviceWorkers: 'block' })
+      report.calls = []
+      const context = await browser.newContext({ viewport: { width, height: 1000 }, timezoneId: 'America/Los_Angeles', serviceWorkers: 'block' })
       await isolateNetwork(context, base, report)
       await context.route('**/*', async (route) => {
         const url = new URL(route.request().url())
@@ -50,7 +51,7 @@ async function main() {
       page.setDefaultTimeout(15_000)
       page.setDefaultNavigationTimeout(15_000)
       page.on('pageerror', error => report.errors.push(error.message))
-      await page.goto(`${base}usage`)
+      await page.goto(`${base}usage?upstreamStatusCode=403`)
       await page.getByLabel('请求搜索', { exact: true }).waitFor()
       const placement = await page.locator('section[aria-label="请求筛选"]').evaluate((filters) => {
         const heading = [...document.querySelectorAll('h2')].find(element => element.textContent.trim() === '请求明细')
@@ -63,8 +64,29 @@ async function main() {
           count: document.querySelectorAll('section[aria-label="请求筛选"]').length,
         }
       })
-      assert.deepEqual(placement, { insideDetails: true, belowHeading: true, belowInsights: true, count: 1 }, `filters stay inside request details at ${width}px`)
+      assert.deepEqual(placement, { insideDetails: false, belowHeading: false, belowInsights: false, count: 1 }, `one shared filter panel precedes insights at ${width}px`)
       await page.getByText('Pro', { exact: true }).first().waitFor()
+      await page.getByRole('button', { name: '筛选时间范围', exact: true }).click()
+      const rangeDialog = page.getByRole('dialog').filter({ has: page.getByRole('form', { name: '时间范围', exact: true }) })
+      await rangeDialog.getByLabel('开始时间', { exact: true }).fill('2026-01-01T00:00')
+      assert.ok(!report.calls.some(call => call.query.startTime?.startsWith('2026-01-01')))
+      await rangeDialog.getByLabel('结束时间', { exact: true }).fill('2026-02-02T00:00')
+      assert.ok(!report.calls.some(call => call.query.startTime?.startsWith('2026-01-01')))
+      await Promise.all([
+        page.waitForResponse(response => response.url().includes('/usage/records?') && response.url().includes('2026-01-01')),
+        rangeDialog.getByRole('button', { name: '应用', exact: true }).click(),
+      ])
+      const customRange = new URL(page.url()).searchParams
+      for (const endpoint of ['/usage/records', '/usage/records/summary', '/usage/insights/health', '/usage/insights/performance', '/usage/insights/cost', '/usage/insights/diagnostics']) {
+        await page.waitForTimeout(30)
+        assert.ok(report.calls.some(call => call.path.endsWith(endpoint)
+          && call.query.startTime === customRange.get('startTime')
+          && call.query.endTime === customRange.get('endTime')), `${endpoint} shares the applied range`)
+      }
+      await page.getByRole('button', { name: '筛选时间范围', exact: true }).click()
+      await rangeDialog.getByRole('button', { name: '最近 7 天', exact: true }).click()
+      await page.waitForURL(url => url.searchParams.get('timeRange') === '7d' && !url.searchParams.has('startTime'))
+
       const account = page.getByLabel('搜索账号', { exact: true })
       await account.fill('filter-')
       await page.getByRole('option', { name: /filter-a@example.invalid/ }).click()
@@ -73,11 +95,11 @@ async function main() {
       await page.waitForURL(url => url.searchParams.get('accountIds') === 'acct-filter-a,acct-filter-b')
       await page.getByLabel('请求搜索', { exact: true }).fill('literal_%')
       await page.waitForResponse(response => response.url().includes('/usage/records?') && response.url().includes('literal'))
-      const endpoints = ['/usage/records', '/usage/records/summary', '/usage/insights/overview', '/usage/insights/diagnostics']
+      const endpoints = ['/usage/records', '/usage/records/summary', '/usage/insights/health', '/usage/insights/performance', '/usage/insights/cost', '/usage/insights/diagnostics']
       for (const endpoint of endpoints) {
         assert(report.calls.some(call => call.path.endsWith(endpoint) && call.query.search === 'literal_%' && call.query.accountIds === 'acct-filter-a,acct-filter-b'), `${endpoint} shares filters`)
       }
-      await page.getByRole('button', { name: '高级筛选', exact: true }).click()
+      await page.getByRole('button', { name: '更多筛选', exact: true }).click()
       await page.getByLabel('搜索API Key', { exact: true }).fill('测试')
       await page.getByRole('button', { name: /测试 Key sk_fixture/ }).click()
       await page.getByLabel('搜索请求分组', { exact: true }).fill('测试')
@@ -85,10 +107,11 @@ async function main() {
       await page.getByRole('radio', { name: '错误排查', exact: true }).click()
       assert.equal(await page.locator('section[aria-label="请求筛选"]').count(), 1)
       await page.getByLabel('客户端状态码', { exact: true }).fill('502')
-      await page.getByLabel('上游状态码', { exact: true }).fill('403')
+      assert.equal(await page.getByLabel('上游状态码', { exact: true }).count(), 0)
+      await page.getByLabel('已应用的钻取条件').getByText('上游状态码：403', { exact: true }).waitFor()
       await page.waitForResponse(response => response.url().includes('/operations/errors?')
         && response.url().includes('clientStatusCode=502') && response.url().includes('upstreamStatusCode=403'))
-      assert.equal(report.calls.filter(call => call.path.endsWith('/usage/records/detail')).length, width === 1440 ? 0 : report.widths.length)
+      assert.equal(report.calls.filter(call => call.path.endsWith('/usage/records/detail')).length, 0)
       await Promise.all([
         page.waitForResponse(response => response.url().includes('/usage/records/detail')),
         page.getByRole('button', { name: '查看错误详情', exact: true }).first().click(),
@@ -104,18 +127,29 @@ async function main() {
       await page.locator('[role="dialog"]').waitFor({ state: 'detached' })
       if (combined)
         await page.getByRole('switch', { name: '详细错误采集（全局）', exact: true }).waitFor()
-      await page.getByRole('button', { name: '高级筛选', exact: true }).scrollIntoViewIfNeeded()
+      await page.getByRole('button', { name: '更多筛选', exact: true }).scrollIntoViewIfNeeded()
       const fields = await page.locator('section[aria-label="请求筛选"] input').evaluateAll(inputs => inputs.map((input) => {
         const box = input.getBoundingClientRect()
         return { left: box.left, right: box.right, width: box.width }
       }))
       assert(fields.every(box => box.left >= 0 && box.right <= width + 1 && box.width > 0), `fields fit ${width}`)
       await page.screenshot({ path: `${output}/filters-${width}.png`, fullPage: true })
+      await page.getByRole('button', { name: '更多筛选', exact: true }).click()
+      const savedRange = new URL(page.url()).searchParams.get('timeRange')
+      await page.getByRole('button', { name: '清除客户端状态码条件', exact: true }).click()
+      await page.waitForURL(url => !url.searchParams.has('clientStatusCode'))
+      assert.equal(new URL(page.url()).searchParams.get('timeRange'), savedRange, 'individual removal retains the time range')
+      assert.equal(new URL(page.url()).searchParams.get('accountIds'), 'acct-filter-a,acct-filter-b')
+      await page.getByRole('button', { name: '更多筛选', exact: true }).click()
+      await page.getByLabel('客户端状态码', { exact: true }).fill('502')
+      await page.waitForURL(url => url.searchParams.get('clientStatusCode') === '502')
       const before = new URL(page.url()).searchParams
       await page.reload()
-      await page.getByRole('button', { name: '高级筛选', exact: true }).click()
+      await page.getByRole('button', { name: '更多筛选', exact: true }).click()
       assert.equal(await page.getByLabel('客户端状态码', { exact: true }).inputValue(), '502')
       assert.equal(new URL(page.url()).searchParams.get('accountIds'), before.get('accountIds'))
+      await page.getByRole('button', { name: '移除上游状态码筛选', exact: true }).click()
+      await page.waitForURL(url => !url.searchParams.has('upstreamStatusCode'))
       await page.getByRole('button', { name: '重置全部筛选', exact: true }).click()
       await page.waitForURL(url => !url.searchParams.has('accountIds'))
       assert.equal(new URL(page.url()).searchParams.get('view'), 'errors')

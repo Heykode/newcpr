@@ -73,6 +73,13 @@ function resolveThemeInputs({
     colorPrimary: seed,
     ...SEED_COLORS_BY_SCHEME[name],
     ...DEFAULT_SEED_DIMENSIONS,
+    ...(resolvedColorId === 'qianxing'
+      ? {
+          ...themeProfiles.qianxing.customization.seed,
+          colorTextBase: name === 'light' ? '#302E29' : '#EEECE5',
+          colorLink: seed,
+        }
+      : {}),
     ...normalizedCustomization.seed,
   }
   return { name, seed, seedTokens, preset: selectedPreset.id, colorId: resolvedColorId, customization: normalizedCustomization }
@@ -122,7 +129,21 @@ function deriveThemeMap(
   // 预设底色只参与表面派生，显式设置的背景优先，编辑器与持久化的 Seed 保持不变
   const background = customization.seed?.colorBgBase ?? PRESET_SURFACE_BACKGROUNDS[colorId]?.[name] ?? seedTokens.colorBgBase
   const fills = name === 'light' ? deriveLightThemeFillMap(background, seedTokens.colorTextBase) : null
-  const baseSurfaces = deriveThemeSurfaceMap(name, background, seedTokens.colorTextBase)
+  const qianxingSurfaces = colorId === 'qianxing'
+    && !customization.seed?.colorBgBase && !customization.seed?.colorTextBase
+  const baseSurfaces = {
+    ...deriveThemeSurfaceMap(name, background, seedTokens.colorTextBase),
+    ...(qianxingSurfaces
+      ? {
+          colorBgLayout: name === 'light' ? '#FBFAF7' : '#262421',
+          colorBgContainer: background,
+          colorBgElevated: background,
+          colorBorder: name === 'light' ? '#D8D1C6' : '#544C42',
+          colorBorderSecondary: name === 'light' ? '#E3DED5' : '#484139',
+          colorSplit: name === 'light' ? '#E3DED5' : '#484139',
+        }
+      : {}),
+  }
   const primary = deriveThemePrimaryMap(seed, name, baseSurfaces.colorBgContainer)
   const surfaces = ensureThemeSurfaceContrast(baseSurfaces, fills, primary)
   const aliases = deriveThemeAliasMap(surfaces)
@@ -138,16 +159,40 @@ function deriveThemeMap(
     presetColors: deriveThemePresetColorMap(name, surfaces.colorBgContainer, seedTokens),
     data: deriveThemeDataMap(aliases, semantics),
     shadows: deriveThemeShadowMap(name, seedTokens.shadowStrength),
-    components: deriveThemeComponentMap(
+    components: { ...deriveThemeComponentMap(
       surfaces,
       fills,
       primary,
       semantics.error,
       seedTokens.shadowStrength,
       preset,
-      customization.tokenOverrides?.['--cp-input-bg'],
-    ),
-    dimensions: deriveThemeDimensionMap(seedTokens, customization.component),
+      customization.tokenOverrides?.['--cp-input-bg'] ?? (colorId === 'qianxing' ? surfaces.colorBgContainer : undefined),
+    ), ...(colorId === 'qianxing'
+      ? {
+          inputBg: surfaces.colorBgContainer,
+          inputHoverBg: surfaces.colorBgContainer,
+          inputActiveBg: surfaces.colorBgContainer,
+          inputShadow: `inset 0 0 0 1px ${surfaces.colorBorder}`,
+          inputHoverShadow: `inset 0 0 0 1px ${primary.colorPrimaryBorderHover}`,
+          inputActiveShadow: `inset 0 0 0 1px ${primary.colorPrimary}, 0 0 0 2px ${primary.colorPrimaryContainer}`,
+          buttonPrimaryColor: surfaces.colorBgContainer,
+          buttonPrimaryBg: seedTokens.colorTextBase,
+          buttonPrimaryHoverBg: surfaces.colorTextSecondary,
+          buttonPrimaryActiveBg: seedTokens.colorTextBase,
+          buttonSecondaryBg: surfaces.colorBgContainer,
+          buttonSecondaryHoverBg: surfaces.colorFillQuaternary,
+          buttonSecondaryActiveBg: surfaces.colorFillTertiary,
+          cardShadow: 'none',
+          layoutSiderShadow: 'none',
+          tableRowStripeBg: surfaces.colorBgContainer,
+          menuItemSelectedBg: primary.colorPrimaryContainer,
+          ...(qianxingSurfaces ? { layoutSiderBg: name === 'light' ? '#F5F2EC' : '#211F1C' } : {}),
+        }
+      : {}) },
+    dimensions: deriveThemeDimensionMap(seedTokens, {
+      ...(colorId === 'qianxing' ? themeProfiles.qianxing.customization.component : {}),
+      ...customization.component,
+    }),
   }
 }
 

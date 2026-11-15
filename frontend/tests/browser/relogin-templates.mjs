@@ -26,10 +26,16 @@ async function main() {
   const modal = page.getByRole('dialog')
   const confirm = page.getByRole('alertdialog')
   const row = id => page.locator(`tbody tr[data-row-key="${id}"]`)
+  const manageTemplates = async () => {
+    await page.goto(`${base}/accounts`)
+    await page.getByRole('button', { name: '账号模板', exact: true }).click()
+    await page.getByRole('button', { name: '管理模板', exact: true }).click()
+  }
   try {
     await page.goto(`${base}/relogin`)
     await row('new-one').waitFor()
-    await page.getByRole('button', { name: '账号模板', exact: true }).click()
+    assert.equal(await page.getByRole('button', { name: '账号模板', exact: true }).count(), 0)
+    await manageTemplates()
     await modal.getByRole('button', { name: '新建模板', exact: true }).click()
     await modal.getByRole('textbox', { name: '模板名称', exact: true }).fill('Team 模板')
     assert.equal(await modal.getByRole('switch', { name: '切换 Turn State 注入', exact: true }).count(), 0)
@@ -45,7 +51,7 @@ async function main() {
     assert.equal(saves[0].config.groupIds.length, 1)
     await modal.getByRole('button', { name: '关闭', exact: true }).last().click()
     await page.reload()
-    await page.getByRole('button', { name: '账号模板', exact: true }).click()
+    await manageTemplates()
     await modal.getByText('Team 模板', { exact: true }).waitFor()
     await modal.getByRole('button', { name: '编辑模板', exact: true }).click()
     assert.equal(await modal.getByRole('switch', { name: '切换 Turn State 注入', exact: true }).count(), 0)
@@ -60,6 +66,8 @@ async function main() {
     assert.equal(saves[1].selection.revision, 1)
     await modal.getByRole('button', { name: '关闭', exact: true }).last().click()
 
+    await page.goto(`${base}/relogin`)
+    await row('new-one').waitFor()
     await page.getByRole('checkbox', { name: '全选当前页', exact: true }).locator('..').click()
     await page.getByRole('button', { name: '批量推送', exact: true }).click()
     await confirm.waitFor()
@@ -120,7 +128,7 @@ async function main() {
     await confirm.waitFor({ state: 'hidden' })
     await page.unroute('**/dev/api/admin/relogin/push')
 
-    await page.getByRole('button', { name: '账号模板', exact: true }).click()
+    await manageTemplates()
     await modal.getByRole('button', { name: '编辑模板', exact: true }).click()
     for (const width of [1440, 390, 320]) {
       await page.setViewportSize({ width, height: width < 500 ? 844 : 1000 })

@@ -258,7 +258,7 @@ async function isolateNetwork(context, base, report) {
       report.api.push(path)
       return route.fulfill({ json: { code: 200, message: 'ok', data: data.get(path) } })
     }
-    const localAsset = /^\/(?:src|assets|node_modules|@vite|@id|@fs)\//.test(path)
+    const localAsset = /^\/(?:src|assets|fonts|node_modules|@vite|@id|@fs)\//.test(path)
       || path === '/favicon.ico' || path === '/favicon.svg'
     if ((request.isNavigationRequest() && path === '/usage') || localAsset)
       return route.continue()

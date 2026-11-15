@@ -38,9 +38,24 @@ Questions to answer:
 
 ## Styling Patterns
 
-<!-- How styles are applied (CSS modules, styled-components, Tailwind, etc.) -->
-
-(To be filled by the team)
+- QX presentation uses the existing theme compiler and shared Base components. The
+  `qianxing` color profile supplies warm surfaces and terracotta accents; explicit
+  seed and component/token overrides still win, and existing nondefault profiles remain.
+- `themeDesignVersion` migrates only the untouched former default once. Do not reset
+  customized themes on initialization or when the user later selects an old profile.
+- Bundle QX Display with its OFL license; use it for headings and system fonts for
+  body text. Preserve semantic chart colors, table column keys and density overrides.
+- QX is a layout and interaction design, not only a palette. Use outlined fields,
+  compact navigation, a top bar with the mobile menu, restrained panel geometry,
+  flexible field widths and visible removable filter conditions. The menu must not
+  float over content. Keep route-guard cancellation, mobile focus trapping and
+  focus restoration intact.
+- Form actions wrap when their minimum readable width does not fit. Avoid fixed
+  two-column filter layouts across unrelated viewport sizes or squeezing a long
+  date range behind ellipsis. Preserve customized theme tokens and dimensions.
+- Shared visual work must not rewrite request health, hotspot ranking, analytics SQL,
+  queue/affinity rules, sorting, pagination or account eligibility. Keep presentation
+  tests aligned with approved layouts instead of restoring obsolete UI restrictions.
 
 ---
 
@@ -87,7 +102,7 @@ Questions to answer:
 
 ### 界面文案与校验时机
 
-- 沿用原页面、基础组件和操作位置。标题、按钮只写名称或动作，不重复字段值、
+- 复用既有业务组件和处理函数，布局与操作位置以当前批准设计为准。标题、按钮只写名称或动作，不重复字段值、
   状态和已清楚的交互；详细规则放已有 Popover，关键错误与不可逆后果就近展示。
 - 自编 UI 文案用短语，不用句号、分号；URL、版本、数值、原始日志和用户输入不改。
 - Tooltip 放短名称，Popover 放多段说明或链接，帮助入口兼容键盘与触屏。
@@ -104,7 +119,7 @@ Questions to answer:
   `themeProfiles` 提供尺寸/材质组合，`resolveThemeProfile` 保留现有功能色和中性色，
   未编辑背景/文字使用明暗默认值。主色不连带覆盖信息/链接色。`themePresets` 只控制表面高光、渐变和阴影。
   材质不提供 customization，不改变配色、圆角、字号和尺寸；显式 customization 独立生效。
-  无自定义时柔光控件圆角为 8px、卡片 18px、侧栏 0；明暗模式一致。
+  无自定义时常规配置控件圆角为 8px、卡片 18px；QX 为 6px 控件和 10px 卡片，侧栏为 0。明暗模式一致，显式尺寸覆盖优先。
   持久化键 `codex-proxy-rs-theme` 不变，无 `themePreset` 的旧配置补 `default`。
 - 预设底色仅参与表面派生，不写回 seed；显式 `colorBgBase` 优先。输入标签底色从
   输入背景合成为实色后派生，包含用户的 `--cp-input-bg` 覆盖。

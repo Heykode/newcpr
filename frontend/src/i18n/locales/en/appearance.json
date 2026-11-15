@@ -225,6 +225,10 @@
       "shadowIntensity": "Shadow intensity"
     },
     "themeColors": {
+      "qianxing": {
+        "label": "Qianxing",
+        "description": "Warm paper with terracotta accents"
+      },
       "relay-blue": {
         "label": "Starlit passage",
         "description": "A lone sail on a star-lit sea"

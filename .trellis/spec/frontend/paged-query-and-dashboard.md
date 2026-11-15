@@ -80,5 +80,17 @@ API、SQL 与缓存键都必须接收完整筛选，不能只传时间与 Provid
 - 边界：旧语言加载晚到不能覆盖新语言；迟到密钥 reveal 不能重开已卸载页面；未知时间用旧显示。
 - 示例：快速点击英文再繁中，英文晚返回仍显示繁中；普通中文功能继续使用；不能把 JSON 对象构建成功当浏览器验收。
 - 验证：三语资源、加载竞态、Blob 401、成功旧响应、SSE 旧代次、导入关闭/卸载；
-  1440/390/320px 浏览器检查导入、余额、主题、登录语言持久化及使用统计筛选位于请求明细。
+  1440/390/320px 浏览器检查导入、余额、主题、登录语言持久化及使用统计公共筛选位于图表前、时间入口唯一，列表状态仍位于请求明细。
+  隐藏的独立筛选输入不删除 URL/钻取参数；已有条件须显示为可移除标签。自定义起止时间一起应用，沿用原本地日界限。
 - 正误：不能整体替换本地列表组件丢掉筛选/模板/余额功能；在原组件接入文案和生命周期保护。
+
+
+### QX query presentation
+
+The common usage toolbar wraps by field width; expanded filters auto-fit rather
+than enforcing two columns. Display the effective time range on its button and
+apply both custom boundaries together. Individual condition chips remove only
+that condition, preserving time, selected accounts and the current view.
+Chart and diagnostics placement may change with viewport width; their transforms,
+request parameters, ranking and pagination remain unchanged. Full-width diagnostics
+keep existing columns and horizontal scrolling where necessary.

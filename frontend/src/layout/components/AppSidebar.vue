@@ -121,15 +121,14 @@ const updateButtonLabel = computed(() => hasUpdate.value
     <template #brand-icon>
       <BaseMotionIcon
         variant="brand"
-        class="inline-flex size-11 items-center justify-center relative -top-0.5 rounded-cp"
+        class="inline-flex size-8 items-center justify-center rounded-cp"
       >
-        <AppBrandMark class="block size-11 select-none" />
+        <AppBrandMark class="block size-8 select-none" />
       </BaseMotionIcon>
     </template>
     <template #brand>
-      <strong class="text-base leading-[1.1] font-heavy text-cp-text"> Codex Proxy </strong>
+      <strong class="font-display text-lg leading-[1.1] text-cp-text"> New CPR </strong>
       <span class="mt-1.5 flex h-4.5 min-w-0 items-center gap-2">
-        <span class="shrink-0 text-xs leading-none font-emphasis text-cp-text-secondary"> Rust build </span>
         <button
           v-if="hasVersionLabel"
           type="button"
@@ -149,12 +148,11 @@ const updateButtonLabel = computed(() => hasUpdate.value
     </template>
     <template #footer>
       <div
-        class="bg-cp-fill-quaternary"
-        :class="isCollapsed ? 'grid gap-1 rounded-cp p-1' : 'flex min-h-11 flex-wrap items-center justify-between gap-1 rounded-cp-lg px-2'"
+        :class="isCollapsed ? 'grid gap-1' : 'flex min-h-11 flex-wrap items-center justify-between gap-2'"
       >
         <span
           v-if="!isCollapsed"
-          class="inline-flex h-7 items-center justify-self-start gap-1.5 whitespace-nowrap rounded-lg bg-cp-success-container px-2 text-xs leading-none font-emphasis text-cp-success-on-container"
+          class="inline-flex h-6 items-center gap-1.5 text-cp-xs text-cp-text-secondary"
         >
           <i class="size-1.5 rounded-full bg-cp-success" />
           {{ t('navigation.online') }}

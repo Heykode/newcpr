@@ -414,7 +414,7 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
 </script>
 
 <template>
-  <div class="flex min-h-0 w-full flex-col xl:h-[calc(100dvh-3rem)] xl:flex-none!">
+  <div class="flex min-h-0 w-full flex-col xl:min-h-[calc(100dvh-7rem)] xl:flex-none!">
     <p v-if="reloginActionError" role="alert" class="shrink-0 text-cp-sm text-cp-error">
       {{ reloginActionError }}
     </p>
@@ -445,63 +445,72 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
       </template>
     </BasePageHeader>
 
+    <BaseCard class="overflow-visible!" padding="compact">
+      <AccountFilters
+        v-model:search="searchQuery"
+        v-model:status="statusQuery"
+        v-model:provider="providerQuery"
+        v-model:group="groupQuery"
+        v-model:plan-type="planTypeQuery"
+        :plan-options="[
+          { label: '全部套餐', value: '' },
+          { label: 'Free', value: 'free' },
+          { label: 'Plus', value: 'plus' },
+          { label: 'Pro', value: 'pro' },
+          { label: 'Team', value: 'team' },
+          { label: 'Business', value: 'business' },
+          { label: 'Enterprise', value: 'enterprise' },
+        ]"
+        :column-options="accountColumnOptions"
+        :visible-column-keys="visibleColumnKeys"
+        :groups="groups"
+        :groups-loading="groupsLoading"
+        :selected-count="selectedIds.size"
+        :hide-columns="isMobile"
+        :batch-deleting="batchDeleting"
+        :exporting-accounts="exportingAccounts"
+        :template-applying="applyingTemplate || applyingQualityTemplate || batchQualityBusy"
+        @delete-selected="showDeleteModal = true"
+        @export-selected="handleExportAccounts"
+        @create="openCreateAccount"
+        @edit-selected="openBatchEdit"
+        @toggle-column="toggleColumn"
+      >
+        <template #account-templates>
+          <BaseButton v-if="selectedIds.size" variant="secondary" :disabled="resetBusy" @click="resetCredits.prepare(false)">
+            <RotateCcw class="size-4" />
+            使用重置次数
+          </BaseButton>
+          <BaseButton variant="secondary" :disabled="resetBusy" @click="resetCredits.history">
+            <History class="size-4" />
+            重置记录{{ resetActiveCount ? ` (${resetActiveCount})` : '' }}
+          </BaseButton>
+          <AccountTemplateMenu :account-ids="[...selectedIds]" :disabled="batchDeleting || applyingQualityTemplate || batchQualityBusy" @applying="applyingTemplate = $event" @applied="onTemplateApplied" />
+          <QualityTemplateApplyMenu :account-ids="[...selectedIds]" :disabled="batchDeleting || applyingTemplate || batchQualityBusy" @applying="applyingQualityTemplate = $event" @applied="onTemplateApplied" />
+          <AccountQualityBatchMenu
+            v-if="selectedIds.size || batchQualityBusy"
+            :selected-count="selectedIds.size"
+            :disabled="batchDeleting || applyingTemplate || applyingQualityTemplate || togglingQualityIds.size > 0 || qualitySetupOpen"
+            :loading="batchQualityBusy"
+            @change="setBatchQualityEnabled(selectedIds, $event)"
+          />
+        </template>
+      </AccountFilters>
+    </BaseCard>
+
     <AccountOverviewCards :summary="accountSummary" :groups="groups" :groups-loading="groupsLoading" />
 
     <BaseCard
       class="mt-4 flex flex-col xl:min-h-80 xl:flex-1"
-      :class="isMobile ? 'overflow-visible! rounded-none! bg-transparent! p-0! shadow-none!' : undefined"
+      :class="isMobile ? 'overflow-visible! rounded-none! border-0! bg-transparent! p-0! shadow-none!' : undefined"
     >
       <template #header>
-        <AccountFilters
-          v-model:search="searchQuery"
-          v-model:status="statusQuery"
-          v-model:provider="providerQuery"
-          v-model:group="groupQuery"
-          v-model:plan-type="planTypeQuery"
-          :plan-options="[
-            { label: '全部套餐', value: '' },
-            { label: 'Free', value: 'free' },
-            { label: 'Plus', value: 'plus' },
-            { label: 'Pro', value: 'pro' },
-            { label: 'Team', value: 'team' },
-            { label: 'Business', value: 'business' },
-            { label: 'Enterprise', value: 'enterprise' },
-          ]"
-          :column-options="accountColumnOptions"
-          :visible-column-keys="visibleColumnKeys"
-          :groups="groups"
-          :groups-loading="groupsLoading"
-          :selected-count="selectedIds.size"
-          :hide-columns="isMobile"
-          :batch-deleting="batchDeleting"
-          :exporting-accounts="exportingAccounts"
-          :template-applying="applyingTemplate || applyingQualityTemplate || batchQualityBusy"
-          @delete-selected="showDeleteModal = true"
-          @export-selected="handleExportAccounts"
-          @create="openCreateAccount"
-          @edit-selected="openBatchEdit"
-          @toggle-column="toggleColumn"
-        >
-          <template #account-templates>
-            <BaseButton v-if="selectedIds.size" variant="secondary" :disabled="resetBusy" @click="resetCredits.prepare(false)">
-              <RotateCcw class="size-4" />
-              使用重置次数
-            </BaseButton>
-            <BaseButton variant="secondary" :disabled="resetBusy" @click="resetCredits.history">
-              <History class="size-4" />
-              重置记录{{ resetActiveCount ? ` (${resetActiveCount})` : '' }}
-            </BaseButton>
-            <AccountTemplateMenu :account-ids="[...selectedIds]" :disabled="batchDeleting || applyingQualityTemplate || batchQualityBusy" @applying="applyingTemplate = $event" @applied="onTemplateApplied" />
-            <QualityTemplateApplyMenu :account-ids="[...selectedIds]" :disabled="batchDeleting || applyingTemplate || batchQualityBusy" @applying="applyingQualityTemplate = $event" @applied="onTemplateApplied" />
-            <AccountQualityBatchMenu
-              v-if="selectedIds.size || batchQualityBusy"
-              :selected-count="selectedIds.size"
-              :disabled="batchDeleting || applyingTemplate || applyingQualityTemplate || togglingQualityIds.size > 0 || qualitySetupOpen"
-              :loading="batchQualityBusy"
-              @change="setBatchQualityEnabled(selectedIds, $event)"
-            />
-          </template>
-        </AccountFilters>
+        <div class="flex items-center justify-between gap-3">
+          <h2 class="m-0 text-base font-semibold text-cp-text">
+            账号列表
+          </h2>
+          <span class="text-cp-xs tabular-nums text-cp-text-secondary">{{ accountPagination.total }} 个账号</span>
+        </div>
       </template>
 
       <template #body>

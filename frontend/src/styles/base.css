@@ -1,7 +1,23 @@
+@font-face {
+  font-family: 'QX Display';
+  src: url('/fonts/qx-display.woff2') format('woff2');
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+}
+
 @layer base {
+  h1 {
+    font-family: var(--font-display);
+    font-weight: 700;
+  }
+  h2 {
+    font-family: var(--font-sans);
+    font-weight: 600;
+  }
   html {
-    background: var(--cp-color-bg-layout, #f6f8fb);
-    color: var(--cp-color-text, #0e1726);
+    background: var(--cp-color-bg-layout, #fbfaf7);
+    color: var(--cp-color-text, #302e29);
     font-family: var(--font-sans);
     font-synthesis: none;
     text-rendering: optimizeLegibility;
@@ -10,7 +26,7 @@
   }
 
   body {
-    background: var(--cp-color-bg-layout, #f6f8fb);
+    background: var(--cp-color-bg-layout, #fbfaf7);
     font-size: var(--cp-font-size, 13px);
   }
 
@@ -120,4 +136,18 @@
   .cp-textarea {
     width: 100%;
   }
+}
+
+[data-theme-color='qianxing'] .cp-button[data-variant='secondary']:not(:disabled) {
+  box-shadow: inset 0 0 0 1px var(--cp-color-border);
+}
+
+[data-theme-color='qianxing'] .cp-data-table th,
+[data-theme-color='qianxing'] .cp-data-table td {
+  border-radius: 0;
+}
+
+[data-theme-color='qianxing'] .cp-data-table td {
+  border-bottom: 1px solid var(--cp-color-border-secondary);
+  border-top-width: 0;
 }

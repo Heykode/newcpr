@@ -32,9 +32,9 @@ const emit = defineEmits<{
         type="button"
         class="relative inline-flex w-full cursor-pointer items-center rounded-cp border-0 bg-transparent outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-cp-control-outline disabled:cursor-not-allowed disabled:text-cp-text-disabled motion-reduce:transition-none"
         :class="[
-          nested ? 'h-10 gap-2 px-3 text-left text-cp-sm' : 'h-11.5 text-sm leading-[1.15]',
-          collapsed ? 'justify-center' : nested ? '' : 'gap-3 px-4',
-          active ? 'font-bold text-cp-text' : 'font-semibold text-cp-text-secondary',
+          nested ? 'h-10 gap-2 px-3 text-left text-cp-sm' : 'h-10 text-cp leading-[1.15]',
+          collapsed ? 'justify-center' : nested ? '' : 'gap-2.5 px-3',
+          active ? 'font-semibold text-cp-primary-text' : 'font-normal text-cp-text-secondary',
           feedbackMuted ? 'transition-none' : 'transition-colors duration-200',
           !active && !feedbackMuted && !item.disabled && !disabled ? 'hover:bg-cp-fill-quaternary hover:text-cp-text' : undefined,
         ]"
@@ -45,7 +45,7 @@ const emit = defineEmits<{
         :aria-controls="expandable && !collapsed ? controls : undefined"
         @click="close(); emit('activate')"
       >
-        <component :is="item.icon" v-if="item.icon" class="shrink-0" :size="nested ? 16 : 20" />
+        <component :is="item.icon" v-if="item.icon" class="shrink-0" :size="nested ? 16 : 18" />
         <span
           data-sidebar-label
           class="min-w-0 overflow-hidden whitespace-nowrap text-left motion-reduce:transition-none"

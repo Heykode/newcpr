@@ -25,4 +25,4 @@
 
 - Usage error summaries come from final `model_requests.provider_error_code/error_message`, never an earlier retry event. Successful rows show no failure summary or tooltip.
 - Failed/incomplete usage requests open a focused error dialog with the existing full-detail escape and diagnostic panel. Absent legacy attempts must not crash the dialog.
-- Keep search/status controls inside request details and retain the existing table preference key. Closed dialogs must not fetch diagnostics.
+- Place shared query filters above the insights; use one time range for charts and request details. Keep the list-only status control inside request details and retain the existing table preference key. Closed dialogs must not fetch diagnostics.

@@ -29,7 +29,7 @@ const slots = defineSlots<{
 const paddingClasses: Record<CardPadding, string | undefined> = {
   none: undefined,
   compact: 'p-4',
-  default: 'p-5.5',
+  default: 'p-4',
 }
 
 const hasManagedHeader = computed(
@@ -45,17 +45,17 @@ const contentClasses = computed(() => [
 <template>
   <component
     :is="props.as"
-    class="overflow-hidden rounded-cp-card bg-(--cp-card-bg) bg-(image:--cp-card-bg-image) shadow-cp-card"
+    class="overflow-hidden rounded-cp-card border border-cp-border-secondary bg-(--cp-card-bg) bg-(image:--cp-card-bg-image) shadow-cp-card"
     :class="[paddingClasses[padding], hasHeader ? 'flex min-h-0 flex-col' : undefined]"
   >
     <template v-if="$slots.header || hasManagedHeader || $slots.body">
       <header v-if="$slots.header || hasManagedHeader" class="shrink-0">
         <slot name="header">
-          <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-            <div class="min-w-0 pt-0.5">
+          <div class="flex flex-wrap items-start justify-between gap-3">
+            <div class="min-w-0 flex-1 basis-40 pt-0.5">
               <h2
                 v-if="props.title || $slots.title"
-                class="m-0 text-xl leading-[1.15] font-heavy text-cp-text text-balance"
+                class="m-0 text-base leading-snug font-semibold text-cp-text text-balance"
               >
                 <slot name="title">
                   {{ props.title }}
@@ -63,14 +63,14 @@ const contentClasses = computed(() => [
               </h2>
               <p
                 v-if="props.description || $slots.description"
-                class="mt-1.75 mb-0 text-cp leading-[1.3] font-emphasis text-cp-text-secondary text-pretty"
+                class="mt-1 mb-0 text-cp-sm leading-relaxed text-cp-text-secondary text-pretty"
               >
                 <slot name="description">
                   {{ props.description }}
                 </slot>
               </p>
             </div>
-            <div v-if="$slots.actions" class="shrink-0">
+            <div v-if="$slots.actions" class="max-w-full shrink-0">
               <slot name="actions" />
             </div>
           </div>

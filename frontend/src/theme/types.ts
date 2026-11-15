@@ -1,6 +1,6 @@
 export type ThemeMode = 'system' | 'light' | 'dark'
 export type ThemeName = 'light' | 'dark'
-export type ThemeColorPresetId = 'relay-blue' | 'deep-teal' | 'signal-violet' | 'graphite'
+export type ThemeColorPresetId = 'qianxing' | 'relay-blue' | 'deep-teal' | 'signal-violet' | 'graphite'
 export type ThemeColorId = ThemeColorPresetId | 'custom'
 export type ThemePresetId = 'default' | 'soft'
 

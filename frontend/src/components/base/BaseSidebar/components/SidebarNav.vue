@@ -92,11 +92,11 @@ const indicatorStyle = computed(() => {
   // 按菜单布局的 spacing 单位定位，随主题密度同步缩放
   const expandedHeight = props.items.slice(0, index).reduce((height, entry) =>
     height + (isExpanded(entry) ? (entry.children?.length ?? 0) * 11 : 0), 0)
-  const top = index * 14.5 + expandedHeight + (nested ? 12.5 + childIndex * 11 : 0)
+  const top = index * 11 + expandedHeight + (nested ? 11 + childIndex * 11 : 0)
   return {
     transform: `translate3d(${nested ? 'calc(var(--spacing) * 6)' : '0px'}, calc(var(--spacing) * ${top}), 0)`,
     width: nested ? 'calc(100% - var(--spacing) * 6)' : '100%',
-    height: `calc(var(--spacing) * ${nested ? 10 : 11.5})`,
+    height: 'calc(var(--spacing) * 10)',
   }
 })
 
@@ -145,10 +145,10 @@ defineExpose({ open, close, updateActiveIndex })
 </script>
 
 <template>
-  <Scrollbar class="my-6 w-full flex-1">
-    <div class="px-4">
+  <Scrollbar class="my-3 w-full flex-1">
+    <div class="px-3">
       <!-- 焦点环位于按钮内侧，避免被滚动区和折叠边界裁切 -->
-      <nav ref="navigation" class="relative grid gap-3" :class="collapse ? 'mx-auto w-11.5' : 'w-full'" :aria-label="navigationLabel">
+      <nav ref="navigation" class="relative grid gap-1" :class="collapse ? 'mx-auto w-10' : 'w-full'" :aria-label="navigationLabel">
         <span
           v-if="indicatorStyle"
           class="pointer-events-none absolute left-0 top-0 overflow-hidden rounded-cp bg-cp-menu-item-selected-bg bg-(image:--cp-menu-item-selected-bg-image) shadow-cp-menu-item-selected transition-[transform,width,height] duration-260 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none"

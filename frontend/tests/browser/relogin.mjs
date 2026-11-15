@@ -48,6 +48,7 @@ async function main() {
   let rows = [
     row('team-account', {
       lastAttemptAt: now,
+      displayName: '团队主账号',
       status: 'ready',
       planType: 'self_serve_business_prolite',
       workspaceId: '12345678-1234-5678-9012-123456789012',
@@ -87,15 +88,18 @@ async function main() {
     else if (path === '/api/admin/relogin') {
       data = { items: [...rows].sort((a, b) => b.importedAt.localeCompare(a.importedAt)), settings }
     }
-    else if (path.endsWith('/relogin/totp')) {
+    else if (path.endsWith('/relogin/export')) {
       totpReads++
-      if (holdTotp) {
+      const body = request.postDataJSON()
+      if (holdTotp && body.format === 'two_fa') {
         await new Promise((resolve) => {
           releaseTotp = resolve
           notifyTotp?.()
         })
       }
-      data = { secret: 'JBSWY3DPEHPK3PXP' }
+      assert.equal(body.confirm, 'export_sensitive_relogin')
+      const entry = rows.find(row => row.id === body.ids[0])
+      data = { files: [{ name: 'sample.txt', content: body.format === 'json' ? JSON.stringify({ email: entry.email, token: 'synthetic-json-token' }) : `${entry.email}----sample-password----JBSWY3DPEHPK3PXP\n` }] }
     }
     else if (path.endsWith('/relogin/history')) {
       historyReads++
@@ -147,6 +151,7 @@ async function main() {
     await page.getByText('team-account@example.invalid', { exact: true }).waitFor()
     assert.equal(await page.locator('tbody tr').count(), 3)
     const team = page.locator('tbody tr[data-row-key="team-account"]')
+    const teamCard = page.getByRole('region', { name: '重登账号 团队主账号', exact: true })
     assert.equal(totpReads, 0)
     assert.equal(historyReads, 0)
     const headers = await page.getByRole('columnheader').allTextContents()
@@ -154,15 +159,24 @@ async function main() {
     await page.context().grantPermissions(['clipboard-read', 'clipboard-write'])
     for (const width of [1440, 390]) {
       await page.setViewportSize({ width, height: 900 })
-      await team.getByRole('button', { name: 'team-account@example.invalid', exact: true }).click()
-      const totp = page.getByRole('dialog', { name: '2FA 密钥', exact: true })
-      await totp.getByText('JBSWY3DPEHPK3PXP', { exact: true }).waitFor()
-      await totp.getByRole('button', { name: '复制密钥', exact: true }).click()
-      assert.equal(await page.evaluate(() => navigator.clipboard.readText()), 'JBSWY3DPEHPK3PXP')
+      const current = width < 768 ? teamCard : team
+      await current.getByRole('button', { name: '团队主账号', exact: true }).click()
+      const totp = page.getByRole('dialog', { name: '账号资料', exact: true })
+      await totp.getByRole('radio', { name: '2FA', exact: true }).click()
+      await totp.locator('code').filter({ hasText: 'team-account@example.invalid----sample-password----JBSWY3DPEHPK3PXP' }).waitFor()
+      await totp.getByRole('button', { name: '复制完整 2FA 资料', exact: true }).click()
+      assert.equal(await page.evaluate(() => navigator.clipboard.readText()), 'team-account@example.invalid----sample-password----JBSWY3DPEHPK3PXP\n')
+      await totp.getByRole('radio', { name: 'JSON', exact: true }).click()
+      await totp.locator('code').filter({ hasText: 'synthetic-json-token' }).waitFor()
+      assert.ok(!(await totp.textContent()).includes('sample-password'))
+      await totp.getByRole('button', { name: '复制 JSON', exact: true }).click()
+      assert.equal(JSON.parse(await page.evaluate(() => navigator.clipboard.readText())).email, 'team-account@example.invalid')
+      await totp.getByRole('radio', { name: '2FA', exact: true }).click()
+      await totp.locator('code').filter({ hasText: 'sample-password' }).waitFor()
       await page.keyboard.press('Escape')
       await totp.waitFor({ state: 'hidden' })
       assert.equal(await page.getByText('JBSWY3DPEHPK3PXP', { exact: true }).count(), 0)
-      await team.locator('button[title="查看重登详情"]').click()
+      await current.locator('button[title="查看重登详情"]').click()
       const history = page.getByRole('dialog', { name: '重登详情', exact: true })
       await history.getByText('登录成功', { exact: true }).waitFor()
       await history.getByText('推送失败', { exact: true }).waitFor()
@@ -174,10 +188,12 @@ async function main() {
       await page.keyboard.press('Escape')
       await history.waitFor({ state: 'hidden' })
     }
+    await page.setViewportSize({ width: 1440, height: 1000 })
+    assert.ok(!(await page.evaluate(() => JSON.stringify(localStorage))).includes('sample-password'))
     holdTotp = true
     const heldRead = new Promise(resolve => notifyTotp = resolve)
-    await team.getByRole('button', { name: 'team-account@example.invalid', exact: true }).click()
-    const totp = page.getByRole('dialog', { name: '2FA 密钥', exact: true })
+    await team.getByRole('button', { name: '团队主账号', exact: true }).click()
+    const totp = page.getByRole('dialog', { name: '账号资料', exact: true })
     await heldRead
     await totp.getByText('正在读取', { exact: true }).waitFor()
     await page.keyboard.press('Escape')
@@ -185,7 +201,20 @@ async function main() {
     releaseTotp()
     holdTotp = false
     await page.getByRole('button', { name: 'free-account@example.invalid', exact: true }).click()
-    await totp.getByText('JBSWY3DPEHPK3PXP', { exact: true }).waitFor()
+    await totp.locator('code').filter({ hasText: 'free-account@example.invalid----sample-password' }).waitFor()
+    await page.keyboard.press('Escape')
+    await totp.waitFor({ state: 'hidden' })
+
+    holdTotp = true
+    const heldTab = new Promise(resolve => notifyTotp = resolve)
+    await team.getByRole('button', { name: '团队主账号', exact: true }).click()
+    await heldTab
+    await totp.getByRole('radio', { name: 'JSON', exact: true }).click()
+    await totp.locator('code').filter({ hasText: 'synthetic-json-token' }).waitFor()
+    releaseTotp()
+    holdTotp = false
+    await page.waitForTimeout(100)
+    assert.ok(!(await totp.textContent()).includes('sample-password'), 'late 2FA response cannot overwrite JSON')
     await page.keyboard.press('Escape')
     await totp.waitFor({ state: 'hidden' })
 
@@ -224,10 +253,18 @@ async function main() {
     await page.keyboard.press('Escape')
     await page.keyboard.press('Escape')
     await workspaceDialog.waitFor({ state: 'hidden' })
-    await page.getByRole('textbox', { name: '搜索邮箱', exact: true }).fill('free-account')
+    rows = rows.map(row => row.id === 'team-account' ? { ...row, displayName: '已更名的团队账号' } : row)
+    await page.getByRole('button', { name: '刷新重登列表', exact: true }).click()
+    await team.getByRole('button', { name: '已更名的团队账号', exact: true }).waitFor()
+    await page.getByRole('textbox', { name: '搜索账号名称或邮箱', exact: true }).fill('已更名')
+    assert.equal(await page.locator('tbody tr').count(), 1)
+    rows = rows.map(row => row.id === 'team-account' ? { ...row, displayName: '团队主账号' } : row)
+    await page.getByRole('textbox', { name: '搜索账号名称或邮箱', exact: true }).fill('')
+    await page.getByRole('button', { name: '刷新重登列表', exact: true }).click()
+    await page.getByRole('textbox', { name: '搜索账号名称或邮箱', exact: true }).fill('free-account')
     await page.locator('tbody tr[data-row-key="team-account"]').waitFor({ state: 'hidden' })
     assert.equal(await page.locator('tbody tr').count(), 1)
-    await page.getByRole('textbox', { name: '搜索邮箱', exact: true }).fill('')
+    await page.getByRole('textbox', { name: '搜索账号名称或邮箱', exact: true }).fill('')
     await page.locator('tbody tr[data-row-key="team-account"]').waitFor()
     await Promise.all([
       page.waitForResponse(response => response.url().endsWith('/relogin/automatic')),
@@ -306,7 +343,7 @@ async function main() {
     assert.equal(await team.getByText('已同步到号池', { exact: true }).count(), 0)
     for (const width of [1440, 390, 320]) {
       await page.setViewportSize({ width, height: 900 })
-      const statusCell = team.locator('[data-column-key="status"]')
+      const statusCell = width < 768 ? teamCard : team.locator('[data-column-key="status"]')
       await statusCell.scrollIntoViewIfNeeded()
       assert.ok(await statusCell.evaluate(cell => [...cell.children].every(node => node.scrollWidth <= node.clientWidth + 1)))
       await page.screenshot({ path: `${output}/recovery-${width}.png`, fullPage: true })

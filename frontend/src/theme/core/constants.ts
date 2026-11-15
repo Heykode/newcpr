@@ -16,7 +16,7 @@ import type {
 import { presetPrimaryColors } from '@ant-design/colors'
 
 export const DEFAULT_THEME_MODE: ThemeMode = 'system'
-export const DEFAULT_THEME_COLOR: ThemeColorPresetId = 'relay-blue'
+export const DEFAULT_THEME_COLOR: ThemeColorPresetId = 'qianxing'
 export const DEFAULT_CUSTOM_THEME_COLOR = '#5983F4'
 export const DEFAULT_THEME_CUSTOMIZATION: ThemeCustomization = {}
 export const defaultThemePresetId: ThemePresetId = 'default'
@@ -35,6 +35,7 @@ export const DARK_CONTAINER_BASE = '#111A29'
 export const DARK_TEXT_BASE = '#D8E2EE'
 
 export const PRESET_SURFACE_BACKGROUNDS: Partial<Record<ThemeColorId, Record<ThemeName, string>>> = {
+  'qianxing': { light: '#FFFEFA', dark: '#2B2824' },
   'deep-teal': { light: '#F8F8F3', dark: '#202727' },
   'signal-violet': { light: '#FCF6F7', dark: '#29242A' },
   'graphite': { light: '#FBF5E8', dark: '#302421' },
@@ -82,6 +83,12 @@ export const DEFAULT_COMPONENT_DIMENSIONS = {
 
 export const THEME_COLOR_PRESETS: readonly ThemeColorPreset[] = [
   {
+    id: 'qianxing',
+    label: '千行暖白',
+    description: '暖白纸面，陶土色点缀',
+    seed: '#A75B49',
+  },
+  {
     id: 'relay-blue',
     label: '星津夜航',
     description: '星垂海面，帆过深蓝',
@@ -108,6 +115,13 @@ export const THEME_COLOR_PRESETS: readonly ThemeColorPreset[] = [
 ] as const
 
 export const themeProfiles: Readonly<Record<ThemeColorPresetId, { preset: ThemePresetId, customization: ThemeCustomization }>> = {
+  'qianxing': {
+    preset: 'default',
+    customization: {
+      seed: { controlHeight: 36, borderRadius: 6, shadowStrength: 35 },
+      component: { cardBorderRadius: 10, tableRowHeight: 60 },
+    },
+  },
   'relay-blue': { preset: 'default', customization: {} },
   'deep-teal': {
     preset: 'default',

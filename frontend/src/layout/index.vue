@@ -1,7 +1,9 @@
 <script setup lang="ts">
+import { Menu } from '@lucide/vue'
 import { storeToRefs } from 'pinia'
-import { nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { RouterView, useRoute } from 'vue-router'
+import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseScrollbar from '@/components/base/BaseScrollbar.vue'
 
 import { t } from '@/i18n'
@@ -10,7 +12,6 @@ import { useUiStore } from '@/stores/modules/ui'
 
 import AppAboutModal from './components/AppAboutModal.vue'
 import AppSidebar from './components/AppSidebar.vue'
-import FloatingSidebarToggle from './components/FloatingSidebarToggle.vue'
 import SystemUpdateModal from './components/SystemUpdateModal/index.vue'
 import { useSidebarFocus } from './useSidebarFocus'
 
@@ -19,6 +20,25 @@ const systemUpdateStore = useSystemUpdateStore()
 const { sidebarCollapsed } = storeToRefs(uiStore)
 const { toggleSidebar } = uiStore
 const route = useRoute()
+const pageLabel = computed(() => {
+  const keys: Record<string, string> = {
+    'dashboard': 'overview',
+    'accounts': 'accounts',
+    'relogin': 'relogin',
+    'proxies': 'proxies',
+    'ipv6-egress': 'ipv6',
+    'account-groups': 'groups',
+    'api-keys': 'apiKeys',
+    'usage': 'usage',
+    'quality-ops': 'quality',
+    'theme': 'appearance',
+    'settings': 'settings',
+    'settings-backup': 'settings',
+    'settings-cleanup': 'settings',
+  }
+  const key = keys[String(route.name)]
+  return key ? t(`navigation.${key}`) : '请求采集'
+})
 const pageScrollbarRef = ref<InstanceType<typeof BaseScrollbar> | null>(null)
 const mobileSidebarOpen = shallowRef(false)
 const mobileSidebarPanel = ref<HTMLElement | null>(null)
@@ -80,11 +100,21 @@ watch(
       @open-about="aboutOpen = true"
       @open-system-update="openSystemUpdate"
     />
-    <FloatingSidebarToggle v-show="!mobileSidebarOpen" :inert="mobileSidebarOpen" @open="openMobileSidebar" />
-    <main :inert="mobileSidebarOpen" class="relative isolate h-dvh min-w-0 flex-1 overflow-hidden">
+    <main :inert="mobileSidebarOpen" class="relative isolate flex h-dvh min-w-0 flex-1 flex-col overflow-hidden">
+      <header class="app-topbar flex h-13 shrink-0 items-center justify-between gap-3 border-b border-cp-border-secondary bg-cp-bg-container px-4 min-[961px]:px-7">
+        <div class="flex min-w-0 items-center gap-3 text-cp-sm">
+          <BaseIconButton class="min-[961px]:hidden" :label="t('navigation.sidebar.open')" :aria-expanded="mobileSidebarOpen" aria-haspopup="dialog" @click="openMobileSidebar">
+            <Menu :size="18" />
+          </BaseIconButton>
+          <span class="hidden text-cp-text-secondary sm:inline">New CPR</span>
+          <span class="hidden text-cp-text-tertiary sm:inline" aria-hidden="true">/</span>
+          <span class="truncate text-cp-text">{{ pageLabel }}</span>
+        </div>
+        <span class="inline-flex shrink-0 items-center gap-2 text-cp-xs text-cp-text-secondary"><i class="size-1.5 rounded-full bg-cp-success" />{{ t('navigation.online') }}</span>
+      </header>
       <!-- The opaque background belongs to the actual scrolling layer. -->
-      <BaseScrollbar ref="pageScrollbarRef" class="[&>div:first-child]:bg-cp-bg-layout">
-        <div class="page-slot flex min-h-full min-w-0 flex-col p-4 min-[961px]:p-6">
+      <BaseScrollbar ref="pageScrollbarRef" class="min-h-0 flex-1 [&>div:first-child]:bg-cp-bg-layout">
+        <div class="page-slot flex min-h-full min-w-0 flex-col p-4 min-[961px]:p-7">
           <RouterView v-slot="{ Component }">
             <component :is="Component" class="min-h-0 flex-1" />
           </RouterView>

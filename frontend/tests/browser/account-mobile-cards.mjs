@@ -292,6 +292,20 @@ async function main() {
       await searched
       await page.waitForFunction(() => document.querySelectorAll('[data-account-card]').length === 1)
       assert.equal(await page.locator('[data-account-card]').count(), 1)
+      await page.getByRole('button', { name: '清除搜索筛选', exact: true }).click()
+      await page.waitForFunction(() => document.querySelectorAll('[data-account-card]').length === 3)
+      assert.equal(reads.at(-1).page, '1', 'clearing search returns to the first page')
+      await page.getByRole('combobox', { name: '按套餐筛选', exact: true }).click()
+      await Promise.all([
+        page.waitForResponse(response => response.url().includes('/api/admin/accounts?') && response.url().includes('planType=plus')),
+        page.getByRole('option', { name: 'Plus', exact: true }).click(),
+      ])
+      await Promise.all([
+        page.waitForResponse(response => response.url().includes('/api/admin/accounts?') && !new URL(response.url()).searchParams.has('planType')),
+        page.getByRole('button', { name: '重置账号筛选', exact: true }).click(),
+      ])
+      assert.equal(reads.at(-1).sortDirection, 'desc', 'resetting filters preserves the chosen sort')
+      assert.equal(await page.getByRole('button', { name: '清除套餐筛选', exact: true }).count(), 0)
       empty = true
       await page.reload()
       await page.getByText('暂无账号数据', { exact: true }).waitFor()

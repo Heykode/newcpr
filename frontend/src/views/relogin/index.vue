@@ -2,8 +2,8 @@
 import type { AccountTemplate } from '@/api/modules/account-templates'
 import type { ReloginBatchResult, ReloginEntry, ReloginPushSelection, ReloginWorkspaceMode } from '@/api/modules/relogin'
 import type { Excel403Action } from '@/utils/excel-settings'
-import { CheckCheck, Download, GripVertical, LayoutTemplate, Pause, Play, RefreshCw, Save, Search, Settings2, Trash2, Upload, X } from '@lucide/vue'
-import { useIntervalFn, useNow } from '@vueuse/core'
+import { CheckCheck, Download, GripVertical, Pause, Play, RefreshCw, Save, Search, Settings2, SlidersHorizontal, Trash2, Upload, X } from '@lucide/vue'
+import { useIntervalFn, useMediaQuery, useNow } from '@vueuse/core'
 
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import {
@@ -19,7 +19,6 @@ import {
   setReloginWorkspace,
 } from '@/api/modules/relogin'
 import AccountTemplatePicker from '@/components/account-templates/AccountTemplatePicker.vue'
-import AccountTemplatesModal from '@/components/account-templates/AccountTemplatesModal.vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCheckbox from '@/components/base/BaseCheckbox.vue'
 import BaseConfirmModal from '@/components/base/BaseConfirmModal.vue'
@@ -27,6 +26,7 @@ import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseModal from '@/components/base/BaseModal/index.vue'
+import BasePageHeader from '@/components/base/BasePageHeader.vue'
 import BaseSelect from '@/components/base/BaseSelect.vue'
 import BaseSwitch from '@/components/base/BaseSwitch.vue'
 import BaseTablePagination from '@/components/base/BaseTable/BaseTablePagination.vue'
@@ -46,15 +46,17 @@ import { formatDateTime } from '@/utils/date'
 import { DEFAULT_EXCEL_MODELS_INPUT } from '@/utils/excel-defaults'
 import { excelRecoverySettings, excelSettings } from '@/utils/excel-settings'
 import { useAccountSwipeSelect } from '../accounts/composables/useAccountSwipeSelect'
+import ReloginCredentialsModal from './components/ReloginCredentialsModal.vue'
 import ReloginHistoryModal from './components/ReloginHistoryModal.vue'
-import ReloginTotpModal from './components/ReloginTotpModal.vue'
+import ReloginMobileCard from './components/ReloginMobileCard.vue'
 import { importPreview } from './import-preview'
-import { credentialLabel, matchesPool, poolPresentation, processingStatus, recoveryCountdown, recoveryLabels, retryProgress, shortWorkspace, statusLabels, workspaceChoices, workspaceId } from './presentation'
+import { credentialLabel, matchesPool, poolPresentation, processingStatus, recoveryCountdown, recoveryLabels, reloginDisplayName, retryProgress, shortWorkspace, statusLabels, workspaceChoices, workspaceId } from './presentation'
 
+const mobile = useMediaQuery('(max-width: 767px)')
 const historyEntry = shallowRef<ReloginEntry | null>(null)
 const historyOpen = shallowRef(false)
-const totpEntry = shallowRef<ReloginEntry | null>(null)
-const totpOpen = shallowRef(false)
+const credentialsEntry = shallowRef<ReloginEntry | null>(null)
+const credentialsOpen = shallowRef(false)
 const entries = shallowRef<ReloginEntry[]>([])
 const loading = shallowRef(false)
 const busy = shallowRef(false)
@@ -88,10 +90,12 @@ async function executeExport() {
   finally { busy.value = false }
 }
 const search = shallowRef('')
+const moreFilters = shallowRef(false)
 const plan = shallowRef('')
 const status = shallowRef('')
 const pool = shallowRef('')
 const automatic = shallowRef('')
+const moreFilterCount = computed(() => [plan.value, pool.value, automatic.value].filter(Boolean).length)
 const page = shallowRef(1)
 const pageSize = shallowRef(20)
 const concurrency = shallowRef('1')
@@ -117,7 +121,7 @@ const poolOptions = [
 const autoOptions = [{ value: '', label: '全部自动重登' }, { value: 'on', label: '允许自动重登' }, { value: 'off', label: '关闭自动重登' }]
 const plans = computed(() => [{ value: '', label: '全部 PLAN' }, ...[...new Set(entries.value.map(row => row.planType).filter((value): value is string => !!value))].sort().map(value => ({ value, label: value.toUpperCase() }))])
 const filtered = computed(() => entries.value.filter(row =>
-  row.email.toLowerCase().includes(search.value.trim().toLowerCase())
+  `${reloginDisplayName(row)} ${row.email}`.toLowerCase().includes(search.value.trim().toLowerCase())
   && (!plan.value || row.planType === plan.value)
   && (!status.value || processingStatus(row).key === status.value)
   && matchesPool(row, pool.value)
@@ -339,7 +343,6 @@ function saveImport() {
   })
 }
 const confirming = shallowRef(false)
-const templatesOpen = shallowRef(false)
 const selectedTemplate = shallowRef<AccountTemplate | null>(null)
 const batchCustomName = shallowRef('')
 const applyExcel = shallowRef(false)
@@ -490,25 +493,22 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="flex h-full min-h-0 min-w-0 flex-col gap-4 overflow-hidden">
-    <header class="flex shrink-0 flex-wrap items-center justify-between gap-3">
-      <div class="flex items-center gap-2">
-        <h1 class="m-0 text-xl font-bold text-cp-text">
-          {{ t('navigation.relogin') }}
-        </h1>
+  <div class="flex min-w-0 flex-col gap-4 md:h-full md:min-h-0 md:overflow-hidden">
+    <BasePageHeader :title="t('navigation.relogin')" description="集中管理账号资料、重登记录和自动恢复状态。">
+      <template #actions>
         <BaseIconButton label="刷新重登列表" :loading="loading" :disabled="busy" @click="reload()">
           <RefreshCw class="size-4" />
         </BaseIconButton>
-      </div>
-      <div class="flex flex-wrap items-center gap-2">
-        <span class="text-cp-sm text-cp-text-secondary">{{ t('groups.metrics.concurrency') }}</span>
-        <BaseInput v-model="concurrency" class="w-18" type="number" min="1" max="8" step="1" aria-label="重登并发" :disabled="busy" />
-        <BaseIconButton label="保存并发设置" :disabled="busy || concurrency === String(savedConcurrency)" @click="configure()">
-          <Save class="size-4" />
-        </BaseIconButton>
-        <BaseIconButton :label="paused ? '恢复重登队列' : '暂停重登队列'" :disabled="busy" @click="configure(!paused)">
-          <Play v-if="paused" class="size-4 text-cp-success" /><Pause v-else class="size-4" />
-        </BaseIconButton>
+        <template v-if="!mobile">
+          <span class="text-cp-sm text-cp-text-secondary">{{ t('groups.metrics.concurrency') }}</span>
+          <BaseInput v-model="concurrency" class="w-18" type="number" min="1" max="8" step="1" aria-label="重登并发" :disabled="busy" />
+          <BaseIconButton label="保存并发设置" :disabled="busy || concurrency === String(savedConcurrency)" @click="configure()">
+            <Save class="size-4" />
+          </BaseIconButton>
+          <BaseIconButton :label="paused ? '恢复重登队列' : '暂停重登队列'" :disabled="busy" @click="configure(!paused)">
+            <Play v-if="paused" class="size-4 text-cp-success" /><Pause v-else class="size-4" />
+          </BaseIconButton>
+        </template>
         <BaseIconButton label="自动重登设置" :disabled="busy" @click="openRetrySettings">
           <Settings2 class="size-4" />
         </BaseIconButton>
@@ -517,68 +517,92 @@ onBeforeUnmount(() => {
             <Upload class="size-4" />
           </template>导入
         </BaseButton>
-        <BaseButton :disabled="busy" @click="templatesOpen = true">
-          <template #icon>
-            <LayoutTemplate class="size-4" />
-          </template>账号模板
-        </BaseButton>
-      </div>
-    </header>
-    <div v-if="paused" class="text-cp-sm text-cp-warning" role="status">
-      重登队列已暂停
+      </template>
+    </BasePageHeader>
+    <div class="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2 rounded-cp-card border border-cp-border-secondary bg-(--cp-card-bg) px-4 py-3 text-cp-xs text-cp-text-secondary" aria-label="自动重登当前设置">
+      <span :class="paused ? 'text-cp-warning' : 'text-cp-success'">{{ paused ? '队列已暂停' : '队列运行中' }}</span>
+      <span>并发 {{ savedConcurrency }}</span>
+      <span>失败最多重试 {{ savedRetrySettings.maxRetries }} 次</span>
+      <span>重试间隔 {{ savedRetrySettings.retryIntervalSeconds }} 秒</span>
+      <span>允许自动重登 {{ entries.filter(row => row.automatic).length }} / {{ entries.length }}</span>
     </div>
-    <div class="grid shrink-0 grid-cols-2 gap-2 lg:grid-cols-[minmax(180px,1fr)_repeat(4,minmax(140px,180px))]">
-      <BaseInput v-model="search" class="col-span-2 lg:col-span-1" aria-label="搜索邮箱" placeholder="搜索邮箱">
-        <template #prefix>
-          <Search class="size-4" />
-        </template>
-      </BaseInput>
-      <BaseSelect v-model="plan" :options="plans" aria-label="PLAN 筛选" />
-      <BaseSelect v-model="status" :options="statusOptions" aria-label="处理状态筛选" />
-      <BaseSelect v-model="pool" :options="poolOptions" aria-label="号池状态筛选" />
-      <BaseSelect v-model="automatic" :options="autoOptions" aria-label="自动重登筛选" />
+    <div class="shrink-0 rounded-cp-card border border-cp-border-secondary bg-(--cp-card-bg) p-4">
+      <div class="relogin-filter-fields">
+        <BaseFormItem label="搜索账号" class="relogin-filter-search">
+          <BaseInput v-model="search" aria-label="搜索账号名称或邮箱" placeholder="搜索账号名称或邮箱" clearable>
+            <template #prefix>
+              <Search class="size-4" />
+            </template>
+          </BaseInput>
+        </BaseFormItem>
+        <BaseFormItem label="处理状态">
+          <BaseSelect v-model="status" :options="statusOptions" aria-label="处理状态筛选" />
+        </BaseFormItem>
+        <div class="relogin-filter-actions flex items-center gap-2">
+          <BaseButton :aria-expanded="moreFilters" @click="moreFilters = !moreFilters">
+            <SlidersHorizontal :size="15" />{{ moreFilters ? '收起筛选' : '更多筛选' }}{{ moreFilterCount ? `（${moreFilterCount}）` : '' }}
+          </BaseButton>
+          <BaseButton v-if="search || status || moreFilterCount" variant="link" @click="search = ''; status = ''; plan = ''; pool = ''; automatic = ''">
+            重置
+          </BaseButton>
+        </div>
+      </div>
+      <div v-if="moreFilters" class="relogin-filter-fields mt-4 border-t border-cp-border-secondary pt-4">
+        <BaseFormItem label="账号套餐">
+          <BaseSelect v-model="plan" :options="plans" aria-label="PLAN 筛选" />
+        </BaseFormItem>
+        <BaseFormItem label="号池状态">
+          <BaseSelect v-model="pool" :options="poolOptions" aria-label="号池状态筛选" />
+        </BaseFormItem>
+        <BaseFormItem label="自动重登">
+          <BaseSelect v-model="automatic" :options="autoOptions" aria-label="自动重登筛选" />
+        </BaseFormItem>
+      </div>
     </div>
     <div class="flex shrink-0 flex-wrap items-center gap-2 border-y border-cp-border py-2">
+      <BaseCheckbox class="md:hidden" label="全选当前页" :model-value="allSelected" :indeterminate="partialSelected" :disabled="busy" @update:model-value="selectPage" />
       <span class="text-cp-sm text-cp-text-secondary">已选 {{ selected.size }} 项</span>
-      <BaseIconButton :label="t('settings.pricing.deselect')" :disabled="busy || !selected.size" @click="selected = new Set()">
-        <X class="size-4" />
-      </BaseIconButton>
-      <BaseButton :disabled="busy || !selected.size || selected.size > 500" @click="queue([...selected])">
-        <template #icon>
-          <RefreshCw class="size-4" />
-        </template>批量重登
-      </BaseButton>
-      <BaseButton :disabled="busy || !selected.size || selected.size > 500" @click="confirm('push', [...selected])">
-        <template #icon>
-          <Upload class="size-4" />
-        </template>批量推送
-      </BaseButton>
-      <BaseIconButton label="批量开启自动重登" :disabled="busy || !selected.size || selected.size > 500" @click="changeAutomatic([...selected], true)">
-        <CheckCheck class="size-4 text-cp-success" />
-      </BaseIconButton>
-      <BaseButton :disabled="busy || !selected.size || selected.size > 200" @click="confirmExport('json')">
-        <template #icon>
-          <Download class="size-4" />
-        </template>导出JSON
-      </BaseButton>
-      <BaseButton :disabled="busy || !selected.size || selected.size > 200" @click="confirmExport('two_fa')">
-        <template #icon>
-          <Download class="size-4" />
-        </template>导出2FA
-      </BaseButton>
-      <BaseIconButton label="批量关闭自动重登" :disabled="busy || !selected.size || selected.size > 500" @click="changeAutomatic([...selected], false)">
-        <Pause class="size-4" />
-      </BaseIconButton>
-      <BaseIconButton label="批量删除资料" :disabled="busy || !selected.size || selected.size > 500" @click="confirm('delete', [...selected])">
-        <Trash2 class="size-4 text-cp-error" />
-      </BaseIconButton>
+      <div v-if="selected.size" class="flex flex-wrap items-center gap-2">
+        <BaseIconButton :label="t('settings.pricing.deselect')" :disabled="busy || !selected.size" @click="selected = new Set()">
+          <X class="size-4" />
+        </BaseIconButton>
+        <BaseButton :disabled="busy || !selected.size || selected.size > 500" @click="queue([...selected])">
+          <template #icon>
+            <RefreshCw class="size-4" />
+          </template>批量重登
+        </BaseButton>
+        <BaseButton :disabled="busy || !selected.size || selected.size > 500" @click="confirm('push', [...selected])">
+          <template #icon>
+            <Upload class="size-4" />
+          </template>批量推送
+        </BaseButton>
+        <BaseIconButton label="批量开启自动重登" :disabled="busy || !selected.size || selected.size > 500" @click="changeAutomatic([...selected], true)">
+          <CheckCheck class="size-4 text-cp-success" />
+        </BaseIconButton>
+        <BaseButton :disabled="busy || !selected.size || selected.size > 200" @click="confirmExport('json')">
+          <template #icon>
+            <Download class="size-4" />
+          </template>导出JSON
+        </BaseButton>
+        <BaseButton :disabled="busy || !selected.size || selected.size > 200" @click="confirmExport('two_fa')">
+          <template #icon>
+            <Download class="size-4" />
+          </template>导出2FA
+        </BaseButton>
+        <BaseIconButton label="批量关闭自动重登" :disabled="busy || !selected.size || selected.size > 500" @click="changeAutomatic([...selected], false)">
+          <Pause class="size-4" />
+        </BaseIconButton>
+        <BaseIconButton label="批量删除资料" :disabled="busy || !selected.size || selected.size > 500" @click="confirm('delete', [...selected])">
+          <Trash2 class="size-4 text-cp-error" />
+        </BaseIconButton>
+      </div>
     </div>
     <div v-if="failure || loadFailure" class="max-h-24 shrink-0 overflow-auto whitespace-pre-wrap break-words text-cp-sm text-cp-error" role="alert">
       {{ failure || loadFailure }}
     </div>
     <ReloginHistoryModal v-model="historyOpen" :entry="historyEntry" @after-leave="!historyOpen && (historyEntry = null)" />
-    <ReloginTotpModal v-model="totpOpen" :entry="totpEntry" @after-leave="!totpOpen && (totpEntry = null)" />
-    <section class="flex min-h-48 min-w-0 flex-1 flex-col overflow-hidden border-y border-cp-border bg-cp-bg-container">
+    <ReloginCredentialsModal v-model="credentialsOpen" :entry="credentialsEntry" @after-leave="!credentialsOpen && (credentialsEntry = null)" />
+    <section v-if="!mobile" class="flex min-h-48 min-w-0 flex-1 flex-col overflow-hidden rounded-cp-card border border-cp-border-secondary bg-cp-bg-container">
       <BaseTable ref="table" class="relogin-table min-h-0 flex-1" :columns="columns" :rows="visible" :selected-row-keys="[...selected]" :loading="loading && !entries.length" column-layout="content" :empty-text="t('appearance.preview.components.noMatchingAccountYet')" @mousedown="onMouseDown">
         <template #header-selection>
           <BaseCheckbox label="全选当前页" :model-value="allSelected" :indeterminate="partialSelected" :disabled="busy" @update:model-value="selectPage" />
@@ -590,9 +614,12 @@ onBeforeUnmount(() => {
           <div class="flex min-w-0 items-center gap-2">
             <span data-swipe-select-handle class="cursor-ns-resize p-1 text-cp-text-tertiary" title="拖动选择"><GripVertical class="size-4" /></span>
             <div class="min-w-0" data-swipe-select-handle>
-              <button type="button" class="block max-w-full truncate text-left font-semibold text-cp-link hover:underline disabled:text-cp-text disabled:no-underline" :title="row.hasTotp ? '查看 2FA' : row.email" :disabled="!row.hasTotp" @mousedown.stop @click.stop="totpEntry = row; totpOpen = true">
-                {{ row.email }}
+              <button type="button" class="block max-w-full truncate text-left font-semibold text-cp-link hover:underline disabled:text-cp-text disabled:no-underline" title="查看 2FA / JSON" @mousedown.stop @click.stop="credentialsEntry = row; credentialsOpen = true">
+                {{ reloginDisplayName(row) }}
               </button>
+              <div v-if="reloginDisplayName(row) !== row.email" class="truncate text-cp-xs text-cp-text-secondary" :title="row.email">
+                {{ row.email }}
+              </div>
               <div class="truncate text-cp-xs text-cp-text-tertiary" :title="row.message">
                 {{ row.message || '待处理' }}
               </div>
@@ -624,7 +651,7 @@ onBeforeUnmount(() => {
           </button>
           <span v-else class="block whitespace-normal break-words" :class="processingStatus(row).tone" :title="processingStatus(row).detail">{{ processingStatus(row).label }}</span>
           <span v-if="retryProgress(row)" class="block text-cp-xs tabular-nums text-cp-text-tertiary">{{ retryProgress(row) }}</span>
-          <span v-if="processingStatus(row).key === 'manual_required'" class="block whitespace-normal break-words text-cp-xs text-cp-error">{{ row.recovery?.message }}</span>
+          <span v-if="row.recovery?.message" class="block whitespace-normal break-words text-cp-xs text-cp-text-secondary">{{ row.recovery.message }}</span>
           <span v-if="row.recovery?.retryAt" class="block whitespace-normal break-words text-cp-xs tabular-nums text-cp-text-tertiary">{{ recoveryCountdown(row, now.getTime()) }}</span>
         </template>
         <template #credential="{ row }">
@@ -664,11 +691,35 @@ onBeforeUnmount(() => {
         </template>
       </BaseTable>
     </section>
+    <section v-else class="grid gap-3" aria-label="重登账号卡片">
+      <p v-if="loading && !entries.length" role="status" class="text-cp-text-secondary">
+        正在读取账号
+      </p>
+      <p v-else-if="!visible.length" class="text-cp-text-secondary">
+        {{ t('appearance.preview.components.noMatchingAccountYet') }}
+      </p>
+      <ReloginMobileCard
+        v-for="row in visible" :key="row.id" :row="row" :selected="selected.has(row.id)" :busy="busy" :paused="paused" :can-push="canPush(row)" :now="now.getTime()"
+        @select="toggle(row.id, $event)" @automatic="changeAutomatic([row.id], $event)"
+        @credentials="credentialsEntry = row; credentialsOpen = true" @history="historyEntry = row; historyOpen = true"
+        @queue="queue([row.id])" @push="confirm('push', [row.id])" @workspace="edit(row)" @delete="confirm('delete', [row.id])"
+      />
+    </section>
     <BaseTablePagination :pagination="{ currentPage: page, pageSize, total: filtered.length }" :loading="busy" @page-change="page = $event" @page-size-change="pageSize = $event" />
     <div v-if="overlayStyle" :style="overlayStyle" class="pointer-events-none fixed z-50 border border-cp-primary bg-cp-primary/10" />
 
     <BaseModal v-model="retrySettingsOpen" title="自动重登设置" size="sm" :dismissible="!busy">
       <div class="grid min-w-0 gap-4">
+        <div v-if="mobile" class="flex flex-wrap items-center gap-2 border-b border-cp-border-secondary pb-4">
+          <span class="text-cp-sm text-cp-text-secondary">{{ t('groups.metrics.concurrency') }}</span>
+          <BaseInput v-model="concurrency" class="w-18" type="number" min="1" max="8" step="1" aria-label="重登并发" :disabled="busy" />
+          <BaseIconButton label="保存并发设置" :disabled="busy || concurrency === String(savedConcurrency)" @click="configure()">
+            <Save class="size-4" />
+          </BaseIconButton>
+          <BaseIconButton :label="paused ? '恢复重登队列' : '暂停重登队列'" :disabled="busy" @click="configure(!paused)">
+            <Play v-if="paused" class="size-4 text-cp-success" /><Pause v-else class="size-4" />
+          </BaseIconButton>
+        </div>
         <BaseFormItem label="失败重试次数（不含首次，0 为不重试）">
           <BaseInput v-model="maxRetries" type="number" min="0" max="10" step="1" aria-label="失败重试次数" :disabled="busy" />
         </BaseFormItem>
@@ -791,7 +842,6 @@ onBeforeUnmount(() => {
         </div>
       </div>
     </BaseConfirmModal>
-    <AccountTemplatesModal v-model="templatesOpen" />
     <BaseModal v-model="editing" title="选择登录工作区" :dismissible="!busy">
       <div class="grid min-w-0 grid-cols-1 gap-3">
         <p class="m-0 break-all text-cp-sm">
@@ -861,6 +911,24 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+.relogin-filter-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: end;
+}
+.relogin-filter-fields > * {
+  flex: 1 1 180px;
+  min-width: 0;
+}
+.relogin-filter-fields > .relogin-filter-search {
+  flex: 2 1 280px;
+}
+.relogin-filter-fields > .relogin-filter-actions {
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+
 @media (max-width: 1599px) {
   .relogin-table :deep([data-column-key='actions']) {
     position: static;

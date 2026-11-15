@@ -1924,11 +1924,13 @@ async fn relogin_statistics_resolve_identity_and_workspace_without_combining_acc
     second.id = "acct_other".into();
     second.upstream_account_id = Some("workspace-other".into());
     second.relogin_count = 7;
-    let h = Harness::new(vec![first.clone(), second]).await;
+    second.custom_name = Some("Workspace display name".into());
+    let h = Harness::new(vec![first.clone(), second.clone()]).await;
     let id = h.import("test@example.invalid").await;
     let view = h.services.relogin().list().await.unwrap().items.remove(0);
     assert_eq!(view.relogin_count, None);
     assert_eq!(view.relogin_account_id, None);
+    assert_eq!(view.display_name, None);
     h.services
         .relogin()
         .workspace(&id, Some("workspace-other".into()))
@@ -1937,6 +1939,15 @@ async fn relogin_statistics_resolve_identity_and_workspace_without_combining_acc
     let view = h.services.relogin().list().await.unwrap().items.remove(0);
     assert_eq!(view.relogin_count, Some(7));
     assert_eq!(view.relogin_account_id.as_deref(), Some("acct_other"));
+    assert_eq!(view.display_name.as_deref(), Some("Workspace display name"));
+    second.custom_name = Some("Renamed account".into());
+    h.accounts.set_accounts(vec![first.clone(), second.clone()]);
+    let view = h.services.relogin().list().await.unwrap().items.remove(0);
+    assert_eq!(view.display_name.as_deref(), Some("Renamed account"));
+    second.custom_name = None;
+    h.accounts.set_accounts(vec![first.clone(), second.clone()]);
+    let view = h.services.relogin().list().await.unwrap().items.remove(0);
+    assert_eq!(view.display_name.as_deref(), Some(second.name.as_str()));
     h.services
         .relogin()
         .workspace(&id, Some("workspace-team".into()))
@@ -1947,6 +1958,10 @@ async fn relogin_statistics_resolve_identity_and_workspace_without_combining_acc
     h.accounts.set_accounts(vec![first]);
     assert_eq!(
         h.services.relogin().list().await.unwrap().items[0].relogin_count,
+        None
+    );
+    assert_eq!(
+        h.services.relogin().list().await.unwrap().items[0].display_name,
         None
     );
 }
