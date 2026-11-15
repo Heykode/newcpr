@@ -2104,6 +2104,7 @@ async fn zero_attempt_failure_does_not_enter_successful_usage_or_cost_aggregates
         .await
         .expect("finalize success control");
     let repository = observability_repository(&database.pool);
+    super::drain_analytics(&database.pool).await;
     let before = repository
         .usage_summary(zero_attempt_range(&request), UsageRecordFilter::default())
         .await
@@ -2117,6 +2118,7 @@ async fn zero_attempt_failure_does_not_enter_successful_usage_or_cost_aggregates
     ExecutionStore::finalize_model_request(&store, early_failure(&request))
         .await
         .expect("finalize failure");
+    super::drain_analytics(&database.pool).await;
     let after = repository
         .usage_summary(zero_attempt_range(&request), UsageRecordFilter::default())
         .await
@@ -2134,7 +2136,7 @@ async fn zero_attempt_failure_does_not_enter_successful_usage_or_cost_aggregates
     assert_eq!(after.requests.latency_sum, before.requests.latency_sum);
     assert_eq!(after.requests.latency_count, before.requests.latency_count);
     assert_eq!(after.attempts, before.attempts);
-    let successes = repository
+    let mut successes = repository
         .usage_summary(
             zero_attempt_range(&request),
             UsageRecordFilter {
@@ -2144,6 +2146,8 @@ async fn zero_attempt_failure_does_not_enter_successful_usage_or_cost_aggregates
         )
         .await
         .expect("successful aggregation unchanged");
+    // 投影推进会更新新鲜度；成功请求的全部业务指标保持不变。
+    successes.analytics = before.analytics.clone();
     assert_eq!(successes, before);
     let filter = UsageRecordFilter {
         request_id: Some(request.id.as_str().to_owned()),

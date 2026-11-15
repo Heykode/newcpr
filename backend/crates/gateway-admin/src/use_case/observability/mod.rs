@@ -4,12 +4,10 @@ use std::{
     collections::{BTreeMap, HashMap, btree_map::Entry},
     str::FromStr,
     sync::Arc,
-    time::{Duration as StdDuration, Instant},
 };
 
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, Timelike as _, Utc};
-use futures::TryStreamExt;
 use gateway_core::{account::ProviderAccountId, routing::ProviderKind, time::DeploymentTimeZone};
 
 use crate::{
@@ -30,7 +28,7 @@ use crate::{
     },
     ports::{
         provider::{ProviderAdminErrorKind, ProviderAdminRegistry},
-        store::{AccountStore, ObservabilityStore, SettingsStore, UsageCalculatedBillingStream},
+        store::{AccountStore, ObservabilityStore, SettingsStore},
     },
 };
 
@@ -39,66 +37,13 @@ mod errors;
 mod export;
 mod metrics;
 use crate::model::observability::{UsageInsight, UsageInsightMetric};
-use metrics::UsageMetricCache;
+mod store_cache;
 
 const HEALTH_TIMELINE_SLOT_MINUTES: i64 = 15;
 const HEALTH_TIMELINE_SLOTS: i64 = 24 * 4;
 const HEALTH_TIMELINE_MIN_SAMPLE_SIZE: u64 = 10;
 const HEALTH_TIMELINE_UNAVAILABLE_FAILURE_THRESHOLD: u64 = 3;
 const HEALTH_TIMELINE_STABLE_RELIABILITY: f64 = 95.0;
-const DASHBOARD_QUERY_BUCKET_SECONDS: i64 = 2;
-const DASHBOARD_QUERY_CACHE_RETENTION: StdDuration = StdDuration::from_secs(2);
-
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-struct DashboardQueryKey {
-    start: DateTime<Utc>,
-    end_bucket: i64,
-}
-
-impl DashboardQueryKey {
-    fn new(range: TimeRange) -> Self {
-        Self {
-            start: range.start,
-            end_bucket: range
-                .end
-                .timestamp()
-                .div_euclid(DASHBOARD_QUERY_BUCKET_SECONDS),
-        }
-    }
-}
-
-struct DashboardQueryEntry {
-    created_at: Instant,
-    result: Arc<tokio::sync::OnceCell<Result<DashboardResult, AdminError>>>,
-}
-
-#[derive(Default)]
-struct DashboardQueryCache {
-    entries: tokio::sync::Mutex<HashMap<DashboardQueryKey, DashboardQueryEntry>>,
-}
-
-impl DashboardQueryCache {
-    async fn result_cell(
-        &self,
-        key: DashboardQueryKey,
-    ) -> Arc<tokio::sync::OnceCell<Result<DashboardResult, AdminError>>> {
-        let now = Instant::now();
-        let mut entries = self.entries.lock().await;
-        entries.retain(|_, entry| {
-            now.duration_since(entry.created_at) < DASHBOARD_QUERY_CACHE_RETENTION
-        });
-        Arc::clone(
-            &entries
-                .entry(key)
-                .or_insert_with(|| DashboardQueryEntry {
-                    created_at: now,
-                    result: Arc::new(tokio::sync::OnceCell::new()),
-                })
-                .result,
-        )
-    }
-}
-
 /// API 消费的观测控制面服务。
 #[async_trait]
 pub trait ObservabilityService: Send + Sync {
@@ -151,8 +96,6 @@ pub(crate) struct DefaultObservabilityService {
     accounts: Arc<dyn AccountStore>,
     settings: Arc<dyn SettingsStore>,
     providers: ProviderAdminRegistry,
-    dashboard_queries: DashboardQueryCache,
-    metric_queries: UsageMetricCache,
     timezone: DeploymentTimeZone,
 }
 
@@ -166,12 +109,10 @@ impl DefaultObservabilityService {
         timezone: DeploymentTimeZone,
     ) -> Self {
         Self {
-            store,
+            store: Arc::new(store_cache::CachedObservabilityStore::new(store)),
             accounts,
             settings,
             providers,
-            dashboard_queries: DashboardQueryCache::default(),
-            metric_queries: UsageMetricCache::default(),
             timezone,
         }
     }
@@ -294,14 +235,7 @@ impl ObservabilityService for DefaultObservabilityService {
         range: TimeRange,
         kind: TrendKind,
     ) -> Result<DashboardResult, AdminError> {
-        let cell = self
-            .dashboard_queries
-            .result_cell(DashboardQueryKey::new(range))
-            .await;
-        let mut result = cell
-            .get_or_init(|| self.load_dashboard_summary(range))
-            .await
-            .clone()?;
+        let mut result = self.load_dashboard_summary(range).await?;
         result.trend = trend(kind, result.observation.trend.clone())?;
         Ok(result)
     }
@@ -367,23 +301,19 @@ impl ObservabilityService for DefaultObservabilityService {
         range: TimeRange,
         filter: UsageFilter,
     ) -> Result<UsageInsights, AdminError> {
-        let aggregates = async {
-            futures::try_join!(
-                self.store.usage_summary(range, filter.clone()),
-                self.store.usage_trend(range, filter.clone()),
-                self.store.usage_concurrency(range, filter.clone()),
-            )
-            .map_err(|error| map_store_error(error, "usage insights"))
-        };
-        let ((overview, trend, concurrency), standard_costs) = futures::try_join!(
-            aggregates,
-            recover_standard_costs(
-                &self.providers,
-                self.store
-                    .usage_calculated_billing_facts(range, filter.clone()),
-            ),
-        )?;
-        build_usage_insights(overview, trend, standard_costs, range, concurrency)
+        let observation = self
+            .store
+            .usage_insights_observation(range, filter)
+            .await
+            .map_err(|error| map_store_error(error, "usage insights"))?;
+        let costs = projected_cost_scenarios(observation.costs)?;
+        build_usage_insights(
+            observation.overview,
+            observation.trend,
+            costs,
+            range,
+            observation.concurrency,
+        )
     }
 
     async fn usage_metric(
@@ -473,6 +403,7 @@ impl ObservabilityService for DefaultObservabilityService {
             });
         }
         Ok(DiagnosticsResult {
+            analytics: result.analytics,
             dimension,
             items,
             current_page: result.current_page,
@@ -701,6 +632,7 @@ fn build_usage_insights(
         coverage: overview.attempts.cost_coverage.clone(),
     };
     Ok(UsageInsights {
+        analytics: overview.analytics,
         granularity,
         health,
         performance,
@@ -748,53 +680,6 @@ impl ScenarioCosts {
 struct UsageCostScenarios {
     standard: ScenarioCosts,
     no_cache: ScenarioCosts,
-}
-
-async fn recover_standard_costs(
-    providers: &ProviderAdminRegistry,
-    mut facts: UsageCalculatedBillingStream<'_>,
-) -> Result<UsageCostScenarios, AdminError> {
-    let mut scenarios = UsageCostScenarios::default();
-    while let Some(fact) = facts
-        .try_next()
-        .await
-        .map_err(|error| map_store_error(error, "usage billing facts"))?
-    {
-        let Ok(provider_kind) = ProviderKind::new(fact.provider_kind.clone()) else {
-            continue;
-        };
-        let input = ProviderBillingInput {
-            upstream_model_id: fact.upstream_model_id.clone(),
-            service_tier: fact.service_tier.clone(),
-            input_tokens: fact.input_tokens,
-            output_tokens: fact.output_tokens,
-            cached_tokens: fact.cached_tokens,
-            cache_write_tokens: fact.cache_write_tokens,
-            total: fact.total.clone(),
-        };
-        let breakdown = match providers.calculated_billing(&provider_kind, &input) {
-            Ok(breakdown) => breakdown,
-            Err(error) if error.kind() == ProviderAdminErrorKind::Unsupported => continue,
-            Err(error) => return Err(map_provider_error(error, "usage billing")),
-        };
-        let Some(breakdown) = breakdown else {
-            continue;
-        };
-        if !breakdown
-            .standard_amount
-            .currency
-            .eq_ignore_ascii_case("USD")
-        {
-            continue;
-        }
-        scenarios
-            .standard
-            .add(fact.bucket_start, breakdown.standard_amount.amount.clone())?;
-        if let Some(no_cache_cost) = no_cache_cost(&fact, &breakdown) {
-            scenarios.no_cache.add(fact.bucket_start, no_cache_cost)?;
-        }
-    }
-    Ok(scenarios)
 }
 
 fn no_cache_cost(
@@ -1272,4 +1157,80 @@ fn quarter_hour_start(value: DateTime<Utc>) -> DateTime<Utc> {
         .timestamp()
         .rem_euclid(HEALTH_TIMELINE_SLOT_MINUTES * 60);
     value - Duration::seconds(elapsed) - Duration::nanoseconds(i64::from(value.nanosecond()))
+}
+
+use crate::{model::observability::UsageBillingProjection, ports::store::UsageBillingProjector};
+pub struct ProviderUsageBillingProjector {
+    providers: ProviderAdminRegistry,
+}
+
+impl ProviderUsageBillingProjector {
+    #[must_use]
+    pub fn new(providers: ProviderAdminRegistry) -> Self {
+        Self { providers }
+    }
+}
+
+impl UsageBillingProjector for ProviderUsageBillingProjector {
+    fn project(
+        &self,
+        fact: &UsageCalculatedBillingFact,
+    ) -> Result<UsageBillingProjection, AdminError> {
+        let Ok(provider_kind) = ProviderKind::new(fact.provider_kind.clone()) else {
+            return Ok(UsageBillingProjection::default());
+        };
+        let input = ProviderBillingInput {
+            upstream_model_id: fact.upstream_model_id.clone(),
+            service_tier: fact.service_tier.clone(),
+            input_tokens: fact.input_tokens,
+            output_tokens: fact.output_tokens,
+            cached_tokens: fact.cached_tokens,
+            cache_write_tokens: fact.cache_write_tokens,
+            total: fact.total.clone(),
+        };
+        let breakdown = match fact
+            .breakdown
+            .as_ref()
+            .filter(|breakdown| breakdown.total_amount == input.total)
+            .cloned()
+            .map_or_else(
+                || self.providers.calculated_billing(&provider_kind, &input),
+                |breakdown| Ok(Some(breakdown)),
+            ) {
+            Ok(breakdown) => breakdown,
+            Err(error) if error.kind() == ProviderAdminErrorKind::Unsupported => {
+                return Ok(UsageBillingProjection::default());
+            }
+            Err(error) => return Err(map_provider_error(error, "usage billing")),
+        };
+        let Some(breakdown) = breakdown else {
+            return Ok(UsageBillingProjection::default());
+        };
+        if !breakdown
+            .standard_amount
+            .currency
+            .eq_ignore_ascii_case("USD")
+        {
+            return Ok(UsageBillingProjection::default());
+        }
+        Ok(UsageBillingProjection {
+            standard_amount: Some(breakdown.standard_amount.amount.clone()),
+            no_cache_amount: no_cache_cost(fact, &breakdown),
+        })
+    }
+}
+
+fn projected_cost_scenarios(
+    points: Vec<crate::model::observability::UsageProjectedCostPoint>,
+) -> Result<UsageCostScenarios, AdminError> {
+    let mut costs = UsageCostScenarios::default();
+    for point in points {
+        if let Some(amount) = point.standard_amount {
+            costs.standard.add(point.bucket_start, amount)?;
+        }
+        if let Some(amount) = point.no_cache_amount {
+            costs.no_cache.add(point.bucket_start, amount)?;
+        }
+    }
+    Ok(costs)
 }

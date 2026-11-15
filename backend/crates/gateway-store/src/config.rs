@@ -28,6 +28,8 @@ pub struct StoreConfig {
     #[serde(skip)]
     backup_staging_dir: PathBuf,
     #[serde(skip)]
+    pub(crate) timezone: gateway_core::time::DeploymentTimeZone,
+    #[serde(skip)]
     pub(crate) log_files: Option<Arc<dyn gateway_admin::ports::log_cleanup::LogFileMaintenance>>,
 }
 
@@ -38,6 +40,7 @@ pub struct StorePoolConfig {
     pub max_connections: u32,
     pub acquire_timeout_seconds: u64,
     pub observability_query_timeout_seconds: u64,
+    pub analytics_projection_work_mem_mb: Option<u32>,
 }
 
 impl Default for StorePoolConfig {
@@ -46,6 +49,7 @@ impl Default for StorePoolConfig {
             max_connections: 20,
             acquire_timeout_seconds: 5,
             observability_query_timeout_seconds: 120,
+            analytics_projection_work_mem_mb: None,
         }
     }
 }
@@ -70,6 +74,18 @@ impl StorePoolConfig {
                         .to_owned(),
             });
         }
+        const MAX_WORK_MEM_MB: u32 = i32::MAX as u32 / 1024;
+        if self
+            .analytics_projection_work_mem_mb
+            .is_some_and(|mb| !(1..=MAX_WORK_MEM_MB).contains(&mb))
+        {
+            return Err(StoreError::InvalidData {
+                entity: "store config",
+                message: format!(
+                    "pool.analytics_projection_work_mem_mb must be between 1 and {MAX_WORK_MEM_MB}"
+                ),
+            });
+        }
         Ok(())
     }
 
@@ -85,6 +101,12 @@ impl StorePoolConfig {
 }
 
 impl StoreConfig {
+    #[must_use]
+    pub fn with_timezone(mut self, timezone: gateway_core::time::DeploymentTimeZone) -> Self {
+        self.timezone = timezone;
+        self
+    }
+
     #[must_use]
     pub fn with_log_files(
         mut self,

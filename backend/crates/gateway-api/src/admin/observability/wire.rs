@@ -601,6 +601,7 @@ impl From<domain::DesktopReleaseStatus> for DashboardDesktopReleaseStatusView {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DashboardDataView {
+    pub analytics: AnalyticsMetadataView,
     pub cards: DashboardCardsView,
     pub trend: TrendData,
     pub health_timeline: HealthTimelineView,
@@ -616,6 +617,7 @@ pub struct DashboardDataView {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageSummaryView {
+    pub analytics: AnalyticsMetadataView,
     pub total_requests: String,
     pub input_tokens: String,
     pub output_tokens: String,
@@ -776,6 +778,7 @@ pub struct ProviderOverviewView {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageInsightsOverviewView {
+    pub analytics: AnalyticsMetadataView,
     pub granularity: String,
     pub health: OverviewHealthView,
     pub performance: OverviewPerformanceView,
@@ -816,6 +819,8 @@ pub struct DiagnosticItemView {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DiagnosticsView {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub analytics: Option<AnalyticsMetadataView>,
     pub dimension: String,
     pub items: Vec<DiagnosticItemView>,
     pub current_page: u32,
@@ -898,6 +903,7 @@ pub struct OpsErrorMetadataView {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageMetricView {
+    pub analytics: AnalyticsMetadataView,
     pub granularity: String,
     #[serde(flatten)]
     pub data: UsageMetricDataView,
@@ -983,4 +989,33 @@ pub struct UsageUpstreamErrorView {
     pub param: Option<String>,
     pub close_reason: Option<String>,
     pub last_event_type: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AnalyticsMetadataView {
+    pub coverage_start: Option<String>,
+    pub coverage_end: Option<String>,
+    pub generated_at: String,
+    pub lag_seconds: u64,
+    pub state: String,
+    pub percentiles_approximate: bool,
+    pub schema_version: u32,
+    pub histogram_version: u32,
+    pub generation: u64,
+}
+impl From<domain::AnalyticsMetadata> for AnalyticsMetadataView {
+    fn from(value: domain::AnalyticsMetadata) -> Self {
+        Self {
+            coverage_start: value.coverage_start.map(|v| v.to_rfc3339()),
+            coverage_end: value.coverage_end.map(|v| v.to_rfc3339()),
+            generated_at: value.generated_at.to_rfc3339(),
+            lag_seconds: value.lag_seconds,
+            state: value.state.as_str().to_owned(),
+            percentiles_approximate: value.percentiles_approximate,
+            schema_version: value.schema_version,
+            histogram_version: value.histogram_version,
+            generation: value.generation,
+        }
+    }
 }

@@ -2,7 +2,6 @@
 
 use super::super::*;
 use serde_json::Value;
-use sqlx::Connection as _;
 
 const MODEL_DIAGNOSTIC_DIMENSION_SQL: &str =
     "coalesce(mr.upstream_model_id, mr.requested_model_id)";
@@ -234,41 +233,45 @@ fn usage_record_detail_select() -> String {
 }
 
 pub(crate) async fn list_usage_records(
-    connection: &mut PgConnection,
+    connection: &mut ObservabilityConnection,
     query: UsageRecordQuery,
 ) -> StoreResult<UsageRecordPage> {
     query.filter.validate()?;
-    observability_page_offset(query.current_page, query.page_size)?;
-    let mut transaction = connection
-        .begin()
-        .await
-        .map_err(|error| postgres_unavailable("begin usage page snapshot").with_source(error))?;
-    sqlx::query("set transaction isolation level repeatable read read only")
-        .execute(&mut *transaction)
-        .await
-        .map_err(|error| {
-            postgres_unavailable("configure usage page snapshot").with_source(error)
-        })?;
+    let mut snapshot = analytics::AnalyticsSnapshot::new_for_accounts(connection).await?;
+    // 第一页未填满时，当前快照中的行数已是精确总数，无需再次扫描计数
     let (total, items) = if query.current_page == 1 {
-        let items = list_usage_record_items(&mut transaction, &query, None).await?;
+        let items = list_usage_record_items(&mut snapshot.tx, &query, None).await?;
         let total = if items.len() < usize::from(query.page_size.get()) {
             items.len() as u64
+        } else if let Some(counts) = projected_usage_counts(&mut snapshot, &query).await? {
+            counts.values().try_fold(0_u64, |sum, count| {
+                sum.checked_add(*count)
+                    .ok_or_else(|| invalid("usage count overflows u64"))
+            })?
         } else {
-            count_usage_records(&mut transaction, &query).await?
+            count_usage_records(&mut snapshot.tx, &query).await?
         };
         (total, items)
     } else {
-        let (total, page) = usage_time_page(&mut transaction, &query).await?;
+        let (total, page) =
+            if let Some(counts) = projected_usage_counts(&mut snapshot, &query).await? {
+                time_page_from_segments(
+                    counts.into_iter().rev(),
+                    query.range,
+                    observability_page_offset(query.current_page, query.page_size)?,
+                    query.page_size,
+                    TimeDelta::minutes(15),
+                )?
+            } else {
+                usage_time_page(&mut snapshot.tx, &query).await?
+            };
         let items = match page {
-            Some(page) => list_usage_record_items_at(&mut transaction, &query, page).await?,
+            Some(page) => list_usage_record_items_at(&mut snapshot.tx, &query, page).await?,
             None => Vec::new(),
         };
         (total, items)
     };
-    transaction
-        .commit()
-        .await
-        .map_err(|error| postgres_unavailable("complete usage page snapshot").with_source(error))?;
+    snapshot.finish().await?;
     Ok(UsageRecordPage {
         items,
         current_page: query.current_page,
@@ -358,37 +361,16 @@ pub(crate) fn time_page_from_counts(
     offset: i64,
     page_size: ObservabilityPageSize,
 ) -> StoreResult<(u64, Option<TimePage>)> {
-    let offset = u64::try_from(offset).map_err(|_| invalid("negative page offset"))?;
-    let end = offset
-        .checked_add(u64::from(page_size.get()))
-        .ok_or_else(|| invalid("page range overflows u64"))?;
-    let mut total = 0_u64;
-    let mut page: Option<TimePage> = None;
-    let mut selected_count = 0_u64;
-    for row in rows {
-        let bucket: DateTime<Utc> = get(row, "bucket_start")?;
-        let count = to_u64(get(row, "request_count")?)?;
-        let next = total
-            .checked_add(count)
-            .ok_or_else(|| invalid("request count overflows u64"))?;
-        if next > offset && total < end {
-            let selected = page.get_or_insert_with(|| TimePage {
-                range: ObservabilityRange {
-                    start: bucket.max(range.start),
-                    end: (bucket + TimeDelta::minutes(1)).min(range.end),
-                },
-                offset: (offset - total) as i64,
-                total: None,
-            });
-            selected.range.start = bucket.max(range.start);
-            selected_count += count;
-        }
-        total = next;
-    }
-    if let Some(page) = &mut page {
-        page.total = Some(selected_count);
-    }
-    Ok((total, page))
+    let counts = rows
+        .iter()
+        .map(|row| {
+            Ok((
+                get(row, "bucket_start")?,
+                to_u64(get(row, "request_count")?)?,
+            ))
+        })
+        .collect::<StoreResult<Vec<_>>>()?;
+    time_page_from_segments(counts, range, offset, page_size, TimeDelta::minutes(1))
 }
 
 async fn usage_time_page(
@@ -805,6 +787,7 @@ pub(crate) async fn usage_diagnostics(
         observation.costs = costs.remove(&observation.key).unwrap_or_default();
     }
     Ok(DiagnosticObservationPage {
+        analytics: None,
         total_request_count,
         items: observations,
         current_page: page.map_or(1, |page| page.current_page),
@@ -889,4 +872,136 @@ pub(crate) fn push_diagnostic_dimension_filter(
         | DiagnosticDimension::ApiKey
         | DiagnosticDimension::Transport => {}
     }
+}
+
+fn time_page_from_segments(
+    counts: impl IntoIterator<Item = (DateTime<Utc>, u64)>,
+    range: ObservabilityRange,
+    offset: i64,
+    page_size: ObservabilityPageSize,
+    width: TimeDelta,
+) -> StoreResult<(u64, Option<TimePage>)> {
+    let offset = u64::try_from(offset).map_err(|_| invalid("negative page offset"))?;
+    let end = offset
+        .checked_add(u64::from(page_size.get()))
+        .ok_or_else(|| invalid("page range overflows u64"))?;
+    let mut total = 0_u64;
+    let mut page = None;
+    let mut selected_count = 0_u64;
+    for (bucket, count) in counts {
+        let next = total
+            .checked_add(count)
+            .ok_or_else(|| invalid("request count overflows u64"))?;
+        if next > offset && total < end {
+            let selected = page.get_or_insert_with(|| TimePage {
+                range: ObservabilityRange {
+                    start: bucket.max(range.start),
+                    end: (bucket + width).min(range.end),
+                },
+                offset: (offset - total) as i64,
+                total: None,
+            });
+            selected.range.start = bucket.max(range.start);
+            selected_count += count;
+        }
+        total = next;
+    }
+    if let Some(page) = &mut page {
+        page.total = Some(selected_count);
+    }
+    Ok((total, page))
+}
+async fn projected_usage_counts(
+    snapshot: &mut analytics::AnalyticsSnapshot<'_>,
+    query: &UsageRecordQuery,
+) -> StoreResult<Option<BTreeMap<DateTime<Utc>, u64>>> {
+    use admin_observability::UsageRecordStatus;
+    if query.record_status == UsageRecordStatus::Error {
+        return Ok(None);
+    }
+    let Some(mut counts) = snapshot
+        .completed_request_counts(query.range, &query.filter)
+        .await?
+    else {
+        return Ok(None);
+    };
+    if query.record_status == UsageRecordStatus::All {
+        // 成功计数已校正未投影差量；其他状态直接读同一快照源表，保留恢复记录和执行中请求
+        let mut statement = QueryBuilder::<Postgres>::new(
+            "select date_bin(interval '15 minutes',mr.started_at,timestamptz 'epoch') as bucket_start,
+                    count(*)::bigint as request_count
+             from request_analytics_source mr where mr.started_at >= ",
+        );
+        statement.push_bind(query.range.start);
+        statement.push(" and mr.started_at < ");
+        statement.push_bind(query.range.end);
+        // NewCPR All includes uncommitted, recovered and prewarm successes as well.
+        statement.push(format!(
+            " and not coalesce(({}),false)",
+            completed_usage_fact_predicate("mr")
+        ));
+        push_non_success_count_filter(&mut statement, &query.filter);
+        statement.push(" group by bucket_start");
+        let rows = statement
+            .build()
+            .fetch_all(&mut *snapshot.tx)
+            .await
+            .map_err(|source| {
+                postgres_unavailable("count non-success usage records").with_source(source)
+            })?;
+        for row in rows {
+            let count = counts.entry(get(&row, "bucket_start")?).or_default();
+            *count = count
+                .checked_add(to_u64(get(&row, "request_count")?)?)
+                .ok_or_else(|| invalid("usage count overflows u64"))?;
+        }
+    }
+    Ok(Some(counts))
+}
+fn push_non_success_count_filter(
+    statement: &mut QueryBuilder<Postgres>,
+    filter: &UsageRecordFilter,
+) {
+    let model_filter = UsageRecordFilter {
+        provider_kind: filter.provider_kind.clone(),
+        model: filter.model.clone(),
+        outcome: filter.outcome.clone(),
+        ..Default::default()
+    };
+    let Some(model) = filter.model.as_ref().filter(|_| *filter == model_filter) else {
+        push_usage_filter(statement, filter, "mr");
+        return;
+    };
+    let outcome_only = UsageRecordFilter {
+        outcome: filter.outcome.clone(),
+        ..Default::default()
+    };
+    push_usage_filter(statement, &outcome_only, "mr");
+    // outcome 索引没有模型或供应方字段；用同一记录的三列等值探测现有索引，避免大批错误回宽表
+    // 其他筛选仍需读取源行，继续使用原谓词；两个 EXISTS 的 OR 不会重复计算双模型匹配
+    statement.push(" and (");
+    for (index, column) in ["requested_model_id", "upstream_model_id"]
+        .iter()
+        .enumerate()
+    {
+        if index > 0 {
+            statement.push(" or ");
+        }
+        statement.push(format!(
+            "exists(select 1 from model_requests modeled where modeled.{column}="
+        ));
+        statement.push_bind(model.clone());
+        statement.push(" and modeled.started_at=mr.started_at and modeled.id=mr.id");
+        if let Some(provider) = &filter.provider_kind {
+            // 放在模型候选内，避免外层同表 EXISTS 被合并为 mr.provider_kind 而重新回宽表
+            statement.push(
+                " and exists(select 1 from model_requests provided where provided.provider_kind=",
+            );
+            statement.push_bind(provider.clone());
+            statement
+                .push(" and provided.started_at=modeled.started_at and provided.id=modeled.id)");
+        }
+        statement.push(")");
+    }
+    statement.push(")");
 }

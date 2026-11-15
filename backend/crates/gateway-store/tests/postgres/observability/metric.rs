@@ -20,6 +20,7 @@ async fn usage_metrics_preserve_selected_values_for_aggregate_and_exact_reads() 
         .execute(&database.pool)
         .await
         .unwrap();
+    drain_analytics(&database.pool).await;
     let store = admin_observability_store(&database.pool);
     let range =
         admin_observability::TimeRange::new(now - TimeDelta::hours(2), now + TimeDelta::hours(1))
@@ -31,14 +32,10 @@ async fn usage_metrics_preserve_selected_values_for_aggregate_and_exact_reads() 
             ..Default::default()
         },
     ] {
-        let full = UsageInsightsObservation {
-            overview: store.usage_summary(range, filter.clone()).await.unwrap(),
-            trend: store.usage_trend(range, filter.clone()).await.unwrap(),
-            concurrency: store
-                .usage_concurrency(range, filter.clone())
-                .await
-                .unwrap(),
-        };
+        let full = store
+            .usage_insights_observation(range, filter.clone())
+            .await
+            .unwrap();
         assert!(full.overview.requests.request_count > 0);
         assert!(full.overview.requests.output_throughput_p50.is_some());
         for metric in [

@@ -1173,7 +1173,7 @@ requestTuning
 排序，不混入智能调度分数或近似同分轮换；全零保持原最早重置时间排序。
 两组权重分别保存，切换策略不相互覆盖。更新设置必须提交完整三项，缺失/null/未知字段
 或非法数字返回 422；读取额外返回只读 `quotaResetWindowWeightsDefaults`，不可回传。
-迁移 0092 新增全零默认列，保留既有设置。资格、账号权重层和亲和仍优先于排序。
+迁移 0093 新增全零默认列，保留既有设置。资格、账号权重层和亲和仍优先于排序。
 
 Codex Responses 最终 HTTP/WS 请求按官方移除 `max_tokens`、`max_output_tokens`、
 `max_completion_tokens`，不再把这些值当输出上限传给上游；`temperature` 和 `prompt_cache_retention`

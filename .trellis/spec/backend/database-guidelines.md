@@ -111,7 +111,8 @@ rate. The database implementation remains SQLx/PostgreSQL.
   historical labels, quality isolation and stable cross-source ordering.
 - Snapshot downstream Key names in both request-admission insert paths. Row
   details/list/search use the snapshot before the current Key name. Grouped
-  diagnostics prefer a current name, then the latest snapshot, then the Key ID.
+  native diagnostics use the latest request-time snapshot, then the Key ID, as upstream does;
+  the local paginated Key/model extension retains its existing current-name fallback.
 - Legacy backfill uses surviving Keys' names at upgrade time. A Key deleted
   before this migration has no recoverable old name; do not invent one.
 - Keep account names/plans, quality-check and prewarm exclusion predicates,
@@ -170,3 +171,83 @@ budget.run(&pool, "report", |mut connection| async move {
 
 The connection owner starts return/rollback on drop and releases its permit
 only when that cleanup future finishes.
+
+
+## Scenario: Official Native Request Analytics
+
+### 1. Scope / Trigger
+
+Native observability now uses the official analytics architecture at `0f5bf03`.
+This supersedes earlier exclusions based on the mistaken plugin-only classification.
+Permanent billing and account identities remain separate authoritative data.
+
+### 2. Signatures
+
+- Migration `0094_request_analytics.sql`: source view, narrow facts, 15m/1h aggregates,
+  daily count index, pending request/bucket queues and build-state singleton.
+- `StoreBundle::request_analytics_worker(Arc<dyn UsageBillingProjector>)` is registered
+  by App bootstrap after Provider initialization. `maintain(batch_size)` accepts 1..=10000.
+- `StorePoolConfig.analytics_projection_work_mem_mb: Option<u32>` defaults to None;
+  valid values are 1..=2097151 MB. Host timezone is supplied with `with_timezone`.
+- Analytics API metadata: coverageStart/coverageEnd/generatedAt, lagSeconds, state,
+  percentilesApproximate, generation, schemaVersion and histogramVersion.
+
+### 3. Contracts
+
+- Projection/backfill uses repeatable-read plus the official schema advisory lock;
+  ACK uses a separate read-committed transaction and exact observed change versions.
+  Late commits, source deletion, rollback and restarted bucket work cannot lose work.
+- Work memory is transaction-local only in projection/backfill. It is not a global
+  connection setting and does not change ACK, bucket rebuilding or online queries.
+- General stats consume published generations; uncovered backfill is Unavailable.
+  Account usage and usage pagination reconcile current source changes in the same snapshot.
+- Success page counts use the completed-usage predicate. All pages add its complete
+  complement from business source rows, including uncommitted/recovered/prewarm successes;
+  an outcome-only list is not equivalent. Error pages keep the existing source predicate.
+- Cache keys include exact ranges and full filters. Official limits are 64 entries,
+  15s TTL (Dashboard 2s), and <=60s stale only after Unavailable and within the same generation.
+  Waiting for the per-key lock counts against the query deadline. Native diagnostics cache
+  metadata; the local paginated Key/model extension stays raw and omits analytics metadata.
+- Counts, tokens and amounts remain exact. Histograms are approximate with explicit metadata;
+  official tests permit 3% relative error. Narrow summaries omit unused distributions;
+  insights and selected metric queries supply the relevant full distributions.
+- Account health timelines retain failures/noncompletion and their five-minute resolution.
+  Source search and protocol-specific prewarm/quality exclusions keep NewCPR predicates.
+  Retention triggers retract derived facts; permanent ledgers are never recomputed by analytics.
+- 0093 retains the historical quota-weight migration identity; do not reuse excluded Excel 0092.
+
+### 4. Validation & Error Matrix
+
+| Condition | Result |
+| --- | --- |
+| Invalid projection work memory | InvalidData before connecting |
+| Backfill has not covered requested range | Unavailable, not zero |
+| New queue version commits before old ACK | New version remains pending |
+| Source/ops update rolls back | No phantom queue contribution |
+| Projection reset interrupted | Persisted progress resumes |
+| Cache generation changes | Old data cannot be served, including stale fallback |
+| Source logs removed | Published stats retract after worker; ledgers remain |
+
+### 5. Good / Base / Bad Cases
+
+Good: mutate source, run the worker, observe one corrected contribution; during the
+pending phase account/page reads remain correct via reconciliation.
+Base: empty database becomes ready after its first worker cycle.
+Bad: synchronously project every admin query to preserve old tests, or double-count
+restored hourly baseline as invented request rows.
+
+### 6. Tests Required
+
+Use real isolated PostgreSQL with CI mode: lifecycle/rollback/late ACK, concurrent deletes,
+resumable reset, large-history bucket locality, projection work memory restoration,
+empty and unknown/zero costs, saved billing snapshots, exact All/Success/Error pagination,
+quality/prewarm isolation, deployment timezone across DST and two-round backup restoration.
+Keep official cache generation/stale tests. Update old immediate-read fixtures explicitly;
+never weaken production consistency to satisfy obsolete fixtures.
+
+### 7. Wrong vs Correct
+
+Wrong: All count = delivered successes + failed/running outcomes; this loses other
+successful records intentionally visible in NewCPR's All page.
+Correct: delivered-success analytics counts plus the exact source predicate complement
+in one snapshot. Keep detailed source filtering identical for count and record queries.

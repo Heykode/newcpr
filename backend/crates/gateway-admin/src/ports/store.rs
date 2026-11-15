@@ -644,8 +644,29 @@ pub type UsageCalculatedBillingStream<'a> =
 /// 用量、趋势、诊断与运维错误的只读能力。
 #[async_trait]
 pub trait ObservabilityStore: Send + Sync {
+    async fn analytics_cache_generation(&self) -> AdminStoreResult<u64> {
+        Ok(0)
+    }
     fn query_timeout(&self) -> std::time::Duration {
         std::time::Duration::from_secs(120)
+    }
+
+    async fn usage_insights_observation(
+        &self,
+        range: TimeRange,
+        filter: UsageFilter,
+    ) -> AdminStoreResult<crate::model::observability::UsageInsightsObservation> {
+        let (overview, trend, concurrency) = futures::try_join!(
+            self.usage_summary(range, filter.clone()),
+            self.usage_trend(range, filter.clone()),
+            self.usage_concurrency(range, filter)
+        )?;
+        Ok(crate::model::observability::UsageInsightsObservation {
+            overview,
+            trend,
+            concurrency,
+            costs: Vec::new(),
+        })
     }
 
     async fn usage_metric_observation(
@@ -665,6 +686,7 @@ pub trait ObservabilityStore: Send + Sync {
             Vec::new()
         };
         Ok(UsageInsightsObservation {
+            costs: Vec::new(),
             overview,
             trend,
             concurrency,
@@ -1067,4 +1089,12 @@ impl AdminStorePorts {
     pub fn quality_ops(&self) -> Option<Arc<dyn super::quality_ops::QualityOpsStore>> {
         self.quality_ops.clone()
     }
+}
+
+/// Provider-confirmed cost projection; does not settle billing ledgers.
+pub trait UsageBillingProjector: Send + Sync {
+    fn project(
+        &self,
+        fact: &UsageCalculatedBillingFact,
+    ) -> Result<crate::model::analytics::UsageBillingProjection, crate::AdminError>;
 }

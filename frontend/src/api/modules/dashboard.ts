@@ -1,5 +1,6 @@
 import type { RequestOptions } from '../request'
 import type { AccountQuotaWindow } from './accounts'
+import type { AnalyticsMetadata } from './analytics'
 import type { UsageListRecord } from './usage'
 import { OBSERVABILITY_TIMEOUT_MS } from '../constants'
 import request from '../request'
@@ -177,6 +178,7 @@ export interface DashboardCapacityInfo {
 }
 
 export interface DashboardSummaryResponse {
+  analytics?: AnalyticsMetadata
   cards: DashboardCards
   trend: DashboardTrendResponse
   healthTimeline: DashboardHealthTimeline

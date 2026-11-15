@@ -1495,9 +1495,11 @@ mod response {
             gateway_api::admin::settings::RuntimeSettingsView::from(current),
         )
         .expect("runtime settings JSON");
-        body.as_object_mut()
-            .expect("runtime settings object")
-            .remove("updatedAt");
+        for read_only_field in ["updatedAt", "quotaResetWindowWeightsDefaults"] {
+            body.as_object_mut()
+                .expect("runtime settings object")
+                .remove(read_only_field);
+        }
         body["maxConcurrentPerAccount"] = json!(limit);
         gateway_api::admin::settings::router::<AdminTestState>()
             .with_state(fixture.state())

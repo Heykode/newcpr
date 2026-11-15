@@ -5,64 +5,6 @@ use crate::model::observability::{
     UsageMetricPoint, UsageMetricSeries, UsageThroughputPercentiles,
 };
 
-const RETENTION: StdDuration = StdDuration::from_secs(2);
-const MAX_ENTRIES: usize = 64;
-
-type ResultCell = Arc<tokio::sync::OnceCell<(UsageInsight, Instant)>>;
-
-struct Entry {
-    range: TimeRange,
-    filter: UsageFilter,
-    metric: UsageInsightMetric,
-    result: ResultCell,
-}
-
-#[derive(Default)]
-pub(super) struct UsageMetricCache {
-    entries: tokio::sync::Mutex<Vec<Entry>>,
-}
-
-impl UsageMetricCache {
-    async fn cell(
-        &self,
-        range: TimeRange,
-        filter: &UsageFilter,
-        metric: UsageInsightMetric,
-    ) -> ResultCell {
-        let mut entries = self.entries.lock().await;
-        entries.retain(|entry| {
-            entry
-                .result
-                .get()
-                .is_none_or(|(_, completed)| completed.elapsed() < RETENTION)
-        });
-        if let Some(entry) = entries
-            .iter()
-            .find(|entry| entry.range == range && entry.filter == *filter && entry.metric == metric)
-        {
-            return Arc::clone(&entry.result);
-        }
-        if entries.len() >= MAX_ENTRIES {
-            if let Some(index) = entries
-                .iter()
-                .position(|entry| Arc::strong_count(&entry.result) == 1)
-            {
-                entries.remove(index);
-            } else {
-                return Arc::new(tokio::sync::OnceCell::new());
-            }
-        }
-        let result = Arc::new(tokio::sync::OnceCell::new());
-        entries.push(Entry {
-            range,
-            filter: filter.clone(),
-            metric,
-            result: Arc::clone(&result),
-        });
-        result
-    }
-}
-
 impl DefaultObservabilityService {
     pub(super) async fn load_usage_metric(
         &self,
@@ -90,36 +32,20 @@ impl DefaultObservabilityService {
         filter: UsageFilter,
         metric: UsageInsightMetric,
     ) -> Result<UsageInsight, AdminError> {
-        let cell = self.metric_queries.cell(range, &filter, metric).await;
-        cell.get_or_try_init(|| async {
-            let observation = self
-                .store
-                .usage_metric_observation(range, filter.clone(), metric)
-                .await
-                .map_err(|error| map_store_error(error, "usage metric"))?;
-            let costs = if matches!(
-                metric,
-                UsageInsightMetric::Cost | UsageInsightMetric::Savings | UsageInsightMetric::Cache
-            ) {
-                recover_standard_costs(
-                    &self.providers,
-                    self.store.usage_calculated_billing_facts(range, filter),
-                )
-                .await?
-            } else {
-                UsageCostScenarios::default()
-            };
-            let insights = build_usage_insights(
-                observation.overview,
-                observation.trend,
-                costs,
-                range,
-                observation.concurrency,
-            )?;
-            Ok((select_usage_metric(insights, metric), Instant::now()))
-        })
-        .await
-        .map(|(value, _)| value.clone())
+        let observation = self
+            .store
+            .usage_metric_observation(range, filter.clone(), metric)
+            .await
+            .map_err(|error| map_store_error(error, "usage metric"))?;
+        let costs = projected_cost_scenarios(observation.costs)?;
+        let insights = build_usage_insights(
+            observation.overview,
+            observation.trend,
+            costs,
+            range,
+            observation.concurrency,
+        )?;
+        Ok(select_usage_metric(insights, metric))
     }
 }
 
@@ -218,6 +144,7 @@ fn select_usage_metric(insights: UsageInsights, metric: UsageInsightMetric) -> U
         )),
     };
     UsageInsight {
+        analytics: insights.analytics,
         granularity: insights.granularity,
         data,
     }

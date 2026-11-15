@@ -1,4 +1,5 @@
 import type { RequestOptions } from '../request'
+import type { AnalyticsMetadata } from './analytics'
 import { OBSERVABILITY_TIMEOUT_MS } from '../constants'
 import request from '../request'
 
@@ -345,6 +346,7 @@ export interface OpsErrorsResponse {
 }
 
 export interface UsageSummaryResponse {
+  analytics?: AnalyticsMetadata
   totalRequests: string
   inputTokens: string
   outputTokens: string
@@ -455,6 +457,7 @@ export interface UsageOverviewCost {
 }
 
 export interface UsageInsightsOverviewResponse {
+  analytics?: AnalyticsMetadata
   granularity: string
   health: UsageOverviewHealth
   performance: UsageOverviewPerformance
@@ -487,6 +490,7 @@ export interface UsageDiagnosticItem {
 }
 
 export interface UsageDiagnosticsResponse {
+  analytics?: AnalyticsMetadata
   dimension: string
   items: UsageDiagnosticItem[]
   currentPage: number
@@ -676,7 +680,7 @@ interface UsageMetricData {
 }
 
 export type UsageMetricResponse<M extends keyof UsageMetricData> = {
-  [K in M]: { granularity: string, metric: K, data: UsageMetricData[K] }
+  [K in M]: { analytics?: AnalyticsMetadata, granularity: string, metric: K, data: UsageMetricData[K] }
 }[M]
 
 export function getUsageHealth(data: UsageRangeQuery, options: RequestOptions = {}) {

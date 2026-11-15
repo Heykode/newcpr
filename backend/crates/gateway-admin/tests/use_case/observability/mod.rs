@@ -1,3 +1,4 @@
+mod analytics_cache;
 mod errors;
 
 use std::{
@@ -21,9 +22,8 @@ use gateway_admin::{
             DashboardRuntimeSlots, DiagnosticDimension, DiagnosticObservation,
             DiagnosticObservationPage, DiagnosticPageQuery, Granularity, HealthStatus,
             LatencyPercentiles, OpsErrorPage, OpsErrorQuery, PercentileMilliseconds,
-            RequestMetricPoint, RequestMetrics, TimeRange, TrendKind, UsageBilling,
-            UsageCalculatedBillingFact, UsageDetail, UsageFilter, UsageListRecord, UsageOverview,
-            UsagePage, UsageQuery, china_day_start,
+            RequestMetricPoint, RequestMetrics, TimeRange, TrendKind, UsageBilling, UsageDetail,
+            UsageFilter, UsageListRecord, UsageOverview, UsagePage, UsageQuery, china_day_start,
         },
         settings::{
             AdminApiKey, AdminApiKeyMutation, ReplaceRuntimeSettings, RotationStrategy,
@@ -448,10 +448,10 @@ async fn dashboard_summary_should_share_one_current_observation_time_across_runt
 }
 
 #[tokio::test]
-async fn dashboard_summary_should_coalesce_concurrent_requests_in_one_short_window() {
+async fn dashboard_summary_coalesces_the_same_query_without_merging_different_ranges() {
     let end_bucket = Utc::now().timestamp().div_euclid(2) * 2;
     let first_end = DateTime::from_timestamp(end_bucket, 100_000_000).expect("first end");
-    let second_end = DateTime::from_timestamp(end_bucket, 900_000_000).expect("second end");
+    let second_end = first_end;
     let first_range = TimeRange::new(china_day_start(first_end), first_end).expect("first range");
     let second_range =
         TimeRange::new(china_day_start(second_end), second_end).expect("second range");
@@ -529,6 +529,11 @@ async fn observability_services_should_calculate_usage_insights_and_diagnostic_s
         ..RequestMetrics::default()
     };
     store.replace_overview(UsageOverview {
+        analytics: gateway_admin::model::observability::AnalyticsMetadata {
+            generated_at: Utc::now(),
+            state: gateway_admin::model::observability::AnalyticsState::Ready,
+            ..Default::default()
+        },
         range,
         requests: metrics.clone(),
         attempts: AttemptMetrics {
@@ -557,21 +562,13 @@ async fn observability_services_should_calculate_usage_insights_and_diagnostic_s
                 .expect("bucket USD cost"),
         }],
     }]);
-    store.replace_calculated_billing_facts(vec![UsageCalculatedBillingFact {
-        bucket_start: quarter_hour_start(now),
-        provider_kind: "openai".to_owned(),
-        upstream_model_id: "gpt-5.5".to_owned(),
-        service_tier: None,
-        input_tokens: Some(800),
-        output_tokens: Some(200),
-        cached_tokens: Some(0),
-        cache_write_tokens: Some(0),
-        total: CurrencyCost {
-            currency: "USD".to_owned(),
-            amount: gateway_admin::model::observability::DecimalAmount::from_str("1.25")
-                .expect("calculated total"),
+    store.replace_projected_costs(vec![
+        gateway_admin::model::observability::UsageProjectedCostPoint {
+            bucket_start: quarter_hour_start(now),
+            standard_amount: Some("1".parse().unwrap()),
+            no_cache_amount: Some("1.25".parse().unwrap()),
         },
-    }]);
+    ]);
     store.replace_diagnostics(vec![diagnostic("openai", 3), diagnostic("xai", 1)]);
     let services = observability_services_with_calculated_billing(store).await;
 
@@ -729,24 +726,17 @@ async fn usage_records_should_enrich_provider_reported_totals_when_pricing_match
 }
 
 #[tokio::test]
-async fn usage_insights_should_reject_partial_costs_when_billing_stream_fails() {
+async fn usage_insights_rejects_unavailable_projection_without_partial_costs() {
     let now = Utc::now();
     let range = observation_range(now);
     let store = Arc::new(FixtureObservabilityStore::new(range));
-    store.replace_calculated_billing_facts(vec![UsageCalculatedBillingFact {
-        bucket_start: quarter_hour_start(now),
-        provider_kind: "openai".to_owned(),
-        upstream_model_id: "gpt-5.5".to_owned(),
-        service_tier: None,
-        input_tokens: Some(800),
-        output_tokens: Some(200),
-        cached_tokens: Some(0),
-        cache_write_tokens: Some(0),
-        total: CurrencyCost {
-            currency: "USD".to_owned(),
-            amount: "1.25".parse().expect("cost"),
+    store.replace_projected_costs(vec![
+        gateway_admin::model::observability::UsageProjectedCostPoint {
+            bucket_start: quarter_hour_start(now),
+            standard_amount: Some("1".parse().unwrap()),
+            no_cache_amount: Some("1.25".parse().unwrap()),
         },
-    }]);
+    ]);
     store.billing_stream_fails.store(true, Ordering::SeqCst);
     let services = observability_services_with_calculated_billing(store).await;
     assert!(
@@ -761,8 +751,11 @@ async fn usage_insights_should_reject_partial_costs_when_billing_stream_fails() 
 struct FixtureObservabilityStore {
     trend: Mutex<Vec<RequestMetricPoint>>,
     overview: Mutex<UsageOverview>,
-    calculated_billing_facts: Mutex<Vec<UsageCalculatedBillingFact>>,
+    projected_costs: Mutex<Vec<gateway_admin::model::observability::UsageProjectedCostPoint>>,
     billing_stream_fails: AtomicBool,
+    insights_fail: AtomicBool,
+    summary_fail: AtomicBool,
+    usage_summary_filters: Mutex<Vec<UsageFilter>>,
     diagnostics: Mutex<Vec<DiagnosticObservation>>,
     runtime_slots: Mutex<Option<DashboardRuntimeSlots>>,
     summary_observed_at: Mutex<Option<DateTime<Utc>>>,
@@ -781,13 +774,21 @@ impl FixtureObservabilityStore {
         Self {
             trend: Mutex::new(Vec::new()),
             overview: Mutex::new(UsageOverview {
+                analytics: gateway_admin::model::observability::AnalyticsMetadata {
+                    generated_at: Utc::now(),
+                    state: gateway_admin::model::observability::AnalyticsState::Ready,
+                    ..Default::default()
+                },
                 range,
                 requests: RequestMetrics::default(),
                 attempts: AttemptMetrics::default(),
                 providers: Vec::new(),
             }),
-            calculated_billing_facts: Mutex::new(Vec::new()),
+            projected_costs: Mutex::new(Vec::new()),
             billing_stream_fails: AtomicBool::new(false),
+            insights_fail: AtomicBool::new(false),
+            summary_fail: AtomicBool::new(false),
+            usage_summary_filters: Mutex::new(Vec::new()),
             diagnostics: Mutex::new(Vec::new()),
             runtime_slots: Mutex::new(None),
             summary_observed_at: Mutex::new(None),
@@ -818,11 +819,32 @@ impl FixtureObservabilityStore {
         *self.overview.lock().expect("overview") = overview;
     }
 
-    fn replace_calculated_billing_facts(&self, facts: Vec<UsageCalculatedBillingFact>) {
-        *self
-            .calculated_billing_facts
-            .lock()
-            .expect("calculated billing facts") = facts;
+    fn replace_projected_costs(
+        &self,
+        points: Vec<gateway_admin::model::observability::UsageProjectedCostPoint>,
+    ) {
+        *self.projected_costs.lock().unwrap() = points;
+    }
+
+    async fn projected_observation(
+        &self,
+        range: TimeRange,
+        filter: UsageFilter,
+        concurrency: bool,
+    ) -> AdminStoreResult<gateway_admin::model::observability::UsageInsightsObservation> {
+        let costs = self.projected_costs.lock().unwrap().clone();
+        Ok(
+            gateway_admin::model::observability::UsageInsightsObservation {
+                overview: self.usage_summary(range, filter.clone()).await?,
+                trend: self.usage_trend(range, filter.clone()).await?,
+                costs,
+                concurrency: if concurrency {
+                    self.usage_concurrency(range, filter).await?
+                } else {
+                    Vec::new()
+                },
+            },
+        )
     }
 
     fn replace_diagnostics(&self, diagnostics: Vec<DiagnosticObservation>) {
@@ -850,6 +872,37 @@ impl FixtureObservabilityStore {
 
 #[async_trait]
 impl ObservabilityStore for FixtureObservabilityStore {
+    async fn analytics_cache_generation(&self) -> AdminStoreResult<u64> {
+        Ok(self.overview.lock().unwrap().analytics.generation)
+    }
+    async fn usage_insights_observation(
+        &self,
+        range: TimeRange,
+        filter: UsageFilter,
+    ) -> AdminStoreResult<gateway_admin::model::observability::UsageInsightsObservation> {
+        if self.insights_fail.load(Ordering::SeqCst)
+            || self.billing_stream_fails.load(Ordering::SeqCst)
+        {
+            return Err(super::unavailable("projected insights unavailable"));
+        }
+        self.projected_observation(range, filter, true).await
+    }
+    async fn usage_metric_observation(
+        &self,
+        range: TimeRange,
+        filter: UsageFilter,
+        metric: gateway_admin::model::observability::UsageInsightMetric,
+    ) -> AdminStoreResult<gateway_admin::model::observability::UsageInsightsObservation> {
+        use gateway_admin::model::observability::UsageInsightMetric as M;
+        if matches!(metric, M::Cost | M::Savings | M::Cache)
+            && self.billing_stream_fails.load(Ordering::SeqCst)
+        {
+            return Err(super::unavailable("projected costs unavailable"));
+        }
+        self.projected_observation(range, filter, metric == M::Load)
+            .await
+    }
+
     fn query_timeout(&self) -> StdDuration {
         self.metric_timeout
     }
@@ -881,6 +934,11 @@ impl ObservabilityStore for FixtureObservabilityStore {
             tokio::time::sleep(dashboard_delay).await;
         }
         Ok(DashboardObservation {
+            analytics: gateway_admin::model::observability::AnalyticsMetadata {
+                generated_at: Utc::now(),
+                state: gateway_admin::model::observability::AnalyticsState::Ready,
+                ..Default::default()
+            },
             range,
             totals: Default::default(),
             provider_accounts: AccountPoolMetrics::default(),
@@ -922,18 +980,7 @@ impl ObservabilityStore for FixtureObservabilityStore {
         _: TimeRange,
         _: UsageFilter,
     ) -> gateway_admin::ports::store::UsageCalculatedBillingStream<'_> {
-        let facts = self
-            .calculated_billing_facts
-            .lock()
-            .expect("calculated billing facts")
-            .clone();
-        let error = self
-            .billing_stream_fails
-            .load(Ordering::SeqCst)
-            .then(|| Err(super::unavailable("billing stream failed")));
-        Box::pin(futures::stream::iter(
-            facts.into_iter().map(Ok).chain(error),
-        ))
+        panic!("analytics must use persisted projected costs instead of scanning billing facts")
     }
 
     async fn list_usage_records(&self, query: UsageQuery) -> AdminStoreResult<UsagePage> {
@@ -951,11 +998,19 @@ impl ObservabilityStore for FixtureObservabilityStore {
         Err(super::unavailable("usage detail"))
     }
 
-    async fn usage_summary(&self, _: TimeRange, _: UsageFilter) -> AdminStoreResult<UsageOverview> {
+    async fn usage_summary(
+        &self,
+        _: TimeRange,
+        filter: UsageFilter,
+    ) -> AdminStoreResult<UsageOverview> {
+        self.usage_summary_filters.lock().unwrap().push(filter);
         self.metric_summary_calls.fetch_add(1, Ordering::Relaxed);
-        let delay = *self.metric_delay.lock().unwrap();
+        let delay = (*self.metric_delay.lock().unwrap()).max(*self.dashboard_delay.lock().unwrap());
         if !delay.is_zero() {
             tokio::time::sleep(delay).await;
+        }
+        if self.summary_fail.load(Ordering::SeqCst) {
+            return Err(super::unavailable("summary unavailable"));
         }
         Ok(self.overview.lock().expect("overview").clone())
     }
@@ -973,6 +1028,7 @@ impl ObservabilityStore for FixtureObservabilityStore {
         let offset = (current_page as usize - 1) * page_size as usize;
         let has_more = page.is_some() && all.len() > offset + page_size as usize;
         Ok(DiagnosticObservationPage {
+            analytics: Some(Default::default()),
             total_request_count: all.iter().map(|item| item.request_count).sum(),
             items: all
                 .into_iter()
@@ -1340,6 +1396,11 @@ async fn health_views_should_include_incomplete_and_keep_final_outcomes_separate
         };
         store.replace_trend(vec![health_metric_point(current_slot, metrics.clone())]);
         store.replace_overview(UsageOverview {
+            analytics: gateway_admin::model::observability::AnalyticsMetadata {
+                generated_at: Utc::now(),
+                state: gateway_admin::model::observability::AnalyticsState::Ready,
+                ..Default::default()
+            },
             range,
             requests: metrics,
             // 中间尝试失败不会增加最终失败请求数

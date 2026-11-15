@@ -623,8 +623,9 @@ Responses 的流式交付在普通、错误和终态的背压等待中响应下�
 目录整轮刷新、单账号刷新/导出和预热通过 `ProviderRuntimePolicyPort::load_request_profile`
 读取持久化全局配置；本地 owner 为 `provider_outbound_user_agents`。诊断使用 Core
 已发布快照的同一全局画像。账号凭据、代理、IPv6、CA 继续由已有账号出口负责。
-请求保留期支持完整正 u32 天数；实际清理与直接 SQL 统计都有超大跨度边界，
-不因此引入已暂缓的 analytics worker。后台只增加 PWA manifest，不缓存业务 API 或支持离线操作。
+请求保留期支持完整正 u32 天数；实际清理和统计保留超大跨度边界。
+原生统计由 RequestAnalytics 后台任务维护可重建事实、预聚合及精确版本队列，
+读取按一致性快照返回覆盖范围和新鲜度；长期账本独立。后台只增加 PWA manifest，不缓存业务 API 或支持离线操作。
 
 ### v3.49.0 调度与 Messages 接入
 

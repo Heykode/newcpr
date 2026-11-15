@@ -1054,6 +1054,7 @@ pub(crate) fn dashboard_view_with_timezone(
         .saturating_sub(provider_accounts.normal);
 
     DashboardDataView {
+        analytics: observation.analytics.into(),
         cards: DashboardCardsView {
             credentials: DashboardCredentialsCardView {
                 total: provider_accounts.total.to_string(),
@@ -1117,6 +1118,7 @@ pub(crate) fn dashboard_view_with_timezone(
 pub(crate) fn usage_summary_view(summary: domain::UsageSummary) -> UsageSummaryView {
     let overview = summary.overview;
     UsageSummaryView {
+        analytics: overview.analytics.clone().into(),
         total_requests: format_compact_number(overview.requests.request_count),
         input_tokens: format_compact_number(overview.requests.input_tokens),
         output_tokens: format_compact_number(overview.requests.output_tokens),
@@ -1166,6 +1168,7 @@ pub(crate) fn usage_insights_view(insights: domain::UsageInsights) -> UsageInsig
         })
         .collect();
     UsageInsightsOverviewView {
+        analytics: insights.analytics.clone().into(),
         granularity: granularity_name(insights.granularity).to_owned(),
         health: OverviewHealthView {
             total_requests: insights.health.total_requests,
@@ -1255,6 +1258,7 @@ pub(crate) fn diagnostics_view(
     dimension: DiagnosticDimension,
 ) -> DiagnosticsView {
     DiagnosticsView {
+        analytics: result.analytics.map(Into::into),
         dimension: dimension.display_name().to_owned(),
         current_page: result.current_page,
         page_size: result.page_size,
@@ -1373,6 +1377,7 @@ pub(crate) fn usage_metric_view(
         )),
     };
     UsageMetricView {
+        analytics: insight.analytics.into(),
         granularity: granularity_name(insight.granularity).to_owned(),
         data,
     }

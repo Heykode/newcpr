@@ -101,8 +101,10 @@ pub(crate) fn admin_dashboard_observation(
         trend,
         account_usage,
         recent_requests,
+        analytics,
     } = observation;
     Ok(admin_observability::DashboardObservation {
+        analytics,
         range: admin_range(range),
         totals: admin_dashboard_totals(totals)?,
         provider_accounts: admin_account_pool_metrics(provider_accounts),
@@ -374,6 +376,7 @@ pub(crate) fn admin_calculated_usage_billing_fact(
     fact: CalculatedUsageBillingFact,
 ) -> AdminStoreResult<admin_observability::UsageCalculatedBillingFact> {
     Ok(admin_observability::UsageCalculatedBillingFact {
+        breakdown: None,
         bucket_start: fact.bucket_start,
         provider_kind: fact.provider_kind,
         upstream_model_id: fact.upstream_model_id,
@@ -678,6 +681,7 @@ pub(crate) fn admin_usage_overview(
     overview: UsageOverview,
 ) -> AdminStoreResult<admin_observability::UsageOverview> {
     Ok(admin_observability::UsageOverview {
+        analytics: overview.analytics,
         range: admin_range(overview.range),
         requests: admin_request_metrics(overview.requests)?,
         attempts: admin_attempt_metrics(overview.attempts)?,

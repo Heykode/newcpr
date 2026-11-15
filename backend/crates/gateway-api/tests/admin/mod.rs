@@ -1376,6 +1376,7 @@ impl ObservabilityStore for UnusedStore {
         let total_request_count = items.iter().map(|item| item.request_count).sum();
         let Some(page) = page else {
             return Ok(DiagnosticObservationPage {
+                analytics: Some(Default::default()),
                 total_request_count,
                 page_size: 100,
                 current_page: 1,
@@ -1386,6 +1387,7 @@ impl ObservabilityStore for UnusedStore {
         let offset = (page.current_page as usize - 1) * usize::from(page.page_size.get());
         let size = usize::from(page.page_size.get());
         Ok(DiagnosticObservationPage {
+            analytics: Some(Default::default()),
             total_request_count,
             has_more: items.len() > offset + size,
             items: items.into_iter().skip(offset).take(size).collect(),

@@ -18,6 +18,7 @@ async fn upstream_tps_projects_existing_observations_and_rejects_invalid_clocks(
     );
     sqlx::query("update model_requests set output_tokens = 100, latency_ms = 2000, first_token_ms = 1000 where id = 'req_observe_success'")
         .execute(&database.pool).await.unwrap();
+    drain_analytics(&database.pool).await;
     let repository = observability_repository(&database.pool);
     let store = admin_observability_store(&database.pool);
     let range =
@@ -60,6 +61,7 @@ async fn upstream_tps_projects_existing_observations_and_rejects_invalid_clocks(
     for (observation, expected) in cases {
         sqlx::query("update model_requests set provider_observation_json = $1 where id = 'req_observe_success'")
             .bind(&observation).execute(&database.pool).await.unwrap();
+        drain_analytics(&database.pool).await;
         let page = repository
             .list_usage_records(UsageRecordQuery {
                 record_status: Default::default(),
@@ -86,15 +88,21 @@ async fn upstream_tps_projects_existing_observations_and_rejects_invalid_clocks(
             .await
             .unwrap();
         assert_eq!(admin_detail.request.upstream_response_ms, expected);
-        let summary = repository
-            .usage_summary(range, filter.clone())
+        let summary = store
+            .usage_insights_observation(
+                admin_observability::TimeRange::new(range.start, range.end).unwrap(),
+                admin_observability::UsageFilter {
+                    request_id: filter.request_id.clone(),
+                    ..Default::default()
+                },
+            )
             .await
             .unwrap();
         let tps = expected.map(|ms| 100_000 / ms);
-        assert_eq!(summary.requests.output_throughput_p10, tps);
-        assert_eq!(summary.requests.output_throughput_p50, tps);
-        assert_eq!(summary.requests.output_throughput_p90, tps);
-        assert_eq!(summary.requests.output_tokens, 100);
+        assert_eq!(summary.overview.requests.output_throughput_p10, tps);
+        assert_eq!(summary.overview.requests.output_throughput_p50, tps);
+        assert_eq!(summary.overview.requests.output_throughput_p90, tps);
+        assert_eq!(summary.overview.requests.output_tokens, 100);
     }
     database.close().await;
 }
@@ -118,15 +126,28 @@ async fn upstream_tps_percentiles_share_only_measured_completed_responses() {
     }
     let range =
         ObservabilityRange::new(now - TimeDelta::hours(1), now + TimeDelta::hours(1)).unwrap();
+    drain_analytics(&database.pool).await;
     let repository = observability_repository(&database.pool);
-    let summary = repository
-        .usage_summary(range, UsageRecordFilter::default())
+    let summary = admin_observability_store(&database.pool)
+        .usage_insights_observation(
+            admin_observability::TimeRange::new(range.start, range.end).unwrap(),
+            Default::default(),
+        )
         .await
         .unwrap();
-    assert_eq!(summary.requests.output_throughput_p10, Some(130));
-    assert_eq!(summary.requests.output_throughput_p50, Some(250));
-    assert_eq!(summary.requests.output_throughput_p90, Some(450));
-    assert_eq!(summary.requests.output_tokens, 400);
+    assert_histogram_percentile(
+        summary.overview.requests.output_throughput_p10.unwrap() as f64,
+        130.0,
+    );
+    assert_histogram_percentile(
+        summary.overview.requests.output_throughput_p50.unwrap() as f64,
+        250.0,
+    );
+    assert_histogram_percentile(
+        summary.overview.requests.output_throughput_p90.unwrap() as f64,
+        450.0,
+    );
+    assert_eq!(summary.overview.requests.output_tokens, 400);
     let dashboard = repository.dashboard_summary(range, now).await.unwrap();
     let measured: Vec<_> = dashboard
         .trend
@@ -134,8 +155,17 @@ async fn upstream_tps_percentiles_share_only_measured_completed_responses() {
         .filter(|point| point.metrics.output_throughput_p50.is_some())
         .collect();
     assert_eq!(measured.len(), 1);
-    assert_eq!(measured[0].metrics.output_throughput_p10, Some(130));
-    assert_eq!(measured[0].metrics.output_throughput_p50, Some(250));
-    assert_eq!(measured[0].metrics.output_throughput_p90, Some(450));
+    assert_histogram_percentile(
+        measured[0].metrics.output_throughput_p10.unwrap() as f64,
+        130.0,
+    );
+    assert_histogram_percentile(
+        measured[0].metrics.output_throughput_p50.unwrap() as f64,
+        250.0,
+    );
+    assert_histogram_percentile(
+        measured[0].metrics.output_throughput_p90.unwrap() as f64,
+        450.0,
+    );
     database.close().await;
 }

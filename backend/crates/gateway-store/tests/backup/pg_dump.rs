@@ -55,6 +55,14 @@ async fn dump_process_lifecycle() {
         )
     };
 
+    let error = dump("success")
+        .dump(request("not-ready"))
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), code::ANALYTICS_NOT_READY);
+    assert!(!directory.join("pid").exists());
+    crate::postgres::drain_analytics(&database.pool).await;
+
     let artifact = dump("success").dump(request("success")).await.unwrap();
     let bytes = std::fs::read(&artifact.path).unwrap();
     assert_eq!(&bytes[..2], &[0x1f, 0x8b]);

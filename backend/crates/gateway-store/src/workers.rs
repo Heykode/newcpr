@@ -298,3 +298,145 @@ impl HealthProbe for RedisHealthProbe {
         })
     }
 }
+
+use std::sync::atomic::{AtomicU32, Ordering};
+pub(crate) fn request_analytics_worker(
+    repository: postgres::PgRequestAnalyticsRepository,
+) -> StoreResult<WorkerContribution> {
+    let id = WorkerId::try_new(WorkerKind::RequestAnalytics, "postgres")
+        .map_err(worker_definition_error)?;
+    Ok(WorkerContribution::Registration(scheduled_worker(
+        id,
+        Duration::from_secs(5),
+        Box::new(RequestAnalyticsTask {
+            repository,
+            cycle: RequestAnalyticsCycle::default(),
+        }),
+    )?))
+}
+
+struct RequestAnalyticsTask {
+    repository: postgres::PgRequestAnalyticsRepository,
+    cycle: RequestAnalyticsCycle,
+}
+
+impl ScheduledTask for RequestAnalyticsTask {
+    fn run_cycle(
+        &self,
+        context: WorkerCycleContext,
+    ) -> futures::future::BoxFuture<'_, Result<(), WorkerTaskError>> {
+        Box::pin(async move {
+            tokio::select! {
+                () = context.cancellation().cancelled() => Ok(()),
+                result = self.cycle.run(&self.repository) => result.map(|_| ()).map_err(|source| {
+                    WorkerTaskError::safe("request analytics maintenance failed").with_source(source)
+                }),
+            }
+        })
+    }
+}
+
+/// 统计消费周期预算，跨轮保留批量上限以便超时后的下一轮提交进展
+pub struct RequestAnalyticsCycle {
+    batch_size: AtomicU32,
+}
+
+impl Default for RequestAnalyticsCycle {
+    fn default() -> Self {
+        Self {
+            batch_size: AtomicU32::new(1_000),
+        }
+    }
+}
+
+impl RequestAnalyticsCycle {
+    /// 生产与隔离压测共用的推进路径；各批独立提交并归还观测槽位
+    pub async fn run(
+        &self,
+        repository: &postgres::PgRequestAnalyticsRepository,
+    ) -> StoreResult<postgres::AnalyticsMaintenance> {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        let mut total = postgres::AnalyticsMaintenance::default();
+        loop {
+            let batch_size = self.batch_size.load(Ordering::Relaxed);
+            let started = tokio::time::Instant::now();
+            let result =
+                match tokio::time::timeout_at(deadline, repository.maintain(batch_size)).await {
+                    Ok(Ok(result)) => result,
+                    Ok(Err(error)) => {
+                        if analytics_maintenance_timed_out(&error) {
+                            self.reduce_batch_size(batch_size);
+                        }
+                        return Err(error);
+                    }
+                    Err(source) => {
+                        if total.projected_requests == 0
+                            && total.backfilled_requests == 0
+                            && total.rebuilt_buckets == 0
+                            && total.advanced_buckets == 0
+                            && !total.reset_progress
+                        {
+                            // 只在整轮没有返回进展时退让，避免尾批剩余时间短导致持续缩批
+                            self.reduce_batch_size(batch_size);
+                            return Err(StoreError::Unavailable {
+                                backend: StoreBackend::PostgreSql,
+                                message: "request analytics cycle timed out without progress"
+                                    .to_owned(),
+                                source: Some(gateway_core::error::ErrorSource::new(source)),
+                            });
+                        }
+                        return Ok(total);
+                    }
+                };
+            let idle = result.projected_requests == 0
+                && result.backfilled_requests == 0
+                && result.rebuilt_buckets == 0
+                && result.advanced_buckets == 0
+                && !result.reset_progress;
+            total.projected_requests += result.projected_requests;
+            total.backfilled_requests += result.backfilled_requests;
+            total.rebuilt_buckets += result.rebuilt_buckets;
+            total.advanced_buckets += result.advanced_buckets;
+            total.reset_progress |= result.reset_progress;
+            // 满批快速完成才恢复吞吐，空结果也可能只是其他实例持有维护锁
+            if (result.projected_requests >= u64::from(batch_size)
+                || result.backfilled_requests >= u64::from(batch_size))
+                && started.elapsed() < Duration::from_secs(2)
+            {
+                self.batch_size
+                    .store((batch_size * 2).min(1_000), Ordering::Relaxed);
+            }
+            if idle {
+                return Ok(total);
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return Ok(total);
+            }
+        }
+    }
+
+    fn reduce_batch_size(&self, batch_size: u32) {
+        let next_batch_size = (batch_size / 2).max(1);
+        self.batch_size.store(next_batch_size, Ordering::Relaxed);
+        tracing::warn!(
+            batch_size,
+            next_batch_size,
+            "request analytics batch timed out"
+        );
+    }
+}
+
+fn analytics_maintenance_timed_out(error: &StoreError) -> bool {
+    let StoreError::Unavailable {
+        source: Some(source),
+        ..
+    } = error
+    else {
+        return false;
+    };
+    source.is::<tokio::time::error::Elapsed>()
+        || source
+            .downcast_ref::<sqlx::Error>()
+            .and_then(sqlx::Error::as_database_error)
+            .is_some_and(|error| error.code().as_deref() == Some("57014"))
+}

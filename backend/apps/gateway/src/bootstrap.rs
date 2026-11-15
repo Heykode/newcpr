@@ -76,8 +76,12 @@ pub async fn run() -> Result<(), BootstrapError> {
     )
     .await?;
     host.report_startup_ready("Host");
-    let mut store =
-        gateway_store::initialize(store.with_log_files(host.log_file_maintenance())).await?;
+    let mut store = gateway_store::initialize(
+        store
+            .with_timezone(timezone)
+            .with_log_files(host.log_file_maintenance()),
+    )
+    .await?;
     host.report_startup_ready("Store");
     host.set_operational_diagnostics(store.operational_diagnostics());
     let request_tuning = RequestTuningHandle::default();
@@ -137,6 +141,22 @@ pub async fn run() -> Result<(), BootstrapError> {
     host.report_startup_ready("API");
 
     let mut plan = store.take_worker_contributions();
+    plan.push(
+        store.request_analytics_worker(std::sync::Arc::new(
+            gateway_admin::ProviderUsageBillingProjector::new(
+                gateway_admin::ports::provider::ProviderAdminRegistry::new([
+                    openai.admin_provider(),
+                    xai.admin_provider(),
+                ])
+                .map_err(|error| {
+                    gateway_admin::model::AdminError::internal(
+                        "invalid analytics provider registry",
+                    )
+                    .with_source(error)
+                })?,
+            ),
+        ))?,
+    );
     plan.extend(core.take_worker_contributions());
     plan.extend(openai.take_worker_contributions());
     plan.extend(xai.take_worker_contributions());

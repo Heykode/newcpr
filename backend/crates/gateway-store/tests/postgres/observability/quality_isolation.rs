@@ -180,21 +180,25 @@ async fn quality_history_is_isolated_from_all_business_projections_without_delet
     .await
     .unwrap();
 
+    drain_analytics(pool).await;
+    let mut actual_dashboard = repository.dashboard_summary(range, now).await.unwrap();
+    // Compare business values; metadata intentionally advances when a projection is published.
     assert_eq!(
-        repository.dashboard_summary(range, now).await.unwrap(),
-        dashboard
+        actual_dashboard.analytics.state,
+        admin_observability::AnalyticsState::Ready
     );
+    actual_dashboard.analytics = dashboard.analytics.clone();
+    assert_eq!(actual_dashboard, dashboard);
     assert_eq!(
         repository.dashboard_trend(range).await.unwrap(),
         dashboard.trend
     );
-    assert_eq!(
-        repository
-            .usage_summary(range, UsageRecordFilter::default())
-            .await
-            .unwrap(),
-        summary
-    );
+    let mut actual_summary = repository
+        .usage_summary(range, Default::default())
+        .await
+        .unwrap();
+    actual_summary.analytics = summary.analytics.clone();
+    assert_eq!(actual_summary, summary);
     assert_eq!(
         repository
             .usage_trend(range, UsageRecordFilter::default())
@@ -247,14 +251,12 @@ async fn quality_history_is_isolated_from_all_business_projections_without_delet
         errors
     );
     for (dimension, before) in dimensions.into_iter().zip(diagnostics) {
-        assert_eq!(
-            repository
-                .usage_diagnostics(range, UsageRecordFilter::default(), dimension, None,)
-                .await
-                .unwrap(),
-            before,
-            "diagnostic dimension {dimension:?}"
-        );
+        let mut after = repository
+            .usage_diagnostics(range, Default::default(), dimension, None)
+            .await
+            .unwrap();
+        after.analytics = before.analytics.clone();
+        assert_eq!(after, before, "diagnostic dimension {dimension:?}");
     }
     // Pagination, explicit searches and source scopes must not reintroduce checks.
     for (index, expected) in errors.items.iter().enumerate() {

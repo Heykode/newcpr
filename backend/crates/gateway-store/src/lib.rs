@@ -45,5 +45,5 @@ pub(crate) use admin_adapter::*;
 pub use bundle::*;
 pub use config::*;
 pub use value::*;
-pub use workers::PostgresHealthProbe;
 pub(crate) use workers::*;
+pub use workers::{PostgresHealthProbe, RequestAnalyticsCycle};

@@ -1,7 +1,7 @@
 //! Export business data and global usage from the same repeatable-read snapshot.
 
 use futures::TryStreamExt as _;
-use gateway_admin::model::backup::BackupError;
+use gateway_admin::model::backup::{BackupError, code};
 use sqlx::{PgPool, Postgres, Transaction};
 use tokio::io::{AsyncWrite, AsyncWriteExt as _};
 
@@ -15,6 +15,13 @@ const EXCLUDED_DATA: &[&str] = &[
     "request_capture_records",
     "request_capture_tasks",
     "backup_usage_hours",
+    "request_analytics_facts",
+    "request_analytics_15m",
+    "request_analytics_1h",
+    "request_analytics_1d_counts",
+    "request_analytics_pending_requests",
+    "request_analytics_pending_buckets",
+    "request_analytics_build_state",
 ];
 
 pub(super) struct BusinessSnapshot {
@@ -37,6 +44,15 @@ impl BusinessSnapshot {
             .execute(&mut *transaction)
             .await
             .map_err(|_| pg_dump_failed("无法设置备份查询期限"))?;
+        if !crate::postgres::analytics::backup_projection_ready(&mut transaction)
+            .await
+            .map_err(|_| pg_dump_failed("无法读取统计发布状态"))?
+        {
+            return Err(BackupError::new(
+                code::ANALYTICS_NOT_READY,
+                "用量统计正在重建，请在统计就绪后重试备份".to_owned(),
+            ));
+        }
         let (snapshot_id, schema): (String, String) =
             sqlx::query_as("select pg_export_snapshot(), current_schema()")
                 .fetch_one(&mut *transaction)
@@ -93,7 +109,10 @@ impl BusinessSnapshot {
             writer.write_all(&bytes).await.map_err(write_failed)?;
         }
         drop(stream);
-        let footer = "\\.\n";
+        let footer = format!(
+            "\\.\nINSERT INTO {}.request_analytics_build_state(singleton) VALUES (true);\n",
+            self.schema
+        );
         writer
             .write_all(footer.as_bytes())
             .await
