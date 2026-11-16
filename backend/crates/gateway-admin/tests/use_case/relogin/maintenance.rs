@@ -35,6 +35,72 @@ async fn save_private(h: &Harness, row: ReloginEntry) {
 }
 
 #[tokio::test]
+async fn manual_authorization_clears_failed_enrollment_but_retains_its_route() {
+    for action in [
+        MaintenanceAction::Authorize,
+        MaintenanceAction::ForceLogin,
+        MaintenanceAction::SwitchWorkspace,
+        MaintenanceAction::LogoutAndRelogin,
+    ] {
+        let proxies = Arc::new(super::super::proxies::TestProxies {
+            events: Some(events()),
+            ..Default::default()
+        });
+        let h = Harness::with_proxies(vec![], Some(proxies)).await;
+        let id = h.import("test@example.invalid").await;
+        let mut row = h.row(&id).await;
+        let mut config = template_config();
+        config.outbound_proxy_id = Some("fixture-proxy".into());
+        row.enrollment = Some(
+            ReloginEnrollment::new(
+                config.settings().unwrap(),
+                Some("fixture-proxy".into()),
+                context("failed-enrollment"),
+            )
+            .unwrap(),
+        );
+        row.status = ReloginStatus::Failed;
+        row.maintenance.view.workspaces = vec![MaintenanceWorkspace {
+            id: "workspace-team".into(),
+            name: "Fixture workspace".into(),
+            plan_type: Some("team".into()),
+            available: true,
+        }];
+        let mut request = command(&row, action);
+        if action == MaintenanceAction::SwitchWorkspace {
+            request.target = Some("workspace-team".into());
+        }
+        save_private(&h, row).await;
+        let mut result = outcome();
+        if action != MaintenanceAction::LogoutAndRelogin {
+            result.credential = Some(credential());
+        }
+        *h.provider.maintenance_result.lock().unwrap() = Some(result);
+        h.services
+            .relogin()
+            .maintain(request, &context("manual-authorization"))
+            .await
+            .unwrap();
+        h.cycle().await;
+        h.cycle().await;
+        let row = h.row(&id).await;
+        assert!(h.accounts.import_settings().is_empty(), "{action:?}");
+        assert_eq!(row.status, ReloginStatus::Ready, "{action:?}");
+        assert!(row.credential.is_some());
+        assert!(row.synced_at.is_none());
+        assert!(row.enrollment.is_none());
+        assert!(row.maintenance.import_egress.is_some());
+        assert!(h.provider.maintenance_routes.lock().unwrap()[0].0.is_some());
+        if action == MaintenanceAction::LogoutAndRelogin {
+            assert_eq!(
+                h.provider.relogin_proxies.lock().unwrap()[0],
+                h.provider.maintenance_routes.lock().unwrap()[0].0
+            );
+        }
+    }
+}
+
+#[tokio::test]
 async fn reads_and_local_edits_preserve_uncertain_candidate_until_explicit_resolution() {
     let h = Harness::new(Vec::new()).await;
     let id = h.import("maintenance@example.invalid").await;
@@ -613,4 +679,212 @@ async fn explicit_workspace_maintenance_keeps_its_proxy_when_other_workspace_dif
         h.provider.maintenance_routes.lock().unwrap()[0].0,
         first.outbound_proxy
     );
+}
+
+#[tokio::test]
+async fn new_account_form_preserves_or_replaces_import_route_and_uses_final_settings() {
+    use gateway_admin::model::relogin_templates::{
+        ReloginNewAccountForm, ReloginNewAccountOptions,
+    };
+    use gateway_core::provider_ports::egress::EgressMode;
+    for (clear, proxy, expected) in [
+        (false, None, Some("proxy-import")),
+        (true, None, None),
+        (false, Some("proxy-edited"), Some("proxy-edited")),
+    ] {
+        let proxies = Arc::new(super::super::proxies::TestProxies {
+            events: Some(events()),
+            ..Default::default()
+        });
+        let h = Harness::with_proxies(vec![], Some(proxies)).await;
+        let id = h.import("test@example.invalid").await;
+        h.ready(&id).await;
+        let mut row = h.row(&id).await;
+        let mut imported = template_config().settings().unwrap();
+        imported.clear_outbound_proxy = false;
+        // A manual push must clear this intent without losing the original route.
+        row.enrollment = Some(
+            ReloginEnrollment::new(imported, Some("proxy-import".into()), context("import"))
+                .unwrap(),
+        );
+        save_private(&h, row.clone()).await;
+        let template = h
+            .services
+            .account_templates()
+            .save_template(None, template_config())
+            .await
+            .unwrap();
+        let mut settings = template.config.settings().unwrap();
+        settings.clear_outbound_proxy = clear;
+        settings.egress_mode = if clear || proxy.is_some() {
+            Some(Some(EgressMode::Unchanged))
+        } else {
+            None
+        };
+        settings.custom_name = Some("Edited account".into());
+        settings.weight = gateway_core::account::AccountWeight::new(31).unwrap();
+        settings.group_ids = vec![
+            gateway_core::routing::AccountGroupId::new("grp_00000000000000000000000000000092")
+                .unwrap(),
+        ];
+        settings.model_access = Some(
+            serde_json::from_value(
+                serde_json::json!({"mode":"allowlist","models":["edited-model"]}),
+            )
+            .unwrap(),
+        );
+        settings.purchase_cost = Some(
+            gateway_admin::model::account_purchase::AccountPurchaseUpdate {
+                amount_cny: Some("12.5".into()),
+                cycle_start: None,
+            },
+        );
+        let expected_settings = settings.clone();
+        let result = h
+            .services
+            .relogin()
+            .push_with_selection(
+                &[id.clone()],
+                &BTreeMap::from([(id.clone(), row.revision)]),
+                ReloginNewAccountOptions {
+                    template: Some(template_selection(&template)),
+                    form: Some(ReloginNewAccountForm {
+                        settings,
+                        outbound_proxy_id: proxy.map(str::to_owned),
+                        quality_template: None,
+                    }),
+                    ..Default::default()
+                },
+                &BTreeMap::new(),
+                &context("push-form"),
+            )
+            .await
+            .unwrap();
+        assert!(result[0].success, "{:?}", result);
+        let saved = h.accounts.import_settings()[0].clone().unwrap();
+        assert_eq!(saved.custom_name, expected_settings.custom_name);
+        assert_eq!(saved.weight, expected_settings.weight);
+        assert_eq!(saved.group_ids, expected_settings.group_ids);
+        assert_eq!(saved.model_access, expected_settings.model_access);
+        assert_eq!(saved.purchase_cost, expected_settings.purchase_cost);
+        assert_eq!(saved.egress_mode, expected_settings.egress_mode);
+        assert_eq!(
+            h.accounts.accounts.lock().unwrap()[0]
+                .outbound_proxy_id
+                .as_deref(),
+            expected
+        );
+        assert!(h.row(&id).await.enrollment.is_none());
+    }
+}
+
+#[tokio::test]
+async fn shared_push_form_only_configures_new_accounts_in_mixed_batch() {
+    use gateway_admin::model::relogin_templates::{
+        ReloginNewAccountForm, ReloginNewAccountOptions,
+    };
+    let mut existing = account(false);
+    existing.email = Some("existing@example.invalid".into());
+    existing.enabled = false;
+    existing.custom_name = Some("Keep existing".into());
+    let h = Harness::new(vec![existing.clone()]).await;
+    let old = h.import("existing@example.invalid").await;
+    let mut old_credential = credential();
+    old_credential.email = "existing@example.invalid".into();
+    *h.provider.relogin_result.lock().unwrap() = Some(old_credential);
+    h.ready(&old).await;
+    *h.provider.relogin_result.lock().unwrap() = Some(credential());
+    let new = h.import("test@example.invalid").await;
+    h.ready(&new).await;
+    let mut settings = template_config().settings().unwrap();
+    settings.custom_name = Some("New only".into());
+    let results = h
+        .services
+        .relogin()
+        .push_with_selection(
+            &[old.clone(), new.clone()],
+            &BTreeMap::from([
+                (old.clone(), h.row(&old).await.revision),
+                (new.clone(), h.row(&new).await.revision),
+            ]),
+            ReloginNewAccountOptions {
+                form: Some(ReloginNewAccountForm {
+                    settings,
+                    outbound_proxy_id: None,
+                    quality_template: Some(
+                        gateway_admin::model::quality_ops::QualityTemplateSelection {
+                            id: "missing-template".into(),
+                            revision: 1,
+                        },
+                    ),
+                }),
+                ..Default::default()
+            },
+            &BTreeMap::new(),
+            &context("mixed-form"),
+        )
+        .await
+        .unwrap();
+    assert!(results.iter().all(|result| result.success), "{:?}", results);
+    assert_eq!(h.accounts.import_settings().len(), 1);
+    let pool = h.accounts.accounts.lock().unwrap().clone();
+    let kept = pool.iter().find(|row| row.id == existing.id).unwrap();
+    assert_eq!(kept.custom_name, existing.custom_name);
+    assert_eq!(kept.enabled, existing.enabled);
+    assert_eq!(kept.weight, existing.weight);
+    assert_eq!(kept.groups, existing.groups);
+    assert!(!h.row(&old).await.message.contains("监测模板"));
+    assert!(h.row(&new).await.synced_at.is_some());
+    assert!(h.row(&new).await.message.contains("监测模板"));
+}
+
+#[tokio::test]
+async fn edited_push_form_rejects_stale_template_and_invalid_references_before_commit() {
+    use gateway_admin::model::relogin_templates::{
+        ReloginNewAccountForm, ReloginNewAccountOptions,
+    };
+    let h = Harness::new(vec![]).await;
+    let id = h.import("test@example.invalid").await;
+    h.ready(&id).await;
+    let row = h.row(&id).await;
+    let template = h
+        .services
+        .account_templates()
+        .save_template(None, template_config())
+        .await
+        .unwrap();
+    for stale in [true, false] {
+        let mut selection = template_selection(&template);
+        if stale {
+            selection.revision += 1;
+        }
+        *h.store.invalid_template_references.lock().unwrap() = !stale;
+        let result = h
+            .services
+            .relogin()
+            .push_with_selection(
+                &[id.clone()],
+                &BTreeMap::from([(id.clone(), row.revision)]),
+                ReloginNewAccountOptions {
+                    template: Some(selection),
+                    form: Some(ReloginNewAccountForm {
+                        settings: template.config.settings().unwrap(),
+                        outbound_proxy_id: None,
+                        quality_template: None,
+                    }),
+                    ..Default::default()
+                },
+                &BTreeMap::new(),
+                &context("form-preflight"),
+            )
+            .await;
+        if stale {
+            assert!(result.is_err());
+        } else {
+            assert!(!result.unwrap()[0].success);
+        }
+        assert_eq!(h.row(&id).await.status, ReloginStatus::Ready);
+        assert_eq!(h.row(&id).await.revision, row.revision);
+        assert!(h.accounts.import_settings().is_empty());
+    }
 }

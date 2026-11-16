@@ -11,7 +11,7 @@ import BaseSwitch from '@/components/base/BaseSwitch.vue'
 import ReloginCountCell from '@/components/ReloginCountCell.vue'
 import { formatDateTime } from '@/utils/date'
 import AccountPlanBadge from '../../accounts/components/AccountPlanBadge.vue'
-import { maintenanceBusy, maintenanceResult, recentOperation, recentOperationAt } from '../maintenance'
+import { maintenanceBusy, maintenanceResult, queueButtonLabel, queueDisabledReason, recentOperation, recentOperationAt } from '../maintenance'
 import { credentialLabel, recoveryCountdown, reloginDisplayName, retryProgress, workspaceId } from '../presentation'
 import ReloginEgress from './ReloginEgress.vue'
 import ReloginSessionStatus from './ReloginSessionStatus.vue'
@@ -110,8 +110,8 @@ defineEmits<{
         <BaseButton v-if="canPush" size="sm" variant="soft" :disabled="busy" @click="$emit('push')">
           推送凭据
         </BaseButton>
-        <BaseButton v-else size="sm" :disabled="busy || paused || maintenanceBusy(row)" @click="$emit('queue')">
-          立即重登
+        <BaseButton v-else size="sm" :title="queueDisabledReason(row, busy, paused)" :disabled="!!queueDisabledReason(row, busy, paused)" @click="$emit('queue')">
+          {{ queueButtonLabel(row, paused) }}
         </BaseButton>
         <BaseIconButton label="设备与会话" size="sm" @click="$emit('maintain', 'devices')">
           <Monitor class="size-4" />
@@ -127,9 +127,6 @@ defineEmits<{
           </template>
           <template #default="{ close }">
             <div class="min-w-40 p-1">
-              <BaseMenuItem :disabled="busy || paused || maintenanceBusy(row)" @click="close(); $emit('queue')">
-                立即重登
-              </BaseMenuItem>
               <BaseMenuItem @click="close(); $emit('maintain', 'session')">
                 登录与授权
               </BaseMenuItem>

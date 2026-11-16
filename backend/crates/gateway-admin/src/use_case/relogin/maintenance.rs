@@ -94,6 +94,7 @@ impl DefaultReloginService {
                 }
                 entry.automatic_job = false;
                 entry.manual_push_context = None;
+                entry.clear_enrollment();
                 entry.credential = None;
                 entry.synced_at = None;
                 entry.status = ReloginStatus::Pending;

@@ -116,6 +116,11 @@ impl DefaultReloginService {
                         .filter(|test| test.success && effective == &record.proxy)
                         .and_then(|test| test.exit_ip)
                         .map(|ip| ip.to_string());
+                    view.latency_ms = record
+                        .last_test
+                        .as_ref()
+                        .filter(|test| test.success && effective == &record.proxy)
+                        .map(|test| test.latency_ms);
                     view.checked_at = record.last_test_at;
                 } else {
                     view.label = format!("{}（已停用，部署默认出口）", view.label);

@@ -364,8 +364,14 @@ preserves acquisition mode and targets; push is a separate confirmation.
   Reject State=true on any non-OpenAI target before mutation. No credential/device
   replacement, template binding, automatic retry or schema migration is implied.
 - Manual push optionally captures template ID/revision; resolve one immutable config
-  snapshot per batch. Stale/deleted templates fail before any push. Only create-only
-  imports receive settings/proxy; existing account rotation never applies them.
+  snapshot per batch. Stale/deleted templates fail before any push. `newAccount` carries
+  the shared import form's final settings, proxy and optional monitoring template.
+  Reuse `apply_prefilled_import` with that snapshot: edits own the settings; the template
+  only supplies legacy State defaults. Keep legacy template-only clients compatible.
+  Only create-only imports receive settings/proxy/monitoring; existing rotation remains
+  credential-only. Clearing enrollment intent must preserve its imported route. An
+  omitted route retains that exit; explicit direct/proxy/IPv6 settings replace it.
+  Monitoring failure after import is a warning, never grounds to replay credentials.
 - Validate group existence and tested proxy availability before entering `Pushing`.
   A preflight rejection preserves `Ready` and cached credentials. Import transactions
   still own final reference checks, create-only identity fencing and device creation.
@@ -594,6 +600,13 @@ an unconfirmed state retain uncertainty. Activation still requires its explicit 
 Explicit reconciliation archives pending enrollment material before clearing the restriction.
 Keep at most ten private material versions. Logout-all pauses automatic reauthentication;
 logout-and-relogin persists phase one then queues the existing worker as phase two.
+All manual authorization actions clear prior enrollment and account-menu automatic-push
+intent before execution. Preserve the imported egress through `clear_enrollment` and
+use the captured route for the current operation; successful acquisition waits for
+explicit push. Ordinary account-management enrollment keeps its automatic import path.
+Desktop and mobile list login buttons use the existing queue endpoint, so occupied
+slots wait for capacity. Their confirmation states session reuse, workspace choice and
+separate manual push. Direct maintenance actions retain their shared concurrency check.
 The logout-all endpoint's successful JSON `null` acknowledges acceptance; allow it only
 for that endpoint. It does not prove immediate global revocation. Keep the delay notice,
 clear the locally retained session, and preserve rejection of HTML/redirect/negative replies.

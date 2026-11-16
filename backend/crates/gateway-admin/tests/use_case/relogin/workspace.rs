@@ -370,6 +370,7 @@ async fn push(h: &Harness, id: &str, target: &AccountRecord, switch_workspace: b
             &[id.into()],
             &BTreeMap::from([(id.into(), row.revision)]),
             gateway_admin::model::relogin_templates::ReloginNewAccountOptions {
+                form: None,
                 template: None,
                 custom_name: Some("Must not rename existing".into()),
                 excel: Some(

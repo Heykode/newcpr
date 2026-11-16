@@ -63,21 +63,17 @@ export function maintenanceResult(row: ReloginEntry) {
   return processingStatus(row)
 }
 
-export function egressAddress(row: ReloginEntry) {
-  const egress = row.egress
-  if (!egress)
-    return '未读取'
-  if (egress.kind === 'default')
-    return '部署默认出口'
-  if (egress.kind === 'unavailable' || egress.kind === 'multiple')
-    return egress.kind === 'multiple' ? '多个工作区出口' : '出口信息不可用'
-  return egress.exitIp || egress.address || egress.label
+export function queueDisabledReason(row: ReloginEntry, busy: boolean, paused: boolean) {
+  if (busy)
+    return '正在提交操作，请稍候'
+  if (paused)
+    return '重登队列已暂停，可在维护设置中恢复'
+  if (row.maintenance?.state === 'running')
+    return '账号维护正在执行，请等待完成或取消任务'
+  return ({ queued: '已在重登队列中，等待执行', running: '正在重登，请等待完成或取消任务', pushing: '正在推送凭据，请等待完成' } as Record<string, string>)[row.status]
 }
-export function egressLabel(row: ReloginEntry) {
-  const egress = row.egress
-  if (!egress)
-    return '刷新后同步账号配置'
-  if (egress.kind === 'proxy')
-    return `${egress.label} · ${egress.exitIp ? '最近检测 IP' : '代理地址'}`
-  return egress.kind === 'default' ? (egress.source === 'account' ? '跟随账号配置' : '未绑定独立出口') : egress.label
+export function queueButtonLabel(row: ReloginEntry, paused: boolean) {
+  if (row.maintenance?.state === 'running')
+    return '维护中'
+  return ({ queued: '排队中', running: '重登中', pushing: '推送中' } as Record<string, string>)[row.status] ?? (paused ? '队列已暂停' : '立即重登')
 }

@@ -11,7 +11,7 @@ use crate::{
             PrepareCredentialRotation, ProviderDocument,
         },
         relogin::*,
-        relogin_templates::{ExcelImportSettings, ReloginTemplateConfig, ReloginTemplateSelection},
+        relogin_templates::{ReloginTemplateConfig, ReloginTemplateSelection},
     },
     ports::{
         provider::ProviderAdmin,
@@ -371,21 +371,18 @@ impl DefaultReloginService {
         entry: &mut ReloginEntry,
         context: &MutationContext,
     ) -> Result<(), AdminError> {
-        self.push_entry_with_template(entry, None, None, None, context)
+        self.push_entry_with_options(entry, None, &Default::default(), context)
             .await
     }
 
-    async fn push_entry_with_template(
+    async fn push_entry_with_options(
         &self,
         entry: &mut ReloginEntry,
         template: Option<&ReloginTemplateConfig>,
-        custom_name: Option<&str>,
-        new_account_excel: Option<&ExcelImportSettings>,
+        options: &crate::model::relogin_templates::ReloginNewAccountOptions,
         context: &MutationContext,
     ) -> Result<(), AdminError> {
-        let outcome = self
-            .push_checked(entry, template, custom_name, new_account_excel, context)
-            .await;
+        let outcome = self.push_checked(entry, template, options, context).await;
         if outcome.is_err() && entry.status == ReloginStatus::Pushing {
             entry.status = ReloginStatus::Uncertain;
             entry.message = "推送结果未确认，请检查号池并重新获取凭证后再推送".to_owned();
@@ -536,10 +533,11 @@ impl DefaultReloginService {
         &self,
         entry: &mut ReloginEntry,
         template: Option<&ReloginTemplateConfig>,
-        custom_name: Option<&str>,
-        new_account_excel: Option<&ExcelImportSettings>,
+        options: &crate::model::relogin_templates::ReloginNewAccountOptions,
         context: &MutationContext,
     ) -> Result<(), AdminError> {
+        let custom_name = options.custom_name.as_deref();
+        let new_account_excel = options.excel.as_ref();
         entry.validate_totp()?;
         if entry.manual_push_context.is_some() && entry.target.is_none() {
             return Err(AdminError::conflict("指定账号任务缺少目标，不能新建账号"));
@@ -618,6 +616,7 @@ impl DefaultReloginService {
             None
         };
         let document = ProviderDocument::new(OpaqueProviderData::new(credential.document.clone()));
+        let creating = current.is_none();
         let synced_account_id = if let Some(current) = current {
             if entry.synced_at.is_some() {
                 return Ok(());
@@ -641,8 +640,13 @@ impl DefaultReloginService {
             }
             result.account_id
         } else {
-            let mut settings = if let Some(template) = template {
-                Some(template.settings()?)
+            let legacy_template = if options.form.is_some() {
+                None
+            } else {
+                template
+            };
+            let mut settings = if let Some(legacy_template) = legacy_template {
+                Some(legacy_template.settings()?)
             } else if let Some(enrollment) = &entry.enrollment {
                 self.store()?
                     .validate_template_references(&enrollment.config)
@@ -653,7 +657,7 @@ impl DefaultReloginService {
                 None
             };
             let inherited_proxy = egress::import_proxy_id(entry).map(str::to_owned);
-            let outbound_proxy_id = match template {
+            let outbound_proxy_id = match legacy_template {
                 Some(config)
                     if !config.preserve_outbound_proxy
                         || config
@@ -697,33 +701,69 @@ impl DefaultReloginService {
                     excel.apply(settings);
                 }
             }
-            if template
+            if legacy_template
                 .is_none_or(|config| config.preserve_outbound_proxy && config.egress_mode.is_none())
                 && let Some(settings) = settings.as_mut()
             {
                 settings.egress_mode = egress::import_egress_mode(entry);
             }
-            if let Some(config) = template {
+            if let Some(config) = legacy_template {
                 self.store()?
                     .validate_template_references(config)
                     .await
                     .map_err(super::account_templates::template_error)?;
             }
-            // Validate inherited proxy references before the import commit fence too.
-            super::import_proxy_binding(self.proxies.as_ref(), outbound_proxy_id.as_deref())
-                .await?;
-            // Import owns both preparation and commit, so fence before entering it.
+            let mut command = ImportCredentials {
+                outbound_proxy_id,
+                settings,
+                context: context.clone(),
+                document,
+            };
+            if let Some(form) = &options.form {
+                let mut settings = form.settings.clone();
+                let preserves_proxy = form.outbound_proxy_id.is_none()
+                    && !settings.clear_outbound_proxy
+                    && !settings
+                        .egress_mode
+                        .flatten()
+                        .is_some_and(|mode| mode.is_active());
+                command.outbound_proxy_id = if preserves_proxy {
+                    egress::import_proxy_id(entry).map(str::to_owned)
+                } else {
+                    form.outbound_proxy_id.clone()
+                };
+                if preserves_proxy && settings.egress_mode.is_none() {
+                    settings.egress_mode = egress::import_egress_mode(entry);
+                }
+                command.settings = Some(settings);
+                if let Some(template) = template {
+                    command = super::account_templates::apply_prefilled_import(command, template)?;
+                }
+                // Validate the same settings contract as account-management 2FA import,
+                // without persisting enrollment or granting automatic-push intent.
+                let checked = ReloginEnrollment::new(
+                    command
+                        .settings
+                        .as_ref()
+                        .ok_or_else(|| AdminError::invalid("缺少新账号设置"))?
+                        .clone(),
+                    command.outbound_proxy_id.clone(),
+                    context.clone(),
+                )?;
+                self.store()?
+                    .validate_template_references(&checked.config)
+                    .await
+                    .map_err(super::account_templates::template_error)?;
+            }
+            // Validate the final route before the import commit fence too.
+            super::import_proxy_binding(
+                self.proxies.as_ref(),
+                command.outbound_proxy_id.as_deref(),
+            )
+            .await?;
             entry.status = ReloginStatus::Pushing;
             self.save(entry).await?;
-            let result = self
-                .openai
-                .import_new_document(ImportCredentials {
-                    outbound_proxy_id,
-                    settings,
-                    context: context.clone(),
-                    document,
-                })
-                .await?;
+            let result = self.openai.import_new_document(command).await?;
             let id = result
                 .credential_ids
                 .first()
@@ -737,10 +777,17 @@ impl DefaultReloginService {
             entry.target = Some(ReloginTarget::from_account(&current.credential)?);
             id.clone()
         };
-        let quality_selection = entry
-            .enrollment
-            .as_ref()
-            .and_then(|enrollment| enrollment.quality_template.clone());
+        let quality_selection = if creating && options.form.is_some() {
+            options
+                .form
+                .as_ref()
+                .and_then(|form| form.quality_template.clone())
+        } else {
+            entry
+                .enrollment
+                .as_ref()
+                .and_then(|enrollment| enrollment.quality_template.clone())
+        };
         let quality_warning = if let Some(selection) = quality_selection {
             match self.quality_ops.as_ref() {
                 Some(quality_ops) => match quality_ops
@@ -1269,6 +1316,7 @@ impl ReloginService for DefaultReloginService {
                 template,
                 custom_name,
                 excel: None,
+                form: None,
             },
             &BTreeMap::new(),
             context,
@@ -1284,18 +1332,15 @@ impl ReloginService for DefaultReloginService {
         selections: &BTreeMap<String, ReloginPushSelection>,
         context: &MutationContext,
     ) -> Result<Vec<ReloginBatchResult>, AdminError> {
-        let crate::model::relogin_templates::ReloginNewAccountOptions {
-            template,
-            custom_name,
-            excel: new_account_excel,
-        } = new_account;
+        let mut new_account = new_account;
         validate_ids(ids)?;
-        if let Some(excel) = &new_account_excel {
+        if let Some(excel) = &new_account.excel {
             excel.validate()?;
         }
-        let custom_name = crate::model::accounts::normalize_custom_name(custom_name.as_deref())?;
+        new_account.custom_name =
+            crate::model::accounts::normalize_custom_name(new_account.custom_name.as_deref())?;
         let _gate = self.gate.lock().await;
-        let template = match template {
+        let template = match new_account.template.clone() {
             Some(selection) => Some(self.templates.resolve(selection).await?),
             None => None,
         };
@@ -1313,14 +1358,14 @@ impl ReloginService for DefaultReloginService {
                     match workspace::confirm_target(&mut entry, selections.get(id)) {
                         Ok(()) => {
                             // A new explicit push supersedes the original import settings.
-                            if entry.enrollment.take().is_some() {
+                            if entry.enrollment.is_some() {
+                                entry.clear_enrollment();
                                 self.save(&mut entry).await?;
                             }
-                            self.push_entry_with_template(
+                            self.push_entry_with_options(
                                 &mut entry,
                                 template.as_ref().map(|template| &template.config),
-                                custom_name.as_deref(),
-                                new_account_excel.as_ref(),
+                                &new_account,
                                 context,
                             )
                             .await

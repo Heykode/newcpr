@@ -79,7 +79,16 @@ struct AccountQueueRequest {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct NewAccountForm {
+    settings: super::accounts::AccountImportSettingsRequest,
+    outbound_proxy_id: Option<String>,
+    quality_template: Option<gateway_admin::model::quality_ops::QualityTemplateSelection>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct PushRequest {
+    new_account: Option<NewAccountForm>,
     new_account_excel: Option<gateway_admin::model::relogin_templates::ExcelImportSettings>,
     custom_name: Option<String>,
     ids: Vec<String>,
@@ -387,6 +396,23 @@ where
                 template: request.template,
                 custom_name: request.custom_name,
                 excel: request.new_account_excel,
+                form: request
+                    .new_account
+                    .map(|form| {
+                        Ok::<_, AdminError>(
+                            gateway_admin::model::relogin_templates::ReloginNewAccountForm {
+                                settings: form.settings.into_settings().map_err(|_| {
+                                    AdminError::invalid_request(
+                                        StatusCode::BAD_REQUEST,
+                                        "账号导入设置不合法",
+                                    )
+                                })?,
+                                outbound_proxy_id: form.outbound_proxy_id,
+                                quality_template: form.quality_template,
+                            },
+                        )
+                    })
+                    .transpose()?,
             },
             &request.selections,
             &auth.context().mutation_context(),

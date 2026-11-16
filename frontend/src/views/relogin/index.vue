@@ -1,7 +1,5 @@
 <script setup lang="ts">
-import type { AccountTemplate } from '@/api/modules/account-templates'
 import type { ReloginBatchResult, ReloginEntry, ReloginPushSelection, ReloginWorkspaceMode } from '@/api/modules/relogin'
-import type { Excel403Action } from '@/utils/excel-settings'
 import { CheckCheck, Download, GripVertical, MoreHorizontal, Pause, Play, RefreshCw, Save, Search, Settings2, Trash2, Upload, X } from '@lucide/vue'
 import { useIntervalFn, useMediaQuery, useNow } from '@vueuse/core'
 
@@ -13,14 +11,12 @@ import {
   exportRelogin,
   getRelogin,
   importRelogin,
-  maintainRelogin,
   pushRelogin,
   queueRelogin,
   resumeReloginWorkspace,
   setReloginAutomatic,
   setReloginWorkspace,
 } from '@/api/modules/relogin'
-import AccountTemplatePicker from '@/components/account-templates/AccountTemplatePicker.vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCheckbox from '@/components/base/BaseCheckbox.vue'
 import BaseConfirmModal from '@/components/base/BaseConfirmModal.vue'
@@ -38,18 +34,15 @@ import { defineTableColumns } from '@/components/base/BaseTable/columns'
 import BaseTable from '@/components/base/BaseTable/index.vue'
 import BaseTextarea from '@/components/base/BaseTextarea.vue'
 import { toast } from '@/components/base/BaseToast'
-import Excel403ActionSelect from '@/components/Excel403ActionSelect.vue'
-import ExcelModelFields from '@/components/ExcelModelFields.vue'
-import ExcelRecoveryFields from '@/components/ExcelRecoveryFields.vue'
 import ReloginCountCell from '@/components/ReloginCountCell.vue'
+import { useAccountGroupCatalog } from '@/composables/useAccountGroupCatalog'
 import { useCopyText } from '@/composables/useCopyText'
 import { useDownload } from '@/composables/useDownload'
 import { t } from '@/i18n'
-import { normalizeAccountName } from '@/utils/account-name'
 import { errorMessage } from '@/utils/async'
 import { formatDateTime } from '@/utils/date'
-import { DEFAULT_EXCEL_MODELS_INPUT } from '@/utils/excel-defaults'
-import { excelRecoverySettings, excelSettings } from '@/utils/excel-settings'
+import AccountSetupFields from '../accounts/components/AccountCreateModal/AccountSetupFields.vue'
+import { accountCreateEgress, accountImportQualityTemplate, accountImportSettings, accountImportTemplate, accountProxyError, emptyAccountCreateForm } from '../accounts/components/AccountCreateModal/model'
 import AccountPlanBadge from '../accounts/components/AccountPlanBadge.vue'
 import { useAccountSwipeSelect } from '../accounts/composables/useAccountSwipeSelect'
 import ReloginColumnFilter from './components/ReloginColumnFilter.vue'
@@ -61,7 +54,7 @@ import ReloginMaintenanceModal from './components/ReloginMaintenanceModal.vue'
 import ReloginMobileCard from './components/ReloginMobileCard.vue'
 import ReloginSessionStatus from './components/ReloginSessionStatus.vue'
 import { importPreview } from './import-preview'
-import { maintenanceBusy, maintenanceResult, matchesMaintenanceStatus, recentOperation, recentOperationAt } from './maintenance'
+import { maintenanceBusy, maintenanceResult, matchesMaintenanceStatus, queueButtonLabel, queueDisabledReason, recentOperation, recentOperationAt } from './maintenance'
 import { matchesPool, processingStatus, recoveryCountdown, recoveryLabels, reloginDisplayName, retryProgress, shortWorkspace, statusLabels, workspaceChoices, workspaceId } from './presentation'
 
 const entries = shallowRef<ReloginEntry[]>([])
@@ -95,7 +88,6 @@ const historyEntry = shallowRef<ReloginEntry | null>(null)
 const historyOpen = shallowRef(false)
 const credentialsEntry = shallowRef<ReloginEntry | null>(null)
 const credentialsOpen = shallowRef(false)
-const immediateIds = ref(new Set<string>())
 const loading = shallowRef(false)
 const busy = shallowRef(false)
 const failure = shallowRef('')
@@ -208,29 +200,6 @@ const { onMouseDown, overlayStyle } = useAccountSwipeSelect({
 })
 let timer: ReturnType<typeof setTimeout> | undefined
 let disposed = false
-async function immediateRelogin(row: ReloginEntry) {
-  if (busy.value || paused.value || maintenanceBusy(row) || immediateIds.value.has(row.id))
-    return
-  immediateIds.value = new Set([...immediateIds.value, row.id])
-  try {
-    const result = await maintainRelogin({ id: row.id, revision: row.revision, action: 'force_login' })
-    if (!disposed) {
-      if (result.state === 'succeeded')
-        toast.success('已取得新凭据，可以推送号池')
-      else toast.error(result.message || '重登未完成')
-    }
-  }
-  catch (error) {
-    if (!disposed)
-      toast.error(errorMessage(error))
-  }
-  finally {
-    immediateIds.value = new Set([...immediateIds.value].filter(id => id !== row.id))
-    if (!disposed)
-      await reload(true)
-  }
-}
-
 let readController: AbortController | undefined
 let generation = 0
 
@@ -421,31 +390,16 @@ function saveImport() {
   })
 }
 const confirming = shallowRef(false)
-const selectedTemplate = shallowRef<AccountTemplate | null>(null)
-const batchCustomName = shallowRef('')
-const applyExcel = shallowRef(false)
-const excelEnabled = shallowRef(false)
-const excelCacheCreationAsInput = shallowRef(true)
-const excel403Action = shallowRef<Excel403Action>('none')
-const excelRecoveryEnabled = shallowRef(false)
-const excelRecoveryInterval = shallowRef('60')
-const excelModelsFollowGlobal = shallowRef(true)
-const excelModels = shallowRef(DEFAULT_EXCEL_MODELS_INPUT)
+const pushForm = ref(emptyAccountCreateForm())
+const pushFields = ref<InstanceType<typeof AccountSetupFields>>()
+const pushProxyError = computed(() => accountProxyError(pushForm.value))
+const { groups: pushGroups, loading: pushGroupsLoading, loadGroups: loadPushGroups } = useAccountGroupCatalog({ immediate: false })
 const confirmMode = shallowRef<'push' | 'delete'>('push')
 const pendingRows = shallowRef<ReloginEntry[]>([])
 const pushAccounts = ref<Record<string, string>>({})
 function confirm(mode: 'push' | 'delete', ids: string[]) {
   failure.value = ''
-  selectedTemplate.value = null
-  batchCustomName.value = ''
-  applyExcel.value = false
-  excelEnabled.value = false
-  excelCacheCreationAsInput.value = true
-  excel403Action.value = 'none'
-  excelRecoveryEnabled.value = false
-  excelRecoveryInterval.value = '60'
-  excelModelsFollowGlobal.value = true
-  excelModels.value = DEFAULT_EXCEL_MODELS_INPUT
+  pushForm.value = { ...emptyAccountCreateForm(), provider: 'openai', proxyMode: 'preserve' }
   confirmMode.value = mode
   pendingRows.value = entries.value.filter(row => ids.includes(row.id)).map(row => ({ ...row }))
   pushAccounts.value = Object.fromEntries(pendingRows.value.map((row) => {
@@ -453,6 +407,8 @@ function confirm(mode: 'push' | 'delete', ids: string[]) {
     return [row.id, targets.length === 1 ? targets[0]!.accountId : '']
   }))
   confirming.value = pendingRows.value.length > 0
+  if (mode === 'push' && pendingRows.value.some(row => canPush(row) && row.poolAccountIds.length === 0))
+    void loadPushGroups()
 }
 function canPush(row: ReloginEntry) {
   return !maintenanceBusy(row) && !row.maintenance?.uncertain && row.status === 'ready' && row.credentialStatus === 'verified' && row.poolStatus !== 'synced'
@@ -474,28 +430,30 @@ function pushTargetOptions(row: ReloginEntry) {
 const pushSelectionMissing = computed(() => pushable.value.some(row =>
   requiresPushTarget(row) && !pushTarget(row),
 ))
-function executeConfirmed() {
+async function executeConfirmed() {
   if (confirmMode.value === 'push' && pushSelectionMissing.value)
     return
+  if (confirmMode.value === 'push' && newPushCount.value > 0) {
+    if (pushProxyError.value || await pushFields.value?.validate() === false)
+      return
+  }
   return action(async () => {
     if (confirmMode.value === 'push') {
-      const template = newPushCount.value > 0 && selectedTemplate.value
-        ? { id: selectedTemplate.value.id, revision: selectedTemplate.value.revision }
-        : undefined
-      const customName = newPushCount.value > 0 ? normalizeAccountName(batchCustomName.value) ?? undefined : undefined
+      const template = newPushCount.value > 0 ? accountImportTemplate(pushForm.value, 'openai') : undefined
       const selections: Record<string, ReloginPushSelection> = {}
       for (const row of pushable.value) {
         const target = pushTarget(row)
         if (requiresPushTarget(row) && target)
           selections[row.id] = { accountId: target.accountId, switchWorkspace: target.switchWorkspace }
       }
-      const newAccountExcel = newPushCount.value > 0 && applyExcel.value
+      const newAccount = newPushCount.value > 0
         ? {
-            ...excelSettings(excelEnabled.value, excelModelsFollowGlobal.value, excelModels.value, excelCacheCreationAsInput.value, excel403Action.value),
-            excelRecovery: excelRecoverySettings(excelRecoveryEnabled.value, excelRecoveryInterval.value),
+            settings: accountImportSettings(pushForm.value, 'openai'),
+            outboundProxyId: accountCreateEgress(pushForm.value, true).outboundProxyId || undefined,
+            qualityTemplate: accountImportQualityTemplate(pushForm.value),
           }
         : undefined
-      batchReport(await pushRelogin(pushable.value, template, customName, Object.keys(selections).length ? selections : undefined, newAccountExcel))
+      batchReport(await pushRelogin(pushable.value, template, undefined, Object.keys(selections).length ? selections : undefined, undefined, newAccount))
     }
     else {
       await deleteRelogin(pendingRows.value.map(row => row.id))
@@ -754,8 +712,8 @@ onBeforeUnmount(() => {
             <BaseButton v-if="canPush(row)" size="sm" variant="soft" :disabled="busy" @click="confirm('push', [row.id])">
               推送凭据
             </BaseButton>
-            <BaseButton v-else size="sm" :loading="immediateIds.has(row.id)" :disabled="busy || paused || maintenanceBusy(row)" @click="immediateRelogin(row)">
-              立即重登
+            <BaseButton v-else size="sm" :title="queueDisabledReason(row, busy, paused)" :disabled="!!queueDisabledReason(row, busy, paused)" @click="queue([row.id])">
+              {{ queueButtonLabel(row, paused) }}
             </BaseButton>
             <BasePopover trigger="click" placement="bottom-end">
               <template #trigger>
@@ -765,9 +723,6 @@ onBeforeUnmount(() => {
               </template>
               <template #default="{ close }">
                 <div class="min-w-40 p-1">
-                  <BaseMenuItem :disabled="paused || maintenanceBusy(row) || immediateIds.has(row.id)" @click="close(); immediateRelogin(row)">
-                    立即重登
-                  </BaseMenuItem>
                   <BaseMenuItem @click="close(); openMaintenance(row)">
                     登录与授权
                   </BaseMenuItem>
@@ -810,10 +765,10 @@ onBeforeUnmount(() => {
         {{ t('appearance.preview.components.noMatchingAccountYet') }}
       </p>
       <ReloginMobileCard
-        v-for="row in visible" :key="row.id" :row="row" :selected="selected.has(row.id)" :busy="busy || immediateIds.has(row.id)" :paused="paused" :can-push="canPush(row)" :now="now.getTime()"
+        v-for="row in visible" :key="row.id" :row="row" :selected="selected.has(row.id)" :busy="busy" :paused="paused" :can-push="canPush(row)" :now="now.getTime()"
         @select="toggle(row.id, $event)" @automatic="changeAutomatic([row.id], $event)"
         @credentials="credentialsEntry = row; credentialsOpen = true" @history="historyEntry = row; historyOpen = true"
-        @cancel="cancelTask(row)" @queue="immediateRelogin(row)" @maintain="openMaintenance(row, $event)" @push="confirm('push', [row.id])" @workspace="edit(row)" @delete="confirm('delete', [row.id])"
+        @cancel="cancelTask(row)" @queue="queue([row.id])" @maintain="openMaintenance(row, $event)" @push="confirm('push', [row.id])" @workspace="edit(row)" @delete="confirm('delete', [row.id])"
       />
     </section>
     <BaseTablePagination :pagination="{ currentPage: page, pageSize, total: filtered.length }" :loading="busy" @page-change="page = $event" @page-size-change="pageSize = $event" />
@@ -883,76 +838,101 @@ onBeforeUnmount(() => {
         将导出所选 {{ exportIds.length }} 条资料，文件包含{{ exportFormat === 'json' ? '访问凭据' : '邮箱、密码和2FA密钥' }}，请妥善保管。
       </p>
     </BaseConfirmModal>
-    <BaseConfirmModal v-model="queueOpen" title="确认重登" :loading="busy" @confirm="executeQueue">
+    <BaseConfirmModal v-model="queueOpen" title="立即重登" confirm-text="加入重登队列" :loading="busy" @confirm="executeQueue">
       <BaseFormItem label="本次登录工作区">
         <BaseSelect v-model="queueMode" :options="queueOptions" aria-label="本次登录工作区" :disabled="busy" />
       </BaseFormItem>
       <p class="mb-0 text-cp-sm">
-        {{ queuedIds.length }} 个账号，获取后待确认推送。自动重登仍沿用原工作区。
+        {{ queuedIds.length }} 个账号将排队获取新的 Codex 凭据，完成后由你确认推送。
+      </p>
+      <p class="mb-0 text-cp-xs text-cp-text-secondary">
+        有效会话会复用，无会话或会话失效时用密码与 2FA 登录。需要强制重新登录，可在“登录与授权”中操作。
       </p>
     </BaseConfirmModal>
-    <BaseConfirmModal v-model="confirming" :title="confirmMode === 'push' ? '确认推送到号池' : '删除重登资料'" :destructive="confirmMode === 'delete'" :loading="busy" :confirm-disabled="confirmMode === 'push' && (!pushable.length || pushSelectionMissing)" @confirm="executeConfirmed">
-      <p v-if="failure" class="mt-0 whitespace-pre-wrap break-words text-cp-sm text-cp-error" role="alert">
-        {{ failure }}
-      </p>
-      <p v-if="confirmMode === 'delete'" class="mt-0 text-cp-sm">
-        删除 {{ pendingRows.length }} 项资料并取消相关重登任务，号池账号不受影响。
-      </p>
-      <p v-else class="mt-0 text-cp-sm">
-        新增 {{ newPushCount }} 项，更新已有账号 {{ pushable.length - newPushCount }} 项，跳过 {{ pendingRows.length - pushable.length }} 项。
-      </p>
-      <AccountTemplatePicker v-if="confirming && confirmMode === 'push' && newPushCount > 0" v-model="selectedTemplate" :disabled="busy" />
-      <div v-if="confirmMode === 'push' && newPushCount > 0" class="my-4 grid min-w-0 gap-3">
-        <BaseCheckbox v-model="applyExcel" label="指定新账号 Excel 设置（优先于模板）" show-label :disabled="busy" />
-        <template v-if="applyExcel">
-          <div class="flex items-center justify-between gap-3">
-            <span class="text-cp-sm">Excel 入口</span>
-            <BaseSwitch v-model="excelEnabled" label="切换新账号 Excel 入口" :disabled="busy" />
-          </div>
-          <BaseFormItem label="Excel 模型">
-            <ExcelModelFields v-model:follow-global="excelModelsFollowGlobal" v-model:models="excelModels" :disabled="busy" />
-          </BaseFormItem>
-          <BaseFormItem label="缓存写入按普通输入计费">
-            <BaseSwitch v-model="excelCacheCreationAsInput" label="新账号缓存写入按普通输入计费" :disabled="busy || !excelEnabled" />
-          </BaseFormItem>
-          <BaseFormItem label="Excel遇到HTTP 403">
-            <Excel403ActionSelect v-model="excel403Action" :disabled="busy || !excelEnabled" />
-          </BaseFormItem>
-          <ExcelRecoveryFields v-model:enabled="excelRecoveryEnabled" v-model:interval="excelRecoveryInterval" :disabled="busy" />
-        </template>
-      </div>
-      <BaseFormItem v-if="confirmMode === 'push' && newPushCount > 0" label="本批账号名称（选填）">
-        <BaseInput v-model="batchCustomName" aria-label="本批账号名称" placeholder="默认名称" :disabled="busy" />
-      </BaseFormItem>
-      <p v-if="confirmMode === 'push' && pushable.length > newPushCount" class="text-cp-sm text-cp-text-secondary">
-        已有账号保留名称、分组、并发、调度及 Excel 配置。
-      </p>
-      <div class="max-h-64 overflow-auto">
-        <div v-for="row in pendingRows" :key="row.id" class="border-b border-cp-border py-2 text-cp-sm">
-          <div class="break-all text-cp-text">
-            {{ row.email }}
-          </div>
-          <div v-if="confirmMode === 'push'" class="text-cp-xs">
-            {{ row.planType?.toUpperCase() ?? '未知' }} / {{ !canPush(row) ? '不可推送' : row.poolAccountIds.length ? '更新已有账号' : '新增入池' }}
-          </div>
-          <div v-if="row.workspaceId && confirmMode === 'push'" class="break-all font-mono text-cp-xs">
-            {{ row.workspaceId }}
-          </div>
-          <div v-if="confirmMode === 'push' && canPush(row) && requiresPushTarget(row)" class="mt-2 grid min-w-0 gap-2">
-            <BaseSelect v-model="pushAccounts[row.id]" :options="pushTargetOptions(row)" :aria-label="`${row.email} 推送目标`" placeholder="选择要更新的账号" :disabled="busy" />
-            <p v-if="pushTarget(row)?.switchWorkspace" class="m-0 break-words text-cp-sm text-cp-warning">
-              将原 {{ pushTarget(row)?.planType?.toUpperCase() ?? '未知套餐' }} 账号切换为 {{ row.planType?.toUpperCase() }}，不另建账号。
-            </p>
-            <p v-else-if="pushTarget(row)" class="m-0 text-cp-sm text-cp-text-secondary">
-              更新所选账号，工作区不变。
-            </p>
-            <p v-else class="m-0 text-cp-sm text-cp-warning">
-              {{ pushTargetOptions(row).length ? '请选择推送目标。' : '原账号已变化或目标工作区已存在，请重新获取凭据。' }}
-            </p>
+    <BaseModal
+      v-model="confirming"
+      :title="confirmMode === 'push' ? '推送凭据' : '删除重登资料'"
+      :size="confirmMode === 'push' ? 'lg' : 'sm'"
+      :tone="confirmMode === 'delete' ? 'danger' : 'neutral'"
+      :role="confirmMode === 'delete' ? 'alertdialog' : 'dialog'"
+      :dismissible="!busy"
+    >
+      <div class="grid min-w-0 gap-5 text-cp-sm">
+        <p v-if="failure" class="m-0 whitespace-pre-wrap break-words text-cp-error" role="alert">
+          {{ failure }}
+        </p>
+        <p v-if="confirmMode === 'delete'" class="m-0 text-cp-text-secondary">
+          删除 {{ pendingRows.length }} 项资料并取消相关重登任务，号池账号不受影响。
+        </p>
+        <div v-else class="flex flex-wrap items-center gap-x-5 gap-y-2 text-cp-text-secondary">
+          <span v-if="newPushCount">新增入池 <strong class="ml-1 text-cp-text">{{ newPushCount }}</strong></span>
+          <span v-if="pushable.length > newPushCount">更新凭据 <strong class="ml-1 text-cp-text">{{ pushable.length - newPushCount }}</strong></span>
+          <span v-if="pendingRows.length > pushable.length">跳过 <strong class="ml-1 text-cp-warning">{{ pendingRows.length - pushable.length }}</strong></span>
+        </div>
+        <div class="grid min-w-0 gap-2">
+          <div v-for="row in pendingRows" :key="row.id" class="min-w-0 rounded-cp border border-cp-border-secondary p-3 sm:p-4">
+            <div class="flex min-w-0 flex-wrap items-start justify-between gap-3">
+              <div class="min-w-0 flex-1">
+                <div class="break-all font-semibold text-cp-text">
+                  {{ reloginDisplayName(row) }}
+                </div>
+                <div v-if="reloginDisplayName(row) !== row.email" class="mt-1 break-all text-cp-xs text-cp-text-secondary">
+                  {{ row.email }}
+                </div>
+              </div>
+              <div v-if="confirmMode === 'push'" class="flex flex-wrap items-center gap-2">
+                <AccountPlanBadge :plan-type="row.planType" :plan-type-display="row.planType?.toUpperCase() || '待识别'" size="sm" />
+                <span class="text-cp-xs" :class="canPush(row) ? 'text-cp-text-secondary' : 'text-cp-warning'">
+                  {{ !canPush(row) ? '不可推送' : row.poolAccountIds.length ? '更新凭据' : '新增入池' }}
+                </span>
+              </div>
+            </div>
+            <div v-if="confirmMode === 'push' && canPush(row) && requiresPushTarget(row)" class="mt-3 grid min-w-0 gap-2">
+              <BaseFormItem label="更新目标">
+                <BaseSelect v-model="pushAccounts[row.id]" :options="pushTargetOptions(row)" :aria-label="`${row.email} 推送目标`" placeholder="选择要更新的账号" :disabled="busy" />
+              </BaseFormItem>
+              <p v-if="pushTarget(row)?.switchWorkspace" class="m-0 break-words text-cp-warning">
+                将原 {{ pushTarget(row)?.planType?.toUpperCase() ?? '未知套餐' }} 账号切换为 {{ row.planType?.toUpperCase() }}，不另建账号。
+              </p>
+              <p v-else-if="!pushTarget(row)" class="m-0 text-cp-warning">
+                {{ pushTargetOptions(row).length ? '请选择推送目标。' : '原账号已变化或目标工作区已存在，请重新获取凭据。' }}
+              </p>
+            </div>
+            <details v-if="row.workspaceId && confirmMode === 'push'" class="mt-3 text-cp-xs text-cp-text-secondary">
+              <summary class="cursor-pointer">
+                工作区：{{ row.maintenance?.workspaces.find(item => item.id === row.workspaceId)?.name || row.workspaceChoices?.find(item => item.id === row.workspaceId)?.name || shortWorkspace(row.workspaceId) }}
+              </summary>
+              <div class="mt-2 break-all font-mono">
+                {{ row.workspaceId }}
+              </div>
+            </details>
           </div>
         </div>
+        <section v-if="confirmMode === 'push' && newPushCount > 0" class="grid min-w-0 gap-4 border-t border-cp-border-secondary pt-4" aria-label="新账号设置">
+          <h3 class="m-0 text-cp-sm font-semibold">
+            新账号设置
+          </h3>
+          <AccountSetupFields
+            v-if="confirming"
+            ref="pushFields"
+            v-model="pushForm"
+            hide-provider
+            :groups="pushGroups"
+            :groups-loading="pushGroupsLoading"
+            :disabled="busy"
+            :proxy-error="pushProxyError"
+          />
+        </section>
       </div>
-    </BaseConfirmModal>
+      <template #footer>
+        <BaseButton variant="secondary" :disabled="busy" @click="confirming = false">
+          {{ t('ui.cancel') }}
+        </BaseButton>
+        <BaseButton :variant="confirmMode === 'delete' ? 'destructive' : 'primary'" :loading="busy" :disabled="confirmMode === 'push' && (!pushable.length || pushSelectionMissing)" @click="executeConfirmed">
+          {{ confirmMode === 'push' ? '推送凭据' : '删除资料' }}
+        </BaseButton>
+      </template>
+    </BaseModal>
     <BaseModal v-model="editing" title="选择登录工作区" :dismissible="!busy">
       <div class="grid min-w-0 grid-cols-1 gap-3">
         <p class="m-0 break-all text-cp-sm">

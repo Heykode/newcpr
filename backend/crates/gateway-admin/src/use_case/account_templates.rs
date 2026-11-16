@@ -40,27 +40,11 @@ pub trait AccountTemplatesService: Send + Sync {
     ) -> Result<ImportCredentials, AdminError>;
     async fn prepare_prefilled_import(
         &self,
-        mut command: ImportCredentials,
+        command: ImportCredentials,
         selection: ReloginTemplateSelection,
     ) -> Result<ImportCredentials, AdminError> {
         let template = self.resolve(selection).await?;
-        let settings = command
-            .settings
-            .as_mut()
-            .ok_or_else(|| AdminError::invalid("缺少导入设置"))?;
-        // The edited form owns settings; the template still supplies its revision fence.
-        settings.template_proxy_mode = Some(
-            if settings.clear_outbound_proxy || command.outbound_proxy_id.is_some() {
-                ImportTemplateProxyMode::Replace
-            } else {
-                ImportTemplateProxyMode::Preserve
-            },
-        );
-        // Preserve legacy template-only State semantics without restoring its retired UI.
-        settings.turn_state_injection_enabled = settings
-            .turn_state_injection_enabled
-            .or(template.config.turn_state_injection_enabled);
-        Ok(command)
+        apply_prefilled_import(command, &template.config)
     }
     async fn apply(
         &self,
@@ -68,6 +52,30 @@ pub trait AccountTemplatesService: Send + Sync {
         selection: ReloginTemplateSelection,
         context: &MutationContext,
     ) -> Result<AccountsUpdateResult, AdminError>;
+}
+
+/// Apply the edited import form using an already revision-checked template snapshot.
+pub(super) fn apply_prefilled_import(
+    mut command: ImportCredentials,
+    template: &ReloginTemplateConfig,
+) -> Result<ImportCredentials, AdminError> {
+    let settings = command
+        .settings
+        .as_mut()
+        .ok_or_else(|| AdminError::invalid("缺少导入设置"))?;
+    // The edited form owns settings; the template still supplies its revision fence.
+    settings.template_proxy_mode = Some(
+        if settings.clear_outbound_proxy || command.outbound_proxy_id.is_some() {
+            ImportTemplateProxyMode::Replace
+        } else {
+            ImportTemplateProxyMode::Preserve
+        },
+    );
+    // Preserve legacy template-only State semantics without restoring its retired UI.
+    settings.turn_state_injection_enabled = settings
+        .turn_state_injection_enabled
+        .or(template.turn_state_injection_enabled);
+    Ok(command)
 }
 
 pub(crate) struct DefaultAccountTemplatesService {

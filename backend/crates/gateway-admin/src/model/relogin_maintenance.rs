@@ -95,6 +95,7 @@ pub struct ReloginEgressView {
     pub proxy_id: Option<String>,
     pub address: Option<String>,
     pub exit_ip: Option<String>,
+    pub latency_ms: Option<u64>,
     pub checked_at: Option<DateTime<Utc>>,
     pub source_ip: Option<std::net::Ipv6Addr>,
     pub mode: Option<gateway_core::provider_ports::egress::EgressMode>,

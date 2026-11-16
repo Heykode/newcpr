@@ -660,6 +660,7 @@ async fn relogin_excel_override_applies_to_new_accounts_and_overrides_template_m
             std::slice::from_ref(&id),
             &BTreeMap::from([(id.clone(), revision)]),
             gateway_admin::model::relogin_templates::ReloginNewAccountOptions {
+                form: None,
                 template: Some(template_selection(&template)),
                 custom_name: None,
                 excel: Some(ExcelImportSettings {

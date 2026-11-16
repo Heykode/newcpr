@@ -893,10 +893,16 @@ real row and checks both themes at 1440/390/320px for clipping and overflow.
 - Own the submission lock in a local synchronous ref, not a parent-fed `defineModel` whose
   reflected update can lag until the next render. Test two clicks in one event-loop turn
   and assert one mutation. Abort stale catalog reads, never retry an uncertain mutation.
-- New-account push confirms an optional template ID/revision plus unchanged row
-  revisions. Default to no template on each open, show a readable config summary,
-  and do not send a template for an existing-only batch. Mixed batches apply it
-  only to new imports. Show request failures inside an open confirmation as well
+- New-account push reuses `AccountSetupFields` and the account-create converters,
+  with OpenAI fixed and its platform chooser hidden. Reset on open, preserve the imported
+  exit by default, and let a template prefill editable fields. Send final settings, proxy,
+  optional monitoring selection and frozen template/row revisions; omit new settings
+  for existing-only batches. Mixed batches apply them only to new imports. Show the
+  workspace name or short ID while keeping the complete ID expandable. Desktop/mobile
+  queue buttons explain pause and active tasks with the same helper; do not invent extra
+  blocking conditions. Egress shows name, available last-success latency and a single-line
+  address, with detection time in details, without starting extra probes.
+  Show request failures inside an open confirmation as well
   as after closure; polling must not erase them or adopt new versions.
 - Verify CRUD, reload, cancellation, stale responses, no-template/mixed pushes and
   desktop/mobile layouts with synthetic endpoints only. Change themes through
