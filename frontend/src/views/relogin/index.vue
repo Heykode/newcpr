@@ -294,11 +294,16 @@ function batchReport(results: ReloginBatchResult[]) {
 }
 const queueOpen = shallowRef(false)
 const queuedIds = shallowRef<string[]>([])
+const queueDescription = computed(() => {
+  const row = queuedIds.value.length === 1 ? entries.value.find(row => row.id === queuedIds.value[0]) : undefined
+  return row ? reloginDisplayName(row) : `已选 ${queuedIds.value.length} 个账号`
+})
 const queueMode = shallowRef<ReloginWorkspaceMode>('highest')
 const queueOptions = [{ value: 'highest', label: '最高套餐' }, { value: 'original', label: '原工作区' }]
 function queue(ids: string[]) {
   queuedIds.value = [...ids]
   queueMode.value = 'highest'
+  failure.value = ''
   queueOpen.value = true
 }
 function executeQueue() {
@@ -838,17 +843,27 @@ onBeforeUnmount(() => {
         将导出所选 {{ exportIds.length }} 条资料，文件包含{{ exportFormat === 'json' ? '访问凭据' : '邮箱、密码和2FA密钥' }}，请妥善保管。
       </p>
     </BaseConfirmModal>
-    <BaseConfirmModal v-model="queueOpen" title="立即重登" confirm-text="加入重登队列" :loading="busy" @confirm="executeQueue">
-      <BaseFormItem label="本次登录工作区">
-        <BaseSelect v-model="queueMode" :options="queueOptions" aria-label="本次登录工作区" :disabled="busy" />
-      </BaseFormItem>
-      <p class="mb-0 text-cp-sm">
-        {{ queuedIds.length }} 个账号将排队获取新的 Codex 凭据，完成后由你确认推送。
-      </p>
-      <p class="mb-0 text-cp-xs text-cp-text-secondary">
-        有效会话会复用，无会话或会话失效时用密码与 2FA 登录。需要强制重新登录，可在“登录与授权”中操作。
-      </p>
-    </BaseConfirmModal>
+    <BaseModal v-model="queueOpen" title="立即重登" :description="queueDescription" size="sm" :dismissible="!busy">
+      <div class="grid gap-4">
+        <p v-if="failure" role="alert" class="m-0 whitespace-pre-wrap break-words text-cp-sm text-cp-error">
+          {{ failure }}
+        </p>
+        <BaseFormItem label="工作区">
+          <BaseSelect v-model="queueMode" :options="queueOptions" aria-label="本次登录工作区" :disabled="busy" />
+        </BaseFormItem>
+        <p class="m-0 text-cp-sm text-cp-text-secondary">
+          完成后待你确认推送
+        </p>
+      </div>
+      <template #footer>
+        <BaseButton variant="secondary" :disabled="busy" @click="queueOpen = false">
+          取消
+        </BaseButton>
+        <BaseButton variant="primary" :loading="busy" @click="executeQueue">
+          加入队列
+        </BaseButton>
+      </template>
+    </BaseModal>
     <BaseModal
       v-model="confirming"
       :title="confirmMode === 'push' ? '推送凭据' : '删除重登资料'"
