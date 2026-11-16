@@ -218,8 +218,20 @@ task cancellation and ordinary missing-entry/revision fences.
   cached credentials and reports invalid material without mutating storage. Preserve
   uncertain push states. Reimporting valid TOTP material resets the row through normal
   revision fencing; unknown legacy fields are no longer serialized on subsequent writes.
-- Login proxy propagation is distinct from managed account device/IPv6/UA state.
-  The Python runner does not implement the pool's IPv6 source-binding policy.
+- Relogin/maintenance resolves pooled accounts' current effective route from account management.
+  Unpooled material retains its imported proxy independently of enrollment/auto-push intent;
+  clearing legacy enrollment first copies that route. Explicit template route overrides apply
+  only to new pushes; preserve inherits import, clear uses deployment default. Validate the
+  effective reference before the push fence. Never fall back to direct after proxy failure.
+  Known fixed IPv6 bindings pass through to the worker; rotating sessions use the existing
+  provider selector once and retain the source while allowed. Listing must not advance the
+  selector. Unpooled IPv6 fixed affinity is still allocated by the account-creation transaction,
+  not by reading material. Preserve explicit deployment IPv6-disabled policy.
+  A whole operation uses one route snapshot. Explicit proxies clear libcurl NOPROXY; explicit
+  source addresses disable environment proxies with CurlOpt.PROXY. trust_env alone is insufficient
+  in pinned curl_cffi 0.15.0. Unbound requests retain normal deployment environment behavior.
+  Ordinary lists return sanitized endpoints and timestamped test IPs, never proxy credentials.
+  Multiple unresolved workspace routes must not be presented as one default route.
 - Deduplicate membership aliases by the real workspace ID before ranking or matching
   a locked workspace. Normalize the official plan wire aliases consistently across
   memberships, access/id token claims and usage verification: self-serve Business,
@@ -254,10 +266,10 @@ Only an unlocked manual acquisition with tied highest-plan memberships can enter
 Choices contain 2..64 distinct nonempty IDs (<=128 bytes, no whitespace/controls),
 names <=128 characters without controls and the same recognized normalized plan.
 Provider rejects malformed choices and ambiguity for an already locked request.
-No raw membership, login session or credential enters this DTO or error metadata.
+No raw membership, login session or credential enters the public choice DTO or public error message. A provider error may privately carry a verified WebSession to the relogin worker; Debug, API errors and logs must never serialize it.
 The JSONB entry defaults `workspace_choices` to empty and `selected_workspace_id`
 to None; waiting survives restart without holding an exchange or retrying.
-Resume queues a fresh manual login under the gate using the observed revision and
+Resume queues a fresh OAuth exchange (reusing only a verified account Web session) under the gate using the observed revision and
 one captured candidate. Keep mode and frozen replacement targets; revalidate their
 identity/revision/email, then recheck membership and acquired identity upstream.
 Never set automatic_job or manual_push_context. Successful acquisition stays Ready
@@ -517,3 +529,121 @@ push, automatic recovery, Team/Business workspaces or deployed runtime behavior.
 - Cover acquisition failures followed by retries, successful login/failed push and
   later push success, cancellations, stale revisions, atomic rollback, pagination,
   material deletion/reimport, explicit secret access and list/history non-disclosure.
+
+
+## Web Session and Account Maintenance
+
+### 1. Scope / Trigger
+
+Relogin maintenance reuses the existing account gate, global concurrency, revision CAS,
+private JSONB material and history. It does not modify request scheduling or State ownership.
+
+### 2. Signatures
+
+- `POST /api/admin/relogin/maintain`: `{id,revision,action,target?,deviceIdHash?,confirm?}`.
+- `POST /api/admin/relogin/cancel`: `{id,revision}`.
+- `POST /api/admin/relogin/material`: `{id}` -> one private snapshot containing its
+  `revision`, current material, pending secret, `needsResolution`, and history.
+- `POST /api/admin/relogin/material/update`: `{id,revision,password,mfaSecret,
+  confirmMaintenanceResolution?:boolean}`. Explicit manual reconciliation only.
+- `ReloginEntry.maintenance` defaults for old JSONB. No schema migration.
+
+### 3. Contracts
+
+`MaintenanceView` is the only ordinary-list projection: no cookies, password, TOTP key,
+enrollment session or credential document. Sensitive reads require admin auth, successful
+access audit and `Cache-Control: no-store`. Secret-bearing records never derive Debug.
+
+`WebSession` binds normalized email, device/session IDs, verified time and cookie domain,
+path, expiry, secure and host-only semantics. Capture cookies at the successful identity
+check, not from a later unverified jar. Failed candidates never overwrite a saved session.
+A completed Web stage can survive later OAuth failure or workspace ambiguity.
+
+Session checking is distinct from OAuth authorization. Authorization always makes fresh
+state/PKCE and exchanges an authorization code; it never labels a cached export as relogin.
+Token string inequality and revocation of all older grants are not guaranteed contracts.
+Fresh login is a separate explicit action. HTML, malformed session JSON, transport errors
+and identity mismatch must not silently trigger a password login; only explicit expiration
+may fall back. Web navigation can skip a denied membership; final OAuth stays target-locked.
+An accounts-backend `401 token_revoked/token_expired` invalidates the earlier Web snapshot
+even if `/api/auth/session` returned a token. A rejected mutation has no unknown effect;
+a read failure after an accepted mutation still does. Explicit authorization may rebuild
+an expired saved Web session once before rereading memberships, preserving its target.
+Do not apply this Web-session classification to the separately verified OAuth usage token.
+The MFA enroll/disable endpoints can explicitly reject a POST with HTTP 401 and
+`detail: User must re-authenticate to enroll/disable a factor`. Classify that
+as `reauthentication_required`, with no uncertain mutation effect. Preserve the
+ordinary Web session and allow explicit force-login followed by a fresh attempt.
+Do not replay the mutation automatically or generalize this to unknown 401/403 replies,
+transport failures, or a failed read after an accepted mutation.
+
+Remote mutations are never automatically retried. Persist running intent before submission;
+prepare TOTP and activation are separate calls with the candidate persisted in between.
+A cancelled, lost or restarted mutation becomes uncertain. The independent `uncertain`
+flag survives unrelated successful reads; `login_paused` survives logout and recovery scans.
+`MaintenanceState::blocks_login` is shared by explicit queues, enrollment and automatic recovery.
+One process owns a job until settlement; stale revisions cannot publish late results.
+
+Only successful acknowledged activation installs its candidate. Unknown security data must
+replace stale flags with unknown. TOTP disabled requires consistent false flags and no factor,
+including factors lacking a usable ID. Ordinary edits preserve pending/uncertain state.
+The disable endpoint may return message-only JSON without `success`. After a valid
+acknowledgement, always reread security state before confirming disablement; never resend
+the mutation to compensate for an unfamiliar acknowledgement. Negative/HTML responses or
+an unconfirmed state retain uncertainty. Activation still requires its explicit success.
+Explicit reconciliation archives pending enrollment material before clearing the restriction.
+Keep at most ten private material versions. Logout-all pauses automatic reauthentication;
+logout-and-relogin persists phase one then queues the existing worker as phase two.
+The logout-all endpoint's successful JSON `null` acknowledges acceptance; allow it only
+for that endpoint. It does not prove immediate global revocation. Keep the delay notice,
+clear the locally retained session, and preserve rejection of HTML/redirect/negative replies.
+
+Frontend confirmations freeze the displayed revision and target; do not reread a new revision
+and silently apply old intent to it. Material and revision must come from the same response.
+Watch modal identity as separate Vue watch sources; polling a new object for the same ID must
+not reset the selected tab. Include the requested initial tab as a watch source: Vue may
+update visibility before that prop in the same parent render. Maintenance history uses
+operation-result labels, not login-success labels for device or security reads. Keep non-login
+activity in last_activity and the credential-producing attempt in last_attempt; persist both in
+existing history in the same transaction. Cancellation/restart finishes the correct activity,
+and subsequent push updates the original authorization attempt. Material edits follow the same
+rule. Table and card layouts retain current pool-health, retry and relogin-count projections.
+Header filters use options inside their own popover, avoiding nested teleported select dismissal.
+Close/account change invalidates pending reads and TOTP timers;
+remote writes may complete and notify the list but never repopulate a closed dialog.
+
+### 4. Validation & Error Matrix
+
+- Unknown fields/action, missing revision -> reject before provider call.
+- Changed revision, same-account activity, global limit/pause -> conflict, no provider call.
+- Uncertain security effect / pending enrollment -> reads allowed, reauthorization blocked.
+- 302/HTML/negative logout acknowledgement -> uncertain, no success claim.
+- Missing directory target -> distinct diagnostic; explicit 402 disabled workspace -> terminal
+  workspace-unavailable. Never classify the former solely as confirmed deactivation.
+- Remote password change / extra email or browser challenge -> manual official verification;
+  no placeholder action that claims to implement automatic password changes.
+
+### 5. Good / Base / Bad Cases
+
+- Good: valid Web session -> new OAuth code exchange -> verified candidate -> explicit push.
+- Base: legacy row -> no session -> password/TOTP login -> verified Web snapshot and OAuth.
+- Bad: activation response lost -> inspect security -> ordinary edit -> automatic retry.
+  The uncertain flag and candidate must still block that retry.
+
+### 6. Required Tests
+
+Python offline fixtures cover fresh authorization with reuse, strict session parsing,
+verified cookie snapshots, membership denial and alias deduplication, MFA factors, 402,
+TOTP three-state flags, and negative logout acknowledgements.
+Rust tests cover shared gate, cancellation, stale revision, identity mismatch, durable
+uncertainty, private material resolution/history and logout pause. API tests cover auth
+and strict DTOs. Frontend tests cover RFC TOTP vectors, frozen confirmations, delayed
+responses and same-account polling. Browser previews must use synthetic data and isolated
+mock APIs; real maintenance and production acceptance require separate authorization.
+
+### 7. Wrong vs Correct
+
+Wrong: refresh the revision after the user confirms, then submit; use HTTP 200 as proof
+that the new password/TOTP works; treat a Web session check as new OAuth credentials.
+Correct: submit the confirmed revision; persist and evaluate action-specific outcomes;
+make the OAuth code exchange explicit and preserve unknown states until reconciled.

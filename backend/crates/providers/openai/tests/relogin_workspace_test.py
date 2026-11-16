@@ -44,6 +44,7 @@ class WorkspaceSelectionTests(unittest.TestCase):
     def test_main_returns_choices_and_closes_session_without_exporting_secrets(self):
         choices = [{"id": name, "name": name, "planType": "business"} for name in ["a", "b"]]
         instance = Mock()
+        instance.web_snapshot.return_value = None
         instance.run.side_effect = worker.WorkspaceSelectionRequired(choices)
         output = io.StringIO()
         with patch.object(worker, "Login", return_value=instance), \

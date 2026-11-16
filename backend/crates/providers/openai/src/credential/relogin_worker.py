@@ -11,6 +11,8 @@ import secrets
 import sys
 import time
 import uuid
+from datetime import datetime, timezone
+from http.cookiejar import Cookie
 from urllib.parse import parse_qs, urlencode, urljoin, urlparse
 
 AUTH = "https://auth.openai.com"
@@ -59,15 +61,15 @@ def normalize_plan(value):
     return PLAN_ALIASES.get(str(value or "").strip().lower())
 
 
-def select_workspace(accounts, preferred=None):
-    by_id = {}
-    names = {}
+def workspace_directory(accounts):
+    """Merge aliases without letting an accessible alias erase an explicit denial."""
     if isinstance(accounts, dict):
         iterable = accounts.items()
     elif isinstance(accounts, list):
         iterable = [(None, item) for item in accounts]
     else:
         raise LoginError("workspace_unknown")
+    result = {}
     for key, item in iterable:
         if not isinstance(item, dict):
             continue
@@ -75,23 +77,38 @@ def select_workspace(accounts, preferred=None):
         if not isinstance(account, dict):
             continue
         identifier = account.get("account_id") or account.get("id") or key
+        if not isinstance(identifier, str) or not identifier or identifier == "default":
+            continue
+        denied = any(
+            obj.get("can_access_with_session") is False or obj.get("can_access") is False
+            or obj.get("is_deactivated") is True or obj.get("is_removed") is True
+            or bool(obj.get("error"))
+            for obj in (item, account)
+        )
         plan = normalize_plan(account.get("plan_type"))
-        if identifier:
-            identifier = str(identifier)
-            previous = by_id.get(identifier)
-            if previous and previous["plan"] != plan:
-                raise LoginError("workspace_plan_unknown")
-            # The membership map may expose the same workspace under an alias.
-            by_id[identifier] = {"id": identifier, "plan": plan}
-            name = account.get("name")
-            if isinstance(name, str) and name.strip():
-                names[identifier] = "".join(char for char in name if char.isprintable()).strip()[:128]
-    items = list(by_id.values())
+        previous = result.get(identifier)
+        if previous and previous["plan"] and plan and previous["plan"] != plan:
+            raise LoginError("workspace_plan_unknown")
+        name = account.get("name")
+        name = "".join(c for c in name if c.isprintable()).strip()[:128] if isinstance(name, str) else ""
+        result[identifier] = {
+            "id": identifier, "plan": plan or (previous or {}).get("plan"),
+            "name": name or (previous or {}).get("name", ""),
+            "available": not denied and (previous or {}).get("available", True),
+        }
+    return list(result.values())
+
+
+def select_workspace(accounts, preferred=None):
+    items = workspace_directory(accounts)
     if preferred:
         matches = [item for item in items if item["id"] == preferred]
         if len(matches) != 1:
             raise LoginError("workspace_missing")
-        return matches[0]
+        if not matches[0]["available"]:
+            raise LoginError("workspace_unavailable")
+        return {"id": matches[0]["id"], "plan": matches[0]["plan"]}
+    items = [item for item in items if item["available"]]
     if not items or any(item["plan"] not in PLAN_PRIORITY for item in items):
         raise LoginError("workspace_plan_unknown")
     priority = max(PLAN_PRIORITY[item["plan"]] for item in items)
@@ -104,10 +121,57 @@ def select_workspace(accounts, preferred=None):
         ):
             raise LoginError("workspace_unknown")
         raise WorkspaceSelectionRequired([
-            {"id": item["id"], "name": names.get(item["id"], ""), "planType": item["plan"]}
+            {"id": item["id"], "name": item["name"], "planType": item["plan"]}
             for item in sorted(best, key=lambda item: item["id"])
         ])
-    return best[0]
+    return {"id": best[0]["id"], "plan": best[0]["plan"]}
+
+
+
+def totp_factors(info):
+    factors = info.get("factors") or info.get("mfa_factors") or []
+    grouped = isinstance(factors, dict)
+    if grouped:
+        factors = factors.get("totp", [])
+    if not isinstance(factors, list):
+        return []
+    return [x for x in factors if isinstance(x, dict)
+            and (grouped or (x.get("factor_type") or x.get("type")) == "totp")]
+
+
+def totp_factor_ids(info):
+    ids = {x.get("id") or x.get("factor_id") for x in totp_factors(info)}
+    ids = {identifier for identifier in ids if isinstance(identifier, str) and identifier}
+    native = info.get("native_default_factor_id")
+    if isinstance(native, str) and native:
+        ids.add(native)
+    return ids
+
+
+def totp_state(info):
+    flags = [info[key] for key in ("mfa_enabled_v2", "mfa_enabled") if isinstance(info.get(key), bool)]
+    factor = bool(totp_factors(info) or totp_factor_ids(info))
+    if flags and all(flags) and factor:
+        return True
+    if flags and not any(flags) and not factor:
+        return False
+    return None
+
+
+def acknowledged(response, *, allow_null=False):
+    if response.status_code == 204:
+        return
+    if not 200 <= response.status_code < 300:
+        raise LoginError("operation_unconfirmed")
+    try:
+        data = response.json()
+    except (ValueError, TypeError):
+        raise LoginError("operation_unconfirmed") from None
+    if allow_null and data is None:
+        return
+    if (not isinstance(data, dict) or data.get("error")
+            or data.get("success") is False or data.get("ok") is False):
+        raise LoginError("operation_unconfirmed")
 
 
 def safe_url(url):
@@ -143,14 +207,44 @@ class Login:
                 or not 16 <= len(secret) <= 128 or len(secret) % 8 not in (0, 2, 4, 5, 7)
                 or any(ch not in "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567" for ch in secret)):
             raise LoginError("invalid_material")
-        from curl_cffi import requests
+        from curl_cffi import requests, CurlOpt
         import pyotp
         self.request = request
         self.totp = pyotp.TOTP(secret)
-        self.session = requests.Session(impersonate="firefox133")
+        # libcurl also reads proxy/no_proxy environment variables. Pin explicit
+        # routes with curl options; trust_env alone does not disable those reads.
+        curl_options = ({CurlOpt.NOPROXY: ""} if request.get("proxy") else
+                        {CurlOpt.PROXY: ""} if request.get("source_ip") else {})
+        self.session = requests.Session(
+            impersonate="firefox133", curl_options=curl_options,
+            trust_env=not bool(request.get("proxy") or request.get("source_ip")),
+        )
         self.proxy = request.get("proxy")
         self.did = str(uuid.uuid4())
+        self.sid = str(uuid.uuid4())
         self.selected = None
+        self.web_token = None
+        self.verified_session = None
+        self.stage = "session"
+        self.effect_started = False
+        self.web_login_performed = False
+        self.rejected_navigation = set()
+        saved = request.get("web_session")
+        if saved and request.get("action") not in ("force_login",):
+            if str(saved.get("email", "")).lower() != request["email"].lower():
+                raise LoginError("identity_mismatch")
+            self.did = str(uuid.UUID(saved["device_id"]))
+            if saved.get("session_id"):
+                self.sid = str(uuid.UUID(saved["session_id"]))
+            for cookie in saved.get("cookies", []):
+                if cookie.get("domain", "").lstrip(".") not in ("auth.openai.com", "chatgpt.com", "openai.com"):
+                    raise LoginError("invalid_session")
+                self.session.cookies.jar.set_cookie(Cookie(
+                    0, cookie["name"], cookie["value"], None, False,
+                    cookie["domain"], not cookie.get("host_only", False), cookie["domain"].startswith("."),
+                    cookie.get("path", "/"), True, cookie.get("secure", True),
+                    cookie.get("expires"), cookie.get("expires") is None, None, None, {}, False,
+                ))
         self.deadline = time.monotonic() + 240
         self.session.cookies.set("oai-did", self.did, domain="auth.openai.com")
         self.session.cookies.set("oai-did", self.did, domain="chatgpt.com")
@@ -168,21 +262,45 @@ class Login:
         headers.update(kwargs.pop("headers", {}))
         response = self.session.request(
             method, url, headers=headers, timeout=30, proxy=self.proxy,
-            verify=True, allow_redirects=False, **kwargs,
+            verify=True, allow_redirects=False, interface=self.request.get("source_ip"), **kwargs,
         )
         if len(response.content) > 2 * 1024 * 1024:
             raise LoginError("response_too_large")
         if response.status_code >= 400:
             path = urlparse(url).path
+            if response.status_code == 401 and urlparse(url).path == "/api/auth/session":
+                raise LoginError("session_expired")
             if response.status_code == 429:
                 raise LoginError("rate_limited")
-            error = self.body(response).get("error")
-            if response.status_code in (400, 401, 403) and isinstance(error, dict):
-                code = error.get("code")
+            body = self.body(response)
+            error = body.get("error")
+            if (response.status_code == 401 and method == "POST"
+                    and urlparse(url).hostname == "chatgpt.com"
+                    and path in ("/backend-api/accounts/mfa/user/disable_in_house",
+                                 "/backend-api/accounts/mfa/enroll")
+                    and body.get("detail") == "User must re-authenticate to enroll/disable a factor"):
+                # The security operation was explicitly rejected, while ordinary Web
+                # reads may remain valid. Let a fresh login proceed without an uncertain lock.
+                self.effect_started = False
+                raise LoginError("reauthentication_required")
+            if response.status_code in (400, 401, 402, 403):
+                code = error.get("code") if isinstance(error, dict) else body.get("code")
                 if code in ("account_banned", "account_deactivated", "account_disabled", "account_suspended"):
                     raise LoginError("account_banned")
                 if code in ("deactivated_workspace", "workspace_deactivated", "organization_disabled"):
                     raise LoginError("workspace_unavailable")
+                if (response.status_code == 401 and urlparse(url).hostname == "chatgpt.com"
+                        and path.startswith("/backend-api/accounts/")
+                        and code in ("token_revoked", "token_expired")):
+                    # /api/auth/session can still return a token after revocation.
+                    # Do not preserve that earlier snapshot as a valid Web session.
+                    self.verified_session = None
+                    self.web_token = None
+                    if method == "POST":
+                        # This mutation was explicitly rejected before authorization.
+                        # A later GET failure must retain any preceding mutation's uncertainty.
+                        self.effect_started = False
+                    raise LoginError("session_expired")
             if "password/verify" in path:
                 raise LoginError("password_rejected")
             if "mfa/verify" in path:
@@ -269,12 +387,17 @@ class Login:
                 payload = {"password": self.request["password"]}
             elif page_type == "mfa_challenge":
                 factor = data.get("factor_id")
-                factors = data.get("factors") or data.get("mfa_challenge_factors") or []
+                challenge_selected = bool(factor)
+                factors = data.get("factors") or data.get("mfa_challenge_factors") or data.get("mfa_factors") or []
                 if not factor:
                     factor = next((item.get("id") or item.get("factor_id") for item in factors
-                                   if isinstance(item, dict) and item.get("factor_type") == "totp"), None)
+                                   if isinstance(item, dict) and (item.get("factor_type") or item.get("type")) == "totp"), None)
                 if not factor:
                     raise LoginError("mfa_factor_missing")
+                if not challenge_selected:
+                    self.fetch("POST", AUTH + "/api/accounts/mfa/issue_challenge", json={
+                        "id": factor, "type": "totp", "force_fresh_challenge": False,
+                    })
                 if time.time() % 30 > 26:
                     time.sleep(30 - time.time() % 30 + 0.1)
                 endpoint = "/api/accounts/mfa/verify"
@@ -288,10 +411,23 @@ class Login:
                         raise LoginError("workspace_unknown")
                     workspace = preferred
                 else:
-                    # This web session is used only to enumerate memberships, never exported.
-                    workspace = preferred or data.get("current_workspace_id") or data.get("workspace_id")
-                    if not workspace and isinstance(choices, list) and choices:
-                        workspace = choices[0].get("id") or choices[0].get("workspace_id")
+                    # Web navigation may use another accessible membership; the final OAuth
+                    # selection above always keeps its explicitly requested identity.
+                    current = data.get("current_workspace_id") or data.get("workspace_id")
+                    candidates = []
+                    if isinstance(choices, list):
+                        for choice in choices:
+                            if not isinstance(choice, dict):
+                                continue
+                            identifier = choice.get("id") or choice.get("workspace_id")
+                            if (identifier and choice.get("can_access") is not False
+                                    and choice.get("can_access_with_session") is not False
+                                    and not choice.get("is_deactivated") and not choice.get("error")):
+                                candidates.append(identifier)
+                    elif current:
+                        candidates = [current]
+                    candidates = [w for w in candidates if w not in self.rejected_navigation]
+                    workspace = current if current in candidates else next(iter(candidates), None)
                 if not workspace:
                     raise LoginError("workspace_unknown")
                 endpoint = "/api/accounts/workspace/select"
@@ -324,14 +460,24 @@ class Login:
                 "/api/accounts/session/select": "/choose-an-account",
                 "/api/accounts/consent/grant": "/consent",
             }[endpoint]
-            response = self.fetch(
-                "POST", AUTH + endpoint,
-                **({"json": payload} if payload is not None else {}),
-                headers={"Referer": AUTH + referer},
-            )
+            try:
+                response = self.fetch(
+                    "POST", AUTH + endpoint,
+                    **({"json": payload} if payload is not None else {}),
+                    headers={"Referer": AUTH + referer},
+                )
+            except LoginError as error:
+                if (not oauth and endpoint == "/api/accounts/workspace/select"
+                        and str(error) == "workspace_unavailable"):
+                    self.rejected_navigation.add(payload["workspace_id"])
+                    counts[page_type] -= 1
+                    continue
+                raise
         raise LoginError("login_loop")
 
-    def run(self):
+    def fresh_web_login(self):
+        self.web_login_performed = True
+        self.stage = "web_login"
         csrf = self.body(self.fetch("GET", WEB + "/api/auth/csrf")).get("csrfToken")
         if not csrf:
             raise LoginError("csrf_missing")
@@ -343,12 +489,79 @@ class Login:
         if not url:
             raise LoginError("authorize_missing")
         self.flow(url)
-        web_token = self.body(self.fetch("GET", WEB + "/api/auth/session")).get("accessToken")
-        if not web_token:
+        self.verify_web_session()
+
+    def verify_web_session(self):
+        response = self.fetch("GET", WEB + "/api/auth/session")
+        try:
+            data = response.json()
+        except (ValueError, TypeError):
+            raise LoginError("session_response_invalid") from None
+        if response.status_code != 200 or not isinstance(data, dict):
+            raise LoginError("session_response_invalid")
+        token = data.get("accessToken") or data.get("access_token")
+        if not token:
+            raise LoginError("session_expired" if not data else "session_response_invalid")
+        email = (data.get("user") or {}).get("email")
+        if not isinstance(email, str) or email.lower() != self.request["email"].lower():
+            raise LoginError("identity_mismatch")
+        self.web_token = token
+        # Capture the jar at verification time. Later OAuth/security responses may change
+        # cookies and must not be mislabeled as a newly verified session.
+        cookies = []
+        for cookie in self.session.cookies.jar:
+            if cookie.domain.lstrip(".") in ("auth.openai.com", "chatgpt.com", "openai.com"):
+                cookies.append({"name": cookie.name, "value": cookie.value, "domain": cookie.domain,
+                                "path": cookie.path, "secure": cookie.secure, "expires": cookie.expires,
+                                "host_only": not cookie.domain_specified})
+        self.verified_session = {"email": self.request["email"], "device_id": self.did, "cookies": cookies,
+                                 "session_id": self.sid,
+                                 "verified_at": datetime.now(timezone.utc).isoformat()}
+
+    def establish_web(self, allow_login=False):
+        if self.request.get("web_session") and self.request.get("action") != "force_login":
+            try:
+                self.verify_web_session()
+                return
+            except LoginError as error:
+                if str(error) != "session_expired" or not allow_login:
+                    raise
+                # A rejected session must not contaminate the new login jar.
+                self.session.cookies.clear()
+                self.verified_session = None
+        elif not allow_login:
             raise LoginError("session_missing")
-        memberships = self.body(self.fetch("GET", WEB + "/backend-api/accounts/check/v4-2023-04-27",
-                                          headers={"Authorization": "Bearer " + web_token}))
-        self.selected = select_workspace(memberships.get("accounts"), self.request.get("workspace_id"))
+        self.fresh_web_login()
+
+    def web_snapshot(self):
+        return self.verified_session
+
+    def web_api(self, method, path, payload=None):
+        headers = {"Authorization": "Bearer " + self.web_token, "oai-session-id": self.sid,
+                   "oai-language": "zh-CN", "x-openai-target-path": "/backend-api" + path,
+                   "x-openai-target-route": "/backend-api" + path}
+        return self.fetch(method, WEB + "/backend-api" + path, headers=headers,
+                          **({"json": payload} if payload is not None else {}))
+
+    def memberships(self):
+        self.stage = "workspace_directory"
+        return self.body(self.web_api("GET", "/accounts/check/v4-2023-04-27")).get("accounts")
+
+    def authorize(self):
+        try:
+            accounts = self.memberships()
+        except LoginError as error:
+            if (str(error) != "session_expired" or not self.request.get("web_session")
+                    or self.web_login_performed or self.request.get("action") == "force_login"):
+                raise
+            # Only a definitively expired saved Web session permits one fresh login.
+            # Keep the requested workspace and stop if its replacement also fails.
+            self.session.cookies.clear()
+            self.verified_session = None
+            self.fresh_web_login()
+            accounts = self.memberships()
+        self.selected = select_workspace(accounts, self.request.get("workspace_id"))
+        self.stage = "oauth_authorize"
         verifier = secrets.token_urlsafe(64)
         challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")
         state = secrets.token_urlsafe(32)
@@ -359,6 +572,7 @@ class Login:
             "id_token_add_organizations": "true", "codex_cli_simplified_flow": "true",
         })
         code = self.flow(authorize, oauth=True, state=state)
+        self.stage = "token_exchange"
         tokens = self.body(self.fetch("POST", AUTH + "/oauth/token", data={
             "grant_type": "authorization_code", "client_id": CLIENT, "code": code,
             "redirect_uri": CALLBACK, "code_verifier": verifier,
@@ -389,6 +603,7 @@ class Login:
             raise LoginError("plan_mismatch")
         if not tokens.get("refresh_token") or access.get("exp", 0) <= time.time():
             raise LoginError("invalid_token")
+        self.stage = "credential_verification"
         usage = self.body(self.fetch("GET", WEB + "/backend-api/wham/usage",
                                     headers={"Authorization": "Bearer " + tokens["access_token"],
                                              "ChatGPT-Account-Id": workspace}))
@@ -403,13 +618,129 @@ class Login:
             raise LoginError("verification_failed")
         document = {key: tokens[key] for key in ("access_token", "refresh_token", "id_token")}
         document.update({"email": email, "account_id": workspace, "type": "codex"})
-        return {"ok": True, "document": document}
+        return {"ok": True, "document": document, "web_session": self.web_snapshot()}
+
+
+    def devices(self):
+        data = self.body(self.web_api("GET", "/accounts/sessions?include_trusted_devices=true"))
+        if not isinstance(data.get("devices"), list):
+            raise LoginError("devices_unavailable")
+        result = []
+        for item in data["devices"][:500]:
+            if not isinstance(item, dict):
+                continue
+            session_id, device_hash = item.get("session_id"), item.get("hashed_device_id")
+            if not session_id and not device_hash:
+                continue
+            result.append({"id": str(item.get("render_id") or session_id or device_hash)[:256],
+                           "sessionId": session_id, "deviceIdHash": device_hash,
+                           "name": str(item.get("display_name") or "未知设备")[:256],
+                           "platform": str(item.get("platform") or "")[:128],
+                           "current": item.get("is_current_device") is True,
+                           "trusted": item.get("is_trusted_device") is True,
+                           "lastActiveAt": item.get("last_signed_in_timestamp_second")})
+        return result
+
+    def security(self):
+        info = self.body(self.web_api("GET", "/accounts/mfa_info"))
+        totp = totp_state(info)
+        password = self.body(self.web_api("GET", "/accounts/change_password/eligibility")).get("eligible")
+        if password is False:
+            add = self.body(self.web_api("GET", "/accounts/add_password/eligibility")).get("eligible")
+            password = False if add is True else None
+        return info, {"totpEnabled": totp if isinstance(totp, bool) else None,
+                      "passwordEnabled": password if isinstance(password, bool) else None}
+
+    def run(self):
+        action = self.request.get("action", "authorize")
+        self.establish_web(allow_login=action in ("authorize", "force_login", "switch_workspace"))
+        if action in ("authorize", "force_login", "switch_workspace"):
+            return self.authorize()
+        self.stage = action
+        view = {"sessionState": "valid", "sessionCheckedAt": datetime.now(timezone.utc).isoformat()}
+        result = {"ok": True, "view": view}
+        if action in ("check_session", "workspaces"):
+            view["workspaces"] = [{"id": w["id"], "name": w["name"], "planType": w["plan"],
+                                   "available": w["available"]} for w in workspace_directory(self.memberships())]
+        elif action == "devices":
+            view["devices"] = self.devices()
+        elif action == "security":
+            _, security = self.security()
+            view.update(security)
+        elif action == "revoke_device":
+            target, device_hash = self.request.get("target"), self.request.get("device_id_hash")
+            if bool(target) == bool(device_hash):
+                raise LoginError("device_missing")
+            device = next((d for d in self.devices() if (d["sessionId"] == target if target else d["deviceIdHash"] == device_hash)), None)
+            if not device or device["current"] or (device_hash and not device["trusted"]):
+                raise LoginError("device_missing")
+            self.effect_started = True
+            acknowledged(self.web_api("POST", "/accounts/trusted_devices/revoke" if device_hash else "/accounts/sessions/revoke",
+                         {"device_id_hash": device_hash} if device_hash else {"session_id": target}))
+            view["message"] = "退出请求已受理，刷新设备列表确认"
+        elif action in ("logout_all", "logout_and_relogin"):
+            self.effect_started = True
+            acknowledged(self.web_api("POST", "/accounts/logout_all", {}), allow_null=True)
+            self.verified_session = None
+            view["sessionState"] = "absent"
+            view["message"] = "全部退出请求已受理，上游可能延迟生效"
+            # Combined recovery is two durable service stages, never one opaque subprocess.
+        elif action == "prepare_totp":
+            info, security = self.security()
+            if security["totpEnabled"] is not False:
+                raise LoginError("totp_already_enabled")
+            self.effect_started = True
+            enrollment = self.body(self.web_api("POST", "/accounts/mfa/enroll", {"factor_type": "totp"}))
+            secret, session_id = enrollment.get("secret"), enrollment.get("session_id")
+            if not isinstance(secret, str) or not isinstance(session_id, str):
+                raise LoginError("totp_enroll_invalid")
+            secret = "".join(secret.upper().split()).rstrip("=")
+            if not 16 <= len(secret) <= 128 or any(c not in "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567" for c in secret):
+                raise LoginError("totp_enroll_invalid")
+            result["pending_totp"] = {"secret": secret, "session_id": session_id,
+                                      "created_at": datetime.now(timezone.utc).isoformat()}
+            view["pendingTotp"] = True
+        elif action == "activate_totp":
+            import pyotp
+            pending = self.request.get("pending_totp")
+            if not pending:
+                raise LoginError("totp_enroll_missing")
+            if time.time() % 30 > 26:
+                time.sleep(30 - time.time() % 30 + .1)
+            self.effect_started = True
+            activated = self.body(self.web_api("POST", "/accounts/mfa/user/activate_enrollment", {
+                "code": pyotp.TOTP(pending["secret"]).now(), "factor_type": "totp", "session_id": pending["session_id"],
+            }))
+            if activated.get("success") is not True:
+                raise LoginError("totp_activation_unconfirmed")
+            # Acknowledged activation is proof for this specific key; a generic enabled flag is not.
+            result["new_secret"] = pending["secret"]
+            view["totpEnabled"] = True
+            view["pendingTotp"] = False
+        elif action == "disable_totp":
+            info, security = self.security()
+            factor_ids = list(totp_factor_ids(info))
+            if len(factor_ids) != 1 or not factor_ids[0]:
+                raise LoginError("mfa_factor_missing")
+            self.effect_started = True
+            response = self.web_api("POST", "/accounts/mfa/user/disable_in_house", {"factor_id": factor_ids[0]})
+            # The endpoint also acknowledges with message-only JSON. The subsequent
+            # state read, not a particular acknowledgement field, proves disablement.
+            acknowledged(response)
+            _, security = self.security()
+            if security["totpEnabled"] is not False:
+                raise LoginError("totp_disable_unconfirmed")
+            view.update(security)
+        else:
+            raise LoginError("unsupported_action")
+        result["web_session"] = self.web_snapshot()
+        return result
 
 
 def main():
     login = None
     try:
-        request = json.loads(sys.stdin.buffer.read(16 * 1024 + 1))
+        request = json.loads(sys.stdin.buffer.read(512 * 1024 + 1))
         login = Login(request)
         result = login.run()
     except ImportError:
@@ -417,12 +748,16 @@ def main():
     except WorkspaceSelectionRequired as error:
         result = {"ok": False, "code": "workspace_ambiguous", "workspaces": error.choices}
     except LoginError as error:
-        result = {"ok": False, "code": str(error)}
+        result = {"ok": False, "code": str(error), "stage": login.stage if login else "initialization",
+                  "uncertain": bool(login and login.effect_started)}
     except Exception:
         # Exception text may contain credentials, cookies or upstream bodies.
-        result = {"ok": False, "code": "transport_failed"}
+        result = {"ok": False, "code": "transport_failed", "stage": login.stage if login else "initialization",
+                  "uncertain": bool(login and login.effect_started)}
     finally:
         if login:
+            if login.web_snapshot() and "web_session" not in result:
+                result["web_session"] = login.web_snapshot()
             login.session.close()
     print(json.dumps(result, separators=(",", ":")), flush=True)
 

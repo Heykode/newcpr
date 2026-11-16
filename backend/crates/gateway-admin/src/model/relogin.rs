@@ -122,6 +122,8 @@ impl ReloginStatus {
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct ReloginCredential {
+    #[serde(default)]
+    pub web_session: Option<super::relogin_maintenance::WebSession>,
     pub document: Map<String, Value>,
     pub email: String,
     pub user_id: String,
@@ -259,6 +261,8 @@ impl ReloginEnrollment {
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct ReloginEntry {
+    #[serde(default)]
+    pub maintenance: super::relogin_maintenance::MaintenanceState,
     pub id: String,
     pub revision: u64,
     pub email: String,
@@ -337,6 +341,8 @@ pub enum ReloginPushResult {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReloginAttempt {
+    #[serde(default)]
+    pub operation: Option<super::relogin_maintenance::MaintenanceAction>,
     pub id: String,
     pub source: ReloginAttemptSource,
     pub started_at: DateTime<Utc>,
@@ -375,6 +381,7 @@ impl ReloginEntry {
             ReloginAttemptSource::Library
         };
         self.last_attempt = Some(ReloginAttempt {
+            operation: None,
             id: uuid::Uuid::now_v7().simple().to_string(),
             source,
             started_at: Utc::now(),
@@ -398,11 +405,24 @@ impl ReloginEntry {
         });
     }
 
+    pub fn clear_enrollment(&mut self) {
+        if let Some(enrollment) = self.enrollment.take() {
+            self.maintenance.import_egress =
+                Some(super::relogin_maintenance::ReloginImportEgress {
+                    proxy_id: enrollment.config.outbound_proxy_id,
+                    mode: enrollment.config.egress_mode,
+                });
+        }
+    }
+
     pub fn update_attempt(&mut self) {
         let Some(attempt) = self.last_attempt.as_mut() else {
             return;
         };
-        if attempt.result == ReloginAttemptResult::Running {
+        if attempt.operation.is_some_and(|action| !action.authorizes()) {
+            return;
+        }
+        if attempt.result == ReloginAttemptResult::Running && attempt.operation.is_none() {
             let result = match self.status {
                 ReloginStatus::Ready => ReloginAttemptResult::Succeeded,
                 ReloginStatus::Failed => ReloginAttemptResult::Failed,
@@ -630,6 +650,9 @@ pub fn validate_ids(ids: &[String]) -> Result<(), AdminError> {
 }
 
 pub struct ReloginRequest {
+    pub source_ip: Option<std::net::Ipv6Addr>,
+    pub egress_mode: Option<gateway_core::provider_ports::egress::EgressMode>,
+    pub web_session: Option<super::relogin_maintenance::WebSession>,
     pub email: String,
     pub password: String,
     pub mfa_secret: String,

@@ -27,6 +27,7 @@ pub mod quota_forecast;
 pub mod quota_forecast_sampling;
 pub mod quota_learning;
 pub mod relogin;
+pub mod relogin_maintenance;
 pub mod relogin_templates;
 pub mod request_capture;
 pub mod reset_credits;

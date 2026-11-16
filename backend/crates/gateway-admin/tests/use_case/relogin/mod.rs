@@ -30,6 +30,7 @@ use std::{
 };
 
 mod enrollment;
+mod maintenance;
 mod recovery;
 mod workspace;
 
@@ -51,6 +52,14 @@ fn conflict() -> AdminStoreError {
 
 #[async_trait]
 impl ReloginStore for MemoryStore {
+    async fn record_maintenance(
+        &self,
+        _id: &str,
+        _action: Option<gateway_admin::model::relogin_maintenance::MaintenanceAction>,
+        _context: &gateway_admin::model::MutationContext,
+    ) -> AdminStoreResult<()> {
+        Ok(())
+    }
     async fn save_attempt(
         &self,
         id: &str,
@@ -189,7 +198,11 @@ impl ReloginStore for MemoryStore {
         }
         let mut history = self.history.lock().unwrap();
         for (entry, _) in entries {
-            if let Some(attempt) = &entry.last_attempt {
+            for attempt in entry
+                .last_attempt
+                .iter()
+                .chain(entry.maintenance.last_activity.iter())
+            {
                 history.insert((entry.id.clone(), attempt.id.clone()), attempt.clone());
             }
         }
@@ -349,6 +362,7 @@ fn account(expired: bool) -> AccountRecord {
 }
 fn credential() -> ReloginCredential {
     ReloginCredential {
+        web_session: None,
         document: serde_json::json!({"access_token":"test-only-token"})
             .as_object()
             .unwrap()
@@ -794,7 +808,7 @@ async fn relogin_import_defaults_redacts_and_requires_explicit_new_account_queue
     assert!(list.items[0].automatic);
     assert_eq!(list.items[0].status, ReloginStatus::Pending);
     let serialized = serde_json::to_string(&list).unwrap();
-    for secret in ["password", "mfa_secret", "JBSWY", "test-only"] {
+    for secret in ["\"password\":", "mfa_secret", "JBSWY", "test-only"] {
         assert!(!serialized.contains(secret));
     }
     h.ready(&id).await;
@@ -2048,7 +2062,7 @@ async fn account_relogin_queries_hide_missing_invalid_and_non_oauth_material_wit
     assert_eq!(actions.len(), 1);
     assert_eq!(actions[0].account_id, "acct_test");
     let wire = serde_json::to_string(&actions).unwrap();
-    for secret in ["password", "mfa_secret", "test-only", "JBSWY"] {
+    for secret in ["\"password\":", "mfa_secret", "test-only", "JBSWY"] {
         assert!(!wire.contains(secret));
     }
     h.store

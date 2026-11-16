@@ -74,6 +74,9 @@ fn eligibility(
     ) {
         return RecoveryView::new("uncertain", "推送结果待核实，不自动重复推送");
     }
+    if entry.maintenance.blocks_login() || entry.maintenance.login_paused {
+        return RecoveryView::new("manual_required", "账号维护待完成");
+    }
     if entry.validate_totp().is_err() {
         return RecoveryView::new("invalid_material", "缺少有效的密码或 2FA 资料");
     }

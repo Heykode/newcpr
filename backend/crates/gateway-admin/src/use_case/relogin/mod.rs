@@ -33,9 +33,11 @@ use serde::Serialize;
 use std::{collections::BTreeMap, sync::Arc};
 use tokio::sync::Mutex;
 
+mod egress;
 mod enrollment;
 mod export;
 mod history;
+mod maintenance;
 mod recovery;
 mod worker;
 mod workspace;
@@ -46,6 +48,9 @@ const MAX_ROTATION_ATTEMPTS: usize = 3;
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReloginView {
+    pub last_activity: Option<ReloginAttempt>,
+    pub egress: crate::model::relogin_maintenance::ReloginEgressView,
+    pub maintenance: crate::model::relogin_maintenance::MaintenanceView,
     pub id: String,
     pub revision: u64,
     pub email: String,
@@ -119,6 +124,22 @@ pub struct AccountReloginAction {
 
 #[async_trait]
 pub trait ReloginService: Send + Sync {
+    async fn maintenance_material(
+        &self,
+        id: &str,
+        context: &MutationContext,
+    ) -> Result<crate::model::relogin_maintenance::MaintenanceMaterial, AdminError>;
+    async fn update_material(
+        &self,
+        command: crate::model::relogin_maintenance::MaterialUpdate,
+        context: &MutationContext,
+    ) -> Result<(), AdminError>;
+    async fn maintain(
+        &self,
+        command: crate::model::relogin_maintenance::MaintenanceCommand,
+        context: &MutationContext,
+    ) -> Result<crate::model::relogin_maintenance::MaintenanceView, AdminError>;
+    async fn cancel(&self, id: &str, revision: u64) -> Result<(), AdminError>;
     async fn history(&self, id: &str, before: Option<&str>) -> Result<ReloginHistory, AdminError>;
     async fn totp(&self, id: &str, context: &MutationContext) -> Result<ReloginTotp, AdminError>;
     async fn push_with_template(
@@ -292,8 +313,42 @@ impl DefaultReloginService {
     }
 
     fn stop(gate: &Gate, entry: &mut ReloginEntry) {
+        if entry.maintenance.view.state == "running" {
+            entry.maintenance.uncertain |= entry
+                .maintenance
+                .view
+                .action
+                .is_some_and(crate::model::relogin_maintenance::MaintenanceAction::destructive);
+            entry.maintenance.view.state = if entry
+                .maintenance
+                .view
+                .action
+                .is_some_and(crate::model::relogin_maintenance::MaintenanceAction::destructive)
+            {
+                "uncertain"
+            } else {
+                "cancelled"
+            }
+            .to_owned();
+            entry.maintenance.view.message = "任务已取消，远端结果需核对".to_owned();
+            let attempt = if entry
+                .maintenance
+                .view
+                .action
+                .is_some_and(|action| action.authorizes())
+            {
+                &mut entry.last_attempt
+            } else {
+                &mut entry.maintenance.last_activity
+            };
+            if let Some(attempt) = attempt {
+                attempt.result = ReloginAttemptResult::Cancelled;
+                attempt.message = entry.maintenance.view.message.clone();
+                attempt.finished_at = Some(Utc::now());
+            }
+        }
         entry.manual_push_context = None;
-        entry.enrollment = None;
+        entry.clear_enrollment();
         if let Some(active) = gate.active.get(&entry.email) {
             active.cancellation.cancel();
         }
@@ -586,16 +641,34 @@ impl DefaultReloginService {
             }
             result.account_id
         } else {
-            let mut settings = if let Some(enrollment) = &entry.enrollment {
+            let mut settings = if let Some(template) = template {
+                Some(template.settings()?)
+            } else if let Some(enrollment) = &entry.enrollment {
                 self.store()?
                     .validate_template_references(&enrollment.config)
                     .await
                     .map_err(super::account_templates::template_error)?;
                 Some(enrollment.settings()?)
             } else {
-                template.map(ReloginTemplateConfig::settings).transpose()?
+                None
             };
-            if custom_name.is_some() || new_account_excel.is_some() {
+            let inherited_proxy = egress::import_proxy_id(entry).map(str::to_owned);
+            let outbound_proxy_id = match template {
+                Some(config)
+                    if !config.preserve_outbound_proxy
+                        || config
+                            .egress_mode
+                            .flatten()
+                            .is_some_and(|mode| mode.is_active()) =>
+                {
+                    config.outbound_proxy_id.clone()
+                }
+                _ => inherited_proxy,
+            };
+            if custom_name.is_some()
+                || new_account_excel.is_some()
+                || egress::import_egress_mode(entry).is_some()
+            {
                 let settings =
                     settings.get_or_insert_with(|| crate::model::accounts::AccountImportSettings {
                         template_proxy_mode: None,
@@ -624,23 +697,28 @@ impl DefaultReloginService {
                     excel.apply(settings);
                 }
             }
+            if template
+                .is_none_or(|config| config.preserve_outbound_proxy && config.egress_mode.is_none())
+                && let Some(settings) = settings.as_mut()
+            {
+                settings.egress_mode = egress::import_egress_mode(entry);
+            }
             if let Some(config) = template {
                 self.store()?
                     .validate_template_references(config)
                     .await
                     .map_err(super::account_templates::template_error)?;
             }
+            // Validate inherited proxy references before the import commit fence too.
+            super::import_proxy_binding(self.proxies.as_ref(), outbound_proxy_id.as_deref())
+                .await?;
             // Import owns both preparation and commit, so fence before entering it.
             entry.status = ReloginStatus::Pushing;
             self.save(entry).await?;
             let result = self
                 .openai
                 .import_new_document(ImportCredentials {
-                    outbound_proxy_id: entry
-                        .enrollment
-                        .as_ref()
-                        .and_then(|enrollment| enrollment.config.outbound_proxy_id.clone())
-                        .or_else(|| template.and_then(|config| config.outbound_proxy_id.clone())),
+                    outbound_proxy_id,
                     settings,
                     context: context.clone(),
                     document,
@@ -686,7 +764,7 @@ impl DefaultReloginService {
             None
         };
         entry.synced_at = Some(Utc::now());
-        entry.enrollment = None;
+        entry.clear_enrollment();
         entry.next_attempt_at = None;
         entry.automatic_attempts = 0;
         entry.stop_reason = None;
@@ -780,6 +858,30 @@ fn result(id: String, outcome: Result<(), AdminError>) -> ReloginBatchResult {
 
 #[async_trait]
 impl ReloginService for DefaultReloginService {
+    async fn maintenance_material(
+        &self,
+        id: &str,
+        context: &MutationContext,
+    ) -> Result<crate::model::relogin_maintenance::MaintenanceMaterial, AdminError> {
+        self.read_maintenance_material(id, context).await
+    }
+    async fn update_material(
+        &self,
+        command: crate::model::relogin_maintenance::MaterialUpdate,
+        context: &MutationContext,
+    ) -> Result<(), AdminError> {
+        self.edit_maintenance_material(command, context).await
+    }
+    async fn maintain(
+        &self,
+        command: crate::model::relogin_maintenance::MaintenanceCommand,
+        context: &MutationContext,
+    ) -> Result<crate::model::relogin_maintenance::MaintenanceView, AdminError> {
+        self.maintain_entry(command, context).await
+    }
+    async fn cancel(&self, id: &str, revision: u64) -> Result<(), AdminError> {
+        self.cancel_maintenance(id, revision).await
+    }
     async fn history(&self, id: &str, before: Option<&str>) -> Result<ReloginHistory, AdminError> {
         self.read_history(id, before).await
     }
@@ -866,6 +968,9 @@ impl ReloginService for DefaultReloginService {
             .find(|entry| entry.id == entry_id)
             .ok_or_else(|| AdminError::not_found("重登资料不存在"))?;
         entry.validate_totp()?;
+        if entry.maintenance.blocks_login() {
+            return Err(AdminError::conflict("请先完成账号安全维护"));
+        }
         if entry.revision != revision {
             return Err(AdminError::conflict("重登资料已变化，请重新确认"));
         }
@@ -882,6 +987,7 @@ impl ReloginService for DefaultReloginService {
                 "目标账号身份、工作区或凭据已变化，请重新确认",
             ));
         }
+        entry.maintenance.login_paused = false;
         entry.target = Some(target.clone());
         entry.workspace_mode = ReloginWorkspaceMode::Original;
         entry.workspace_targets.clear();
@@ -889,7 +995,7 @@ impl ReloginService for DefaultReloginService {
         entry.selected_workspace_id = None;
         entry.automatic_job = false;
         entry.manual_push_context = Some(context.clone());
-        entry.enrollment = None;
+        entry.clear_enrollment();
         entry.credential = None;
         entry.synced_at = None;
         entry.status = ReloginStatus::Queued;
@@ -913,134 +1019,157 @@ impl ReloginService for DefaultReloginService {
             .map_err(store_error)?;
         let settings = self.store()?.settings().await.map_err(store_error)?;
         let now = Utc::now();
-        let items = entries
-            .into_iter()
-            .map(|entry| {
-                let recovery = recovery::view(&entry, &pool, &settings, now);
-                let imported_at = entry.import_time();
-                let matches = matching_accounts(&entry, &pool);
-                let statistics = statistics_account(&entry, &matches);
-                let display_name = statistics.map(|account| {
-                    account
-                        .custom_name
-                        .clone()
-                        .unwrap_or_else(|| account.name.clone())
-                });
-                let material_error = entry.validate_totp().err();
-                let has_totp = material_error.is_none();
-                let credential = entry.credential.as_ref().filter(|_| has_totp);
-                let uncertain = matches!(
-                    entry.status,
-                    ReloginStatus::Pushing | ReloginStatus::Uncertain
-                );
-                let pool_status = if matches.is_empty() {
-                    "absent"
-                } else if entry.synced_at.is_some()
-                    && entry.target.as_ref().is_some_and(|target| {
-                        matches.iter().any(|account| {
-                            account.id == target.account_id
-                                && account.upstream_user_id.as_ref() == Some(&target.user_id)
-                                && account.upstream_account_id.as_ref()
-                                    == Some(&target.workspace_id)
-                        })
+        let mut items = Vec::with_capacity(entries.len());
+        let mut proxies = BTreeMap::new();
+        for entry in entries {
+            let recovery = recovery::view(&entry, &pool, &settings, now);
+            let imported_at = entry.import_time();
+            let matches = matching_accounts(&entry, &pool);
+            let statistics = statistics_account(&entry, &matches);
+            let display_name = statistics.map(|account| {
+                account
+                    .custom_name
+                    .clone()
+                    .unwrap_or_else(|| account.name.clone())
+            });
+            let material_error = entry.validate_totp().err();
+            let has_totp = material_error.is_none();
+            let credential = entry.credential.as_ref().filter(|_| has_totp);
+            let uncertain = matches!(
+                entry.status,
+                ReloginStatus::Pushing | ReloginStatus::Uncertain
+            );
+            let pool_status = if matches.is_empty() {
+                "absent"
+            } else if entry.synced_at.is_some()
+                && entry.target.as_ref().is_some_and(|target| {
+                    matches.iter().any(|account| {
+                        account.id == target.account_id
+                            && account.upstream_user_id.as_ref() == Some(&target.user_id)
+                            && account.upstream_account_id.as_ref() == Some(&target.workspace_id)
                     })
-                {
-                    "synced"
-                } else if credential.is_some() {
-                    "pending_push"
-                } else {
-                    "present"
-                };
-                let push_targets = workspace::push_targets(&entry, &pool);
-                ReloginView {
-                    workspace_mode: entry.workspace_mode,
-                    push_targets,
-                    recovery,
-                    id: entry.id,
-                    revision: entry.revision,
-                    email: entry.email,
-                    display_name,
-                    has_totp,
-                    enrollment_pending: entry.enrollment.is_some(),
-                    automatic: entry.automatic && has_totp,
-                    status: if material_error.is_some() && !uncertain {
-                        ReloginStatus::Failed
-                    } else {
-                        entry.status
-                    },
-                    message: if uncertain {
-                        entry.message
-                    } else {
-                        material_error.map_or(entry.message, |error| error.message().to_owned())
-                    },
-                    preferred_workspace_id: entry.preferred_workspace_id,
-                    workspace_choices: if !has_totp {
-                        Vec::new()
-                    } else {
-                        entry.workspace_choices
-                    },
-                    plan_type: credential.map(|value| value.plan_type.clone()).or_else(|| {
-                        matches
-                            .first()
-                            .and_then(|account| account.plan_type.clone())
-                    }),
-                    workspace_id: credential.map(|value| value.workspace_id.clone()),
-                    credential_status: match credential {
-                        None => "none",
-                        Some(value) if value.expires_at <= now => "expired",
-                        Some(_) => "verified",
-                    },
-                    pool_status,
-                    pool_account_ids: matches.iter().map(|account| account.id.clone()).collect(),
-                    pool_accounts: matches
-                        .iter()
-                        .map(|account| {
-                            let projection = resolve_account_operational_status(
-                                &AccountStatusFacts {
-                                    quota_paused: account.quota_paused,
-                                    enabled: account.enabled,
-                                    credential_state: account.credential_state,
-                                    access_token_expires_at: account
-                                        .access_token_expires_at
-                                        .map(Into::into),
-                                    quota: account.quota,
-                                    rate_limited_until: runtime
-                                        .rate_limited_until
-                                        .get(&account.id)
-                                        .copied()
-                                        .map(Into::into),
-                                    last_error_reason: account.last_error_reason,
-                                    last_error_message: account.last_error_message.clone(),
-                                },
-                                now.into(),
-                            );
-                            ReloginPoolAccountView {
-                                id: account.id.clone(),
-                                workspace_id: account.upstream_account_id.clone(),
-                                plan_type: account.plan_type.clone(),
-                                enabled: account.enabled,
-                                status: projection.status.as_str(),
-                                error_reason: projection.error_reason.map(|reason| reason.as_str()),
-                                error_message: projection.error_message,
-                            }
-                        })
-                        .collect(),
-                    relogin_account_id: statistics.map(|account| account.id.clone()),
-                    relogin_count: statistics
-                        .map(|account| account.relogin_count)
-                        .or_else(|| matches.is_empty().then_some(0)),
-                    last_relogin_at: statistics.and_then(|account| account.last_relogin_at),
-                    last_attempt_at: entry
-                        .last_attempt
-                        .as_ref()
-                        .map(|attempt| attempt.started_at),
-                    verified_at: credential.map(|value| value.verified_at),
-                    expires_at: credential.map(|value| value.expires_at),
-                    imported_at,
-                    updated_at: entry.updated_at,
+                })
+            {
+                "synced"
+            } else if credential.is_some() {
+                "pending_push"
+            } else {
+                "present"
+            };
+            let push_targets = workspace::push_targets(&entry, &pool);
+            let egress = if statistics.is_none() && !matches.is_empty() {
+                crate::model::relogin_maintenance::ReloginEgressView {
+                    kind: "multiple".into(),
+                    label: "选择工作区后跟随对应账号出口".into(),
+                    source: "account".into(),
+                    ..Default::default()
                 }
-            })
-            .collect();
+            } else {
+                self.egress_view(&entry, statistics, &mut proxies)
+                    .await
+                    .unwrap_or_else(
+                        |error| crate::model::relogin_maintenance::ReloginEgressView {
+                            kind: "unavailable".into(),
+                            label: error.message().to_owned(),
+                            ..Default::default()
+                        },
+                    )
+            };
+            items.push(ReloginView {
+                last_activity: entry.maintenance.last_activity.clone(),
+                egress,
+                maintenance: crate::model::relogin_maintenance::MaintenanceView {
+                    uncertain: entry.maintenance.uncertain,
+                    login_paused: entry.maintenance.login_paused,
+                    ..entry.maintenance.view.clone()
+                },
+                workspace_mode: entry.workspace_mode,
+                push_targets,
+                recovery,
+                id: entry.id,
+                revision: entry.revision,
+                email: entry.email,
+                display_name,
+                has_totp,
+                enrollment_pending: entry.enrollment.is_some(),
+                automatic: entry.automatic && has_totp,
+                status: if material_error.is_some() && !uncertain {
+                    ReloginStatus::Failed
+                } else {
+                    entry.status
+                },
+                message: if uncertain {
+                    entry.message
+                } else {
+                    material_error.map_or(entry.message, |error| error.message().to_owned())
+                },
+                preferred_workspace_id: entry.preferred_workspace_id,
+                workspace_choices: if !has_totp {
+                    Vec::new()
+                } else {
+                    entry.workspace_choices
+                },
+                plan_type: credential.map(|value| value.plan_type.clone()).or_else(|| {
+                    matches
+                        .first()
+                        .and_then(|account| account.plan_type.clone())
+                }),
+                workspace_id: credential.map(|value| value.workspace_id.clone()),
+                credential_status: match credential {
+                    None => "none",
+                    Some(value) if value.expires_at <= now => "expired",
+                    Some(_) => "verified",
+                },
+                pool_status,
+                pool_account_ids: matches.iter().map(|account| account.id.clone()).collect(),
+                pool_accounts: matches
+                    .iter()
+                    .map(|account| {
+                        let projection = resolve_account_operational_status(
+                            &AccountStatusFacts {
+                                quota_paused: account.quota_paused,
+                                enabled: account.enabled,
+                                credential_state: account.credential_state,
+                                access_token_expires_at: account
+                                    .access_token_expires_at
+                                    .map(Into::into),
+                                quota: account.quota,
+                                rate_limited_until: runtime
+                                    .rate_limited_until
+                                    .get(&account.id)
+                                    .copied()
+                                    .map(Into::into),
+                                last_error_reason: account.last_error_reason,
+                                last_error_message: account.last_error_message.clone(),
+                            },
+                            now.into(),
+                        );
+                        ReloginPoolAccountView {
+                            id: account.id.clone(),
+                            workspace_id: account.upstream_account_id.clone(),
+                            plan_type: account.plan_type.clone(),
+                            enabled: account.enabled,
+                            status: projection.status.as_str(),
+                            error_reason: projection.error_reason.map(|reason| reason.as_str()),
+                            error_message: projection.error_message,
+                        }
+                    })
+                    .collect(),
+                relogin_account_id: statistics.map(|account| account.id.clone()),
+                relogin_count: statistics
+                    .map(|account| account.relogin_count)
+                    .or_else(|| matches.is_empty().then_some(0)),
+                last_relogin_at: statistics.and_then(|account| account.last_relogin_at),
+                last_attempt_at: entry
+                    .last_attempt
+                    .as_ref()
+                    .map(|attempt| attempt.started_at),
+                verified_at: credential.map(|value| value.verified_at),
+                expires_at: credential.map(|value| value.expires_at),
+                imported_at,
+                updated_at: entry.updated_at,
+            });
+        }
         Ok(ReloginList { settings, items })
     }
 
@@ -1094,13 +1223,17 @@ impl ReloginService for DefaultReloginService {
                     .cloned()
                     .ok_or_else(|| AdminError::not_found("资料不存在"))?;
                 entry.validate_totp()?;
+                if entry.maintenance.blocks_login() {
+                    return Err(AdminError::conflict("请先完成账号安全维护"));
+                }
                 if entry.status.active() || gate.active.contains_key(&entry.email) {
                     return Err(AdminError::conflict("账号已有活动任务"));
                 }
+                entry.maintenance.login_paused = false;
                 workspace::prepare_queue(&mut entry, &pool, mode)?;
                 entry.automatic_job = false;
                 entry.manual_push_context = None;
-                entry.enrollment = None;
+                entry.clear_enrollment();
                 entry.status = ReloginStatus::Queued;
                 entry.message = "等待重登".to_owned();
                 self.save(&mut entry).await
@@ -1170,6 +1303,11 @@ impl ReloginService for DefaultReloginService {
         let mut results = Vec::new();
         for id in ids {
             let outcome = match entries.iter().find(|entry| &entry.id == id) {
+                Some(entry)
+                    if entry.maintenance.view.state == "running" || entry.maintenance.uncertain =>
+                {
+                    Err(AdminError::conflict("请先完成账号维护，再推送凭据"))
+                }
                 Some(entry) if revisions.get(id) == Some(&entry.revision) => {
                     let mut entry = entry.clone();
                     match workspace::confirm_target(&mut entry, selections.get(id)) {

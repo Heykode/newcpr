@@ -18,7 +18,8 @@ pub(super) fn prepare_queue(
 ) -> Result<(), AdminError> {
     let targets = if mode == ReloginWorkspaceMode::Highest {
         let matches = matching_accounts(entry, pool);
-        if let Some(first) = matches.first()
+        if statistics_account(entry, &matches).is_none()
+            && let Some(first) = matches.first()
             && matches.iter().any(|account| {
                 account.effective_outbound_proxy() != first.effective_outbound_proxy()
             })

@@ -41,6 +41,21 @@ async fn relogin_every_endpoint_requires_admin_auth_before_reading_material() {
         ("/api/admin/relogin", None),
         ("/api/admin/relogin/history", Some(json!({"id":"a"}))),
         ("/api/admin/relogin/totp", Some(json!({"id":"a"}))),
+        (
+            "/api/admin/relogin/maintain",
+            Some(json!({"id":"a","revision":1,"action":"devices"})),
+        ),
+        (
+            "/api/admin/relogin/cancel",
+            Some(json!({"id":"a","revision":1})),
+        ),
+        ("/api/admin/relogin/material", Some(json!({"id":"a"}))),
+        (
+            "/api/admin/relogin/material/update",
+            Some(
+                json!({"id":"a","revision":1,"password":"test-only-private-material","mfaSecret":"fixture"}),
+            ),
+        ),
         ("/api/admin/relogin/templates", None),
         (
             "/api/admin/relogin/enroll",
@@ -108,6 +123,22 @@ async fn relogin_rejects_missing_confirmation_versions_and_unknown_fields() {
     fixture.auth.insert_session("valid-session");
     for (path, body) in [
         ("/api/admin/relogin/history", json!({"before": "abc"})),
+        (
+            "/api/admin/relogin/maintain",
+            json!({"id":"a","action":"devices"}),
+        ),
+        (
+            "/api/admin/relogin/maintain",
+            json!({"id":"a","revision":1,"action":"unknown"}),
+        ),
+        (
+            "/api/admin/relogin/material",
+            json!({"id":"a","includeSession":true}),
+        ),
+        (
+            "/api/admin/relogin/material/update",
+            json!({"id":"a","revision":1,"password":"test-only-private-material","mfaSecret":"fixture","session":{}}),
+        ),
         (
             "/api/admin/relogin/totp",
             json!({"id": "a", "password": "untrusted"}),

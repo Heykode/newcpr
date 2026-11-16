@@ -2,16 +2,18 @@
 import type { AccountTemplate } from '@/api/modules/account-templates'
 import type { ReloginBatchResult, ReloginEntry, ReloginPushSelection, ReloginWorkspaceMode } from '@/api/modules/relogin'
 import type { Excel403Action } from '@/utils/excel-settings'
-import { CheckCheck, Download, GripVertical, Pause, Play, RefreshCw, Save, Search, Settings2, SlidersHorizontal, Trash2, Upload, X } from '@lucide/vue'
+import { CheckCheck, Download, GripVertical, MoreHorizontal, Pause, Play, RefreshCw, Save, Search, Settings2, Trash2, Upload, X } from '@lucide/vue'
 import { useIntervalFn, useMediaQuery, useNow } from '@vueuse/core'
 
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import {
+  cancelRelogin,
   configureRelogin,
   deleteRelogin,
   exportRelogin,
   getRelogin,
   importRelogin,
+  maintainRelogin,
   pushRelogin,
   queueRelogin,
   resumeReloginWorkspace,
@@ -25,8 +27,10 @@ import BaseConfirmModal from '@/components/base/BaseConfirmModal.vue'
 import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
+import BaseMenuItem from '@/components/base/BaseMenuItem.vue'
 import BaseModal from '@/components/base/BaseModal/index.vue'
 import BasePageHeader from '@/components/base/BasePageHeader.vue'
+import BasePopover from '@/components/base/BasePopover.vue'
 import BaseSelect from '@/components/base/BaseSelect.vue'
 import BaseSwitch from '@/components/base/BaseSwitch.vue'
 import BaseTablePagination from '@/components/base/BaseTable/BaseTablePagination.vue'
@@ -38,6 +42,7 @@ import Excel403ActionSelect from '@/components/Excel403ActionSelect.vue'
 import ExcelModelFields from '@/components/ExcelModelFields.vue'
 import ExcelRecoveryFields from '@/components/ExcelRecoveryFields.vue'
 import ReloginCountCell from '@/components/ReloginCountCell.vue'
+import { useCopyText } from '@/composables/useCopyText'
 import { useDownload } from '@/composables/useDownload'
 import { t } from '@/i18n'
 import { normalizeAccountName } from '@/utils/account-name'
@@ -45,19 +50,52 @@ import { errorMessage } from '@/utils/async'
 import { formatDateTime } from '@/utils/date'
 import { DEFAULT_EXCEL_MODELS_INPUT } from '@/utils/excel-defaults'
 import { excelRecoverySettings, excelSettings } from '@/utils/excel-settings'
+import AccountPlanBadge from '../accounts/components/AccountPlanBadge.vue'
 import { useAccountSwipeSelect } from '../accounts/composables/useAccountSwipeSelect'
+import ReloginColumnFilter from './components/ReloginColumnFilter.vue'
 import ReloginCredentialsModal from './components/ReloginCredentialsModal.vue'
+import ReloginEgress from './components/ReloginEgress.vue'
+import ReloginFilterOptions from './components/ReloginFilterOptions.vue'
 import ReloginHistoryModal from './components/ReloginHistoryModal.vue'
+import ReloginMaintenanceModal from './components/ReloginMaintenanceModal.vue'
 import ReloginMobileCard from './components/ReloginMobileCard.vue'
+import ReloginSessionStatus from './components/ReloginSessionStatus.vue'
 import { importPreview } from './import-preview'
-import { credentialLabel, matchesPool, poolPresentation, processingStatus, recoveryCountdown, recoveryLabels, reloginDisplayName, retryProgress, shortWorkspace, statusLabels, workspaceChoices, workspaceId } from './presentation'
+import { maintenanceBusy, maintenanceResult, matchesMaintenanceStatus, recentOperation, recentOperationAt } from './maintenance'
+import { matchesPool, processingStatus, recoveryCountdown, recoveryLabels, reloginDisplayName, retryProgress, shortWorkspace, statusLabels, workspaceChoices, workspaceId } from './presentation'
 
+const entries = shallowRef<ReloginEntry[]>([])
+const maintenanceId = shallowRef('')
+const maintenanceOpen = shallowRef(false)
+const maintenanceTab = shallowRef('session')
+const maintenanceEntry = computed(() => entries.value.find(row => row.id === maintenanceId.value) ?? null)
+function openMaintenance(row: ReloginEntry, tab = 'session') {
+  maintenanceId.value = row.id
+  maintenanceTab.value = tab
+  maintenanceOpen.value = true
+}
+async function cancelTask(row: ReloginEntry) {
+  try {
+    await cancelRelogin(row.id, row.revision)
+    await reload(true)
+  }
+  catch (error) { toast.error(errorMessage(error)) }
+}
+const summary = computed(() => [
+  { key: '', label: '全部账号' },
+  { key: 'active', label: '处理中' },
+  { key: 'queued', label: '排队' },
+  { key: 'needs_attention', label: '待处理' },
+  { key: 'failed', label: '异常' },
+].map(item => ({ ...item, count: entries.value.filter(row => matchesMaintenanceStatus(row, item.key)).length })))
+const webSessionFilter = shallowRef('')
+const sessionOptions = [{ label: '全部 Web 会话', value: '' }, { label: '有效', value: 'valid' }, { label: '已失效', value: 'expired' }, { label: '未建立 / 未检测', value: 'unknown' }]
 const mobile = useMediaQuery('(max-width: 767px)')
 const historyEntry = shallowRef<ReloginEntry | null>(null)
 const historyOpen = shallowRef(false)
 const credentialsEntry = shallowRef<ReloginEntry | null>(null)
 const credentialsOpen = shallowRef(false)
-const entries = shallowRef<ReloginEntry[]>([])
+const immediateIds = ref(new Set<string>())
 const loading = shallowRef(false)
 const busy = shallowRef(false)
 const failure = shallowRef('')
@@ -67,6 +105,19 @@ const exportOpen = shallowRef(false)
 const exportFormat = shallowRef<'json' | 'two_fa'>('json')
 const exportIds = shallowRef<string[]>([])
 const { downloadText } = useDownload()
+const copyText = useCopyText()
+async function copySelected() {
+  if (busy.value || !selected.value.size || selected.value.size > 200)
+    return
+  const ids = [...selected.value]
+  busy.value = true
+  try {
+    const result = await exportRelogin(ids, 'two_fa', { silent: true })
+    await copyText(result.files.map(file => file.content).join('\n'))
+  }
+  catch (error) { toast.error(errorMessage(error)) }
+  finally { busy.value = false }
+}
 
 function confirmExport(format: 'json' | 'two_fa') {
   exportIds.value = [...selected.value]
@@ -90,12 +141,15 @@ async function executeExport() {
   finally { busy.value = false }
 }
 const search = shallowRef('')
-const moreFilters = shallowRef(false)
+const egressFilter = shallowRef('')
+const egressOptions = [{ value: '', label: '全部出口' }, { value: 'proxy', label: '账号代理' }, { value: 'ipv6', label: 'IPv6 出口' }, { value: 'default', label: '部署默认出口' }, { value: 'unavailable', label: '出口不可用' }, { value: 'multiple', label: '多个工作区出口' }]
 const plan = shallowRef('')
 const status = shallowRef('')
 const pool = shallowRef('')
 const automatic = shallowRef('')
-const moreFilterCount = computed(() => [plan.value, pool.value, automatic.value].filter(Boolean).length)
+const recent = shallowRef('')
+const recentOptions = [{ value: '', label: '全部时间' }, { value: '1', label: '最近 24 小时' }, { value: '7', label: '最近 7 天' }, { value: '30', label: '最近 30 天' }, { value: 'never', label: '尚未操作' }]
+const filterCount = computed(() => [plan.value, pool.value, automatic.value, recent.value, status.value, webSessionFilter.value, egressFilter.value].filter(Boolean).length)
 const page = shallowRef(1)
 const pageSize = shallowRef(20)
 const concurrency = shallowRef('1')
@@ -107,7 +161,7 @@ const retryIntervalSeconds = shallowRef('30')
 const savedRetrySettings = shallowRef({ maxRetries: 2, retryIntervalSeconds: 30 })
 const retrySettingsError = shallowRef('')
 const now = useNow({ scheduler: callback => useIntervalFn(callback, 1000) })
-const statusOptions = [{ value: '', label: '全部处理状态' }, ...Object.entries({ ...statusLabels, ...recoveryLabels }).map(([value, label]) => ({ value, label })), { value: 'synced', label: '已同步到号池' }]
+const statusOptions = [{ value: '', label: '全部处理状态' }, { value: 'active', label: '处理中' }, { value: 'needs_attention', label: '待处理' }, ...Object.entries({ ...statusLabels, ...recoveryLabels }).map(([value, label]) => ({ value, label })), { value: 'synced', label: '已同步到号池' }]
 const poolOptions = [
   { value: '', label: '全部号池状态' },
   { value: 'absent', label: '未入池' },
@@ -123,7 +177,10 @@ const plans = computed(() => [{ value: '', label: '全部 PLAN' }, ...[...new Se
 const filtered = computed(() => entries.value.filter(row =>
   `${reloginDisplayName(row)} ${row.email}`.toLowerCase().includes(search.value.trim().toLowerCase())
   && (!plan.value || row.planType === plan.value)
-  && (!status.value || processingStatus(row).key === status.value)
+  && matchesMaintenanceStatus(row, status.value)
+  && (!webSessionFilter.value || (webSessionFilter.value === 'unknown' ? !['valid', 'expired'].includes(row.maintenance?.sessionState ?? '') : row.maintenance?.sessionState === webSessionFilter.value))
+  && (!recent.value || (recent.value === 'never' ? !recentOperationAt(row) : Date.parse(recentOperationAt(row) ?? '') >= now.value.getTime() - Number(recent.value) * 86400000))
+  && (!egressFilter.value || row.egress?.kind === egressFilter.value)
   && matchesPool(row, pool.value)
   && (!automatic.value || row.automatic === (automatic.value === 'on')),
 ))
@@ -132,14 +189,12 @@ const allSelected = computed(() => visible.value.length > 0 && visible.value.eve
 const partialSelected = computed(() => !allSelected.value && visible.value.some(row => selected.value.has(row.id)))
 const columns = defineTableColumns<ReloginEntry>([
   { key: 'selection', kind: 'selection' },
-  { key: 'identity', label: '账号', kind: 'identity', size: 'xl', grow: 1 },
-  { key: 'lastAttempt', label: '上次重登时间', kind: 'datetime', size: 'lg' },
-  { key: 'plan', label: 'PLAN / 工作区', kind: 'custom', size: 'lg' },
-  { key: 'status', label: '处理状态', kind: 'status', size: 'lg' },
-  { key: 'credential', label: '本次凭据', kind: 'status' },
-  { key: 'pool', label: '号池状态', kind: 'status' },
-  { key: 'reloginCount', label: '重登次数', kind: 'numeric', size: 'sm', align: 'center' },
-  { key: 'automatic', label: '自动重登', kind: 'status', size: 'sm' },
+  { key: 'identity', label: '账号', kind: 'identity', size: 'lg', grow: 1 },
+  { key: 'plan', label: 'PLAN', kind: 'custom', size: 'sm' },
+  { key: 'credential', label: '登录状态', kind: 'status', size: 'md' },
+  { key: 'egress', label: '出口 IP', kind: 'custom', size: 'lg' },
+  { key: 'status', label: '最近操作', kind: 'custom', size: 'lg' },
+  { key: 'automatic', label: '自动恢复', kind: 'status', size: 'sm' },
   { key: 'actions', label: '操作', kind: 'actions', size: 'lg' },
 ])
 const table = shallowRef<{ getScrollElement: () => HTMLElement | undefined, getTableElement: () => HTMLTableElement | undefined }>()
@@ -153,6 +208,29 @@ const { onMouseDown, overlayStyle } = useAccountSwipeSelect({
 })
 let timer: ReturnType<typeof setTimeout> | undefined
 let disposed = false
+async function immediateRelogin(row: ReloginEntry) {
+  if (busy.value || paused.value || maintenanceBusy(row) || immediateIds.value.has(row.id))
+    return
+  immediateIds.value = new Set([...immediateIds.value, row.id])
+  try {
+    const result = await maintainRelogin({ id: row.id, revision: row.revision, action: 'force_login' })
+    if (!disposed) {
+      if (result.state === 'succeeded')
+        toast.success('已取得新凭据，可以推送号池')
+      else toast.error(result.message || '重登未完成')
+    }
+  }
+  catch (error) {
+    if (!disposed)
+      toast.error(errorMessage(error))
+  }
+  finally {
+    immediateIds.value = new Set([...immediateIds.value].filter(id => id !== row.id))
+    if (!disposed)
+      await reload(true)
+  }
+}
+
 let readController: AbortController | undefined
 let generation = 0
 
@@ -377,7 +455,7 @@ function confirm(mode: 'push' | 'delete', ids: string[]) {
   confirming.value = pendingRows.value.length > 0
 }
 function canPush(row: ReloginEntry) {
-  return row.status === 'ready' && row.credentialStatus === 'verified' && row.poolStatus !== 'synced'
+  return !maintenanceBusy(row) && !row.maintenance?.uncertain && row.status === 'ready' && row.credentialStatus === 'verified' && row.poolStatus !== 'synced'
 }
 const pushable = computed(() => pendingRows.value.filter(canPush))
 const newPushCount = computed(() => pushable.value.filter(row => row.poolAccountIds.length === 0).length)
@@ -466,7 +544,7 @@ function saveWorkspace() {
     }
   })
 }
-watch([search, plan, status, pool, automatic, pageSize], () => {
+watch([search, plan, status, pool, automatic, recent, webSessionFilter, egressFilter, pageSize], () => {
   page.value = 1
 })
 watch(() => filtered.value.length, (length) => {
@@ -494,22 +572,13 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="flex min-w-0 flex-col gap-4 md:h-full md:min-h-0 md:overflow-hidden">
-    <BasePageHeader :title="t('navigation.relogin')" description="集中管理账号资料、重登记录和自动恢复状态。">
+    <BasePageHeader :title="t('navigation.relogin')" description="账号资料 · 登录会话 · 安全维护">
       <template #actions>
         <BaseIconButton label="刷新重登列表" :loading="loading" :disabled="busy" @click="reload()">
           <RefreshCw class="size-4" />
         </BaseIconButton>
-        <template v-if="!mobile">
-          <span class="text-cp-sm text-cp-text-secondary">{{ t('groups.metrics.concurrency') }}</span>
-          <BaseInput v-model="concurrency" class="w-18" type="number" min="1" max="8" step="1" aria-label="重登并发" :disabled="busy" />
-          <BaseIconButton label="保存并发设置" :disabled="busy || concurrency === String(savedConcurrency)" @click="configure()">
-            <Save class="size-4" />
-          </BaseIconButton>
-          <BaseIconButton :label="paused ? '恢复重登队列' : '暂停重登队列'" :disabled="busy" @click="configure(!paused)">
-            <Play v-if="paused" class="size-4 text-cp-success" /><Pause v-else class="size-4" />
-          </BaseIconButton>
-        </template>
-        <BaseIconButton label="自动重登设置" :disabled="busy" @click="openRetrySettings">
+
+        <BaseIconButton label="维护设置" :disabled="busy" @click="openRetrySettings">
           <Settings2 class="size-4" />
         </BaseIconButton>
         <BaseButton variant="primary" :disabled="busy" @click="importing = true">
@@ -519,45 +588,41 @@ onBeforeUnmount(() => {
         </BaseButton>
       </template>
     </BasePageHeader>
-    <div class="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2 rounded-cp-card border border-cp-border-secondary bg-(--cp-card-bg) px-4 py-3 text-cp-xs text-cp-text-secondary" aria-label="自动重登当前设置">
-      <span :class="paused ? 'text-cp-warning' : 'text-cp-success'">{{ paused ? '队列已暂停' : '队列运行中' }}</span>
-      <span>并发 {{ savedConcurrency }}</span>
-      <span>失败最多重试 {{ savedRetrySettings.maxRetries }} 次</span>
-      <span>重试间隔 {{ savedRetrySettings.retryIntervalSeconds }} 秒</span>
-      <span>允许自动重登 {{ entries.filter(row => row.automatic).length }} / {{ entries.length }}</span>
+    <div class="relogin-summary" aria-label="账号维护概览">
+      <button v-for="item in summary" :key="item.key" type="button" class="relogin-summary-item" :class="{ active: status === item.key }" @click="status = item.key">
+        <span>{{ item.label }}</span><strong>{{ item.count }}</strong>
+      </button>
+      <div class="relogin-queue-meta">
+        <span :class="paused ? 'text-cp-warning' : 'text-cp-success'">{{ paused ? '队列已暂停' : '队列运行中' }}</span><span>{{ savedConcurrency }} 个任务并行 · 失败重试 {{ savedRetrySettings.maxRetries }} 次</span>
+      </div>
     </div>
-    <div class="shrink-0 rounded-cp-card border border-cp-border-secondary bg-(--cp-card-bg) p-4">
-      <div class="relogin-filter-fields">
-        <BaseFormItem label="搜索账号" class="relogin-filter-search">
-          <BaseInput v-model="search" aria-label="搜索账号名称或邮箱" placeholder="搜索账号名称或邮箱" clearable>
-            <template #prefix>
-              <Search class="size-4" />
-            </template>
-          </BaseInput>
-        </BaseFormItem>
-        <BaseFormItem label="处理状态">
-          <BaseSelect v-model="status" :options="statusOptions" aria-label="处理状态筛选" />
-        </BaseFormItem>
-        <div class="relogin-filter-actions flex items-center gap-2">
-          <BaseButton :aria-expanded="moreFilters" @click="moreFilters = !moreFilters">
-            <SlidersHorizontal :size="15" />{{ moreFilters ? '收起筛选' : '更多筛选' }}{{ moreFilterCount ? `（${moreFilterCount}）` : '' }}
-          </BaseButton>
-          <BaseButton v-if="search || status || moreFilterCount" variant="link" @click="search = ''; status = ''; plan = ''; pool = ''; automatic = ''">
-            重置
-          </BaseButton>
-        </div>
-      </div>
-      <div v-if="moreFilters" class="relogin-filter-fields mt-4 border-t border-cp-border-secondary pt-4">
-        <BaseFormItem label="账号套餐">
-          <BaseSelect v-model="plan" :options="plans" aria-label="PLAN 筛选" />
-        </BaseFormItem>
-        <BaseFormItem label="号池状态">
-          <BaseSelect v-model="pool" :options="poolOptions" aria-label="号池状态筛选" />
-        </BaseFormItem>
-        <BaseFormItem label="自动重登">
-          <BaseSelect v-model="automatic" :options="autoOptions" aria-label="自动重登筛选" />
-        </BaseFormItem>
-      </div>
+    <div class="flex flex-wrap items-center gap-3">
+      <BaseInput v-model="search" class="w-full sm:max-w-80" aria-label="搜索账号名称或邮箱" placeholder="搜索账号名称或邮箱" clearable>
+        <template #prefix>
+          <Search class="size-4" />
+        </template>
+      </BaseInput>
+      <span class="ml-auto text-cp-xs tabular-nums text-cp-text-tertiary">{{ filtered.length }} / {{ entries.length }} 个账号</span>
+      <BaseButton :disabled="!search && !filterCount" @click="search = ''; status = ''; plan = ''; pool = ''; automatic = ''; recent = ''; webSessionFilter = ''; egressFilter = ''">
+        清除筛选{{ filterCount ? `（${filterCount}）` : '' }}
+      </BaseButton>
+    </div>
+    <div v-if="mobile" class="flex flex-wrap gap-x-4 gap-y-2">
+      <ReloginColumnFilter label="PLAN" :active="!!plan">
+        <ReloginFilterOptions v-model="plan" :options="plans" label="PLAN 筛选" />
+      </ReloginColumnFilter>
+      <ReloginColumnFilter label="登录状态" :active="!!webSessionFilter || !!pool">
+        <ReloginFilterOptions v-model="webSessionFilter" :options="sessionOptions" label="Web 会话筛选" /><ReloginFilterOptions v-model="pool" :options="poolOptions" label="号池状态筛选" />
+      </ReloginColumnFilter>
+      <ReloginColumnFilter label="出口 IP" :active="!!egressFilter">
+        <ReloginFilterOptions v-model="egressFilter" :options="egressOptions" label="出口筛选" />
+      </ReloginColumnFilter>
+      <ReloginColumnFilter label="最近操作" :active="!!status || !!recent">
+        <ReloginFilterOptions v-model="status" :options="statusOptions" label="处理状态筛选" /><ReloginFilterOptions v-model="recent" :options="recentOptions" label="最近操作时间筛选" />
+      </ReloginColumnFilter>
+      <ReloginColumnFilter label="自动恢复" :active="!!automatic">
+        <ReloginFilterOptions v-model="automatic" :options="autoOptions" label="自动恢复筛选" />
+      </ReloginColumnFilter>
     </div>
     <div class="flex shrink-0 flex-wrap items-center gap-2 border-y border-cp-border py-2">
       <BaseCheckbox class="md:hidden" label="全选当前页" :model-value="allSelected" :indeterminate="partialSelected" :disabled="busy" @update:model-value="selectPage" />
@@ -579,6 +644,9 @@ onBeforeUnmount(() => {
         <BaseIconButton label="批量开启自动重登" :disabled="busy || !selected.size || selected.size > 500" @click="changeAutomatic([...selected], true)">
           <CheckCheck class="size-4 text-cp-success" />
         </BaseIconButton>
+        <BaseButton :disabled="busy || !selected.size || selected.size > 200" @click="copySelected">
+          复制 2FA
+        </BaseButton>
         <BaseButton :disabled="busy || !selected.size || selected.size > 200" @click="confirmExport('json')">
           <template #icon>
             <Download class="size-4" />
@@ -600,8 +668,9 @@ onBeforeUnmount(() => {
     <div v-if="failure || loadFailure" class="max-h-24 shrink-0 overflow-auto whitespace-pre-wrap break-words text-cp-sm text-cp-error" role="alert">
       {{ failure || loadFailure }}
     </div>
+    <ReloginMaintenanceModal v-model="maintenanceOpen" :entry="maintenanceEntry" :initial-tab="maintenanceTab" @changed="reload(true)" @credentials="credentialsEntry = maintenanceEntry; credentialsOpen = true" />
     <ReloginHistoryModal v-model="historyOpen" :entry="historyEntry" @after-leave="!historyOpen && (historyEntry = null)" />
-    <ReloginCredentialsModal v-model="credentialsOpen" :entry="credentialsEntry" @after-leave="!credentialsOpen && (credentialsEntry = null)" />
+    <ReloginCredentialsModal v-model="credentialsOpen" :entry="credentialsEntry" @changed="reload(true)" @after-leave="!credentialsOpen && (credentialsEntry = null)" />
     <section v-if="!mobile" class="flex min-h-48 min-w-0 flex-1 flex-col overflow-hidden rounded-cp-card border border-cp-border-secondary bg-cp-bg-container">
       <BaseTable ref="table" class="relogin-table min-h-0 flex-1" :columns="columns" :rows="visible" :selected-row-keys="[...selected]" :loading="loading && !entries.length" column-layout="content" :empty-text="t('appearance.preview.components.noMatchingAccountYet')" @mousedown="onMouseDown">
         <template #header-selection>
@@ -620,73 +689,115 @@ onBeforeUnmount(() => {
               <div v-if="reloginDisplayName(row) !== row.email" class="truncate text-cp-xs text-cp-text-secondary" :title="row.email">
                 {{ row.email }}
               </div>
-              <div class="truncate text-cp-xs text-cp-text-tertiary" :title="row.message">
-                {{ row.message || '待处理' }}
-              </div>
-              <div class="truncate text-cp-xs text-cp-text-tertiary">
-                导入 {{ row.importedAt ? formatDateTime(row.importedAt) : '时间未记录' }}
-              </div>
             </div>
           </div>
         </template>
-        <template #lastAttempt="{ row }">
-          <button v-if="row.lastAttemptAt || row.lastReloginAt" type="button" class="whitespace-nowrap text-cp-link hover:underline" title="查看重登详情" @click="historyEntry = row; historyOpen = true">
-            {{ formatDateTime(row.lastAttemptAt || row.lastReloginAt) }}
-          </button>
-          <span v-else class="text-cp-text-tertiary">—</span>
+        <template #header-plan>
+          <ReloginColumnFilter label="PLAN" :active="!!plan">
+            <ReloginFilterOptions v-model="plan" :options="plans" label="PLAN 筛选" />
+          </ReloginColumnFilter>
+        </template>
+        <template #header-credential>
+          <ReloginColumnFilter label="登录状态" :active="!!webSessionFilter || !!pool">
+            <ReloginFilterOptions v-model="webSessionFilter" :options="sessionOptions" label="Web 会话筛选" /><ReloginFilterOptions v-model="pool" :options="poolOptions" label="号池状态筛选" />
+          </ReloginColumnFilter>
+        </template>
+        <template #header-egress>
+          <ReloginColumnFilter label="出口 IP" :active="!!egressFilter">
+            <ReloginFilterOptions v-model="egressFilter" :options="egressOptions" label="出口筛选" />
+          </ReloginColumnFilter>
+        </template>
+        <template #header-status>
+          <ReloginColumnFilter label="最近操作" :active="!!status || !!recent">
+            <ReloginFilterOptions v-model="status" :options="statusOptions" label="处理状态筛选" /><ReloginFilterOptions v-model="recent" :options="recentOptions" label="最近操作时间筛选" />
+          </ReloginColumnFilter>
+        </template>
+        <template #header-automatic>
+          <ReloginColumnFilter label="自动恢复" :active="!!automatic">
+            <ReloginFilterOptions v-model="automatic" :options="autoOptions" label="自动恢复筛选" />
+          </ReloginColumnFilter>
         </template>
         <template #plan="{ row }">
-          <div class="w-full min-w-0 overflow-hidden">
-            <div class="truncate font-mono text-cp-sm" :title="row.planType?.toUpperCase()">
-              {{ row.planType?.toUpperCase() ?? '待识别' }}
-            </div>
-            <div class="truncate font-mono text-cp-xs text-cp-text-tertiary" :title="workspaceId(row) ?? '自动选择工作区'">
-              {{ shortWorkspace(workspaceId(row)) }}
-            </div>
+          <AccountPlanBadge :plan-type="row.planType" :plan-type-display="row.planType?.toUpperCase() || '待识别'" size="sm" />
+          <div class="mt-1 truncate text-cp-xs text-cp-text-tertiary" :title="workspaceId(row) ?? '自动选择工作区'">
+            {{ shortWorkspace(workspaceId(row)) }}
           </div>
         </template>
+        <template #egress="{ row }">
+          <ReloginEgress :row="row" />
+        </template>
         <template #status="{ row }">
+          <button type="button" class="mb-1 block text-left font-medium text-cp-link hover:underline" @click="historyEntry = row; historyOpen = true">
+            {{ recentOperation(row) }}
+          </button>
           <button v-if="row.status === 'awaiting_workspace'" type="button" class="block cursor-pointer border-0 bg-transparent p-0 text-left text-cp-sm text-cp-warning underline underline-offset-4 disabled:cursor-not-allowed disabled:opacity-50" :disabled="busy || paused" @click="edit(row)">
             待选择工作区
           </button>
-          <span v-else class="block whitespace-normal break-words" :class="processingStatus(row).tone" :title="processingStatus(row).detail">{{ processingStatus(row).label }}</span>
+          <span v-else class="block whitespace-normal break-words" :class="maintenanceResult(row).tone" :title="row.maintenance?.message || processingStatus(row).detail">{{ maintenanceResult(row).label }}</span>
+          <button v-if="recentOperationAt(row)" type="button" class="mt-1 block whitespace-nowrap text-cp-xs tabular-nums text-cp-link hover:underline" title="查看操作记录" @click="historyEntry = row; historyOpen = true">
+            {{ formatDateTime(recentOperationAt(row)) }}
+          </button>
           <span v-if="retryProgress(row)" class="block text-cp-xs tabular-nums text-cp-text-tertiary">{{ retryProgress(row) }}</span>
-          <span v-if="row.recovery?.state !== 'idle' && row.recovery?.message" class="block whitespace-normal break-words text-cp-xs text-cp-text-secondary">{{ row.recovery.message }}</span>
           <span v-if="row.recovery?.retryAt" class="block whitespace-normal break-words text-cp-xs tabular-nums text-cp-text-tertiary">{{ recoveryCountdown(row, now.getTime()) }}</span>
         </template>
         <template #credential="{ row }">
-          <span class="block whitespace-normal break-words" :class="row.credentialStatus === 'verified' ? 'text-cp-success' : row.credentialStatus === 'expired' ? 'text-cp-warning' : 'text-cp-text-tertiary'" :title="row.verifiedAt ? `本次缓存凭据验证于 ${formatDateTime(row.verifiedAt)}；不代表已推送或号池当前正常` : '尚未通过重登获取新的 JSON；与号池已有凭据无关'">{{ credentialLabel(row) }}</span>
-        </template>
-        <template #pool="{ row }">
-          <div :title="poolPresentation(row).detail">
-            <span class="block whitespace-normal break-words" :class="poolPresentation(row).tone">{{ poolPresentation(row).label }}</span>
-            <span v-if="poolPresentation(row).caption" class="block text-cp-xs text-cp-text-tertiary">{{ poolPresentation(row).caption }}</span>
-          </div>
+          <ReloginSessionStatus :row="row" />
         </template>
         <template #automatic="{ row }">
           <BaseSwitch :label="`${row.email} 自动重登`" :model-value="row.automatic" :disabled="busy" @update:model-value="changeAutomatic([row.id], $event)" />
-        </template>
-        <template #reloginCount="{ row }">
-          <ReloginCountCell :count="row.reloginCount" :last-relogin-at="row.lastReloginAt" />
+          <div class="mt-1 text-cp-xs text-cp-text-tertiary">
+            成功 <ReloginCountCell :count="row.reloginCount" :last-relogin-at="row.lastReloginAt" /> 次
+          </div>
         </template>
         <template #actions="{ row }">
-          <div class="grid w-full min-w-0 justify-items-start gap-1 py-1">
-            <div class="flex items-center gap-1">
-              <BaseButton class="w-12 whitespace-nowrap px-2!" size="sm" title="重新登录并获取新凭据" :aria-busy="row.status === 'running' || undefined" :disabled="busy || ['queued', 'running', 'pushing'].includes(row.status)" @click="queue([row.id])">
-                重登
-              </BaseButton>
-              <BaseButton class="w-12 whitespace-nowrap px-2!" variant="soft" size="sm" title="确认推送到号池" :disabled="busy || !canPush(row)" @click="confirm('push', [row.id])">
-                推送
-              </BaseButton>
-            </div>
-            <div class="flex items-center gap-1">
-              <BaseIconButton label="选择工作区" size="sm" :disabled="busy || ['queued', 'running', 'pushing', 'uncertain'].includes(row.status)" @click="edit(row)">
-                <Settings2 class="size-3.5" />
-              </BaseIconButton>
-              <BaseIconButton label="删除重登资料" size="sm" :disabled="busy" @click="confirm('delete', [row.id])">
-                <Trash2 class="size-3.5 text-cp-error" />
-              </BaseIconButton>
-            </div>
+          <div class="flex flex-nowrap items-center gap-1 whitespace-nowrap">
+            <BaseButton v-if="canPush(row)" size="sm" variant="soft" :disabled="busy" @click="confirm('push', [row.id])">
+              推送凭据
+            </BaseButton>
+            <BaseButton v-else size="sm" :loading="immediateIds.has(row.id)" :disabled="busy || paused || maintenanceBusy(row)" @click="immediateRelogin(row)">
+              立即重登
+            </BaseButton>
+            <BasePopover trigger="click" placement="bottom-end">
+              <template #trigger>
+                <BaseIconButton label="更多账号操作" size="sm">
+                  <MoreHorizontal class="size-4" />
+                </BaseIconButton>
+              </template>
+              <template #default="{ close }">
+                <div class="min-w-40 p-1">
+                  <BaseMenuItem :disabled="paused || maintenanceBusy(row) || immediateIds.has(row.id)" @click="close(); immediateRelogin(row)">
+                    立即重登
+                  </BaseMenuItem>
+                  <BaseMenuItem @click="close(); openMaintenance(row)">
+                    登录与授权
+                  </BaseMenuItem>
+                  <BaseMenuItem @click="close(); openMaintenance(row, 'devices')">
+                    设备与会话
+                  </BaseMenuItem>
+                  <BaseMenuItem @click="close(); openMaintenance(row, 'workspaces')">
+                    工作区
+                  </BaseMenuItem>
+                  <BaseMenuItem @click="close(); credentialsEntry = row; credentialsOpen = true">
+                    账号资料与复制
+                  </BaseMenuItem>
+                  <BaseMenuItem @click="close(); openMaintenance(row, 'security')">
+                    安全维护
+                  </BaseMenuItem>
+                  <BaseMenuItem @click="close(); historyEntry = row; historyOpen = true">
+                    操作历史
+                  </BaseMenuItem>
+                  <BaseMenuItem :disabled="maintenanceBusy(row)" @click="close(); edit(row)">
+                    自动恢复工作区
+                  </BaseMenuItem>
+                  <BaseMenuItem v-if="maintenanceBusy(row)" @click="close(); cancelTask(row)">
+                    取消任务
+                  </BaseMenuItem>
+                  <BaseMenuItem tone="destructive" @click="close(); confirm('delete', [row.id])">
+                    删除本地资料
+                  </BaseMenuItem>
+                </div>
+              </template>
+            </BasePopover>
           </div>
         </template>
       </BaseTable>
@@ -699,18 +810,18 @@ onBeforeUnmount(() => {
         {{ t('appearance.preview.components.noMatchingAccountYet') }}
       </p>
       <ReloginMobileCard
-        v-for="row in visible" :key="row.id" :row="row" :selected="selected.has(row.id)" :busy="busy" :paused="paused" :can-push="canPush(row)" :now="now.getTime()"
+        v-for="row in visible" :key="row.id" :row="row" :selected="selected.has(row.id)" :busy="busy || immediateIds.has(row.id)" :paused="paused" :can-push="canPush(row)" :now="now.getTime()"
         @select="toggle(row.id, $event)" @automatic="changeAutomatic([row.id], $event)"
         @credentials="credentialsEntry = row; credentialsOpen = true" @history="historyEntry = row; historyOpen = true"
-        @queue="queue([row.id])" @push="confirm('push', [row.id])" @workspace="edit(row)" @delete="confirm('delete', [row.id])"
+        @cancel="cancelTask(row)" @queue="immediateRelogin(row)" @maintain="openMaintenance(row, $event)" @push="confirm('push', [row.id])" @workspace="edit(row)" @delete="confirm('delete', [row.id])"
       />
     </section>
     <BaseTablePagination :pagination="{ currentPage: page, pageSize, total: filtered.length }" :loading="busy" @page-change="page = $event" @page-size-change="pageSize = $event" />
     <div v-if="overlayStyle" :style="overlayStyle" class="pointer-events-none fixed z-50 border border-cp-primary bg-cp-primary/10" />
 
-    <BaseModal v-model="retrySettingsOpen" title="自动重登设置" size="sm" :dismissible="!busy">
+    <BaseModal v-model="retrySettingsOpen" title="维护设置" size="sm" :dismissible="!busy">
       <div class="grid min-w-0 gap-4">
-        <div v-if="mobile" class="flex flex-wrap items-center gap-2 border-b border-cp-border-secondary pb-4">
+        <div class="flex flex-wrap items-center gap-2 border-b border-cp-border-secondary pb-4">
           <span class="text-cp-sm text-cp-text-secondary">{{ t('groups.metrics.concurrency') }}</span>
           <BaseInput v-model="concurrency" class="w-18" type="number" min="1" max="8" step="1" aria-label="重登并发" :disabled="busy" />
           <BaseIconButton label="保存并发设置" :disabled="busy || concurrency === String(savedConcurrency)" @click="configure()">
@@ -911,27 +1022,61 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.relogin-filter-fields {
+.relogin-summary {
   display: flex;
   flex-wrap: wrap;
-  gap: 12px;
-  align-items: end;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
 }
-.relogin-filter-fields > * {
-  flex: 1 1 180px;
-  min-width: 0;
+.relogin-summary-item {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  border: 1px solid var(--cp-border-secondary);
+  border-radius: 8px;
+  background: var(--cp-card-bg);
+  padding: 12px 18px;
+  color: var(--cp-text-secondary);
+  cursor: pointer;
 }
-.relogin-filter-fields > .relogin-filter-search {
-  flex: 2 1 280px;
+.relogin-summary-item strong {
+  font-size: 22px;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  color: var(--cp-text);
 }
-.relogin-filter-fields > .relogin-filter-actions {
-  flex: 0 0 auto;
+.relogin-summary-item.active {
+  border-color: var(--cp-primary);
+  background: var(--cp-primary-bg);
+}
+.relogin-queue-meta {
   margin-left: auto;
+  display: grid;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--cp-text-tertiary);
+}
+@media (max-width: 767px) {
+  .relogin-summary-item {
+    flex: 1 1 40%;
+    justify-content: space-between;
+  }
+  .relogin-queue-meta {
+    margin: 4px 0 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
 }
 
-@media (max-width: 1599px) {
-  .relogin-table :deep([data-column-key='actions']) {
-    position: static;
-  }
+.relogin-table :deep([data-column-key='plan']),
+.relogin-table :deep([data-column-key='credential']) {
+  padding-left: 8px;
+  padding-right: 8px;
+}
+.relogin-table :deep([data-column-key='status']) {
+  padding-left: 12px;
+  padding-right: 12px;
 }
 </style>

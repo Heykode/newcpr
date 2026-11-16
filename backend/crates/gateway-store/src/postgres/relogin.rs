@@ -51,7 +51,11 @@ async fn save_row(
     if result.rows_affected() != 1 {
         return Err(conflict());
     }
-    if let Some(attempt) = &entry.last_attempt {
+    for attempt in entry
+        .last_attempt
+        .iter()
+        .chain(entry.maintenance.last_activity.iter())
+    {
         sqlx::query(
             "insert into account_relogin_history (entry_id,id,detail) values ($1,$2,$3)
             on conflict (entry_id,id) do update set detail=excluded.detail",
@@ -68,6 +72,34 @@ async fn save_row(
 
 #[async_trait]
 impl ReloginStore for PgReloginStore {
+    async fn record_maintenance(
+        &self,
+        id: &str,
+        action: Option<gateway_admin::model::relogin_maintenance::MaintenanceAction>,
+        context: &gateway_admin::model::MutationContext,
+    ) -> AdminStoreResult<()> {
+        let mut transaction = self.pool.begin().await.map_err(unavailable)?;
+        super::admin_security_audit::insert_admin_audit_event(
+            &mut transaction,
+            crate::mutation_audit(
+                context,
+                if action.is_some() {
+                    "maintain_relogin_account"
+                } else {
+                    "update_relogin_material"
+                },
+                "relogin_entry",
+                id,
+                action
+                    .map(|action| vec![action.label().to_owned()])
+                    .unwrap_or_else(|| vec!["password".to_owned(), "mfa_secret".to_owned()]),
+            ),
+        )
+        .await
+        .map_err(unavailable)?;
+        transaction.commit().await.map_err(unavailable)
+    }
+
     async fn save_attempt(
         &self,
         id: &str,

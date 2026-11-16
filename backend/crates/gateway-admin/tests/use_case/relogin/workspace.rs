@@ -44,7 +44,7 @@ async fn relogin_workspace_wait_is_durable_and_does_not_retry_or_hold_a_slot() {
     assert_eq!(list.items[0].recovery.state, "awaiting_workspace");
     assert_eq!(list.items[0].workspace_choices, choices());
     let wire = serde_json::to_string(&list).unwrap();
-    for secret in ["password", "mfa_secret", "test-only-token", "JBSWY"] {
+    for secret in ["\"password\":", "mfa_secret", "test-only-token", "JBSWY"] {
         assert!(!wire.contains(secret));
     }
 

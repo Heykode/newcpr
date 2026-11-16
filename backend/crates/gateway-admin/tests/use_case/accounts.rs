@@ -89,6 +89,18 @@ pub(super) struct FakeProviderAdmin {
     subscription_result: Mutex<Result<Option<ProviderSubscription>, ProviderAdminErrorKind>>,
     personal_info_barrier: Mutex<Option<Arc<tokio::sync::Barrier>>>,
     pub(super) relogin_result: Mutex<Option<gateway_admin::model::relogin::ReloginCredential>>,
+    pub(super) maintenance_result:
+        Mutex<Option<gateway_admin::model::relogin_maintenance::MaintenanceOutcome>>,
+    pub(super) maintenance_routes: Mutex<
+        Vec<(
+            Option<gateway_core::account::OutboundProxy>,
+            Option<std::net::Ipv6Addr>,
+        )>,
+    >,
+    pub(super) relogin_egress:
+        Mutex<Option<Arc<gateway_core::provider_ports::egress::ProviderEgressConfig>>>,
+    pub(super) maintenance_calls:
+        Mutex<Vec<gateway_admin::model::relogin_maintenance::MaintenanceAction>>,
     pub(super) relogin_error: Mutex<Option<ProviderAdminError>>,
     pub(super) relogin_delay: Mutex<std::time::Duration>,
     pub(super) relogin_requests: Mutex<Vec<Option<String>>>,
@@ -120,6 +132,10 @@ impl FakeProviderAdmin {
             subscription_result: Mutex::new(Ok(None)),
             personal_info_barrier: Mutex::new(None),
             relogin_result: Mutex::new(None),
+            maintenance_result: Mutex::new(None),
+            maintenance_routes: Mutex::new(Vec::new()),
+            relogin_egress: Mutex::new(None),
+            maintenance_calls: Mutex::new(Vec::new()),
             relogin_error: Mutex::new(None),
             relogin_delay: Mutex::new(std::time::Duration::ZERO),
             relogin_requests: Mutex::new(Vec::new()),
@@ -257,6 +273,34 @@ impl FakeProviderAdmin {
 
 #[async_trait]
 impl ProviderAdmin for FakeProviderAdmin {
+    fn relogin_egress_state(
+        &self,
+    ) -> Result<
+        Option<Arc<gateway_core::provider_ports::egress::ProviderEgressConfig>>,
+        ProviderAdminError,
+    > {
+        Ok(self.relogin_egress.lock().unwrap().clone())
+    }
+
+    async fn maintain_relogin(
+        &self,
+        request: gateway_admin::model::relogin_maintenance::MaintenanceRequest,
+    ) -> Result<gateway_admin::model::relogin_maintenance::MaintenanceOutcome, ProviderAdminError>
+    {
+        self.maintenance_calls.lock().unwrap().push(request.action);
+        self.maintenance_routes
+            .lock()
+            .unwrap()
+            .push((request.login.outbound_proxy, request.login.source_ip));
+        let delay = *self.relogin_delay.lock().unwrap();
+        tokio::time::sleep(delay).await;
+        self.maintenance_result
+            .lock()
+            .unwrap()
+            .take()
+            .ok_or_else(|| ProviderAdminError::new(ProviderAdminErrorKind::Unavailable))
+    }
+
     async fn relogin(
         &self,
         request: gateway_admin::model::relogin::ReloginRequest,
@@ -1137,6 +1181,14 @@ impl AccountStore for FakeAccountStore {
                 account.upstream_user_id = prepared.upstream_user_id.clone();
                 account.upstream_account_id = prepared.upstream_account_id.clone();
                 account.plan_type = prepared.plan_type.clone();
+                account.outbound_proxy_id = command
+                    .outbound_proxy
+                    .as_ref()
+                    .map(|binding| binding.id.clone());
+                account.outbound_proxy = command
+                    .outbound_proxy
+                    .as_ref()
+                    .map(|binding| binding.proxy.clone());
                 account
             })
             .collect();

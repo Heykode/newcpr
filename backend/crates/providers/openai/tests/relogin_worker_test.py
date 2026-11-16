@@ -34,8 +34,13 @@ def login():
     instance.session = types.SimpleNamespace(cookies=types.SimpleNamespace(jar=[]))
     instance.totp = types.SimpleNamespace(now=lambda: "123456")
     instance.did = "fixture-device"
+    instance.sid = "fixture-session"
     instance.deadline = time.monotonic() + 60
     instance.proxy = None
+    instance.verified_session = None
+    instance.rejected_navigation = set()
+    instance.effect_started = False
+    instance.web_login_performed = False
     return instance
 
 
@@ -152,6 +157,7 @@ class FlowTests(unittest.TestCase):
                      body("login_password", {"url": worker.AUTH + "/log-in/password"})),
             response(worker.AUTH + "/api/accounts/password/verify",
                      body("mfa_challenge", {"factors": [None, {"factor_type": "totp", "id": "factor"}]})),
+            response(worker.AUTH + "/api/accounts/mfa/issue_challenge", {}),
             response(worker.AUTH + "/api/accounts/mfa/verify",
                      body("codex_consent", {"url": worker.AUTH + "/sign-in-with-chatgpt/codex/consent"})),
             response(worker.AUTH + "/api/accounts/workspace/select",
@@ -162,11 +168,12 @@ class FlowTests(unittest.TestCase):
         ]
         result, requests = self.run_flow(responses)
         self.assertEqual(result, "fixture-code")
-        self.assertEqual(len(requests), 7)
+        self.assertEqual(len(requests), 8)
         self.assertEqual(requests[2][2]["json"], {"password": "test-only-password"})
-        self.assertEqual(requests[3][2]["json"], {"id": "factor", "type": "totp", "code": "123456"})
-        self.assertEqual(requests[4][2]["json"], {"workspace_id": "team-id"})
-        self.assertEqual(requests[5][2]["json"], {"org_id": "org", "project_id": "project"})
+        self.assertEqual(requests[3][2]["json"], {"id": "factor", "type": "totp", "force_fresh_challenge": False})
+        self.assertEqual(requests[4][2]["json"], {"id": "factor", "type": "totp", "code": "123456"})
+        self.assertEqual(requests[5][2]["json"], {"workspace_id": "team-id"})
+        self.assertEqual(requests[6][2]["json"], {"org_id": "org", "project_id": "project"})
         self.assertTrue(all(not url.startswith("http://localhost") for _, url, _ in requests))
 
     def test_email_challenges_stop_without_sending_or_reading_codes(self):
@@ -199,7 +206,7 @@ class FlowTests(unittest.TestCase):
         session = types.SimpleNamespace(cookies=types.SimpleNamespace(set=lambda *a, **k: None))
         requests = types.SimpleNamespace(Session=lambda **kwargs: session)
         totp = types.SimpleNamespace(TOTP=lambda secret: ("totp", secret))
-        with patch.dict("sys.modules", {"curl_cffi": types.SimpleNamespace(requests=requests),
+        with patch.dict("sys.modules", {"curl_cffi": types.SimpleNamespace(requests=requests, CurlOpt=types.SimpleNamespace(PROXY=1, NOPROXY=2)),
                                        "pyotp": totp}):
             instance = worker.Login({
                 "email": "test@example.invalid", "password": "test-only-password",
@@ -292,7 +299,7 @@ class CredentialTests(unittest.TestCase):
         }
         bodies = iter([
             {"csrfToken": "fixture-csrf"}, {"url": worker.AUTH + "/log-in"},
-            {"accessToken": "fixture-web-token"},
+            {"accessToken": "fixture-web-token", "user": {"email": "test@example.invalid"}},
             {"accounts": {"personal": {"account": {"plan_type": "free"}},
                           "team-id": {"account": {"plan_type": membership_plan}}}},
             tokens, usage_override if usage_override is not None else {"rate_limit": {}, "plan_type": "team"},

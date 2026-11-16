@@ -44,7 +44,7 @@ pub enum ProviderAdminErrorKind {
     Internal,
 }
 
-/// 不携带 OAuth 请求材料的管理错误。
+/// 不公开 OAuth 请求材料的管理错误。
 ///
 /// `message` 是 Provider 局部诊断，可能包含原始上游正文；通用管理用例不得自动把它作为公开文案。
 /// 只有明确拥有原始诊断合同的调用方才能读取，`Debug` 始终只记录是否存在。
@@ -58,6 +58,7 @@ pub struct ProviderAdminError {
     public_message: Option<&'static str>,
     relogin_stop_reason: Option<crate::model::relogin::ReloginStopReason>,
     relogin_workspace_choices: Vec<crate::model::relogin::ReloginWorkspaceChoice>,
+    relogin_web_session: Option<Box<crate::model::relogin_maintenance::WebSession>>,
 }
 
 impl PartialEq for ProviderAdminError {
@@ -67,6 +68,7 @@ impl PartialEq for ProviderAdminError {
             && self.public_message == other.public_message
             && self.relogin_stop_reason == other.relogin_stop_reason
             && self.relogin_workspace_choices == other.relogin_workspace_choices
+            && self.relogin_web_session == other.relogin_web_session
     }
 }
 
@@ -104,6 +106,7 @@ impl ProviderAdminError {
             public_message: None,
             relogin_stop_reason: None,
             relogin_workspace_choices: Vec::new(),
+            relogin_web_session: None,
         }
     }
 
@@ -153,6 +156,19 @@ impl ProviderAdminError {
     }
 
     #[must_use]
+    pub fn with_relogin_web_session(
+        mut self,
+        session: Option<crate::model::relogin_maintenance::WebSession>,
+    ) -> Self {
+        self.relogin_web_session = session.map(Box::new);
+        self
+    }
+
+    pub fn relogin_web_session(&self) -> Option<&crate::model::relogin_maintenance::WebSession> {
+        self.relogin_web_session.as_deref()
+    }
+
+    #[must_use]
     pub const fn kind(&self) -> ProviderAdminErrorKind {
         self.kind
     }
@@ -184,6 +200,29 @@ pub trait ProviderAdmin: Send + Sync {
         _authentication_kind: &str,
     ) -> crate::model::accounts::ProviderAccountCapabilities {
         Default::default()
+    }
+
+    fn relogin_egress_state(
+        &self,
+    ) -> Result<
+        Option<std::sync::Arc<gateway_core::provider_ports::egress::ProviderEgressConfig>>,
+        ProviderAdminError,
+    > {
+        Ok(None)
+    }
+
+    fn select_relogin_source(
+        &self,
+        _account: &crate::model::accounts::AccountRecord,
+    ) -> Result<Option<std::net::Ipv6Addr>, ProviderAdminError> {
+        Err(ProviderAdminError::new(ProviderAdminErrorKind::Unsupported))
+    }
+
+    async fn maintain_relogin(
+        &self,
+        _request: crate::model::relogin_maintenance::MaintenanceRequest,
+    ) -> Result<crate::model::relogin_maintenance::MaintenanceOutcome, ProviderAdminError> {
+        Err(ProviderAdminError::new(ProviderAdminErrorKind::Unavailable))
     }
 
     async fn relogin(

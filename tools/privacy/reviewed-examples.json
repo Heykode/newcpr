@@ -3054,5 +3054,53 @@
     "file_sha256": "0786704c6852b28ef6c62ff0744d9bae11caebc5897f39d8f5b11c27653df417",
     "line_sha256": "814069861c50b1e716f26a23b5af8033d740a1f95e5c875d570e4a9476b9bbb5",
     "reason": "Re-reviewed unchanged synthetic authenticated URL rejection fixture after removing a stale default profile assertion."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/relogin_maintenance_test.py",
+    "rule": "gitleaks:generic-api-key",
+    "line": 176,
+    "file_sha256": "0dfa0b6778ede289e5b4a524d1d8b3d241eae7f9ef1867311ef5d2055c4ebf5a",
+    "line_sha256": "2aad0541f46519fe92712daa2d3f7802aa42220f33385c3286f8143aadb7585e",
+    "reason": "Reviewed RFC 6238 SHA-1 seed used by the mocked TOTP enrollment response; decoded bytes are the published numeric test seed, not an account secret."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/relogin_maintenance_test.py",
+    "rule": "gitleaks:generic-api-key",
+    "line": 186,
+    "file_sha256": "0dfa0b6778ede289e5b4a524d1d8b3d241eae7f9ef1867311ef5d2055c4ebf5a",
+    "line_sha256": "f8ae8973f8fe7d5efce80d2d292e51d6253317b5be752aef84dd68672ce33b44",
+    "reason": "Reviewed RFC 6238 SHA-1 seed used only by mocked TOTP activation acknowledgement tests; not an account secret."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/relogin_worker_test.py",
+    "rule": "gitleaks:generic-api-key",
+    "line": 195,
+    "file_sha256": "09f1fe7cec9212a26612bfbee5a32b8b8d29d1fce28ae587ec7b1d12ac1584d1",
+    "line_sha256": "b694d43bcd4cf81f0a75c5b6e286b07b3f4936dc9e7e30592017b7b0b819b117",
+    "reason": "Re-reviewed unchanged invalid-secret fixture containing the standard illustrative UUID after maintenance routing tests; exact line matches the earlier reviewed fixture."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/relogin_worker_test.py",
+    "rule": "authenticated-url",
+    "line": 272,
+    "file_sha256": "09f1fe7cec9212a26612bfbee5a32b8b8d29d1fce28ae587ec7b1d12ac1584d1",
+    "line_sha256": "47e73e43e21ddf5e79f265d16deb345c7d52a1cf04c0683c90e5d50b4e49aee3",
+    "reason": "Re-reviewed unchanged synthetic authenticated URL used only by the isolated URL rejection test after maintenance routing tests; exact line matches the earlier reviewed fixture."
+  },
+  {
+    "path": "frontend/tests/relogin-maintenance.test.mjs",
+    "rule": "gitleaks:generic-api-key",
+    "line": 31,
+    "file_sha256": "f4b10cd336da09a53391426120b9987720bd346ef92c17413c657ea5aa0c4cac",
+    "line_sha256": "ffc67ec5efec89d80303616b56837ce989723744a6083039c35aa38541dc0626",
+    "reason": "Reviewed RFC 6238 SHA-1 numeric seed for deterministic TOTP test vectors and the 30-second boundary; not an account secret."
+  },
+  {
+    "path": "frontend/tests/relogin-maintenance.test.mjs",
+    "rule": "gitleaks:generic-api-key",
+    "line": 153,
+    "file_sha256": "f4b10cd336da09a53391426120b9987720bd346ef92c17413c657ea5aa0c4cac",
+    "line_sha256": "3a7f30ef3e0e710d99cd2bfda482f4d47e415715ddd81c091a6ef0ffd385575d",
+    "reason": "Reviewed reuse of the RFC 6238 SHA-1 seed in a mocked account-material response for revision and late-read tests; password is an explicit fixture and no real account is used."
   }
 ]
