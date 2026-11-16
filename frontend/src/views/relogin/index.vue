@@ -651,7 +651,7 @@ onBeforeUnmount(() => {
           </button>
           <span v-else class="block whitespace-normal break-words" :class="processingStatus(row).tone" :title="processingStatus(row).detail">{{ processingStatus(row).label }}</span>
           <span v-if="retryProgress(row)" class="block text-cp-xs tabular-nums text-cp-text-tertiary">{{ retryProgress(row) }}</span>
-          <span v-if="row.recovery?.message" class="block whitespace-normal break-words text-cp-xs text-cp-text-secondary">{{ row.recovery.message }}</span>
+          <span v-if="row.recovery?.state !== 'idle' && row.recovery?.message" class="block whitespace-normal break-words text-cp-xs text-cp-text-secondary">{{ row.recovery.message }}</span>
           <span v-if="row.recovery?.retryAt" class="block whitespace-normal break-words text-cp-xs tabular-nums text-cp-text-tertiary">{{ recoveryCountdown(row, now.getTime()) }}</span>
         </template>
         <template #credential="{ row }">
