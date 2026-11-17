@@ -134,7 +134,7 @@ async function main() {
       await page.setViewportSize({ width, height: 900 })
       await page.goto(`${origin}/api-keys`)
       await page.getByRole('button', { name: '更多密钥操作', exact: true }).click()
-      await page.getByRole('button', { name: '重置已用额度', exact: true }).click()
+      await page.getByRole('menuitem', { name: '重置已用额度', exact: true }).click()
       const dialog = page.getByRole('alertdialog')
       await dialog.waitFor()
       assert.equal(await dialog.evaluate(element => element.scrollWidth <= element.clientWidth), true)
@@ -145,7 +145,7 @@ async function main() {
       assert.equal(resets.length, 0)
     }
     await page.getByRole('button', { name: '更多密钥操作', exact: true }).click()
-    await page.getByRole('button', { name: '重置已用额度', exact: true }).click()
+    await page.getByRole('menuitem', { name: '重置已用额度', exact: true }).click()
     const dialog = page.getByRole('alertdialog')
     await dialog.getByRole('radio', { name: '日额度', exact: true }).click()
     failReset = true

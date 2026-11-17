@@ -42,12 +42,10 @@ const modelOptions = computed(() => {
   return Array.from(options, ([value, label]) => ({ value, label }))
 })
 const limitRule = computed<FormRule>(() => ({
-  trigger: [],
   validator: (_rule, value: string) => value === '' || /^(?:[1-9]\d?|100)$/.test(value),
   message: t('accounts.quotaSettings.invalid'),
 }))
 const modelRule = computed<FormRule>(() => ({
-  trigger: [],
   required: true,
   validator: (_rule, value: string) => Boolean(value.trim()) && value.trim().length <= 128 && !/\p{Cc}/u.test(value),
   message: t('accounts.quotaSettings.invalidModel'),
@@ -126,21 +124,33 @@ async function save() {
       <p v-if="!draft.length" class="m-0 text-cp-sm text-cp-text-secondary">
         {{ t('accounts.quotaSettings.empty') }}
       </p>
-      <section v-for="(row, index) in draft" :key="row.key" class="relative grid gap-3 rounded-cp bg-cp-fill-quaternary p-3" :aria-label="row.label">
-        <h3 class="m-0 pr-32 text-cp-sm font-heavy text-cp-text">
-          {{ row.label }}
-        </h3>
-        <BaseSwitch v-model="row.warmup" show-label class="absolute! top-2 right-3" :label="t('accounts.quotaSettings.warmup')" :aria-label="`${row.label} · ${t('accounts.quotaSettings.warmup')}`" :disabled="loading" />
+      <section v-for="(row, index) in draft" :key="row.key" class="grid gap-3 rounded-cp bg-cp-fill-quaternary p-3" :aria-label="row.label">
+        <div class="flex items-center justify-between gap-3">
+          <h3 class="m-0 min-w-0 wrap-anywhere text-cp-sm font-heavy text-cp-text">
+            {{ row.label }}
+          </h3>
+          <BaseSwitch
+            v-model="row.warmup"
+            size="sm"
+            inline-prompt
+            class="w-12 [&:lang(en)]:w-18"
+            width="100%"
+            :active-text="t('accounts.quotaSettings.warmup')"
+            :inactive-text="t('accounts.quotaSettings.warmup')"
+            :aria-label="`${row.label} · ${t('accounts.quotaSettings.warmup')}`"
+            :disabled="loading"
+          />
+        </div>
         <div class="grid gap-3 sm:grid-cols-2">
           <BaseFormItem :label="t('accounts.quotaSettings.limit')" :prop="`${index}.limit`" :rules="limitRule">
-            <BaseInput v-model="row.limit" type="number" min="1" max="100" step="1" :aria-label="`${row.label} · ${t('accounts.quotaSettings.limit')}`" :placeholder="t('accounts.quotaSettings.unlimited')" :disabled="loading" @update:model-value="formRef?.clearValidate(`${index}.limit`)">
+            <BaseInput v-model="row.limit" :validate-event="false" type="number" min="1" max="100" step="1" :aria-label="`${row.label} · ${t('accounts.quotaSettings.limit')}`" :placeholder="t('accounts.quotaSettings.unlimited')" :disabled="loading" @update:model-value="formRef?.clearValidate(`${index}.limit`)">
               <template #suffix>
                 %
               </template>
             </BaseInput>
           </BaseFormItem>
           <BaseFormItem v-if="row.warmup" :label="t('accounts.quotaSettings.model')" :prop="`${index}.model`" :rules="modelRule">
-            <BaseSelect v-model="row.model" class="w-full" :options="modelOptions" :aria-label="`${row.label} · ${t('accounts.quotaSettings.model')}`" :placeholder="t('accounts.quotaSettings.modelPlaceholder')" :empty-text="t('accounts.connectionTest.noModels')" :disabled="loading || loadingModels" @update:model-value="formRef?.clearValidate(`${index}.model`)" />
+            <BaseSelect v-model="row.model" :validate-event="false" class="w-full" :options="modelOptions" :aria-label="`${row.label} · ${t('accounts.quotaSettings.model')}`" :placeholder="t('accounts.quotaSettings.modelPlaceholder')" :empty-text="t('accounts.connectionTest.noModels')" :disabled="loading || loadingModels" @update:model-value="formRef?.clearValidate(`${index}.model`)" />
           </BaseFormItem>
         </div>
       </section>

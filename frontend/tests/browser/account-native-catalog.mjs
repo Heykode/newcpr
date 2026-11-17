@@ -89,7 +89,7 @@ async function main() {
     await row.waitFor()
     await row.getByRole('button', { name: '更多操作', exact: true }).click()
     const downloaded = page.waitForEvent('download')
-    await page.getByRole('button', { name: '导出模型目录', exact: true }).click()
+    await page.getByRole('menuitem', { name: '导出模型目录', exact: true }).click()
     const download = await downloaded
     assert.equal(download.suggestedFilename(), 'cpr-model-catalog-acct_sample_0.json')
     assert.deepEqual(JSON.parse(await readFile(await download.path(), 'utf8')), catalog)
@@ -97,7 +97,7 @@ async function main() {
     assert.deepEqual(tests, [])
 
     await row.getByRole('button', { name: '更多操作', exact: true }).click()
-    await page.getByRole('button', { name: '测试连接', exact: true }).click()
+    await page.getByRole('menuitem', { name: '测试连接', exact: true }).click()
     const dialog = page.getByRole('dialog')
     await dialog.getByLabel('测试提示词', { exact: true }).fill('Synthetic diagnostic prompt\n第二行')
     await dialog.getByRole('button', { name: '开始测试', exact: true }).click()

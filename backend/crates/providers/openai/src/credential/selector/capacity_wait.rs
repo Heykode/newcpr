@@ -608,7 +608,27 @@ impl CodexCredentialSelector {
                         request,
                         &mut state,
                     )
-                    .await?
+                    .await
+                    .map_err(|error| {
+                        if matches!(
+                            error,
+                            CredentialSelectionError::AccountWait(AccountWaitFailure::Timeout)
+                        ) && !candidates.iter().any(|candidate| candidate.account.id() == &owner)
+                        {
+                            // Only distinguish model restrictions inside this request's scope.
+                            let reason = match (request.upstream_model, request.attempt.account_scope()) {
+                                (Some(model), Some(scope))
+                                    if scope.allows(&owner) && !scope.allows_model(&owner, model) =>
+                                {
+                                    "The parent session's account does not allow the requested model."
+                                }
+                                _ => "The parent session's account cannot serve this request.",
+                            };
+                            CredentialSelectionError::IneligibleSessionAccountTimeout(reason)
+                        } else {
+                            error
+                        }
+                    })?
                 {
                     WaitOutcome::Acquired(lease) => return Ok(*lease),
                     WaitOutcome::Full => {

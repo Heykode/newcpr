@@ -241,7 +241,7 @@ test('real menu renders relogin only with material and exposes busy and failure 
     setup: (props, { slots }) => () => vue.h('button', { disabled: props.disabled }, slots.default?.()),
   })
   const component = load(new URL('../src/views/accounts/components/AccountTableActions.vue', import.meta.url), {
-    '@/components/base/BasePopover.vue': passthrough,
+    '@/components/RowActionMenu.vue': passthrough,
     '@/components/base/BaseMenuItem.vue': button,
     '@/components/base/BaseIconButton.vue': button,
   }).default

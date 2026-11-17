@@ -388,7 +388,7 @@ async fn relaxed_child_uses_normal_weight_order_and_migrates_the_shared_root() {
 }
 
 #[tokio::test]
-async fn preferred_preserves_the_model_blocked_root_while_relaxed_migrates_it() {
+async fn child_model_access_timeout_is_explained_without_changing_affinity_modes() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_subagent_a").await;
     let affinity = Arc::new(MemorySessionAffinity::default());
@@ -449,21 +449,61 @@ async fn preferred_preserves_the_model_blocked_root_while_relaxed_migrates_it() 
             account_policy().with_openai_account_affinity(mode),
         )
     };
-    let strict = provider
-        .execute(
-            generate("root", Some("strict-child"), None),
-            scoped(AccountAffinity::Strict).with_request_tuning(
-                gateway_core::routing::RequestTuning {
-                    account_concurrency_wait_timeout_seconds: 1,
-                    ..Default::default()
-                },
+    for wait in [false, true] {
+        for (scope, reason) in [
+            (
+                scope.clone(),
+                "The parent session's account does not allow the requested model.",
             ),
-        )
-        .await
-        .err()
-        .unwrap();
-    assert_eq!(strict.kind(), ProviderErrorKind::ConcurrencyQueueTimeout);
-    assert!(strict.retry_is_prohibited());
+            (
+                Arc::new(FrozenAccountScope::new(
+                    Arc::new(RuntimeAccountDirectory::new(BTreeMap::from([(
+                        ProviderAccountId::new("acct_subagent_b").unwrap(),
+                        RuntimeAccount::new(ProviderKind::new("openai").unwrap(), BTreeSet::new()),
+                    )]))),
+                    ClientRoutingScope::all_accounts(),
+                )),
+                "The parent session's account cannot serve this request.",
+            ),
+        ] {
+            let strict = provider
+                .execute(
+                    generate("root", Some("strict-child"), None),
+                    context_with_policy(
+                        "req_strict_model_access",
+                        CancellationToken::new(),
+                        scope,
+                        account_policy().with_openai_account_affinity(AccountAffinity::Strict),
+                    )
+                    .with_request_tuning(
+                        gateway_core::routing::RequestTuning {
+                            account_busy_wait_enabled: wait,
+                            account_concurrency_wait_timeout_seconds: 1,
+                            ..Default::default()
+                        },
+                    ),
+                )
+                .await
+                .err()
+                .unwrap();
+            assert_eq!(strict.kind(), ProviderErrorKind::ConcurrencyQueueTimeout);
+            assert!(strict.retry_is_prohibited());
+            assert_eq!(strict.send_state(), UpstreamSendState::NotSent);
+            let gateway = gateway_core::error::GatewayError::from_provider(&strict);
+            assert_eq!(
+                gateway.client_message(),
+                format!("{reason} Timed out waiting for the session to switch accounts.")
+            );
+            assert!(
+                strict
+                    .error_details()
+                    .unwrap()
+                    .contains(gateway.client_message())
+            );
+            assert_eq!(affinity.binding_count(), 1);
+            assert!(server.received_requests().await.unwrap().is_empty());
+        }
+    }
     let preferred = provider
         .execute(
             generate("root", Some("preferred-child"), None),

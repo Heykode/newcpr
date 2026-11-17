@@ -940,6 +940,15 @@ pub(super) fn map_selection_error(error: CredentialSelectionError) -> ProviderEr
                 .with_classification("account_capacity_wait", reason.as_str()),
             )
         }
+        CredentialSelectionError::IneligibleSessionAccountTimeout(_) => provider_error(
+            ProviderErrorKind::ConcurrencyQueueTimeout,
+            UpstreamSendState::NotSent,
+        )
+        .with_client_visible_upstream_error(ClientVisibleUpstreamError::new(
+            error.to_string(),
+            None,
+            None,
+        )),
         CredentialSelectionError::CapacityUnavailable { retry_after } => {
             let error = provider_error(
                 ProviderErrorKind::AccountCapacityUnavailable,

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { OutboundProxyRecord } from '@/api'
-import { LockKeyhole, MoreHorizontal, Pencil, Plus, Power, RefreshCw, Search, Trash2, Users, Wifi, X } from '@lucide/vue'
+import { LockKeyhole, Pencil, Plus, Power, RefreshCw, Search, Trash2, Users, Wifi, X } from '@lucide/vue'
 import { watchDebounced } from '@vueuse/core'
 import { computed, onMounted, reactive, ref, shallowRef, watch } from 'vue'
 import { createProxy, deleteProxy, getProxies, probeProxy, testProxy, updateProxy } from '@/api'
@@ -13,11 +13,11 @@ import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseMenuItem from '@/components/base/BaseMenuItem.vue'
 import BasePageHeader from '@/components/base/BasePageHeader.vue'
-import BasePopover from '@/components/base/BasePopover.vue'
 import BaseTablePagination from '@/components/base/BaseTable/BaseTablePagination.vue'
 import { defineTableColumns } from '@/components/base/BaseTable/columns'
 import BaseTable from '@/components/base/BaseTable/index.vue'
 import { toast } from '@/components/base/BaseToast'
+import RowActionMenu from '@/components/RowActionMenu.vue'
 import { useAsyncAction } from '@/composables/useAsyncAction'
 import { usePagedQuery } from '@/composables/usePagedQuery'
 import { t } from '@/i18n'
@@ -402,29 +402,20 @@ onMounted(() => void query.execute())
                 <BaseIconButton size="sm" :label="t('proxies.actions.edit')" :disabled="batchTesting || testingIds.has(row.id) || updatingIds.has(row.id)" @click="openForm(row)">
                   <Pencil class="size-3.5 text-cp-link" />
                 </BaseIconButton>
-                <BasePopover placement="bottom-end">
-                  <template #trigger="{ open }">
-                    <BaseIconButton size="sm" label="更多代理操作" :aria-expanded="open" :loading="updatingIds.has(row.id)" :disabled="batchTesting || testingIds.has(row.id) || updatingIds.has(row.id)">
-                      <MoreHorizontal class="size-3.5" />
-                    </BaseIconButton>
-                  </template>
-                  <template #default="{ close }">
-                    <div class="w-44 p-1">
-                      <BaseMenuItem :disabled="batchTesting || testingIds.has(row.id) || updatingIds.has(row.id)" @click="(close(), toggleEnabled(row))">
-                        <template #icon>
-                          <Power class="size-3.5" :class="row.enabled ? 'text-cp-warning' : 'text-cp-success'" />
-                        </template>
-                        {{ row.enabled ? '禁用代理' : '启用代理' }}
-                      </BaseMenuItem>
-                      <BaseMenuItem tone="destructive" :disabled="batchTesting || testingIds.has(row.id) || updatingIds.has(row.id)" @click="(close(), requestDelete(row))">
-                        <template #icon>
-                          <Trash2 class="size-3.5" />
-                        </template>
-                        {{ t('proxies.actions.deleteProxy') }}
-                      </BaseMenuItem>
-                    </div>
-                  </template>
-                </BasePopover>
+                <RowActionMenu label="更多代理操作" menu-class="w-36 p-1.5" :loading="updatingIds.has(row.id)" :disabled="batchTesting || testingIds.has(row.id) || updatingIds.has(row.id)">
+                  <BaseMenuItem :disabled="batchTesting || testingIds.has(row.id) || updatingIds.has(row.id)" @click="toggleEnabled(row)">
+                    <template #icon>
+                      <Power class="size-3.5" :class="row.enabled ? 'text-cp-warning' : 'text-cp-success'" />
+                    </template>
+                    {{ row.enabled ? '禁用代理' : '启用代理' }}
+                  </BaseMenuItem>
+                  <BaseMenuItem tone="destructive" :disabled="batchTesting || testingIds.has(row.id) || updatingIds.has(row.id)" @click="requestDelete(row)">
+                    <template #icon>
+                      <Trash2 class="size-3.5" />
+                    </template>
+                    {{ t('proxies.actions.deleteProxy') }}
+                  </BaseMenuItem>
+                </RowActionMenu>
               </div>
             </template>
           </BaseTable>

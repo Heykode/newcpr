@@ -181,7 +181,7 @@ async function main() {
       const previousPatchCount = patches.length
       await more.click()
       const rejected = page.waitForResponse(response => response.url().endsWith('/accounts/batch-update') && response.status() === 503)
-      await page.getByRole('button', { name: label, exact: true }).click()
+      await page.getByRole('menuitem', { name: label, exact: true }).click()
       await rejected
       await page.getByText('Synthetic Excel toggle failed', { exact: true }).waitFor()
       assert.equal(await firstExcelMark.count(), markerCount)
@@ -190,7 +190,7 @@ async function main() {
     }
     await expectFailedToggle('开启 Excel 入口', 0)
     await more.click()
-    await page.getByRole('button', { name: '开启 Excel 入口', exact: true }).click()
+    await page.getByRole('menuitem', { name: '开启 Excel 入口', exact: true }).click()
     await firstRow.locator('[data-account-avatar][data-account-excel-status="enabled"]').waitFor()
     await firstExcelMark.waitFor()
     assert.equal(await firstExcelMark.getAttribute('aria-label'), 'Excel 模式已开启')
@@ -283,7 +283,7 @@ async function main() {
     await page.setViewportSize({ width: 1440, height: 900 })
     await expectFailedToggle('关闭 Excel 入口', 1)
     await more.click()
-    await page.getByRole('button', { name: '关闭 Excel 入口', exact: true }).click()
+    await page.getByRole('menuitem', { name: '关闭 Excel 入口', exact: true }).click()
     await firstRow.locator('[data-account-avatar][data-account-excel-status="default"]').waitFor()
     assert.equal(await firstExcelMark.count(), 0)
     assert.equal(await firstAvatar.getAttribute('class'), defaultAvatarClass)

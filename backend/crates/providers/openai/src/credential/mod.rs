@@ -24,6 +24,7 @@ pub(crate) use affinity::{
     derive_messages_session_affinity, derive_previous_response_id_hash, derive_turn_alias,
 };
 pub(crate) use oauth::oauth_owner_ref;
+pub(crate) use quota::observed_quota_window;
 pub(crate) use types::{candidate_oauth_metadata, parse_access_token_expiration};
 
 pub use admin::{

@@ -46,6 +46,13 @@ malformed terminals and explicit failed statuses are not success.
   tests. The old global active-limit reassignment rule is retired; do not restore
   it to satisfy v3.43.1 assertions.
 
+Historical quota observations use the same canonical window parser as current
+snapshots. Follow v3.51.0 `history_window -> observed_quota_window -> quota_windows`:
+merge only the recorded response into an empty document, discard default windows
+that mirror named buckets, and match the exact window key. Never borrow a current
+snapshot to fill a missing historical bucket. This shared native parser does not
+enable the excluded plugin quota-history query API.
+
 ## Reset Facts
 
 For explicit quota exhaustion, accept positive numeric or numeric-string

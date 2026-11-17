@@ -2271,6 +2271,18 @@ fn access_token_is_current(account: &ProviderAccount, now: SystemTime) -> bool {
         .is_none_or(|expires_at| expires_at > now)
 }
 
+pub(crate) fn observed_quota_window(
+    parsed: &ParsedRateLimits,
+    key: &str,
+) -> Option<CodexQuotaWindow> {
+    // 只解释本次响应，不借用当前快照补全旧观测或把具名桶镜像当作账号额度
+    let (quota, _) = merge_passive_quota(Map::new(), std::slice::from_ref(parsed), None);
+    snapshot::quota_windows(&quota)
+        .ok()?
+        .into_iter()
+        .find(|window| window.key() == key)
+}
+
 fn merge_passive_quota(
     mut quota: Map<String, Value>,
     observations: &[ParsedRateLimits],

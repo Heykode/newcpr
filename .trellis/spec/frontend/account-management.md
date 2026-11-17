@@ -56,6 +56,16 @@
   cancel paths, batch editing, unknown quota/capacity, and quota refresh without a GET.
   Use synthetic APIs in the isolated test server; no production credentials or traffic.
 
+## Account Menus And Quota Settings
+
+- Account row menus reuse `RowActionMenu` on desktop and mobile. Keep immediate
+  relogin, Excel, quality, catalog export and their existing disabled/busy guards;
+  menu keyboard support must not change action payloads or select the account row.
+- Quota settings keep the bucket title and compact warmup switch on one row.
+  Limit/model controls use `validateEvent=false`; editing clears the field error
+  and submission always validates the complete draft before saving. Do not restore
+  empty rule triggers to suppress validation or remove model validation on submit.
+
 ## Account Group Summaries
 
 - Desktop `AccountGroupMarks.layout = 'stacked'` centers text badges in at most

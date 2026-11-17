@@ -547,6 +547,63 @@ async fn enrollment_queues_then_imports_with_confirmed_settings_and_retains_2fa(
 }
 
 #[tokio::test]
+async fn enrollment_preserves_submitted_name_and_settings_with_selected_egress() {
+    use gateway_core::{account::OutboundProxy, provider_ports::egress::EgressMode};
+
+    for (mode, proxy_id) in [
+        (None, None),
+        (Some(None), None),
+        (Some(Some(EgressMode::Unchanged)), None),
+        (Some(Some(EgressMode::Unchanged)), Some("proxy-fixture")),
+    ] {
+        let proxies = Arc::new(super::super::proxies::TestProxies {
+            events: Some(events()),
+            ..Default::default()
+        });
+        let h = Harness::with_proxies(vec![], Some(proxies)).await;
+        let mut settings = intent().settings().unwrap();
+        settings.egress_mode = mode;
+        settings.clear_outbound_proxy = proxy_id.is_none();
+        settings.model_access = Some(
+            serde_json::from_value(
+                serde_json::json!({"mode":"allowlist","models":["import-model"]}),
+            )
+            .unwrap(),
+        );
+        let enrollment = ReloginEnrollment::new(
+            settings.clone(),
+            proxy_id.map(str::to_owned),
+            context("enroll-egress"),
+        )
+        .unwrap();
+        let ids = h
+            .services
+            .relogin()
+            .enroll(MATERIAL, false, enrollment)
+            .await
+            .unwrap();
+        h.cycle().await;
+        let row = h.row(&ids[0]).await;
+        assert!(row.synced_at.is_some(), "{}", row.message);
+        let expected_proxy =
+            proxy_id.map(|_| OutboundProxy::parse("http://127.0.0.1:8080").unwrap());
+        assert_eq!(
+            *h.provider.relogin_proxies.lock().unwrap(),
+            vec![expected_proxy.clone()],
+            "login must use the selected exit before enrollment"
+        );
+        let accounts = h.accounts.accounts.lock().unwrap();
+        assert_eq!(accounts[0].outbound_proxy, expected_proxy);
+        assert_eq!(accounts[0].outbound_proxy_id.as_deref(), proxy_id);
+        assert_eq!(
+            h.accounts.import_settings(),
+            vec![Some(settings)],
+            "egress inheritance must preserve every submitted import setting"
+        );
+    }
+}
+
+#[tokio::test]
 async fn enrollment_failure_never_creates_account_and_paused_queue_rejects_new_work() {
     let h = Harness::new(vec![]).await;
     h.store.settings.lock().unwrap().paused = true;
@@ -575,18 +632,70 @@ async fn enrollment_failure_never_creates_account_and_paused_queue_rejects_new_w
 }
 
 #[tokio::test]
-async fn enrollment_updates_same_identity_without_changing_existing_settings() {
-    let h = Harness::new(vec![account(false)]).await;
-    let ids = h
-        .services
-        .relogin()
-        .enroll(MATERIAL, false, intent())
-        .await
-        .unwrap();
-    h.cycle().await;
-    let row = h.row(&ids[0]).await;
-    assert!(row.synced_at.is_some(), "{}", row.message);
-    assert!(h.accounts.import_settings().is_empty());
+async fn existing_account_relogin_only_rotates_credentials_for_every_entry_point() {
+    use gateway_core::account::{AccountConcurrencyLimit, AccountWeight, OutboundProxy};
+
+    for source in ["enrollment", "account_menu", "automatic", "library"] {
+        let mut original = account(source == "automatic");
+        original.enabled = source == "automatic";
+        original.custom_name = Some("Keep existing name".into());
+        original.weight = AccountWeight::new(23).unwrap();
+        original.concurrency_limit = AccountConcurrencyLimit::new(3);
+        original.outbound_proxy_id = Some("existing-proxy".into());
+        original.outbound_proxy = Some(OutboundProxy::parse("http://127.0.0.1:18080").unwrap());
+        let h = Harness::new(vec![original.clone()]).await;
+        let id = if source == "enrollment" {
+            h.services
+                .relogin()
+                .enroll(MATERIAL, false, intent())
+                .await
+                .unwrap()
+                .remove(0)
+        } else {
+            h.import("test@example.invalid").await
+        };
+        match source {
+            "account_menu" => h.queue_account(&id, &original).await.unwrap(),
+            "library" => h.ready(&id).await,
+            _ => {}
+        }
+        if source == "library" {
+            let row = h.row(&id).await;
+            let result = h
+                .services
+                .relogin()
+                .push(
+                    std::slice::from_ref(&id),
+                    &BTreeMap::from([(id.clone(), row.revision)]),
+                    &context("existing-push"),
+                )
+                .await
+                .unwrap();
+            assert!(result[0].success, "{}", result[0].message);
+        } else {
+            h.cycle().await;
+        }
+        let row = h.row(&id).await;
+        assert!(row.synced_at.is_some(), "{source}: {}", row.message);
+        assert!(h.accounts.import_settings().is_empty());
+        assert_eq!(h.accounts.rotation_attempts.lock().unwrap().len(), 1);
+        assert_eq!(
+            *h.provider.relogin_proxies.lock().unwrap(),
+            vec![original.outbound_proxy.clone()]
+        );
+        let accounts = h.accounts.accounts.lock().unwrap();
+        let kept = &accounts[0];
+        assert_eq!(kept.id, original.id);
+        assert_eq!(kept.custom_name, original.custom_name);
+        assert_eq!(kept.enabled, original.enabled);
+        assert_eq!(kept.groups, original.groups);
+        assert_eq!(kept.model_access, original.model_access);
+        assert_eq!(kept.concurrency_limit, original.concurrency_limit);
+        assert_eq!(kept.weight, original.weight);
+        assert_eq!(kept.responses_upstream, original.responses_upstream);
+        assert_eq!(kept.outbound_proxy_id, original.outbound_proxy_id);
+        assert_eq!(kept.outbound_proxy, original.outbound_proxy);
+    }
 }
 
 #[tokio::test]
