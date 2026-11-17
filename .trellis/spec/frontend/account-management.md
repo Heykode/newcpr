@@ -753,7 +753,10 @@ keep disabled and error filters orthogonal. Old servers without pool facts displ
 unknown, not normal. Uncertain pushes stay fenced even when the pool later recovers.
 Keep newest material imports first using server `importedAt` order. Background changes
 do not reorder entries. Display unknown import times honestly.
-Bound long plan names and workspace IDs within their column; retain full values in
+Share desktop spare width across identity, plan, egress and recent-operation columns;
+do not let identity absorb it all while other facts are clipped. Under PLAN, prefer the
+observed name for the exact workspace ID, falling back to a short ID. Allow names and
+login-state labels to wrap; do not truncate a shortened ID again. Retain full IDs in
 titles and the workspace picker. Known workspace choices are deduplicated; no free-text
 ID editor. Text actions `重登` / `推送` have stable, non-wrapping widths. On viewports
 below 1600px, the action column scrolls normally instead of covering other facts.

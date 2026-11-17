@@ -57,7 +57,7 @@ import ReloginSessionStatus from './components/ReloginSessionStatus.vue'
 import ReloginWorkspaceCard from './components/ReloginWorkspaceCard.vue'
 import { importPreview } from './import-preview'
 import { knownMaintenanceWorkspaces, maintenanceBusy, maintenanceResult, matchesMaintenanceStatus, queueButtonLabel, queueDisabledReason, recentOperation, recentOperationAt } from './maintenance'
-import { matchesPool, processingStatus, recoveryCountdown, recoveryLabels, reloginDisplayName, retryProgress, shortWorkspace, statusLabels, workspaceChoices, workspaceId } from './presentation'
+import { matchesPool, processingStatus, recoveryCountdown, recoveryLabels, reloginDisplayName, retryProgress, shortWorkspace, statusLabels, workspaceChoices, workspaceId, workspaceLabel } from './presentation'
 
 const entries = shallowRef<ReloginEntry[]>([])
 const maintenanceId = shallowRef('')
@@ -183,12 +183,12 @@ const allSelected = computed(() => visible.value.length > 0 && visible.value.eve
 const partialSelected = computed(() => !allSelected.value && visible.value.some(row => selected.value.has(row.id)))
 const columns = defineTableColumns<ReloginEntry>([
   { key: 'selection', kind: 'selection' },
-  { key: 'identity', label: '账号', kind: 'identity', size: 'lg', grow: 1 },
-  { key: 'plan', label: 'PLAN', kind: 'custom', size: 'sm' },
-  { key: 'credential', label: '登录状态', kind: 'status', size: 'md' },
+  { key: 'identity', label: '账号', kind: 'identity', size: 'xl' },
+  { key: 'plan', label: 'PLAN', kind: 'custom', size: 'lg' },
+  { key: 'credential', label: '登录状态', kind: 'status', size: 'lg', align: 'left' },
   { key: 'egress', label: '出口 IP', kind: 'custom', size: 'lg' },
   { key: 'status', label: '最近操作', kind: 'custom', size: 'lg' },
-  { key: 'automatic', label: '自动恢复', kind: 'status', size: 'sm' },
+  { key: 'automatic', label: '自动恢复', kind: 'status', size: 'md' },
   { key: 'actions', label: '操作', kind: 'actions', size: 'lg' },
 ])
 const table = shallowRef<{ getScrollElement: () => HTMLElement | undefined, getTableElement: () => HTMLTableElement | undefined }>()
@@ -646,7 +646,7 @@ onBeforeUnmount(() => {
     <ReloginHistoryModal v-model="historyOpen" :entry="historyEntry" @after-leave="!historyOpen && (historyEntry = null)" />
     <ReloginCredentialsModal v-model="credentialsOpen" :entry="credentialsEntry" @changed="reload(true)" @after-leave="!credentialsOpen && (credentialsEntry = null)" />
     <section v-if="!mobile" class="flex min-h-48 min-w-0 flex-1 flex-col overflow-hidden rounded-cp-card border border-cp-border-secondary bg-cp-bg-container">
-      <BaseTable ref="table" class="relogin-table min-h-0 flex-1" :columns="columns" :rows="visible" :selected-row-keys="[...selected]" :loading="loading && !entries.length" column-layout="content" :empty-text="t('appearance.preview.components.noMatchingAccountYet')" @mousedown="onMouseDown">
+      <BaseTable ref="table" class="relogin-table min-h-0 flex-1" :columns="columns" :rows="visible" :selected-row-keys="[...selected]" :loading="loading && !entries.length" column-layout="proportional" :empty-text="t('appearance.preview.components.noMatchingAccountYet')" @mousedown="onMouseDown">
         <template #header-selection>
           <BaseCheckbox label="全选当前页" :model-value="allSelected" :indeterminate="partialSelected" :disabled="busy" @update:model-value="selectPage" />
         </template>
@@ -693,8 +693,8 @@ onBeforeUnmount(() => {
         </template>
         <template #plan="{ row }">
           <AccountPlanBadge :plan-type="row.planType" :plan-type-display="row.planType?.toUpperCase() || '待识别'" size="sm" />
-          <div class="mt-1 truncate text-cp-xs text-cp-text-tertiary" :title="workspaceId(row) ?? '自动选择工作区'">
-            {{ shortWorkspace(workspaceId(row)) }}
+          <div class="mt-1 whitespace-normal break-words text-cp-xs text-cp-text-secondary [overflow-wrap:anywhere]" :title="workspaceId(row) ?? '自动选择工作区'">
+            {{ workspaceLabel(row) }}
           </div>
         </template>
         <template #egress="{ row }">
@@ -1089,8 +1089,17 @@ onBeforeUnmount(() => {
   padding-left: 8px;
   padding-right: 8px;
 }
+.relogin-table :deep([data-column-key='identity']),
 .relogin-table :deep([data-column-key='status']) {
   padding-left: 12px;
   padding-right: 12px;
+}
+@media (max-width: 1599px) {
+  .relogin-table :deep(th[data-column-key='actions']) {
+    right: auto !important;
+  }
+  .relogin-table :deep(td[data-column-key='actions']) {
+    position: static;
+  }
 }
 </style>
