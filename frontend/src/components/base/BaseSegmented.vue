@@ -128,19 +128,20 @@ async function handleKeydown(event: KeyboardEvent, index: number) {
     :aria-required="ariaRequired"
     :aria-disabled="disabled || undefined"
   >
+    <!-- 选中态独立于输入底色，避免主题中的输入框与普通容器同色时失去区分。 -->
     <span
       v-if="indicatorStyle && activeIndex >= 0"
-      class="pointer-events-none absolute inset-y-0.75 left-0 rounded-cp bg-cp-bg-container shadow-cp-tertiary transition-[transform,width] duration-200 ease-out motion-reduce:transition-none"
+      class="pointer-events-none absolute inset-y-0.75 left-0 rounded-cp bg-cp-primary-container shadow-cp-tertiary transition-[transform,width] duration-200 ease-out motion-reduce:transition-none"
       :style="indicatorStyle"
     />
     <button
       v-for="(option, index) in options"
       :key="option.value"
       ref="option"
-      class="relative cp-10 inline-flex touch-manipulation items-center justify-center gap-1.5 rounded-cp border-0 bg-transparent leading-none font-emphasis outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-cp-control-outline motion-reduce:transition-none"
+      class="relative z-10 inline-flex touch-manipulation items-center justify-center gap-1.5 rounded-cp border-0 bg-transparent leading-none font-emphasis outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-cp-control-outline motion-reduce:transition-none"
       :class="[
         optionClasses[componentSize],
-        model === option.value ? 'text-cp-text' : 'text-cp-text-secondary hover:text-cp-text',
+        model === option.value ? 'text-cp-primary-on-container' : 'text-cp-text-secondary hover:text-cp-text',
         disabled || option.disabled ? 'cursor-not-allowed opacity-60 hover:text-cp-text-secondary' : undefined,
         display === 'icon' ? 'px-0' : undefined,
       ]"
