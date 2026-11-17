@@ -46,7 +46,8 @@ impl DefaultReloginService {
         if enrollment.is_some()
             && inputs.iter().any(|input| {
                 existing.get(&input.email).is_some_and(|entry| {
-                    entry.status.active()
+                    entry.maintenance.blocks_login()
+                        || entry.status.active()
                         || entry.status == ReloginStatus::Uncertain
                         || gate.active.contains_key(&entry.email)
                 })
@@ -86,6 +87,7 @@ impl DefaultReloginService {
                 changes.push((entry, Some(expected)));
             } else {
                 let entry = ReloginEntry {
+                    maintenance: Default::default(),
                     last_attempt: None,
                     id: format!("relogin_{}", uuid::Uuid::now_v7().simple()),
                     revision: 1,
@@ -122,6 +124,11 @@ impl DefaultReloginService {
                 workspace::prepare_queue(entry, &pool, ReloginWorkspaceMode::Original)?;
                 entry.automatic_job = false;
                 entry.manual_push_context = None;
+                entry.maintenance.import_egress =
+                    Some(crate::model::relogin_maintenance::ReloginImportEgress {
+                        proxy_id: enrollment.config.outbound_proxy_id.clone(),
+                        mode: enrollment.config.egress_mode,
+                    });
                 entry.enrollment = Some(enrollment.clone());
                 entry.status = ReloginStatus::Queued;
                 entry.message = "等待登录验证并入池".to_owned();

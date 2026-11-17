@@ -12,6 +12,7 @@ import AccountProviderChooser from './AccountProviderChooser.vue'
 import { prefillAccountTemplate } from './template'
 
 defineProps<{
+  hideProvider?: boolean
   groups: AccountGroup[]
   groupsLoading: boolean
   disabled: boolean
@@ -24,7 +25,7 @@ defineExpose({ validate: () => settingsRef.value?.validate() })
 
 <template>
   <div class="grid gap-6">
-    <fieldset class="m-0 min-w-0 border-0 p-0">
+    <fieldset v-if="!hideProvider" class="m-0 min-w-0 border-0 p-0">
       <legend class="mb-3 p-0 text-cp font-medium text-cp-text-secondary">
         {{ t('accounts.onboarding.accountPlatform') }}
       </legend>

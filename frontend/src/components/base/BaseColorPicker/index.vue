@@ -1,24 +1,29 @@
 <script setup lang="ts">
+import type { ComponentSize } from '../controls/types'
 import { Check, ChevronDown } from '@lucide/vue'
 import { clamp } from 'es-toolkit'
 import { computed, shallowRef, useAttrs, useTemplateRef, watch } from 'vue'
 import { t } from '@/i18n'
 import { normalizeHexColor } from '@/utils/color'
-
 import BaseButton from '../BaseButton.vue'
+
 import { useFormField } from '../BaseForm/composables/useFormField'
 import BaseInput from '../BaseInput.vue'
 import BasePopover from '../BasePopover.vue'
+import { useComponentSize } from '../controls/size'
 import { formatRgbaColor, hexToHsva, hsvaToHex, normalizePickerHexColor, parseRgbaColor, rgbaToHexColor } from './color'
 
 const props = withDefaults(
   defineProps<{
+    size?: ComponentSize
+    validateEvent?: boolean
     presets?: readonly string[]
     disabled?: boolean
     label?: string
     allowAlpha?: boolean
   }>(),
   {
+    validateEvent: true,
     presets: () => [],
     disabled: false,
     label: '选择颜色',
@@ -26,8 +31,10 @@ const props = withDefaults(
   },
 )
 
+const componentSize = useComponentSize(() => props.size)
+
 const model = defineModel<string>({ required: true })
-const { controlId, invalid, describedBy, ariaRequired, validate } = useFormField(useAttrs())
+const { controlId, invalid, describedBy, ariaRequired, validate } = useFormField(useAttrs(), () => props.validateEvent)
 watch(model, () => void validate('change'))
 const open = shallowRef(false)
 const hue = shallowRef(0)
@@ -275,11 +282,12 @@ function normalizedInputColor() {
     <template #trigger>
       <button
         :id="controlId"
+        :class="[{ sm: 'size-7', md: 'size-8', lg: 'size-10' }[componentSize], invalid && !disabled && 'ring-2 ring-cp-error ring-offset-1']"
         :aria-invalid="invalid || undefined"
         :aria-describedby="describedBy"
         :aria-required="ariaRequired"
         type="button"
-        class="group inline-flex size-8 items-center justify-center rounded-sm border-0 bg-transparent p-0 outline-none transition-opacity duration-150 hover:opacity-90 focus-visible:ring-2 focus-visible:ring-cp-control-outline disabled:cursor-not-allowed disabled:opacity-60"
+        class="group inline-flex items-center justify-center rounded-sm border-0 bg-transparent p-0 outline-none transition-opacity duration-150 hover:opacity-90 focus-visible:ring-2 focus-visible:ring-cp-control-outline disabled:cursor-not-allowed disabled:opacity-60"
         :disabled="props.disabled"
         :aria-label="props.label"
         aria-haspopup="dialog"

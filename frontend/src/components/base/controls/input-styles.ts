@@ -10,6 +10,8 @@ const sizeClasses: Record<ComponentSize, string> = {
 export function getInputClasses(size: ComponentSize, disabled: boolean, invalid: boolean, { open = false, inset = 'text', trailing = false }: { open?: boolean, inset?: 'text' | 'item', trailing?: boolean } = {}) {
   return [
     sizeClasses[size],
+    disabled ? '[--field-affix-state:var(--cp-color-text-disabled)]' : invalid ? '[--field-affix-state:var(--cp-color-error)]' : '[--field-affix-state:initial]',
+    '[--field-affix:var(--field-affix-state,var(--cp-color-text-quaternary))]',
     'min-h-(--field-height) min-w-0 rounded-cp border-0 [--field-pad:max(2px,calc((var(--field-height)-var(--field-row))/2))] py-(--field-pad) outline-none transition-[background-color,box-shadow,color] duration-160 motion-reduce:transition-none',
     inset === 'item' ? 'ps-(--field-pad)' : 'ps-(--field-inline)',
     trailing || inset === 'item' ? 'pe-(--field-pad)' : 'pe-(--field-inline)',

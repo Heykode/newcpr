@@ -109,6 +109,7 @@ fn core_value_owners_do_not_depend_on_execution_or_routing() {
             "concurrency.rs" => Some(&["error"]),
             "event.rs" => Some(&["metering", "operation", "upstream", "validation"]),
             "account/store.rs" => Some(&["account", "error", "identity", "validation"]),
+            "account/proxy.rs" => Some(&["upstream"]),
             "account/selection.rs" => Some(&["account", "concurrency", "identity", "validation"]),
             path if path.starts_with("policy/") => Some(&["account", "policy", "validation"]),
             path if path.starts_with("account/") => Some(&["account", "identity", "validation"]),

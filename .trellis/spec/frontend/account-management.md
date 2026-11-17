@@ -753,10 +753,21 @@ keep disabled and error filters orthogonal. Old servers without pool facts displ
 unknown, not normal. Uncertain pushes stay fenced even when the pool later recovers.
 Keep newest material imports first using server `importedAt` order. Background changes
 do not reorder entries. Display unknown import times honestly.
-Bound long plan names and workspace IDs within their column; retain full values in
+Share desktop spare width across identity, plan, egress and recent-operation columns;
+do not let identity absorb it all while other facts are clipped. Under PLAN, prefer the
+observed name for the exact workspace ID, falling back to a short ID. Allow names and
+login-state labels to wrap; do not truncate a shortened ID again. Retain full IDs in
 titles and the workspace picker. Known workspace choices are deduplicated; no free-text
 ID editor. Text actions `重登` / `推送` have stable, non-wrapping widths. On viewports
 below 1600px, the action column scrolls normally instead of covering other facts.
+Mobile cards show the same observed workspace name and keep Web, Codex and pool
+states separate in three compact cells. Give egress its own full-width row with a
+non-wrapping, locally scrollable IP. Show the full wrapping workspace ID and success
+count directly on the card, preserving zero/unknown count semantics. Use one history
+entry per card; omit the duplicate OAuth detail and expansion control. Web-session
+health, cached OAuth material and pool sync history remain distinct facts. Primary and icon actions have at least
+44px touch height. The mobile filter dialog binds the existing filter state directly,
+including active counts and reset; do not introduce separate filtering semantics.
 Push confirmation captures row revisions and must not silently switch to a newer
 credential returned by background polling. Keep action failures independent of
 successful list refreshes, so polling cannot erase a failed push message.
@@ -893,11 +904,27 @@ real row and checks both themes at 1440/390/320px for clipping and overflow.
 - Own the submission lock in a local synchronous ref, not a parent-fed `defineModel` whose
   reflected update can lag until the next render. Test two clicks in one event-loop turn
   and assert one mutation. Abort stale catalog reads, never retry an uncertain mutation.
-- New-account push confirms an optional template ID/revision plus unchanged row
-  revisions. Default to no template on each open, show a readable config summary,
-  and do not send a template for an existing-only batch. Mixed batches apply it
-  only to new imports. Show request failures inside an open confirmation as well
+- New-account push reuses `AccountSetupFields` and the account-create converters,
+  with OpenAI fixed and its platform chooser hidden. Reset on open, preserve the imported
+  exit by default, and let a template prefill editable fields. Send final settings, proxy,
+  optional monitoring selection and frozen template/row revisions; omit new settings
+  for existing-only batches. Mixed batches apply them only to new imports. Show the
+  workspace name or short ID while keeping the complete ID expandable. Desktop/mobile
+  queue buttons explain pause and active tasks with the same helper; do not invent extra
+  blocking conditions. Egress shows name, available last-success latency and a single-line
+  address, with detection time in details, without starting extra probes.
+  Show request failures inside an open confirmation as well
   as after closure; polling must not erase them or adopt new versions.
+- List login confirmation and maintenance use the same workspace card and account plan
+  badge. Named choices come only from the observed maintenance directory, deduplicated by
+  ID; unavailable choices stay visible and disabled. Without a directory, keep the existing
+  highest/original policies rather than inventing names or availability from pool targets.
+  Explicit workspace selection queues `switch_workspace` with the displayed row revision;
+  highest/original policies keep the ordinary queue endpoint and batch behavior.
+  Authorize and force-login also queue, preserving their distinct login semantics. Display
+  current queued/running status before historical maintenance results. Cancel refreshes the
+  row; never turn off automatic recovery implicitly. Reading local material stays available
+  while another task is queued.
 - Verify CRUD, reload, cancellation, stale responses, no-template/mixed pushes and
   desktop/mobile layouts with synthetic endpoints only. Change themes through
   the actual theme control so generated CSS variables match the selected theme.
@@ -1101,10 +1128,12 @@ match window statistics by exact stable window key.
 - Retain existing swipe handles and selection exclusions for interactive buttons.
   Verify real dialogs and the menu at desktop/mobile widths with synthetic data.
 
-## v3.45.1 account controls
+## Account controls (v3.50.0)
 
-- Quota limit editing uses account-wide window keys, retains saved missing-window keys and validates
-  integer 1..100 (empty clears). Save through batchUpdateAccounts, then reload the current account.
+- Quota settings use account-wide keys and retain saved missing-window keys. Each bucket stores
+  `{limitPercent, warmup}`. Validate integer 1..100 (empty clears), and require a model when warmup
+  is enabled. Run form validation before batchUpdateAccounts; reload the current account after save.
+  Old limits migrate unchanged; bucket warmup defaults off and is independent of global Cron.
 - quota_paused is a distinct scheduling status. Dashboard limited-quota count includes paused and
   exhausted accounts. Keep local multi-group badges wrapping naturally on desktop and mobile.
 - Concurrency details grow with actual request rows. Keep an accessible modal and viewport scrolling;
@@ -1126,7 +1155,6 @@ match window statistics by exact stable window key.
 禁止只重命名选项而漏掉 `accountEgressPatch` 的混合批量 OpenAI 覆盖清理；既有
 `mixed providers explicitly choose common exits` 回归必须保留。Mihomo/IPv6 显式选择仍独立。
 
-
 ## Account Query Toolbar
 
 - Keep labeled search, status, group, plan and provider filters separate from list
@@ -1138,3 +1166,16 @@ match window statistics by exact stable window key.
 - Mobile and desktop representation switches keep using the same account handlers.
   Browser coverage verifies search removal, plan reset, retained sort, pagination,
   selection, groups, quota refresh and account actions.
+
+### Shared controls and subpath hosting
+
+Base controls resolve size from explicit prop, nearest form, config provider, then their existing
+fallback. Preserve local sm/md/lg, table column layout, multi-group wrapping and mobile cards.
+`validateEvent: false` disables event-triggered field validation, not explicit form validation.
+Table size, stripe and rowClassName must reach real rows; pagination supports hideOnSinglePage.
+Numeric scrollbar height/maxHeight use px, including zero. Empty/loading/no-match select text
+uses caller overrides when present. Keep NewCPR tokens and existing public component interfaces.
+
+`CPR_WEB_BASE_PATH` is a build-time base (default `/`). Router history, management API requests,
+static icons/PWA and browser session restoration use that base. Reverse proxies must strip the
+prefix for backend routes and rewrite Cookie Path and relative Location, including Realtime calls.

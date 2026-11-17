@@ -623,13 +623,19 @@ pub(super) async fn synchronize_passive_quota(
     quota: &CodexCredentialQuotaService,
     account: &ProviderAccount,
     rate_limits: &[CodexRateLimitObservation],
+    request_used_quota: bool,
     authority: QuotaRefreshAuthority,
 ) {
     if rate_limits.is_empty() {
         return;
     }
     if let Err(error) = quota
-        .synchronize_passive_rate_limits(account, rate_limits, authority)
+        .synchronize_passive_rate_limits_with_usage(
+            account,
+            rate_limits,
+            authority,
+            request_used_quota,
+        )
         .await
     {
         tracing::warn!(
@@ -645,6 +651,7 @@ pub(super) async fn synchronize_passive_quota_headers(
     account: &ProviderAccount,
     headers: &[(String, String)],
     image_endpoint: bool,
+    request_used_quota: bool,
     observed_at: SystemTime,
     authority: QuotaRefreshAuthority,
 ) {
@@ -664,6 +671,7 @@ pub(super) async fn synchronize_passive_quota_headers(
         quota,
         account,
         std::slice::from_ref(&observation),
+        request_used_quota,
         authority,
     )
     .await;

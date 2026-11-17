@@ -6,6 +6,7 @@ import { useResizeObserver } from '@vueuse/core'
 import { computed, nextTick, onMounted, shallowRef, useSlots, useTemplateRef, watch } from 'vue'
 import BaseEmpty from '../BaseEmpty.vue'
 import BaseScrollbar from '../BaseScrollbar.vue'
+import { useComponentSize } from '../controls/size'
 import {
   alignClass,
   cellContentClass,
@@ -24,7 +25,8 @@ const props = withDefaults(defineProps<BaseTableProps<Row>>(), {
   rowKey: 'id',
   selectedRowKeys: () => [],
   expandedRowKeys: () => [],
-  density: 'default',
+  stripe: true,
+  showHeaderWhenEmpty: false,
   loading: false,
   emptyText: '暂无数据',
   scrollbarAlwaysVisible: false,
@@ -34,6 +36,7 @@ const props = withDefaults(defineProps<BaseTableProps<Row>>(), {
 const emit = defineEmits<{
   sortChange: [sort: BaseTableSort | undefined]
 }>()
+const componentSize = useComponentSize(() => props.size ?? (props.density === 'compact' ? 'sm' : props.density === 'default' ? 'md' : undefined))
 const expandMotion = useTableExpandMotion()
 const slots = useSlots()
 const computedColumns = computed(() => resolveColumns(props.columns))
@@ -87,24 +90,20 @@ watch([() => displayRows.value.length, () => props.columns], async () => {
   measureHorizontalScroll()
 })
 
-const headerRowClass = computed(() => [
-  props.density === 'compact' ? 'h-8 text-cp-xs' : 'h-10 text-cp-sm',
-  'font-bold text-cp-text-secondary',
-])
-const bodyRowClass = computed(() => (props.density === 'compact' ? 'h-cp-table-row-sm' : 'h-cp-table-row'))
-const cellPaddingClass = computed(() => (props.density === 'compact' ? 'px-3' : 'px-4'))
-const bodyTextClass = computed(() => (props.density === 'compact' ? 'text-cp-sm' : 'text-cp'))
+// 空态遮罩和滚动条沿用表头高度，单元格内容沿用行高，切换密度时保持对齐
+const tableSizeClasses = {
+  sm: '[--table-header-height:2rem] [--table-row-height:var(--cp-table-row-height-sm)] [--table-row-gap:4px]',
+  md: '[--table-header-height:2.5rem] [--table-row-height:var(--cp-table-row-height)] [--table-row-gap:6px]',
+  lg: '[--table-header-height:3rem] [--table-row-height:var(--cp-table-row-height-lg)] [--table-row-gap:6px]',
+}
+const cellPaddingClass = computed(() => (componentSize.value === 'sm' ? 'px-3' : 'px-4'))
+const bodyTextClass = computed(() => (componentSize.value === 'sm' ? 'text-cp-sm' : componentSize.value === 'lg' ? 'text-cp-lg' : 'text-cp'))
 const bodyCellFrameClass = computed(() =>
-  props.density === 'compact'
+  componentSize.value === 'sm'
     ? 'border-y-2 border-transparent bg-clip-padding'
     : 'border-y-[3px] border-transparent bg-clip-padding',
 )
-const firstRowTopGapClass = computed(() => (props.density === 'compact' ? 'border-t-4' : 'border-t-[6px]'))
-const bodyCellContentClass = computed(() =>
-  props.density === 'compact'
-    ? 'min-h-[calc(var(--cp-table-row-height-sm)-4px)]'
-    : 'min-h-[calc(var(--cp-table-row-height)-6px)]',
-)
+const firstRowTopGapClass = computed(() => (componentSize.value === 'sm' ? 'border-t-4' : 'border-t-[6px]'))
 
 function getRowKey(row: Row, index: number) {
   if (typeof props.rowKey === 'function')
@@ -124,14 +123,15 @@ function isRowExpanded(row: Row, index: number) {
 function rowBackgroundClass(row: Row, index: number) {
   if (isRowSelected(row, index))
     return 'bg-(--cp-table-row-selected-bg)'
-  if (index % 2 === 1)
+  if (props.stripe && index % 2 === 1)
     return 'bg-(--cp-table-row-stripe-bg)'
   return 'bg-(--cp-table-row-bg)'
 }
 
 function rowClass(row: Row, index: number) {
   return [
-    bodyRowClass.value,
+    'h-(--table-row-height)',
+    typeof props.rowClassName === 'function' ? props.rowClassName({ row, rowIndex: index }) : props.rowClassName,
     isRowSelected(row, index)
       ? 'hover:[&>td]:bg-(--cp-table-row-selected-bg)'
       : 'hover:[&>td]:bg-(--cp-table-row-hover-bg)',
@@ -196,17 +196,12 @@ defineExpose({
 </script>
 
 <template>
-  <div class="isolate flex h-full min-h-0 w-full max-w-full flex-col overflow-hidden">
+  <div class="isolate flex h-full min-h-0 w-full max-w-full flex-col overflow-hidden" :class="tableSizeClasses[componentSize]">
     <div v-loading="loading" class="relative flex min-h-0 max-w-full flex-1 overflow-hidden">
       <BaseScrollbar
-        v-if="hasRows"
+        v-if="hasRows || showHeaderWhenEmpty"
         ref="scrollbar"
-        class="min-h-0 flex-1"
-        :class="
-          density === 'compact'
-            ? '[--cp-scrollbar-track-inset-block-start:2.25rem]'
-            : '[--cp-scrollbar-track-inset-block-start:2.75rem]'
-        "
+        class="min-h-0 flex-1 [--cp-scrollbar-track-inset-block-start:calc(var(--table-header-height)+0.25rem)]"
         :always-visible="scrollbarAlwaysVisible"
         horizontal
         @scroll="handleTableScroll"
@@ -216,7 +211,7 @@ defineExpose({
             <col v-for="column in computedColumns" :key="column.key" :style="columnStyle(column, computedColumns, columnLayout)">
           </colgroup>
           <thead>
-            <tr :class="headerRowClass">
+            <tr class="h-(--table-header-height) font-bold text-cp-text-secondary" :class="{ sm: 'text-cp-xs', md: 'text-cp-sm', lg: 'text-cp' }[componentSize]">
               <th
                 v-for="(column, columnIndex) in computedColumns"
                 :key="column.key"
@@ -292,7 +287,7 @@ defineExpose({
                   ]"
                   :style="stickyStyle(column)"
                 >
-                  <div class="grid content-center" :class="bodyCellContentClass">
+                  <div class="grid min-h-[calc(var(--table-row-height)-var(--table-row-gap))] content-center">
                     <div :class="cellContentClass(column)" :title="bodyCellTitle(column, row)">
                       <slot
                         :name="column.key"
@@ -324,7 +319,7 @@ defineExpose({
           </tbody>
         </table>
       </BaseScrollbar>
-      <div v-else class="grid min-h-0 flex-1 place-items-center overflow-hidden px-4">
+      <div v-if="!hasRows" class="grid min-h-0 flex-1 place-items-center overflow-hidden px-4" :class="showHeaderWhenEmpty ? 'absolute inset-x-0 top-(--table-header-height) bottom-0' : undefined">
         <BaseEmpty v-if="!loading" :title="emptyText" surface="none" class="w-full max-w-80" />
       </div>
     </div>

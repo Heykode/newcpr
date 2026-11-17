@@ -7,6 +7,12 @@ use async_trait::async_trait;
 
 #[async_trait]
 pub trait ReloginStore: Send + Sync {
+    async fn record_maintenance(
+        &self,
+        id: &str,
+        action: Option<crate::model::relogin_maintenance::MaintenanceAction>,
+        context: &crate::model::MutationContext,
+    ) -> AdminStoreResult<()>;
     /// Record a failed push preflight without invalidating its existing confirmation revision.
     async fn save_attempt(
         &self,

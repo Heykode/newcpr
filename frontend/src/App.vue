@@ -3,6 +3,7 @@ import { useDebounceFn, useDevicePixelRatio, useEventListener, useWindowSize } f
 import { watch } from 'vue'
 import { RouterView } from 'vue-router'
 
+import BaseConfigProvider from '@/components/base/BaseConfigProvider.vue'
 import { BaseToast } from '@/components/base/BaseToast'
 
 const overlay = (navigator as Navigator & { windowControlsOverlay?: EventTarget & { getTitlebarAreaRect: () => DOMRect } }).windowControlsOverlay
@@ -38,8 +39,10 @@ if (overlay) {
 
 <template>
   <div class="pwa-titlebar hidden bg-cp-bg-container" aria-hidden="true" />
-  <RouterView />
-  <BaseToast />
+  <BaseConfigProvider>
+    <RouterView />
+    <BaseToast />
+  </BaseConfigProvider>
 </template>
 
 <style scoped>

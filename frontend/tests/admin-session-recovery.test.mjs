@@ -13,7 +13,7 @@ const tick = () => new Promise(resolve => setImmediate(resolve))
 
 function loadText(text, dependencies = {}, globals = {}) {
   const exports = {}
-  const { outputText } = ts.transpileModule(text, {
+  const { outputText } = ts.transpileModule(text.replaceAll('import.meta.env.BASE_URL', JSON.stringify('/proxy/')), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2024 },
   })
   runInNewContext(outputText, {

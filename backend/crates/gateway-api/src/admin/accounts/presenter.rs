@@ -107,8 +107,8 @@ pub(super) fn account_view(
     quota.overdraft =
         codex_quota_overdraft.map(|state| codex_quota_overdraft_view(state, timezone));
     AccountView {
-        quota_limits: account.quota_limits,
-        quota_limits_supported: account.provider_kind.as_str() == "openai"
+        quota_settings: account.quota_settings,
+        quota_settings_supported: account.provider_kind.as_str() == "openai"
             && account.authentication_kind == "oauth",
         auto_use_quota_credits: account.auto_use_quota_credits,
         error_protection,

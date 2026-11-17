@@ -275,3 +275,68 @@ test('highest workspace acquisition and exact push target are explicit opt-ins',
     selections: { a: { accountId: 'original-free', switchWorkspace: true } },
   })
 })
+
+test('manual push carries the complete edited account form with the confirmed versions', async () => {
+  const calls = []
+  const { pushRelogin } = load('../src/api/modules/relogin.ts', {
+    '../request': async config => calls.push(config),
+  })
+  const form = {
+    settings: { enabled: true, customName: 'Edited account', weight: 7, concurrencyLimit: 3, groupIds: ['grp_edited'], modelAccess: { mode: 'allowlist', models: ['model-demo'] }, egressMode: 'unchanged' },
+    outboundProxyId: 'proxy-edited',
+    qualityTemplate: { id: 'quality-demo', revision: 2 },
+  }
+  await pushRelogin([{ id: 'a', revision: 17 }], { id: 'template-demo', revision: 4 }, undefined, undefined, undefined, form)
+  assert.deepEqual(JSON.parse(JSON.stringify(calls[0].data)), {
+    ids: ['a'],
+    revisions: { a: 17 },
+    template: { id: 'template-demo', revision: 4 },
+    newAccount: form,
+  })
+  await pushRelogin([{ id: 'existing', revision: 9 }])
+  assert.equal('newAccount' in calls[1].data, false)
+})
+
+test('queue availability explains active work and pause without blocking idle failed accounts', () => {
+  const { queueDisabledReason, queueButtonLabel } = load('../src/views/relogin/maintenance.ts')
+  assert.equal(queueDisabledReason({ status: 'failed' }, false, false), undefined)
+  assert.equal(queueButtonLabel({ status: 'failed' }, false), '立即重登')
+  for (const status of ['queued', 'running', 'pushing']) {
+    assert.ok(queueDisabledReason({ status }, false, false))
+    assert.notEqual(queueButtonLabel({ status }, false), '立即重登')
+  }
+  assert.match(queueDisabledReason({ status: 'ready' }, false, true), /暂停/)
+  assert.match(queueDisabledReason({ status: 'ready', maintenance: { state: 'running' } }, false, false), /维护/)
+})
+
+test('queued task state takes precedence over older completed maintenance', () => {
+  const { maintenanceResult, queueButtonLabel, maintenanceBusy } = load('../src/views/relogin/maintenance.ts', {
+    './presentation': { processingStatus },
+  })
+  const row = { status: 'queued', message: '等待重登', maintenance: { state: 'succeeded', checkedAt: '2026-01-01T00:00:00Z' } }
+  assert.equal(maintenanceResult(row).label, '排队中')
+  assert.equal(maintenanceBusy(row), true)
+  row.status = 'failed'
+  row.maintenance.state = 'cancelled'
+  assert.equal(maintenanceResult(row).label, '已取消')
+  assert.equal(queueButtonLabel(row, false), '立即重登')
+  assert.equal(maintenanceBusy(row), false)
+})
+
+test('queue workspace cards use the observed directory without inventing names or plans', () => {
+  const { knownMaintenanceWorkspaces } = load('../src/views/relogin/maintenance.ts', {
+    './presentation': { processingStatus },
+  })
+  const row = { workspaceId: 'pool-only', planType: 'business' }
+  assert.equal(knownMaintenanceWorkspaces(row).length, 0)
+  row.maintenance = { workspaces: [
+    { id: 'team-a', name: 'Research', planType: 'business', available: true },
+    { id: 'team-a', name: 'Alias', planType: 'business', available: true },
+    { id: 'team-b', name: '', planType: null, available: false },
+  ] }
+  const choices = knownMaintenanceWorkspaces(row)
+  assert.deepEqual(Array.from(choices, item => item.id), ['team-a', 'team-b'])
+  assert.equal(choices[0].name, 'Research')
+  assert.equal(choices[1].planType, null)
+  assert.equal(choices[1].available, false)
+})

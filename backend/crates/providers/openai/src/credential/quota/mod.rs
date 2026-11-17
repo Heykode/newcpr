@@ -5,6 +5,7 @@
 //! - [`evidence`]：额度接口错误到凭据/额度事实的分类。
 //! - [`recovery`]：各额度窗口独立的恢复基准与访问结论。
 
+mod bucket_warmup;
 mod document;
 pub(crate) mod evidence;
 mod recovery;
@@ -62,6 +63,7 @@ use snapshot::{
 };
 
 const QUOTA_MERGE_ATTEMPTS: usize = 3;
+const BUCKET_USAGE_FIELD: &str = "_cpr_bucket_last_used_at";
 const LIMIT_EVIDENCE_FIELD: &str = "_cpr_quota_limit_evidence";
 pub(crate) const QUOTA_SCHEDULING_TTL: Duration = Duration::from_secs(10 * 60);
 const QUOTA_HYDRATION_FAILURE_TTL: Duration = Duration::from_secs(5);
@@ -577,7 +579,7 @@ enum WarmupDecision<'a> {
     Exhausted(Option<&'a CodexQuotaWindow>),
 }
 
-fn warmup_account_is_available(account: &ProviderAccount) -> bool {
+pub(super) fn warmup_account_is_available(account: &ProviderAccount) -> bool {
     account.authentication_kind() == crate::credential::CODEX_AUTHENTICATION_KIND_OAUTH
         && account.enabled()
         && matches!(
@@ -636,7 +638,7 @@ fn quota_refresh_candidate(
             .filter(|window| {
                 window.is_account_wide()
                     && account
-                        .quota_limits()
+                        .quota_settings()
                         .reached(window.key(), window.used_percent())
             })
             .filter_map(CodexQuotaWindow::reset_at)
@@ -854,11 +856,12 @@ impl CodexCredentialQuotaService {
         let observed = self.store.get_quotas(&account_ids).await?;
         let observed_snapshots = observed
             .iter()
-            .filter_map(|observation| {
-                quota_snapshot_from_observation(observation)
-                    .map(|snapshot| (observation.account_id.clone(), snapshot))
+            .filter_map(|obs| {
+                quota_snapshot_from_observation(obs)
+                    .map(|snapshot| (obs.account_id.clone(), snapshot))
             })
             .collect::<BTreeMap<_, _>>();
+
         let profile = match &self.runtime_policy {
             Some(policy) => self
                 .profile
@@ -870,6 +873,7 @@ impl CodexCredentialQuotaService {
         let client = self
             .backend_client()
             .with_request_profile(CodexWireProfileState::new(profile));
+
         for account in accounts {
             if account.quota().is_exhausted() {
                 summary.skipped_exhausted += 1;
@@ -912,115 +916,157 @@ impl CodexCredentialQuotaService {
                 }
             }
 
-            let credential = match self.repository.load_runtime_credential(&account).await {
-                Ok(credential) => credential,
-                Err(error) => {
-                    tracing::warn!(account_id = %account.id(), error = %error, "OpenAI warmup credential load failed");
-                    summary.failed += 1;
-                    continue;
-                }
-            };
-            let authorization = match credential.authentication.authorization_header() {
-                Ok(authorization) => authorization,
-                Err(error) => {
-                    tracing::warn!(account_id = %account.id(), error = %error, "OpenAI warmup credential authorization failed");
-                    summary.failed += 1;
-                    continue;
-                }
-            };
-            let request_id = format!("warmup_{}", Uuid::now_v7().simple());
-            let mut body = Map::new();
-            body.insert("model".to_owned(), Value::String(model.to_owned()));
-            body.insert(
-                "input".to_owned(),
-                serde_json::json!([{
-                    "type": "message",
-                    "role": "user",
-                    "content": [{"type": "input_text", "text": "hello"}]
-                }]),
-            );
-            body.insert("stream".to_owned(), Value::Bool(true));
-            body.insert("store".to_owned(), Value::Bool(false));
-            body.insert("generate".to_owned(), Value::Bool(false));
-            body.insert(
-                "service_tier".to_owned(),
-                Value::String("default".to_owned()),
-            );
-            body.insert("reasoning".to_owned(), serde_json::json!({"effort": "low"}));
-            body.insert("text".to_owned(), serde_json::json!({"verbosity": "low"}));
-            let request = CodexResponsesRequest::from_body(body);
-            let account_client = match self.warmup_client(&client, &account, &request_id) {
-                Ok(client) => client,
-                Err(error) => {
-                    tracing::warn!(account_id = %account.id(), error = %error, "OpenAI warmup account client construction failed");
-                    summary.failed += 1;
-                    continue;
-                }
-            };
-            let context = CodexRequestContext::auxiliary(
-                authorization.expose_secret(),
-                account.upstream_account_id(),
-                &request_id,
-                Some(&credential.installation_id),
-            );
-            let result = tokio::time::timeout(WARMUP_REQUEST_TIMEOUT, async {
-                let mut response = account_client
-                    .create_response_stream_http_sse(&request, context)
-                    .await
-                    .map_err(|error| format!("request: {error}"))?;
-                let observed_at = response.rate_limit_observed_at;
-                let terminal = consume_warmup_sse(&mut response, &account_client)
-                    .await
-                    .map_err(str::to_owned);
-                let headers = response.rate_limit_headers.clone();
-                let updates = match response.rate_limit_updates.as_ref() {
-                    Some(updates) => std::mem::take(&mut *updates.lock().await),
-                    None => Vec::new(),
-                };
-                terminal.map(|()| (observed_at, headers, updates))
-            })
-            .await;
-            drop(account_client);
-
-            match result {
-                Ok(Ok((observed_at, headers, updates))) => {
-                    if !headers.is_empty()
-                        && let Err(error) = self
-                            .synchronize_passive_headers(
-                                &account,
-                                &headers,
-                                observed_at,
-                                QuotaRefreshAuthority::ObserveAccess,
-                            )
-                            .await
-                    {
-                        tracing::warn!(account_id = %account.id(), error = %error, "OpenAI warmup header observation failed");
-                    }
-                    if !updates.is_empty()
-                        && let Err(error) = self
-                            .synchronize_passive_rate_limits(
-                                &account,
-                                &updates,
-                                QuotaRefreshAuthority::ObserveAccess,
-                            )
-                            .await
-                    {
-                        tracing::warn!(account_id = %account.id(), error = %error, "OpenAI warmup event observation failed");
-                    }
-                    summary.warmed_up += 1;
-                }
-                Ok(Err(error)) => {
-                    tracing::warn!(account_id = %account.id(), error, "OpenAI warmup request failed");
-                    summary.failed += 1;
-                }
-                Err(_) => {
-                    tracing::warn!(account_id = %account.id(), "OpenAI warmup request timed out");
-                    summary.failed += 1;
-                }
+            if self.warmup_one(&account, model, &client).await {
+                summary.warmed_up += 1;
+                self.record_scheduled_warmup_use(&account, chrono::Utc::now())
+                    .await?;
+            } else {
+                summary.failed += 1;
             }
             tokio::time::sleep(Duration::from_secs(2)).await;
         }
+
         Ok(summary)
+    }
+
+    pub(super) async fn warmup_one(
+        &self,
+        account: &ProviderAccount,
+        model: &str,
+        client: &CodexBackendClient,
+    ) -> bool {
+        let mut summary = CodexWarmupSummary::default();
+        let credential = match self.repository.load_runtime_credential(account).await {
+            Ok(cred) => cred,
+            Err(_) => {
+                return false;
+            }
+        };
+        let authorization = match credential.authentication.authorization_header() {
+            Ok(auth) => auth,
+            Err(_) => {
+                return false;
+            }
+        };
+
+        let mut body = Map::new();
+        body.insert("model".to_owned(), Value::String(model.to_owned()));
+        body.insert(
+            "input".to_owned(),
+            serde_json::json!([{
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "hello"}]
+            }]),
+        );
+        body.insert("stream".to_owned(), Value::Bool(true));
+        body.insert("store".to_owned(), Value::Bool(false));
+        body.insert(
+            "service_tier".to_owned(),
+            Value::String("default".to_owned()),
+        );
+        // 目录里各模型的最低档都是 low，none 会收到上游 error 终态并让整次预热记为失败
+        body.insert("reasoning".to_owned(), serde_json::json!({"effort": "low"}));
+        body.insert("text".to_owned(), serde_json::json!({"verbosity": "low"}));
+
+        let upstream_request = CodexResponsesRequest::from_body(body);
+        let request_id = format!("warmup_{}", Uuid::now_v7().simple());
+        let client_for_account = match self.warmup_client(client, account, &request_id) {
+            Ok(c) => c,
+            Err(error) => {
+                tracing::warn!(account_id = %account.id(), error = %error, "warmup client for account failed");
+                return false;
+            }
+        };
+        let context = crate::transport::CodexRequestContext::auxiliary(
+            authorization.expose_secret(),
+            account.upstream_account_id(),
+            &request_id,
+            Some(&credential.installation_id),
+        );
+
+        // HTTP 200 只确认响应头；必须消费 SSE 直到终态才能确认预热结果和额度事件
+        let attempt = tokio::time::timeout(WARMUP_REQUEST_TIMEOUT, async {
+            let mut response = client_for_account
+                .create_response_stream_http_sse(&upstream_request, context)
+                .await
+                .map_err(|_| "request_rejected")?;
+            let observed_at = response.rate_limit_observed_at;
+            let terminal = consume_warmup_sse(&mut response, &client_for_account).await;
+            let rate_limit_updates = match response.rate_limit_updates.as_ref() {
+                Some(updates) => std::mem::take(&mut *updates.lock().await),
+                None => Vec::new(),
+            };
+            Ok::<_, &'static str>((
+                terminal,
+                response.rate_limit_headers,
+                rate_limit_updates,
+                observed_at,
+            ))
+        })
+        .await;
+        match attempt {
+            Ok(Ok((terminal, headers, rate_limit_updates, observed_at))) => {
+                match terminal {
+                    Ok(()) => {
+                        // 被动额度同步会把成功请求的窗口事实标为可用，失败流不能复用该结论
+                        if !headers.is_empty()
+                            && let Err(error) = self
+                                .synchronize_passive_headers(
+                                    account,
+                                    &headers,
+                                    observed_at,
+                                    QuotaRefreshAuthority::ObserveAccess,
+                                )
+                                .await
+                        {
+                            tracing::warn!(account_id = %account.id(), error = %error, "OpenAI warmup rate-limit header sync failed");
+                        }
+                        if !rate_limit_updates.is_empty()
+                            && let Err(error) = self
+                                .synchronize_passive_rate_limits(
+                                    account,
+                                    &rate_limit_updates,
+                                    QuotaRefreshAuthority::ObserveAccess,
+                                )
+                                .await
+                        {
+                            tracing::warn!(account_id = %account.id(), error = %error, "OpenAI warmup rate-limit event sync failed");
+                        }
+                        summary.warmed_up += 1;
+                        tracing::info!(
+                            account_id = %account.id(),
+                            model,
+                            "OpenAI account warmed up successfully"
+                        );
+                    }
+                    Err(reason) => {
+                        summary.failed += 1;
+                        tracing::warn!(
+                            account_id = %account.id(),
+                            reason,
+                            "OpenAI account warmup stream failed"
+                        );
+                    }
+                }
+            }
+            Ok(Err(reason)) => {
+                summary.failed += 1;
+                tracing::warn!(
+                    account_id = %account.id(),
+                    reason,
+                    "OpenAI account warmup request rejected by upstream"
+                );
+            }
+            Err(_) => {
+                summary.failed += 1;
+                tracing::warn!(
+                    account_id = %account.id(),
+                    "OpenAI account warmup request timed out"
+                );
+            }
+        }
+        summary.warmed_up == 1
     }
 
     /// 查询当前账号由 Codex Desktop 暴露的主动额度重置卡。
@@ -1473,6 +1519,22 @@ impl CodexCredentialQuotaService {
         observations: &[CodexRateLimitObservation],
         authority: QuotaRefreshAuthority,
     ) -> Result<bool, CodexCredentialQuotaError> {
+        self.synchronize_passive_rate_limits_with_usage(
+            account,
+            observations,
+            authority,
+            authority == QuotaRefreshAuthority::ObserveAccess,
+        )
+        .await
+    }
+
+    pub(crate) async fn synchronize_passive_rate_limits_with_usage(
+        &self,
+        account: &ProviderAccount,
+        observations: &[CodexRateLimitObservation],
+        authority: QuotaRefreshAuthority,
+        request_used_quota: bool,
+    ) -> Result<bool, CodexCredentialQuotaError> {
         if observations.is_empty() {
             return Ok(false);
         }
@@ -1541,14 +1603,18 @@ impl CodexCredentialQuotaService {
                 return Ok(false);
             }
             let prior = existing_state.unwrap_or_else(|| account.quota());
-            let (mut quota, updated_default) = merge_passive_quota(existing, &rate_limits);
+            let (mut quota, updated_default) = merge_passive_quota(
+                existing,
+                &rate_limits,
+                request_used_quota.then_some(observed_at),
+            );
             let mut snapshot = parse_account_quota_snapshot(
                 account.id().clone(),
                 account.revision(),
                 observed_at,
                 &Value::Object(quota.clone()),
             )?;
-            snapshot.retain_limit_evidence(account.quota_limits(), previous.as_ref(), &mut quota);
+            snapshot.retain_limit_evidence(account.quota_settings(), previous.as_ref(), &mut quota);
             let credit_access = prior.evidence() == Some(QuotaEvidence::CreditsAvailable);
             let fresh_credits = rate_limits.iter().any(|limits| limits.credits.is_some());
             // 具名桶和元数据不改变套餐结论；点数不能再用时，仍须撤销原先仅凭点数的放行
@@ -1590,8 +1656,9 @@ impl CodexCredentialQuotaService {
             let outcome = self
                 .store
                 .compare_and_swap_quota(QuotaObservation {
-                    quota_pause: has_quota_facts
-                        .then(|| snapshot.pause_decision(account.quota_limits(), Some(merge_base))),
+                    quota_pause: has_quota_facts.then(|| {
+                        snapshot.pause_decision(account.quota_settings(), Some(merge_base))
+                    }),
                     plan_type,
                     account_id: account.id().clone(),
                     expected_revision: account.revision(),
@@ -1838,6 +1905,7 @@ impl CodexCredentialQuotaService {
                     .ok_or(CodexCredentialQuotaError::InvalidCredentialData)?,
             );
             object.remove(RECOVERY_FIELD);
+            object.remove(BUCKET_USAGE_FIELD);
             object.remove(LIMIT_EVIDENCE_FIELD);
             let mut snapshot = parse_account_quota_snapshot(
                 account.id().clone(),
@@ -1845,16 +1913,21 @@ impl CodexCredentialQuotaService {
                 observed_at,
                 &Value::Object(object.clone()),
             )?;
-            let (merge_base, previous) =
-                if account.quota().is_exhausted() || !account.quota_limits().is_empty() {
-                    let (base, snapshot) = self.read_snapshot_with_base(account).await?;
-                    if base.observed_at.is_some_and(|at| at >= observed_at) {
-                        return Err(CodexCredentialQuotaError::RevisionConflict);
-                    }
-                    (Some(base), snapshot)
-                } else {
-                    (None, None)
-                };
+            // 请求使用证据与上游比例分开保留，0% 取整不能让主动刷新抹掉已发生的请求
+            let (base, previous) = self.read_snapshot_with_base(account).await?;
+            if base.observed_at.is_some_and(|at| at >= observed_at) {
+                return Err(CodexCredentialQuotaError::RevisionConflict);
+            }
+            let merge_base = Some(base);
+            if let Some(previous) = &previous {
+                snapshot.last_used_at.clone_from(&previous.last_used_at);
+                if !snapshot.last_used_at.is_empty() {
+                    object.insert(
+                        BUCKET_USAGE_FIELD.into(),
+                        serde_json::json!(snapshot.last_used_at),
+                    );
+                }
+            }
             // 失败后回读只允许明确可用的点数恢复访问，套餐 allowed 仍可能滞后
             let observe_access = matches!(authority, QuotaRefreshAuthority::ObserveAccess)
                 || (account.auto_use_quota_credits() && snapshot.credits_usable());
@@ -1882,7 +1955,11 @@ impl CodexCredentialQuotaService {
                         .with_observed_at(observed_at),
                 });
             }
-            snapshot.retain_limit_evidence(account.quota_limits(), previous.as_ref(), &mut object);
+            snapshot.retain_limit_evidence(
+                account.quota_settings(),
+                previous.as_ref(),
+                &mut object,
+            );
             let state = if matches!(authority, QuotaRefreshAuthority::PreserveAccess) {
                 snapshot.access_with_credits(account.quota(), account.auto_use_quota_credits())
             } else {
@@ -1898,7 +1975,9 @@ impl CodexCredentialQuotaService {
             if self
                 .store
                 .compare_and_swap_quota(QuotaObservation {
-                    quota_pause: Some(snapshot.pause_decision(account.quota_limits(), merge_base)),
+                    quota_pause: Some(
+                        snapshot.pause_decision(account.quota_settings(), merge_base),
+                    ),
                     plan_type: observed_account_plan(account.plan_type(), snapshot.plan_type()),
                     account_id: account.id().clone(),
                     expected_revision: account.revision(),
@@ -2195,6 +2274,7 @@ fn access_token_is_current(account: &ProviderAccount, now: SystemTime) -> bool {
 fn merge_passive_quota(
     mut quota: Map<String, Value>,
     observations: &[ParsedRateLimits],
+    used_at: Option<SystemTime>,
 ) -> (Map<String, Value>, bool) {
     let mut updated_default = false;
     let mut snapshots = RateLimitSnapshotsByLimitId::take_from_document(&mut quota);
@@ -2229,6 +2309,19 @@ fn merge_passive_quota(
             })
             .or_else(|| resolved_limit_ids.get(DEFAULT_CODEX_LIMIT_ID).cloned());
         if let Some(active_limit) = active_limit {
+            if let Some(used_at) = used_at {
+                let usage = quota
+                    .entry(BUCKET_USAGE_FIELD)
+                    .or_insert_with(|| serde_json::json!({}));
+                if let Some(usage) = usage.as_object_mut() {
+                    usage.insert(
+                        active_limit.clone(),
+                        serde_json::json!(
+                            chrono::DateTime::<chrono::Utc>::from(used_at).timestamp()
+                        ),
+                    );
+                }
+            }
             quota.insert("active_limit".to_owned(), Value::String(active_limit));
         }
         merge_passive_metadata(&mut quota, rate_limits);

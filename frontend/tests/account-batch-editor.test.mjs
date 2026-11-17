@@ -58,6 +58,7 @@ function mountEditor(t, options = {}) {
     '@/components/base/BaseToast': { toast },
   })
   const accountsApi = request && loadModule(new URL('../src/api/modules/accounts.ts', import.meta.url), {
+    '../constants': { API_BASE_URL: '' },
     '../request': config => request.default({ ...config, adapter: options.adapter }),
   })
   const asyncAction = loadModule(new URL('../src/composables/useAsyncAction.ts', import.meta.url), {

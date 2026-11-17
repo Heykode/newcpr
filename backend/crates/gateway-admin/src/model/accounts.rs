@@ -208,7 +208,7 @@ pub struct AccountTurnStateSlotStatus {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountRecord {
     pub quota_paused: bool,
-    pub quota_limits: gateway_core::account::AccountQuotaLimits,
+    pub quota_settings: gateway_core::account::AccountQuotaSettings,
     pub auto_use_quota_credits: bool,
     pub custom_name: Option<String>,
     pub id: String,
@@ -470,7 +470,7 @@ pub struct AccountUpdateResult {
 /// 一批账号可编辑事实的一次性替换命令。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BatchUpdateAccounts {
-    pub quota_limits: Option<gateway_core::account::AccountQuotaLimits>,
+    pub quota_settings: Option<gateway_core::account::AccountQuotaSettings>,
     pub auto_use_quota_credits: Option<bool>,
     pub excel_recovery: Option<super::excel_recovery::ExcelRecoveryConfig>,
     pub purchase_cost: Option<super::account_purchase::AccountPurchaseUpdate>,
@@ -588,7 +588,7 @@ pub enum TurnStateProbeOutcome {
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct ProviderAccountCapabilities {
-    pub quota_limits_supported: bool,
+    pub quota_settings_supported: bool,
     pub quota_credits: bool,
     pub quota: bool,
     pub quota_refresh: bool,
@@ -601,6 +601,8 @@ pub struct ProviderAccountCapabilities {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PreparedQuotaPause {
+    pub settings: gateway_core::account::AccountQuotaSettings,
+    pub previous_settings: gateway_core::account::AccountQuotaSettings,
     pub observed_at: Option<DateTime<Utc>>,
     pub revision: Revision,
     pub paused: bool,

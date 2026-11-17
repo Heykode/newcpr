@@ -255,6 +255,11 @@ impl CodexCanonicalDecoder {
         std::mem::take(&mut self.timing_signals)
     }
 
+    /// 使用累计输出事实判断中途失败的请求，避免把前导事件当作额度使用
+    pub(crate) const fn semantic_output_seen(&self) -> bool {
+        self.semantic_output_seen
+    }
+
     /// 返回本 attempt 已从上游响应生命周期帧观察到的实际服务档位。
     #[must_use]
     pub fn response_service_tier(&self) -> Option<&str> {

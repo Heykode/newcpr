@@ -450,6 +450,7 @@ function mountTasks(t, api = {}) {
 test('account task APIs match upstream methods, body/query fields and read cancellation', async () => {
   const requests = []
   const load = loader({
+    '../constants': { API_BASE_URL: '' },
     '../request': async (config) => {
       requests.push(config)
       return {}

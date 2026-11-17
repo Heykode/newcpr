@@ -51,6 +51,7 @@ async fn relogin_seconds_upgrade_converts_defaults_and_preserves_custom_duration
 
 fn entry(id: &str, email: &str) -> ReloginEntry {
     ReloginEntry {
+        maintenance: Default::default(),
         last_attempt: None,
         imported_at: Some(chrono::Utc::now()),
         id: id.into(),
@@ -1152,5 +1153,95 @@ async fn relogin_history_is_atomic_paginated_and_removed_with_material() {
     );
     store.delete(&row.id, row.revision).await.unwrap();
     assert!(store.history(&row.id, None, 50).await.unwrap().is_empty());
+    database.close().await;
+}
+
+#[tokio::test]
+async fn relogin_maintenance_private_snapshot_and_unknown_state_survive_reopen() {
+    use gateway_admin::model::relogin_maintenance::*;
+    let Some(database) = TestDatabase::create("relogin_maintenance").await else {
+        return;
+    };
+    let store = PgReloginStore::new(database.pool.clone());
+    let mut row = entry("maintenance", "maintenance@example.invalid");
+    row.maintenance.uncertain = true;
+    row.maintenance.login_paused = true;
+    row.maintenance.pending_totp = Some(PendingTotp {
+        secret: "JBSWY3DPEHPK3PXP".into(),
+        session_id: "fixture-enrollment".into(),
+        created_at: chrono::Utc::now(),
+    });
+    row.maintenance.session = Some(WebSession {
+        source_ip: None,
+        egress_mode: None,
+        email: row.email.clone(),
+        device_id: "fixture-device".into(),
+        session_id: "fixture-session".into(),
+        cookies: vec![WebCookie {
+            name: "fixture-cookie".into(),
+            value: "test-only-cookie".into(),
+            domain: "example.invalid".into(),
+            path: "/".into(),
+            secure: true,
+            expires: None,
+            host_only: true,
+        }],
+        verified_at: chrono::Utc::now(),
+    });
+    row.maintenance.import_egress = Some(ReloginImportEgress {
+        proxy_id: Some("proxy-import".into()),
+        mode: None,
+    });
+    row.begin_attempt();
+    let login_id = row.last_attempt.as_ref().unwrap().id.clone();
+    let login = row.last_attempt.take();
+    row.begin_attempt();
+    row.last_attempt.as_mut().unwrap().operation = Some(MaintenanceAction::Devices);
+    let activity_id = row.last_attempt.as_ref().unwrap().id.clone();
+    row.maintenance.last_activity = row.last_attempt.take();
+    row.last_attempt = login;
+    store.save(&row, None).await.unwrap();
+    let reopened = PgReloginStore::new(database.pool.clone());
+    let loaded = reopened.entries().await.unwrap().remove(0);
+    assert_eq!(
+        loaded
+            .maintenance
+            .import_egress
+            .as_ref()
+            .unwrap()
+            .proxy_id
+            .as_deref(),
+        Some("proxy-import")
+    );
+    assert_eq!(loaded.last_attempt.as_ref().unwrap().id, login_id);
+    assert_eq!(
+        loaded.maintenance.last_activity.as_ref().unwrap().id,
+        activity_id
+    );
+    let history = reopened.history(&row.id, None, 50).await.unwrap();
+    assert_eq!(history.len(), 2);
+    assert!(
+        history.iter().any(
+            |item| item.id == activity_id && item.operation == Some(MaintenanceAction::Devices)
+        )
+    );
+    assert!(
+        history
+            .iter()
+            .any(|item| item.id == login_id && item.operation.is_none())
+    );
+    assert!(loaded.maintenance.uncertain && loaded.maintenance.login_paused);
+    assert_eq!(
+        loaded.maintenance.pending_totp.unwrap().session_id,
+        "fixture-enrollment"
+    );
+    assert!(loaded.maintenance.session.as_ref().unwrap().cookies[0].host_only);
+    assert_eq!(
+        loaded.maintenance.session.unwrap().cookies[0].value,
+        "test-only-cookie"
+    );
+    row.revision += 1;
+    store.save(&row, Some(1)).await.unwrap();
+    assert!(reopened.save(&row, Some(1)).await.is_err());
     database.close().await;
 }

@@ -4,7 +4,7 @@ use gateway_core::account::ResponsesUpstream;
 
 fn patch(id: &str) -> BatchUpdateAccounts {
     BatchUpdateAccounts {
-        quota_limits: Default::default(),
+        quota_settings: Default::default(),
         auto_use_quota_credits: None,
         account_ids: vec![id.into()],
         excel_recovery: None,

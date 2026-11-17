@@ -67,6 +67,7 @@ export function deriveThemeDimensionMap(
     controlHeight: `${controlHeight}px`,
     controlHeightLg: `${controlHeight + controlHeightStep}px`,
     tableRowHeight: `${tableRowHeight}px`,
+    tableRowHeightLg: `${tableRowHeight + seedTokens.sizeStep * 2}px`,
     tableRowHeightSm: `${Math.max(32, tableRowHeight - 20)}px`,
     borderRadiusSm: `${Math.max(0, borderRadius - radiusStep)}px`,
     borderRadius: `${borderRadius}px`,

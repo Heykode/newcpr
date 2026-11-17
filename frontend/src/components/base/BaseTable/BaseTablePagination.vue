@@ -1,11 +1,13 @@
 <script setup lang="ts">
+import type { ComponentSize } from '../controls/types'
 import type { BaseTablePagination, PagerItem } from './pagination'
 import { ChevronLeft, ChevronRight } from '@lucide/vue'
 import { computed } from 'vue'
-
 import { t } from '@/i18n'
+
 import BaseIconButton from '../BaseIconButton.vue'
 import BaseSelect from '../BaseSelect.vue'
+import { useComponentSize } from '../controls/size'
 import {
   getCurrentPage,
   getPagerItems,
@@ -14,6 +16,8 @@ import {
 } from './pagination'
 
 const props = defineProps<{
+  size?: ComponentSize
+  hideOnSinglePage?: boolean
   pagination: BaseTablePagination
   loading: boolean
 }>()
@@ -22,6 +26,13 @@ const emit = defineEmits<{
   pageChange: [page: number]
   pageSizeChange: [pageSize: number]
 }>()
+
+const componentSize = useComponentSize(() => props.size, 'sm')
+const pageSizeClasses = {
+  sm: 'h-cp-control-sm min-w-cp-control-sm text-xs',
+  md: 'h-cp-control min-w-cp-control text-cp',
+  lg: 'h-cp-control-lg min-w-cp-control-lg text-cp-lg',
+}
 
 const totalPages = computed(() => getTotalPages(props.pagination))
 const currentPage = computed(() => getCurrentPage(props.pagination, totalPages.value))
@@ -75,7 +86,8 @@ function goToPage(page: number) {
 
 function paginationPageClass(page: number) {
   return [
-    'inline-flex size-8 items-center justify-center rounded-cp border-0 text-xs font-bold leading-none transition-colors duration-150 outline-none',
+    pageSizeClasses[componentSize.value],
+    'inline-flex items-center justify-center rounded-cp border-0 px-2 font-bold leading-none transition-colors duration-150 outline-none',
     page === currentPage.value
       ? 'cursor-default bg-(--cp-button-primary-bg) text-(--cp-button-primary-color)'
       : 'cursor-pointer bg-cp-fill-quaternary text-cp-text hover:bg-cp-bg-text-hover focus-visible:ring-2 focus-visible:ring-cp-control-outline focus-visible:ring-offset-2 focus-visible:ring-offset-cp-bg-container',
@@ -85,6 +97,7 @@ function paginationPageClass(page: number) {
 
 <template>
   <footer
+    v-if="!hideOnSinglePage || totalPages > 1"
     class="@container/pagination mt-2 min-h-10 min-w-0 shrink-0 px-0 py-1"
   >
     <div class="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-center gap-2 @min-[36rem]/pagination:grid-cols-[minmax(0,1fr)_auto_auto] @min-[36rem]/pagination:gap-3">
@@ -96,7 +109,7 @@ function paginationPageClass(page: number) {
         :aria-label="t('ui.pageSize')"
         :options="pageSizeOptions"
         :disabled="loading"
-        size="sm"
+        :size="componentSize"
         class="w-28 shrink-0"
       />
 
@@ -106,7 +119,7 @@ function paginationPageClass(page: number) {
       >
         <BaseIconButton
           variant="secondary"
-          size="sm"
+          :size="componentSize"
           :disabled="loading || currentPage <= 1"
           :label="t('ui.previous')"
           @click="goToPage(currentPage - 1)"
@@ -123,7 +136,8 @@ function paginationPageClass(page: number) {
           <template v-for="(item, index) in items" :key="`${item}-${index}`">
             <span
               v-if="item === 'ellipsis'"
-              class="inline-flex size-8 items-center justify-center text-xs font-bold text-cp-text-quaternary"
+              class="inline-flex items-center justify-center font-bold text-cp-text-quaternary"
+              :class="pageSizeClasses[componentSize]"
             >
               …
             </span>
@@ -142,7 +156,7 @@ function paginationPageClass(page: number) {
 
         <BaseIconButton
           variant="secondary"
-          size="sm"
+          :size="componentSize"
           :disabled="loading || currentPage >= totalPages"
           :label="t('ui.next')"
           @click="goToPage(currentPage + 1)"

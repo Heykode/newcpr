@@ -5,6 +5,7 @@ import type { SelectPositionElements } from './useSelectPosition'
 import { onClickOutside } from '@vueuse/core'
 import { computed, nextTick, ref, useId, watch } from 'vue'
 import { useLocale } from './locale'
+import { useComponentSize } from './size'
 import { useSelectPosition } from './useSelectPosition'
 
 interface SelectElements extends SelectPositionElements {
@@ -21,6 +22,7 @@ export function useSelect<Multiple extends boolean, Value extends SelectOptionVa
   callbacks: { change: (value: SelectValue<Multiple, Value>) => void, removeTag: (value: Value) => void },
 ) {
   const { rootRef, triggerRef, popoverRef, listboxRef, scrollbarRef } = elements
+  const componentSize = useComponentSize(() => props.size)
   const search = ref('')
   const open = ref(false)
   const activeIndex = ref(-1)
@@ -47,8 +49,14 @@ export function useSelect<Multiple extends boolean, Value extends SelectOptionVa
     return `${selectId}-option-${index}`
   }
 
+  function isOptionDisabled(option: SelectOption<Value>) {
+    const limit = props.multipleLimit ?? 0
+    return Boolean(option.disabled || (props.multiple && limit > 0
+      && selectedValues.value.length >= limit && !selectedValues.value.includes(option.value)))
+  }
+
   function enabledIndexes() {
-    return displayed.value.flatMap((option, index) => (option.disabled ? [] : [index]))
+    return displayed.value.flatMap((option, index) => (isOptionDisabled(option) ? [] : [index]))
   }
 
   function selectedIndex() {
@@ -57,7 +65,7 @@ export function useSelect<Multiple extends boolean, Value extends SelectOptionVa
 
   function setActiveToSelected() {
     const selected = selectedIndex()
-    if (selected >= 0 && !displayed.value[selected]?.disabled) {
+    if (selected >= 0 && !isOptionDisabled(displayed.value[selected]!)) {
       activeIndex.value = selected
       return
     }
@@ -122,7 +130,7 @@ export function useSelect<Multiple extends boolean, Value extends SelectOptionVa
 
   function handleOptionFocus(index: number) {
     const option = displayed.value[index]
-    if (!option || option.disabled)
+    if (!option || isOptionDisabled(option))
       return
 
     activeIndex.value = index
@@ -130,7 +138,7 @@ export function useSelect<Multiple extends boolean, Value extends SelectOptionVa
   }
 
   function chooseOption(option: SelectOption<Value>, index: number) {
-    if (props.disabled || option.disabled)
+    if (props.disabled || isOptionDisabled(option))
       return
 
     const value = (props.multiple
@@ -217,7 +225,7 @@ export function useSelect<Multiple extends boolean, Value extends SelectOptionVa
   }
 
   watch(
-    () => [displayed.value, props.size],
+    () => [displayed.value, componentSize.value, props.multipleLimit],
     async () => {
       if (!open.value)
         return
@@ -230,6 +238,9 @@ export function useSelect<Multiple extends boolean, Value extends SelectOptionVa
   )
 
   watch(model, async () => {
+    const active = displayed.value[activeIndex.value]
+    if (open.value && active && isOptionDisabled(active))
+      setActiveToSelected()
     await nextTick()
     updatePopoverPosition()
   })
@@ -250,6 +261,8 @@ export function useSelect<Multiple extends boolean, Value extends SelectOptionVa
 
   return {
     selectId,
+    componentSize,
+    isOptionDisabled,
     open,
     search,
     activeIndex,

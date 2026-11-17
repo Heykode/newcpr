@@ -2,6 +2,7 @@ import type { RequestOptions } from '../request'
 import type { AccountGroupRef } from './account-groups'
 import type { QualityMonitoring } from './quality-ops'
 import type { Excel403Action, ExcelRecoveryConfig, ExcelRecoveryView } from '@/utils/excel-settings'
+import { API_BASE_URL } from '../constants'
 import request from '../request'
 
 export type AccountStatus
@@ -218,9 +219,14 @@ export interface AccountHealthBucket {
 
 export type ResponsesUpstream = 'codex' | 'excel'
 
+export interface AccountQuotaBucketSettings {
+  limitPercent: number | null
+  warmup: { model: string } | null
+}
+
 export interface Account {
-  quotaLimits: Record<string, number>
-  quotaLimitsSupported: boolean
+  quotaSettings: Record<string, AccountQuotaBucketSettings>
+  quotaSettingsSupported: boolean
   autoUseQuotaCredits: boolean
   errorProtection?: { until: string, requiresProbe: boolean, rules: { id: string, name: string }[] } | null
   customName?: string | null
@@ -557,7 +563,7 @@ interface AccountUpdateParam {
 }
 
 interface AccountBatchUpdateParam {
-  quotaLimits?: Record<string, number>
+  quotaSettings?: Record<string, AccountQuotaBucketSettings>
   autoUseQuotaCredits?: boolean
   purchaseCost?: AccountPurchaseUpdate
   excelRecovery?: ExcelRecoveryConfig
@@ -720,7 +726,7 @@ export function accountProfileAvatarUrl(accountId: string, sourceUrl: string) {
     accountId,
     version: stableAvatarVersion(sourceUrl),
   })
-  return `/api/admin/accounts/profile-avatar?${params.toString()}`
+  return `${API_BASE_URL}/api/admin/accounts/profile-avatar?${params.toString()}`
 }
 
 function stableAvatarVersion(value: string) {

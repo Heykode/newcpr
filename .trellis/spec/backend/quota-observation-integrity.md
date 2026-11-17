@@ -138,3 +138,16 @@ out-of-order and pre-exhaustion observations cannot advance recovery. These are
 separate concerns; do not reinstate strict reset equality to enforce freshness.
 The quota recovery tests cover both upstream business conditions and local clock
 fences; update old fixture expectations when upstream changes these conditions.
+
+## Quota Bucket Warmup (v3.50.0)
+
+Passive successful requests and semantic output record per-generic-bucket usage timestamps even
+at rounded zero percent. Active refresh preserves this evidence; named/image buckets do not mark
+generic subscription use. Bucket progress is durable and separate from quota observations.
+The worker rechecks five minutes after a registered reset and claims one combined request only
+when the enabled bucket is still unused. A CAS fences credential revision, progress revision,
+settings, observation time, enabled/access/pause state and model policy. Configuration or identity
+changes cannot reuse a stale claim; ordinary credential rotation keeps same-identity progress.
+No automatic replay after an ambiguous claimed request. Global Cron uses the same warmup sender,
+records successful use and remains independent from per-bucket opt-in. Existing account egress,
+credential ownership and local observation clocks remain authoritative.

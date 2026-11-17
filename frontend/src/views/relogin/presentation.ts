@@ -174,3 +174,10 @@ export function workspaceId(row: ReloginEntry) {
 export function shortWorkspace(id: string | null) {
   return id ? (id.length > 18 ? `${id.slice(0, 8)}…${id.slice(-6)}` : id) : '自动选择'
 }
+
+export function workspaceLabel(row: ReloginEntry) {
+  const id = workspaceId(row)
+  return row.maintenance?.workspaces.find(workspace => workspace.id === id)?.name?.trim()
+    || row.workspaceChoices?.find(workspace => workspace.id === id)?.name?.trim()
+    || shortWorkspace(id)
+}

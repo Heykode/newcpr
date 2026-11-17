@@ -12,9 +12,13 @@ export type SelectValue<Multiple extends boolean, Value extends SelectOptionValu
 
 export interface SelectProps<Multiple extends boolean = false, Value extends SelectOptionValue = string> {
   options: SelectOption<Value>[]
+  validateEvent?: boolean
   size?: ComponentSize
   disabled?: boolean
   placeholder?: string
+  loadingText?: string
+  noMatchText?: string
+  multipleLimit?: number
   emptyText?: string
   multiple?: Multiple & boolean
   filterable?: boolean

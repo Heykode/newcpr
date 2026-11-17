@@ -746,6 +746,7 @@ pub(super) fn cold_json_response_stream(request: ColdJsonResponse) -> EventStrea
                 &active_account,
                 &response.rate_limit_headers,
                 image_endpoint,
+                true,
                 response.rate_limit_observed_at,
                 crate::credential::QuotaRefreshAuthority::ObserveAccess,
             )
@@ -990,7 +991,7 @@ pub(super) fn cold_response_stream_once(response: ColdResponse) -> EventStream {
                 }
                 apply_failure(&failure_context, &active_account, &failure)
                 .await;
-                Err(quota_continuation_replay_error(
+                Err(continuation_recovery_error(
                     failure.error,
                     &request,
                     ReplayBoundary::BeforeSemanticOutput,
@@ -1118,6 +1119,7 @@ pub(super) fn cold_response_stream_once(response: ColdResponse) -> EventStream {
                         &quota,
                         &active_account,
                         passive_quota_observation.rate_limits(),
+                        decoder.semantic_output_seen(),
                         crate::credential::QuotaRefreshAuthority::PreserveAccess,
                     )
                     .await;
@@ -1230,13 +1232,14 @@ pub(super) fn cold_response_stream_once(response: ColdResponse) -> EventStream {
                             &quota,
                             &active_account,
                             passive_quota_observation.rate_limits(),
+                            decoder.semantic_output_seen(),
                             crate::credential::QuotaRefreshAuthority::PreserveAccess,
                         )
                         .await;
                     }
                     apply_failure(&failure_context, &active_account, &failure)
                     .await;
-                    Err(quota_continuation_replay_error(
+                    Err(continuation_recovery_error(
                         failure.error,
                         &request,
                         ReplayBoundary::from_semantic_output(pre_commit_events.is_committed()),
@@ -1350,6 +1353,7 @@ pub(super) fn cold_response_stream_once(response: ColdResponse) -> EventStream {
                     &quota,
                     &active_account,
                     passive_quota_observation.rate_limits(),
+                    quota_success && terminal_failure.is_none() || decoder.semantic_output_seen(),
                     if quota_success
                         && terminal_failure.is_none()
                         && !request.quota_overdraft_active()
@@ -1434,7 +1438,7 @@ pub(super) fn cold_response_stream_once(response: ColdResponse) -> EventStream {
                         .error
                         .with_atomic_client_events(pre_commit_events.take_for_failure(events));
                 }
-                Err(quota_continuation_replay_error(
+                Err(continuation_recovery_error(
                     failure.error,
                     &request,
                     ReplayBoundary::from_semantic_output(failure_after_commit),
@@ -1505,6 +1509,7 @@ pub(super) fn cold_response_stream_once(response: ColdResponse) -> EventStream {
                 &quota,
                 &active_account,
                 passive_quota_observation.rate_limits(),
+                quota_success && terminal_failure.is_none() || decoder.semantic_output_seen(),
                 if quota_success
                     && terminal_failure.is_none()
                     && !request.quota_overdraft_active()
@@ -1585,7 +1590,7 @@ pub(super) fn cold_response_stream_once(response: ColdResponse) -> EventStream {
                     .error
                     .with_atomic_client_events(pre_commit_events.take_for_failure(events));
             }
-            Err(quota_continuation_replay_error(
+            Err(continuation_recovery_error(
                 failure.error,
                 &request,
                 ReplayBoundary::from_semantic_output(failure_after_commit),

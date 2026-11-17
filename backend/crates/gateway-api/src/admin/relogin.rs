@@ -79,7 +79,16 @@ struct AccountQueueRequest {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct NewAccountForm {
+    settings: super::accounts::AccountImportSettingsRequest,
+    outbound_proxy_id: Option<String>,
+    quality_template: Option<gateway_admin::model::quality_ops::QualityTemplateSelection>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct PushRequest {
+    new_account: Option<NewAccountForm>,
     new_account_excel: Option<gateway_admin::model::relogin_templates::ExcelImportSettings>,
     custom_name: Option<String>,
     ids: Vec<String>,
@@ -124,6 +133,13 @@ where
 {
     Router::new()
         .route("/api/admin/relogin", get(list::<S>))
+        .route("/api/admin/relogin/material", post(material::<S>))
+        .route(
+            "/api/admin/relogin/material/update",
+            post(update_material::<S>),
+        )
+        .route("/api/admin/relogin/maintain", post(maintain::<S>))
+        .route("/api/admin/relogin/cancel", post(cancel::<S>))
         .route("/api/admin/relogin/history", post(history::<S>))
         .route("/api/admin/relogin/totp", post(totp::<S>))
         .route("/api/admin/relogin/import", post(import::<S>))
@@ -380,6 +396,23 @@ where
                 template: request.template,
                 custom_name: request.custom_name,
                 excel: request.new_account_excel,
+                form: request
+                    .new_account
+                    .map(|form| {
+                        Ok::<_, AdminError>(
+                            gateway_admin::model::relogin_templates::ReloginNewAccountForm {
+                                settings: form.settings.into_settings().map_err(|_| {
+                                    AdminError::invalid_request(
+                                        StatusCode::BAD_REQUEST,
+                                        "账号导入设置不合法",
+                                    )
+                                })?,
+                                outbound_proxy_id: form.outbound_proxy_id,
+                                quality_template: form.quality_template,
+                            },
+                        )
+                    })
+                    .transpose()?,
             },
             &request.selections,
             &auth.context().mutation_context(),
@@ -525,6 +558,90 @@ where
         .admin_services()
         .relogin()
         .configure_update(request)
+        .await
+        .map_err(map_admin_service_error)?;
+    Ok(AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(())))
+}
+
+async fn maintain<S>(
+    auth: AdminAuth,
+    State(state): State<S>,
+    AdminJson(command): AdminJson<gateway_admin::model::relogin_maintenance::MaintenanceCommand>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: AdminSessionState + Send + Sync,
+{
+    let result = state
+        .admin_services()
+        .relogin()
+        .maintain(command, &auth.context().mutation_context())
+        .await
+        .map_err(map_admin_service_error)?;
+    let mut response =
+        AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(result)).into_response();
+    response.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-store"),
+    );
+    Ok(response)
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CancelRequest {
+    id: String,
+    revision: u64,
+}
+async fn cancel<S>(
+    _auth: AdminAuth,
+    State(state): State<S>,
+    AdminJson(command): AdminJson<CancelRequest>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: AdminSessionState + Send + Sync,
+{
+    state
+        .admin_services()
+        .relogin()
+        .cancel(&command.id, command.revision)
+        .await
+        .map_err(map_admin_service_error)?;
+    Ok(AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(())))
+}
+
+async fn material<S>(
+    auth: AdminAuth,
+    State(state): State<S>,
+    AdminJson(command): AdminJson<TotpRequest>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: AdminSessionState + Send + Sync,
+{
+    let result = state
+        .admin_services()
+        .relogin()
+        .maintenance_material(&command.id, &auth.context().mutation_context())
+        .await
+        .map_err(map_admin_service_error)?;
+    let mut response =
+        AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(result)).into_response();
+    response.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-store"),
+    );
+    Ok(response)
+}
+async fn update_material<S>(
+    auth: AdminAuth,
+    State(state): State<S>,
+    AdminJson(command): AdminJson<gateway_admin::model::relogin_maintenance::MaterialUpdate>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: AdminSessionState + Send + Sync,
+{
+    state
+        .admin_services()
+        .relogin()
+        .update_material(command, &auth.context().mutation_context())
         .await
         .map_err(map_admin_service_error)?;
     Ok(AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(())))

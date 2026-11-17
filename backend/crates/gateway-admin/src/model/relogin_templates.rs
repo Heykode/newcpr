@@ -13,6 +13,14 @@ pub struct ReloginNewAccountOptions {
     pub template: Option<ReloginTemplateSelection>,
     pub custom_name: Option<String>,
     pub excel: Option<ExcelImportSettings>,
+    pub form: Option<ReloginNewAccountForm>,
+}
+
+/// Final settings from the shared account-import form, applied only to new accounts.
+pub struct ReloginNewAccountForm {
+    pub settings: AccountImportSettings,
+    pub outbound_proxy_id: Option<String>,
+    pub quality_template: Option<super::quality_ops::QualityTemplateSelection>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

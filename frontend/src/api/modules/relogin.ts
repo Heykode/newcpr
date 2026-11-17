@@ -20,7 +20,21 @@ export interface ReloginPoolAccount {
   errorReason: string | null
   errorMessage: string | null
 }
+export interface ReloginEgress {
+  kind: 'default' | 'proxy' | 'ipv6' | 'unavailable' | 'multiple'
+  label: string
+  source: 'account' | 'import' | 'default'
+  accountId: string | null
+  proxyId: string | null
+  address: string | null
+  exitIp: string | null
+  checkedAt: string | null
+  latencyMs?: number | null
+}
 export interface ReloginEntry {
+  egress?: ReloginEgress
+  lastActivity?: ReloginAttempt | null
+  maintenance?: MaintenanceView
   id: string
   revision: number
   email: string
@@ -51,6 +65,7 @@ export interface ReloginEntry {
   updatedAt: string
 }
 export interface ReloginAttempt {
+  operation?: MaintenanceAction | null
   id: string
   source: 'library' | 'account_menu' | 'automatic' | 'enrollment'
   startedAt: string
@@ -115,10 +130,15 @@ export function exportRelogin(ids: string[], format: 'json' | 'two_fa', options:
 export function queueRelogin(ids: string[], workspaceMode: ReloginWorkspaceMode = 'original') {
   return request<ReloginBatchResult[]>({ url: '/api/admin/relogin/queue', method: 'POST', data: { ids, workspaceMode } })
 }
-export function pushRelogin(rows: Pick<ReloginEntry, 'id' | 'revision'>[], template?: AccountTemplateSelection, customName?: string, selections?: Record<string, ReloginPushSelection>, newAccountExcel?: import('@/utils/excel-settings').ExcelSettings) {
+export interface ReloginNewAccountForm {
+  settings: import('./accounts').AccountImportSettings
+  outboundProxyId?: string
+  qualityTemplate?: Pick<import('./quality-ops').QualityRuleTemplate, 'id' | 'revision'>
+}
+export function pushRelogin(rows: Pick<ReloginEntry, 'id' | 'revision'>[], template?: AccountTemplateSelection, customName?: string, selections?: Record<string, ReloginPushSelection>, newAccountExcel?: import('@/utils/excel-settings').ExcelSettings, newAccount?: ReloginNewAccountForm) {
   const ids = rows.map(row => row.id)
   const revisions = Object.fromEntries(rows.map(row => [row.id, row.revision]))
-  return request<ReloginBatchResult[]>({ url: '/api/admin/relogin/push', method: 'POST', data: { ids, revisions, ...(template ? { template } : {}), ...(customName ? { customName } : {}), ...(selections ? { selections } : {}), ...(newAccountExcel ? { newAccountExcel } : {}) }, timeout: 120000 })
+  return request<ReloginBatchResult[]>({ url: '/api/admin/relogin/push', method: 'POST', data: { ids, revisions, ...(template ? { template } : {}), ...(customName ? { customName } : {}), ...(selections ? { selections } : {}), ...(newAccountExcel ? { newAccountExcel } : {}), ...(newAccount ? { newAccount } : {}) }, timeout: 120000 })
 }
 export function deleteRelogin(ids: string[]) {
   return request<void>({ url: '/api/admin/relogin/delete', method: 'POST', data: { ids } })
@@ -134,4 +154,43 @@ export function resumeReloginWorkspace(id: string, revision: number, workspaceId
 }
 export function configureRelogin(data: ReloginSettingsUpdate) {
   return request<void>({ url: '/api/admin/relogin/settings', method: 'POST', data })
+}
+
+export type MaintenanceAction = 'edit_material' | 'check_session' | 'devices' | 'workspaces' | 'security' | 'revoke_device' | 'logout_all' | 'logout_and_relogin' | 'authorize' | 'force_login' | 'switch_workspace' | 'prepare_totp' | 'activate_totp' | 'disable_totp'
+export interface MaintenanceDevice { id: string, sessionId: string | null, deviceIdHash: string | null, name: string, platform: string, current: boolean, trusted: boolean, lastActiveAt: number | null }
+export interface MaintenanceWorkspace { id: string, name: string, planType: string | null, available: boolean }
+export interface MaintenanceView {
+  action: MaintenanceAction | null
+  state: string
+  message: string
+  checkedAt: string | null
+  sessionState: string
+  sessionCheckedAt: string | null
+  devices: MaintenanceDevice[]
+  workspaces: MaintenanceWorkspace[]
+  totpEnabled: boolean | null
+  passwordEnabled: boolean | null
+  pendingTotp: boolean
+  uncertain: boolean
+  loginPaused: boolean
+}
+export interface MaintenanceMaterial {
+  revision: number
+  needsResolution: boolean
+  password: string
+  mfaSecret: string
+  pendingTotpSecret: string | null
+  history: { password: string, mfa_secret: string, saved_at: string, pending_totp?: { secret: string } | null }[]
+}
+export function maintainRelogin(data: { id: string, revision: number, action: MaintenanceAction, target?: string, deviceIdHash?: string, confirm?: string }) {
+  return request<MaintenanceView>({ url: '/api/admin/relogin/maintain', method: 'POST', data, timeout: 310000, silent: true })
+}
+export function cancelRelogin(id: string, revision: number) {
+  return request<void>({ url: '/api/admin/relogin/cancel', method: 'POST', data: { id, revision } })
+}
+export function getReloginMaterial(id: string, options: RequestOptions = {}) {
+  return request<MaintenanceMaterial>({ url: '/api/admin/relogin/material', method: 'POST', data: { id }, ...options })
+}
+export function updateReloginMaterial(data: { id: string, revision: number, password: string, mfaSecret: string, confirmMaintenanceResolution?: boolean }) {
+  return request<void>({ url: '/api/admin/relogin/material/update', method: 'POST', data, silent: true })
 }

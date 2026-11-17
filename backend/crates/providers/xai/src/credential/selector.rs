@@ -171,6 +171,10 @@ impl GrokAccountSessionSelector {
                     })
                     .collect()
             };
+            let accounts = accounts
+                .into_iter()
+                .filter(|account| !request.excludes_proxy(account.outbound_proxy()))
+                .collect::<Vec<_>>();
             let catalog_eligible = if diagnostic {
                 accounts
             } else {

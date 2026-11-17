@@ -133,6 +133,42 @@ impl DefaultReloginService {
             let pool = self.pool().await?;
             // No jobs survive process shutdown. Never leave a persisted running row stuck forever.
             for entry in &mut entries {
+                if entry.maintenance.view.state == "running"
+                    && !gate.active.contains_key(&entry.email)
+                {
+                    entry.maintenance.uncertain |= entry.maintenance.view.action.is_some_and(
+                        crate::model::relogin_maintenance::MaintenanceAction::destructive,
+                    );
+                    entry.maintenance.view.state = if entry.maintenance.view.action.is_some_and(
+                        crate::model::relogin_maintenance::MaintenanceAction::destructive,
+                    ) {
+                        "uncertain"
+                    } else {
+                        "failed"
+                    }
+                    .to_owned();
+                    entry.maintenance.view.message = "上次维护中断，请核对结果".to_owned();
+                    entry.maintenance.queued_login = None;
+                    let attempt = if entry
+                        .maintenance
+                        .view
+                        .action
+                        .is_some_and(|action| action.authorizes())
+                    {
+                        &mut entry.last_attempt
+                    } else {
+                        &mut entry.maintenance.last_activity
+                    };
+                    if let Some(attempt) = attempt
+                        && attempt.operation.is_some()
+                    {
+                        attempt.result = ReloginAttemptResult::Failed;
+                        attempt.finished_at = Some(Utc::now());
+                        attempt.message = entry.maintenance.view.message.clone();
+                    }
+                    self.save(entry).await?;
+                }
+
                 if entry.status == ReloginStatus::Pushing && !gate.active.contains_key(&entry.email)
                 {
                     entry.status = ReloginStatus::Uncertain;
@@ -155,6 +191,9 @@ impl DefaultReloginService {
             }
             let mut jobs = Vec::new();
             for mut entry in entries {
+                if entry.maintenance.blocks_login() || entry.maintenance.login_paused {
+                    continue;
+                }
                 if entry.validate_totp().is_err() {
                     continue;
                 }
@@ -170,6 +209,7 @@ impl DefaultReloginService {
                     continue;
                 }
                 if entry.status != ReloginStatus::Queued {
+                    entry.maintenance.queued_login = None;
                     if entry.status == ReloginStatus::Ready
                         && entry.synced_at.is_none()
                         && let Some(enrollment) = entry.enrollment.clone()
@@ -210,7 +250,7 @@ impl DefaultReloginService {
                         entry.workspace_choices.clear();
                         entry.selected_workspace_id = None;
                         entry.manual_push_context = None;
-                        entry.enrollment = None;
+                        entry.clear_enrollment();
                     }
                 }
                 let target_account = entry
@@ -255,12 +295,18 @@ impl DefaultReloginService {
                         })
                         .collect();
                     if candidates.len() != entry.workspace_targets.len()
-                        || candidates.first().is_some_and(|first| {
-                            candidates.iter().any(|account| {
-                                account.effective_outbound_proxy()
-                                    != first.effective_outbound_proxy()
-                            })
-                        })
+                        || (entry
+                            .maintenance
+                            .queued_login
+                            .as_ref()
+                            .and_then(|queued| queued.route.as_ref())
+                            .is_none()
+                            && candidates.first().is_some_and(|first| {
+                                candidates.iter().any(|account| {
+                                    account.effective_outbound_proxy()
+                                        != first.effective_outbound_proxy()
+                                })
+                            }))
                     {
                         entry.status = ReloginStatus::Failed;
                         entry.message = "原账号或代理已变化，请重新发起重登".to_owned();
@@ -271,59 +317,45 @@ impl DefaultReloginService {
                 if entry.automatic_job || (entry.enrollment.is_some() && entry.target.is_none()) {
                     entry.automatic_attempts += 1;
                 }
-                let enrollment_proxy = if entry.target.is_none() {
-                    if let Some(enrollment) = &entry.enrollment {
-                        match super::super::import_proxy_binding(
-                            self.proxies.as_ref(),
-                            enrollment.config.outbound_proxy_id.as_deref(),
-                        )
-                        .await
-                        {
-                            Ok(reservation) => {
-                                reservation.map(|reservation| reservation.binding.proxy)
-                            }
-                            Err(error) => {
-                                entry.status = ReloginStatus::Failed;
-                                entry.message = error.message().to_owned();
-                                entry.next_attempt_at = Some(
-                                    Utc::now()
-                                        + chrono::Duration::seconds(i64::from(
-                                            settings.retry_interval_seconds,
-                                        )),
-                                );
-                                self.save(&mut entry).await?;
-                                continue;
-                            }
-                        }
-                    } else {
-                        None
-                    }
+                let workspace_id = if entry.workspace_mode == ReloginWorkspaceMode::Highest {
+                    entry.selected_workspace_id.clone()
                 } else {
-                    None
+                    entry
+                        .target
+                        .as_ref()
+                        .map(|target| target.workspace_id.clone())
+                        .or_else(|| entry.selected_workspace_id.clone())
+                        .or_else(|| entry.preferred_workspace_id.clone())
                 };
-                let request = ReloginRequest {
-                    email: entry.email.clone(),
-                    password: entry.password.clone(),
-                    mfa_secret: entry.mfa_secret.clone(),
-                    workspace_id: if entry.workspace_mode == ReloginWorkspaceMode::Highest {
-                        entry.selected_workspace_id.clone()
-                    } else {
-                        entry
-                            .target
-                            .as_ref()
-                            .map(|target| target.workspace_id.clone())
-                            .or_else(|| entry.selected_workspace_id.clone())
-                            .or_else(|| entry.preferred_workspace_id.clone())
-                    },
-                    outbound_proxy: target_account
-                        .or_else(|| {
-                            entry.workspace_targets.first().and_then(|target| {
-                                pool.iter().find(|account| target.matches_account(account))
-                            })
-                        })
-                        .map_or(enrollment_proxy, |account| {
-                            account.effective_outbound_proxy().cloned()
-                        }),
+                let mut route_entry = entry.clone();
+                if let Some(route) = entry
+                    .maintenance
+                    .queued_login
+                    .as_ref()
+                    .and_then(|queued| queued.route.as_ref())
+                {
+                    if !pool.iter().any(|account| route.matches_account(account)) {
+                        entry.status = ReloginStatus::Failed;
+                        entry.message = "原账号出口归属已变化，请重新发起重登".to_owned();
+                        self.save(&mut entry).await?;
+                        continue;
+                    }
+                    route_entry.target = Some(route.clone());
+                }
+                let request = match self.login_request(&route_entry, &pool, workspace_id).await {
+                    Ok(request) => request,
+                    Err(error) => {
+                        entry.status = ReloginStatus::Failed;
+                        entry.message = error.message().to_owned();
+                        entry.next_attempt_at = Some(
+                            Utc::now()
+                                + chrono::Duration::seconds(i64::from(
+                                    settings.retry_interval_seconds,
+                                )),
+                        );
+                        self.save(&mut entry).await?;
+                        continue;
+                    }
                 };
                 if entry.automatic_job {
                     let now = Utc::now();
@@ -336,6 +368,13 @@ impl DefaultReloginService {
                 entry.credential = None;
                 entry.status = ReloginStatus::Running;
                 entry.message = "正在登录并验证工作区".to_owned();
+                if let Some(queued) = &entry.maintenance.queued_login {
+                    entry.maintenance.view.action = Some(queued.action.action());
+                    entry.maintenance.view.state = "running".to_owned();
+                    entry.maintenance.view.message =
+                        format!("正在{}", queued.action.action().label());
+                    entry.maintenance.view.checked_at = Some(Utc::now());
+                }
                 self.save(&mut entry).await?;
                 let cancellation = CancellationToken::new();
                 jobs.push((entry, request, cancellation));
@@ -362,19 +401,45 @@ impl DefaultReloginService {
         cancellation: CancellationToken,
         shutdown: &CancellationToken,
     ) -> Result<(), AdminError> {
+        if let Some(queued) = &entry.maintenance.queued_login {
+            let action = queued.action.action();
+            let request = crate::model::relogin_maintenance::MaintenanceRequest {
+                target: entry.selected_workspace_id.clone(),
+                login: request,
+                action,
+                device_id_hash: None,
+                pending_totp: None,
+            };
+            let outcome = tokio::select! {
+                biased;
+                () = shutdown.cancelled() => Err(AdminError::conflict("服务正在停止，任务已取消")),
+                () = cancellation.cancelled() => Err(AdminError::conflict("重登任务已取消")),
+                outcome = tokio::time::timeout(Duration::from_secs(300), self.provider.maintain_relogin(request)) => {
+                    match outcome {
+                        Ok(outcome) => outcome.map_err(|error| map_provider_error(error, "relogin maintenance")),
+                        Err(_) => Err(AdminError::unavailable("重登超时，请检查网络和代理")),
+                    }
+                }
+            };
+            return self
+                .finish_maintenance(&entry, action, &cancellation, outcome)
+                .await
+                .map(|_| ());
+        }
         let workspace_locked = request.workspace_id.is_some();
         let outcome = tokio::select! {
             biased;
-            () = shutdown.cancelled() => Err((AdminError::conflict("服务正在停止，任务已取消"), None, Vec::new())),
-            () = cancellation.cancelled() => Err((AdminError::conflict("重登任务已取消"), None, Vec::new())),
+            () = shutdown.cancelled() => Err((AdminError::conflict("服务正在停止，任务已取消"), None, Vec::new(), None)),
+            () = cancellation.cancelled() => Err((AdminError::conflict("重登任务已取消"), None, Vec::new(), None)),
             outcome = tokio::time::timeout(Duration::from_secs(300), self.provider.relogin(request)) => {
                 match outcome {
                     Ok(outcome) => outcome.map_err(|error| {
                         let reason = error.relogin_stop_reason();
                         let choices = error.relogin_workspace_choices().to_vec();
-                        (map_provider_error(error, "relogin"), reason, choices)
+                        let session = error.relogin_web_session().cloned();
+                        (map_provider_error(error, "relogin"), reason, choices, session)
                     }),
-                    Err(_) => Err((AdminError::unavailable("重登超时，请检查网络和代理"), None, Vec::new())),
+                    Err(_) => Err((AdminError::unavailable("重登超时，请检查网络和代理"), None, Vec::new(), None)),
                 }
             }
         };
@@ -426,13 +491,25 @@ impl DefaultReloginService {
                     current.status = ReloginStatus::Failed;
                     current.message = "新凭据身份或工作区不一致，未推送".to_owned();
                 } else {
+                    if let Some(session) = &credential.web_session {
+                        current.maintenance.session = Some(session.clone());
+                        current.maintenance.view.session_state = "valid".to_owned();
+                        current.maintenance.view.session_checked_at = Some(session.verified_at);
+                    }
                     current.credential = Some(credential);
                     current.synced_at = None;
                     current.status = ReloginStatus::Ready;
                     current.message = "已获取新 JSON，凭证验证通过".to_owned();
                 }
             }
-            Err((error, reason, choices)) => {
+            Err((error, reason, choices, session)) => {
+                if let Some(session) =
+                    session.filter(|session| session.email.eq_ignore_ascii_case(&current.email))
+                {
+                    current.maintenance.view.session_state = "valid".to_owned();
+                    current.maintenance.view.session_checked_at = Some(session.verified_at);
+                    current.maintenance.session = Some(session);
+                }
                 if reason.is_none()
                     && !workspace_locked
                     && !current.automatic_job

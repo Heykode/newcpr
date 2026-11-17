@@ -12,7 +12,7 @@
 - `config.yaml`：应用行为与真实凭据，由 `config.example.yaml` 复制得到并被 Git 忽略。
 - `compose.yaml`：镜像、容器网络、端口、目录映射、健康检查和资源限制。
 
-项目不使用 `.env` 配置文件。Compose 环境变量用于容器地址、镜像选择和构建发布；
+后端不使用 `.env` 配置文件。Compose 环境变量用于容器地址、镜像选择和构建发布；
 应用设置与凭据保存在 `config.yaml` 中。已有部署不要重新复制模板覆盖配置。
 
 管理统计查询使用 `store.pool.observability_query_timeout_seconds`，省略时为 120 秒，
@@ -126,6 +126,52 @@ OpenAI Responses 上游 WebSocket 每 25 秒发送 Ping 保活，并回应上游
 `downstream.body.closed` 和反向代理日志判断断开位置，不能仅凭此消息认定是 JSON 格式错误。
 SSE 注释保活用于防止传输链路空闲断开，不会重置 Codex 等待完整 SSE 事件的超时；
 若报错为 `idle timeout waiting for SSE`，再检查客户端的 `stream_idle_timeout_ms`。
+
+### URL 子路径部署
+
+源码构建可通过 `CPR_WEB_BASE_PATH` 指定前端部署前缀，默认值为 `/`。
+管理端请求和生成的客户端地址沿用同一前缀，前缀以 `/` 开头和结尾，例如部署到 `https://example.com/proxy/`：
+
+```bash
+CPR_IMAGE=codex-proxy-rs:subpath CPR_WEB_BASE_PATH=/proxy/ \
+  docker compose -f deploy/compose.yaml build codex-proxy-rs
+```
+
+直接构建前端时，Vite 默认值为 `/`；公开示例保存在 `frontend/.env.example`。
+在不纳入 Git 的 `frontend/.env.local` 中配置以下内容，再执行 `pnpm --dir frontend build`：
+
+```dotenv
+CPR_WEB_BASE_PATH=/proxy/
+```
+
+进程环境中的同名变量优先于 env 文件，Docker 构建使用上方 Compose 构建参数。
+路径在构建时确定，修改运行时环境变量或只转发路径不会改变已发布镜像中的前端资源。
+
+后端仍按根路径提供服务，反向代理需要剥除请求前缀，并为登录和刷新 Cookie 的 `Path`、
+站内根相对 `Location` 补回前缀，保证 Realtime 客户端沿返回地址连接和挂断。
+以下 Caddy 示例适用于 Caddy 在宿主机、应用使用默认本机端口的部署：
+
+```caddyfile
+example.com {
+    redir /proxy /proxy/ 308
+
+    handle_path /proxy/* {
+        reverse_proxy 127.0.0.1:8080 {
+            header_down Set-Cookie "(?i)(;[[:space:]]*Path=)/([^;]*)" "${1}/proxy/${2}"
+            # 仅改写站内根相对路径，保留外部 URL
+            header_down Location "^/([^/].*)?$" "/proxy/${1}"
+            flush_interval -1
+        }
+    }
+}
+```
+
+Caddy 与应用同在容器网络时，将回源地址改为 `codex-proxy-rs:8080`。
+合并到已有站点时，将子路径处理放在兜底路由之前，保留浏览器的 `Origin` 和鉴权头。
+管理入口为 `/proxy/`，模型客户端使用 `/proxy/v1`。
+
+子路径部署需要使用同一前缀构建并验证对应镜像；升级按本仓库的验证部署流程执行，不可换用根路径构建产物。
+验收时检查子页面刷新、登录续期、头像资源、SSE 与 WebSocket，并保留默认根路径部署的验证。
 
 ## 客户端配置
 

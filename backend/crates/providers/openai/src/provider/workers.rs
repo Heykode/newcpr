@@ -10,7 +10,6 @@ pub(crate) struct ClientReleaseServices {
     pub platforms: Arc<PlatformDesktopReleaseService>,
 }
 
-use chrono::{Timelike as _, Utc};
 use gateway_core::time::DeploymentTimeZone;
 
 pub(super) const WORKER_INITIAL_BACKOFF: Duration = Duration::from_secs(1);
@@ -324,70 +323,84 @@ impl ScheduledTask for OpenAiQuotaTask {
 impl ScheduledTask for OpenAiWarmupTask {
     fn run_cycle(&self, context: WorkerCycleContext) -> BoxFuture<'_, Result<(), WorkerTaskError>> {
         Box::pin(async move {
-            if context.cancellation().is_cancelled() {
-                return Ok(());
-            }
-            let Some(runtime_policy) = self.quota.runtime_policy() else {
-                return Ok(());
+            let cron_result = self.run_cron_cycle(&context).await;
+            let bucket_result = tokio::select! {
+                () = context.cancellation().cancelled() => return Ok(()),
+                result = self.quota.execute_bucket_warmup_at(chrono::Utc::now()) => result,
             };
-            let policy = runtime_policy.load_warmup_policy().await.map_err(|error| {
-                tracing::warn!(error = %error, "OpenAI warmup policy load failed");
-                WorkerTaskError::safe("OpenAI warmup policy load failed")
-            })?;
-            if !policy.enabled() {
-                return Ok(());
+            if let Err(error) = bucket_result {
+                tracing::warn!(error = %error, "OpenAI quota bucket warmup cycle failed");
             }
-            let local_now = self.timezone.local(Utc::now());
-            let local_slot = local_now
-                .naive_local()
-                .with_second(0)
-                .and_then(|value| value.with_nanosecond(0));
-            let Some(local_slot) = local_slot else {
-                return Err(WorkerTaskError::safe("OpenAI warmup local time is invalid"));
-            };
-            if !policy.matches_slot(local_slot) {
-                return Ok(());
-            }
-            let claimed = runtime_policy
-                .claim_warmup_slot(self.timezone, local_slot)
-                .await
-                .map_err(|error| {
-                    tracing::warn!(error = %error, "OpenAI warmup slot claim failed");
-                    WorkerTaskError::safe("OpenAI warmup slot claim failed")
-                })?;
-            if !claimed {
-                return Ok(());
-            }
-            let Some(model) = policy.model() else {
-                return Err(WorkerTaskError::safe("OpenAI warmup model is missing"));
-            };
-            tracing::info!(
-                timezone = self.timezone.name(),
-                model,
-                "OpenAI account warmup cycle started"
-            );
-            tokio::select! {
-                () = context.cancellation().cancelled() => Ok(()),
-                result = self.quota.execute_warmup(model) => {
-                    match result {
-                        Ok(summary) => {
-                            tracing::info!(
-                                warmed_up = summary.warmed_up,
-                                skipped_active = summary.skipped_active,
-                                skipped_exhausted = summary.skipped_exhausted,
-                                failed = summary.failed,
-                                "OpenAI account warmup cycle completed"
-                            );
-                            Ok(())
-                        }
-                        Err(error) => {
-                            tracing::warn!(error = %error, "OpenAI account warmup cycle failed");
-                            Err(WorkerTaskError::safe("OpenAI account warmup cycle failed"))
-                        }
-                    }
-                }
-            }
+            cron_result
         })
+    }
+}
+
+impl OpenAiWarmupTask {
+    async fn run_cron_cycle(&self, context: &WorkerCycleContext) -> Result<(), WorkerTaskError> {
+        if context.cancellation().is_cancelled() {
+            return Ok(());
+        }
+        let Some(runtime_policy) = self.quota.runtime_policy() else {
+            return Ok(());
+        };
+        let policy = runtime_policy.load_warmup_policy().await.map_err(|error| {
+            WorkerTaskError::safe("OpenAI warmup policy load failed").with_source(error)
+        })?;
+        if !policy.enabled() {
+            return Ok(());
+        }
+        use chrono::Timelike as _;
+        let now = chrono::Utc::now();
+        let local_now = self.timezone.local(now);
+        // 回拨产生的第二个相同时刻不能再次执行
+        if self
+            .timezone
+            .resolve_local(local_now.naive_local())
+            .is_none_or(|first| first != now)
+        {
+            return Ok(());
+        }
+        let slot = local_now
+            .naive_local()
+            .with_second(0)
+            .and_then(|value| value.with_nanosecond(0))
+            .ok_or_else(|| WorkerTaskError::safe("invalid warmup slot"))?;
+        if !policy.matches_slot(slot) {
+            return Ok(());
+        }
+        let Some(model) = policy.model() else {
+            return Err(WorkerTaskError::safe("OpenAI warmup model is missing"));
+        };
+        if !runtime_policy
+            .claim_warmup_slot(self.timezone, slot)
+            .await
+            .map_err(|source| {
+                WorkerTaskError::safe("warmup slot is unavailable").with_source(source)
+            })?
+        {
+            return Ok(());
+        }
+        tracing::info!(%slot, model, "OpenAI account warmup cycle started");
+        let outcome = tokio::select! {
+            () = context.cancellation().cancelled() => return Ok(()),
+            outcome = self.quota.execute_warmup(model) => outcome,
+        };
+        match outcome {
+            Ok(summary) => {
+                tracing::info!(
+                    warmed_up = summary.warmed_up,
+                    skipped_active = summary.skipped_active,
+                    skipped_exhausted = summary.skipped_exhausted,
+                    failed = summary.failed,
+                    "OpenAI account warmup cycle completed"
+                );
+            }
+            Err(error) => {
+                tracing::warn!(error = %error, "OpenAI account warmup cycle failed");
+            }
+        }
+        Ok(())
     }
 }
 

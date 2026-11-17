@@ -167,6 +167,38 @@ impl OpenAiAdminProvider {
 
 #[async_trait]
 impl ProviderAdmin for OpenAiAdminProvider {
+    fn relogin_egress_state(
+        &self,
+    ) -> Result<
+        Option<Arc<gateway_core::provider_ports::egress::ProviderEgressConfig>>,
+        ProviderAdminError,
+    > {
+        self.egress_runtime
+            .as_ref()
+            .map(|runtime| runtime.snapshot())
+            .transpose()
+            .map_err(|_| {
+                provider_admin_error(ProviderAdminErrorKind::Unavailable)
+                    .with_public_message("账号出口配置暂不可用")
+            })
+    }
+
+    fn select_relogin_source(
+        &self,
+        account: &AccountRecord,
+    ) -> Result<Option<std::net::Ipv6Addr>, ProviderAdminError> {
+        let account = account_from_record(account)?;
+        self.egress_runtime
+            .as_ref()
+            .map(|runtime| runtime.select(&account))
+            .transpose()
+            .map(|route| route.flatten().map(|route| route.source))
+            .map_err(|_| {
+                provider_admin_error(ProviderAdminErrorKind::Unavailable)
+                    .with_public_message("账号 IPv6 出口暂不可用")
+            })
+    }
+
     fn validate_key_client_profile(
         &self,
         profile: &OpaqueProviderData,
@@ -187,7 +219,7 @@ impl ProviderAdmin for OpenAiAdminProvider {
     ) -> gateway_admin::model::accounts::ProviderAccountCapabilities {
         let oauth = authentication_kind == crate::credential::CODEX_AUTHENTICATION_KIND_OAUTH;
         gateway_admin::model::accounts::ProviderAccountCapabilities {
-            quota_limits_supported: oauth,
+            quota_settings_supported: oauth,
             quota_credits: oauth,
             quota: oauth,
             quota_refresh: oauth,
@@ -438,6 +470,14 @@ impl ProviderAdmin for OpenAiAdminProvider {
         }))
     }
 
+    async fn maintain_relogin(
+        &self,
+        request: gateway_admin::model::relogin_maintenance::MaintenanceRequest,
+    ) -> Result<gateway_admin::model::relogin_maintenance::MaintenanceOutcome, ProviderAdminError>
+    {
+        crate::credential::relogin::maintain(self, request).await
+    }
+
     async fn relogin(
         &self,
         request: gateway_admin::model::relogin::ReloginRequest,
@@ -648,7 +688,7 @@ impl ProviderAdmin for OpenAiAdminProvider {
         Ok(project_quota(
             snapshot,
             account.quota().is_exhausted(),
-            account.quota_limits(),
+            account.quota_settings(),
         ))
     }
 
@@ -709,7 +749,7 @@ impl ProviderAdmin for OpenAiAdminProvider {
                 Ok(project_quota(
                     snapshot,
                     request.account.quota.is_exhausted(),
-                    &request.account.quota_limits,
+                    &request.account.quota_settings,
                 ))
             })
             .collect()
@@ -1239,7 +1279,7 @@ fn empty_quota() -> ProviderQuota {
 fn project_quota(
     snapshot: Option<CodexAccountQuotaSnapshot>,
     limit_reached: bool,
-    limits: &gateway_core::account::AccountQuotaLimits,
+    limits: &gateway_core::account::AccountQuotaSettings,
 ) -> ProviderQuota {
     let paused_windows = snapshot
         .as_ref()

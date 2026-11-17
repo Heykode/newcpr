@@ -922,7 +922,9 @@ impl CodexCredentialSelector {
                 .account_state_owner()
                 .filter(|owner| owner.provider() == &self.provider_kind)
                 .map(|owner| owner.account().clone()),
-            ContinuationAttempt::None | ContinuationAttempt::ReplayAny => None,
+            ContinuationAttempt::None
+            | ContinuationAttempt::ReplayAny
+            | ContinuationAttempt::RotateForClientReplay => None,
         };
         let required_account = request.attempt.required_account().cloned();
         if required_account
@@ -977,6 +979,12 @@ impl CodexCredentialSelector {
         let mut excluded = request.attempt.excluded_accounts().clone();
         if !diagnostic {
             for candidate in &candidates {
+                if request
+                    .attempt
+                    .excludes_proxy(candidate.account.outbound_proxy())
+                {
+                    excluded.insert(candidate.account.id().clone());
+                }
                 if candidate.account.quota_paused() {
                     if request
                         .attempt

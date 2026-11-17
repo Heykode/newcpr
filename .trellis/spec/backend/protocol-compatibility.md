@@ -235,7 +235,9 @@ or multipart image editing. These contracts extend, not replace,
   Chat-only generic error and discard recovery fields. Keep existing capacity
   projection and failure-request-ID precedence over opening IDs.
 - After initial keepalive, use the copied official chat_error_frame for Chat
-  errors, preserve recovery fields and Retry-After, then emit exactly one DONE.
+  errors, preserve recovery fields and emit exactly one DONE. Ordinary errors retain
+  Retry-After; capacity projection removes Retry-After and retry-after-ms from
+  client headers and nested error headers while keeping original diagnostic facts.
   Do not send response.failed to Chat. Admission rejection still returns its
   original HTTP error, and native Responses retains its existing SSE contract.
 - Regress a four-minute first-event wait, both early and late errors, JSON and

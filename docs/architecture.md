@@ -574,7 +574,6 @@ turn alias、会话恢复或账号状态所有权。Preferred 缓存读写失败
 不产生真实 `account_switch`，Excel 也不能仅凭这类 `affinity_hit` 推断状态属于所选账号。
 本地 Guardian 父线程成功记录独立保留；内容偏好没有主绑定完成回写。
 
-
 ## 官方 v3.42.0 原生合同
 
 - Key 准入与账号排队独立计时；后续账号重选、Provider 切换和重试共享账号等待预算。
@@ -600,7 +599,7 @@ turn alias、会话恢复或账号状态所有权。Preferred 缓存读写失败
   一个源事件可产生多个目标事件，终态只在最后交付；提交/结算失败不能留下成功的 message_stop。
 - CountTokens 也是独立 Operation，复用模型/账号准入，使用有并发界限的本地 tokenizer 任务，
   支持截止和取消，不调用上游推理、不写入虚假上游成功用量。
-- `quota_limits` 和 `quota_paused` 贯穿 Store、Admin、选号、等待重查及页面；更新校验配置、
+- `quota_settings`（0096 将旧 `quota_limits` 转为每桶配置）和 `quota_paused` 贯穿 Store、Admin、选号、等待重查及页面；更新校验配置、
   凭据 revision、观察时间和 merge-base，保留 PR #260 的成功回写时序保护。
 - Cron 预激活、周额度自动重置、错误来源投影和预算重置使用现有运行时与数据层，新增迁移
   `0088`–`0090`，不重写历史 schema。插件运行时、上游 API-key 账号及其专属 CPR 互联转发不在当前批准范围；混合提交的公共修复单独接入。
@@ -634,3 +633,11 @@ Core 的 `account::scheduling::ResetWindowWeights` 统一实现重置评分。�
 全零保留原排序，非零严格比较窗口得分，不覆盖智能调度的系数。已有亲和与资格规则先执行。
 Messages 在转换为 Responses 之前解析 Claude 显式会话，按 Client Key 派生独立亲和键。
 选号和安全诊断使用相同身份；后续复用既有租约、绑定和换号流程，不生成原生 turn 归属。
+
+## 官方 v3.50.0 原生接入
+
+额度桶配置从 Admin/UI 经 Core 值对象写入 Store；0096 追加迁移保留旧上限。
+预热 worker 复用账号出口和凭据，持久进度 CAS 独立于额度观测，成功请求与预热记录通用桶使用证据。
+Core 将本请求确认不可达的代理入口传入 Provider 直接及等待选号；WS 与 HTTP 共享建连换号规则。
+原生续接仅迁移绑定并要求客户端完整重放，API 出口清理容量错误等待头且保留内部事实。
+具体来源、模块映射、保留差异和验证边界见 [v3.50.0 接入记录](upstream-v3500-native-parity.md)。

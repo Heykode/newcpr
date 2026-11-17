@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import type { Component } from 'vue'
-
+import type { ComponentSize } from './controls/types'
 import { useResizeObserver } from '@vueuse/core'
-import { clamp } from 'es-toolkit'
-import { computed, nextTick, shallowRef, useTemplateRef, watch } from 'vue'
 
-type SegmentedSize = 'sm' | 'md' | 'lg'
+import { clamp } from 'es-toolkit'
+import { computed, nextTick, shallowRef, useAttrs, useTemplateRef, watch } from 'vue'
+import { useFormField } from './BaseForm/composables/useFormField'
+import { useComponentSize } from './controls/size'
 
 export interface SegmentedOption {
   label: string
@@ -20,18 +21,25 @@ const props = withDefaults(
     options: SegmentedOption[]
     disabled?: boolean
     display?: 'label' | 'icon'
-    size?: SegmentedSize
+    size?: ComponentSize
+    validateEvent?: boolean
   }>(),
   {
+    validateEvent: true,
     disabled: false,
     display: 'label',
-    size: 'md',
   },
 )
+const emit = defineEmits<{ change: [value: string] }>()
 
-const model = defineModel<string>({ required: true })
+const componentSize = useComponentSize(() => props.size)
+
+const attrs = useAttrs()
 const rootRef = useTemplateRef<HTMLElement>('root')
 const optionRefs = useTemplateRef<HTMLButtonElement[]>('option')
+const { controlId, labelledBy, describedBy, invalid, ariaRequired, validate } = useFormField(attrs, () => props.validateEvent)
+defineExpose({ focus: () => rootRef.value?.querySelector<HTMLButtonElement>('[tabindex="0"]')?.focus() })
+const model = defineModel<string>({ required: true })
 
 const activeIndex = computed(() => props.options.findIndex(option => option.value === model.value))
 const optionCount = computed(() => clamp(props.options.length, 1, Number.POSITIVE_INFINITY))
@@ -40,6 +48,7 @@ const gridStyle = computed(() => ({
 }))
 const indicatorStyle = shallowRef<{ width: string, transform: string }>()
 
+// 标签宽度会随语言和容器变化，滑块始终跟随实际选项尺寸
 function updateIndicator() {
   const option = rootRef.value?.querySelectorAll<HTMLButtonElement>('[role="radio"]')[activeIndex.value]
   indicatorStyle.value = option
@@ -50,12 +59,12 @@ function updateIndicator() {
 watch([activeIndex, () => props.options, rootRef], updateIndicator, { flush: 'post' })
 useResizeObserver(() => [rootRef.value, ...(optionRefs.value ?? [])], updateIndicator)
 
-const rootClasses: Record<SegmentedSize, string> = {
+const rootClasses: Record<ComponentSize, string> = {
   sm: 'h-cp-control-sm min-h-cp-control-sm',
   md: 'h-cp-control min-h-cp-control',
   lg: 'h-cp-control-lg min-h-cp-control-lg',
 }
-const optionClasses: Record<SegmentedSize, string> = {
+const optionClasses: Record<ComponentSize, string> = {
   sm: 'px-2 text-cp-xs',
   md: 'px-3 text-xs',
   lg: 'px-4 text-cp',
@@ -70,6 +79,8 @@ function selectOption(index: number) {
   if (props.disabled || !option || option.disabled || option.value === model.value)
     return
   model.value = option.value
+  emit('change', option.value)
+  validate('change')
 }
 
 async function handleKeydown(event: KeyboardEvent, index: number) {
@@ -103,12 +114,18 @@ async function handleKeydown(event: KeyboardEvent, index: number) {
 
 <template>
   <div
+    :id="controlId"
     ref="root"
-    class="relative inline-grid min-w-0 max-w-full items-stretch overflow-x-auto rounded-cp bg-cp-fill-tertiary p-0.75 scrollbar-none [&::-webkit-scrollbar]:hidden [&::-webkit-scrollbar]:size-0"
-    :class="rootClasses[size]"
+    tabindex="-1"
+    class="relative inline-grid min-w-0 max-w-full items-stretch overflow-x-auto rounded-cp p-0.75 scrollbar-none [&::-webkit-scrollbar]:hidden [&::-webkit-scrollbar]:size-0"
+    :class="[rootClasses[componentSize], invalid && !disabled ? 'bg-cp-error-container' : 'bg-(--cp-input-bg)']"
     :style="gridStyle"
     role="radiogroup"
     :aria-label="label"
+    :aria-labelledby="typeof attrs['aria-labelledby'] === 'string' ? attrs['aria-labelledby'] : label ? undefined : labelledBy"
+    :aria-describedby="describedBy"
+    :aria-invalid="invalid || undefined"
+    :aria-required="ariaRequired"
     :aria-disabled="disabled || undefined"
   >
     <span
@@ -120,9 +137,9 @@ async function handleKeydown(event: KeyboardEvent, index: number) {
       v-for="(option, index) in options"
       :key="option.value"
       ref="option"
-      class="relative z-10 inline-flex touch-manipulation items-center justify-center gap-1.5 rounded-cp border-0 bg-transparent leading-none font-emphasis outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-cp-control-outline motion-reduce:transition-none"
+      class="relative cp-10 inline-flex touch-manipulation items-center justify-center gap-1.5 rounded-cp border-0 bg-transparent leading-none font-emphasis outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-cp-control-outline motion-reduce:transition-none"
       :class="[
-        optionClasses[size],
+        optionClasses[componentSize],
         model === option.value ? 'text-cp-text' : 'text-cp-text-secondary hover:text-cp-text',
         disabled || option.disabled ? 'cursor-not-allowed opacity-60 hover:text-cp-text-secondary' : undefined,
         display === 'icon' ? 'px-0' : undefined,

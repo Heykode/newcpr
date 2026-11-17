@@ -20,7 +20,7 @@ defineOptions({
 const props = withDefaults(
   defineProps<SelectProps<Multiple, Value>>(),
   {
-    size: 'md',
+    validateEvent: true,
     disabled: false,
     maxCollapseTags: 1,
   },
@@ -40,9 +40,11 @@ const controlRef = useTemplateRef<HTMLElement>('controlRef')
 const popoverRef = useTemplateRef<HTMLElement>('popoverRef')
 const listboxRef = useTemplateRef<HTMLElement>('listboxRef')
 const scrollbarRef = useTemplateRef<InstanceType<typeof Scrollbar>>('scrollbarRef')
-const { controlId, invalid, describedBy, ariaRequired, rootAttrs, controlAttrs, validate } = useFormField(attrs)
+const { controlId, invalid, describedBy, ariaRequired, rootAttrs, controlAttrs, validate } = useFormField(attrs, () => props.validateEvent)
 const {
   selectId,
+  componentSize,
+  isOptionDisabled,
   open,
   search,
   activeIndex,
@@ -112,8 +114,8 @@ const sizeConfig: Record<SelectSize, { option: string, icon: number }> = {
 function optionClasses(option: SelectOption<Value>, index: number) {
   return [
     'flex w-full shrink-0 touch-manipulation items-center gap-2 rounded-cp-sm border-0 px-3 text-left font-emphasis leading-none outline-none transition-colors motion-reduce:transition-none',
-    sizeConfig[props.size].option,
-    option.disabled
+    sizeConfig[componentSize.value].option,
+    isOptionDisabled(option)
       ? 'cursor-not-allowed bg-transparent text-cp-text-disabled'
       : selectedValues.value.includes(option.value)
         ? 'cursor-pointer bg-cp-control-item-bg-active text-cp-primary-text'
@@ -139,7 +141,7 @@ defineExpose({ focus: () => triggerRef.value?.focus(), blur: () => triggerRef.va
     <div
       ref="controlRef"
       class="group/select relative flex w-full items-center gap-2 text-left font-emphasis leading-none"
-      :class="getInputClasses(size, disabled, invalid, { open, inset: hasTags ? 'item' : 'text', trailing: true })"
+      :class="getInputClasses(componentSize, disabled, invalid, { open, inset: hasTags ? 'item' : 'text', trailing: true })"
       :style="{ anchorName: `--${selectId}` }"
     >
       <button
@@ -160,7 +162,7 @@ defineExpose({ focus: () => triggerRef.value?.focus(), blur: () => triggerRef.va
         <SelectTags
           v-if="hasTags"
           :options="selectedOptions"
-          :size="size === 'sm' ? 'sm' : 'md'"
+          :size="componentSize === 'sm' ? 'sm' : 'md'"
           :disabled="disabled"
           :collapse="collapseTags"
           :tooltip="collapseTagsTooltip"
@@ -210,8 +212,8 @@ defineExpose({ focus: () => triggerRef.value?.focus(), blur: () => triggerRef.va
         <ChevronDown
           aria-hidden="true"
           class="pointer-events-none transition-transform motion-reduce:transition-none"
-          :class="[disabled ? 'text-cp-text-disabled' : open ? 'rotate-180 text-cp-primary-text' : 'text-cp-text-quaternary', canClear && !open && 'group-focus-within/select:opacity-0 group-hover/select:opacity-0']"
-          :size="sizeConfig[size].icon"
+          :class="[open ? 'rotate-180 text-[color:var(--field-affix-state,var(--cp-color-primary-text))]' : 'text-(color:--field-affix)', canClear && !open && 'group-focus-within/select:opacity-0 group-hover/select:opacity-0']"
+          :size="sizeConfig[componentSize].icon"
         />
         <button
           v-if="canClear && !open"
@@ -251,7 +253,7 @@ defineExpose({ focus: () => triggerRef.value?.focus(), blur: () => triggerRef.va
             >
               <div v-if="displayed.length === 0" class="shrink-0">
                 <slot name="empty" :search="search">
-                  <Empty :title="loading ? locale.common.loading : search ? locale.select.noMatches : (emptyText ?? locale.select.empty)" size="sm" surface="none" role="status">
+                  <Empty :title="loading ? loadingText ?? locale.common.loading : search ? noMatchText ?? locale.select.noMatches : (emptyText ?? locale.select.empty)" size="sm" surface="none" role="status">
                     <template v-if="loading" #icon>
                       <LoaderCircle :size="18" class="animate-spin text-cp-text-quaternary motion-reduce:animate-none" />
                     </template>
@@ -268,21 +270,21 @@ defineExpose({ focus: () => triggerRef.value?.focus(), blur: () => triggerRef.va
                   role="option"
                   :aria-selected="selectedValues.includes(option.value)"
                   tabindex="-1"
-                  :disabled="option.disabled"
+                  :disabled="isOptionDisabled(option)"
                   :class="optionClasses(option, index)"
-                  @mouseenter="activeIndex = option.disabled ? activeIndex : index"
+                  @mouseenter="activeIndex = isOptionDisabled(option) ? activeIndex : index"
                   @focus="handleOptionFocus(index)"
                   @mousedown.prevent
                   @click="chooseOption(option, index)"
                   @keydown.esc="handleEscape"
                 >
-                  <slot name="option" :option="option" :index="index" :selected="selectedValues.includes(option.value)" :disabled="Boolean(option.disabled)">
+                  <slot name="option" :option="option" :index="index" :selected="selectedValues.includes(option.value)" :disabled="isOptionDisabled(option)">
                     <span class="min-w-0 truncate" :class="option.description ? 'max-w-1/2 shrink-0' : 'flex-1'">{{ option.label }}</span>
                     <span
                       v-if="option.description"
                       :title="option.description"
                       class="min-w-0 flex-1 truncate font-normal"
-                      :class="option.disabled ? 'text-cp-text-disabled' : 'text-cp-text-tertiary'"
+                      :class="isOptionDisabled(option) ? 'text-cp-text-disabled' : 'text-cp-text-tertiary'"
                     >
                       {{ option.description }}
                     </span>

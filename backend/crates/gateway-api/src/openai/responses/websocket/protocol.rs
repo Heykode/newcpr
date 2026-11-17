@@ -6,7 +6,9 @@ use gateway_core::event::ProviderResponseHeader;
 use serde_json::{Map, Value, json};
 use thiserror::Error;
 
-use crate::openai::error::{client_error_code, gateway_error_contract, gateway_error_from_engine};
+use crate::openai::error::{
+    capacity_error_for_client, gateway_error_contract, gateway_error_from_engine,
+};
 
 use super::super::{
     DecodedResponsesRequest, ProtocolErrorBody, RequestDecodeError,
@@ -213,6 +215,7 @@ pub(super) fn initial_engine_error_event(
         .unwrap_or(default_status);
     if provider.is_some_and(|error| {
         error.kind() == gateway_core::error::ProviderErrorKind::UpstreamCapacityUnavailable
+            && gateway.client_error_code() != Some("previous_response_not_found")
     }) {
         status = StatusCode::SERVICE_UNAVAILABLE;
     }
@@ -250,15 +253,9 @@ pub(super) fn error_event(
     request_id: Option<&str>,
     mut headers: Map<String, Value>,
 ) -> String {
-    let projected_code = client_error_code(code);
-    let status = if projected_code != code {
-        StatusCode::SERVICE_UNAVAILABLE
-    } else {
-        status
-    };
     let mut error = Map::new();
     error.insert("type".to_owned(), Value::String(error_type.to_owned()));
-    error.insert("code".to_owned(), Value::String(projected_code.to_owned()));
+    error.insert("code".to_owned(), Value::String(code.to_owned()));
     error.insert("message".to_owned(), Value::String(message.to_owned()));
     if let Some(param) = param {
         error.insert("param".to_owned(), Value::String(param.to_owned()));
@@ -288,7 +285,10 @@ pub(super) fn error_event(
     if !headers.is_empty() {
         event.insert("headers".to_owned(), Value::Object(headers));
     }
-    Value::Object(event).to_string()
+    let event = Value::Object(event);
+    capacity_error_for_client(&event)
+        .unwrap_or(event)
+        .to_string()
 }
 
 pub(super) fn connection_limit_event() -> String {

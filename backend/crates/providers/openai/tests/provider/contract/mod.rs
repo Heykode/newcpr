@@ -91,12 +91,14 @@ mod native_encrypted_history;
 mod precommit;
 mod quota_continuation;
 mod quota_observation;
+mod quota_usage;
 mod raw_identity;
 mod reasoning_replay;
 mod request_alignment;
 mod response_control_lifecycle;
 mod scheduling;
 mod search_history;
+mod selection_retry;
 mod streamed_errors;
 mod timing;
 mod tls_recovery;
@@ -2752,6 +2754,7 @@ async fn connection_failure_preserves_io_cause_without_claiming_payload_was_sent
     for (websocket, proxy_hint) in [
         (false, None),
         (true, None),
+        (false, Some(ProxyConnectionHint::Unreachable)),
         (false, Some(ProxyConnectionHint::CheckProxy)),
         (true, Some(ProxyConnectionHint::Unreachable)),
         (true, Some(ProxyConnectionHint::TunnelFailed)),
@@ -2760,7 +2763,11 @@ async fn connection_failure_preserves_io_cause_without_claiming_payload_was_sent
         create_account(&store, "acct_abrupt_disconnect").await;
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base_url = format!("http://{}", listener.local_addr().unwrap());
-        let rejection = if proxy_hint == Some(ProxyConnectionHint::TunnelFailed) {
+        let tunnel_rejected = matches!(
+            proxy_hint,
+            Some(ProxyConnectionHint::TunnelFailed | ProxyConnectionHint::CheckProxy)
+        );
+        let rejection = if tunnel_rejected {
             Some(tokio::spawn(async move {
                 let (mut socket, _) = listener.accept().await.unwrap();
                 assert!(
@@ -2795,7 +2802,13 @@ async fn connection_failure_preserves_io_cause_without_claiming_payload_was_sent
         } else {
             http_generate_operation()
         };
-        let mut stream = provider_with_base_url(&store, base_url)
+        // HTTP 客户端仅为 HTTPS 目标执行 CONNECT；代理可达但拒绝隧道不能归因为拨号失败
+        let upstream = if !websocket && tunnel_rejected {
+            "https://upstream.invalid".to_owned()
+        } else {
+            base_url
+        };
+        let mut stream = provider_with_base_url(&store, upstream)
             .execute(
                 planned_request("openai", operation),
                 context("req_connect_refused", CancellationToken::new()),
@@ -2811,6 +2824,14 @@ async fn connection_failure_preserves_io_cause_without_claiming_payload_was_sent
         };
         let diagnostic = error.diagnostic().expect("connection diagnosis");
         assert_eq!(diagnostic.proxy_hint(), proxy_hint);
+        assert_eq!(
+            error.unreachable_proxy().is_some(),
+            proxy_hint == Some(ProxyConnectionHint::Unreachable)
+        );
+        assert_eq!(
+            error.allows_connection_rotation(),
+            proxy_hint != Some(ProxyConnectionHint::TunnelFailed)
+        );
         if let Some(rejection) = rejection {
             rejection.await.unwrap();
         }
@@ -2863,6 +2884,7 @@ async fn abrupt_websocket_disconnect_preserves_diagnosis_and_ambiguous_send_stat
     server.await.unwrap();
     assert_eq!(error.kind(), ProviderErrorKind::Transport);
     assert_eq!(error.send_state(), UpstreamSendState::Ambiguous);
+    assert!(!error.allows_connection_rotation());
     assert!(!error.replay_is_safe());
     assert_eq!(error.pre_delivery_retry(), None);
     assert_eq!(
@@ -6623,7 +6645,7 @@ async fn capacity_http_and_websocket_opening_rejections_use_bounded_business_ret
                 max_retries, initial_delay, max_delay, ..
             }) if max_retries.get() == 3 && initial_delay == Duration::from_millis(500) && max_delay == Duration::from_secs(8))
             );
-            assert!(!provider_openai::openai_failure_affects_account_score(
+            assert!(provider_openai::openai_failure_affects_account_score(
                 &error
             ));
             assert_eq!(
@@ -6779,7 +6801,7 @@ async fn capacity_stream_rejection_only_retries_before_semantic_output_on_both_t
                 "use_websocket={use_websocket}, semantic_output={semantic_output}, client_events={client_events:?}: {error:?}"
             );
             assert_eq!(error.pre_delivery_retry().is_some(), !semantic_output);
-            assert!(!provider_openai::openai_failure_affects_account_score(
+            assert!(provider_openai::openai_failure_affects_account_score(
                 &error
             ));
             assert_eq!(
@@ -9087,15 +9109,18 @@ async fn image_quota_headers_keep_the_codex_weekly_window_and_access_state() {
 }
 
 #[tokio::test]
-async fn general_quota_limits_filter_new_requests_until_every_window_recovers() {
+async fn general_quota_settings_filter_new_requests_until_every_window_recovers() {
     let store = Arc::new(MemoryAccountStore::default());
     let limited = "acct_provider_contract";
     let backup = "acct_scope_new";
     create_account(&store, limited).await;
     create_account(&store, backup).await;
-    store.set_quota_limits(
+    store.set_quota_settings(
         limited,
-        serde_json::from_value(json!({"codex:18000s":99, "codex:604800s":95})).unwrap(),
+        serde_json::from_value(
+            json!({"codex:18000s": {"limitPercent": 99, "warmup": null}, "codex:604800s": {"limitPercent": 95, "warmup": null}}),
+        )
+        .unwrap(),
     );
     let server = MockServer::start().await;
     Mock::given(method("POST"))
@@ -9229,3 +9254,79 @@ fn request_observation_only_inherits_native_openai_session_configuration() {
 }
 
 mod correlation;
+
+#[tokio::test]
+async fn bare_sse_error_without_status_preserves_request_and_capacity_classification() {
+    for (detail, expected_kind) in [
+        (
+            json!({"type":"invalid_request_error","code":null,"param":"input",
+                "message":"Response input messages must contain the word 'json' in some form to use 'text.format' of type 'json_object'."}),
+            ProviderErrorKind::InvalidRequest,
+        ),
+        (
+            json!({"type":"server_error","message":"An internal server error occurred."}),
+            ProviderErrorKind::Unavailable,
+        ),
+        (
+            json!({"type":"invalid_request_error","code":"server_is_overloaded","message":"overloaded"}),
+            ProviderErrorKind::UpstreamCapacityUnavailable,
+        ),
+    ] {
+        let frame = json!({"type":"error","error":detail});
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/codex/responses"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                format!("event: error\ndata: {frame}\n\n"),
+                "text/event-stream",
+            ))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let store = Arc::new(MemoryAccountStore::default());
+        create_account(&store, "acct_provider_contract").await;
+        let mut stream = provider_with_base_url(&store, server.uri())
+            .execute(
+                planned_request("openai", http_generate_operation()),
+                context("req_bare_sse_error", CancellationToken::new()),
+            )
+            .await
+            .unwrap();
+        let (mut events, mut error) = precommit::stream_failure(&mut stream).await;
+        assert_eq!(error.kind(), expected_kind, "{frame}");
+        assert_eq!(error.upstream_status(), None);
+        if expected_kind == ProviderErrorKind::InvalidRequest {
+            assert!(error.retry_is_prohibited());
+            let visible = error.client_visible_upstream_error().unwrap();
+            assert_eq!(visible.error_type(), Some("invalid_request_error"));
+            assert_eq!(Some(visible.message()), frame["error"]["message"].as_str());
+        }
+        events.extend(error.take_atomic_client_events());
+        assert_eq!(events.last().unwrap().wire_event().unwrap().data(), &frame);
+    }
+}
+
+#[tokio::test]
+async fn client_replay_rotation_without_session_identity_does_not_select_or_send() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_provider_contract").await;
+    let server = MockServer::start().await;
+    let error = provider_with_base_url(&store, server.uri())
+        .execute(
+            planned_request("openai", generate_operation()),
+            pinned_continuation_context(
+                "req_unbound_rotation",
+                "acct_provider_contract",
+                "client-previous",
+                "upstream-previous",
+                2,
+                ContinuationAttempt::RotateForClientReplay,
+            ),
+        )
+        .await
+        .err()
+        .expect("without a binding the next full request cannot follow a replacement account");
+    assert_eq!(error.kind(), ProviderErrorKind::NoEligibleAccount);
+    assert_eq!(error.send_state(), UpstreamSendState::NotSent);
+    assert!(server.received_requests().await.unwrap().is_empty());
+}
