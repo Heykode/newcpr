@@ -59,7 +59,7 @@ const trackClasses = computed(() => [
         : 'bg-cp-fill-tertiary shadow-cp-tertiary',
 ])
 const thumbClasses = computed(() => [
-  'absolute top-0.5 cp-10 size-(--thumb) rounded-full bg-cp-white shadow-cp-tertiary transition-[left] duration-180 ease-out motion-reduce:transition-none',
+  'absolute top-0.5 z-10 size-(--thumb) rounded-full bg-cp-white shadow-cp-tertiary transition-[left] duration-180 ease-out motion-reduce:transition-none',
   model.value ? 'left-[calc(100%-var(--thumb)-0.125rem)]' : 'left-0.5',
 ])
 const inlineTextClasses = computed(() => [
