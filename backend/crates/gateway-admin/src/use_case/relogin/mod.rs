@@ -709,7 +709,10 @@ impl DefaultReloginService {
                         weight: crate::model::accounts::AccountWeight::DEFAULT,
                         group_ids: Vec::new(),
                     });
-                settings.custom_name = custom_name.map(str::to_owned);
+                // Egress or Excel overrides must not clear the enrollment name.
+                if let Some(name) = custom_name {
+                    settings.custom_name = Some(name.to_owned());
+                }
                 if let Some(excel) = new_account_excel {
                     excel.apply(settings);
                 }
