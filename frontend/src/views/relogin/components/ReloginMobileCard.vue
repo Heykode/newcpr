@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import type { ReloginEntry } from '@/api/modules/relogin'
-import { ChevronDown, ChevronRight, Layers, Monitor, MoreHorizontal } from '@lucide/vue'
-import { shallowRef, useId } from 'vue'
+import { ChevronRight, Layers, Monitor, MoreHorizontal } from '@lucide/vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseCheckbox from '@/components/base/BaseCheckbox.vue'
@@ -13,7 +12,7 @@ import ReloginCountCell from '@/components/ReloginCountCell.vue'
 import { formatDateTime } from '@/utils/date'
 import AccountPlanBadge from '../../accounts/components/AccountPlanBadge.vue'
 import { maintenanceBusy, maintenanceResult, queueButtonLabel, queueDisabledReason, recentOperation, recentOperationAt } from '../maintenance'
-import { credentialLabel, recoveryCountdown, reloginDisplayName, retryProgress, workspaceId, workspaceLabel } from '../presentation'
+import { recoveryCountdown, reloginDisplayName, retryProgress, shortWorkspace, workspaceId, workspaceLabel } from '../presentation'
 import ReloginEgress from './ReloginEgress.vue'
 import ReloginSessionStatus from './ReloginSessionStatus.vue'
 
@@ -30,8 +29,6 @@ defineEmits<{
   cancel: []
   maintain: [tab: string]
 }>()
-const detailsOpen = shallowRef(false)
-const detailsId = useId()
 </script>
 
 <template>
@@ -48,9 +45,15 @@ const detailsId = useId()
         <AccountPlanBadge :plan-type="row.planType" :plan-type-display="row.planType?.toUpperCase() || '待识别'" size="sm" />
       </div>
     </div>
-    <div class="mt-2 flex min-w-0 items-start gap-2 text-cp-xs text-cp-text-secondary" :title="workspaceId(row) || '自动选择工作区'">
-      <Layers class="mt-0.5 size-3.5 shrink-0" />
-      <span class="min-w-0 break-words [overflow-wrap:anywhere]">{{ workspaceLabel(row) }}</span>
+    <div class="mt-2 grid min-w-0 gap-1.5 rounded-cp bg-cp-fill-quaternary p-2.5">
+      <div class="flex min-w-0 items-start gap-2">
+        <Layers class="mt-0.5 size-3.5 shrink-0 text-cp-text-tertiary" />
+        <span class="min-w-0 break-words text-cp-xs font-semibold text-cp-text-secondary [overflow-wrap:anywhere]">{{ workspaceLabel(row) === shortWorkspace(workspaceId(row)) ? '工作区' : workspaceLabel(row) }}</span>
+      </div>
+      <div class="flex min-w-0 items-baseline gap-2">
+        <span class="shrink-0 text-[10px] font-medium text-cp-text-tertiary">ID</span>
+        <span class="min-w-0 break-all font-mono text-cp-xs text-cp-text-secondary">{{ workspaceId(row) || '自动选择' }}</span>
+      </div>
     </div>
     <div class="mt-3 grid min-w-0 gap-3 text-cp-sm">
       <ReloginSessionStatus :row="row" compact />
@@ -62,8 +65,8 @@ const detailsId = useId()
         <button type="button" class="flex min-h-11 w-full items-center gap-2 rounded-cp text-left hover:bg-cp-fill-quaternary" aria-label="查看操作历史" @click="$emit('history')">
           <span class="min-w-0 flex-1">
             <span class="flex flex-wrap items-baseline gap-x-2 gap-y-1">
-              <span class="break-words font-medium text-cp-link">{{ recentOperation(row) }}</span>
-              <span v-if="row.status !== 'awaiting_workspace'" :class="maintenanceResult(row).tone" :title="row.maintenance?.message || row.message">{{ maintenanceResult(row).label }}</span>
+              <span class="break-words font-semibold text-cp-link">{{ recentOperation(row) }}</span>
+              <span v-if="row.status !== 'awaiting_workspace'" class="rounded-full bg-cp-fill-tertiary px-2 py-0.5 text-cp-xs font-medium" :class="maintenanceResult(row).tone" :title="row.maintenance?.message || row.message">{{ maintenanceResult(row).label }}</span>
             </span>
             <span v-if="recentOperationAt(row)" class="mt-1 block text-cp-xs tabular-nums text-cp-text-tertiary">{{ formatDateTime(recentOperationAt(row)) }}</span>
           </span>
@@ -77,38 +80,17 @@ const detailsId = useId()
       </div>
     </div>
     <div class="mt-2 flex items-center justify-between gap-2 border-t border-cp-border-secondary">
-      <button type="button" class="flex min-h-11 items-center gap-1.5 text-cp-xs text-cp-text-secondary" :aria-expanded="detailsOpen" :aria-controls="detailsId" @click="detailsOpen = !detailsOpen">
-        更多详情<ChevronDown class="size-3.5 transition-transform" :class="{ 'rotate-180': detailsOpen }" />
-      </button>
+      <div class="flex min-w-0 flex-wrap items-center gap-1.5 text-cp-xs text-cp-text-secondary">
+        <span>成功重登</span>
+        <span class="inline-flex min-w-7 items-center justify-center rounded-full bg-cp-fill-tertiary px-2 py-0.5">
+          <ReloginCountCell class="text-cp-sm font-semibold" :count="row.reloginCount" :last-relogin-at="row.lastReloginAt" />
+        </span>
+        <span v-if="row.reloginCount != null">次</span>
+      </div>
       <div class="flex shrink-0 items-center gap-2">
         <span class="text-cp-xs text-cp-text-secondary">自动恢复</span>
         <BaseSwitch class="min-h-11" :label="`${row.email} 自动重登`" :model-value="row.automatic" :disabled="busy" @update:model-value="$emit('automatic', $event)" />
       </div>
-    </div>
-    <div v-if="detailsOpen" :id="detailsId" class="pb-3 text-cp-xs">
-      <dl class="m-0 grid gap-3 rounded-cp bg-cp-fill-quaternary p-3">
-        <div>
-          <dt class="text-cp-text-secondary">
-            OAuth 凭据
-          </dt><dd class="m-0 mt-1">
-            {{ credentialLabel(row) }}
-          </dd>
-        </div>
-        <div>
-          <dt class="text-cp-text-secondary">
-            工作区 ID
-          </dt><dd class="m-0 mt-1 break-all font-mono">
-            {{ workspaceId(row) || '自动选择' }}
-          </dd>
-        </div>
-        <div>
-          <dt class="text-cp-text-secondary">
-            成功重登次数
-          </dt><dd class="m-0 mt-1">
-            <ReloginCountCell :count="row.reloginCount" :last-relogin-at="row.lastReloginAt" />
-          </dd>
-        </div>
-      </dl>
     </div>
     <div class="flex min-w-0 items-center gap-1 border-t border-cp-border-secondary pt-2">
       <BaseButton v-if="canPush" class="min-h-11 min-w-0 flex-1 whitespace-nowrap px-3" variant="soft" :disabled="busy" @click="$emit('push')">
