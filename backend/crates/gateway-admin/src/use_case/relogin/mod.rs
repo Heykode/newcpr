@@ -62,6 +62,7 @@ pub struct ReloginView {
     pub message: String,
     pub recovery: recovery::RecoveryView,
     pub plan_type: Option<String>,
+    pub plan_type_display: Option<String>,
     pub workspace_id: Option<String>,
     pub preferred_workspace_id: Option<String>,
     pub workspace_mode: ReloginWorkspaceMode,
@@ -87,6 +88,7 @@ pub struct ReloginPoolAccountView {
     pub id: String,
     pub workspace_id: Option<String>,
     pub plan_type: Option<String>,
+    pub plan_type_display: Option<String>,
     pub enabled: bool,
     pub status: &'static str,
     pub error_reason: Option<&'static str>,
@@ -1115,7 +1117,12 @@ impl ReloginService for DefaultReloginService {
             } else {
                 "present"
             };
-            let push_targets = workspace::push_targets(&entry, &pool);
+            let push_targets = workspace::push_targets(&entry, &pool, self.provider.as_ref());
+            let plan_type = credential.map(|value| value.plan_type.clone()).or_else(|| {
+                matches
+                    .first()
+                    .and_then(|account| account.plan_type.clone())
+            });
             let egress = if statistics.is_none() && !matches.is_empty() {
                 crate::model::relogin_maintenance::ReloginEgressView {
                     kind: "multiple".into(),
@@ -1168,11 +1175,10 @@ impl ReloginService for DefaultReloginService {
                 } else {
                     entry.workspace_choices
                 },
-                plan_type: credential.map(|value| value.plan_type.clone()).or_else(|| {
-                    matches
-                        .first()
-                        .and_then(|account| account.plan_type.clone())
-                }),
+                plan_type_display: plan_type
+                    .as_deref()
+                    .map(|plan| self.provider.plan_type_display(plan)),
+                plan_type,
                 workspace_id: credential.map(|value| value.workspace_id.clone()),
                 credential_status: match credential {
                     None => "none",
@@ -1207,6 +1213,10 @@ impl ReloginService for DefaultReloginService {
                             id: account.id.clone(),
                             workspace_id: account.upstream_account_id.clone(),
                             plan_type: account.plan_type.clone(),
+                            plan_type_display: account
+                                .plan_type
+                                .as_deref()
+                                .map(|plan| self.provider.plan_type_display(plan)),
                             enabled: account.enabled,
                             status: projection.status.as_str(),
                             error_reason: projection.error_reason.map(|reason| reason.as_str()),

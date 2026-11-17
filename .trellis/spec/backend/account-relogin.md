@@ -524,6 +524,9 @@ push, automatic recovery, Team/Business workspaces or deployed runtime behavior.
 - `POST /api/admin/relogin/history` accepts `{id,before?}`; return up to 50 descending
   UUIDv7 records and `nextCursor`. Invalid cursor => invalid request, absent entry =>
   not found. List `lastAttemptAt` is independent from pool-owned `lastReloginAt`.
+- Queuing/cancelling another login must preserve the previous attempt and its push outcome.
+  A generic Failed entry with cached credentials is not evidence of a failed push;
+  only the push operation records push failures. Keep attempt creation at worker claim.
 - Preserve preflight push failure semantics: `save_attempt(id,revision,attempt)`
   changes only the same attempt snapshot/history under CAS without incrementing the
   library revision or consuming the existing valid push confirmation. Post-commit
@@ -633,6 +636,11 @@ and subsequent push updates the original authorization attempt. Material edits f
 rule. Successful authorization records the verified credential's workspace in that attempt,
 including when no workspace was selected before login. Table and card layouts retain current
 pool-health, retry and relogin-count projections.
+Relogin account, pool and push-target views expose `planTypeDisplay` from the same provider
+mapping as account management, while retaining raw `planType` for identity and authorization.
+Desktop/mobile badges and plan filters use those labels; aliases share one filter option.
+Workspace-directory choices already carry normalized plan categories; do not reinterpret
+those categories as raw provider plan wire values.
 Header filters use options inside their own popover, avoiding nested teleported select dismissal.
 Close/account change invalidates pending reads and TOTP timers;
 remote writes may complete and notify the list but never repopulate a closed dialog.

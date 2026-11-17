@@ -14,7 +14,27 @@ function load(path, dependencies = {}) {
   return exports
 }
 const { importPreview } = load('../src/views/relogin/import-preview.ts')
-const { processingStatus, recoveryCountdown, retryProgress, credentialLabel, poolPresentation, matchesPool, workspaceChoices, shortWorkspace } = load('../src/views/relogin/presentation.ts')
+const { processingStatus, recoveryCountdown, retryProgress, credentialLabel, poolPresentation, matchesPool, workspaceChoices, shortWorkspace, reloginPlanDisplay, reloginPlanOptions } = load('../src/views/relogin/presentation.ts')
+
+test('relogin plans use provider labels and group aliases without changing raw values', () => {
+  const rows = [
+    { planType: 'self_serve_business_prolite', planTypeDisplay: 'Business' },
+    { planType: 'self_serve_business_usage_based', planTypeDisplay: 'Business' },
+    { planType: 'team', planTypeDisplay: 'Business' },
+    { planType: 'business', planTypeDisplay: 'Enterprise' },
+    { planType: 'free', planTypeDisplay: 'Free' },
+    { planType: 'future-plan' },
+    { planType: null },
+  ]
+  const original = structuredClone(rows)
+  assert.deepEqual(Array.from(reloginPlanOptions(rows), item => item.label), ['全部 PLAN', 'BUSINESS', 'ENTERPRISE', 'FREE', 'FUTURE-PLAN'])
+  assert.equal(rows.filter(row => reloginPlanDisplay(row) === 'BUSINESS').length, 3)
+  assert.equal(reloginPlanDisplay(rows[6]), '待识别')
+  assert.equal(reloginPlanDisplay(undefined, '未知套餐'), '未知套餐')
+  assert.equal(reloginPlanDisplay({ planType: 'plus' }), 'PLUS')
+  assert.equal(workspaceChoices({ status: 'ready', poolAccounts: [{ ...rows[0], workspaceId: 'pool-business' }] })[0].label, 'BUSINESS · pool-business')
+  assert.deepEqual(rows, original)
+})
 
 test('awaiting workspace choices supersede retry labels and exclude pool/preferences', () => {
   const row = {

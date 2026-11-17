@@ -12,7 +12,7 @@ import ReloginCountCell from '@/components/ReloginCountCell.vue'
 import { formatDateTime } from '@/utils/date'
 import AccountPlanBadge from '../../accounts/components/AccountPlanBadge.vue'
 import { maintenanceBusy, maintenanceResult, queueButtonLabel, queueDisabledReason, recentOperation, recentOperationAt } from '../maintenance'
-import { recoveryCountdown, reloginDisplayName, retryProgress, shortWorkspace, workspaceId, workspaceLabel } from '../presentation'
+import { recoveryCountdown, reloginDisplayName, reloginPlanDisplay, retryProgress, shortWorkspace, workspaceId, workspaceLabel } from '../presentation'
 import ReloginEgress from './ReloginEgress.vue'
 import ReloginSessionStatus from './ReloginSessionStatus.vue'
 
@@ -42,7 +42,7 @@ defineEmits<{
         </span>
       </button>
       <div class="flex min-h-11 max-w-[38%] shrink-0 items-center">
-        <AccountPlanBadge :plan-type="row.planType" :plan-type-display="row.planType?.toUpperCase() || '待识别'" size="sm" />
+        <AccountPlanBadge :plan-type="row.planType" :plan-type-display="reloginPlanDisplay(row)" size="sm" />
       </div>
     </div>
     <div class="mt-2 grid min-w-0 gap-1.5 rounded-cp bg-cp-fill-quaternary p-2.5">
