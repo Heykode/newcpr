@@ -35,6 +35,242 @@ async fn save_private(h: &Harness, row: ReloginEntry) {
 }
 
 #[tokio::test]
+async fn authorization_waits_for_shared_capacity_and_preserves_its_action() {
+    for action in [
+        MaintenanceAction::Authorize,
+        MaintenanceAction::ForceLogin,
+        MaintenanceAction::SwitchWorkspace,
+    ] {
+        let h = Harness::new(vec![]).await;
+        h.store.settings.lock().unwrap().concurrency = 1;
+        let occupied = h.import("occupied@example.invalid").await;
+        let id = h.import("test@example.invalid").await;
+        *h.provider.relogin_delay.lock().unwrap() = std::time::Duration::from_secs(60);
+        let services = h.services.clone();
+        let probe = command(&h.row(&occupied).await, MaintenanceAction::CheckSession);
+        let running = tokio::spawn(async move {
+            services
+                .relogin()
+                .maintain(probe, &context("occupied"))
+                .await
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            while h.provider.maintenance_calls.lock().unwrap().is_empty() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        let mut row = h.row(&id).await;
+        row.maintenance.view.workspaces = vec![MaintenanceWorkspace {
+            id: "workspace-team".into(),
+            name: "Research".into(),
+            plan_type: Some("team".into()),
+            available: true,
+        }];
+        let mut request = command(&row, action);
+        if action == MaintenanceAction::SwitchWorkspace {
+            request.target = Some("workspace-team".into());
+        }
+        save_private(&h, row).await;
+        let view = h
+            .services
+            .relogin()
+            .maintain(request, &context("queue-authorization"))
+            .await
+            .unwrap();
+        assert_eq!(view.state, "queued");
+        let row = h.row(&id).await;
+        assert_eq!(row.status, ReloginStatus::Queued);
+        // A persisted queue survives serialization without losing force-login/workspace intent.
+        save_private(
+            &h,
+            serde_json::from_value(serde_json::to_value(row).unwrap()).unwrap(),
+        )
+        .await;
+        h.cycle().await;
+        assert_eq!(h.provider.maintenance_calls.lock().unwrap().len(), 1);
+        h.services
+            .relogin()
+            .cancel(&occupied, h.row(&occupied).await.revision)
+            .await
+            .unwrap();
+        assert!(running.await.unwrap().is_err());
+        *h.provider.relogin_delay.lock().unwrap() = std::time::Duration::ZERO;
+        let mut result = outcome();
+        result.credential = Some(credential());
+        *h.provider.maintenance_result.lock().unwrap() = Some(result);
+        h.cycle().await;
+        let row = h.row(&id).await;
+        assert_eq!(row.status, ReloginStatus::Ready);
+        assert_eq!(row.last_attempt.as_ref().unwrap().operation, Some(action));
+        assert_eq!(
+            row.last_attempt.as_ref().unwrap().result,
+            ReloginAttemptResult::Succeeded
+        );
+        assert_eq!(
+            h.provider.maintenance_calls.lock().unwrap().as_slice(),
+            &[MaintenanceAction::CheckSession, action]
+        );
+        assert!(h.accounts.import_settings().is_empty());
+        assert!(row.synced_at.is_none());
+        if action == MaintenanceAction::SwitchWorkspace {
+            assert_eq!(
+                h.provider
+                    .maintenance_workspaces
+                    .lock()
+                    .unwrap()
+                    .last()
+                    .unwrap()
+                    .as_deref(),
+                Some("workspace-team")
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn authorization_without_credentials_finishes_as_failed_and_releases_capacity() {
+    let h = Harness::new(vec![]).await;
+    h.store.settings.lock().unwrap().concurrency = 1;
+    let id = h.import("test@example.invalid").await;
+    for with_credential in [false, true] {
+        let mut result = outcome();
+        if with_credential {
+            result.credential = Some(credential());
+        }
+        *h.provider.maintenance_result.lock().unwrap() = Some(result);
+        h.services
+            .relogin()
+            .maintain(
+                command(&h.row(&id).await, MaintenanceAction::Authorize),
+                &context("queued"),
+            )
+            .await
+            .unwrap();
+        h.cycle().await;
+        let row = h.row(&id).await;
+        assert_eq!(
+            row.status,
+            if with_credential {
+                ReloginStatus::Ready
+            } else {
+                ReloginStatus::Failed
+            }
+        );
+        assert_eq!(
+            row.maintenance.view.state,
+            if with_credential {
+                "succeeded"
+            } else {
+                "failed"
+            }
+        );
+        assert!(row.maintenance.queued_login.is_none());
+        assert!(row.last_attempt.unwrap().finished_at.is_some());
+    }
+    assert_eq!(h.provider.maintenance_calls.lock().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn cancelled_queued_authorization_never_executes_and_preserves_automatic_setting() {
+    let h = Harness::new(vec![]).await;
+    let id = h.import("test@example.invalid").await;
+    let before = h.row(&id).await;
+    h.services
+        .relogin()
+        .maintain(
+            command(&before, MaintenanceAction::ForceLogin),
+            &context("queue-cancel"),
+        )
+        .await
+        .unwrap();
+    let queued = h.row(&id).await;
+    assert_eq!(queued.status, ReloginStatus::Queued);
+    h.services
+        .relogin()
+        .cancel(&id, queued.revision)
+        .await
+        .unwrap();
+    h.cycle().await;
+    let row = h.row(&id).await;
+    assert!(!row.status.active());
+    assert_eq!(row.maintenance.view.state, "cancelled");
+    assert_eq!(row.automatic, before.automatic);
+    assert!(h.provider.maintenance_calls.lock().unwrap().is_empty());
+    assert!(h.provider.relogin_requests.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn cancelled_running_authorization_cannot_restore_credentials() {
+    let h = Harness::new(vec![]).await;
+    let id = h.import("test@example.invalid").await;
+    let mut result = outcome();
+    result.credential = Some(credential());
+    *h.provider.maintenance_result.lock().unwrap() = Some(result);
+    *h.provider.relogin_delay.lock().unwrap() = std::time::Duration::from_secs(60);
+    h.services
+        .relogin()
+        .maintain(
+            command(&h.row(&id).await, MaintenanceAction::Authorize),
+            &context("queued"),
+        )
+        .await
+        .unwrap();
+    let task = h.task.clone();
+    let cycle = tokio::spawn(async move { task.run_cycle(cycle_context()).await });
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        while h.provider.maintenance_calls.lock().unwrap().is_empty() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let row = h.row(&id).await;
+    h.services
+        .relogin()
+        .cancel(&id, row.revision)
+        .await
+        .unwrap();
+    cycle.await.unwrap().unwrap();
+    let row = h.row(&id).await;
+    assert!(!row.status.active());
+    assert!(row.credential.is_none());
+    assert_eq!(row.maintenance.view.state, "cancelled");
+    assert_eq!(
+        row.last_attempt.unwrap().result,
+        ReloginAttemptResult::Cancelled
+    );
+}
+
+#[tokio::test]
+async fn queued_authorization_rechecks_pool_identity_before_using_its_route() {
+    let mut pooled = account(false);
+    let h = Harness::new(vec![pooled.clone()]).await;
+    let id = h.import("test@example.invalid").await;
+    h.services
+        .relogin()
+        .maintain(
+            command(&h.row(&id).await, MaintenanceAction::Authorize),
+            &context("queued"),
+        )
+        .await
+        .unwrap();
+    pooled.upstream_user_id = Some("replacement-principal".into());
+    h.accounts.set_accounts(vec![pooled]);
+    h.cycle().await;
+    let row = h.row(&id).await;
+    assert_eq!(row.status, ReloginStatus::Failed);
+    assert_eq!(row.maintenance.view.state, "failed");
+    assert!(row.maintenance.queued_login.is_none());
+    assert_eq!(
+        row.last_attempt.unwrap().result,
+        ReloginAttemptResult::Failed
+    );
+    assert!(h.provider.maintenance_calls.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn manual_authorization_clears_failed_enrollment_but_retains_its_route() {
     for action in [
         MaintenanceAction::Authorize,
@@ -257,8 +493,10 @@ async fn identity_mismatch_finishes_attempt_without_overwriting_old_material() {
         )
         .await
         .unwrap();
-    assert_eq!(view.state, "failed");
+    assert_eq!(view.state, "queued");
+    h.cycle().await;
     let row = h.row(&id).await;
+    assert_eq!(row.maintenance.view.state, "failed");
     assert!(row.credential.is_none());
     assert_eq!(
         row.last_attempt.as_ref().unwrap().result,
@@ -542,6 +780,7 @@ async fn maintenance_reads_preserve_authorization_push_history() {
         )
         .await
         .unwrap();
+    h.cycle().await;
     let original = h.row(&id).await.last_attempt.unwrap();
     assert_eq!(original.result, ReloginAttemptResult::Succeeded);
     *h.provider.maintenance_result.lock().unwrap() = Some(outcome());
@@ -669,16 +908,22 @@ async fn explicit_workspace_maintenance_keeps_its_proxy_when_other_workspace_dif
     save_private(&h, row).await;
     let mut request = command(&h.row(&id).await, MaintenanceAction::SwitchWorkspace);
     request.target = Some("workspace-second".into());
-    *h.provider.maintenance_result.lock().unwrap() = Some(outcome());
+    let mut result = outcome();
+    let mut selected = credential();
+    selected.workspace_id = "workspace-second".into();
+    result.credential = Some(selected);
+    *h.provider.maintenance_result.lock().unwrap() = Some(result);
     h.services
         .relogin()
         .maintain(request, &context("workspace-route"))
         .await
         .unwrap();
+    h.cycle().await;
     assert_eq!(
         h.provider.maintenance_routes.lock().unwrap()[0].0,
         first.outbound_proxy
     );
+    assert_eq!(h.row(&id).await.status, ReloginStatus::Ready);
 }
 
 #[tokio::test]

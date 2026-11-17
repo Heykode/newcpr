@@ -148,6 +148,7 @@ impl DefaultReloginService {
                     }
                     .to_owned();
                     entry.maintenance.view.message = "上次维护中断，请核对结果".to_owned();
+                    entry.maintenance.queued_login = None;
                     let attempt = if entry
                         .maintenance
                         .view
@@ -208,6 +209,7 @@ impl DefaultReloginService {
                     continue;
                 }
                 if entry.status != ReloginStatus::Queued {
+                    entry.maintenance.queued_login = None;
                     if entry.status == ReloginStatus::Ready
                         && entry.synced_at.is_none()
                         && let Some(enrollment) = entry.enrollment.clone()
@@ -293,12 +295,18 @@ impl DefaultReloginService {
                         })
                         .collect();
                     if candidates.len() != entry.workspace_targets.len()
-                        || candidates.first().is_some_and(|first| {
-                            candidates.iter().any(|account| {
-                                account.effective_outbound_proxy()
-                                    != first.effective_outbound_proxy()
-                            })
-                        })
+                        || (entry
+                            .maintenance
+                            .queued_login
+                            .as_ref()
+                            .and_then(|queued| queued.route.as_ref())
+                            .is_none()
+                            && candidates.first().is_some_and(|first| {
+                                candidates.iter().any(|account| {
+                                    account.effective_outbound_proxy()
+                                        != first.effective_outbound_proxy()
+                                })
+                            }))
                     {
                         entry.status = ReloginStatus::Failed;
                         entry.message = "原账号或代理已变化，请重新发起重登".to_owned();
@@ -319,7 +327,22 @@ impl DefaultReloginService {
                         .or_else(|| entry.selected_workspace_id.clone())
                         .or_else(|| entry.preferred_workspace_id.clone())
                 };
-                let request = match self.login_request(&entry, &pool, workspace_id).await {
+                let mut route_entry = entry.clone();
+                if let Some(route) = entry
+                    .maintenance
+                    .queued_login
+                    .as_ref()
+                    .and_then(|queued| queued.route.as_ref())
+                {
+                    if !pool.iter().any(|account| route.matches_account(account)) {
+                        entry.status = ReloginStatus::Failed;
+                        entry.message = "原账号出口归属已变化，请重新发起重登".to_owned();
+                        self.save(&mut entry).await?;
+                        continue;
+                    }
+                    route_entry.target = Some(route.clone());
+                }
+                let request = match self.login_request(&route_entry, &pool, workspace_id).await {
                     Ok(request) => request,
                     Err(error) => {
                         entry.status = ReloginStatus::Failed;
@@ -345,6 +368,13 @@ impl DefaultReloginService {
                 entry.credential = None;
                 entry.status = ReloginStatus::Running;
                 entry.message = "正在登录并验证工作区".to_owned();
+                if let Some(queued) = &entry.maintenance.queued_login {
+                    entry.maintenance.view.action = Some(queued.action.action());
+                    entry.maintenance.view.state = "running".to_owned();
+                    entry.maintenance.view.message =
+                        format!("正在{}", queued.action.action().label());
+                    entry.maintenance.view.checked_at = Some(Utc::now());
+                }
                 self.save(&mut entry).await?;
                 let cancellation = CancellationToken::new();
                 jobs.push((entry, request, cancellation));
@@ -371,6 +401,31 @@ impl DefaultReloginService {
         cancellation: CancellationToken,
         shutdown: &CancellationToken,
     ) -> Result<(), AdminError> {
+        if let Some(queued) = &entry.maintenance.queued_login {
+            let action = queued.action.action();
+            let request = crate::model::relogin_maintenance::MaintenanceRequest {
+                target: entry.selected_workspace_id.clone(),
+                login: request,
+                action,
+                device_id_hash: None,
+                pending_totp: None,
+            };
+            let outcome = tokio::select! {
+                biased;
+                () = shutdown.cancelled() => Err(AdminError::conflict("服务正在停止，任务已取消")),
+                () = cancellation.cancelled() => Err(AdminError::conflict("重登任务已取消")),
+                outcome = tokio::time::timeout(Duration::from_secs(300), self.provider.maintain_relogin(request)) => {
+                    match outcome {
+                        Ok(outcome) => outcome.map_err(|error| map_provider_error(error, "relogin maintenance")),
+                        Err(_) => Err(AdminError::unavailable("重登超时，请检查网络和代理")),
+                    }
+                }
+            };
+            return self
+                .finish_maintenance(&entry, action, &cancellation, outcome)
+                .await
+                .map(|_| ());
+        }
         let workspace_locked = request.workspace_id.is_some();
         let outcome = tokio::select! {
             biased;

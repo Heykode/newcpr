@@ -101,6 +101,7 @@ pub(super) struct FakeProviderAdmin {
         Mutex<Option<Arc<gateway_core::provider_ports::egress::ProviderEgressConfig>>>,
     pub(super) maintenance_calls:
         Mutex<Vec<gateway_admin::model::relogin_maintenance::MaintenanceAction>>,
+    pub(super) maintenance_workspaces: Mutex<Vec<Option<String>>>,
     pub(super) relogin_error: Mutex<Option<ProviderAdminError>>,
     pub(super) relogin_delay: Mutex<std::time::Duration>,
     pub(super) relogin_requests: Mutex<Vec<Option<String>>>,
@@ -136,6 +137,7 @@ impl FakeProviderAdmin {
             maintenance_routes: Mutex::new(Vec::new()),
             relogin_egress: Mutex::new(None),
             maintenance_calls: Mutex::new(Vec::new()),
+            maintenance_workspaces: Mutex::new(Vec::new()),
             relogin_error: Mutex::new(None),
             relogin_delay: Mutex::new(std::time::Duration::ZERO),
             relogin_requests: Mutex::new(Vec::new()),
@@ -288,6 +290,10 @@ impl ProviderAdmin for FakeProviderAdmin {
     ) -> Result<gateway_admin::model::relogin_maintenance::MaintenanceOutcome, ProviderAdminError>
     {
         self.maintenance_calls.lock().unwrap().push(request.action);
+        self.maintenance_workspaces
+            .lock()
+            .unwrap()
+            .push(request.login.workspace_id.clone());
         self.maintenance_routes
             .lock()
             .unwrap()

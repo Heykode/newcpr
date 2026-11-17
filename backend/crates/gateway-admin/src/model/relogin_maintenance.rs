@@ -47,7 +47,39 @@ pub enum MaintenanceAction {
     ActivateTotp,
     DisableTotp,
 }
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QueuedLoginAction {
+    Authorize,
+    ForceLogin,
+    SwitchWorkspace,
+}
+impl QueuedLoginAction {
+    pub fn action(self) -> MaintenanceAction {
+        match self {
+            Self::Authorize => MaintenanceAction::Authorize,
+            Self::ForceLogin => MaintenanceAction::ForceLogin,
+            Self::SwitchWorkspace => MaintenanceAction::SwitchWorkspace,
+        }
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct QueuedLogin {
+    pub action: QueuedLoginAction,
+    /// Keep the original pool identity as route owner when authorizing another workspace.
+    pub route: Option<super::relogin::ReloginTarget>,
+}
 impl MaintenanceAction {
+    pub fn queued_login(self) -> Option<QueuedLoginAction> {
+        match self {
+            Self::Authorize => Some(QueuedLoginAction::Authorize),
+            Self::ForceLogin => Some(QueuedLoginAction::ForceLogin),
+            Self::SwitchWorkspace => Some(QueuedLoginAction::SwitchWorkspace),
+            _ => None,
+        }
+    }
     pub fn destructive(self) -> bool {
         matches!(
             self,
@@ -166,6 +198,8 @@ pub struct MaterialVersion {
 }
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub struct MaintenanceState {
+    #[serde(default)]
+    pub queued_login: Option<QueuedLogin>,
     #[serde(default)]
     pub import_egress: Option<ReloginImportEgress>,
     #[serde(default)]

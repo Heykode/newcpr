@@ -313,6 +313,17 @@ impl DefaultReloginService {
     }
 
     fn stop(gate: &Gate, entry: &mut ReloginEntry) {
+        if entry.status == ReloginStatus::Queued {
+            entry.maintenance.view.action = entry
+                .maintenance
+                .queued_login
+                .as_ref()
+                .map(|queued| queued.action.action());
+            entry.maintenance.view.state = "cancelled".to_owned();
+            entry.maintenance.view.message = "已取消排队".to_owned();
+            entry.maintenance.view.checked_at = Some(Utc::now());
+        }
+        entry.maintenance.queued_login = None;
         if entry.maintenance.view.state == "running" {
             entry.maintenance.uncertain |= entry
                 .maintenance
@@ -1035,6 +1046,7 @@ impl ReloginService for DefaultReloginService {
             ));
         }
         entry.maintenance.login_paused = false;
+        entry.maintenance.queued_login = None;
         entry.target = Some(target.clone());
         entry.workspace_mode = ReloginWorkspaceMode::Original;
         entry.workspace_targets.clear();

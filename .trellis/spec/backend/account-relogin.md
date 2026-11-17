@@ -604,9 +604,19 @@ All manual authorization actions clear prior enrollment and account-menu automat
 intent before execution. Preserve the imported egress through `clear_enrollment` and
 use the captured route for the current operation; successful acquisition waits for
 explicit push. Ordinary account-management enrollment keeps its automatic import path.
-Desktop and mobile list login buttons use the existing queue endpoint, so occupied
-slots wait for capacity. Their confirmation states session reuse, workspace choice and
-separate manual push. Direct maintenance actions retain their shared concurrency check.
+Desktop and mobile list login buttons use the existing queue. Maintenance authorize,
+force-login and switch-workspace persist their action in the existing JSONB entry and
+wait for the same worker and concurrency gate. Preserve force-login and explicit workspace
+intent through persistence; call the corresponding maintenance provider action on execution.
+Capture the original route owner before changing workspace selection, recheck its identity
+on claim, and resolve its current configured egress. A known route owner permits choosing
+another workspace without adopting that workspace's proxy. Unknown routes keep existing
+ambiguity checks. Queries and security operations retain immediate shared-gate execution.
+Queued authorization success requires a credential; failure must finish its attempt and
+release capacity. Cancellation clears queued intent and fences late results, but does not
+disable automatic recovery. A later eligible automatic recovery is a separate task.
+Confirmation freezes the selected workspace and revision; successful acquisition still
+waits for explicit push.
 The logout-all endpoint's successful JSON `null` acknowledges acceptance; allow it only
 for that endpoint. It does not prove immediate global revocation. Keep the delay notice,
 clear the locally retained session, and preserve rejection of HTML/redirect/negative replies.
@@ -628,7 +638,8 @@ remote writes may complete and notify the list but never repopulate a closed dia
 ### 4. Validation & Error Matrix
 
 - Unknown fields/action, missing revision -> reject before provider call.
-- Changed revision, same-account activity, global limit/pause -> conflict, no provider call.
+- Changed revision, same-account activity or pause -> conflict, no provider call.
+- Global concurrency full -> authorization queues; immediate maintenance returns conflict.
 - Uncertain security effect / pending enrollment -> reads allowed, reauthorization blocked.
 - 302/HTML/negative logout acknowledgement -> uncertain, no success claim.
 - Missing directory target -> distinct diagnostic; explicit 402 disabled workspace -> terminal

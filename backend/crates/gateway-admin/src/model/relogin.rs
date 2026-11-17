@@ -381,7 +381,11 @@ impl ReloginEntry {
             ReloginAttemptSource::Library
         };
         self.last_attempt = Some(ReloginAttempt {
-            operation: None,
+            operation: self
+                .maintenance
+                .queued_login
+                .as_ref()
+                .map(|queued| queued.action.action()),
             id: uuid::Uuid::now_v7().simple().to_string(),
             source,
             started_at: Utc::now(),
@@ -416,13 +420,22 @@ impl ReloginEntry {
     }
 
     pub fn update_attempt(&mut self) {
+        let queued_login = self.maintenance.queued_login.is_some();
+        if queued_login && self.status == ReloginStatus::Failed {
+            self.maintenance.view.state = "failed".to_owned();
+            self.maintenance.view.message = self.message.clone();
+            self.maintenance.view.checked_at = Some(Utc::now());
+            self.maintenance.queued_login = None;
+        }
         let Some(attempt) = self.last_attempt.as_mut() else {
             return;
         };
         if attempt.operation.is_some_and(|action| !action.authorizes()) {
             return;
         }
-        if attempt.result == ReloginAttemptResult::Running && attempt.operation.is_none() {
+        if attempt.result == ReloginAttemptResult::Running
+            && (attempt.operation.is_none() || queued_login)
+        {
             let result = match self.status {
                 ReloginStatus::Ready => ReloginAttemptResult::Succeeded,
                 ReloginStatus::Failed => ReloginAttemptResult::Failed,

@@ -11,6 +11,7 @@ import {
   exportRelogin,
   getRelogin,
   importRelogin,
+  maintainRelogin,
   pushRelogin,
   queueRelogin,
   resumeReloginWorkspace,
@@ -53,8 +54,9 @@ import ReloginHistoryModal from './components/ReloginHistoryModal.vue'
 import ReloginMaintenanceModal from './components/ReloginMaintenanceModal.vue'
 import ReloginMobileCard from './components/ReloginMobileCard.vue'
 import ReloginSessionStatus from './components/ReloginSessionStatus.vue'
+import ReloginWorkspaceCard from './components/ReloginWorkspaceCard.vue'
 import { importPreview } from './import-preview'
-import { maintenanceBusy, maintenanceResult, matchesMaintenanceStatus, queueButtonLabel, queueDisabledReason, recentOperation, recentOperationAt } from './maintenance'
+import { knownMaintenanceWorkspaces, maintenanceBusy, maintenanceResult, matchesMaintenanceStatus, queueButtonLabel, queueDisabledReason, recentOperation, recentOperationAt } from './maintenance'
 import { matchesPool, processingStatus, recoveryCountdown, recoveryLabels, reloginDisplayName, retryProgress, shortWorkspace, statusLabels, workspaceChoices, workspaceId } from './presentation'
 
 const entries = shallowRef<ReloginEntry[]>([])
@@ -294,21 +296,30 @@ function batchReport(results: ReloginBatchResult[]) {
 }
 const queueOpen = shallowRef(false)
 const queuedIds = shallowRef<string[]>([])
+const queueEntry = shallowRef<ReloginEntry | null>(null)
+const queueWorkspaces = computed(() => knownMaintenanceWorkspaces(queueEntry.value))
 const queueDescription = computed(() => {
   const row = queuedIds.value.length === 1 ? entries.value.find(row => row.id === queuedIds.value[0]) : undefined
   return row ? reloginDisplayName(row) : `已选 ${queuedIds.value.length} 个账号`
 })
-const queueMode = shallowRef<ReloginWorkspaceMode>('highest')
-const queueOptions = [{ value: 'highest', label: '最高套餐' }, { value: 'original', label: '原工作区' }]
+const queueMode = shallowRef('highest')
+const queueOptions = [{ value: 'highest', label: '最高套餐', description: '自动选择可用的最高套餐' }, { value: 'original', label: '原工作区', description: '继续使用原账号工作区' }]
 function queue(ids: string[]) {
   queuedIds.value = [...ids]
+  queueEntry.value = ids.length === 1 ? entries.value.find(row => row.id === ids[0]) ?? null : null
   queueMode.value = 'highest'
   failure.value = ''
   queueOpen.value = true
 }
 function executeQueue() {
   return action(async () => {
-    batchReport(await queueRelogin(queuedIds.value, queueMode.value))
+    if (queueMode.value.startsWith('workspace:') && queueEntry.value) {
+      await maintainRelogin({ id: queueEntry.value.id, revision: queueEntry.value.revision, action: 'switch_workspace', target: queueMode.value.slice('workspace:'.length) })
+      toast.success('已加入重登队列')
+    }
+    else {
+      batchReport(await queueRelogin(queuedIds.value, queueMode.value as ReloginWorkspaceMode))
+    }
     queueOpen.value = false
   })
 }
@@ -848,9 +859,17 @@ onBeforeUnmount(() => {
         <p v-if="failure" role="alert" class="m-0 whitespace-pre-wrap break-words text-cp-sm text-cp-error">
           {{ failure }}
         </p>
-        <BaseFormItem label="工作区">
-          <BaseSelect v-model="queueMode" :options="queueOptions" aria-label="本次登录工作区" :disabled="busy" />
-        </BaseFormItem>
+        <div role="radiogroup" aria-label="本次登录工作区" class="grid gap-2">
+          <button v-for="option in queueOptions" :key="option.value" type="button" role="radio" :aria-checked="queueMode === option.value" :disabled="busy" class="min-w-0 rounded-cp-lg focus-visible:outline-2 focus-visible:outline-cp-primary" @click="queueMode = option.value">
+            <ReloginWorkspaceCard :label="option.label" :description="option.description" :selected="queueMode === option.value" />
+          </button>
+          <div v-if="queueWorkspaces.length" class="mt-2 text-cp-xs text-cp-text-tertiary">
+            已读取的工作区
+          </div>
+          <button v-for="choice in queueWorkspaces" :key="choice.id" type="button" role="radio" :aria-checked="queueMode === `workspace:${choice.id}`" :disabled="busy || !choice.available" class="min-w-0 rounded-cp-lg focus-visible:outline-2 focus-visible:outline-cp-primary disabled:opacity-50" @click="queueMode = `workspace:${choice.id}`">
+            <ReloginWorkspaceCard :workspace="choice" :selected="queueMode === `workspace:${choice.id}`" />
+          </button>
+        </div>
         <p class="m-0 text-cp-sm text-cp-text-secondary">
           完成后待你确认推送
         </p>

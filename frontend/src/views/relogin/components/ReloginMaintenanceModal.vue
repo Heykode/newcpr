@@ -8,8 +8,9 @@ import BaseModal from '@/components/base/BaseModal/index.vue'
 import BaseSegmented from '@/components/base/BaseSegmented.vue'
 import { errorMessage } from '@/utils/async'
 import { formatDateTime } from '@/utils/date'
-import { maintenanceLabels, sessionLabel } from '../maintenance'
+import { maintenanceBusy, maintenanceLabels, sessionLabel } from '../maintenance'
 import ReloginEgress from './ReloginEgress.vue'
+import ReloginWorkspaceCard from './ReloginWorkspaceCard.vue'
 
 const props = defineProps<{ entry: ReloginEntry | null, initialTab?: string }>()
 const emit = defineEmits<{ changed: [], afterLeave: [], credentials: [] }>()
@@ -23,6 +24,7 @@ const failure = shallowRef('')
 const confirmation = shallowRef(false)
 const pending = shallowRef<{ action: MaintenanceAction, target?: string, deviceIdHash?: string, revision: number } | null>(null)
 const view = computed(() => result.value ?? current.value?.maintenance)
+const taskBusy = computed(() => busy.value || (!!current.value && maintenanceBusy(current.value)))
 let generation = 0
 watch([() => open.value, () => props.entry?.id, () => props.initialTab], ([visible]) => {
   generation++
@@ -43,7 +45,7 @@ watch(() => props.entry, (value) => {
   }
 })
 function ask(action: MaintenanceAction, target?: string, deviceIdHash?: string) {
-  if (!current.value || busy.value)
+  if (!current.value || taskBusy.value)
     return
   pending.value = { action, target, deviceIdHash, revision: current.value.revision }
   confirmation.value = true
@@ -53,7 +55,7 @@ function showCredentials() {
   emit('credentials')
 }
 async function run(action: MaintenanceAction, target?: string, deviceIdHash?: string, confirmed = false, revision = current.value?.revision) {
-  if (!current.value || busy.value)
+  if (!current.value || taskBusy.value)
     return
   const owner = generation
   const id = current.value.id
@@ -109,7 +111,7 @@ function afterLeave() {
             Web 登录会话
           </div><span class="text-cp-xs text-cp-text-secondary">{{ current ? sessionLabel({ ...current, maintenance: view }) : '未检测' }} · {{ view?.sessionCheckedAt ? formatDateTime(view.sessionCheckedAt) : '尚未核对' }}</span>
         </div>
-        <BaseButton size="sm" :loading="busy" @click="run('check_session')">
+        <BaseButton size="sm" :loading="busy" :disabled="taskBusy" @click="run('check_session')">
           检查 Web 会话
         </BaseButton>
       </div>
@@ -117,17 +119,17 @@ function afterLeave() {
         会话检查只确认网页登录是否有效，不会获取新的号池凭据。
       </p>
       <div class="maintenance-choice">
-        <div><strong>获取新的 Codex 凭据</strong><p>复用有效登录会话，重新获取并验证 OAuth 凭据</p></div><BaseButton :disabled="busy" variant="primary" @click="run('authorize')">
+        <div><strong>获取新的 Codex 凭据</strong><p>可复用有效会话，排队获取新凭据</p></div><BaseButton :disabled="taskBusy" variant="primary" @click="run('authorize')">
           获取新凭据
         </BaseButton>
       </div>
       <div class="maintenance-choice">
-        <div><strong>密码与 2FA 重登</strong><p>建立新的独立登录会话，再重新授权</p></div><BaseButton :disabled="busy" @click="run('force_login')">
+        <div><strong>密码与 2FA 重登</strong><p>排队重新登录，建立新会话</p></div><BaseButton :disabled="taskBusy" @click="run('force_login')">
           密码与 2FA 重登
         </BaseButton>
       </div>
       <div class="maintenance-choice">
-        <div><strong>退出并重登</strong><p>先提交全部退出，成功后进入重登队列</p></div><BaseButton :disabled="busy" @click="ask('logout_and_relogin')">
+        <div><strong>退出并重登</strong><p>先提交全部退出，成功后进入重登队列</p></div><BaseButton :disabled="taskBusy" @click="ask('logout_and_relogin')">
           退出并重登
         </BaseButton>
       </div>
@@ -140,9 +142,9 @@ function afterLeave() {
     </div>
     <div v-else-if="tab === 'devices'" class="grid gap-3">
       <div class="flex flex-wrap justify-between gap-2">
-        <BaseButton :loading="busy" @click="run('devices')">
+        <BaseButton :loading="busy" :disabled="taskBusy" @click="run('devices')">
           刷新设备
-        </BaseButton><BaseButton :disabled="busy" @click="ask('logout_all')">
+        </BaseButton><BaseButton :disabled="taskBusy" @click="ask('logout_all')">
           退出全部设备
         </BaseButton>
       </div>
@@ -150,7 +152,7 @@ function afterLeave() {
         <div class="min-w-0">
           <strong class="break-words">{{ device.name }}</strong><span v-if="device.current" class="ml-2 text-cp-xs text-cp-primary">当前设备</span><p>{{ device.platform || '平台未知' }} · {{ device.lastActiveAt ? formatDateTime(new Date(device.lastActiveAt * 1000).toISOString()) : '活动时间未知' }}</p>
         </div>
-        <BaseButton size="sm" :disabled="busy || device.current" @click="ask('revoke_device', device.sessionId ?? undefined, device.sessionId ? undefined : device.deviceIdHash ?? undefined)">
+        <BaseButton size="sm" :disabled="taskBusy || device.current" @click="ask('revoke_device', device.sessionId ?? undefined, device.sessionId ? undefined : device.deviceIdHash ?? undefined)">
           退出
         </BaseButton>
       </div>
@@ -160,27 +162,22 @@ function afterLeave() {
     </div>
     <div v-else-if="tab === 'workspaces'" class="grid gap-3">
       <div>
-        <BaseButton :loading="busy" @click="run('workspaces')">
+        <BaseButton :loading="busy" :disabled="taskBusy" @click="run('workspaces')">
           刷新工作区
         </BaseButton>
       </div>
-      <div v-for="workspace in view?.workspaces ?? []" :key="workspace.id" class="maintenance-choice">
-        <div class="min-w-0">
-          <strong>{{ workspace.name || '未命名工作区' }}</strong><span class="ml-2 text-cp-xs text-cp-primary">{{ workspace.planType?.toUpperCase() ?? '套餐未知' }}</span><p class="break-all font-mono">
-            {{ workspace.id }}
-          </p><span v-if="!workspace.available" class="text-cp-xs text-cp-warning">不可访问</span>
-        </div>
-        <BaseButton size="sm" :disabled="busy || !workspace.available" @click="ask('switch_workspace', workspace.id)">
+      <ReloginWorkspaceCard v-for="workspace in view?.workspaces ?? []" :key="workspace.id" :workspace="workspace">
+        <BaseButton size="sm" :disabled="taskBusy || !workspace.available" @click="ask('switch_workspace', workspace.id)">
           选择并授权
         </BaseButton>
-      </div>
+      </ReloginWorkspaceCard>
       <p class="m-0 text-cp-xs text-cp-text-secondary">
         切换后重新获取凭据，推送时再确认号池目标
       </p>
     </div>
     <div v-else class="grid gap-4">
       <div class="flex flex-wrap items-center justify-between gap-3">
-        <span class="text-cp-sm">2FA {{ view?.totpEnabled == null ? '未核对' : view.totpEnabled ? '已启用' : '未启用' }} · 密码 {{ view?.passwordEnabled == null ? '未核对' : view.passwordEnabled ? '已设置' : '未设置' }}</span><BaseButton :loading="busy" @click="run('security')">
+        <span class="text-cp-sm">2FA {{ view?.totpEnabled == null ? '未核对' : view.totpEnabled ? '已启用' : '未启用' }} · 密码 {{ view?.passwordEnabled == null ? '未核对' : view.passwordEnabled ? '已设置' : '未设置' }}</span><BaseButton :loading="busy" :disabled="taskBusy" @click="run('security')">
           核对安全状态
         </BaseButton>
       </div>
@@ -190,13 +187,13 @@ function afterLeave() {
         </BaseButton>
       </div>
       <div class="flex flex-wrap gap-2">
-        <BaseButton :disabled="busy || view?.uncertain || view?.totpEnabled !== true" @click="ask('disable_totp')">
+        <BaseButton :disabled="taskBusy || view?.uncertain || view?.totpEnabled !== true" @click="ask('disable_totp')">
           停用旧 2FA
         </BaseButton>
-        <BaseButton :disabled="busy || view?.uncertain || view?.totpEnabled !== false || view?.pendingTotp" @click="ask('prepare_totp')">
+        <BaseButton :disabled="taskBusy || view?.uncertain || view?.totpEnabled !== false || view?.pendingTotp" @click="ask('prepare_totp')">
           准备新 2FA
         </BaseButton>
-        <BaseButton variant="primary" :disabled="busy || view?.uncertain || !view?.pendingTotp" @click="ask('activate_totp')">
+        <BaseButton variant="primary" :disabled="taskBusy || view?.uncertain || !view?.pendingTotp" @click="ask('activate_totp')">
           激活新 2FA
         </BaseButton>
       </div>
@@ -206,7 +203,7 @@ function afterLeave() {
     </div>
     <BaseConfirmModal v-model="confirmation" :title="pending ? maintenanceLabels[pending.action] : '确认维护'" :loading="busy" @confirm="pending && run(pending.action, pending.target, pending.deviceIdHash, true, pending.revision)">
       <p v-if="pending?.action === 'switch_workspace'">
-        将为所选工作区重新授权，号池推送需另行确认
+        将排队为所选工作区获取凭据，完成后待确认推送
       </p>
       <p v-else-if="pending?.action === 'disable_totp'">
         此操作会关闭上游当前 2FA，完成后需继续准备并激活新密钥

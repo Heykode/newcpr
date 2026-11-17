@@ -1,4 +1,4 @@
-import type { MaintenanceAction, ReloginEntry } from '@/api/modules/relogin'
+import type { MaintenanceAction, MaintenanceWorkspace, ReloginEntry } from '@/api/modules/relogin'
 import { processingStatus } from './presentation'
 
 export const maintenanceLabels: Record<MaintenanceAction, string> = {
@@ -50,6 +50,8 @@ export function matchesMaintenanceStatus(row: ReloginEntry, status: string) {
 }
 
 export function maintenanceResult(row: ReloginEntry) {
+  if (['queued', 'running', 'pushing'].includes(row.status))
+    return processingStatus(row)
   if (row.lastActivity && recentOperationAt(row) === row.lastActivity.startedAt)
     return { label: row.lastActivity.result === 'succeeded' ? (row.lastActivity.operation === 'edit_material' ? '已保存' : '已完成') : ({ running: '执行中', cancelled: '已取消', awaiting_workspace: '待选择工作区' } as Record<string, string>)[row.lastActivity.result] ?? '失败', tone: row.lastActivity.result === 'succeeded' ? 'text-cp-success' : 'text-cp-error' }
   if (row.maintenance?.uncertain)
@@ -61,6 +63,15 @@ export function maintenanceResult(row: ReloginEntry) {
       return { label, tone: maintenance.state === 'failed' ? 'text-cp-error' : 'text-cp-text-secondary' }
   }
   return processingStatus(row)
+}
+
+export function knownMaintenanceWorkspaces(row: ReloginEntry | null) {
+  const known = new Map<string, MaintenanceWorkspace>()
+  for (const workspace of row?.maintenance?.workspaces ?? []) {
+    if (workspace.id && !known.has(workspace.id))
+      known.set(workspace.id, workspace)
+  }
+  return [...known.values()]
 }
 
 export function queueDisabledReason(row: ReloginEntry, busy: boolean, paused: boolean) {

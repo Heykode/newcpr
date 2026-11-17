@@ -904,6 +904,16 @@ real row and checks both themes at 1440/390/320px for clipping and overflow.
   address, with detection time in details, without starting extra probes.
   Show request failures inside an open confirmation as well
   as after closure; polling must not erase them or adopt new versions.
+- List login confirmation and maintenance use the same workspace card and account plan
+  badge. Named choices come only from the observed maintenance directory, deduplicated by
+  ID; unavailable choices stay visible and disabled. Without a directory, keep the existing
+  highest/original policies rather than inventing names or availability from pool targets.
+  Explicit workspace selection queues `switch_workspace` with the displayed row revision;
+  highest/original policies keep the ordinary queue endpoint and batch behavior.
+  Authorize and force-login also queue, preserving their distinct login semantics. Display
+  current queued/running status before historical maintenance results. Cancel refreshes the
+  row; never turn off automatic recovery implicitly. Reading local material stays available
+  while another task is queued.
 - Verify CRUD, reload, cancellation, stale responses, no-template/mixed pushes and
   desktop/mobile layouts with synthetic endpoints only. Change themes through
   the actual theme control so generated CSS variables match the selected theme.

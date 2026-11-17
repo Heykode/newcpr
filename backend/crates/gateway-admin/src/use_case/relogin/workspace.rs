@@ -16,6 +16,7 @@ pub(super) fn prepare_queue(
     pool: &[AccountRecord],
     mode: ReloginWorkspaceMode,
 ) -> Result<(), AdminError> {
+    entry.maintenance.queued_login = None;
     let targets = if mode == ReloginWorkspaceMode::Highest {
         let matches = matching_accounts(entry, pool);
         if statistics_account(entry, &matches).is_none()

@@ -308,3 +308,35 @@ test('queue availability explains active work and pause without blocking idle fa
   assert.match(queueDisabledReason({ status: 'ready' }, false, true), /暂停/)
   assert.match(queueDisabledReason({ status: 'ready', maintenance: { state: 'running' } }, false, false), /维护/)
 })
+
+test('queued task state takes precedence over older completed maintenance', () => {
+  const { maintenanceResult, queueButtonLabel, maintenanceBusy } = load('../src/views/relogin/maintenance.ts', {
+    './presentation': { processingStatus },
+  })
+  const row = { status: 'queued', message: '等待重登', maintenance: { state: 'succeeded', checkedAt: '2026-01-01T00:00:00Z' } }
+  assert.equal(maintenanceResult(row).label, '排队中')
+  assert.equal(maintenanceBusy(row), true)
+  row.status = 'failed'
+  row.maintenance.state = 'cancelled'
+  assert.equal(maintenanceResult(row).label, '已取消')
+  assert.equal(queueButtonLabel(row, false), '立即重登')
+  assert.equal(maintenanceBusy(row), false)
+})
+
+test('queue workspace cards use the observed directory without inventing names or plans', () => {
+  const { knownMaintenanceWorkspaces } = load('../src/views/relogin/maintenance.ts', {
+    './presentation': { processingStatus },
+  })
+  const row = { workspaceId: 'pool-only', planType: 'business' }
+  assert.equal(knownMaintenanceWorkspaces(row).length, 0)
+  row.maintenance = { workspaces: [
+    { id: 'team-a', name: 'Research', planType: 'business', available: true },
+    { id: 'team-a', name: 'Alias', planType: 'business', available: true },
+    { id: 'team-b', name: '', planType: null, available: false },
+  ] }
+  const choices = knownMaintenanceWorkspaces(row)
+  assert.deepEqual(Array.from(choices, item => item.id), ['team-a', 'team-b'])
+  assert.equal(choices[0].name, 'Research')
+  assert.equal(choices[1].planType, null)
+  assert.equal(choices[1].available, false)
+})

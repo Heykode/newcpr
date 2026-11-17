@@ -46,7 +46,10 @@ impl DefaultReloginService {
             {
                 return Err(AdminError::conflict("账号有活动任务或推送待确认"));
             }
-            if settings.paused || gate.active.len() >= settings.concurrency {
+            if settings.paused
+                || (command.action.queued_login().is_none()
+                    && gate.active.len() >= settings.concurrency)
+            {
                 return Err(AdminError::conflict("维护队列已暂停或并发已满，请稍后重试"));
             }
             if entry.maintenance.uncertain && command.action.destructive() {
@@ -103,6 +106,26 @@ impl DefaultReloginService {
                 .record_maintenance(&entry.id, Some(command.action), context)
                 .await
                 .map_err(store_error)?;
+            if let Some(action) = command.action.queued_login() {
+                entry.maintenance.queued_login = Some(QueuedLogin {
+                    action,
+                    route: statistics_account(
+                        &route_entry,
+                        &matching_accounts(&route_entry, &pool),
+                    )
+                    .map(ReloginTarget::from_account)
+                    .transpose()?,
+                });
+                entry.maintenance.view.action = Some(command.action);
+                entry.maintenance.view.state = "queued".to_owned();
+                entry.maintenance.view.message = "已加入重登队列".to_owned();
+                entry.maintenance.view.checked_at = Some(Utc::now());
+                entry.maintenance.view.login_paused = false;
+                entry.status = ReloginStatus::Queued;
+                entry.message = "已加入重登队列".to_owned();
+                self.save(&mut entry).await?;
+                return Ok(entry.maintenance.view);
+            }
             let request = MaintenanceRequest {
                 login: self
                     .login_request(
@@ -156,22 +179,40 @@ impl DefaultReloginService {
                 match outcome { Ok(outcome) => outcome.map_err(|error| map_provider_error(error, "relogin maintenance")), Err(_) => Err(AdminError::unavailable("维护超时")) }
             }
         };
+        self.finish_maintenance(&entry, command.action, &cancellation, outcome)
+            .await?
+            .ok_or_else(|| AdminError::conflict("资料已变化或维护已取消，已丢弃迟到结果"))
+    }
+
+    pub(super) async fn finish_maintenance(
+        &self,
+        entry: &ReloginEntry,
+        action: MaintenanceAction,
+        cancellation: &CancellationToken,
+        outcome: Result<MaintenanceOutcome, AdminError>,
+    ) -> Result<Option<MaintenanceView>, AdminError> {
         let mut gate = self.gate.lock().await;
         gate.active.remove(&entry.email);
-        let mut current = self
+        let Some(mut current) = self
             .entries()
             .await?
             .into_iter()
             .find(|row| row.id == entry.id)
-            .ok_or_else(|| AdminError::not_found("资料已删除，已丢弃结果"))?;
+        else {
+            return Ok(None);
+        };
         if current.revision != entry.revision || cancellation.is_cancelled() {
-            return Err(AdminError::conflict(
-                "资料已变化或维护已取消，已丢弃迟到结果",
-            ));
+            return Ok(None);
         }
         // Validate before applying any part of a provider result; failed identity checks
         // still finish the durable attempt instead of leaving it running.
         let outcome = outcome.and_then(|outcome| {
+            if action.queued_login().is_some()
+                && outcome.view.state == "succeeded"
+                && outcome.credential.is_none()
+            {
+                return Err(AdminError::unavailable("授权未返回凭据，请重新尝试"));
+            }
             if outcome.credential.as_ref().is_some_and(|credential| {
                 !credential.email.eq_ignore_ascii_case(&current.email)
                     || current.target.as_ref().is_some_and(|target| {
@@ -210,17 +251,17 @@ impl DefaultReloginService {
                 if view.state != "awaiting_workspace"
                     && (!succeeded
                         || !matches!(
-                            command.action,
+                            action,
                             MaintenanceAction::Workspaces | MaintenanceAction::CheckSession
                         ))
                 {
                     view.workspaces = previous.workspaces;
                 }
-                if command.action != MaintenanceAction::Devices || !succeeded {
+                if action != MaintenanceAction::Devices || !succeeded {
                     view.devices = previous.devices;
                 }
                 if !matches!(
-                    command.action,
+                    action,
                     MaintenanceAction::Security
                         | MaintenanceAction::DisableTotp
                         | MaintenanceAction::ActivateTotp
@@ -239,15 +280,14 @@ impl DefaultReloginService {
                 }
                 if succeeded
                     && matches!(
-                        command.action,
+                        action,
                         MaintenanceAction::LogoutAll | MaintenanceAction::LogoutAndRelogin
                     )
                 {
                     current.maintenance.session = None;
-                    current.maintenance.login_paused =
-                        command.action == MaintenanceAction::LogoutAll;
+                    current.maintenance.login_paused = action == MaintenanceAction::LogoutAll;
                     view.session_state = "absent".to_owned();
-                    if command.action == MaintenanceAction::LogoutAndRelogin {
+                    if action == MaintenanceAction::LogoutAndRelogin {
                         current.status = ReloginStatus::Queued;
                         current.message = "退出请求已受理，等待重新登录授权".to_owned();
                     }
@@ -296,8 +336,8 @@ impl DefaultReloginService {
                 current.maintenance.view = view;
             }
             Err(error) => {
-                current.maintenance.uncertain |= command.action.destructive();
-                current.maintenance.view.state = if command.action.destructive() {
+                current.maintenance.uncertain |= action.destructive();
+                current.maintenance.view.state = if action.destructive() {
                     "uncertain"
                 } else {
                     "failed"
@@ -306,7 +346,7 @@ impl DefaultReloginService {
                 current.maintenance.view.message = error.message().to_owned();
             }
         }
-        if command.action.authorizes()
+        if action.authorizes()
             && matches!(
                 current.maintenance.view.state.as_str(),
                 "failed" | "uncertain"
@@ -315,7 +355,7 @@ impl DefaultReloginService {
             current.status = ReloginStatus::Failed;
             current.message = current.maintenance.view.message.clone();
         }
-        let attempt = if command.action.authorizes() {
+        let attempt = if action.authorizes() {
             &mut current.last_attempt
         } else {
             &mut current.maintenance.last_activity
@@ -333,8 +373,9 @@ impl DefaultReloginService {
         }
         current.maintenance.view.uncertain = current.maintenance.uncertain;
         current.maintenance.view.login_paused = current.maintenance.login_paused;
+        current.maintenance.queued_login = None;
         self.save(&mut current).await?;
-        Ok(current.maintenance.view)
+        Ok(Some(current.maintenance.view))
     }
 
     pub(super) async fn cancel_maintenance(
