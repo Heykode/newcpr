@@ -107,6 +107,8 @@ function fixture() {
           return ok({ authenticated: true })
         if (path === '/api/admin/system/version' && method === 'GET')
           return ok({ version: 'test', hasUpdate: false, deploymentMode: 'test' })
+        if (path === '/api/admin/system/update/detail' && method === 'GET')
+          return ok({ currentVersion: 'test', latestVersion: null, hasUpdate: false, updateSupported: false })
         if (path === endpoint && method === 'GET')
           return ok({ items: records, page: { page: 1, pageSize: 20, total: records.length, totalPages: 1 } })
         if (path === `${endpoint}/delete` && method === 'POST') {
@@ -317,7 +319,7 @@ async function runViewport(page, state, base, output, width) {
   const row = id => page.locator(`tr[data-row-key="${id}"]`)
   const action = async (id, label) => {
     await row(id).getByRole('button', { name: '更多代理操作', exact: true }).click()
-    return page.getByRole('button', { name: label, exact: true })
+    return page.getByRole('menuitem', { name: label, exact: true })
   }
   const dialog = page.getByRole('dialog')
   const auto = dialog.getByRole('switch', { name: autoLabel, exact: true })

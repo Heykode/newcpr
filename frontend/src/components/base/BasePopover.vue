@@ -1,11 +1,10 @@
 <script setup lang="ts">
 import type { CSSProperties } from 'vue'
+import type { PopoverPlacement } from './BasePopover/types'
 import { onClickOutside, useEventListener, useThrottleFn, whenever } from '@vueuse/core'
 import { clamp } from 'es-toolkit'
 import { computed, nextTick, onBeforeUnmount, ref, shallowRef, useAttrs, watch } from 'vue'
 
-type PopoverPlacement
-  = 'top' | 'top-start' | 'top-end' | 'right' | 'bottom' | 'bottom-start' | 'bottom-end' | 'left'
 type PopoverTrigger = 'click' | 'hover' | 'hover-click'
 type PopoverSide = 'top' | 'right' | 'bottom' | 'left'
 type PopoverArrowSurfaceClass = string | Partial<Record<PopoverSide, string>>
@@ -270,7 +269,10 @@ function popoverArrowPosition(options: {
 
 const updatePopoverPositionThrottled = useThrottleFn(updatePopoverPosition, 32, true)
 
-defineExpose({ updatePosition: updatePopoverPosition })
+defineExpose({
+  focus: () => (props.anchorElement ?? rootRef.value?.querySelector<HTMLElement>('button, [tabindex]'))?.focus(),
+  updatePosition: updatePopoverPosition,
+})
 
 async function openPopover() {
   if (props.disabled || open.value)

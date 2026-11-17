@@ -108,6 +108,11 @@ Questions to answer:
 - Tooltip 放短名称，Popover 放多段说明或链接，帮助入口兼容键盘与触屏。
 - 官方 ZPopover 的 `reference` 插槽接入本地 BasePopover 时使用 `trigger`；帮助内容保留命名 dialog，
   图标放既有 FormItem `label-extra`，按现有 BaseIconButton 的 `label`/`size` 接口适配。浏览器须确认入口真实出现且能打开，不能仅凭类型检查。
+- 账号、API Key、代理行菜单使用官方 v0.12 的 `BaseDropdown` 键盘逻辑和共享 `RowActionMenu`。
+  方向键、Home/End 跳过禁用项；Enter/Space 激活；Escape/Tab 关闭；选择后恢复触发按钮焦点。
+  `BaseMenuItem` 只在 Dropdown 内设置 `menuitem` 和 `tabindex=-1`，其他消费者保持普通按钮。
+  浏览器测试按 `menu/menuitem` 定位，不为旧按钮断言去掉官方菜单语义。
+- `BaseIconButton.pressed` 未提供时省略 `aria-pressed`，显式 false 必须保留为 `aria-pressed="false"`。
 - 新增表单项不在尚未编辑时显示必填错误；失焦或提交后提示，提交始终完整验证。
   动态规则使用稳定身份，删除前项不能把后项的输入状态移到其他规则。
 - API Key 安装 ID 默认空，生成只填草稿，保存后发送；清空删除该 Key 覆盖。

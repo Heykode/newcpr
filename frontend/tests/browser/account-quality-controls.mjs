@@ -106,25 +106,25 @@ async function main() {
     assert.ok(await row(0).locator('[data-quality-verdict]').evaluate(el => el.classList.contains('text-cp-success')))
     assert.ok(await row(1).locator('[data-quality-verdict]').evaluate(el => el.classList.contains('text-cp-error')))
     await row(0).getByRole('button', { name: '更多操作', exact: true }).click()
-    const menu = page.getByRole('group', { name: '账号操作', exact: true })
-    const buttons = await menu.getByRole('button').allTextContents()
+    const menu = page.getByRole('menu', { name: '更多操作', exact: true })
+    const buttons = await menu.getByRole('menuitem').allTextContents()
     assert.match(buttons[0], /测试连接/)
     assert.match(buttons[1], /质量检测开关/)
-    await menu.getByRole('button', { name: /质量检测开关/ }).click()
+    await menu.getByRole('menuitem', { name: /质量检测开关/ }).click()
     await row(0).getByText('监测暂停', { exact: true }).waitFor()
     assert.deepEqual(writes[0], { id: 'rule-0', revision: 1, enabled: false })
     rejectToggle = true
     await row(0).getByRole('button', { name: '更多操作', exact: true }).click()
-    await menu.getByRole('button', { name: /质量检测开关/ }).click()
+    await menu.getByRole('menuitem', { name: /质量检测开关/ }).click()
     await page.getByText('规则已更新', { exact: true }).waitFor()
     await row(0).getByText('监测暂停', { exact: true }).waitFor()
     rejectToggle = false
     await row(0).getByRole('button', { name: '更多操作', exact: true }).click()
-    await menu.getByRole('button', { name: /质量检测开关/ }).click()
+    await menu.getByRole('menuitem', { name: /质量检测开关/ }).click()
     await row(0).getByText('监测中', { exact: true }).waitFor()
     failTemplates = true
     await row(2).getByRole('button', { name: '更多操作', exact: true }).click()
-    await menu.getByRole('button', { name: /质量检测开关/ }).click()
+    await menu.getByRole('menuitem', { name: /质量检测开关/ }).click()
     const setup = page.getByRole('dialog', { name: '开启质量检测', exact: true })
     await setup.getByRole('alert').waitFor()
     assert.equal(await setup.getByRole('button', { name: '确认开启', exact: true }).isDisabled(), true)
@@ -157,9 +157,11 @@ async function main() {
     await batchSwitch(false)
     await page.waitForFunction(() => document.querySelector('button[aria-label="质量检测"]')?.disabled)
     assert.equal(await page.getByRole('button', { name: '监测模板', exact: true }).isDisabled(), true)
-    assert.equal(await page.getByRole('button', { name: '删除选中 (3)', exact: true }).isDisabled(), true)
+    await page.getByRole('button', { name: '批量操作', exact: true }).click()
+    assert.equal(await page.getByRole('button', { name: '删除 (3)', exact: true }).isDisabled(), true)
+    await page.keyboard.press('Escape')
     await row(0).getByRole('button', { name: '更多操作', exact: true }).click()
-    assert.equal(await menu.getByRole('button', { name: /质量检测开关/ }).isDisabled(), true)
+    assert.equal(await menu.getByRole('menuitem', { name: /质量检测开关/ }).isDisabled(), true)
     await page.keyboard.press('Escape')
     heldWrites.resolve()
     heldWrites = null
@@ -172,7 +174,7 @@ async function main() {
 
     // A mixed selection must converge on the requested state, never invert each row.
     await row(0).getByRole('button', { name: '更多操作', exact: true }).click()
-    await menu.getByRole('button', { name: /质量检测开关/ }).click()
+    await menu.getByRole('menuitem', { name: /质量检测开关/ }).click()
     await row(0).getByText('监测中', { exact: true }).waitFor()
     const beforeEnable = writes.length
     await batchSwitch(true)
@@ -256,7 +258,7 @@ async function main() {
     await confirm.waitFor({ state: 'hidden' })
     assert.equal(deletions[0].deleteRelogin, true)
     await card(2).getByRole('button', { name: '更多操作', exact: true }).click()
-    await menu.getByRole('button', { name: /质量检测开关/ }).click()
+    await menu.getByRole('menuitem', { name: /质量检测开关/ }).click()
     await setup.getByRole('button', { name: /状态探针模板/ }).click()
     await setup.getByRole('button', { name: '确认开启', exact: true }).click()
     await setup.waitFor({ state: 'hidden' })
@@ -268,8 +270,11 @@ async function main() {
         const account = width < 768 ? card(index) : row(index)
         await account.getByRole('checkbox', { name: '选择账号', exact: true }).locator('..').click()
       }
-      const removeSelected = page.getByRole('button', { name: '删除选中 (2)', exact: true })
-      await removeSelected.click()
+      const removeSelected = async () => {
+        await page.getByRole('button', { name: '批量操作', exact: true }).click()
+        await page.getByRole('button', { name: '删除 (2)', exact: true }).click()
+      }
+      await removeSelected()
       const batch = page.getByRole('alertdialog', { name: '确认删除', exact: true })
       const checkbox = batch.getByRole('checkbox', { name: '同步删除 2FA', exact: true })
       assert.equal(await checkbox.isChecked(), false)
@@ -280,7 +285,7 @@ async function main() {
       const beforeCancel = deletions.length
       await batch.getByRole('button', { name: '取消', exact: true }).click()
       assert.equal(deletions.length, beforeCancel)
-      await removeSelected.click()
+      await removeSelected()
       assert.equal(await checkbox.isChecked(), false)
       await checkbox.locator('..').click()
       await batch.getByRole('button', { name: '确认删除', exact: true }).click()

@@ -133,6 +133,11 @@ Redis `in_flight` 已含本请求时不得再加一。PG 与 Redis 之间不是�
   可等待根迁至其他合法账号，不能伪造凭据恢复证据或绕过 native owner。
 - 队满、超时或跟随选择失败标记 retry prohibited，不能借 provider fallback 逃离根绑定。
   required、Native/ReplayOwner 和诊断指定账号不套用这层 SessionBound 包装。
+- 对照官方 v3.51.0：仅 strict 子线程等待超时且根账号不在本轮候选集合时，返回
+  `IneligibleSessionAccountTimeout`。账号仍在本次授权范围、但明确不允许请求模型时说明
+  模型限制；其他资格缺失只说明根账号不能处理请求，不猜测范围外账号的权限。
+  保留 429 / `concurrency_queue_timeout`、`NotSent`、禁止 fallback 及原共享截止；
+  队满、取消、仍在候选内的凭据失效/冷却和显式固定账号不套用这条提示。
 - 仅持有等待槽不算执行并发、不发送上游请求、不改账号健康。权限、模型、额度、出口、
   指纹、保留并发池及执行租约的原合同保持有效。
 - 回归入口 `provider::contract::affinity_recovery` 覆盖普通等待开/关、失效/停用恢复、

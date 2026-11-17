@@ -388,6 +388,14 @@ async fn strict_wait_timeout_and_queue_full_cannot_escape_to_provider_fallback()
                 ProviderErrorKind::ConcurrencyQueueTimeout
             }
         );
+        assert_eq!(
+            gateway_core::error::GatewayError::from_provider(&error).client_message(),
+            if full {
+                "Request queue is full."
+            } else {
+                "Request queue wait timed out."
+            }
+        );
         assert!(error.retry_is_prohibited());
         assert_eq!(budget.is_exhausted(), !full);
         assert_eq!(f.leases.capacity.waiting.load(Ordering::SeqCst), 0);

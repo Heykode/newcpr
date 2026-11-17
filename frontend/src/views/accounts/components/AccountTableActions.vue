@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import type { AccountRow } from '../constants'
 import type { AccountReloginAction } from '@/api/modules/relogin'
-import { ClipboardCheck, Download, KeyRound, MoreHorizontal, Pencil, RefreshCw, RotateCcw, Table2, Trash2, Wifi } from '@lucide/vue'
+import { ClipboardCheck, Download, KeyRound, Pencil, RefreshCw, RotateCcw, Table2, Trash2, Wifi } from '@lucide/vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
 
 import BaseMenuItem from '@/components/base/BaseMenuItem.vue'
-import BasePopover from '@/components/base/BasePopover.vue'
+import RowActionMenu from '@/components/RowActionMenu.vue'
 import { t } from '@/i18n'
 
 defineProps<{
@@ -59,105 +59,95 @@ const emit = defineEmits<{
       <Trash2 class="size-3.5 text-cp-error" />
     </BaseIconButton>
 
-    <BasePopover placement="bottom-end">
-      <template #trigger="{ open }">
-        <BaseIconButton variant="ghost" :size="comfortable ? 'md' : 'sm'" :class="comfortable ? 'size-8!' : undefined" :label="t('accounts.actions.moreActions')" :pressed="open">
-          <MoreHorizontal class="size-4" />
-        </BaseIconButton>
-      </template>
-
-      <template #default="{ close }">
-        <div role="group" :aria-label="t('appearance.preview.components.accountOperation')" class="w-40 p-1.5">
-          <BaseMenuItem
-            :loading="testing"
-            :disabled="testing"
-            @click.stop="(close(), emit('test', account))"
-          >
-            <template #icon>
-              <Wifi class="size-3.5 text-cp-text-quaternary" />
-            </template>
-            {{ t('accounts.connectionTest.title') }}
-          </BaseMenuItem>
-          <BaseMenuItem :loading="togglingQuality" :disabled="togglingQuality || qualityDisabled" @click.stop="(close(), emit('toggleQuality', account))">
-            <template #icon>
-              <ClipboardCheck class="size-3.5 text-cp-text-quaternary" />
-            </template>
-            <span class="inline-flex w-full items-center justify-between gap-2">
-              质量检测开关
-              <span :class="account.qualityMonitoring?.enabled ? 'text-cp-success' : 'text-cp-text-secondary'" class="text-cp-xs">{{ account.qualityMonitoring?.enabled ? '开' : '关' }}</span>
-            </span>
-          </BaseMenuItem>
-          <BaseMenuItem
-            v-if="account.provider === 'openai' && account.responsesUpstream !== 'excel'"
-            :loading="exportingModelCatalog"
-            :disabled="exportingModelCatalog"
-            @click.stop="(close(), emit('exportModelCatalog', account))"
-          >
-            <template #icon>
-              <Download class="size-3.5 text-cp-text-quaternary" />
-            </template>
-            导出模型目录
-          </BaseMenuItem>
-          <BaseMenuItem
-            :loading="refreshing"
-            :disabled="refreshing"
-            @click.stop="(close(), emit('refresh', account.id))"
-          >
-            <template #loading>
-              <RefreshCw class="size-3.5 animate-spin text-cp-text-quaternary motion-reduce:animate-none" />
-            </template>
-            <template #icon>
-              <RefreshCw class="size-3.5 text-cp-text-quaternary" />
-            </template>
-            {{ t('accounts.actions.refreshToken') }}
-          </BaseMenuItem>
-          <BaseMenuItem @click.stop="(close(), emit('reauthorize', account))">
-            <template #icon>
-              <KeyRound class="size-3.5 text-cp-text-quaternary" />
-            </template>
-            {{ t('accounts.actions.reauthorize') }}
-          </BaseMenuItem>
-          <BaseMenuItem
-            :loading="recovering"
-            :disabled="recovering"
-            @click.stop="(close(), emit('recover', account.id))"
-          >
-            <template #icon>
-              <RotateCcw class="size-3.5 text-cp-text-quaternary" />
-            </template>
-            恢复状态
-          </BaseMenuItem>
-          <BaseMenuItem
-            v-if="account.provider === 'openai' && account.authenticationKind === 'oauth'"
-            :loading="togglingExcel"
-            :disabled="togglingExcel"
-            @click.stop="(close(), emit('toggleExcel', account, account.responsesUpstream !== 'excel'))"
-          >
-            <template #icon>
-              <Table2 class="size-3.5 text-cp-text-quaternary" />
-            </template>
-            {{ account.responsesUpstream === 'excel' ? '关闭 Excel 入口' : '开启 Excel 入口' }}
-          </BaseMenuItem>
-          <BaseMenuItem
-            v-if="relogin"
-            :loading="relogin.busy"
-            :disabled="reloginUnavailable || relogin.busy || Boolean(relogin.blockedReason)"
-            :title="reloginUnavailable ? '重登状态读取失败，正在重试' : relogin.blockedReason || relogin.message"
-            @click.stop="(close(), emit('relogin', account))"
-          >
-            <template #icon>
-              <RotateCcw class="size-3.5 text-cp-text-quaternary" />
-            </template>
-            {{ relogin.busy ? '重登处理中' : '立即重登' }}
-          </BaseMenuItem>
-          <p
-            v-if="relogin && !relogin.busy && (relogin.status === 'failed' || relogin.status === 'uncertain')"
-            class="px-2 py-1 text-cp-xs break-words text-cp-error"
-          >
-            {{ relogin.message }}
-          </p>
-        </div>
-      </template>
-    </BasePopover>
+    <RowActionMenu :label="t('accounts.actions.moreActions')" menu-class="w-40 p-1.5" :size="comfortable ? 'md' : 'sm'" :button-class="comfortable ? 'size-8!' : undefined">
+      <BaseMenuItem
+        :loading="testing"
+        :disabled="testing"
+        @click.stop="emit('test', account)"
+      >
+        <template #icon>
+          <Wifi class="size-3.5 text-cp-text-quaternary" />
+        </template>
+        {{ t('accounts.connectionTest.title') }}
+      </BaseMenuItem>
+      <BaseMenuItem :loading="togglingQuality" :disabled="togglingQuality || qualityDisabled" @click.stop="emit('toggleQuality', account)">
+        <template #icon>
+          <ClipboardCheck class="size-3.5 text-cp-text-quaternary" />
+        </template>
+        <span class="inline-flex w-full items-center justify-between gap-2">
+          质量检测开关
+          <span :class="account.qualityMonitoring?.enabled ? 'text-cp-success' : 'text-cp-text-secondary'" class="text-cp-xs">{{ account.qualityMonitoring?.enabled ? '开' : '关' }}</span>
+        </span>
+      </BaseMenuItem>
+      <BaseMenuItem
+        v-if="account.provider === 'openai' && account.responsesUpstream !== 'excel'"
+        :loading="exportingModelCatalog"
+        :disabled="exportingModelCatalog"
+        @click.stop="emit('exportModelCatalog', account)"
+      >
+        <template #icon>
+          <Download class="size-3.5 text-cp-text-quaternary" />
+        </template>
+        导出模型目录
+      </BaseMenuItem>
+      <BaseMenuItem
+        :loading="refreshing"
+        :disabled="refreshing"
+        @click.stop="emit('refresh', account.id)"
+      >
+        <template #loading>
+          <RefreshCw class="size-3.5 animate-spin text-cp-text-quaternary motion-reduce:animate-none" />
+        </template>
+        <template #icon>
+          <RefreshCw class="size-3.5 text-cp-text-quaternary" />
+        </template>
+        {{ t('accounts.actions.refreshToken') }}
+      </BaseMenuItem>
+      <BaseMenuItem @click.stop="emit('reauthorize', account)">
+        <template #icon>
+          <KeyRound class="size-3.5 text-cp-text-quaternary" />
+        </template>
+        {{ t('accounts.actions.reauthorize') }}
+      </BaseMenuItem>
+      <BaseMenuItem
+        :loading="recovering"
+        :disabled="recovering"
+        @click.stop="emit('recover', account.id)"
+      >
+        <template #icon>
+          <RotateCcw class="size-3.5 text-cp-text-quaternary" />
+        </template>
+        恢复状态
+      </BaseMenuItem>
+      <BaseMenuItem
+        v-if="account.provider === 'openai' && account.authenticationKind === 'oauth'"
+        :loading="togglingExcel"
+        :disabled="togglingExcel"
+        @click.stop="emit('toggleExcel', account, account.responsesUpstream !== 'excel')"
+      >
+        <template #icon>
+          <Table2 class="size-3.5 text-cp-text-quaternary" />
+        </template>
+        {{ account.responsesUpstream === 'excel' ? '关闭 Excel 入口' : '开启 Excel 入口' }}
+      </BaseMenuItem>
+      <BaseMenuItem
+        v-if="relogin"
+        :loading="relogin.busy"
+        :disabled="reloginUnavailable || relogin.busy || Boolean(relogin.blockedReason)"
+        :title="reloginUnavailable ? '重登状态读取失败，正在重试' : relogin.blockedReason || relogin.message"
+        @click.stop="emit('relogin', account)"
+      >
+        <template #icon>
+          <RotateCcw class="size-3.5 text-cp-text-quaternary" />
+        </template>
+        {{ relogin.busy ? '重登处理中' : '立即重登' }}
+      </BaseMenuItem>
+      <p
+        v-if="relogin && !relogin.busy && (relogin.status === 'failed' || relogin.status === 'uncertain')"
+        class="px-2 py-1 text-cp-xs break-words text-cp-error"
+      >
+        {{ relogin.message }}
+      </p>
+    </RowActionMenu>
   </div>
 </template>

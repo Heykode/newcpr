@@ -21,7 +21,7 @@ const props = withDefaults(
 
     loading: false,
     disabled: false,
-    pressed: false,
+    pressed: undefined,
     type: 'button',
   },
 )
@@ -75,7 +75,7 @@ const classes = computed(() => [
     :class="classes"
     :disabled="disabled || loading"
     :aria-label="label"
-    :aria-pressed="pressed || undefined"
+    :aria-pressed="pressed"
     :aria-busy="loading || undefined"
   >
     <span

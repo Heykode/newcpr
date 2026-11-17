@@ -254,6 +254,31 @@ async fn quota_forecast_observation_reuses_protocol_parser_and_keeps_window_iden
     assert_eq!(observed.used_percent, 32.5);
     assert_eq!(observed.plan_type.as_deref(), Some("pro"));
     assert_eq!(observed.reset_at.timestamp(), 1_789_805_447);
+    let mut mismatched = window.clone();
+    mismatched.key = "codex:18000s".to_owned();
+    assert!(
+        provider
+            .quota_forecast_observation(&document, &mismatched)
+            .is_none()
+    );
+    let mirrored = ProviderDocument::new(OpaqueProviderData::new(
+        json!({"rateLimitHeaders": [
+            ["x-codex-primary-used-percent", "23"],
+            ["x-codex-primary-window-minutes", "10080"],
+            ["x-codex-primary-reset-at", "1789805447"],
+            ["x-feature-primary-used-percent", "23"],
+            ["x-feature-primary-window-minutes", "10080"],
+            ["x-feature-primary-reset-at", "1789805447"]
+        ]})
+        .as_object()
+        .unwrap()
+        .clone(),
+    ));
+    assert!(
+        provider
+            .quota_forecast_observation(&mirrored, &window)
+            .is_none()
+    );
     window.role = Some(ProviderQuotaWindowRole::Secondary);
     assert!(
         provider

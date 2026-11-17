@@ -2317,6 +2317,8 @@ pub enum CredentialSelectionError {
     ContinuationOwnerChanged,
     #[error("Codex account wait unavailable: {0}")]
     AccountWait(AccountWaitFailure),
+    #[error("{0} Timed out waiting for the session to switch accounts.")]
+    IneligibleSessionAccountTimeout(&'static str),
     #[error("Codex account selection cancelled")]
     Cancelled,
     #[error("Codex pinned account selection failed: {source}")]

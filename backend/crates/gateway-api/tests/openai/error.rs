@@ -286,22 +286,35 @@ fn engine_provider_error_should_preserve_retry_classification() {
 
 #[tokio::test]
 async fn provider_queue_errors_preserve_the_full_http_contract() {
-    for (provider_kind, kind, code) in [
+    for (provider_kind, kind, code, detail) in [
         (
             ProviderErrorKind::ConcurrencyQueueFull,
             GatewayErrorKind::ConcurrencyQueueFull,
             "concurrency_queue_full",
+            None,
         ),
         (
             ProviderErrorKind::ConcurrencyQueueTimeout,
             GatewayErrorKind::ConcurrencyQueueTimeout,
             "concurrency_queue_timeout",
+            None,
+        ),
+        (
+            ProviderErrorKind::ConcurrencyQueueTimeout,
+            GatewayErrorKind::ConcurrencyQueueTimeout,
+            "concurrency_queue_timeout",
+            Some(
+                "The parent session's account does not allow the requested model. Timed out waiting for the session to switch accounts.",
+            ),
         ),
     ] {
-        let error = EngineError::Provider(ProviderError::new(
-            provider_kind,
-            UpstreamSendState::NotSent,
-        ));
+        let mut provider_error = ProviderError::new(provider_kind, UpstreamSendState::NotSent);
+        if let Some(detail) = detail {
+            provider_error = provider_error.with_client_visible_upstream_error(
+                ClientVisibleUpstreamError::new(detail, None, None),
+            );
+        }
+        let error = EngineError::Provider(provider_error);
         let mapped = gateway_error_from_engine(&error);
         assert_eq!(mapped.kind(), kind);
         let response = gateway_error_response(&mapped);
@@ -310,6 +323,9 @@ async fn provider_queue_errors_preserve_the_full_http_contract() {
         let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(body["error"]["code"], code);
         assert_eq!(body["error"]["type"], "rate_limit_error");
+        if let Some(detail) = detail {
+            assert_eq!(body["error"]["message"], detail);
+        }
     }
 }
 

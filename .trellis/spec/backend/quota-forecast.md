@@ -128,6 +128,11 @@ estimates are not balances, billing facts or scheduling inputs.
   and at least five sampled percentage points. Truncated history and counter
   regressions must not silently become full-window samples. List/detail USD
   capacity remains the dynamic ratio; section 9 applies only to group monitoring.
+- Parse each historical response through `history_window` and the shared native
+  quota parser. Match the window key, source, role and duration; account-wide
+  forecasts cannot consume a default window that only mirrors a named bucket.
+  Missing or incompatible observations remain unavailable, without substituting
+  current quota or changing scheduling and access recovery.
 - Missing costs and tokens have independent coverage. Missing data stays
   unknown rather than becoming zero or a false fully-covered estimate. Token
   estimates may use partial known totals with the incomplete flag. A recorded
