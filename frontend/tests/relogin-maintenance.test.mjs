@@ -15,7 +15,9 @@ function evaluate(source, dependencies = {}, globals = {}) {
   return exports
 }
 const { currentTotp } = evaluate(readFileSync(new URL('../src/views/relogin/totp.ts', import.meta.url), 'utf8'))
-const { recentOperationAt, recentOperation } = evaluate(readFileSync(new URL('../src/views/relogin/maintenance.ts', import.meta.url), 'utf8'))
+const presentation = evaluate(readFileSync(new URL('../src/views/relogin/presentation.ts', import.meta.url), 'utf8'))
+const maintenance = evaluate(readFileSync(new URL('../src/views/relogin/maintenance.ts', import.meta.url), 'utf8'), { './presentation': presentation })
+const { recentOperationAt, recentOperation } = maintenance
 
 test('recent operation time follows the newer login or maintenance for both layouts and filters', () => {
   const row = { lastAttemptAt: '2026-01-02T00:00:00Z', maintenance: { action: 'devices', checkedAt: '2026-01-01T00:00:00Z' } }
@@ -53,6 +55,7 @@ function modal(t, filename, api, names) {
     '@/utils/async': { errorMessage: error => error.message },
     '@/composables/useCopyText': { useCopyText: () => () => {} },
     '../totp': { currentTotp },
+    '../maintenance': maintenance,
   }, {
     defineProps: () => props,
     defineEmits: () => event => events.push(event),

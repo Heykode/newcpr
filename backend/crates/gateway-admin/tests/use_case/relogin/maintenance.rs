@@ -783,6 +783,7 @@ async fn maintenance_reads_preserve_authorization_push_history() {
     h.cycle().await;
     let original = h.row(&id).await.last_attempt.unwrap();
     assert_eq!(original.result, ReloginAttemptResult::Succeeded);
+    assert_eq!(original.workspace_id.as_deref(), Some("workspace-team"));
     *h.provider.maintenance_result.lock().unwrap() = Some(outcome());
     h.services
         .relogin()
@@ -813,6 +814,7 @@ async fn maintenance_reads_preserve_authorization_push_history() {
         .iter()
         .find(|item| item.id == original.id)
         .unwrap();
+    assert_eq!(login.workspace_id, original.workspace_id);
     assert_eq!(login.push_result, ReloginPushResult::Succeeded);
     let devices = history
         .items
@@ -820,6 +822,62 @@ async fn maintenance_reads_preserve_authorization_push_history() {
         .find(|item| item.operation == Some(MaintenanceAction::Devices))
         .unwrap();
     assert_eq!(devices.push_result, ReloginPushResult::NotRequested);
+}
+
+#[tokio::test]
+async fn manual_authorization_and_push_do_not_disable_later_automatic_recovery() {
+    let h = Harness::new(vec![account(false)]).await;
+    let id = h.import("test@example.invalid").await;
+    // An existing production row has no maintenance field before this upgrade.
+    let mut legacy = serde_json::to_value(h.row(&id).await).unwrap();
+    legacy.as_object_mut().unwrap().remove("maintenance");
+    save_private(&h, serde_json::from_value(legacy).unwrap()).await;
+    let mut authorized = outcome();
+    authorized.credential = Some(credential());
+    *h.provider.maintenance_result.lock().unwrap() = Some(authorized);
+    h.services
+        .relogin()
+        .maintain(
+            command(&h.row(&id).await, MaintenanceAction::Authorize),
+            &context("authorize-before-recovery"),
+        )
+        .await
+        .unwrap();
+    h.cycle().await;
+    let row = h.row(&id).await;
+    assert!(row.synced_at.is_none());
+    let pushed = h
+        .services
+        .relogin()
+        .push(
+            std::slice::from_ref(&id),
+            &BTreeMap::from([(id.clone(), row.revision)]),
+            &context("manual-push-before-recovery"),
+        )
+        .await
+        .unwrap();
+    assert!(pushed[0].success, "{pushed:?}");
+    let row = h.row(&id).await;
+    let target = row.target.as_ref().unwrap().clone();
+    let mut expired = account(true);
+    expired.credential_revision = revision(target.credential_revision);
+    expired.turn_state_binding_revision = revision(target.credential_revision);
+    h.accounts.set_accounts(vec![expired]);
+    save_private(
+        &h,
+        serde_json::from_value(serde_json::to_value(row).unwrap()).unwrap(),
+    )
+    .await;
+    h.cycle().await;
+    let recovered = h.row(&id).await;
+    assert!(recovered.automatic && recovered.automatic_job);
+    assert!(recovered.synced_at.is_some());
+    assert_eq!(recovered.target.unwrap().account_id, target.account_id);
+    assert_eq!(
+        *h.provider.relogin_requests.lock().unwrap(),
+        vec![Some(target.workspace_id)]
+    );
+    assert_eq!(h.accounts.audit_requests().len(), 2);
 }
 
 #[tokio::test]

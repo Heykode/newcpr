@@ -3102,5 +3102,21 @@
     "file_sha256": "f4b10cd336da09a53391426120b9987720bd346ef92c17413c657ea5aa0c4cac",
     "line_sha256": "3a7f30ef3e0e710d99cd2bfda482f4d47e415715ddd81c091a6ef0ffd385575d",
     "reason": "Reviewed reuse of the RFC 6238 SHA-1 seed in a mocked account-material response for revision and late-read tests; password is an explicit fixture and no real account is used."
+  },
+  {
+    "path": "frontend/tests/relogin-maintenance.test.mjs",
+    "rule": "gitleaks:generic-api-key",
+    "line": 33,
+    "file_sha256": "6b203c8733b61cd09c6b413fa243ec9a9a67df9eeb54b43a6b032abf35f40e4f",
+    "line_sha256": "ffc67ec5efec89d80303616b56837ce989723744a6083039c35aa38541dc0626",
+    "reason": "Re-reviewed unchanged RFC 6238 SHA-1 public numeric seed after wiring the real maintenance dependency; used only for deterministic TOTP vectors, not an account secret."
+  },
+  {
+    "path": "frontend/tests/relogin-maintenance.test.mjs",
+    "rule": "gitleaks:generic-api-key",
+    "line": 156,
+    "file_sha256": "6b203c8733b61cd09c6b413fa243ec9a9a67df9eeb54b43a6b032abf35f40e4f",
+    "line_sha256": "3a7f30ef3e0e710d99cd2bfda482f4d47e415715ddd81c091a6ef0ffd385575d",
+    "reason": "Re-reviewed unchanged mock material containing the RFC 6238 SHA-1 public seed and an explicit fixture password; only its location changed after wiring the real maintenance dependency."
   }
 ]

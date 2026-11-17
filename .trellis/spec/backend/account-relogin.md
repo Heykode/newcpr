@@ -630,7 +630,9 @@ operation-result labels, not login-success labels for device or security reads. 
 activity in last_activity and the credential-producing attempt in last_attempt; persist both in
 existing history in the same transaction. Cancellation/restart finishes the correct activity,
 and subsequent push updates the original authorization attempt. Material edits follow the same
-rule. Table and card layouts retain current pool-health, retry and relogin-count projections.
+rule. Successful authorization records the verified credential's workspace in that attempt,
+including when no workspace was selected before login. Table and card layouts retain current
+pool-health, retry and relogin-count projections.
 Header filters use options inside their own popover, avoiding nested teleported select dismissal.
 Close/account change invalidates pending reads and TOTP timers;
 remote writes may complete and notify the list but never repopulate a closed dialog.

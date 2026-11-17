@@ -324,6 +324,9 @@ impl DefaultReloginService {
                     current.message = view.message.clone();
                 }
                 if let Some(credential) = outcome.credential {
+                    if let Some(attempt) = &mut current.last_attempt {
+                        attempt.workspace_id = Some(credential.workspace_id.clone());
+                    }
                     current.credential = Some(credential);
                     current.synced_at = None;
                     current.status = ReloginStatus::Ready;
