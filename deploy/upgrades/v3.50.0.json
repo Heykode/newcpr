@@ -1,0 +1,10 @@
+{
+  "from_version": "3.49.2",
+  "to_version": "3.50.0",
+  "from_migrations_tree": "264f7329a279254ddd3c97d4306fccbbde7df3fa",
+  "to_migrations_tree": "cc4c09717912524d9eac4701a333010f175259ba",
+  "added": [
+    "0096_account_quota_settings.sql"
+  ],
+  "recovery": "manual"
+}
