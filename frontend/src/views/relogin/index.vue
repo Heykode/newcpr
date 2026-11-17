@@ -57,7 +57,7 @@ import ReloginSessionStatus from './components/ReloginSessionStatus.vue'
 import ReloginWorkspaceCard from './components/ReloginWorkspaceCard.vue'
 import { importPreview } from './import-preview'
 import { knownMaintenanceWorkspaces, maintenanceBusy, maintenanceResult, matchesMaintenanceStatus, queueButtonLabel, queueDisabledReason, recentOperation, recentOperationAt } from './maintenance'
-import { matchesPool, processingStatus, recoveryCountdown, recoveryLabels, reloginDisplayName, retryProgress, shortWorkspace, statusLabels, workspaceChoices, workspaceId, workspaceLabel } from './presentation'
+import { matchesPool, processingStatus, recoveryCountdown, recoveryLabels, reloginDisplayName, reloginPlanDisplay, reloginPlanOptions, retryProgress, shortWorkspace, statusLabels, workspaceChoices, workspaceId, workspaceLabel } from './presentation'
 
 const entries = shallowRef<ReloginEntry[]>([])
 const maintenanceId = shallowRef('')
@@ -168,10 +168,10 @@ const poolOptions = [
   { value: 'quota_exhausted', label: '额度耗尽' },
 ]
 const autoOptions = [{ value: '', label: '全部自动重登' }, { value: 'on', label: '允许自动重登' }, { value: 'off', label: '关闭自动重登' }]
-const plans = computed(() => [{ value: '', label: '全部 PLAN' }, ...[...new Set(entries.value.map(row => row.planType).filter((value): value is string => !!value))].sort().map(value => ({ value, label: value.toUpperCase() }))])
+const plans = computed(() => reloginPlanOptions(entries.value))
 const filtered = computed(() => entries.value.filter(row =>
   `${reloginDisplayName(row)} ${row.email}`.toLowerCase().includes(search.value.trim().toLowerCase())
-  && (!plan.value || row.planType === plan.value)
+  && (!plan.value || reloginPlanDisplay(row) === plan.value)
   && matchesMaintenanceStatus(row, status.value)
   && (!webSessionFilter.value || (webSessionFilter.value === 'unknown' ? !['valid', 'expired'].includes(row.maintenance?.sessionState ?? '') : row.maintenance?.sessionState === webSessionFilter.value))
   && (!recent.value || (recent.value === 'never' ? !recentOperationAt(row) : Date.parse(recentOperationAt(row) ?? '') >= now.value.getTime() - Number(recent.value) * 86400000))
@@ -441,7 +441,7 @@ function pushTarget(row: ReloginEntry) {
 function pushTargetOptions(row: ReloginEntry) {
   return (row.pushTargets ?? []).filter(target => target.available).map(target => ({
     value: target.accountId,
-    label: `${target.planType?.toUpperCase() ?? '未知套餐'} · ${target.workspaceId}`,
+    label: `${reloginPlanDisplay(target, '未知套餐')} · ${target.workspaceId}`,
   }))
 }
 const pushSelectionMissing = computed(() => pushable.value.some(row =>
@@ -685,7 +685,7 @@ onBeforeUnmount(() => {
           </ReloginColumnFilter>
         </template>
         <template #plan="{ row }">
-          <AccountPlanBadge :plan-type="row.planType" :plan-type-display="row.planType?.toUpperCase() || '待识别'" size="sm" />
+          <AccountPlanBadge :plan-type="row.planType" :plan-type-display="reloginPlanDisplay(row)" size="sm" />
           <div class="mt-1 whitespace-normal break-words text-cp-xs text-cp-text-secondary [overflow-wrap:anywhere]" :title="workspaceId(row) ?? '自动选择工作区'">
             {{ workspaceLabel(row) }}
           </div>
@@ -941,7 +941,7 @@ onBeforeUnmount(() => {
                 </div>
               </div>
               <div v-if="confirmMode === 'push'" class="flex flex-wrap items-center gap-2">
-                <AccountPlanBadge :plan-type="row.planType" :plan-type-display="row.planType?.toUpperCase() || '待识别'" size="sm" />
+                <AccountPlanBadge :plan-type="row.planType" :plan-type-display="reloginPlanDisplay(row)" size="sm" />
                 <span class="text-cp-xs" :class="canPush(row) ? 'text-cp-text-secondary' : 'text-cp-warning'">
                   {{ !canPush(row) ? '不可推送' : row.poolAccountIds.length ? '更新凭据' : '新增入池' }}
                 </span>
@@ -952,7 +952,7 @@ onBeforeUnmount(() => {
                 <BaseSelect v-model="pushAccounts[row.id]" :options="pushTargetOptions(row)" :aria-label="`${row.email} 推送目标`" placeholder="选择要更新的账号" :disabled="busy" />
               </BaseFormItem>
               <p v-if="pushTarget(row)?.switchWorkspace" class="m-0 break-words text-cp-warning">
-                将原 {{ pushTarget(row)?.planType?.toUpperCase() ?? '未知套餐' }} 账号切换为 {{ row.planType?.toUpperCase() }}，不另建账号。
+                将原 {{ reloginPlanDisplay(pushTarget(row), '未知套餐') }} 账号切换为 {{ reloginPlanDisplay(row) }}，不另建账号。
               </p>
               <p v-else-if="!pushTarget(row)" class="m-0 text-cp-warning">
                 {{ pushTargetOptions(row).length ? '请选择推送目标。' : '原账号已变化或目标工作区已存在，请重新获取凭据。' }}

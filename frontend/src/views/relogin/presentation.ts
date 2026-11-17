@@ -1,5 +1,14 @@
 import type { ReloginEntry, ReloginPoolAccount, ReloginStatus } from '@/api/modules/relogin'
 
+export function reloginPlanDisplay(row: { planType?: string | null, planTypeDisplay?: string | null } | undefined, fallback = '待识别') {
+  return (row?.planTypeDisplay?.trim() || row?.planType?.trim())?.toUpperCase() || fallback
+}
+
+export function reloginPlanOptions(rows: ReloginEntry[]) {
+  const labels = rows.filter(row => row.planType).map(row => reloginPlanDisplay(row))
+  return [{ value: '', label: '全部 PLAN' }, ...[...new Set(labels)].sort().map(label => ({ value: label, label }))]
+}
+
 export function reloginDisplayName(row: ReloginEntry) {
   return row.displayName?.trim() || row.email
 }
@@ -153,16 +162,16 @@ export function workspaceChoices(row: ReloginEntry) {
       description: choice.id,
     }))
   }
-  const known = new Map<string, string | null>()
+  const known = new Map<string, string>()
   for (const account of row.poolAccounts ?? []) {
     if (account.workspaceId)
-      known.set(account.workspaceId, account.planType)
+      known.set(account.workspaceId, reloginPlanDisplay(account, '工作区'))
   }
   if (row.workspaceId)
-    known.set(row.workspaceId, row.planType)
+    known.set(row.workspaceId, reloginPlanDisplay(row, '工作区'))
   return [...known].map(([value, plan]) => ({
     value,
-    label: `${plan?.toUpperCase() ?? '工作区'} · ${value}`,
+    label: `${plan} · ${value}`,
   }))
 }
 

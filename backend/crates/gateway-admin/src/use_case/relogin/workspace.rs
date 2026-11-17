@@ -7,6 +7,7 @@ pub struct PushTargetView {
     pub account_id: String,
     pub workspace_id: String,
     pub plan_type: Option<String>,
+    pub plan_type_display: Option<String>,
     pub switch_workspace: bool,
     pub available: bool,
 }
@@ -48,7 +49,11 @@ pub(super) fn prepare_queue(
     Ok(())
 }
 
-pub(super) fn push_targets(entry: &ReloginEntry, pool: &[AccountRecord]) -> Vec<PushTargetView> {
+pub(super) fn push_targets(
+    entry: &ReloginEntry,
+    pool: &[AccountRecord],
+    provider: &dyn ProviderAdmin,
+) -> Vec<PushTargetView> {
     if entry.workspace_mode != ReloginWorkspaceMode::Highest {
         return Vec::new();
     }
@@ -70,6 +75,9 @@ pub(super) fn push_targets(entry: &ReloginEntry, pool: &[AccountRecord]) -> Vec<
                 account_id: target.account_id.clone(),
                 workspace_id: target.workspace_id.clone(),
                 plan_type: current.and_then(|account| account.plan_type.clone()),
+                plan_type_display: current
+                    .and_then(|account| account.plan_type.as_deref())
+                    .map(|plan| provider.plan_type_display(plan)),
                 switch_workspace: target.workspace_id != credential.workspace_id,
                 available: current.is_some_and(|account| {
                     target.matches_account(account)

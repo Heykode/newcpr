@@ -205,6 +205,8 @@ async fn cancelled_queued_authorization_never_executes_and_preserves_automatic_s
 async fn cancelled_running_authorization_cannot_restore_credentials() {
     let h = Harness::new(vec![]).await;
     let id = h.import("test@example.invalid").await;
+    h.ready(&id).await;
+    let previous = h.row(&id).await.last_attempt.unwrap();
     let mut result = outcome();
     result.credential = Some(credential());
     *h.provider.maintenance_result.lock().unwrap() = Some(result);
@@ -240,6 +242,17 @@ async fn cancelled_running_authorization_cannot_restore_credentials() {
     assert_eq!(
         row.last_attempt.unwrap().result,
         ReloginAttemptResult::Cancelled
+    );
+    let history = h.services.relogin().history(&id, None).await.unwrap();
+    assert_eq!(history.items.len(), 2);
+    let retained = history
+        .items
+        .iter()
+        .find(|item| item.id == previous.id)
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(retained).unwrap(),
+        serde_json::to_value(previous).unwrap()
     );
 }
 

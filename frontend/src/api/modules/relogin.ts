@@ -9,12 +9,14 @@ export interface ReloginPushSelection { accountId: string, switchWorkspace: bool
 export interface ReloginPushTarget extends ReloginPushSelection {
   workspaceId: string
   planType: string | null
+  planTypeDisplay?: string | null
   available: boolean
 }
 export interface ReloginPoolAccount {
   id: string
   workspaceId: string | null
   planType: string | null
+  planTypeDisplay?: string | null
   enabled: boolean
   status: 'normal' | 'error' | 'rate_limited' | 'quota_exhausted' | 'disabled'
   errorReason: string | null
@@ -46,6 +48,7 @@ export interface ReloginEntry {
   message: string
   recovery?: { state: string, message: string, retryAt: string | null, retriesUsed?: number, maxRetries?: number }
   planType: string | null
+  planTypeDisplay?: string | null
   workspaceId: string | null
   preferredWorkspaceId: string | null
   workspaceMode?: ReloginWorkspaceMode

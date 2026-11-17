@@ -2350,6 +2350,124 @@ async fn deleting_account_and_library_fences_running_login_without_cancelling_fa
 }
 
 #[tokio::test]
+async fn relogin_plan_displays_use_the_provider_without_rewriting_raw_plans() {
+    let mut pooled = account(false);
+    pooled.plan_type = Some("self_serve_business_prolite".into());
+    let h = Harness::new(vec![pooled]).await;
+    let id = h.import("test@example.invalid").await;
+    let pending = h.services.relogin().list().await.unwrap().items.remove(0);
+    assert_eq!(
+        pending.plan_type.as_deref(),
+        Some("self_serve_business_prolite")
+    );
+    assert_eq!(
+        pending.plan_type_display.as_deref(),
+        Some("openai display: self_serve_business_prolite")
+    );
+    assert_eq!(
+        pending.pool_accounts[0].plan_type_display,
+        pending.plan_type_display
+    );
+    h.services
+        .relogin()
+        .queue_with_workspace(std::slice::from_ref(&id), ReloginWorkspaceMode::Highest)
+        .await
+        .unwrap();
+    h.cycle().await;
+    let ready = h.services.relogin().list().await.unwrap().items.remove(0);
+    assert_eq!(ready.plan_type.as_deref(), Some("team"));
+    assert_eq!(
+        ready.plan_type_display.as_deref(),
+        Some("openai display: team")
+    );
+    assert_eq!(
+        ready.push_targets[0].plan_type_display,
+        pending.plan_type_display
+    );
+    assert_eq!(ready.push_targets[0].plan_type, pending.plan_type);
+}
+
+#[tokio::test]
+async fn relogin_cancelled_queue_preserves_previous_login_and_push_history() {
+    use gateway_admin::model::relogin_maintenance::{MaintenanceAction, MaintenanceCommand};
+
+    for previous_push in ["not_requested", "failed", "succeeded"] {
+        for maintenance in [false, true] {
+            let h = Harness::new(vec![account(false)]).await;
+            let id = h.import("test@example.invalid").await;
+            h.ready(&id).await;
+            if previous_push != "not_requested" {
+                if previous_push == "failed" {
+                    h.provider.fail_next(ProviderAdminErrorKind::Invalid);
+                }
+                let row = h.row(&id).await;
+                let results = h
+                    .services
+                    .relogin()
+                    .push(
+                        std::slice::from_ref(&id),
+                        &BTreeMap::from([(id.clone(), row.revision)]),
+                        &context("previous-push"),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(results[0].success, previous_push == "succeeded");
+            }
+            let before = h.services.relogin().history(&id, None).await.unwrap();
+            let expected_history = serde_json::to_value(&before).unwrap();
+            let pool_writes = h.accounts.audit_requests().len();
+            if maintenance {
+                let row = h.row(&id).await;
+                h.services
+                    .relogin()
+                    .maintain(
+                        MaintenanceCommand {
+                            id: id.clone(),
+                            revision: row.revision,
+                            action: MaintenanceAction::Authorize,
+                            target: None,
+                            device_id_hash: None,
+                            confirm: None,
+                        },
+                        &context("next-login"),
+                    )
+                    .await
+                    .unwrap();
+            } else {
+                assert!(
+                    h.services
+                        .relogin()
+                        .queue(std::slice::from_ref(&id))
+                        .await
+                        .unwrap()[0]
+                        .success
+                );
+            }
+            let queued = h.row(&id).await;
+            assert_eq!(queued.status, ReloginStatus::Queued);
+            h.services
+                .relogin()
+                .cancel(&id, queued.revision)
+                .await
+                .unwrap();
+            h.cycle().await;
+            let cancelled = h.row(&id).await;
+            assert_eq!(cancelled.maintenance.view.state, "cancelled");
+            assert!(!cancelled.status.active());
+            assert_eq!(
+                serde_json::to_value(h.services.relogin().history(&id, None).await.unwrap())
+                    .unwrap(),
+                expected_history,
+                "previous push: {previous_push}, maintenance queue: {maintenance}"
+            );
+            assert_eq!(h.accounts.audit_requests().len(), pool_writes);
+            assert_eq!(h.provider.relogin_requests.lock().unwrap().len(), 1);
+            assert!(h.provider.maintenance_calls.lock().unwrap().is_empty());
+        }
+    }
+}
+
+#[tokio::test]
 async fn relogin_history_records_separate_attempts_and_preserves_push_outcomes() {
     let h = Harness::new(vec![account(false)]).await;
     let id = h.import("test@example.invalid").await;

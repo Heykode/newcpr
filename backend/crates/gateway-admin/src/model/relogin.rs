@@ -460,9 +460,8 @@ impl ReloginEntry {
                 ReloginStatus::Ready if self.synced_at.is_some() => {
                     Some(ReloginPushResult::Succeeded)
                 }
-                ReloginStatus::Failed if self.credential.is_some() => {
-                    Some(ReloginPushResult::Failed)
-                }
+                // Failed can describe a later cancelled login with cached credentials.
+                // Only the push operation itself records a failed push outcome.
                 _ => None,
             };
             if let Some(push) = push {
