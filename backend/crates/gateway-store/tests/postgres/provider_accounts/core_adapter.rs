@@ -210,14 +210,15 @@ async fn quota_merge_can_only_replace_the_snapshot_it_read() {
         .insert_provider_account(account(id.as_str(), "fixture"))
         .await
         .unwrap();
-    let limits = json!({"codex:18000s": 95});
-    sqlx::query("update provider_accounts set quota_limits = $2 where id = $1")
+    let limits = json!({"codex:18000s": {"limitPercent": 95, "warmup": null}});
+    sqlx::query("update provider_accounts set quota_settings = $2 where id = $1")
         .bind(id.as_str())
         .bind(&limits)
         .execute(&database.pool)
         .await
         .unwrap();
-    let limits: gateway_core::account::AccountQuotaLimits = serde_json::from_value(limits).unwrap();
+    let limits: gateway_core::account::AccountQuotaSettings =
+        serde_json::from_value(limits).unwrap();
     let start = SystemTime::UNIX_EPOCH + Duration::from_secs(1_800_000_000);
     let later = start + Duration::from_secs(1);
     let observed = |base, observed_at, paused| QuotaObservation {

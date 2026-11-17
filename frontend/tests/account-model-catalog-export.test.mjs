@@ -14,7 +14,7 @@ function load(path, dependencies = {}) {
   const { outputText } = ts.transpileModule(readFileSync(new URL(path, import.meta.url), 'utf8'), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2024, esModuleInterop: true },
   })
-  runInNewContext(outputText, { exports, AbortController, require: name => dependencies[name] ?? require(name) })
+  runInNewContext(outputText, { exports, AbortController, URLSearchParams, require: name => dependencies[name] ?? require(name) })
   return exports
 }
 
@@ -49,6 +49,7 @@ function mountExporter(t, getAccountModelCatalog, downloadJson) {
 test('catalog API uses a single account GET and forwards cancellation options', async () => {
   let sent
   const api = load('../src/api/modules/accounts.ts', {
+    '../constants': { API_BASE_URL: '' },
     '../request': async config => sent = config,
   })
   const controller = new AbortController()
@@ -174,4 +175,16 @@ test('a failed download does not poison the next account export', async (t) => {
   assert.deepEqual(started, ['cpr-model-catalog-acct_first.json', 'cpr-model-catalog-acct_second.json'])
   assert.deepEqual(exported.errors, ['download failed'])
   assert.equal(exported.successes.length, 1)
+})
+
+test('avatar URLs preserve deployment prefixes and encode account IDs', () => {
+  for (const base of ['', '/proxy']) {
+    const api = load('../src/api/modules/accounts.ts', {
+      '../constants': { API_BASE_URL: base },
+      '../request': assert.fail,
+    })
+    const url = new URL(api.accountProfileAvatarUrl('acct / one', 'https://example.com/avatar.png'), 'https://example.org')
+    assert.equal(url.pathname, `${base}/api/admin/accounts/profile-avatar`)
+    assert.equal(url.searchParams.get('accountId'), 'acct / one')
+  }
 })

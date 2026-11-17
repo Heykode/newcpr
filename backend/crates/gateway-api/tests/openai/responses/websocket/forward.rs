@@ -264,7 +264,7 @@ async fn initial_capacity_error_projects_status_and_preserves_current_request_he
         assert_eq!(error["error"]["code"], "server_error");
         assert_eq!(error["error"]["message"], "synthetic capacity");
         assert_eq!(error["headers"]["x-request-id"], "req_capacity");
-        assert_eq!(error["headers"]["retry-after"], "2");
+        assert!(error["headers"].get("retry-after").is_none());
     }
 }
 
@@ -810,4 +810,33 @@ async fn websocket_success_terminal_still_requires_execution_finalization() {
     assert!(trace.finalized.load(Ordering::Acquire));
     assert_eq!(trace.next_calls.load(Ordering::Acquire), 2);
     socket.close(None).await.unwrap();
+}
+
+#[tokio::test]
+async fn initial_capacity_failure_offers_client_retry_with_upstream_correlation() {
+    for code in ["server_is_overloaded", "slow_down"] {
+        for status in [400, 429, 503] {
+            let provider = upstream_failure(
+                status,
+                b"",
+                vec![
+                    header("x-request-id", b"req_capacity"),
+                    header("retry-after", b"7"),
+                    header("retry-after-ms", b"7000"),
+                ],
+            )
+            .with_client_visible_upstream_error(ClientVisibleUpstreamError::new(
+                "busy",
+                Some(code.to_owned()),
+                Some("service_unavailable_error".to_owned()),
+            ));
+            let error = initial_error(EngineError::Provider(provider), Vec::new()).await;
+            assert_eq!(error["status"], 503);
+            assert_eq!(error["error"]["code"], "server_error");
+            assert_eq!(error["error"]["message"], "busy");
+            assert_eq!(error["headers"]["x-request-id"], "req_capacity");
+            assert!(error["headers"].get("retry-after").is_none());
+            assert!(error["headers"].get("retry-after-ms").is_none());
+        }
+    }
 }

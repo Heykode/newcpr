@@ -46,6 +46,7 @@ struct StoredAccount {
 
 #[derive(Default)]
 pub(crate) struct MemoryAccountStore {
+    warmup_states: Mutex<BTreeMap<ProviderAccountId, gateway_core::account::QuotaWarmupState>>,
     catalogs: Mutex<
         BTreeMap<
             ProviderAccountId,
@@ -81,7 +82,7 @@ impl MemoryAccountStore {
         stored.account = stored
             .account
             .clone()
-            .with_quota_limits(stored.account.quota_limits().clone(), paused);
+            .with_quota_settings(stored.account.quota_settings().clone(), paused);
     }
 
     pub(crate) fn hold_next_quota_read(&self) -> (oneshot::Receiver<()>, oneshot::Sender<()>) {
@@ -91,16 +92,16 @@ impl MemoryAccountStore {
         (ready, release)
     }
 
-    pub(crate) fn set_quota_limits(
+    pub(crate) fn set_quota_settings(
         &self,
         id: &str,
-        limits: gateway_core::account::AccountQuotaLimits,
+        limits: gateway_core::account::AccountQuotaSettings,
     ) {
         let mut accounts = self.accounts.lock().unwrap();
         let stored = accounts
             .get_mut(&ProviderAccountId::new(id).unwrap())
             .unwrap();
-        stored.account = stored.account.clone().with_quota_limits(limits, false);
+        stored.account = stored.account.clone().with_quota_settings(limits, false);
     }
 
     pub(crate) fn enable_quota_credits(&self, id: &str) {
@@ -238,6 +239,56 @@ impl MemoryAccountStore {
 
 #[async_trait]
 impl ProviderAccountStore for MemoryAccountStore {
+    async fn load_quota_warmup_state(
+        &self,
+        account: &ProviderAccount,
+    ) -> Result<Option<gateway_core::account::QuotaWarmupState>, StoreError> {
+        let accounts = self.accounts.lock().unwrap();
+        if accounts
+            .get(account.id())
+            .is_none_or(|stored| stored.account.revision() != account.revision())
+        {
+            return Ok(None);
+        }
+        Ok(Some(
+            self.warmup_states
+                .lock()
+                .unwrap()
+                .get(account.id())
+                .cloned()
+                .unwrap_or_default(),
+        ))
+    }
+
+    async fn compare_and_swap_quota_warmup_state(
+        &self,
+        update: gateway_core::account::QuotaWarmupStateUpdate<'_>,
+    ) -> Result<bool, StoreError> {
+        let accounts = self.accounts.lock().unwrap();
+        let Some(stored) = accounts.get(update.account.id()) else {
+            return Ok(false);
+        };
+        if stored.account.revision() != update.account.revision()
+            || !stored.account.enabled()
+            || stored.account.quota_settings() != update.account.quota_settings()
+            || stored.account.credential_state() != update.account.credential_state()
+            || stored.account.quota().access() != update.account.quota().access()
+            || stored.account.quota_paused() != update.account.quota_paused()
+            || stored.quota.as_ref().map(|quota| quota.observed_at)
+                != update.expected_quota_observed_at
+        {
+            return Ok(false);
+        }
+        let mut states = self.warmup_states.lock().unwrap();
+        let state = states.entry(update.account.id().clone()).or_default();
+        if state.version != update.expected_version {
+            return Ok(false);
+        }
+        state.version += 1;
+        state.data = update.data;
+        Ok(true)
+    }
+
     async fn load_account_catalogs(
         &self,
         provider: &ProviderKind,
@@ -565,7 +616,7 @@ impl ProviderAccountStore for MemoryAccountStore {
         }
         let current_version = stored.quota.as_ref().map(|quota| quota.observed_at);
         if observation.quota_pause.as_ref().is_some_and(|decision| {
-            &decision.limits != stored.account.quota_limits()
+            &decision.limits != stored.account.quota_settings()
                 || current_version == Some(observation.observed_at)
                 || decision
                     .merge_base
@@ -605,7 +656,7 @@ impl ProviderAccountStore for MemoryAccountStore {
             .map_or(stored.account.quota_paused(), |v| v.paused);
         stored.quota = Some(observation);
         stored.account = rebuild_account(&stored.account, replacement)
-            .with_quota_limits(stored.account.quota_limits().clone(), paused);
+            .with_quota_settings(stored.account.quota_settings().clone(), paused);
         Ok(QuotaWriteOutcome::Updated)
     }
 
@@ -821,7 +872,7 @@ fn rebuild_account(current: &ProviderAccount, rebuild: AccountRebuild) -> Provid
     )
     .with_scheduling(current.concurrency_limit(), current.weight())
     .with_auto_use_quota_credits(current.auto_use_quota_credits())
-    .with_quota_limits(current.quota_limits().clone(), current.quota_paused())
+    .with_quota_settings(current.quota_settings().clone(), current.quota_paused())
     .with_turn_state_injection_enabled(current.turn_state_injection_enabled())
     .with_turn_state_binding_revision(current.turn_state_binding_revision())
     .with_outbound_proxy(current.outbound_proxy().cloned())

@@ -228,6 +228,7 @@ impl fmt::Debug for SelectedGrokSession {
 /// 单次 selector 调用的入参，持有冻结且不含密钥的尝试视图。
 #[derive(Debug, Clone)]
 pub struct GrokSessionSelection {
+    excluded_proxy_endpoints: Vec<gateway_core::upstream::ProxyEndpoint>,
     concurrency_wait_budget: gateway_core::concurrency::ConcurrencyWaitBudget,
     upstream_model: UpstreamModelId,
     excluded_accounts: BTreeSet<ProviderAccountId>,
@@ -242,6 +243,26 @@ pub struct GrokSessionSelection {
 }
 
 impl GrokSessionSelection {
+    #[must_use]
+    pub fn with_excluded_proxy_endpoints(
+        mut self,
+        endpoints: Vec<gateway_core::upstream::ProxyEndpoint>,
+    ) -> Self {
+        self.excluded_proxy_endpoints = endpoints;
+        self
+    }
+
+    pub(crate) fn excludes_proxy(
+        &self,
+        proxy: Option<&gateway_core::account::OutboundProxy>,
+    ) -> bool {
+        proxy.is_some_and(|proxy| {
+            self.excluded_proxy_endpoints
+                .iter()
+                .any(|endpoint| proxy.matches_endpoint(endpoint))
+        })
+    }
+
     #[must_use]
     pub fn with_concurrency_wait_budget(
         mut self,
@@ -284,6 +305,7 @@ impl GrokSessionSelection {
         client_api_key_id: ClientApiKeyId,
     ) -> Self {
         Self {
+            excluded_proxy_endpoints: Vec::new(),
             concurrency_wait_budget: Default::default(),
             upstream_model,
             excluded_accounts,

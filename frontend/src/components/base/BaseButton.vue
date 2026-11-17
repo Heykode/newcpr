@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { LoaderCircle } from '@lucide/vue'
 import { computed } from 'vue'
+import { useComponentSize } from './controls/size'
 
 type ButtonVariant = 'primary' | 'secondary' | 'soft' | 'ghost' | 'link' | 'destructive'
 type ButtonSize = 'sm' | 'md' | 'lg'
@@ -15,7 +16,7 @@ const props = withDefaults(
   }>(),
   {
     variant: 'secondary',
-    size: 'md',
+
     loading: false,
     disabled: false,
     type: 'button',
@@ -42,6 +43,8 @@ const variantClasses: Record<ButtonVariant, string> = {
   destructive: 'bg-cp-error-container text-cp-error-on-container shadow-none hover:bg-cp-error-container-hover active:bg-cp-error-container-active',
 }
 
+const componentSize = useComponentSize(() => props.size, 'md')
+
 const sizeClasses: Record<ButtonSize, string> = {
   sm: 'h-cp-control-sm gap-1.5 px-3 text-xs',
   md: 'h-cp-control gap-2 px-4 text-cp',
@@ -58,7 +61,7 @@ const classes = computed(() => [
   'cp-button inline-flex shrink-0 touch-manipulation items-center justify-center rounded-cp border-0 font-medium leading-none outline-none transition-[background-color,box-shadow,color,opacity,transform] duration-150 motion-safe:active:translate-y-px motion-safe:active:scale-[0.985] motion-reduce:transition-none',
   'focus-visible:ring-2 focus-visible:ring-cp-control-outline focus-visible:ring-offset-2 focus-visible:ring-offset-cp-bg-container',
   'disabled:cursor-not-allowed disabled:transform-none disabled:bg-cp-bg-container-disabled disabled:text-cp-text-disabled disabled:shadow-none',
-  sizeClasses[props.size],
+  sizeClasses[componentSize.value],
   variantClasses[props.variant],
 ])
 </script>
@@ -67,7 +70,7 @@ const classes = computed(() => [
   <button :type="type" :class="classes" :data-variant="variant" :disabled="disabled || loading" :aria-busy="loading || undefined">
     <span v-if="loading" class="inline-grid shrink-0 place-items-center leading-none">
       <slot name="loading">
-        <LoaderCircle class="animate-spin motion-reduce:animate-none" :size="spinnerSizes[size]" />
+        <LoaderCircle class="animate-spin motion-reduce:animate-none" :size="spinnerSizes[componentSize]" />
       </slot>
     </span>
     <span v-else-if="$slots.icon" class="inline-grid shrink-0 place-items-center">

@@ -1128,10 +1128,12 @@ match window statistics by exact stable window key.
 - Retain existing swipe handles and selection exclusions for interactive buttons.
   Verify real dialogs and the menu at desktop/mobile widths with synthetic data.
 
-## v3.45.1 account controls
+## Account controls (v3.50.0)
 
-- Quota limit editing uses account-wide window keys, retains saved missing-window keys and validates
-  integer 1..100 (empty clears). Save through batchUpdateAccounts, then reload the current account.
+- Quota settings use account-wide keys and retain saved missing-window keys. Each bucket stores
+  `{limitPercent, warmup}`. Validate integer 1..100 (empty clears), and require a model when warmup
+  is enabled. Run form validation before batchUpdateAccounts; reload the current account after save.
+  Old limits migrate unchanged; bucket warmup defaults off and is independent of global Cron.
 - quota_paused is a distinct scheduling status. Dashboard limited-quota count includes paused and
   exhausted accounts. Keep local multi-group badges wrapping naturally on desktop and mobile.
 - Concurrency details grow with actual request rows. Keep an accessible modal and viewport scrolling;
@@ -1153,7 +1155,6 @@ match window statistics by exact stable window key.
 禁止只重命名选项而漏掉 `accountEgressPatch` 的混合批量 OpenAI 覆盖清理；既有
 `mixed providers explicitly choose common exits` 回归必须保留。Mihomo/IPv6 显式选择仍独立。
 
-
 ## Account Query Toolbar
 
 - Keep labeled search, status, group, plan and provider filters separate from list
@@ -1165,3 +1166,16 @@ match window statistics by exact stable window key.
 - Mobile and desktop representation switches keep using the same account handlers.
   Browser coverage verifies search removal, plan reset, retained sort, pagination,
   selection, groups, quota refresh and account actions.
+
+### Shared controls and subpath hosting
+
+Base controls resolve size from explicit prop, nearest form, config provider, then their existing
+fallback. Preserve local sm/md/lg, table column layout, multi-group wrapping and mobile cards.
+`validateEvent: false` disables event-triggered field validation, not explicit form validation.
+Table size, stripe and rowClassName must reach real rows; pagination supports hideOnSinglePage.
+Numeric scrollbar height/maxHeight use px, including zero. Empty/loading/no-match select text
+uses caller overrides when present. Keep NewCPR tokens and existing public component interfaces.
+
+`CPR_WEB_BASE_PATH` is a build-time base (default `/`). Router history, management API requests,
+static icons/PWA and browser session restoration use that base. Reverse proxies must strip the
+prefix for backend routes and rewrite Cookie Path and relative Location, including Realtime calls.

@@ -1,10 +1,13 @@
+use std::num::NonZeroU32;
 use std::sync::Arc;
+use std::time::Duration;
 
 use futures::{StreamExt, stream};
 use gateway_core::account::{AccountFeedbackStats, ProviderAccountId};
 use gateway_core::engine::provider::{EventStream, ProviderCallMetadata, ProviderStream};
 use gateway_core::error::{
     ClientVisibleUpstreamError, OpaqueUpstreamValue, ProviderError, ProviderErrorKind,
+    TransientRetryPolicy,
 };
 use gateway_core::routing::{ProviderKind, UpstreamModelId};
 use gateway_core::upstream::{UpstreamSendState, UpstreamTransport};
@@ -45,7 +48,7 @@ fn deliver_error_with_openai_feedback(
 }
 
 #[test]
-fn account_score_failure_filter_should_exclude_request_scoped_capacity_errors() {
+fn account_score_failure_filter_should_accept_capacity_errors_with_scored_reasons() {
     for code in ["server_is_overloaded", "slow_down", "server_error"] {
         let error = sent_error(ProviderErrorKind::Unavailable, Some(code))
             .with_client_visible_upstream_error(ClientVisibleUpstreamError::new(
@@ -53,13 +56,15 @@ fn account_score_failure_filter_should_exclude_request_scoped_capacity_errors() 
                 Some("server_error".to_owned()),
                 Some("server_error".to_owned()),
             ));
-        assert!(!openai_failure_affects_account_score(&error));
+        assert!(openai_failure_affects_account_score(&error));
     }
 }
 
 #[test]
 fn account_score_failure_filter_should_accept_the_closed_reason_list() {
     for code in [
+        "server_is_overloaded",
+        "slow_down",
         "rate_limit_exceeded",
         "rate_limit_error",
         "server_error",
@@ -82,14 +87,20 @@ fn account_score_failure_filter_should_normalize_case_and_whitespace() {
 
 #[test]
 fn account_score_failure_filter_should_use_a_structured_type_when_code_is_absent() {
-    let error = ProviderError::new(ProviderErrorKind::Unavailable, UpstreamSendState::Sent)
-        .with_client_visible_upstream_error(ClientVisibleUpstreamError::new(
-            "upstream unavailable",
-            None,
-            Some("SERVICE_UNAVAILABLE_ERROR".to_owned()),
-        ));
+    for error_type in [
+        "SERVICE_UNAVAILABLE_ERROR",
+        "SERVER_IS_OVERLOADED",
+        "SLOW_DOWN",
+    ] {
+        let error = ProviderError::new(ProviderErrorKind::Unavailable, UpstreamSendState::Sent)
+            .with_client_visible_upstream_error(ClientVisibleUpstreamError::new(
+                "upstream unavailable",
+                None,
+                Some(error_type.to_owned()),
+            ));
 
-    assert!(openai_failure_affects_account_score(&error));
+        assert!(openai_failure_affects_account_score(&error));
+    }
 }
 
 #[test]
@@ -185,17 +196,64 @@ fn openai_feedback_should_not_amplify_repeated_client_configuration_errors() {
 }
 
 #[test]
-fn openai_feedback_should_not_penalize_an_account_for_server_overload() {
+fn openai_feedback_should_penalize_capacity_rejections_even_with_transient_retry() {
+    for code in ["server_is_overloaded", "slow_down"] {
+        let feedback = Arc::new(AccountFeedbackStats::default());
+        let provider = ProviderKind::new("openai").expect("provider");
+        let account = ProviderAccountId::new("acct_overloaded").expect("account");
+        let error = sent_error(ProviderErrorKind::UpstreamCapacityUnavailable, Some(code))
+            .with_replay_safe()
+            .with_transient_retry_policy(
+                NonZeroU32::new(3).expect("retry count"),
+                Duration::from_millis(500),
+                Duration::from_secs(8),
+                Duration::ZERO,
+                TransientRetryPolicy::RetryThenRotateAccount,
+            );
+
+        deliver_error_with_openai_feedback(&feedback, &provider, &account, error);
+
+        assert_eq!(
+            feedback.scheduling_signals(&provider, &account).0,
+            Some(4_000),
+            "capacity rejection should receive the stronger penalty: {code}"
+        );
+    }
+}
+
+#[test]
+fn openai_feedback_should_keep_regular_server_error_penalty() {
     let feedback = Arc::new(AccountFeedbackStats::default());
     let provider = ProviderKind::new("openai").expect("provider");
-    let account = ProviderAccountId::new("acct_overloaded").expect("account");
+    let account = ProviderAccountId::new("acct_server_error").expect("account");
 
     deliver_error_with_openai_feedback(
         &feedback,
         &provider,
         &account,
-        sent_error(ProviderErrorKind::Unavailable, Some("server_is_overloaded")),
+        sent_error(ProviderErrorKind::Unavailable, Some("server_error")),
     );
 
-    assert_eq!(feedback.scheduling_signals(&provider, &account).0, None);
+    assert_eq!(
+        feedback.scheduling_signals(&provider, &account).0,
+        Some(2_000)
+    );
+}
+
+#[test]
+fn openai_feedback_should_ignore_unconfirmed_capacity_rejections() {
+    for send_state in [UpstreamSendState::NotSent, UpstreamSendState::Ambiguous] {
+        let feedback = Arc::new(AccountFeedbackStats::default());
+        let provider = ProviderKind::new("openai").expect("provider");
+        let account = ProviderAccountId::new("acct_unconfirmed").expect("account");
+        let error = ProviderError::new(ProviderErrorKind::UpstreamCapacityUnavailable, send_state)
+            .with_upstream_code(OpaqueUpstreamValue::new("server_is_overloaded"));
+
+        deliver_error_with_openai_feedback(&feedback, &provider, &account, error);
+
+        assert_eq!(
+            feedback.scheduling_signals(&provider, &account),
+            (None, None)
+        );
+    }
 }

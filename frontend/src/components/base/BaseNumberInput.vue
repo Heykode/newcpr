@@ -2,15 +2,17 @@
 import type { ComponentSize } from './controls/types'
 import { Minus, Plus } from '@lucide/vue'
 import { computed, useAttrs } from 'vue'
-
 import { useFormField } from './BaseForm/composables/useFormField'
+
 import BaseIconButton from './BaseIconButton.vue'
 import { getInputClasses } from './controls/input-styles'
+import { useComponentSize } from './controls/size'
 
 defineOptions({ inheritAttrs: false })
 
 const props = withDefaults(
   defineProps<{
+    validateEvent?: boolean
     size?: ComponentSize
     label: string
     min?: number
@@ -20,7 +22,8 @@ const props = withDefaults(
     disabled?: boolean
   }>(),
   {
-    size: 'sm',
+    validateEvent: true,
+
     min: undefined,
     max: undefined,
     step: 1,
@@ -29,10 +32,12 @@ const props = withDefaults(
   },
 )
 
+const componentSize = useComponentSize(() => props.size, 'sm')
+
 const model = defineModel<number>({ required: true })
 const attrs = useAttrs()
 
-const { rootAttrs, controlAttrs, controlId, invalid, describedBy, ariaRequired, validate } = useFormField(attrs)
+const { rootAttrs, controlAttrs, controlId, invalid, describedBy, ariaRequired, validate } = useFormField(attrs, () => props.validateEvent)
 const canDecrease = computed(() => !props.disabled && (props.min === undefined || model.value > props.min))
 const canIncrease = computed(() => !props.disabled && (props.max === undefined || model.value < props.max))
 
@@ -69,7 +74,7 @@ function stepBy(direction: -1 | 1) {
   <div
     v-bind="rootAttrs"
     class="inline-flex items-center"
-    :class="getInputClasses(size, disabled, invalid, { inset: 'item' })"
+    :class="getInputClasses(componentSize, disabled, invalid, { inset: 'item' })"
   >
     <BaseIconButton
       :label="`减少${label}`"
@@ -79,7 +84,7 @@ function stepBy(direction: -1 | 1) {
       :disabled="!canDecrease"
       @click="stepBy(-1)"
     >
-      <Minus class="size-3" />
+      <Minus class="size-3" :class="invalid && canDecrease && 'text-cp-error'" />
     </BaseIconButton>
 
     <span class="inline-flex min-w-0 flex-1 items-baseline justify-center gap-1">
@@ -98,11 +103,11 @@ function stepBy(direction: -1 | 1) {
         :step="step"
         :disabled="disabled"
         class="h-(--field-row) min-w-0 appearance-[textfield] border-0 bg-transparent p-0 font-mono tabular-nums text-cp-text outline-none disabled:text-cp-text-disabled [&::-webkit-inner-spin-button]:m-0 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:m-0 [&::-webkit-outer-spin-button]:appearance-none"
-        :class="size === 'sm' ? 'w-9 text-right font-bold' : 'w-full text-center'"
+        :class="componentSize === 'sm' ? 'w-9 text-right font-bold' : 'w-full text-center'"
         @input="updateModel"
         @blur="restoreValue"
       >
-      <span v-if="unit" class="shrink-0 text-[9px] font-emphasis text-cp-text-quaternary">
+      <span v-if="unit" class="shrink-0 text-[9px] font-emphasis text-(color:--field-affix)">
         {{ unit }}
       </span>
     </span>
@@ -115,7 +120,7 @@ function stepBy(direction: -1 | 1) {
       :disabled="!canIncrease"
       @click="stepBy(1)"
     >
-      <Plus class="size-3" />
+      <Plus class="size-3" :class="invalid && canIncrease && 'text-cp-error'" />
     </BaseIconButton>
   </div>
 </template>

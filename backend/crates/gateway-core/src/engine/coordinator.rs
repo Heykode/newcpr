@@ -265,6 +265,7 @@ where
             last_selected_account: None,
             candidate_index,
             excluded_accounts: BTreeSet::new(),
+            excluded_proxy_endpoints: Vec::new(),
             credential_recovery_attempted_accounts: BTreeSet::new(),
             recovery_account: None,
             pending_retry: None,
@@ -408,6 +409,7 @@ pub struct ResponseExecutionSession<S: ?Sized> {
     last_selected_account: Option<crate::account::ProviderAccountId>,
     candidate_index: usize,
     excluded_accounts: BTreeSet<crate::account::ProviderAccountId>,
+    excluded_proxy_endpoints: Vec<crate::upstream::ProxyEndpoint>,
     credential_recovery_attempted_accounts: BTreeSet<crate::account::ProviderAccountId>,
     /// 凭据恢复后的一次性同账号钉选；只约束紧随其后的 replay attempt，
     /// attempt 建立时即被消费，后续可重试错误仍可换号消耗剩余重试预算。
@@ -937,6 +939,10 @@ where
         }
     }
 
+    fn has_account_rotation_budget(&self) -> bool {
+        self.account_switches < self.plan.request_tuning().max_account_switches
+    }
+
     async fn prepare_attempt(&mut self) -> Result<Option<PullOutcome>, EngineError> {
         let pending_retry = self.pending_retry.take();
         let is_connection_recovery = (pending_retry.is_some()
@@ -1030,7 +1036,7 @@ where
         {
             return self.finish_exhausted_routing().await;
         }
-        let account_context = match &self.account_selection {
+        let mut account_context = match &self.account_selection {
             AccountSelection::Diagnostic(account) => AccountAttemptContext::diagnostic(
                 self.excluded_accounts.clone(),
                 account.clone(),
@@ -1065,6 +1071,9 @@ where
             self.credential_recovery_attempted_accounts
                 .contains(account)
         }));
+        account_context
+            .excluded_proxy_endpoints
+            .clone_from(&self.excluded_proxy_endpoints);
         let provider = self
             .engine
             .providers()
@@ -1169,9 +1178,22 @@ where
             }
             ProviderBoundary::Result(result) => match *result {
                 Ok(stream) => stream,
-                Err(error) => {
+                Err(mut error) => {
                     record_trace_error(&attempt_trace, &error);
+                    if self.continuation_attempt == ContinuationAttempt::RotateForClientReplay
+                        && error.continuation_recovery_disposition()
+                            == Some(ContinuationRecoveryDisposition::ClientReplayRequired)
+                        && let Some(original) = self.last_retryable_failure.take()
+                    {
+                        error = original.with_client_recovery_from(error);
+                        self.last_retryable_failure_events.clear();
+                    }
                     if self.connection_rotation.is_some()
+                        && self
+                            .last_retryable_failure
+                            .as_ref()
+                            .and_then(ProviderError::unreachable_proxy)
+                            .is_none()
                         && self.connection_budget.remaining().is_some()
                         && !error.retry_is_prohibited()
                         && error.send_state() == UpstreamSendState::NotSent
@@ -1249,17 +1271,15 @@ where
                             "accountWaitExhausted": self.account_wait_budget.is_exhausted(),
                         }),
                     );
-                    if (error.kind() == ProviderErrorKind::SessionPolicyRestricted
-                        || (!error.retry_is_prohibited()
-                            && matches!(
-                                error.kind(),
-                                ProviderErrorKind::AccountCapacityUnavailable
-                                    | ProviderErrorKind::NoEligibleAccount
-                                    | ProviderErrorKind::QuotaExhausted
-                                    | ProviderErrorKind::ConcurrencyQueueFull
-                                    | ProviderErrorKind::ConcurrencyQueueTimeout
-                            )))
-                        && let Some(last_failure) = self.last_retryable_failure.take()
+                    if matches!(
+                        error.kind(),
+                        ProviderErrorKind::AccountCapacityUnavailable
+                            | ProviderErrorKind::NoEligibleAccount
+                            | ProviderErrorKind::SessionPolicyRestricted
+                            | ProviderErrorKind::QuotaExhausted
+                            | ProviderErrorKind::ConcurrencyQueueFull
+                            | ProviderErrorKind::ConcurrencyQueueTimeout
+                    ) && let Some(last_failure) = self.last_retryable_failure.take()
                     {
                         if last_failure.kind() == ProviderErrorKind::Unauthorized {
                             // 本地账号池已耗尽时，之前账号的认证 401 不能继续冒充
@@ -1620,10 +1640,9 @@ where
                 Some(crate::error::PreDeliveryRetry::AccountRotation)
             )
             && self.routing_attempts < self.plan.max_attempts().get();
-        let connection_retry_requested = matches!(
-            error.pre_delivery_retry(),
-            Some(crate::error::PreDeliveryRetry::SameAccountConnectionRetry { .. })
-        );
+        let connection_retry_requested = self.current_send_state() == UpstreamSendState::NotSent
+            && self.continuation_attempt == ContinuationAttempt::None
+            && error.allows_connection_rotation();
         // Honor the provider's bounded size-recovery directive without changing
         // the observed send state or permitting account rotation.
         let retry_after_exceeds_limit = error
@@ -1818,6 +1837,11 @@ where
                     reserve_connection_rotation,
                 });
             } else if let Some((transport, delay)) = connection_rotation {
+                if let Some(endpoint) = error.unreachable_proxy()
+                    && !self.excluded_proxy_endpoints.contains(endpoint)
+                {
+                    self.excluded_proxy_endpoints.push(endpoint.clone());
+                }
                 let account = current.metadata.provider_account_id().clone();
                 self.excluded_accounts.insert(account.clone());
                 self.connection_rotation = Some(PendingAttemptRetry {
@@ -2024,6 +2048,26 @@ where
         }
 
         match self.continuation_attempt {
+            ContinuationAttempt::Native
+                if error.continuation_recovery_disposition()
+                    == Some(ContinuationRecoveryDisposition::ClientReplayRequired)
+                    && matches!(
+                        error.pre_delivery_retry(),
+                        Some(crate::error::PreDeliveryRetry::SameAccountTransientRetry {
+                            policy: crate::error::TransientRetryPolicy::RetryThenRotateAccount,
+                            ..
+                        })
+                    )
+                    && error
+                        .retry_after()
+                        .is_some_and(|delay| delay > self.plan.max_retry_after())
+                    && !error.retry_is_prohibited()
+                    && self.has_account_rotation_budget() =>
+            {
+                self.continuation_attempt = ContinuationAttempt::RotateForClientReplay;
+                self.excluded_accounts
+                    .insert(current.metadata.provider_account_id().clone());
+            }
             ContinuationAttempt::Native => match error.continuation_recovery_disposition() {
                 Some(ContinuationRecoveryDisposition::RetryExactConnection) => {
                     self.recovery_account = Some(current.metadata.provider_account_id().clone());
@@ -2044,6 +2088,11 @@ where
             {
                 return false;
             }
+            ContinuationAttempt::ReplayOwner | ContinuationAttempt::ReplayAny
+                if !self.has_account_rotation_budget() =>
+            {
+                return false;
+            }
             ContinuationAttempt::ReplayOwner => {
                 self.continuation_attempt = ContinuationAttempt::ReplayAny;
                 self.excluded_accounts
@@ -2053,7 +2102,7 @@ where
                 self.excluded_accounts
                     .insert(current.metadata.provider_account_id().clone());
             }
-            ContinuationAttempt::None => return false,
+            ContinuationAttempt::None | ContinuationAttempt::RotateForClientReplay => return false,
         }
         true
     }

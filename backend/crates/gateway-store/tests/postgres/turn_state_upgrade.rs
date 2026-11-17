@@ -137,12 +137,23 @@ async fn model_access_and_excel_upgrade_default_without_touching_identity_or_inh
         Some(serde_json::json!(false))
     );
     assert_eq!(
-        after.as_object_mut().unwrap().remove("quota_limits"),
+        after.as_object_mut().unwrap().remove("quota_settings"),
         Some(serde_json::json!({}))
     );
     assert_eq!(
         after.as_object_mut().unwrap().remove("quota_paused"),
         Some(serde_json::json!(false))
+    );
+    assert_eq!(
+        after.as_object_mut().unwrap().remove("quota_warmup_state"),
+        Some(serde_json::json!({}))
+    );
+    assert_eq!(
+        after
+            .as_object_mut()
+            .unwrap()
+            .remove("quota_warmup_revision"),
+        Some(serde_json::json!(0))
     );
     assert_eq!(before, after);
     database.close().await;
@@ -217,12 +228,23 @@ async fn excel_policy_upgrade_preserves_existing_choices_and_pause_diagnostics()
         Some(serde_json::json!(false))
     );
     assert_eq!(
-        after.as_object_mut().unwrap().remove("quota_limits"),
+        after.as_object_mut().unwrap().remove("quota_settings"),
         Some(serde_json::json!({}))
     );
     assert_eq!(
         after.as_object_mut().unwrap().remove("quota_paused"),
         Some(serde_json::json!(false))
+    );
+    assert_eq!(
+        after.as_object_mut().unwrap().remove("quota_warmup_state"),
+        Some(serde_json::json!({}))
+    );
+    assert_eq!(
+        after
+            .as_object_mut()
+            .unwrap()
+            .remove("quota_warmup_revision"),
+        Some(serde_json::json!(0))
     );
     assert_eq!(before, after);
     database.close().await;
@@ -496,5 +518,58 @@ async fn lifecycle_upgrade_preserves_existing_state_and_rejects_old_migrator() {
         Err(sqlx::migrate::MigrateError::VersionMissing(version)) if version > 27
     ));
     super::TEST_MIGRATOR.run(&database.pool).await.unwrap();
+    database.close().await;
+}
+
+#[tokio::test]
+async fn quota_settings_upgrade_preserves_limits_and_identity_with_warmup_disabled() {
+    let old = sqlx::migrate::Migrator {
+        migrations: super::TEST_MIGRATOR
+            .iter()
+            .filter(|migration| migration.version <= 95)
+            .cloned()
+            .collect::<Vec<_>>()
+            .into(),
+        ..sqlx::migrate::Migrator::DEFAULT
+    };
+    let Some(database) = TestDatabase::create_with_migrator("quota_settings_upgrade", &old).await
+    else {
+        return;
+    };
+    insert_legacy_account(&database).await;
+    sqlx::query("update provider_accounts set quota_limits = '{\"codex:18000s\":95,\"codex:604800s\":90}', quota_paused = true")
+        .execute(&database.pool).await.unwrap();
+    let mut before: serde_json::Value =
+        sqlx::query_scalar("select to_jsonb(a) from provider_accounts a")
+            .fetch_one(&database.pool)
+            .await
+            .unwrap();
+    before.as_object_mut().unwrap().remove("quota_limits");
+    super::TEST_MIGRATOR.run(&database.pool).await.unwrap();
+    super::TEST_MIGRATOR.run(&database.pool).await.unwrap();
+    let mut after: serde_json::Value =
+        sqlx::query_scalar("select to_jsonb(a) from provider_accounts a")
+            .fetch_one(&database.pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        after.as_object_mut().unwrap().remove("quota_settings"),
+        Some(serde_json::json!({
+            "codex:18000s": {"limitPercent":95,"warmup":null},
+            "codex:604800s": {"limitPercent":90,"warmup":null}
+        }))
+    );
+    assert_eq!(
+        after.as_object_mut().unwrap().remove("quota_warmup_state"),
+        Some(serde_json::json!({}))
+    );
+    assert_eq!(
+        after
+            .as_object_mut()
+            .unwrap()
+            .remove("quota_warmup_revision"),
+        Some(serde_json::json!(0))
+    );
+    assert_eq!(before, after);
     database.close().await;
 }

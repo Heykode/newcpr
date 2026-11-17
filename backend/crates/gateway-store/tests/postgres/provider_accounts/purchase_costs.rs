@@ -17,7 +17,7 @@ fn month_start() -> NaiveDate {
 
 fn patch(ids: &[&str], amount: Option<&str>, date: Option<NaiveDate>) -> BatchUpdateAccounts {
     BatchUpdateAccounts {
-        quota_limits: Default::default(),
+        quota_settings: Default::default(),
         auto_use_quota_credits: None,
         excel_recovery: None,
         purchase_cost: Some(AccountPurchaseUpdate {

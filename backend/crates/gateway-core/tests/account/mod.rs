@@ -2,6 +2,7 @@ mod location;
 mod model_access;
 mod proxy;
 mod quota_reset_priority;
+mod quota_settings;
 mod responses_upstream;
 mod selection;
 mod selection_diagnostics;

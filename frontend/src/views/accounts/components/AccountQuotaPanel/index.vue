@@ -14,7 +14,7 @@ import AccountProfileModal from '../AccountProfileModal/index.vue'
 import AccountQuotaOverdraftStatus from '../AccountQuotaOverdraft/Status.vue'
 import AccountQuotaCredits from './Credits.vue'
 import AccountQuotaPanelEntry from './Entry.vue'
-import QuotaLimits from './QuotaLimits.vue'
+import QuotaSettings from './QuotaSettings.vue'
 import AccountResetCredits from './ResetCredits.vue'
 
 const props = defineProps<{
@@ -69,7 +69,7 @@ const lastRefreshed = computed(() => props.account.quota.refreshedAtRelative
         >
           <UserRound class="size-3.5" />
         </BaseIconButton>
-        <QuotaLimits v-if="account.quotaLimitsSupported" :key="account.id" :account="account" @account-updated="emit('accountUpdated', $event)" />
+        <QuotaSettings v-if="account.quotaSettingsSupported" :key="account.id" :account="account" @account-updated="emit('accountUpdated', $event)" />
         <AccountResetCredits
           v-if="account.provider === 'openai'"
           :account="account"

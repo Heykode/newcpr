@@ -2244,7 +2244,7 @@ async fn accounts_batch_update_should_commit_once_and_notify_each_provider() {
         .batch_update(
             &context("batch-update-request"),
             BatchUpdateAccounts {
-                quota_limits: Default::default(),
+                quota_settings: Default::default(),
                 auto_use_quota_credits: None,
                 excel_recovery: None,
                 purchase_cost: None,
@@ -4141,7 +4141,7 @@ fn account_list_query() -> AccountListQuery {
 pub(super) fn account_record(kind: &str) -> AccountRecord {
     let now = Utc::now();
     AccountRecord {
-        quota_limits: Default::default(),
+        quota_settings: Default::default(),
         quota_paused: Default::default(),
         auto_use_quota_credits: false,
         outbound_proxy_enabled: true,

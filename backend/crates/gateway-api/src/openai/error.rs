@@ -39,6 +39,10 @@ pub(super) fn client_error_code(code: &str) -> &str {
     }
 }
 
+pub(super) fn is_retry_after_header(name: &str) -> bool {
+    name.eq_ignore_ascii_case("retry-after") || name.eq_ignore_ascii_case("retry-after-ms")
+}
+
 pub(super) fn capacity_error_for_client(data: &Value) -> Option<Value> {
     const CODE_PATHS: [&str; 2] = ["/error/code", "/response/error/code"];
     let capacity_code = |value: &Value| {
@@ -53,6 +57,12 @@ pub(super) fn capacity_error_for_client(data: &Value) -> Option<Value> {
         return None;
     }
     let mut projected = data.clone();
+    // 容量等待与换号已由网关执行；旧账号的等待提示不能再次阻塞客户端的新一轮路由
+    for path in ["/headers", "/error/headers", "/response/error/headers"] {
+        if let Some(Value::Object(headers)) = projected.pointer_mut(path) {
+            headers.retain(|name, _| !is_retry_after_header(name));
+        }
+    }
     for path in CODE_PATHS {
         if let Some(code) = projected.pointer_mut(path)
             && capacity_code(code)
@@ -214,7 +224,9 @@ pub fn gateway_error_response(error: &GatewayError) -> Response {
 /// 下游提交前仅转换容量失败信号，其余上游响应保持原样。
 pub fn engine_error_response(error: &EngineError) -> Response {
     let capacity_unavailable = matches!(error, EngineError::Provider(error)
-        if error.kind() == ProviderErrorKind::UpstreamCapacityUnavailable);
+        if error.kind() == ProviderErrorKind::UpstreamCapacityUnavailable
+            && error.client_visible_upstream_error().and_then(|detail| detail.code())
+                != Some("previous_response_not_found"));
     if let EngineError::Provider(error) = error
         && let Some(upstream) = error.client_visible_upstream_response()
         && let Ok(status) = StatusCode::from_u16(upstream.status())
@@ -222,6 +234,7 @@ pub fn engine_error_response(error: &EngineError) -> Response {
         let projected = serde_json::from_slice::<Value>(upstream.body())
             .ok()
             .and_then(|body| capacity_error_for_client(&body));
+        let suppress_retry_after = capacity_unavailable || projected.is_some();
         let mut response = match projected {
             Some(body) => {
                 let mut response = Response::new(Body::from(body.to_string()));
@@ -244,6 +257,9 @@ pub fn engine_error_response(error: &EngineError) -> Response {
             response.headers_mut().insert(CONTENT_TYPE, content_type);
         }
         for header in upstream.headers() {
+            if suppress_retry_after && is_retry_after_header(header.name()) {
+                continue;
+            }
             let Ok(name) = HeaderName::from_bytes(header.name().as_bytes()) else {
                 continue;
             };
@@ -251,6 +267,13 @@ pub fn engine_error_response(error: &EngineError) -> Response {
                 continue;
             };
             response.headers_mut().append(name, value);
+        }
+        if !response.headers().contains_key("x-request-id")
+            && !response.headers().contains_key("x-oai-request-id")
+            && let Some(request_id) = error.upstream_request_id()
+            && let Ok(value) = HeaderValue::from_str(request_id.as_str())
+        {
+            response.headers_mut().insert("x-request-id", value);
         }
         return response;
     }

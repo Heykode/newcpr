@@ -1258,7 +1258,7 @@ impl AccountStore for PgAdminAccountStore {
             .accounts
             .batch_update_provider_accounts_admin(BatchUpdateProviderAccountsAdmin {
                 pauses: Default::default(),
-                quota_limits: None,
+                quota_settings: None,
                 auto_use_quota_credits: None,
                 excel_recovery: command.excel_recovery,
                 purchase_cost: command.purchase_cost,
@@ -1372,7 +1372,7 @@ impl AccountStore for PgAdminAccountStore {
                 command.auto_use_quota_credits.is_some(),
                 "auto_use_quota_credits",
             ),
-            (command.quota_limits.is_some(), "quota_limits"),
+            (command.quota_settings.is_some(), "quota_settings"),
             (command.enabled.is_some(), "enabled"),
             (command.responses_upstream.is_some(), "responses_upstream"),
             (command.excel_models.is_some(), "excel_models"),
@@ -1418,7 +1418,7 @@ impl AccountStore for PgAdminAccountStore {
             .accounts
             .batch_update_provider_accounts_admin(BatchUpdateProviderAccountsAdmin {
                 pauses,
-                quota_limits: command.quota_limits,
+                quota_settings: command.quota_settings,
                 auto_use_quota_credits: command.auto_use_quota_credits,
                 excel_recovery: command.excel_recovery,
                 purchase_cost: command.purchase_cost,

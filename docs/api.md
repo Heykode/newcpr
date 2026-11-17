@@ -355,8 +355,19 @@ OpenAI 明确返回 `server_is_overloaded`、`slow_down` 或模型容量不足�
 包括 0）优先。重试仍受既有次数、活动租约、取消和交付边界约束，不新增换号预算。
 若上游错误包含 `NO_MORE_RETRY`，跳过同账号恢复及等待；是否能换号仍按安全发送、
 已交付输出、续接归属和既有换号次数判断，不能凭这个信号绕过限制。
-容量不足不扣 Smart 账号健康分，不触发 Provider 全局熔断，也不作为账号额度耗尽写入冷却状态。
-最终交付的上游错误仍按上述透明边界保留原始状态码、错误码和正文。
+已发送且命中官方错误码闭集的容量失败计入智能调度健康分，不触发 Provider 全局熔断，也不作为账号额度耗尽；
+账号冷却继续由独立错误保护规则决定。最终 `server_is_overloaded` / `slow_down` 投影为
+`server_error`，HTTP/WS 数字状态为 503，清除外发响应头及错误事件 headers 的
+`Retry-After` / `retry-after-ms`；保留关联 ID、其他字段及内部原始诊断。普通限流和其他错误不变。
+原生续接在有效输出前安全遇到容量拒绝，建议等待超过 `maxRetryAfterSeconds`，且有持久会话绑定、
+替代账号及换号预算时，先迁移绑定，再返回 `previous_response_not_found` 要求客户端携带完整历史。
+当前增量输入及原账号的 `previous_response_id` 不发送到新账号；不满足条件则保留当前错误。
+
+HTTP 与 WS 新请求在明确未发送的瞬时建连失败下共享最多 4 次建连、30 秒预算，
+先同账号退避，再按预算重选。确认账号代理 TCP 入口不可达后，本请求跳过相同主机/端口的账号；
+下一请求重新尝试。SOCKS/CONNECT 隧道拒绝不能直接证明代理入口不可达。
+无替代账号时，已确认坏入口返回原错误；其他瞬时失败可继续用原账号剩余预算。
+固定账号、严格子线程根归属、取消、截止和安全重放边界继续生效。
 明确额度耗尽继续走现有账号隔离与安全换号流程，
 包括 WebSocket 握手返回的 429；不会因其长 `Retry-After` 而转入同账号传输恢复等待。
 
@@ -659,16 +670,27 @@ RT-only 使用同一形状，只提交 `refreshToken`。不得把真实 token �
 旧 OAuth 链接失效。文件中显式的出站配置优先于表单代理，未指定时使用表单代理。
 账号列表的每个 item 返回轻量 `groups: [{ id, name, enabled }]`。
 
-### 通用额度调度上限
+### 通用额度桶设置
 
-OpenAI OAuth 账号通过 `/api/admin/accounts/batch-update` 的 `quotaLimits` 配置窗口上限。
-键来自 `quota.windows` 中 `accountWide: true` 的窗口 `key`，值为 1–100 的整数已用百分比。
-省略保留原值，空对象关闭，提交映射替换全部上限。任一通用窗口触顶时暂停接收新请求，
+OpenAI OAuth 账号的 `capabilities.quotaSettingsSupported` 为真。通过
+`/api/admin/accounts/batch-update` 的 `quotaSettings` 配置通用桶，例如
+`{"accountIds":["acct_example"],"quotaSettings":{"codex:18000s":{"limitPercent":95,"warmup":null}}}`。
+键来自 `quota.windows` 中 `accountWide: true` 的窗口 `key`；`limitPercent` 是 1–100 的整数，
+省略或 `null` 表示不设上限。`warmup` 省略或 `null` 关闭预热；开启时为
+`{"model":"example-model"}`，模型 ID 非空且不超过 128 字节。
+省略 `quotaSettings` 保留原配置，空对象关闭全部桶设置，提交映射替换全部桶设置。
+迁移 0096 保留旧窗口上限，预热默认关闭。任一通用窗口触顶时暂停接收新请求，
 在途请求继续，状态为 `quota_paused`，`quota.pausedWindows` 给出触发窗口。
 缺少观测或仅到达 resetAt 不视作恢复；触发窗口观测全部低于阈值或解除配置才恢复。
 该状态独立于上游额度耗尽、cooldown 和手动启停，专属模型窗口不参与判断。
 严格子线程继续遵守根账号归属；优先/宽松按各自策略选健康候选。质量重测的既有诊断豁免
 不扩展到普通透支请求。
+
+桶预热独立于全局 Cron。已观测窗口重置满 5 分钟后复查，只有本轮未使用的通用桶才预热；
+正常请求即使用量取整为 0% 也保留使用证据，主动刷新不会清除，具名桶不算作通用桶使用。
+同批到期窗口合并一次请求，持久 CAS 防止跨进程、重启重复领取；已领取请求超时或取消不自动重放。
+无重置时间则等待观测；停用、凭据不可用、额度耗尽、调度暂停或模型不允许时不执行。
+复查失败最多每 5 分钟重查。预热沿账号原有出口执行，不绕过账号的代理或固定 IPv6。
 
 ### 账号模型限制
 

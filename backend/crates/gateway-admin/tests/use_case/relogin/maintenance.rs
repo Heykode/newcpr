@@ -799,7 +799,7 @@ async fn maintenance_reads_preserve_authorization_push_history() {
         .services
         .relogin()
         .push_with_template(
-            &[id.clone()],
+            std::slice::from_ref(&id),
             &BTreeMap::from([(id.clone(), row.revision)]),
             None,
             None,
@@ -917,7 +917,7 @@ async fn new_account_push_template_route_overrides_or_preserves_import() {
             .services
             .relogin()
             .push_with_template(
-                &[id.clone()],
+                std::slice::from_ref(&id),
                 &BTreeMap::from([(id.clone(), revision)]),
                 Some(template_selection(&template)),
                 None,
@@ -1047,7 +1047,7 @@ async fn new_account_form_preserves_or_replaces_import_route_and_uses_final_sett
             .services
             .relogin()
             .push_with_selection(
-                &[id.clone()],
+                std::slice::from_ref(&id),
                 &BTreeMap::from([(id.clone(), row.revision)]),
                 ReloginNewAccountOptions {
                     template: Some(template_selection(&template)),
@@ -1166,7 +1166,7 @@ async fn edited_push_form_rejects_stale_template_and_invalid_references_before_c
             .services
             .relogin()
             .push_with_selection(
-                &[id.clone()],
+                std::slice::from_ref(&id),
                 &BTreeMap::from([(id.clone(), row.revision)]),
                 ReloginNewAccountOptions {
                     template: Some(selection),

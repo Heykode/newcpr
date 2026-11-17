@@ -286,7 +286,7 @@ impl ProviderStreamAccountFeedback {
     fn report_failure(&mut self, error: &ProviderError) {
         if self.reported
             // `Ambiguous` 仍须关闭重放边界，但不能证明失败由账号造成；将它计入
-            // 账号评分会把传输不确定性错误归因给账号。
+            // 账号评分会把传输不确定性错误归因给账号
             || error.send_state() != UpstreamSendState::Sent
             || matches!(
                 error.kind(),
@@ -304,13 +304,17 @@ impl ProviderStreamAccountFeedback {
         {
             return;
         }
-        self.stats.report(
-            &self.provider_kind,
-            &self.account_id,
+        let feedback = if error.kind() == ProviderErrorKind::UpstreamCapacityUnavailable {
+            AccountAttemptFeedback::CapacityRejected {
+                first_output_ms: self.first_output_ms,
+            }
+        } else {
             AccountAttemptFeedback::Failed {
                 first_output_ms: self.first_output_ms,
-            },
-        );
+            }
+        };
+        self.stats
+            .report(&self.provider_kind, &self.account_id, feedback);
         self.reported = true;
     }
 }

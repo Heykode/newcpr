@@ -87,7 +87,9 @@ pub(super) fn continuation_account(
                 .map_err(|_| invalid_continuation())
         }
         (ContinuationAttempt::ReplayAny, _) => Ok(None),
-        (ContinuationAttempt::None, _) => Err(invalid_continuation()),
+        (ContinuationAttempt::None | ContinuationAttempt::RotateForClientReplay, _) => {
+            Err(invalid_continuation())
+        }
     }
 }
 
@@ -128,7 +130,9 @@ pub(super) fn apply_continuation(
             request.inherit_session(None);
             Ok(())
         }
-        ContinuationAttempt::None => Err(invalid_continuation()),
+        ContinuationAttempt::None | ContinuationAttempt::RotateForClientReplay => {
+            Err(invalid_continuation())
+        }
     }
 }
 

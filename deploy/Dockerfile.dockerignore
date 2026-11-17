@@ -19,6 +19,7 @@ deploy/logs/
 local.yaml
 local.yml
 .env
+.env.*
 config.yaml
 deploy/config.yaml
 deploy/.env

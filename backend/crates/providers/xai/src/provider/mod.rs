@@ -425,6 +425,7 @@ async fn select_grok_session(
             .map(|budget| budget.concurrency_wait_budget())
             .unwrap_or_default(),
     )
+    .with_excluded_proxy_endpoints(context.excluded_proxy_endpoints().to_vec())
     .with_affinity(affinity)
     .with_cancellation(context.cancellation().clone());
     if context.deadline().is_elapsed() {

@@ -188,7 +188,7 @@ async fn custom_names_are_atomic_searchable_and_preserve_account_identity() {
     .unwrap();
     let store = admin_account_store(&database.pool);
     let command = BatchUpdateAccounts {
-        quota_limits: Default::default(),
+        quota_settings: Default::default(),
         auto_use_quota_credits: None,
         excel_recovery: None,
         purchase_cost: None,
@@ -2594,7 +2594,7 @@ async fn account_enable_preserves_facts_and_explicit_recovery_clears_them() {
     let enabled = store
         .batch_update_accounts(
             BatchUpdateAccounts {
-                quota_limits: Default::default(),
+                quota_settings: Default::default(),
                 auto_use_quota_credits: None,
                 excel_recovery: None,
                 purchase_cost: None,
@@ -2739,7 +2739,7 @@ async fn terminal_batch_update_replaces_state_and_groups_once_or_rolls_back_ever
     let result = store
         .batch_update_accounts(
             BatchUpdateAccounts {
-                quota_limits: Default::default(),
+                quota_settings: Default::default(),
                 auto_use_quota_credits: None,
                 excel_recovery: None,
                 purchase_cost: None,
@@ -2795,7 +2795,7 @@ async fn terminal_batch_update_replaces_state_and_groups_once_or_rolls_back_ever
     store
         .batch_update_accounts(
             BatchUpdateAccounts {
-                quota_limits: Default::default(),
+                quota_settings: Default::default(),
                 auto_use_quota_credits: None,
                 excel_recovery: None,
                 purchase_cost: None,
@@ -3612,7 +3612,7 @@ async fn provider_account_admin_mutations_are_scoped_audited_and_atomic() {
     let revision = repository
         .batch_update_provider_accounts_admin(BatchUpdateProviderAccountsAdmin {
             pauses: Default::default(),
-            quota_limits: Default::default(),
+            quota_settings: Default::default(),
             auto_use_quota_credits: None,
             excel_recovery: None,
             purchase_cost: None,
@@ -4493,7 +4493,7 @@ async fn disabling_quota_credits_revokes_credit_only_access_even_with_a_late_obs
     };
     let set_policy = async |enabled| {
         let command = BatchUpdateAccounts {
-            quota_limits: Default::default(),
+            quota_settings: Default::default(),
             auto_use_quota_credits: Some(enabled),
             excel_recovery: None,
             purchase_cost: None,
@@ -4563,5 +4563,70 @@ async fn disabling_quota_credits_revokes_credit_only_access_even_with_a_late_obs
     observe(QuotaState::allowed(SystemTime::now())).await;
     set_policy(false).await;
     assert_eq!(access().await, QuotaAccessState::Allowed);
+    database.close().await;
+}
+
+#[tokio::test]
+async fn quota_warmup_claim_is_persistent_and_fenced_by_configuration_usage_and_account_state() {
+    use gateway_core::account::QuotaWarmupStateUpdate;
+    let Some(database) = TestDatabase::create("quota_warmup_claim").await else {
+        return;
+    };
+    let repository = PgProviderAccountRepository::new(database.pool.clone());
+    repository
+        .insert_provider_account(account("acct_warmup", "fixture"))
+        .await
+        .unwrap();
+    let id = ProviderAccountId::new("acct_warmup").unwrap();
+    let current = repository.get_account(&id).await.unwrap().unwrap();
+    let initial = repository
+        .load_quota_warmup_state(&current)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(initial.version, 0);
+    let claim = || QuotaWarmupStateUpdate {
+        account: &current,
+        expected_version: 0,
+        expected_quota_observed_at: None,
+        data: json!({"claimed": true}).as_object().unwrap().clone(),
+    };
+    let (one, two) = tokio::join!(
+        repository.compare_and_swap_quota_warmup_state(claim()),
+        repository.compare_and_swap_quota_warmup_state(claim())
+    );
+    assert_ne!(one.unwrap(), two.unwrap());
+    let reloaded = PgProviderAccountRepository::new(database.pool.clone());
+    let state = reloaded
+        .load_quota_warmup_state(&current)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(state.version, 1);
+    assert_eq!(state.data["claimed"], true);
+    for mutation in [
+        "update provider_accounts set quota_settings = '{\"codex:604800s\":{\"warmup\":{\"model\":\"test-model\"}}}' where id = 'acct_warmup'",
+        "update provider_accounts set quota_observed_at = now(), updated_at = now(), provider_quota_json = '{}' where id = 'acct_warmup'",
+        "update provider_accounts set enabled = false where id = 'acct_warmup'",
+        "update provider_accounts set credential_state = 'invalid' where id = 'acct_warmup'",
+        "update provider_accounts set credential_revision = credential_revision + 1 where id = 'acct_warmup'",
+    ] {
+        sqlx::query(sqlx::AssertSqlSafe(mutation))
+            .execute(&database.pool)
+            .await
+            .unwrap();
+        assert!(
+            !reloaded
+                .compare_and_swap_quota_warmup_state(QuotaWarmupStateUpdate {
+                    expected_version: 1,
+                    ..claim()
+                })
+                .await
+                .unwrap()
+        );
+        sqlx::query("update provider_accounts set quota_settings = '{}', quota_observed_at = null, provider_quota_json = null, enabled = true, credential_state = $1, credential_revision = $2 where id = 'acct_warmup'")
+            .bind(current.credential_state().as_str()).bind(i64::try_from(current.revision().get()).unwrap())
+            .execute(&database.pool).await.unwrap();
+    }
     database.close().await;
 }

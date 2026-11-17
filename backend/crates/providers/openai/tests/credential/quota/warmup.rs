@@ -177,7 +177,7 @@ async fn warmup_uses_selected_pool_preserves_identity_and_releases_lease() {
             assert!(!request.headers.contains_key("x-codex-turn-state"));
             assert!(!request.headers.contains_key("cookie"));
             let body: Value = serde_json::from_slice(&request.body).unwrap();
-            assert_eq!(body["generate"], false);
+            assert!(body.get("generate").is_none());
             assert_eq!(body["reasoning"]["effort"], "low");
             assert_eq!(body["store"], false);
         }

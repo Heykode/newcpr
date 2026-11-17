@@ -3,6 +3,8 @@
 use std::fmt;
 use url::Url;
 
+use crate::upstream::ProxyEndpoint;
+
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct OutboundProxy(Url, u32);
 
@@ -41,6 +43,26 @@ impl OutboundProxy {
 
     pub const fn max_websocket_connections(&self) -> u32 {
         self.1
+    }
+
+    #[must_use]
+    pub fn dial_endpoint(&self) -> ProxyEndpoint {
+        ProxyEndpoint::new(
+            self.0.host_str().expect("validated proxy host"),
+            self.0
+                .port_or_known_default()
+                .expect("validated proxy port"),
+        )
+    }
+
+    #[must_use]
+    pub fn matches_endpoint(&self, endpoint: &ProxyEndpoint) -> bool {
+        endpoint.matches(
+            self.0.host_str().expect("validated proxy host"),
+            self.0
+                .port_or_known_default()
+                .expect("validated proxy port"),
+        )
     }
 
     #[must_use]

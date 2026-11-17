@@ -52,7 +52,7 @@ pub(crate) fn parse_error_reason(value: Option<String>) -> StoreResult<Option<Ac
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderAccountSummary {
     pub quota_paused: bool,
-    pub quota_limits: gateway_core::account::AccountQuotaLimits,
+    pub quota_settings: gateway_core::account::AccountQuotaSettings,
     pub auto_use_quota_credits: bool,
     pub outbound_proxy_id: Option<String>,
     pub outbound_proxy_enabled: bool,
@@ -315,7 +315,7 @@ impl fmt::Debug for RotateProviderAccount {
 #[derive(Debug, Clone)]
 pub struct BatchUpdateProviderAccountsAdmin {
     pub pauses: gateway_admin::model::accounts::PreparedQuotaPauses,
-    pub quota_limits: Option<gateway_core::account::AccountQuotaLimits>,
+    pub quota_settings: Option<gateway_core::account::AccountQuotaSettings>,
     pub auto_use_quota_credits: Option<bool>,
     pub excel_recovery: Option<gateway_admin::model::excel_recovery::ExcelRecoveryConfig>,
     pub purchase_cost: Option<gateway_admin::model::account_purchase::AccountPurchaseUpdate>,
@@ -411,7 +411,7 @@ pub(crate) const ACCOUNT_SELECT: &str = "select
             has_refresh_token, access_token_expires_at, next_refresh_at, enabled, turn_state_injection_enabled, responses_upstream, excel_models, excel_models_follow_global, excel_cache_creation_as_input, excel_ignore_encrypted_content, request_proxy_source, excel_auto_disable_on_403, excel_403_action, excel_auto_disabled_at, excel_403_warning_at, excel_mode_disabled_at,
             case when excel_models_follow_global then (select excel_default_models from runtime_settings where id = 1) else excel_models end as effective_excel_models, concurrency_limit, weight, model_access_json, credential_state,
             provider_quota_json, quota_access_state, quota_evidence, quota_access_observed_at, quota_reset_at,
-            coalesce((select status = 'passed' and provider_accounts.quota_access_state='exhausted' and account_subject=provider_accounts.upstream_account_id from codex_quota_overdraft_states where account_id = provider_accounts.id and credential_revision = provider_accounts.credential_revision and config_revision = (select config_revision from runtime_settings where id = 1) and exists(select 1 from runtime_settings where id = 1 and codex_quota_overdraft_enabled)), false) as codex_quota_overdraft_passed, auto_use_quota_credits, quota_limits, quota_paused,
+            coalesce((select status = 'passed' and provider_accounts.quota_access_state='exhausted' and account_subject=provider_accounts.upstream_account_id from codex_quota_overdraft_states where account_id = provider_accounts.id and credential_revision = provider_accounts.credential_revision and config_revision = (select config_revision from runtime_settings where id = 1) and exists(select 1 from runtime_settings where id = 1 and codex_quota_overdraft_enabled)), false) as codex_quota_overdraft_passed, auto_use_quota_credits, quota_settings, quota_paused,
             last_error_reason, last_error_message,
             credential_observed_at, quota_observed_at, created_at, updated_at, relogin_count, last_relogin_at
      from provider_accounts where id = $1";
@@ -425,7 +425,7 @@ pub(crate) const ACCOUNT_SELECT_BY_IDS: &str = "select
             has_refresh_token, access_token_expires_at, next_refresh_at, enabled, turn_state_injection_enabled, responses_upstream, excel_models, excel_models_follow_global, excel_cache_creation_as_input, excel_ignore_encrypted_content, request_proxy_source, excel_auto_disable_on_403, excel_403_action, excel_auto_disabled_at, excel_403_warning_at, excel_mode_disabled_at,
             case when excel_models_follow_global then (select excel_default_models from runtime_settings where id = 1) else excel_models end as effective_excel_models, concurrency_limit, weight, model_access_json, credential_state,
             provider_quota_json, quota_access_state, quota_evidence, quota_access_observed_at, quota_reset_at,
-            coalesce((select status = 'passed' and provider_accounts.quota_access_state='exhausted' and account_subject=provider_accounts.upstream_account_id from codex_quota_overdraft_states where account_id = provider_accounts.id and credential_revision = provider_accounts.credential_revision and config_revision = (select config_revision from runtime_settings where id = 1) and exists(select 1 from runtime_settings where id = 1 and codex_quota_overdraft_enabled)), false) as codex_quota_overdraft_passed, auto_use_quota_credits, quota_limits, quota_paused,
+            coalesce((select status = 'passed' and provider_accounts.quota_access_state='exhausted' and account_subject=provider_accounts.upstream_account_id from codex_quota_overdraft_states where account_id = provider_accounts.id and credential_revision = provider_accounts.credential_revision and config_revision = (select config_revision from runtime_settings where id = 1) and exists(select 1 from runtime_settings where id = 1 and codex_quota_overdraft_enabled)), false) as codex_quota_overdraft_passed, auto_use_quota_credits, quota_settings, quota_paused,
             last_error_reason, last_error_message,
             credential_observed_at, quota_observed_at, created_at, updated_at, relogin_count, last_relogin_at
      from provider_accounts
@@ -441,7 +441,7 @@ pub(crate) const REFRESH_CANDIDATES_SELECT: &str = "select
             has_refresh_token, access_token_expires_at, next_refresh_at, enabled, turn_state_injection_enabled, responses_upstream, excel_models, excel_models_follow_global, excel_cache_creation_as_input, excel_ignore_encrypted_content, request_proxy_source, excel_auto_disable_on_403, excel_403_action, excel_auto_disabled_at, excel_403_warning_at, excel_mode_disabled_at,
             case when excel_models_follow_global then (select excel_default_models from runtime_settings where id = 1) else excel_models end as effective_excel_models, concurrency_limit, weight, model_access_json, credential_state,
             provider_quota_json, quota_access_state, quota_evidence, quota_access_observed_at, quota_reset_at,
-            coalesce((select status = 'passed' and provider_accounts.quota_access_state='exhausted' and account_subject=provider_accounts.upstream_account_id from codex_quota_overdraft_states where account_id = provider_accounts.id and credential_revision = provider_accounts.credential_revision and config_revision = (select config_revision from runtime_settings where id = 1) and exists(select 1 from runtime_settings where id = 1 and codex_quota_overdraft_enabled)), false) as codex_quota_overdraft_passed, auto_use_quota_credits, quota_limits, quota_paused,
+            coalesce((select status = 'passed' and provider_accounts.quota_access_state='exhausted' and account_subject=provider_accounts.upstream_account_id from codex_quota_overdraft_states where account_id = provider_accounts.id and credential_revision = provider_accounts.credential_revision and config_revision = (select config_revision from runtime_settings where id = 1) and exists(select 1 from runtime_settings where id = 1 and codex_quota_overdraft_enabled)), false) as codex_quota_overdraft_passed, auto_use_quota_credits, quota_settings, quota_paused,
             last_error_reason, last_error_message,
             credential_observed_at, quota_observed_at, created_at, updated_at, relogin_count, last_relogin_at
      from provider_accounts
@@ -533,7 +533,7 @@ pub(crate) fn core_account_from_summary(
     .with_turn_state_binding_revision(binding_revision)
     .with_scheduling(summary.concurrency_limit, summary.weight)
     .with_model_access(summary.model_access)
-    .with_quota_limits(summary.quota_limits, summary.quota_paused)
+    .with_quota_settings(summary.quota_settings, summary.quota_paused)
     .with_auto_use_quota_credits(summary.auto_use_quota_credits)
     .with_outbound_proxy(
         summary
@@ -587,9 +587,9 @@ pub(crate) fn account_summary_from_row(
         .ok_or_else(|| invalid("invalid weight"))?;
     Ok(ProviderAccountSummary {
         quota_paused: status.quota_paused,
-        quota_limits: get::<sqlx::types::Json<gateway_core::account::AccountQuotaLimits>>(
+        quota_settings: get::<sqlx::types::Json<gateway_core::account::AccountQuotaSettings>>(
             &row,
-            "quota_limits",
+            "quota_settings",
         )?
         .0,
         auto_use_quota_credits: get(&row, "auto_use_quota_credits")?,

@@ -6,6 +6,7 @@ import { useFormField } from './BaseForm/composables/useFormField'
 import { clearButtonClass } from './controls/clear-button'
 import { getInputClasses, inputFieldClass } from './controls/input-styles'
 import { useLocale } from './controls/locale'
+import { useComponentSize } from './controls/size'
 
 defineOptions({ inheritAttrs: false })
 
@@ -17,15 +18,15 @@ const props = withDefaults(
     clearable?: boolean
     showPassword?: boolean
     size?: ComponentSize
+    validateEvent?: boolean
   }>(),
   {
+    validateEvent: true,
     placeholder: '',
     type: 'text',
     disabled: false,
-    size: 'md',
   },
 )
-
 const emit = defineEmits<{
   input: [value: string]
   change: [value: string]
@@ -38,9 +39,11 @@ defineSlots<{ prefix?: () => unknown, suffix?: () => unknown }>()
 
 const locale = useLocale()
 
+const componentSize = useComponentSize(() => props.size, 'md')
+
 const model = defineModel<string>({ default: '' })
 const attrs = useAttrs()
-const { controlId, invalid, describedBy, required, ariaRequired, rootAttrs, controlAttrs, validate } = useFormField(attrs)
+const { controlId, invalid, describedBy, required, ariaRequired, rootAttrs, controlAttrs, validate } = useFormField(attrs, () => props.validateEvent)
 watch(model, () => {
   void validate('change')
 })
@@ -61,12 +64,7 @@ function clear() {
 defineExpose({ focus, blur: () => inputRef.value?.blur(), select: () => inputRef.value?.select(), clear })
 
 const showClear = computed(() => Boolean(props.clearable && model.value && !props.disabled && (attrs.readonly === undefined || attrs.readonly === false)))
-const containerClasses = computed(() => getInputClasses(props.size, props.disabled, invalid.value, { trailing: Boolean(showClear.value || props.showPassword) }))
-
-const iconClasses = computed(() => [
-  'inline-flex shrink-0',
-  props.disabled ? 'text-cp-text-disabled' : invalid.value ? 'text-cp-error' : 'text-cp-text-quaternary',
-])
+const containerClasses = computed(() => getInputClasses(componentSize.value, props.disabled, invalid.value, { trailing: Boolean(showClear.value || props.showPassword) }))
 
 function updateModel(event: Event) {
   if (composing.value)
@@ -100,7 +98,7 @@ function syncAutofill(event: AnimationEvent) {
 <template>
   <div v-bind="rootAttrs" class="cp-input min-w-0">
     <span class="group/input relative inline-flex w-full items-center gap-2" :class="containerClasses">
-      <span v-if="$slots.prefix" :class="iconClasses">
+      <span v-if="$slots.prefix" class="inline-flex shrink-0 text-(color:--field-affix)">
         <slot name="prefix" />
       </span>
       <input
@@ -125,7 +123,7 @@ function syncAutofill(event: AnimationEvent) {
         @focus="emit('focus', $event)"
         @blur="emit('blur', $event); validate('blur')"
       >
-      <span v-if="$slots.suffix" :class="iconClasses">
+      <span v-if="$slots.suffix" class="inline-flex shrink-0 text-(color:--field-affix)">
         <slot name="suffix" />
       </span>
       <button

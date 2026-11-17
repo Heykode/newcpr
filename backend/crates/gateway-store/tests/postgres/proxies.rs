@@ -448,7 +448,7 @@ async fn partial_batch_proxy_updates_preserve_credentials_groups_and_unselected_
         .await
         .unwrap();
     let mut command = BatchUpdateAccounts {
-        quota_limits: Default::default(),
+        quota_settings: Default::default(),
         auto_use_quota_credits: None,
         excel_recovery: None,
         purchase_cost: None,
@@ -1349,7 +1349,7 @@ async fn legacy_urls_join_one_catalog_entry_and_invalid_batch_rolls_back() {
         admin
             .batch_update_accounts(
                 BatchUpdateAccounts {
-                    quota_limits: Default::default(),
+                    quota_settings: Default::default(),
                     auto_use_quota_credits: None,
                     excel_recovery: None,
                     purchase_cost: None,

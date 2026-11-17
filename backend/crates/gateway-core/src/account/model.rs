@@ -702,7 +702,7 @@ pub struct ProviderAccount {
     excel_403_action: super::Excel403Action,
     concurrency_limit: Option<AccountConcurrencyLimit>,
     weight: AccountWeight,
-    quota_limits: super::AccountQuotaLimits,
+    quota_settings: super::AccountQuotaSettings,
     quota_paused: bool,
     model_access: super::AccountModelAccess,
     credential_state: CredentialState,
@@ -720,15 +720,19 @@ pub struct ProviderAccount {
 
 impl ProviderAccount {
     #[must_use]
-    pub fn with_quota_limits(mut self, limits: super::AccountQuotaLimits, paused: bool) -> Self {
+    pub fn with_quota_settings(
+        mut self,
+        limits: super::AccountQuotaSettings,
+        paused: bool,
+    ) -> Self {
         // 只有限额账号需要在取得租约前检测额度窗口的并发更新
         self.quota_paused = paused;
-        self.quota_limits = limits;
+        self.quota_settings = limits;
         self
     }
     #[must_use]
-    pub const fn quota_limits(&self) -> &super::AccountQuotaLimits {
-        &self.quota_limits
+    pub const fn quota_settings(&self) -> &super::AccountQuotaSettings {
+        &self.quota_settings
     }
     #[must_use]
     pub const fn quota_paused(&self) -> bool {
@@ -767,7 +771,7 @@ impl ProviderAccount {
             excel_403_action: Default::default(),
             concurrency_limit: None,
             weight: AccountWeight::DEFAULT,
-            quota_limits: super::AccountQuotaLimits::disabled(),
+            quota_settings: super::AccountQuotaSettings::disabled(),
             quota_paused: false,
             model_access: super::AccountModelAccess::all(),
             credential_state: CredentialState::Unknown,

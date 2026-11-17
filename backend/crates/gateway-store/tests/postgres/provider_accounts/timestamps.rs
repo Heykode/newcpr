@@ -98,6 +98,7 @@ async fn repository_credential_cas_keeps_time_and_stale_revision_fencing() {
     );
     let after = row(&database, id).await;
     assert_eq!(after["turn_state_binding_revision"], 2);
+    assert_eq!(after["quota_warmup_revision"], 1);
     unchanged_except(
         before,
         after.clone(),
@@ -105,6 +106,7 @@ async fn repository_credential_cas_keeps_time_and_stale_revision_fencing() {
             "provider_credentials_json",
             "credential_revision",
             "turn_state_binding_revision",
+            "quota_warmup_revision",
             "access_token_expires_at",
         ],
     );
@@ -133,6 +135,7 @@ async fn repository_credential_cas_keeps_time_and_stale_revision_fencing() {
     let final_row = row(&database, id).await;
     assert_eq!(final_row["credential_revision"], 3);
     assert_eq!(final_row["turn_state_binding_revision"], 3);
+    assert_eq!(final_row["quota_warmup_revision"], 2);
     assert_eq!(final_row["updated_at"], after["updated_at"]);
     database.close().await;
 }
@@ -181,10 +184,12 @@ async fn core_credential_cas_preserves_other_observation_clocks_and_disabled_sta
         ));
         let after = row(&database, id.as_str()).await;
         assert_eq!(after["turn_state_binding_revision"], 2);
+        assert_eq!(after["quota_warmup_revision"], 1);
         let mut changed = vec![
             "provider_credentials_json",
             "credential_revision",
             "turn_state_binding_revision",
+            "quota_warmup_revision",
         ];
         if with_state {
             changed.push("credential_observed_at");
@@ -239,6 +244,7 @@ async fn admin_rotation_clears_quota_snapshot_and_preserves_access_and_disabled_
             "provider_credentials_json",
             "credential_revision",
             "turn_state_binding_revision",
+            "quota_warmup_revision",
             "access_token_expires_at",
             "credential_observed_at",
             "provider_quota_json",
@@ -249,6 +255,7 @@ async fn admin_rotation_clears_quota_snapshot_and_preserves_access_and_disabled_
         assert_eq!(after["quota_access_state"], before["quota_access_state"]);
         assert_eq!(after["enabled"], enabled);
         assert_eq!(after["turn_state_binding_revision"], 2);
+        assert_eq!(after["quota_warmup_revision"], 1);
         assert_eq!(after["updated_at"], before["updated_at"]);
         assert_eq!(after["credential_state"], "ready");
         let observed: DateTime<Utc> =
@@ -306,11 +313,13 @@ async fn profile_enable_and_recovery_writes_do_not_move_update_time_backwards() 
     assert_eq!(recovered["enabled"], true);
     assert_eq!(recovered["credential_state"], "ready");
     assert_eq!(recovered["provider_quota_json"], Value::Null);
+    assert_eq!(recovered["quota_warmup_revision"], 1);
     unchanged_except(
         disabled,
         recovered,
         &[
             "enabled",
+            "quota_warmup_revision",
             "credential_observed_at",
             "provider_quota_json",
             "quota_observed_at",

@@ -1,3 +1,5 @@
+import type { ComponentSize } from '../controls/types'
+
 export type TableRow = object
 
 export type TableColumnKind
@@ -44,6 +46,10 @@ export interface BaseTableProps<Row extends TableRow> {
   selectedRowKeys?: Array<string | number>
   expandedRowKeys?: Array<string | number>
   density?: 'compact' | 'default'
+  size?: ComponentSize
+  stripe?: boolean
+  rowClassName?: string | ((data: { row: Row, rowIndex: number }) => string)
+  showHeaderWhenEmpty?: boolean
   loading?: boolean
   emptyText?: string
   scrollbarAlwaysVisible?: boolean

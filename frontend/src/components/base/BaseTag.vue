@@ -3,6 +3,7 @@ import type { ComponentSize } from './controls/types'
 import { X } from '@lucide/vue'
 import { computed, useId } from 'vue'
 import { useLocale } from './controls/locale'
+import { useComponentSize } from './controls/size'
 
 const props = withDefaults(defineProps<{
   type?: TagType
@@ -13,7 +14,7 @@ const props = withDefaults(defineProps<{
   closeLabel?: string
 }>(), {
   type: 'default',
-  size: 'md',
+
   round: false,
   closable: false,
   disabled: false,
@@ -40,13 +41,15 @@ const typeClasses: Record<TagType, string> = {
   warning: 'bg-cp-warning-container text-cp-warning-on-container',
   danger: 'bg-cp-error-container text-cp-error-on-container',
 }
+const componentSize = useComponentSize(() => props.size, 'md')
+
 const sizeClasses: Record<ComponentSize, string> = {
   sm: 'min-h-5 gap-1 px-1.5 py-0.5 text-cp-xs',
   md: 'min-h-6 gap-1.5 px-2 py-0.5 text-cp-xs',
   lg: 'min-h-7 gap-2 px-2.5 py-1 text-cp-sm',
 }
 const classes = computed(() => [
-  sizeClasses[props.size],
+  sizeClasses[componentSize.value],
   props.round ? 'rounded-full' : 'rounded-cp',
   props.disabled ? 'bg-cp-bg-container-disabled text-cp-text-disabled' : typeClasses[props.type],
 ])

@@ -791,6 +791,18 @@ impl Provider for CodexProvider {
             .or(cache_preference.as_ref())
             .or(messages_affinity.as_ref())
             .or(session_affinity.as_ref());
+        if context.continuation_attempt() == ContinuationAttempt::RotateForClientReplay
+            && (account_affinity
+                .and_then(CodexSessionAffinity::key)
+                .is_none()
+                || context.account_selection_policy().openai_account_affinity()
+                    == gateway_core::account::AccountAffinity::Relaxed)
+        {
+            return Err(provider_error(
+                ProviderErrorKind::NoEligibleAccount,
+                UpstreamSendState::NotSent,
+            ));
+        }
         let transport_affinity_key =
             derive_codex_transport_key(&upstream_request, context.client_api_key_ref());
 
@@ -812,6 +824,11 @@ impl Provider for CodexProvider {
             .map_err(map_selection_error)?;
         let account_selection_wait_ms =
             u64::try_from(selection_started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
+        if context.continuation_attempt() == ContinuationAttempt::RotateForClientReplay {
+            // Core 已确认允许换号；选号器迁移共享绑定后，完整历史仍须由客户端提供
+            // 不将旧账号的 previous_response_id 或增量输入发送给替代账号
+            return Err(continuation_replay_required_error("account_rotated"));
+        }
         let lease = Arc::new(lease);
         let responses_upstream = if context.is_native_quality_probe() {
             gateway_core::account::ResponsesUpstream::Codex
@@ -870,7 +887,9 @@ impl Provider for CodexProvider {
                         ContinuationAttempt::ReplayOwner | ContinuationAttempt::ReplayAny => {
                             PreviousResponseScope::ExternalUnknown
                         }
-                        ContinuationAttempt::None => PreviousResponseScope::ExternalUnknown,
+                        ContinuationAttempt::None | ContinuationAttempt::RotateForClientReplay => {
+                            PreviousResponseScope::ExternalUnknown
+                        }
                     };
                     upstream_request.set_previous_response_id(Some(
                         continuation.upstream_response_id().as_str().to_owned(),

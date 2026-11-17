@@ -23,7 +23,7 @@ export const authPlugin: Plugin = {
     async function restore() {
       if (document.visibilityState !== 'visible' || authStore.loading || authStore.sessionChecked)
         return
-      await router.replace(router.currentRoute.value.fullPath)
+      await router.replace(router.options.history.location)
     }
     const resume = () => {
       void restore().catch(() => {})

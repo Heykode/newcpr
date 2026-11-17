@@ -303,7 +303,9 @@ impl CodexCredentialSelector {
                 .account_state_owner()
                 .filter(|owner| owner.provider() == &self.provider_kind)
                 .map(|owner| owner.account().clone()),
-            ContinuationAttempt::None | ContinuationAttempt::ReplayAny => None,
+            ContinuationAttempt::None
+            | ContinuationAttempt::ReplayAny
+            | ContinuationAttempt::RotateForClientReplay => None,
         };
         if request
             .attempt
@@ -527,7 +529,26 @@ impl CodexCredentialSelector {
             control
                 .run(self.reload_wait_exclusions(&mut state, request))
                 .await?;
+            if state.follows_root
+                && !candidates.is_empty()
+                && candidates.iter().all(|candidate| {
+                    request
+                        .attempt
+                        .excludes_proxy(candidate.account.outbound_proxy())
+                })
+            {
+                return Err(CredentialSelectionError::NoEligibleCredential);
+            }
             for candidate in &candidates {
+                if request
+                    .attempt
+                    .excludes_proxy(candidate.account.outbound_proxy())
+                {
+                    state
+                        .context
+                        .excluded_accounts
+                        .insert(candidate.account.id().clone());
+                }
                 if !request.attempt.is_quality_retest() && candidate.account.quota_paused() {
                     if state.follows_root && state.pinned.as_ref() == Some(candidate.account.id()) {
                         return Err(CredentialSelectionError::QuotaPolicyFiltered);
@@ -856,7 +877,26 @@ impl CodexCredentialSelector {
             candidates = control
                 .run(self.reload_wait_pool(request, &state.universe))
                 .await?;
+            if state.follows_root
+                && !candidates.is_empty()
+                && candidates.iter().all(|candidate| {
+                    request
+                        .attempt
+                        .excludes_proxy(candidate.account.outbound_proxy())
+                })
+            {
+                return Err(CredentialSelectionError::NoEligibleCredential);
+            }
             for candidate in &candidates {
+                if request
+                    .attempt
+                    .excludes_proxy(candidate.account.outbound_proxy())
+                {
+                    state
+                        .context
+                        .excluded_accounts
+                        .insert(candidate.account.id().clone());
+                }
                 if !request.attempt.is_quality_retest() && candidate.account.quota_paused() {
                     if state.follows_root && state.pinned.as_ref() == Some(candidate.account.id()) {
                         return Err(CredentialSelectionError::QuotaPolicyFiltered);

@@ -26,7 +26,7 @@ fn context() -> MutationContext {
 
 fn batch(ids: &[&str]) -> gateway_admin::model::accounts::BatchUpdateAccounts {
     gateway_admin::model::accounts::BatchUpdateAccounts {
-        quota_limits: Default::default(),
+        quota_settings: Default::default(),
         auto_use_quota_credits: None,
         excel_recovery: None,
         purchase_cost: None,

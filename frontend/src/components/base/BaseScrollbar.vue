@@ -5,8 +5,8 @@ import { computed, nextTick, onBeforeUnmount, onMounted, shallowRef, useTemplate
 
 const props = withDefaults(
   defineProps<{
-    maxHeight?: string
-    height?: string
+    maxHeight?: string | number
+    height?: string | number
     horizontal?: boolean
     vertical?: boolean
     alwaysVisible?: boolean
@@ -25,6 +25,10 @@ const emit = defineEmits<{
 }>()
 
 const overflowTolerance = 1
+
+function cssLength(value?: string | number) {
+  return typeof value === 'number' ? `${value}px` : value
+}
 
 const rootRef = useTemplateRef<HTMLDivElement>('root')
 const wrapRef = useTemplateRef<HTMLDivElement>('wrap')
@@ -79,11 +83,11 @@ const horizontalThumbStyle = computed(() => ({
 }))
 const rootClasses = computed(() => [
   'relative min-h-0 overflow-hidden',
-  props.maxHeight || props.height ? undefined : 'h-full',
+  props.maxHeight != null || props.height != null ? undefined : 'h-full',
 ])
 const wrapClasses = computed(() => [
   'min-h-0 max-h-[inherit] overflow-auto outline-none [scrollbar-width:none] [&::-webkit-scrollbar]:hidden [&::-webkit-scrollbar]:size-0',
-  props.maxHeight ? undefined : 'h-full',
+  props.maxHeight != null ? undefined : 'h-full',
 ])
 const verticalTrackClass = computed(() => (props.horizontal && canScrollX.value ? 'bottom-1.5' : 'bottom-0'))
 const horizontalTrackClass = computed(() => (props.vertical && canScrollY.value ? 'right-1.5' : 'right-0'))
@@ -461,7 +465,7 @@ defineExpose({
 </script>
 
 <template>
-  <div ref="root" :class="rootClasses" :style="{ maxHeight, height }">
+  <div ref="root" :class="rootClasses" :style="{ maxHeight: cssLength(maxHeight), height: cssLength(height) }">
     <div ref="wrap" :class="wrapClasses" tabindex="0">
       <div ref="view">
         <slot />

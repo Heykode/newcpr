@@ -363,14 +363,13 @@ async fn capacity_projection_keeps_extensions_before_and_after_keepalive() {
                 let (text, chunks) = sse_body(response).await;
                 assert!(text.starts_with(": keep-alive\n\n"));
                 assert_eq!(chunks.len(), 1);
-                expected["error"]["headers"] = json!({"retry-after":"7"});
                 assert_eq!(chunks[0]["error"], expected["error"]);
                 assert_eq!(text.matches("data: [DONE]").count(), 1);
                 assert!(!text.contains("response.failed"));
                 assert_eq!(fixture.trace.calls.client_statuses(), vec![200]);
             } else {
                 assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-                assert_eq!(response.headers()["retry-after"], "7");
+                assert!(!response.headers().contains_key("retry-after"));
                 assert_eq!(json_body(response).await, expected);
                 assert_eq!(fixture.trace.calls.client_statuses(), vec![503]);
             }

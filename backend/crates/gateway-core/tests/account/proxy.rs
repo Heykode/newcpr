@@ -14,6 +14,35 @@ fn proxy_endpoints_support_explicit_schemes_and_redact_credentials() {
 }
 
 #[test]
+fn dial_endpoints_match_host_and_port_without_credentials_or_capacity() {
+    for (source, same, different) in [
+        (
+            "http://user:${PROXY_PASSWORD}@Proxy.Example",
+            "socks5://other:${OTHER_PROXY_PASSWORD}@proxy.example:80",
+            "http://proxy.example:81",
+        ),
+        (
+            "https://user:${PROXY_PASSWORD}@[::1]",
+            "http://other:${OTHER_PROXY_PASSWORD}@[::1]:443",
+            "https://[2001:db8::2]",
+        ),
+    ] {
+        let endpoint = OutboundProxy::parse(source).unwrap().dial_endpoint();
+        let same = OutboundProxy::parse(same)
+            .unwrap()
+            .with_max_websocket_connections(3);
+        assert_eq!(endpoint, same.dial_endpoint());
+        assert!(same.matches_endpoint(&endpoint));
+        assert!(
+            !OutboundProxy::parse(different)
+                .unwrap()
+                .matches_endpoint(&endpoint)
+        );
+        assert_eq!(format!("{endpoint:?}"), "ProxyEndpoint(<redacted>)");
+    }
+}
+
+#[test]
 fn invalid_proxy_never_silently_becomes_direct() {
     for url in [
         "",
@@ -25,9 +54,10 @@ fn invalid_proxy_never_silently_becomes_direct() {
         "http://host:80/path",
         "http://host:80?secret=1",
         "http://host:80#fragment",
-        "http://user:secret@host:80\n",
+        "http://user:${PROXY_PASSWORD}@host:80\n",
     ] {
         let error = OutboundProxy::parse(url).unwrap_err();
         assert!(!error.to_string().contains("secret"));
+        assert!(!error.to_string().contains("PROXY_PASSWORD"));
     }
 }
