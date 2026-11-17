@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { ReloginBatchResult, ReloginEntry, ReloginPushSelection, ReloginWorkspaceMode } from '@/api/modules/relogin'
-import { CheckCheck, Download, GripVertical, MoreHorizontal, Pause, Play, RefreshCw, Save, Search, Settings2, Trash2, Upload, X } from '@lucide/vue'
+import { CheckCheck, Download, Funnel, GripVertical, MoreHorizontal, Pause, Play, RefreshCw, Save, Search, Settings2, Trash2, Upload, X } from '@lucide/vue'
 import { useIntervalFn, useMediaQuery, useNow } from '@vueuse/core'
 
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
@@ -86,6 +86,7 @@ const summary = computed(() => [
 const webSessionFilter = shallowRef('')
 const sessionOptions = [{ label: '全部 Web 会话', value: '' }, { label: '有效', value: 'valid' }, { label: '已失效', value: 'expired' }, { label: '未建立 / 未检测', value: 'unknown' }]
 const mobile = useMediaQuery('(max-width: 767px)')
+const mobileFiltersOpen = shallowRef(false)
 const historyEntry = shallowRef<ReloginEntry | null>(null)
 const historyOpen = shallowRef(false)
 const credentialsEntry = shallowRef<ReloginEntry | null>(null)
@@ -545,8 +546,8 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="flex min-w-0 flex-col gap-4 md:h-full md:min-h-0 md:overflow-hidden">
-    <BasePageHeader :title="t('navigation.relogin')" description="账号资料 · 登录会话 · 安全维护">
+  <div class="flex min-w-0 flex-col gap-3 md:h-full md:min-h-0 md:gap-4 md:overflow-hidden">
+    <BasePageHeader class="relogin-page-header" :title="t('navigation.relogin')" :description="mobile ? undefined : '账号资料 · 登录会话 · 安全维护'">
       <template #actions>
         <BaseIconButton label="刷新重登列表" :loading="loading" :disabled="busy" @click="reload()">
           <RefreshCw class="size-4" />
@@ -567,40 +568,32 @@ onBeforeUnmount(() => {
         <span>{{ item.label }}</span><strong>{{ item.count }}</strong>
       </button>
       <div class="relogin-queue-meta">
-        <span :class="paused ? 'text-cp-warning' : 'text-cp-success'">{{ paused ? '队列已暂停' : '队列运行中' }}</span><span>{{ savedConcurrency }} 个任务并行 · 失败重试 {{ savedRetrySettings.maxRetries }} 次</span>
+        <span :class="paused ? 'text-cp-warning' : 'text-cp-success'">{{ paused ? '队列已暂停' : '队列运行中' }}</span><span class="hidden md:inline">{{ savedConcurrency }} 个任务并行 · 失败重试 {{ savedRetrySettings.maxRetries }} 次</span>
       </div>
     </div>
-    <div class="flex flex-wrap items-center gap-3">
-      <BaseInput v-model="search" class="w-full sm:max-w-80" aria-label="搜索账号名称或邮箱" placeholder="搜索账号名称或邮箱" clearable>
+    <div class="flex items-center gap-2 md:flex-wrap md:gap-3">
+      <BaseInput v-model="search" :class="mobile ? 'min-w-0 flex-1' : 'w-full sm:max-w-80'" aria-label="搜索账号名称或邮箱" placeholder="搜索账号名称或邮箱" clearable>
         <template #prefix>
           <Search class="size-4" />
         </template>
       </BaseInput>
-      <span class="ml-auto text-cp-xs tabular-nums text-cp-text-tertiary">{{ filtered.length }} / {{ entries.length }} 个账号</span>
-      <BaseButton :disabled="!search && !filterCount" @click="search = ''; status = ''; plan = ''; pool = ''; automatic = ''; recent = ''; webSessionFilter = ''; egressFilter = ''">
+      <BaseButton v-if="mobile" class="min-h-11 whitespace-nowrap px-3" :variant="filterCount ? 'soft' : 'secondary'" @click="mobileFiltersOpen = true">
+        <template #icon>
+          <Funnel class="size-4" />
+        </template>筛选{{ filterCount ? ` ${filterCount}` : '' }}
+      </BaseButton>
+      <span v-if="!mobile" class="ml-auto text-cp-xs tabular-nums text-cp-text-tertiary">{{ filtered.length }} / {{ entries.length }} 个账号</span>
+      <BaseButton v-if="!mobile" :disabled="!search && !filterCount" @click="search = ''; status = ''; plan = ''; pool = ''; automatic = ''; recent = ''; webSessionFilter = ''; egressFilter = ''">
         清除筛选{{ filterCount ? `（${filterCount}）` : '' }}
       </BaseButton>
     </div>
-    <div v-if="mobile" class="flex flex-wrap gap-x-4 gap-y-2">
-      <ReloginColumnFilter label="PLAN" :active="!!plan">
-        <ReloginFilterOptions v-model="plan" :options="plans" label="PLAN 筛选" />
-      </ReloginColumnFilter>
-      <ReloginColumnFilter label="登录状态" :active="!!webSessionFilter || !!pool">
-        <ReloginFilterOptions v-model="webSessionFilter" :options="sessionOptions" label="Web 会话筛选" /><ReloginFilterOptions v-model="pool" :options="poolOptions" label="号池状态筛选" />
-      </ReloginColumnFilter>
-      <ReloginColumnFilter label="出口 IP" :active="!!egressFilter">
-        <ReloginFilterOptions v-model="egressFilter" :options="egressOptions" label="出口筛选" />
-      </ReloginColumnFilter>
-      <ReloginColumnFilter label="最近操作" :active="!!status || !!recent">
-        <ReloginFilterOptions v-model="status" :options="statusOptions" label="处理状态筛选" /><ReloginFilterOptions v-model="recent" :options="recentOptions" label="最近操作时间筛选" />
-      </ReloginColumnFilter>
-      <ReloginColumnFilter label="自动恢复" :active="!!automatic">
-        <ReloginFilterOptions v-model="automatic" :options="autoOptions" label="自动恢复筛选" />
-      </ReloginColumnFilter>
-    </div>
-    <div class="flex shrink-0 flex-wrap items-center gap-2 border-y border-cp-border py-2">
-      <BaseCheckbox class="md:hidden" label="全选当前页" :model-value="allSelected" :indeterminate="partialSelected" :disabled="busy" @update:model-value="selectPage" />
+    <div class="flex shrink-0 flex-wrap items-center gap-2 border-y border-cp-border py-1 md:py-2">
+      <BaseCheckbox class="min-h-11 min-w-8 justify-center md:hidden" label="全选当前页" :model-value="allSelected" :indeterminate="partialSelected" :disabled="busy" @update:model-value="selectPage" />
       <span class="text-cp-sm text-cp-text-secondary">已选 {{ selected.size }} 项</span>
+      <span v-if="mobile" class="ml-auto text-cp-xs tabular-nums text-cp-text-tertiary">{{ filtered.length }} / {{ entries.length }} 个账号</span>
+      <BaseButton v-if="mobile && (search || filterCount)" class="min-h-11 px-2" variant="ghost" @click="search = ''; status = ''; plan = ''; pool = ''; automatic = ''; recent = ''; webSessionFilter = ''; egressFilter = ''">
+        清除筛选
+      </BaseButton>
       <div v-if="selected.size" class="flex flex-wrap items-center gap-2">
         <BaseIconButton :label="t('settings.pricing.deselect')" :disabled="busy || !selected.size" @click="selected = new Set()">
           <X class="size-4" />
@@ -790,6 +783,39 @@ onBeforeUnmount(() => {
     <BaseTablePagination :pagination="{ currentPage: page, pageSize, total: filtered.length }" :loading="busy" @page-change="page = $event" @page-size-change="pageSize = $event" />
     <div v-if="overlayStyle" :style="overlayStyle" class="pointer-events-none fixed z-50 border border-cp-primary bg-cp-primary/10" />
 
+    <BaseModal v-model="mobileFiltersOpen" title="筛选账号" size="sm">
+      <div class="grid gap-4">
+        <BaseFormItem label="PLAN">
+          <BaseSelect v-model="plan" :options="plans" aria-label="PLAN 筛选" />
+        </BaseFormItem>
+        <BaseFormItem label="Web 会话">
+          <BaseSelect v-model="webSessionFilter" :options="sessionOptions" aria-label="Web 会话筛选" />
+        </BaseFormItem>
+        <BaseFormItem label="号池状态">
+          <BaseSelect v-model="pool" :options="poolOptions" aria-label="号池状态筛选" />
+        </BaseFormItem>
+        <BaseFormItem label="出口 IP">
+          <BaseSelect v-model="egressFilter" :options="egressOptions" aria-label="出口筛选" />
+        </BaseFormItem>
+        <BaseFormItem label="处理状态">
+          <BaseSelect v-model="status" :options="statusOptions" aria-label="处理状态筛选" />
+        </BaseFormItem>
+        <BaseFormItem label="最近操作">
+          <BaseSelect v-model="recent" :options="recentOptions" aria-label="最近操作时间筛选" />
+        </BaseFormItem>
+        <BaseFormItem label="自动恢复">
+          <BaseSelect v-model="automatic" :options="autoOptions" aria-label="自动恢复筛选" />
+        </BaseFormItem>
+      </div>
+      <template #footer>
+        <BaseButton class="min-h-11" :disabled="!filterCount" @click="status = ''; plan = ''; pool = ''; automatic = ''; recent = ''; webSessionFilter = ''; egressFilter = ''">
+          重置筛选
+        </BaseButton>
+        <BaseButton class="min-h-11" variant="primary" @click="mobileFiltersOpen = false">
+          查看 {{ filtered.length }} 个账号
+        </BaseButton>
+      </template>
+    </BaseModal>
     <BaseModal v-model="retrySettingsOpen" title="维护设置" size="sm" :dismissible="!busy">
       <div class="grid min-w-0 gap-4">
         <div class="flex flex-wrap items-center gap-2 border-b border-cp-border-secondary pb-4">
@@ -1072,11 +1098,40 @@ onBeforeUnmount(() => {
   color: var(--cp-text-tertiary);
 }
 @media (max-width: 767px) {
+  .relogin-page-header {
+    gap: 8px;
+    padding-bottom: 0;
+  }
+  .relogin-page-header :deep(> div:first-child) {
+    flex-basis: auto;
+  }
+  .relogin-page-header :deep(h1) {
+    font-size: 20px;
+  }
+  .relogin-page-header :deep(> div:last-child) {
+    gap: 4px;
+    margin-top: 0;
+  }
+  .relogin-page-header :deep(button) {
+    min-height: 44px;
+    min-width: 44px;
+  }
+  .relogin-summary {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 4px;
+  }
   .relogin-summary-item {
-    flex: 1 1 40%;
-    justify-content: space-between;
+    flex-direction: column;
+    gap: 6px;
+    padding: 8px 4px;
+    font-size: 11px;
+  }
+  .relogin-summary-item strong {
+    font-size: 18px;
   }
   .relogin-queue-meta {
+    grid-column: 1 / -1;
     margin: 4px 0 0;
     display: flex;
     flex-wrap: wrap;

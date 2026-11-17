@@ -760,6 +760,12 @@ login-state labels to wrap; do not truncate a shortened ID again. Retain full ID
 titles and the workspace picker. Known workspace choices are deduplicated; no free-text
 ID editor. Text actions `重登` / `推送` have stable, non-wrapping widths. On viewports
 below 1600px, the action column scrolls normally instead of covering other facts.
+Mobile cards show the same observed workspace name and keep Web, Codex and pool
+states separate in three compact cells. Give egress its own full-width row with a
+non-wrapping, locally scrollable IP. Use one history entry per card; keep full IDs
+and credential details behind expansion. Primary and icon actions have at least
+44px touch height. The mobile filter dialog binds the existing filter state directly,
+including active counts and reset; do not introduce separate filtering semantics.
 Push confirmation captures row revisions and must not silently switch to a newer
 credential returned by background polling. Keep action failures independent of
 successful list refreshes, so polling cannot erase a failed push message.
