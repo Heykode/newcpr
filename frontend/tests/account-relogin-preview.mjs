@@ -2,6 +2,7 @@ import { realpathSync } from 'node:fs'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 import { createServer } from 'vite'
+import { enrollmentExample } from './fixtures/enrollment-plan-preview.mjs'
 import { accounts as samples } from './fixtures/relogin-count-data.mjs'
 
 // Isolated synthetic queue; never forward credentials or requests to a real backend.
@@ -60,7 +61,9 @@ async function main() {
     syncedAt: null,
   }))
   const deadlines = new Map()
+  const enrollment = process.env.QA_ENROLLMENT === '1' ? enrollmentExample(library, accounts, groups, templates, reloginSettings) : null
   const server = await createServer({
+    define: { 'import.meta.env.VITE_ENROLLMENT_PREVIEW': JSON.stringify(enrollment ? '1' : '') },
     root: fileURLToPath(new URL('..', import.meta.url)),
     server: {
       host: '127.0.0.1',
@@ -81,6 +84,26 @@ async function main() {
       configureServer(vite) {
         vite.middlewares.use(async (request, response, next) => {
           const url = new URL(request.url ?? '/', 'http://127.0.0.1')
+          if (enrollment && url.pathname === '/__preview__/enrollment') {
+            response.setHeader('Content-Type', 'application/json')
+            response.setHeader('Cache-Control', 'no-store')
+            if (request.method !== 'POST' || request.headers.origin !== `http://${request.headers.host}` || request.headers['content-type'] !== 'application/json') {
+              response.writeHead(403).end('{}')
+              return
+            }
+            try {
+              let raw = ''
+              for await (const chunk of request) {
+                raw += chunk
+                if (raw.length > 65536)
+                  throw new Error('示例设置过大')
+              }
+              enrollment.command(JSON.parse(raw))
+              response.end('{}')
+            }
+            catch (error) { response.writeHead(409).end(JSON.stringify({ message: error.message })) }
+            return
+          }
           if (!url.pathname.startsWith('/dev/'))
             return next()
           response.setHeader('Content-Type', 'application/json')
@@ -96,6 +119,9 @@ async function main() {
               case '/api/admin/system/version':
                 data = { version: 'local-sample', buildType: 'test' }
                 break
+              case '/api/admin/system/update/detail':
+                data = { policy: { channel: 'stable', availableChannels: ['stable'] }, currentVersion: 'local-sample', hasUpdate: false, updateSupported: false }
+                break
               case '/api/admin/accounts':
                 data = {
                   items: accounts,
@@ -107,12 +133,16 @@ async function main() {
                 data = { items: groups, page: { page: 1, pageSize: 200, total: groups.length, totalPages: 1 } }
                 break
               case '/api/admin/proxies':
-                data = { items: [], page: { page: 1, pageSize: 200, total: 0, totalPages: 0 } }
+                data = { items: enrollment?.proxies ?? [], page: { page: 1, pageSize: 200, total: enrollment?.proxies.length ?? 0, totalPages: enrollment ? 1 : 0 } }
+                break
+              case '/api/admin/quality-ops/templates':
+                data = enrollment?.quality ?? []
                 break
               case '/api/admin/ipv6-egress':
                 data = { revision: 1, defaultMode: 'unchanged', addresses: [], accountOverrides: {}, fixedBindings: {} }
                 break
               case '/api/admin/relogin':
+                enrollment?.advance()
                 data = { settings: reloginSettings, items: library }
                 break
               case '/api/admin/relogin/templates':
@@ -121,6 +151,20 @@ async function main() {
               case '/api/admin/accounts/import-tasks':
                 data = { items: [] }
                 break
+            }
+          }
+          else if (enrollment && request.method === 'POST' && ['/api/admin/proxies/test', '/api/admin/proxies/probe'].includes(path)) {
+            let raw = ''
+            for await (const chunk of request)
+              raw += chunk
+            const proxy = enrollment.proxies.find(item => item.id === JSON.parse(raw).id)
+            if (path.endsWith('/test') && !proxy) {
+              status = 404
+            }
+            else {
+              const success = proxy?.id !== 'fixture-C'
+              const result = { success, latencyMs: success ? 24 : 0, exitIp: success ? '192.0.2.20' : null, exitIpv4: null, exitIpv6: null, message: success ? '示例出口可用' : '示例出口不可用' }
+              data = proxy ? Object.assign(proxy, { lastTest: result, lastTestAt: new Date().toISOString() }) : result
             }
           }
           else if (request.method === 'POST' && path === '/api/admin/relogin/settings') {
@@ -287,7 +331,7 @@ async function main() {
     }],
   })
   await server.listen()
-  process.stdout.write(`Local sample only: http://127.0.0.1:${server.config.server.port}/accounts\n`)
+  process.stdout.write(`Local sample only: http://127.0.0.1:${server.config.server.port}/${enrollment ? 'relogin' : 'accounts'}\n`)
 }
 
 main().catch((error) => {

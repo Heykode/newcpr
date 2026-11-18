@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { ReloginEntry } from '@/api/modules/relogin'
+import type { EnrollmentEntry } from '../enrollment-plan'
 import { ChevronRight, Layers, Monitor, MoreHorizontal } from '@lucide/vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
@@ -11,13 +11,16 @@ import BaseSwitch from '@/components/base/BaseSwitch.vue'
 import ReloginCountCell from '@/components/ReloginCountCell.vue'
 import { formatDateTime } from '@/utils/date'
 import AccountPlanBadge from '../../accounts/components/AccountPlanBadge.vue'
+import { canArrange } from '../enrollment-plan'
 import { maintenanceBusy, maintenanceResult, queueButtonLabel, queueDisabledReason, recentOperation, recentOperationAt } from '../maintenance'
 import { recoveryCountdown, reloginDisplayName, reloginPlanDisplay, retryProgress, shortWorkspace, workspaceId, workspaceLabel } from '../presentation'
+import EnrollmentPlanStatus from './EnrollmentPlanStatus.vue'
 import ReloginEgress from './ReloginEgress.vue'
 import ReloginSessionStatus from './ReloginSessionStatus.vue'
 
-defineProps<{ row: ReloginEntry, selected: boolean, busy: boolean, paused: boolean, canPush: boolean, now: number }>()
+defineProps<{ row: EnrollmentEntry, selected: boolean, busy: boolean, paused: boolean, canPush: boolean, now: number }>()
 defineEmits<{
+  arrange: []
   select: [value: boolean]
   automatic: [value: boolean]
   credentials: []
@@ -58,10 +61,12 @@ defineEmits<{
     <div class="mt-3 grid min-w-0 gap-3 text-cp-sm">
       <ReloginSessionStatus :row="row" compact />
       <div class="flex min-w-0 items-start gap-3">
-        <span class="shrink-0 pt-0.5 text-cp-xs text-cp-text-tertiary">出口</span>
-        <ReloginEgress class="flex-1" :row="row" />
+        <span class="shrink-0 pt-0.5 text-cp-xs text-cp-text-tertiary">{{ canArrange(row) ? '计划出口' : '出口' }}</span>
+        <span v-if="canArrange(row)" class="min-w-0 break-words">{{ row.enrollmentPlan?.exitLabel || '未设置' }}</span>
+        <ReloginEgress v-else class="flex-1" :row="row" />
       </div>
-      <div>
+      <EnrollmentPlanStatus v-if="canArrange(row)" :row="row" />
+      <div v-else>
         <button type="button" class="flex min-h-11 w-full items-center gap-2 rounded-cp text-left hover:bg-cp-fill-quaternary" aria-label="查看操作历史" @click="$emit('history')">
           <span class="min-w-0 flex-1">
             <span class="flex flex-wrap items-baseline gap-x-2 gap-y-1">
@@ -93,7 +98,10 @@ defineEmits<{
       </div>
     </div>
     <div class="flex min-w-0 items-center gap-1 border-t border-cp-border-secondary pt-2">
-      <BaseButton v-if="canPush" class="min-h-11 min-w-0 flex-1 whitespace-nowrap px-3" variant="soft" :disabled="busy" @click="$emit('push')">
+      <BaseButton v-if="canArrange(row)" class="min-h-11 min-w-0 flex-1" variant="soft" :disabled="busy || row.enrollmentPlan?.state === 'running'" @click="$emit('arrange')">
+        {{ row.enrollmentPlan ? '查看安排' : '安排入池' }}
+      </BaseButton>
+      <BaseButton v-else-if="canPush" class="min-h-11 min-w-0 flex-1 whitespace-nowrap px-3" variant="soft" :disabled="busy" @click="$emit('push')">
         推送凭据
       </BaseButton>
       <BaseButton v-else class="min-h-11 min-w-0 flex-1 whitespace-nowrap px-3" :title="queueDisabledReason(row, busy, paused)" :disabled="!!queueDisabledReason(row, busy, paused)" @click="$emit('queue')">
@@ -113,6 +121,9 @@ defineEmits<{
         </template>
         <template #default="{ close }">
           <div class="min-w-48 p-1 [&_button]:min-h-11">
+            <BaseMenuItem v-if="canArrange(row)" :disabled="!!queueDisabledReason(row, busy, paused) || row.enrollmentPlan?.state === 'scheduled'" @click="close(); $emit('queue')">
+              仅重登，不推送
+            </BaseMenuItem>
             <BaseMenuItem @click="close(); $emit('maintain', 'session')">
               登录与授权
             </BaseMenuItem>
