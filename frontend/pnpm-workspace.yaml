@@ -1,5 +1,10 @@
 autoInstallPeers: false
 
+# picomatch 只在构建工具链中使用，未进入发布产物。上游发布修复后升级并移除此例外
+auditConfig:
+  ignoreGhsas:
+    - GHSA-fc5q-39xc-vjpf
+
 overrides:
   oxfmt@0.35.0>tinypool: 2.1.2
 
