@@ -217,7 +217,14 @@ task cancellation and ordinary missing-entry/revision fences.
 - Integration tests mirror the production module layout: a directory module such
   as `use_case/relogin` uses `tests/use_case/relogin/mod.rs`. Run the App workspace
   architecture tests as well as the API architecture checks before merging.
-  Email verification pages require manual interaction; never send or read email codes.
+- Initial Web email-OTP login may try the password entry once in the same session
+  and egress, following `li-zane/sub2api-helper` commit `af529bdfd4aada9a9348cfc2ed3f6a8dc34a8043`.
+  Request the entry and its redirects with HTML navigation Accept headers; the JSON
+  Accept variant may return an unrendered page shell. Confirm a JSON password page
+  or an HTML password form before submitting. Preserve
+  email requirements after password/TOTP or during OAuth, and when password entry
+  returns to email verification. Report `email_verification_required`; never send
+  or read email codes. Cover both password-page representations and no-restart cases.
 - Old JSONB rows with an empty TOTP secret remain readable/deletable but cannot queue,
   auto-login, enable automatic recovery or push cached credentials. The list hides their
   cached credentials and reports invalid material without mutating storage. Preserve

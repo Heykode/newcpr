@@ -78,6 +78,9 @@ pub(crate) async fn login(
                 "无法确认工作区套餐，请指定工作区 ID"
             }
             Some("identity_mismatch" | "plan_mismatch") => "新凭据身份、套餐或工作区不符，未推送",
+            Some("email_verification_required") => {
+                "上游仍要求邮箱验证码，请在官方页面完成验证后重试"
+            }
             Some("interaction_required" | "login_loop") => {
                 "登录需要人工交互或流程已变化，请人工重新授权"
             }
@@ -278,6 +281,7 @@ pub(crate) async fn maintain(
             }
             "mfa_factor_missing" => "上游未返回唯一的 TOTP 因子，未执行停用",
             "interaction_required" => "上游要求人工验证，请在官方页面完成",
+            "email_verification_required" => "上游仍要求邮箱验证码，请在官方页面完成验证后重试",
             "password_rejected" => "密码验证失败，请检查本地资料",
             "mfa_rejected" => "2FA 验证失败，请检查密钥与服务器时间",
             "rate_limited" => "上游限流，请稍后重试",
