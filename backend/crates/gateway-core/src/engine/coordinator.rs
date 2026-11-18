@@ -2307,6 +2307,9 @@ where
     }
 
     async fn finish_interruption(&mut self, error: &EngineError) -> Result<(), EngineError> {
+        if let Some(current) = self.current.as_mut() {
+            current.stream.abort();
+        }
         self.response_commit.finish();
         let (outcome, gateway_error) = match error {
             EngineError::Cancelled => (

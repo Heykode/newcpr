@@ -49,7 +49,7 @@ async fn official_websocket_wire_fingerprint_should_remain_aligned() {
         (opening, websocket_key, frame)
     });
 
-    let mut request = CodexResponsesRequest::from_body(
+    let mut request = encode_request_with_headers(
         json!({
             "model": "gpt-5.5",
             "instructions": "be brief",
@@ -68,11 +68,11 @@ async fn official_websocket_wire_fingerprint_should_remain_aligned() {
         .as_object()
         .expect("request object")
         .clone(),
+        &[("x-codex-beta-features", "feature-a")],
     );
     request.use_websocket = true;
     request.local_conversation_id = Some("conversation-fingerprint".to_owned());
     request.turn_metadata = Some(r#"{"kind":"fingerprint"}"#.to_owned());
-    request.beta_features = Some("feature-a".to_owned());
     request.version = Some("26.908.40834".to_owned());
     request.codex_window_id = Some("window-fingerprint".to_owned());
     let client = CodexBackendClient::new(
@@ -92,7 +92,6 @@ async fn official_websocket_wire_fingerprint_should_remain_aligned() {
                 response_control: None,
                 trace: None,
                 turn_metadata: request.turn_metadata.as_deref(),
-                beta_features: request.beta_features.as_deref(),
                 version: request.version.as_deref(),
                 codex_window_id: request.codex_window_id.as_deref(),
                 session_id: Some("session-fingerprint"),
@@ -109,7 +108,8 @@ async fn official_websocket_wire_fingerprint_should_remain_aligned() {
         opening.lines().next(),
         Some("GET /backend-api/codex/responses HTTP/1.1")
     );
-    // Native WS ordering after the unified QX session header projection.
+    // The real encoder supplies the conversation anchor from prompt_cache_key;
+    // the selected thread owns the emitted conversation header.
     assert_eq!(
         read_header_names(&opening),
         vec![
@@ -118,11 +118,11 @@ async fn official_websocket_wire_fingerprint_should_remain_aligned() {
             "upgrade",
             "sec-websocket-version",
             "sec-websocket-key",
+            "conversation_id",
             "session_id",
             "chatgpt-account-id",
             "authorization",
             "user-agent",
-            "originator",
             "version",
             "x-codex-beta-features",
             "x-client-request-id",
@@ -132,8 +132,21 @@ async fn official_websocket_wire_fingerprint_should_remain_aligned() {
             "x-codex-turn-metadata",
             "x-codex-routing-hint",
             "openai-beta",
+            "originator",
             "sec-websocket-extensions",
         ]
+    );
+    assert_eq!(
+        read_header_value(&opening, "conversation_id"),
+        Some("thread-fingerprint")
+    );
+    assert_eq!(
+        read_header_value(&opening, "x-codex-beta-features"),
+        Some("feature-a")
+    );
+    assert_eq!(
+        read_header_value(&opening, "x-responsesapi-include-timing-metrics"),
+        None
     );
     assert_eq!(
         read_header_value(&opening, "sec-websocket-extensions"),

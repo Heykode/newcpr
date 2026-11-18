@@ -3391,3 +3391,38 @@ async fn oauth_connection_failures_preserve_safe_diagnostics_and_release_the_cla
         assert!(values.values().next().unwrap().3.is_none());
     }
 }
+
+#[tokio::test]
+async fn plan_display_uses_pro_short_names_and_codex_status_labels_for_other_known_plans() {
+    let bundle = provider_openai::initialize(valid_config().config, provider_ports())
+        .await
+        .unwrap();
+    let admin = bundle.admin_provider();
+    for (raw, display) in [
+        ("prolite", "ProLite"),
+        ("pro", "Pro"),
+        ("promax", "ProMax"),
+        ("free", "Free"),
+        ("go", "Go"),
+        ("plus", "Plus"),
+        ("team", "Business"),
+        ("self_serve_business_prolite", "Business Premium"),
+        ("self_serve_business_usage_based", "Business"),
+        ("business", "Enterprise"),
+        ("ent26", "Enterprise"),
+        ("enterprise", "Enterprise"),
+        ("hc", "Enterprise"),
+        ("enterprise_cbp_automation", "Enterprise (Automation)"),
+        ("enterprise_cbp_usage_based", "Enterprise"),
+        ("edu", "Edu"),
+        ("education", "Edu"),
+        ("edu_plus", "Edu Plus"),
+        ("edu_pro", "Edu Pro"),
+        ("sci", "Academic Researchers"),
+        ("sci_plus", "Academic Researchers Plus"),
+        ("SCI_PLUS", "Academic Researchers Plus"),
+        ("Future_Plan", "Future_Plan"),
+    ] {
+        assert_eq!(admin.plan_type_display(raw), display, "{raw}");
+    }
+}

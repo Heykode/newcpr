@@ -873,11 +873,13 @@ measured reduction in upstream risk controls, account bans or rate limits.
 
 ## Turn-State 全量回传
 
-按官方 `1daa0623a0`，未知归属的完整请求保留客户端 turn-state，首次请求、
-失败后重试和进程重启均不要求本地 proof 缓存。只保留 token 不代表认可其
-previous_response_id、parent_response_id 或账号归属；无主续接仍走已有历史重放。
-明确换号、轮次冲突继续清理 header、passthrough 及已知正文镜像，包括字符串和
-对象形式的嵌套 metadata。普通粘性命中只参与选号，不证明响应所有权。
+按官方 v3.52.1，转发本次请求携带的 turn-state；即使仍在同一账号、同一轮，
+也不从上次响应或会话恢复客户端未发送的值。WS 握手的轮次头只用于首次执行，
+当前帧的状态优先；帧内的元数据不会变为出站元数据头。
+未知归属的完整请求保留客户端回传的状态，首次请求、失败后重试和进程重启均不要求本地 proof 缓存。
+这不代表认可其 previous_response_id、parent_response_id 或账号归属；无主续接仍走已有历史重放。
+明确换号时清理 header、passthrough 及已知正文镜像，包括字符串和对象形式的嵌套 metadata；
+不因旧会话的轮次不同而丢弃客户端在本次请求中发送的状态。普通粘性命中只参与选号，不证明响应所有权。
 对应 HTTP/WS 全量请求、失败 token、换号和不完整历史回归位于
 `provider::contract::turn_state` 与 `identity_isolation`。
 

@@ -283,8 +283,9 @@ Responses 不透传下游的逐跳头、反代元数据（如 `cf-*`、`x-forwar
 正文设备身份和账号/Key 隔离保留。真实 UUIDv7 关联标识保留创建时间，其他值使用稳定 UUIDv4；
 合法 UUID 加规范 u64 的窗口保留后缀，context window 独立映射。显式缓存键独立于线程，
 同 scope 的相同原值映射相同；没有传缓存键时不补造。turn 引用和加密内容保持原值。
-同一轮全量请求可回传已记录且归属匹配的上游 turn-state，包括失败响应提供的值；
-此证明不授予未知 response ID 或其他账号状态的使用权。
+Responses 转发当前请求回传的 turn-state；不从历史会话补取，明确换号时清除。
+WS 握手的轮次状态与元数据头仅用于首次执行，当前帧的状态优先；帧元数据和原始请求头分别转发。
+Beta 和计时选项按收到的请求头透传。轮次状态不授予未知 response ID 或其他账号状态的使用权。
 
 OpenAI Responses 在统一请求编码阶段，将 `input` 数组中显式指定
 `type: "message"` 且 `role: "system"` 的消息转换为 `role: "developer"`。
@@ -447,9 +448,10 @@ HTTP 与 WS 新请求在明确未发送的瞬时建连失败下共享最多 4 �
 列表与详情复用现有状态解析器；启停不清除凭据、错误或额度记录，重新开启后展示真实状态。
 “正常”不表示此刻并发空闲，也不保证满足某个请求的分组、模型或路由条件。
 
-账号视图和 Dashboard 账号概览中的 `planType` 保留原始套餐值；`planTypeDisplay` 由后端先按 Provider 解析名称，
-再统一为大驼峰格式，前端直接展示该字段，例如 `Free`、`SuperGrokPro`、`EduPlus`。
-OpenAI 的 `self_serve_business_prolite` 等 Team 套餐显示为 `Business`；新套餐也使用相同格式。
+账号视图和 Dashboard 账号概览的 `planType` 保留原始值，`planTypeDisplay` 使用 Provider 给出的最终名称。
+OpenAI 区分 `ProLite`、`Pro`、`ProMax`；`self_serve_business_prolite` 显示为 `Business Premium`，
+`self_serve_business_usage_based` 显示为 `Business`。保留空格、括号和未知 OpenAI 套餐的原始拼写。
+未提供专属名称规则的 Provider 沿用通用大驼峰格式。
 账号套餐为空或 `unknown` 时，后端优先用已保存的上游额度响应
 中的明确套餐值补全 `planType` 和 `planTypeDisplay`；两处均无套餐信息时才显示“未知套餐”。
 
@@ -706,7 +708,7 @@ OpenAI OAuth 账号的 `capabilities.quotaSettingsSupported` 为真。通过
 普通请求在评分和获取账号租约前筛选；粘性、重试及容量等待不能绕过限制。
 OpenAI OAuth 账号白名单精确包含映射后的上游 ID 时，允许请求目录外模型，由上游判定是否支持。
 没有白名单豁免时，检查该账号当前凭据和套餐对应的最近成功目录；
-目录缺少模型时不选该账号，30 分钟刷新间隔、ETag 通知和刷新失败不会撤销排除。
+目录缺少模型时不选该账号，一小时复查间隔、ETag 通知和刷新失败不会撤销排除。
 没有同身份目录时交给上游验证，不借同套餐其他账号的权限。
 账号禁用、Key 分组、认证、冷却、额度与并发限制继续生效。
 已开始请求使用其冻结配置；旧 State 开关不构成原生 Responses 的额外资格条件。

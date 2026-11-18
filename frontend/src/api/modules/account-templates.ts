@@ -4,6 +4,7 @@ import type { Excel403Action, ExcelRecoveryConfig } from '@/utils/excel-settings
 import request from '../request'
 
 export interface AccountTemplateConfig {
+  credentialProxyId?: string | null
   modelAccess?: AccountModelAccess | null
   preserveOutboundProxy?: boolean
   requestProxySource?: import('@/utils/request-proxy-source').RequestProxySource

@@ -4,16 +4,19 @@ import type { AccountCreateForm, AccountImportMode } from './model'
 import type { AccountGroup } from '@/api'
 import { Openai, Xai } from '@boxicons/vue'
 import { Copy, LayoutGrid, Settings2 } from '@lucide/vue'
-import { computed, useTemplateRef } from 'vue'
+import { computed, shallowRef, useTemplateRef } from 'vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCheckbox from '@/components/base/BaseCheckbox.vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseModal from '@/components/base/BaseModal/index.vue'
 import BaseSegmented from '@/components/base/BaseSegmented.vue'
+import { toast } from '@/components/base/BaseToast'
 import ProviderIconGroup from '@/components/ProviderIconGroup.vue'
 import { useCopyText } from '@/composables/useCopyText'
 import { t } from '@/i18n'
 import { normalizeAccountName } from '@/utils/account-name'
+import { errorMessage } from '@/utils/async'
+import { enrollmentPreview, enrollmentSettings, previewPlanCommand } from '@/views/relogin/enrollment-plan'
 import { accountModelAccessError } from '../../utils/modelAccess'
 import { parseAccountSchedulingForm } from '../../utils/schedulingForm'
 import AccountIdentityCell from '../AccountIdentityCell.vue'
@@ -21,7 +24,7 @@ import AccountPlanBadge from '../AccountPlanBadge.vue'
 import AccountImportFields from './AccountImportFields.vue'
 import AccountOAuthFields from './AccountOAuthFields.vue'
 import AccountSetupFields from './AccountSetupFields.vue'
-import { accountProxyError } from './model'
+import { accountCreateEgress, accountImportSettings, accountProxyError } from './model'
 import { resolveAccountCreatePresentation } from './presenter'
 
 const props = withDefaults(defineProps<{
@@ -43,7 +46,8 @@ const accountCopyValue = computed(() =>
   || props.account?.id
   || '',
 )
-const busy = computed(() => props.saving || props.oauthLoading)
+const importingExample = shallowRef(false)
+const busy = computed(() => props.saving || props.oauthLoading || importingExample.value)
 const proxyError = computed(() => accountProxyError(form.value))
 const scheduling = computed(() => parseAccountSchedulingForm(form.value.concurrencyLimit, form.value.weight))
 const modelError = computed(() => accountModelAccessError(form.value.modelAccess))
@@ -84,6 +88,21 @@ async function continueToImport() {
     return
   if (form.value.provider && scheduling.value.valid && !modelError.value && !nameError.value && !props.groupsLoading && !proxyError.value && !busy.value)
     form.value.step = 'import'
+}
+async function importExample() {
+  if (!enrollmentPreview || busy.value)
+    return
+  importingExample.value = true
+  try {
+    if (!await setupFields.value?.validate())
+      return
+    accountImportSettings(form.value)
+    await previewPlanCommand({ mode: 'import-sample', settings: enrollmentSettings(form.value), exit: accountCreateEgress(form.value, true) })
+    open.value = false
+    toast.success('示例账号已提交，可在失效重登查看')
+  }
+  catch (cause) { toast.error(errorMessage(cause)) }
+  finally { importingExample.value = false }
 }
 </script>
 
@@ -199,7 +218,10 @@ async function continueToImport() {
       <BaseButton v-else class="mr-auto" variant="secondary" :disabled="busy" @click="form.step = 'settings'">
         {{ t('common.actions.previous') }}
       </BaseButton>
-      <BaseButton v-if="view.configuring" variant="primary" :disabled="!form.provider || groupsLoading || busy" @click="continueToImport">
+      <BaseButton v-if="enrollmentPreview && view.configuring && form.provider === 'openai' && !reauthorizing" variant="primary" :disabled="groupsLoading || busy" @click="importExample">
+        导入示例账号
+      </BaseButton>
+      <BaseButton v-else-if="view.configuring" variant="primary" :disabled="!form.provider || groupsLoading || busy" @click="continueToImport">
         继续导入
       </BaseButton>
       <BaseButton v-else variant="primary" :loading="saving || oauthLoading" :disabled="!view.canSubmit" @click="emit('create')">

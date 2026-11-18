@@ -1027,19 +1027,85 @@ async fn provider_should_send_the_configured_location_to_the_upstream() {
 }
 
 async fn capture_turn_state_request(
-    request_id: &str,
-    previous_turn_id: Option<&str>,
     current_turn_id: Option<&str>,
     client_turn_state: Option<&str>,
 ) -> wiremock::Request {
-    capture_turn_state_request_with_mirrors(
-        request_id,
-        previous_turn_id,
-        current_turn_id,
-        client_turn_state,
-        false,
-    )
-    .await
+    let account_id = "acct_session_affinity";
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, account_id).await;
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(CAPTURE_COMPLETED_SSE),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let session_state = Map::from_iter([
+        ("account_id".to_owned(), json!(account_id)),
+        ("conversation_id".to_owned(), json!("conversation")),
+        ("turn_state".to_owned(), json!("previous-turn-state")),
+        ("client_turn_id".to_owned(), json!("turn-same")),
+        ("continuation_scope".to_owned(), json!("persisted")),
+    ]);
+    let mut protocol_context = Map::from_iter([("use_websocket".to_owned(), json!(false))]);
+    if let Some(current_turn_id) = current_turn_id {
+        protocol_context.insert(
+            "turn_metadata".to_owned(),
+            Value::String(json!({"turn_id": current_turn_id}).to_string()),
+        );
+    }
+    if let Some(client_turn_state) = client_turn_state {
+        protocol_context.insert("turn_state".to_owned(), json!(client_turn_state));
+        protocol_context.insert(
+            "opaque_request_headers".to_owned(),
+            json!([["x-codex-turn-state", STANDARD.encode(client_turn_state)]]),
+        );
+    }
+    let mut body = Map::from_iter([
+        ("model".to_owned(), json!("gpt-5.4")),
+        ("input".to_owned(), json!("current input")),
+        ("previous_response_id".to_owned(), json!("resp_previous")),
+        ("client_metadata".to_owned(), json!({"custom":"preserved"})),
+    ]);
+    if let Some(state) = client_turn_state {
+        for key in ["turnState", "turn_state", "x-codex-turn-state"] {
+            body.insert(key.to_owned(), json!(state));
+            body["client_metadata"]
+                .as_object_mut()
+                .unwrap()
+                .insert(key.to_owned(), json!(state));
+        }
+    }
+    let operation = Operation::Generate(
+        GenerateRequest::from_protocol_payload(
+            ProtocolPayload::json_object("openai", body)
+                .expect("OpenAI payload")
+                .with_context(protocol_context),
+        )
+        .with_provider_session_state(
+            ProviderSessionState::new("openai", session_state).expect("provider session state"),
+        ),
+    );
+    let mut stream = provider_with_base_url(&store, server.uri())
+        .execute(
+            planned_request("openai", operation),
+            context("req_client_turn_state", CancellationToken::new()),
+        )
+        .await
+        .expect("prepare turn-state provider stream");
+    while let Some(event) = stream.next().await {
+        event.expect("turn-state provider response");
+    }
+    let mut requests = server
+        .received_requests()
+        .await
+        .expect("captured turn-state request");
+    assert_eq!(requests.len(), 1);
+    requests.pop().expect("single turn-state request")
 }
 
 async fn capture_turn_state_request_with_mirrors(
@@ -5242,62 +5308,72 @@ async fn missing_affinity_full_request_should_preserve_client_turn_state() {
 }
 
 #[tokio::test]
-async fn matching_turn_id_should_restore_previous_turn_state() {
-    let request = capture_turn_state_request(
-        "req_restore_same_turn_state",
-        Some("turn-same"),
-        Some("turn-same"),
-        None,
-    )
-    .await;
-
-    assert_eq!(
-        captured_header_values(&request, "x-codex-turn-state"),
-        vec![b"previous-turn-state".to_vec()]
-    );
-}
-
-#[tokio::test]
-async fn matching_turn_id_should_prefer_an_explicit_client_echo_over_saved_provider_state() {
-    let request = capture_turn_state_request(
-        "req_use_client_turn_state",
-        Some("turn-same"),
-        Some("turn-same"),
-        Some("client-turn-state"),
-    )
-    .await;
-
-    assert_eq!(
-        captured_header_values(&request, "x-codex-turn-state"),
-        vec![b"client-turn-state".to_vec()]
-    );
-}
-
-#[tokio::test]
-async fn new_or_unidentified_turn_should_not_restore_previous_turn_state() {
-    for (request_id, previous_turn_id, current_turn_id, client_turn_state) in [
-        (
-            "req_new_turn_state",
-            Some("turn-old"),
-            Some("turn-new"),
-            Some("stale-client-turn-state"),
-        ),
-        ("req_unidentified_turn_state", None, Some("turn-new"), None),
-        (
-            "req_missing_current_turn_state",
-            Some("turn-old"),
-            None,
-            None,
-        ),
+async fn same_account_continuation_forwards_only_the_current_request_turn_state() {
+    // 旧版会话中可能仍有保存的轮次和 token
+    for (turn, supplied) in [
+        (Some("turn-same"), None),
+        (Some("turn-same"), Some("client-turn-state")),
+        (Some("turn-new"), Some("client-turn-state")),
+        (None, Some("client-turn-state")),
     ] {
-        let request = capture_turn_state_request(
-            request_id,
-            previous_turn_id,
-            current_turn_id,
-            client_turn_state,
-        )
-        .await;
-        assert!(captured_header_values(&request, "x-codex-turn-state").is_empty());
+        let request = capture_turn_state_request(turn, supplied).await;
+        let headers = captured_header_values(&request, "x-codex-turn-state");
+        assert_eq!(
+            headers,
+            supplied
+                .map(|value| value.as_bytes())
+                .into_iter()
+                .collect::<Vec<_>>()
+        );
+        let body = captured_request_body(&request);
+        for key in ["turnState", "turn_state", "x-codex-turn-state"] {
+            assert_eq!(body.get(key).and_then(Value::as_str), supplied);
+            assert_eq!(
+                body["client_metadata"].get(key).and_then(Value::as_str),
+                supplied
+            );
+        }
+        assert_eq!(body["input"][0]["content"][0]["text"], "current input");
+        assert_eq!(body["client_metadata"]["custom"], "preserved");
+    }
+}
+
+#[tokio::test]
+async fn websocket_body_fields_stay_in_the_body_when_using_http_upstream() {
+    let frame = r#"{"request_kind":"turn","tool_namespaces_info":{"workspace":{}}}"#;
+    let body = json!({
+        "model": "gpt-5.4", "input": "hello",
+        "client_metadata": {"x-codex-turn-metadata": frame},
+        "betaFeatures": "only-in-body", "includeTimingMetrics": "true"
+    });
+    let sent = capture_scoped_http_request(
+        "req_frame_only",
+        "acct_scope_same",
+        "acct_scope_same",
+        body.as_object().unwrap().clone(),
+        Map::from_iter([(
+            gateway_protocol::openai::WEBSOCKET_FRAME_CONTEXT_KEY.into(),
+            json!(true),
+        )]),
+    )
+    .await;
+    for header in [
+        "x-codex-turn-metadata",
+        "x-codex-beta-features",
+        "x-responsesapi-include-timing-metrics",
+    ] {
+        assert!(!sent.headers.contains_key(header), "{header}");
+    }
+    let sent_body = captured_request_body(&sent);
+    let sent_frame = sent_body["client_metadata"]["x-codex-turn-metadata"]
+        .as_str()
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(sent_frame).unwrap(),
+        serde_json::from_str::<Value>(frame).unwrap()
+    );
+    for key in ["betaFeatures", "includeTimingMetrics"] {
+        assert_eq!(sent_body[key], body[key]);
     }
 }
 

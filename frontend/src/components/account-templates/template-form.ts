@@ -33,6 +33,7 @@ export function templateForm(config?: AccountTemplateConfig) {
         }
       : undefined,
     name: config?.name ?? '',
+    credentialProxyId: config?.credentialProxyId,
     modelAccess: config?.modelAccess ? { ...config.modelAccess, models: [...config.modelAccess.models] } : undefined,
     enabled: config?.enabled ?? true,
     applyExcel: config === undefined || config.responsesUpstream != null || config.excelModelsFollowGlobal != null || config.excelModels != null,
@@ -74,6 +75,7 @@ export function templateConfig(form: ReturnType<typeof templateForm>): AccountTe
   }
   return {
     name,
+    ...(form.credentialProxyId === undefined ? {} : { credentialProxyId: form.credentialProxyId }),
     ...(form.modelAccess ? { modelAccess: { ...form.modelAccess, models: [...form.modelAccess.models] } } : {}),
     enabled: form.enabled,
     ...(form.applyExcel

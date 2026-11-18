@@ -1,7 +1,15 @@
 use super::*;
 
 fn request() -> CodexResponsesRequest {
-    let mut request = codex_request("gpt-test", "be brief", Vec::new());
+    request_with_beta(None)
+}
+
+fn request_with_beta(beta: Option<&str>) -> CodexResponsesRequest {
+    let body = codex_request("gpt-test", "be brief", Vec::new())
+        .body()
+        .clone();
+    let headers = beta.map(|v| ("x-codex-beta-features", v));
+    let mut request = encode_request_with_headers(body, headers.as_slice());
     request.local_conversation_id = Some("compat-conversation".to_owned());
     request.client_session_id = Some("compat-session".to_owned());
     request.client_thread_id = Some("compat-thread".to_owned());
@@ -74,8 +82,7 @@ async fn assert_opening_compatibility(
         }
         openings.lock().unwrap().clone()
     });
-    let mut first = request();
-    first.beta_features = first_beta.map(str::to_owned);
+    let mut first = request_with_beta(first_beta);
     first.codex_window_id = first_window.map(str::to_owned);
     let initial = timeout(
         Duration::from_secs(3),
@@ -88,8 +95,7 @@ async fn assert_opening_compatibility(
     .unwrap()
     .unwrap();
     assert_eq!(initial.transport, CodexBackendTransport::WebSocket);
-    let mut second = first.clone();
-    second.beta_features = second_beta.map(str::to_owned);
+    let mut second = request_with_beta(second_beta);
     second.codex_window_id = second_window.map(str::to_owned);
     if exact {
         second.set_previous_response_id(Some("resp_compat_first".into()));
@@ -117,7 +123,7 @@ async fn assert_opening_compatibility(
             openings[1]
                 .get("x-codex-beta-features")
                 .map(|v| v.to_str().unwrap()),
-            Some(second_beta.unwrap_or("remote_compaction_v2"))
+            second_beta
         );
         if let Some(window) = second_window {
             assert!(
@@ -181,8 +187,9 @@ async fn unchanged_opening_attributes_reuse_the_same_socket() {
 }
 
 #[tokio::test]
-async fn default_and_explicit_default_beta_share_the_same_opening() {
-    assert_opening_compatibility(None, Some("remote_compaction_v2"), None, None, true, false).await;
+async fn omitted_and_explicit_compaction_beta_use_distinct_openings() {
+    assert_opening_compatibility(None, Some("remote_compaction_v2"), None, None, false, false)
+        .await;
 }
 
 #[tokio::test]

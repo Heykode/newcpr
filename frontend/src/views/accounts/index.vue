@@ -23,6 +23,7 @@ import QualityTemplateApplyMenu from '@/components/quality-ops/QualityTemplateAp
 import ReloginCountCell from '@/components/ReloginCountCell.vue'
 import { useAccountGroupCatalog } from '@/composables/useAccountGroupCatalog'
 import { t } from '@/i18n'
+import { enrollmentPreview } from '../relogin/enrollment-plan'
 import AccountBatchEditModal from './components/AccountBatchEditModal.vue'
 import AccountCapacityCell from './components/AccountCapacityCell.vue'
 import AccountConnectionTestModal from './components/AccountConnectionTestModal.vue'
@@ -347,6 +348,7 @@ const {
   modelAccess: editingModelAccess,
   proxyMode: editingProxyMode,
   proxyId: editingProxyId,
+  credentialProxyId: editingCredentialProxyId,
   egressMode: editingEgressMode,
   egressReadState: editingEgressReadState,
   selectedGroupIds: editingGroupIds,
@@ -355,6 +357,7 @@ const {
   save: saveAccountEdit,
   clear: clearAccountEdit,
 } = useAccountEditor({
+  credentialEgress: enrollmentPreview,
   accounts,
   reloadAccounts: loadAccounts,
   reloadGroups: loadGroups,
@@ -598,7 +601,7 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
 
             <template #planType="{ row }">
               <div class="flex w-full min-w-0 justify-center" :title="row.planTypeDisplay">
-                <AccountPlanBadge data-account-plan-mark :plan-type="row.planType" :plan-type-display="row.planTypeDisplay" />
+                <AccountPlanBadge wrap data-account-plan-mark :plan-type="row.planType" :plan-type-display="row.planTypeDisplay" />
               </div>
             </template>
 
@@ -792,6 +795,7 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
       v-model:proxy-mode="editingProxyMode"
       v-model:egress-mode="editingEgressMode"
       v-model:proxy-id="editingProxyId"
+      v-model:credential-proxy-id="editingCredentialProxyId"
       v-model:selected-group-ids="editingGroupIds"
       :account="editingAccount"
       :groups="groups"

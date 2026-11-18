@@ -60,15 +60,8 @@ pub(crate) async fn responses_websocket(
         &headers,
         connect_info.map(|Extension(ConnectInfo(address))| address),
     );
-    let request_headers = OpenAiRequestHeaders::from_headers(&headers);
-    ResponsesWebSocketAdapter::new(service).upgrade_with_client_context(
-        websocket,
-        client,
-        client_ip,
-        user_agent,
-        request_headers,
-        headers,
-    )
+    ResponsesWebSocketAdapter::new(service)
+        .upgrade_with_client_context(websocket, client, client_ip, user_agent, headers)
 }
 
 /// 已鉴权 Responses WebSocket 升级边界。
@@ -90,7 +83,6 @@ impl ResponsesWebSocketAdapter {
         client: AuthenticatedClient,
         client_ip: Option<IpAddr>,
         user_agent: Option<String>,
-        request_headers: OpenAiRequestHeaders,
         raw_headers: HeaderMap,
     ) -> Response {
         let connection_guard = match self.service.try_register_connection() {
@@ -111,7 +103,7 @@ impl ResponsesWebSocketAdapter {
             connection_id,
             client_ip,
             user_agent,
-            request_headers,
+            raw_headers,
             lifecycle: self.service.lifecycle(),
             connection_guard,
         };
@@ -127,7 +119,7 @@ struct ResponsesWebSocketSession {
     connection_id: String,
     client_ip: Option<IpAddr>,
     user_agent: Option<String>,
-    request_headers: OpenAiRequestHeaders,
+    raw_headers: HeaderMap,
     lifecycle: Arc<dyn ConnectionLifecycle>,
     connection_guard: Box<dyn ConnectionGuard>,
 }
@@ -139,7 +131,7 @@ async fn serve_responses_websocket(socket: Socket, session: ResponsesWebSocketSe
         connection_id,
         client_ip,
         user_agent,
-        request_headers,
+        mut raw_headers,
         lifecycle,
         connection_guard,
     } = session;
@@ -149,8 +141,6 @@ async fn serve_responses_websocket(socket: Socket, session: ResponsesWebSocketSe
     );
     let _connection_guard = connection_guard;
     let cancellation = lifecycle.cancellation();
-    let request_headers =
-        request_headers.with_downstream_websocket_connection_id(connection_id.clone());
     let mut connection = ResponsesWebSocketConnection::new(socket, connection_id, cancellation);
     let mut request_count = 0_u64;
     let mut replay = ConnectionReplaySnapshot::default();
@@ -197,6 +187,8 @@ async fn serve_responses_websocket(socket: Socket, session: ResponsesWebSocketSe
         }
         request_count = request_count.saturating_add(1);
         let correlation_id = Arc::<str>::from(service.next_request_id());
+        let request_headers = OpenAiRequestHeaders::from_headers(&raw_headers)
+            .with_downstream_websocket_connection_id(connection.id().to_owned());
         let decoded = match replay.decode(&payload, &request_headers) {
             Ok(decoded) => decoded.with_client_context(client_ip, user_agent.clone()),
             Err(error) => {
@@ -233,6 +225,8 @@ async fn serve_responses_websocket(socket: Socket, session: ResponsesWebSocketSe
             expire_connection(&mut connection).await;
             break;
         }
+        raw_headers.remove("x-codex-turn-state");
+        raw_headers.remove("x-codex-turn-metadata");
         let started = match service
             .start_response(
                 client.clone(),

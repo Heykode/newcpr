@@ -48,6 +48,7 @@ export interface AccountCreateForm {
   oauthCallback: string
   proxyMode: string
   proxyId: string
+  credentialProxyId?: string | null
   egressMode: string
 }
 
