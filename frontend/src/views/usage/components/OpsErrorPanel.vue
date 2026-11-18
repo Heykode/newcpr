@@ -151,12 +151,14 @@ function upstreamSendStateText(value: string | null | undefined) {
           />
         </template>
         <template #accountPlanType="{ row }">
-          <AccountPlanBadge
-            v-if="row.accountPlanType"
-            :plan-type="row.accountPlanType"
-            :plan-type-display="row.accountPlanTypeDisplay || row.accountPlanType"
-            size="sm"
-          />
+          <div v-if="row.accountPlanType" class="-mx-2.5 flex min-w-0 justify-center">
+            <AccountPlanBadge
+              wrap
+              :plan-type="row.accountPlanType"
+              :plan-type-display="row.accountPlanTypeDisplay || row.accountPlanType"
+              size="sm"
+            />
+          </div>
           <span v-else class="text-cp-text-quaternary">—</span>
         </template>
         <template #message="{ row }">

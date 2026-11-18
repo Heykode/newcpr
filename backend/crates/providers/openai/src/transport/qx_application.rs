@@ -257,14 +257,6 @@ pub fn apply_response_headers(
             }
         }
     }
-    if !headers.contains_key("x-codex-beta-features") {
-        let features = [context.beta_features, request.beta_features.as_deref()]
-            .into_iter()
-            .flatten()
-            .find_map(|value| HeaderValue::from_str(value).ok())
-            .unwrap_or_else(|| HeaderValue::from_static("remote_compaction_v2"));
-        headers.insert(HeaderName::from_static("x-codex-beta-features"), features);
-    }
     Ok(())
 }
 

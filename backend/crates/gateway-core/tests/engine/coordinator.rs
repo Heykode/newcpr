@@ -629,6 +629,7 @@ struct FakeStore {
     state: Mutex<StoreState>,
     failures: BTreeSet<StoreWriteFailure>,
     create_gate: Mutex<Option<oneshot::Receiver<()>>>,
+    intermediate_gate: Mutex<Option<oneshot::Receiver<()>>>,
     send_state_gate: Mutex<Option<oneshot::Receiver<()>>>,
     finalize_gate: Mutex<Option<oneshot::Receiver<()>>>,
 }
@@ -729,6 +730,10 @@ impl ExecutionStore for FakeStore {
         &self,
         failure: IntermediateFailure,
     ) -> Result<(), StoreError> {
+        let gate = self.intermediate_gate.lock().unwrap().take();
+        if let Some(gate) = gate {
+            gate.await.expect("intermediate failure released");
+        }
         let mut state = self.state.lock().expect("store lock");
         state.intermediate_failures += 1;
         state
@@ -982,7 +987,7 @@ impl Provider for ScriptedProvider {
                         futures::stream::iter(items.into_iter().map(canonical_provider_event))
                             .chain(futures::stream::pending()),
                     ),
-                    (),
+                    TrackedLease(Arc::clone(&self.released_leases)),
                 ))
             }
             Script::ObservedStream { account_id, items } => {
@@ -3944,7 +3949,16 @@ fn recovered_credential_retries_the_same_account_exactly_once() {
         CancellationToken::new(),
     ))
     .expect("start execution");
-    block_on(session.collect_uncommitted()).expect("recovered account succeeds");
+    let (release, gate) = oneshot::channel();
+    *store.intermediate_gate.lock().unwrap() = Some(gate);
+    block_on(async {
+        let mut collect = Box::pin(session.collect_uncommitted());
+        assert!(futures::poll!(collect.as_mut()).is_pending());
+        assert_eq!(provider.contexts.lock().unwrap().len(), 1);
+        assert_eq!(provider.released_leases.load(Ordering::SeqCst), 1);
+        release.send(()).unwrap();
+        collect.await.expect("recovered account succeeds");
+    });
     block_on(session.commit_downstream(Some(200))).expect("commit response");
 
     let contexts = provider.contexts.lock().expect("contexts lock");
@@ -6214,7 +6228,7 @@ fn structural_event_before_replay_safe_failure_should_switch_account_before_comm
 fn cancellation_before_pending_delivery_commit_reaches_terminal_state() {
     let operation = generate_operation();
     let route_plan = plan(&operation);
-    let (coordinator, store, _) = coordinator(vec![Script::Stream {
+    let (coordinator, store, provider) = coordinator(vec![Script::Stream {
         account_id: "acct_first",
         items: complete_stream(None),
     }]);
@@ -6235,7 +6249,15 @@ fn cancellation_before_pending_delivery_commit_reaches_terminal_state() {
         CommitRequirement::CommitBeforeDelivery
     );
 
-    block_on(session.cancel_and_finalize()).expect("cancel finalization");
+    let (release, gate) = oneshot::channel();
+    *store.send_state_gate.lock().unwrap() = Some(gate);
+    block_on(async {
+        let mut cancel = Box::pin(session.cancel_and_finalize());
+        assert!(futures::poll!(cancel.as_mut()).is_pending());
+        assert_eq!(provider.released_leases.load(Ordering::SeqCst), 1);
+        release.send(()).unwrap();
+        cancel.await.expect("cancel finalization");
+    });
 
     assert!(session.is_finalized());
     let state = store.state.lock().expect("store lock");
@@ -7076,6 +7098,7 @@ fn charged_terminal_write_resumes_without_replacing_success_failure_or_send_fact
                     assert!(futures::poll!(collect.as_mut()).is_pending());
                 } else {
                     session.collect_uncommitted().await.unwrap();
+                    assert_eq!(provider.released_leases.load(Ordering::SeqCst), 1);
                     let mut commit = Box::pin(session.commit_downstream(Some(200)));
                     assert!(futures::poll!(commit.as_mut()).is_pending());
                 }
@@ -7164,7 +7187,7 @@ fn interrupted_terminal_send_state_write_resumes_without_restarting_cleanup() {
 }
 
 #[test]
-fn interrupted_stream_failure_keeps_error_lease_and_single_attempt() {
+fn interrupted_stream_failure_releases_lease_and_keeps_single_attempt() {
     block_on(async {
         for cancel in [false, true] {
             let operation = generate_operation();
@@ -7200,7 +7223,7 @@ fn interrupted_stream_failure_keeps_error_lease_and_single_attempt() {
             let mut waiting = Box::pin(session.next_event());
             assert!(futures::poll!(waiting.as_mut()).is_pending());
             drop(waiting);
-            assert_eq!(provider.released_leases.load(Ordering::SeqCst), 0);
+            assert_eq!(provider.released_leases.load(Ordering::SeqCst), 1);
             if cancel {
                 session.cancel_and_finalize().await.unwrap();
             } else {
@@ -7230,7 +7253,7 @@ fn interrupted_stream_failure_keeps_error_lease_and_single_attempt() {
 fn deadline_after_commit_is_incomplete_without_provider_circuit_failure() {
     let operation = generate_operation();
     let route_plan = plan(&operation);
-    let (coordinator, store, _) = coordinator(vec![Script::HangingStream {
+    let (coordinator, store, provider) = coordinator(vec![Script::HangingStream {
         account_id: "acct_first",
         items: vec![Ok(GatewayEvent::Started(ResponseMeta::new(
             "response-1",
@@ -7256,6 +7279,7 @@ fn deadline_after_commit_is_incomplete_without_provider_circuit_failure() {
     block_on(session.commit_downstream(Some(200))).expect("commit started event");
 
     let error = block_on(session.next_event()).expect_err("deadline elapses mid-stream");
+    assert_eq!(provider.released_leases.load(Ordering::SeqCst), 1);
 
     assert!(matches!(error, EngineError::Deadline));
     // 网关自身请求预算到期不是上游超时；已在交付中的长流集中到期
@@ -7572,6 +7596,58 @@ impl gateway_core::engine::provider::NativeResponseTranslator for MessagesTransl
             })
             .collect()
     }
+}
+
+#[test]
+fn native_translation_failure_after_commit_releases_lease_without_replay() {
+    block_on(async {
+        let body = json!({"model":"gpt-5","max_tokens":128,"messages":[{"role":"user","content":"hello"}]});
+        let operation = Operation::Generate(GenerateRequest::from_protocol_payload(
+            ProtocolPayload::json_object("anthropic", body.as_object().unwrap().clone()).unwrap(),
+        ));
+        let route_plan = plan(&operation);
+        let wire = |kind: &str| {
+            ProtocolWireEvent::json("openai", Some(kind.to_owned()), json!({"type":kind})).unwrap()
+        };
+        let (coordinator, _, provider) = coordinator(vec![Script::TranslatedStream {
+            items: vec![
+                Ok(ProviderEvent::canonical_with_wire(
+                    vec![GatewayEvent::Started(ResponseMeta::new(
+                        "resp_one", "gpt-5",
+                    ))],
+                    wire("response.created"),
+                )),
+                // The native translator requires an item in this event.
+                Ok(ProviderEvent::wire(wire("response.output_item.added"))),
+            ],
+        }]);
+        let mut session = coordinator
+            .start(
+                model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
+                operation,
+                route_plan,
+                None,
+                None,
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        let first = session.next_event().await.unwrap().unwrap();
+        assert_eq!(
+            first.commit_requirement(),
+            CommitRequirement::CommitBeforeDelivery
+        );
+        session.commit_downstream(Some(200)).await.unwrap();
+        assert_eq!(provider.released_leases.load(Ordering::SeqCst), 0);
+        assert!(matches!(
+            session.next_event().await.unwrap_err(),
+            EngineError::Provider(error)
+                if error.kind() == ProviderErrorKind::Protocol
+                    && error.send_state() == UpstreamSendState::Sent
+        ));
+        assert_eq!(provider.released_leases.load(Ordering::SeqCst), 1);
+        assert_eq!(provider.contexts.lock().unwrap().len(), 1);
+    });
 }
 
 #[test]

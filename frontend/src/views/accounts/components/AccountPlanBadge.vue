@@ -8,6 +8,7 @@ const props = withDefaults(
     planType?: string | null
     planTypeDisplay: string
     size?: 'xs' | 'sm' | 'md'
+    wrap?: boolean
   }>(),
   {
     planType: null,
@@ -30,13 +31,11 @@ const fallbackPalettes = [
 
 const rawPlanType = computed(() => props.planType?.trim() || '')
 
-const sizeClass = computed(() => {
-  if (props.size === 'xs')
-    return 'h-4.5 rounded-full px-1.5 text-[10px] font-bold'
-  return props.size === 'sm'
-    ? 'h-5 rounded-full px-1.75 text-cp-xs font-bold'
-    : 'h-5.5 rounded-full px-2 text-cp-xs font-heavy'
-})
+const sizes = {
+  xs: { text: 'text-[10px] font-bold', singleLine: 'h-4.5 px-1.5' },
+  sm: { text: 'text-cp-xs font-bold', singleLine: 'h-5 px-1.75' },
+  md: { text: 'text-cp-xs font-heavy', singleLine: 'h-5.5 px-2' },
+}
 
 const paletteClass = computed(() => {
   const key = rawPlanType.value.toLowerCase()
@@ -50,10 +49,10 @@ const paletteClass = computed(() => {
 
 <template>
   <span
-    class="inline-flex min-w-0 max-w-full items-center justify-center whitespace-nowrap leading-none shadow-cp-tertiary"
-    :class="[sizeClass, paletteClass]"
+    class="inline-flex min-w-0 max-w-full items-center justify-center shadow-cp-tertiary"
+    :class="[sizes[size].text, paletteClass, wrap ? 'min-h-5.5 rounded-lg px-1 py-0.75 text-center leading-3.5' : [sizes[size].singleLine, 'rounded-full whitespace-nowrap leading-none']]"
     :title="planTypeDisplay || undefined"
   >
-    <span class="truncate">{{ planTypeDisplay }}</span>
+    <span :class="wrap ? 'line-clamp-3 text-balance wrap-anywhere whitespace-normal' : 'truncate'">{{ planTypeDisplay }}</span>
   </span>
 </template>

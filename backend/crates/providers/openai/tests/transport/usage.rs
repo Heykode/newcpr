@@ -512,8 +512,6 @@ async fn fetch_should_use_wham_usage_headers_only() {
             request_id: "req_usage_headers",
             turn_state: Some("turn-state"),
             turn_metadata: Some("turn-meta"),
-            beta_features: Some("feature-a"),
-            include_timing_metrics: Some("true"),
             version: Some("26.318.11754"),
             codex_window_id: Some("cw_1"),
             parent_thread_id: Some("parent-1"),
@@ -522,7 +520,6 @@ async fn fetch_should_use_wham_usage_headers_only() {
             session_id: Some("session-1"),
             thread_id: Some("thread-1"),
             client_request_id: Some("client-request-1"),
-            turn_id: Some("turn-1"),
             account_selection: Default::default(),
         })
         .await
@@ -851,8 +848,6 @@ fn context() -> CodexRequestContext<'static> {
         request_id: "req_usage_limit",
         turn_state: None,
         turn_metadata: None,
-        beta_features: None,
-        include_timing_metrics: None,
         version: None,
         codex_window_id: None,
         parent_thread_id: None,
@@ -861,7 +856,6 @@ fn context() -> CodexRequestContext<'static> {
         session_id: None,
         thread_id: None,
         client_request_id: None,
-        turn_id: None,
         account_selection: Default::default(),
     }
 }

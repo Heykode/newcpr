@@ -96,7 +96,6 @@ fn resolved_ids_override_passthrough_without_mutating_body_or_continuation() {
         ("x-client-request-id", "cpr-thread"),
         ("conversation_id", "cpr-thread"),
         ("x-codex-window-id", "foreign:prefix:00042"),
-        ("x-codex-beta-features", "remote_compaction_v2"),
         ("x-codex-turn-state", "opaque-state"),
         ("x-codex-turn-metadata", "{\"turn_id\":\"original-turn\"}"),
         ("x-openai-subagent", "review"),
@@ -255,15 +254,9 @@ fn beta_features_preserve_existing_empty_and_multivalue_declarations() {
             values
         );
     }
-    let mut context = context();
-    context.beta_features = Some("context-feature");
     let mut headers = HeaderMap::new();
-    apply_response_headers(&mut headers, &request, context).unwrap();
-    assert_header(&headers, "x-codex-beta-features", "context-feature");
-    context.beta_features = Some("");
-    headers.clear();
-    apply_response_headers(&mut headers, &request, context).unwrap();
-    assert_header(&headers, "x-codex-beta-features", "");
+    apply_response_headers(&mut headers, &request, context()).unwrap();
+    assert!(!headers.contains_key("x-codex-beta-features"));
 }
 
 #[test]

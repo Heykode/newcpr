@@ -42,6 +42,8 @@ async function main() {
     const page = await browser.newPage({ viewport: { width: 390, height: 844 }, reducedMotion: 'reduce' })
     page.setDefaultTimeout(15000)
     const rows = structuredClone(mobileAccounts)
+    rows[1].planType = 'sci_plus'
+    rows[1].planTypeDisplay = 'Academic Researchers Plus'
     const errors = []
     const unexpected = []
     const reads = []
@@ -142,6 +144,10 @@ async function main() {
         const desktopGroups = page.locator(`tr[data-row-key="${rows[0].id}"]`).getByRole('button', { name: /^查看账号分组/ })
         await desktopGroups.waitFor()
         await assertGroupBounds(desktopGroups, 2)
+        const longPlan = page.locator(`tr[data-row-key="${rows[1].id}"] [data-account-plan-mark] span`)
+        await longPlan.waitFor()
+        assert.ok(await longPlan.evaluate(el => el.clientHeight > Number.parseFloat(getComputedStyle(el).lineHeight)
+          && el.scrollHeight <= el.clientHeight + 1 && el.scrollWidth <= el.clientWidth + 1), 'long plan wraps within its column')
         for (const width of [320, 390, 430, 767]) {
           await page.setViewportSize({ width, height: 900 })
           await first().scrollIntoViewIfNeeded()

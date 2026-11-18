@@ -162,7 +162,7 @@ pub struct CodexResponsesRequest {
     pub(crate) scheduling_session_hint: Option<OpenAiSchedulingSessionHint>,
     /// 客户端 request ID，仅保留在受控本地上下文。
     pub client_request_id: Option<String>,
-    /// 客户端 turn ID，仅保留在受控本地上下文。
+    /// 本地额度计量使用的轮次身份，不用于恢复 turn state。
     pub client_turn_id: Option<String>,
     /// 连接池和 affinity 使用的本地会话身份，不发送上游。
     pub local_conversation_id: Option<String>,
@@ -186,12 +186,10 @@ pub struct CodexResponsesRequest {
     /// 代理托管 state 的版本；只参与本地 WS 新链连接隔离，不发送上游。
     /// turn metadata 透传头。
     pub turn_metadata: Option<String>,
-    /// beta features 透传头。
-    pub beta_features: Option<String>,
+    /// 实际入站为 WS 帧时，观测优先使用本帧的轮次元数据
+    pub(crate) websocket_frame: bool,
     /// 下游 `version` 扩展头；存在时上游值由 Desktop 版本画像统一生成。
     pub version: Option<String>,
-    /// timing metrics 透传头。
-    pub include_timing_metrics: Option<String>,
     /// Responses Lite 请求语义；HTTP 使用 header，WebSocket 使用 client metadata 投影。
     pub responses_lite: Option<String>,
     /// Memory consolidation 请求语义；HTTP 与 WebSocket opening 均使用 header。
@@ -662,9 +660,8 @@ impl CodexResponsesRequest {
             force_http_sse: false,
             turn_state: None,
             turn_metadata: None,
-            beta_features: None,
+            websocket_frame: false,
             version: None,
-            include_timing_metrics: None,
             responses_lite: None,
             memgen_request: None,
             codex_window_id: None,
@@ -835,7 +832,11 @@ impl CodexResponsesRequest {
     pub fn semantics_with_override(&self, previous: Option<&str>) -> CodexRequestSemantics {
         gateway_protocol::openai::codex::codex_responses_request_semantics_with_continuation(
             self.body(),
-            self.turn_metadata.as_deref(),
+            gateway_protocol::openai::observed_turn_metadata(
+                self.body(),
+                self.turn_metadata.as_deref(),
+                self.websocket_frame,
+            ),
             previous,
         )
     }

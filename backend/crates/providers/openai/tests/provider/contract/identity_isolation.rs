@@ -1,20 +1,23 @@
 use super::*;
 
 #[tokio::test]
-async fn changed_turn_clears_opaque_header_and_all_known_body_mirrors() {
+async fn same_account_preserves_current_mirrors_across_turn_ids() {
     let request = capture_turn_state_request_with_mirrors(
         "req_changed_turn_mirrors",
         Some("old"),
         Some("new"),
-        Some("stale-state"),
+        Some("current-state"),
         true,
     )
     .await;
-    assert!(captured_header_values(&request, "x-codex-turn-state").is_empty());
+    assert_eq!(request.headers["x-codex-turn-state"], "current-state");
     let body = captured_request_body(&request);
-    assert!(body.get("turn_state").is_none());
-    assert!(body["client_metadata"].get("x-codex-turn-state").is_none());
-    assert!(body["client_metadata"].get("turnState").is_none());
+    assert_eq!(body["turn_state"], "current-state");
+    assert_eq!(
+        body["client_metadata"]["x-codex-turn-state"],
+        "current-state"
+    );
+    assert_eq!(body["client_metadata"]["turnState"], "current-state");
     assert_eq!(body["client_metadata"]["keep"], "business");
     assert_eq!(body["input"][0]["content"][0]["text"], "current input");
     for raw in [
@@ -24,7 +27,7 @@ async fn changed_turn_clears_opaque_header_and_all_known_body_mirrors() {
     ] {
         assert!(raw.is_ascii(), "new-turn metadata must remain ASCII JSON");
         let fields: Value = serde_json::from_str(raw).unwrap();
-        assert!(fields.get("turn_state").is_none());
+        assert_eq!(fields["turn_state"], "current-state");
         assert_eq!(fields["keep"], "business");
         assert_eq!(fields["workspace"], "/tmp/\u{4e2d}\u{6587}/\u{1f680}");
     }

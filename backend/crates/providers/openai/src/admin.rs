@@ -263,24 +263,25 @@ impl ProviderAdmin for OpenAiAdminProvider {
     }
 
     fn plan_type_display(&self, plan_type: &str) -> String {
-        // 与官方 Desktop 的套餐名称映射一致；原始子类型继续由 plan_type 保留。
+        // Pro 系列使用短名；其余已知套餐对应 Codex /status。
         match plan_type.to_ascii_lowercase().as_str() {
             "free" | "free_workspace" | "guest" => "Free",
             "go" => "Go",
             "plus" => "Plus",
-            "pro" | "prolite" => "Pro",
-            "team" | "self_serve_business_prolite" | "self_serve_business_usage_based" => {
-                "Business"
+            "pro" => "Pro",
+            "prolite" => "ProLite",
+            "promax" => "ProMax",
+            "team" | "self_serve_business_usage_based" => "Business",
+            "self_serve_business_prolite" => "Business Premium",
+            "business" | "ent26" | "enterprise" | "hc" | "enterprise_cbp_usage_based" => {
+                "Enterprise"
             }
-            "business"
-            | "ent26"
-            | "enterprise_cbp_automation"
-            | "enterprise_cbp_usage_based"
-            | "enterprise"
-            | "hc" => "Enterprise",
+            "enterprise_cbp_automation" => "Enterprise (Automation)",
             "edu" | "education" => "Edu",
             "edu_plus" => "Edu Plus",
             "edu_pro" => "Edu Pro",
+            "sci" => "Academic Researchers",
+            "sci_plus" => "Academic Researchers Plus",
             _ => plan_type,
         }
         .to_owned()

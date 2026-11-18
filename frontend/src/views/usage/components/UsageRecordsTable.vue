@@ -83,6 +83,7 @@ const emit = defineEmits<{ filter: [value: UsageFilterParams] }>()
       </button>
       <AccountPlanBadge
         v-if="row.accountPlanTypeDisplay"
+        wrap
         class="mt-1"
         :plan-type="row.accountPlanType"
         :plan-type-display="row.accountPlanTypeDisplay"

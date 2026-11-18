@@ -397,10 +397,6 @@ pub(super) struct OpenAiSessionState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) oauth_identity: Option<String>,
     pub(super) conversation_id: Option<String>,
-    #[serde(default)]
-    pub(super) turn_state: Option<String>,
-    #[serde(default)]
-    pub(super) client_turn_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) reasoning_effort_override: Option<String>,
     pub(super) continuation_scope: OpenAiContinuationScope,
@@ -424,20 +420,12 @@ pub(super) struct OpenAiSessionCapture {
     pub(super) account_id: String,
     pub(super) oauth_identity: Option<String>,
     pub(super) conversation_id: Option<String>,
-    pub(super) turn_state: Option<String>,
-    pub(super) client_turn_id: Option<String>,
     pub(super) reasoning_effort_override: Option<String>,
     pub(super) response_store: bool,
     pub(super) oversized_http: bool,
     pub(super) continuation_scope: Option<OpenAiContinuationScope>,
     pub(super) client_api_key_id: Option<String>,
     pub(super) identity_seed: Option<crate::transport::qx_application::CodexIdentitySeed>,
-}
-
-pub(super) fn same_client_turn(previous: Option<&str>, current: Option<&str>) -> bool {
-    previous
-        .zip(current)
-        .is_some_and(|(previous, current)| !previous.is_empty() && previous == current)
 }
 
 pub(super) fn decode_openai_session_state(request: &GenerateRequest) -> Option<OpenAiSessionState> {
@@ -475,8 +463,6 @@ fn encode_openai_session_capture(
         account_id: capture.account_id.clone(),
         oauth_identity: capture.oauth_identity.clone(),
         conversation_id: capture.conversation_id.clone(),
-        turn_state: capture.turn_state.clone(),
-        client_turn_id: capture.client_turn_id.clone(),
         reasoning_effort_override: capture.reasoning_effort_override.clone(),
         continuation_scope,
         client_api_key_id: capture.client_api_key_id.clone(),
@@ -1024,7 +1010,6 @@ pub(super) fn cold_response_stream_once(response: ColdResponse) -> EventStream {
             } else {
                 OpenAiContinuationScope::ReplayRequired
             });
-            capture.turn_state = response.turn_state.clone().or(capture.turn_state.clone());
         }
         let mut observation_state = OpenAiResponseObservationState::from_backend_response(
             &response,
@@ -1190,7 +1175,6 @@ pub(super) fn cold_response_stream_once(response: ColdResponse) -> EventStream {
                     };
                     let metadata_merge = merge_response_metadata_updates(
                         response_metadata_updates.as_ref(),
-                        &mut session_capture,
                         &mut observation_state,
                     )
                     .await;
@@ -1285,7 +1269,6 @@ pub(super) fn cold_response_stream_once(response: ColdResponse) -> EventStream {
             };
             let metadata_merge = merge_response_metadata_updates(
                 response_metadata_updates.as_ref(),
-                &mut session_capture,
                 &mut observation_state,
             )
             .await;
@@ -1527,7 +1510,6 @@ pub(super) fn cold_response_stream_once(response: ColdResponse) -> EventStream {
         }
         let metadata_changed = merge_response_metadata_updates(
             response_metadata_updates.as_ref(),
-            &mut session_capture,
             &mut observation_state,
         )
         .await
@@ -1606,12 +1588,8 @@ pub(super) fn cold_response_stream_once(response: ColdResponse) -> EventStream {
 
 async fn merge_response_metadata_updates(
     updates: Option<&CodexResponseMetadataUpdates>,
-    session_capture: &mut Option<OpenAiSessionCapture>,
     observation_state: &mut OpenAiResponseObservationState,
 ) -> Option<bool> {
     let turn_state = updates?.lock().await.turn_state.take()?;
-    if let Some(capture) = session_capture.as_mut() {
-        capture.turn_state = Some(turn_state.clone());
-    }
     Some(observation_state.merge_client_header("x-codex-turn-state", &turn_state))
 }

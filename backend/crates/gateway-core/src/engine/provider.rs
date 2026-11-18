@@ -220,14 +220,18 @@ const MAX_NATIVE_RESPONSE_EVENTS_PER_INPUT: usize = 64;
 pub struct ProviderStream {
     native_response_translator: Option<Box<dyn NativeResponseTranslator>>,
     metadata: ProviderCallMetadata,
-    events: EventStream,
-    _lease: Box<dyn ResourceLease>,
+    source: Option<ProviderStreamSource>,
     account_feedback: Option<ProviderStreamAccountFeedback>,
     account_protection: Option<super::account_protection::AttemptProtection>,
     protection_feedback: Option<BoxFuture<'static, Option<Result<ProviderEvent, ProviderError>>>>,
     validator: EventSequenceValidator,
     strict_canonical_seen: bool,
-    terminated: bool,
+}
+
+// 事件流内部也可能持有同一租约，结束读取时须一并丢弃
+struct ProviderStreamSource {
+    events: EventStream,
+    _lease: Box<dyn ResourceLease>,
 }
 
 struct ProviderStreamAccountFeedback {
@@ -345,16 +349,23 @@ impl ProviderStream {
     {
         Self {
             metadata,
-            events: Box::pin(events),
-            _lease: Box::new(lease),
+            source: Some(ProviderStreamSource {
+                events: Box::pin(events),
+                _lease: Box::new(lease),
+            }),
             native_response_translator: None,
             account_feedback: None,
             account_protection: None,
             protection_feedback: None,
             validator: EventSequenceValidator::new(),
             strict_canonical_seen: false,
-            terminated: false,
         }
+    }
+
+    pub(super) fn abort(&mut self) {
+        self.source.take();
+        self.account_protection.take();
+        self.protection_feedback.take();
     }
 
     /// 让公共 stream 边界统一回灌账号成功率与首个有效输出延迟。
@@ -384,6 +395,15 @@ impl ProviderStream {
     }
 
     pub fn translate_native_response(
+        &mut self,
+        event: ProviderEvent,
+        terminal: bool,
+    ) -> Result<Vec<ProviderEvent>, ProviderError> {
+        self.translate_event(event, terminal)
+            .inspect_err(|_| self.abort())
+    }
+
+    fn translate_event(
         &mut self,
         mut event: ProviderEvent,
         terminal: bool,
@@ -467,7 +487,11 @@ impl Stream for ProviderStream {
             };
         }
         let result = this.poll_event(context);
-        let terminal = matches!(&result, Poll::Ready(Some(Err(_)) | None))
+        let upstream_finished = matches!(&result, Poll::Ready(Some(Err(_)) | None));
+        if upstream_finished {
+            this.source.take();
+        }
+        let terminal = upstream_finished
             || (matches!(&result, Poll::Ready(Some(Ok(_))))
                 && this
                     .account_protection
@@ -490,14 +514,14 @@ impl ProviderStream {
         context: &mut Context<'_>,
     ) -> Poll<Option<Result<ProviderEvent, ProviderError>>> {
         let this = self;
-        if this.terminated {
+        let Some(source) = this.source.as_mut() else {
             return Poll::Ready(None);
-        }
+        };
         if let Some(feedback) = this.account_feedback.as_mut() {
             feedback.start();
         }
 
-        match this.events.as_mut().poll_next(context) {
+        match source.events.as_mut().poll_next(context) {
             Poll::Pending => Poll::Pending,
             Poll::Ready(Some(Ok(event))) => {
                 // 带 wire 的 canonical facts 只是旁路观测：wire 才是客户端协议的
@@ -506,7 +530,6 @@ impl ProviderStream {
                     this.strict_canonical_seen = true;
                     for fact in event.canonical_facts() {
                         if this.validator.observe(fact).is_err() {
-                            this.terminated = true;
                             let error = ProviderError::new(
                                 ProviderErrorKind::Protocol,
                                 UpstreamSendState::Sent,
@@ -527,14 +550,12 @@ impl ProviderStream {
                 Poll::Ready(Some(Ok(event)))
             }
             Poll::Ready(Some(Err(error))) => {
-                this.terminated = true;
                 if let Some(feedback) = this.account_feedback.as_mut() {
                     feedback.report_failure(&error);
                 }
                 Poll::Ready(Some(Err(error)))
             }
             Poll::Ready(None) => {
-                this.terminated = true;
                 let validation = if this.strict_canonical_seen {
                     this.validator.finish()
                 } else {

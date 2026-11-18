@@ -598,7 +598,7 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
 
             <template #planType="{ row }">
               <div class="flex w-full min-w-0 justify-center" :title="row.planTypeDisplay">
-                <AccountPlanBadge data-account-plan-mark :plan-type="row.planType" :plan-type-display="row.planTypeDisplay" />
+                <AccountPlanBadge wrap data-account-plan-mark :plan-type="row.planType" :plan-type-display="row.planTypeDisplay" />
               </div>
             </template>
 

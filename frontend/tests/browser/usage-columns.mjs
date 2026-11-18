@@ -72,13 +72,13 @@ function fixtures() {
       totalTokens: 160,
     }).flatMap(([key, value]) => [[key, value], [`${key}Display`, String(value)]])),
     billing: null,
-    latencyDetails: index === 1 ? { firstTokenMs: 100, firstEventMs: 80 } : { firstEventMs: 80 },
+    latencyDetails: index === 1 ? { upstreamResponseMs: 1234, firstTokenMs: 100, firstEventMs: 80 } : { upstreamResponseMs: 1234, firstEventMs: 80 },
     firstTokenLatencyMs: index === 1 ? 234 : null,
   }))
   const errors = [1, 2].map(index => ({
     ...common,
-    accountPlanType: index === 1 ? 'pro' : null,
-    accountPlanTypeDisplay: index === 1 ? 'Pro' : null,
+    accountPlanType: index === 1 ? 'sci_plus' : null,
+    accountPlanTypeDisplay: index === 1 ? 'Academic Researchers Plus' : null,
     id: `ops_columns_${index}`,
     requestId: `req_columns_${index}`,
     clientApiKeyId: null,
@@ -232,7 +232,6 @@ function fixtures() {
       totalTokens: '320',
       averageLatencyMs: '1234 ms',
     }],
-    ['/api/admin/usage/insights/overview', overview],
     ['/api/admin/usage/insights/health', { metric: 'health', granularity: '1d', data: overview.health }],
     ['/api/admin/usage/insights/performance', { metric: 'latency', granularity: '1d', data: { summary: { p50Ms: 10, p95Ms: 20, p99Ms: 30 }, points: [] } }],
     ['/api/admin/usage/insights/cost', { metric: 'cost', granularity: '1d', data: { summary: overview.cost, points: [] } }],
@@ -299,7 +298,9 @@ async function assertColumns(page, table, hidden = false) {
       assert.match(await row.locator('[data-column-key="tokenDetails"]').textContent() ?? '', /90\s*40\s*20/)
   }
   else {
-    assert.equal((await rows.nth(0).locator('[data-column-key="accountPlanType"]').textContent())?.trim(), 'Pro')
+    const plan = rows.nth(0).locator('[data-column-key="accountPlanType"] [title="Academic Researchers Plus"] span')
+    assert.equal((await plan.textContent())?.trim(), 'Academic Researchers Plus')
+    assert.ok(await plan.evaluate(el => el.scrollHeight <= el.clientHeight + 1 && el.scrollWidth <= el.clientWidth + 1))
     assert.equal((await rows.nth(1).locator('[data-column-key="accountPlanType"]').textContent())?.trim(), '\u2014')
   }
 }

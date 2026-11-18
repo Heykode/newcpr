@@ -730,19 +730,6 @@ impl Provider for CodexProvider {
         if let Some(identity) = &self.session_identity {
             identity.prepare_local_conversation(&mut upstream_request);
         }
-        if let Some(previous_session) = previous_session.as_ref() {
-            if same_client_turn(
-                previous_session.client_turn_id.as_deref(),
-                upstream_request.client_turn_id.as_deref(),
-            ) {
-                upstream_request.turn_state = upstream_request
-                    .turn_state
-                    .take()
-                    .or_else(|| previous_session.turn_state.clone());
-            } else {
-                crate::transport::request::clear_turn_state(&mut upstream_request);
-            }
-        }
         let session_affinity = (!is_messages)
             .then(|| derive_codex_session_affinity(&upstream_request, context.client_api_key_ref()))
             .flatten()
@@ -1064,8 +1051,6 @@ impl Provider for CodexProvider {
             account_id: lease.account_id().as_str().to_owned(),
             oauth_identity,
             conversation_id: upstream_request.local_conversation_id.clone(),
-            turn_state: upstream_request.turn_state.clone(),
-            client_turn_id: upstream_request.client_turn_id.clone(),
             reasoning_effort_override: upstream_request
                 .semantics_with_override(
                     previous_session
