@@ -14,6 +14,7 @@ const settingKeys = [
   'modelAccess',
   'proxyMode',
   'proxyId',
+  'credentialProxyId',
   'egressMode',
   'requestProxySource',
   'weight',
@@ -40,9 +41,16 @@ export interface EnrollmentPlan {
   settings: ReturnType<typeof enrollmentSettings>
   when: string | null
   exitLabel: string
+  credentialExitLabel?: string
 }
 
-export type EnrollmentEntry = ReloginEntry & { enrollmentPlan?: EnrollmentPlan }
+export type EnrollmentEntry = ReloginEntry & { enrollmentPlan?: EnrollmentPlan, credentialExitLabel?: string }
+export function separateCredentialExit(row: EnrollmentEntry) {
+  if (!enrollmentPreview)
+    return undefined
+  const label = canArrange(row) ? row.enrollmentPlan?.credentialExitLabel : row.credentialExitLabel
+  return label !== (canArrange(row) ? row.enrollmentPlan?.exitLabel : row.egress?.label) ? label : undefined
+}
 export const enrollmentLabels = { draft: '已存草稿', scheduled: '已定时', running: '入池中', failed: '出口不可用', verification: '待人工验证', done: '已入池' }
 
 export function canArrange(row: EnrollmentEntry) {

@@ -13,6 +13,7 @@ import { useProxyCatalog } from '@/composables/useProxyCatalog'
 import { t } from '@/i18n'
 import { errorMessage } from '@/utils/async'
 import { accountExcel403Action, excel403ActionLabel } from '@/utils/excel-settings'
+import { enrollmentPreview } from '@/views/relogin/enrollment-plan'
 import AccountTemplatesModal from './AccountTemplatesModal.vue'
 
 const props = withDefaults(defineProps<{ disabled: boolean, label?: string, manage?: boolean, summary?: boolean, compact?: boolean }>(), { label: '新增账号模板', manage: false, summary: true, compact: false })
@@ -166,6 +167,11 @@ onScopeDispose(() => controller?.abort())
       </dt><dd class="m-0 break-all">
         {{ proxyName }}
       </dd>
+      <template v-if="enrollmentPreview">
+        <dt>凭据维护出口</dt><dd class="min-w-0 break-all">
+          {{ selected.config.credentialProxyId ? proxies.find(p => p.id === selected?.config.credentialProxyId)?.name ?? '原代理不可用' : selected.config.credentialProxyId === null ? '跟随账号出口' : '保留账号原设置' }}
+        </dd>
+      </template>
     </dl>
     <AccountTemplatesModal v-if="manage" v-model="managing" />
   </div>

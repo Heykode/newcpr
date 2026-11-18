@@ -11,7 +11,7 @@ import BaseSwitch from '@/components/base/BaseSwitch.vue'
 import ReloginCountCell from '@/components/ReloginCountCell.vue'
 import { formatDateTime } from '@/utils/date'
 import AccountPlanBadge from '../../accounts/components/AccountPlanBadge.vue'
-import { canArrange } from '../enrollment-plan'
+import { canArrange, separateCredentialExit } from '../enrollment-plan'
 import { maintenanceBusy, maintenanceResult, queueButtonLabel, queueDisabledReason, recentOperation, recentOperationAt } from '../maintenance'
 import { recoveryCountdown, reloginDisplayName, reloginPlanDisplay, retryProgress, shortWorkspace, workspaceId, workspaceLabel } from '../presentation'
 import EnrollmentPlanStatus from './EnrollmentPlanStatus.vue'
@@ -62,7 +62,10 @@ defineEmits<{
       <ReloginSessionStatus :row="row" compact />
       <div class="flex min-w-0 items-start gap-3">
         <span class="shrink-0 pt-0.5 text-cp-xs text-cp-text-tertiary">{{ canArrange(row) ? '计划出口' : '出口' }}</span>
-        <span v-if="canArrange(row)" class="min-w-0 break-words">{{ row.enrollmentPlan?.exitLabel || '未设置' }}</span>
+        <span v-if="canArrange(row)" class="min-w-0 break-words">
+          {{ row.enrollmentPlan?.exitLabel || '未设置' }}
+          <span v-if="separateCredentialExit(row)" class="block text-cp-xs text-cp-text-secondary">凭据维护出口：{{ separateCredentialExit(row) }}</span>
+        </span>
         <ReloginEgress v-else class="flex-1" :row="row" />
       </div>
       <EnrollmentPlanStatus v-if="canArrange(row)" :row="row" />

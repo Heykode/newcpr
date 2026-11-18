@@ -2,6 +2,7 @@
 import type { ReloginEntry } from '@/api/modules/relogin'
 import { computed } from 'vue'
 import { formatDateTime } from '@/utils/date'
+import { separateCredentialExit } from '../enrollment-plan'
 
 const props = defineProps<{ row: ReloginEntry }>()
 const detail = computed(() => {
@@ -19,5 +20,6 @@ const detail = computed(() => {
       <span v-if="row.egress?.latencyMs != null" class="shrink-0 whitespace-nowrap text-cp-xs tabular-nums text-cp-text-secondary">{{ row.egress.latencyMs }} ms</span>
     </div>
     <span v-if="row.egress?.exitIp || row.egress?.address" class="mt-1 block overflow-x-auto whitespace-nowrap font-mono text-cp-xs text-cp-text-secondary">{{ row.egress.exitIp || row.egress.address }}</span>
+    <span v-if="separateCredentialExit(row)" class="mt-1 block text-cp-xs text-cp-text-secondary">凭据维护出口：{{ separateCredentialExit(row) }}</span>
   </div>
 </template>

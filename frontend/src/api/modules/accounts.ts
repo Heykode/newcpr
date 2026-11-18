@@ -225,6 +225,7 @@ export interface AccountQuotaBucketSettings {
 }
 
 export interface Account {
+  credentialProxyId?: string | null
   quotaSettings: Record<string, AccountQuotaBucketSettings>
   quotaSettingsSupported: boolean
   autoUseQuotaCredits: boolean
@@ -539,6 +540,7 @@ interface AccountResetCreditConsumeParam extends AccountIdParam {
 }
 
 interface AccountUpdateParam {
+  credentialProxyId?: string | null
   purchaseCost?: AccountPurchaseUpdate
   excelRecovery?: ExcelRecoveryConfig
   egressMode?: string | null

@@ -13,13 +13,33 @@ export function enrollmentExample(library, accounts, groups, templates, settings
   }))
   groups.push({ ...groups[0], id: 'grp_00000000000000000000000000000092', name: '备用组' })
   templates.push({ id: 'fixture-standard', revision: 1, config: { name: '常用入池 · 代理 A', groupIds: [groups[0].id], weight: 1, concurrencyLimit: null, enabled: true, outboundProxyId: proxies[0].id, egressMode: 'unchanged', requestProxySource: 'account' } })
+  templates.push({ id: 'fixture-split', revision: 1, config: { ...templates[0].config, name: '账号 A · 维护 B', credentialProxyId: proxies[1].id } })
   const quality = [{ id: 'fixture-check', revision: 1, name: '入池质量检测', config: {} }]
   const base = { ...library[0], automatic: false, status: 'pending', planType: null, workspaceId: null, credentialStatus: 'none', verifiedAt: null, expiresAt: null }
   const sample = (id, name) => ({ ...structuredClone(base), id, email: `${id}@example.invalid`, displayName: name || null })
   const existing = library.at(-1)
+  Object.assign(accounts[0], { outboundProxyId: proxies[1].id, outboundProxyEndpoint: proxies[1].endpoint })
   Object.assign(existing, { displayName: '已入池示例', poolStatus: 'synced', egress: { kind: 'proxy', source: 'account', label: proxies[1].name } })
   library.splice(0, library.length, sample('new-one', '新账号示例'), sample('verify', '需人工验证示例'), existing)
   let nextId = 1
+  function proxyFor(id) {
+    return proxies.find(proxy => proxy.id === id)
+  }
+  function editAccount(account, config) {
+    if (config.outboundProxyId !== undefined && !config.preserveOutboundProxy) {
+      account.outboundProxyId = config.outboundProxyId || null
+      account.outboundProxyEndpoint = proxyFor(account.outboundProxyId)?.endpoint ?? null
+    }
+    if (config.credentialProxyId !== undefined)
+      account.credentialProxyId = config.credentialProxyId
+    const row = library.find(row => row.poolAccountIds.includes(account.id))
+    if (row) {
+      const proxy = proxyFor(account.outboundProxyId)
+      if (config.outboundProxyId !== undefined && !config.preserveOutboundProxy)
+        row.egress = { kind: proxy ? 'proxy' : 'default', source: 'account', label: proxy?.name ?? '部署默认出口', proxyId: proxy?.id ?? null }
+      row.credentialExitLabel = account.credentialProxyId ? proxyFor(account.credentialProxyId)?.name ?? '原代理不可用' : undefined
+    }
+  }
   function advance() {
     const now = Date.now()
     for (const row of library) {
@@ -36,9 +56,11 @@ export function enrollmentExample(library, accounts, groups, templates, settings
         continue
       row.revision++
       row.lastAttemptAt = new Date(now).toISOString()
-      const proxy = proxies.find(proxy => proxy.id === plan.exit.outboundProxyId)
-      if (proxy?.id === 'fixture-C' || row.id === 'verify') {
-        plan.state = proxy?.id === 'fixture-C' ? 'failed' : 'verification'
+      const proxy = proxyFor(plan.exit.outboundProxyId)
+      const credentialId = plan.settings.credentialProxyId || plan.exit.outboundProxyId
+      const unavailable = credentialId && (!proxyFor(credentialId)?.enabled || credentialId === 'fixture-C')
+      if (unavailable || row.id === 'verify') {
+        plan.state = unavailable ? 'failed' : 'verification'
         row.status = 'failed'
         row.message = plan.state === 'failed' ? '所选出口不可用' : '等待人工验证'
         continue
@@ -54,6 +76,7 @@ export function enrollmentExample(library, accounts, groups, templates, settings
         modelAccess: plan.settings.modelAccess,
         outboundProxyId: proxy?.id ?? null,
         outboundProxyEndpoint: proxy?.endpoint ?? null,
+        credentialProxyId: plan.settings.credentialProxyId || null,
         reloginCount: 1,
         lastReloginAt: row.lastAttemptAt,
       }
@@ -67,6 +90,7 @@ export function enrollmentExample(library, accounts, groups, templates, settings
         status: 'ready',
         lastReloginAt: row.lastAttemptAt,
         egress: { kind: proxy ? 'proxy' : plan.settings.proxyMode === 'ipv6' ? 'ipv6' : 'default', label: plan.exitLabel, source: 'account', proxyId: proxy?.id ?? null },
+        credentialExitLabel: plan.credentialExitLabel,
       })
     }
   }
@@ -76,7 +100,10 @@ export function enrollmentExample(library, accounts, groups, templates, settings
       library.unshift(sample(`sample-${nextId++}`))
       return
     }
-    const row = library.find(row => row.id === body.id)
+    const importing = body.mode === 'import-sample'
+    const row = importing ? sample(`sample-${nextId++}`) : library.find(row => row.id === body.id)
+    if (importing)
+      body = { ...body, revision: row.revision, mode: 'now' }
     if (!row || row.poolAccountIds.length || row.revision !== body.revision || row.enrollmentPlan?.state === 'running')
       throw new Error('账号状态已变化，请关闭后重新查看')
     if (body.mode === 'cancel') {
@@ -95,10 +122,15 @@ export function enrollmentExample(library, accounts, groups, templates, settings
       if (body.exit.outboundProxyId && !proxy)
         throw new Error('所选代理不存在')
       const exitLabel = proxy?.name ?? ({ ipv6: 'IPv6 出口', mihomo: 'Mihomo', proxy_pool: '代理池' }[body.settings.proxyMode] || '部署默认出口')
-      row.enrollmentPlan = { state: body.mode === 'now' ? 'running' : body.mode, settings: body.settings, exit: body.exit, exitLabel, when: body.when, startedAt: Date.now() }
+      const credentialProxy = proxyFor(body.settings.credentialProxyId)
+      if (body.settings.credentialProxyId && !credentialProxy)
+        throw new Error('凭据维护出口不存在，请重新选择')
+      row.enrollmentPlan = { state: body.mode === 'now' ? 'running' : body.mode, settings: body.settings, exit: body.exit, exitLabel, credentialExitLabel: credentialProxy?.name, when: body.when, startedAt: Date.now() }
       row.status = body.mode === 'now' ? 'running' : 'pending'
     }
     row.revision++
+    if (importing)
+      library.unshift(row)
   }
-  return { advance, command, proxies, quality }
+  return { advance, command, editAccount, proxies, quality }
 }

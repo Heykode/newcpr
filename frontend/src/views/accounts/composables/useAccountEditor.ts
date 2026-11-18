@@ -19,6 +19,7 @@ import { concurrencyLimitInput, parseAccountSchedulingForm, parseExcelModels } f
 type AccountRow = Awaited<ReturnType<typeof getAccounts>>['items'][number]
 
 export function useAccountEditor(options: {
+  credentialEgress?: boolean
   accounts: Ref<AccountRow[]>
   reloadAccounts: () => Promise<unknown>
   reloadGroups: () => Promise<unknown>
@@ -53,6 +54,7 @@ export function useAccountEditor(options: {
   let initialModelAccess = ''
   const proxyMode = shallowRef('')
   const proxyId = shallowRef('')
+  const credentialProxyId = shallowRef<string | null>(null)
   const egressMode = shallowRef('fixed_ipv6_reuse')
   const egressReadState = shallowRef<AccountEgressReadState>({ loading: false, error: false })
   let initialEgress: AccountEgressDraft | undefined
@@ -104,6 +106,7 @@ export function useAccountEditor(options: {
     initialPurchase = JSON.stringify([purchaseAmount.value, purchaseCycleStart.value])
     editingAccountId.value = account.id
     editingAccount.value = { ...account }
+    credentialProxyId.value = account.credentialProxyId ?? null
     customName.value = account.customName ?? ''
     initialCustomName = customName.value
     schedulingEnabled.value = account.enabled
@@ -161,6 +164,7 @@ export function useAccountEditor(options: {
         throw new Error('出口配置尚未读取成功，请关闭后重新打开编辑')
       const payload: Parameters<typeof updateAccount>[0] = {
         accountId,
+        ...(options.credentialEgress && editingAccount.value?.provider === 'openai' && credentialProxyId.value !== (editingAccount.value.credentialProxyId ?? null) ? { credentialProxyId: credentialProxyId.value } : {}),
         ...(initialEgress && !sameAccountEgress(initialEgress, egress)
           ? accountEgressPatch(egress, editingAccount.value?.provider === 'openai')
           : {}),
@@ -258,6 +262,7 @@ export function useAccountEditor(options: {
     modelAccess,
     proxyMode,
     proxyId,
+    credentialProxyId,
     egressMode,
     egressReadState,
     selectedGroupIds,

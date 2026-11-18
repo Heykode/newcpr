@@ -58,7 +58,7 @@ import ReloginMaintenanceModal from './components/ReloginMaintenanceModal.vue'
 import ReloginMobileCard from './components/ReloginMobileCard.vue'
 import ReloginSessionStatus from './components/ReloginSessionStatus.vue'
 import ReloginWorkspaceCard from './components/ReloginWorkspaceCard.vue'
-import { canArrange, enrollmentPreview, previewPlanCommand } from './enrollment-plan'
+import { canArrange, enrollmentPreview, previewPlanCommand, separateCredentialExit } from './enrollment-plan'
 import { importPreview } from './import-preview'
 import { knownMaintenanceWorkspaces, maintenanceBusy, maintenanceResult, matchesMaintenanceStatus, queueButtonLabel, queueDisabledReason, recentOperation, recentOperationAt } from './maintenance'
 import { matchesPool, processingStatus, recoveryCountdown, recoveryLabels, reloginDisplayName, reloginPlanDisplay, reloginPlanOptions, retryProgress, shortWorkspace, statusLabels, workspaceChoices, workspaceId, workspaceLabel } from './presentation'
@@ -703,6 +703,7 @@ onBeforeUnmount(() => {
           <div v-if="canArrange(row)" class="text-cp-sm">
             {{ row.enrollmentPlan?.exitLabel || '未设置' }}
             <span class="block text-cp-xs text-cp-text-tertiary">计划出口</span>
+            <span v-if="separateCredentialExit(row)" class="block text-cp-xs text-cp-text-secondary">凭据维护出口：{{ separateCredentialExit(row) }}</span>
           </div>
           <ReloginEgress v-else :row="row" />
         </template>

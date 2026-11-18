@@ -123,6 +123,7 @@ async function main() {
                 data = { policy: { channel: 'stable', availableChannels: ['stable'] }, currentVersion: 'local-sample', hasUpdate: false, updateSupported: false }
                 break
               case '/api/admin/accounts':
+                enrollment?.advance()
                 data = {
                   items: accounts,
                   page: { page: 1, pageSize: 20, total: accounts.length, totalPages: 1 },
@@ -186,6 +187,7 @@ async function main() {
             }
             else {
               for (const account of accounts.filter(account => ids.includes(account.id))) {
+                enrollment?.editAccount(account, body)
                 for (const field of ['customName', 'enabled', 'turnStateInjectionEnabled', 'concurrencyLimit', 'weight']) {
                   if (Object.hasOwn(body, field))
                     account[field] = field === 'customName' ? body[field]?.trim() || null : body[field]
@@ -217,6 +219,7 @@ async function main() {
                 })
                 if (config.turnStateInjectionEnabled != null)
                   account.turnStateInjectionEnabled = config.turnStateInjectionEnabled
+                enrollment?.editAccount(account, config)
               }
               data = { accountIds: body.accountIds, configRevision: 2 }
             }
