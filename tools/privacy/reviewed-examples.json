@@ -3118,5 +3118,21 @@
     "file_sha256": "6b203c8733b61cd09c6b413fa243ec9a9a67df9eeb54b43a6b032abf35f40e4f",
     "line_sha256": "3a7f30ef3e0e710d99cd2bfda482f4d47e415715ddd81c091a6ef0ffd385575d",
     "reason": "Re-reviewed unchanged mock material containing the RFC 6238 SHA-1 public seed and an explicit fixture password; only its location changed after wiring the real maintenance dependency."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/relogin_worker_test.py",
+    "rule": "gitleaks:generic-api-key",
+    "line": 326,
+    "file_sha256": "566128950ee1a749606215b92a6c1a18c5a718ea048bfc5d60b0668eaaaf187e",
+    "line_sha256": "b694d43bcd4cf81f0a75c5b6e286b07b3f4936dc9e7e30592017b7b0b819b117",
+    "reason": "Manually re-reviewed the unchanged invalid-secret fixture with the illustrative UUID after initial password-entry tests shifted its line; no real account secret."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/relogin_worker_test.py",
+    "rule": "authenticated-url",
+    "line": 403,
+    "file_sha256": "566128950ee1a749606215b92a6c1a18c5a718ea048bfc5d60b0668eaaaf187e",
+    "line_sha256": "47e73e43e21ddf5e79f265d16deb345c7d52a1cf04c0683c90e5d50b4e49aee3",
+    "reason": "Manually re-reviewed the unchanged synthetic user:password URL rejected by safe_url without any network request; initial password-entry tests shifted its line."
   }
 ]

@@ -22,6 +22,11 @@ def response(url, body=None, location=None):
     )
 
 
+def offered_password_page(url):
+    return response(url, {"page": {"type": "email_otp_verification",
+                                    "payload": {"login_methods": [{"type": "password"}]}}})
+
+
 def token(payload):
     encoded = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
     return "fixture." + encoded + ".unsigned"
@@ -176,7 +181,133 @@ class FlowTests(unittest.TestCase):
         self.assertEqual(requests[6][2]["json"], {"org_id": "org", "project_id": "project"})
         self.assertTrue(all(not url.startswith("http://localhost") for _, url, _ in requests))
 
-    def test_email_challenges_stop_without_sending_or_reading_codes(self):
+    def test_initial_email_login_can_select_password_then_complete_totp(self):
+        for password_body, html in [
+            ({"page": {"type": "login_password"}}, ""),
+            ({}, '<form><input type="password" name="password"></form>'),
+        ]:
+            with self.subTest(password_body=password_body):
+                password_page = response(worker.AUTH + "/log-in/password", password_body)
+                password_page.text = html
+                result, calls = self.run_flow([
+                    response(worker.AUTH + "/oauth/authorize", {"page": {
+                        "type": "email_otp_verification", "payload": {
+                            "email_verification_mode": "passwordless_login",
+                            "login_methods": [{"type": "passwordless_otp"}, {"type": "password"}],
+                        },
+                    }}),
+                    password_page,
+                    response(worker.AUTH + "/api/accounts/password/verify", {"page": {
+                        "type": "mfa_challenge", "payload": {"factor_id": "factor"},
+                    }}),
+                    response(worker.AUTH + "/api/accounts/mfa/verify", location=worker.WEB + "/"),
+                    response(worker.WEB + "/"),
+                ], oauth=False)
+                self.assertIsNone(result)
+                self.assertEqual([url for _, url, _ in calls], [
+                    worker.AUTH + "/log-in", worker.AUTH + "/log-in/password",
+                    worker.AUTH + "/api/accounts/password/verify",
+                    worker.AUTH + "/api/accounts/mfa/verify", worker.WEB + "/",
+                ])
+                self.assertEqual(calls[2][2]["json"], {"password": "test-only-password"})
+                self.assertEqual(calls[3][2]["json"]["code"], "123456")
+                self.assertIn("text/html", calls[1][2]["headers"]["Accept"])
+
+    def test_password_entry_redirect_keeps_html_navigation_headers(self):
+        instance = login()
+        calls = []
+        def fetch(method, url, **kwargs):
+            calls.append((method, url))
+            if url.endswith("/oauth/authorize"):
+                return offered_password_page(url)
+            if url.endswith("/log-in/password"):
+                self.assertIn("text/html", kwargs["headers"]["Accept"])
+                return response(url, location=worker.AUTH + "/log-in/password?step=password")
+            if "step=password" in url:
+                result = response(url)
+                # Match upstream content negotiation: JSON Accept receives no form.
+                result.text = '<input type="password">' if "text/html" in kwargs.get("headers", {}).get("Accept", "") else ""
+                return result
+            if url.endswith("/api/accounts/password/verify"):
+                return response(url, {"page": {"type": "email_otp_verification"}})
+            self.fail("unexpected authentication request")
+        instance.fetch = fetch
+        with self.assertRaisesRegex(worker.LoginError, "^email_verification_required$"):
+            instance.flow(worker.AUTH + "/oauth/authorize")
+        self.assertEqual(len(calls), 4)
+
+    def test_password_entry_is_attempted_once_and_must_be_confirmed(self):
+        challenge = response(worker.AUTH + "/log-in/password")
+        challenge.text = '<title>Just a moment...</title><input type="password">'
+        for page, expected in [
+            (response(worker.AUTH + "/email-verification"), "email_verification_required"),
+            (response(worker.AUTH + "/log-in/password"), "interaction_required"),
+            (response(worker.AUTH + "/phone-verification"), "interaction_required"),
+            (challenge, "interaction_required"),
+        ]:
+            with self.subTest(url=page.url):
+                instance = login()
+                calls = []
+                results = iter([offered_password_page(worker.AUTH + "/email-verification"), page])
+                def fetch(method, url, **kwargs):
+                    calls.append((method, url))
+                    return next(results)
+                instance.fetch = fetch
+                with self.assertRaisesRegex(worker.LoginError, "^" + expected + "$"):
+                    instance.flow(worker.AUTH + "/oauth/authorize")
+                self.assertEqual(calls, [
+                    ("GET", worker.AUTH + "/oauth/authorize"),
+                    ("GET", worker.AUTH + "/log-in/password"),
+                ])
+
+    def test_password_entry_does_not_follow_a_different_origin(self):
+        instance = login()
+        calls = []
+        results = iter([
+            offered_password_page(worker.AUTH + "/email-verification"),
+            response(worker.AUTH + "/log-in/password", location=worker.WEB + "/"),
+        ])
+        def fetch(method, url, **kwargs):
+            calls.append((method, url))
+            return next(results)
+        instance.fetch = fetch
+        with self.assertRaisesRegex(worker.LoginError, "^unexpected_redirect$"):
+            instance.flow(worker.AUTH + "/oauth/authorize")
+        self.assertEqual(len(calls), 2)
+
+    def test_email_login_without_an_offered_password_stops_on_first_response(self):
+        for payload in ({}, {"login_methods": [{"type": "passwordless_otp"}]}, {"login_methods": "password"}):
+            with self.subTest(payload=payload):
+                instance = login()
+                body = {"page": {"type": "email_otp_verification", "payload": payload},
+                        "oai-client-auth-session": {"login_methods": [{"type": "password"}]}}
+                with patch.object(instance, "fetch", return_value=response(worker.AUTH + "/email-verification", body)) as fetch:
+                    with self.assertRaisesRegex(worker.LoginError, "^email_verification_required$"):
+                        instance.flow(worker.AUTH + "/oauth/authorize")
+                    fetch.assert_called_once_with("GET", worker.AUTH + "/oauth/authorize")
+
+    def test_email_after_password_or_totp_never_restarts_password_login(self):
+        for initial, endpoint in [
+            ({"type": "login_password"}, "/api/accounts/password/verify"),
+            ({"type": "mfa_challenge", "payload": {"factor_id": "factor"}}, "/api/accounts/mfa/verify"),
+        ]:
+            with self.subTest(initial=initial):
+                instance = login()
+                calls = []
+                results = iter([
+                    response(worker.AUTH + "/oauth/authorize", {"page": initial}),
+                    offered_password_page(worker.AUTH + endpoint),
+                ])
+                def fetch(method, url, **kwargs):
+                    calls.append((method, url))
+                    return next(results)
+                instance.fetch = fetch
+                with patch.object(worker.time, "time", return_value=60):
+                    with self.assertRaisesRegex(worker.LoginError, "^email_verification_required$"):
+                        instance.flow(worker.AUTH + "/oauth/authorize")
+                self.assertEqual(calls, [("GET", worker.AUTH + "/oauth/authorize"), ("POST", worker.AUTH + endpoint)])
+
+    def test_email_challenges_in_oauth_stop_without_sending_or_reading_codes(self):
         for kind in ("email_otp_send", "email_otp_verification"):
             with self.subTest(kind=kind):
                 instance = login()
@@ -187,8 +318,8 @@ class FlowTests(unittest.TestCase):
                     return response(worker.AUTH, {"page": {"type": kind}})
 
                 instance.fetch = fetch
-                with self.assertRaisesRegex(worker.LoginError, "interaction_required"):
-                    instance.flow(worker.AUTH + "/log-in")
+                with self.assertRaisesRegex(worker.LoginError, "email_verification_required"):
+                    instance.flow(worker.AUTH + "/log-in", oauth=True)
                 self.assertEqual(calls, [("GET", worker.AUTH + "/log-in")])
 
     def test_invalid_or_legacy_material_stops_before_creating_a_session(self):
@@ -246,7 +377,7 @@ class FlowTests(unittest.TestCase):
                 })])
 
     def test_interactive_challenges_stop(self):
-        for kind in ["captcha", "email_otp_verification", "add_phone", "unknown_page"]:
+        for kind in ["captcha", "add_phone", "unknown_page"]:
             with self.assertRaisesRegex(worker.LoginError, "interaction_required"):
                 self.run_flow([response(worker.AUTH, {"page": {"type": kind}})])
 

@@ -7,6 +7,7 @@ Challenges requiring a browser, email or phone are terminal here, never bypassed
 import base64
 import hashlib
 import json
+import re
 import secrets
 import sys
 import time
@@ -338,6 +339,13 @@ class Login:
     def flow(self, url, oauth=False, state=None):
         response = self.fetch("GET", url)
         counts = {}
+        password_entry_attempted = False
+        password_entry_pending = False
+        credentials_submitted = False
+        password_entry_headers = {
+            "Referer": AUTH + "/email-verification",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        }
         for _ in range(32):
             body = self.body(response)
             location = response.headers.get("location")
@@ -350,6 +358,8 @@ class Login:
             if location:
                 location = urljoin(str(response.url), location)
                 parsed = urlparse(location)
+                if password_entry_pending and parsed.netloc != urlparse(AUTH).netloc:
+                    raise LoginError("unexpected_redirect")
                 if (oauth and parsed.scheme == "http" and parsed.hostname == "localhost"
                         and parsed.port == 1455 and parsed.path == "/auth/callback"
                         and not parsed.username and not parsed.password and not parsed.fragment):
@@ -357,7 +367,8 @@ class Login:
                     if query.get("state") != [state] or len(query.get("code", [])) != 1:
                         raise LoginError("callback_mismatch")
                     return query["code"][0]
-                response = self.fetch("GET", location)
+                response = self.fetch("GET", location,
+                                      **({"headers": password_entry_headers} if password_entry_pending else {}))
                 continue
             if not oauth and str(response.url).startswith(WEB) and response.status_code == 200:
                 return None
@@ -367,6 +378,7 @@ class Login:
                     "/log-in": "login_identifier",
                     "/login": "login_identifier",
                     "/log-in/password": "login_password",
+                    "/email-verification": "email_otp_verification",
                     "/mfa-challenge": "mfa_challenge",
                     "/sign-in-with-chatgpt/codex/consent": "codex_consent",
                     "/sign-in-with-chatgpt/codex/organization": "codex_organization",
@@ -376,6 +388,20 @@ class Login:
                 if path.startswith("/mfa-challenge/"):
                     page_type = "mfa_challenge"
                     data.setdefault("factor_id", path.rsplit("/", 1)[-1])
+            if password_entry_pending and page_type == "login_password":
+                # The JSON login page is authoritative; an HTML route must contain
+                # a password form, not merely have the expected URL.
+                html = getattr(response, "text", "")
+                mitigation = response.headers.get("cf-mitigated", "") or response.headers.get("x-cf-mitigated", "")
+                challenge = ("challenge" in mitigation.lower() or re.search(
+                    r"<title[^>]*>\s*(?:just a moment|checking your browser|verify you are human)", html, re.I))
+                confirmed = (isinstance(page, dict) and page.get("type") == "login_password") or re.search(
+                    r"<input\b[^>]*\btype\s*=\s*(?:\"password\"|'password'|password(?=\s|>))", html, re.I)
+                if response.status_code != 200 or challenge or not confirmed:
+                    raise LoginError("interaction_required")
+                password_entry_pending = False
+            elif password_entry_pending and page_type not in ("email_otp_verification", "email_otp_send"):
+                raise LoginError("interaction_required")
             counts[page_type] = counts.get(page_type, 0) + 1
             if counts[page_type] > 2:
                 raise LoginError("login_loop")
@@ -383,9 +409,11 @@ class Login:
                 endpoint = "/api/accounts/authorize/continue"
                 payload = {"username": {"kind": "email", "value": self.request["email"]}}
             elif page_type == "login_password":
+                credentials_submitted = True
                 endpoint = "/api/accounts/password/verify"
                 payload = {"password": self.request["password"]}
             elif page_type == "mfa_challenge":
+                credentials_submitted = True
                 factor = data.get("factor_id")
                 challenge_selected = bool(factor)
                 factors = data.get("factors") or data.get("mfa_challenge_factors") or data.get("mfa_factors") or []
@@ -402,6 +430,20 @@ class Login:
                     time.sleep(30 - time.time() % 30 + 0.1)
                 endpoint = "/api/accounts/mfa/verify"
                 payload = {"id": factor, "type": "totp", "code": self.totp.now()}
+            elif page_type in ("email_otp_verification", "email_otp_send"):
+                # Use only the methods on this page, not hints from a prior session.
+                payload = page.get("payload") if isinstance(page, dict) else None
+                methods = payload.get("login_methods") if isinstance(payload, dict) else None
+                offers_password = isinstance(methods, list) and any(
+                    isinstance(method, dict) and method.get("type") == "password" for method in methods)
+                if (page_type == "email_otp_verification" and not oauth
+                        and not password_entry_attempted and not credentials_submitted
+                        and offers_password and self.request.get("password")):
+                    password_entry_attempted = password_entry_pending = True
+                    response = self.fetch("GET", AUTH + "/log-in/password",
+                                          headers=password_entry_headers)
+                    continue
+                raise LoginError("email_verification_required")
             elif page_type in ("workspace", "workspace_select", "sign_in_with_chatgpt_codex",
                                "sign_in_with_chatgpt_codex_consent", "codex_consent"):
                 choices = data.get("workspaces") or data.get("workspace_choices") or data.get("available_workspaces")
