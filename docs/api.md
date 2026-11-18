@@ -1451,6 +1451,10 @@ errorCode, errorMessage, startedAt, completedAt, expiresAt, createdAt, updatedAt
 request/response/upstream ID、outcome 与搜索文本。诊断 `dimension` 可取 `model`、`account`、
 `apiKey`、`provider`、`transport`、`failureClass`、`status`。
 
+专用账号筛选 `accountSearch` 只匹配请求或错误事件当时保存的账号名称、邮箱，
+区分大小写，`%`、`_`、`\` 均按普通字符处理。账号改名或删除不改变历史匹配结果。
+同一条件用于明细、分页总数和顶部统计；按账号 ID 多选及通用搜索仍独立生效。
+
 请求健康统计使用最终结果：服务错误数为服务失败与未完成之和；有效样本为成功、服务失败与未完成。
 调用方 4xx 只从最终失败记录计入，取消请求（包括取消时的 499）单独统计；中间重试不增加最终失败数。
 `successRate`、`errorRate` 无有效样本时返回 `null`，图表保留空值，不显示为零或百分之百。
@@ -1484,6 +1488,9 @@ request/response/upstream ID、outcome 与搜索文本。诊断 `dimension` 可�
 OpenAI 本地估算包含 `gpt-6-sol`、`gpt-6-luna` 的标准、Flex、Fast、
 缓存读写和长上下文价档，按实际发送的模型计价，不因响应模型名不同改用另一型号的价格。
 输入超过 272,000 tokens 时切换长上下文价档；未知模型后缀和未知服务档位不猜测价格。
+`gpt-6.2-astra` 和 `gpt-6.2-sol` 支持标准、Fast/Priority 与 Ultrafast 的普通及长上下文价，
+包括缓存读写；Ultrafast 按对应上下文标准价的 6 倍估算，两者都没有 Flex 价。
+两者的 `web_search_preview` 调用使用推理模型工具价。
 这不改变上游模型目录、账号模型政策或 State 配置，也不把旧型号别名改指向新型号。
 
 汇总与洞察中的请求数与 outcome 分布覆盖筛选范围内业务请求；token、缓存、延迟与成本聚合仅统计
@@ -1519,8 +1526,9 @@ Dashboard 的 `accountUsage[]` 由后端提供 `usageWindow`、`metricLabel`、`
 
 OpenAI 的 `serviceTier` 只接受上游响应生命周期事件确认的实际 `response.service_tier`；请求里的
 期望档位只保留在 request summary，不能冒充响应事实。计费展示把 `priority`/`fast` 映射为 `Fast`，
-`flex` 映射为 `Flex`，缺失或 `default` 映射为 `Default`；未知非空值原样展示。Fast 优先使用模型的
-priority 价格，缺少专用价格时回退到标准价格的 `2.00x`；Flex 为 `0.50x`，Default 为 `1.00x`。
+`ultrafast` 映射为 `Ultrafast`，`flex` 映射为 `Flex`；估算明细的标准档显示为 `Standard`。
+费用列优先读记录的实际档位，缺失时才读费用明细。Fast 显示单闪电，Ultrafast 显示双闪电；
+没有费用明细时仍可显示实际档位，但不会提供费用详情按钮。无对应模型或档位价目时不估算。
 
 OpenAI 账号队满或超时后的重选记录为 `account.queue.reselect`；绑定 CAS 迁移成功后，
 `account.binding.migrated` 保存拒绝原因 `reason`、原账号 `fromAccountId` 和新账号 `toAccountId`。

@@ -42,7 +42,7 @@ async fn usage_search_shared_filters_match_real_facts_and_analytics() {
         operation: Some("/v1/responses".into()),
         details: admin_observability::RequestSearchFilter {
             account_ids: vec!["acct_observe".into(), "missing".into()],
-            account_search: Some("literal_%".into()),
+            account_search: Some("account@example.invalid".into()),
             group_id: Some("grp_history".into()),
             requested_model: Some("public-model".into()),
             upstream_model: Some("upstream-model".into()),
@@ -125,6 +125,83 @@ async fn usage_search_shared_filters_match_real_facts_and_analytics() {
 }
 
 #[tokio::test]
+async fn usage_account_filter_matches_only_historical_names_and_emails() {
+    use admin_observability::UsageRecordStatus::{All, Error, Success};
+    let Some(database) = TestDatabase::create("usage_account_snapshot").await else {
+        return;
+    };
+    let now = Utc::now();
+    seed_observability_facts(&database.pool, now).await.unwrap();
+    sqlx::query(
+        "update model_requests set provider_account_email_snapshot = case when id = 'req_observe_success' then $1 end,
+           provider_account_name_snapshot = case when id = 'req_observe_failed' then $2 end
+         where id in ('req_observe_success', 'req_observe_failed')",
+    )
+    .bind(r"alice_%\ops@example.invalid")
+    .bind("alice team")
+    .execute(&database.pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "update provider_accounts set custom_name = 'Current Alias' where id = 'acct_observe'",
+    )
+    .execute(&database.pool)
+    .await
+    .unwrap();
+    let range =
+        ObservabilityRange::new(now - TimeDelta::hours(1), now + TimeDelta::hours(1)).unwrap();
+    let repository = observability_repository(&database.pool);
+    for deleted in [false, true] {
+        if deleted {
+            sqlx::query("delete from provider_accounts where id = 'acct_observe'")
+                .execute(&database.pool)
+                .await
+                .unwrap();
+            super::super::drain_analytics(&database.pool).await;
+        }
+        for (record_status, search, page, total, expected) in [
+            (Success, r"_%\", 1, 1, Some("req_observe_success")),
+            (Error, "team", 1, 1, Some("req_observe_failed")),
+            (All, "alice", 1, 2, Some("req_observe_failed")),
+            (All, "alice", 2, 2, Some("req_observe_success")),
+            (Error, "@example", 1, 0, None),
+            (All, "ALICE", 1, 0, None),
+            (All, "alice%ops", 1, 0, None),
+            (All, "Current Alias", 1, 0, None),
+            (All, "acct_observe", 1, 0, None),
+        ] {
+            let filter = UsageRecordFilter {
+                details: admin_observability::RequestSearchFilter {
+                    account_search: Some(search.into()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let records = repository
+                .list_usage_records(UsageRecordQuery {
+                    record_status,
+                    range,
+                    filter: filter.clone(),
+                    current_page: page,
+                    page_size: ObservabilityPageSize::new(1).unwrap(),
+                })
+                .await
+                .unwrap();
+            assert_eq!(
+                records.total, total,
+                "{record_status:?} {search} page {page}"
+            );
+            assert_eq!(records.items.first().map(|item| item.id.as_str()), expected);
+            if record_status == All {
+                let summary = repository.usage_summary(range, filter).await.unwrap();
+                assert_eq!(summary.requests.request_count, total);
+            }
+        }
+    }
+    database.close().await;
+}
+
+#[tokio::test]
 async fn usage_search_error_filters_separate_attempt_and_final_request_evidence() {
     let Some(database) = TestDatabase::create("usage_error_filters").await else {
         return;
@@ -134,6 +211,7 @@ async fn usage_search_error_filters_separate_attempt_and_final_request_evidence(
     let range =
         ObservabilityRange::new(now - TimeDelta::hours(1), now + TimeDelta::hours(1)).unwrap();
     sqlx::query("update model_requests set upstream_status_code = 403, upstream_transport = 'excel_http_sse',
+                provider_account_name_snapshot = 'Final account',
                 error_message = 'test blocked_%_body',
                 diagnostic_trace_json = $1 where id = 'req_observe_failed'")
         .bind(serde_json::json!({"events": [
@@ -141,6 +219,22 @@ async fn usage_search_error_filters_separate_attempt_and_final_request_evidence(
             {"stage":"attempt.failed", "attemptIndex":2, "data":{"diagnostic":{"stage":"read_body"}}}
         ]})).execute(&database.pool).await.unwrap();
     use admin_observability::RequestSearchFilter as F;
+    for (scope, account, total) in [
+        ("requests", "Final account", 1),
+        ("events", "Final account", 0),
+        ("events", "primary", 1),
+        ("requests", "primary", 0),
+    ] {
+        let filter = F {
+            error_scope: Some(scope.into()),
+            account_search: Some(account.into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            error_page(&database.pool, range, filter, None).await.total,
+            total
+        );
+    }
     let p = error_page(
         &database.pool,
         range,

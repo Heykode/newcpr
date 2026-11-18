@@ -82,6 +82,8 @@ fn astra_billing_should_preserve_components_across_tiers_and_context_boundary() 
 fn gpt6_billing_should_preserve_components_tiers_and_context_boundary() {
     // Published USD/1M rates in ten-thousandths: input, cache read, cache write, output.
     for (model, rates) in [
+        ("gpt-6.2-astra", [80_000, 4_000, 100_000, 400_000]),
+        ("gpt-6.2-sol", [20_000, 1_000, 25_000, 100_000]),
         ("gpt-6.1-sol", [20_000_u128, 1_000, 25_000, 100_000]),
         ("gpt-6.1-terra", [10_000_u128, 500, 12_500, 50_000]),
         ("gpt-6-sol", [20_000_u128, 2_000, 25_000, 100_000]),
@@ -107,7 +109,20 @@ fn gpt6_billing_should_preserve_components_tiers_and_context_boundary() {
                 (Some("flex"), 50),
                 (Some("fast"), 200),
                 (Some("priority"), 200),
+                (Some("ultrafast"), 600),
             ] {
+                if tier == Some("flex") && model.starts_with("gpt-6.2-") {
+                    assert!(
+                        openai_billing_breakdown(model, billing_usage(input, 5, 20, 10), tier)
+                            .is_none()
+                    );
+                    continue;
+                }
+                if tier == Some("ultrafast")
+                    && !matches!(model, "gpt-6.2-astra" | "gpt-6.2-sol" | "gpt-6.1-sol")
+                {
+                    continue;
+                }
                 let breakdown =
                     openai_billing_breakdown(model, billing_usage(input, 5, 20, 10), tier)
                         .expect("published GPT-6 family pricing");
