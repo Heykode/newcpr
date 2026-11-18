@@ -121,7 +121,7 @@ onScopeDispose(() => {
 })
 
 const textFields: { key: keyof UsageFilterDraft, label: string, placeholder?: string, type?: string }[] = [
-  { key: 'accountSearch', label: '账号名称', placeholder: '名称、邮箱或历史名称' },
+  { key: 'accountSearch', label: '账号名称', placeholder: '请求时的账号名称或邮箱' },
   { key: 'clientStatusCode', label: '客户端状态码', type: 'number' },
 ]
 // Older URLs and table drill-downs retain these filters, with visible removal controls.

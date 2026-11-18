@@ -47,22 +47,22 @@ export function usageErrorOrigin(record: { errorOrigin?: UsageListRecord['errorO
   const origins = {
     proxy: {
       label: t('usage.error.origin.proxy'),
-      className: 'bg-cp-blue-container text-cp-blue-on-container',
+      className: 'text-cp-blue-text',
       hint: null,
     },
     upstream: {
       label: t('usage.error.origin.upstream'),
-      className: 'bg-cp-error-container text-cp-error-on-container',
+      className: 'text-cp-error-text',
       hint: null,
     },
     connection: {
       label: t('usage.error.origin.connection'),
-      className: 'bg-cp-warning-container text-cp-warning-on-container',
+      className: 'text-cp-warning-text',
       hint: t('usage.error.origin.connectionHint'),
     },
     unknown: {
       label: t('usage.error.origin.unknown'),
-      className: 'bg-cp-fill-tertiary text-cp-text-secondary',
+      className: 'text-cp-text-secondary',
       hint: t('usage.error.origin.unknownHint'),
     },
   }

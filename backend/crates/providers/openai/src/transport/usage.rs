@@ -241,6 +241,27 @@ struct PricingRule {
 // 档位也统一按常规价计算。
 // 按官方固定增量 8621e24e 清理已关闭型号；仅弃用但尚未关闭的型号继续保留。
 const PRICING_RULES: &[PricingRule] = &[
+    // GPT-6.2 的 Ultrafast 使用官方价目表中的 6 倍常规价，核验日期 2026-11-18
+    PricingRule {
+        model: "gpt-6.2-astra",
+        pricing: ModelPricing::new(80_000, 400_000, 4_000)
+            .with_cache_write(125)
+            .with_fast(160_000, 800_000, 8_000)
+            .with_ultrafast(480_000, 2_400_000, 24_000)
+            .with_long(160_000, 600_000, 8_000)
+            .with_long_fast(320_000, 1_200_000, 16_000)
+            .with_long_ultrafast(960_000, 3_600_000, 48_000),
+    },
+    PricingRule {
+        model: "gpt-6.2-sol",
+        pricing: ModelPricing::new(20_000, 100_000, 1_000)
+            .with_cache_write(125)
+            .with_fast(40_000, 200_000, 2_000)
+            .with_ultrafast(120_000, 600_000, 6_000)
+            .with_long(40_000, 150_000, 2_000)
+            .with_long_fast(80_000, 300_000, 4_000)
+            .with_long_ultrafast(240_000, 900_000, 12_000),
+    },
     // Official CPR 18c75132: standard, Flex, Priority and long-context rates.
     PricingRule {
         model: "gpt-6.1-terra",
@@ -724,7 +745,13 @@ fn reasoning_model(model: &str) -> bool {
     model.starts_with("gpt-5")
         || matches!(
             model,
-            "gpt-6-astra" | "gpt-6-sol" | "gpt-6-luna" | "gpt-6.1-sol" | "gpt-6.1-terra"
+            "gpt-6.2-astra"
+                | "gpt-6.2-sol"
+                | "gpt-6-astra"
+                | "gpt-6.1-sol"
+                | "gpt-6.1-terra"
+                | "gpt-6-sol"
+                | "gpt-6-luna"
         )
         || model.starts_with("o1")
         || model.starts_with("o3")

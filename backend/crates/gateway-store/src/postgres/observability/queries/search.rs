@@ -117,19 +117,6 @@ pub(crate) fn validate_search_details(filter: &RequestSearchFilter) -> StoreResu
     Ok(())
 }
 
-pub(crate) fn push_contains(query: &mut QueryBuilder<Postgres>, columns: &[String], text: &str) {
-    let pattern = format!("%{}", literal_prefix_pattern(text));
-    query.push(" and (");
-    for (index, column) in columns.iter().enumerate() {
-        if index > 0 {
-            query.push(" or ");
-        }
-        query.push(format!("{column} ilike "));
-        query.push_bind(pattern.clone()).push(" escape '\\'");
-    }
-    query.push(")");
-}
-
 fn equality(query: &mut QueryBuilder<Postgres>, column: &str, value: &Option<String>) {
     if let Some(value) = value {
         query
@@ -164,18 +151,16 @@ pub(crate) fn push_request_search(
             .push("::text[])");
     }
     if let Some(search) = &filter.account_search {
-        push_contains(
-            query,
-            &[
-                format!("{owner}.provider_account_ref"),
-                format!("{owner}.provider_account_email_snapshot"),
-                format!("{owner}.provider_account_name_snapshot"),
-                format!(
-                    "(select concat_ws(' ', pa.name, pa.email, pa.custom_name) from provider_accounts pa where pa.id = {owner}.provider_account_ref)"
-                ),
-            ],
-            search,
-        );
+        let pattern = format!("%{}", literal_prefix_pattern(search));
+        query.push(format!(
+            " and ({owner}.provider_account_name_snapshot like "
+        ));
+        query.push_bind(pattern.clone());
+        query.push(format!(
+            " escape '\\' or {owner}.provider_account_email_snapshot like "
+        ));
+        query.push_bind(pattern);
+        query.push(" escape '\\')");
     }
     if let Some(group) = &filter.group_id {
         query

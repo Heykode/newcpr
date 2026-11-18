@@ -392,6 +392,8 @@ fn decoder_should_use_non_reasoning_preview_web_search_price() {
 #[test]
 fn gpt6_decoder_should_use_reasoning_preview_web_search_price() {
     for model in [
+        "gpt-6.2-astra",
+        "gpt-6.2-sol",
         "gpt-6-astra",
         "gpt-6-sol",
         "gpt-6-luna",

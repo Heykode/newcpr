@@ -9,6 +9,7 @@ const root = fileURLToPath(new URL('../..', import.meta.url))
 const entry = `
 import { createApp, h, ref } from 'vue'
 import { createPinia } from 'pinia'
+import { setLocale } from '/src/i18n'
 import UsageTable from '/src/views/usage/components/UsageRecordsTable.vue'
 import ForecastCapacity from '/src/views/accounts/components/AccountQuotaForecastModal/ForecastCapacity.vue'
 import UpdateModal from '/src/layout/components/SystemUpdateModal/index.vue'
@@ -19,18 +20,20 @@ import '@fontsource-variable/jetbrains-mono'
 import '/src/styles/index.css'
 const pinia = createPinia()
 const open = ref(false)
+const observedTier = ref('ultrafast')
 const notes = 'Synthetic current note: ' + 'long note '.repeat(30)
 const app = createApp({
   setup() {
     const store = useSystemUpdateStore(pinia)
-    window.qa = { store, open }
+    window.qa = { store, open, observedTier }
     return () => h('main', { style: 'padding:16px;max-width:1100px;margin:auto' }, [
       h('h1', { style: 'font-size:20px;margin-bottom:16px' }, 'Stable update verification'),
       h(UsageTable, { columns: [
         { key: 'accountEmail', label: 'Account', width: 240 },
         { key: 'model', label: 'Model', width: 200 },
         { key: 'clientApiKeyName', label: 'Key', width: 144 },
-        { key: 'billing', label: 'Billing', width: 144 }
+        { key: 'billing', label: 'Billing', width: 144 },
+        { key: 'errorMessage', label: 'Error', width: 160 }
       ], rows: [{
         id: 'synthetic-usage', accountEmail: 'synthetic@example.invalid',
         accountCustomName: notes, model: 'synthetic-model',
@@ -40,6 +43,9 @@ const app = createApp({
           cacheWriteAmountDisplay:'$0.00',inputPriceDisplay:'$2.00',outputPriceDisplay:'$4.00',
           cacheWritePriceDisplay:'$0.00',serviceTierDisplay:'Fast',multiplierDisplay:'1.00x',
           standardAmountDisplay:'$1.23' }
+      }, {
+        id: 'synthetic-unpriced', billing: null, serviceTier: observedTier.value,
+        outcome: 'failed', errorOrigin: 'connection', errorMessage: 'Synthetic connection error',
       }] }),
       h('div', { style: 'max-width:480px;margin-top:20px' }, [
         h(ForecastCapacity, { forecast: {
@@ -54,6 +60,7 @@ const app = createApp({
   }
 })
 app.use(pinia)
+await setLocale('zh-Hans')
 useThemeStore(pinia).initializeTheme()
 app.mount('#app')
 `
@@ -122,6 +129,7 @@ async function main() {
         else if (path.endsWith('/detail')) {
           body = {
             currentVersion: '3.1.0',
+            policy: { channel: 'stable', availableChannels: ['stable'] },
             latestVersion: '3.2.0',
             hasUpdate: true,
             buildType: 'release',
@@ -131,7 +139,7 @@ async function main() {
           }
         }
         else if (path.endsWith('/version')) {
-          body = { version: '3.1.0', latestVersion: '3.2.0', hasUpdate: true, deploymentMode: 'binary' }
+          body = { version: '3.1.0', latestVersion: '3.2.0', hasUpdate: true, updateChannel: 'stable', deploymentMode: 'binary' }
         }
         else {
           unexpected.push(path)
@@ -148,7 +156,16 @@ async function main() {
       assert.equal(await keyName.evaluate(element => element.scrollWidth > element.clientWidth), true)
       const billing = page.getByRole('button', { name: '查看长上下文计费明细' })
       assert.equal(await billing.count(), 1)
-      assert.equal(await page.getByRole('img', { name: 'Fast 加速' }).count(), 1)
+      assert.equal(await page.getByRole('img', { name: 'Fast 模式', exact: true }).locator('svg').count(), 1)
+      const unpriced = page.getByRole('row').filter({ hasText: 'Synthetic connection error' })
+      assert.equal(await unpriced.getByRole('img', { name: 'Ultrafast 模式' }).locator('svg').count(), 2)
+      assert.equal(await unpriced.getByRole('button', { name: /费用明细|计费明细/ }).count(), 0)
+      const origin = unpriced.getByTitle('连接发生错误，现有记录无法确定由哪一方引起')
+      assert.equal(await origin.evaluate(el => getComputedStyle(el).backgroundColor), 'rgba(0, 0, 0, 0)')
+      await page.evaluate(() => {
+        window.qa.observedTier.value = 'priority'
+      })
+      assert.equal(await unpriced.getByRole('img', { name: 'Fast 模式', exact: true }).locator('svg').count(), 1)
       assert.match(await billing.getAttribute('class'), /warning/)
       await billing.hover()
       const billingTitle = page.getByText('长上下文计费明细', { exact: true })
