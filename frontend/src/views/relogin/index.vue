@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { EnrollmentEntry } from './enrollment-plan'
 import type { ReloginBatchResult, ReloginEntry, ReloginPushSelection, ReloginWorkspaceMode } from '@/api/modules/relogin'
 import { CheckCheck, Download, Funnel, GripVertical, MoreHorizontal, Pause, Play, RefreshCw, Save, Search, Settings2, Trash2, Upload, X } from '@lucide/vue'
 import { useIntervalFn, useMediaQuery, useNow } from '@vueuse/core'
@@ -46,6 +47,8 @@ import AccountSetupFields from '../accounts/components/AccountCreateModal/Accoun
 import { accountCreateEgress, accountImportQualityTemplate, accountImportSettings, accountImportTemplate, accountProxyError, emptyAccountCreateForm } from '../accounts/components/AccountCreateModal/model'
 import AccountPlanBadge from '../accounts/components/AccountPlanBadge.vue'
 import { useAccountSwipeSelect } from '../accounts/composables/useAccountSwipeSelect'
+import EnrollmentPlanModal from './components/EnrollmentPlanModal.vue'
+import EnrollmentPlanStatus from './components/EnrollmentPlanStatus.vue'
 import ReloginColumnFilter from './components/ReloginColumnFilter.vue'
 import ReloginCredentialsModal from './components/ReloginCredentialsModal.vue'
 import ReloginEgress from './components/ReloginEgress.vue'
@@ -55,11 +58,13 @@ import ReloginMaintenanceModal from './components/ReloginMaintenanceModal.vue'
 import ReloginMobileCard from './components/ReloginMobileCard.vue'
 import ReloginSessionStatus from './components/ReloginSessionStatus.vue'
 import ReloginWorkspaceCard from './components/ReloginWorkspaceCard.vue'
+import { canArrange, enrollmentPreview, previewPlanCommand, separateCredentialExit } from './enrollment-plan'
 import { importPreview } from './import-preview'
 import { knownMaintenanceWorkspaces, maintenanceBusy, maintenanceResult, matchesMaintenanceStatus, queueButtonLabel, queueDisabledReason, recentOperation, recentOperationAt } from './maintenance'
 import { matchesPool, processingStatus, recoveryCountdown, recoveryLabels, reloginDisplayName, reloginPlanDisplay, reloginPlanOptions, retryProgress, shortWorkspace, statusLabels, workspaceChoices, workspaceId, workspaceLabel } from './presentation'
 
-const entries = shallowRef<ReloginEntry[]>([])
+const entries = shallowRef<EnrollmentEntry[]>([])
+const arranging = shallowRef<EnrollmentEntry | null>(null)
 const maintenanceId = shallowRef('')
 const maintenanceOpen = shallowRef(false)
 const maintenanceTab = shallowRef('session')
@@ -182,7 +187,7 @@ const filtered = computed(() => entries.value.filter(row =>
 const visible = computed(() => filtered.value.slice((page.value - 1) * pageSize.value, page.value * pageSize.value))
 const allSelected = computed(() => visible.value.length > 0 && visible.value.every(row => selected.value.has(row.id)))
 const partialSelected = computed(() => !allSelected.value && visible.value.some(row => selected.value.has(row.id)))
-const columns = defineTableColumns<ReloginEntry>([
+const columns = defineTableColumns<EnrollmentEntry>([
   { key: 'selection', kind: 'selection' },
   { key: 'identity', label: '账号', kind: 'identity', size: 'xl' },
   { key: 'plan', label: 'PLAN', kind: 'custom', size: 'lg' },
@@ -556,7 +561,10 @@ onBeforeUnmount(() => {
         <BaseIconButton label="维护设置" :disabled="busy" @click="openRetrySettings">
           <Settings2 class="size-4" />
         </BaseIconButton>
-        <BaseButton variant="primary" :disabled="busy" @click="importing = true">
+        <BaseButton v-if="enrollmentPreview" variant="primary" :disabled="busy" @click="action(() => previewPlanCommand({ mode: 'sample' }))">
+          添加示例资料
+        </BaseButton>
+        <BaseButton v-else variant="primary" :disabled="busy" @click="importing = true">
           <template #icon>
             <Upload class="size-4" />
           </template>导入
@@ -637,6 +645,7 @@ onBeforeUnmount(() => {
     </div>
     <ReloginMaintenanceModal v-model="maintenanceOpen" :entry="maintenanceEntry" :initial-tab="maintenanceTab" @changed="reload(true)" @credentials="credentialsEntry = maintenanceEntry; credentialsOpen = true" />
     <ReloginHistoryModal v-model="historyOpen" :entry="historyEntry" @after-leave="!historyOpen && (historyEntry = null)" />
+    <EnrollmentPlanModal v-if="enrollmentPreview && arranging" :key="arranging.id" :row="arranging" :paused="paused" @close="arranging = null" @changed="reload(true)" />
     <ReloginCredentialsModal v-model="credentialsOpen" :entry="credentialsEntry" @changed="reload(true)" @after-leave="!credentialsOpen && (credentialsEntry = null)" />
     <section v-if="!mobile" class="flex min-h-48 min-w-0 flex-1 flex-col overflow-hidden rounded-cp-card border border-cp-border-secondary bg-cp-bg-container">
       <BaseTable ref="table" class="relogin-table min-h-0 flex-1" :columns="columns" :rows="visible" :selected-row-keys="[...selected]" :loading="loading && !entries.length" column-layout="proportional" :empty-text="t('appearance.preview.components.noMatchingAccountYet')" @mousedown="onMouseDown">
@@ -691,21 +700,29 @@ onBeforeUnmount(() => {
           </div>
         </template>
         <template #egress="{ row }">
-          <ReloginEgress :row="row" />
+          <div v-if="canArrange(row)" class="text-cp-sm">
+            {{ row.enrollmentPlan?.exitLabel || '未设置' }}
+            <span class="block text-cp-xs text-cp-text-tertiary">计划出口</span>
+            <span v-if="separateCredentialExit(row)" class="block text-cp-xs text-cp-text-secondary">凭据维护出口：{{ separateCredentialExit(row) }}</span>
+          </div>
+          <ReloginEgress v-else :row="row" />
         </template>
         <template #status="{ row }">
-          <button type="button" class="mb-1 block text-left font-medium text-cp-link hover:underline" @click="historyEntry = row; historyOpen = true">
-            {{ recentOperation(row) }}
-          </button>
-          <button v-if="row.status === 'awaiting_workspace'" type="button" class="block cursor-pointer border-0 bg-transparent p-0 text-left text-cp-sm text-cp-warning underline underline-offset-4 disabled:cursor-not-allowed disabled:opacity-50" :disabled="busy || paused" @click="edit(row)">
-            待选择工作区
-          </button>
-          <span v-else class="block whitespace-normal break-words" :class="maintenanceResult(row).tone" :title="row.maintenance?.message || processingStatus(row).detail">{{ maintenanceResult(row).label }}</span>
-          <button v-if="recentOperationAt(row)" type="button" class="mt-1 block whitespace-nowrap text-cp-xs tabular-nums text-cp-link hover:underline" title="查看操作记录" @click="historyEntry = row; historyOpen = true">
-            {{ formatDateTime(recentOperationAt(row)) }}
-          </button>
-          <span v-if="retryProgress(row)" class="block text-cp-xs tabular-nums text-cp-text-tertiary">{{ retryProgress(row) }}</span>
-          <span v-if="row.recovery?.retryAt" class="block whitespace-normal break-words text-cp-xs tabular-nums text-cp-text-tertiary">{{ recoveryCountdown(row, now.getTime()) }}</span>
+          <EnrollmentPlanStatus v-if="canArrange(row)" :row="row" />
+          <template v-else>
+            <button type="button" class="mb-1 block text-left font-medium text-cp-link hover:underline" @click="historyEntry = row; historyOpen = true">
+              {{ recentOperation(row) }}
+            </button>
+            <button v-if="row.status === 'awaiting_workspace'" type="button" class="block cursor-pointer border-0 bg-transparent p-0 text-left text-cp-sm text-cp-warning underline underline-offset-4 disabled:cursor-not-allowed disabled:opacity-50" :disabled="busy || paused" @click="edit(row)">
+              待选择工作区
+            </button>
+            <span v-else class="block whitespace-normal break-words" :class="maintenanceResult(row).tone" :title="row.maintenance?.message || processingStatus(row).detail">{{ maintenanceResult(row).label }}</span>
+            <button v-if="recentOperationAt(row)" type="button" class="mt-1 block whitespace-nowrap text-cp-xs tabular-nums text-cp-link hover:underline" title="查看操作记录" @click="historyEntry = row; historyOpen = true">
+              {{ formatDateTime(recentOperationAt(row)) }}
+            </button>
+            <span v-if="retryProgress(row)" class="block text-cp-xs tabular-nums text-cp-text-tertiary">{{ retryProgress(row) }}</span>
+            <span v-if="row.recovery?.retryAt" class="block whitespace-normal break-words text-cp-xs tabular-nums text-cp-text-tertiary">{{ recoveryCountdown(row, now.getTime()) }}</span>
+          </template>
         </template>
         <template #credential="{ row }">
           <ReloginSessionStatus :row="row" />
@@ -718,7 +735,10 @@ onBeforeUnmount(() => {
         </template>
         <template #actions="{ row }">
           <div class="flex flex-nowrap items-center gap-1 whitespace-nowrap">
-            <BaseButton v-if="canPush(row)" size="sm" variant="soft" :disabled="busy" @click="confirm('push', [row.id])">
+            <BaseButton v-if="canArrange(row)" size="sm" variant="soft" :disabled="busy || row.enrollmentPlan?.state === 'running'" @click="arranging = row">
+              {{ row.enrollmentPlan ? '查看安排' : '安排入池' }}
+            </BaseButton>
+            <BaseButton v-else-if="canPush(row)" size="sm" variant="soft" :disabled="busy" @click="confirm('push', [row.id])">
               推送凭据
             </BaseButton>
             <BaseButton v-else size="sm" :title="queueDisabledReason(row, busy, paused)" :disabled="!!queueDisabledReason(row, busy, paused)" @click="queue([row.id])">
@@ -732,6 +752,9 @@ onBeforeUnmount(() => {
               </template>
               <template #default="{ close }">
                 <div class="min-w-40 p-1">
+                  <BaseMenuItem v-if="canArrange(row)" :disabled="!!queueDisabledReason(row, busy, paused) || row.enrollmentPlan?.state === 'scheduled'" @click="close(); queue([row.id])">
+                    仅重登，不推送
+                  </BaseMenuItem>
                   <BaseMenuItem @click="close(); openMaintenance(row)">
                     登录与授权
                   </BaseMenuItem>
@@ -776,6 +799,7 @@ onBeforeUnmount(() => {
       <ReloginMobileCard
         v-for="row in visible" :key="row.id" :row="row" :selected="selected.has(row.id)" :busy="busy" :paused="paused" :can-push="canPush(row)" :now="now.getTime()"
         @select="toggle(row.id, $event)" @automatic="changeAutomatic([row.id], $event)"
+        @arrange="arranging = row"
         @credentials="credentialsEntry = row; credentialsOpen = true" @history="historyEntry = row; historyOpen = true"
         @cancel="cancelTask(row)" @queue="queue([row.id])" @maintain="openMaintenance(row, $event)" @push="confirm('push', [row.id])" @workspace="edit(row)" @delete="confirm('delete', [row.id])"
       />

@@ -14,6 +14,7 @@ import { toast } from '@/components/base/BaseToast'
 import { useAccountGroupCatalog } from '@/composables/useAccountGroupCatalog'
 import { errorMessage } from '@/utils/async'
 import AccountSettingsFields from '@/views/accounts/components/AccountSettingsFields.vue'
+import { enrollmentPreview } from '@/views/relogin/enrollment-plan'
 import { templateConfig, templateForm } from './template-form'
 
 const open = defineModel<boolean>({ required: true })
@@ -132,6 +133,7 @@ onScopeDispose(() => {
         <BaseInput v-model="form.name" aria-label="模板名称" :disabled="busy" />
       </BaseFormItem>
       <AccountSettingsFields
+        v-model:credential-proxy-id="form.credentialProxyId"
         v-model:enabled="form.enabled"
         v-model:model-access="form.modelAccess"
         v-model:excel-enabled="form.excelEnabled"
@@ -149,6 +151,8 @@ onScopeDispose(() => {
         v-model:proxy-mode="form.proxyMode"
         v-model:proxy-id="form.proxyId"
         v-model:egress-mode="form.egressMode"
+        :credential-egress="enrollmentPreview"
+        template-egress
         request-proxy-available
         model-access-available
         known-model-catalog

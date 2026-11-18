@@ -20,6 +20,7 @@ import { DEFAULT_EXCEL_MODELS_INPUT } from '@/utils/excel-defaults'
 import { accountModelAccessError } from '../utils/modelAccess'
 import AccountModelAccessField from './AccountModelAccessField.vue'
 import AccountOutboundField from './AccountOutboundField.vue'
+import CredentialEgressField from './CredentialEgressField.vue'
 
 const props = withDefaults(defineProps<{
   groups: AccountGroup[]
@@ -40,6 +41,8 @@ const props = withDefaults(defineProps<{
   knownModelCatalog?: boolean
   modelAccessAvailable?: boolean
   preserveModelAccess?: boolean
+  credentialEgress?: boolean
+  templateEgress?: boolean
 }>(), { preserveProxy: true, batch: false, excelAvailable: false, nameAvailable: false, modelAccessAvailable: false, preserveModelAccess: false })
 
 const customName = defineModel<string>('customName', { default: '' })
@@ -65,6 +68,7 @@ const modelAccess = defineModel<AccountModelAccess | undefined>('modelAccess')
 const updateModelAccess = defineModel<boolean>('updateModelAccess', { default: false })
 const proxyMode = defineModel<string>('proxyMode', { required: true })
 const proxyId = defineModel<string>('proxyId', { required: true })
+const credentialProxyId = defineModel<string | null>('credentialProxyId')
 const egressMode = defineModel<string>('egressMode', { default: 'fixed_ipv6_reuse' })
 const selectedGroupIds = defineModel<string[]>('selectedGroupIds', { required: true })
 const updateEnabled = defineModel<boolean>('updateEnabled', { default: false })
@@ -313,5 +317,6 @@ defineExpose({ validate: () => formRef.value?.validate().catch(() => false) })
         />
       </template>
     </AccountOutboundField>
+    <CredentialEgressField v-if="credentialEgress" v-model="credentialProxyId" :disabled="disabled" :template="templateEgress" />
   </BaseForm>
 </template>

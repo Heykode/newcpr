@@ -18,6 +18,8 @@ export function prefillAccountTemplate(form: AccountCreateForm, selected: Accoun
   }
   const config = template.config
   const next = { ...form, importTemplate: template }
+  if (config.credentialProxyId !== undefined)
+    next.credentialProxyId = config.credentialProxyId
   next.enabled = config.enabled
   next.concurrencyLimit = config.concurrencyLimit == null ? '' : String(config.concurrencyLimit)
   next.weight = String(config.weight)
