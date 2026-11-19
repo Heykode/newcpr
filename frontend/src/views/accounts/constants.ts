@@ -70,6 +70,7 @@ export const accountColumns = defineTableColumns<AccountRow>([
     key: 'accessTokenExpiresAtDisplay',
     label: '令牌过期',
     kind: 'datetime',
+    minWidth: 160,
     sortable: 'expiresAt',
     format: value => optionalAccountCell(value),
     emptyText: '',

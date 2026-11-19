@@ -590,6 +590,7 @@ fn websocket_pool_config_for_tests(
         enabled: true,
         max_age: Duration::from_mins(1),
         maintenance_interval,
+        fast_path_budget: Duration::from_millis(800),
         idle_timeout: Duration::from_secs(300),
         stream_idle_timeout: None,
     }

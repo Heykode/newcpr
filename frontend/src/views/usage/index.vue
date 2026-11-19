@@ -1,18 +1,17 @@
 <script setup lang="ts">
 import type { UsageTimeRange } from './composables/useUsageTimeRange'
-import type { UsageDisplayRecord } from './utils/records'
-import type { UsageFilterParams } from '@/api'
-import type { ConfigurableTableColumn } from '@/components/base/BaseTable/useTableColumns'
+import type { UsageErrorOrigin, UsageFilterParams } from '@/api'
 import { Eye } from '@lucide/vue'
-import { computed, shallowRef, watch } from 'vue'
+import { useElementSize } from '@vueuse/core'
+import { computed, shallowRef, useTemplateRef, watch } from 'vue'
 
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BasePageHeader from '@/components/base/BasePageHeader.vue'
 import BaseSegmented from '@/components/base/BaseSegmented.vue'
+import BaseSelect from '@/components/base/BaseSelect.vue'
 import BaseTableColumnSettings from '@/components/base/BaseTable/BaseTableColumnSettings.vue'
 import BaseTablePagination from '@/components/base/BaseTable/BaseTablePagination.vue'
-import { useTableColumns } from '@/components/base/BaseTable/useTableColumns'
 import ProviderFilterSegmented from '@/components/ProviderFilterSegmented.vue'
 import { t } from '@/i18n'
 import DetailedCaptureControl from './components/DetailedCaptureControl.vue'
@@ -25,10 +24,10 @@ import UsageRecordDetailModal from './components/UsageRecordDetailModal.vue'
 import UsageRecordsTable from './components/UsageRecordsTable.vue'
 import UsageSummaryCards from './components/UsageSummaryCards.vue'
 import { useUsageFilters } from './composables/useUsageFilters'
+import { useUsageRecordColumns } from './composables/useUsageRecordColumns'
 import { useUsageRecordDetail } from './composables/useUsageRecordDetail'
 import { useUsageRecordsTable } from './composables/useUsageRecordsTable'
 import { useUsageTimeRange } from './composables/useUsageTimeRange'
-import { usageRecordColumns } from './constants'
 
 const { draft, error: filterError, filters, errorFilters } = useUsageFilters()
 const recordView = computed({
@@ -44,12 +43,17 @@ const recordViewOptions = [
   { label: '错误排查', value: 'errors' },
 ]
 const recordStatus = shallowRef<'success' | 'error' | 'all'>('success')
-const recordColumns = computed<ConfigurableTableColumn<UsageDisplayRecord>[]>(() => recordStatus.value === 'success'
-  ? usageRecordColumns
-  : usageRecordColumns.flatMap(column => column.key === 'route'
-      ? [column, { key: 'errorMessage', label: '最终错误', kind: 'custom', size: '4xl', hideable: false }]
-      : [column]))
-const { visibleColumns, columnOptions, setColumnVisible, resetColumns } = useTableColumns(recordColumns, 'usage-records')
+const errorOrigin = shallowRef<UsageErrorOrigin | 'all'>('all')
+const errorOriginOptions = [
+  { label: '全部来源', value: 'all' },
+  { label: '上游响应', value: 'upstream' },
+  { label: '代理处理', value: 'proxy' },
+  { label: '上游连接', value: 'connection' },
+  { label: '未知来源', value: 'unknown' },
+]
+const tableArea = useTemplateRef<HTMLElement>('tableArea')
+const { width: tableWidth } = useElementSize(tableArea)
+const columns = useUsageRecordColumns(recordStatus, tableWidth)
 const recordStatusOptions = [
   { label: '成功', value: 'success' },
   { label: '错误', value: 'error' },
@@ -87,6 +91,7 @@ const {
   filters,
   provider,
   recordStatus,
+  errorOrigin,
 })
 
 const { showDetailModal, selectedUsageRecord, detailIsError, detailLoading, detailError, handleViewDetail, reloadDetail } = useUsageRecordDetail()
@@ -168,7 +173,7 @@ watch(timeRange, () => {
       <template #body>
         <div
           v-show="recordView === 'success'"
-          class="grid min-h-130 min-w-0 flex-1 grid-rows-[auto_minmax(0,1fr)] gap-3"
+          class="flex min-h-130 min-w-0 flex-1 flex-col gap-3"
         >
           <UsageFilters
             v-model:search="searchQuery"
@@ -179,22 +184,27 @@ watch(timeRange, () => {
           >
             <template #actions>
               <BaseSegmented v-model="recordStatus" label="请求状态" :options="recordStatusOptions" class="w-48" />
+              <BaseSelect v-if="recordStatus === 'error'" v-model="errorOrigin" label="错误来源" :options="errorOriginOptions" class="w-36" />
               <BaseTableColumnSettings
                 label="请求记录显示列"
-                :options="columnOptions"
-                @change="setColumnVisible"
-                @reset="resetColumns"
+                :options="columns.columnOptions.value"
+                reorderable
+                @change="columns.setColumnVisible"
+                @reset="columns.resetColumns"
+                @reorder="columns.setColumnOrder"
               />
             </template>
           </UsageFilters>
 
-          <div class="flex min-h-0 min-w-0 flex-col">
+          <div ref="tableArea" class="flex min-h-0 min-w-0 flex-1 flex-col">
             <p v-if="tableError" role="alert" class="text-cp-sm text-cp-error-text">
               {{ tableError }}
             </p>
             <UsageRecordsTable
               class="min-h-0 flex-1"
-              :columns="visibleColumns"
+              :columns="columns.visibleColumns.value"
+              :column-layout="recordStatus === 'error' ? 'content' : 'proportional'"
+              request-details
               :rows="records"
               :loading="loading"
               :empty-text="t('usage.noUsageRecords')"

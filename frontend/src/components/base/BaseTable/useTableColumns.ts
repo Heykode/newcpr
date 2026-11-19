@@ -13,6 +13,7 @@ export interface TableColumnOption {
   label: string
   visible: boolean
   disabled: boolean
+  reorderable?: boolean
 }
 
 function readVisibility(value: string): Record<string, boolean> {
@@ -43,8 +44,29 @@ export function useTableColumns<Row extends TableRow>(
     },
   )
 
+  const order = useStorage<string[]>(`codex-proxy:table-column-order:${tableId}`, [], undefined, {
+    shallow: true,
+    writeDefaults: false,
+    serializer: {
+      read: (value) => {
+        try {
+          const parsed: unknown = JSON.parse(value)
+          return Array.isArray(parsed) ? [...new Set(parsed.filter((item): item is string => typeof item === 'string'))] : []
+        }
+        catch { return [] }
+      },
+      write: JSON.stringify,
+    },
+  })
+  const orderedColumns = computed(() => {
+    const sourceColumns = toValue(source)
+    const byKey = new Map(sourceColumns.map(column => [column.key, column]))
+    const ordered = order.value.flatMap(key => byKey.has(key) ? [byKey.get(key)!] : [])
+    ordered.push(...sourceColumns.filter(column => !order.value.includes(column.key)))
+    return [...ordered.filter(column => column.fixed === 'left'), ...ordered.filter(column => !column.fixed), ...ordered.filter(column => column.fixed === 'right')]
+  })
   const columnStates = computed(() => {
-    const states = toValue(source).map((column) => {
+    const states = orderedColumns.value.map((column) => {
       const override = overrides.value[column.key]
       return {
         column,
@@ -62,6 +84,7 @@ export function useTableColumns<Row extends TableRow>(
       key: column.key,
       label: column.label!,
       visible,
+      reorderable: !column.fixed && column.kind !== 'actions',
       disabled: column.hideable === false || (visible && visibleColumns.value.length === 1),
     })))
 
@@ -78,9 +101,15 @@ export function useTableColumns<Row extends TableRow>(
     overrides.value = next
   }
 
+  function setColumnOrder(keys: string[]) {
+    const known = new Set(toValue(source).map(column => column.key))
+    order.value = [...new Set(keys.filter(key => known.has(key)))]
+  }
+
   function resetColumns() {
+    order.value = []
     overrides.value = {}
   }
 
-  return { visibleColumns, columnOptions, setColumnVisible, resetColumns }
+  return { visibleColumns, columnOptions, setColumnVisible, setColumnOrder, resetColumns }
 }

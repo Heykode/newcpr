@@ -851,7 +851,7 @@ impl ProviderError {
         self
     }
 
-    /// 附加仅可返回给当前请求方的原始上游 HTTP 失败响应。
+    /// 附加仅可返回给当前请求方的 HTTP 失败响应
     #[must_use]
     pub fn with_client_visible_upstream_response(
         mut self,
@@ -1018,7 +1018,7 @@ impl ProviderError {
         self.client_visible_upstream_error.as_deref()
     }
 
-    /// 返回只供当前协议响应使用的原始上游 HTTP 失败响应。
+    /// 返回仅供当前请求方使用的 HTTP 失败响应
     #[must_use]
     pub fn client_visible_upstream_response(&self) -> Option<&ClientVisibleUpstreamResponse> {
         self.client_visible_upstream_response.as_deref()

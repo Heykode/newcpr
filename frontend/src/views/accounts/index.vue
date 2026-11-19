@@ -250,7 +250,7 @@ const {
   connectionTestStartedAt,
   connectionTestFinishedAt,
   connectionTestDurationMs,
-  testingConnectionIds,
+  testingAccountId,
   loadingConnectionTestModels,
   refreshingConnectionTestModels,
   connectionTestSelectedModel,
@@ -660,7 +660,7 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
                 :toggling-excel="togglingExcelAccountIds.has(row.id)"
                 :toggling-quality="togglingQualityIds.has(row.id)"
                 :quality-disabled="batchQualityBusy"
-                :testing="testingConnectionIds.has(row.id)"
+                :testing="testingAccountId === row.id"
                 :exporting-model-catalog="exportingModelCatalogIds.has(row.id)"
                 :relogin="reloginActions[row.id]"
                 :relogin-unavailable="Boolean(reloginReadError)"

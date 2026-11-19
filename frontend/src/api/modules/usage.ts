@@ -80,6 +80,8 @@ export interface UsageTurnStateSummary {
   transport: string
 }
 
+export type UsageErrorOrigin = 'proxy' | 'upstream' | 'connection' | 'unknown'
+
 export interface UsageListRecord {
   clientStatusCode: number | null
   upstreamStatusCode: number | null
@@ -565,7 +567,7 @@ interface PageQuery {
   pageSize: number
 }
 
-type UsagePageQuery = UsageRangeQuery & PageQuery & { recordStatus?: 'success' | 'error' | 'all' }
+type UsagePageQuery = UsageRangeQuery & PageQuery & { recordStatus?: 'success' | 'error' | 'all', errorOrigin?: UsageErrorOrigin }
 
 type OpsErrorPageQuery = UsagePageQuery
 

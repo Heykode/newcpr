@@ -141,11 +141,7 @@ pub(super) const UPSTREAM_RESPONSE_MS_SQL: &str = r#"jsonb_path_query_first(mr.p
        'strict $.upstreamTimingMetrics.upstreamResponseMs ? (@.type() == "number" && @ > 0 && @ <= 9223372036854775807 && @.floor() == @)',
        '{}'::jsonb, true)::bigint"#;
 
-fn usage_list_record_select() -> String {
-    format!(
-    "select {UPSTREAM_RESPONSE_MS_SQL} as upstream_response_ms, mr.id, mr.outcome, mr.provider_error_code as error_code, mr.error_message, coalesce(mr.client_api_key_name_snapshot, ck.name) as client_api_key_name, mr.billing_snapshot_json,
-            mr.error_kind, mr.upstream_status_code, mr.client_status_code,
-            exists (
+const SAVED_ERROR_FACTS: &str = "(select exists (
               select 1 from (values
                 (saved_error.body -> 'code'),
                 (saved_error.body -> 'type'),
@@ -155,8 +151,29 @@ fn usage_list_record_select() -> String {
             ) as has_upstream_error,
             case when saved_upstream.body ->> 'type' = 'websocket.close'
               and jsonb_typeof(saved_upstream.body -> 'code') = 'number'
+              and (saved_upstream.body ->> 'code') ~ '^[0-9]{1,5}$'
+              and (saved_upstream.body -> 'code') <= '65535'::jsonb
               then saved_upstream.body ->> 'code'
-            end as websocket_close_code,
+            end as websocket_close_code
+     from lateral (
+       select case when pg_input_is_valid(mr.raw_upstream_error, 'jsonb') then
+         case when jsonb_typeof(mr.raw_upstream_error::jsonb -> 'upstream') = 'string'
+           and pg_input_is_valid(mr.raw_upstream_error::jsonb ->> 'upstream', 'jsonb')
+           then (mr.raw_upstream_error::jsonb ->> 'upstream')::jsonb
+         end
+       end as body
+       -- 保留子查询边界，让错误字段和关闭码复用同一行已解码的上游正文
+       offset 0
+     ) saved_upstream
+     cross join lateral (
+       select coalesce(saved_upstream.body -> 'error', saved_upstream.body #> '{response,error}') as body
+     ) saved_error) facts";
+
+fn usage_list_record_select() -> String {
+    format!(
+    "select {UPSTREAM_RESPONSE_MS_SQL} as upstream_response_ms, mr.id, mr.outcome, mr.provider_error_code as error_code, mr.error_message, coalesce(mr.client_api_key_name_snapshot, ck.name) as client_api_key_name, mr.billing_snapshot_json,
+            mr.error_kind, mr.upstream_status_code, mr.client_status_code,
+            facts.has_upstream_error, facts.websocket_close_code,
             mr.continuation_unavailable_reason, mr.upstream_connection_exit_reason,
             (mr.recovery_request_id is not null and mr.recovered_at is not null) as recovered,
             mr.endpoint, mr.client_transport, mr.requested_model_id,
@@ -183,17 +200,7 @@ fn usage_list_record_select() -> String {
      from model_requests mr
      left join provider_accounts account on account.id = mr.provider_account_ref
      left join client_api_keys ck on ck.id = mr.client_api_key_ref
-     cross join lateral (
-       select case when pg_input_is_valid(mr.raw_upstream_error, 'jsonb') then
-         case when jsonb_typeof(mr.raw_upstream_error::jsonb -> 'upstream') = 'string'
-           and pg_input_is_valid(mr.raw_upstream_error::jsonb ->> 'upstream', 'jsonb')
-           then (mr.raw_upstream_error::jsonb ->> 'upstream')::jsonb
-         end
-       end as body
-     ) saved_upstream
-     cross join lateral (
-       select coalesce(saved_upstream.body -> 'error', saved_upstream.body #> '{{response,error}}') as body
-     ) saved_error")
+     cross join lateral {SAVED_ERROR_FACTS}")
 }
 
 fn usage_record_detail_select() -> String {
@@ -428,13 +435,66 @@ fn push_record_status(
     use admin_observability::UsageRecordStatus;
     match status {
         UsageRecordStatus::Success => push_completed_usage_fact_filter(query, "mr"),
-        UsageRecordStatus::Error | UsageRecordStatus::All => {
+        UsageRecordStatus::Error(origin) => {
             super::super::super::usage_facts::push_business_request_filter(query, "mr");
-            if status == UsageRecordStatus::Error {
-                query.push(" and mr.outcome in ('failed', 'incomplete')");
+            query.push(" and mr.outcome in ('failed', 'incomplete')");
+            if let Some(origin) = origin {
+                push_usage_error_origin(query, origin);
             }
         }
+        UsageRecordStatus::All => {
+            super::super::super::usage_facts::push_business_request_filter(query, "mr");
+        }
     }
+}
+
+fn push_usage_error_origin(
+    statement: &mut QueryBuilder<Postgres>,
+    origin: admin_observability::UsageErrorOrigin,
+) {
+    use admin_observability::{UsageErrorEvidence::*, UsageErrorOrigin};
+    statement.push(" and case");
+    for &(evidence, result) in UsageErrorOrigin::RULES {
+        statement.push(" when ");
+        match evidence {
+            ProviderErrorCode => {
+                statement.push("mr.provider_error_code <> ''");
+            }
+            UpstreamStatusAtLeast(min) => {
+                statement
+                    .push("mr.upstream_status_code >= ")
+                    .push_bind(i32::from(min));
+            }
+            SavedUpstreamErrorOrClose => {
+                statement.push("mr.raw_upstream_error is not null and (select facts.has_upstream_error or facts.websocket_close_code is not null from lateral ")
+                    .push(SAVED_ERROR_FACTS).push(")");
+            }
+            ErrorKind(values) => {
+                statement
+                    .push("mr.error_kind = any(")
+                    .push_bind(values)
+                    .push(")");
+            }
+            Continuation(values) => {
+                statement
+                    .push("mr.continuation_unavailable_reason = any(")
+                    .push_bind(values)
+                    .push(")");
+            }
+            ConnectionExit(values) => {
+                statement
+                    .push("mr.upstream_connection_exit_reason = any(")
+                    .push_bind(values)
+                    .push(")");
+            }
+        }
+        statement.push(" then ").push_bind(result.as_str());
+    }
+    statement
+        .push(" else ")
+        .push_bind(UsageErrorOrigin::Unknown.as_str())
+        .push(" end = ")
+        .push_bind(origin.as_str());
 }
 
 pub(crate) async fn usage_record_detail(
@@ -916,7 +976,7 @@ async fn projected_usage_counts(
     query: &UsageRecordQuery,
 ) -> StoreResult<Option<BTreeMap<DateTime<Utc>, u64>>> {
     use admin_observability::UsageRecordStatus;
-    if query.record_status == UsageRecordStatus::Error {
+    if matches!(query.record_status, UsageRecordStatus::Error(_)) {
         return Ok(None);
     }
     let Some(mut counts) = snapshot

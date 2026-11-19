@@ -687,7 +687,7 @@ fn decoder_should_exclude_downstream_transport_headers_from_opaque_context() {
         HeaderValue::from_static(r#"{"scheme":"https"}"#),
     );
     headers.insert("accept-encoding", HeaderValue::from_static("br, gzip"));
-    // 正文未压缩；入口现在消费 Content-Encoding，但仍不得向上游透传。
+    // identity 与未压缩的正文匹配，Content-Encoding 由入口消费
     headers.insert("content-encoding", HeaderValue::from_static("identity"));
     headers.insert("x-openai-future-mode", HeaderValue::from_static("keep"));
 

@@ -161,10 +161,10 @@ async fn usage_account_filter_matches_only_historical_names_and_emails() {
         }
         for (record_status, search, page, total, expected) in [
             (Success, r"_%\", 1, 1, Some("req_observe_success")),
-            (Error, "team", 1, 1, Some("req_observe_failed")),
+            (Error(None), "team", 1, 1, Some("req_observe_failed")),
             (All, "alice", 1, 2, Some("req_observe_failed")),
             (All, "alice", 2, 2, Some("req_observe_success")),
-            (Error, "@example", 1, 0, None),
+            (Error(None), "@example", 1, 0, None),
             (All, "ALICE", 1, 0, None),
             (All, "alice%ops", 1, 0, None),
             (All, "Current Alias", 1, 0, None),
@@ -368,6 +368,126 @@ async fn usage_search_error_filters_separate_attempt_and_final_request_evidence(
         let page = error_page(&database.pool, range, filter.clone(), None).await;
         assert_eq!(page.total, count, "{filter:?}");
         assert_eq!(page.items.len() as u64, count);
+    }
+    database.close().await;
+}
+
+#[tokio::test]
+async fn error_origin_filters_matching_requests_before_counting_and_paging() {
+    use gateway_admin::model::observability::{UsageErrorOrigin::*, UsageRecordStatus};
+
+    let Some(database) = TestDatabase::create("usage_error_origin_pages").await else {
+        return;
+    };
+    let start = Utc::now();
+    let repository = admin_observability_store(&database.pool);
+    let range = admin_observability::TimeRange::new(start, start + TimeDelta::hours(1)).unwrap();
+    let saved =
+        |body: serde_json::Value| serde_json::json!({"upstream": body.to_string()}).to_string();
+    for (minute, (id, outcome, kind, status, details, model)) in [
+        ("edge_0", "failed", "internal_error", None, None, "main"),
+        (
+            "edge_1",
+            "failed",
+            "internal_error",
+            Some(503_i32),
+            None,
+            "main",
+        ),
+        ("edge_2", "incomplete", "transport", Some(200), None, "main"),
+        (
+            "edge_3",
+            "incomplete",
+            "invalid_request",
+            None,
+            Some("old plain text".into()),
+            "main",
+        ),
+        (
+            "edge_4",
+            "failed",
+            "internal_error",
+            None,
+            Some(saved(
+                serde_json::json!({"response":{"error":{"message":"sample"}}}),
+            )),
+            "main",
+        ),
+        (
+            "edge_5",
+            "failed",
+            "internal_error",
+            None,
+            Some(saved(
+                serde_json::json!({"type":"websocket.close","code":1012}),
+            )),
+            "other",
+        ),
+        (
+            "edge_6",
+            "failed",
+            "internal_error",
+            None,
+            Some(saved(
+                serde_json::json!({"type":"websocket.close","code":65536}),
+            )),
+            "main",
+        ),
+        ("edge_7", "cancelled", "internal_error", None, None, "main"),
+        ("edge_8", "succeeded", "internal_error", None, None, "main"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        super::super::analytics::seed(
+            &database.pool,
+            id,
+            start + TimeDelta::minutes(minute as i64),
+            &[],
+        )
+        .await;
+        sqlx::query("update model_requests set outcome=$2, error_kind=$3, upstream_status_code=$4, raw_upstream_error=$5, requested_model_id=$6 where id=$1")
+            .bind(id).bind(outcome).bind(kind).bind(status).bind(details).bind(model)
+            .execute(&database.pool).await.unwrap();
+    }
+    for (origin, model, ids) in [
+        (Proxy, None, vec!["edge_6", "edge_0"]),
+        (Upstream, None, vec!["edge_5", "edge_4", "edge_1"]),
+        (Connection, None, vec!["edge_2"]),
+        (Unknown, None, vec!["edge_3"]),
+        (Upstream, Some("main"), vec!["edge_4", "edge_1"]),
+        (Proxy, Some("other"), vec![]),
+    ] {
+        for current_page in 1..=ids.len() + 1 {
+            let page = repository
+                .list_usage_records(admin_observability::UsageQuery {
+                    range,
+                    record_status: UsageRecordStatus::Error(Some(origin)),
+                    filter: admin_observability::UsageFilter {
+                        model: model.map(str::to_owned),
+                        ..Default::default()
+                    },
+                    current_page: current_page as u32,
+                    page_size: PageSize::new(1).unwrap(),
+                })
+                .await
+                .unwrap();
+            assert_eq!(page.total, ids.len() as u64, "{origin:?} / {model:?}");
+            let items: Vec<_> = page
+                .items
+                .iter()
+                .map(|item| (item.id.as_str(), item.error_origin()))
+                .collect();
+            let expected: Vec<_> = ids
+                .get(current_page - 1)
+                .map(|id| (*id, origin))
+                .into_iter()
+                .collect();
+            assert_eq!(
+                items, expected,
+                "{origin:?} / {model:?} / page {current_page}"
+            );
+        }
     }
     database.close().await;
 }

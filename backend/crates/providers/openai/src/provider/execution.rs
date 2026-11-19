@@ -1417,9 +1417,7 @@ pub(super) fn cold_response_stream_once(response: ColdResponse) -> EventStream {
                         yield event;
                     }
                 } else if atomic_upstream_failure {
-                    failure.error = failure
-                        .error
-                        .with_atomic_client_events(pre_commit_events.take_for_failure(events));
+                    failure.error = super::failure::with_atomic_failure_events(failure.error, pre_commit_events.take_for_failure(events), &context);
                 }
                 Err(continuation_recovery_error(
                     failure.error,
@@ -1568,9 +1566,7 @@ pub(super) fn cold_response_stream_once(response: ColdResponse) -> EventStream {
                     yield event;
                 }
             } else if atomic_upstream_failure {
-                failure.error = failure
-                    .error
-                    .with_atomic_client_events(pre_commit_events.take_for_failure(events));
+                failure.error = super::failure::with_atomic_failure_events(failure.error, pre_commit_events.take_for_failure(events), &context);
             }
             Err(continuation_recovery_error(
                 failure.error,

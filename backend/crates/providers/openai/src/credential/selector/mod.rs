@@ -275,60 +275,69 @@ impl AffinityEscapeReason {
 }
 
 #[derive(Debug, Default)]
+enum AffinitySelectionState {
+    #[default]
+    Unbound,
+    Preferred(ProviderSessionAffinityBinding),
+    Escaped(ProviderSessionAffinityBinding, AffinityEscapeReason),
+}
+
+#[derive(Debug, Default)]
 struct AffinitySelection {
-    bound_account: Option<ProviderAccountId>,
-    bound_binding: Option<ProviderSessionAffinityBinding>,
-    preferred_account: Option<ProviderAccountId>,
-    escape_reason: Option<AffinityEscapeReason>,
+    state: AffinitySelectionState,
     inherited: bool,
 }
 
 impl AffinitySelection {
     fn preferred(binding: ProviderSessionAffinityBinding) -> Self {
-        let account_id = binding.account_id().clone();
         Self {
-            bound_account: Some(account_id.clone()),
-            bound_binding: Some(binding),
-            preferred_account: Some(account_id),
-            escape_reason: None,
+            state: AffinitySelectionState::Preferred(binding),
             inherited: false,
         }
     }
 
     fn escaped(binding: ProviderSessionAffinityBinding, reason: AffinityEscapeReason) -> Self {
-        let account_id = binding.account_id().clone();
         Self {
-            bound_account: Some(account_id),
-            bound_binding: Some(binding),
-            preferred_account: None,
-            escape_reason: Some(reason),
+            state: AffinitySelectionState::Escaped(binding, reason),
             inherited: false,
         }
     }
 
     fn bound_account(&self) -> Option<&ProviderAccountId> {
-        self.bound_account.as_ref()
+        self.bound_binding()
+            .map(ProviderSessionAffinityBinding::account_id)
     }
 
     fn bound_binding(&self) -> Option<&ProviderSessionAffinityBinding> {
-        self.bound_binding.as_ref()
+        match &self.state {
+            AffinitySelectionState::Preferred(binding)
+            | AffinitySelectionState::Escaped(binding, _) => Some(binding),
+            AffinitySelectionState::Unbound => None,
+        }
     }
 
     fn preferred_account(&self) -> Option<&ProviderAccountId> {
-        self.preferred_account.as_ref()
+        match &self.state {
+            AffinitySelectionState::Preferred(binding) => Some(binding.account_id()),
+            _ => None,
+        }
+    }
+
+    fn escape_reason(&self) -> Option<AffinityEscapeReason> {
+        match &self.state {
+            AffinitySelectionState::Escaped(_, reason) => Some(*reason),
+            _ => None,
+        }
     }
 
     fn escape(&mut self, reason: AffinityEscapeReason) {
-        if self.bound_account.is_some() && self.escape_reason.is_none() {
-            self.escape_reason = Some(reason);
-            self.preferred_account = None;
+        if let AffinitySelectionState::Preferred(_) = &self.state
+            && let AffinitySelectionState::Preferred(binding) = std::mem::take(&mut self.state)
+        {
+            self.state = AffinitySelectionState::Escaped(binding, reason);
         }
     }
-
     fn observe_preferred_selection(&mut self, selection: PreferredAccountSelection) {
-        if self.bound_account.is_none() || self.escape_reason.is_some() {
-            return;
-        }
         match selection {
             PreferredAccountSelection::Hit => {}
             PreferredAccountSelection::Blocked(AccountSchedulingBlocker::ConcurrencyLimit) => {
@@ -355,7 +364,7 @@ impl AffinitySelection {
     }
 
     fn observe_lease_busy(&mut self, account_id: &ProviderAccountId) {
-        if self.bound_account.as_ref() == Some(account_id) {
+        if self.preferred_account() == Some(account_id) {
             self.escape(AffinityEscapeReason::LeaseSaturated);
         }
     }
@@ -366,14 +375,11 @@ impl AffinitySelection {
         cache_preference: bool,
     ) -> AffinityTelemetry {
         AffinityTelemetry {
-            affinity_hit: !self.inherited
-                && self.bound_account.as_ref() == Some(selected_account)
-                && self.escape_reason.is_none(),
-            escape_reason: self.escape_reason,
+            affinity_hit: !self.inherited && self.preferred_account() == Some(selected_account),
+            escape_reason: self.escape_reason(),
             account_switch: !cache_preference
                 && self
-                    .bound_account
-                    .as_ref()
+                    .bound_account()
                     .is_some_and(|bound| bound != selected_account),
         }
     }
@@ -875,7 +881,7 @@ impl CodexCredentialSelector {
                         first_output_latency_ms: None,
                     })
                     .with_provider_quota(self.quota.scheduling_signals(&account))
-                    .with_rate_limit(rate_limits.get(account.id()).copied().flatten())
+                    .with_rate_limit(rate_limits.get(account.id()).copied())
                     .with_runtime_health(health.0, health.1);
                 let signals = quality_selection_signals(signals, quality);
                 AccountCandidate { account, signals }
@@ -1137,34 +1143,29 @@ impl CodexCredentialSelector {
                 };
             };
             affinity.observe_preferred_selection(selection.preferred());
-            let selected = selection.candidate();
-            let account = candidates
-                .iter()
-                .find(|candidate| candidate.account.id() == selected.account.id())
-                .map(|candidate| candidate.account.clone())
-                .ok_or(CredentialSelectionError::InvalidCredential(None))?;
+            let account = &selection.candidate().account;
             let allows_account_state_mutation = context
                 .eligibility
                 .allows_account_state_mutation(account.enabled());
-            if !diagnostic && self.excel_auth_block(&account).is_some() {
+            if !diagnostic && self.excel_auth_block(account).is_some() {
                 excluded.insert(account.id().clone());
                 continue;
             }
             // Snapshot conflicts must not consume capacity or the request interval.
-            let (account, runtime) =
-                match self.repository.reload_selected_credential(&account).await {
-                    Ok(reloaded) => reloaded,
-                    Err(CredentialRepositoryError::InvalidCredentialData(_))
-                        if pinned_account.is_none() =>
-                    {
-                        if affinity.bound_account() == Some(account.id()) {
-                            affinity.escape(AffinityEscapeReason::HardUnavailable);
-                        }
-                        excluded.insert(account.id().clone());
-                        continue;
+            let (account, runtime) = match self.repository.reload_selected_credential(account).await
+            {
+                Ok(reloaded) => reloaded,
+                Err(CredentialRepositoryError::InvalidCredentialData(_))
+                    if pinned_account.is_none() =>
+                {
+                    if affinity.bound_account() == Some(account.id()) {
+                        affinity.escape(AffinityEscapeReason::HardUnavailable);
                     }
-                    Err(error) => return Err(error.into()),
-                };
+                    excluded.insert(account.id().clone());
+                    continue;
+                }
+                Err(error) => return Err(error.into()),
+            };
             if !diagnostic && account.quota_paused() {
                 self.invalidate_projection(&projection);
                 return Err(CredentialSelectionError::AccountSnapshotChanged);

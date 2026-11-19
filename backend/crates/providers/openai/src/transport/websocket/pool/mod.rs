@@ -41,6 +41,7 @@ pub(crate) use self::{
     },
 };
 
+pub(crate) const DEFAULT_FAST_PATH_BUDGET_MS: u64 = 800;
 const DEFAULT_MAX_AGE: Duration = Duration::from_mins(55);
 const DEFAULT_MAINTENANCE_INTERVAL: Duration = Duration::from_secs(5);
 const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
@@ -72,6 +73,8 @@ pub struct CodexWebSocketPoolConfig {
     pub enabled: bool,
     /// 单个 socket 的最大生命周期。
     pub max_age: Duration,
+    /// 允许回退 HTTP 的请求在前台等待 WebSocket 建连的时长
+    pub fast_path_budget: Duration,
     /// 后台维护间隔；`None` 表示不启动后台任务。
     pub maintenance_interval: Option<Duration>,
     /// Unbound idle connections are recycled independently of heartbeat traffic.
@@ -85,6 +88,7 @@ impl Default for CodexWebSocketPoolConfig {
         Self {
             enabled: true,
             max_age: DEFAULT_MAX_AGE,
+            fast_path_budget: Duration::from_millis(DEFAULT_FAST_PATH_BUDGET_MS),
             maintenance_interval: Some(DEFAULT_MAINTENANCE_INTERVAL),
             idle_timeout: DEFAULT_IDLE_TIMEOUT,
             stream_idle_timeout: Some(DEFAULT_STREAM_IDLE_TIMEOUT),
@@ -168,6 +172,10 @@ impl CodexWebSocketPool {
     pub fn with_account_concurrency(mut self, limits: AccountConcurrencyHandle) -> Self {
         self.account_concurrency = Some(limits);
         self
+    }
+
+    pub(crate) fn fast_path_budget(&self) -> Duration {
+        self.config.fast_path_budget
     }
 
     /// 等待下一条上游消息的空闲超时；`None` 或零值使用默认 300 秒。

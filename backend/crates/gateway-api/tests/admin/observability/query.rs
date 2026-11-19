@@ -22,6 +22,23 @@ async fn request_status_filter_accepts_known_values_and_rejects_unknown_values()
         ("?recordStatus=error", StatusCode::OK),
         ("?recordStatus=all", StatusCode::OK),
         ("?recordStatus=unknown", StatusCode::BAD_REQUEST),
+        ("?recordStatus=error&errorOrigin=proxy", StatusCode::OK),
+        ("?recordStatus=error&errorOrigin=upstream", StatusCode::OK),
+        ("?recordStatus=error&errorOrigin=connection", StatusCode::OK),
+        ("?recordStatus=error&errorOrigin=unknown", StatusCode::OK),
+        (
+            "?recordStatus=error&errorOrigin=invalid",
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            "?recordStatus=success&errorOrigin=proxy",
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            "?recordStatus=all&errorOrigin=proxy",
+            StatusCode::BAD_REQUEST,
+        ),
+        ("?errorOrigin=proxy", StatusCode::BAD_REQUEST),
     ] {
         let response = gateway_api::admin::observability::router::<AdminTestState>()
             .with_state(fixture.state())
@@ -43,6 +60,49 @@ async fn request_status_filter_accepts_known_values_and_rejects_unknown_values()
 fn dashboard_query_should_parse_terminal_trend_kinds() {
     let query: DashboardQuery = serde_json::from_value(json!({"kind": "errors"})).unwrap();
     assert_eq!(query.trend_kind().unwrap(), TrendKind::Errors);
+}
+
+#[tokio::test]
+async fn analytics_queries_reject_list_only_status_and_error_origin() {
+    use crate::admin::{AdminTestFixture, AdminTestState};
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode, header},
+    };
+    use tower::ServiceExt as _;
+
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.insert_session("valid-session");
+    let router =
+        gateway_api::admin::observability::router::<AdminTestState>().with_state(fixture.state());
+    for (path, base) in [
+        ("/api/admin/usage/records/summary", "provider=openai"),
+        ("/api/admin/usage/insights/overview", "provider=openai"),
+        ("/api/admin/usage/insights/health", "provider=openai"),
+        ("/api/admin/usage/insights/performance", "metric=latency"),
+        ("/api/admin/usage/insights/cost", "metric=cost"),
+    ] {
+        for (extra, expected) in [
+            // 合法查询进入测试 Store；此夹具没有配置汇总数据，返回 503。
+            ("", StatusCode::SERVICE_UNAVAILABLE),
+            ("&errorOrigin=proxy", StatusCode::BAD_REQUEST),
+            ("&recordStatus=error", StatusCode::BAD_REQUEST),
+        ] {
+            let response = router
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(format!("{path}?{base}{extra}"))
+                        .header("x-request-id", "req_analytics_filter")
+                        .header(header::COOKIE, "cpr_admin_session=valid-session")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), expected, "{path}?{base}{extra}");
+        }
+    }
 }
 
 #[test]

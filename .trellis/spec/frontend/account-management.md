@@ -406,6 +406,10 @@ pagination.
 - `POST /api/admin/accounts/batch-update` sends `accountIds` plus only selected
   `enabled`, `concurrencyLimit`, `weight`, `groupIds` and `outboundProxyId`.
 - `useAccountConnectionTest({ reload })` owns the modal's asynchronous lifetime.
+  The active controller and `testingAccountId` describe the current test. Terminal
+  events clear busy state immediately; there is no minimum-duration wait. Abort,
+  delayed close and old event callbacks retain generation checks so an old test
+  cannot close, fail or clear the next test, including another run on the same account.
 - `POST /api/admin/accounts/connection-test` accepts a JSON body with `accountId`,
   `modelId`, `interface`, `stream`, and `prompt`; it returns diagnostic SSE events.
   The equivalent GET query remains for legacy clients only.

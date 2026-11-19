@@ -1191,6 +1191,28 @@ async fn classify_inference_status(
     if let Some(source) = body_error {
         error = error.with_source(source.without_url());
     }
+    let (code, message) = if status == StatusCode::BAD_REQUEST && reasoning_decode_failed(&metadata)
+    {
+        ("reasoning_decode_failed", "上游无法解码加密的推理内容")
+    } else {
+        let message = match (body_failure, kind) {
+            (
+                Some(GrokBodyFailure::ModelCapacity),
+                GrokInferenceTransportErrorKind::RateLimited,
+            ) => "上游模型容量不足",
+            (
+                Some(GrokBodyFailure::EmptyUpstream),
+                GrokInferenceTransportErrorKind::Unavailable,
+            ) => "上游未返回模型响应",
+            _ => kind.diagnostic_message(),
+        };
+        (
+            body_failure.map_or("upstream_failure", GrokBodyFailure::marker),
+            message,
+        )
+    };
+    error = error
+        .with_diagnostic(ProviderDiagnostic::new(message).with_classification("upstream", code));
     error = error.with_upstream_failure_fields(gateway_core::upstream::UpstreamFailureFields {
         status: Some(status_code),
         code: metadata.original_code.clone(),
@@ -1249,7 +1271,7 @@ enum GrokBodyFailure {
 impl GrokBodyFailure {
     fn transport_kind(self) -> GrokInferenceTransportErrorKind {
         match self {
-            Self::Quota(failure) => quota_transport_error_kind(failure),
+            Self::Quota(failure) => GrokInferenceTransportErrorKind::from_quota(failure),
             Self::Billing => GrokInferenceTransportErrorKind::PaymentRequired,
             Self::EmptyUpstream => GrokInferenceTransportErrorKind::Unavailable,
             Self::ModelCapacity | Self::RateLimit => GrokInferenceTransportErrorKind::RateLimited,
@@ -1401,7 +1423,7 @@ fn first_string(object: &serde_json::Map<String, Value>, fields: &[&str]) -> Opt
 fn classify_payment_required(metadata: &InferenceErrorMetadata) -> GrokInferenceTransportErrorKind {
     quota_failure(metadata).map_or(
         GrokInferenceTransportErrorKind::PaymentRequired,
-        quota_transport_error_kind,
+        GrokInferenceTransportErrorKind::from_quota,
     )
 }
 
@@ -1421,7 +1443,7 @@ fn classify_forbidden(
     } else if let Some(failure) = body_failure {
         failure.transport_kind()
     } else if let Some(failure) = quota_failure(metadata) {
-        quota_transport_error_kind(failure)
+        GrokInferenceTransportErrorKind::from_quota(failure)
     } else if model_access_denied(metadata) {
         GrokInferenceTransportErrorKind::ModelAccessDenied
     } else {
@@ -1434,7 +1456,7 @@ fn classify_too_many_requests(
 ) -> GrokInferenceTransportErrorKind {
     quota_failure(metadata).map_or(
         GrokInferenceTransportErrorKind::RateLimited,
-        quota_transport_error_kind,
+        GrokInferenceTransportErrorKind::from_quota,
     )
 }
 
@@ -1468,16 +1490,6 @@ fn quota_failure(metadata: &InferenceErrorMetadata) -> Option<GrokQuotaFailureKi
         metadata.error_type.as_deref(),
         metadata.message.as_deref(),
     )
-}
-
-fn quota_transport_error_kind(failure: GrokQuotaFailureKind) -> GrokInferenceTransportErrorKind {
-    match failure {
-        GrokQuotaFailureKind::Account => GrokInferenceTransportErrorKind::QuotaExhausted,
-        GrokQuotaFailureKind::FreeAccount => GrokInferenceTransportErrorKind::FreeQuotaExhausted,
-        GrokQuotaFailureKind::FreeModelUsage => {
-            GrokInferenceTransportErrorKind::ModelQuotaExhausted
-        }
-    }
 }
 
 fn model_access_denied(metadata: &InferenceErrorMetadata) -> bool {

@@ -29,6 +29,15 @@ Aligned narrowly with official `743a3aba70a4f78f27fb53d80a6e719599d2fe5e`
   `[DONE]` do not count; nonempty WS data does. First-event, first-text and
   first-reasoning remain distinct. This metric never controls delivery/retry.
 
+## 原生 WS 参数错误的 HTTP 交付
+
+官方 v3.53.0 的 `0922f3486c`：Provider 将单条原始 WS `error` 中的 error 对象
+附到客户端响应，只适用于禁止重试的 InvalidRequest/400、原生 `/v1/responses`
+HTTP SSE 入口。Core 使用同一 ResponseCommit 原子冻结：首字节未提交则返回 JSON/400；
+保活或正文已经提交则保留原 SSE 错误事件，不重写 HTTP 状态、不重复发送事件。
+AttemptContext 必须从实际 NewModelRequest 接收 endpoint 与 client_transport。
+WS 客户端、Chat/Messages、Excel 和其他错误不得仅凭状态码套用这条规则。
+
 ## Excel Settings Contract
 
 - `RequestTuning.stream_prefetch_bytes` / `streamPrefetchBytes` remains compatible

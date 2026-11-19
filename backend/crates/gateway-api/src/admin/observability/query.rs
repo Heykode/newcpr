@@ -28,6 +28,7 @@ impl DashboardQuery {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UsageQuery {
     pub record_status: Option<String>,
+    pub error_origin: Option<String>,
     #[serde(flatten)]
     pub details: RequestSearchQuery,
     #[serde(default, deserialize_with = "super::search::query_number")]
@@ -55,6 +56,17 @@ pub struct UsageQuery {
 }
 
 impl UsageQuery {
+    /// 记录状态和错误来源只用于明细列表，不参与汇总与图表。
+    pub fn validate_analytics(&self) -> Result<(), WireValidationError> {
+        if self.record_status.is_some() {
+            return Err(WireValidationError::new("recordStatus"));
+        }
+        if self.error_origin.is_some() {
+            return Err(WireValidationError::new("errorOrigin"));
+        }
+        Ok(())
+    }
+
     /// 校验 Element Plus 风格的页码分页字段。
     pub fn validate_pagination(&self) -> Result<(u32, u16), WireValidationError> {
         let current_page = self.current_page.unwrap_or(1);
@@ -380,11 +392,24 @@ pub(crate) fn usage_command(query: &UsageQuery) -> Result<domain::UsageQuery, Wi
     let page_size_value =
         DomainPageSize::new(page_size).map_err(|_| WireValidationError::new("pageSize"))?;
     Ok(domain::UsageQuery {
-        record_status: match query.record_status.as_deref() {
-            None | Some("success") => domain::UsageRecordStatus::Success,
-            Some("error") => domain::UsageRecordStatus::Error,
-            Some("all") => domain::UsageRecordStatus::All,
-            _ => return Err(WireValidationError::new("recordStatus")),
+        record_status: match (
+            query.record_status.as_deref(),
+            query.error_origin.as_deref(),
+        ) {
+            (None | Some("success"), None) => domain::UsageRecordStatus::Success,
+            (Some("all"), None) => domain::UsageRecordStatus::All,
+            (Some("error"), origin) => domain::UsageRecordStatus::Error(match origin {
+                None => None,
+                Some("proxy") => Some(domain::UsageErrorOrigin::Proxy),
+                Some("upstream") => Some(domain::UsageErrorOrigin::Upstream),
+                Some("connection") => Some(domain::UsageErrorOrigin::Connection),
+                Some("unknown") => Some(domain::UsageErrorOrigin::Unknown),
+                Some(_) => return Err(WireValidationError::new("errorOrigin")),
+            }),
+            (None | Some("success" | "all"), Some(_)) => {
+                return Err(WireValidationError::new("errorOriginRecordStatus"));
+            }
+            (Some(_), _) => return Err(WireValidationError::new("recordStatus")),
         },
         range: usage_range(query.start_time.as_deref(), query.end_time.as_deref())?,
         filter: usage_filter(query)?,

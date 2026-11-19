@@ -418,6 +418,94 @@ async fn models_should_reject_recognized_cli_below_configured_min() {
 }
 
 #[tokio::test]
+async fn desktop_hosted_tui_uses_cli_gate_on_native_routes() {
+    let execution = ModelsExecution::with_cli_min();
+    for (method, endpoint) in [("GET", "/v1/models"), ("POST", "/v1/responses")] {
+        let response = api_router(execution.clone())
+            .await
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(endpoint)
+                    .header(AUTHORIZATION, "Bearer sk_models_test")
+                    .header("originator", "Codex Desktop")
+                    .header(
+                        "user-agent",
+                        "Codex Desktop/0.39.0 (Linux; x86_64) xterm (codex-tui; 0.38.0)",
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::BAD_REQUEST,
+            "{method} {endpoint}"
+        );
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["error"]["client"], "codex_cli");
+        assert_eq!(value["error"]["current_version"], "0.39.0");
+        assert_eq!(value["error"]["min_version"], "0.40.0");
+    }
+    use tokio_tungstenite::tungstenite::{Error as WsError, client::IntoClientRequest};
+    let app = api_router(execution.clone()).await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    for (version, allowed) in [("0.39.0", false), ("0.40.0", true)] {
+        let mut request = format!("ws://{address}/v1/responses")
+            .into_client_request()
+            .unwrap();
+        request
+            .headers_mut()
+            .insert(AUTHORIZATION, "Bearer sk_models_test".parse().unwrap());
+        request
+            .headers_mut()
+            .insert("originator", "Codex Desktop".parse().unwrap());
+        request.headers_mut().insert(
+            "user-agent",
+            format!("Codex Desktop/{version} (Linux; x86_64) xterm (codex-tui; 0.38.0)")
+                .parse()
+                .unwrap(),
+        );
+        let result = tokio_tungstenite::connect_async(request).await;
+        if allowed {
+            let (mut socket, _) = result.unwrap();
+            socket.close(None).await.unwrap();
+        } else {
+            let Err(WsError::Http(response)) = result else {
+                panic!("expected CLI version rejection")
+            };
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+            let body: serde_json::Value =
+                serde_json::from_slice(response.body().as_ref().unwrap()).unwrap();
+            assert_eq!(body["error"]["client"], "codex_cli");
+            assert_eq!(body["error"]["current_version"], version);
+        }
+    }
+    server.abort();
+    let _ = server.await;
+    let response = api_router(execution)
+        .await
+        .oneshot(
+            Request::get("/v1/models")
+                .header(AUTHORIZATION, "Bearer sk_models_test")
+                .header("originator", "Codex Desktop")
+                .header(
+                    "user-agent",
+                    "Codex Desktop/0.40.0 (Linux; x86_64) xterm (codex-tui; 0.39.0)",
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
 async fn models_should_reject_recognized_cli_with_invalid_version() {
     let request = Request::get("/v1/models")
         .header(AUTHORIZATION, "Bearer sk_models_test")

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { TableColumnOption } from './useTableColumns'
-import { Columns3, RotateCcw } from '@lucide/vue'
+import { ArrowDown, ArrowUp, Columns3, RotateCcw } from '@lucide/vue'
 import { nextTick, shallowRef, useId, useTemplateRef, watch } from 'vue'
 import { t } from '@/i18n'
 import BaseButton from '../BaseButton.vue'
@@ -9,15 +9,26 @@ import BaseIconButton from '../BaseIconButton.vue'
 import BasePopover from '../BasePopover.vue'
 import BaseScrollbar from '../BaseScrollbar.vue'
 
-defineProps<{
+const props = defineProps<{
   options: TableColumnOption[]
   label: string
+  reorderable?: boolean
 }>()
 
 const emit = defineEmits<{
   change: [key: string, visible: boolean]
+  reorder: [keys: string[]]
   reset: []
 }>()
+
+function moveColumn(index: number, delta: number) {
+  const target = index + delta
+  if (!props.options[index]?.reorderable || !props.options[target]?.reorderable)
+    return
+  const keys = props.options.map(option => option.key)
+  ;[keys[index], keys[target]] = [keys[target]!, keys[index]!]
+  emit('reorder', keys)
+}
 
 const open = shallowRef(false)
 const panelId = useId()
@@ -104,17 +115,25 @@ watch(open, async (value) => {
         </div>
         <BaseScrollbar max-height="min(20rem, calc(100dvh - 10rem))">
           <div class="grid gap-0.5 p-2">
-            <BaseCheckbox
-              v-for="option in options"
-              :key="option.key"
-              :model-value="option.visible"
-              :label="option.label"
-              :disabled="option.disabled"
-              show-label
-              class="min-h-9 w-full rounded-cp px-2 py-2"
-              :class="option.disabled ? undefined : 'hover:bg-cp-bg-text-hover'"
-              @update:model-value="emit('change', option.key, $event)"
-            />
+            <div v-for="(option, index) in options" :key="option.key" class="flex items-center">
+              <BaseCheckbox
+                :model-value="option.visible"
+                :label="option.label"
+                :disabled="option.disabled"
+                show-label
+                class="min-h-9 min-w-0 flex-1 rounded-cp px-2 py-2"
+                :class="option.disabled ? undefined : 'hover:bg-cp-bg-text-hover'"
+                @update:model-value="emit('change', option.key, $event)"
+              />
+              <template v-if="reorderable && option.reorderable">
+                <BaseIconButton :label="`${option.label}上移`" size="sm" :disabled="!options[index - 1]?.reorderable" @click="moveColumn(index, -1)">
+                  <ArrowUp class="size-3.5" />
+                </BaseIconButton>
+                <BaseIconButton :label="`${option.label}下移`" size="sm" :disabled="!options[index + 1]?.reorderable" @click="moveColumn(index, 1)">
+                  <ArrowDown class="size-3.5" />
+                </BaseIconButton>
+              </template>
+            </div>
           </div>
         </BaseScrollbar>
         <div class="flex justify-end px-2 pb-2">

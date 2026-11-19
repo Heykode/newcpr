@@ -208,6 +208,7 @@ pub(crate) async fn usage_records_summary<S>(
 where
     S: AdminSessionState + Send + Sync,
 {
+    query.validate_analytics().map_err(map_wire_error)?;
     let range = usage_range(query.start_time.as_deref(), query.end_time.as_deref())
         .map_err(map_wire_error)?;
     let filter = usage_filter(&query).map_err(map_wire_error)?;
@@ -231,6 +232,7 @@ pub(crate) async fn usage_insights_overview<S>(
 where
     S: AdminSessionState + Send + Sync,
 {
+    query.validate_analytics().map_err(map_wire_error)?;
     let range = usage_range(query.start_time.as_deref(), query.end_time.as_deref())
         .map_err(map_wire_error)?;
     let filter = usage_filter(&query).map_err(map_wire_error)?;
@@ -289,6 +291,7 @@ async fn usage_metric_response<S>(
 where
     S: AdminSessionState + Send + Sync,
 {
+    query.validate_analytics().map_err(map_wire_error)?;
     let time = state.deployment_timezone();
     let range = usage_range(query.start_time.as_deref(), query.end_time.as_deref())
         .map_err(map_wire_error)?;

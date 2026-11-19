@@ -33,7 +33,7 @@ hyper = { version = "=1.11.1", default-features = false }
 hyper-rustls = "=0.27.7"
 hyper-util = { version = "0.1.20", features = ["client-legacy", "client-proxy", "http1", "tokio"] }
 # Pin the vendored Linux native-tls backend independently of system OpenSSL.
-openssl = { version = "=0.10.81", features = ["vendored"] }
+openssl = { version = "=0.10.82", features = ["vendored"] }
 # HTTP 使用 native-tls + ALPN；rustls 保留给 CPR WebSocket 和代理 TLS。
 # 显式列出 features，避免引入 reqwest 默认压缩特性。
 native-tls = "=0.2.18"
@@ -56,10 +56,10 @@ tokio = { version = "=1.53.3", default-features = false, features = ["fs", "io-u
 tokio-rustls = { version = "=0.26.5", default-features = false }
 tokio-util = { version = "0.7.18", features = ["rt"] }
 tower-service = "0.3.3"
-# 官方 Codex WebSocket 需要上游尚未发布的 proxy 与 permessage-deflate 实现，固定到已审计提交。
-tokio-tungstenite = { git = "https://github.com/openai-oss-forks/tokio-tungstenite", rev = "0e5b2d73aa18dd9f0a50ee9ff199d5aef7594186", features = ["proxy", "rustls-tls-native-roots"] }
+# 官方 fork 支持代理连接和分帧消息的 permessage-deflate，两个提交须配套
+tokio-tungstenite = { git = "https://github.com/openai-oss-forks/tokio-tungstenite", rev = "7447c427513cfe685f236e1ac0513c4ea3dd9c0b", features = ["proxy", "rustls-tls-native-roots"] }
 tracing = "0.1.44"
-tungstenite = { git = "https://github.com/openai-oss-forks/tungstenite-rs", rev = "4fffad30fe373adbdcffab9545e9e9bf4f2fc19f", features = ["deflate", "proxy"] }
+tungstenite = { git = "https://github.com/openai-oss-forks/tungstenite-rs", rev = "bc589d684755a8c02da0fc7e58d0861cbfc306f1", features = ["deflate", "proxy"] }
 url = "2.5.8"
 uuid = { version = "1.23.3", features = ["v4", "v7"] }
 # 官方 Codex app-server 对 /v1/responses 请求体默认做 zstd 压缩（level 3），

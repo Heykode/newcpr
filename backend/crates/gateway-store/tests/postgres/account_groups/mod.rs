@@ -27,6 +27,35 @@ mod image_policy;
 mod monitor_lifecycles;
 
 #[tokio::test]
+async fn duplicate_group_name_has_a_specific_error_without_advancing_revision() {
+    let Some(db) = TestDatabase::create("group_duplicate_name").await else {
+        return;
+    };
+    let groups = PgAccountGroupRepository::new(db.pool.clone());
+    let command = |id| NewAccountGroup {
+        allow_image_generation: true,
+        id: group_id(id),
+        name: "Duplicate group".to_owned(),
+        description: None,
+        color: group_color("#2563EBFF"),
+        fast_mode: FastMode::Default,
+        disable_fast: false,
+    };
+    groups
+        .create_account_group(command(MIXED_GROUP), &context("create-group"))
+        .await
+        .unwrap();
+    let revision = current_revision(&db.pool).await;
+    let error = groups
+        .create_account_group(command(EMPTY_GROUP), &context("duplicate-group"))
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), AdminStoreErrorKind::DuplicateName);
+    assert_eq!(current_revision(&db.pool).await, revision);
+    db.close().await;
+}
+
+#[tokio::test]
 async fn monitor_reuses_key_bindings_and_includes_ungrouped_quota_peers() {
     let Some(db) = TestDatabase::create("monitor_key_facts").await else {
         return;

@@ -12,6 +12,7 @@ pub enum StoreBackend {
 /// 上层状态机需要区分的稳定冲突类型。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConflictKind {
+    DuplicateName,
     StaleRevision,
     AlreadyFinalized,
     RequestNotRunning,
@@ -128,6 +129,10 @@ pub(crate) fn admin_store_error(resource: &'static str, error: StoreError) -> Ad
             kind: ConflictKind::StaleRevision,
             ..
         } => AdminStoreErrorKind::StaleRevision,
+        StoreError::Conflict {
+            kind: ConflictKind::DuplicateName,
+            ..
+        } => AdminStoreErrorKind::DuplicateName,
         StoreError::Conflict { .. } => AdminStoreErrorKind::Conflict,
         StoreError::InvalidData { .. } => AdminStoreErrorKind::Invalid,
         StoreError::Unavailable { .. } => AdminStoreErrorKind::Unavailable,

@@ -90,6 +90,8 @@
     },
     "filters": {
       "error": "Error",
+      "errorSource": "Error source",
+      "allSources": "All sources",
       "requestDetailType": "Request detail type",
       "label": "Usage record filters and actions",
       "refreshUsageHistory": "Refresh usage history",
@@ -332,7 +334,8 @@
       "clientResponse": "Client response",
       "responseStarted": "Started",
       "responseNotStarted": "Not started",
-      "responseNotRecorded": "Not recorded"
+      "responseNotRecorded": "Not recorded",
+      "recovered": "Subsequently recovered"
     },
     "insights": {
       "useStatisticalObservations": "Use statistical observations"

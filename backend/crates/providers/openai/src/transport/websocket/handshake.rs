@@ -1,4 +1,4 @@
-//! Responses WebSocket endpoint、opening handshake 与首帧发送。
+//! Responses WebSocket endpoint、opening handshake 与请求发送
 
 use std::{error::Error as _, io, time::Duration};
 
@@ -34,7 +34,7 @@ use super::{
 };
 
 const WEBSOCKET_EXTENSIONS: &str = "permessage-deflate; client_max_window_bits";
-const WEBSOCKET_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+pub(crate) const WEBSOCKET_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const WEBSOCKET_SEND_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 
 impl CodexWebSocketConnection {
@@ -70,7 +70,7 @@ impl CodexWebSocketConnection {
         }
     }
 
-    /// 构造 Responses WebSocket opening 与首个 `response.create` 文本帧。
+    /// 构造 Responses WebSocket opening 与首条 `response.create` 消息
     pub fn responses_create_request(
         base_url: &str,
         websocket_key: &str,
