@@ -106,5 +106,7 @@ keep existing columns and horizontal scrolling where necessary.
   错误首列固定、不可隐藏；操作右固定。时间窄列显示时间与日期，原完整值作为提示。
 - 基础表格仅允许显式固定在左侧且处于该分区末尾的 custom 列按 grow 扩展；
   selection/actions 等固定宽度不受影响。列移动不能跨越左右固定分区。
+- 数组操作须兼容继承的 Vue DOM 配置（ES2022 lib）；提高 target 不会自动提高 lib。
+  涉及新内建 API 的改动使用强制重新类型检查验证，避免增量缓存漏掉构建兼容问题。
 - 保留 NewCPR 原有全部视图、详情入口、分析图表和当前样式。验证实际组件的横向滚动、
   列排序、隐藏、恢复默认与视图隔离，不以单独类名断言替代浏览器检查。

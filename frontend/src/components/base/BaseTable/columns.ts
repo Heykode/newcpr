@@ -227,9 +227,14 @@ export function columnStyle<Row extends TableRow>(
 ) {
   const tableWidth = minimumTableWidth(columns)
   if (layout === 'content') {
+    let lastStickyLeft: ResolvedTableColumn<Row> | undefined
+    for (const item of columns) {
+      if (item.sticky === 'left')
+        lastStickyLeft = item
+    }
     const growWeight = (item: ResolvedTableColumn<Row>) =>
       Number.isFinite(item.grow) && (!item.sticky || (item.fixed === 'left'
-        && item.kind === 'custom' && item === columns.findLast(column => column.sticky === 'left')))
+        && item.kind === 'custom' && item === lastStickyLeft))
         ? Math.max(item.grow ?? 0, 0)
         : 0
     const totalGrow = columns.reduce((total, item) => total + growWeight(item), 0)
