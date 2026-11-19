@@ -32,6 +32,9 @@ export interface BaseTableColumn<Row extends TableRow = TableRow> {
   format?: (value: unknown, row: Row) => unknown
   emptyText?: string
   grow?: number
+  width?: number
+  minWidth?: number
+  fixed?: TableColumnSticky
 }
 
 export interface BaseTableSort {
@@ -176,7 +179,7 @@ export function resolveColumns<Row extends TableRow>(
   const resolved = columns.map((column): ResolvedTableColumn<Row> => {
     const kind = column.kind ?? 'text'
     const recipe = columnRecipes[kind]
-    const basisWidth = recipe.basisWidth ?? columnWidths[column.size ?? recipe.size]
+    const basisWidth = column.width ?? column.minWidth ?? recipe.basisWidth ?? columnWidths[column.size ?? recipe.size]
 
     return {
       ...column,
@@ -186,7 +189,7 @@ export function resolveColumns<Row extends TableRow>(
       truncate: recipe.truncate,
       contentClass: recipe.contentClass,
       paddingClass: recipe.paddingClass,
-      sticky: recipe.sticky,
+      sticky: column.fixed ?? recipe.sticky,
     }
   })
 
@@ -224,8 +227,16 @@ export function columnStyle<Row extends TableRow>(
 ) {
   const tableWidth = minimumTableWidth(columns)
   if (layout === 'content') {
+    let lastStickyLeft: ResolvedTableColumn<Row> | undefined
+    for (const item of columns) {
+      if (item.sticky === 'left')
+        lastStickyLeft = item
+    }
     const growWeight = (item: ResolvedTableColumn<Row>) =>
-      !item.sticky && Number.isFinite(item.grow) ? Math.max(item.grow ?? 0, 0) : 0
+      Number.isFinite(item.grow) && (!item.sticky || (item.fixed === 'left'
+        && item.kind === 'custom' && item === lastStickyLeft))
+        ? Math.max(item.grow ?? 0, 0)
+        : 0
     const totalGrow = columns.reduce((total, item) => total + growWeight(item), 0)
     const grow = growWeight(column)
     if (totalGrow > 0) {

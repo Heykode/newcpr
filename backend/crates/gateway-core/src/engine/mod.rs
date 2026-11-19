@@ -362,6 +362,8 @@ impl ContinuationAttempt {
 /// Provider 每次执行可见的 request-local context。
 #[derive(Debug, Clone)]
 pub struct RequestAttemptContext {
+    endpoint: String,
+    client_transport: execution::ClientTransport,
     client_ip: Option<IpAddr>,
     connection_budget: connection::ConnectionBudget,
     response_control: Option<response_control::ResponseControl>,
@@ -378,6 +380,17 @@ pub struct RequestAttemptContext {
 }
 
 impl RequestAttemptContext {
+    #[must_use]
+    pub fn with_client_request(
+        mut self,
+        endpoint: String,
+        transport: execution::ClientTransport,
+    ) -> Self {
+        self.endpoint = endpoint;
+        self.client_transport = transport;
+        self
+    }
+
     #[must_use]
     pub fn with_client_ip(mut self, client_ip: Option<IpAddr>) -> Self {
         self.client_ip = client_ip;
@@ -437,6 +450,8 @@ impl RequestAttemptContext {
     #[must_use]
     pub fn new(request_id: ModelRequestId, client_api_key_ref: ClientApiKeyId) -> Self {
         Self {
+            endpoint: String::new(),
+            client_transport: execution::ClientTransport::HttpJson,
             client_ip: None,
             provider_route: Arc::new(std::sync::OnceLock::new()),
             connection_budget: connection::ConnectionBudget::default(),
@@ -503,6 +518,16 @@ pub struct AttemptContext {
 }
 
 impl AttemptContext {
+    #[must_use]
+    pub fn endpoint(&self) -> &str {
+        &self.request.endpoint
+    }
+
+    #[must_use]
+    pub const fn client_transport(&self) -> execution::ClientTransport {
+        self.request.client_transport
+    }
+
     pub fn lease_detail(&self, model: Option<&str>) -> crate::provider_ports::ProviderLeaseDetail {
         crate::provider_ports::ProviderLeaseDetail {
             request_id: self.request_id().as_str().to_owned(),

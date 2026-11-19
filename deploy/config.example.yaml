@@ -62,7 +62,14 @@ api:
   request_id_header: 'x-request-id'
 
 openai:
-  # 上游地址、WebSocket 池、额度刷新和 OAuth 使用 Provider 内置默认值；模板只保留画像启动基线。
+  # 上游地址、额度刷新和 OAuth 使用 Provider 内置默认值。
+  # Responses WS 池可单独覆盖以下默认值；未列出的字段不必补齐。
+  # ws_pool:
+  #   enabled: true
+  #   max_age_ms: 3300000
+  #   fast_path_budget_ms: 800 # 回退 HTTP 前等待 WS 建连的时长，范围 1–15000 毫秒
+  #   idle_timeout_ms: 300000
+  #   stream_idle_timeout_ms: 300000
   wire_profile:
     # 版本元组来自同一个官方 macOS Desktop ZIP；Provider 每 24 小时检查 appcast，
     # 仅在包内 Core 核验和 Redis 条件覆盖都成功后原子更新。

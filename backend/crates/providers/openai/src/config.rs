@@ -10,7 +10,9 @@ use url::{Host, Url};
 use crate::credential::CodexQuotaRefreshPolicy;
 use crate::transport::profile::{CodexRequestLocation, CodexWireProfile, CodexWireProfileState};
 use crate::transport::session::{CodexSessionIdentity, CodexSessionIdentityError};
-use crate::transport::websocket::CodexWebSocketPoolConfig;
+use crate::transport::websocket::{
+    CodexWebSocketPoolConfig, DEFAULT_FAST_PATH_BUDGET_MS, WEBSOCKET_CONNECT_TIMEOUT,
+};
 use crate::{
     OFFICIAL_CODEX_BASE_URL,
     credential::token_client::{
@@ -193,20 +195,35 @@ impl CodexApiConfig {
 pub struct CodexWebSocketPoolSettings {
     pub enabled: bool,
     pub max_age_ms: u64,
+    pub fast_path_budget_ms: u64,
     pub idle_timeout_ms: u64,
     pub stream_idle_timeout_ms: u64,
 }
 
 #[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(default, deny_unknown_fields)]
 struct CodexWebSocketPoolSettingsInput {
-    #[serde(default = "default_websocket_pool_idle_timeout_ms")]
     idle_timeout_ms: u64,
     enabled: bool,
     max_age_ms: u64,
+    fast_path_budget_ms: u64,
     stream_idle_timeout_ms: u64,
     #[serde(default, rename = "max_connecting")]
     _legacy_max_connecting: serde::de::IgnoredAny,
+}
+
+impl Default for CodexWebSocketPoolSettingsInput {
+    fn default() -> Self {
+        let defaults = CodexWebSocketPoolSettings::default();
+        Self {
+            enabled: defaults.enabled,
+            max_age_ms: defaults.max_age_ms,
+            fast_path_budget_ms: defaults.fast_path_budget_ms,
+            idle_timeout_ms: defaults.idle_timeout_ms,
+            stream_idle_timeout_ms: defaults.stream_idle_timeout_ms,
+            _legacy_max_connecting: serde::de::IgnoredAny,
+        }
+    }
 }
 
 impl From<CodexWebSocketPoolSettingsInput> for CodexWebSocketPoolSettings {
@@ -214,14 +231,11 @@ impl From<CodexWebSocketPoolSettingsInput> for CodexWebSocketPoolSettings {
         Self {
             enabled: value.enabled,
             max_age_ms: value.max_age_ms,
+            fast_path_budget_ms: value.fast_path_budget_ms,
             idle_timeout_ms: value.idle_timeout_ms,
             stream_idle_timeout_ms: value.stream_idle_timeout_ms,
         }
     }
-}
-
-const fn default_websocket_pool_idle_timeout_ms() -> u64 {
-    300_000
 }
 
 impl Default for CodexWebSocketPoolSettings {
@@ -229,7 +243,8 @@ impl Default for CodexWebSocketPoolSettings {
         Self {
             enabled: true,
             max_age_ms: 55 * 60 * 1000,
-            idle_timeout_ms: default_websocket_pool_idle_timeout_ms(),
+            fast_path_budget_ms: DEFAULT_FAST_PATH_BUDGET_MS,
+            idle_timeout_ms: 300_000,
             stream_idle_timeout_ms: 300_000,
         }
     }
@@ -237,6 +252,13 @@ impl Default for CodexWebSocketPoolSettings {
 
 impl CodexWebSocketPoolSettings {
     fn validate(&self) -> Result<(), OpenAiConfigError> {
+        if self.fast_path_budget_ms == 0
+            || Duration::from_millis(self.fast_path_budget_ms) > WEBSOCKET_CONNECT_TIMEOUT
+        {
+            return Err(OpenAiConfigError::InvalidField(
+                "openai.ws_pool.fast_path_budget_ms",
+            ));
+        }
         if self.max_age_ms == 0 || self.idle_timeout_ms == 0 {
             return Err(OpenAiConfigError::InvalidField("openai.ws_pool"));
         }
@@ -247,6 +269,7 @@ impl CodexWebSocketPoolSettings {
         CodexWebSocketPoolConfig {
             enabled: self.enabled,
             max_age: Duration::from_millis(self.max_age_ms),
+            fast_path_budget: Duration::from_millis(self.fast_path_budget_ms),
             idle_timeout: Duration::from_millis(self.idle_timeout_ms),
             stream_idle_timeout: (self.stream_idle_timeout_ms != 0)
                 .then(|| Duration::from_millis(self.stream_idle_timeout_ms)),

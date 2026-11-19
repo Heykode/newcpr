@@ -339,7 +339,8 @@ editing prior entries.
 - Bad: rotate UA/source mid-attempt or allocate a new fixed address on GET.
 - Bad: evict a live continuation solely to implement "fresh connection".
 - Good: three 100-ms successful openings following 750-ms capacity waits do not
-  trip the origin breaker, while foreground decisions retain their 800-ms limit.
+  trip the origin breaker. Foreground decisions use `openai.ws_pool.fast_path_budget_ms`
+  (default 800 ms; allowed 1–15000 ms), independent from background opening lifetime.
 - Bad: treating a successful revision probe as recovery while leaving the
   snapshot's suspension timer armed.
 

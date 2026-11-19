@@ -1,7 +1,7 @@
 import type { Ref } from 'vue'
 import type { UsageDisplayRecord } from '../utils/records'
 import type { UsageTimeRangeParams } from './useUsageTimeRange'
-import type { UsageFilterParams } from '@/api'
+import type { UsageErrorOrigin, UsageFilterParams } from '@/api'
 import { watchDebounced } from '@vueuse/core'
 
 import { computed, onMounted, onScopeDispose, shallowRef, watch } from 'vue'
@@ -19,6 +19,7 @@ interface UseUsageRecordsTableOptions {
   filters?: Readonly<Ref<UsageFilterParams>>
   provider?: Ref<string>
   recordStatus?: Readonly<Ref<'success' | 'error' | 'all'>>
+  errorOrigin?: Readonly<Ref<UsageErrorOrigin | 'all'>>
 }
 
 type UsageLoadScope = 'all' | 'table'
@@ -103,6 +104,7 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
     try {
       const result = await getUsageRecords({
         recordStatus: options.recordStatus?.value,
+        errorOrigin: options.recordStatus?.value === 'error' && options.errorOrigin?.value !== 'all' ? options.errorOrigin?.value : undefined,
         currentPage: currentPage.value,
         pageSize: pageSize.value,
         ...tableParams,
@@ -165,7 +167,7 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
     loadUsageRecords()
   })
 
-  watch(() => options.recordStatus?.value, () => {
+  watch([() => options.recordStatus?.value, () => options.errorOrigin?.value], () => {
     resetPagination()
     if (options.active.value)
       void loadUsageRecords({ scope: 'table' })

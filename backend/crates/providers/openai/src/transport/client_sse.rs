@@ -1,6 +1,9 @@
 use gateway_core::diagnostics::{StreamCapture, StreamFormat, TraceContext, diagnostic_json};
 
-use std::{sync::Arc, time::Instant};
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use futures::{StreamExt, TryStreamExt};
 use gateway_protocol::openai::{
@@ -32,7 +35,7 @@ use crate::transport::{
     response_meta,
     websocket::{
         CodexWebSocketConnection, CodexWebSocketExchangeError, CodexWebSocketPool,
-        CodexWebSocketPoolKey, PreviousResponseUnavailableReason, WEBSOCKET_FAST_PATH_BUDGET,
+        CodexWebSocketPoolKey, DEFAULT_FAST_PATH_BUDGET_MS, PreviousResponseUnavailableReason,
         WebSocketFastPath, WebSocketOriginBreaker, execute_prepared_response_create_request_stream,
         post_send_ambiguous, prepare_response_create_request_with_pool, websocket_audit_dir,
         write_websocket_audit_artifact_from_env_with_timezone,
@@ -713,7 +716,10 @@ impl CodexBackendClient {
             .map(|(pool, key)| (pool, key, downstream_cancellation));
         let fast_path_budget = match requirement {
             TransportRequirement::PersistedContinuation | TransportRequirement::NewChain => {
-                Some(WEBSOCKET_FAST_PATH_BUDGET)
+                Some(self.websocket_pool.as_deref().map_or(
+                    Duration::from_millis(DEFAULT_FAST_PATH_BUDGET_MS),
+                    CodexWebSocketPool::fast_path_budget,
+                ))
             }
             TransportRequirement::ExplicitWebSocketWarmup
             | TransportRequirement::WebSocketNewChain

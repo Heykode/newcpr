@@ -56,22 +56,17 @@ fn map_store_error(error: AdminStoreError, resource: &'static str) -> AdminError
             "账号身份与已保存的设备档案冲突，本次操作未保存。请先核对账号身份和历史设备档案。",
         );
     }
-    let kind = match error.kind() {
-        AdminStoreErrorKind::Invalid => AdminErrorKind::Invalid,
-        AdminStoreErrorKind::NotFound => AdminErrorKind::NotFound,
-        AdminStoreErrorKind::StaleRevision | AdminStoreErrorKind::Conflict => {
-            AdminErrorKind::Conflict
+    let (kind, message) = match error.kind() {
+        AdminStoreErrorKind::Invalid => (AdminErrorKind::Invalid, "请求参数不合法"),
+        AdminStoreErrorKind::NotFound => (AdminErrorKind::NotFound, "请求的资源不存在"),
+        AdminStoreErrorKind::StaleRevision => {
+            (AdminErrorKind::Conflict, "数据已更新，请刷新后再操作")
         }
-        AdminStoreErrorKind::Unavailable => AdminErrorKind::Unavailable,
+        AdminStoreErrorKind::DuplicateName => (AdminErrorKind::Conflict, "名称已存在"),
+        AdminStoreErrorKind::Conflict => (AdminErrorKind::Conflict, "当前资源状态不允许此操作"),
+        AdminStoreErrorKind::Unavailable => (AdminErrorKind::Unavailable, "存储服务暂不可用"),
     };
     tracing::warn!(resource, error_kind = ?error.kind(), "admin store operation failed");
-    let message = match kind {
-        AdminErrorKind::Invalid => "请求参数不合法",
-        AdminErrorKind::NotFound => "请求的资源不存在",
-        AdminErrorKind::Conflict => "当前资源状态冲突，请刷新后重试",
-        AdminErrorKind::Unavailable => "依赖服务暂不可用",
-        _ => "服务内部错误",
-    };
     AdminError::new(kind, message).with_source(error)
 }
 
@@ -100,9 +95,8 @@ fn map_provider_error(
         ProviderAdminErrorKind::Conflict => "服务商资源状态冲突，请刷新后重试",
         ProviderAdminErrorKind::BadGateway => "上游服务请求失败",
         ProviderAdminErrorKind::Ambiguous => "上游执行结果未知，请刷新状态后再决定是否重试",
-        ProviderAdminErrorKind::Unavailable | ProviderAdminErrorKind::CredentialRefreshRequired => {
-            "服务商暂不可用"
-        }
+        ProviderAdminErrorKind::Unavailable => "服务商暂不可用",
+        ProviderAdminErrorKind::CredentialRefreshRequired => "账号凭据需要刷新",
         ProviderAdminErrorKind::Internal => "服务内部错误",
     };
     AdminError::new(kind, error.public_message().unwrap_or(message)).with_source(error)

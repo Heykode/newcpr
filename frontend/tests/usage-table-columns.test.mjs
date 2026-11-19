@@ -179,7 +179,7 @@ test('success and error preferences and reset remain isolated from each other an
   assert.equal(option(errors, 'route').visible, false)
   assert.equal(storage.getItem(`${prefix}ops-errors`), '{"route":false}')
   assert.equal(storage.getItem('cpr.accounts.visible-columns'), '{"version":2,"keys":[]}')
-  assert.ok(storage.writes.every(([key]) => key.startsWith(prefix)))
+  assert.ok(storage.writes.every(([key]) => key.startsWith(prefix) || key.startsWith('codex-proxy:table-column-order:')))
 })
 
 test('required identity, error and action fields override corrupt preferences and reject hiding', async (t) => {
@@ -287,4 +287,27 @@ test('real storage events normalize corruption, synchronize reset and stop after
   await receive('{"model":false}')
   assert.equal(option(state, 'model').visible, true)
   assert.deepEqual(state.errors, [])
+})
+
+test('column order survives reload and is isolated between usage and errors', async (t) => {
+  const storage = new MemoryStorage()
+  const source = [
+    { key: 'error', label: 'Error', fixed: 'left', hideable: false },
+    { key: 'time', label: 'Time' },
+    { key: 'model', label: 'Model' },
+    { key: 'actions', label: 'Actions', kind: 'actions', fixed: 'right' },
+  ]
+  const errors = mount(t, source, 'usage-error-records', storage)
+  const usage = mount(t, usageRecordColumns, 'usage-records', storage)
+  errors.setColumnOrder(['actions', 'model', 'time', 'error', 'model', 'unknown'])
+  errors.setColumnVisible('time', false)
+  await vue.nextTick()
+  assert.deepEqual(keys(errors), ['error', 'model', 'actions'])
+  assert.deepEqual(keys(usage), Array.from(usageRecordColumns, column => column.key))
+  errors.stop()
+  const reopened = mount(t, source, 'usage-error-records', storage)
+  reopened.setColumnVisible('time', true)
+  assert.deepEqual(keys(reopened), ['error', 'model', 'time', 'actions'])
+  reopened.resetColumns()
+  assert.deepEqual(keys(reopened), ['error', 'time', 'model', 'actions'])
 })

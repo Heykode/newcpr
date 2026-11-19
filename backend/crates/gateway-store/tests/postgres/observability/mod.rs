@@ -2849,7 +2849,7 @@ async fn usage_error_origins_agree_for_saved_errors_without_failure_status() {
                 .list_usage_records(admin_observability::UsageQuery {
                     range,
                     filter: admin_observability::UsageFilter::default(),
-                    record_status: admin_observability::UsageRecordStatus::All,
+                    record_status: admin_observability::UsageRecordStatus::Error(Some(origin)),
                     current_page: 1,
                     page_size: PageSize::new(10).unwrap(),
                 })
@@ -2947,7 +2947,7 @@ async fn usage_error_origins_preserve_saved_failure_and_connection_boundaries() 
             .list_usage_records(admin_observability::UsageQuery {
                 range,
                 filter: admin_observability::UsageFilter::default(),
-                record_status: admin_observability::UsageRecordStatus::All,
+                record_status: admin_observability::UsageRecordStatus::Error(Some(origin)),
                 current_page: 1,
                 page_size: PageSize::new(10).unwrap(),
             })

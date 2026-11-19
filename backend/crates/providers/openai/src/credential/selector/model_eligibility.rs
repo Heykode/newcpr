@@ -12,7 +12,7 @@ impl CodexCredentialSelector {
         &self,
         accounts: &[ProviderAccount],
         request: &CredentialSelectionInput<'_>,
-    ) -> HashMap<ProviderAccountId, Option<SystemTime>> {
+    ) -> HashMap<ProviderAccountId, SystemTime> {
         let ids = accounts
             .iter()
             .map(|account| account.id().clone())
@@ -56,14 +56,18 @@ impl CodexCredentialSelector {
                 .ok()
                 .flatten()
                 .map(|value| value.scheduling_until(now));
-            limits.insert(id.clone(), until.max(protected));
+            if let Some(until) = until.max(protected) {
+                limits.insert(id.clone(), until);
+            }
         }
         for (account, cooldown) in native.into_iter().zip(models) {
             if let Some(cooldown) = cooldown.ok().flatten().filter(|value| {
                 value.credential_revision() == account.revision() && value.until() > now
             }) {
-                let until = limits.entry(account.id().clone()).or_default();
-                *until = (*until).max(Some(cooldown.until()));
+                limits
+                    .entry(account.id().clone())
+                    .and_modify(|until| *until = (*until).max(cooldown.until()))
+                    .or_insert(cooldown.until());
             }
         }
         limits

@@ -330,7 +330,7 @@ async fn backfill_coverage_uses_contiguous_cursor_instead_of_old_corrected_facts
     ] {
         seed(&database.pool, id, now - TimeDelta::hours(age), &[]).await;
     }
-    // 模拟迁移后历史队列为空，随后最旧请求发生单点修正
+    // 清空待处理队列后只修正最早的请求，验证中间的时间段仍需回填
     sqlx::query("delete from request_analytics_pending_requests")
         .execute(&database.pool)
         .await

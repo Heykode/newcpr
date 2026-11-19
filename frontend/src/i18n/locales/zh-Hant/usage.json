@@ -90,6 +90,8 @@
     },
     "filters": {
       "error": "錯誤",
+      "errorSource": "錯誤來源",
+      "allSources": "全部來源",
       "requestDetailType": "請求明細類型",
       "label": "使用記錄篩選與操作",
       "refreshUsageHistory": "刷新使用記錄",
@@ -332,7 +334,8 @@
       "clientResponse": "客戶端響應",
       "responseStarted": "已開始",
       "responseNotStarted": "未開始",
-      "responseNotRecorded": "未記錄"
+      "responseNotRecorded": "未記錄",
+      "recovered": "後續已恢復"
     },
     "insights": {
       "useStatisticalObservations": "使用統計觀測"

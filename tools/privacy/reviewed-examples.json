@@ -3206,5 +3206,109 @@
     "file_sha256": "0aebe4b4f6d723908a20ab1b739a49fe3a61888ea3da50c51e49d88ab01559c4",
     "line_sha256": "c36a0dbdd71274dfb45379085d8b6535806e84789a7edb39c1c60e508b0a311b",
     "reason": "Re-reviewed the previously approved synthetic location-probe fixture. It shifted one line after the in-memory reservation signature change."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/config.rs",
+    "rule": "non-example-ip",
+    "line": 133,
+    "file_sha256": "46bc8dae66e0270478883ed22b688dff0da1321cb1945093d06e19246018e514",
+    "line_sha256": "c7cce97562dd79d3c5f4aad42f7ef636c045565c6191a42b5df548842e5197f4",
+    "reason": "Manually re-reviewed unchanged URL rejection fixtures after v3.53.0 configuration tests were added; synthetic user:pass and private-network sample are parsed only, never contacted."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/config.rs",
+    "rule": "authenticated-url",
+    "line": 135,
+    "file_sha256": "46bc8dae66e0270478883ed22b688dff0da1321cb1945093d06e19246018e514",
+    "line_sha256": "814069861c50b1e716f26a23b5af8033d740a1f95e5c875d570e4a9476b9bbb5",
+    "reason": "Manually re-reviewed unchanged URL rejection fixtures after v3.53.0 configuration tests were added; synthetic user:pass and private-network sample are parsed only, never contacted."
+  },
+  {
+    "path": "backend/crates/providers/xai/tests/transport/network.rs",
+    "rule": "authenticated-url",
+    "line": 36,
+    "file_sha256": "14d73de26d5821b8eb3f596a7d62cfc24f82627f3fc4721e07458287b35ff298",
+    "line_sha256": "db5e5704b33f31cec217e126622734c6a1da9f478dfe6bfc7944197b592719ad",
+    "reason": "Manually re-reviewed unchanged v3.53.0 transport fixtures: loopback-only synthetic proxy authentication and in-memory DNS-policy classification values, not production endpoints or credentials."
+  },
+  {
+    "path": "backend/crates/providers/xai/tests/transport/network.rs",
+    "rule": "non-example-ip",
+    "line": 854,
+    "file_sha256": "14d73de26d5821b8eb3f596a7d62cfc24f82627f3fc4721e07458287b35ff298",
+    "line_sha256": "2033d9097d789fb4eed2b21b5a01eb0145e10f75f2f8467ef1150acf7f925a5e",
+    "reason": "Manually re-reviewed unchanged v3.53.0 transport fixtures: loopback-only synthetic proxy authentication and in-memory DNS-policy classification values, not production endpoints or credentials."
+  },
+  {
+    "path": "backend/crates/providers/xai/tests/transport/network.rs",
+    "rule": "non-example-ip",
+    "line": 855,
+    "file_sha256": "14d73de26d5821b8eb3f596a7d62cfc24f82627f3fc4721e07458287b35ff298",
+    "line_sha256": "29d81e2ff628a6d92cd9d90361016d7d15585af36dafbd01c39bc9085350ed6d",
+    "reason": "Manually re-reviewed unchanged v3.53.0 transport fixtures: loopback-only synthetic proxy authentication and in-memory DNS-policy classification values, not production endpoints or credentials."
+  },
+  {
+    "path": "backend/crates/providers/xai/tests/transport/network.rs",
+    "rule": "non-example-ip",
+    "line": 882,
+    "file_sha256": "14d73de26d5821b8eb3f596a7d62cfc24f82627f3fc4721e07458287b35ff298",
+    "line_sha256": "633b87faae9403ebc883cd526be3f63fcba619f14b0f199b64ecd1c77037c672",
+    "reason": "Manually re-reviewed unchanged v3.53.0 transport fixtures: loopback-only synthetic proxy authentication and in-memory DNS-policy classification values, not production endpoints or credentials."
+  },
+  {
+    "path": "backend/crates/providers/xai/tests/transport/network.rs",
+    "rule": "non-example-ip",
+    "line": 885,
+    "file_sha256": "14d73de26d5821b8eb3f596a7d62cfc24f82627f3fc4721e07458287b35ff298",
+    "line_sha256": "db277d270b9478e13bcedcff8464565c90b76cb95d4a3e7943c6c06d04a90c4a",
+    "reason": "Manually re-reviewed unchanged v3.53.0 transport fixtures: loopback-only synthetic proxy authentication and in-memory DNS-policy classification values, not production endpoints or credentials."
+  },
+  {
+    "path": "backend/crates/providers/xai/tests/transport/network.rs",
+    "rule": "non-example-ip",
+    "line": 893,
+    "file_sha256": "14d73de26d5821b8eb3f596a7d62cfc24f82627f3fc4721e07458287b35ff298",
+    "line_sha256": "010fed8499bcc9f73dea3feb5c20bf0e285c1ea52f15accef256b827f6aaaf4a",
+    "reason": "Manually re-reviewed unchanged v3.53.0 transport fixtures: loopback-only synthetic proxy authentication and in-memory DNS-policy classification values, not production endpoints or credentials."
+  },
+  {
+    "path": "backend/crates/providers/xai/tests/transport/network.rs",
+    "rule": "non-example-ip",
+    "line": 901,
+    "file_sha256": "14d73de26d5821b8eb3f596a7d62cfc24f82627f3fc4721e07458287b35ff298",
+    "line_sha256": "633b87faae9403ebc883cd526be3f63fcba619f14b0f199b64ecd1c77037c672",
+    "reason": "Manually re-reviewed unchanged v3.53.0 transport fixtures: loopback-only synthetic proxy authentication and in-memory DNS-policy classification values, not production endpoints or credentials."
+  },
+  {
+    "path": "backend/crates/providers/xai/tests/transport/network.rs",
+    "rule": "non-example-ip",
+    "line": 904,
+    "file_sha256": "14d73de26d5821b8eb3f596a7d62cfc24f82627f3fc4721e07458287b35ff298",
+    "line_sha256": "e3bdf4aa928b4f907700a66d215a91a8151046a067eda3d2e0f19168abcedd0e",
+    "reason": "Manually re-reviewed unchanged v3.53.0 transport fixtures: loopback-only synthetic proxy authentication and in-memory DNS-policy classification values, not production endpoints or credentials."
+  },
+  {
+    "path": "backend/crates/providers/xai/tests/transport/network.rs",
+    "rule": "non-example-ip",
+    "line": 905,
+    "file_sha256": "14d73de26d5821b8eb3f596a7d62cfc24f82627f3fc4721e07458287b35ff298",
+    "line_sha256": "005dca5fefcbc8e5d518b6c59d289c1d25f7d8ed10bfc7698b7b0bbd5e2c78f4",
+    "reason": "Manually re-reviewed unchanged v3.53.0 transport fixtures: loopback-only synthetic proxy authentication and in-memory DNS-policy classification values, not production endpoints or credentials."
+  },
+  {
+    "path": "backend/crates/providers/xai/tests/transport/network.rs",
+    "rule": "non-example-ip",
+    "line": 918,
+    "file_sha256": "14d73de26d5821b8eb3f596a7d62cfc24f82627f3fc4721e07458287b35ff298",
+    "line_sha256": "a502ee022493b5e891be27fbf87aa830b1adb35f45aa03c5220ee21214c673d5",
+    "reason": "Manually re-reviewed unchanged v3.53.0 transport fixtures: loopback-only synthetic proxy authentication and in-memory DNS-policy classification values, not production endpoints or credentials."
+  },
+  {
+    "path": "backend/crates/providers/xai/tests/transport/network.rs",
+    "rule": "non-example-ip",
+    "line": 928,
+    "file_sha256": "14d73de26d5821b8eb3f596a7d62cfc24f82627f3fc4721e07458287b35ff298",
+    "line_sha256": "9e479e1097600c03e5b02a059871972d553af67489633306a1ac5dbb3264de7c",
+    "reason": "Manually re-reviewed unchanged v3.53.0 transport fixtures: loopback-only synthetic proxy authentication and in-memory DNS-policy classification values, not production endpoints or credentials."
   }
 ]

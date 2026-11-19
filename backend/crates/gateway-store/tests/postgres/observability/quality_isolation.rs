@@ -208,14 +208,14 @@ async fn quality_history_is_isolated_from_all_business_projections_without_delet
     );
     for status in [
         admin_observability::UsageRecordStatus::All,
-        admin_observability::UsageRecordStatus::Error,
+        admin_observability::UsageRecordStatus::Error(None),
     ] {
         let mut query = records_query.clone();
         query.record_status = status;
         let full = repository.list_usage_records(query.clone()).await.unwrap();
         assert!(full.items.iter().any(|row| row.id == "req_observe_failed"));
         assert!(full.items.iter().all(|row| !row.id.starts_with("quality_")));
-        if status == admin_observability::UsageRecordStatus::Error {
+        if status == admin_observability::UsageRecordStatus::Error(None) {
             assert!(
                 full.items
                     .iter()

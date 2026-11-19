@@ -7,6 +7,32 @@ use gateway_core::{account::AccountStatusFacts, routing::AccountGroupId};
 
 use super::{PageSize, Revision, observability::DecimalAmount};
 
+pub fn validate_group_fields(
+    name: &str,
+    description: Option<&str>,
+) -> Result<(), super::AdminError> {
+    if name.trim().is_empty() {
+        return Err(super::AdminError::invalid("请输入账号组名称"));
+    }
+    if name.chars().count() > 100 {
+        return Err(super::AdminError::invalid("账号组名称最多 100 个字符"));
+    }
+    if name.trim() != name || name.chars().any(char::is_control) {
+        return Err(super::AdminError::invalid(
+            "账号组名称不能包含首尾空白或控制字符",
+        ));
+    }
+    if let Some(description) = description {
+        if description.len() > 4096 {
+            return Err(super::AdminError::invalid("账号组描述最多 4096 字节"));
+        }
+        if description.chars().any(char::is_control) {
+            return Err(super::AdminError::invalid("账号组描述不能包含控制字符"));
+        }
+    }
+    Ok(())
+}
+
 /// Canonical `#RRGGBBAA` color persisted with an account group.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountGroupColor(String);

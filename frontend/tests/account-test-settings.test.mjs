@@ -51,19 +51,13 @@ function mountTest(storage, options = {}) {
         const deliver = event => onMessage(JSON.stringify(event))
         send = deliver
         end = resolve
-        signal.addEventListener('abort', () => resolve(), { once: true })
+        signal.addEventListener('abort', () => options.delayClose ? options.delayClose(resolve) : resolve(), { once: true })
         if (options.autoComplete !== false)
           queueMicrotask(() => deliver({ type: 'test_complete', success: true }))
       }),
     },
     '@/components/base/BaseToast': { toast: { success: () => {}, error: assert.fail } },
-    '@/composables/useIdSet': {
-      useIdSet: () => {
-        const ids = new Set()
-        return { ids, has: id => ids.has(id), add: id => ids.add(id), remove: id => ids.delete(id) }
-      },
-    },
-    '@/utils/async': { errorMessage: error => error.message, withMinimumDuration: options.withMinimumDuration ?? (task => task()) },
+    '@/utils/async': { errorMessage: error => error.message },
     '@/utils/date': { formatDateTime: () => 'now', formatTime: () => 'now' },
   }, { AbortController, TextEncoder, queueMicrotask })
   const state = scope.run(() => module.useAccountConnectionTest({
@@ -262,10 +256,7 @@ test('finishing a cancelled test cannot fail or close the next account test', as
   const completions = []
   const query = mountTest(new Map(), {
     autoComplete: false,
-    withMinimumDuration: async (task) => {
-      await task()
-      await new Promise(resolve => completions.push(resolve))
-    },
+    delayClose: resolve => completions.push(resolve),
   })
   try {
     query.state.openConnectionTest({ id: 'account-a' })
@@ -304,7 +295,7 @@ test('premature stream closure and malformed events cannot produce an empty succ
       await result
       assert.equal(query.state.connectionTestStatus.value, 'error')
       assert.match(query.state.connectionTestStatusView.value.description, malformed ? /解析失败/ : /未返回完成事件/)
-      assert.equal(query.state.testingConnectionIds.has('account-a'), false)
+      assert.equal(query.state.testingAccountId.value, undefined)
     }
     finally {
       query.stop()
@@ -384,5 +375,35 @@ test('proxy diagnostics describe only provider failures before sending and appea
     finally {
       query.stop()
     }
+  }
+})
+
+test('completion allows immediate same-account retest without accepting old events', async () => {
+  const completions = []
+  const query = mountTest(new Map(), { autoComplete: false, delayClose: resolve => completions.push(resolve) })
+  try {
+    query.state.openConnectionTest({ id: 'account-a' })
+    await new Promise(resolve => setImmediate(resolve))
+    const previous = query.state.handleTestConnection()
+    const oldSender = query.currentSender()
+    query.send({ type: 'test_complete', success: true })
+    assert.equal(query.state.testingAccountId.value, undefined)
+    const current = query.state.handleTestConnection()
+    assert.equal(query.requests.length, 2)
+    oldSender({ type: 'test_complete', success: false })
+    completions.shift()()
+    await previous
+    assert.equal(query.state.connectionTestStatus.value, 'running')
+    assert.equal(query.state.testingAccountId.value, 'account-a')
+    query.send({ type: 'test_complete', success: true })
+    completions.shift()()
+    await current
+    assert.equal(query.state.connectionTestStatus.value, 'success')
+    assert.equal(query.state.testingAccountId.value, undefined)
+  }
+  finally {
+    query.stop()
+    for (const resolve of completions)
+      resolve()
   }
 })

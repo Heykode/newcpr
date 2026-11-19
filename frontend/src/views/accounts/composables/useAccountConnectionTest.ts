@@ -7,15 +7,9 @@ import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
 import { getAccountModels, refreshAccountModels } from '@/api'
 import { streamAccountConnectionTest } from '@/api/modules/account-connection-test'
 import { toast } from '@/components/base/BaseToast'
-import { useIdSet } from '@/composables/useIdSet'
 import { t } from '@/i18n'
-import { errorMessage, withMinimumDuration } from '@/utils/async'
+import { errorMessage } from '@/utils/async'
 import { formatDateTime, formatTime } from '@/utils/date'
-
-interface ConnectionTestRun {
-  accountId: string
-  controller: AbortController
-}
 
 interface ConnectionTestSettings {
   endpoint: 'responses'
@@ -199,7 +193,7 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
   const connectionTestStartedAt = shallowRef('')
   const connectionTestFinishedAt = shallowRef('')
   const connectionTestDurationMs = shallowRef<number | null>(null)
-  const testingConnections = useIdSet<string>()
+  const testingAccountId = shallowRef<string>()
   const loadingConnectionTestModels = shallowRef(false)
   const refreshingConnectionTestModels = shallowRef(false)
   const connectionTestSelectedModel = shallowRef('')
@@ -223,7 +217,7 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
   const connectionTestModelOptions = ref<ConnectionTestModelOption[]>([])
 
   let connectionTestStartedAtMs = 0
-  let connectionTestRun: ConnectionTestRun | undefined
+  let connectionTestController: AbortController | undefined
   let connectionTestGeneration = 0
   let connectionTestModelRequest = 0
 
@@ -361,12 +355,10 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
   }
 
   function clearConnectionTestRun() {
-    const run = connectionTestRun
-    connectionTestRun = undefined
-    if (run) {
-      run.controller.abort()
-      testingConnections.remove(run.accountId)
-    }
+    const controller = connectionTestController
+    connectionTestController = undefined
+    testingAccountId.value = undefined
+    controller?.abort()
   }
 
   function failConnectionTest(message = '测试连接失败') {
@@ -537,7 +529,7 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
       connectionTestError.value = '测试提示词不能包含不可见控制字符'
       return
     }
-    if (testingConnections.has(account.id))
+    if (testingAccountId.value === account.id)
       return
     abortConnectionTest()
     const generation = connectionTestGeneration
@@ -552,39 +544,34 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
     connectionTestStartedAt.value = formatDateTime()
     connectionTestFinishedAt.value = ''
     appendConnectionTestLog('准备发送测试请求', 'info')
-    testingConnections.add(account.id)
-    const run: ConnectionTestRun = {
-      accountId: account.id,
-      controller: new AbortController(),
-    }
-    connectionTestRun = run
+    const controller = new AbortController()
+    connectionTestController = controller
+    testingAccountId.value = account.id
     try {
-      await withMinimumDuration(async () => {
-        try {
-          await streamAccountConnectionTest({
-            accountId: account.id,
-            modelId: connectionTestSelectedModel.value,
-            interface: settings.endpoint,
-            stream: settings.stream,
-            prompt: settings.prompt,
-          }, run.controller.signal, (raw) => {
-            if (generation !== connectionTestGeneration || connectionTestRun !== run)
-              return
-            try {
-              const event = parseConnectionTestEvent(raw)
-              if (event)
-                handleConnectionTestEvent(event)
-            }
-            catch {
-              failConnectionTest('测试响应解析失败')
-            }
-          })
-        }
-        catch (error: unknown) {
-          if (!run.controller.signal.aborted)
-            throw error
-        }
-      })
+      try {
+        await streamAccountConnectionTest({
+          accountId: account.id,
+          modelId: connectionTestSelectedModel.value,
+          interface: settings.endpoint,
+          stream: settings.stream,
+          prompt: settings.prompt,
+        }, controller.signal, (raw) => {
+          if (generation !== connectionTestGeneration || connectionTestController !== controller)
+            return
+          try {
+            const event = parseConnectionTestEvent(raw)
+            if (event)
+              handleConnectionTestEvent(event)
+          }
+          catch {
+            failConnectionTest('测试响应解析失败')
+          }
+        })
+      }
+      catch (error: unknown) {
+        if (!controller.signal.aborted)
+          throw error
+      }
       if (generation === connectionTestGeneration && connectionTestStatus.value === 'running') {
         recordConnectionTestFailure('failure', '测试失败', '测试连接未返回完成事件')
       }
@@ -621,7 +608,7 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
     connectionTestStartedAt,
     connectionTestFinishedAt,
     connectionTestDurationMs,
-    testingConnectionIds: testingConnections.ids,
+    testingAccountId,
     loadingConnectionTestModels,
     refreshingConnectionTestModels,
     connectionTestSelectedModel,

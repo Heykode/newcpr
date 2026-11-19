@@ -1105,7 +1105,7 @@ impl CodexCredentialSelector {
         self.quota.prepare_scheduling(&accounts).await;
         let cooldowns = self.scheduling_cooldowns(&accounts, request).await;
         for account in accounts {
-            let cooldown = cooldowns.get(account.id()).copied().flatten();
+            let cooldown = cooldowns.get(account.id()).copied();
             let health = self
                 .account_feedback
                 .scheduling_signals(&self.provider_kind, account.id());

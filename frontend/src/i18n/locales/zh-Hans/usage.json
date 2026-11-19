@@ -90,6 +90,8 @@
     },
     "filters": {
       "error": "错误",
+      "errorSource": "错误来源",
+      "allSources": "全部来源",
       "requestDetailType": "请求明细类型",
       "label": "使用记录筛选与操作",
       "refreshUsageHistory": "刷新使用记录",
@@ -332,7 +334,8 @@
       "clientResponse": "客户端响应",
       "responseStarted": "已开始",
       "responseNotStarted": "未开始",
-      "responseNotRecorded": "未记录"
+      "responseNotRecorded": "未记录",
+      "recovered": "后续已恢复"
     },
     "insights": {
       "useStatisticalObservations": "使用统计观测"

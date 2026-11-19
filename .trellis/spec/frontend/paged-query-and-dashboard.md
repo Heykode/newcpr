@@ -94,3 +94,19 @@ that condition, preserving time, selected accounts and the current view.
 Chart and diagnostics placement may change with viewport width; their transforms,
 request parameters, ranking and pagination remain unchanged. Full-width diagnostics
 keep existing columns and horizontal scrolling where necessary.
+
+## 请求错误来源与独立列配置
+
+- 官方 v3.53.0：请求明细 `recordStatus=error` 可附带
+  `errorOrigin=proxy|upstream|connection|unknown`；其他状态携带来源应拒绝。
+  来源按已保存事实解释，不能根据客户端状态码或错误文案猜测。
+- 列表、总数、分页在同一来源过滤后计算，投影和 SQL 共享分类优先级。
+  列表专属的状态/来源不进入图表与汇总；汇总/概览/指标 API 对误带这些字段的请求返回 400，不能静默忽略。公共时间、账号、模型等筛选继续联动。
+- 成功/全部共用 `usage-records`，错误使用 `usage-error-records` 保存显示和顺序。
+  错误首列固定、不可隐藏；操作右固定。时间窄列显示时间与日期，原完整值作为提示。
+- 基础表格仅允许显式固定在左侧且处于该分区末尾的 custom 列按 grow 扩展；
+  selection/actions 等固定宽度不受影响。列移动不能跨越左右固定分区。
+- 数组操作须兼容继承的 Vue DOM 配置（ES2022 lib）；提高 target 不会自动提高 lib。
+  涉及新内建 API 的改动使用强制重新类型检查验证，避免增量缓存漏掉构建兼容问题。
+- 保留 NewCPR 原有全部视图、详情入口、分析图表和当前样式。验证实际组件的横向滚动、
+  列排序、隐藏、恢复默认与视图隔离，不以单独类名断言替代浏览器检查。

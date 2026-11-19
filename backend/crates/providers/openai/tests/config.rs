@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::{path::Path, time::Duration};
 
 use chrono::{TimeZone as _, Utc};
 use provider_openai::config::{
@@ -248,4 +248,56 @@ fn valid_config() -> OpenAiConfig {
             .expect("valid test time"),
     };
     config
+}
+
+#[test]
+fn websocket_pool_timeouts_accept_defaults_and_individual_overrides() {
+    for (settings, idle_ms, fast_ms) in [
+        (
+            serde_json::json!({
+                "enabled": true,
+                "max_age_ms": 3_300_000,
+                "max_connecting": 8,
+                "stream_idle_timeout_ms": 300_000
+            }),
+            300_000,
+            800,
+        ),
+        (
+            serde_json::json!({"idle_timeout_ms": 600_000}),
+            600_000,
+            800,
+        ),
+        (serde_json::json!({"fast_path_budget_ms": 1}), 300_000, 1),
+        (
+            serde_json::json!({"fast_path_budget_ms": 15_000}),
+            300_000,
+            15_000,
+        ),
+    ] {
+        let mut config = valid_config();
+        config.ws_pool = serde_json::from_value(settings).unwrap();
+        config
+            .resolve_and_validate(Path::new("/srv/gateway"))
+            .unwrap();
+        let pool = config.websocket_pool_config();
+        assert_eq!(pool.idle_timeout, Duration::from_millis(idle_ms));
+        assert_eq!(pool.fast_path_budget, Duration::from_millis(fast_ms));
+    }
+}
+
+#[test]
+fn websocket_fast_path_budget_must_fit_the_opening_timeout() {
+    for budget_ms in [0, 15_001] {
+        let mut config = valid_config();
+        config.ws_pool.fast_path_budget_ms = budget_ms;
+        let error = config
+            .resolve_and_validate(Path::new("/srv/gateway"))
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("openai.ws_pool.fast_path_budget_ms")
+        );
+    }
 }

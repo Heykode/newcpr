@@ -1266,8 +1266,6 @@ async fn admin_auth_should_accept_a_configured_request_id_header_name() {
 
     let fixture = AdminTestFixture::new().await;
     fixture.auth.insert_session("valid-session");
-    // 部署把 api.request_id_header 改名后，注入的 header 不再叫 x-request-id；
-    // 管理请求仍须拿到请求上下文，而不是退化为 500。
     let custom = HeaderName::from_static("x-trace-id");
     let app = app(fixture.state()).layer(SetRequestIdLayer::new(custom, MakeRequestUuid));
     let unlabelled = Request::builder()
