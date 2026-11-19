@@ -65,7 +65,7 @@ import { matchesPool, processingStatus, recoveryCountdown, recoveryLabels, relog
 
 const entries = shallowRef<EnrollmentEntry[]>([])
 const arranging = shallowRef<EnrollmentEntry | null>(null)
-const importedDrafts = shallowRef<Record<string, number> | null>(null)
+const importedPlans = shallowRef<Record<string, number> | null>(null)
 const maintenanceId = shallowRef('')
 const maintenanceOpen = shallowRef(false)
 const maintenanceTab = shallowRef('session')
@@ -411,12 +411,12 @@ function saveImport() {
     page.value = 1
     toast.success(`已导入 ${result.imported} 个账号`)
     if (result.revisions && Object.keys(result.revisions).length && !disposed)
-      importedDrafts.value = result.revisions
+      importedPlans.value = result.revisions
   })
 }
 function addSampleDrafts() {
   return action(async () => {
-    importedDrafts.value = await previewPlanCommand({ mode: 'sample' }) ?? null
+    importedPlans.value = await previewPlanCommand({ mode: 'sample' }) ?? null
   })
 }
 const confirming = shallowRef(false)
@@ -654,7 +654,7 @@ onBeforeUnmount(() => {
     <ReloginMaintenanceModal v-model="maintenanceOpen" :entry="maintenanceEntry" :initial-tab="maintenanceTab" @changed="reload(true)" @credentials="credentialsEntry = maintenanceEntry; credentialsOpen = true" />
     <ReloginHistoryModal v-model="historyOpen" :entry="historyEntry" @after-leave="!historyOpen && (historyEntry = null)" />
     <EnrollmentPlanModal v-if="arranging" :key="arranging.id" :row="arranging" :paused="paused" @close="arranging = null" @changed="reload(true)" />
-    <EnrollmentPlanModal v-if="importedDrafts" :revisions="importedDrafts" :paused="paused" @close="importedDrafts = null" @changed="reload(true)" />
+    <EnrollmentPlanModal v-if="importedPlans" :revisions="importedPlans" :paused="paused" @close="importedPlans = null" @changed="reload(true)" />
     <ReloginCredentialsModal v-model="credentialsOpen" :entry="credentialsEntry" @changed="reload(true)" @after-leave="!credentialsOpen && (credentialsEntry = null)" />
     <section v-if="!mobile" class="flex min-h-48 min-w-0 flex-1 flex-col overflow-hidden rounded-cp-card border border-cp-border-secondary bg-cp-bg-container">
       <BaseTable ref="table" class="relogin-table min-h-0 flex-1" :columns="columns" :rows="visible" :selected-row-keys="[...selected]" :loading="loading && !entries.length" column-layout="proportional" :empty-text="t('appearance.preview.components.noMatchingAccountYet')" @mousedown="onMouseDown">

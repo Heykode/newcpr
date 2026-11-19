@@ -60,8 +60,10 @@ struct EnrollmentPlanRequest {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct ImportedDraftsRequest {
+struct ImportedPlansRequest {
     revisions: std::collections::BTreeMap<String, u64>,
+    mode: gateway_admin::model::relogin::EnrollmentPlanMode,
+    when: Option<chrono::DateTime<chrono::Utc>>,
     new_account: NewAccountForm,
     template: Option<ReloginTemplateSelection>,
 }
@@ -162,7 +164,7 @@ where
         .route("/api/admin/relogin/history", post(history::<S>))
         .route("/api/admin/relogin/totp", post(totp::<S>))
         .route("/api/admin/relogin/import", post(import::<S>))
-        .route("/api/admin/relogin/import/drafts", post(import_drafts::<S>))
+        .route("/api/admin/relogin/import/plans", post(import_plans::<S>))
         .route("/api/admin/relogin/enroll", post(enroll::<S>))
         .route(
             "/api/admin/relogin/enrollment-plan",
@@ -291,10 +293,10 @@ impl NewAccountForm {
     }
 }
 
-async fn import_drafts<S>(
+async fn import_plans<S>(
     auth: AdminAuth,
     State(state): State<S>,
-    AdminJson(request): AdminJson<ImportedDraftsRequest>,
+    AdminJson(request): AdminJson<ImportedPlansRequest>,
 ) -> Result<impl IntoResponse, AdminError>
 where
     S: AdminSessionState + Send + Sync,
@@ -303,10 +305,14 @@ where
     let result = state
         .admin_services()
         .relogin()
-        .draft_imports(
-            request.revisions,
-            request.new_account.enrollment(&context)?,
-            request.template,
+        .arrange_imports(
+            gateway_admin::model::relogin::ImportedEnrollmentPlanCommand {
+                revisions: request.revisions,
+                mode: request.mode,
+                when: request.when,
+                enrollment: request.new_account.enrollment(&context)?,
+                template: request.template,
+            },
             &context,
         )
         .await

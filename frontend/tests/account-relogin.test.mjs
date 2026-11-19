@@ -147,6 +147,13 @@ test('account action API sends exact target and supports only read cancellation'
   assert.equal(requests[2].url, '/api/admin/relogin/enrollment-plan')
   assert.equal(requests[2].method, 'POST')
   assert.equal(requests[2].data, plan)
+  for (const mode of ['draft', 'now', 'scheduled']) {
+    const batch = { revisions: { 'entry-a': 7, 'entry-b': 3 }, mode, when: mode === 'scheduled' ? plan.when : null, newAccount: plan.newAccount }
+    await api.saveImportedPlans(batch)
+    assert.equal(requests.at(-1).url, '/api/admin/relogin/import/plans')
+    assert.equal(requests.at(-1).method, 'POST')
+    assert.equal(requests.at(-1).data, batch)
+  }
 })
 
 test('immediate action queues once with a frozen target and refreshes after success', async (t) => {

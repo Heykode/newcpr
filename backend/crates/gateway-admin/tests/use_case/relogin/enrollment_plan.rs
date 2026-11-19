@@ -29,7 +29,16 @@ async fn imported_drafts_skip_existing_pool_plans_and_stale_versions_and_never_e
     let results = h
         .services
         .relogin()
-        .draft_imports(revisions, intent(), None, &context("draft-batch"))
+        .arrange_imports(
+            ImportedEnrollmentPlanCommand {
+                revisions,
+                mode: EnrollmentPlanMode::Draft,
+                when: None,
+                enrollment: intent(),
+                template: None,
+            },
+            &context("draft-batch"),
+        )
         .await
         .unwrap();
     assert_eq!(results.iter().filter(|r| r.success).count(), 1);
@@ -394,4 +403,213 @@ async fn existing_immediate_enrollment_projects_its_saved_settings_without_a_pla
     let json = serde_json::to_value(plan).unwrap();
     assert!(json.get("context").is_none());
     assert!(json.get("password").is_none());
+}
+
+#[tokio::test]
+async fn imported_plans_execute_through_shared_queue_with_saved_settings_and_concurrency() {
+    for mode in [EnrollmentPlanMode::Now, EnrollmentPlanMode::Scheduled] {
+        let h = Harness::with_proxies(vec![], Some(proxies(true))).await;
+        h.store.settings.lock().unwrap().concurrency = 2;
+        *h.provider.relogin_delay.lock().unwrap() = std::time::Duration::from_millis(20);
+        let mut revisions = BTreeMap::new();
+        for email in [
+            "first@example.invalid",
+            "second@example.invalid",
+            "third@example.invalid",
+        ] {
+            let id = h.import(email).await;
+            let mut row = h.row(&id).await;
+            row.maintenance.login_paused = true;
+            revisions.insert(id.clone(), row.revision);
+            h.store.rows.lock().unwrap().insert(id, row);
+        }
+        let mut enrollment = intent();
+        enrollment.config.credential_proxy_id = Some(Some("maintenance-proxy".into()));
+        let when = (mode == EnrollmentPlanMode::Scheduled).then(|| Utc::now() + Duration::hours(1));
+        let results = h
+            .services
+            .relogin()
+            .arrange_imports(
+                ImportedEnrollmentPlanCommand {
+                    revisions: revisions.clone(),
+                    mode,
+                    when,
+                    enrollment: enrollment.clone(),
+                    template: None,
+                },
+                &context("batch-plan"),
+            )
+            .await
+            .unwrap();
+        assert!(results.iter().all(|r| r.success));
+        assert!(h.provider.relogin_requests.lock().unwrap().is_empty());
+        for id in revisions.keys() {
+            let row = h.row(id).await;
+            assert!(!row.maintenance.login_paused);
+            assert_eq!(row.enrollment_plan.as_ref().unwrap().when, when);
+            assert_eq!(
+                row.status,
+                if mode == EnrollmentPlanMode::Now {
+                    ReloginStatus::Queued
+                } else {
+                    ReloginStatus::Pending
+                }
+            );
+        }
+        if mode == EnrollmentPlanMode::Scheduled {
+            h.cycle().await;
+            assert!(h.provider.relogin_requests.lock().unwrap().is_empty());
+            for id in revisions.keys() {
+                let mut row: ReloginEntry =
+                    serde_json::from_value(serde_json::to_value(h.row(id).await).unwrap()).unwrap();
+                row.enrollment_plan.as_mut().unwrap().when =
+                    Some(Utc::now() - Duration::seconds(1));
+                h.store.rows.lock().unwrap().insert(id.clone(), row);
+            }
+        }
+        h.store.settings.lock().unwrap().paused = true;
+        h.cycle().await;
+        assert!(h.provider.relogin_requests.lock().unwrap().is_empty());
+        h.store.settings.lock().unwrap().paused = false;
+        h.cycle().await;
+        assert_eq!(h.provider.relogin_peak.load(Ordering::SeqCst), 2);
+        assert_eq!(h.provider.relogin_requests.lock().unwrap().len(), 3);
+        assert!(
+            h.provider.relogin_proxies.lock().unwrap().iter().all(|p| p
+                .as_ref()
+                .unwrap()
+                .endpoint()
+                == "http://maintenance.example:8080/")
+        );
+        assert_eq!(
+            h.accounts.import_settings(),
+            vec![Some(enrollment.settings().unwrap()); 3]
+        );
+        for id in revisions.keys() {
+            let row = h.row(id).await;
+            assert!(row.synced_at.is_some());
+            assert_eq!(
+                row.enrollment_plan.unwrap().state,
+                EnrollmentPlanState::Done
+            );
+        }
+        h.cycle().await;
+        assert_eq!(h.provider.relogin_requests.lock().unwrap().len(), 3);
+    }
+}
+
+#[tokio::test]
+async fn imported_plan_batch_rejects_invalid_timing_and_pause_before_any_write() {
+    let h = Harness::new(vec![]).await;
+    let id = h.import("first@example.invalid").await;
+    let revision = h.row(&id).await.revision;
+    for (mode, when, paused) in [
+        (EnrollmentPlanMode::Now, None, true),
+        (EnrollmentPlanMode::Scheduled, None, false),
+        (
+            EnrollmentPlanMode::Scheduled,
+            Some(Utc::now() - Duration::hours(1)),
+            false,
+        ),
+        (
+            EnrollmentPlanMode::Draft,
+            Some(Utc::now() + Duration::hours(1)),
+            false,
+        ),
+        (EnrollmentPlanMode::Cancel, None, false),
+    ] {
+        h.store.settings.lock().unwrap().paused = paused;
+        assert!(
+            h.services
+                .relogin()
+                .arrange_imports(
+                    ImportedEnrollmentPlanCommand {
+                        revisions: BTreeMap::from([(id.clone(), revision)]),
+                        mode,
+                        when,
+                        enrollment: intent(),
+                        template: None,
+                    },
+                    &context("invalid-batch"),
+                )
+                .await
+                .is_err()
+        );
+        let row = h.row(&id).await;
+        assert_eq!(row.revision, revision);
+        assert!(row.enrollment_plan.is_none());
+    }
+}
+
+#[tokio::test]
+async fn imported_execution_skips_existing_stale_and_scheduled_rows_and_reports_partial_save() {
+    for mode in [EnrollmentPlanMode::Now, EnrollmentPlanMode::Scheduled] {
+        let h = Harness::new(vec![account_record("openai")]).await;
+        let mut revisions = BTreeMap::new();
+        for email in [
+            "test@example.invalid",
+            "first@example.invalid",
+            "second@example.invalid",
+            "planned@example.invalid",
+            "stale@example.invalid",
+        ] {
+            let id = h.import(email).await;
+            if email.starts_with("planned") {
+                arrange(
+                    &h,
+                    &id,
+                    EnrollmentPlanMode::Scheduled,
+                    Some(Utc::now() + Duration::days(1)),
+                )
+                .await;
+            }
+            revisions.insert(
+                id.clone(),
+                if email.starts_with("stale") {
+                    0
+                } else {
+                    h.row(&id).await.revision
+                },
+            );
+        }
+        *h.store.fail_after.lock().unwrap() = Some(0);
+        let results = h
+            .services
+            .relogin()
+            .arrange_imports(
+                ImportedEnrollmentPlanCommand {
+                    revisions: revisions.clone(),
+                    mode,
+                    when: (mode == EnrollmentPlanMode::Scheduled)
+                        .then(|| Utc::now() + Duration::hours(1)),
+                    enrollment: intent(),
+                    template: None,
+                },
+                &context("partial-batch"),
+            )
+            .await
+            .unwrap();
+        assert_eq!(results.iter().filter(|r| r.success).count(), 1);
+        assert_eq!(results.iter().filter(|r| !r.success).count(), 4);
+        let success = results.iter().find(|r| r.success).unwrap();
+        let row = h.row(&success.id).await;
+        let repeated = h
+            .services
+            .relogin()
+            .arrange_imports(
+                ImportedEnrollmentPlanCommand {
+                    revisions: BTreeMap::from([(row.id.clone(), row.revision)]),
+                    mode,
+                    when: (mode == EnrollmentPlanMode::Scheduled)
+                        .then(|| Utc::now() + Duration::hours(1)),
+                    enrollment: intent(),
+                    template: None,
+                },
+                &context("repeat-batch"),
+            )
+            .await
+            .unwrap();
+        assert!(!repeated[0].success);
+        assert_eq!(h.row(&row.id).await.revision, row.revision);
+    }
 }

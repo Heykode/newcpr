@@ -1,5 +1,4 @@
 use super::*;
-use std::collections::BTreeSet;
 
 impl DefaultReloginService {
     async fn resolve_plan_settings(
@@ -22,30 +21,33 @@ impl DefaultReloginService {
             .map_err(super::super::account_templates::template_error)
     }
 
-    pub(super) async fn save_import_drafts(
+    pub(super) async fn arrange_imported_enrollments(
         &self,
-        revisions: BTreeMap<String, u64>,
-        mut enrollment: ReloginEnrollment,
-        template: Option<ReloginTemplateSelection>,
+        command: ImportedEnrollmentPlanCommand,
         context: &MutationContext,
     ) -> Result<Vec<ReloginBatchResult>, AdminError> {
+        let ImportedEnrollmentPlanCommand {
+            revisions,
+            mode,
+            when,
+            mut enrollment,
+            template,
+        } = command;
         validate_ids(&revisions.keys().cloned().collect::<Vec<_>>())?;
+        if mode == EnrollmentPlanMode::Cancel {
+            return Err(AdminError::invalid("请在对应账号的安排中取消定时"));
+        }
+        self.validate_plan_timing(mode, when).await?;
         self.resolve_plan_settings(&mut enrollment, template.as_ref())
             .await?;
-        let active: BTreeSet<_> = self.gate.lock().await.active.keys().cloned().collect();
+        let gate = self.gate.lock().await;
         let mut entries: BTreeMap<_, _> = self
             .entries()
             .await?
             .into_iter()
             .map(|e| (e.id.clone(), e))
             .collect();
-        let pool: BTreeSet<_> = self
-            .pool()
-            .await?
-            .into_iter()
-            .filter(|a| a.authentication_kind == "oauth")
-            .filter_map(|a| a.email.map(|s| s.to_ascii_lowercase()))
-            .collect();
+        let pool = self.pool().await?;
         let mut results = Vec::with_capacity(revisions.len());
         for (id, revision) in revisions {
             let outcome = async {
@@ -57,28 +59,20 @@ impl DefaultReloginService {
                     || entry.enrollment_plan.is_some()
                     || entry.enrollment.is_some()
                     || entry.maintenance.blocks_login()
-                    || active.contains(&entry.email)
-                    || pool.contains(&entry.email.to_ascii_lowercase())
+                    || gate.active.contains_key(&entry.email)
+                    || !matching_accounts(entry, &pool).is_empty()
                 {
                     return Err(AdminError::conflict("资料已变化、已有安排或已入池"));
                 }
                 entry.validate_totp()?;
-                entry.maintenance.import_egress =
-                    Some(crate::model::relogin_maintenance::ReloginImportEgress {
-                        proxy_id: enrollment.config.outbound_proxy_id.clone(),
-                        credential_proxy_id: enrollment
-                            .config
-                            .credential_proxy_id
-                            .clone()
-                            .flatten(),
-                        mode: enrollment.config.egress_mode,
-                    });
-                entry.enrollment_plan = Some(ReloginEnrollmentPlan {
-                    state: EnrollmentPlanState::Draft,
-                    when: None,
-                    enrollment: enrollment.clone(),
-                    template: template.clone(),
-                });
+                Self::apply_enrollment_plan(
+                    entry,
+                    mode,
+                    when,
+                    enrollment.clone(),
+                    template.clone(),
+                    &pool,
+                )?;
                 entry.revision = revision
                     .checked_add(1)
                     .filter(|r| *r <= i64::MAX as u64)
@@ -133,70 +127,21 @@ impl DefaultReloginService {
             entry.message = "已取消定时，保留入池设置".to_owned();
         } else {
             entry.validate_totp()?;
-            if command.mode == EnrollmentPlanMode::Now
-                && self.store()?.settings().await.map_err(store_error)?.paused
-            {
-                return Err(AdminError::conflict("重登队列已暂停"));
-            }
-            if command.mode == EnrollmentPlanMode::Scheduled {
-                if command.when.is_none_or(|time| time <= Utc::now()) {
-                    return Err(AdminError::invalid("请选择晚于现在的执行时间"));
-                }
-            } else if command.when.is_some() {
-                return Err(AdminError::invalid("仅定时执行可指定执行时间"));
-            }
+            self.validate_plan_timing(command.mode, command.when)
+                .await?;
             let mut enrollment = command
                 .enrollment
                 .ok_or_else(|| AdminError::invalid("缺少入池设置"))?;
             self.resolve_plan_settings(&mut enrollment, command.template.as_ref())
                 .await?;
-            entry.clear_enrollment();
-            entry.maintenance.import_egress =
-                Some(crate::model::relogin_maintenance::ReloginImportEgress {
-                    proxy_id: enrollment.config.outbound_proxy_id.clone(),
-                    credential_proxy_id: enrollment.config.credential_proxy_id.clone().flatten(),
-                    mode: enrollment.config.egress_mode,
-                });
-            if command.mode != EnrollmentPlanMode::Draft {
-                entry.maintenance.login_paused = false;
-            }
-            entry.manual_push_context = None;
-            entry.automatic_job = false;
-            entry.automatic_attempts = 0;
-            entry.next_attempt_at = None;
-            entry.stop_reason = None;
-            let previous_schedule = if command.mode == EnrollmentPlanMode::Now {
-                entry
-                    .enrollment_plan
-                    .take()
-                    .filter(|plan| plan.state == EnrollmentPlanState::Scheduled)
-            } else {
-                None
-            };
-            entry.enrollment_plan = Some(ReloginEnrollmentPlan {
-                state: if command.mode == EnrollmentPlanMode::Scheduled {
-                    EnrollmentPlanState::Scheduled
-                } else {
-                    EnrollmentPlanState::Draft
-                },
-                when: command.when,
+            Self::apply_enrollment_plan(
+                &mut entry,
+                command.mode,
+                command.when,
                 enrollment,
-                template: command.template,
-            });
-            entry.message = if command.mode == EnrollmentPlanMode::Scheduled {
-                "已安排定时入池"
-            } else {
-                "入池设置已保存"
-            }
-            .to_owned();
-            if command.mode == EnrollmentPlanMode::Now {
-                Self::activate_enrollment_plan(&mut entry, &pool)?;
-                // The early attempt owns its enrollment. Its original schedule
-                // remains durable until an actual pool commit, even on failure.
-                if previous_schedule.is_some() {
-                    entry.enrollment_plan = previous_schedule;
-                }
-            }
+                command.template,
+                &pool,
+            )?;
         }
         let expected = entry.revision;
         entry.revision = expected
@@ -208,6 +153,84 @@ impl DefaultReloginService {
             .save_enrollment_plan(&entry, expected, context)
             .await
             .map_err(store_error)
+    }
+
+    async fn validate_plan_timing(
+        &self,
+        mode: EnrollmentPlanMode,
+        when: Option<DateTime<Utc>>,
+    ) -> Result<(), AdminError> {
+        if mode == EnrollmentPlanMode::Now
+            && self.store()?.settings().await.map_err(store_error)?.paused
+        {
+            return Err(AdminError::conflict("重登队列已暂停"));
+        }
+        if mode == EnrollmentPlanMode::Scheduled {
+            if when.is_none_or(|time| time <= Utc::now()) {
+                return Err(AdminError::invalid("请选择晚于现在的执行时间"));
+            }
+        } else if when.is_some() {
+            return Err(AdminError::invalid("仅定时执行可指定执行时间"));
+        }
+        Ok(())
+    }
+
+    fn apply_enrollment_plan(
+        entry: &mut ReloginEntry,
+        mode: EnrollmentPlanMode,
+        when: Option<DateTime<Utc>>,
+        enrollment: ReloginEnrollment,
+        template: Option<ReloginTemplateSelection>,
+        pool: &[AccountRecord],
+    ) -> Result<(), AdminError> {
+        entry.clear_enrollment();
+        entry.maintenance.import_egress =
+            Some(crate::model::relogin_maintenance::ReloginImportEgress {
+                proxy_id: enrollment.config.outbound_proxy_id.clone(),
+                credential_proxy_id: enrollment.config.credential_proxy_id.clone().flatten(),
+                mode: enrollment.config.egress_mode,
+            });
+        if mode != EnrollmentPlanMode::Draft {
+            entry.maintenance.login_paused = false;
+        }
+        entry.manual_push_context = None;
+        entry.automatic_job = false;
+        entry.automatic_attempts = 0;
+        entry.next_attempt_at = None;
+        entry.stop_reason = None;
+        let previous_schedule = if mode == EnrollmentPlanMode::Now {
+            entry
+                .enrollment_plan
+                .take()
+                .filter(|plan| plan.state == EnrollmentPlanState::Scheduled)
+        } else {
+            None
+        };
+        entry.enrollment_plan = Some(ReloginEnrollmentPlan {
+            state: if mode == EnrollmentPlanMode::Scheduled {
+                EnrollmentPlanState::Scheduled
+            } else {
+                EnrollmentPlanState::Draft
+            },
+            when,
+            enrollment,
+            template,
+        });
+        entry.message = if mode == EnrollmentPlanMode::Scheduled {
+            "已安排定时入池"
+        } else {
+            "入池设置已保存"
+        }
+        .to_owned();
+        if mode == EnrollmentPlanMode::Now {
+            Self::activate_enrollment_plan(entry, pool)?;
+            // The early attempt owns its enrollment. Its original schedule
+            // remains durable until an actual pool commit, even on failure.
+            if previous_schedule.is_some() {
+                entry.enrollment_plan = previous_schedule;
+            }
+        }
+        Ok(())
     }
 
     pub(super) fn activate_enrollment_plan(

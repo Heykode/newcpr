@@ -47,9 +47,8 @@ export function enrollmentExample(library, accounts, groups, templates, settings
       if (!plan)
         continue
       if (plan.state === 'scheduled' && !settings.paused && Date.parse(plan.when) <= now) {
-        plan.state = 'running'
-        plan.startedAt = now
-        row.status = 'running'
+        plan.state = 'queued'
+        row.status = 'queued'
         row.revision++
       }
       if (plan.state !== 'running' || now - plan.startedAt < 1200)
@@ -93,6 +92,19 @@ export function enrollmentExample(library, accounts, groups, templates, settings
         credentialEgress: { kind: 'proxy', source: 'credential', label: plan.credentialExitLabel || plan.exitLabel },
       })
     }
+    if (settings.paused)
+      return
+    let active = library.filter(row => row.enrollmentPlan?.state === 'running').length
+    for (const row of library) {
+      if (active >= settings.concurrency)
+        break
+      if (row.enrollmentPlan?.state === 'queued') {
+        Object.assign(row.enrollmentPlan, { state: 'running', startedAt: now })
+        row.status = 'running'
+        row.revision++
+        active++
+      }
+    }
   }
   function command(body) {
     advance()
@@ -129,7 +141,7 @@ export function enrollmentExample(library, accounts, groups, templates, settings
       const credentialProxy = proxyFor(body.settings.credentialProxyId)
       if (body.settings.credentialProxyId && !credentialProxy)
         throw new Error('凭据维护出口不存在，请重新选择')
-      row.enrollmentPlan = { state: body.mode === 'now' ? 'running' : body.mode, settings: body.settings, exit: body.exit, exitLabel, credentialExitLabel: credentialProxy?.name, when: body.when, startedAt: Date.now() }
+      row.enrollmentPlan = { state: body.mode === 'now' ? 'queued' : body.mode, settings: body.settings, exit: body.exit, exitLabel, credentialExitLabel: credentialProxy?.name, when: body.when, startedAt: Date.now() }
       Object.assign(row.enrollmentPlan, {
         config: body.config || { ...body.settings, name: '入池设置', outboundProxyId: body.exit.outboundProxyId || null },
         customName: body.settings.customName || null,
@@ -139,7 +151,7 @@ export function enrollmentExample(library, accounts, groups, templates, settings
       })
       row.egress = { kind: proxy ? 'proxy' : 'default', source: 'import', label: exitLabel }
       row.credentialEgress = { kind: credentialProxy ? 'proxy' : row.egress.kind, source: credentialProxy ? 'credential' : 'import', label: credentialProxy?.name || exitLabel }
-      row.status = body.mode === 'now' ? 'running' : 'pending'
+      row.status = body.mode === 'now' ? 'queued' : 'pending'
     }
     row.revision++
     if (importing)
@@ -154,14 +166,19 @@ export function enrollmentExample(library, accounts, groups, templates, settings
     }
     return { imported: Object.keys(revisions).length, revisions }
   }
-  function draftSamples(body) {
+  function planSamples(body) {
     return Object.entries(body.revisions).map(([id, revision]) => {
       const row = library.find(item => item.id === id)
       if (!row || row.enrollmentPlan || row.poolAccountIds.length || row.revision !== revision)
         return { id, success: false, message: '资料已变化、已有安排或已入池' }
-      command({ id, revision, mode: 'draft', newAccount: body.newAccount, template: body.template })
-      return { id, success: true, message: '完成' }
+      try {
+        command({ id, revision, mode: body.mode, when: body.when, newAccount: body.newAccount, template: body.template })
+        return { id, success: true, message: '完成' }
+      }
+      catch (error) {
+        return { id, success: false, message: error.message }
+      }
     })
   }
-  return { advance, command, editAccount, proxies, quality, importSamples, draftSamples }
+  return { advance, command, editAccount, proxies, quality, importSamples, planSamples }
 }

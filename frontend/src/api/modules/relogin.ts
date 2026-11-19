@@ -126,8 +126,8 @@ export function getRelogin(options: RequestOptions = {}) {
 export function importRelogin(text: string, replaceExisting: boolean) {
   return request<{ imported: number, revisions?: Record<string, number> }>({ url: '/api/admin/relogin/import', method: 'POST', data: { text, replaceExisting } })
 }
-export function saveImportedDrafts(data: { revisions: Record<string, number>, newAccount: ReloginNewAccountForm, template?: AccountTemplateSelection }) {
-  return request<ReloginBatchResult[]>({ url: '/api/admin/relogin/import/drafts', method: 'POST', data })
+export function saveImportedPlans(data: { revisions: Record<string, number>, mode: 'draft' | 'now' | 'scheduled', when?: string | null, newAccount: ReloginNewAccountForm, template?: AccountTemplateSelection }) {
+  return request<ReloginBatchResult[]>({ url: '/api/admin/relogin/import/plans', method: 'POST', data })
 }
 export function enrollRelogin(data: { text: string, replaceExisting: boolean, settings: import('./accounts').AccountImportSettings, outboundProxyId?: string, qualityTemplate?: Pick<import('./quality-ops').QualityRuleTemplate, 'id' | 'revision'> }) {
   return request<{ ids: string[] }>({ url: '/api/admin/relogin/enroll', method: 'POST', data })

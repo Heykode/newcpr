@@ -173,11 +173,9 @@ pub trait ReloginService: Send + Sync {
         context: &MutationContext,
     ) -> Result<(), AdminError>;
     async fn import(&self, text: &str, replace: bool) -> Result<BTreeMap<String, u64>, AdminError>;
-    async fn draft_imports(
+    async fn arrange_imports(
         &self,
-        revisions: BTreeMap<String, u64>,
-        enrollment: ReloginEnrollment,
-        template: Option<ReloginTemplateSelection>,
+        command: ImportedEnrollmentPlanCommand,
         context: &MutationContext,
     ) -> Result<Vec<ReloginBatchResult>, AdminError>;
     async fn enroll(
@@ -1310,15 +1308,12 @@ impl ReloginService for DefaultReloginService {
             .collect())
     }
 
-    async fn draft_imports(
+    async fn arrange_imports(
         &self,
-        revisions: BTreeMap<String, u64>,
-        enrollment: ReloginEnrollment,
-        template: Option<ReloginTemplateSelection>,
+        command: ImportedEnrollmentPlanCommand,
         context: &MutationContext,
     ) -> Result<Vec<ReloginBatchResult>, AdminError> {
-        self.save_import_drafts(revisions, enrollment, template, context)
-            .await
+        self.arrange_imported_enrollments(command, context).await
     }
     async fn enroll(
         &self,

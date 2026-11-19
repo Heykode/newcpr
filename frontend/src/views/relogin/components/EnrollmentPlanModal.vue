@@ -3,7 +3,7 @@ import type { EnrollmentEntry } from '../enrollment-plan'
 import { CalendarClock, Play, Save } from '@lucide/vue'
 import { computed, onMounted, ref, shallowRef, watch } from 'vue'
 import { getQualityTemplates } from '@/api/modules/quality-ops'
-import { saveEnrollmentPlan, saveImportedDrafts } from '@/api/modules/relogin'
+import { saveEnrollmentPlan, saveImportedPlans } from '@/api/modules/relogin'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseModal from '@/components/base/BaseModal/index.vue'
 import BaseSegmented from '@/components/base/BaseSegmented.vue'
@@ -81,18 +81,20 @@ async function submit(cancel = false) {
           qualityTemplate: accountImportQualityTemplate(form.value),
         },
       }
+      const execution = { mode: mode.value, when: time === null ? null : new Date(time).toISOString() }
       if (props.revisions) {
-        const results = await saveImportedDrafts({ revisions: props.revisions, ...config })
+        const results = await saveImportedPlans({ revisions: props.revisions, ...execution, ...config })
         const saved = results.filter(row => row.success).length
         const firstError = results.find(row => !row.success)?.message
-        const summary = `已保存 ${saved} 份草稿${firstError ? `，未保存 ${results.length - saved} 份：${firstError}` : ''}`
+        const action = { draft: '已保存草稿', now: '已加入重登队列', scheduled: '已安排定时入池' }[mode.value]
+        const summary = `${saved} 个账号${action}${firstError ? `，${results.length - saved} 个未安排：${firstError}` : ''}`
         if (firstError)
           toast.warning(summary)
         else
           toast.success(summary)
       }
       else if (props.row) {
-        await saveEnrollmentPlan({ id: props.row.id, revision: props.row.revision, mode: mode.value, when: time === null ? null : new Date(time).toISOString(), ...config })
+        await saveEnrollmentPlan({ id: props.row.id, revision: props.row.revision, ...execution, ...config })
       }
     }
     emit('changed')
@@ -104,8 +106,8 @@ async function submit(cancel = false) {
 </script>
 
 <template>
-  <BaseModal v-model="open" :title="revisions ? `为本次导入的 ${Object.keys(revisions).length} 个账号保存草稿` : '安排入池'" :description="row?.email" size="lg" :dismissible="!busy" @after-leave="emit('close')">
-    <section v-if="!revisions" class="mb-5 grid min-w-0 gap-3 border-b border-cp-border-secondary pb-5">
+  <BaseModal v-model="open" :title="revisions ? `安排入池 · ${Object.keys(revisions).length} 个账号` : '安排入池'" :description="row?.email" size="lg" :dismissible="!busy" @after-leave="emit('close')">
+    <section class="mb-5 grid min-w-0 gap-3 border-b border-cp-border-secondary pb-5">
       <h3 class="m-0 text-cp-sm font-semibold">
         执行方式
       </h3>

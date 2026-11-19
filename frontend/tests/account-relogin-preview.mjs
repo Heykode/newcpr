@@ -229,8 +229,8 @@ async function main() {
             for await (const chunk of request)
               raw += chunk
             const body = JSON.parse(raw)
-            if (enrollment && path === '/api/admin/relogin/import/drafts') {
-              data = enrollment.draftSamples(body)
+            if (enrollment && path === '/api/admin/relogin/import/plans') {
+              data = enrollment.planSamples(body)
             }
             else if (path.endsWith('/templates/save')) {
               const index = templates.findIndex(row => row.id === body.selection?.id)

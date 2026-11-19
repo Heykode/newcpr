@@ -62,7 +62,7 @@ async fn relogin_every_endpoint_requires_admin_auth_before_reading_material() {
             Some(json!({"text":"test-only-private-material"})),
         ),
         ("/api/admin/relogin/enrollment-plan", Some(json!({}))),
-        ("/api/admin/relogin/import/drafts", Some(json!({}))),
+        ("/api/admin/relogin/import/plans", Some(json!({}))),
         ("/api/admin/relogin/export", Some(json!({}))),
         ("/api/admin/relogin/templates/save", Some(json!({}))),
         ("/api/admin/relogin/templates/delete", Some(json!({}))),
@@ -324,5 +324,43 @@ async fn relogin_push_accepts_optional_camel_case_name_and_validates_before_stor
         )
         .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+}
+
+#[tokio::test]
+async fn imported_plan_modes_and_time_are_explicit_and_typed() {
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.insert_session("valid-session");
+    let path = "/api/admin/relogin/import/plans";
+    let base = json!({
+        "revisions": {"entry-a": 1, "entry-b": 3},
+        "newAccount": {"settings": {"enabled":true,"concurrencyLimit":null,"weight":1,"groupIds":[]}},
+    });
+    for mode in ["draft", "now", "scheduled"] {
+        let mut body = base.clone();
+        body["mode"] = json!(mode);
+        if mode == "scheduled" {
+            body["when"] = json!("2099-01-01T00:00:00Z");
+        }
+        // This fixture deliberately has no login store: accepted DTOs reach the service.
+        assert_eq!(
+            request(&fixture, path, Some(body), true).await.0,
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+    }
+    for patch in [
+        json!({}),
+        json!({"mode":"unknown"}),
+        json!({"mode":"scheduled", "when":"not-a-date"}),
+        json!({"mode":"now", "surprise":true}),
+    ] {
+        let mut body = base.clone();
+        body.as_object_mut()
+            .unwrap()
+            .extend(patch.as_object().unwrap().clone());
+        assert_eq!(
+            request(&fixture, path, Some(body), true).await.0,
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
     }
 }

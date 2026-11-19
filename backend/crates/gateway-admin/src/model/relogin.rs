@@ -737,3 +737,11 @@ pub struct EnrollmentPlanCommand {
     pub enrollment: Option<ReloginEnrollment>,
     pub template: Option<super::relogin_templates::ReloginTemplateSelection>,
 }
+
+pub struct ImportedEnrollmentPlanCommand {
+    pub revisions: std::collections::BTreeMap<String, u64>,
+    pub mode: EnrollmentPlanMode,
+    pub when: Option<DateTime<Utc>>,
+    pub enrollment: ReloginEnrollment,
+    pub template: Option<super::relogin_templates::ReloginTemplateSelection>,
+}
