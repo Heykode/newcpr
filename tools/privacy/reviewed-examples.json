@@ -3134,5 +3134,77 @@
     "file_sha256": "5a80bbce7b92cd343899aa573a2698a16abd376bc0444d9816358b7dcbdc25e5",
     "line_sha256": "47e73e43e21ddf5e79f265d16deb345c7d52a1cf04c0683c90e5d50b4e49aee3",
     "reason": "Manually re-reviewed the unchanged synthetic user:password URL rejected by safe_url without any network request; initial password-entry tests shifted its line."
+  },
+  {
+    "path": "backend/apps/gateway/tests/bootstrap.rs",
+    "rule": "authenticated-url",
+    "line": 394,
+    "file_sha256": "cf6efb49febe58e3e0abd07ad7963128e19fffdbf0f85b81046b537079156a81",
+    "line_sha256": "be871b5bb1fb717424afe768be0a94bd16324aa95d478d8be07e11d0ed234c75",
+    "reason": "Manually re-reviewed the unchanged loopback configuration rejection fixture and the complete diff adding the optional credential-maintenance route argument. The embedded password is synthetic parser input and is never used for a database connection."
+  },
+  {
+    "path": "backend/crates/gateway-admin/tests/model/provider_credentials.rs",
+    "rule": "authenticated-url",
+    "line": 262,
+    "file_sha256": "3369096538c2a8d0464e6e037cd2e417c46f7556ef7977c493ec89914b5e5c95",
+    "line_sha256": "c85204f4407a8fb3204045ad397ed644fc6cb87825bfac0e6e809b0324b82079",
+    "reason": "Manually re-reviewed the unchanged documentation-domain proxy fixture and the added maintenance-proxy serialization assertions. Both routes use synthetic in-memory test inputs with no network requests or real credentials."
+  },
+  {
+    "path": "backend/crates/gateway-api/tests/admin/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 35,
+    "file_sha256": "0aebe4b4f6d723908a20ab1b739a49fe3a61888ea3da50c51e49d88ab01559c4",
+    "line_sha256": "67a2d50bb2845a354154b03afae3748669dd1152f0c944342ec3c3bef3ce984f",
+    "reason": "Re-reviewed the existing synthetic proxy import fixture. Its bytes are unchanged; only the in-memory reservation method signature changed."
+  },
+  {
+    "path": "backend/crates/gateway-api/tests/admin/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 383,
+    "file_sha256": "0aebe4b4f6d723908a20ab1b739a49fe3a61888ea3da50c51e49d88ab01559c4",
+    "line_sha256": "0daf5322378ec1f4089cffe5f7839bf43e667f3177f1d4ac94651b4fcd8a7d43",
+    "reason": "Re-reviewed the previously approved synthetic proxy URL assertion. It shifted one line after the in-memory reservation signature change."
+  },
+  {
+    "path": "backend/crates/gateway-api/tests/admin/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 449,
+    "file_sha256": "0aebe4b4f6d723908a20ab1b739a49fe3a61888ea3da50c51e49d88ab01559c4",
+    "line_sha256": "68c0f9074b2a4b0317d8586a6524a6153303a423e298086c96185772796837d3",
+    "reason": "Re-reviewed the previously approved synthetic admin request fixture. It shifted one line after the in-memory reservation signature change."
+  },
+  {
+    "path": "backend/crates/gateway-api/tests/admin/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 648,
+    "file_sha256": "0aebe4b4f6d723908a20ab1b739a49fe3a61888ea3da50c51e49d88ab01559c4",
+    "line_sha256": "b2d2a8562a4ed48e58c93460d8667865b9a7e1df7b2416d42095ce76b8078f54",
+    "reason": "Re-reviewed the previously approved synthetic admin request fixture. It shifted one line after the in-memory reservation signature change."
+  },
+  {
+    "path": "backend/crates/gateway-api/tests/admin/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 689,
+    "file_sha256": "0aebe4b4f6d723908a20ab1b739a49fe3a61888ea3da50c51e49d88ab01559c4",
+    "line_sha256": "b2d2a8562a4ed48e58c93460d8667865b9a7e1df7b2416d42095ce76b8078f54",
+    "reason": "Re-reviewed the previously approved synthetic admin request fixture. It shifted one line after the in-memory reservation signature change."
+  },
+  {
+    "path": "backend/crates/gateway-api/tests/admin/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 808,
+    "file_sha256": "0aebe4b4f6d723908a20ab1b739a49fe3a61888ea3da50c51e49d88ab01559c4",
+    "line_sha256": "6ca8102fb3d417f5b9c43b2b86187c41e05688ea3a984cfa48578f057c3e4d93",
+    "reason": "Re-reviewed the previously approved synthetic admin request fixture. It shifted one line after the in-memory reservation signature change."
+  },
+  {
+    "path": "backend/crates/gateway-api/tests/admin/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 926,
+    "file_sha256": "0aebe4b4f6d723908a20ab1b739a49fe3a61888ea3da50c51e49d88ab01559c4",
+    "line_sha256": "c36a0dbdd71274dfb45379085d8b6535806e84789a7edb39c1c60e508b0a311b",
+    "reason": "Re-reviewed the previously approved synthetic location-probe fixture. It shifted one line after the in-memory reservation signature change."
   }
 ]

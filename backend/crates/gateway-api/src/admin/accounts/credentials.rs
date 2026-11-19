@@ -22,6 +22,12 @@ impl AccountProvider {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AccountImportSettingsRequest {
+    #[serde(
+        default,
+        deserialize_with = "super::wire::deserialize_optional_nullable",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub credential_proxy_id: Option<Option<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub excel_recovery: Option<gateway_admin::model::excel_recovery::ExcelRecoveryConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -73,6 +79,7 @@ impl AccountImportSettingsRequest {
         self,
     ) -> Result<gateway_admin::model::accounts::AccountImportSettings, WireValidationError> {
         Ok(gateway_admin::model::accounts::AccountImportSettings {
+            credential_proxy_id: self.credential_proxy_id,
             template_proxy_mode: None,
             excel_recovery: self.excel_recovery,
             purchase_cost: self.purchase_cost,
@@ -197,6 +204,7 @@ impl AccountImportRequest {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct StartAccountAuthorizationRequest {
+    pub credential_proxy_id: Option<String>,
     pub outbound_proxy_id: Option<String>,
     pub provider: String,
     pub name: String,
@@ -233,6 +241,7 @@ impl StartAccountAuthorizationRequest {
         Ok((
             provider,
             StartAuthorization {
+                credential_proxy_id: self.credential_proxy_id,
                 context,
                 name: self.name.trim().to_owned(),
                 reauthorization,
@@ -306,6 +315,12 @@ impl CompleteAccountAuthorizationRequest {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UpdateAccountRequest {
+    #[serde(
+        default,
+        deserialize_with = "super::wire::deserialize_optional_nullable",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub credential_proxy_id: Option<Option<String>>,
     pub excel_recovery: Option<gateway_admin::model::excel_recovery::ExcelRecoveryConfig>,
     pub purchase_cost: Option<gateway_admin::model::account_purchase::AccountPurchaseUpdate>,
     #[serde(
@@ -358,6 +373,7 @@ impl UpdateAccountRequest {
     pub(super) fn into_command(self) -> Result<UpdateAccount, WireValidationError> {
         self.validate()?;
         Ok(UpdateAccount {
+            credential_proxy_id: self.credential_proxy_id,
             excel_recovery: self.excel_recovery,
             purchase_cost: self.purchase_cost,
             egress_mode: self.egress_mode,

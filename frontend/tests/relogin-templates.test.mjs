@@ -267,3 +267,14 @@ test('templates never carry account names and push names are independent of temp
   await api.pushRelogin([{ id: 'old', revision: 1 }])
   assert.equal('customName' in calls[2].data, false)
 })
+
+test('credential maintenance template choice preserves keep, follow and separate proxy', () => {
+  for (const choice of [undefined, null, 'maintenance-proxy']) {
+    const form = { ...templateForm(), name: 'Maintenance defaults', credentialProxyId: choice }
+    const config = templateConfig(form)
+    assert.equal(Object.hasOwn(config, 'credentialProxyId'), choice !== undefined)
+    assert.equal(config.credentialProxyId, choice)
+    assert.equal(templateForm(config).credentialProxyId, choice)
+    assert.equal(config.outboundProxyId, null)
+  }
+})

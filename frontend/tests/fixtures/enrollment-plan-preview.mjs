@@ -37,7 +37,7 @@ export function enrollmentExample(library, accounts, groups, templates, settings
       const proxy = proxyFor(account.outboundProxyId)
       if (config.outboundProxyId !== undefined && !config.preserveOutboundProxy)
         row.egress = { kind: proxy ? 'proxy' : 'default', source: 'account', label: proxy?.name ?? '部署默认出口', proxyId: proxy?.id ?? null }
-      row.credentialExitLabel = account.credentialProxyId ? proxyFor(account.credentialProxyId)?.name ?? '原代理不可用' : undefined
+      row.credentialEgress = account.credentialProxyId ? { kind: 'proxy', source: 'credential', label: proxyFor(account.credentialProxyId)?.name ?? '原代理不可用', proxyId: account.credentialProxyId } : row.egress
     }
   }
   function advance() {
@@ -47,9 +47,8 @@ export function enrollmentExample(library, accounts, groups, templates, settings
       if (!plan)
         continue
       if (plan.state === 'scheduled' && !settings.paused && Date.parse(plan.when) <= now) {
-        plan.state = 'running'
-        plan.startedAt = now
-        row.status = 'running'
+        plan.state = 'queued'
+        row.status = 'queued'
         row.revision++
       }
       if (plan.state !== 'running' || now - plan.startedAt < 1200)
@@ -90,15 +89,32 @@ export function enrollmentExample(library, accounts, groups, templates, settings
         status: 'ready',
         lastReloginAt: row.lastAttemptAt,
         egress: { kind: proxy ? 'proxy' : plan.settings.proxyMode === 'ipv6' ? 'ipv6' : 'default', label: plan.exitLabel, source: 'account', proxyId: proxy?.id ?? null },
-        credentialExitLabel: plan.credentialExitLabel,
+        credentialEgress: { kind: 'proxy', source: 'credential', label: plan.credentialExitLabel || plan.exitLabel },
       })
+    }
+    if (settings.paused)
+      return
+    let active = library.filter(row => row.enrollmentPlan?.state === 'running').length
+    for (const row of library) {
+      if (active >= settings.concurrency)
+        break
+      if (row.enrollmentPlan?.state === 'queued') {
+        Object.assign(row.enrollmentPlan, { state: 'running', startedAt: now })
+        row.status = 'running'
+        row.revision++
+        active++
+      }
     }
   }
   function command(body) {
     advance()
+    if (body.newAccount) {
+      const input = body.newAccount
+      const proxyId = input.outboundProxyId || ''
+      body = { ...body, settings: { ...input.settings, customName: input.settings.customName ?? '', proxyMode: proxyId ? 'proxy' : 'direct', proxyId }, exit: { outboundProxyId: proxyId }, config: { ...input.settings, name: '入池设置', outboundProxyId: proxyId || null }, qualityTemplate: input.qualityTemplate }
+    }
     if (body.mode === 'sample') {
-      library.unshift(sample(`sample-${nextId++}`))
-      return
+      return importSamples(2)
     }
     const importing = body.mode === 'import-sample'
     const row = importing ? sample(`sample-${nextId++}`) : library.find(row => row.id === body.id)
@@ -125,12 +141,44 @@ export function enrollmentExample(library, accounts, groups, templates, settings
       const credentialProxy = proxyFor(body.settings.credentialProxyId)
       if (body.settings.credentialProxyId && !credentialProxy)
         throw new Error('凭据维护出口不存在，请重新选择')
-      row.enrollmentPlan = { state: body.mode === 'now' ? 'running' : body.mode, settings: body.settings, exit: body.exit, exitLabel, credentialExitLabel: credentialProxy?.name, when: body.when, startedAt: Date.now() }
-      row.status = body.mode === 'now' ? 'running' : 'pending'
+      row.enrollmentPlan = { state: body.mode === 'now' ? 'queued' : body.mode, settings: body.settings, exit: body.exit, exitLabel, credentialExitLabel: credentialProxy?.name, when: body.when, startedAt: Date.now() }
+      Object.assign(row.enrollmentPlan, {
+        config: body.config || { ...body.settings, name: '入池设置', outboundProxyId: body.exit.outboundProxyId || null },
+        customName: body.settings.customName || null,
+        purchaseCost: body.settings.purchaseCost || null,
+        qualityTemplate: body.qualityTemplate || null,
+        template: body.template || null,
+      })
+      row.egress = { kind: proxy ? 'proxy' : 'default', source: 'import', label: exitLabel }
+      row.credentialEgress = { kind: credentialProxy ? 'proxy' : row.egress.kind, source: credentialProxy ? 'credential' : 'import', label: credentialProxy?.name || exitLabel }
+      row.status = body.mode === 'now' ? 'queued' : 'pending'
     }
     row.revision++
     if (importing)
       library.unshift(row)
   }
-  return { advance, command, editAccount, proxies, quality }
+  function importSamples(count) {
+    const revisions = {}
+    for (let i = 0; i < Math.min(count, 500); i++) {
+      const row = sample(`sample-${nextId++}`)
+      library.unshift(row)
+      revisions[row.id] = row.revision
+    }
+    return { imported: Object.keys(revisions).length, revisions }
+  }
+  function planSamples(body) {
+    return Object.entries(body.revisions).map(([id, revision]) => {
+      const row = library.find(item => item.id === id)
+      if (!row || row.enrollmentPlan || row.poolAccountIds.length || row.revision !== revision)
+        return { id, success: false, message: '资料已变化、已有安排或已入池' }
+      try {
+        command({ id, revision, mode: body.mode, when: body.when, newAccount: body.newAccount, template: body.template })
+        return { id, success: true, message: '完成' }
+      }
+      catch (error) {
+        return { id, success: false, message: error.message }
+      }
+    })
+  }
+  return { advance, command, editAccount, proxies, quality, importSamples, planSamples }
 }

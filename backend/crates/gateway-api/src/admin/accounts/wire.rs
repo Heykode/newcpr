@@ -69,6 +69,8 @@ pub(super) struct ApplyAccountTemplateRequest {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BatchUpdateAccountsRequest {
+    #[serde(default, deserialize_with = "deserialize_optional_nullable")]
+    pub credential_proxy_id: Option<Option<String>>,
     pub quota_settings: Option<gateway_core::account::AccountQuotaSettings>,
     pub auto_use_quota_credits: Option<bool>,
     pub excel_recovery: Option<gateway_admin::model::excel_recovery::ExcelRecoveryConfig>,
@@ -182,6 +184,7 @@ impl BatchUpdateAccountsRequest {
             && self.group_ids.is_none()
             && self.outbound_proxy_id.is_none()
             && self.outbound_proxy_url.is_none()
+            && self.credential_proxy_id.is_none()
         {
             return Err(WireValidationError::new("fields"));
         }
@@ -191,6 +194,7 @@ impl BatchUpdateAccountsRequest {
     pub(super) fn into_command(self) -> Result<BatchUpdateAccounts, WireValidationError> {
         self.validate()?;
         Ok(BatchUpdateAccounts {
+            credential_proxy_id: self.credential_proxy_id,
             quota_settings: self.quota_settings,
             auto_use_quota_credits: self.auto_use_quota_credits,
             excel_recovery: self.excel_recovery,
@@ -354,6 +358,7 @@ pub struct AccountSummaryView {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountView {
+    pub credential_proxy_id: Option<String>,
     pub quota_settings: gateway_core::account::AccountQuotaSettings,
     pub quota_settings_supported: bool,
     pub auto_use_quota_credits: bool,

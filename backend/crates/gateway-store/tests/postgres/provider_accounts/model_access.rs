@@ -48,6 +48,7 @@ async fn model_policy_patch_preserves_identity_state_groups_and_egress() {
         AccountModelAccess::new(AccountModelAccessMode::Denylist, vec!["model-a".into()]).unwrap();
     let store = admin_account_store(&database.pool);
     let command = BatchUpdateAccounts {
+        credential_proxy_id: None,
         quota_settings: Default::default(),
         auto_use_quota_credits: None,
         excel_recovery: None,

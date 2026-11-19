@@ -17,6 +17,7 @@ fn month_start() -> NaiveDate {
 
 fn patch(ids: &[&str], amount: Option<&str>, date: Option<NaiveDate>) -> BatchUpdateAccounts {
     BatchUpdateAccounts {
+        credential_proxy_id: None,
         quota_settings: Default::default(),
         auto_use_quota_credits: None,
         excel_recovery: None,
@@ -60,6 +61,7 @@ async fn purchase_import_applies_per_account_preserves_omission_and_rolls_back_i
     };
     let repo = PgProviderAccountRepository::new(db.pool.clone());
     let mut settings = AccountImportSettings {
+        credential_proxy_id: None,
         template_proxy_mode: None,
         excel_recovery: None,
         purchase_cost: Some(AccountPurchaseUpdate {

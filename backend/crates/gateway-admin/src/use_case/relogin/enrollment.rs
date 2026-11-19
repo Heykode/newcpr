@@ -6,7 +6,7 @@ impl DefaultReloginService {
         text: &str,
         replace: bool,
         mut enrollment: Option<ReloginEnrollment>,
-    ) -> Result<Vec<String>, AdminError> {
+    ) -> Result<Vec<(String, u64)>, AdminError> {
         let inputs = parse_relogin_import(text)?;
         if inputs.len() != 1
             && let Some(enrollment) = enrollment.as_mut()
@@ -87,6 +87,7 @@ impl DefaultReloginService {
                 changes.push((entry, Some(expected)));
             } else {
                 let entry = ReloginEntry {
+                    enrollment_plan: None,
                     maintenance: Default::default(),
                     last_attempt: None,
                     id: format!("relogin_{}", uuid::Uuid::now_v7().simple()),
@@ -126,6 +127,11 @@ impl DefaultReloginService {
                 entry.manual_push_context = None;
                 entry.maintenance.import_egress =
                     Some(crate::model::relogin_maintenance::ReloginImportEgress {
+                        credential_proxy_id: enrollment
+                            .config
+                            .credential_proxy_id
+                            .clone()
+                            .flatten(),
                         proxy_id: enrollment.config.outbound_proxy_id.clone(),
                         mode: enrollment.config.egress_mode,
                     });
@@ -134,7 +140,10 @@ impl DefaultReloginService {
                 entry.message = "等待登录验证并入池".to_owned();
             }
         }
-        let ids = changes.iter().map(|(entry, _)| entry.id.clone()).collect();
+        let ids = changes
+            .iter()
+            .map(|(entry, _)| (entry.id.clone(), entry.revision))
+            .collect();
         self.store()?
             .save_batch(&changes)
             .await

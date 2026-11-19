@@ -23,7 +23,6 @@ import QualityTemplateApplyMenu from '@/components/quality-ops/QualityTemplateAp
 import ReloginCountCell from '@/components/ReloginCountCell.vue'
 import { useAccountGroupCatalog } from '@/composables/useAccountGroupCatalog'
 import { t } from '@/i18n'
-import { enrollmentPreview } from '../relogin/enrollment-plan'
 import AccountBatchEditModal from './components/AccountBatchEditModal.vue'
 import AccountCapacityCell from './components/AccountCapacityCell.vue'
 import AccountConnectionTestModal from './components/AccountConnectionTestModal.vue'
@@ -357,7 +356,7 @@ const {
   save: saveAccountEdit,
   clear: clearAccountEdit,
 } = useAccountEditor({
-  credentialEgress: enrollmentPreview,
+  credentialEgress: true,
   accounts,
   reloadAccounts: loadAccounts,
   reloadGroups: loadGroups,

@@ -1,4 +1,4 @@
-//! Relogin and maintenance use the current pool binding, never a second account setting.
+//! Maintenance uses its explicit proxy, or follows the current account/import route.
 use super::*;
 use crate::model::relogin_maintenance::ReloginEgressView;
 
@@ -20,12 +20,15 @@ impl DefaultReloginService {
             matches.first().copied()
         });
         let mut proxies = BTreeMap::new();
-        let mut route = self.egress_view(entry, account, &mut proxies).await?;
+        let mut route = self
+            .maintenance_egress_view(entry, account, &mut proxies)
+            .await?;
         if statistics_account(entry, &matches).is_none() && matches.len() > 1 {
             for other in matches.iter().skip(1) {
-                let other_route = self.egress_view(entry, Some(other), &mut proxies).await?;
-                if other.effective_outbound_proxy()
-                    != account.and_then(AccountRecord::effective_outbound_proxy)
+                let other_route = self
+                    .maintenance_egress_view(entry, Some(other), &mut proxies)
+                    .await?;
+                if !same_maintenance_route(other, account.expect("workspace candidate"))
                     || route.source_ip != other_route.source_ip
                     || route.mode != other_route.mode
                 {
@@ -35,7 +38,15 @@ impl DefaultReloginService {
                 }
             }
         }
-        let proxy = if let Some(account) = account {
+        let proxy = if let Some(id) = maintenance_proxy_id(entry, account) {
+            let record = proxies
+                .get(id)
+                .ok_or_else(|| AdminError::unavailable("凭据维护出口暂不可用"))?;
+            if !record.enabled {
+                return Err(AdminError::unavailable("凭据维护出口已停用，请更换出口"));
+            }
+            Some(record.proxy.clone())
+        } else if let Some(account) = account {
             account.effective_outbound_proxy().cloned()
         } else {
             super::super::import_proxy_binding(self.proxies.as_ref(), import_proxy_id(entry))
@@ -60,6 +71,46 @@ impl DefaultReloginService {
             outbound_proxy: proxy,
             source_ip: route.source_ip,
             egress_mode: route.mode,
+        })
+    }
+
+    pub(super) async fn maintenance_egress_view(
+        &self,
+        entry: &ReloginEntry,
+        account: Option<&AccountRecord>,
+        proxies: &mut BTreeMap<String, crate::model::proxies::ProxyRecord>,
+    ) -> Result<ReloginEgressView, AdminError> {
+        let Some(id) = maintenance_proxy_id(entry, account) else {
+            return self.egress_view(entry, account, proxies).await;
+        };
+        if !proxies.contains_key(id) {
+            proxies.insert(
+                id.to_owned(),
+                self.proxies.get(id).await.map_err(store_error)?,
+            );
+        }
+        let record = &proxies[id];
+        let test = record.last_test.as_ref().filter(|test| test.success);
+        Ok(ReloginEgressView {
+            kind: if record.enabled {
+                "proxy"
+            } else {
+                "unavailable"
+            }
+            .into(),
+            label: if record.enabled {
+                record.name.clone()
+            } else {
+                format!("{}（已停用）", record.name)
+            },
+            source: "credential".into(),
+            proxy_id: Some(record.id.clone()),
+            account_id: account.map(|row| row.id.clone()),
+            address: Some(record.proxy.endpoint()),
+            exit_ip: test.and_then(|test| test.exit_ip).map(|ip| ip.to_string()),
+            latency_ms: test.map(|test| test.latency_ms),
+            checked_at: record.last_test_at,
+            ..Default::default()
         })
     }
 
@@ -224,4 +275,33 @@ pub(super) fn import_egress_mode(
                 .as_ref()
                 .and_then(|value| value.mode)
         })
+}
+
+pub(super) fn maintenance_proxy_id<'a>(
+    entry: &'a ReloginEntry,
+    account: Option<&'a AccountRecord>,
+) -> Option<&'a str> {
+    if let Some(account) = account {
+        return account.credential_proxy_id.as_deref();
+    }
+    if let Some(enrollment) = &entry.enrollment {
+        return enrollment
+            .config
+            .credential_proxy_id
+            .as_ref()
+            .and_then(|id| id.as_deref());
+    }
+    entry
+        .maintenance
+        .import_egress
+        .as_ref()
+        .and_then(|route| route.credential_proxy_id.as_deref())
+}
+
+pub(super) fn same_maintenance_route(left: &AccountRecord, right: &AccountRecord) -> bool {
+    if left.credential_proxy_id.is_some() || right.credential_proxy_id.is_some() {
+        left.credential_proxy_id.is_some() && left.credential_proxy_id == right.credential_proxy_id
+    } else {
+        left.effective_outbound_proxy() == right.effective_outbound_proxy()
+    }
 }

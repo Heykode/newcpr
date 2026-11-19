@@ -17,6 +17,155 @@ use gateway_store::postgres::{
 };
 
 #[tokio::test]
+async fn enrollment_plan_survives_reopening_and_audit_is_atomic_with_revision_update() {
+    use gateway_admin::model::{
+        MutationActor, MutationContext,
+        relogin::{EnrollmentPlanState, ReloginEnrollment, ReloginEnrollmentPlan},
+    };
+    let Some(database) = TestDatabase::create("enrollment_plan").await else {
+        return;
+    };
+    let store = PgReloginStore::new(database.pool.clone());
+    let mut row = entry("plan-entry", "plan@example.invalid");
+    store.save(&row, None).await.unwrap();
+    let config = serde_json::from_value::<gateway_admin::model::relogin_templates::ReloginTemplateConfig>(serde_json::json!({
+        "name": "Scheduled defaults", "enabled": true, "concurrencyLimit": null,
+        "weight": 1, "groupIds": [], "outboundProxyId": null, "credentialProxyId": "maintenance-proxy"
+    })).unwrap();
+    let context = MutationContext {
+        actor: MutationActor::System,
+        request_id: "plan-persistence-test".into(),
+    };
+    let mut settings = config.settings().unwrap();
+    settings.custom_name = Some("Scheduled account".into());
+    row.enrollment_plan = Some(ReloginEnrollmentPlan {
+        state: EnrollmentPlanState::Scheduled,
+        when: Some(chrono::Utc::now() + chrono::Duration::hours(2)),
+        enrollment: ReloginEnrollment::new(settings, None, context.clone()).unwrap(),
+        template: None,
+    });
+    let expected = row.revision;
+    row.revision += 1;
+    store
+        .save_enrollment_plan(&row, expected, &context)
+        .await
+        .unwrap();
+    let reopened = PgReloginStore::new(database.pool.clone());
+    let restored = reopened.entries().await.unwrap().pop().unwrap();
+    let plan = restored.enrollment_plan.unwrap();
+    assert_eq!(plan.state, EnrollmentPlanState::Scheduled);
+    assert_eq!(
+        plan.enrollment.config.credential_proxy_id,
+        Some(Some("maintenance-proxy".into()))
+    );
+    assert_eq!(
+        plan.enrollment.custom_name.as_deref(),
+        Some("Scheduled account")
+    );
+    let audit_count: i64 = sqlx::query_scalar(
+        "select count(*) from admin_audit_events where action='arrange_relogin_enrollment'",
+    )
+    .fetch_one(&database.pool)
+    .await
+    .unwrap();
+    assert_eq!(audit_count, 1);
+    row.enrollment_plan.as_mut().unwrap().state = EnrollmentPlanState::Draft;
+    assert!(
+        store
+            .save_enrollment_plan(&row, expected, &context)
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        reopened.entries().await.unwrap()[0]
+            .enrollment_plan
+            .as_ref()
+            .unwrap()
+            .state,
+        EnrollmentPlanState::Scheduled
+    );
+    let audit_count: i64 = sqlx::query_scalar(
+        "select count(*) from admin_audit_events where action='arrange_relogin_enrollment'",
+    )
+    .fetch_one(&database.pool)
+    .await
+    .unwrap();
+    assert_eq!(audit_count, 1);
+    // A pool transaction which rolls back or imports the wrong workspace must
+    // not consume the plan. A committed import must survive immediate removal.
+    let mut active = reopened.entries().await.unwrap().remove(0);
+    active.preferred_workspace_id = Some("intended-workspace".into());
+    let expected = active.revision;
+    active.revision += 1;
+    reopened.save(&active, Some(expected)).await.unwrap();
+    let repo = PgProviderAccountRepository::new(database.pool.clone());
+    let mut other = account("plan-other", "other-user");
+    other.email = Some(active.email.clone());
+    other.upstream_account_id = Some("other-workspace".into());
+    repo.insert_provider_account(other).await.unwrap();
+    assert_eq!(
+        reopened.entries().await.unwrap()[0]
+            .enrollment_plan
+            .as_ref()
+            .unwrap()
+            .state,
+        EnrollmentPlanState::Scheduled
+    );
+    let pool_command = |invalid: bool| {
+        let mut intended = account("plan-matched", "matched-user");
+        intended.email = Some(active.email.to_ascii_uppercase());
+        intended.upstream_account_id = active.preferred_workspace_id.clone();
+        let mut settings = active
+            .enrollment_plan
+            .as_ref()
+            .unwrap()
+            .enrollment
+            .settings()
+            .unwrap();
+        settings.credential_proxy_id = None;
+        if invalid {
+            settings.group_ids.push(
+                gateway_core::routing::AccountGroupId::new("grp_00000000000000000000000000000137")
+                    .unwrap(),
+            );
+        }
+        ImportProviderAccounts {
+            settings: Some(settings),
+            outbound_proxy: None,
+            scope: ProviderAccountAdminScope {
+                provider_kind: "openai".into(),
+            },
+            accounts: vec![intended],
+            audit: audit("plan-pool", "import", "provider_accounts"),
+        }
+    };
+    assert!(
+        repo.import_provider_accounts(pool_command(true))
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        reopened.entries().await.unwrap()[0]
+            .enrollment_plan
+            .as_ref()
+            .unwrap()
+            .state,
+        EnrollmentPlanState::Scheduled
+    );
+    repo.import_provider_accounts(pool_command(false))
+        .await
+        .unwrap();
+    repo.delete_provider_account("plan-matched").await.unwrap();
+    let completed = reopened.entries().await.unwrap().remove(0);
+    let settled = completed.enrollment_plan.as_ref().unwrap();
+    assert_eq!(settled.state, EnrollmentPlanState::CompletedEarly);
+    assert!(settled.when.is_none());
+    // A stale due-worker write cannot resurrect the schedule.
+    assert!(reopened.save(&active, Some(active.revision)).await.is_err());
+    database.close().await;
+}
+
+#[tokio::test]
 async fn relogin_seconds_upgrade_converts_defaults_and_preserves_custom_durations() {
     let old = sqlx::migrate::Migrator {
         migrations: super::TEST_MIGRATOR
@@ -51,6 +200,7 @@ async fn relogin_seconds_upgrade_converts_defaults_and_preserves_custom_duration
 
 fn entry(id: &str, email: &str) -> ReloginEntry {
     ReloginEntry {
+        enrollment_plan: None,
         maintenance: Default::default(),
         last_attempt: None,
         imported_at: Some(chrono::Utc::now()),
@@ -535,6 +685,7 @@ async fn relogin_templates_persist_fence_versions_and_revalidate_references() {
         id: "template-one".into(),
         revision: 1,
         config: ReloginTemplateConfig {
+            credential_proxy_id: None,
             excel_recovery: None,
             model_access: Some(
                 serde_json::from_value(serde_json::json!({
@@ -1189,6 +1340,7 @@ async fn relogin_maintenance_private_snapshot_and_unknown_state_survive_reopen()
         verified_at: chrono::Utc::now(),
     });
     row.maintenance.import_egress = Some(ReloginImportEgress {
+        credential_proxy_id: None,
         proxy_id: Some("proxy-import".into()),
         mode: None,
     });

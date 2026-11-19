@@ -39,6 +39,7 @@ fn success() -> ProxyTestResult {
 
 fn update(account_id: &str, selection: AccountProxySelection) -> UpdateAccount {
     UpdateAccount {
+        credential_proxy_id: None,
         excel_recovery: None,
         purchase_cost: None,
         egress_mode: None,
@@ -60,6 +61,97 @@ fn update(account_id: &str, selection: AccountProxySelection) -> UpdateAccount {
         group_ids: vec![],
         outbound_proxy: Some(selection),
     }
+}
+
+#[tokio::test]
+async fn credential_maintenance_binding_is_independent_preserved_and_explicitly_clearable() {
+    let Some(database) = TestDatabase::create("credential_route").await else {
+        return;
+    };
+    let proxies = PgProxyRepository::new(database.pool.clone());
+    let repository = PgProviderAccountRepository::new(database.pool.clone());
+    let admin = admin_account_store(&database.pool);
+    let proxy = proxies
+        .create(
+            NewProxy {
+                auto_location: false,
+                test: Some(success()),
+                request_location: None,
+                name: "Maintenance proxy".into(),
+                proxy: OutboundProxy::parse("http://maintenance.example:8080").unwrap(),
+            },
+            &context(),
+        )
+        .await
+        .unwrap()
+        .record;
+    repository
+        .insert_provider_account(account("acct_maintenance_route", "maintenance-route-user"))
+        .await
+        .unwrap();
+    let mut command = update("acct_maintenance_route", AccountProxySelection::Direct);
+    command.outbound_proxy = None;
+    command.credential_proxy_id = Some(Some(proxy.id.clone()));
+    admin
+        .update_account(command.clone(), &context())
+        .await
+        .unwrap();
+    let stored = repository
+        .load_provider_account("acct_maintenance_route")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        stored.summary.credential_proxy_id.as_deref(),
+        Some(proxy.id.as_str())
+    );
+    assert!(stored.summary.outbound_proxy.is_none());
+    let credential_revision = stored.summary.credential_revision;
+    command.credential_proxy_id = None;
+    command.custom_name = Some(Some("Preserved account name".into()));
+    admin
+        .update_account(command.clone(), &context())
+        .await
+        .unwrap();
+    let stored = repository
+        .load_provider_account("acct_maintenance_route")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        stored.summary.credential_proxy_id.as_deref(),
+        Some(proxy.id.as_str())
+    );
+    assert_eq!(stored.summary.credential_revision, credential_revision);
+    command.credential_proxy_id = Some(Some("missing-proxy".into()));
+    assert!(
+        admin
+            .update_account(command.clone(), &context())
+            .await
+            .is_err()
+    );
+    let stored = repository
+        .load_provider_account("acct_maintenance_route")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        stored.summary.credential_proxy_id.as_deref(),
+        Some(proxy.id.as_str())
+    );
+    command.credential_proxy_id = Some(None);
+    admin.update_account(command, &context()).await.unwrap();
+    let stored = repository
+        .load_provider_account("acct_maintenance_route")
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(stored.summary.credential_proxy_id.is_none());
+    assert_eq!(
+        stored.summary.custom_name.as_deref(),
+        Some("Preserved account name")
+    );
+    database.close().await;
 }
 
 #[tokio::test]
@@ -448,6 +540,7 @@ async fn partial_batch_proxy_updates_preserve_credentials_groups_and_unselected_
         .await
         .unwrap();
     let mut command = BatchUpdateAccounts {
+        credential_proxy_id: None,
         quota_settings: Default::default(),
         auto_use_quota_credits: None,
         excel_recovery: None,
@@ -933,6 +1026,80 @@ async fn stale_proxy_mutations_release_locks_before_next_update() {
 }
 
 #[tokio::test]
+async fn paired_import_guards_share_one_slot_and_release_both_routes() {
+    let Some(database) = TestDatabase::create("paired_import_guard").await else {
+        return;
+    };
+    let store = PgProxyRepository::new(database.pool.clone());
+    let mut ids = Vec::new();
+    for port in [8080, 8081] {
+        ids.push(
+            store
+                .create(
+                    NewProxy {
+                        name: format!("route {port}"),
+                        proxy: OutboundProxy::parse(&format!("http://localhost:{port}")).unwrap(),
+                        auto_location: false,
+                        test: None,
+                        request_location: None,
+                    },
+                    &context(),
+                )
+                .await
+                .unwrap()
+                .record
+                .id,
+        );
+    }
+    let (a, b) = (&ids[0], &ids[1]);
+    // Failure on the second ID releases the first lock before returning.
+    assert!(store.reserve_import_pair(a, Some("missing")).await.is_err());
+    let mut exclusive = database.pool.begin().await.unwrap();
+    for id in [a, b] {
+        assert!(
+            sqlx::query_scalar::<_, bool>(
+                "select pg_try_advisory_xact_lock(hashtextextended($1,739219))"
+            )
+            .bind(id)
+            .fetch_one(&mut *exclusive)
+            .await
+            .unwrap()
+        );
+    }
+    exclusive.rollback().await.unwrap();
+    let mut reservations = Vec::new();
+    for other in [a, b, b, a] {
+        let reservation = store.reserve_import_pair(a, Some(other)).await.unwrap();
+        assert_eq!(&reservation.additional.as_ref().unwrap().id, other);
+        reservations.push(reservation);
+    }
+    assert!(store.reserve_import(a).await.is_err());
+    let mut blocked = database.pool.begin().await.unwrap();
+    for id in [a, b] {
+        assert!(
+            !sqlx::query_scalar::<_, bool>(
+                "select pg_try_advisory_xact_lock(hashtextextended($1,739219))"
+            )
+            .bind(id)
+            .fetch_one(&mut *blocked)
+            .await
+            .unwrap()
+        );
+    }
+    blocked.rollback().await.unwrap();
+    let holding = reservations.pop().unwrap();
+    let task = tokio::spawn(async move {
+        let _hold = holding;
+        std::future::pending::<()>().await
+    });
+    task.abort();
+    assert!(task.await.unwrap_err().is_cancelled());
+    assert!(store.reserve_import_pair(b, Some(a)).await.is_ok());
+    drop(reservations);
+    database.close().await;
+}
+
+#[tokio::test]
 async fn rejected_import_reservations_release_proxy_lock_before_returning() {
     let Some(database) = TestDatabase::create("rejected_proxy_import").await else {
         return;
@@ -1349,6 +1516,7 @@ async fn legacy_urls_join_one_catalog_entry_and_invalid_batch_rolls_back() {
         admin
             .batch_update_accounts(
                 BatchUpdateAccounts {
+                    credential_proxy_id: None,
                     quota_settings: Default::default(),
                     auto_use_quota_credits: None,
                     excel_recovery: None,

@@ -222,6 +222,7 @@ pub(super) fn account_view(
         effective_concurrency_limit: effective_concurrency_limit.get(),
         weight: account.weight.get(),
         model_access: account.model_access,
+        credential_proxy_id: account.credential_proxy_id,
         outbound_proxy_id: account.outbound_proxy_id,
         outbound_proxy_endpoint: account
             .outbound_proxy

@@ -198,6 +198,7 @@ impl ReloginEnrollment {
         }
         let result = Self {
             config: super::relogin_templates::ReloginTemplateConfig {
+                credential_proxy_id: settings.credential_proxy_id,
                 excel_recovery: settings.excel_recovery,
                 model_access: None,
                 egress_mode: settings.egress_mode,
@@ -261,6 +262,8 @@ impl ReloginEnrollment {
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct ReloginEntry {
+    #[serde(default)]
+    pub enrollment_plan: Option<ReloginEnrollmentPlan>,
     #[serde(default)]
     pub maintenance: super::relogin_maintenance::MaintenanceState,
     pub id: String,
@@ -410,9 +413,20 @@ impl ReloginEntry {
     }
 
     pub fn clear_enrollment(&mut self) {
+        if let Some(plan) = self.enrollment_plan.as_mut()
+            && plan.state == EnrollmentPlanState::Running
+        {
+            plan.state = if self.synced_at.is_some() {
+                EnrollmentPlanState::Done
+            } else {
+                EnrollmentPlanState::Draft
+            };
+            plan.when = None;
+        }
         if let Some(enrollment) = self.enrollment.take() {
             self.maintenance.import_egress =
                 Some(super::relogin_maintenance::ReloginImportEgress {
+                    credential_proxy_id: enrollment.config.credential_proxy_id.clone().flatten(),
                     proxy_id: enrollment.config.outbound_proxy_id,
                     mode: enrollment.config.egress_mode,
                 });
@@ -504,6 +518,49 @@ impl ReloginEntry {
         }
         Ok(())
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EnrollmentPlanState {
+    Draft,
+    Scheduled,
+    Running,
+    Failed,
+    Done,
+    CompletedEarly,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EnrollmentPlanMode {
+    Draft,
+    Now,
+    Scheduled,
+    Cancel,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct ReloginEnrollmentPlan {
+    pub template: Option<super::relogin_templates::ReloginTemplateSelection>,
+    pub state: EnrollmentPlanState,
+    pub when: Option<DateTime<Utc>>,
+    pub enrollment: ReloginEnrollment,
+}
+
+/// Safe plan projection; never expose the stored administrator context or login material.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReloginEnrollmentPlanView {
+    pub template: Option<super::relogin_templates::ReloginTemplateSelection>,
+    pub state: &'static str,
+    pub when: Option<DateTime<Utc>>,
+    pub config: super::relogin_templates::ReloginTemplateConfig,
+    pub custom_name: Option<String>,
+    pub purchase_cost: Option<super::account_purchase::AccountPurchaseUpdate>,
+    pub quality_template: Option<super::quality_ops::QualityTemplateSelection>,
+    pub exit_label: String,
+    pub credential_exit_label: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -670,4 +727,21 @@ pub struct ReloginRequest {
     pub mfa_secret: String,
     pub workspace_id: Option<String>,
     pub outbound_proxy: Option<gateway_core::account::OutboundProxy>,
+}
+
+pub struct EnrollmentPlanCommand {
+    pub id: String,
+    pub revision: u64,
+    pub mode: EnrollmentPlanMode,
+    pub when: Option<DateTime<Utc>>,
+    pub enrollment: Option<ReloginEnrollment>,
+    pub template: Option<super::relogin_templates::ReloginTemplateSelection>,
+}
+
+pub struct ImportedEnrollmentPlanCommand {
+    pub revisions: std::collections::BTreeMap<String, u64>,
+    pub mode: EnrollmentPlanMode,
+    pub when: Option<DateTime<Utc>>,
+    pub enrollment: ReloginEnrollment,
+    pub template: Option<super::relogin_templates::ReloginTemplateSelection>,
 }

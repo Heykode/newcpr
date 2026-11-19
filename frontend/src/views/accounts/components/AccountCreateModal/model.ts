@@ -18,7 +18,7 @@ export type AccountImportInputMode = Exclude<AccountImportMode, 'oauth'>
 
 export interface AccountCreateForm {
   importTemplate: AccountTemplate | null
-  qualityTemplate: QualityRuleTemplate | null
+  qualityTemplate: Pick<QualityRuleTemplate, 'id' | 'revision' | 'name'> | null
   templateEgress?: { draft: AccountEgressDraft, patch: AccountEgressPatch }
   purchaseAmount: string
   purchaseCycleStart: string
@@ -120,6 +120,7 @@ export function accountImportSettings(form: AccountCreateForm, provider = form.p
     ...(outboundProxyId === '' ? { clearOutboundProxy: true } : {}),
     ...(form.purchaseAmount.trim() ? { purchaseCost: purchaseCostPatch(form.purchaseAmount, form.purchaseCycleStart) } : {}),
     ...(customName ? { customName } : {}),
+    ...(provider === 'openai' && form.credentialProxyId !== undefined ? { credentialProxyId: form.credentialProxyId } : {}),
     enabled: form.enabled,
     ...(requestProxySource === undefined ? {} : { requestProxySource }),
     ...(egressMode === undefined ? {} : { egressMode }),

@@ -84,7 +84,7 @@ async function main() {
       configureServer(vite) {
         vite.middlewares.use(async (request, response, next) => {
           const url = new URL(request.url ?? '/', 'http://127.0.0.1')
-          if (enrollment && url.pathname === '/__preview__/enrollment') {
+          if (enrollment && ['/__preview__/enrollment', '/api/admin/relogin/enrollment-plan', '/dev/api/admin/relogin/enrollment-plan'].includes(url.pathname)) {
             response.setHeader('Content-Type', 'application/json')
             response.setHeader('Cache-Control', 'no-store')
             if (request.method !== 'POST' || request.headers.origin !== `http://${request.headers.host}` || request.headers['content-type'] !== 'application/json') {
@@ -98,8 +98,8 @@ async function main() {
                 if (raw.length > 65536)
                   throw new Error('示例设置过大')
               }
-              enrollment.command(JSON.parse(raw))
-              response.end('{}')
+              const data = enrollment.command(JSON.parse(raw))
+              response.end(JSON.stringify({ code: 200, data: data ?? null, message: 'ok' }))
             }
             catch (error) { response.writeHead(409).end(JSON.stringify({ message: error.message })) }
             return
@@ -229,7 +229,10 @@ async function main() {
             for await (const chunk of request)
               raw += chunk
             const body = JSON.parse(raw)
-            if (path.endsWith('/templates/save')) {
+            if (enrollment && path === '/api/admin/relogin/import/plans') {
+              data = enrollment.planSamples(body)
+            }
+            else if (path.endsWith('/templates/save')) {
               const index = templates.findIndex(row => row.id === body.selection?.id)
               if (body.selection && (index < 0 || templates[index].revision !== body.selection.revision)) {
                 status = 409

@@ -26,6 +26,7 @@ fn context() -> MutationContext {
 
 fn batch(ids: &[&str]) -> gateway_admin::model::accounts::BatchUpdateAccounts {
     gateway_admin::model::accounts::BatchUpdateAccounts {
+        credential_proxy_id: None,
         quota_settings: Default::default(),
         auto_use_quota_credits: None,
         excel_recovery: None,
@@ -87,6 +88,7 @@ async fn unified_single_save_clears_proxy_atomically_and_preserves_identity() {
     let before = identity().await.unwrap();
     let bindings = load(&egress).await.fixed_bindings;
     let mut command = UpdateAccount {
+        credential_proxy_id: None,
         excel_recovery: None,
         purchase_cost: None,
         account_id: "acct_unified".into(),

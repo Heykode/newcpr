@@ -910,6 +910,7 @@ async fn new_account_push_template_route_overrides_or_preserves_import() {
         let id = h.import("test@example.invalid").await;
         let mut row = h.row(&id).await;
         row.maintenance.import_egress = Some(ReloginImportEgress {
+            credential_proxy_id: None,
             proxy_id: Some("proxy-import".into()),
             mode: None,
         });

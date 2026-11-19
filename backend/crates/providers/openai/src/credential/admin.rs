@@ -926,6 +926,16 @@ impl CodexCredentialAdminService {
         payload: Value,
         default_proxy: Option<&gateway_core::account::OutboundProxy>,
     ) -> Result<PreparedCodexAccountImport, CodexCredentialAdminError> {
+        self.prepare_import_document_with_routes(payload, default_proxy, None)
+            .await
+    }
+
+    pub async fn prepare_import_document_with_routes(
+        &self,
+        payload: Value,
+        default_proxy: Option<&gateway_core::account::OutboundProxy>,
+        credential_proxy: Option<&gateway_core::account::OutboundProxy>,
+    ) -> Result<PreparedCodexAccountImport, CodexCredentialAdminError> {
         if serde_json::to_vec(&payload)
             .map_err(|_| CodexCredentialAdminError::InvalidInput)?
             .len()
@@ -948,7 +958,7 @@ impl CodexCredentialAdminService {
                     candidate.authentication.access_token.clone(),
                     candidate.authentication.refresh_token.clone(),
                     candidate.authentication.id_token.clone(),
-                    candidate.outbound_proxy.as_ref(),
+                    credential_proxy.or(candidate.outbound_proxy.as_ref()),
                 )
                 .await?;
             let metadata = if secret
@@ -962,7 +972,10 @@ impl CodexCredentialAdminService {
                     .personal_access_token_client
                     .as_ref()
                     .ok_or(PersonalAccessTokenError::Unavailable)?
-                    .personal_access_token_metadata(token, candidate.outbound_proxy.as_ref())
+                    .personal_access_token_metadata(
+                        token,
+                        credential_proxy.or(candidate.outbound_proxy.as_ref()),
+                    )
                     .await?;
                 secret = CodexOAuthSecret {
                     access_token: SecretString::from(token),

@@ -208,6 +208,39 @@ impl DefaultReloginService {
                 {
                     continue;
                 }
+                if entry
+                    .enrollment_plan
+                    .as_ref()
+                    .is_some_and(|plan| plan.state == EnrollmentPlanState::Scheduled)
+                    && !matches!(
+                        entry.status,
+                        ReloginStatus::Queued | ReloginStatus::AwaitingWorkspace
+                    )
+                    && !(entry.status == ReloginStatus::Ready && entry.enrollment.is_some())
+                {
+                    if entry
+                        .enrollment_plan
+                        .as_ref()
+                        .and_then(|plan| plan.when)
+                        .is_none_or(|time| time > Utc::now())
+                    {
+                        continue;
+                    }
+                    if let Err(error) = Self::activate_enrollment_plan(&mut entry, &pool) {
+                        entry
+                            .enrollment_plan
+                            .as_mut()
+                            .expect("scheduled plan")
+                            .state = EnrollmentPlanState::Failed;
+                        entry.message = error.message().to_owned();
+                        self.save(&mut entry).await?;
+                        continue;
+                    }
+                    entry.automatic_attempts = 0;
+                    entry.next_attempt_at = None;
+                    entry.stop_reason = None;
+                    self.save(&mut entry).await?;
+                }
                 if entry.status != ReloginStatus::Queued {
                     entry.maintenance.queued_login = None;
                     if entry.status == ReloginStatus::Ready
@@ -302,10 +335,9 @@ impl DefaultReloginService {
                             .and_then(|queued| queued.route.as_ref())
                             .is_none()
                             && candidates.first().is_some_and(|first| {
-                                candidates.iter().any(|account| {
-                                    account.effective_outbound_proxy()
-                                        != first.effective_outbound_proxy()
-                                })
+                                candidates
+                                    .iter()
+                                    .any(|account| !egress::same_maintenance_route(account, first))
                             }))
                     {
                         entry.status = ReloginStatus::Failed;

@@ -809,6 +809,7 @@ async fn quality_account_rename_keeps_recovery_ownership() {
     super::admin_account_store(&db.pool)
         .update_account(
             UpdateAccount {
+                credential_proxy_id: None,
                 excel_recovery: None,
                 purchase_cost: None,
                 egress_mode: None,

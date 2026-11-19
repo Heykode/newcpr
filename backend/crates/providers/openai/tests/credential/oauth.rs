@@ -195,6 +195,7 @@ async fn complete_with_mutation(
         .clone();
     let completed = service
         .complete_authorization(CompleteCodexOAuthAuthorization {
+            credential_proxy_id: None,
             owner_ref: "test-owner".to_owned(),
             flow_id: started.flow_id,
             callback_url: SecretString::from(format!(
@@ -636,6 +637,7 @@ async fn reauthorization_updates_identity_without_reusing_a_missing_refresh_toke
             .to_owned();
         let result = service
             .complete_authorization(CompleteCodexOAuthAuthorization {
+                credential_proxy_id: None,
                 owner_ref: "test-owner".to_owned(),
                 flow_id: started.flow_id,
                 callback_url: SecretString::from(format!(
@@ -714,6 +716,7 @@ async fn first_exchange_uses_id_token_identity_before_access_token_fallback() {
     let completed = service
         .complete_authorization(CompleteCodexOAuthAuthorization {
             owner_ref: "test-owner".to_owned(),
+            credential_proxy_id: None,
             flow_id: started.flow_id,
             callback_url: SecretString::from(format!(
                 "http://localhost:1455/auth/callback?code=synthetic&state={state}"
@@ -725,6 +728,17 @@ async fn first_exchange_uses_id_token_identity_before_access_token_fallback() {
         panic!("created credential");
     };
     assert_eq!(created.account.upstream_user_id(), Some("user-A"));
+}
+
+#[tokio::test]
+async fn clearing_a_bound_maintenance_route_rejects_before_token_exchange() {
+    let started = mutation()
+        .with_credential_proxy_id(Some("bound-route".into()))
+        .with_credential_proxy(Some(
+            gateway_core::account::OutboundProxy::parse("http://localhost:8080").unwrap(),
+        ));
+    let result = complete_with_mutation("invalid-id-token".into(), started).await;
+    assert!(matches!(result, Err(CodexOAuthAdminError::Conflict)));
 }
 
 #[tokio::test]
@@ -777,6 +791,7 @@ async fn reauthorization_binds_the_selected_slot_to_the_new_oauth_account() {
     let completed = service
         .complete_authorization(CompleteCodexOAuthAuthorization {
             owner_ref: "test-owner".into(),
+            credential_proxy_id: None,
             flow_id: started.flow_id,
             callback_url: SecretString::from(format!(
                 "http://127.0.0.1:1455/auth/callback?code=browser&state={}",

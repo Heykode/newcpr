@@ -1210,6 +1210,9 @@ impl AccountStore for PgAdminAccountStore {
         if command.excel_recovery.is_some() {
             changed_fields.push("excel_recovery".to_owned());
         }
+        if command.credential_proxy_id.is_some() {
+            changed_fields.push("credential_proxy_id".to_owned());
+        }
         if command.outbound_proxy.is_some() {
             changed_fields.push("outbound_proxy".to_owned());
         }
@@ -1257,6 +1260,7 @@ impl AccountStore for PgAdminAccountStore {
         let config_revision = self
             .accounts
             .batch_update_provider_accounts_admin(BatchUpdateProviderAccountsAdmin {
+                credential_proxy_id: command.credential_proxy_id,
                 pauses: Default::default(),
                 quota_settings: None,
                 auto_use_quota_credits: None,
@@ -1408,6 +1412,9 @@ impl AccountStore for PgAdminAccountStore {
                 changed_fields.push(field.to_owned());
             }
         }
+        if command.credential_proxy_id.is_some() {
+            changed_fields.push("credential_proxy_id".to_owned());
+        }
         if command.outbound_proxy.is_some() {
             changed_fields.push("outbound_proxy".to_owned());
         }
@@ -1417,6 +1424,7 @@ impl AccountStore for PgAdminAccountStore {
         let config_revision = self
             .accounts
             .batch_update_provider_accounts_admin(BatchUpdateProviderAccountsAdmin {
+                credential_proxy_id: command.credential_proxy_id,
                 pauses,
                 quota_settings: command.quota_settings,
                 auto_use_quota_credits: command.auto_use_quota_credits,

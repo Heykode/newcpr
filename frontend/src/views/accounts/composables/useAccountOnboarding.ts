@@ -43,11 +43,20 @@ export function useAccountOnboarding(options: {
   let submissionIds: string[] = []
   let submittedBatches = 0
   let oauthExpiryTimer: ReturnType<typeof setTimeout> | undefined
+  let oauthGeneration = 0
   function clearOAuthExpiry() {
     clearTimeout(oauthExpiryTimer)
     oauthExpiryTimer = undefined
   }
-  onScopeDispose(clearOAuthExpiry)
+  function invalidateOAuth() {
+    oauthGeneration++
+    clearOAuthExpiry()
+    createForm.value.oauthFlowId = ''
+    createForm.value.oauthAuthUrl = ''
+    createForm.value.oauthCallback = ''
+  }
+  onScopeDispose(invalidateOAuth)
+  watch(createModalOpen, invalidateOAuth, { flush: 'sync' })
   watch([createModalOpen, () => createForm.value.oauthFlowId], clearOAuthExpiry, { flush: 'sync' })
   // Modal-local credential material; never persist or log this comparison key.
   let submissionKey: string | undefined
@@ -157,7 +166,9 @@ export function useAccountOnboarding(options: {
         const proxyError = accountProxyError(createForm.value)
         if (!account && proxyError)
           throw new Error(proxyError)
+        const generation = ++oauthGeneration
         const result = await startAccountOAuth({
+          ...(!account && input.provider === 'openai' && createForm.value.credentialProxyId !== undefined ? { credentialProxyId: createForm.value.credentialProxyId } : {}),
           ...input,
           outboundProxyId: !account && createForm.value.proxyMode === 'proxy' ? createForm.value.proxyId.trim() : undefined,
           ...(account
@@ -167,6 +178,8 @@ export function useAccountOnboarding(options: {
             : {}),
         })
 
+        if (generation !== oauthGeneration)
+          return
         createForm.value = {
           ...createForm.value,
           oauthFlowId: result.flowId,
@@ -298,12 +311,10 @@ export function useAccountOnboarding(options: {
     [
       () => createForm.value.proxyMode,
       () => createForm.value.proxyMode === 'proxy' ? createForm.value.proxyId.trim() : '',
+      () => createForm.value.credentialProxyId ?? null,
+      () => createForm.value.provider,
     ],
-    () => {
-      createForm.value.oauthFlowId = ''
-      createForm.value.oauthAuthUrl = ''
-      createForm.value.oauthCallback = ''
-    },
+    invalidateOAuth,
     { flush: 'sync' },
   )
 

@@ -230,9 +230,9 @@ task cancellation and ordinary missing-entry/revision fences.
   cached credentials and reports invalid material without mutating storage. Preserve
   uncertain push states. Reimporting valid TOTP material resets the row through normal
   revision fencing; unknown legacy fields are no longer serialized on subsequent writes.
-- Relogin/maintenance resolves pooled accounts' current effective route from account management.
+- Relogin/maintenance resolves an explicit account `credential_proxy_id` first; when absent, it follows the current effective account route. This setting is independent of the ordinary request route.
   Unpooled material retains its imported proxy independently of enrollment/auto-push intent;
-  clearing legacy enrollment first copies that route. Explicit template route overrides apply
+  clearing legacy enrollment first copies both ordinary and maintenance routes. Explicit template route overrides apply
   only to new pushes; preserve inherits import, clear uses deployment default. Validate the
   effective reference before the push fence. Never fall back to direct after proxy failure.
   Known fixed IPv6 bindings pass through to the worker; rotating sessions use the existing
@@ -693,3 +693,17 @@ Wrong: refresh the revision after the user confirms, then submit; use HTTP 200 a
 that the new password/TOTP works; treat a Web session check as new OAuth credentials.
 Correct: submit the confirmed revision; persist and evaluate action-specific outcomes;
 make the OAuth code exchange explicit and preserve unknown states until reconciled.
+
+
+## Persistent Enrollment Plans and Credential Maintenance Egress
+
+- `credentialProxyId` is an independent managed-proxy reference in account import/edit/template settings. Omission preserves an existing binding; null follows the account route; an ID selects the maintenance proxy. Migration 0097 adds the account field without modifying existing migrations. Inference retains its existing route. A missing/disabled maintenance proxy fails explicitly; deleting it cannot silently switch maintenance to direct.
+- Every SQL projection consumed by `account_summary_from_row` must include `credential_proxy_id`, including account-group member and monitor queries. Validate these paths against isolated PostgreSQL when extending the shared account summary; nullable data does not permit a missing result column. Legacy full-row upgrade tests must assert the new null default separately while retaining equality for all pre-existing fields.
+- Login-library imports retain the maintenance route in private JSONB before the account exists. Relogin, authorization, devices, workspaces and security actions use one resolved maintenance route snapshot. OAuth code exchange and credential import token/PAT acquisition use this route independently of the account route saved to the pool. Existing-account credential rotations preserve local settings.
+- Provider refresh-token processing outside these maintenance/import operations retains its existing account route; do not silently change inference or background refresh behavior as part of this setting.
+- Authenticated `POST /api/admin/relogin/enrollment-plan` uses `{id,revision,mode,when?,newAccount?,template?}` with draft/now/scheduled/cancel modes. Store frozen account settings and administrator context in the entry JSONB. Safe list projection omits context and all login material. The plan save and audit share a revision-fenced transaction.
+- The existing single-instance worker activates due plans under its shared gate and capacity limits. Recheck pool absence before activation; reuse enrollment retry, workspace and create-only push fences. Pausing delays due plans. Explicit scheduled/now actions resume a manually paused login; saving a draft does not. Cancellation keeps a draft and prevents a later timer activation. Restart keeps schedules; interrupted pushes remain uncertain and are never blindly replayed.
+- Production UI must call the production endpoint without DEV gates. Development sample controls may remain isolated. A preview or stored mock state is not acceptance for persistent routing or scheduled execution; require service execution and real isolated PostgreSQL roundtrips as well as UI checks.
+- A committed matching pool write ends an outstanding schedule inside the pool transaction. Rolling back the pool write must also roll back completion. Removing the account does not reactivate it. Keep the current pool state separate from the last plan outcome; preserve the original deadline across an unsuccessful early attempt.
+- Library import returns the written IDs and revisions. Authenticated `POST /api/admin/relogin/import/plans` accepts those revisions, one mode (draft/now/scheduled), optional shared time and frozen new-account settings/template. Resolve settings once per batch and reuse single-account plan transitions under the shared gate and per-entry CAS/audit. Skip already pooled/changed/planned entries and return each outcome. Draft never queues; now queues all accepted entries; scheduled entries become eligible at the shared time. Actual starts obey the existing configured login concurrency, pause, retries and workspace policy. Closing the dialog does not write a plan. A displayed plan must not hide live operations or workspace selection on either layout.
+- New-account OAuth completion must match the maintenance route bound when the link was created. Reject a mismatch before exchanging the code; route changes in the form also discard late start responses. Reauthorization retains existing account settings.

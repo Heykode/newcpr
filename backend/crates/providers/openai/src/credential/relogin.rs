@@ -133,6 +133,7 @@ async fn prepare_credential(
         .ok_or_else(|| error("重登缺少凭据"))?;
     let prepared = provider
         .prepare_import(PrepareCredentialImport {
+            credential_outbound_proxy: None,
             default_outbound_proxy: request.outbound_proxy,
             document: ProviderDocument::new(OpaqueProviderData::new(document.clone())),
         })

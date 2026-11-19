@@ -1323,6 +1323,7 @@ async fn openai_admin_provider_rejects_unprepared_mutations_before_store_commit(
     let admin = bundle.admin_provider();
     let import_error = admin
         .prepare_import(PrepareCredentialImport {
+            credential_outbound_proxy: None,
             default_outbound_proxy: None,
             document: ProviderDocument::new(OpaqueProviderData::new(Map::new())),
         })
@@ -1365,6 +1366,7 @@ async fn initialized_provider_reports_a_safe_pat_format_error_before_network_acc
     let error = bundle
         .admin_provider()
         .prepare_import(PrepareCredentialImport {
+            credential_outbound_proxy: None,
             default_outbound_proxy: None,
             document: ProviderDocument::new(OpaqueProviderData::new(Map::from_iter([(
                 "accessToken".to_owned(),
@@ -2492,6 +2494,7 @@ fn provider_ports_with_catalog(
 fn account_record(account: &ProviderAccount) -> AccountRecord {
     let now = Utc::now();
     AccountRecord {
+        credential_proxy_id: None,
         quota_settings: Default::default(),
         quota_paused: Default::default(),
         auto_use_quota_credits: false,

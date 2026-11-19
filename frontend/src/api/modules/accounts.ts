@@ -597,6 +597,7 @@ interface AccountDeleteParams {
 }
 
 export interface AccountImportSettings {
+  credentialProxyId?: string | null
   purchaseCost?: AccountPurchaseUpdate
   excelRecovery?: ExcelRecoveryConfig
   clearOutboundProxy?: boolean
@@ -638,6 +639,7 @@ interface CreateAccountImportTaskParam {
 }
 
 interface AccountOAuthStartParam {
+  credentialProxyId?: string | null
   outboundProxyUrl?: string
   outboundProxyId?: string
   provider: string

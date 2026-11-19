@@ -106,9 +106,10 @@ impl ProxyStore for MemoryProxies {
         Ok(Revision::new(4).unwrap())
     }
 
-    async fn reserve_import(
+    async fn reserve_import_pair(
         &self,
         _: &str,
+        _: Option<&str>,
     ) -> AdminStoreResult<gateway_admin::ports::proxy::ProxyImportReservation> {
         Err(missing())
     }

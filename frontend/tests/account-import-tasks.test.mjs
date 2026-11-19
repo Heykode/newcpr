@@ -839,6 +839,30 @@ test('OAuth expiry warns only for the current open flow and clears timers on dis
   assert.equal(h.notifications.warnings.length, 1)
 })
 
+test('changing maintenance egress discards both the current OAuth callback and a late link', async (t) => {
+  let finish
+  const h = mountOnboarding(t, {
+    startOAuth: () => new Promise((resolve) => { finish = resolve }),
+  })
+  h.input('openai', 'oauth')
+  const form = h.state.createForm
+  form.value.credentialProxyId = 'route-a'
+  const late = h.state.handleAuthorizeOAuth()
+  form.value.credentialProxyId = 'route-b'
+  finish({ flowId: 'link-a', authorizationUrl: 'https://example.invalid/a' })
+  await late
+  assert.equal(form.value.oauthFlowId, '')
+  const fresh = h.state.handleAuthorizeOAuth()
+  finish({ flowId: 'link-b', authorizationUrl: 'https://example.invalid/b' })
+  await fresh
+  assert.equal(form.value.oauthFlowId, 'link-b')
+  form.value.oauthCallback = 'old callback'
+  form.value.credentialProxyId = null
+  await h.state.handleCreate()
+  assert.deepEqual([form.value.oauthFlowId, form.value.oauthAuthUrl, form.value.oauthCallback], ['', '', ''])
+  assert.equal(h.oauthCompletions.length, 0)
+})
+
 test('OAuth creation and existing-account relogin keep their original APIs and settings semantics', async (t) => {
   for (const provider of ['openai', 'xai']) {
     const h = mountOnboarding(t)

@@ -206,6 +206,7 @@ async fn openai_authorization_create_should_observe_initial_quota() {
     services
         .openai()
         .start_authorization(StartAuthorization {
+            credential_proxy_id: None,
             outbound_proxy: None,
             context: context("oauth-start-openai-create"),
             name: "new OpenAI credential".to_owned(),
@@ -262,6 +263,7 @@ async fn openai_authorization_create_should_remain_successful_when_initial_quota
     services
         .openai()
         .start_authorization(StartAuthorization {
+            credential_proxy_id: None,
             outbound_proxy: None,
             context: context("oauth-start-openai-quota-failure"),
             name: "new OpenAI credential".to_owned(),
@@ -304,6 +306,7 @@ async fn openai_authorization_store_failure_should_release_claim_for_retry() {
     services
         .openai()
         .start_authorization(StartAuthorization {
+            credential_proxy_id: None,
             outbound_proxy: None,
             context: context("oauth-store-retry"),
             name: "new OpenAI credential".to_owned(),
@@ -372,6 +375,7 @@ async fn openai_reauthorization_should_commit_after_credential_revision_advances
     services
         .openai()
         .start_authorization(StartAuthorization {
+            credential_proxy_id: None,
             outbound_proxy: None,
             context: context("oauth-start-openai"),
             name: "reauthorize".to_owned(),
@@ -477,6 +481,7 @@ async fn oauth_preparation_failure_stops_reauthorization_before_commit_or_succes
         services
             .openai()
             .start_authorization(StartAuthorization {
+                credential_proxy_id: None,
                 outbound_proxy: None,
                 context: context("failed-reauthorization"),
                 name: "reauthorize".to_owned(),
@@ -544,6 +549,7 @@ async fn reauthorization_with_import_settings_releases_claim_without_committing(
     services
         .openai()
         .start_authorization(StartAuthorization {
+            credential_proxy_id: None,
             outbound_proxy: None,
             context: context("reauthorization-settings"),
             name: "existing account".to_owned(),

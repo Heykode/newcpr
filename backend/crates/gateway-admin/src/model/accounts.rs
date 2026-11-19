@@ -49,6 +49,8 @@ pub struct AccountConcurrencyPage {
 /// 导入时统一应用的账号调度与分组设置；缺省时保留原有导入语义。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountImportSettings {
+    /// Absent preserves the binding; explicit null follows the account route.
+    pub credential_proxy_id: Option<Option<String>>,
     /// Internal template intent; None retains ordinary document import precedence.
     pub template_proxy_mode: Option<ImportTemplateProxyMode>,
     pub excel_recovery: Option<super::excel_recovery::ExcelRecoveryConfig>,
@@ -207,6 +209,7 @@ pub struct AccountTurnStateSlotStatus {
 /// 账号公共存储投影；Provider 专属字段不进入此结构。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountRecord {
+    pub credential_proxy_id: Option<String>,
     pub quota_paused: bool,
     pub quota_settings: gateway_core::account::AccountQuotaSettings,
     pub auto_use_quota_credits: bool,
@@ -437,6 +440,8 @@ pub struct AccountSummary {
 /// 账号可编辑事实的一次性替换命令。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UpdateAccount {
+    /// Absent preserves the binding; explicit null follows the account route.
+    pub credential_proxy_id: Option<Option<String>>,
     pub excel_recovery: Option<super::excel_recovery::ExcelRecoveryConfig>,
     pub purchase_cost: Option<super::account_purchase::AccountPurchaseUpdate>,
     pub egress_mode: Option<Option<gateway_core::provider_ports::egress::EgressMode>>,
@@ -470,6 +475,8 @@ pub struct AccountUpdateResult {
 /// 一批账号可编辑事实的一次性替换命令。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BatchUpdateAccounts {
+    /// Absent preserves the binding; explicit null follows the account route.
+    pub credential_proxy_id: Option<Option<String>>,
     pub quota_settings: Option<gateway_core::account::AccountQuotaSettings>,
     pub auto_use_quota_credits: Option<bool>,
     pub excel_recovery: Option<super::excel_recovery::ExcelRecoveryConfig>,

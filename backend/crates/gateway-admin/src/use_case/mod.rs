@@ -152,13 +152,14 @@ async fn pending_authorization(
 ) -> Result<PendingAuthorizationMutation, AdminError> {
     let proxy;
     let mut proxy_id = None;
+    let mut credential_proxy_id = command.credential_proxy_id.clone();
     let target = match &command.reauthorization {
         Some(account_id) => {
-            proxy = required_credential(accounts, provider_kind, account_id, resource)
+            let account = required_credential(accounts, provider_kind, account_id, resource)
                 .await?
-                .credential
-                .effective_outbound_proxy()
-                .cloned();
+                .credential;
+            credential_proxy_id = account.credential_proxy_id.clone();
+            proxy = account.effective_outbound_proxy().cloned();
             AuthorizationMutationTarget::Reauthorize {
                 account_id: account_id.clone(),
             }
@@ -188,6 +189,7 @@ async fn pending_authorization(
             }
         }
     };
+    let credential_proxy = import_proxy_binding(proxies, credential_proxy_id.as_deref()).await?;
     Ok(PendingAuthorizationMutation::new(
         provider_kind.clone(),
         target,
@@ -196,6 +198,8 @@ async fn pending_authorization(
         ),
     )
     .with_outbound_proxy(proxy)
+    .with_credential_proxy(credential_proxy.map(|reservation| reservation.binding.proxy))
+    .with_credential_proxy_id(credential_proxy_id)
     .with_outbound_proxy_id(proxy_id))
 }
 

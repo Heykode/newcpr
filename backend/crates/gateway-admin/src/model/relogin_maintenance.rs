@@ -266,6 +266,8 @@ pub struct MaterialUpdate {
 
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub struct ReloginImportEgress {
+    #[serde(default)]
+    pub credential_proxy_id: Option<String>,
     pub proxy_id: Option<String>,
     pub mode: Option<Option<gateway_core::provider_ports::egress::EgressMode>>,
 }

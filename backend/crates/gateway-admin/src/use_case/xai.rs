@@ -95,6 +95,7 @@ impl XaiService for DefaultXaiService {
         let prepared = self
             .provider
             .prepare_import(PrepareCredentialImport {
+                credential_outbound_proxy: None,
                 default_outbound_proxy: outbound_proxy
                     .as_ref()
                     .map(|binding| binding.proxy.clone()),

@@ -636,6 +636,7 @@ impl Harness {
             .provider
             .admin_provider()
             .prepare_import(PrepareCredentialImport {
+                credential_outbound_proxy: None,
                 default_outbound_proxy: None,
                 document: document(access, id),
             })

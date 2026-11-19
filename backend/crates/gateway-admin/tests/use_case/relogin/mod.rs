@@ -30,6 +30,7 @@ use std::{
 };
 
 mod enrollment;
+mod enrollment_plan;
 mod maintenance;
 mod recovery;
 mod workspace;
@@ -52,6 +53,15 @@ fn conflict() -> AdminStoreError {
 
 #[async_trait]
 impl ReloginStore for MemoryStore {
+    async fn save_enrollment_plan(
+        &self,
+        entry: &ReloginEntry,
+        expected: u64,
+        _: &gateway_admin::model::MutationContext,
+    ) -> AdminStoreResult<()> {
+        self.save(entry, Some(expected)).await
+    }
+
     async fn record_maintenance(
         &self,
         _id: &str,
@@ -378,6 +388,7 @@ fn credential() -> ReloginCredential {
 
 pub(super) fn template_config() -> ReloginTemplateConfig {
     ReloginTemplateConfig {
+        credential_proxy_id: None,
         excel_recovery: None,
         model_access: None,
         preserve_outbound_proxy: false,

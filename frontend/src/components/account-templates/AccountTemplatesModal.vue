@@ -14,7 +14,6 @@ import { toast } from '@/components/base/BaseToast'
 import { useAccountGroupCatalog } from '@/composables/useAccountGroupCatalog'
 import { errorMessage } from '@/utils/async'
 import AccountSettingsFields from '@/views/accounts/components/AccountSettingsFields.vue'
-import { enrollmentPreview } from '@/views/relogin/enrollment-plan'
 import { templateConfig, templateForm } from './template-form'
 
 const open = defineModel<boolean>({ required: true })
@@ -151,7 +150,7 @@ onScopeDispose(() => {
         v-model:proxy-mode="form.proxyMode"
         v-model:proxy-id="form.proxyId"
         v-model:egress-mode="form.egressMode"
-        :credential-egress="enrollmentPreview"
+        credential-egress
         template-egress
         request-proxy-available
         model-access-available

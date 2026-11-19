@@ -31,17 +31,58 @@ fn conflict() -> AdminStoreError {
     AdminStoreError::new(AdminStoreErrorKind::Conflict, "relogin", "entry changed")
 }
 
+// All account creation paths hold the account-egress fence. Settle the saved
+// schedule before the pool transaction commits, even if the account is removed
+// before the next worker tick. Do not invalidate an in-flight operation's CAS.
+pub(super) async fn settle_pool_enrollment(
+    connection: &mut PgConnection,
+    account_ids: &[String],
+) -> crate::StoreResult<()> {
+    sqlx::query(
+        "with matched as (
+           select r.id, r.revision + case when r.material->>'status'='pushing'
+               or (r.material->>'enrollment' is null and (r.material->>'status'='running'
+               or r.material#>>'{maintenance,view,state}'='running')) then 0 else 1 end as rev,
+               r.material->>'enrollment' is not null and r.material->>'status' not in ('pushing','uncertain') as stop_job
+           from account_relogin_entries r
+           where lower(r.email) in (select lower(email) from provider_accounts where id=any($1))
+           and (r.material#>>'{enrollment_plan,state}' = 'scheduled' or
+                (r.material#>>'{enrollment_plan,state}'='running' and r.material->>'status'<>'pushing'))
+           and exists (select 1 from provider_accounts a where a.id = any($1)
+              and a.provider_kind='openai' and a.authentication_kind='oauth'
+              and lower(a.email)=lower(r.email)
+              and coalesce(r.material#>>'{target,workspace_id}',r.material->>'selected_workspace_id',
+                   r.material->>'preferred_workspace_id',a.upstream_account_id) is not distinct from a.upstream_account_id
+              and (r.material#>>'{target,user_id}' is null or r.material#>>'{target,user_id}'=a.upstream_user_id)
+           ) for update of r
+         ) update account_relogin_entries r set revision=m.rev,
+           material=jsonb_set(jsonb_set(jsonb_set(r.material,'{revision}',to_jsonb(m.rev)),
+              '{enrollment_plan,state}','\"completed_early\"'),'{enrollment_plan,when}','null')
+              || case when m.stop_job then '{\"enrollment\":null,\"next_attempt_at\":null,\"status\":\"pending\",\"message\":\"入池安排已完成\"}'::jsonb else '{}'::jsonb end
+           from matched m where r.id=m.id",
+    )
+    .bind(account_ids)
+    .execute(connection)
+    .await
+    .map_err(|err| crate::postgres_unavailable("settle enrollment schedule").with_source(err))?;
+    Ok(())
+}
+
 async fn save_row(
     connection: &mut PgConnection,
     entry: &ReloginEntry,
     expected: Option<u64>,
+    explicit_plan: bool,
 ) -> AdminStoreResult<()> {
     let material = serde_json::to_value(entry).map_err(unavailable)?;
     let revision = i64::try_from(entry.revision).map_err(unavailable)?;
     let result = if let Some(expected) = expected {
-        sqlx::query("update account_relogin_entries set revision=$2, material=$3 where id=$1 and revision=$4 and email=$5")
+        sqlx::query("update account_relogin_entries set revision=$2, material=case
+            when not $6 and material#>>'{enrollment_plan,state}'='completed_early'
+            then jsonb_set($3,'{enrollment_plan}',material->'enrollment_plan')
+            else $3 end where id=$1 and revision=$4 and email=$5")
             .bind(&entry.id).bind(revision).bind(material)
-            .bind(i64::try_from(expected).map_err(unavailable)?).bind(&entry.email)
+            .bind(i64::try_from(expected).map_err(unavailable)?).bind(&entry.email).bind(explicit_plan)
             .execute(&mut *connection).await
     } else {
         sqlx::query("insert into account_relogin_entries (id,email,revision,material) values ($1,$2,$3,$4) on conflict do nothing")
@@ -72,6 +113,41 @@ async fn save_row(
 
 #[async_trait]
 impl ReloginStore for PgReloginStore {
+    async fn save_enrollment_plan(
+        &self,
+        entry: &ReloginEntry,
+        expected: u64,
+        context: &gateway_admin::model::MutationContext,
+    ) -> AdminStoreResult<()> {
+        let mut transaction = self.pool.begin().await.map_err(unavailable)?;
+        // Serialize the absence check with pool insert/import. A UI snapshot
+        // taken before the pool commit must not install a new stale schedule.
+        sqlx::query("select id from provider_egress_settings where id=1 for share")
+            .execute(&mut *transaction)
+            .await
+            .map_err(unavailable)?;
+        let present: bool = sqlx::query_scalar("select exists(select 1 from provider_accounts
+            where provider_kind='openai' and authentication_kind='oauth' and lower(email)=lower($1))")
+            .bind(&entry.email).fetch_one(&mut *transaction).await.map_err(unavailable)?;
+        if present {
+            return Err(conflict());
+        }
+        save_row(&mut transaction, entry, Some(expected), true).await?;
+        super::admin_security_audit::insert_admin_audit_event(
+            &mut transaction,
+            crate::mutation_audit(
+                context,
+                "arrange_relogin_enrollment",
+                "relogin_entry",
+                &entry.id,
+                vec!["enrollment_plan".to_owned()],
+            ),
+        )
+        .await
+        .map_err(unavailable)?;
+        transaction.commit().await.map_err(unavailable)
+    }
+
     async fn record_maintenance(
         &self,
         id: &str,
@@ -269,6 +345,17 @@ impl ReloginStore for PgReloginStore {
                 "模板中的分组已不存在，请编辑模板",
             ));
         }
+        if let Some(Some(id)) = &config.credential_proxy_id {
+            let valid: bool = sqlx::query_scalar("select exists(select 1 from outbound_proxies where id=$1 and enabled and last_test_success=true)")
+                .bind(id).fetch_one(&self.pool).await.map_err(unavailable)?;
+            if !valid {
+                return Err(AdminStoreError::new(
+                    AdminStoreErrorKind::Invalid,
+                    "relogin templates",
+                    "凭据维护出口不存在、已停用或未通过测试",
+                ));
+            }
+        }
         if let Some(id) = &config.outbound_proxy_id {
             let valid: bool = sqlx::query_scalar("select exists(select 1 from outbound_proxies where id=$1 and last_test_success=true)")
                 .bind(id).fetch_one(&self.pool).await.map_err(unavailable)?;
@@ -298,13 +385,13 @@ impl ReloginStore for PgReloginStore {
     }
     async fn save(&self, entry: &ReloginEntry, expected: Option<u64>) -> AdminStoreResult<()> {
         let mut transaction = self.pool.begin().await.map_err(unavailable)?;
-        save_row(&mut transaction, entry, expected).await?;
+        save_row(&mut transaction, entry, expected, false).await?;
         transaction.commit().await.map_err(unavailable)
     }
     async fn save_batch(&self, entries: &[(ReloginEntry, Option<u64>)]) -> AdminStoreResult<()> {
         let mut transaction = self.pool.begin().await.map_err(unavailable)?;
         for (entry, expected) in entries {
-            save_row(&mut transaction, entry, *expected).await?;
+            save_row(&mut transaction, entry, *expected, false).await?;
         }
         transaction.commit().await.map_err(unavailable)
     }

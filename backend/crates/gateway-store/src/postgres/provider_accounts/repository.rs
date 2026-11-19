@@ -202,7 +202,7 @@ impl PgProviderAccountRepository {
                     coalesce((select enabled from outbound_proxies where outbound_proxies.id = provider_accounts.outbound_proxy_id), true) as outbound_proxy_enabled,
             coalesce((select max_websocket_connections from outbound_proxies where outbound_proxies.id = provider_accounts.outbound_proxy_id), 0) as max_websocket_connections,
             (select case when auto_location then detected_location_json -> 'location' else request_location_json end from outbound_proxies where outbound_proxies.id = provider_accounts.outbound_proxy_id and enabled) as request_location_json,
-                    outbound_proxy_id, outbound_proxy_url, id, provider_kind, name, custom_name, email, upstream_user_id,
+                    credential_proxy_id, outbound_proxy_id, outbound_proxy_url, id, provider_kind, name, custom_name, email, upstream_user_id,
                     upstream_account_id, plan_type, authentication_kind, credential_revision, turn_state_binding_revision, has_refresh_token,
                     access_token_expires_at, next_refresh_at, enabled, turn_state_injection_enabled, responses_upstream, excel_models, excel_models_follow_global, excel_cache_creation_as_input, excel_ignore_encrypted_content, request_proxy_source, excel_auto_disable_on_403, excel_403_action, excel_auto_disabled_at, excel_403_warning_at, excel_mode_disabled_at,
             case when excel_models_follow_global then (select excel_default_models from runtime_settings where id = 1) else excel_models end as effective_excel_models, concurrency_limit, weight, model_access_json, credential_state,
@@ -359,6 +359,11 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
         .execute(&mut *transaction)
         .await
         .map_err(|error| postgres_unavailable("insert provider account").with_source(error))?;
+        super::super::relogin::settle_pool_enrollment(
+            &mut transaction,
+            std::slice::from_ref(&account.id),
+        )
+        .await?;
         super::super::synchronize_account_egress_in_transaction(
             &mut transaction,
             std::slice::from_ref(&account.id),
@@ -787,6 +792,7 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
                 self.retain_turn_state(&mut transaction, state_owner)
                     .await?;
             }
+            super::super::relogin::settle_pool_enrollment(&mut transaction, &account_ids).await?;
             if let Some(settings) = &command.settings {
                 if settings.clear_outbound_proxy && command.outbound_proxy.is_some() {
                     return Err(invalid(
@@ -824,6 +830,7 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
                     &mut transaction,
                     &unique_ids,
                     AccountSchedulingPatch {
+                        credential_proxy_id: settings.credential_proxy_id.as_ref(),
                         egress_mode: settings.egress_mode,
                         enabled: Some(settings.enabled),
                         explicit_scheduling_intent: true,
@@ -1107,6 +1114,7 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
                 &mut transaction,
                 &command.account_ids,
                 AccountSchedulingPatch {
+                    credential_proxy_id: command.credential_proxy_id.as_ref(),
                     egress_mode: command.egress_mode,
                     enabled: command.enabled,
                     explicit_scheduling_intent: command.explicit_scheduling_intent,
@@ -1533,6 +1541,7 @@ pub(crate) async fn apply_account_template_in_transaction(
         transaction,
         &ids,
         AccountSchedulingPatch {
+            credential_proxy_id: settings.credential_proxy_id.as_ref(),
             egress_mode: settings.egress_mode,
             enabled: Some(settings.enabled),
             explicit_scheduling_intent: false,
@@ -1559,6 +1568,7 @@ pub(crate) async fn apply_account_template_in_transaction(
 }
 
 struct AccountSchedulingPatch<'a> {
+    credential_proxy_id: Option<&'a Option<String>>,
     egress_mode: Option<Option<gateway_core::provider_ports::egress::EgressMode>>,
     enabled: Option<bool>,
     explicit_scheduling_intent: bool,
@@ -1583,6 +1593,7 @@ async fn update_provider_accounts_scheduling_in_transaction(
     patch: AccountSchedulingPatch<'_>,
 ) -> StoreResult<()> {
     let AccountSchedulingPatch {
+        credential_proxy_id,
         egress_mode,
         enabled,
         explicit_scheduling_intent,
@@ -1658,6 +1669,27 @@ async fn update_provider_accounts_scheduling_in_transaction(
                 return Err(invalid("request proxy pools require an OpenAI account"));
             }
         }
+    }
+    if let Some(Some(id)) = credential_proxy_id {
+        super::super::proxies::resolve_proxy_selection(
+            transaction,
+            &gateway_admin::model::proxies::AccountProxySelection::Saved(id.clone()),
+        )
+        .await?;
+        let unsupported: bool = sqlx::query_scalar("select exists(select 1 from provider_accounts where id = any($1::text[]) and provider_kind <> 'openai')")
+            .bind(account_ids).fetch_one(&mut **transaction).await
+            .map_err(|error| postgres_unavailable("validate maintenance egress provider").with_source(error))?;
+        if unsupported {
+            return Err(invalid("credential maintenance egress requires OpenAI"));
+        }
+    }
+    if let Some(id) = credential_proxy_id {
+        sqlx::query("update provider_accounts set credential_proxy_id=$2 where id=any($1::text[])")
+            .bind(account_ids)
+            .bind(id)
+            .execute(&mut **transaction)
+            .await
+            .map_err(|error| postgres_unavailable("set maintenance egress").with_source(error))?;
     }
     let (proxy_id, proxy) = match outbound_proxy {
         Some(selection) => {
