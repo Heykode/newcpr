@@ -30,6 +30,7 @@ async function main() {
     hasTotp: true,
     automatic: true,
     status: 'awaiting_workspace',
+    enrollmentPlan: { state: 'draft', when: null },
     message: '有多个同级工作区，请选择后继续',
     workspaceChoices: choices,
     workspaceMode: 'highest',
@@ -103,6 +104,12 @@ async function main() {
   }
   try {
     await page.goto(`${process.env.QA_BASE_URL || 'http://127.0.0.1:5245'}/relogin`)
+    await page.setViewportSize({ width: 390, height: 900 })
+    const mobileRow = page.locator('[aria-label="重登账号 select@example.invalid"]')
+    await mobileRow.getByText('已存草稿', { exact: true }).waitFor()
+    await mobileRow.getByRole('button', { name: '选择工作区并继续' }).click()
+    await close()
+    await page.setViewportSize({ width: 1440, height: 1000 })
     await open('select')
     assert.ok(await submit().isDisabled(), 'no candidate is implicitly selected')
     assert.equal(await dialog.getByRole('textbox').count(), 0, 'no free-form workspace ID')
@@ -137,7 +144,7 @@ async function main() {
       path: '/api/admin/relogin/workspace/resume',
       body: { id: 'select', revision: 7, workspaceId: longId },
     }])
-    assert.ok(await row('select').getByRole('button', { name: '推送', exact: true }).isDisabled())
+    assert.ok(await row('select').getByRole('button', { name: '查看安排', exact: true }).isDisabled())
 
     // A background list refresh must not silently replace the confirmation version.
     await open('stale')

@@ -178,9 +178,10 @@ impl ProxyStore for TestProxies {
         Err(super::unavailable("proxy"))
     }
 
-    async fn reserve_import(
+    async fn reserve_import_pair(
         &self,
         id: &str,
+        additional: Option<&str>,
     ) -> AdminStoreResult<gateway_admin::ports::proxy::ProxyImportReservation> {
         let events = self
             .events
@@ -188,6 +189,19 @@ impl ProxyStore for TestProxies {
             .ok_or_else(|| super::unavailable("proxy"))?;
         events.lock().unwrap().push("proxy.reserve");
         Ok(gateway_admin::ports::proxy::ProxyImportReservation {
+            additional: match additional {
+                Some(id) => {
+                    let record = self.get(id).await?;
+                    if !record.enabled {
+                        return Err(super::unavailable("proxy"));
+                    }
+                    Some(ImportProxyBinding {
+                        id: id.to_owned(),
+                        proxy: record.proxy,
+                    })
+                }
+                None => None,
+            },
             binding: ImportProxyBinding {
                 id: id.to_owned(),
                 proxy: if self.records.is_some() {

@@ -413,7 +413,9 @@ impl ReloginEntry {
     }
 
     pub fn clear_enrollment(&mut self) {
-        if let Some(plan) = self.enrollment_plan.as_mut() {
+        if let Some(plan) = self.enrollment_plan.as_mut()
+            && plan.state == EnrollmentPlanState::Running
+        {
             plan.state = if self.synced_at.is_some() {
                 EnrollmentPlanState::Done
             } else {
@@ -526,6 +528,7 @@ pub enum EnrollmentPlanState {
     Running,
     Failed,
     Done,
+    CompletedEarly,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]

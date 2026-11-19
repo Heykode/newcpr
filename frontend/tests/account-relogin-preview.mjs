@@ -98,8 +98,8 @@ async function main() {
                 if (raw.length > 65536)
                   throw new Error('示例设置过大')
               }
-              enrollment.command(JSON.parse(raw))
-              response.end(JSON.stringify({ code: 200, data: null, message: 'ok' }))
+              const data = enrollment.command(JSON.parse(raw))
+              response.end(JSON.stringify({ code: 200, data: data ?? null, message: 'ok' }))
             }
             catch (error) { response.writeHead(409).end(JSON.stringify({ message: error.message })) }
             return
@@ -229,7 +229,10 @@ async function main() {
             for await (const chunk of request)
               raw += chunk
             const body = JSON.parse(raw)
-            if (path.endsWith('/templates/save')) {
+            if (enrollment && path === '/api/admin/relogin/import/drafts') {
+              data = enrollment.draftSamples(body)
+            }
+            else if (path.endsWith('/templates/save')) {
               const index = templates.findIndex(row => row.id === body.selection?.id)
               if (body.selection && (index < 0 || templates[index].revision !== body.selection.revision)) {
                 status = 409

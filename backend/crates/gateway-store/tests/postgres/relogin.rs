@@ -91,6 +91,77 @@ async fn enrollment_plan_survives_reopening_and_audit_is_atomic_with_revision_up
     .await
     .unwrap();
     assert_eq!(audit_count, 1);
+    // A pool transaction which rolls back or imports the wrong workspace must
+    // not consume the plan. A committed import must survive immediate removal.
+    let mut active = reopened.entries().await.unwrap().remove(0);
+    active.preferred_workspace_id = Some("intended-workspace".into());
+    let expected = active.revision;
+    active.revision += 1;
+    reopened.save(&active, Some(expected)).await.unwrap();
+    let repo = PgProviderAccountRepository::new(database.pool.clone());
+    let mut other = account("plan-other", "other-user");
+    other.email = Some(active.email.clone());
+    other.upstream_account_id = Some("other-workspace".into());
+    repo.insert_provider_account(other).await.unwrap();
+    assert_eq!(
+        reopened.entries().await.unwrap()[0]
+            .enrollment_plan
+            .as_ref()
+            .unwrap()
+            .state,
+        EnrollmentPlanState::Scheduled
+    );
+    let pool_command = |invalid: bool| {
+        let mut intended = account("plan-matched", "matched-user");
+        intended.email = Some(active.email.to_ascii_uppercase());
+        intended.upstream_account_id = active.preferred_workspace_id.clone();
+        let mut settings = active
+            .enrollment_plan
+            .as_ref()
+            .unwrap()
+            .enrollment
+            .settings()
+            .unwrap();
+        settings.credential_proxy_id = None;
+        if invalid {
+            settings.group_ids.push(
+                gateway_core::routing::AccountGroupId::new("grp_00000000000000000000000000000137")
+                    .unwrap(),
+            );
+        }
+        ImportProviderAccounts {
+            settings: Some(settings),
+            outbound_proxy: None,
+            scope: ProviderAccountAdminScope {
+                provider_kind: "openai".into(),
+            },
+            accounts: vec![intended],
+            audit: audit("plan-pool", "import", "provider_accounts"),
+        }
+    };
+    assert!(
+        repo.import_provider_accounts(pool_command(true))
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        reopened.entries().await.unwrap()[0]
+            .enrollment_plan
+            .as_ref()
+            .unwrap()
+            .state,
+        EnrollmentPlanState::Scheduled
+    );
+    repo.import_provider_accounts(pool_command(false))
+        .await
+        .unwrap();
+    repo.delete_provider_account("plan-matched").await.unwrap();
+    let completed = reopened.entries().await.unwrap().remove(0);
+    let settled = completed.enrollment_plan.as_ref().unwrap();
+    assert_eq!(settled.state, EnrollmentPlanState::CompletedEarly);
+    assert!(settled.when.is_none());
+    // A stale due-worker write cannot resurrect the schedule.
+    assert!(reopened.save(&active, Some(active.revision)).await.is_err());
     database.close().await;
 }
 

@@ -41,7 +41,7 @@ export function separateCredentialExit(row: EnrollmentEntry) {
   const label = row.credentialEgress?.label
   return label !== row.egress?.label ? label : undefined
 }
-export const enrollmentLabels = { draft: '已存草稿', scheduled: '已定时', queued: '已排队', running: '入池中', failed: '执行失败', verification: '待人工处理', uncertain: '推送待确认', done: '已入池' }
+export const enrollmentLabels = { draft: '已存草稿', scheduled: '已定时', queued: '已排队', running: '入池中', failed: '执行失败', verification: '待人工处理', uncertain: '推送待确认', done: '入池安排已完成', completed_early: '已提前完成' }
 
 export function canArrange(row: EnrollmentEntry) {
   return row.poolAccountIds.length === 0 && row.poolStatus === 'absent'
@@ -60,4 +60,5 @@ export async function previewPlanCommand(body: Record<string, unknown>) {
   const data = await result.json()
   if (!result.ok)
     throw new Error(data.message || '操作失败，请刷新列表')
+  return data.data?.revisions as Record<string, number> | undefined
 }

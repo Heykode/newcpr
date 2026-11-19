@@ -13,7 +13,14 @@ use crate::model::{
 #[async_trait]
 pub trait ProxyStore: Send + Sync {
     /// 在凭据交换到提交期间保护选定代理的连接配置和测试结果。
-    async fn reserve_import(&self, id: &str) -> AdminStoreResult<ProxyImportReservation>;
+    async fn reserve_import(&self, id: &str) -> AdminStoreResult<ProxyImportReservation> {
+        self.reserve_import_pair(id, None).await
+    }
+    async fn reserve_import_pair(
+        &self,
+        id: &str,
+        additional: Option<&str>,
+    ) -> AdminStoreResult<ProxyImportReservation>;
     async fn list(&self, query: ProxyListQuery) -> AdminStoreResult<ProxyPage>;
     async fn list_accounts(
         &self,
@@ -57,6 +64,7 @@ pub trait ProxyImportGuard: Send + Sync {}
 
 pub struct ProxyImportReservation {
     pub binding: ImportProxyBinding,
+    pub additional: Option<ImportProxyBinding>,
     pub guard: Box<dyn ProxyImportGuard>,
 }
 

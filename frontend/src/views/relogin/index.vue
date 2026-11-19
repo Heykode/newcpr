@@ -65,6 +65,7 @@ import { matchesPool, processingStatus, recoveryCountdown, recoveryLabels, relog
 
 const entries = shallowRef<EnrollmentEntry[]>([])
 const arranging = shallowRef<EnrollmentEntry | null>(null)
+const importedDrafts = shallowRef<Record<string, number> | null>(null)
 const maintenanceId = shallowRef('')
 const maintenanceOpen = shallowRef(false)
 const maintenanceTab = shallowRef('session')
@@ -409,6 +410,13 @@ function saveImport() {
     importText.value = ''
     page.value = 1
     toast.success(`已导入 ${result.imported} 个账号`)
+    if (result.revisions && Object.keys(result.revisions).length && !disposed)
+      importedDrafts.value = result.revisions
+  })
+}
+function addSampleDrafts() {
+  return action(async () => {
+    importedDrafts.value = await previewPlanCommand({ mode: 'sample' }) ?? null
   })
 }
 const confirming = shallowRef(false)
@@ -561,7 +569,7 @@ onBeforeUnmount(() => {
         <BaseIconButton label="维护设置" :disabled="busy" @click="openRetrySettings">
           <Settings2 class="size-4" />
         </BaseIconButton>
-        <BaseButton v-if="enrollmentPreview" variant="primary" :disabled="busy" @click="action(() => previewPlanCommand({ mode: 'sample' }))">
+        <BaseButton v-if="enrollmentPreview" variant="primary" :disabled="busy" @click="addSampleDrafts">
           添加示例资料
         </BaseButton>
         <BaseButton v-else variant="primary" :disabled="busy" @click="importing = true">
@@ -646,6 +654,7 @@ onBeforeUnmount(() => {
     <ReloginMaintenanceModal v-model="maintenanceOpen" :entry="maintenanceEntry" :initial-tab="maintenanceTab" @changed="reload(true)" @credentials="credentialsEntry = maintenanceEntry; credentialsOpen = true" />
     <ReloginHistoryModal v-model="historyOpen" :entry="historyEntry" @after-leave="!historyOpen && (historyEntry = null)" />
     <EnrollmentPlanModal v-if="arranging" :key="arranging.id" :row="arranging" :paused="paused" @close="arranging = null" @changed="reload(true)" />
+    <EnrollmentPlanModal v-if="importedDrafts" :revisions="importedDrafts" :paused="paused" @close="importedDrafts = null" @changed="reload(true)" />
     <ReloginCredentialsModal v-model="credentialsOpen" :entry="credentialsEntry" @changed="reload(true)" @after-leave="!credentialsOpen && (credentialsEntry = null)" />
     <section v-if="!mobile" class="flex min-h-48 min-w-0 flex-1 flex-col overflow-hidden rounded-cp-card border border-cp-border-secondary bg-cp-bg-container">
       <BaseTable ref="table" class="relogin-table min-h-0 flex-1" :columns="columns" :rows="visible" :selected-row-keys="[...selected]" :loading="loading && !entries.length" column-layout="proportional" :empty-text="t('appearance.preview.components.noMatchingAccountYet')" @mousedown="onMouseDown">
@@ -704,7 +713,7 @@ onBeforeUnmount(() => {
         </template>
         <template #status="{ row }">
           <EnrollmentPlanStatus v-if="row.enrollmentPlan" :row="row" />
-          <template v-if="!row.enrollmentPlan || !['draft', 'scheduled'].includes(row.enrollmentPlan.state)">
+          <template v-if="row.status !== 'pending' || recentOperationAt(row) || !row.enrollmentPlan || !['draft', 'scheduled'].includes(row.enrollmentPlan.state)">
             <button type="button" class="mb-1 block text-left font-medium text-cp-link hover:underline" @click="historyEntry = row; historyOpen = true">
               {{ recentOperation(row) }}
             </button>
@@ -747,7 +756,7 @@ onBeforeUnmount(() => {
               </template>
               <template #default="{ close }">
                 <div class="min-w-40 p-1">
-                  <BaseMenuItem v-if="canArrange(row) && canPush(row)" :disabled="busy || row.enrollmentPlan?.state === 'scheduled'" @click="close(); confirm('push', [row.id])">
+                  <BaseMenuItem v-if="canArrange(row) && canPush(row)" :disabled="busy" @click="close(); confirm('push', [row.id])">
                     推送已有凭据
                   </BaseMenuItem>
                   <BaseMenuItem v-if="canArrange(row)" :disabled="!!queueDisabledReason(row, busy, paused) || row.enrollmentPlan?.state === 'scheduled'" @click="close(); queue([row.id])">

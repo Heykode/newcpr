@@ -60,6 +60,14 @@ struct EnrollmentPlanRequest {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ImportedDraftsRequest {
+    revisions: std::collections::BTreeMap<String, u64>,
+    new_account: NewAccountForm,
+    template: Option<ReloginTemplateSelection>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ExportRequest {
     ids: Vec<String>,
     format: gateway_admin::model::relogin::ReloginExportFormat,
@@ -154,6 +162,7 @@ where
         .route("/api/admin/relogin/history", post(history::<S>))
         .route("/api/admin/relogin/totp", post(totp::<S>))
         .route("/api/admin/relogin/import", post(import::<S>))
+        .route("/api/admin/relogin/import/drafts", post(import_drafts::<S>))
         .route("/api/admin/relogin/enroll", post(enroll::<S>))
         .route(
             "/api/admin/relogin/enrollment-plan",
@@ -243,18 +252,7 @@ where
     let context = auth.context().mutation_context();
     let enrollment = request
         .new_account
-        .map(|form| {
-            let settings = form.settings.into_settings().map_err(|_| {
-                AdminError::invalid_request(StatusCode::BAD_REQUEST, "账号入池设置不合法")
-            })?;
-            gateway_admin::model::relogin::ReloginEnrollment::new(
-                settings,
-                form.outbound_proxy_id,
-                context.clone(),
-            )
-            .map(|value| value.with_quality_template(form.quality_template))
-            .map_err(map_admin_service_error)
-        })
+        .map(|form| form.enrollment(&context))
         .transpose()?;
     state
         .admin_services()
@@ -273,6 +271,50 @@ where
         .await
         .map_err(map_admin_service_error)?;
     Ok(AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(())))
+}
+
+impl NewAccountForm {
+    fn enrollment(
+        self,
+        context: &gateway_admin::model::MutationContext,
+    ) -> Result<gateway_admin::model::relogin::ReloginEnrollment, AdminError> {
+        let settings = self.settings.into_settings().map_err(|_| {
+            AdminError::invalid_request(StatusCode::BAD_REQUEST, "账号入池设置不合法")
+        })?;
+        gateway_admin::model::relogin::ReloginEnrollment::new(
+            settings,
+            self.outbound_proxy_id,
+            context.clone(),
+        )
+        .map(|value| value.with_quality_template(self.quality_template))
+        .map_err(map_admin_service_error)
+    }
+}
+
+async fn import_drafts<S>(
+    auth: AdminAuth,
+    State(state): State<S>,
+    AdminJson(request): AdminJson<ImportedDraftsRequest>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: AdminSessionState + Send + Sync,
+{
+    let context = auth.context().mutation_context();
+    let result = state
+        .admin_services()
+        .relogin()
+        .draft_imports(
+            request.revisions,
+            request.new_account.enrollment(&context)?,
+            request.template,
+            &context,
+        )
+        .await
+        .map_err(map_admin_service_error)?;
+    Ok(AdminResponse::new(
+        StatusCode::OK,
+        AdminEnvelope::ok(result),
+    ))
 }
 
 async fn enroll<S>(
@@ -404,7 +446,7 @@ async fn import<S>(
 where
     S: AdminSessionState + Send + Sync,
 {
-    let count = state
+    let revisions = state
         .admin_services()
         .relogin()
         .import(&request.text, request.replace_existing)
@@ -412,7 +454,7 @@ where
         .map_err(map_admin_service_error)?;
     Ok(AdminResponse::new(
         StatusCode::OK,
-        AdminEnvelope::ok(serde_json::json!({"imported": count})),
+        AdminEnvelope::ok(serde_json::json!({"imported": revisions.len(), "revisions": revisions})),
     ))
 }
 

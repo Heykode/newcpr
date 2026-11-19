@@ -3,10 +3,11 @@ import type { EnrollmentEntry } from '../enrollment-plan'
 import { CalendarClock, Play, Save } from '@lucide/vue'
 import { computed, onMounted, ref, shallowRef, watch } from 'vue'
 import { getQualityTemplates } from '@/api/modules/quality-ops'
-import { saveEnrollmentPlan } from '@/api/modules/relogin'
+import { saveEnrollmentPlan, saveImportedDrafts } from '@/api/modules/relogin'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseModal from '@/components/base/BaseModal/index.vue'
 import BaseSegmented from '@/components/base/BaseSegmented.vue'
+import { toast } from '@/components/base/BaseToast'
 import { useAccountGroupCatalog } from '@/composables/useAccountGroupCatalog'
 import { errorMessage } from '@/utils/async'
 import { formatDateTime } from '@/utils/date'
@@ -15,10 +16,10 @@ import { accountCreateEgress, accountImportQualityTemplate, accountImportSetting
 import { prefillAccountTemplate } from '../../accounts/components/AccountCreateModal/template'
 import EnrollmentTimePicker from './EnrollmentTimePicker.vue'
 
-const props = defineProps<{ row: EnrollmentEntry, paused: boolean }>()
+const props = defineProps<{ row?: EnrollmentEntry, revisions?: Record<string, number>, paused: boolean }>()
 const emit = defineEmits<{ close: [], changed: [] }>()
 const open = ref(true)
-const plan = props.row.enrollmentPlan
+const plan = props.row?.enrollmentPlan
 const initialForm = { ...emptyAccountCreateForm(), provider: 'openai' as const }
 const restored = plan ? prefillAccountTemplate(initialForm, { id: plan.template?.id ?? '', revision: plan.template?.revision ?? 0, config: plan.config }) : initialForm
 if (plan) {
@@ -61,9 +62,10 @@ async function submit(cancel = false) {
   busy.value = true
   error.value = ''
   try {
-    const target = { id: props.row.id, revision: props.row.revision }
     if (cancel) {
-      await saveEnrollmentPlan({ ...target, mode: 'cancel' })
+      if (!props.row)
+        return
+      await saveEnrollmentPlan({ id: props.row.id, revision: props.row.revision, mode: 'cancel' })
     }
     else {
       const time = mode.value === 'scheduled' ? new Date(initialWhen === when.value && plan?.when ? plan.when : when.value).getTime() : null
@@ -71,17 +73,27 @@ async function submit(cancel = false) {
         throw new Error('请选择晚于现在的执行时间')
       if (proxyError.value || await fields.value?.validate() === false)
         throw new Error(proxyError.value || '请检查账号设置')
-      await saveEnrollmentPlan({
-        ...target,
-        mode: mode.value,
-        when: time === null ? null : new Date(time).toISOString(),
+      const config = {
         ...(form.value.importTemplate ? { template: { id: form.value.importTemplate.id, revision: form.value.importTemplate.revision } } : {}),
         newAccount: {
           settings: accountImportSettings(form.value),
           outboundProxyId: accountCreateEgress(form.value, true).outboundProxyId || undefined,
           qualityTemplate: accountImportQualityTemplate(form.value),
         },
-      })
+      }
+      if (props.revisions) {
+        const results = await saveImportedDrafts({ revisions: props.revisions, ...config })
+        const saved = results.filter(row => row.success).length
+        const firstError = results.find(row => !row.success)?.message
+        const summary = `已保存 ${saved} 份草稿${firstError ? `，未保存 ${results.length - saved} 份：${firstError}` : ''}`
+        if (firstError)
+          toast.warning(summary)
+        else
+          toast.success(summary)
+      }
+      else if (props.row) {
+        await saveEnrollmentPlan({ id: props.row.id, revision: props.row.revision, mode: mode.value, when: time === null ? null : new Date(time).toISOString(), ...config })
+      }
     }
     emit('changed')
     open.value = false
@@ -92,8 +104,8 @@ async function submit(cancel = false) {
 </script>
 
 <template>
-  <BaseModal v-model="open" title="安排入池" :description="row.email" size="lg" :dismissible="!busy" @after-leave="emit('close')">
-    <section class="mb-5 grid min-w-0 gap-3 border-b border-cp-border-secondary pb-5">
+  <BaseModal v-model="open" :title="revisions ? `为本次导入的 ${Object.keys(revisions).length} 个账号保存草稿` : '安排入池'" :description="row?.email" size="lg" :dismissible="!busy" @after-leave="emit('close')">
+    <section v-if="!revisions" class="mb-5 grid min-w-0 gap-3 border-b border-cp-border-secondary pb-5">
       <h3 class="m-0 text-cp-sm font-semibold">
         执行方式
       </h3>

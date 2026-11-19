@@ -1,6 +1,99 @@
 use super::*;
+use std::collections::BTreeSet;
 
 impl DefaultReloginService {
+    async fn resolve_plan_settings(
+        &self,
+        enrollment: &mut ReloginEnrollment,
+        template: Option<&ReloginTemplateSelection>,
+    ) -> Result<(), AdminError> {
+        if let Some(selection) = template {
+            let template = self.templates.resolve(selection.clone()).await?;
+            enrollment.config.name = template.config.name;
+            enrollment.config.turn_state_injection_enabled = enrollment
+                .config
+                .turn_state_injection_enabled
+                .or(template.config.turn_state_injection_enabled);
+        }
+        enrollment.settings()?;
+        self.store()?
+            .validate_template_references(&enrollment.config)
+            .await
+            .map_err(super::super::account_templates::template_error)
+    }
+
+    pub(super) async fn save_import_drafts(
+        &self,
+        revisions: BTreeMap<String, u64>,
+        mut enrollment: ReloginEnrollment,
+        template: Option<ReloginTemplateSelection>,
+        context: &MutationContext,
+    ) -> Result<Vec<ReloginBatchResult>, AdminError> {
+        validate_ids(&revisions.keys().cloned().collect::<Vec<_>>())?;
+        self.resolve_plan_settings(&mut enrollment, template.as_ref())
+            .await?;
+        let active: BTreeSet<_> = self.gate.lock().await.active.keys().cloned().collect();
+        let mut entries: BTreeMap<_, _> = self
+            .entries()
+            .await?
+            .into_iter()
+            .map(|e| (e.id.clone(), e))
+            .collect();
+        let pool: BTreeSet<_> = self
+            .pool()
+            .await?
+            .into_iter()
+            .filter(|a| a.authentication_kind == "oauth")
+            .filter_map(|a| a.email.map(|s| s.to_ascii_lowercase()))
+            .collect();
+        let mut results = Vec::with_capacity(revisions.len());
+        for (id, revision) in revisions {
+            let outcome = async {
+                let entry = entries
+                    .get_mut(&id)
+                    .ok_or_else(|| AdminError::not_found("资料不存在"))?;
+                if entry.revision != revision
+                    || entry.status != ReloginStatus::Pending
+                    || entry.enrollment_plan.is_some()
+                    || entry.enrollment.is_some()
+                    || entry.maintenance.blocks_login()
+                    || active.contains(&entry.email)
+                    || pool.contains(&entry.email.to_ascii_lowercase())
+                {
+                    return Err(AdminError::conflict("资料已变化、已有安排或已入池"));
+                }
+                entry.validate_totp()?;
+                entry.maintenance.import_egress =
+                    Some(crate::model::relogin_maintenance::ReloginImportEgress {
+                        proxy_id: enrollment.config.outbound_proxy_id.clone(),
+                        credential_proxy_id: enrollment
+                            .config
+                            .credential_proxy_id
+                            .clone()
+                            .flatten(),
+                        mode: enrollment.config.egress_mode,
+                    });
+                entry.enrollment_plan = Some(ReloginEnrollmentPlan {
+                    state: EnrollmentPlanState::Draft,
+                    when: None,
+                    enrollment: enrollment.clone(),
+                    template: template.clone(),
+                });
+                entry.revision = revision
+                    .checked_add(1)
+                    .filter(|r| *r <= i64::MAX as u64)
+                    .ok_or_else(|| AdminError::internal("重登资料版本超出范围"))?;
+                entry.updated_at = Utc::now();
+                self.store()?
+                    .save_enrollment_plan(entry, revision, context)
+                    .await
+                    .map_err(store_error)
+            }
+            .await;
+            results.push(result(id, outcome));
+        }
+        Ok(results)
+    }
     pub(super) async fn arrange_enrollment(
         &self,
         command: EnrollmentPlanCommand,
@@ -55,19 +148,8 @@ impl DefaultReloginService {
             let mut enrollment = command
                 .enrollment
                 .ok_or_else(|| AdminError::invalid("缺少入池设置"))?;
-            if let Some(selection) = &command.template {
-                let template = self.templates.resolve(selection.clone()).await?;
-                enrollment.config.name = template.config.name;
-                enrollment.config.turn_state_injection_enabled = enrollment
-                    .config
-                    .turn_state_injection_enabled
-                    .or(template.config.turn_state_injection_enabled);
-            }
-            enrollment.settings()?;
-            self.store()?
-                .validate_template_references(&enrollment.config)
-                .await
-                .map_err(super::super::account_templates::template_error)?;
+            self.resolve_plan_settings(&mut enrollment, command.template.as_ref())
+                .await?;
             entry.clear_enrollment();
             entry.maintenance.import_egress =
                 Some(crate::model::relogin_maintenance::ReloginImportEgress {
@@ -83,6 +165,14 @@ impl DefaultReloginService {
             entry.automatic_attempts = 0;
             entry.next_attempt_at = None;
             entry.stop_reason = None;
+            let previous_schedule = if command.mode == EnrollmentPlanMode::Now {
+                entry
+                    .enrollment_plan
+                    .take()
+                    .filter(|plan| plan.state == EnrollmentPlanState::Scheduled)
+            } else {
+                None
+            };
             entry.enrollment_plan = Some(ReloginEnrollmentPlan {
                 state: if command.mode == EnrollmentPlanMode::Scheduled {
                     EnrollmentPlanState::Scheduled
@@ -101,6 +191,11 @@ impl DefaultReloginService {
             .to_owned();
             if command.mode == EnrollmentPlanMode::Now {
                 Self::activate_enrollment_plan(&mut entry, &pool)?;
+                // The early attempt owns its enrollment. Its original schedule
+                // remains durable until an actual pool commit, even on failure.
+                if previous_schedule.is_some() {
+                    entry.enrollment_plan = previous_schedule;
+                }
             }
         }
         let expected = entry.revision;
@@ -161,6 +256,7 @@ pub(super) fn view(
         EnrollmentPlanState::Draft => "draft",
         EnrollmentPlanState::Scheduled => "scheduled",
         EnrollmentPlanState::Done => "done",
+        EnrollmentPlanState::CompletedEarly => "completed_early",
         EnrollmentPlanState::Failed => "failed",
         EnrollmentPlanState::Running => match entry.status {
             ReloginStatus::Failed => {

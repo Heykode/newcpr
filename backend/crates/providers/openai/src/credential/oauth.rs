@@ -70,6 +70,7 @@ impl fmt::Debug for CodexOAuthAuthorizationStarted {
 }
 
 pub struct CompleteCodexOAuthAuthorization {
+    pub credential_proxy_id: Option<String>,
     pub owner_ref: String,
     pub flow_id: String,
     pub callback_url: SecretString,
@@ -474,7 +475,11 @@ impl CodexOAuthAdmin for CodexOAuthAdminService {
         let claim_ref = random_secret()?;
         let pending = self.claim_pending(&command, &claim_ref).await?;
         let completed = self
-            .complete_claimed_authorization(pending, command.callback_url.expose_secret())
+            .complete_claimed_authorization(
+                pending,
+                command.callback_url.expose_secret(),
+                command.credential_proxy_id.as_deref(),
+            )
             .await;
         match completed {
             Ok((mutation, credential)) => Ok(CompletedCodexOAuthAuthorization {
@@ -500,8 +505,17 @@ impl CodexOAuthAdminService {
         &self,
         pending: CodexPendingAuthorization,
         callback_url: &str,
+        credential_proxy_id: Option<&str>,
     ) -> Result<(PendingAuthorizationMutation, CompletedCodexOAuthCredential), CodexOAuthAdminError>
     {
+        // Reauthorization uses the stored account route. New accounts must use the
+        // same maintenance selection for the exchange and the subsequent import.
+        if pending.reauthorization().is_none()
+            && (pending.mutation.credential_proxy_id() != credential_proxy_id
+                || pending.mutation.credential_proxy().is_some() != credential_proxy_id.is_some())
+        {
+            return Err(CodexOAuthAdminError::Conflict);
+        }
         let current = if let Some(target) = pending.reauthorization() {
             let current = self
                 .store

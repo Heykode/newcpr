@@ -102,8 +102,7 @@ export function enrollmentExample(library, accounts, groups, templates, settings
       body = { ...body, settings: { ...input.settings, customName: input.settings.customName ?? '', proxyMode: proxyId ? 'proxy' : 'direct', proxyId }, exit: { outboundProxyId: proxyId }, config: { ...input.settings, name: '入池设置', outboundProxyId: proxyId || null }, qualityTemplate: input.qualityTemplate }
     }
     if (body.mode === 'sample') {
-      library.unshift(sample(`sample-${nextId++}`))
-      return
+      return importSamples(2)
     }
     const importing = body.mode === 'import-sample'
     const row = importing ? sample(`sample-${nextId++}`) : library.find(row => row.id === body.id)
@@ -146,5 +145,23 @@ export function enrollmentExample(library, accounts, groups, templates, settings
     if (importing)
       library.unshift(row)
   }
-  return { advance, command, editAccount, proxies, quality }
+  function importSamples(count) {
+    const revisions = {}
+    for (let i = 0; i < Math.min(count, 500); i++) {
+      const row = sample(`sample-${nextId++}`)
+      library.unshift(row)
+      revisions[row.id] = row.revision
+    }
+    return { imported: Object.keys(revisions).length, revisions }
+  }
+  function draftSamples(body) {
+    return Object.entries(body.revisions).map(([id, revision]) => {
+      const row = library.find(item => item.id === id)
+      if (!row || row.enrollmentPlan || row.poolAccountIds.length || row.revision !== revision)
+        return { id, success: false, message: '资料已变化、已有安排或已入池' }
+      command({ id, revision, mode: 'draft', newAccount: body.newAccount, template: body.template })
+      return { id, success: true, message: '完成' }
+    })
+  }
+  return { advance, command, editAccount, proxies, quality, importSamples, draftSamples }
 }

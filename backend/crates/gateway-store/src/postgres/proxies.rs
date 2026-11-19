@@ -39,6 +39,30 @@ pub struct PgProxyRepository {
 }
 
 impl PgProxyRepository {
+    async fn lock_import_binding(
+        &self,
+        connection: &mut PgConnection,
+        id: &str,
+    ) -> AdminStoreResult<ImportProxyBinding> {
+        let acquired: bool =
+            sqlx::query_scalar("select pg_try_advisory_lock_shared(hashtextextended($1, 739219))")
+                .bind(id)
+                .fetch_one(&mut *connection)
+                .await
+                .map_err(|_| store_error(unavailable()))?;
+        if !acquired {
+            return Err(store_error(conflict(id)));
+        }
+        let record = self.get(id).await?;
+        if !record.enabled {
+            return Err(store_error(conflict(id)));
+        }
+        Ok(ImportProxyBinding {
+            id: record.id,
+            proxy: record.proxy,
+        })
+    }
+
     #[must_use]
     pub fn new(pool: PgPool) -> Self {
         Self {
@@ -476,7 +500,11 @@ impl ProxyStore for PgProxyRepository {
         })
     }
 
-    async fn reserve_import(&self, id: &str) -> AdminStoreResult<ProxyImportReservation> {
+    async fn reserve_import_pair(
+        &self,
+        id: &str,
+        additional: Option<&str>,
+    ) -> AdminStoreResult<ProxyImportReservation> {
         let slot = self
             .import_slots
             .clone()
@@ -488,32 +516,29 @@ impl ProxyStore for PgProxyRepository {
             .await
             .map_err(|_| store_error(unavailable()))?
             .detach();
-        let acquired: bool =
-            sqlx::query_scalar("select pg_try_advisory_lock_shared(hashtextextended($1, 739219))")
-                .bind(id)
-                .fetch_one(&mut connection)
-                .await
-                .map_err(|_| store_error(unavailable()))?;
-        if !acquired {
-            return Err(store_error(conflict(id)));
+        let bindings = async {
+            let binding = self.lock_import_binding(&mut connection, id).await?;
+            let extra = match additional {
+                Some(extra) if extra == id => Some(binding.clone()),
+                Some(extra) => Some(self.lock_import_binding(&mut connection, extra).await?),
+                None => None,
+            };
+            Ok((binding, extra))
         }
-        let record = match self.get(id).await {
-            Ok(record) if record.enabled => record,
-            result => {
-                // Complete the unlock before callers can retry a proxy mutation.
-                sqlx::query("select pg_advisory_unlock_shared(hashtextextended($1, 739219))")
-                    .bind(id)
+        .await;
+        let (binding, additional) = match bindings {
+            Ok(bindings) => bindings,
+            Err(error) => {
+                sqlx::query("select pg_advisory_unlock_all()")
                     .execute(&mut connection)
                     .await
                     .map_err(|_| store_error(unavailable()))?;
-                return Err(result.err().unwrap_or_else(|| store_error(conflict(id))));
+                return Err(error);
             }
         };
         Ok(ProxyImportReservation {
-            binding: ImportProxyBinding {
-                id: record.id,
-                proxy: record.proxy,
-            },
+            binding,
+            additional,
             guard: Box::new(PgProxyImportGuard {
                 _connection: connection,
                 _slot: slot,

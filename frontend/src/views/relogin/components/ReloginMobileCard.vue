@@ -65,7 +65,7 @@ defineEmits<{
         <ReloginEgress class="flex-1" :row="row" />
       </div>
       <EnrollmentPlanStatus v-if="row.enrollmentPlan" :row="row" />
-      <div v-if="!row.enrollmentPlan || !['draft', 'scheduled'].includes(row.enrollmentPlan.state)">
+      <div v-if="row.status !== 'pending' || recentOperationAt(row) || !row.enrollmentPlan || !['draft', 'scheduled'].includes(row.enrollmentPlan.state)">
         <button type="button" class="flex min-h-11 w-full items-center gap-2 rounded-cp text-left hover:bg-cp-fill-quaternary" aria-label="查看操作历史" @click="$emit('history')">
           <span class="min-w-0 flex-1">
             <span class="flex flex-wrap items-baseline gap-x-2 gap-y-1">
@@ -120,7 +120,7 @@ defineEmits<{
         </template>
         <template #default="{ close }">
           <div class="min-w-48 p-1 [&_button]:min-h-11">
-            <BaseMenuItem v-if="canArrange(row) && canPush" :disabled="busy || row.enrollmentPlan?.state === 'scheduled'" @click="close(); $emit('push')">
+            <BaseMenuItem v-if="canArrange(row) && canPush" :disabled="busy" @click="close(); $emit('push')">
               推送已有凭据
             </BaseMenuItem>
             <BaseMenuItem v-if="canArrange(row)" :disabled="!!queueDisabledReason(row, busy, paused) || row.enrollmentPlan?.state === 'scheduled'" @click="close(); $emit('queue')">

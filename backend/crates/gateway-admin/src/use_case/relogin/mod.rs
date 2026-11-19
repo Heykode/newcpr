@@ -172,7 +172,14 @@ pub trait ReloginService: Send + Sync {
         target: &ReloginTarget,
         context: &MutationContext,
     ) -> Result<(), AdminError>;
-    async fn import(&self, text: &str, replace: bool) -> Result<usize, AdminError>;
+    async fn import(&self, text: &str, replace: bool) -> Result<BTreeMap<String, u64>, AdminError>;
+    async fn draft_imports(
+        &self,
+        revisions: BTreeMap<String, u64>,
+        enrollment: ReloginEnrollment,
+        template: Option<ReloginTemplateSelection>,
+        context: &MutationContext,
+    ) -> Result<Vec<ReloginBatchResult>, AdminError>;
     async fn enroll(
         &self,
         text: &str,
@@ -847,6 +854,12 @@ impl DefaultReloginService {
             None
         };
         entry.synced_at = Some(Utc::now());
+        if let Some(plan) = entry.enrollment_plan.as_mut()
+            && plan.state == EnrollmentPlanState::Scheduled
+        {
+            plan.state = EnrollmentPlanState::CompletedEarly;
+            plan.when = None;
+        }
         entry.clear_enrollment();
         entry.next_attempt_at = None;
         entry.automatic_attempts = 0;
@@ -1289,10 +1302,24 @@ impl ReloginService for DefaultReloginService {
         Ok(ReloginList { settings, items })
     }
 
-    async fn import(&self, text: &str, replace: bool) -> Result<usize, AdminError> {
-        Ok(self.import_entries(text, replace, None).await?.len())
+    async fn import(&self, text: &str, replace: bool) -> Result<BTreeMap<String, u64>, AdminError> {
+        Ok(self
+            .import_entries(text, replace, None)
+            .await?
+            .into_iter()
+            .collect())
     }
 
+    async fn draft_imports(
+        &self,
+        revisions: BTreeMap<String, u64>,
+        enrollment: ReloginEnrollment,
+        template: Option<ReloginTemplateSelection>,
+        context: &MutationContext,
+    ) -> Result<Vec<ReloginBatchResult>, AdminError> {
+        self.save_import_drafts(revisions, enrollment, template, context)
+            .await
+    }
     async fn enroll(
         &self,
         text: &str,
@@ -1309,7 +1336,12 @@ impl ReloginService for DefaultReloginService {
             enrollment.config.outbound_proxy_id.as_deref(),
         )
         .await?;
-        self.import_entries(text, replace, Some(enrollment)).await
+        Ok(self
+            .import_entries(text, replace, Some(enrollment))
+            .await?
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect())
     }
 
     async fn export(

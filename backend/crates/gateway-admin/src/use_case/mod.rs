@@ -199,6 +199,7 @@ async fn pending_authorization(
     )
     .with_outbound_proxy(proxy)
     .with_credential_proxy(credential_proxy.map(|reservation| reservation.binding.proxy))
+    .with_credential_proxy_id(credential_proxy_id)
     .with_outbound_proxy_id(proxy_id))
 }
 

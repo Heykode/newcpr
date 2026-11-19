@@ -359,6 +359,11 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
         .execute(&mut *transaction)
         .await
         .map_err(|error| postgres_unavailable("insert provider account").with_source(error))?;
+        super::super::relogin::settle_pool_enrollment(
+            &mut transaction,
+            std::slice::from_ref(&account.id),
+        )
+        .await?;
         super::super::synchronize_account_egress_in_transaction(
             &mut transaction,
             std::slice::from_ref(&account.id),
@@ -787,6 +792,7 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
                 self.retain_turn_state(&mut transaction, state_owner)
                     .await?;
             }
+            super::super::relogin::settle_pool_enrollment(&mut transaction, &account_ids).await?;
             if let Some(settings) = &command.settings {
                 if settings.clear_outbound_proxy && command.outbound_proxy.is_some() {
                     return Err(invalid(

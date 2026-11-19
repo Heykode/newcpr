@@ -543,6 +543,9 @@ impl ProviderAdmin for OpenAiAdminProvider {
         let completed = self
             .oauth
             .complete_authorization(CompleteCodexOAuthAuthorization {
+                credential_proxy_id: command
+                    .settings
+                    .and_then(|settings| settings.credential_proxy_id.flatten()),
                 owner_ref: oauth_owner_ref(binding.owner()),
                 flow_id: command.flow_id,
                 callback_url: SecretString::from(command.callback_url),

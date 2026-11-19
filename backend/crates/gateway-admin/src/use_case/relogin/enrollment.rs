@@ -6,7 +6,7 @@ impl DefaultReloginService {
         text: &str,
         replace: bool,
         mut enrollment: Option<ReloginEnrollment>,
-    ) -> Result<Vec<String>, AdminError> {
+    ) -> Result<Vec<(String, u64)>, AdminError> {
         let inputs = parse_relogin_import(text)?;
         if inputs.len() != 1
             && let Some(enrollment) = enrollment.as_mut()
@@ -140,7 +140,10 @@ impl DefaultReloginService {
                 entry.message = "等待登录验证并入池".to_owned();
             }
         }
-        let ids = changes.iter().map(|(entry, _)| entry.id.clone()).collect();
+        let ids = changes
+            .iter()
+            .map(|(entry, _)| (entry.id.clone(), entry.revision))
+            .collect();
         self.store()?
             .save_batch(&changes)
             .await

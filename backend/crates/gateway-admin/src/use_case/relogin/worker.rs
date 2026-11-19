@@ -212,6 +212,11 @@ impl DefaultReloginService {
                     .enrollment_plan
                     .as_ref()
                     .is_some_and(|plan| plan.state == EnrollmentPlanState::Scheduled)
+                    && !matches!(
+                        entry.status,
+                        ReloginStatus::Queued | ReloginStatus::AwaitingWorkspace
+                    )
+                    && !(entry.status == ReloginStatus::Ready && entry.enrollment.is_some())
                 {
                     if entry
                         .enrollment_plan
@@ -231,6 +236,9 @@ impl DefaultReloginService {
                         self.save(&mut entry).await?;
                         continue;
                     }
+                    entry.automatic_attempts = 0;
+                    entry.next_attempt_at = None;
+                    entry.stop_reason = None;
                     self.save(&mut entry).await?;
                 }
                 if entry.status != ReloginStatus::Queued {

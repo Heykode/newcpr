@@ -91,29 +91,42 @@ impl DefaultOpenAiService {
         require_new: bool,
     ) -> Result<CredentialImportResult, AdminError> {
         let context = command.context;
-        let proxy_reservation = super::import_proxy_binding(
-            self.proxies.as_ref(),
-            command.outbound_proxy_id.as_deref(),
-        )
-        .await?;
-        let outbound_proxy = proxy_reservation
+        let business_id = command.outbound_proxy_id.as_deref();
+        let maintenance_id = command
+            .settings
             .as_ref()
-            .map(|reservation| reservation.binding.clone());
-        let credential_proxy = super::import_proxy_binding(
-            self.proxies.as_ref(),
-            command
-                .settings
-                .as_ref()
-                .and_then(|settings| settings.credential_proxy_id.as_ref())
-                .and_then(|id| id.as_deref()),
-        )
-        .await?;
+            .and_then(|settings| settings.credential_proxy_id.as_ref())
+            .and_then(|id| id.as_deref());
+        let proxy_reservation = match business_id.or(maintenance_id) {
+            Some(first) => Some(
+                self.proxies
+                    .reserve_import_pair(first, business_id.and(maintenance_id))
+                    .await
+                    .map_err(|err| map_store_error(err, "proxy"))?,
+            ),
+            None => None,
+        };
+        let outbound_proxy = business_id
+            .and(proxy_reservation.as_ref())
+            .map(|r| r.binding.clone());
+        let credential_proxy = maintenance_id
+            .map(|id| {
+                proxy_reservation
+                    .as_ref()
+                    .and_then(|r| {
+                        [&r.binding]
+                            .into_iter()
+                            .chain(r.additional.as_ref())
+                            .find(|binding| binding.id == id)
+                    })
+                    .map(|binding| binding.proxy.clone())
+                    .ok_or_else(|| AdminError::conflict("凭据维护代理与导入预留不一致"))
+            })
+            .transpose()?;
         let prepared = self
             .provider
             .prepare_import(PrepareCredentialImport {
-                credential_outbound_proxy: credential_proxy
-                    .as_ref()
-                    .map(|reservation| reservation.binding.proxy.clone()),
+                credential_outbound_proxy: credential_proxy,
                 default_outbound_proxy: outbound_proxy
                     .as_ref()
                     .map(|binding| binding.proxy.clone()),
@@ -208,10 +221,10 @@ impl OpenAiService for DefaultOpenAiService {
 
     async fn complete_authorization(
         &self,
-        mut command: CompleteAuthorization,
+        command: CompleteAuthorization,
     ) -> Result<CredentialMutationResult, AdminError> {
         let context = command.context.clone();
-        let settings = command.settings.take();
+        let settings = command.settings.clone();
         let prepared = self
             .provider
             .complete_authorization(command)

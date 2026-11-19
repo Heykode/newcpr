@@ -258,6 +258,7 @@ pub enum AuthorizationMutationTarget {
 /// 必须完整进入 Provider opaque pending payload、并在 complete 后原样恢复的事务信封。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PendingAuthorizationMutation {
+    credential_proxy_id: Option<String>,
     credential_proxy: Option<gateway_core::account::OutboundProxy>,
     provider_kind: ProviderKind,
     target: AuthorizationMutationTarget,
@@ -280,6 +281,7 @@ impl PendingAuthorizationMutation {
             outbound_proxy: None,
             outbound_proxy_id: None,
             credential_proxy: None,
+            credential_proxy_id: None,
         }
     }
 
@@ -318,6 +320,16 @@ impl PendingAuthorizationMutation {
 
     pub fn credential_proxy(&self) -> Option<&gateway_core::account::OutboundProxy> {
         self.credential_proxy.as_ref()
+    }
+
+    #[must_use]
+    pub fn with_credential_proxy_id(mut self, id: Option<String>) -> Self {
+        self.credential_proxy_id = id;
+        self
+    }
+
+    pub fn credential_proxy_id(&self) -> Option<&str> {
+        self.credential_proxy_id.as_deref()
     }
 
     pub fn outbound_proxy(&self) -> Option<&gateway_core::account::OutboundProxy> {
@@ -366,6 +378,9 @@ impl PendingAuthorizationMutation {
                 Value::String(self.owner_binding.started_request_id().to_owned()),
             ),
         ]);
+        if let Some(id) = &self.credential_proxy_id {
+            document.insert("credential_proxy_id".to_owned(), Value::String(id.clone()));
+        }
         if let Some(proxy) = &self.credential_proxy {
             document.insert(
                 "credential_proxy_url".to_owned(),
@@ -458,6 +473,7 @@ impl PendingAuthorizationMutation {
         )
         .with_outbound_proxy(proxy)
         .with_credential_proxy(credential_proxy)
+        .with_credential_proxy_id(document.credential_proxy_id)
         .with_outbound_proxy_id(document.outbound_proxy_id))
     }
 }
@@ -465,6 +481,7 @@ impl PendingAuthorizationMutation {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct StoredAuthorizationMutationV1 {
+    credential_proxy_id: Option<String>,
     #[serde(default)]
     credential_proxy_url: Option<String>,
     #[serde(default)]

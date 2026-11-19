@@ -6,6 +6,66 @@ fn intent() -> ReloginEnrollment {
     ReloginEnrollment::new(settings, None, context("plan-test")).unwrap()
 }
 
+#[tokio::test]
+async fn imported_drafts_skip_existing_pool_plans_and_stale_versions_and_never_enqueue() {
+    let h = Harness::new(vec![account_record("openai")]).await;
+    let pooled = h.import("test@example.invalid").await;
+    let fresh = h.import("fresh@example.invalid").await;
+    let scheduled = h.import("scheduled@example.invalid").await;
+    let other = h.import("other@example.invalid").await;
+    arrange(
+        &h,
+        &scheduled,
+        EnrollmentPlanMode::Scheduled,
+        Some(Utc::now() + Duration::hours(1)),
+    )
+    .await;
+    let revisions = BTreeMap::from([
+        (fresh.clone(), h.row(&fresh).await.revision),
+        (pooled.clone(), h.row(&pooled).await.revision),
+        (scheduled.clone(), h.row(&scheduled).await.revision),
+        (other.clone(), 0),
+    ]);
+    let results = h
+        .services
+        .relogin()
+        .draft_imports(revisions, intent(), None, &context("draft-batch"))
+        .await
+        .unwrap();
+    assert_eq!(results.iter().filter(|r| r.success).count(), 1);
+    assert_eq!(
+        h.row(&fresh).await.enrollment_plan.unwrap().state,
+        EnrollmentPlanState::Draft
+    );
+    assert!(
+        h.row(&pooled).await.enrollment_plan.is_none()
+            && h.row(&other).await.enrollment_plan.is_none()
+    );
+    assert_eq!(
+        h.row(&scheduled).await.enrollment_plan.unwrap().state,
+        EnrollmentPlanState::Scheduled
+    );
+    h.cycle().await;
+    assert!(h.provider.relogin_requests.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn immediate_enrollment_consumes_the_schedule_only_after_a_successful_pool_write() {
+    let h = Harness::new(vec![]).await;
+    let id = h.import("test@example.invalid").await;
+    let later = Some(Utc::now() + Duration::hours(3));
+    arrange(&h, &id, EnrollmentPlanMode::Scheduled, later).await;
+    arrange(&h, &id, EnrollmentPlanMode::Now, None).await;
+    assert_eq!(h.row(&id).await.enrollment_plan.unwrap().when, later);
+    h.cycle().await;
+    let plan = h.row(&id).await.enrollment_plan.unwrap();
+    assert_eq!(plan.state, EnrollmentPlanState::CompletedEarly);
+    assert!(plan.when.is_none());
+    h.accounts.set_accounts(vec![]);
+    h.cycle().await;
+    assert_eq!(h.accounts.import_settings().len(), 1);
+}
+
 async fn arrange(
     h: &Harness,
     id: &str,

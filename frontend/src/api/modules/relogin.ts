@@ -124,7 +124,10 @@ export function getRelogin(options: RequestOptions = {}) {
   return request<ReloginList>({ url: '/api/admin/relogin', method: 'GET', ...options })
 }
 export function importRelogin(text: string, replaceExisting: boolean) {
-  return request<{ imported: number }>({ url: '/api/admin/relogin/import', method: 'POST', data: { text, replaceExisting } })
+  return request<{ imported: number, revisions?: Record<string, number> }>({ url: '/api/admin/relogin/import', method: 'POST', data: { text, replaceExisting } })
+}
+export function saveImportedDrafts(data: { revisions: Record<string, number>, newAccount: ReloginNewAccountForm, template?: AccountTemplateSelection }) {
+  return request<ReloginBatchResult[]>({ url: '/api/admin/relogin/import/drafts', method: 'POST', data })
 }
 export function enrollRelogin(data: { text: string, replaceExisting: boolean, settings: import('./accounts').AccountImportSettings, outboundProxyId?: string, qualityTemplate?: Pick<import('./quality-ops').QualityRuleTemplate, 'id' | 'revision'> }) {
   return request<{ ids: string[] }>({ url: '/api/admin/relogin/enroll', method: 'POST', data })
@@ -201,7 +204,7 @@ export function updateReloginMaterial(data: { id: string, revision: number, pass
 }
 
 export interface ReloginEnrollmentPlan {
-  state: 'draft' | 'scheduled' | 'queued' | 'running' | 'failed' | 'verification' | 'uncertain' | 'done'
+  state: 'draft' | 'scheduled' | 'queued' | 'running' | 'failed' | 'verification' | 'uncertain' | 'done' | 'completed_early'
   when: string | null
   config: import('./account-templates').AccountTemplateConfig
   template: AccountTemplateSelection | null
