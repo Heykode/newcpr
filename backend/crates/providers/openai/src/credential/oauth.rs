@@ -519,11 +519,13 @@ impl CodexOAuthAdminService {
             .exchange_pending(
                 &pending,
                 callback_url,
-                current
-                    .as_ref()
-                    .map_or(pending.mutation.outbound_proxy(), |current| {
-                        current.account.outbound_proxy()
-                    }),
+                pending.mutation.credential_proxy().or_else(|| {
+                    current
+                        .as_ref()
+                        .map_or(pending.mutation.outbound_proxy(), |current| {
+                            current.account.outbound_proxy()
+                        })
+                }),
             )
             .await?;
         let mutation = pending.mutation.clone();

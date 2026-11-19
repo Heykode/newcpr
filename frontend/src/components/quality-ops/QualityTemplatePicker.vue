@@ -11,7 +11,7 @@ import BaseSelect from '@/components/base/BaseSelect.vue'
 import { errorMessage } from '@/utils/async'
 
 withDefaults(defineProps<{ disabled: boolean, label?: string, manage?: boolean }>(), { label: '导入监测模板', manage: false })
-const selected = defineModel<QualityRuleTemplate | null>({ required: true })
+const selected = defineModel<Pick<QualityRuleTemplate, 'id' | 'revision' | 'name'> | null>({ required: true })
 const router = useRouter()
 const rows = shallowRef<QualityRuleTemplate[]>([])
 const loading = shallowRef(true)
@@ -19,6 +19,9 @@ const error = shallowRef('')
 let controller: AbortController | undefined
 const options = computed(() => [
   { value: '', label: '不使用模板' },
+  ...(selected.value && !rows.value.some(row => row.id === selected.value?.id && row.revision === selected.value?.revision)
+    ? [{ value: `${selected.value.id}:${selected.value.revision}`, label: selected.value.name }]
+    : []),
   ...rows.value.map(row => ({ value: `${row.id}:${row.revision}`, label: row.name })),
 ])
 const value = computed({

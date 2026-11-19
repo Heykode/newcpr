@@ -9,6 +9,7 @@ pub(crate) fn admin_account_record(
         quota_paused: summary.quota_paused,
         quota_settings: summary.quota_settings,
         auto_use_quota_credits: summary.auto_use_quota_credits,
+        credential_proxy_id: summary.credential_proxy_id,
         outbound_proxy_id: summary.outbound_proxy_id,
         outbound_proxy_enabled: summary.outbound_proxy_enabled,
         custom_name: summary.custom_name,

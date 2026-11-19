@@ -158,6 +158,7 @@ export function useAccountOnboarding(options: {
         if (!account && proxyError)
           throw new Error(proxyError)
         const result = await startAccountOAuth({
+          ...(!account && input.provider === 'openai' && createForm.value.credentialProxyId !== undefined ? { credentialProxyId: createForm.value.credentialProxyId } : {}),
           ...input,
           outboundProxyId: !account && createForm.value.proxyMode === 'proxy' ? createForm.value.proxyId.trim() : undefined,
           ...(account

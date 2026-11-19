@@ -22,9 +22,9 @@ pub(super) fn prepare_queue(
         let matches = matching_accounts(entry, pool);
         if statistics_account(entry, &matches).is_none()
             && let Some(first) = matches.first()
-            && matches.iter().any(|account| {
-                account.effective_outbound_proxy() != first.effective_outbound_proxy()
-            })
+            && matches
+                .iter()
+                .any(|account| !egress::same_maintenance_route(account, first))
         {
             return Err(AdminError::conflict(
                 "同邮箱账号使用不同代理，请选择原工作区重登",

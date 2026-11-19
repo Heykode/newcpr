@@ -227,6 +227,7 @@ impl AccountTemplatesService for DefaultAccountTemplatesService {
             .batch_update(
                 context,
                 BatchUpdateAccounts {
+                    credential_proxy_id: settings.credential_proxy_id,
                     quota_settings: None,
                     auto_use_quota_credits: None,
                     excel_recovery: settings.excel_recovery,

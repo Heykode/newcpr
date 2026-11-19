@@ -6,7 +6,6 @@ import AccountTemplatePicker from '@/components/account-templates/AccountTemplat
 import BaseCheckbox from '@/components/base/BaseCheckbox.vue'
 import QualityTemplatePicker from '@/components/quality-ops/QualityTemplatePicker.vue'
 import { t } from '@/i18n'
-import { enrollmentPreview } from '@/views/relogin/enrollment-plan'
 import AccountPurchaseFields from '../AccountPurchaseFields.vue'
 import AccountSettingsFields from '../AccountSettingsFields.vue'
 import AccountProviderChooser from './AccountProviderChooser.vue'
@@ -72,7 +71,7 @@ defineExpose({ validate: () => settingsRef.value?.validate() })
       v-model:proxy-id="form.proxyId"
       v-model:credential-proxy-id="form.credentialProxyId"
       v-model:egress-mode="form.egressMode"
-      :credential-egress="enrollmentPreview && form.provider === 'openai'"
+      :credential-egress="form.provider === 'openai'"
       :excel-available="form.applyExcel && (form.provider === 'openai' || form.provider === 'batch')"
       encrypted-content-available
       :request-proxy-available="form.provider === 'openai' || form.provider === 'batch'"

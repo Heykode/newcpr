@@ -58,7 +58,7 @@ import ReloginMaintenanceModal from './components/ReloginMaintenanceModal.vue'
 import ReloginMobileCard from './components/ReloginMobileCard.vue'
 import ReloginSessionStatus from './components/ReloginSessionStatus.vue'
 import ReloginWorkspaceCard from './components/ReloginWorkspaceCard.vue'
-import { canArrange, enrollmentPreview, previewPlanCommand, separateCredentialExit } from './enrollment-plan'
+import { canArrange, enrollmentPreview, previewPlanCommand } from './enrollment-plan'
 import { importPreview } from './import-preview'
 import { knownMaintenanceWorkspaces, maintenanceBusy, maintenanceResult, matchesMaintenanceStatus, queueButtonLabel, queueDisabledReason, recentOperation, recentOperationAt } from './maintenance'
 import { matchesPool, processingStatus, recoveryCountdown, recoveryLabels, reloginDisplayName, reloginPlanDisplay, reloginPlanOptions, retryProgress, shortWorkspace, statusLabels, workspaceChoices, workspaceId, workspaceLabel } from './presentation'
@@ -645,7 +645,7 @@ onBeforeUnmount(() => {
     </div>
     <ReloginMaintenanceModal v-model="maintenanceOpen" :entry="maintenanceEntry" :initial-tab="maintenanceTab" @changed="reload(true)" @credentials="credentialsEntry = maintenanceEntry; credentialsOpen = true" />
     <ReloginHistoryModal v-model="historyOpen" :entry="historyEntry" @after-leave="!historyOpen && (historyEntry = null)" />
-    <EnrollmentPlanModal v-if="enrollmentPreview && arranging" :key="arranging.id" :row="arranging" :paused="paused" @close="arranging = null" @changed="reload(true)" />
+    <EnrollmentPlanModal v-if="arranging" :key="arranging.id" :row="arranging" :paused="paused" @close="arranging = null" @changed="reload(true)" />
     <ReloginCredentialsModal v-model="credentialsOpen" :entry="credentialsEntry" @changed="reload(true)" @after-leave="!credentialsOpen && (credentialsEntry = null)" />
     <section v-if="!mobile" class="flex min-h-48 min-w-0 flex-1 flex-col overflow-hidden rounded-cp-card border border-cp-border-secondary bg-cp-bg-container">
       <BaseTable ref="table" class="relogin-table min-h-0 flex-1" :columns="columns" :rows="visible" :selected-row-keys="[...selected]" :loading="loading && !entries.length" column-layout="proportional" :empty-text="t('appearance.preview.components.noMatchingAccountYet')" @mousedown="onMouseDown">
@@ -700,16 +700,11 @@ onBeforeUnmount(() => {
           </div>
         </template>
         <template #egress="{ row }">
-          <div v-if="canArrange(row)" class="text-cp-sm">
-            {{ row.enrollmentPlan?.exitLabel || '未设置' }}
-            <span class="block text-cp-xs text-cp-text-tertiary">计划出口</span>
-            <span v-if="separateCredentialExit(row)" class="block text-cp-xs text-cp-text-secondary">凭据维护出口：{{ separateCredentialExit(row) }}</span>
-          </div>
-          <ReloginEgress v-else :row="row" />
+          <ReloginEgress :row="row" />
         </template>
         <template #status="{ row }">
-          <EnrollmentPlanStatus v-if="canArrange(row)" :row="row" />
-          <template v-else>
+          <EnrollmentPlanStatus v-if="row.enrollmentPlan" :row="row" />
+          <template v-if="!row.enrollmentPlan || !['draft', 'scheduled'].includes(row.enrollmentPlan.state)">
             <button type="button" class="mb-1 block text-left font-medium text-cp-link hover:underline" @click="historyEntry = row; historyOpen = true">
               {{ recentOperation(row) }}
             </button>
@@ -735,7 +730,7 @@ onBeforeUnmount(() => {
         </template>
         <template #actions="{ row }">
           <div class="flex flex-nowrap items-center gap-1 whitespace-nowrap">
-            <BaseButton v-if="canArrange(row)" size="sm" variant="soft" :disabled="busy || row.enrollmentPlan?.state === 'running'" @click="arranging = row">
+            <BaseButton v-if="canArrange(row)" size="sm" variant="soft" :disabled="busy || ['queued', 'running', 'pushing', 'uncertain'].includes(row.status)" @click="arranging = row">
               {{ row.enrollmentPlan ? '查看安排' : '安排入池' }}
             </BaseButton>
             <BaseButton v-else-if="canPush(row)" size="sm" variant="soft" :disabled="busy" @click="confirm('push', [row.id])">
@@ -752,6 +747,9 @@ onBeforeUnmount(() => {
               </template>
               <template #default="{ close }">
                 <div class="min-w-40 p-1">
+                  <BaseMenuItem v-if="canArrange(row) && canPush(row)" :disabled="busy || row.enrollmentPlan?.state === 'scheduled'" @click="close(); confirm('push', [row.id])">
+                    推送已有凭据
+                  </BaseMenuItem>
                   <BaseMenuItem v-if="canArrange(row)" :disabled="!!queueDisabledReason(row, busy, paused) || row.enrollmentPlan?.state === 'scheduled'" @click="close(); queue([row.id])">
                     仅重登，不推送
                   </BaseMenuItem>

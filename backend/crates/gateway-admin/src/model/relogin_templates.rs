@@ -95,6 +95,12 @@ fn default_cache_creation_as_input() -> bool {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReloginTemplateConfig {
+    #[serde(
+        default,
+        deserialize_with = "deserialize_credential_proxy",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub credential_proxy_id: Option<Option<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub excel_recovery: Option<super::excel_recovery::ExcelRecoveryConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -166,7 +172,11 @@ impl ReloginTemplateConfig {
                 return Err(AdminError::invalid("账号代理与 IPv6 出口策略不能同时启用"));
             }
         }
+        if let Some(Some(id)) = &self.credential_proxy_id {
+            validate_template_id(id)?;
+        }
         Ok(AccountImportSettings {
+            credential_proxy_id: self.credential_proxy_id.clone(),
             template_proxy_mode: None,
             excel_recovery: self.excel_recovery,
             purchase_cost: None,
@@ -239,4 +249,11 @@ pub fn validate_template_id(id: &str) -> Result<(), AdminError> {
         return Err(AdminError::invalid("模板或代理 ID 不合法"));
     }
     Ok(())
+}
+
+fn deserialize_credential_proxy<'de, D>(deserializer: D) -> Result<Option<Option<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<String>::deserialize(deserializer).map(Some)
 }

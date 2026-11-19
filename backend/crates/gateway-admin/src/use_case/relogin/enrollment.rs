@@ -87,6 +87,7 @@ impl DefaultReloginService {
                 changes.push((entry, Some(expected)));
             } else {
                 let entry = ReloginEntry {
+                    enrollment_plan: None,
                     maintenance: Default::default(),
                     last_attempt: None,
                     id: format!("relogin_{}", uuid::Uuid::now_v7().simple()),
@@ -126,6 +127,11 @@ impl DefaultReloginService {
                 entry.manual_push_context = None;
                 entry.maintenance.import_egress =
                     Some(crate::model::relogin_maintenance::ReloginImportEgress {
+                        credential_proxy_id: enrollment
+                            .config
+                            .credential_proxy_id
+                            .clone()
+                            .flatten(),
                         proxy_id: enrollment.config.outbound_proxy_id.clone(),
                         mode: enrollment.config.egress_mode,
                     });

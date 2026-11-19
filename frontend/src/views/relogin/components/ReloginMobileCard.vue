@@ -11,7 +11,7 @@ import BaseSwitch from '@/components/base/BaseSwitch.vue'
 import ReloginCountCell from '@/components/ReloginCountCell.vue'
 import { formatDateTime } from '@/utils/date'
 import AccountPlanBadge from '../../accounts/components/AccountPlanBadge.vue'
-import { canArrange, separateCredentialExit } from '../enrollment-plan'
+import { canArrange } from '../enrollment-plan'
 import { maintenanceBusy, maintenanceResult, queueButtonLabel, queueDisabledReason, recentOperation, recentOperationAt } from '../maintenance'
 import { recoveryCountdown, reloginDisplayName, reloginPlanDisplay, retryProgress, shortWorkspace, workspaceId, workspaceLabel } from '../presentation'
 import EnrollmentPlanStatus from './EnrollmentPlanStatus.vue'
@@ -61,15 +61,11 @@ defineEmits<{
     <div class="mt-3 grid min-w-0 gap-3 text-cp-sm">
       <ReloginSessionStatus :row="row" compact />
       <div class="flex min-w-0 items-start gap-3">
-        <span class="shrink-0 pt-0.5 text-cp-xs text-cp-text-tertiary">{{ canArrange(row) ? '计划出口' : '出口' }}</span>
-        <span v-if="canArrange(row)" class="min-w-0 break-words">
-          {{ row.enrollmentPlan?.exitLabel || '未设置' }}
-          <span v-if="separateCredentialExit(row)" class="block text-cp-xs text-cp-text-secondary">凭据维护出口：{{ separateCredentialExit(row) }}</span>
-        </span>
-        <ReloginEgress v-else class="flex-1" :row="row" />
+        <span class="shrink-0 pt-0.5 text-cp-xs text-cp-text-tertiary">出口</span>
+        <ReloginEgress class="flex-1" :row="row" />
       </div>
-      <EnrollmentPlanStatus v-if="canArrange(row)" :row="row" />
-      <div v-else>
+      <EnrollmentPlanStatus v-if="row.enrollmentPlan" :row="row" />
+      <div v-if="!row.enrollmentPlan || !['draft', 'scheduled'].includes(row.enrollmentPlan.state)">
         <button type="button" class="flex min-h-11 w-full items-center gap-2 rounded-cp text-left hover:bg-cp-fill-quaternary" aria-label="查看操作历史" @click="$emit('history')">
           <span class="min-w-0 flex-1">
             <span class="flex flex-wrap items-baseline gap-x-2 gap-y-1">
@@ -101,7 +97,7 @@ defineEmits<{
       </div>
     </div>
     <div class="flex min-w-0 items-center gap-1 border-t border-cp-border-secondary pt-2">
-      <BaseButton v-if="canArrange(row)" class="min-h-11 min-w-0 flex-1" variant="soft" :disabled="busy || row.enrollmentPlan?.state === 'running'" @click="$emit('arrange')">
+      <BaseButton v-if="canArrange(row)" class="min-h-11 min-w-0 flex-1" variant="soft" :disabled="busy || ['queued', 'running', 'pushing', 'uncertain'].includes(row.status)" @click="$emit('arrange')">
         {{ row.enrollmentPlan ? '查看安排' : '安排入池' }}
       </BaseButton>
       <BaseButton v-else-if="canPush" class="min-h-11 min-w-0 flex-1 whitespace-nowrap px-3" variant="soft" :disabled="busy" @click="$emit('push')">
@@ -124,6 +120,9 @@ defineEmits<{
         </template>
         <template #default="{ close }">
           <div class="min-w-48 p-1 [&_button]:min-h-11">
+            <BaseMenuItem v-if="canArrange(row) && canPush" :disabled="busy || row.enrollmentPlan?.state === 'scheduled'" @click="close(); $emit('push')">
+              推送已有凭据
+            </BaseMenuItem>
             <BaseMenuItem v-if="canArrange(row)" :disabled="!!queueDisabledReason(row, busy, paused) || row.enrollmentPlan?.state === 'scheduled'" @click="close(); $emit('queue')">
               仅重登，不推送
             </BaseMenuItem>

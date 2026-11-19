@@ -1169,6 +1169,7 @@ async fn ordinary_account_edits_preserve_template_recovery_only_for_unchanged_po
         accounts
             .update_account(
                 UpdateAccount {
+                    credential_proxy_id: None,
                     account_id: "acct_quality_a".into(),
                     enabled: true,
                     concurrency_limit: Some(

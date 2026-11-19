@@ -264,7 +264,14 @@ fn pending_mutation_v1_should_round_trip_all_targets_and_owners() {
                         .unwrap()
                         .with_max_websocket_connections(16),
                     ))
-                    .with_outbound_proxy_id(Some("proxy_saved".to_owned()));
+                    .with_outbound_proxy_id(Some("proxy_saved".to_owned()))
+                    .with_credential_proxy(Some(
+                        gateway_core::account::OutboundProxy::parse(
+                            "http://maintenance.example:8080",
+                        )
+                        .unwrap()
+                        .with_max_websocket_connections(8),
+                    ));
                 assert_eq!(
                     PendingAuthorizationMutation::from_storage_v1(Value::Object(
                         with_proxy.to_storage_v1()

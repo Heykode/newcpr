@@ -1821,6 +1821,7 @@ mod response {
             codex_quota_overdraft: None,
             effective_concurrency_limit: std::num::NonZeroU32::new(3).expect("concurrency limit"),
             account: AccountRecord {
+                credential_proxy_id: None,
                 quota_settings: Default::default(),
                 quota_paused: Default::default(),
                 auto_use_quota_credits: false,
@@ -2621,5 +2622,32 @@ mod import_settings {
                 "missing {field}"
             );
         }
+    }
+}
+
+#[test]
+fn credential_maintenance_exit_preserves_missing_null_and_explicit_id() {
+    use gateway_api::admin::accounts::{AccountImportSettingsRequest, UpdateAccountRequest};
+    use serde_json::json;
+    for (value, expected) in [
+        (None, None),
+        (Some(serde_json::Value::Null), Some(None)),
+        (
+            Some(json!("maintenance-proxy")),
+            Some(Some("maintenance-proxy".to_owned())),
+        ),
+    ] {
+        let mut body = json!({"enabled":true,"concurrencyLimit":null,"weight":1,"groupIds":[]});
+        if let Some(value) = value {
+            body["credentialProxyId"] = value;
+        }
+        let request: AccountImportSettingsRequest = serde_json::from_value(body.clone()).unwrap();
+        assert_eq!(request.credential_proxy_id, expected);
+        let replay: AccountImportSettingsRequest =
+            serde_json::from_value(serde_json::to_value(request).unwrap()).unwrap();
+        assert_eq!(replay.credential_proxy_id, expected);
+        body["accountId"] = json!("acct_test");
+        let update: UpdateAccountRequest = serde_json::from_value(body).unwrap();
+        assert_eq!(update.credential_proxy_id, expected);
     }
 }

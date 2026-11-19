@@ -1018,6 +1018,7 @@ impl AccountsService for DefaultAccountsService {
             self.accounts
                 .batch_update_accounts(
                     BatchUpdateAccounts {
+                        credential_proxy_id: None,
                         quota_settings: None,
                         auto_use_quota_credits: None,
                         excel_recovery: None,

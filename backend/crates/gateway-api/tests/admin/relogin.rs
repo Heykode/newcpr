@@ -61,6 +61,7 @@ async fn relogin_every_endpoint_requires_admin_auth_before_reading_material() {
             "/api/admin/relogin/enroll",
             Some(json!({"text":"test-only-private-material"})),
         ),
+        ("/api/admin/relogin/enrollment-plan", Some(json!({}))),
         ("/api/admin/relogin/export", Some(json!({}))),
         ("/api/admin/relogin/templates/save", Some(json!({}))),
         ("/api/admin/relogin/templates/delete", Some(json!({}))),

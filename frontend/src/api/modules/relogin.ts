@@ -25,7 +25,7 @@ export interface ReloginPoolAccount {
 export interface ReloginEgress {
   kind: 'default' | 'proxy' | 'ipv6' | 'unavailable' | 'multiple'
   label: string
-  source: 'account' | 'import' | 'default'
+  source: 'account' | 'import' | 'default' | 'credential'
   accountId: string | null
   proxyId: string | null
   address: string | null
@@ -34,6 +34,8 @@ export interface ReloginEgress {
   latencyMs?: number | null
 }
 export interface ReloginEntry {
+  credentialEgress?: ReloginEgress
+  enrollmentPlan?: ReloginEnrollmentPlan | null
   egress?: ReloginEgress
   lastActivity?: ReloginAttempt | null
   maintenance?: MaintenanceView
@@ -196,4 +198,26 @@ export function getReloginMaterial(id: string, options: RequestOptions = {}) {
 }
 export function updateReloginMaterial(data: { id: string, revision: number, password: string, mfaSecret: string, confirmMaintenanceResolution?: boolean }) {
   return request<void>({ url: '/api/admin/relogin/material/update', method: 'POST', data, silent: true })
+}
+
+export interface ReloginEnrollmentPlan {
+  state: 'draft' | 'scheduled' | 'queued' | 'running' | 'failed' | 'verification' | 'uncertain' | 'done'
+  when: string | null
+  config: import('./account-templates').AccountTemplateConfig
+  template: AccountTemplateSelection | null
+  customName: string | null
+  purchaseCost: import('./accounts').AccountPurchaseUpdate | null
+  qualityTemplate: Pick<import('./quality-ops').QualityRuleTemplate, 'id' | 'revision'> | null
+  exitLabel: string
+  credentialExitLabel: string
+}
+export function saveEnrollmentPlan(data: {
+  id: string
+  revision: number
+  mode: 'draft' | 'now' | 'scheduled' | 'cancel'
+  when?: string | null
+  newAccount?: ReloginNewAccountForm
+  template?: AccountTemplateSelection
+}) {
+  return request<void>({ url: '/api/admin/relogin/enrollment-plan', method: 'POST', data })
 }

@@ -17,6 +17,84 @@ use gateway_store::postgres::{
 };
 
 #[tokio::test]
+async fn enrollment_plan_survives_reopening_and_audit_is_atomic_with_revision_update() {
+    use gateway_admin::model::{
+        MutationActor, MutationContext,
+        relogin::{EnrollmentPlanState, ReloginEnrollment, ReloginEnrollmentPlan},
+    };
+    let Some(database) = TestDatabase::create("enrollment_plan").await else {
+        return;
+    };
+    let store = PgReloginStore::new(database.pool.clone());
+    let mut row = entry("plan-entry", "plan@example.invalid");
+    store.save(&row, None).await.unwrap();
+    let config = serde_json::from_value::<gateway_admin::model::relogin_templates::ReloginTemplateConfig>(serde_json::json!({
+        "name": "Scheduled defaults", "enabled": true, "concurrencyLimit": null,
+        "weight": 1, "groupIds": [], "outboundProxyId": null, "credentialProxyId": "maintenance-proxy"
+    })).unwrap();
+    let context = MutationContext {
+        actor: MutationActor::System,
+        request_id: "plan-persistence-test".into(),
+    };
+    let mut settings = config.settings().unwrap();
+    settings.custom_name = Some("Scheduled account".into());
+    row.enrollment_plan = Some(ReloginEnrollmentPlan {
+        state: EnrollmentPlanState::Scheduled,
+        when: Some(chrono::Utc::now() + chrono::Duration::hours(2)),
+        enrollment: ReloginEnrollment::new(settings, None, context.clone()).unwrap(),
+        template: None,
+    });
+    let expected = row.revision;
+    row.revision += 1;
+    store
+        .save_enrollment_plan(&row, expected, &context)
+        .await
+        .unwrap();
+    let reopened = PgReloginStore::new(database.pool.clone());
+    let restored = reopened.entries().await.unwrap().pop().unwrap();
+    let plan = restored.enrollment_plan.unwrap();
+    assert_eq!(plan.state, EnrollmentPlanState::Scheduled);
+    assert_eq!(
+        plan.enrollment.config.credential_proxy_id,
+        Some(Some("maintenance-proxy".into()))
+    );
+    assert_eq!(
+        plan.enrollment.custom_name.as_deref(),
+        Some("Scheduled account")
+    );
+    let audit_count: i64 = sqlx::query_scalar(
+        "select count(*) from admin_audit_events where action='arrange_relogin_enrollment'",
+    )
+    .fetch_one(&database.pool)
+    .await
+    .unwrap();
+    assert_eq!(audit_count, 1);
+    row.enrollment_plan.as_mut().unwrap().state = EnrollmentPlanState::Draft;
+    assert!(
+        store
+            .save_enrollment_plan(&row, expected, &context)
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        reopened.entries().await.unwrap()[0]
+            .enrollment_plan
+            .as_ref()
+            .unwrap()
+            .state,
+        EnrollmentPlanState::Scheduled
+    );
+    let audit_count: i64 = sqlx::query_scalar(
+        "select count(*) from admin_audit_events where action='arrange_relogin_enrollment'",
+    )
+    .fetch_one(&database.pool)
+    .await
+    .unwrap();
+    assert_eq!(audit_count, 1);
+    database.close().await;
+}
+
+#[tokio::test]
 async fn relogin_seconds_upgrade_converts_defaults_and_preserves_custom_durations() {
     let old = sqlx::migrate::Migrator {
         migrations: super::TEST_MIGRATOR
@@ -51,6 +129,7 @@ async fn relogin_seconds_upgrade_converts_defaults_and_preserves_custom_duration
 
 fn entry(id: &str, email: &str) -> ReloginEntry {
     ReloginEntry {
+        enrollment_plan: None,
         maintenance: Default::default(),
         last_attempt: None,
         imported_at: Some(chrono::Utc::now()),
@@ -535,6 +614,7 @@ async fn relogin_templates_persist_fence_versions_and_revalidate_references() {
         id: "template-one".into(),
         revision: 1,
         config: ReloginTemplateConfig {
+            credential_proxy_id: None,
             excel_recovery: None,
             model_access: Some(
                 serde_json::from_value(serde_json::json!({
@@ -1189,6 +1269,7 @@ async fn relogin_maintenance_private_snapshot_and_unknown_state_survive_reopen()
         verified_at: chrono::Utc::now(),
     });
     row.maintenance.import_egress = Some(ReloginImportEgress {
+        credential_proxy_id: None,
         proxy_id: Some("proxy-import".into()),
         mode: None,
     });

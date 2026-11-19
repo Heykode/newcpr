@@ -152,6 +152,7 @@ async fn unsaved_proxy_probe_shares_test_limit_and_releases_slot_on_cancellation
 
 #[derive(Default)]
 pub(super) struct TestProxies {
+    pub records: Option<Vec<ProxyRecord>>,
     pub events: Option<super::accounts::EventLog>,
     pub accounts: Option<Vec<ProxyAccountRef>>,
 }
@@ -189,7 +190,15 @@ impl ProxyStore for TestProxies {
         Ok(gateway_admin::ports::proxy::ProxyImportReservation {
             binding: ImportProxyBinding {
                 id: id.to_owned(),
-                proxy: OutboundProxy::parse("http://127.0.0.1:8080").unwrap(),
+                proxy: if self.records.is_some() {
+                    let record = self.get(id).await?;
+                    if !record.enabled {
+                        return Err(super::unavailable("proxy"));
+                    }
+                    record.proxy
+                } else {
+                    OutboundProxy::parse("http://127.0.0.1:8080").unwrap()
+                },
             },
             guard: Box::new(ImportGuard(events.clone())),
         })
@@ -212,8 +221,12 @@ impl ProxyStore for TestProxies {
             page_size: query.page_size.get(),
         })
     }
-    async fn get(&self, _: &str) -> AdminStoreResult<ProxyRecord> {
-        Err(super::unavailable("proxy"))
+    async fn get(&self, id: &str) -> AdminStoreResult<ProxyRecord> {
+        self.records
+            .as_ref()
+            .and_then(|rows| rows.iter().find(|row| row.id == id))
+            .cloned()
+            .ok_or_else(|| super::unavailable("proxy"))
     }
     async fn create(&self, _: NewProxy, _: &MutationContext) -> AdminStoreResult<ProxyMutation> {
         Err(super::unavailable("proxy"))

@@ -72,6 +72,29 @@ async fn save_row(
 
 #[async_trait]
 impl ReloginStore for PgReloginStore {
+    async fn save_enrollment_plan(
+        &self,
+        entry: &ReloginEntry,
+        expected: u64,
+        context: &gateway_admin::model::MutationContext,
+    ) -> AdminStoreResult<()> {
+        let mut transaction = self.pool.begin().await.map_err(unavailable)?;
+        save_row(&mut transaction, entry, Some(expected)).await?;
+        super::admin_security_audit::insert_admin_audit_event(
+            &mut transaction,
+            crate::mutation_audit(
+                context,
+                "arrange_relogin_enrollment",
+                "relogin_entry",
+                &entry.id,
+                vec!["enrollment_plan".to_owned()],
+            ),
+        )
+        .await
+        .map_err(unavailable)?;
+        transaction.commit().await.map_err(unavailable)
+    }
+
     async fn record_maintenance(
         &self,
         id: &str,
@@ -268,6 +291,17 @@ impl ReloginStore for PgReloginStore {
                 "relogin templates",
                 "模板中的分组已不存在，请编辑模板",
             ));
+        }
+        if let Some(Some(id)) = &config.credential_proxy_id {
+            let valid: bool = sqlx::query_scalar("select exists(select 1 from outbound_proxies where id=$1 and enabled and last_test_success=true)")
+                .bind(id).fetch_one(&self.pool).await.map_err(unavailable)?;
+            if !valid {
+                return Err(AdminStoreError::new(
+                    AdminStoreErrorKind::Invalid,
+                    "relogin templates",
+                    "凭据维护出口不存在、已停用或未通过测试",
+                ));
+            }
         }
         if let Some(id) = &config.outbound_proxy_id {
             let valid: bool = sqlx::query_scalar("select exists(select 1 from outbound_proxies where id=$1 and last_test_success=true)")

@@ -39,6 +39,7 @@ fn success() -> ProxyTestResult {
 
 fn update(account_id: &str, selection: AccountProxySelection) -> UpdateAccount {
     UpdateAccount {
+        credential_proxy_id: None,
         excel_recovery: None,
         purchase_cost: None,
         egress_mode: None,
@@ -60,6 +61,97 @@ fn update(account_id: &str, selection: AccountProxySelection) -> UpdateAccount {
         group_ids: vec![],
         outbound_proxy: Some(selection),
     }
+}
+
+#[tokio::test]
+async fn credential_maintenance_binding_is_independent_preserved_and_explicitly_clearable() {
+    let Some(database) = TestDatabase::create("credential_route").await else {
+        return;
+    };
+    let proxies = PgProxyRepository::new(database.pool.clone());
+    let repository = PgProviderAccountRepository::new(database.pool.clone());
+    let admin = admin_account_store(&database.pool);
+    let proxy = proxies
+        .create(
+            NewProxy {
+                auto_location: false,
+                test: Some(success()),
+                request_location: None,
+                name: "Maintenance proxy".into(),
+                proxy: OutboundProxy::parse("http://maintenance.example:8080").unwrap(),
+            },
+            &context(),
+        )
+        .await
+        .unwrap()
+        .record;
+    repository
+        .insert_provider_account(account("acct_maintenance_route", "maintenance-route-user"))
+        .await
+        .unwrap();
+    let mut command = update("acct_maintenance_route", AccountProxySelection::Direct);
+    command.outbound_proxy = None;
+    command.credential_proxy_id = Some(Some(proxy.id.clone()));
+    admin
+        .update_account(command.clone(), &context())
+        .await
+        .unwrap();
+    let stored = repository
+        .load_provider_account("acct_maintenance_route")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        stored.summary.credential_proxy_id.as_deref(),
+        Some(proxy.id.as_str())
+    );
+    assert!(stored.summary.outbound_proxy.is_none());
+    let credential_revision = stored.summary.credential_revision;
+    command.credential_proxy_id = None;
+    command.custom_name = Some(Some("Preserved account name".into()));
+    admin
+        .update_account(command.clone(), &context())
+        .await
+        .unwrap();
+    let stored = repository
+        .load_provider_account("acct_maintenance_route")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        stored.summary.credential_proxy_id.as_deref(),
+        Some(proxy.id.as_str())
+    );
+    assert_eq!(stored.summary.credential_revision, credential_revision);
+    command.credential_proxy_id = Some(Some("missing-proxy".into()));
+    assert!(
+        admin
+            .update_account(command.clone(), &context())
+            .await
+            .is_err()
+    );
+    let stored = repository
+        .load_provider_account("acct_maintenance_route")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        stored.summary.credential_proxy_id.as_deref(),
+        Some(proxy.id.as_str())
+    );
+    command.credential_proxy_id = Some(None);
+    admin.update_account(command, &context()).await.unwrap();
+    let stored = repository
+        .load_provider_account("acct_maintenance_route")
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(stored.summary.credential_proxy_id.is_none());
+    assert_eq!(
+        stored.summary.custom_name.as_deref(),
+        Some("Preserved account name")
+    );
+    database.close().await;
 }
 
 #[tokio::test]
@@ -448,6 +540,7 @@ async fn partial_batch_proxy_updates_preserve_credentials_groups_and_unselected_
         .await
         .unwrap();
     let mut command = BatchUpdateAccounts {
+        credential_proxy_id: None,
         quota_settings: Default::default(),
         auto_use_quota_credits: None,
         excel_recovery: None,
@@ -1349,6 +1442,7 @@ async fn legacy_urls_join_one_catalog_entry_and_invalid_batch_rolls_back() {
         admin
             .batch_update_accounts(
                 BatchUpdateAccounts {
+                    credential_proxy_id: None,
                     quota_settings: Default::default(),
                     auto_use_quota_credits: None,
                     excel_recovery: None,

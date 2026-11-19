@@ -37,7 +37,7 @@ export function enrollmentExample(library, accounts, groups, templates, settings
       const proxy = proxyFor(account.outboundProxyId)
       if (config.outboundProxyId !== undefined && !config.preserveOutboundProxy)
         row.egress = { kind: proxy ? 'proxy' : 'default', source: 'account', label: proxy?.name ?? '部署默认出口', proxyId: proxy?.id ?? null }
-      row.credentialExitLabel = account.credentialProxyId ? proxyFor(account.credentialProxyId)?.name ?? '原代理不可用' : undefined
+      row.credentialEgress = account.credentialProxyId ? { kind: 'proxy', source: 'credential', label: proxyFor(account.credentialProxyId)?.name ?? '原代理不可用', proxyId: account.credentialProxyId } : row.egress
     }
   }
   function advance() {
@@ -90,12 +90,17 @@ export function enrollmentExample(library, accounts, groups, templates, settings
         status: 'ready',
         lastReloginAt: row.lastAttemptAt,
         egress: { kind: proxy ? 'proxy' : plan.settings.proxyMode === 'ipv6' ? 'ipv6' : 'default', label: plan.exitLabel, source: 'account', proxyId: proxy?.id ?? null },
-        credentialExitLabel: plan.credentialExitLabel,
+        credentialEgress: { kind: 'proxy', source: 'credential', label: plan.credentialExitLabel || plan.exitLabel },
       })
     }
   }
   function command(body) {
     advance()
+    if (body.newAccount) {
+      const input = body.newAccount
+      const proxyId = input.outboundProxyId || ''
+      body = { ...body, settings: { ...input.settings, customName: input.settings.customName ?? '', proxyMode: proxyId ? 'proxy' : 'direct', proxyId }, exit: { outboundProxyId: proxyId }, config: { ...input.settings, name: '入池设置', outboundProxyId: proxyId || null }, qualityTemplate: input.qualityTemplate }
+    }
     if (body.mode === 'sample') {
       library.unshift(sample(`sample-${nextId++}`))
       return
@@ -126,6 +131,15 @@ export function enrollmentExample(library, accounts, groups, templates, settings
       if (body.settings.credentialProxyId && !credentialProxy)
         throw new Error('凭据维护出口不存在，请重新选择')
       row.enrollmentPlan = { state: body.mode === 'now' ? 'running' : body.mode, settings: body.settings, exit: body.exit, exitLabel, credentialExitLabel: credentialProxy?.name, when: body.when, startedAt: Date.now() }
+      Object.assign(row.enrollmentPlan, {
+        config: body.config || { ...body.settings, name: '入池设置', outboundProxyId: body.exit.outboundProxyId || null },
+        customName: body.settings.customName || null,
+        purchaseCost: body.settings.purchaseCost || null,
+        qualityTemplate: body.qualityTemplate || null,
+        template: body.template || null,
+      })
+      row.egress = { kind: proxy ? 'proxy' : 'default', source: 'import', label: exitLabel }
+      row.credentialEgress = { kind: credentialProxy ? 'proxy' : row.egress.kind, source: credentialProxy ? 'credential' : 'import', label: credentialProxy?.name || exitLabel }
       row.status = body.mode === 'now' ? 'running' : 'pending'
     }
     row.revision++

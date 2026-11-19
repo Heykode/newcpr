@@ -99,9 +99,21 @@ impl DefaultOpenAiService {
         let outbound_proxy = proxy_reservation
             .as_ref()
             .map(|reservation| reservation.binding.clone());
+        let credential_proxy = super::import_proxy_binding(
+            self.proxies.as_ref(),
+            command
+                .settings
+                .as_ref()
+                .and_then(|settings| settings.credential_proxy_id.as_ref())
+                .and_then(|id| id.as_deref()),
+        )
+        .await?;
         let prepared = self
             .provider
             .prepare_import(PrepareCredentialImport {
+                credential_outbound_proxy: credential_proxy
+                    .as_ref()
+                    .map(|reservation| reservation.binding.proxy.clone()),
                 default_outbound_proxy: outbound_proxy
                     .as_ref()
                     .map(|binding| binding.proxy.clone()),

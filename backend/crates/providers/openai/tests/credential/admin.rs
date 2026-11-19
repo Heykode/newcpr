@@ -895,3 +895,35 @@ async fn pat_import_uses_account_proxy_without_direct_fallback() {
         );
     }
 }
+
+#[tokio::test]
+async fn credential_maintenance_proxy_validates_import_without_replacing_business_proxy() {
+    for status in [200, 503] {
+        let origin = MockServer::start().await;
+        let business = MockServer::start().await;
+        let maintenance = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/accounts/v1/user-auth-credential/whoami"))
+            .respond_with(ResponseTemplate::new(status).set_body_json(pat_identity()))
+            .expect(1)
+            .mount(&maintenance)
+            .await;
+        let business_proxy = gateway_core::account::OutboundProxy::parse(&business.uri()).unwrap();
+        let maintenance_proxy =
+            gateway_core::account::OutboundProxy::parse(&maintenance.uri()).unwrap();
+        let result = pat_service(&origin).prepare_import_document_with_routes(
+            serde_json::json!({"accessToken": "at-proxy-token", "outboundProxyUrl": business.uri()}),
+            Some(&business_proxy), Some(&maintenance_proxy),
+        ).await;
+        if status == 200 {
+            assert_eq!(
+                result.unwrap().accounts()[0].account.outbound_proxy(),
+                Some(&business_proxy)
+            );
+        } else {
+            assert!(result.is_err());
+        }
+        assert!(business.received_requests().await.unwrap().is_empty());
+        assert!(origin.received_requests().await.unwrap().is_empty());
+    }
+}

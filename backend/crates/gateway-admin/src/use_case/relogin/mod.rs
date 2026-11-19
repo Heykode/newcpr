@@ -35,6 +35,7 @@ use tokio::sync::Mutex;
 
 mod egress;
 mod enrollment;
+mod enrollment_plan;
 mod export;
 mod history;
 mod maintenance;
@@ -48,6 +49,8 @@ const MAX_ROTATION_ATTEMPTS: usize = 3;
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReloginView {
+    pub enrollment_plan: Option<ReloginEnrollmentPlanView>,
+    pub credential_egress: crate::model::relogin_maintenance::ReloginEgressView,
     pub last_activity: Option<ReloginAttempt>,
     pub egress: crate::model::relogin_maintenance::ReloginEgressView,
     pub maintenance: crate::model::relogin_maintenance::MaintenanceView,
@@ -126,6 +129,11 @@ pub struct AccountReloginAction {
 
 #[async_trait]
 pub trait ReloginService: Send + Sync {
+    async fn arrange(
+        &self,
+        command: EnrollmentPlanCommand,
+        context: &MutationContext,
+    ) -> Result<(), AdminError>;
     async fn maintenance_material(
         &self,
         id: &str,
@@ -685,9 +693,11 @@ impl DefaultReloginService {
             if custom_name.is_some()
                 || new_account_excel.is_some()
                 || egress::import_egress_mode(entry).is_some()
+                || egress::maintenance_proxy_id(entry, None).is_some()
             {
                 let settings =
                     settings.get_or_insert_with(|| crate::model::accounts::AccountImportSettings {
+                        credential_proxy_id: None,
                         template_proxy_mode: None,
                         excel_recovery: None,
                         purchase_cost: None,
@@ -723,6 +733,12 @@ impl DefaultReloginService {
             {
                 settings.egress_mode = egress::import_egress_mode(entry);
             }
+            if let Some(settings) = settings.as_mut()
+                && settings.credential_proxy_id.is_none()
+            {
+                settings.credential_proxy_id =
+                    egress::maintenance_proxy_id(entry, None).map(|id| Some(id.to_owned()));
+            }
             if let Some(config) = legacy_template {
                 self.store()?
                     .validate_template_references(config)
@@ -750,6 +766,10 @@ impl DefaultReloginService {
                 };
                 if preserves_proxy && settings.egress_mode.is_none() {
                     settings.egress_mode = egress::import_egress_mode(entry);
+                }
+                if settings.credential_proxy_id.is_none() {
+                    settings.credential_proxy_id =
+                        egress::maintenance_proxy_id(entry, None).map(|id| Some(id.to_owned()));
                 }
                 command.settings = Some(settings);
                 if let Some(template) = template {
@@ -921,6 +941,13 @@ fn result(id: String, outcome: Result<(), AdminError>) -> ReloginBatchResult {
 
 #[async_trait]
 impl ReloginService for DefaultReloginService {
+    async fn arrange(
+        &self,
+        command: EnrollmentPlanCommand,
+        context: &MutationContext,
+    ) -> Result<(), AdminError> {
+        self.arrange_enrollment(command, context).await
+    }
     async fn maintenance_material(
         &self,
         id: &str,
@@ -1144,7 +1171,24 @@ impl ReloginService for DefaultReloginService {
                         },
                     )
             };
+            let credential_egress = if statistics.is_none() && !matches.is_empty() {
+                egress.clone()
+            } else {
+                self.maintenance_egress_view(&entry, statistics, &mut proxies)
+                    .await
+                    .unwrap_or_else(
+                        |error| crate::model::relogin_maintenance::ReloginEgressView {
+                            kind: "unavailable".into(),
+                            label: error.message().to_owned(),
+                            ..Default::default()
+                        },
+                    )
+            };
+            let enrollment_plan =
+                enrollment_plan::view(&entry, &egress.label, &credential_egress.label);
             items.push(ReloginView {
+                enrollment_plan,
+                credential_egress,
                 last_activity: entry.maintenance.last_activity.clone(),
                 egress,
                 maintenance: crate::model::relogin_maintenance::MaintenanceView {

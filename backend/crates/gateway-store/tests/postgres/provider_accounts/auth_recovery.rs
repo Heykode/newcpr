@@ -76,6 +76,7 @@ async fn replacement_clears_old_authentication_failure_but_import_uses_explicit_
         repository
             .import_provider_accounts(ImportProviderAccounts {
                 settings: Some(gateway_admin::model::accounts::AccountImportSettings {
+                    credential_proxy_id: None,
                     template_proxy_mode: None,
                     excel_recovery: None,
                     purchase_cost: None,

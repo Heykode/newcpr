@@ -7,6 +7,13 @@ use async_trait::async_trait;
 
 #[async_trait]
 pub trait ReloginStore: Send + Sync {
+    async fn save_enrollment_plan(
+        &self,
+        entry: &ReloginEntry,
+        expected: u64,
+        context: &crate::model::MutationContext,
+    ) -> AdminStoreResult<()>;
+
     async fn record_maintenance(
         &self,
         id: &str,

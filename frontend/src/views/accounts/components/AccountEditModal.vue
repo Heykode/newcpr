@@ -13,7 +13,6 @@ import { t } from '@/i18n'
 import { formatDateTime } from '@/utils/date'
 import { DEFAULT_EXCEL_MODELS_INPUT } from '@/utils/excel-defaults'
 import { excelRecoveryResultLabel } from '@/utils/excel-settings'
-import { enrollmentPreview } from '@/views/relogin/enrollment-plan'
 import AccountIdentityCell from './AccountIdentityCell.vue'
 import AccountPlanBadge from './AccountPlanBadge.vue'
 import AccountPurchaseFields from './AccountPurchaseFields.vue'
@@ -107,7 +106,7 @@ async function requestSave() {
         v-model:proxy-id="proxyId"
         v-model:credential-proxy-id="credentialProxyId"
         v-model:egress-mode="egressMode"
-        :credential-egress="enrollmentPreview && account.provider === 'openai'"
+        :credential-egress="account.provider === 'openai'"
         encrypted-content-available
         name-available
         model-access-available

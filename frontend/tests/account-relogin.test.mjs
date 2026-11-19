@@ -136,6 +136,17 @@ test('account action API sends exact target and supports only read cancellation'
   assert.equal(requests[1].url, '/api/admin/relogin/accounts/queue')
   assert.equal(requests[1].data, body)
   assert.equal(requests[1].signal, undefined)
+  const plan = {
+    id: 'entry-a',
+    revision: 7,
+    mode: 'scheduled',
+    when: '2099-01-01T00:00:00Z',
+    newAccount: { settings: { credentialProxyId: 'proxy-maintenance' }, outboundProxyId: 'proxy-business' },
+  }
+  await api.saveEnrollmentPlan(plan)
+  assert.equal(requests[2].url, '/api/admin/relogin/enrollment-plan')
+  assert.equal(requests[2].method, 'POST')
+  assert.equal(requests[2].data, plan)
 })
 
 test('immediate action queues once with a frozen target and refreshes after success', async (t) => {

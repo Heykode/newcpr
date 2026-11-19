@@ -2142,6 +2142,7 @@ async fn accounts_update_should_commit_then_release_disabled_account_and_publish
         .update(
             &context("update-request"),
             UpdateAccount {
+                credential_proxy_id: None,
                 excel_recovery: None,
                 purchase_cost: None,
                 egress_mode: None,
@@ -2193,6 +2194,7 @@ async fn accounts_update_should_not_notify_provider_when_store_commit_fails() {
         .update(
             &context("update-failure"),
             UpdateAccount {
+                credential_proxy_id: None,
                 excel_recovery: None,
                 purchase_cost: None,
                 egress_mode: None,
@@ -2249,6 +2251,7 @@ async fn accounts_batch_update_should_commit_once_and_notify_each_provider() {
         .batch_update(
             &context("batch-update-request"),
             BatchUpdateAccounts {
+                credential_proxy_id: None,
                 quota_settings: Default::default(),
                 auto_use_quota_credits: None,
                 excel_recovery: None,
@@ -4154,6 +4157,7 @@ fn account_list_query() -> AccountListQuery {
 pub(super) fn account_record(kind: &str) -> AccountRecord {
     let now = Utc::now();
     AccountRecord {
+        credential_proxy_id: None,
         quota_settings: Default::default(),
         quota_paused: Default::default(),
         auto_use_quota_credits: false,
@@ -4512,6 +4516,7 @@ fn unsupported() -> ProviderAdminError {
 
 pub(super) fn import_settings() -> gateway_admin::model::accounts::AccountImportSettings {
     gateway_admin::model::accounts::AccountImportSettings {
+        credential_proxy_id: None,
         template_proxy_mode: None,
         excel_recovery: None,
         purchase_cost: None,

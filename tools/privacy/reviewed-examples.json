@@ -3134,5 +3134,21 @@
     "file_sha256": "5a80bbce7b92cd343899aa573a2698a16abd376bc0444d9816358b7dcbdc25e5",
     "line_sha256": "47e73e43e21ddf5e79f265d16deb345c7d52a1cf04c0683c90e5d50b4e49aee3",
     "reason": "Manually re-reviewed the unchanged synthetic user:password URL rejected by safe_url without any network request; initial password-entry tests shifted its line."
+  },
+  {
+    "path": "backend/apps/gateway/tests/bootstrap.rs",
+    "rule": "authenticated-url",
+    "line": 394,
+    "file_sha256": "cf6efb49febe58e3e0abd07ad7963128e19fffdbf0f85b81046b537079156a81",
+    "line_sha256": "be871b5bb1fb717424afe768be0a94bd16324aa95d478d8be07e11d0ed234c75",
+    "reason": "Manually re-reviewed the unchanged loopback configuration rejection fixture and the complete diff adding the optional credential-maintenance route argument. The embedded password is synthetic parser input and is never used for a database connection."
+  },
+  {
+    "path": "backend/crates/gateway-admin/tests/model/provider_credentials.rs",
+    "rule": "authenticated-url",
+    "line": 262,
+    "file_sha256": "3369096538c2a8d0464e6e037cd2e417c46f7556ef7977c493ec89914b5e5c95",
+    "line_sha256": "c85204f4407a8fb3204045ad397ed644fc6cb87825bfac0e6e809b0324b82079",
+    "reason": "Manually re-reviewed the unchanged documentation-domain proxy fixture and the added maintenance-proxy serialization assertions. Both routes use synthetic in-memory test inputs with no network requests or real credentials."
   }
 ]
