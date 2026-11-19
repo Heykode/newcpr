@@ -1,0 +1,10 @@
+{
+  "from_version": "3.52.1",
+  "to_version": "3.52.2",
+  "from_migrations_tree": "cc4c09717912524d9eac4701a333010f175259ba",
+  "to_migrations_tree": "f7325979e9edc21afd695b9a4d8388c12c3695ef",
+  "added": [
+    "0097_credential_maintenance_proxy.sql"
+  ],
+  "recovery": "manual"
+}
