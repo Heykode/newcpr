@@ -9,6 +9,7 @@ mod auth_recovery;
 mod excel;
 mod excel_recovery;
 mod model_access;
+mod plan_filters;
 mod quota_forecast;
 mod state_retention;
 

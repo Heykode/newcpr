@@ -1181,6 +1181,57 @@ match window statistics by exact stable window key.
   Browser coverage verifies search removal, plan reset, retained sort, pagination,
   selection, groups, quota refresh and account actions.
 
+### Codex plan filters
+
+#### Scope
+
+The account toolbar uses a fixed Codex catalog, independent of loaded accounts or
+current filters. Include All plans and the 15 names in `codexPlanFilterOptions`;
+do not add xAI, Other or Unknown options. Reserve enough plan-field width for full
+option names; let the toolbar wrap its fields on narrow screens.
+
+#### Signatures
+
+`GET /api/admin/accounts?planType=openai:<raw-alias>` reaches
+`AccountPlanFilter::Raw(String)`. `ProviderAdmin::plan_type_aliases(&str)` resolves
+it to `ProviderPlans { provider_kind, plan_types }` before the Store query.
+
+#### Contracts
+
+OpenAI owns display names and aliases in `providers/openai/src/admin/plans.rs`.
+Free includes `free/free_workspace/guest`; Business includes
+`team/self_serve_business_usage_based`; Business Premium uses
+`self_serve_business_prolite`. Enterprise includes
+`business/ent26/enterprise/hc/enterprise_cbp_usage_based`; Edu includes
+`edu/education`. Other entries are distinct, including ProLite, Pro and ProMax.
+SQL matches the stored account plan, trims grouped values, and applies the alias
+set and provider intersection before counting/paging. This change does not add
+quota-snapshot fallback to filtering. Raw queries retain single-value matching.
+
+#### Validation and errors
+
+- Known provider plus unknown plan: reject as invalid before querying the Store.
+- Unknown prefix: retain raw query behavior; do not guess another provider.
+- Conflicting provider filter: return an empty intersection, never override it.
+- No matching accounts: keep all 16 selector entries; clearing removes planType.
+
+#### Cases
+
+Good: `openai:team` matches both Business aliases on OpenAI accounts.
+Base: raw `business` still matches only that raw value, case-insensitively.
+Bad: treating raw `business` as Business would contradict the Enterprise badge.
+
+#### Required tests
+
+Cover all display aliases, distinct Pro tiers, legacy raw queries, invalid groups,
+provider intersection, SQL totals and every page. Browser checks at 1440/390/320px
+select each option, check request values, clear filters and verify readable labels.
+
+#### Wrong and correct
+
+Wrong: derive options from the current page or filter already paginated records.
+Correct: fixed UI options, provider-owned aliases, bound SQL before pagination.
+
 ### Shared controls and subpath hosting
 
 Base controls resolve size from explicit prop, nearest form, config provider, then their existing

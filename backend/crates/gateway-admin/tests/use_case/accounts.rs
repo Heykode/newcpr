@@ -383,6 +383,15 @@ impl ProviderAdmin for FakeProviderAdmin {
         }
     }
 
+    fn plan_type_aliases(&self, plan_type: &str) -> Option<Vec<String>> {
+        (self.kind.as_str() == "openai" && plan_type == "team").then(|| {
+            vec![
+                "team".to_owned(),
+                "self_serve_business_usage_based".to_owned(),
+            ]
+        })
+    }
+
     async fn account_unavailable(&self, _: &ProviderAccountId) {
         self.record("provider.account_unavailable");
     }
@@ -715,6 +724,7 @@ impl ProviderAdmin for FakeProviderAdmin {
 }
 
 pub(super) struct FakeAccountStore {
+    list_queries: Mutex<Vec<AccountListQuery>>,
     pub(super) deletion_library:
         Mutex<Option<Arc<dyn gateway_admin::ports::relogin::ReloginStore>>>,
     pub(super) recovery_claim:
@@ -760,6 +770,7 @@ impl FakeAccountStore {
 
     fn with_account(account: AccountRecord, events: EventLog) -> Arc<Self> {
         Arc::new(Self {
+            list_queries: Mutex::default(),
             events,
             accounts: Mutex::new(vec![account]),
             deletion_library: Mutex::default(),
@@ -919,9 +930,10 @@ impl AccountStore for FakeAccountStore {
 
     async fn list_accounts(
         &self,
-        _: AccountListQuery,
+        query: AccountListQuery,
         _: AccountRuntimeSnapshot,
     ) -> AdminStoreResult<AccountPage> {
+        self.list_queries.lock().unwrap().push(query);
         self.record("store.list_accounts");
         let accounts = self.accounts.lock().expect("accounts").clone();
         let total = accounts.len() as u64;
@@ -2351,6 +2363,46 @@ async fn accounts_list_should_return_complete_directory_semantics() {
     assert!(detail.cumulative_costs.is_empty());
     assert!(account.usage.is_none());
     assert!(detail.usage.is_none());
+}
+
+#[tokio::test]
+async fn account_plan_filter_resolves_provider_aliases_and_preserves_raw_queries() {
+    use gateway_admin::model::accounts::AccountPlanFilter;
+    let provider = FakeProviderAdmin::new("openai", events());
+    let store = FakeAccountStore::new("openai", events());
+    let services = accounts_service(provider, store.clone()).await;
+    for raw in ["openai:team", "business", "future:plan"] {
+        let mut query = account_list_query();
+        query.plan_type = Some(raw.into());
+        // A conflicting provider remains an intersection, not an override.
+        query.provider_kind = Some(ProviderKind::new("xai").unwrap());
+        services.accounts().list(query).await.unwrap();
+    }
+    let queries = store.list_queries.lock().unwrap().clone();
+    assert_eq!(
+        queries[0].plan_type,
+        Some(AccountPlanFilter::ProviderPlans {
+            provider_kind: ProviderKind::new("openai").unwrap(),
+            plan_types: vec![
+                "team".to_owned(),
+                "self_serve_business_usage_based".to_owned()
+            ],
+        })
+    );
+    assert_eq!(queries[0].provider_kind.as_ref().unwrap().as_str(), "xai");
+    assert_eq!(
+        queries[1].plan_type,
+        Some(AccountPlanFilter::Raw("business".to_owned()))
+    );
+    assert_eq!(
+        queries[2].plan_type,
+        Some(AccountPlanFilter::Raw("future:plan".to_owned()))
+    );
+
+    let mut invalid = account_list_query();
+    invalid.plan_type = Some("openai:unknown-plan".into());
+    assert!(services.accounts().list(invalid).await.is_err());
+    assert_eq!(store.list_queries.lock().unwrap().len(), 3);
 }
 
 #[tokio::test]

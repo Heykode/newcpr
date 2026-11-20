@@ -3429,3 +3429,52 @@ async fn plan_display_uses_pro_short_names_and_codex_status_labels_for_other_kno
         assert_eq!(admin.plan_type_display(raw), display, "{raw}");
     }
 }
+
+#[tokio::test]
+async fn codex_plan_filters_cover_every_display_alias_without_merging_pro_tiers() {
+    let bundle = provider_openai::initialize(valid_config().config, provider_ports())
+        .await
+        .unwrap();
+    let admin = bundle.admin_provider();
+    let groups: &[(&str, &[&str])] = &[
+        ("Free", &["free", "free_workspace", "guest"]),
+        ("Go", &["go"]),
+        ("Plus", &["plus"]),
+        ("ProLite", &["prolite"]),
+        ("Pro", &["pro"]),
+        ("ProMax", &["promax"]),
+        ("Business", &["team", "self_serve_business_usage_based"]),
+        ("Business Premium", &["self_serve_business_prolite"]),
+        (
+            "Enterprise",
+            &[
+                "business",
+                "ent26",
+                "enterprise",
+                "hc",
+                "enterprise_cbp_usage_based",
+            ],
+        ),
+        ("Enterprise (Automation)", &["enterprise_cbp_automation"]),
+        ("Edu", &["edu", "education"]),
+        ("Edu Plus", &["edu_plus"]),
+        ("Edu Pro", &["edu_pro"]),
+        ("Academic Researchers", &["sci"]),
+        ("Academic Researchers Plus", &["sci_plus"]),
+    ];
+    for (display, aliases) in groups {
+        for raw in *aliases {
+            let actual = admin.plan_type_aliases(&raw.to_ascii_uppercase()).unwrap();
+            assert_eq!(actual, *aliases, "{raw}");
+            assert!(
+                actual
+                    .iter()
+                    .all(|alias| admin.plan_type_display(alias) == *display)
+            );
+        }
+    }
+    for unknown in ["", "future-plan", "supergrok"] {
+        assert!(admin.plan_type_aliases(unknown).is_none());
+        assert_eq!(admin.plan_type_display(unknown), unknown);
+    }
+}

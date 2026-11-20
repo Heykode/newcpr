@@ -1,5 +1,7 @@
 //! OpenAI 管理边界：Provider preparation 与 Redis OAuth pending 适配。
 
+mod plans;
+
 use gateway_protocol::openai::OPENAI_PROTOCOL;
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -263,28 +265,12 @@ impl ProviderAdmin for OpenAiAdminProvider {
     }
 
     fn plan_type_display(&self, plan_type: &str) -> String {
-        // Pro 系列使用短名；其余已知套餐对应 Codex /status。
-        match plan_type.to_ascii_lowercase().as_str() {
-            "free" | "free_workspace" | "guest" => "Free",
-            "go" => "Go",
-            "plus" => "Plus",
-            "pro" => "Pro",
-            "prolite" => "ProLite",
-            "promax" => "ProMax",
-            "team" | "self_serve_business_usage_based" => "Business",
-            "self_serve_business_prolite" => "Business Premium",
-            "business" | "ent26" | "enterprise" | "hc" | "enterprise_cbp_usage_based" => {
-                "Enterprise"
-            }
-            "enterprise_cbp_automation" => "Enterprise (Automation)",
-            "edu" | "education" => "Edu",
-            "edu_plus" => "Edu Plus",
-            "edu_pro" => "Edu Pro",
-            "sci" => "Academic Researchers",
-            "sci_plus" => "Academic Researchers Plus",
-            _ => plan_type,
-        }
-        .to_owned()
+        plans::display_name(plan_type).to_owned()
+    }
+
+    fn plan_type_aliases(&self, plan_type: &str) -> Option<Vec<String>> {
+        plans::aliases(plan_type)
+            .map(|values| values.iter().map(|value| (*value).to_owned()).collect())
     }
 
     async fn account_unavailable(&self, account_id: &ProviderAccountId) {

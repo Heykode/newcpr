@@ -689,7 +689,12 @@ impl AccountsService for DefaultAccountsService {
             .map_err(|error| map_store_error(error, "account concurrency"))
     }
 
-    async fn list(&self, query: AccountListQuery) -> Result<AccountDirectoryPage, AdminError> {
+    async fn list(&self, mut query: AccountListQuery) -> Result<AccountDirectoryPage, AdminError> {
+        query.plan_type = query
+            .plan_type
+            .map(|filter| self.providers.resolve_account_plan_filter(filter))
+            .transpose()
+            .map_err(|error| map_provider_error(error, "account plan filter"))?;
         let runtime = self
             .account_runtime
             .active_rate_limits()

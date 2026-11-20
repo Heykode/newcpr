@@ -59,7 +59,7 @@ import { useAccountsQuery } from './composables/useAccountsQuery'
 import { useAccountsTable } from './composables/useAccountsTable'
 import { useAccountSwipeSelect } from './composables/useAccountSwipeSelect'
 import { useBatchResetCredits } from './composables/useBatchResetCredits'
-import { accountColumnOptions, accountColumns, derivedAccountStatus, readAccountColumnKeys, writeAccountColumnKeys } from './constants'
+import { accountColumnOptions, accountColumns, codexPlanFilterOptions, derivedAccountStatus, readAccountColumnKeys, writeAccountColumnKeys } from './constants'
 import { accountHasReloginTotp, reloginTotpEmailSet } from './relogin-availability'
 
 const selectedIds = ref<Set<string>>(new Set())
@@ -454,15 +454,7 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
         v-model:provider="providerQuery"
         v-model:group="groupQuery"
         v-model:plan-type="planTypeQuery"
-        :plan-options="[
-          { label: '全部套餐', value: '' },
-          { label: 'Free', value: 'free' },
-          { label: 'Plus', value: 'plus' },
-          { label: 'Pro', value: 'pro' },
-          { label: 'Team', value: 'team' },
-          { label: 'Business', value: 'business' },
-          { label: 'Enterprise', value: 'enterprise' },
-        ]"
+        :plan-options="codexPlanFilterOptions"
         :column-options="accountColumnOptions"
         :visible-column-keys="visibleColumnKeys"
         :groups="groups"

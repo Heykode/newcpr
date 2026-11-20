@@ -294,7 +294,7 @@ impl ListQuery {
             group_filter,
             search,
             status,
-            plan_type,
+            plan_type: plan_type.map(Into::into),
             sort,
         })
     }

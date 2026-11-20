@@ -5,6 +5,26 @@ import { t } from '@/i18n'
 export type AccountRow = Awaited<ReturnType<typeof getAccounts>>['items'][number]
 export type AccountQuotaWindow = AccountRow['quota']['windows'][number]
 
+// Provider-scoped filters group aliases exactly as the account plan column does.
+export const codexPlanFilterOptions = [
+  { label: '全部套餐', value: '' },
+  { label: 'Free', value: 'openai:free' },
+  { label: 'Go', value: 'openai:go' },
+  { label: 'Plus', value: 'openai:plus' },
+  { label: 'ProLite', value: 'openai:prolite' },
+  { label: 'Pro', value: 'openai:pro' },
+  { label: 'ProMax', value: 'openai:promax' },
+  { label: 'Business', value: 'openai:team' },
+  { label: 'Business Premium', value: 'openai:self_serve_business_prolite' },
+  { label: 'Enterprise', value: 'openai:enterprise' },
+  { label: 'Enterprise (Automation)', value: 'openai:enterprise_cbp_automation' },
+  { label: 'Edu', value: 'openai:edu' },
+  { label: 'Edu Plus', value: 'openai:edu_plus' },
+  { label: 'Edu Pro', value: 'openai:edu_pro' },
+  { label: 'Academic Researchers', value: 'openai:sci' },
+  { label: 'Academic Researchers Plus', value: 'openai:sci_plus' },
+]
+
 export interface AccountQuotaWindowEntry {
   key: string
   label: string | null

@@ -1,6 +1,7 @@
 //! 管理账号目录的数据库分页 read model。
 
 use super::*;
+use gateway_admin::model::accounts::AccountPlanFilter;
 use std::collections::BTreeMap;
 
 pub(crate) struct AdminAccountPageRows {
@@ -26,7 +27,14 @@ pub(crate) async fn load_admin_account_page(
         .map(|provider| provider.as_str().to_owned());
     let search_prefix = query.search.as_deref().map(literal_contains_pattern);
     let status = query.status.map(|status| status.as_str().to_owned());
-    let plan_type = query.plan_type.as_deref();
+    let (plan_provider, plan_types) = match &query.plan_type {
+        None => (None, None),
+        Some(AccountPlanFilter::Raw(plan)) => (None, Some(vec![plan.clone()])),
+        Some(AccountPlanFilter::ProviderPlans {
+            provider_kind,
+            plan_types,
+        }) => (Some(provider_kind.as_str()), Some(plan_types.clone())),
+    };
     let (group_mode, group_id) = match query.group_filter.as_ref() {
         None => (0_i16, None),
         Some(AccountGroupFilter::Group(group_id)) => (1_i16, Some(group_id.as_str().to_owned())),
@@ -110,7 +118,10 @@ pub(crate) async fn load_admin_account_page(
                    lower(coalesce(a.upstream_account_id, '')) like $4 escape '\\' or
                    lower(coalesce(a.upstream_user_id, '')) like $4 escape '\\')
               and ($5::text is null or status.admin_status = $5)
-              and ($6::text is null or lower(coalesce(a.plan_type, '')) = lower($6))
+              and ($6::text[] is null or lower(case when $15::text is null
+                   then coalesce(a.plan_type, '') else trim(coalesce(a.plan_type, '')) end)
+                   = any(select lower(raw_plan) from unnest($6::text[]) raw_plan))
+              and ($15::text is null or a.provider_kind = $15)
               and ($7::smallint = 0 or
                    ($7 = 1 and exists (
                      select 1
@@ -199,7 +210,7 @@ pub(crate) async fn load_admin_account_page(
                     .bind(provider_kind)
                     .bind(search_prefix)
                     .bind(status)
-                    .bind(plan_type)
+                    .bind(plan_types)
                     .bind(group_mode)
                     .bind(group_id)
                     .bind(page_size)
@@ -208,6 +219,7 @@ pub(crate) async fn load_admin_account_page(
                     .bind(usage_ids)
                     .bind(usage_tokens)
                     .bind(usage_latest)
+                    .bind(plan_provider)
                     .fetch_all(&mut *snapshot.tx)
                     .await
                     .map_err(|error| {

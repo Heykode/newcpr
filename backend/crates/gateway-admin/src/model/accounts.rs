@@ -125,6 +125,28 @@ pub struct AccountSort {
     pub direction: SortDirection,
 }
 
+/// 原始套餐查询保持精确匹配；Provider 套餐组由对应 Provider 解析。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AccountPlanFilter {
+    Raw(String),
+    ProviderPlans {
+        provider_kind: ProviderKind,
+        plan_types: Vec<String>,
+    },
+}
+
+impl From<String> for AccountPlanFilter {
+    fn from(value: String) -> Self {
+        Self::Raw(value)
+    }
+}
+
+impl From<&str> for AccountPlanFilter {
+    fn from(value: &str) -> Self {
+        Self::Raw(value.to_owned())
+    }
+}
+
 /// 账号列表的存储查询条件。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountListQuery {
@@ -134,7 +156,7 @@ pub struct AccountListQuery {
     pub group_filter: Option<AccountGroupFilter>,
     pub search: Option<String>,
     pub status: Option<AccountStatus>,
-    pub plan_type: Option<String>,
+    pub plan_type: Option<AccountPlanFilter>,
     pub sort: Option<AccountSort>,
 }
 
