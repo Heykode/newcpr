@@ -354,7 +354,11 @@
         "follow_location": "优先使用代理位置，其次使用已开启的全局位置。两者都未设置时发送 null",
         "custom": "固定使用指定的两位国家代码"
       },
-      "customCountryCode": "自定义国家代码"
+      "customCountryCode": "自定义国家代码",
+      "requestCountryDescription": "设置 Codex 请求如何发送国家代码",
+      "requestCountryScope": "仅用于 Codex OAuth 账号",
+      "countryMode": "发送策略",
+      "invalidCountryCode": "请输入两位大写国家代码"
     },
     "quotaReset": {
       "title": "主动重置卡",

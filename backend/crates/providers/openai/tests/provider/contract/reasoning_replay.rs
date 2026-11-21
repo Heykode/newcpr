@@ -326,7 +326,16 @@ async fn capture(input: Value, websocket: bool, qx: bool) -> Value {
 }
 
 async fn capture_with_store(input: Value, websocket: bool, qx: bool, stored: bool) -> Value {
-    capture_with_country(input, websocket, qx, stored, Default::default(), None).await
+    capture_with_country(
+        input,
+        websocket,
+        qx,
+        stored,
+        Default::default(),
+        None,
+        Some(json!("CA")),
+    )
+    .await
 }
 
 async fn capture_with_country(
@@ -336,6 +345,7 @@ async fn capture_with_country(
     stored: bool,
     country: gateway_core::account::OpenAiRequestCountry,
     location: Option<gateway_core::account::RequestLocation>,
+    client_country: Option<Value>,
 ) -> Value {
     let http = MockServer::start().await;
     let (base_url, websocket_server) = if websocket {
@@ -366,13 +376,16 @@ async fn capture_with_country(
     };
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_provider_contract").await;
-    let original = json!({
-        "model":"gpt-5.4","store":stored,"stream":true,"input":input,"request_country":"CA",
+    let mut original = json!({
+        "model":"gpt-5.4","store":stored,"stream":true,"input":input,
         "instructions":"Preserve the original instructions.",
         "tools":[{"type":"function","name":"echo","parameters":{"type":"object","properties":{"status":{"type":"string"},"content":{"type":"array"}}}}],
         "future_field":{"status":"keep","content":[1]},
-        "client_metadata":{"extension":{"status":"keep","content":[1]}}
+        "client_metadata":{"request_country":"DE","extension":{"status":"keep","content":[1]}}
     });
+    if let Some(value) = client_country {
+        original["request_country"] = value;
+    }
     let operation = Operation::Generate(GenerateRequest::from_protocol_payload(
         ProtocolPayload::json_object("openai", original.as_object().unwrap().clone())
             .unwrap()
@@ -435,6 +448,7 @@ async fn capture_with_country(
         actual["client_metadata"]["extension"],
         original["client_metadata"]["extension"]
     );
+    assert_eq!(actual["client_metadata"]["request_country"], json!("DE"));
     actual
 }
 
@@ -551,9 +565,36 @@ async fn request_country_policies_reach_both_native_transports() {
                 json!("JP"),
             ),
         ] {
-            let actual =
-                capture_with_country(json!([]), websocket, false, false, policy, location).await;
+            let actual = capture_with_country(
+                json!([]),
+                websocket,
+                false,
+                false,
+                policy,
+                location,
+                Some(json!("CA")),
+            )
+            .await;
             assert_eq!(actual.get("request_country"), Some(&expected));
+        }
+    }
+}
+
+#[tokio::test]
+async fn request_country_passthrough_preserves_missing_and_null_on_http_and_ws() {
+    for websocket in [false, true] {
+        for client_country in [None, Some(Value::Null)] {
+            let actual = capture_with_country(
+                json!([]),
+                websocket,
+                false,
+                false,
+                gateway_core::account::OpenAiRequestCountry::Passthrough {},
+                Some(gateway_core::account::RequestLocation::default()),
+                client_country.clone(),
+            )
+            .await;
+            assert_eq!(actual.get("request_country"), client_country.as_ref());
         }
     }
 }

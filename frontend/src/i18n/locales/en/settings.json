@@ -354,7 +354,11 @@
         "follow_location": "Use the proxy location first, then the enabled global location. Send null when neither applies.",
         "custom": "Always use the specified two-letter country code."
       },
-      "customCountryCode": "Custom country code"
+      "customCountryCode": "Custom country code",
+      "requestCountryDescription": "Choose how Codex requests send the country code",
+      "requestCountryScope": "Applies only to Codex OAuth accounts",
+      "countryMode": "Policy",
+      "invalidCountryCode": "Enter a two-letter uppercase country code"
     },
     "quotaReset": {
       "title": "Quota reset credits",

@@ -165,3 +165,24 @@ Normal browser tabs have no inset. Check actual browser geometry at short and mo
 viewports after resize/zoom; CSS class assertions alone cannot establish no overlap.
 Quota-reset settings share the three-window input component with Smart, but each
 strategy keeps its own object and reset defaults. Keep the existing inline layout.
+
+### v3.54.1 shared display rules
+
+- Request country has its own card with four policy descriptions and an explicit
+  Codex OAuth scope. HelpPopover supports structured default-slot content while
+  keeping the plain content prop for existing consumers. Preserve keyboard/touch access.
+- Account and group forms share the model access editor; blocklist wording must
+  not imply account-only behavior. Keep the 15 Codex account plan filters separate
+  from upstream API-key account types.
+- Shared usage tables always pass the original timestamp to UsageTimeCell and
+  define the 128px time width in shared columns, including dashboard callers.
+- Cost chart legend, lines and tooltips derive from one series definition. Empty
+  activity can fill zero; active buckets with unknown prices remain null. Missing
+  comparison estimates do not generate tooltip rows.
+- Proxy create/test displays and completion notifications share batch summaries.
+  Pending/running/skipped are not completed; location detection is independent of
+  connectivity. Preserve optional location access and prioritize connection errors
+  over location messages. Reuse lifecycle fencing and stop behavior.
+- Local BaseTable uses sticky th backgrounds, not the upstream thead pseudo-element.
+  Do not replace the local library merely to copy a submodule bump. Check actual
+  WebKit and Chromium scrolling, fixed columns and expanded rows before parity claims.

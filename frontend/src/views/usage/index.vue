@@ -204,7 +204,6 @@ watch(timeRange, () => {
               class="min-h-0 flex-1"
               :columns="columns.visibleColumns.value"
               :column-layout="recordStatus === 'error' ? 'content' : 'proportional'"
-              request-details
               :rows="records"
               :loading="loading"
               :empty-text="t('usage.noUsageRecords')"

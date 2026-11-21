@@ -1030,6 +1030,14 @@ impl Provider for CodexProvider {
                     context.request_id().as_str(),
                 );
                 crate::compat::normalize_minimal_effort(&mut upstream_request);
+                crate::transport::request::apply_request_country(
+                    upstream_request.body_mut(),
+                    lease
+                        .account()
+                        .request_location()
+                        .or(context.request_location()),
+                    context.request_country(),
+                );
             }
         }
         if let Some(location) = lease
@@ -1040,16 +1048,6 @@ impl Provider for CodexProvider {
             crate::transport::request::align_structured_location_fields(
                 upstream_request.body_mut(),
                 location,
-            );
-        }
-        if !excel {
-            crate::transport::request::apply_request_country(
-                upstream_request.body_mut(),
-                lease
-                    .account()
-                    .request_location()
-                    .or(context.request_location()),
-                context.request_country(),
             );
         }
         quality_probe::prepare(&mut upstream_request, &context, lease.account())?;

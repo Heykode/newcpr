@@ -149,3 +149,34 @@ test('official parser reports duplicates and malformed shorthand with safe fixed
   assert.ok(proxyBatchInputError('a'.repeat(512 * 1024 + 1), 1))
   assert.ok(proxyBatchInputError('', 101))
 })
+
+test('batch test notifications share connectivity and location counts with result rows', async (t) => {
+  const notifications = []
+  const dependencies = {
+    '../utils/batch': exports,
+    '@/utils/async': { errorMessage: error => error.message },
+    '@/api': { getProxies: async () => ({ items: [{ id: 'proxy-one', name: 'One' }, { id: 'proxy-two', name: 'Two' }], page: { totalPages: 1 } }) },
+    '@/components/base/BaseToast': { toast: {
+      warning: message => notifications.push(['warning', message]),
+      success: message => notifications.push(['success', message]),
+      error: message => notifications.push(['error', message]),
+    } },
+  }
+  dependencies['@/composables/useRequestState'] = load('../src/composables/useRequestState.ts', dependencies)
+  dependencies['./useProxyBatchTest'] = load('../src/views/proxies/composables/useProxyBatchTest.ts', dependencies)
+  const scope = vue.effectScope()
+  t.after(() => scope.stop())
+  let reloads = 0
+  const batch = scope.run(() => load('../src/views/proxies/composables/useProxyBatchTesting.ts', dependencies).useProxyBatchTesting({
+    test: async rows => rows.map(record => ({ status: 'succeeded', data: { ...record, lastTest: { success: true, message: 'connected' } } })),
+    reload: async () => reloads++,
+  }))
+  await batch.start(['proxy-one', 'proxy-two', 'missing'])
+  assert.equal(reloads, 1)
+  assert.equal(notifications.length, 1)
+  assert.equal(notifications[0][0], 'warning')
+  assert.match(notifications[0][1], /连接正常 2 条/)
+  assert.match(notifications[0][1], /地区待处理 2 条/)
+  assert.match(notifications[0][1], /1 条代理已不存在/)
+  assert.doesNotMatch(notifications[0][1], /未成功/)
+})

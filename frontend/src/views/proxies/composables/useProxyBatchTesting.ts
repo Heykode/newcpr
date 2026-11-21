@@ -4,13 +4,8 @@ import { getProxies } from '@/api'
 import { toast } from '@/components/base/BaseToast'
 import { useRequestState } from '@/composables/useRequestState'
 import { t } from '@/i18n'
+import { summarizeProxyTests } from '../utils/batch'
 import { useProxyBatchTest } from './useProxyBatchTest'
-
-const ZNotification = {
-  warning: ({ message }: { message: string }) => toast.warning(message),
-  error: ({ message }: { message: string }) => toast.error(message),
-  success: ({ message }: { message: string }) => toast.success(message),
-}
 
 export function useProxyBatchTesting(options: { test: ProxyTestExecutor, reload: () => Promise<unknown> }) {
   const request = useRequestState()
@@ -41,9 +36,7 @@ export function useProxyBatchTesting(options: { test: ProxyTestExecutor, reload:
       if (!request.isCurrent(requestId))
         return
       if (!collected.size) {
-        ZNotification.warning({
-          message: t('proxies.batchTest.proxyMissing'),
-        })
+        toast.warning(t('proxies.batchTest.proxyMissing'))
         return
       }
       await tests.run([
@@ -54,9 +47,8 @@ export function useProxyBatchTesting(options: { test: ProxyTestExecutor, reload:
       await options.reload()
       if (!request.isCurrent(requestId))
         return
-      const succeeded = tests.items.value.filter(item => item.status === 'succeeded').length
+      const { succeeded, locationPending } = summarizeProxyTests(tests.items.value)
       const incomplete = tests.items.value.filter(item => item.status !== 'succeeded')
-      const locationPending = tests.items.value.filter(item => item.status === 'succeeded' && item.record?.lastTest?.location?.status !== 'detected').length
       const missing = wanted.size - collected.size
       const summary = [
         t('proxies.batchTest.batchTestCompletedConnected', { succeeded }),
@@ -71,16 +63,14 @@ export function useProxyBatchTesting(options: { test: ProxyTestExecutor, reload:
       if (firstFailure)
         summary.push(`${firstFailure.name}：${firstFailure.message}`)
       const notify = incomplete.length || locationPending || missing
-        ? ZNotification.warning
-        : ZNotification.success
-      notify({
-        message: summary.join('，'),
-      })
+        ? toast.warning
+        : toast.success
+      notify(summary.join('，'))
     }
     catch (cause) {
       request.fail(requestId, cause)
       if (request.isCurrent(requestId) && request.error.value)
-        ZNotification.error({ message: request.error.value })
+        toast.error(request.error.value)
     }
     finally {
       request.finish(requestId)

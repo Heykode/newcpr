@@ -25,6 +25,7 @@ import { formatDateTime } from '@/utils/date'
 import ManagedProxyPanel from './components/ManagedProxyPanel.vue'
 import ProxyAccountsModal from './components/ProxyAccountsModal.vue'
 import ProxyBatchCreateModal from './components/ProxyBatchCreateModal.vue'
+import ProxyBatchResults from './components/ProxyBatchResults.vue'
 import ProxyFormModal from './components/ProxyFormModal.vue'
 import { useProxyBatchTesting } from './composables/useProxyBatchTesting'
 import { proxyLocationMessage, proxyTestFeedback } from './utils/location'
@@ -74,7 +75,6 @@ const batch = useProxyBatchTesting({
   reload: () => query.execute({ silent: true }),
 })
 const batchTesting = batch.busy
-const batchResults = computed(() => batch.tests.items.value.map(item => `${item.name}：${item.message || item.status}`))
 const allSelected = computed(() => proxies.value.length > 0 && proxies.value.every(proxy => selected.value.has(proxy.id)))
 watch(proxies, (items) => {
   for (const item of items) {
@@ -333,11 +333,7 @@ onMounted(() => void query.execute())
       </template>
       <template #body>
         <div class="flex h-full min-h-0 flex-col">
-          <div v-if="batchResults.length" role="status" class="max-h-36 shrink-0 overflow-auto text-cp-xs">
-            <p v-for="(result, index) in batchResults" :key="index">
-              {{ result }}
-            </p>
-          </div>
+          <ProxyBatchResults v-if="batch.tests.items.value.length" :tests="batch.tests.items.value" class="mb-3 max-h-64 shrink-0 overflow-auto" />
           <BaseTable class="min-h-0 flex-1" :columns="columns" :rows="proxies" :loading="loading" :empty-text="search.trim() ? '没有找到匹配的代理，请尝试其他名称' : '暂无代理，请点击新增代理添加'">
             <template #header-selection>
               <BaseCheckbox :model-value="allSelected" :disabled="batchTesting" :label="t('proxies.page.selectCurrentPageProxy')" @update:model-value="selectPage" />

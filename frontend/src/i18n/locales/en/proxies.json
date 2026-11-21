@@ -60,7 +60,7 @@
       "stopped": "Remaining additions stopped"
     },
     "batchTest": {
-      "resultsTitle": "Batch results",
+      "resultsTitle": "Batch proxy results",
       "processed": "Processed",
       "added": "Added: {created}",
       "invalidFormat": "Invalid format: {invalid}",
