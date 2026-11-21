@@ -64,6 +64,7 @@ pub(crate) struct MemoryAccountStore {
     pub(crate) before_provider_list: Mutex<Option<Box<dyn FnOnce() + Send + Sync>>>,
     pub(crate) before_credential_load: Mutex<Option<Box<dyn FnOnce() + Send + Sync>>>,
     pub(crate) credential_conflicts: AtomicUsize,
+    pub(crate) credential_error: Mutex<Option<StoreErrorKind>>,
     pub(crate) credential_loads: AtomicUsize,
     pub(crate) pause_account_read: AtomicBool,
     pub(crate) account_reads: AtomicUsize,
@@ -431,7 +432,13 @@ impl ProviderAccountStore for MemoryAccountStore {
             hook();
         }
         if self.fail_provider_listing.load(Ordering::SeqCst) {
-            return Err(store_error(StoreErrorKind::Unavailable));
+            return Err(StoreError::caused_by(
+                StoreErrorKind::Unavailable,
+                std::io::Error::new(
+                    std::io::ErrorKind::ConnectionRefused,
+                    "PRIVATE_DATABASE_CAUSE",
+                ),
+            ));
         }
         Ok(self
             .accounts
@@ -474,6 +481,9 @@ impl ProviderAccountStore for MemoryAccountStore {
         expected_revision: CredentialRevision,
     ) -> Result<LoadedCredential, StoreError> {
         self.credential_loads.fetch_add(1, Ordering::SeqCst);
+        if let Some(kind) = *self.credential_error.lock().unwrap() {
+            return Err(store_error(kind));
+        }
         let hook = self.before_credential_load.lock().unwrap().take();
         if let Some(hook) = hook {
             hook();
@@ -518,6 +528,7 @@ impl ProviderAccountStore for MemoryAccountStore {
             profile,
             preserve_profile,
             preserve_turn_state_binding,
+            preserve_access_token_expiry,
             credential,
             has_refresh_token,
             access_token_expires_at,
@@ -531,6 +542,11 @@ impl ProviderAccountStore for MemoryAccountStore {
         if stored.account.revision() != expected_revision {
             return Ok(CredentialCasOutcome::Conflict);
         }
+        let access_token_expires_at = if preserve_access_token_expiry {
+            stored.account.access_token_expires_at()
+        } else {
+            access_token_expires_at
+        };
         let next = expected_revision
             .next()
             .map_err(|_| store_error(StoreErrorKind::Conflict))?;
@@ -700,6 +716,32 @@ impl ProviderAccountStore for MemoryAccountStore {
             observation.state = change.state;
         }
         Ok(QuotaWriteOutcome::Updated)
+    }
+
+    async fn expire_access_token(
+        &self,
+        account: &ProviderAccount,
+        observed_at: SystemTime,
+    ) -> Result<bool, StoreError> {
+        let mut accounts = self.accounts.lock().expect("account store lock");
+        let Some(stored) = accounts.get_mut(account.id()) else {
+            return Ok(false);
+        };
+        if stored.account.revision() != account.revision()
+            || stored
+                .state_observed_at
+                .is_some_and(|current| current > observed_at)
+        {
+            return Ok(false);
+        }
+        let mut facts = AccountRebuild::preserving(&stored.account);
+        facts.access_token_expires_at = Some(
+            facts
+                .access_token_expires_at
+                .map_or(observed_at, |at| at.min(observed_at)),
+        );
+        stored.account = rebuild_account(&stored.account, facts);
+        Ok(true)
     }
 
     async fn apply_state_change(&self, change: AccountStateChange) -> Result<(), StoreError> {

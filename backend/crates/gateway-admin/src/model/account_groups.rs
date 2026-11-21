@@ -3,7 +3,10 @@
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
-use gateway_core::{account::AccountStatusFacts, routing::AccountGroupId};
+use gateway_core::{
+    account::{AccountModelAccess, AccountStatusFacts, FastMode},
+    routing::AccountGroupId,
+};
 
 use super::{PageSize, Revision, observability::DecimalAmount};
 
@@ -106,7 +109,9 @@ pub struct AccountGroupListQuery {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountGroupRecord {
     pub allow_image_generation: bool,
-    pub fast_mode: gateway_core::account::FastMode,
+    pub allow_subagents: bool,
+    pub model_access: AccountModelAccess,
+    pub fast_mode: FastMode,
     pub id: AccountGroupId,
     pub name: String,
     pub description: Option<String>,
@@ -137,7 +142,9 @@ pub struct AccountGroupPage {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreateAccountGroup {
     pub allow_image_generation: bool,
-    pub fast_mode: gateway_core::account::FastMode,
+    pub allow_subagents: bool,
+    pub model_access: AccountModelAccess,
+    pub fast_mode: FastMode,
     pub name: String,
     pub description: Option<String>,
     pub color: AccountGroupColor,
@@ -148,7 +155,9 @@ pub struct CreateAccountGroup {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewAccountGroup {
     pub allow_image_generation: bool,
-    pub fast_mode: gateway_core::account::FastMode,
+    pub allow_subagents: bool,
+    pub model_access: AccountModelAccess,
+    pub fast_mode: FastMode,
     pub id: AccountGroupId,
     pub name: String,
     pub description: Option<String>,
@@ -160,7 +169,9 @@ pub struct NewAccountGroup {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UpdateAccountGroup {
     pub allow_image_generation: Option<bool>,
-    pub fast_mode: Option<gateway_core::account::FastMode>,
+    pub allow_subagents: Option<bool>,
+    pub model_access: Option<AccountModelAccess>,
+    pub fast_mode: Option<FastMode>,
     pub id: AccountGroupId,
     pub name: String,
     pub description: Option<String>,

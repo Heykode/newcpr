@@ -1348,6 +1348,7 @@ pub struct CredentialCasUpdateParts {
     pub profile: ProviderAccountUpdate,
     pub preserve_profile: bool,
     pub preserve_turn_state_binding: bool,
+    pub preserve_access_token_expiry: bool,
     pub credential: PlaintextCredential,
     pub has_refresh_token: bool,
     pub access_token_expires_at: Option<SystemTime>,
@@ -1363,6 +1364,7 @@ pub struct CredentialCasUpdate {
     profile: ProviderAccountUpdate,
     preserve_profile: bool,
     preserve_turn_state_binding: bool,
+    preserve_access_token_expiry: bool,
     credential: PlaintextCredential,
     has_refresh_token: bool,
     access_token_expires_at: Option<SystemTime>,
@@ -1381,6 +1383,10 @@ impl fmt::Debug for CredentialCasUpdate {
             .field(
                 "preserve_turn_state_binding",
                 &self.preserve_turn_state_binding,
+            )
+            .field(
+                "preserve_access_token_expiry",
+                &self.preserve_access_token_expiry,
             )
             .field("credential", &self.credential)
             .field("has_refresh_token", &self.has_refresh_token)
@@ -1418,6 +1424,7 @@ impl CredentialCasUpdate {
             profile,
             preserve_profile: false,
             preserve_turn_state_binding: false,
+            preserve_access_token_expiry: false,
             credential,
             has_refresh_token,
             access_token_expires_at,
@@ -1441,7 +1448,14 @@ impl CredentialCasUpdate {
         self
     }
 
-    /// 将刷新调度与账号错误事实放入同一个 revision CAS。
+    /// 沿用同一访问令牌时，保留提交时的有效期，避免覆盖在途收到的撤销事实
+    #[must_use]
+    pub const fn preserving_access_token_expiry(mut self) -> Self {
+        self.preserve_access_token_expiry = true;
+        self
+    }
+
+    /// 将刷新调度与账号错误事实放入同一个 revision CAS
     #[must_use]
     pub fn with_account_state(
         mut self,
@@ -1508,6 +1522,7 @@ impl CredentialCasUpdate {
             profile: self.profile,
             preserve_profile: self.preserve_profile,
             preserve_turn_state_binding: self.preserve_turn_state_binding,
+            preserve_access_token_expiry: self.preserve_access_token_expiry,
             credential: self.credential,
             has_refresh_token: self.has_refresh_token,
             access_token_expires_at: self.access_token_expires_at,

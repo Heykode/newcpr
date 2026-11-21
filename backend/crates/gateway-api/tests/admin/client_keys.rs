@@ -447,3 +447,126 @@ async fn list_route_should_accept_the_full_nonzero_u16_page_size() {
 
     assert_eq!(response.status(), StatusCode::OK);
 }
+
+#[tokio::test]
+async fn key_usage_routes_freeze_cutoff_and_validate_before_store_access() {
+    use axum::{
+        body::{Body, to_bytes},
+        http::{Request, StatusCode},
+    };
+    use tower::ServiceExt as _;
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.insert_session("key-usage-session");
+    let app = gateway_api::admin::router::<AdminTestState>().with_state(fixture.state());
+    let cutoff = Utc
+        .with_ymd_and_hms(2026, 10, 1, 12, 30, 0)
+        .unwrap()
+        .timestamp_millis();
+    for route in ["statistics", "statistics/models"] {
+        for auth in [false, true] {
+            let mut request = Request::builder()
+                .header("x-request-id", "key-usage-request")
+                .uri(format!(
+                    "/api/admin/client-keys/{route}?id=key_usage&period=7d&asOf={cutoff}"
+                ));
+            if auth {
+                request = request.header("cookie", "cpr_admin_session=key-usage-session");
+            }
+            let response = app
+                .clone()
+                .oneshot(request.body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                if auth {
+                    StatusCode::OK
+                } else {
+                    StatusCode::UNAUTHORIZED
+                }
+            );
+            if auth && route == "statistics" {
+                let body: serde_json::Value = serde_json::from_slice(
+                    &to_bytes(response.into_body(), usize::MAX).await.unwrap(),
+                )
+                .unwrap();
+                assert_eq!(body["data"]["asOf"], cutoff);
+                assert_eq!(body["data"]["dates"].as_array().unwrap().len(), 7);
+                assert_eq!(body["data"]["totals"]["costUsd"], serde_json::Value::Null);
+            }
+        }
+    }
+    let queries = fixture.key_usage_queries.lock().unwrap().clone();
+    assert_eq!(queries.len(), 2);
+    assert_eq!(queries[0], queries[1]);
+    assert_eq!(queries[0].0.end.timestamp_millis(), cutoff);
+    assert_eq!(queries[0].1, "key_usage");
+    for (query, status) in [
+        ("id=key_usage&period=5d", StatusCode::BAD_REQUEST),
+        ("id=key_usage&asOf=9999999999999", StatusCode::BAD_REQUEST),
+        ("id=key_usage&metric=unknown", StatusCode::BAD_REQUEST),
+        ("id=key_usage&other=1", StatusCode::BAD_REQUEST),
+        ("id=key_missing", StatusCode::NOT_FOUND),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .header("x-request-id", "key-usage-request")
+                    .uri(format!("/api/admin/client-keys/statistics?{query}"))
+                    .header("cookie", "cpr_admin_session=key-usage-session")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), status, "{query}");
+    }
+    assert_eq!(fixture.key_usage_queries.lock().unwrap().len(), 2);
+    for (method, path) in [
+        ("GET", "budget-reference-accounts"),
+        ("GET", "budget-alignment"),
+        ("POST", "budget-alignment"),
+        ("POST", "batch-update"),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .header("x-request-id", "key-usage-request")
+                    .method(method)
+                    .uri(format!("/api/admin/client-keys/{path}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::UNAUTHORIZED,
+            "{method} {path}"
+        );
+    }
+}
+
+#[test]
+fn batch_key_wire_preserves_zero_and_omission_and_rejects_removed_profile_fields() {
+    use gateway_api::admin::client_keys::BatchUpdateClientKeysRequest;
+    let patch = serde_json::from_value::<BatchUpdateClientKeysRequest>(
+        json!({"ids":["key_patch"],"maxConcurrency":0}),
+    )
+    .unwrap()
+    .into_command()
+    .unwrap();
+    assert_eq!(patch.max_concurrency, Some(0));
+    assert_eq!(patch.requests_per_minute, None);
+    assert_eq!(patch.group_ids, None);
+    assert_eq!(patch.daily_limit_usd, None);
+    assert!(patch.request_profile_override_updates.is_empty());
+    for legacy in ["openaiClientProfileOverride", "xaiClientProfileOverride"] {
+        let mut input = json!({"ids":["key_patch"],"maxConcurrency":1});
+        input[legacy] = json!({});
+        assert!(serde_json::from_value::<BatchUpdateClientKeysRequest>(input).is_err());
+    }
+}

@@ -676,8 +676,6 @@ mod batch_update {
         for fields in [
             json!({"outboundProxyId": "invalid proxy"}),
             json!({"outboundProxyId": "p".repeat(129)}),
-            json!({"outboundProxyId": "proxy_saved", "outboundProxyUrl": ""}),
-            json!({"outboundProxyId": "", "outboundProxyUrl": "http://127.0.0.1:8080"}),
         ] {
             let mut payload = fields;
             payload["accountIds"] = json!(["acct_test"]);
@@ -691,6 +689,13 @@ mod batch_update {
                 "outboundProxyId"
             );
         }
+        assert!(
+            serde_json::from_value::<BatchUpdateAccountsRequest>(json!({
+                "accountIds": ["acct_test"], "outboundProxyUrl": ""
+            }))
+            .is_err(),
+            "retired URL binding is rejected at the wire boundary"
+        );
         let empty: BatchUpdateAccountsRequest =
             serde_json::from_value(json!({"accountIds": ["acct_test"]})).unwrap();
         assert_eq!(empty.validate().unwrap_err().field(), "fields");

@@ -43,6 +43,17 @@ pub enum CodexRuntimeAuthentication {
 }
 
 impl CodexRuntimeAuthentication {
+    pub(crate) fn model_client_for_account(
+        &self,
+        client: &crate::transport::CodexBackendClient,
+        account: &gateway_core::account::ProviderAccount,
+    ) -> crate::transport::CodexClientResult<crate::transport::CodexBackendClient> {
+        let client = client.for_account(account)?;
+        Ok(match self {
+            Self::OAuth(secret) => client.with_fedramp_routing(secret.has_fedramp_routing_claim()),
+        })
+    }
+
     pub fn authorization_header(&self) -> Result<SecretString, CodexCredentialDataError> {
         match self {
             Self::OAuth(secret) => Ok(SecretString::from(format!(

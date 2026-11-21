@@ -15,6 +15,7 @@ use gateway_admin::{
         MutationContext,
         account_groups::AccountGroupRef as AdminAccountGroupRef,
         client_keys::{
+            BatchUpdateClientKeys, BudgetReferenceAccountPage,
             ClientKeyCursor as AdminClientKeyCursor,
             ClientKeyCursorValue as AdminClientKeyCursorValue,
             ClientKeyListQuery as AdminClientKeyListQuery, ClientKeyPage as AdminClientKeyPage,
@@ -24,7 +25,7 @@ use gateway_admin::{
             SortDirection as AdminSortDirection, UpdateClientKey as AdminUpdateClientKey,
         },
     },
-    ports::store::{AdminStoreResult, ClientKeyStore},
+    ports::store::{AdminStoreResult, BatchClientKeyProfileMerger, ClientKeyStore},
 };
 use gateway_core::{
     account::OpaqueProviderData,
@@ -691,6 +692,95 @@ impl PgAdminClientKeyStore {
 
 #[async_trait]
 impl ClientKeyStore for PgAdminClientKeyStore {
+    async fn budget_reference_accounts(
+        &self,
+        id: &gateway_core::policy::ClientApiKeyId,
+        search: &str,
+        after: &str,
+    ) -> AdminStoreResult<BudgetReferenceAccountPage> {
+        use gateway_admin::model::client_keys::BudgetReferenceAccount;
+        const PAGE_SIZE: u8 = 20;
+        let store_error = |operation, source| {
+            admin_store_error(ENTITY, postgres_unavailable(operation).with_source(source))
+        };
+        // 空分组表示全部账号，只有启用分组内的成员可作为受限密钥的参考账号
+        let groups: Vec<String> = sqlx::query_scalar(
+            "select array(select account_group_id from client_api_key_groups where client_api_key_id = k.id)
+             from client_api_keys k where k.id = $1",
+        )
+        .bind(id.as_str())
+        .fetch_optional(&self.keys.pool)
+        .await
+        .map_err(|error| store_error("read key groups", error))?
+        .ok_or_else(|| admin_store_error(ENTITY, StoreError::NotFound {
+            entity: ENTITY, id: id.as_str().to_owned()
+        }))?;
+        let rows: Vec<(String, String, Option<String>, String)> = sqlx::query_as(
+            "select a.id, a.name, a.email, a.provider_kind from provider_accounts a
+             where a.id > $1
+               and ($2 = '' or strpos(lower(a.name), lower($2)) > 0
+                         or strpos(lower(coalesce(a.email, '')), lower($2)) > 0)
+               and (cardinality($3::text[]) = 0 or exists (
+                   select 1 from account_group_accounts m join account_groups g on g.id = m.account_group_id
+                   where m.provider_account_id = a.id and m.account_group_id = any($3) and g.enabled))
+             order by a.id limit $4",
+        )
+        .bind(after)
+        .bind(search)
+        .bind(&groups)
+        .bind(i64::from(PAGE_SIZE) + 1)
+        .fetch_all(&self.keys.pool)
+        .await
+        .map_err(|error| store_error("select reference accounts", error))?;
+        let has_more = rows.len() > usize::from(PAGE_SIZE);
+        let items: Vec<_> = rows
+            .into_iter()
+            .take(usize::from(PAGE_SIZE))
+            .map(|(id, name, email, provider)| BudgetReferenceAccount {
+                id,
+                name,
+                email,
+                provider,
+            })
+            .collect();
+        let next_cursor = items.last().filter(|_| has_more).map(|row| row.id.clone());
+        Ok(BudgetReferenceAccountPage { items, next_cursor })
+    }
+
+    async fn client_key_budget_window(
+        &self,
+        id: &ClientApiKeyId,
+        period: gateway_admin::model::client_keys::ClientKeyBudgetWindowPeriod,
+    ) -> AdminStoreResult<gateway_admin::model::client_keys::ClientKeyBudgetWindow> {
+        super::client_budget_windows::get(&self.keys.pool, id, period).await
+    }
+
+    async fn set_client_key_budget_window(
+        &self,
+        command: gateway_admin::model::client_keys::SetClientKeyBudgetWindow,
+        context: &MutationContext,
+    ) -> AdminStoreResult<u64> {
+        super::client_budget_windows::set(&self.keys.pool, command, context).await
+    }
+
+    async fn get_client_key(
+        &self,
+        id: &ClientApiKeyId,
+    ) -> AdminStoreResult<Option<AdminClientKeyRecord>> {
+        self.keys
+            .get_client_api_key(id.as_str())
+            .await
+            .map_err(|e| admin_store_error(ENTITY, e))?
+            .map(admin_client_key_record)
+            .transpose()
+    }
+    async fn client_key_budget(
+        &self,
+        id: &ClientApiKeyId,
+    ) -> AdminStoreResult<Option<ClientBudgetStatus>> {
+        Ok(self.get_client_key(id).await?.map(|record| record.budget))
+    }
+
     async fn reset_client_key_budget(
         &self,
         command: gateway_admin::model::client_keys::ResetClientKeyBudget,
@@ -837,6 +927,55 @@ impl ClientKeyStore for PgAdminClientKeyStore {
             .await
             .map_err(|error| admin_store_error(ENTITY, error))?;
         Ok((admin_revision(revision)?, self.required_record(&id).await?))
+    }
+
+    async fn batch_update_client_keys(
+        &self,
+        command: BatchUpdateClientKeys,
+        merge_profiles: BatchClientKeyProfileMerger,
+        context: &MutationContext,
+    ) -> AdminStoreResult<gateway_admin::model::Revision> {
+        let mut fields = Vec::new();
+        if let Some(groups) = &command.group_ids {
+            fields.push("group_ids".to_owned());
+            fields.push(
+                if groups.is_empty() {
+                    "routing_scope:all"
+                } else {
+                    "routing_scope:groups"
+                }
+                .to_owned(),
+            );
+        }
+        fields.extend(
+            [
+                (command.enabled.is_some(), "enabled"),
+                (command.max_concurrency.is_some(), "max_concurrency"),
+                (command.requests_per_minute.is_some(), "requests_per_minute"),
+                (command.daily_limit_usd.is_some(), "daily_limit_usd"),
+                (command.weekly_limit_usd.is_some(), "weekly_limit_usd"),
+                (
+                    !command.request_profile_override_updates.is_empty()
+                        || command.installation_seed.is_some(),
+                    "provider_request_profiles_json",
+                ),
+            ]
+            .into_iter()
+            .filter(|(changed, _)| *changed)
+            .map(|(_, field)| field.to_owned()),
+        );
+        let audit = mutation_audit(
+            context,
+            "batch_update",
+            "client_api_key",
+            "client_api_keys",
+            fields,
+        );
+        self.control_plane
+            .batch_update_client_keys(command, merge_profiles, audit)
+            .await
+            .map_err(|error| admin_store_error(ENTITY, error))
+            .and_then(admin_revision)
     }
 
     async fn set_client_key_enabled(
@@ -1118,6 +1257,68 @@ fn require_changed(rows_affected: u64, id: &str) -> StoreResult<()> {
             id: id.to_owned(),
         })
     }
+}
+
+pub(super) async fn batch_update_client_keys_in_transaction(
+    tx: &mut Transaction<'_, Postgres>,
+    command: &BatchUpdateClientKeys,
+    merge_profiles: &BatchClientKeyProfileMerger,
+) -> StoreResult<()> {
+    let ids: Vec<_> = command
+        .ids
+        .iter()
+        .map(|id| id.as_str().to_owned())
+        .collect();
+    let update_profiles =
+        !command.request_profile_override_updates.is_empty() || command.installation_seed.is_some();
+    for chunk in ids.chunks(if update_profiles {
+        16
+    } else {
+        ids.len().max(1)
+    }) {
+        let mut profiles_by_id = BTreeMap::new();
+        if update_profiles {
+            type StoredRequestProfiles =
+                BTreeMap<String, serde_json::Map<String, serde_json::Value>>;
+            let rows: Vec<(String, sqlx::types::Json<StoredRequestProfiles>)> = sqlx::query_as(
+                "select id, provider_request_profiles_json from client_api_keys where id = any($1) order by id for update")
+                .bind(chunk).fetch_all(&mut **tx).await
+                .map_err(|e| postgres_unavailable("read batch key profiles").with_source(e))?;
+            for (id, sqlx::types::Json(profiles)) in rows {
+                let mut profiles = decode_request_profiles(profiles)?;
+                merge_profiles(&mut profiles)
+                    .map_err(|e| invalid("invalid client key request profile").with_source(e))?;
+                validate_request_profiles(profiles.values())?;
+                profiles_by_id.insert(id, encode_request_profiles(&profiles));
+            }
+        }
+        let changed = sqlx::query("update client_api_keys set enabled = coalesce($2, enabled),
+            max_concurrency = coalesce($3, max_concurrency), requests_per_minute = coalesce($4, requests_per_minute),
+            daily_limit_usd = coalesce($5::text::numeric, daily_limit_usd),
+            weekly_limit_usd = coalesce($6::text::numeric, weekly_limit_usd),
+            provider_request_profiles_json = coalesce($7::jsonb -> id, provider_request_profiles_json), updated_at = now()
+            where id = any($1)")
+            .bind(chunk).bind(command.enabled)
+            .bind(command.max_concurrency.map(to_i64).transpose()?)
+            .bind(command.requests_per_minute.map(to_i64).transpose()?)
+            .bind(command.daily_limit_usd.map(Decimal::canonical))
+            .bind(command.weekly_limit_usd.map(Decimal::canonical))
+            .bind(sqlx::types::Json(profiles_by_id)).execute(&mut **tx).await
+            .map_err(|e| postgres_unavailable("batch update client API keys").with_source(e))?;
+        if usize::try_from(changed.rows_affected()).ok() != Some(chunk.len()) {
+            return Err(StoreError::NotFound {
+                entity: ENTITY,
+                id: "selected client API keys".to_owned(),
+            });
+        }
+    }
+    if let Some(groups) = &command.group_ids {
+        let groups: Vec<_> = groups.iter().map(|id| id.as_str().to_owned()).collect();
+        for id in &ids {
+            replace_client_api_key_groups_in_transaction(tx, id, &groups).await?;
+        }
+    }
+    Ok(())
 }
 
 async fn replace_client_api_key_groups_in_transaction(

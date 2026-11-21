@@ -18,7 +18,7 @@ use super::{
     },
     diagnostics::{CodexUpstreamDiagnostics, CodexUpstreamSendPhase},
     endpoints::endpoint_url,
-    headers::{insert_optional_header, is_managed_identity_header},
+    headers::{insert_optional_header, is_managed_model_header},
     response_meta,
     websocket::CodexWebSocketConnection,
 };
@@ -39,7 +39,7 @@ impl CodexBackendClient {
         )?;
         for header in extra_protocol_headers {
             let name = reqwest::header::HeaderName::from_bytes(header.name().as_bytes())?;
-            if is_managed_identity_header(name.as_str())
+            if is_managed_model_header(&name, self.fedramp_routing)
                 // This Live business reference is a local-only hint in Responses.
                 || (name != "x-session-id"
                     && (is_transport_managed_request_header(name.as_str())

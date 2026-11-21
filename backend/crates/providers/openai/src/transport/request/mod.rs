@@ -151,6 +151,29 @@ fn adapt_codex_responses_body(
     }
 }
 
+pub(crate) fn apply_request_country(
+    body: &mut Map<String, Value>,
+    location: Option<&CodexRequestLocation>,
+    country: &gateway_core::account::OpenAiRequestCountry,
+) {
+    use gateway_core::account::OpenAiRequestCountry;
+    match country {
+        OpenAiRequestCountry::Default {} => {
+            body.insert("request_country".into(), Value::Null);
+        }
+        OpenAiRequestCountry::Passthrough {} => {}
+        OpenAiRequestCountry::FollowLocation {} => {
+            body.insert(
+                "request_country".into(),
+                Value::from(location.map(|location| location.country.as_str())),
+            );
+        }
+        OpenAiRequestCountry::Custom { country } => {
+            body.insert("request_country".into(), Value::from(country.as_str()));
+        }
+    }
+}
+
 pub(crate) fn align_structured_location_fields(
     body: &mut Map<String, Value>,
     location: &CodexRequestLocation,
@@ -873,6 +896,7 @@ fn replace_metadata_field(metadata: &mut Map<String, Value>, key: &str, value: O
 // 优先;body 顶层别名只在 header 缺失时兜底(例如 WebSocket 帧无法逐轮携带
 // 请求头的场景)。
 fn apply_protocol_context(request: &mut CodexResponsesRequest, context: &Map<String, Value>) {
+    request.guardian_role = gateway_protocol::openai::codex_guardian_role(request.body(), context);
     request.client_account_session_id =
         gateway_protocol::openai::codex_account_session_id(request.body(), context);
     let account_thread = gateway_protocol::openai::codex_account_thread_id(request.body(), context);

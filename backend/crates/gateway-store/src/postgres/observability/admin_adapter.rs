@@ -459,6 +459,57 @@ impl ObservabilityRepository for PgObservabilityRepository {
 
 #[async_trait]
 impl AdminObservabilityStore for PgAdminObservabilityStore {
+    async fn client_key_statistics(
+        &self,
+        range: admin_observability::TimeRange,
+        id: &gateway_core::policy::ClientApiKeyId,
+        query: admin_observability::KeyUsageMetric,
+    ) -> AdminStoreResult<admin_observability::KeyStatisticsOverview> {
+        let range = store_range(range)?;
+        let timezone = self.repository.timezone;
+        self.repository
+            .query_budget
+            .run(
+                &self.repository.pool,
+                "load key usage statistics",
+                |mut connection| async move {
+                    let mut snapshot = analytics::AnalyticsSnapshot::new(&mut connection).await?;
+                    let result = snapshot
+                        .client_key_statistics(range, id.as_str(), timezone, query)
+                        .await?;
+                    snapshot.finish().await?;
+                    Ok(result)
+                },
+            )
+            .await
+            .map_err(observability_error)
+    }
+
+    async fn client_key_models(
+        &self,
+        range: admin_observability::TimeRange,
+        id: &gateway_core::policy::ClientApiKeyId,
+    ) -> AdminStoreResult<Vec<admin_observability::KeyModelRow>> {
+        let range = store_range(range)?;
+        let timezone = self.repository.timezone;
+        self.repository
+            .query_budget
+            .run(
+                &self.repository.pool,
+                "load key usage statistics",
+                |mut connection| async move {
+                    let mut snapshot = analytics::AnalyticsSnapshot::new(&mut connection).await?;
+                    let result = snapshot
+                        .client_key_models(range, id.as_str(), timezone)
+                        .await?;
+                    snapshot.finish().await?;
+                    Ok(result)
+                },
+            )
+            .await
+            .map_err(observability_error)
+    }
+
     async fn analytics_cache_generation(&self) -> AdminStoreResult<u64> {
         self.repository
             .query_budget

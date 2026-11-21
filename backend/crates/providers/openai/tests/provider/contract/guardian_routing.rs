@@ -279,11 +279,183 @@ async fn guardian_ignores_expired_ambiguous_and_wrong_path_routing_cookies() {
         }
         let requests = server.requests.lock().unwrap();
         assert!(!requests[1].1.contains_key("cookie"));
+        // Parent ownership remains valid even when its routing cookie is unusable.
+        assert_eq!(
+            requests[1].2["client_metadata"]["parent_response_id"],
+            "parent"
+        );
+    }
+}
+
+#[tokio::test]
+async fn guardian_review_model_and_account_claim_reach_native_http_and_websocket() {
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    const TARGET: &str = "codex-auto-review";
+    for websocket in [false, true] {
+        let server = MockServer::start().await;
+        let ws_server = RoutingUpstream::start(None).await;
+        Mock::given(method("POST"))
+            .and(path("/codex/responses"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                format!("event: response.created\ndata: {{\"type\":\"response.created\",\"response\":{{\"id\":\"resp_scope_capture\",\"model\":\"{TARGET}\"}}}}\n\n{CAPTURE_COMPLETED_SSE}"),
+                "text/event-stream",
+            ))
+            .mount(&server).await;
+        let store = Arc::new(MemoryAccountStore::default());
+        let token = format!(
+            "e30.{}.synthetic",
+            URL_SAFE_NO_PAD.encode(
+                json!({
+                    "https://api.openai.com/auth":{"chatgpt_account_is_fedramp":true}
+                })
+                .to_string()
+            )
+        );
+        store
+            .seed_oauth_credential(ImportCodexOAuthCredential {
+                account_id: SELECTED_ACCOUNT.into(),
+                name: "Guardian fixture".into(),
+                secret: secret(&token),
+                verified_account: profile("chatgpt-guardian-fixture"),
+                next_refresh_at: Some(Utc::now() + chrono::Duration::minutes(30)),
+                enabled: true,
+            })
+            .await;
+        let provider = provider_with_base_url(
+            &store,
+            if websocket {
+                ws_server.url.clone()
+            } else {
+                server.uri()
+            },
+        );
+        let kind = ProviderKind::new("openai").unwrap();
+        let snapshot = RuntimeSnapshot::new(
+            ConfigRevision::new(1).unwrap(),
+            account_policy(),
+            vec![kind.clone()],
+            ["gpt-5.4", TARGET]
+                .into_iter()
+                .map(|model| {
+                    ProviderModel::new(
+                        kind.clone(),
+                        UpstreamModelId::new(model).unwrap(),
+                        ModelCapabilities::new([OperationKind::Generate].into(), Some(32_000))
+                            .with_upstream_feature_validation(),
+                    )
+                })
+                .collect(),
+            vec![],
+        )
+        .unwrap()
+        .with_openai_request_settings(true, Default::default());
+        let make = |source: &str| {
+            Operation::Generate(GenerateRequest::from_protocol_payload(
+                ProtocolPayload::json_object(
+                    "openai",
+                    json!({
+                        "model":"gpt-5.4","input":"Review this command", "client_metadata":{
+                            "fixture_response_id":"resp_review", "x-openai-subagent":"guardian",
+                            "x-codex-turn-metadata": json!({"thread_source":source}).to_string()
+                        }
+                    })
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+                )
+                .unwrap()
+                .with_context(Map::from_iter([
+                    ("use_websocket".into(), json!(websocket)),
+                    (
+                        "opaque_request_headers".into(),
+                        json!([["x-openai-fedramp", STANDARD.encode("false")]]),
+                    ),
+                ])),
+            ))
+        };
+        let model = PublicModelId::new("gpt-5.4").unwrap();
+        let review = make("guardian_review");
+        let target = provider
+            .direct_account_model(&model, &review, None, &snapshot)
+            .expect("structured reviewer selects dedicated model");
+        assert_eq!(target.as_str(), TARGET);
+        for other in [
+            make("guardian_classifier"),
+            make("ordinary"),
+            generate_operation(),
+        ] {
+            assert!(
+                provider
+                    .direct_account_model(&model, &other, None, &snapshot)
+                    .is_none()
+            );
+        }
+        let disabled = snapshot
+            .clone()
+            .with_openai_request_settings(false, Default::default());
         assert!(
-            requests[1]
-                .2
-                .pointer("/client_metadata/parent_response_id")
+            provider
+                .direct_account_model(&model, &review, None, &disabled)
                 .is_none()
         );
+        for (previous_model, expected) in [(TARGET, true), ("gpt-5.4", false)] {
+            let previous = ProviderSessionState::new(
+                "openai",
+                json!({"reviewer_model":previous_model})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            )
+            .unwrap();
+            assert_eq!(
+                provider
+                    .direct_account_model(&model, &review, Some(&previous), &disabled)
+                    .is_some(),
+                expected
+            );
+        }
+        let plan = snapshot
+            .plan_with_direct_account_model(
+                &model,
+                &review,
+                contract_account_scope(),
+                &RoutingContext::default(),
+                &kind,
+                &target,
+                None,
+            )
+            .unwrap();
+        assert!(plan.candidates()[0].requires_direct_authentication());
+        let mut stream = provider
+            .execute(
+                ProviderRequest::new(review, plan.candidates()[0].clone()),
+                routing_context("review_model", "key_openai_contract", SELECTED_ACCOUNT),
+            )
+            .await
+            .unwrap();
+        while let Some(event) = stream.next().await {
+            event.expect("review completes");
+        }
+        let (headers, body) = if websocket {
+            let captured = ws_server.requests.lock().unwrap();
+            assert_eq!(captured.len(), 1);
+            (captured[0].1.clone(), captured[0].2.clone())
+        } else {
+            let captured = server.received_requests().await.unwrap();
+            assert_eq!(captured.len(), 1);
+            assert_eq!(captured[0].headers["content-encoding"], "zstd");
+            (
+                captured[0].headers.clone(),
+                captured_request_body(&captured[0]),
+            )
+        };
+        assert_eq!(body["model"], TARGET);
+        assert_eq!(headers["x-codex-guardian"], "reviewer");
+        assert_eq!(
+            headers["x-openai-fedramp"], "true",
+            "selected account claim overrides downstream header"
+        );
+        assert_eq!(headers.get_all("x-openai-fedramp").iter().count(), 1);
+        assert!(!headers.contains_key("x-codex-routing-hint"));
     }
 }

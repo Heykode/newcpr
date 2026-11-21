@@ -1,10 +1,13 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import type { ApiKey } from '@/api'
+import { ref, shallowRef, watch } from 'vue'
+import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
-
 import BaseCheckbox from '@/components/base/BaseCheckbox.vue'
 import BaseConfirmModal from '@/components/base/BaseConfirmModal.vue'
+import BaseModal from '@/components/base/BaseModal/index.vue'
 import BasePageHeader from '@/components/base/BasePageHeader.vue'
+
 import BaseTablePagination from '@/components/base/BaseTable/BaseTablePagination.vue'
 import BaseTable from '@/components/base/BaseTable/index.vue'
 import ClientImportModal from '@/components/ClientImportModal.vue'
@@ -13,6 +16,8 @@ import { useAccountGroupCatalog } from '@/composables/useAccountGroupCatalog'
 import { usePageSelection } from '@/composables/usePageSelection'
 import { t } from '@/i18n'
 import ApiKeyActions from './components/ApiKeyActions.vue'
+import ApiKeyBatchEditModal from './components/ApiKeyBatchEditModal.vue'
+import ApiKeyBudgetAlignment from './components/ApiKeyBudgetAlignment.vue'
 import ApiKeyBudgetCell from './components/ApiKeyBudgetCell.vue'
 import ApiKeyBudgetResetModal from './components/ApiKeyBudgetResetModal.vue'
 import ApiKeyCreateModal from './components/ApiKeyCreateModal.vue'
@@ -20,6 +25,7 @@ import ApiKeyFilters from './components/ApiKeyFilters.vue'
 import ApiKeyIdentityCell from './components/ApiKeyIdentityCell.vue'
 import ApiKeyPrefixCell from './components/ApiKeyPrefixCell.vue'
 import ApiKeyScopeCell from './components/ApiKeyScopeCell.vue'
+import ApiKeyStatisticsModal from './components/ApiKeyStatisticsModal.vue'
 import ApiKeyStatusBadge from './components/ApiKeyStatusBadge.vue'
 import ApiKeyUseModal from './components/ApiKeyUseModal.vue'
 import { useApiKeyMutations } from './composables/useApiKeyMutations'
@@ -27,6 +33,12 @@ import { useApiKeysQuery } from './composables/useApiKeysQuery'
 import { useApiKeyUse } from './composables/useApiKeyUse'
 import { apiKeyColumns } from './constants'
 
+const showBatchEdit = shallowRef(false)
+const statisticsKey = shallowRef<ApiKey | null>(null)
+const alignmentKey = shallowRef<ApiKey | null>(null)
+const showAlignment = shallowRef(false)
+const alignmentBusy = shallowRef(false)
+const alignment = ref<InstanceType<typeof ApiKeyBudgetAlignment>>()
 const selectedIds = ref<Set<string>>(new Set())
 const {
   loading,
@@ -45,6 +57,16 @@ const {
   loading: loadingGroups,
   loadGroups,
 } = useAccountGroupCatalog({ immediate: false })
+
+function openAlignment(key: ApiKey) {
+  alignmentKey.value = key
+  showAlignment.value = true
+}
+function batchSaved(ids: string[]) {
+  selectedIds.value = new Set([...selectedIds.value].filter(id => !ids.includes(id)))
+  void loadApiKeys()
+}
+watch(showBatchEdit, open => open && void loadGroups())
 
 const {
   showBudgetResetModal,
@@ -117,6 +139,19 @@ watch(
 
 <template>
   <div class="flex h-full min-h-0 w-full flex-col overflow-hidden">
+    <ApiKeyBatchEditModal v-model="showBatchEdit" :ids="[...selectedIds]" :groups="groups" :group-loading="loadingGroups" @saved="batchSaved" />
+    <ApiKeyStatisticsModal v-if="statisticsKey" :api-key="statisticsKey" @close="statisticsKey = null" />
+    <BaseModal v-model="showAlignment" title="对齐本期预算窗口" description="本期沿用参考账号的日或周窗口，到期恢复密钥自身周期" :dismissible="!alignmentBusy" @after-leave="!showAlignment && (alignmentKey = null)">
+      <ApiKeyBudgetAlignment v-if="alignmentKey" :key="alignmentKey.id" ref="alignment" :active="showAlignment" :api-key="alignmentKey" @busy="alignmentBusy = $event" @saved="showAlignment = false; loadApiKeys()" />
+      <template #footer>
+        <BaseButton :disabled="alignmentBusy" @click="showAlignment = false">
+          取消
+        </BaseButton>
+        <BaseButton variant="primary" :loading="alignmentBusy" :disabled="!alignment?.canSubmit" @click="alignment?.submit()">
+          确认对齐
+        </BaseButton>
+      </template>
+    </BaseModal>
     <BasePageHeader
       :title="t('navigation.apiKeys')"
       :description="t('keys.page.description')"
@@ -131,6 +166,7 @@ watch(
           :batch-deleting="batchDeleting"
           :selected-count="selectedIds.size"
           @create="openCreate"
+          @edit-selected="showBatchEdit = true"
           @delete-selected="showDeleteModal = true"
         />
       </template>
@@ -209,6 +245,8 @@ watch(
                 :revealing="revealingKeyIds.has(row.id)"
                 :updating-status="updatingStatusKeyIds.has(row.id)"
                 @edit="openEdit"
+                @statistics="statisticsKey = $event"
+                @align-budget="openAlignment"
                 @reset-budget="requestBudgetReset"
                 @delete="requestDeleteKey"
                 @import-ccs="importToCcs"

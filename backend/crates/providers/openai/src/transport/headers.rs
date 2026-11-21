@@ -116,6 +116,9 @@ impl CodexBackendClient {
     ) -> CodexClientResult<HeaderMap> {
         let mut headers =
             build_codex_model_headers(profile, context.authorization, context.account_id)?;
+        if self.fedramp_routing {
+            headers.insert("x-openai-fedramp", HeaderValue::from_static("true"));
+        }
         insert_optional_header(&mut headers, "cookie", context.cookie_header)?;
         Ok(headers)
     }
@@ -153,6 +156,7 @@ impl CodexBackendClient {
         context: CodexRequestContext<'_>,
     ) -> CodexClientResult<HeaderMap> {
         let mut headers = self.response_headers(request, context)?;
+        headers.remove("x-codex-turn-state");
         headers.insert(
             HeaderName::from_static("openai-beta"),
             HeaderValue::from_static("responses_websockets=2026-02-06"),
@@ -197,21 +201,34 @@ impl CodexBackendClient {
         if let Some(subagent) = openai_subagent_from_metadata(request.client_metadata()) {
             insert_optional_protocol_header(&mut headers, "x-openai-subagent", Some(&subagent));
         }
-        let routing_hint = match request.service_tier().map(generate_upstream_service_tier) {
-            Some(tier) => format!("model={};tier={tier}", request.model()),
-            None => format!("model={}", request.model()),
-        };
-        insert_optional_protocol_header(&mut headers, "x-codex-routing-hint", Some(&routing_hint));
+        if let Some(role) = request.oauth_guardian_role() {
+            insert_optional_protocol_header(&mut headers, "x-codex-guardian", role.header());
+        } else {
+            let routing_hint = match request.service_tier().map(generate_upstream_service_tier) {
+                Some(tier) => format!("model={};tier={tier}", request.model()),
+                None => format!("model={}", request.model()),
+            };
+            insert_optional_protocol_header(
+                &mut headers,
+                "x-codex-routing-hint",
+                Some(&routing_hint),
+            );
+        }
         append_passthrough_headers(&mut headers, &request.passthrough_headers);
         super::qx_application::apply_response_headers(&mut headers, request, context)?;
         Ok(headers)
     }
 }
 
+pub(super) fn is_managed_model_header(name: &HeaderName, fedramp_routing: bool) -> bool {
+    is_managed_identity_header(name.as_str()) || (fedramp_routing && name == "x-openai-fedramp")
+}
+
 pub(super) fn append_passthrough_headers(headers: &mut HeaderMap, passthrough: &HeaderMap) {
+    let fedramp_routing = headers.contains_key("x-openai-fedramp");
     for name in passthrough.keys() {
         // 身份与传输字段只由画像/正文生成；其余协议头保留原始多值字节。
-        if is_managed_identity_header(name.as_str())
+        if is_managed_model_header(name, fedramp_routing)
             || matches!(
                 name.as_str(),
                 "openai-beta"

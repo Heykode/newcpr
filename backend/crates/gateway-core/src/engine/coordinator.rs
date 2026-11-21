@@ -1135,6 +1135,7 @@ where
                     self.plan.config_revision(),
                 )
                 .with_request_location(self.plan.request_location().cloned())
+                .with_request_country(self.plan.request_country().clone())
                 .with_timing_started_at(self.observation.timing_started_at)
                 .with_trace(self.trace.clone()),
             next_attempt,

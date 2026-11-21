@@ -1244,3 +1244,23 @@ uses caller overrides when present. Keep NewCPR tokens and existing public compo
 `CPR_WEB_BASE_PATH` is a build-time base (default `/`). Router history, management API requests,
 static icons/PWA and browser session restoration use that base. Reverse proxies must strip the
 prefix for backend routes and rewrite Cookie Path and relative Location, including Realtime calls.
+
+
+## v3.54.0 Native Admin Integration
+
+- Group forms persist modelAccess, allowSubagents and ultrafast through the real API.
+  Model shortcuts add gpt-image-2 and gpt-image-1.5 with exact-ID deduplication.
+- Client Key batch editing resets the draft when reopened and sends only selected
+  patch fields. Closing statistics/alignment invalidates pending loads before the
+  modal's leave transition; clear content after leave, preserving the existing body lock.
+- Statistics trend/model table share the server asOf. Missing values remain unknown
+  and estimated costs retain their marker. Reference account search is paginated;
+  alignment is a one-period action, not an ongoing upstream budget controller.
+- Runtime settings require Guardian and country policy fields. The independent
+  user-agent and reset-credit forms keep their own save contracts.
+- Usage errors keep the error column left, time second and actions right. A bounded
+  keyboard-dismissable popover exposes the full detail; preserve specific local WS
+  close/continuation reasons before the official generic reason/message fallback.
+- Browser regression covers 1440/390/320px error details and the existing 15 Codex
+  plan filters; group/key/settings dialogs use 1440/390px with synthetic network
+  fixtures. Check geometry and interactions, not only classes or source text.

@@ -132,8 +132,8 @@ async fn history_repairs_only_complete_unreferenced_message_ids() {
         )
         .await;
         let mut expected = body["input"].clone();
-        if matches!(index, 0 | 2 | 6) {
-            expected[0]["id"] = json!("msg_local");
+        if matches!(index, 0 | 2 | 3 | 5 | 6) {
+            expected[0].as_object_mut().unwrap().remove("id");
         }
         assert_eq!(captured_request_body(&captured)["input"], expected);
         // The source history remains the client's original, including opaque references.

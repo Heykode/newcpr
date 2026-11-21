@@ -545,7 +545,6 @@ interface AccountUpdateParam {
   excelRecovery?: ExcelRecoveryConfig
   egressMode?: string | null
   customName?: string | null
-  outboundProxyUrl?: string
   outboundProxyId?: string
   accountId: string
   enabled: boolean
@@ -571,7 +570,6 @@ interface AccountBatchUpdateParam {
   excelRecovery?: ExcelRecoveryConfig
   egressMode?: string | null
   customName?: string | null
-  outboundProxyUrl?: string
   outboundProxyId?: string
   accountIds: string[]
   enabled?: boolean
@@ -640,7 +638,6 @@ interface CreateAccountImportTaskParam {
 
 interface AccountOAuthStartParam {
   credentialProxyId?: string | null
-  outboundProxyUrl?: string
   outboundProxyId?: string
   provider: string
   name: string

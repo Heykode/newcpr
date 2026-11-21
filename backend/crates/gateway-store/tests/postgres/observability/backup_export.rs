@@ -27,6 +27,9 @@ async fn business_backup_restore_preserves_ledgers_and_global_usage_without_deta
     .unwrap();
     sqlx::query("insert into client_key_budget_windows(client_api_key_id,daily_start,daily_end,weekly_start,weekly_end,daily_used_usd,weekly_used_usd) values('backup_key',$1,$1+interval '1 day',$1,$1+interval '7 days',2.5,9.5)")
         .bind(hour).execute(&db.pool).await.unwrap();
+    let alignment = serde_json::json!({"period":"weekly","starts_at":hour,"ends_at":hour+TimeDelta::days(7),"resume_calendar":true});
+    sqlx::query("update client_key_budget_windows set revision=7,last_operation_request=$1 where client_api_key_id='backup_key'")
+        .bind(&alignment).execute(&db.pool).await.unwrap();
     sqlx::query("insert into client_key_charge_events(request_id,client_api_key_id,amount_usd,completed_at) values('charge_before_backup','backup_key',2.5,now())")
         .execute(&db.pool).await.unwrap();
     let identity: String = sqlx::query_scalar(
@@ -186,6 +189,9 @@ async fn business_backup_restore_preserves_ledgers_and_global_usage_without_deta
         let budgets: (String,String,i64) = sqlx::query_as("select daily_used_usd::text,weekly_used_usd::text,(select count(*) from client_key_charge_events) from client_key_budget_windows where client_api_key_id='backup_key'")
             .fetch_one(&db.pool).await.unwrap();
         assert_eq!(budgets, ("2.5000000000".into(), "9.5000000000".into(), 1));
+        let restored_alignment: (i64, serde_json::Value) = sqlx::query_as("select revision,last_operation_request from client_key_budget_windows where client_api_key_id='backup_key'")
+            .fetch_one(&db.pool).await.unwrap();
+        assert_eq!(restored_alignment, (7, alignment.clone()));
         let filtered = repo
             .usage_summary(
                 range,

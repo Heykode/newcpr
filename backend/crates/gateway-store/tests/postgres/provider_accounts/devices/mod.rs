@@ -142,6 +142,8 @@ async fn oauth_reauthorization_rebinds_device_preserves_local_settings_and_rolls
             AuthorizationOwnerBinding::from_context(&context),
         ),
         credential: AuthorizationCredentialCommit::Reauthorize(PreparedCredentialRotationFacts {
+            preserve_access_token_expiry: Default::default(),
+
             preserve_profile: false,
             account_id: account_id.clone(),
             provider_kind: provider.clone(),

@@ -138,8 +138,8 @@ const { allSelected, indeterminate, selectedRowKeys, toggleSelection, toggleAll 
               </span>
             </template>
             <template #fastMode="{ row }">
-              <span class="text-cp-xs" :class="row.fastMode === 'enabled' ? 'text-cp-warning-text' : 'text-cp-text-secondary'">
-                {{ row.fastMode === 'enabled' ? '开启' : row.fastMode === 'disabled' ? '关闭' : '默认' }}
+              <span class="text-cp-xs" :class="['enabled', 'ultrafast'].includes(row.fastMode) ? 'text-cp-warning-text' : 'text-cp-text-secondary'">
+                {{ row.fastMode === 'ultrafast' ? 'Ultrafast' : row.fastMode === 'enabled' ? '开启' : row.fastMode === 'disabled' ? '关闭' : '默认' }}
               </span>
             </template>
 

@@ -253,7 +253,7 @@ use super::websocket::{
 
 const UPSTREAM_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 pub(super) const UPSTREAM_STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
-const X_CODEX_WS_STREAM_REQUEST_START_MS_CLIENT_METADATA_KEY: &str =
+pub(super) const X_CODEX_WS_STREAM_REQUEST_START_MS_CLIENT_METADATA_KEY: &str =
     "x-codex-ws-stream-request-start-ms";
 const MAX_CACHED_REQWEST_CLIENTS: usize = 256;
 type ReqwestClientCacheKey = (Option<String>, String, String, Duration);
@@ -951,6 +951,7 @@ pub(super) struct RecoveryAttemptRoute {
 /// Codex HTTP/SSE 上游客户端。
 #[derive(Clone)]
 pub struct CodexBackendClient {
+    pub(super) fedramp_routing: bool,
     pub(super) routing_affinity: Option<super::routing_affinity::ChatGptRoutingAffinity>,
     pub(super) connection_budget: Option<gateway_core::engine::connection::ConnectionBudget>,
     pub(super) session_proxy:
@@ -976,6 +977,11 @@ pub struct CodexBackendClient {
 }
 
 impl CodexBackendClient {
+    pub(crate) fn with_fedramp_routing(mut self, enabled: bool) -> Self {
+        self.fedramp_routing = enabled;
+        self
+    }
+
     pub(crate) fn with_routing_affinity(
         mut self,
         affinity: Option<super::routing_affinity::ChatGptRoutingAffinity>,
@@ -1060,6 +1066,7 @@ impl CodexBackendClient {
     ) -> Result<Self, CodexClientError> {
         let mut client = self.clone();
         client.session_proxy = None;
+        client.fedramp_routing = false;
         client.profile = self.profile.frozen();
         client.outbound_proxy = account.outbound_proxy().cloned();
         client.egress_key = egress_key(account.id().as_str(), account.outbound_proxy());
@@ -1432,7 +1439,7 @@ fn project_websocket_client_metadata(request: &mut CodexResponsesRequest) {
     request.set_client_metadata(Some(Value::Object(metadata)));
 }
 
-fn now_unix_timestamp_millis() -> u128 {
+pub(super) fn now_unix_timestamp_millis() -> u128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis())

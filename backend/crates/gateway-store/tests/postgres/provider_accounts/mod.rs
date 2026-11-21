@@ -4041,6 +4041,8 @@ pub(super) fn credential_update(
     marker: &str,
 ) -> ProviderCredentialUpdate {
     ProviderCredentialUpdate {
+        preserve_access_token_expiry: Default::default(),
+
         preserve_profile: false,
         account_id: account_id.to_owned(),
         expected_revision: Revision::new(revision).expect("credential revision"),

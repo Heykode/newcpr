@@ -33,6 +33,9 @@ async fn duplicate_group_name_has_a_specific_error_without_advancing_revision() 
     };
     let groups = PgAccountGroupRepository::new(db.pool.clone());
     let command = |id| NewAccountGroup {
+        allow_subagents: true,
+        model_access: Default::default(),
+
         allow_image_generation: true,
         id: group_id(id),
         name: "Duplicate group".to_owned(),
@@ -66,6 +69,9 @@ async fn monitor_reuses_key_bindings_and_includes_ungrouped_quota_peers() {
         groups
             .create_account_group(
                 NewAccountGroup {
+                    allow_subagents: true,
+                    model_access: Default::default(),
+
                     allow_image_generation: true,
                     id: group_id(id),
                     name: id.to_owned(),
@@ -120,6 +126,9 @@ async fn fast_mode_group_updates_keep_legacy_sql_and_snapshot_facts_in_sync() {
     repository
         .create_account_group(
             NewAccountGroup {
+                allow_subagents: true,
+                model_access: Default::default(),
+
                 allow_image_generation: true,
                 id: id.clone(),
                 name: "Fast policy".to_owned(),
@@ -150,6 +159,9 @@ async fn fast_mode_group_updates_keep_legacy_sql_and_snapshot_facts_in_sync() {
         let mutation = repository
             .update_account_group(
                 UpdateAccountGroup {
+                    allow_subagents: Default::default(),
+                    model_access: Default::default(),
+
                     allow_image_generation: None,
                     id: id.clone(),
                     name: "Renamed policy".to_owned(),
@@ -191,6 +203,9 @@ async fn fast_mode_group_creation_preserves_legacy_opt_out_and_publishes_snapsho
         let mutation = repository
             .create_account_group(
                 NewAccountGroup {
+                    allow_subagents: true,
+                    model_access: Default::default(),
+
                     allow_image_generation: true,
                     id: id.clone(),
                     name: format!("Fast policy {index}"),
@@ -245,7 +260,7 @@ async fn fast_mode_migration_preserves_legacy_groups_and_defaults_new_groups() {
     super::TEST_MIGRATOR.run(&database.pool).await.unwrap();
     super::TEST_MIGRATOR.run(&database.pool).await.unwrap();
     let after: Vec<serde_json::Value> =
-        sqlx::query_scalar("select to_jsonb(g) - 'fast_mode' - 'allow_image_generation' from account_groups g order by id")
+        sqlx::query_scalar("select to_jsonb(g) - 'fast_mode' - 'allow_image_generation' - 'allow_subagents' - 'model_access_json' from account_groups g order by id")
             .fetch_all(&database.pool)
             .await
             .expect("upgraded group records without added column");
@@ -363,6 +378,9 @@ async fn groups_aggregate_cross_provider_members_and_key_bindings_without_multip
     groups
         .create_account_group(
             NewAccountGroup {
+                allow_subagents: true,
+                model_access: Default::default(),
+
                 allow_image_generation: true,
                 id: mixed_group.clone(),
                 name: "Mixed Production".to_owned(),
@@ -378,6 +396,9 @@ async fn groups_aggregate_cross_provider_members_and_key_bindings_without_multip
     groups
         .create_account_group(
             NewAccountGroup {
+                allow_subagents: true,
+                model_access: Default::default(),
+
                 allow_image_generation: true,
                 id: empty_group.clone(),
                 name: "Empty Pool".to_owned(),
@@ -577,6 +598,9 @@ async fn group_costs_should_include_statusless_websocket_but_reject_statusless_h
     groups
         .create_account_group(
             NewAccountGroup {
+                allow_subagents: true,
+                model_access: Default::default(),
+
                 allow_image_generation: true,
                 id: group_id(EMPTY_GROUP),
                 name: "Statusless Costs".to_owned(),
@@ -674,6 +698,9 @@ async fn monitor_snapshot_uses_completion_window_shared_costs_and_durable_identi
         groups
             .create_account_group(
                 NewAccountGroup {
+                    allow_subagents: true,
+                    model_access: Default::default(),
+
                     allow_image_generation: true,
                     id: group_id(id),
                     name: id.to_owned(),
@@ -810,6 +837,9 @@ async fn list_and_monitor_attribute_all_scopes_to_current_serving_memberships_on
         groups
             .create_account_group(
                 NewAccountGroup {
+                    allow_subagents: true,
+                    model_access: Default::default(),
+
                     allow_image_generation: true,
                     id: group_id(id),
                     name: id.to_owned(),

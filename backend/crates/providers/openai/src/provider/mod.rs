@@ -1,6 +1,6 @@
 //! Codex 的 `gateway-core` Provider adapter。
 
-use gateway_protocol::openai::OPENAI_PROTOCOL;
+use gateway_protocol::openai::{CodexGuardianRole, OPENAI_PROTOCOL, codex_guardian_role};
 use std::collections::BTreeSet;
 use std::fmt;
 use std::num::NonZeroU32;
@@ -318,6 +318,21 @@ impl fmt::Debug for CodexProvider {
 
 #[async_trait]
 impl Provider for CodexProvider {
+    fn direct_account_model(
+        &self,
+        model: &gateway_core::routing::PublicModelId,
+        operation: &Operation,
+        previous: Option<&ProviderSessionState>,
+        snapshot: &gateway_core::routing::RuntimeSnapshot,
+    ) -> Option<UpstreamModelId> {
+        guardian::review_model(
+            snapshot.oauth_guardian_review_model(),
+            model,
+            operation,
+            previous,
+        )
+    }
+
     fn resolve_key_request_profile(
         &self,
         profile: Option<&gateway_core::account::OpaqueProviderData>,
@@ -652,6 +667,24 @@ impl Provider for CodexProvider {
             PreviousResponseScope::ExternalUnknown
         };
         let continuation_requested = generate.native_continuation_requested();
+        let direct_model = candidate.requires_direct_authentication();
+        if continuation_requested
+            && !guardian::continuation_model_matches(
+                previous_session
+                    .as_ref()
+                    .and_then(|state| state.reviewer_model.as_deref()),
+                upstream_model.as_str(),
+                direct_model,
+            )
+        {
+            return Err(continuation_replay_required_error("review_model_changed"));
+        }
+        let reviewer_model = (direct_model
+            || guardian::is_reviewer(generate)
+            || previous_session
+                .as_ref()
+                .is_some_and(|state| state.reviewer_model.is_some()))
+        .then(|| upstream_model.as_str().to_owned());
         crate::transport::evidence::record_request(
             &context.trace(),
             "provider.request.input",
@@ -677,15 +710,6 @@ impl Provider for CodexProvider {
             )
         });
         let context = context.with_codex_quota_overdraft_eligibility(quota_overdraft_eligible);
-        // 编码已生成独立请求；HTTP、WS 与重试在头部和计量之前共用此策略。
-        let supports_priority = candidate.model_presentation().is_some_and(|model| {
-            model
-                .service_tiers()
-                .iter()
-                .any(|tier| tier.id() == "priority")
-        });
-        let fast_mode = candidate.account_scope().fast_mode();
-        upstream_request.apply_fast_policy(fast_mode, supports_priority);
         let client_key_id = context.client_api_key_ref().as_str();
         if previous_session
             .as_ref()
@@ -825,6 +849,30 @@ impl Provider for CodexProvider {
                 .responses_upstream_for_model(upstream_model.as_str())
         };
         let excel = responses_upstream == gateway_core::account::ResponsesUpstream::Excel;
+        if direct_model && excel {
+            return Err(provider_error(
+                ProviderErrorKind::NoEligibleAccount,
+                UpstreamSendState::NotSent,
+            ));
+        }
+        let payload = generate.protocol_payload();
+        if !(!excel
+            && codex_guardian_role(payload.body(), payload.context())
+                == Some(CodexGuardianRole::Housekeeper))
+            && let Some(tier) = crate::transport::protocol::responses::fast_policy_tier(
+                candidate.account_scope().fast_mode(),
+                upstream_request.service_tier(),
+                |tier| {
+                    self.catalog
+                        .account_advertises_tier(lease.account(), upstream_model, tier)
+                },
+            )
+        {
+            upstream_request
+                .body_mut()
+                .insert("service_tier".into(), Value::String(tier.into()));
+        }
+
         if previous_session
             .as_ref()
             .is_some_and(|state| state.responses_upstream != responses_upstream)
@@ -897,9 +945,6 @@ impl Provider for CodexProvider {
             return Err(continuation_replay_required_error("scope_unavailable"));
         }
         if !excel
-            && upstream_request
-                .downstream_websocket_connection_id
-                .is_some()
             && upstream_request.previous_response_id().is_some()
             && upstream_request.generate()
             && previous_session.as_ref().is_some_and(|state| {
@@ -912,12 +957,13 @@ impl Provider for CodexProvider {
         let before = trace
             .is_enabled()
             .then(|| crate::transport::evidence::request_state(&upstream_request));
-        let guardian_parent = (!excel
-            && !state_owner_cross_account
-            && upstream_request.is_guardian()
+        let guardian_role = (!excel)
+            .then(|| upstream_request.oauth_guardian_role())
+            .flatten();
+        let guardian_parent = (!state_owner_cross_account
             && matches!(
-                lease.authentication(),
-                crate::credential::CodexRuntimeAuthentication::OAuth(_)
+                guardian_role,
+                Some(CodexGuardianRole::Reviewer | CodexGuardianRole::Classifier)
             ))
         .then(|| {
             upstream_request
@@ -940,14 +986,25 @@ impl Provider for CodexProvider {
                 lease.installation_id(),
             );
         scope_request_to_account(&mut upstream_request, &installation_id, account_scope);
-        if let Some((response_id, _)) = &guardian_parent
+        if guardian_role.is_some()
             && let Some(Value::Object(metadata)) =
                 upstream_request.body_mut().get_mut("client_metadata")
         {
-            metadata.insert(
-                "parent_response_id".to_owned(),
-                Value::String(response_id.clone()),
-            );
+            metadata.remove("guardian_credits_requested");
+            if let Some((response_id, _)) = &guardian_parent {
+                metadata.insert(
+                    "parent_response_id".to_owned(),
+                    Value::String(response_id.clone()),
+                );
+            } else {
+                metadata.remove("parent_response_id");
+            }
+        }
+        if matches!(
+            guardian_role,
+            Some(CodexGuardianRole::Reviewer | CodexGuardianRole::Classifier)
+        ) {
+            upstream_request.body_mut().shift_remove("service_tier");
         }
         if let Some(before) = before {
             trace.record_evidence(
@@ -965,7 +1022,6 @@ impl Provider for CodexProvider {
         ) {
             crate::compat::default_missing_format_name(upstream_request.body_mut());
             crate::compat::normalize_custom_history_ids(upstream_request.body_mut());
-            crate::compat::normalize_message_history_ids(upstream_request.body_mut());
             crate::compat::normalize_reasoning_replay(upstream_request.body_mut());
             if !excel {
                 crate::compat::normalize_codex_oauth_options(upstream_request.body_mut());
@@ -984,6 +1040,16 @@ impl Provider for CodexProvider {
             crate::transport::request::align_structured_location_fields(
                 upstream_request.body_mut(),
                 location,
+            );
+        }
+        if !excel {
+            crate::transport::request::apply_request_country(
+                upstream_request.body_mut(),
+                lease
+                    .account()
+                    .request_location()
+                    .or(context.request_location()),
+                context.request_country(),
             );
         }
         quality_probe::prepare(&mut upstream_request, &context, lease.account())?;
@@ -1014,7 +1080,7 @@ impl Provider for CodexProvider {
             upstream_request.use_websocket = false;
         }
         let requirement = transport_requirement(&upstream_request);
-        let requested_transport = selected_transport(&upstream_request);
+        let requested_transport = selected_transport(&upstream_request, guardian_role);
         let session_http_fallback = requirement.allows_pre_send_http_fallback()
             && transport_affinity_key
                 .as_ref()
@@ -1047,6 +1113,7 @@ impl Provider for CodexProvider {
         let session_capture = (upstream_request.quality_probe.is_none()
             && (!continuation_requested || previous_session.is_some()))
         .then(|| OpenAiSessionCapture {
+            reviewer_model,
             responses_upstream,
             account_id: lease.account_id().as_str().to_owned(),
             oauth_identity,
@@ -1091,7 +1158,17 @@ impl Provider for CodexProvider {
             });
         let client = self
             .account_exit_client(&context, lease.account(), excel, session)?
-            .with_routing_affinity(guardian_parent.map(|(_, affinity)| affinity));
+            .with_fedramp_routing(
+                !excel
+                    && lease.authentication().oauth().is_some_and(
+                        crate::credential::CodexOAuthSecret::has_fedramp_routing_claim,
+                    ),
+            )
+            .with_routing_affinity(
+                guardian_parent
+                    .filter(|_| guardian_role == Some(CodexGuardianRole::Reviewer))
+                    .and_then(|(_, parent)| parent.affinity),
+            );
         let client = if !excel && context.continuation_attempt() == ContinuationAttempt::None {
             client.with_connection_budget(context.connection_budget().clone())
         } else {

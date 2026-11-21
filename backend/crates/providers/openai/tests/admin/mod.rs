@@ -2441,6 +2441,15 @@ pub(crate) async fn initialized_test_provider(
     accounts: Arc<MemoryAccountStore>,
     base_url: String,
 ) -> Arc<dyn gateway_core::engine::provider::Provider> {
+    initialized_test_bundle(accounts, base_url)
+        .await
+        .core_provider()
+}
+
+pub(crate) async fn initialized_test_bundle(
+    accounts: Arc<MemoryAccountStore>,
+    base_url: String,
+) -> provider_openai::ProviderBundle {
     let mut config = valid_config();
     config.config.api.base_url = base_url;
     provider_openai::initialize(
@@ -2449,7 +2458,6 @@ pub(crate) async fn initialized_test_provider(
     )
     .await
     .expect("initialized provider")
-    .core_provider()
 }
 
 pub(super) fn provider_ports() -> ProviderStorePorts {
@@ -2918,7 +2926,7 @@ mod errors {
                 enabled: true,
             })
             .await;
-        let before = store.account(account_id).unwrap();
+        let mut before = store.account(account_id).unwrap();
         let server = MockServer::start().await;
         let mut config = valid_config();
         config.config.api.base_url = server.uri();
@@ -2936,6 +2944,28 @@ mod errors {
             (503, "unavailable", Kind::BadGateway, "服务异常"),
             (400, "invalid_request", Kind::Unavailable, "出站连接"),
         ] {
+            if before
+                .access_token_expires_at()
+                .is_some_and(|expiry| expiry <= SystemTime::now())
+            {
+                gateway_core::account::ProviderAccountStore::delete_account(
+                    store.as_ref(),
+                    before.id(),
+                )
+                .await
+                .unwrap();
+                store
+                    .seed_oauth_credential(ImportCodexOAuthCredential {
+                        account_id: account_id.to_owned(),
+                        name: "quota error".to_owned(),
+                        secret: secret("quota-error-test-token"),
+                        verified_account: profile("chatgpt-quota-error"),
+                        next_refresh_at: None,
+                        enabled: true,
+                    })
+                    .await;
+                before = store.account(account_id).unwrap();
+            }
             server.reset().await;
             Mock::given(method("GET"))
                 .and(path("/api/codex/usage"))
@@ -2964,7 +2994,18 @@ mod errors {
                     .contains("raw-secret-marker")
             );
             assert!(!format!("{error:?} {error}").contains("raw-secret-marker"));
-            assert_eq!(store.account(account_id).unwrap(), before);
+            let current = store.account(account_id).unwrap();
+            if status == 401 && code == "token_revoked" {
+                assert!(current.access_token_expires_at().unwrap() <= SystemTime::now());
+                assert_eq!(current.revision(), before.revision());
+                assert_eq!(current.credential_state(), before.credential_state());
+                assert_eq!(current.quota(), before.quota());
+                assert_eq!(current.last_error_message(), before.last_error_message());
+                assert_eq!(current.next_refresh_at(), before.next_refresh_at());
+                before = current;
+            } else {
+                assert_eq!(current, before);
+            }
         }
         server.reset().await;
         Mock::given(method("GET"))

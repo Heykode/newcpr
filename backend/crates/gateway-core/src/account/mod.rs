@@ -29,7 +29,7 @@ pub use store::{
     QuotaWarmupStateUpdate, StoredAccountCatalog,
 };
 mod location;
-pub use location::RequestLocation;
+pub use location::{InvalidRequestLocation, OpenAiRequestCountry, RequestLocation};
 pub mod scheduling;
 pub use scheduling::{
     QuotaResetPeriod, ResetWindowWeights, SchedulingConfigError, SmartSchedulingConfig,

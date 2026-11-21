@@ -350,11 +350,13 @@ impl AdminBundle {
 /// # Errors
 ///
 /// 配置非法、Provider 注册冲突/缺失或默认管理员初始化失败时返回错误。
+#[expect(clippy::too_many_arguments)]
 pub async fn initialize(
     config: AdminConfig,
     store: AdminStorePorts,
     providers: Vec<Arc<dyn ProviderAdmin>>,
     snapshot: Arc<dyn SnapshotControl>,
+    published_snapshot: gateway_core::runtime::RuntimeSnapshotHandle,
     probes: (Arc<dyn AccountProbe>, Arc<dyn ports::proxy::ProxyProbe>),
     client_distribution: Arc<dyn ClientDistributionResolver>,
     host_operations: (
@@ -367,6 +369,7 @@ pub async fn initialize(
         store,
         providers,
         snapshot,
+        published_snapshot,
         probes,
         client_distribution,
         host_operations,
@@ -382,6 +385,7 @@ pub async fn initialize_with_timezone(
     store: AdminStorePorts,
     providers: Vec<Arc<dyn ProviderAdmin>>,
     snapshot: Arc<dyn SnapshotControl>,
+    published_snapshot: gateway_core::runtime::RuntimeSnapshotHandle,
     probes: (Arc<dyn AccountProbe>, Arc<dyn ports::proxy::ProxyProbe>),
     client_distribution: Arc<dyn ClientDistributionResolver>,
     host_operations: (
@@ -553,6 +557,7 @@ pub async fn initialize_with_timezone(
             store.account_groups(),
             store.account_runtime(),
             snapshot.clone(),
+            published_snapshot,
         )),
         client_keys: Arc::new(DefaultClientKeyService::new(
             store.client_keys(),

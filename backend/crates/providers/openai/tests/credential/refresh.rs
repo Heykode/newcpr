@@ -1213,3 +1213,209 @@ async fn scheduled_refresh_respects_retry_not_before_until_it_has_elapsed() {
     ));
     assert_eq!(refresher.calls(), 1);
 }
+
+#[tokio::test]
+async fn quota_revocation_overrides_exhaustion_until_scheduled_refresh_replaces_the_token() {
+    let store = Arc::new(MemoryAccountStore::default());
+    let policy = MutableRuntimePolicy::new(Duration::from_secs(5 * 60));
+    let service = refresh_service(&store, SingleUseRefresher::new(), policy);
+    let account_id = "acct_exhausted_quota_refresh";
+    seed_refreshable_account(
+        &store,
+        account_id,
+        SystemTime::now()
+            .checked_add(Duration::from_secs(24 * 3600))
+            .expect("test expiry"),
+        None,
+    )
+    .await;
+    let account = store.account(account_id).expect("seeded account");
+    assert_eq!(
+        store
+            .apply_quota_access(QuotaAccessChange {
+                account_id: account.id().clone(),
+                expected_revision: account.revision(),
+                state: QuotaState::exhausted(
+                    QuotaEvidence::UsageLimitReached,
+                    SystemTime::now(),
+                    None,
+                ),
+            })
+            .await
+            .expect("persist exhausted quota"),
+        QuotaWriteOutcome::Updated
+    );
+
+    let before = store.account(account_id).expect("exhausted account");
+    assert_eq!(
+        before.status_projection(SystemTime::now(), None).status,
+        AccountStatus::QuotaExhausted
+    );
+    assert!(service.refresh_due().await.unwrap().is_empty());
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/codex/usage"))
+        .respond_with(
+            ResponseTemplate::new(401)
+                .set_body_raw(r#"{"detail":{"code":"token_revoked"}}"#, "text/plain"),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let quota = super::quota::quota_service_with_base_url(
+        &store,
+        reqwest::Client::builder().no_proxy().build().unwrap(),
+        server.uri(),
+    );
+    assert_eq!(quota.synchronize().await.unwrap().revoked, 1);
+    let revoked = store.account(account_id).expect("revoked account");
+    let status = revoked.status_projection(SystemTime::now(), None);
+    assert_eq!(status.status, AccountStatus::Error);
+    assert_eq!(
+        status.error_reason,
+        Some(AccountErrorReason::AccessTokenExpired)
+    );
+    assert_eq!(revoked.quota(), before.quota());
+    assert_eq!(revoked.revision(), before.revision());
+
+    let outcomes = service.refresh_due().await.expect("refresh cycle");
+
+    assert!(matches!(
+        outcomes.as_slice(),
+        [CodexCredentialRefreshOutcome::Refreshed {
+            account_id: refreshed_account_id,
+            ..
+        }] if refreshed_account_id == account_id
+    ));
+    let account = store.account(account_id).expect("refreshed account");
+    assert!(account.quota().is_exhausted());
+    assert_eq!(
+        account.status_projection(SystemTime::now(), None).status,
+        AccountStatus::QuotaExhausted
+    );
+    assert!(
+        !store
+            .expire_access_token(&before, SystemTime::now())
+            .await
+            .unwrap()
+    );
+    let loaded = store
+        .load_credential(account.id(), account.revision())
+        .await
+        .expect("refreshed credential");
+    let runtime = CodexCredentialCodec::decode(&loaded.credential).expect("runtime credential");
+    let oauth = runtime.authentication.oauth().expect("OAuth credential");
+    assert_eq!(oauth.access_token.expose_secret(), "refreshed-access-token");
+    let expected_refresh_token = format!("rt-access-{account_id}");
+    assert_eq!(
+        oauth
+            .refresh_token
+            .as_ref()
+            .map(SecretString::expose_secret),
+        Some(expected_refresh_token.as_str())
+    );
+}
+
+#[tokio::test]
+async fn quota_revocation_during_oauth_refresh_preserves_terminal_and_retry_results() {
+    for (background_quota, retryable) in [(false, false), (true, false), (true, true)] {
+        let store = Arc::new(MemoryAccountStore::default());
+        let account_id = "acct_quota_during_refresh";
+        seed_refreshable_account(
+            &store,
+            account_id,
+            SystemTime::now() + Duration::from_secs(60),
+            None,
+        )
+        .await;
+        let account = store.account(account_id).expect("account");
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/codex/usage"))
+            .respond_with(ResponseTemplate::new(401).set_body_json(serde_json::json!({
+                "error": {"code": "token_revoked"}
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let quota = super::quota::quota_service_with_base_url(
+            &store,
+            reqwest::Client::builder()
+                .no_proxy()
+                .build()
+                .expect("client"),
+            server.uri(),
+        );
+        let service = CodexCredentialRefreshService::new(
+            store.repository(),
+            Arc::new(QuotaRejectionDuringRefresh {
+                quota,
+                account_id: account.id().clone(),
+                background_quota,
+                failure: if retryable {
+                    RefreshFailure::Transport {
+                        message: None,
+                        upstream: None,
+                    }
+                } else {
+                    RefreshFailure::InvalidGrant {
+                        message: Some("refresh token invalidated".to_owned()),
+                        upstream: None,
+                    }
+                },
+            }),
+            Arc::new(RefreshLeases),
+            Arc::new(RefreshCredentialState),
+            MutableRuntimePolicy::new(Duration::from_secs(5 * 60)),
+        );
+        let outcomes = service.refresh_due().await.expect("refresh cycle");
+        let current = store.account(account_id).expect("account after refresh");
+        if retryable {
+            assert!(matches!(
+                outcomes.as_slice(),
+                [CodexCredentialRefreshOutcome::Transient { .. }]
+            ));
+            assert!(current.next_refresh_at().is_some());
+            assert_eq!(current.credential_state(), CredentialState::Ready);
+            assert_eq!(
+                current
+                    .status_projection(SystemTime::now(), None)
+                    .error_reason,
+                Some(AccountErrorReason::AccessTokenExpired)
+            );
+        } else {
+            assert!(matches!(
+                outcomes.as_slice(),
+                [CodexCredentialRefreshOutcome::Invalidated { .. }]
+            ));
+            assert_eq!(current.credential_state(), CredentialState::Expired);
+            assert_eq!(
+                current.last_error_message(),
+                Some("refresh token invalidated")
+            );
+        }
+    }
+}
+
+struct QuotaRejectionDuringRefresh {
+    quota: provider_openai::credential::CodexCredentialQuotaService,
+    account_id: ProviderAccountId,
+    background_quota: bool,
+    failure: RefreshFailure,
+}
+
+#[async_trait]
+impl TokenRefresher for QuotaRejectionDuringRefresh {
+    async fn refresh(&self, _: &str) -> Result<TokenPair, RefreshFailure> {
+        // 模拟 RT 请求在途时，手动或周期额度查询先收到 401
+        if self.background_quota {
+            assert_eq!(
+                self.quota.synchronize().await.expect("quota cycle").revoked,
+                1
+            );
+        } else {
+            assert!(self.quota.refresh_account(&self.account_id).await.is_err());
+        }
+        Err(self.failure.clone())
+    }
+}

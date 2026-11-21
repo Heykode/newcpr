@@ -18,12 +18,15 @@ use gateway_admin::model::{
         CreateAccountGroup, DeleteAccountGroup, SetAccountGroupEnabled, UpdateAccountGroup,
     },
 };
-use gateway_core::routing::AccountGroupId;
+use gateway_core::{
+    account::{AccountModelAccess, FastMode},
+    routing::AccountGroupId,
+};
 use serde::{Deserialize, Serialize};
 
 use super::{
     AdminAuth, AdminEnvelope, AdminError, AdminJson, AdminQuery, AdminResponse, AdminSessionState,
-    PageMeta, WireValidationError, wire::map_admin_service_error,
+    PageMeta, WireValidationError, accounts::AccountModelView, wire::map_admin_service_error,
 };
 
 const DEFAULT_PAGE_SIZE: u32 = 50;
@@ -66,11 +69,19 @@ impl ListAccountGroupsQuery {
     }
 }
 
+const fn default_allowed() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct CreateAccountGroupRequest {
-    #[serde(default = "allow_images_default")]
+    #[serde(default = "default_allowed")]
     allow_image_generation: bool,
+    #[serde(default = "default_allowed")]
+    allow_subagents: bool,
+    #[serde(default)]
+    model_access: AccountModelAccess,
     #[serde(default)]
     fast_mode: gateway_core::account::FastMode,
     name: String,
@@ -84,7 +95,9 @@ struct CreateAccountGroupRequest {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct UpdateAccountGroupRequest {
     allow_image_generation: Option<bool>,
-    fast_mode: Option<gateway_core::account::FastMode>,
+    allow_subagents: Option<bool>,
+    model_access: Option<AccountModelAccess>,
+    fast_mode: Option<FastMode>,
     id: String,
     name: String,
     description: Option<String>,
@@ -102,7 +115,9 @@ struct AccountGroupIdRequest {
 #[serde(rename_all = "camelCase")]
 struct AccountGroupView {
     allow_image_generation: bool,
-    fast_mode: gateway_core::account::FastMode,
+    allow_subagents: bool,
+    model_access: AccountModelAccess,
+    fast_mode: FastMode,
     id: String,
     name: String,
     description: Option<String>,
@@ -149,6 +164,8 @@ impl From<AccountGroupRecord> for AccountGroupView {
             id: record.id.to_string(),
             name: record.name,
             description: record.description,
+            allow_subagents: record.allow_subagents,
+            model_access: record.model_access,
             color: record.color.as_str().to_owned(),
             enabled: record.enabled,
             disable_fast: record.disable_fast,
@@ -239,11 +256,44 @@ where
 {
     Router::new()
         .route("/api/admin/account-groups", get(list::<S>))
+        .route("/api/admin/account-groups/models", get(models::<S>))
         .route("/api/admin/account-groups/create", post(create::<S>))
         .route("/api/admin/account-groups/update", post(update::<S>))
         .route("/api/admin/account-groups/enable", post(enable::<S>))
         .route("/api/admin/account-groups/disable", post(disable::<S>))
         .route("/api/admin/account-groups/delete", post(delete::<S>))
+}
+
+#[derive(Serialize)]
+struct AccountGroupModelsData {
+    models: Vec<AccountModelView>,
+}
+
+async fn models<S>(
+    _auth: AdminAuth,
+    State(state): State<S>,
+    AdminQuery(query): AdminQuery<AccountGroupIdRequest>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: AdminSessionState + Send + Sync,
+{
+    let models = state
+        .admin_services()
+        .account_groups()
+        .models(&group_id(query.id)?)
+        .map_err(map_service_error)?;
+    Ok(AdminResponse::new(
+        StatusCode::OK,
+        AdminEnvelope::ok(AccountGroupModelsData {
+            models: models
+                .into_iter()
+                .map(|model| AccountModelView {
+                    id: model.as_str().to_owned(),
+                    label: model.as_str().to_owned(),
+                })
+                .collect(),
+        }),
+    ))
 }
 
 async fn list<S>(
@@ -285,6 +335,8 @@ where
                 CreateAccountGroup {
                     allow_image_generation: request.allow_image_generation,
                     fast_mode: request.fast_mode,
+                    allow_subagents: request.allow_subagents,
+                    model_access: request.model_access,
                     name: request.name,
                     description: request.description,
                     color: group_color(&request.color)?,
@@ -314,6 +366,8 @@ where
                 UpdateAccountGroup {
                     allow_image_generation: request.allow_image_generation,
                     fast_mode: request.fast_mode,
+                    allow_subagents: request.allow_subagents,
+                    model_access: request.model_access,
                     id: group_id(request.id)?,
                     name: request.name,
                     description: request.description,
@@ -408,10 +462,6 @@ fn mutation_response(
 
 fn group_id(value: String) -> Result<AccountGroupId, AdminError> {
     AccountGroupId::new(value).map_err(|_| AdminError::bad_request("账号组 ID 不合法"))
-}
-
-fn allow_images_default() -> bool {
-    true
 }
 
 fn group_color(value: &str) -> Result<AccountGroupColor, AdminError> {

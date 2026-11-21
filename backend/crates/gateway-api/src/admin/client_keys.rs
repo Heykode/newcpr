@@ -5,10 +5,11 @@ use std::{collections::BTreeMap, fmt};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{DateTime, Utc};
 use gateway_admin::model::client_keys::{
-    ClientKeyCursor, ClientKeyCursorValue as DomainCursorValue, ClientKeyListQuery,
-    ClientKeyMutation, ClientKeyPage, ClientKeyPageSize, ClientKeyRecord, ClientKeySecret,
-    ClientKeySort as DomainSort, ClientKeySortField as DomainSortField, CreateClientKey,
-    CreatedClientKey, DeleteClientKey, SetClientKeyEnabled, SortDirection, UpdateClientKey,
+    BatchUpdateClientKeys, ClientKeyCursor, ClientKeyCursorValue as DomainCursorValue,
+    ClientKeyListQuery, ClientKeyMutation, ClientKeyPage, ClientKeyPageSize, ClientKeyRecord,
+    ClientKeySecret, ClientKeySort as DomainSort, ClientKeySortField as DomainSortField,
+    CreateClientKey, CreatedClientKey, DeleteClientKey, SetClientKeyEnabled, SortDirection,
+    UpdateClientKey,
 };
 use gateway_core::{
     engine::budget::ClientBudgetLimits,
@@ -152,8 +153,6 @@ impl ClientKeySort {
 pub struct CreateClientKeyRequest {
     #[serde(default)]
     provider_request_profile_overrides: ProviderRequestProfileOverrides,
-    openai_client_profile_override: Option<serde_json::Map<String, serde_json::Value>>,
-    xai_client_profile_override: Option<serde_json::Map<String, serde_json::Value>>,
     name: String,
     label: Option<String>,
     group_ids: Vec<String>,
@@ -174,8 +173,6 @@ impl CreateClientKeyRequest {
         Ok(CreateClientKey {
             request_profile_overrides: normalize_request_profile_overrides(
                 self.provider_request_profile_overrides,
-                self.openai_client_profile_override,
-                self.xai_client_profile_override,
             )?,
             name: self.name,
             label: self.label,
@@ -199,10 +196,6 @@ impl CreateClientKeyRequest {
 pub struct UpdateClientKeyRequest {
     #[serde(default)]
     provider_request_profile_overrides: ProviderRequestProfileOverrideUpdates,
-    #[serde(default, deserialize_with = "deserialize_profile_override")]
-    openai_client_profile_override: Option<Option<serde_json::Map<String, serde_json::Value>>>,
-    #[serde(default, deserialize_with = "deserialize_profile_override")]
-    xai_client_profile_override: Option<Option<serde_json::Map<String, serde_json::Value>>>,
     id: String,
     name: String,
     label: Option<String>,
@@ -225,8 +218,6 @@ impl UpdateClientKeyRequest {
         Ok(UpdateClientKey {
             request_profile_override_updates: normalize_request_profile_override_updates(
                 self.provider_request_profile_overrides,
-                self.openai_client_profile_override,
-                self.xai_client_profile_override,
             )?,
             id: client_key_id(self.id, "clientKeyMutationNotFound")?,
             name: self.name,
@@ -284,7 +275,6 @@ impl ClientKeyMutationRequest {
 #[serde(rename_all = "camelCase")]
 pub struct ClientKeyView {
     provider_request_profile_overrides: ProviderRequestProfileOverrides,
-    openai_client_profile_override: Option<serde_json::Map<String, serde_json::Value>>,
     id: String,
     name: String,
     label: Option<String>,
@@ -328,9 +318,6 @@ impl From<ClientKeyRecord> for ClientKeyView {
             "groups"
         };
         Self {
-            openai_client_profile_override: provider_request_profile_overrides
-                .get("openai")
-                .cloned(),
             provider_request_profile_overrides,
             id: record.id.to_string(),
             name: record.name,
@@ -665,11 +652,9 @@ fn validate_limit(value: u64, field: &'static str) -> Result<(), WireValidationE
 
 fn normalize_request_profile_overrides(
     profiles: ProviderRequestProfileOverrides,
-    openai: Option<serde_json::Map<String, serde_json::Value>>,
-    xai: Option<serde_json::Map<String, serde_json::Value>>,
 ) -> Result<gateway_admin::model::client_keys::ProviderRequestProfileOverrides, WireValidationError>
 {
-    let mut normalized = profiles
+    let normalized = profiles
         .into_iter()
         .map(|(provider, profile)| {
             if !matches!(provider.as_str(), "openai" | "xai") {
@@ -684,33 +669,16 @@ fn normalize_request_profile_overrides(
         })
         .collect::<Result<gateway_admin::model::client_keys::ProviderRequestProfileOverrides, _>>(
         )?;
-    for (provider, profile) in [("openai", openai), ("xai", xai)] {
-        let Some(profile) = profile else {
-            continue;
-        };
-        validate_request_profile_size(&profile)?;
-        let provider = ProviderKind::new(provider).expect("static Provider kind is valid");
-        let profile = gateway_core::account::OpaqueProviderData::new(profile);
-        if normalized
-            .get(&provider)
-            .is_some_and(|current| current != &profile)
-        {
-            return Err(WireValidationError::new("providerRequestProfileOverrides"));
-        }
-        normalized.insert(provider, profile);
-    }
     Ok(normalized)
 }
 
 fn normalize_request_profile_override_updates(
     profiles: ProviderRequestProfileOverrideUpdates,
-    openai: Option<Option<serde_json::Map<String, serde_json::Value>>>,
-    xai: Option<Option<serde_json::Map<String, serde_json::Value>>>,
 ) -> Result<
     gateway_admin::model::client_keys::ProviderRequestProfileOverrideUpdates,
     WireValidationError,
 > {
-    let mut normalized = profiles
+    let normalized = profiles
         .into_iter()
         .map(|(provider, profile)| {
             if !matches!(provider.as_str(), "openai" | "xai") {
@@ -730,23 +698,6 @@ fn normalize_request_profile_override_updates(
             gateway_admin::model::client_keys::ProviderRequestProfileOverrideUpdates,
             _,
         >>()?;
-    for (provider, profile) in [("openai", openai), ("xai", xai)] {
-        let Some(profile) = profile else {
-            continue;
-        };
-        if let Some(profile) = profile.as_ref() {
-            validate_request_profile_size(profile)?;
-        }
-        let provider = ProviderKind::new(provider).expect("static Provider kind is valid");
-        let profile = profile.map(gateway_core::account::OpaqueProviderData::new);
-        if normalized
-            .get(&provider)
-            .is_some_and(|current| current != &profile)
-        {
-            return Err(WireValidationError::new("providerRequestProfileOverrides"));
-        }
-        normalized.insert(provider, profile);
-    }
     Ok(normalized)
 }
 
@@ -757,12 +708,6 @@ fn validate_request_profile_size(
         return Err(WireValidationError::new("providerRequestProfileOverrides"));
     }
     Ok(())
-}
-
-fn deserialize_profile_override<'de, D: serde::Deserializer<'de>>(
-    deserializer: D,
-) -> Result<Option<Option<serde_json::Map<String, serde_json::Value>>>, D::Error> {
-    Option::<serde_json::Map<String, serde_json::Value>>::deserialize(deserializer).map(Some)
 }
 
 fn validate_required_text(value: &str, field: &'static str) -> Result<(), WireValidationError> {
@@ -813,6 +758,10 @@ where
     S: AdminSessionState + Clone + Send + Sync + 'static,
 {
     Router::new()
+        .route(
+            "/api/admin/client-keys/batch-update",
+            post(batch_update_client_keys::<S>),
+        )
         .route("/api/admin/client-keys", get(list_client_keys::<S>))
         .route(
             "/api/admin/client-keys/create",
@@ -906,6 +855,92 @@ where
         .map_err(map_service_error)?;
     let data = ClientKeyListData::try_from(result).map_err(|_| AdminError::internal())?;
     Ok(AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(data)))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BatchUpdateClientKeysRequest {
+    ids: Vec<String>,
+    group_ids: Option<Vec<String>>,
+    enabled: Option<bool>,
+    max_concurrency: Option<u64>,
+    requests_per_minute: Option<u64>,
+    daily_limit_usd: Option<String>,
+    weekly_limit_usd: Option<String>,
+    #[serde(default)]
+    provider_request_profile_overrides: ProviderRequestProfileOverrideUpdates,
+    installation_seed: Option<String>,
+}
+
+impl BatchUpdateClientKeysRequest {
+    /// 复用单把密钥的字段校验，缺省和显式零值分别保留
+    pub fn into_command(self) -> Result<BatchUpdateClientKeys, WireValidationError> {
+        if let Some(limit) = self.max_concurrency {
+            validate_limit(limit, "maxConcurrency")?;
+        }
+        if let Some(limit) = self.requests_per_minute {
+            validate_limit(limit, "requestsPerMinute")?;
+        }
+        let installation_seed = self
+            .installation_seed
+            .map(|value| {
+                if value.len() != uuid::fmt::Hyphenated::LENGTH {
+                    return Err(WireValidationError::new("installationSeed"));
+                }
+                uuid::Uuid::try_parse(&value)
+                    .map_err(|_| WireValidationError::new("installationSeed"))
+            })
+            .transpose()?;
+        Ok(BatchUpdateClientKeys {
+            ids: self
+                .ids
+                .into_iter()
+                .map(|id| client_key_id(id, "id"))
+                .collect::<Result<_, _>>()?,
+            group_ids: self.group_ids.map(validate_group_ids).transpose()?,
+            enabled: self.enabled,
+            max_concurrency: self.max_concurrency,
+            requests_per_minute: self.requests_per_minute,
+            daily_limit_usd: parse_budget(self.daily_limit_usd, "dailyLimitUsd")?,
+            weekly_limit_usd: parse_budget(self.weekly_limit_usd, "weeklyLimitUsd")?,
+            request_profile_override_updates: normalize_request_profile_override_updates(
+                self.provider_request_profile_overrides,
+            )?,
+            installation_seed,
+        })
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BatchUpdatedClientKeysData {
+    config_revision: u64,
+    updated: usize,
+}
+
+async fn batch_update_client_keys<S>(
+    auth: AdminAuth,
+    State(state): State<S>,
+    AdminJson(request): AdminJson<BatchUpdateClientKeysRequest>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: AdminSessionState + Send + Sync,
+{
+    let command = request.into_command().map_err(map_wire_error)?;
+    let updated = command.ids.len();
+    let config_revision = state
+        .admin_services()
+        .client_keys()
+        .batch_update(&auth.context().mutation_context(), command)
+        .await
+        .map_err(map_service_error)?;
+    Ok(AdminResponse::new(
+        StatusCode::OK,
+        AdminEnvelope::ok(BatchUpdatedClientKeysData {
+            config_revision: config_revision.get(),
+            updated,
+        }),
+    ))
 }
 
 async fn create_client_key<S>(

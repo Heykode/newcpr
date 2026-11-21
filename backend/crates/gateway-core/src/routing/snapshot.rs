@@ -33,6 +33,8 @@ pub struct SnapshotSettingsFacts {
     excel_image_transport: Option<super::ExcelImageTransport>,
     responses_max_decompressed_body_bytes: u64,
     request_location: Option<crate::account::RequestLocation>,
+    openai_oauth_guardian_review_model: bool,
+    openai_request_country: crate::account::OpenAiRequestCountry,
     max_concurrent_per_account: u32,
     openai_guardian_reserved_concurrency: u32,
     openai_session_binding_ttl_hours: u32,
@@ -53,6 +55,17 @@ pub struct SnapshotSettingsFacts {
 }
 
 impl SnapshotSettingsFacts {
+    #[must_use]
+    pub fn with_openai_request_settings(
+        mut self,
+        guardian: bool,
+        country: crate::account::OpenAiRequestCountry,
+    ) -> Self {
+        self.openai_oauth_guardian_review_model = guardian;
+        self.openai_request_country = country;
+        self
+    }
+
     #[must_use]
     pub const fn with_quota_reset_window_weights(
         mut self,
@@ -127,6 +140,8 @@ impl SnapshotSettingsFacts {
             codex_quota_overdraft_enabled: false,
             codex_quota_overdraft_probe_model: "gpt-6-astra".to_owned(),
             request_location: None,
+            openai_oauth_guardian_review_model: true,
+            openai_request_country: Default::default(),
             request_interval_ms,
             rotation_strategy: rotation_strategy.into(),
             quota_reset_window_weights: Default::default(),
@@ -242,6 +257,8 @@ impl SnapshotClientPolicyFacts {
 /// Store 读取到的账号分组事实。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SnapshotAccountGroupFacts {
+    allow_subagents: bool,
+    model_access: crate::account::AccountModelAccess,
     allow_image_generation: bool,
     id: AccountGroupId,
     name: String,
@@ -251,6 +268,17 @@ pub struct SnapshotAccountGroupFacts {
 
 impl SnapshotAccountGroupFacts {
     #[must_use]
+    pub const fn with_subagents(mut self, allowed: bool) -> Self {
+        self.allow_subagents = allowed;
+        self
+    }
+    #[must_use]
+    pub fn with_model_access(mut self, model_access: crate::account::AccountModelAccess) -> Self {
+        self.model_access = model_access;
+        self
+    }
+
+    #[must_use]
     pub const fn with_image_generation(mut self, allowed: bool) -> Self {
         self.allow_image_generation = allowed;
         self
@@ -259,6 +287,8 @@ impl SnapshotAccountGroupFacts {
     pub fn new(id: AccountGroupId, name: String, enabled: bool) -> Self {
         Self {
             allow_image_generation: true,
+            allow_subagents: true,
+            model_access: crate::account::AccountModelAccess::all(),
             id,
             name,
             enabled,
@@ -289,6 +319,7 @@ pub struct SnapshotProviderAccountFacts {
     account_id: ProviderAccountId,
     provider_kind: String,
     concurrency_limit: Option<u32>,
+    excel_models: BTreeSet<String>,
     model_access: crate::account::AccountModelAccess,
 }
 
@@ -299,8 +330,14 @@ impl SnapshotProviderAccountFacts {
             account_id,
             provider_kind: provider_kind.into(),
             concurrency_limit: None,
+            excel_models: BTreeSet::new(),
             model_access: crate::account::AccountModelAccess::all(),
         }
+    }
+
+    pub fn with_excel_models(mut self, models: BTreeSet<String>) -> Self {
+        self.excel_models = models;
+        self
     }
 
     #[must_use]
@@ -599,6 +636,7 @@ async fn compile_runtime_snapshot(
                 .insert(
                     account.account_id.clone(),
                     RuntimeAccount::new(provider_kind, BTreeSet::new())
+                        .with_excel_models(account.excel_models)
                         .with_model_access(account.model_access),
                 )
                 .is_some()
@@ -625,9 +663,17 @@ async fn compile_runtime_snapshot(
             .get_mut(&account_id)
             .ok_or(RuntimeSnapshotCompileError::InvalidData)?;
         *account = RuntimeAccount::new(account.provider_kind().clone(), group_ids)
-            .with_model_access(account.model_access().clone());
+            .with_model_access(account.model_access().clone())
+            .with_excel_models(account.excel_models().clone());
     }
-    let account_directory = Arc::new(RuntimeAccountDirectory::new(accounts));
+    let account_directory = Arc::new(
+        RuntimeAccountDirectory::new(accounts).with_group_model_access(
+            groups
+                .iter()
+                .map(|(id, group)| (id.clone(), group.model_access.clone()))
+                .collect(),
+        ),
+    );
 
     let decompressed_body_limit =
         usize::try_from(facts.settings.responses_max_decompressed_body_bytes)
@@ -719,6 +765,7 @@ async fn compile_runtime_snapshot(
     for policy in facts.client_policies {
         let mut fast_mode = crate::account::FastMode::Default;
         let mut allow_image_generation = true;
+        let mut allow_subagents = true;
         let account_scope = if policy.group_ids.is_empty() {
             FrozenAccountScope::new(
                 Arc::clone(&account_directory),
@@ -738,6 +785,7 @@ async fn compile_runtime_snapshot(
                 // 禁用分组仅影响选号；Key 仍继承该分组的 Fast 限制。
                 fast_mode = fast_mode.merge(group.fast_mode);
                 allow_image_generation &= group.allow_image_generation;
+                allow_subagents &= group.allow_subagents;
                 bound_groups.push(RoutingGroupSnapshot::new(
                     group.id.clone(),
                     group.name.clone(),
@@ -761,7 +809,8 @@ async fn compile_runtime_snapshot(
                 account_scope
                     .with_request_profiles(policy.request_profiles)
                     .with_fast_mode(fast_mode)
-                    .with_image_generation(allow_image_generation),
+                    .with_image_generation(allow_image_generation)
+                    .with_subagents(allow_subagents),
             ),
             true,
             policy.limits,
@@ -794,6 +843,10 @@ async fn compile_runtime_snapshot(
                 codex_quota_overdraft_probe_model,
             )
             .with_request_location(facts.settings.request_location)
+            .with_openai_request_settings(
+                facts.settings.openai_oauth_guardian_review_model,
+                facts.settings.openai_request_country,
+            )
             .with_account_concurrency_limits(account_limits)
     })
 }
@@ -810,6 +863,8 @@ pub struct RuntimeSnapshot {
     codex_quota_overdraft_probe_model: UpstreamModelId,
     responses_max_decompressed_body_bytes: std::num::NonZeroUsize,
     request_location: Option<crate::account::RequestLocation>,
+    openai_oauth_guardian_review_model: bool,
+    openai_request_country: crate::account::OpenAiRequestCountry,
     revision: ConfigRevision,
     account_selection_policy: AccountSelectionPolicy,
     providers: Arc<BTreeSet<ProviderKind>>,
@@ -829,6 +884,21 @@ pub struct RuntimeSnapshot {
 }
 
 impl RuntimeSnapshot {
+    #[must_use]
+    pub const fn oauth_guardian_review_model(&self) -> bool {
+        self.openai_oauth_guardian_review_model
+    }
+    #[must_use]
+    pub fn with_openai_request_settings(
+        mut self,
+        guardian: bool,
+        country: crate::account::OpenAiRequestCountry,
+    ) -> Self {
+        self.openai_oauth_guardian_review_model = guardian;
+        self.openai_request_country = country;
+        self
+    }
+
     #[must_use]
     pub fn with_request_profiles(
         mut self,
@@ -996,6 +1066,8 @@ impl RuntimeSnapshot {
             .expect("positive default limit"),
             revision,
             request_location: None,
+            openai_oauth_guardian_review_model: true,
+            openai_request_country: Default::default(),
             account_selection_policy,
             providers: Arc::new(provider_set),
             provider_models: Arc::new(model_map),
@@ -1183,7 +1255,43 @@ impl RuntimeSnapshot {
     }
 
     /// 合并冻结账号范围内实际存在 Provider 的公开模型。
+    /// 分组编辑器使用成员账号的实际模型，可编辑已停用或已限制模型的分组
     #[must_use]
+    pub fn upstream_models_for_group(&self, group: &AccountGroupId) -> Vec<UpstreamModelId> {
+        let mut models = BTreeSet::new();
+        for (account_id, account) in self.account_directory.accounts_in_group(group) {
+            let provider = account.provider_kind();
+            if !self.providers.contains(provider) {
+                continue;
+            }
+            let access = account.model_access();
+            if access.mode() == crate::account::AccountModelAccessMode::Allowlist {
+                // 原生图片、Search 和透传模型可能只有账号白名单明确声明了 ID
+                models.extend(
+                    access
+                        .models()
+                        .iter()
+                        .filter_map(|id| UpstreamModelId::new(id.clone()).ok()),
+                );
+            }
+            let sources = self.model_catalog_accounts.get(provider);
+            if let Some(catalog) = self.provider_models.get(provider) {
+                models.extend(
+                    catalog
+                        .keys()
+                        .filter(|model| {
+                            access.allows(model.as_str())
+                                && sources
+                                    .and_then(|sources| sources.get(model.as_str()))
+                                    .is_none_or(|sources| sources.contains(account_id))
+                        })
+                        .cloned(),
+                );
+            }
+        }
+        models.into_iter().collect()
+    }
+
     pub fn public_models_for_scope(&self, scope: &FrozenAccountScope) -> Vec<PublicModelId> {
         scope
             .provider_kinds()
@@ -1317,7 +1425,56 @@ impl RuntimeSnapshot {
         account_scope: Arc<FrozenAccountScope>,
         context: &RoutingContext,
     ) -> Result<RoutingPlan, RoutingError> {
-        self.plan_inner(public_model, operation, account_scope, context, true)
+        self.plan_inner(public_model, operation, account_scope, context, true, None)
+    }
+
+    /// Choose a single native target before attempts; retries retain that model and scope.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "routing inputs plus frozen native-model target and continuation owner"
+    )]
+    pub fn plan_with_direct_account_model(
+        &self,
+        public_model: &PublicModelId,
+        operation: &Operation,
+        scope: Arc<FrozenAccountScope>,
+        context: &RoutingContext,
+        provider: &ProviderKind,
+        target: &UpstreamModelId,
+        continuation_owner: Option<&ProviderAccountId>,
+    ) -> Result<RoutingPlan, RoutingError> {
+        if self.model_mappings.contains_key(public_model.as_str()) {
+            return self.plan(public_model, operation, scope, context);
+        }
+        let sources = self
+            .model_catalog_accounts
+            .get(provider)
+            .and_then(|models| models.get(target.as_str()));
+        let accounts: BTreeSet<_> = scope
+            .allowed_account_ids()
+            .filter(|id| {
+                scope.directory().account(id).is_some_and(|account| {
+                    account.provider_kind() == provider
+                        && account.uses_native_upstream(target.as_str())
+                }) && scope.allows_model(id, target.as_str())
+                    && sources.is_none_or(|accounts| accounts.contains(*id))
+            })
+            .cloned()
+            .collect();
+        if !accounts.is_empty()
+            && continuation_owner.is_none_or(|owner| accounts.contains(owner))
+            && let Ok(plan) = self.plan_inner(
+                public_model,
+                operation,
+                Arc::new(scope.restricted_to_accounts(&accounts)),
+                context,
+                true,
+                Some(target),
+            )
+        {
+            return Ok(plan);
+        }
+        self.plan(public_model, operation, scope, context)
     }
 
     /// Fixed-account administration keeps its existing local model-policy exemption.
@@ -1333,7 +1490,14 @@ impl RuntimeSnapshot {
             .as_ref()
             .clone()
             .with_request_profiles(self.request_profiles.clone());
-        self.plan_inner(public_model, operation, Arc::new(scope), context, false)
+        self.plan_inner(
+            public_model,
+            operation,
+            Arc::new(scope),
+            context,
+            false,
+            None,
+        )
     }
 
     fn plan_inner(
@@ -1343,6 +1507,7 @@ impl RuntimeSnapshot {
         account_scope: Arc<FrozenAccountScope>,
         context: &RoutingContext,
         enforce_account_model_policy: bool,
+        direct_model: Option<&UpstreamModelId>,
     ) -> Result<RoutingPlan, RoutingError> {
         let requirements = operation.capability_requirements();
         let mut candidates = Vec::new();
@@ -1353,12 +1518,19 @@ impl RuntimeSnapshot {
 
         let requested_model = public_model.as_str();
         let mapped_model = self.mapped_model(requested_model);
-        let upstream_model = if self.model_mappings.contains_key(requested_model) {
+        let upstream_model = if let Some(model) = direct_model {
+            Ok(model.clone())
+        } else if self.model_mappings.contains_key(requested_model) {
             UpstreamModelId::new(mapped_model)
         } else {
             UpstreamModelId::from_client_wire(mapped_model)
         }
         .map_err(|_| RoutingError::InvalidIdentifier)?;
+        if enforce_account_model_policy
+            && account_scope.groups_deny_model(Some(upstream_model.as_str()))
+        {
+            return Err(RoutingError::GroupModelDenied);
+        }
         // Ownership is global; filtering the owner cannot turn a known model into passthrough.
         let known_model = self.is_known_upstream_model(&upstream_model);
 
@@ -1387,6 +1559,9 @@ impl RuntimeSnapshot {
                 .provider_models
                 .get(provider)
                 .and_then(|models| models.get(&upstream_model));
+            if direct_model.is_some() && capabilities.is_none() {
+                continue;
+            }
             let emulated_features = match capabilities {
                 Some(capabilities) => {
                     let Some(emulated) = capabilities.match_requirements(&requirements) else {
@@ -1400,6 +1575,7 @@ impl RuntimeSnapshot {
                 None => BTreeSet::new(),
             };
             candidates.push(ProviderCandidate {
+                requires_direct_authentication: direct_model.is_some(),
                 provider: provider.clone(),
                 model_presentation: self
                     .provider_model_presentations
@@ -1447,6 +1623,7 @@ impl RuntimeSnapshot {
             max_attempts: self.request_tuning.max_attempts(),
             request_tuning: self.request_tuning,
             request_location: self.request_location.clone(),
+            request_country: self.openai_request_country.clone(),
             account_scope,
             candidates: Arc::from(candidates),
         })
@@ -1464,6 +1641,9 @@ impl RuntimeSnapshot {
         account_scope: Arc<FrozenAccountScope>,
         context: &RoutingContext,
     ) -> Result<RoutingPlan, RoutingError> {
+        if account_scope.groups_deny_model(upstream_model.map(UpstreamModelId::as_str)) {
+            return Err(RoutingError::GroupModelDenied);
+        }
         let allowed = !account_scope.provider_kinds().is_empty()
             && account_scope.provider_kinds().contains(provider)
             && self.providers.contains(provider)
@@ -1478,6 +1658,7 @@ impl RuntimeSnapshot {
             });
         }
         let candidate = ProviderCandidate {
+            requires_direct_authentication: false,
             provider: provider.clone(),
             model_presentation: None,
             upstream_model: upstream_model.cloned(),
@@ -1494,6 +1675,7 @@ impl RuntimeSnapshot {
             max_attempts: self.request_tuning.max_attempts(),
             request_tuning: self.request_tuning,
             request_location: self.request_location.clone(),
+            request_country: self.openai_request_country.clone(),
             account_scope,
             candidates: Arc::from([candidate]),
         })

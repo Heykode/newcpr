@@ -738,6 +738,7 @@ impl fmt::Debug for PrepareCredentialRotation {
 #[derive(Debug, Clone, PartialEq)]
 pub struct PreparedCredentialRotationFacts {
     pub preserve_profile: bool,
+    pub preserve_access_token_expiry: bool,
     pub account_id: ProviderAccountId,
     pub provider_kind: ProviderKind,
     pub expected_credential_revision: Revision,
@@ -1328,5 +1329,13 @@ impl fmt::Debug for AccountExportBundle {
             .field("document_count", &self.documents.len())
             .field("relogin_count", &self.relogin.len())
             .finish()
+    }
+}
+
+impl ProviderQuotaWindow {
+    pub(crate) fn observed_bounds(&self) -> Option<(DateTime<Utc>, DateTime<Utc>)> {
+        let ends_at = self.reset_at?;
+        let duration = chrono::Duration::try_seconds(i64::try_from(self.window_seconds?).ok()?)?;
+        Some((ends_at.checked_sub_signed(duration)?, ends_at))
     }
 }

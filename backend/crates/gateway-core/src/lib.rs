@@ -129,6 +129,7 @@ impl CoreStorePorts {
 }
 
 pub struct CoreBundle {
+    snapshots: RuntimeSnapshotHandle,
     execution: Arc<dyn ExecutionService>,
     snapshot_control: Arc<dyn SnapshotControl>,
     account_probe: Arc<dyn AccountProbe>,
@@ -137,6 +138,11 @@ pub struct CoreBundle {
 }
 
 impl CoreBundle {
+    #[must_use]
+    pub fn snapshot_handle(&self) -> RuntimeSnapshotHandle {
+        self.snapshots.clone()
+    }
+
     #[must_use]
     pub fn execution_service(&self) -> Arc<dyn ExecutionService> {
         Arc::clone(&self.execution)
@@ -244,8 +250,9 @@ pub async fn initialize_with_request_tuning(
     let execution: Arc<dyn ExecutionService> = service.clone();
     let account_probe: Arc<dyn AccountProbe> = service;
     let snapshot_control: Arc<dyn SnapshotControl> = publisher;
-    let health_probes: Vec<Arc<dyn HealthProbe>> = vec![Arc::new(snapshots)];
+    let health_probes: Vec<Arc<dyn HealthProbe>> = vec![Arc::new(snapshots.clone())];
     Ok(CoreBundle {
+        snapshots,
         execution,
         snapshot_control,
         account_probe,

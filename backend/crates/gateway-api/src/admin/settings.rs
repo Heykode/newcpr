@@ -48,6 +48,8 @@ pub struct RuntimeSettingsView {
     pub refresh_concurrency: u64,
     pub max_concurrent_per_account: u64,
     pub openai_guardian_reserved_concurrency: u64,
+    pub openai_oauth_guardian_review_model: bool,
+    pub openai_request_country: gateway_core::account::OpenAiRequestCountry,
     pub account_warmup_enabled: bool,
     pub account_warmup_cron: String,
     pub account_warmup_model: Option<String>,
@@ -86,6 +88,8 @@ pub struct UpdateRuntimeSettingsRequest {
     pub refresh_concurrency: u64,
     pub max_concurrent_per_account: u64,
     pub openai_guardian_reserved_concurrency: Option<u64>,
+    pub openai_oauth_guardian_review_model: bool,
+    pub openai_request_country: gateway_core::account::OpenAiRequestCountry,
     pub account_warmup_enabled: Option<bool>,
     pub account_warmup_cron: Option<String>,
     #[serde(default, deserialize_with = "deserialize_probe_proxy_selection")]
@@ -137,6 +141,9 @@ impl UpdateRuntimeSettingsRequest {
         {
             return Err(WireValidationError::new("turnStateProbeProxyId"));
         }
+        self.openai_request_country
+            .validate()
+            .map_err(|_| WireValidationError::new("openaiRequestCountry"))?;
         validate_model_mappings(&self.model_mappings)?;
         if let Some(models) = &self.turn_state_models {
             validate_turn_state_models(models)?;
@@ -227,6 +234,8 @@ impl UpdateRuntimeSettingsRequest {
     fn into_command(self) -> Result<ReplaceRuntimeSettings, WireValidationError> {
         self.validate()?;
         Ok(ReplaceRuntimeSettings {
+            openai_oauth_guardian_review_model: self.openai_oauth_guardian_review_model,
+            openai_request_country: self.openai_request_country,
             expected_revision: gateway_admin::model::Revision::new(self.config_revision)
                 .map_err(|_| WireValidationError::new("configRevision"))?,
             excel_default_models: self.excel_default_models,
@@ -285,6 +294,8 @@ impl From<RuntimeSettings> for RuntimeSettingsView {
     fn from(settings: RuntimeSettings) -> Self {
         Self {
             config_revision: settings.config_revision.get(),
+            openai_oauth_guardian_review_model: settings.openai_oauth_guardian_review_model,
+            openai_request_country: settings.openai_request_country,
             excel_default_models: settings.excel_default_models,
             turn_state_injection_enabled: settings.turn_state_injection_enabled,
             turn_state_probe_proxy_id: settings.turn_state_probe_proxy_id,

@@ -231,14 +231,14 @@
       }
     },
     "warmup": {
-      "title": "Account warmup",
+      "title": "Scheduled warmup",
       "description": "Try to start quota windows for idle Codex OAuth accounts",
       "modelLabel": "Warmup model",
       "modelHelp": "Required when enabled, use an available model",
       "modelPlaceholder": "Enter model name",
-      "helpTitle": "About account warmup",
+      "helpTitle": "About scheduled warmup",
       "help": "Sends a lightweight request to available Codex OAuth accounts, skipping exhausted quotas and confirmed active windows, accounts at 0% may be warmed up, activation is not guaranteed",
-      "enableWarmup": "Enable warmup",
+      "enableWarmup": "Enable scheduled warmup",
       "cronExpression": "Cron expression",
       "cronHelp": "Press Enter after each tag",
       "scheduleHelp": "Runs in the deployment time zone, once per matching minute"
@@ -316,7 +316,10 @@
     },
     "modelMapping": "Model mapping",
     "routing": {
-      "modelMapHelp": "Map client model names to the upstream models used"
+      "modelMapHelp": "Map client model names to the upstream models used",
+      "oauthGuardianReviewModel": "Dedicated review model",
+      "oauthGuardianReviewModelHelp": "Prefer the dedicated review model for synchronous reviews with OAuth accounts",
+      "oauthGuardianReviewModelDetails": "Prefer codex-auto-review when enabled. Use the model requested by the client when disabled or when no eligible review account is available"
     },
     "addMapping": "Add mapping",
     "loadingModelMapping": "Loading model mapping",
@@ -336,7 +339,22 @@
     "location": {
       "requestLocationOverride": "Request location override",
       "description": "Override time zone and location fields in Codex requests, custom locations on account proxies take precedence",
-      "enableLocationOverlay": "Enable location overlay"
+      "enableLocationOverlay": "Enable location overlay",
+      "requestCountry": "Request country",
+      "countryHelp": "Request country mode help",
+      "countryModes": {
+        "default": "Null",
+        "passthrough": "Pass through",
+        "follow_location": "Follow location",
+        "custom": "Custom"
+      },
+      "countryHints": {
+        "default": "Always send JSON null.",
+        "passthrough": "Keep the client’s value. Omit the field when the client omits it.",
+        "follow_location": "Use the proxy location first, then the enabled global location. Send null when neither applies.",
+        "custom": "Always use the specified two-letter country code."
+      },
+      "customCountryCode": "Custom country code"
     },
     "quotaReset": {
       "title": "Quota reset credits",
@@ -655,7 +673,7 @@
       "overloadSettingsRequired": "Complete the overload protection settings",
       "invalidOverloadSettings": "Use a failure threshold of 2–1,000, a counting window of 60–3,600 seconds, and a cooldown of 300–604,800 seconds",
       "invalidProbeModel": "The probe model must be at most 128 characters without control characters",
-      "warmupModelRequired": "Select a model to enable warmup",
+      "warmupModelRequired": "Select a model to enable scheduled warmup",
       "invalidWarmupModel": "Warmup model name must not exceed 128 characters",
       "settingsSaved": "Settings saved",
       "protectionSettingsRequired": "Complete the error protection settings",

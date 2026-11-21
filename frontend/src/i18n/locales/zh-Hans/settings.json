@@ -231,14 +231,14 @@
       }
     },
     "warmup": {
-      "title": "账号预热",
+      "title": "定时预热",
       "description": "尝试启动空闲 Codex OAuth 账号的额度窗口",
       "modelLabel": "预热模型",
       "modelHelp": "启用时必填，需为账号可用模型",
       "modelPlaceholder": "输入模型名称",
-      "helpTitle": "账号预热说明",
+      "helpTitle": "定时预热说明",
       "help": "向可用的 Codex OAuth 账号发送轻量请求，跳过额度耗尽和已确认活跃的窗口，0% 账号允许预热，不保证窗口成功启动",
-      "enableWarmup": "启用预热",
+      "enableWarmup": "启用定时预热",
       "cronExpression": "Cron 表达式",
       "cronHelp": "回车添加 Tag，支持多个",
       "scheduleHelp": "按部署时区执行，同一分钟只预热一次"
@@ -316,7 +316,10 @@
     },
     "modelMapping": "模型映射",
     "routing": {
-      "modelMapHelp": "将客户端请求的模型名称映射为实际使用的上游模型"
+      "modelMapHelp": "将客户端请求的模型名称映射为实际使用的上游模型",
+      "oauthGuardianReviewModel": "专用审核模型",
+      "oauthGuardianReviewModelHelp": "同步审核优先使用授权账号的专用模型",
+      "oauthGuardianReviewModelDetails": "开启时优先使用 codex-auto-review，关闭此项或没有可用账号支持该模型时，沿用客户端请求的模型"
     },
     "addMapping": "添加映射",
     "loadingModelMapping": "正在加载模型映射",
@@ -336,7 +339,22 @@
     "location": {
       "requestLocationOverride": "请求位置覆盖",
       "description": "覆盖 Codex 请求中的时区与位置字段，账号出站代理的自定义位置优先",
-      "enableLocationOverlay": "启用位置覆盖"
+      "enableLocationOverlay": "启用位置覆盖",
+      "requestCountry": "请求国家",
+      "countryHelp": "请求国家模式说明",
+      "countryModes": {
+        "default": "空值",
+        "passthrough": "透传",
+        "follow_location": "跟随位置",
+        "custom": "自定义"
+      },
+      "countryHints": {
+        "default": "始终发送 JSON null",
+        "passthrough": "保留客户端原值，未传时省略该字段",
+        "follow_location": "优先使用代理位置，其次使用已开启的全局位置。两者都未设置时发送 null",
+        "custom": "固定使用指定的两位国家代码"
+      },
+      "customCountryCode": "自定义国家代码"
     },
     "quotaReset": {
       "title": "主动重置卡",
@@ -655,8 +673,8 @@
       "overloadSettingsRequired": "请完整填写过载保护参数",
       "invalidOverloadSettings": "失败次数阈值应为 2～1000，统计窗口为 60～3600 秒，冷却时长为 300～604800 秒",
       "invalidProbeModel": "探测模型最多 128 个字符，不能包含控制字符",
-      "warmupModelRequired": "启用预激活时请选择模型",
-      "invalidWarmupModel": "预激活模型名称不能超过 128 个字符",
+      "warmupModelRequired": "启用定时预热时请选择模型",
+      "invalidWarmupModel": "预热模型名称不能超过 128 个字符",
       "settingsSaved": "设置已保存",
       "protectionSettingsRequired": "请完整填写错误保护参数",
       "invalidProtectionSettings": "失败阈值应为 2～1000，计数有效期为 60～3600 秒，冷却时长为 300～604800 秒",

@@ -1,4 +1,4 @@
-import type { AccountGroup, ApiKey, GroupFastMode } from '@/api'
+import type { AccountGroup, AccountModelAccess, ApiKey, GroupFastMode } from '@/api'
 import { watchDebounced } from '@vueuse/core'
 import { computed, onMounted, ref, shallowRef, watch } from 'vue'
 
@@ -18,9 +18,12 @@ import { usePagedQuery } from '@/composables/usePagedQuery'
 import { errorMessage } from '@/utils/async'
 import { normalizeRgbaHexColor } from '@/utils/color'
 import { formatDateTime } from '@/utils/date'
+import { accountModelAccessError } from '@/views/accounts/utils/modelAccess'
 import { DEFAULT_ACCOUNT_GROUP_COLOR } from '../constants'
 
 export interface AccountGroupFormValue {
+  allowSubagents: boolean
+  modelAccess: AccountModelAccess | undefined
   allowImageGeneration: boolean
   fastMode: GroupFastMode
   name: string
@@ -117,6 +120,8 @@ export function useAccountGroups() {
     form.value = {
       fastMode: group.fastMode ?? (group.disableFast ? 'disabled' : 'default'),
       allowImageGeneration: group.allowImageGeneration ?? true,
+      allowSubagents: group.allowSubagents,
+      modelAccess: structuredClone(group.modelAccess),
       name: group.name,
       description: group.description ?? '',
       color: group.color,
@@ -139,16 +144,23 @@ export function useAccountGroups() {
       return
     }
 
+    const modelError = accountModelAccessError(form.value.modelAccess)
+    if (modelError) {
+      toast.warning(modelError)
+      return
+    }
     await savingAction.run(async () => {
       const updating = Boolean(editingGroup.value)
       const description = form.value.description.trim() || null
       const fastMode = form.value.fastMode
       if (editingGroup.value) {
-        await updateAccountGroup({ id: editingGroup.value.id, name, description, color, fastMode, allowImageGeneration: form.value.allowImageGeneration })
+        await updateAccountGroup({ id: editingGroup.value.id, name, description, color, fastMode, allowSubagents: form.value.allowSubagents, modelAccess: form.value.modelAccess, allowImageGeneration: form.value.allowImageGeneration })
       }
       else {
         await createAccountGroup({
           fastMode,
+          allowSubagents: form.value.allowSubagents,
+          modelAccess: form.value.modelAccess,
           allowImageGeneration: form.value.allowImageGeneration,
           name,
           description,
@@ -312,5 +324,5 @@ export function useAccountGroups() {
 }
 
 function emptyForm(): AccountGroupFormValue {
-  return { name: '', description: '', color: DEFAULT_ACCOUNT_GROUP_COLOR, fastMode: 'default', disableFast: false, allowImageGeneration: true }
+  return { name: '', description: '', color: DEFAULT_ACCOUNT_GROUP_COLOR, fastMode: 'default', disableFast: false, allowImageGeneration: true, allowSubagents: true, modelAccess: { mode: 'all', models: [] } }
 }

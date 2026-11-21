@@ -250,6 +250,8 @@ impl FakeProviderAdmin {
     fn prepared_rotation(&self, account: &AccountRecord) -> PreparedCredentialRotation {
         PreparedCredentialRotation::new(
             PreparedCredentialRotationFacts {
+                preserve_access_token_expiry: Default::default(),
+
                 preserve_profile: false,
                 account_id: ProviderAccountId::new(account.id.clone()).expect("account ID"),
                 provider_kind: account.provider_kind.clone(),
@@ -1441,6 +1443,9 @@ pub(super) struct StaticSettingsStore;
 impl SettingsStore for StaticSettingsStore {
     async fn load_runtime_settings(&self) -> AdminStoreResult<RuntimeSettings> {
         Ok(RuntimeSettings {
+            openai_oauth_guardian_review_model: true,
+            openai_request_country: Default::default(),
+
             turn_state_probe_proxy_id: None,
             turn_state_probe_concurrency: 3,
             config_revision: revision(1),

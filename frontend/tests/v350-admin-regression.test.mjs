@@ -284,6 +284,8 @@ test('runtime save keeps custom parameters and silently rereads server state aft
   const updates = []
   const server = {
     configRevision: 7,
+    openaiOauthGuardianReviewModel: true,
+    openaiRequestCountry: { mode: 'follow_location' },
     refreshMarginSeconds: 60,
     refreshConcurrency: 8,
     maxConcurrentPerAccount: 20,

@@ -185,6 +185,18 @@ impl ProviderAdminError {
 /// 全部由 [`crate::ports::store::AccountStore`] 提交。运行时资源通知只在事务成功后发生。
 #[async_trait]
 pub trait ProviderAdmin: Send + Sync {
+    fn merge_batch_key_profile(
+        &self,
+        current: Option<&gateway_core::account::OpaqueProviderData>,
+        update: Option<&Option<gateway_core::account::OpaqueProviderData>>,
+        installation_seed: Option<uuid::Uuid>,
+    ) -> Result<Option<gateway_core::account::OpaqueProviderData>, ProviderAdminError> {
+        if installation_seed.is_some() {
+            return Err(ProviderAdminError::new(ProviderAdminErrorKind::Unsupported));
+        }
+        Ok(update.map_or_else(|| current.cloned(), Clone::clone))
+    }
+
     fn validate_key_client_profile(
         &self,
         _profile: &gateway_core::account::OpaqueProviderData,

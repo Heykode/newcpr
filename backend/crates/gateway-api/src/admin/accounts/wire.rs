@@ -19,29 +19,20 @@ impl<'de> Deserialize<'de> for AccountProxyUpdate {
 
 pub(super) fn proxy_selection(
     id: Option<String>,
-    url: Option<AccountProxyUpdate>,
 ) -> Result<Option<gateway_admin::model::proxies::AccountProxySelection>, WireValidationError> {
     use gateway_admin::model::proxies::AccountProxySelection;
-    match (id, url) {
-        (Some(_), Some(_)) => Err(WireValidationError::new("outboundProxyId")),
-        (Some(id), None) if id.is_empty() => Ok(Some(AccountProxySelection::Direct)),
-        (Some(id), None) => {
-            if id.len() > 128
-                || !id
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
-            {
-                return Err(WireValidationError::new("outboundProxyId"));
-            }
-            Ok(Some(AccountProxySelection::Saved(id)))
-        }
-        (None, Some(value)) => Ok(Some(
-            value
-                .0
-                .map_or(AccountProxySelection::Direct, AccountProxySelection::Url),
-        )),
-        (None, None) => Ok(None),
+    let Some(id) = id else { return Ok(None) };
+    if id.is_empty() {
+        return Ok(Some(AccountProxySelection::Direct));
     }
+    if id.len() > 128
+        || !id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+    {
+        return Err(WireValidationError::new("outboundProxyId"));
+    }
+    Ok(Some(AccountProxySelection::Saved(id)))
 }
 
 /// 账号列表查询参数。
@@ -80,7 +71,6 @@ pub struct BatchUpdateAccountsRequest {
     #[serde(default, deserialize_with = "deserialize_optional_nullable")]
     pub custom_name: Option<Option<String>>,
     pub outbound_proxy_id: Option<String>,
-    pub outbound_proxy_url: Option<AccountProxyUpdate>,
     pub account_ids: Vec<String>,
     pub enabled: Option<bool>,
     pub turn_state_injection_enabled: Option<bool>,
@@ -158,10 +148,7 @@ impl BatchUpdateAccountsRequest {
         if let Some(weight) = self.weight {
             parse_account_weight(weight)?;
         }
-        proxy_selection(
-            self.outbound_proxy_id.clone(),
-            self.outbound_proxy_url.clone(),
-        )?;
+        proxy_selection(self.outbound_proxy_id.clone())?;
         if self.quota_settings.is_none()
             && self.auto_use_quota_credits.is_none()
             && self.excel_recovery.is_none()
@@ -183,7 +170,6 @@ impl BatchUpdateAccountsRequest {
             && self.model_access.is_none()
             && self.group_ids.is_none()
             && self.outbound_proxy_id.is_none()
-            && self.outbound_proxy_url.is_none()
             && self.credential_proxy_id.is_none()
         {
             return Err(WireValidationError::new("fields"));
@@ -204,7 +190,7 @@ impl BatchUpdateAccountsRequest {
                 .custom_name
                 .map(|value| super::credentials::parse_custom_name(value.as_deref()))
                 .transpose()?,
-            outbound_proxy: proxy_selection(self.outbound_proxy_id, self.outbound_proxy_url)?,
+            outbound_proxy: proxy_selection(self.outbound_proxy_id)?,
             account_ids: self.account_ids,
             enabled: self.enabled,
             turn_state_injection_enabled: self.turn_state_injection_enabled,

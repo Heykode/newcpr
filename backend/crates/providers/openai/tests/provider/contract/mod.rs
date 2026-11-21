@@ -4606,7 +4606,7 @@ async fn advertised_size_fallback_preserves_next_request_websocket_for_oauth_cre
                     .is_some_and(|wire| wire.event_type() == Some("response.completed"));
             }
             assert!(completed);
-            if index == 0 && downstream_websocket {
+            if index == 0 {
                 let state = captured_state.expect("fallback session state");
                 assert_eq!(state.payload()["continuation_scope"], "replay_required");
                 let restored: ProviderSessionState =

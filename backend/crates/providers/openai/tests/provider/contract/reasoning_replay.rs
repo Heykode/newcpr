@@ -132,7 +132,7 @@ async fn hosted_search_errors_preserve_wire_details_without_replay_on_http_and_w
             } else {
                 let requests = http.received_requests().await.unwrap();
                 assert_eq!(requests.len(), 1);
-                let body: Value = requests[0].body_json().unwrap();
+                let body = captured_request_body(&requests[0]);
                 assert_eq!(body["tools"][0]["type"], "web_search");
             }
         }
@@ -326,6 +326,17 @@ async fn capture(input: Value, websocket: bool, qx: bool) -> Value {
 }
 
 async fn capture_with_store(input: Value, websocket: bool, qx: bool, stored: bool) -> Value {
+    capture_with_country(input, websocket, qx, stored, Default::default(), None).await
+}
+
+async fn capture_with_country(
+    input: Value,
+    websocket: bool,
+    qx: bool,
+    stored: bool,
+    country: gateway_core::account::OpenAiRequestCountry,
+    location: Option<gateway_core::account::RequestLocation>,
+) -> Value {
     let http = MockServer::start().await;
     let (base_url, websocket_server) = if websocket {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -356,7 +367,7 @@ async fn capture_with_store(input: Value, websocket: bool, qx: bool, stored: boo
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_provider_contract").await;
     let original = json!({
-        "model":"gpt-5.4","store":stored,"stream":true,"input":input,
+        "model":"gpt-5.4","store":stored,"stream":true,"input":input,"request_country":"CA",
         "instructions":"Preserve the original instructions.",
         "tools":[{"type":"function","name":"echo","parameters":{"type":"object","properties":{"status":{"type":"string"},"content":{"type":"array"}}}}],
         "future_field":{"status":"keep","content":[1]},
@@ -378,7 +389,21 @@ async fn capture_with_store(input: Value, websocket: bool, qx: bool, stored: boo
     let mut stream = provider
         .execute(
             planned_request("openai", operation),
-            context("req_replay_compatibility", CancellationToken::new()),
+            AttemptContext::new(
+                RequestAttemptContext::new(
+                    ModelRequestId::new("req_replay_compatibility").unwrap(),
+                    ClientApiKeyId::new("key_openai_contract").unwrap(),
+                )
+                .with_request_country(country)
+                .with_request_location(location),
+                NonZeroU32::new(1).unwrap(),
+                SystemTime::now() + Duration::from_secs(30),
+                account_policy(),
+                AccountAttemptContext::new(BTreeSet::new(), None, None)
+                    .with_account_scope(contract_account_scope()),
+                None,
+                CancellationToken::new(),
+            ),
         )
         .await
         .unwrap();
@@ -433,8 +458,8 @@ async fn message_ids_are_normalized_without_changing_references_tools_or_ciphert
         for stored in [false, true] {
             let actual = capture_with_store(input.clone(), websocket, false, stored).await;
             let mut expected = input.clone();
-            if !stored {
-                expected[0]["id"] = json!("msg_history");
+            for index in [0, 5, 10, 11] {
+                expected[index].as_object_mut().unwrap().remove("id");
             }
             assert_eq!(actual["input"], expected);
         }
@@ -463,6 +488,72 @@ async fn plaintext_reasoning_only_moves_when_every_part_can_be_preserved() {
                 expected[0].as_object_mut().unwrap().remove("id");
             }
             assert_eq!(actual["input"], expected);
+        }
+    }
+}
+
+#[tokio::test]
+async fn replay_compatibility_should_omit_only_unreferenced_inline_message_ids() {
+    let input = json!([
+        {"type":"item_reference","id":"item_before"},
+        {"type":"message","id":"item_standalone","role":"assistant","phase":"final_answer",
+         "content":[{"type":"output_text","text":"done"}]},
+        {"type":"message","id":"item_before","role":"assistant","content":"first"},
+        {"type":"message","id":"item_after","role":"user","content":"second"},
+        {"type":"message","id":"item_implicit","role":"developer","content":"instructions"},
+        {"type":"item_reference","id":"item_after"},
+        {"id":"item_implicit"},
+        {"type":"message","id":"msg_valid","role":"assistant","content":"answer"},
+        {"type":"message","id":"item_no_content","role":"assistant","content":[]},
+        {"type":"message","id":"item_encrypted","role":"assistant","content":"summary","encrypted_content":"opaque"},
+        {"type":"message","id":"item_opaque_part","role":"assistant","content":[{"type":"encrypted_content","encrypted_content":"opaque"}]},
+        {"type":"message","id":"item_image","role":"user","content":[{"type":"input_image","file_id":"file_example"}]},
+        {"type":"agent_message","id":"item_agent","content":[{"type":"encrypted_content","encrypted_content":"opaque"}]},
+        {"type":"function_call","id":"item_call","call_id":"call_example","name":"echo","arguments":"{}"}
+    ]);
+    let mut expected = input.clone();
+    expected[1].as_object_mut().unwrap().shift_remove("id");
+    for websocket in [false, true] {
+        let actual = capture(input.clone(), websocket, false).await;
+        assert_eq!(actual["input"].to_string(), expected.to_string());
+    }
+}
+
+#[tokio::test]
+async fn request_country_policies_reach_both_native_transports() {
+    use gateway_core::account::{OpenAiRequestCountry as Country, RequestLocation};
+    for websocket in [false, true] {
+        for (policy, location, expected) in [
+            (Country::FollowLocation {}, None, Value::Null),
+            (
+                Country::FollowLocation {},
+                Some(RequestLocation {
+                    country: "NZ".into(),
+                    ..Default::default()
+                }),
+                json!("NZ"),
+            ),
+            (
+                Country::Default {},
+                Some(RequestLocation::default()),
+                Value::Null,
+            ),
+            (
+                Country::Passthrough {},
+                Some(RequestLocation::default()),
+                json!("CA"),
+            ),
+            (
+                Country::Custom {
+                    country: "JP".into(),
+                },
+                Some(RequestLocation::default()),
+                json!("JP"),
+            ),
+        ] {
+            let actual =
+                capture_with_country(json!([]), websocket, false, false, policy, location).await;
+            assert_eq!(actual.get("request_country"), Some(&expected));
         }
     }
 }

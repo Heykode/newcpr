@@ -339,6 +339,8 @@ impl AccountGroupStore for PgAccountGroupRepository {
                 "disable_fast".to_owned(),
                 "fast_mode".to_owned(),
                 "allow_image_generation".to_owned(),
+                "allow_subagents".to_owned(),
+                "model_access".to_owned(),
             ],
         );
         let revision = self
@@ -346,8 +348,8 @@ impl AccountGroupStore for PgAccountGroupRepository {
                 Box::pin(async move {
                     sqlx::query(
                         "insert into account_groups
-                         (id, name, description, color, fast_mode, disable_fast, allow_image_generation, enabled, created_at, updated_at)
-                         values ($1, $2, $3, $4, $5, $6, $7, true, now(), now())",
+                         (id, name, description, color, fast_mode, disable_fast, allow_image_generation, allow_subagents, model_access_json, enabled, created_at, updated_at)
+                         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, true, now(), now())",
                     )
                     .bind(command.id.as_str())
                     .bind(command.name)
@@ -356,6 +358,8 @@ impl AccountGroupStore for PgAccountGroupRepository {
                     .bind(if command.disable_fast { "disabled" } else { command.fast_mode.as_str() })
                     .bind(command.disable_fast || command.fast_mode == gateway_core::account::FastMode::Disabled)
                     .bind(command.allow_image_generation)
+                    .bind(command.allow_subagents)
+                    .bind(sqlx::types::Json(command.model_access))
                     .execute(&mut **transaction)
                     .await
                     .map_err(|error| map_group_write_error(error, command.id.as_str()))?;
@@ -388,6 +392,8 @@ impl AccountGroupStore for PgAccountGroupRepository {
                 "disable_fast".to_owned(),
                 "fast_mode".to_owned(),
                 "allow_image_generation".to_owned(),
+                "allow_subagents".to_owned(),
+                "model_access".to_owned(),
             ],
         );
         let revision = self
@@ -400,7 +406,9 @@ impl AccountGroupStore for PgAccountGroupRepository {
                          when $6::boolean is not null then case when $6 then 'disabled' else 'default' end
                          else fast_mode end,
                      disable_fast = coalesce($5 = 'disabled', $6, disable_fast),
-                     allow_image_generation = coalesce($7, allow_image_generation), updated_at = now()
+                     allow_image_generation = coalesce($7, allow_image_generation),
+                     allow_subagents = coalesce($8, allow_subagents),
+                     model_access_json = coalesce($9, model_access_json), updated_at = now()
                  where id = $1",
                     )
                     .bind(command.id.as_str())
@@ -410,6 +418,8 @@ impl AccountGroupStore for PgAccountGroupRepository {
                     .bind(command.fast_mode.map(gateway_core::account::FastMode::as_str))
                     .bind(command.disable_fast)
                     .bind(command.allow_image_generation)
+                    .bind(command.allow_subagents)
+                    .bind(command.model_access.map(sqlx::types::Json))
                     .execute(&mut **transaction)
                     .await
                     .map_err(|error| map_group_write_error(error, command.id.as_str()))?;
@@ -583,7 +593,7 @@ async fn load_member_facts<'e>(
 
 fn group_select() -> QueryBuilder<Postgres> {
     QueryBuilder::new(
-        "select g.id, g.name, g.description, g.color, g.enabled, g.disable_fast, g.fast_mode, g.allow_image_generation, g.created_at, g.updated_at,
+        "select g.id, g.name, g.description, g.color, g.enabled, g.disable_fast, g.fast_mode, g.allow_image_generation, g.allow_subagents, g.model_access_json, g.created_at, g.updated_at,
                 coalesce(members.member_count, 0)::bigint as member_count,
                 coalesce(keys.client_key_count, 0)::bigint as client_key_count,
                 coalesce(members.provider_counts, '{}'::jsonb) as provider_counts
@@ -663,6 +673,15 @@ fn group_record(row: &sqlx::postgres::PgRow) -> StoreResult<AccountGroupRecord> 
         allow_image_generation: row
             .try_get("allow_image_generation")
             .map_err(|_| invalid("invalid image permission"))?,
+        allow_subagents: row
+            .try_get("allow_subagents")
+            .map_err(|_| invalid("invalid allow_subagents"))?,
+        model_access: row
+            .try_get::<sqlx::types::Json<gateway_core::account::AccountModelAccess>, _>(
+                "model_access_json",
+            )
+            .map_err(|_| invalid("invalid model access"))?
+            .0,
         fast_mode: gateway_core::account::FastMode::parse(
             row.try_get("fast_mode")
                 .map_err(|_| invalid("invalid fast_mode"))?,

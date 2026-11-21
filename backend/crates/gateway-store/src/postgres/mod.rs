@@ -1,6 +1,9 @@
 //! PostgreSQL 业务表的 adapters。
 
 use async_trait::async_trait;
+use gateway_admin::{
+    model::client_keys::BatchUpdateClientKeys, ports::store::BatchClientKeyProfileMerger,
+};
 use sqlx::{
     PgPool,
     postgres::{PgConnectOptions, PgPoolOptions},
@@ -17,6 +20,7 @@ mod admission_recovery;
 mod backup;
 mod billing_snapshot;
 mod client_budget_buffer;
+mod client_budget_windows;
 mod client_budgets;
 mod client_keys;
 mod egress;
@@ -321,6 +325,7 @@ impl ControlPlaneRepository for PgControlPlaneRepository {
 }
 
 enum ControlPlaneMutation {
+    BatchUpdateClientKeys(BatchUpdateClientKeys, BatchClientKeyProfileMerger),
     CreateClientApiKey(NewClientApiKey),
     UpdateClientApiKey(UpdateClientApiKeyDetails),
     SetClientApiKeyEnabled { id: String, enabled: bool },
@@ -329,6 +334,19 @@ enum ControlPlaneMutation {
 }
 
 impl PgControlPlaneRepository {
+    pub(super) async fn batch_update_client_keys(
+        &self,
+        command: BatchUpdateClientKeys,
+        merge_profiles: BatchClientKeyProfileMerger,
+        audit: AdminAuditEvent,
+    ) -> StoreResult<Revision> {
+        self.apply_targeted_mutation(
+            ControlPlaneMutation::BatchUpdateClientKeys(command, merge_profiles),
+            audit,
+        )
+        .await
+    }
+
     async fn apply_targeted_mutation(
         &self,
         mutation: ControlPlaneMutation,
@@ -340,6 +358,14 @@ impl PgControlPlaneRepository {
         let result = async {
             let revision = bump_config_revision_in_transaction(&mut transaction).await?;
             match mutation {
+                ControlPlaneMutation::BatchUpdateClientKeys(command, merge_profiles) => {
+                    client_keys::batch_update_client_keys_in_transaction(
+                        &mut transaction,
+                        &command,
+                        &merge_profiles,
+                    )
+                    .await?;
+                }
                 ControlPlaneMutation::CreateClientApiKey(key) => {
                     audit.changed_fields.push(if key.group_ids.is_empty() {
                         "routing_scope:all".to_owned()

@@ -1467,7 +1467,7 @@ pub(crate) async fn rotate_provider_account_in_transaction(
              credential_revision = credential_revision + 1,
              turn_state_binding_revision = credential_revision + 1,
              has_refresh_token = $8,
-             access_token_expires_at = $9,
+             access_token_expires_at = case when $16 then access_token_expires_at else $9 end,
              next_refresh_at = $10,
              upstream_user_id = case when $11::boolean then $12::text else upstream_user_id end,
              upstream_account_id = case when $11::boolean then $13::text else upstream_account_id end,
@@ -1498,6 +1498,7 @@ pub(crate) async fn rotate_provider_account_in_transaction(
     .bind(upstream_account_id)
     .bind(update.preserve_profile)
     .bind(preserve_name)
+    .bind(update.preserve_access_token_expiry)
     .fetch_optional(&mut **transaction)
     .await
     .map_err(|error| {

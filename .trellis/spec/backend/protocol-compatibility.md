@@ -463,13 +463,11 @@ events, then use the existing encoder and single execution finalization.
   The existing string/list content-anchor equivalence must keep routing,
   session and cache identity unchanged. Preserve the original protocol payload.
 - Preserve call_id links, references, encrypted history, compaction and unknown shapes.
-  On the selected OAuth send copy only, `normalize_message_history_ids` repairs the
-  rejected `item_` prefix to `msg_` for complete stateless `type=message` items.
-  Require a recognized role and content, a unique source ID, no target collision,
-  an ASCII alphanumeric/underscore/hyphen suffix and a resulting length at most 64.
-  Stored/conversation/previous-response histories and unknown input item types are
-  excluded. Duplicate/reference IDs, reasoning IDs and tool IDs remain untouched.
-  Account selection, identity derivation and the client's original body precede this repair.
+  On the selected OAuth send copy, omit an `item_` message ID only when it is
+  unreferenced and has complete inline plain-text content. Preserve references,
+  encrypted/tool/unknown content and other IDs. Do not rewrite `item_` to `msg_`,
+  and do not add store/conversation gates absent from the pinned official helper.
+  Account selection and identity derivation still precede the outbound mutation.
 - `normalize_plaintext_reasoning` may move nonempty content consisting solely of
   `{type: reasoning_text, text: string}` parts into an absent/null/empty summary.
   Preserve order/text; do not overwrite existing summaries or drop unknown fields.
@@ -568,3 +566,23 @@ events, then use the existing encoder and single execution finalization.
 - Providers supply requested endpoint model, continuation and an optional previous
   reasoning override from their own real session. They do not reinterpret the
   common wire facts; xAI cannot inherit an OpenAI session override.
+
+## Guardian 身份与传输（v3.54.0）
+
+- 在入口合并身份之前保存结构化 Guardian 角色；HTTP 正文/头各自必须完整且不冲突，
+  重复或错误类型标记拒绝推断；WS 仅当前帧正文参与识别，不沿用握手身份。
+- reviewer 的专用模型 hook 在 Core 规划中生效，尊重显式映射、账号目录、分组与账号
+  模型限制及续接 owner。无合格原生账号则按普通模型规划；不得转入 Excel。
+  已确认的 reviewer_model 决定续接，不能因开关改变而把旧 handle 交给另一模型。
+- 显式 Guardian 角色头优先；自动 reviewer 标记仅在实际专用模型上生成。
+  classifier/housekeeper 保留其 sampler 传输；普通与 reviewer HTTP 正文使用 zstd，
+  不再按小正文大小跳过，classifier/housekeeper 不压缩。WS 消息压缩仍按原独立规则。
+- 所选 OAuth ID token（缺失时 access token）的 FedRAMP claim 决定受管理标记；
+  下游不能覆盖该账号的 true。无 claim 的同账号扩展按既有透传合同处理。
+  模型目录、预热、Images/Search 和 Live 辅助调用复用账号客户端及池隔离。
+- WS opening 不携带 turn-state；在连接就绪后编码本次 payload、填开始时间，
+  编码失败丢弃已检出的连接；请求证据来自最终发送正文。
+- HTTP/SSE 回退产生 ReplayRequired 的续接在确认归属后以 NotSent 拒绝，
+  返回 previous_response_not_found 供完整历史重放；Excel 保留既有合同。
+  成功重放只关联真正要求恢复的同 Key/会话 failed 或 incomplete 记录，
+  不改写原错误终态与计费事实。

@@ -872,6 +872,22 @@ impl FixtureObservabilityStore {
 
 #[async_trait]
 impl ObservabilityStore for FixtureObservabilityStore {
+    async fn client_key_statistics(
+        &self,
+        _: gateway_admin::model::observability::TimeRange,
+        _: &gateway_core::policy::ClientApiKeyId,
+        _: gateway_admin::model::observability::KeyUsageMetric,
+    ) -> AdminStoreResult<gateway_admin::model::observability::KeyStatisticsOverview> {
+        Err(super::unavailable("key statistics"))
+    }
+    async fn client_key_models(
+        &self,
+        _: gateway_admin::model::observability::TimeRange,
+        _: &gateway_core::policy::ClientApiKeyId,
+    ) -> AdminStoreResult<Vec<gateway_admin::model::observability::KeyModelRow>> {
+        Err(super::unavailable("key statistics"))
+    }
+
     async fn analytics_cache_generation(&self) -> AdminStoreResult<u64> {
         Ok(self.overview.lock().unwrap().analytics.generation)
     }
@@ -1052,6 +1068,9 @@ struct FixtureSettingsStore;
 impl SettingsStore for FixtureSettingsStore {
     async fn load_runtime_settings(&self) -> AdminStoreResult<RuntimeSettings> {
         Ok(RuntimeSettings {
+            openai_oauth_guardian_review_model: true,
+            openai_request_country: Default::default(),
+
             openai_account_affinity: Default::default(),
             openai_session_binding_ttl_hours: 24,
             turn_state_probe_proxy_id: None,

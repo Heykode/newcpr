@@ -1,6 +1,6 @@
 import type { ProtectionDraft } from '../components/error-protection/form'
 import type { rotationOptions } from '../constants'
-import type { AccountAffinity, RequestTuning } from '@/api/modules/settings'
+import type { AccountAffinity, OpenAiRequestCountry, RequestTuning } from '@/api/modules/settings'
 import { computed, reactive, ref, shallowRef } from 'vue'
 import { getSettings, updateSettings } from '@/api'
 import { defaultRequestLocation } from '@/api/modules/proxies'
@@ -76,6 +76,8 @@ export function useSettingsForm() {
   const configRevision = shallowRef(0)
   const mappings = ref<Array<{ requestedModel: string, upstreamModel: string }>>([])
   const form = reactive({
+    openaiOauthGuardianReviewModel: true,
+    openaiRequestCountry: { mode: 'follow_location' } as OpenAiRequestCountry,
     accountErrorProtection: defaultProtection(),
     excelDefaultModels: DEFAULT_EXCEL_MODELS_INPUT,
     responsesMaxDecompressedBodyBytes: 64 * 1024 * 1024,
@@ -158,6 +160,8 @@ export function useSettingsForm() {
     form.responsesMaxDecompressedBodyBytes
       = data.responsesMaxDecompressedBodyBytes ?? 64 * 1024 * 1024
     form.openaiAccountAffinity = data.openaiAccountAffinity ?? 'strict'
+    form.openaiOauthGuardianReviewModel = data.openaiOauthGuardianReviewModel
+    form.openaiRequestCountry = structuredClone(data.openaiRequestCountry)
     form.refreshMarginSeconds = data.refreshMarginSeconds
     form.refreshConcurrency = data.refreshConcurrency
     form.maxConcurrentPerAccount = data.maxConcurrentPerAccount
@@ -250,6 +254,10 @@ export function useSettingsForm() {
   }
 
   async function saveSettings() {
+    if (form.openaiRequestCountry.mode === 'custom' && !/^[A-Z]{2}$/.test(form.openaiRequestCountry.country)) {
+      toast.warning('国家代码须为两位大写英文字母')
+      return
+    }
     if (saving.value || loading.value)
       return
     if (excelImages.errors.value.length) {
@@ -418,6 +426,8 @@ export function useSettingsForm() {
         excelDefaultModels,
         responsesMaxDecompressedBodyBytes: form.responsesMaxDecompressedBodyBytes,
         modelMappings: mappingPayload(),
+        openaiOauthGuardianReviewModel: form.openaiOauthGuardianReviewModel,
+        openaiRequestCountry: { ...form.openaiRequestCountry },
         refreshMarginSeconds,
         refreshConcurrency,
         maxConcurrentPerAccount,

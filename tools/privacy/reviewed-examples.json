@@ -3310,5 +3310,13 @@
     "file_sha256": "14d73de26d5821b8eb3f596a7d62cfc24f82627f3fc4721e07458287b35ff298",
     "line_sha256": "9e479e1097600c03e5b02a059871972d553af67489633306a1ac5dbb3264de7c",
     "reason": "Manually re-reviewed unchanged v3.53.0 transport fixtures: loopback-only synthetic proxy authentication and in-memory DNS-policy classification values, not production endpoints or credentials."
+  },
+  {
+    "path": "backend/crates/gateway-admin/tests/model/provider_credentials.rs",
+    "rule": "authenticated-url",
+    "line": 262,
+    "file_sha256": "3a38dcc2afe594b7eaa25b0df44ffb9d201526283d165d30f8f04e3b49ca8100",
+    "line_sha256": "c85204f4407a8fb3204045ad397ed644fc6cb87825bfac0e6e809b0324b82079",
+    "reason": "Manually re-reviewed the unchanged documentation-domain authenticated proxy fixture after removal of the legacy outboundProxyUrl mutation field. This pending-authorization serialization test uses synthetic in-memory inputs and performs no network access."
   }
 ]

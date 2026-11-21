@@ -11,6 +11,7 @@ use gateway_core::{
     },
 };
 use redis::{Script, aio::ConnectionManager};
+use std::sync::LazyLock;
 use uuid::Uuid;
 
 use crate::{Revision, StoreError, StoreResult, redis_unavailable, require_nonempty};
@@ -43,6 +44,17 @@ redis.call('PEXPIRE', KEYS[1], ttl)
 if #KEYS > 1 then redis.call('ZADD', KEYS[2], incoming_until, ARGV[3]) end
 return 1
 "#;
+
+static WRITE_ACCOUNT: LazyLock<Script> = LazyLock::new(|| {
+    Script::new(
+        &[
+            super::account_error_protection::MIGRATE,
+            "migrate_protection(KEYS[1], KEYS[3], KEYS[2], KEYS[4], ARGV[3])\n",
+            WRITE_SCRIPT,
+        ]
+        .concat(),
+    )
+});
 
 const READ_SCRIPT: &str = r#"
 local revision = redis.call('HGET', KEYS[1], 'revision')
@@ -79,6 +91,25 @@ redis.call('DEL', KEYS[1])
 redis.call('ZREM', KEYS[2], ARGV[3])
 return 1
 "#;
+
+// Account reads and clears must migrate before inspecting expiry or deleting the legacy key.
+fn account_cooldown_script(script: &str, account_arg: usize) -> Script {
+    Script::new(
+        &[
+            super::account_error_protection::MIGRATE,
+            &format!(
+                "migrate_protection(KEYS[1], KEYS[3], KEYS[2], KEYS[4], ARGV[{account_arg}])\n"
+            ),
+            script,
+        ]
+        .concat(),
+    )
+}
+static READ_ACCOUNT: LazyLock<Script> = LazyLock::new(|| account_cooldown_script(READ_SCRIPT, 1));
+static INVALIDATE_ACCOUNT: LazyLock<Script> =
+    LazyLock::new(|| account_cooldown_script(INVALIDATE_SCRIPT, 2));
+static RECOVER_OBSERVED_ACCOUNT: LazyLock<Script> =
+    LazyLock::new(|| account_cooldown_script(RECOVER_OBSERVED_SCRIPT, 3));
 
 const ACTIVE_COOLDOWNS_SCRIPT: &str = r#"
 local clock = redis.call('TIME')
@@ -132,12 +163,12 @@ impl RedisCredentialCooldownRepository {
         })
     }
 
-    fn key(&self, provider_account_id: &str) -> StoreResult<String> {
+    pub(super) fn key(&self, provider_account_id: &str) -> StoreResult<String> {
         let fingerprint = resource_fingerprint("credential cooldown", provider_account_id)?;
         Ok(format!("{}:account:{fingerprint}:cooldown", self.namespace))
     }
 
-    fn active_index_key(&self) -> String {
+    pub(super) fn active_index_key(&self) -> String {
         format!("{}:account:active-cooldowns", self.namespace)
     }
 
@@ -168,9 +199,11 @@ impl RedisCredentialCooldownRepository {
         }
         let mut connection = self.connection.clone();
         let written = if let Some(index_member) = index_member {
-            Script::new(WRITE_SCRIPT)
+            WRITE_ACCOUNT
                 .key(key)
                 .key(self.active_index_key())
+                .key(self.protection_key(index_member)?)
+                .key(self.protection_index_key())
                 .arg(credential_revision.get())
                 .arg(until_ms)
                 .arg(index_member)
@@ -197,9 +230,11 @@ impl RedisCredentialCooldownRepository {
     ) -> StoreResult<Option<StoredCooldown>> {
         let mut connection = self.connection.clone();
         let result = if let Some(index_member) = index_member {
-            Script::new(READ_SCRIPT)
+            READ_ACCOUNT
                 .key(key)
                 .key(self.active_index_key())
+                .key(self.protection_key(index_member)?)
+                .key(self.protection_index_key())
                 .arg(index_member)
                 .invoke_async(&mut connection)
                 .await
@@ -308,9 +343,11 @@ impl RedisCredentialCooldownRepository {
     ) -> StoreResult<bool> {
         let mut connection = self.connection.clone();
         let removed = if let Some(index_member) = index_member {
-            Script::new(INVALIDATE_SCRIPT)
+            INVALIDATE_ACCOUNT
                 .key(key)
                 .key(self.active_index_key())
+                .key(self.protection_key(index_member)?)
+                .key(self.protection_index_key())
                 .arg(through_revision.get())
                 .arg(index_member)
                 .invoke_async::<i64>(&mut connection)
@@ -562,7 +599,7 @@ impl ProviderCooldownPort for RedisCredentialCooldownRepository {
     ) -> futures::future::BoxFuture<'a, Vec<Result<Option<ProviderCooldown>, ProviderStoreError>>>
     {
         Box::pin(async move {
-            let script = Script::new(READ_SCRIPT);
+            let script = READ_ACCOUNT.clone();
             let mut results = Vec::with_capacity(account_ids.len());
             for batch in account_ids.chunks(128) {
                 let commands = batch
@@ -571,9 +608,11 @@ impl ProviderCooldownPort for RedisCredentialCooldownRepository {
                         let mut command = redis::cmd("EVALSHA");
                         command
                             .arg(script.get_hash())
-                            .arg(2)
+                            .arg(4)
                             .arg(self.key(account.as_str())?)
                             .arg(self.active_index_key())
+                            .arg(self.protection_key(account.as_str())?)
+                            .arg(self.protection_index_key())
                             .arg(account.as_str());
                         Ok(command)
                     })
@@ -645,9 +684,14 @@ impl ProviderCooldownPort for RedisCredentialCooldownRepository {
                 .key(observed.account_id().as_str())
                 .map_err(|_| provider_invalid("encode cooldown key"))?;
             let until: DateTime<Utc> = observed.until().into();
-            let result: i64 = Script::new(RECOVER_OBSERVED_SCRIPT)
+            let result: i64 = RECOVER_OBSERVED_ACCOUNT
                 .key(key)
                 .key(self.active_index_key())
+                .key(
+                    self.protection_key(observed.account_id().as_str())
+                        .map_err(|_| provider_invalid("protection key"))?,
+                )
+                .key(self.protection_index_key())
                 .arg(observed.credential_revision().get())
                 .arg(until.timestamp_millis())
                 .arg(observed.account_id().as_str())

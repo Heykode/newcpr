@@ -209,7 +209,6 @@ pub struct StartAccountAuthorizationRequest {
     pub provider: String,
     pub name: String,
     pub account_id: Option<String>,
-    pub outbound_proxy_url: Option<super::wire::AccountProxyUpdate>,
 }
 
 impl StartAccountAuthorizationRequest {
@@ -245,10 +244,7 @@ impl StartAccountAuthorizationRequest {
                 context,
                 name: self.name.trim().to_owned(),
                 reauthorization,
-                outbound_proxy: super::wire::proxy_selection(
-                    self.outbound_proxy_id,
-                    self.outbound_proxy_url,
-                )?,
+                outbound_proxy: super::wire::proxy_selection(self.outbound_proxy_id)?,
             },
         ))
     }
@@ -334,7 +330,6 @@ pub struct UpdateAccountRequest {
     )]
     pub custom_name: Option<Option<String>>,
     pub outbound_proxy_id: Option<String>,
-    pub outbound_proxy_url: Option<super::wire::AccountProxyUpdate>,
     pub account_id: String,
     pub enabled: bool,
     pub turn_state_injection_enabled: Option<bool>,
@@ -381,10 +376,7 @@ impl UpdateAccountRequest {
                 .custom_name
                 .map(|value| parse_custom_name(value.as_deref()))
                 .transpose()?,
-            outbound_proxy: super::wire::proxy_selection(
-                self.outbound_proxy_id,
-                self.outbound_proxy_url,
-            )?,
+            outbound_proxy: super::wire::proxy_selection(self.outbound_proxy_id)?,
             account_id: self.account_id,
             enabled: self.enabled,
             turn_state_injection_enabled: self.turn_state_injection_enabled,

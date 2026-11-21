@@ -40,7 +40,8 @@
       "currentlyUsed": "當前已用",
       "afterReset": "重置後",
       "remainUnchanged": "保持不變",
-      "confirmReset": "確認重置"
+      "confirmReset": "確認重置",
+      "title": "重置額度"
     },
     "created": {
       "apiKeyCreated": "API密鑰已創建",
@@ -108,6 +109,49 @@
         "confirm": "允許訪問",
         "description": "此密鑰可訪問全部賬號，包括未分組和以後新增的賬號"
       }
+    },
+    "statistics": {
+      "title": "用量統計",
+      "heading": "用量統計 · {name}",
+      "metric": "統計指標",
+      "period": "統計期間",
+      "days": "近 {days} 天",
+      "showingPrevious": "目前顯示近 {days} 天的資料",
+      "costUsd": "費用",
+      "tokens": "用量",
+      "requests": "請求數",
+      "trend": "每日用量趨勢",
+      "model": "模型",
+      "other": "其他 {count} 個模型",
+      "unknownModel": "未記錄模型",
+      "knownCost": "僅含已知美元費用",
+      "costShare": "費用佔比",
+      "peakRequests": "單日最高請求數",
+      "activeDays": "活躍天數",
+      "includesEstimate": "含本機估算",
+      "empty": "此期間沒有用量記錄",
+      "missing": "此指標暫無已知數值"
+    },
+    "alignment": {
+      "title": "對齊帳號窗口",
+      "description": "重算本期費用，到期恢復原週期",
+      "account": "參考帳號",
+      "noAccounts": "沒有符合的帳號",
+      "select": "依名稱或電子郵件搜尋",
+      "window": "參考窗口",
+      "empty": "此帳號沒有可對齊的有效日或週窗口",
+      "start": "本期開始",
+      "end": "本期重設",
+      "confirm": "確認對齊本期",
+      "saved": "本期額度窗口已對齊"
+    },
+    "batch": {
+      "edit": "批次編輯",
+      "updated": "已更新 {count} 個金鑰",
+      "description": "已選 {count} 個密鑰",
+      "partiallyEnabled": "部分密鑰已啟用",
+      "mixed": "多個值",
+      "clearLimit": "設為不限"
     }
   }
 }

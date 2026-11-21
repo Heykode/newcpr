@@ -10,7 +10,8 @@ use gateway_core::routing::{
 };
 use provider_openai::OFFICIAL_CODEX_BASE_URL;
 use provider_openai::credential::{
-    CodexCredentialCatalogError, CodexCredentialCatalogService, ImportCodexOAuthCredential,
+    CodexCredentialCatalogError, CodexCredentialCatalogService, CredentialRepositoryError,
+    ImportCodexOAuthCredential,
 };
 use provider_openai::transport::CodexModelCatalogError;
 use provider_openai::transport::profile::{CodexWireProfile, CodexWireProfileState};
@@ -1261,4 +1262,47 @@ async fn discovery_refresh_and_export_use_the_current_global_profile() {
         service.cached_account_models(&first).unwrap().unwrap(),
         ["model-0.170.0"]
     );
+}
+
+#[tokio::test]
+async fn catalog_refresh_preserves_the_store_cause_for_diagnostics() {
+    use gateway_core::error::{ErrorDetails, ErrorSource};
+
+    let store = Arc::new(MemoryAccountStore::default());
+    store.fail_provider_listing();
+    let error = service(&store).refresh_catalogs().await.unwrap_err();
+    assert!(matches!(
+        error,
+        CodexCredentialCatalogError::Credential(CredentialRepositoryError::Store(_))
+    ));
+    assert!(!error.to_string().contains("PRIVATE_DATABASE_CAUSE"));
+    let details = ErrorDetails::capture(Some(&ErrorSource::new(error)), None, false).unwrap();
+    assert!(details.as_str().contains("PRIVATE_DATABASE_CAUSE"));
+}
+
+#[tokio::test]
+async fn admin_model_catalog_reports_conflicts_and_store_outages_before_querying_upstream() {
+    use gateway_admin::ports::provider::ProviderAdminErrorKind;
+    use gateway_core::error::StoreErrorKind;
+
+    let store = Arc::new(MemoryAccountStore::default());
+    let account = seed_account(&store, "acct_catalog_errors").await;
+    let server = MockServer::start().await;
+    let bundle = crate::admin::initialized_test_bundle(Arc::clone(&store), server.uri()).await;
+    for (store_kind, admin_kind) in [
+        (StoreErrorKind::Conflict, ProviderAdminErrorKind::Conflict),
+        (
+            StoreErrorKind::Unavailable,
+            ProviderAdminErrorKind::Unavailable,
+        ),
+    ] {
+        *store.credential_error.lock().unwrap() = Some(store_kind);
+        let error = bundle
+            .admin_provider()
+            .models(account.id(), true)
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind(), admin_kind);
+    }
+    assert!(server.received_requests().await.unwrap().is_empty());
 }

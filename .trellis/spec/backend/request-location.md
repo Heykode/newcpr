@@ -12,8 +12,9 @@
   must leave account credentials, account revisions, enabled state, scheduling
   and URLs untouched. The proxy/config revision still advances.
 - Both observation and pre-selection encoding pass no location. After selecting
-  the lease, use proxy > enabled global location; absent both, preserve the client
-  payload. Never fall back to the wire-profile startup location. Keep the original
+  the lease, use proxy > enabled global location; absent both, preserve structured
+  client location/timezone fields. The independent request_country strategy below
+  determines that one top-level field. Never fall back to the wire-profile startup location. Keep the original
   request for affinity/cache identity and apply the official helper only to the
   outbound copy. Do not clear continuation or change account/device identity.
 - Retain existing JSON field names for stored-settings compatibility. Compile
@@ -63,3 +64,11 @@
   The form's location action fills only the manual draft; saving remains explicit.
   New URL connectivity tests do not look up location; the separate location action
   probes the new URL without changing a saved proxy or account binding.
+
+## 原生请求国家策略（v3.54.0）
+
+`OpenAiRequestCountry` 随配置快照冻结，经 RequestAttemptContext 在实际选号后应用。
+默认 follow_location 取代理位置，再取启用的全局位置，否则写 null；default 总写 null，
+passthrough 保留客户端字段（包括缺失），custom 只接受两个大写 ASCII 字母。
+不得用启动画像位置兜底；HTTP/WS 必须共用此规则，Excel 保留独立请求映射。
+验证设置存取、原请求不变、缺位置及四策略的实际出站正文。

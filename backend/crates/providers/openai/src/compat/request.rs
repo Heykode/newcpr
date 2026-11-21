@@ -1,5 +1,7 @@
 //! Pure request compatibility after selecting the native Codex account.
 
+use std::collections::HashSet;
+
 use serde_json::{Map, Value, json};
 
 /// Normalize only rejected reasoning replay fields on the selected OAuth copy.
@@ -8,6 +10,7 @@ pub(crate) fn normalize_reasoning_replay(body: &mut Map<String, Value>) {
     let Some(input) = body.get_mut("input").and_then(Value::as_array_mut) else {
         return;
     };
+    normalize_replayed_text_ids(input);
     let mut id_counts = std::collections::BTreeMap::<String, usize>::new();
     for item in input.iter() {
         if let Some(id) = item.get("id").and_then(Value::as_str) {
@@ -151,4 +154,64 @@ pub(crate) fn normalize_codex_request_body(body: &mut Map<String, Value>) {
     ] {
         body.shift_remove(field);
     }
+}
+
+fn normalize_replayed_text_ids(input: &mut [Value]) {
+    let mut messages = Vec::new();
+    let mut referenced_ids = HashSet::new();
+    for item in input {
+        let Some(item) = item.as_object_mut() else {
+            continue;
+        };
+        let kind = item.get("type").and_then(Value::as_str);
+        match kind {
+            Some("reasoning") => {}
+            Some("message") => {
+                if generic_item_id(item).is_some() && has_inline_text_content(item) {
+                    messages.push(item);
+                }
+            }
+            _ => {
+                let is_reference = kind == Some("item_reference")
+                    || (item.get("type").is_none_or(Value::is_null)
+                        && !item.contains_key("role")
+                        && !item.contains_key("content"));
+                if is_reference && let Some(id) = generic_item_id(item) {
+                    referenced_ids.insert(id);
+                }
+            }
+        }
+    }
+    // Codex 要求消息 ID 以 msg 开头；引用可以出现在消息前后，收齐后才能省略可选 ID
+    for message in messages {
+        if generic_item_id(message).is_some_and(|id| !referenced_ids.contains(id)) {
+            message.shift_remove("id");
+        }
+    }
+}
+
+fn generic_item_id(item: &Map<String, Value>) -> Option<&str> {
+    item.get("id")
+        .and_then(Value::as_str)
+        .filter(|id| id.starts_with("item_"))
+}
+
+fn has_inline_text_content(item: &Map<String, Value>) -> bool {
+    matches!(
+        item.get("role").and_then(Value::as_str),
+        Some("user" | "assistant" | "developer" | "system")
+    ) && !item.contains_key("encrypted_content")
+        && match item.get("content") {
+            Some(Value::String(text)) => !text.is_empty(),
+            Some(Value::Array(parts)) => {
+                !parts.is_empty()
+                    && parts.iter().all(|part| {
+                        matches!(
+                            part.get("type").and_then(Value::as_str),
+                            Some("input_text" | "output_text")
+                        ) && part.get("text").is_some_and(Value::is_string)
+                    })
+            }
+            _ => false,
+        }
 }

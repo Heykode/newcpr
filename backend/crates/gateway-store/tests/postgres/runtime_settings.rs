@@ -549,6 +549,9 @@ async fn warmup_cursor_is_atomic_durable_and_monotonic_across_configuration_upda
 
 fn settings_with_margin(refresh_margin_seconds: u64) -> RuntimeSettingsUpdate {
     RuntimeSettingsUpdate {
+        openai_oauth_guardian_review_model: true,
+        openai_request_country: Default::default(),
+
         turn_state_probe_proxy_id: None,
         turn_state_probe_concurrency: None,
         openai_account_affinity: None,

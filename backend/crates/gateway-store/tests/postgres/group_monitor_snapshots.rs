@@ -30,6 +30,9 @@ async fn seed(repo: &PgAccountGroupRepository) -> Vec<AccountGroupId> {
         let id = AccountGroupId::new(format!("grp_{index:032x}")).expect("group id");
         repo.create_account_group(
             NewAccountGroup {
+                allow_subagents: true,
+                model_access: Default::default(),
+
                 allow_image_generation: true,
                 id: id.clone(),
                 name: format!("Group {index}"),
@@ -199,6 +202,9 @@ async fn monitor_snapshot_config_changes_retain_previous_values_and_deletion_rem
         .expect("sample");
     repo.update_account_group(
         UpdateAccountGroup {
+            allow_subagents: Default::default(),
+            model_access: Default::default(),
+
             allow_image_generation: None,
             id: ids[0].clone(),
             name: "Renamed".to_owned(),

@@ -12,14 +12,13 @@ mod connection_budget_tests {
         NOW.with(std::cell::Cell::get)
     }
 
-    fn request(base: &str) -> CodexWebSocketRequest {
-        CodexWebSocketRequest {
+    fn request(base: &str) -> super::super::model::ResponseCreateOpening {
+        super::super::model::ResponseCreateOpening {
             connection: CodexWebSocketConnection::responses(
                 base,
                 &tungstenite::handshake::client::generate_key(),
                 Vec::new(),
             ),
-            payload_text: "{}".to_owned(),
             continuation: WebSocketContinuationRequirement::NewChain,
             codex_search_declared: false,
         }
@@ -338,7 +337,7 @@ impl PreparedWebSocket {
 /// 只建立或租用 WebSocket，不发送 payload。
 #[expect(clippy::too_many_arguments)]
 pub(crate) async fn prepare_response_create_request_with_pool(
-    request: &CodexWebSocketRequest,
+    request: &super::model::ResponseCreateOpening,
     pool: Option<(
         &CodexWebSocketPool,
         CodexWebSocketPoolKey,
@@ -504,7 +503,7 @@ fn shared_opening_deadline_does_not_double_charge_account_capacity_wait() {
 }
 
 async fn prepare_unpooled_websocket(
-    request: &CodexWebSocketRequest,
+    request: &super::model::ResponseCreateOpening,
     breaker: &WebSocketOriginBreaker,
     origin_key: &str,
     fast_path_budget: Option<Duration>,
@@ -543,7 +542,7 @@ async fn prepare_unpooled_websocket(
 
 #[expect(clippy::too_many_arguments)]
 async fn prepare_pooled_websocket(
-    request: &CodexWebSocketRequest,
+    request: &super::model::ResponseCreateOpening,
     pool: &CodexWebSocketPool,
     connect_lease: WebSocketPoolConnectLease,
     breaker: &WebSocketOriginBreaker,
@@ -954,7 +953,7 @@ pub(crate) async fn execute_prepared_response_create_request_stream(
         initial_search_declared,
     } = connection;
     // Only the current exchange owns an active exit reference. Idle sockets do not.
-    metadata.session_proxy = request.connection.session_proxy.clone();
+    metadata.session_proxy = request.opening.connection.session_proxy.clone();
     trace.record("upstream.connection", serde_json::json!({
         "connectionId": websocket.connection_id().to_string(), "reused": reused,
         "pool": pool_decision.map_or("unpooled", WebSocketPoolDecision::kind),
@@ -1004,7 +1003,8 @@ pub(crate) async fn execute_prepared_response_create_request_stream(
         lease,
         created_at,
         continuation,
-        initial_search_declared: initial_search_declared.unwrap_or(request.codex_search_declared),
+        initial_search_declared: initial_search_declared
+            .unwrap_or(request.opening.codex_search_declared),
     });
     let mut exchange = stream_websocket_response(
         websocket,

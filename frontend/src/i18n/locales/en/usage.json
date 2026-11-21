@@ -335,7 +335,12 @@
       "responseStarted": "Started",
       "responseNotStarted": "Not started",
       "responseNotRecorded": "Not recorded",
-      "recovered": "Subsequently recovered"
+      "recovered": "Subsequently recovered",
+      "noAvailableProvider": "No upstream provider is available for this request.",
+      "upstreamConnectionClosed": "Upstream connection closed",
+      "queueTimeout": "Request queue wait timed out",
+      "queueFull": "Request queue is full",
+      "websocketCloseCode": "WebSocket close code"
     },
     "insights": {
       "useStatisticalObservations": "Use statistical observations"
