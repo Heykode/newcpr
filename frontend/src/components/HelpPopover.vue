@@ -3,7 +3,7 @@ import { CircleAlert } from '@lucide/vue'
 import BaseIconButton from './base/BaseIconButton.vue'
 import BasePopover from './base/BasePopover.vue'
 
-defineProps<{ label: string, content: string }>()
+defineProps<{ label: string, content?: string }>()
 </script>
 
 <template>
@@ -14,7 +14,7 @@ defineProps<{ label: string, content: string }>()
       </BaseIconButton>
     </template>
     <section role="dialog" :aria-label="label" class="max-w-72 whitespace-pre-line px-3 py-2 text-cp-sm leading-relaxed text-cp-text-secondary">
-      {{ content }}
+      <slot>{{ content }}</slot>
     </section>
   </BasePopover>
 </template>

@@ -6,7 +6,8 @@ import BaseModal from '@/components/base/BaseModal/index.vue'
 import BaseSelect from '@/components/base/BaseSelect.vue'
 import BaseTextarea from '@/components/base/BaseTextarea.vue'
 import { useProxyBatchCreate } from '../composables/useProxyBatchCreate'
-import { proxyBatchStates, proxyProtocolOptions } from '../utils/batch'
+import { proxyProtocolOptions } from '../utils/batch'
+import ProxyBatchResults from './ProxyBatchResults.vue'
 
 const emit = defineEmits<{ created: [] }>()
 const open = defineModel<boolean>({ default: false })
@@ -41,14 +42,7 @@ const { text, prefix, protocol, parsed, inputError, items, busy, stopping, creat
         </div>
       </template>
       <template v-else>
-        <div role="status" class="max-h-64 overflow-auto text-cp-sm">
-          <p v-for="item in items" :key="item.key" class="break-all" :class="proxyBatchStates[item.status].tone">
-            {{ item.name }} · {{ proxyBatchStates[item.status].label }} · {{ item.message }}
-          </p>
-          <p v-for="item in tests.items.value" :key="`test-${item.key}`" class="break-all" :class="proxyBatchStates[item.status].tone">
-            {{ item.name }} · {{ proxyBatchStates[item.status].label }} · {{ item.message }}
-          </p>
-        </div>
+        <ProxyBatchResults :items="items" :tests="tests.items.value" />
         <div class="flex flex-wrap gap-2">
           <BaseButton v-if="busy" :disabled="stopping" @click="stop">
             停止后续操作

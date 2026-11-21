@@ -60,7 +60,7 @@
       "stopped": "已停止後續添加"
     },
     "batchTest": {
-      "resultsTitle": "批量添加結果",
+      "resultsTitle": "批次代理結果",
       "processed": "已處理",
       "added": "已添加 {created}",
       "invalidFormat": "格式錯誤 {invalid}",

@@ -1207,7 +1207,7 @@ requestTuning
 
 全量保存必须包含布尔 `openaiOauthGuardianReviewModel` 和 `openaiRequestCountry` 对象；旧页面须刷新后再保存。
 Guardian 开关默认 true，仅结构化同步审核且有权限的原生账号优先使用 `codex-auto-review`，不覆盖显式模型映射或已确认的续接模型。
-国家策略为 `{"mode":"follow_location"}`（默认，代理位置优先于已启用全局位置，无位置发送 null）、`{"mode":"default"}`（发送 null）、`{"mode":"passthrough"}`（保留原字段）或 `{"mode":"custom","country":"JP"}`（两个大写 ASCII 字母）。策略在实际选号后应用于原生 HTTP/WS 正文。
+国家策略为 `{"mode":"follow_location"}`（默认，代理位置优先于已启用全局位置，无位置发送 null）、`{"mode":"default"}`（发送 null）、`{"mode":"passthrough"}`（保留原字段）或 `{"mode":"custom","country":"JP"}`（两个大写 ASCII 字母）。策略仅用于 Codex OAuth 账号，在实际选号后应用于原生 HTTP/WS 正文的顶层 `request_country`。透传保留客户端显式 null 或字段缺失，不改写 `client_metadata` 中的同名字段。时区和搜索位置覆盖独立处理；Excel 沿用独立映射，本地没有上游 API Key 账号运行路径。
 本地自动重置卡 `AutoResetConfig.onLowWeeklyQuota` 与全局 UA `/api/admin/settings/openai-user-agent` 仍使用各自接口，不复制官方完整 settings 结构。
 
 `rotationStrategy` 可取 `smart`、`quota_reset_priority`、`round_robin`、`sticky`。

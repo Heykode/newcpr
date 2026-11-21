@@ -643,3 +643,15 @@ Messages 在转换为 Responses 之前解析 Claude 显式会话，按 Client Ke
 Core 将本请求确认不可达的代理入口传入 Provider 直接及等待选号；WS 与 HTTP 共享建连换号规则。
 原生续接仅迁移绑定并要求客户端完整重放，API 出口清理容量错误等待头且保留内部事实。
 具体来源、模块映射、保留差异和验证边界见 [v3.50.0 接入记录](upstream-v3500-native-parity.md)。
+
+## v3.54.1 请求国家与管理界面
+
+请求国家策略属于 Codex OAuth 原生出站准备，使用已经冻结的配置和选号后的代理位置。
+`provider-openai` 在 OAuth 归一化分支内调用 `apply_request_country`，代理位置优先于已启用
+的全局位置；一般时区和结构化位置对齐独立执行。Excel 使用自己的请求映射。
+
+账号与分组复用现有 `AccountModelAccessField`，后端仍按账号与分组的权限交集判断。
+概览和分析统计复用 `UsageRecordsTable` 与 128px 时间列，不再通过页面专属参数决定时间格式。
+费用图的图例、曲线和提示从同一序列定义派生；空桶可以补零，有请求但未知费用保持未知。
+批量代理新增、测试列表及通知共用统计规则，地区识别失败不改变连接测试成功状态。
+具体来源、保留差异和验证范围见 [v3.54.1 接入记录](upstream-v3541-native-parity.md)。

@@ -31,7 +31,6 @@ withDefaults(
     columns: BaseTableColumn<UsageDisplayRecord>[]
     columnLayout?: TableColumnLayout
     rows: UsageDisplayRecord[]
-    requestDetails?: boolean
     loading?: boolean
     emptyText?: string
   }>(),
@@ -62,7 +61,7 @@ const emit = defineEmits<{ filter: [value: UsageFilterParams] }>()
       <span v-else>—</span>
     </template>
     <template #createdAtDisplay="{ row }">
-      <UsageTimeCell :value="row.createdAtDisplay" :datetime="requestDetails ? row.createdAt : undefined" />
+      <UsageTimeCell :value="row.createdAtDisplay" :datetime="row.createdAt" />
     </template>
     <template #provider="{ row }">
       <ProviderIconGroup

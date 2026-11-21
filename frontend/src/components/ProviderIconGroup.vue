@@ -17,21 +17,12 @@ const props = withDefaults(
 const normalizedProvider = computed(() => (props.provider ?? '').trim().toLowerCase())
 const normalizedAuthenticationKind = computed(() => (props.authenticationKind ?? '').trim().toLowerCase())
 const showAuthenticationKind = computed(() => props.authenticationKind !== undefined)
-const groupGapClass = computed(() => {
-  if (props.size === 'xs')
-    return 'gap-0.75'
-  return props.size === 'sm' ? 'gap-1' : 'gap-2'
-})
-const iconContainerClass = computed(() => {
-  if (props.size === 'xs')
-    return 'size-4.5 rounded-md'
-  return props.size === 'sm' ? 'size-5 rounded-md' : 'size-7 rounded-lg'
-})
-const iconClass = computed(() => {
-  if (props.size === 'xs')
-    return 'size-2.5'
-  return props.size === 'sm' ? 'size-3' : 'size-4'
-})
+const sizeClasses = {
+  xs: { gap: 'gap-0.75', container: 'size-4.5 rounded-md', icon: 'size-2.5' },
+  sm: { gap: 'gap-1', container: 'size-5 rounded-md', icon: 'size-3' },
+  md: { gap: 'gap-2', container: 'size-7 rounded-lg', icon: 'size-4' },
+}
+const classes = computed(() => sizeClasses[props.size])
 
 const providerLabel = computed(() => formatProviderLabel(props.provider, '未知平台'))
 
@@ -45,25 +36,25 @@ const authenticationLabel = computed(() => {
 </script>
 
 <template>
-  <span class="inline-flex items-center whitespace-nowrap" :class="groupGapClass">
+  <span class="inline-flex items-center whitespace-nowrap" :class="classes.gap">
     <span
       class="inline-flex shrink-0 items-center justify-center bg-cp-fill-secondary/80 text-cp-text"
-      :class="iconContainerClass"
+      :class="classes.container"
       :title="providerLabel"
     >
-      <Openai v-if="normalizedProvider === 'openai'" :class="iconClass" />
-      <Xai v-else-if="normalizedProvider === 'xai'" :class="iconClass" />
+      <Openai v-if="normalizedProvider === 'openai'" :class="classes.icon" />
+      <Xai v-else-if="normalizedProvider === 'xai'" :class="classes.icon" />
       <span v-else class="text-[10px] font-heavy text-cp-text-quaternary">?</span>
     </span>
 
     <span
       v-if="showAuthenticationKind"
       class="inline-flex shrink-0 items-center justify-center bg-cp-fill-secondary/80 text-cp-text"
-      :class="iconContainerClass"
+      :class="classes.container"
       :title="authenticationLabel"
     >
-      <LinkAlt v-if="normalizedAuthenticationKind === 'oauth'" :class="iconClass" />
-      <Key v-else-if="normalizedAuthenticationKind === 'api_key'" :class="iconClass" />
+      <LinkAlt v-if="normalizedAuthenticationKind === 'oauth'" :class="classes.icon" />
+      <Key v-else-if="normalizedAuthenticationKind === 'api_key'" :class="classes.icon" />
       <span v-else class="text-[10px] font-heavy text-cp-text-quaternary">?</span>
     </span>
 

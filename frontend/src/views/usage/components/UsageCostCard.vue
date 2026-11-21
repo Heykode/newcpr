@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { EChartsOption, LineSeriesOption } from 'echarts'
+import type { EChartsOption } from 'echarts'
 import type { getUsageRecordInsightsOverview } from '@/api'
 import { computed } from 'vue'
 
@@ -14,7 +14,6 @@ import {
 import { chartTooltipContent } from '@/components/charts/tooltip'
 import { useChartPalette } from '@/composables/useChartPalette'
 import { t } from '@/i18n'
-import { formatLocalizedCompactNumber as formatCompactNumber } from '@/utils/number'
 
 import {
   tooltipIndex,
@@ -35,7 +34,13 @@ import {
 
 type Cost = Awaited<ReturnType<typeof getUsageRecordInsightsOverview>>['cost']
 type Activity = Awaited<ReturnType<typeof getUsageRecordInsightsOverview>>['health']['points']
-type UsageChartPalette = ReturnType<typeof useChartPalette>['palette']['value']
+interface CostSeries {
+  label: string
+  color: string
+  values: (number | null)[]
+  area?: 'strong'
+  tooltipValue: (index: number) => string | null
+}
 
 const props = withDefaults(
   defineProps<{
@@ -57,9 +62,6 @@ const requestActivity = computed(() => requestActivityByBucket(
   points.value.map(point => point.bucket),
   props.activity,
 ))
-const hasNoCacheCost = computed(() =>
-  points.value.some(point => point.noCacheCost != null),
-)
 const coverageRate = computed(() => {
   const { known, partial, unknown } = props.cost.coverage
   const total = known + partial + unknown
@@ -72,23 +74,64 @@ const viewOptions = [
   { label: '缓存', value: 'cache' },
 ]
 
-const hasData = computed(() => {
-  if (props.loading || points.value.length === 0)
-    return false
-  if (activeView.value === 'cost') {
-    return points.value.some(point => point.estimatedCost != null || point.noCacheCost != null)
+function amountValues(amounts: (string | null)[]) {
+  return zeroInactiveValues(amounts.map(amount => decimalDisplayNumber(amount)), requestActivity.value)
+}
+
+function primaryAmountSeries(label: string, amounts: (string | null)[]): CostSeries {
+  return {
+    label,
+    color: palette.value.success,
+    area: 'strong',
+    values: amountValues(amounts),
+    tooltipValue: index => formatUsd(amounts[index] ?? (requestActivity.value[index] === false ? '0' : null)),
   }
-  if (activeView.value === 'savings')
-    return points.value.some(point => point.cacheSavings != null)
-  return points.value.some(
-    point => point.inputTokens > 0 || point.cachedTokenRate > 0 || (point.cacheHitRequestRate ?? 0) > 0,
-  )
+}
+
+function rateSeries(label: string, color: string, values: (number | null)[]): CostSeries {
+  return { label, color, values, tooltipValue: index => formatPercent(values[index] ?? null) }
+}
+
+const chart = computed<{ hasData: boolean, series: CostSeries[] }>(() => {
+  const chartPoints = points.value
+  if (props.loading || chartPoints.length === 0)
+    return { hasData: false, series: [] }
+
+  if (activeView.value === 'cost') {
+    const actual = chartPoints.map(point => point.estimatedCost)
+    const comparison = chartPoints.map(point => point.noCacheCost)
+    const hasComparison = comparison.some(amount => amount != null)
+    const series = [primaryAmountSeries(t('usage.cost.actualCost'), actual)]
+    if (hasComparison) {
+      series.push({
+        label: t('usage.cost.withoutCacheEstimate'),
+        color: palette.value.textMuted,
+        values: amountValues(comparison),
+        // 对比曲线允许补零，提示只展示该时间桶实际提供的估算
+        tooltipValue: index => comparison[index] == null ? null : formatUsd(comparison[index]),
+      })
+    }
+    return { hasData: hasComparison || actual.some(amount => amount != null), series }
+  }
+  if (activeView.value === 'savings') {
+    const savings = chartPoints.map(point => point.cacheSavings)
+    return {
+      hasData: savings.some(amount => amount != null),
+      series: [primaryAmountSeries(t('usage.cost.cacheSavings'), savings)],
+    }
+  }
+  return {
+    hasData: chartPoints.some(point => point.inputTokens > 0 || point.cachedTokenRate > 0 || (point.cacheHitRequestRate ?? 0) > 0),
+    series: [
+      rateSeries(t('usage.cost.cacheTokenProportion'), palette.value.normal, chartPoints.map(point => point.cachedTokenRate)),
+      rateSeries(t('usage.cost.hitRequestRate'), palette.value.success, chartPoints.map(point => point.cacheHitRequestRate)),
+    ],
+  }
 })
 
 const chartOption = computed<EChartsOption>(() => {
   const theme = palette.value
-  const legend = legendNames()
-  const series = chartSeries(theme)
+  const series = chart.value.series
 
   return {
     animationDuration: 240,
@@ -100,137 +143,29 @@ const chartOption = computed<EChartsOption>(() => {
       outerBoundsMode: 'same',
       outerBoundsContain: 'axisLabel',
     },
-    legend: usageLegend(theme, legend),
+    legend: usageLegend(theme, series.map(item => item.label)),
     tooltip: usageTooltip(theme, formatTooltip),
     xAxis: usageCategoryAxis(
       points.value.map(point => point.label),
       theme,
     ),
-    yAxis: usageValueAxis(theme, axisFormatter(), {
-      min: activeView.value === 'cache' ? 0 : undefined,
-      max: activeView.value === 'cache' ? 1 : undefined,
-    }),
-    series,
+    yAxis: activeView.value === 'cache'
+      ? usageValueAxis(theme, formatPercent, { min: 0, max: 1 })
+      : usageValueAxis(theme, formatUsdAxis),
+    series: series.flatMap(item => usageGapAwareLineSeries(item.label, item.values, item.color, { area: item.area })),
   }
 })
 
-function legendNames() {
-  if (activeView.value === 'savings')
-    return [t('usage.cost.cacheSavings')]
-  if (activeView.value === 'cache')
-    return [t('usage.cost.cacheTokenProportion'), t('usage.cost.hitRequestRate')]
-  return hasNoCacheCost.value ? [t('usage.cost.actualCost'), t('usage.cost.withoutCacheEstimate')] : [t('usage.cost.actualCost')]
-}
-
-function axisFormatter() {
-  if (activeView.value === 'cost' || activeView.value === 'savings')
-    return formatUsdAxis
-  if (activeView.value === 'cache')
-    return (value: number) => formatPercent(value)
-  return (value: number) => formatCompactNumber(value)
-}
-
-function chartSeries(theme: UsageChartPalette): LineSeriesOption[] {
-  const chartPoints = points.value
-  if (activeView.value === 'savings') {
-    return [
-      ...usageGapAwareLineSeries(
-        t('usage.cost.cacheSavings'),
-        zeroInactiveValues(
-          chartPoints.map(point => decimalDisplayNumber(point.cacheSavings)),
-          requestActivity.value,
-        ),
-        theme.success,
-        { area: 'strong' },
-      ),
-    ]
-  }
-
-  if (activeView.value === 'cache') {
-    return [
-      ...usageGapAwareLineSeries(
-        t('usage.cost.cacheTokenProportion'),
-        chartPoints.map(point => point.cachedTokenRate),
-        theme.normal,
-      ),
-      ...usageGapAwareLineSeries(
-        t('usage.cost.hitRequestRate'),
-        chartPoints.map(point => point.cacheHitRequestRate),
-        theme.success,
-      ),
-    ]
-  }
-
-  const series = [
-    ...usageGapAwareLineSeries(
-      t('usage.cost.actualCost'),
-      zeroInactiveValues(
-        chartPoints.map(point => decimalDisplayNumber(point.estimatedCost)),
-        requestActivity.value,
-      ),
-      theme.success,
-      { area: 'strong' },
-    ),
-  ]
-  if (hasNoCacheCost.value) {
-    series.push(
-      ...usageGapAwareLineSeries(
-        t('usage.cost.withoutCacheEstimate'),
-        zeroInactiveValues(
-          chartPoints.map(point => decimalDisplayNumber(point.noCacheCost)),
-          requestActivity.value,
-        ),
-        theme.textMuted,
-      ),
-    )
-  }
-  return series
-}
-
 function formatTooltip(params: unknown) {
-  const rows = tooltipRows(params)
-  const pointIndex = tooltipIndex(rows[0])
-  const point = points.value[pointIndex]
+  const index = tooltipIndex(tooltipRows(params)[0])
+  const point = points.value[index]
   if (!point)
     return ''
-  const theme = palette.value
-
-  if (activeView.value === 'savings') {
-    return chartTooltipContent(point.label, [
-      usageTooltipItem(
-        t('usage.cost.cacheSavings'),
-        formatUsd(costAmount(point.cacheSavings, pointIndex)),
-        theme.success,
-      ),
-    ])
-  }
-
-  if (activeView.value === 'cache') {
-    return chartTooltipContent(point.label, [
-      usageTooltipItem(t('usage.cost.cacheTokenProportion'), formatPercent(point.cachedTokenRate), theme.normal),
-      usageTooltipItem(t('usage.cost.hitRequestRate'), formatPercent(point.cacheHitRequestRate), theme.success),
-    ])
-  }
-
-  const lines = [
-    usageTooltipItem(
-      t('usage.cost.actualCost'),
-      formatUsd(costAmount(point.estimatedCost, pointIndex)),
-      theme.success,
-    ),
-  ]
-  if (point.noCacheCost != null) {
-    lines.push(usageTooltipItem(
-      t('usage.cost.withoutCacheEstimate'),
-      formatUsd(costAmount(point.noCacheCost, pointIndex)),
-      theme.textMuted,
-    ))
-  }
+  const lines = chart.value.series.flatMap((series) => {
+    const value = series.tooltipValue(index)
+    return value == null ? [] : [usageTooltipItem(series.label, value, series.color)]
+  })
   return chartTooltipContent(point.label, lines)
-}
-
-function costAmount(value: string | null, pointIndex: number) {
-  return value ?? (requestActivity.value[pointIndex] === false ? '0' : null)
 }
 </script>
 
@@ -246,8 +181,8 @@ function costAmount(value: string | null, pointIndex: number) {
     </template>
 
     <template #body>
-      <div class="grid min-h-66" :class="hasData ? 'gap-3' : 'flex-1'">
-        <div v-if="hasData" class="grid grid-cols-5 gap-1 rounded-xl bg-cp-fill-quaternary/45 p-2">
+      <div class="grid min-h-66" :class="chart.hasData ? 'gap-3' : 'flex-1'">
+        <div v-if="chart.hasData" class="grid grid-cols-5 gap-1 rounded-xl bg-cp-fill-quaternary/45 p-2">
           <div class="grid min-w-0 gap-1 px-1.5">
             <span class="truncate text-[10px] font-bold text-cp-text-quaternary">实际费用</span>
             <strong class="truncate font-mono text-cp-sm font-heavy tabular-nums text-cp-text">
@@ -279,7 +214,7 @@ function costAmount(value: string | null, pointIndex: number) {
             </strong>
           </div>
         </div>
-        <BaseChart v-if="hasData" :option="chartOption" :height="210" />
+        <BaseChart v-if="chart.hasData" :option="chartOption" :height="210" />
         <BaseEmpty
           v-else
           size="sm"

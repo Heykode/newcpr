@@ -31,7 +31,7 @@ export const usageRecordColumns: ConfigurableTableColumn<UsageDisplayRecord>[] =
   { key: 'clientApiKeyName', label: 'Key 名称', kind: 'identity', size: 'lg', emptyText: '—' },
   { key: 'latency', label: '延迟', kind: 'numeric', size: 'xl' },
   { key: 'performance', label: '性能', kind: 'numeric', size: 'lg' },
-  { key: 'createdAtDisplay', label: '时间', kind: 'datetime' },
+  { key: 'createdAtDisplay', label: '时间', kind: 'datetime', width: 128 },
   { key: 'clientIp', label: 'IP', kind: 'custom', size: '3xl' },
   { key: 'userAgent', label: 'User-Agent', kind: 'custom', size: '4xl' },
   { key: 'actions', label: '操作', kind: 'actions', size: 'sm', hideable: false },

@@ -6,11 +6,9 @@ import { useTableColumns } from '@/components/base/BaseTable/useTableColumns'
 import { usageRecordColumns } from '../constants'
 
 export function useUsageRecordColumns(status: Ref<'success' | 'error' | 'all'>, tableWidth: Readonly<Ref<number>>) {
-  const columns = computed(() => usageRecordColumns.map(column => column.key === 'createdAtDisplay'
-    ? { ...column, width: 128 }
-    : column.key === 'accountEmail'
-      ? { ...column, width: 280, hideable: true }
-      : column.key === 'actions' ? { ...column, fixed: 'right' as const } : column))
+  const columns = computed(() => usageRecordColumns.map(column => column.key === 'accountEmail'
+    ? { ...column, width: 280, hideable: true }
+    : column.key === 'actions' ? { ...column, fixed: 'right' as const } : column))
   const usage = useTableColumns(() => status.value === 'all'
     ? columns.value.flatMap(column => column.key === 'route'
         ? [column, { key: 'errorMessage', label: '最终错误', kind: 'custom' as const, size: '4xl' as const, hideable: false }]

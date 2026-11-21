@@ -354,7 +354,11 @@
         "follow_location": "優先使用代理位置，其次使用已啟用的全域位置。兩者皆未設定時傳送 null",
         "custom": "固定使用指定的兩位國家代碼"
       },
-      "customCountryCode": "自訂國家代碼"
+      "customCountryCode": "自訂國家代碼",
+      "requestCountryDescription": "設定 Codex 請求如何傳送國家代碼",
+      "requestCountryScope": "僅用於 Codex OAuth 帳號",
+      "countryMode": "傳送策略",
+      "invalidCountryCode": "請輸入兩位大寫國家代碼"
     },
     "quotaReset": {
       "title": "主動重置卡",

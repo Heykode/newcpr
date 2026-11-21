@@ -255,7 +255,7 @@ export function useSettingsForm() {
 
   async function saveSettings() {
     if (form.openaiRequestCountry.mode === 'custom' && !/^[A-Z]{2}$/.test(form.openaiRequestCountry.country)) {
-      toast.warning('国家代码须为两位大写英文字母')
+      toast.warning(t('settings.location.invalidCountryCode'))
       return
     }
     if (saving.value || loading.value)
