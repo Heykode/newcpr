@@ -777,6 +777,7 @@ pub struct RoutingContext {
 /// 已绑定 Provider 的请求候选；模型端点携带真实上游模型，原生端点不虚构模型。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderCandidate {
+    requires_direct_authentication: bool,
     provider: ProviderKind,
     upstream_model: Option<UpstreamModelId>,
     model_presentation: Option<ModelPresentation>,
@@ -785,6 +786,10 @@ pub struct ProviderCandidate {
 }
 
 impl ProviderCandidate {
+    pub const fn requires_direct_authentication(&self) -> bool {
+        self.requires_direct_authentication
+    }
+
     #[must_use]
     pub const fn model_presentation(&self) -> Option<&ModelPresentation> {
         self.model_presentation.as_ref()
@@ -818,6 +823,7 @@ pub struct RoutingPlan {
     codex_quota_overdraft_enabled: bool,
     codex_quota_overdraft_probe_model: UpstreamModelId,
     request_location: Option<crate::account::RequestLocation>,
+    request_country: crate::account::OpenAiRequestCountry,
     config_revision: ConfigRevision,
     account_selection_policy: AccountSelectionPolicy,
     operation: OperationKind,
@@ -828,6 +834,10 @@ pub struct RoutingPlan {
 }
 
 impl RoutingPlan {
+    #[must_use]
+    pub fn request_country(&self) -> &crate::account::OpenAiRequestCountry {
+        &self.request_country
+    }
     #[must_use]
     pub fn account_error_protection(&self) -> Arc<crate::account::CompiledAccountErrorProtection> {
         Arc::clone(&self.account_error_protection)

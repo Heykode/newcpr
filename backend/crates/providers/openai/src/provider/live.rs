@@ -335,9 +335,9 @@ impl CodexProvider {
             .cloned()
             .collect::<Vec<_>>();
         let events = cold_live_call_stream(ColdLiveCall {
-            client: self
-                .client_for_request(&context)?
-                .for_account(lease.account())
+            client: lease
+                .authentication()
+                .model_client_for_account(&self.client_for_request(&context)?, lease.account())
                 .map_err(|error| map_client_error(error, UpstreamSendState::NotSent, None).error)?,
             registry: Arc::clone(&self.live_registry),
             response_origin: self.live_calls_url.clone(),
@@ -528,7 +528,7 @@ impl CodexLiveGateway {
     async fn load_pinned_credential(
         &self,
         account_id: &gateway_core::account::ProviderAccountId,
-    ) -> Result<(ProviderAccount, SecretString, String), LiveGatewayError> {
+    ) -> Result<(ProviderAccount, SecretString, String, bool), LiveGatewayError> {
         let credential_unavailable = |message: &'static str| {
             LiveGatewayError::new(LiveGatewayErrorKind::CredentialUnavailable, message)
         };
@@ -560,7 +560,11 @@ impl CodexLiveGateway {
             .map_err(|_| {
                 credential_unavailable("The credentials for this voice call are invalid.")
             })?;
-        Ok((account, authorization, credential.installation_id))
+        let fedramp = credential
+            .authentication
+            .oauth()
+            .is_some_and(|oauth| oauth.has_fedramp_routing_claim());
+        Ok((account, authorization, credential.installation_id, fedramp))
     }
 
     fn sideband_endpoint(style: LiveSidebandStyle, call_id: &str) -> String {
@@ -653,7 +657,7 @@ impl LiveGateway for CodexLiveGateway {
                 })?;
             // 认领与 guard 构造之间没有 await 点，取消不会留下孤儿认领。
             let claim = LiveCallClaim::new(Arc::clone(&self.registry), request.call_id.to_owned());
-            let (account, authorization, installation_id) =
+            let (account, authorization, installation_id, fedramp) =
                 self.load_pinned_credential(&account_id).await?;
             let installation_id = profile.effective_installation_id(
                 request.client_api_key_id,
@@ -671,6 +675,7 @@ impl LiveGateway for CodexLiveGateway {
                 .client
                 .clone()
                 .with_request_profile(CodexWireProfileState::new(profile))
+                .with_fedramp_routing(fedramp)
                 .for_account(&account)
                 .map_err(map_live_http_error)?;
             let context = CodexRequestContext::auxiliary(
@@ -728,7 +733,7 @@ impl LiveGateway for CodexLiveGateway {
                 .map_err(|claim_error| {
                     LiveGatewayError::new(claim_error.kind(), claim_error.message())
                 })?;
-            let (account, authorization, installation_id) =
+            let (account, authorization, installation_id, fedramp) =
                 self.load_pinned_credential(&account_id).await?;
             let installation_id = profile.effective_installation_id(
                 request.client_api_key_id,
@@ -741,6 +746,7 @@ impl LiveGateway for CodexLiveGateway {
                 .client
                 .clone()
                 .with_request_profile(CodexWireProfileState::new(profile))
+                .with_fedramp_routing(fedramp)
                 .for_account(&account)
                 .map_err(|_| {
                     LiveGatewayError::new(

@@ -34,8 +34,14 @@ impl Eq for CodexWebSocketConnection {}
 /// 已构造完成的 Responses WebSocket 请求描述。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CodexWebSocketRequest {
-    pub(crate) connection: CodexWebSocketConnection,
+    pub(crate) opening: ResponseCreateOpening,
     pub(super) payload_text: String,
+}
+
+/// 建连只读取路由和续接要求，推理帧在连接就绪后编码
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ResponseCreateOpening {
+    pub(crate) connection: CodexWebSocketConnection,
     pub(super) continuation: WebSocketContinuationRequirement,
     pub(super) codex_search_declared: bool,
 }
@@ -114,7 +120,7 @@ impl fmt::Display for PreviousResponseUnavailableReason {
 impl CodexWebSocketRequest {
     /// 返回连接描述。
     pub fn connection(&self) -> &CodexWebSocketConnection {
-        &self.connection
+        &self.opening.connection
     }
 
     /// 返回将要发送的完整 `response.create` 文本
@@ -124,6 +130,21 @@ impl CodexWebSocketRequest {
 
     /// 返回连接续接要求。
     pub fn continuation(&self) -> &WebSocketContinuationRequirement {
+        &self.opening.continuation
+    }
+}
+
+impl ResponseCreateOpening {
+    pub(crate) fn with_payload(self, payload_text: String) -> CodexWebSocketRequest {
+        CodexWebSocketRequest {
+            opening: self,
+            payload_text,
+        }
+    }
+    pub(crate) fn connection(&self) -> &CodexWebSocketConnection {
+        &self.connection
+    }
+    pub(crate) fn continuation(&self) -> &WebSocketContinuationRequirement {
         &self.continuation
     }
 }

@@ -54,7 +54,13 @@ pub enum OperationError {
     },
 }
 
-/// 路由快照或 Route Plan 不满足不变量。
+/// Core 路由和 Provider 原生端点共用的分组模型拒绝码
+pub const GROUP_MODEL_DENIED_CODE: &str = "group_model_denied";
+/// 拒绝原因不回显请求模型或分组名称
+pub const GROUP_MODEL_DENIED_MESSAGE: &str =
+    "Model is not allowed by the API key's account groups.";
+
+/// 路由快照或 Route Plan 不满足不变量
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum RoutingError {
     /// 动态 Provider/model 标识无法构造。
@@ -69,7 +75,10 @@ pub enum RoutingError {
     /// Key 的账号范围中当前没有任何可参与路由的账号。
     #[error("account routing scope is empty")]
     EmptyAccountScope,
-    /// 快照中存在重复实体。
+    /// 已启用的绑定分组均明确禁止请求模型
+    #[error("{GROUP_MODEL_DENIED_MESSAGE}")]
+    GroupModelDenied,
+    /// 快照中存在重复实体
     #[error("duplicate {entity} `{id}`")]
     DuplicateEntity {
         /// 实体类型。

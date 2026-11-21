@@ -53,6 +53,7 @@ impl CodexCredentialRepository {
         let oauth = data
             .oauth_mut()
             .ok_or(CredentialRepositoryError::InvalidCredentialData(None))?;
+        let same_access_token = oauth.access_token == *secret.access_token.expose_secret();
         oauth.access_token = secret.access_token.expose_secret().to_owned();
         oauth.refresh_token = secret
             .refresh_token
@@ -75,6 +76,11 @@ impl CodexCredentialRepository {
         .map_err(|source| CredentialRepositoryError::InvalidCredentialData(Some(source.into())))?
         .preserving_profile()
         .with_account_state(CredentialState::Ready, SystemTime::now(), None, None);
+        let update = if same_access_token {
+            update.preserving_access_token_expiry()
+        } else {
+            update
+        };
         cas_revision(self.store.compare_and_swap_credential(update).await?)
     }
 
@@ -104,7 +110,8 @@ impl CodexCredentialRepository {
         )
         .map_err(|source| CredentialRepositoryError::InvalidCredentialData(Some(source.into())))?
         .preserving_profile()
-        .preserving_turn_state_binding();
+        .preserving_turn_state_binding()
+        .preserving_access_token_expiry();
         if let Some(error_reason) = error_reason {
             update = update.with_account_state(
                 account.credential_state(),
@@ -235,7 +242,8 @@ impl CodexCredentialRepository {
             account.next_refresh_at(),
         )
         .map_err(|source| CredentialRepositoryError::InvalidCredentialData(Some(source.into())))?
-        .preserving_profile();
+        .preserving_profile()
+        .preserving_access_token_expiry();
         if preserve_binding {
             update = update.preserving_turn_state_binding();
         }
@@ -358,7 +366,7 @@ fn cas_revision(
     }
 }
 
-#[derive(Debug, Error)]
+#[derive(Debug, Clone, Error)]
 pub enum CredentialRepositoryError {
     #[error("Codex credential data is invalid")]
     InvalidCredentialData(#[source] Option<gateway_core::error::ErrorSource>),

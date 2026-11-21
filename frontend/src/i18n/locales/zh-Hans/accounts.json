@@ -221,7 +221,8 @@
       "selectOrAddAtLeastOneModel": "请至少选择或添加一个模型",
       "configureUpToModels": "最多配置 256 个模型",
       "invalidModelId": "请使用有效的精确模型 ID，不支持通配符",
-      "enterValidExactModelIdUpTo": "请输入有效的精确模型 ID，最多 256 字节，不支持通配符"
+      "enterValidExactModelIdUpTo": "请输入有效的精确模型 ID，最多 256 字节，不支持通配符",
+      "addImageModels": "添加常用 OpenAI 生图模型"
     },
     "notes": {
       "viewAccountNotes": "查看账号备注",
@@ -294,7 +295,8 @@
       "resetRefreshFailed": "额度已重置，但最新额度加载失败：{value}",
       "statusRestored": "账号状态已恢复",
       "staleAccount": "账号 {id} 的页面数据已失效，请重新选择",
-      "unsupportedProvider": "不支持的 Provider：{provider}"
+      "unsupportedProvider": "不支持的 Provider：{provider}",
+      "deletionResultUnknown": "删除结果未知，请核对账号列表"
     },
     "usage": {
       "call": "调用",
@@ -653,11 +655,11 @@
       "empty": "没有已观测的额度桶",
       "invalid": "请输入 1～100 的整数，留空表示不限制",
       "limit": "调度上限",
-      "warmup": "预热",
+      "warmup": "重置预热",
       "model": "预热模型",
       "modelPlaceholder": "选择模型",
       "invalidModel": "请输入有效的预热模型 ID",
-      "subtitle": "设置额度上限与重置后预热"
+      "subtitle": "设置额度上限与重置预热"
     }
   }
 }

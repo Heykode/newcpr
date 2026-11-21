@@ -227,6 +227,13 @@ async fn serve_responses_websocket(socket: Socket, session: ResponsesWebSocketSe
         }
         raw_headers.remove("x-codex-turn-state");
         raw_headers.remove("x-codex-turn-metadata");
+        raw_headers.remove("x-codex-guardian");
+        if raw_headers
+            .get("x-openai-subagent")
+            .is_some_and(|value| value == "guardian")
+        {
+            raw_headers.remove("x-openai-subagent");
+        }
         let started = match service
             .start_response(
                 client.clone(),

@@ -664,6 +664,17 @@ pub trait Provider: Send + Sync {
         Ok(None)
     }
 
+    /// Optional native account target, resolved once using the authenticated snapshot.
+    fn direct_account_model(
+        &self,
+        _model: &crate::routing::PublicModelId,
+        _operation: &Operation,
+        _previous: Option<&crate::operation::ProviderSessionState>,
+        _snapshot: &crate::routing::RuntimeSnapshot,
+    ) -> Option<crate::routing::UpstreamModelId> {
+        None
+    }
+
     fn model_catalog_is_exhaustive(&self) -> bool {
         true
     }

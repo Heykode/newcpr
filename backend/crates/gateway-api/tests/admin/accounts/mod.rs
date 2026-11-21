@@ -145,7 +145,12 @@ mod query {
         ));
         assert_eq!(query.search.as_deref(), Some("operator"));
         assert_eq!(query.status, Some(AccountStatus::Normal));
-        assert_eq!(query.plan_type.as_deref(), Some("pro"));
+        assert_eq!(
+            query.plan_type,
+            Some(gateway_admin::model::accounts::AccountPlanFilter::Raw(
+                "pro".to_owned()
+            ))
+        );
         assert_eq!(
             query.sort.expect("sort").field,
             AccountSortField::LastUsedAt
@@ -153,6 +158,20 @@ mod query {
         assert_eq!(
             query.sort.expect("copy sort").direction,
             SortDirection::Desc
+        );
+    }
+
+    #[test]
+    fn account_query_preserves_provider_plan_selection_for_service_resolution() {
+        let query: ListQuery = serde_json::from_value(json!({
+            "planType": " openai:self_serve_business_prolite "
+        }))
+        .unwrap();
+        assert_eq!(
+            query.validate().unwrap().plan_type,
+            Some(gateway_admin::model::accounts::AccountPlanFilter::Raw(
+                "openai:self_serve_business_prolite".to_owned()
+            ))
         );
     }
 
@@ -657,8 +676,6 @@ mod batch_update {
         for fields in [
             json!({"outboundProxyId": "invalid proxy"}),
             json!({"outboundProxyId": "p".repeat(129)}),
-            json!({"outboundProxyId": "proxy_saved", "outboundProxyUrl": ""}),
-            json!({"outboundProxyId": "", "outboundProxyUrl": "http://127.0.0.1:8080"}),
         ] {
             let mut payload = fields;
             payload["accountIds"] = json!(["acct_test"]);
@@ -672,6 +689,13 @@ mod batch_update {
                 "outboundProxyId"
             );
         }
+        assert!(
+            serde_json::from_value::<BatchUpdateAccountsRequest>(json!({
+                "accountIds": ["acct_test"], "outboundProxyUrl": ""
+            }))
+            .is_err(),
+            "retired URL binding is rejected at the wire boundary"
+        );
         let empty: BatchUpdateAccountsRequest =
             serde_json::from_value(json!({"accountIds": ["acct_test"]})).unwrap();
         assert_eq!(empty.validate().unwrap_err().field(), "fields");

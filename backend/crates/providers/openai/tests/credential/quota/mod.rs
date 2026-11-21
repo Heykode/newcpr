@@ -69,7 +69,7 @@ fn quota_service(store: &Arc<MemoryAccountStore>) -> CodexCredentialQuotaService
     )
 }
 
-fn quota_service_with_base_url(
+pub(super) fn quota_service_with_base_url(
     store: &Arc<MemoryAccountStore>,
     http: reqwest::Client,
     base_url: String,
@@ -667,7 +667,7 @@ async fn quota_rejection_preserves_status_and_bounded_codes_without_touching_acc
     let store = Arc::new(MemoryAccountStore::default());
     let account_id = "acct_quota_rejection_detail";
     create_account(&store, account_id).await;
-    let before = store.account(account_id).unwrap();
+    let mut before = store.account(account_id).unwrap();
     let server = MockServer::start().await;
     let service = quota_service_with_base_url(
         &store,
@@ -689,6 +689,19 @@ async fn quota_rejection_preserves_status_and_bounded_codes_without_touching_acc
         (json!({"error":{"code":"错误码"}}), None),
         (json!({"error":{"code":123}}), None),
     ] {
+        if before
+            .access_token_expires_at()
+            .is_some_and(|expiry| expiry <= SystemTime::now())
+        {
+            gateway_core::account::ProviderAccountStore::delete_account(
+                store.as_ref(),
+                before.id(),
+            )
+            .await
+            .unwrap();
+            create_account(&store, account_id).await;
+            before = store.account(account_id).unwrap();
+        }
         server.reset().await;
         Mock::given(method("GET"))
             .and(path("/api/codex/usage"))
@@ -702,7 +715,18 @@ async fn quota_rejection_preserves_status_and_bounded_codes_without_touching_acc
             }
             other => panic!("expected upstream rejection: {other:?}"),
         }
-        assert_eq!(store.account(account_id).unwrap(), before);
+        let current = store.account(account_id).unwrap();
+        if expected == Some("token_revoked") {
+            assert!(current.access_token_expires_at().unwrap() <= SystemTime::now());
+            assert_eq!(current.revision(), before.revision());
+            assert_eq!(current.credential_state(), before.credential_state());
+            assert_eq!(current.quota(), before.quota());
+            assert_eq!(current.last_error_message(), before.last_error_message());
+            assert_eq!(current.next_refresh_at(), before.next_refresh_at());
+            before = current;
+        } else {
+            assert_eq!(current, before);
+        }
         store
             .repository()
             .load_runtime_credential(&before)
@@ -909,4 +933,53 @@ async fn missing_window_keeps_its_confirmed_limit_across_refresh_and_restart() {
             blocked
         );
     }
+}
+
+#[tokio::test]
+async fn manual_quota_revocation_expires_only_the_access_token_and_preserves_diagnostics() {
+    let store = Arc::new(MemoryAccountStore::default());
+    let account_id = "acct_quota_rejection_detail";
+    create_account(&store, account_id).await;
+    let account = store.account(account_id).expect("account");
+    persist_quota_state(&store, &account, exhausted_quota(None)).await;
+    let before = store.account(account_id).expect("account before rejection");
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/codex/usage"))
+        .respond_with(ResponseTemplate::new(401).set_body_json(json!({
+            "error": {
+                "code": "token_revoked",
+                "message": "Encountered invalidated oauth token for user, failing request"
+            }
+        })))
+        .mount(&server)
+        .await;
+    let service = quota_service_with_base_url(
+        &store,
+        reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .expect("client"),
+        server.uri(),
+    );
+
+    match service.refresh_account(account.id()).await {
+        Err(CodexCredentialQuotaError::Upstream { status, code, .. }) => {
+            assert_eq!(status, Some(401));
+            assert_eq!(code.as_deref(), Some("token_revoked"));
+        }
+        other => panic!("expected upstream rejection, got {other:?}"),
+    }
+    let current = store.account(account_id).expect("account after revocation");
+    assert_eq!(current.revision(), before.revision());
+    assert_eq!(current.quota(), before.quota());
+    assert_eq!(current.credential_state(), before.credential_state());
+    assert_eq!(current.next_refresh_at(), before.next_refresh_at());
+    assert!(current.has_refresh_token());
+    let status = current.status_projection(SystemTime::now(), None);
+    assert_eq!(status.status, AccountStatus::Error);
+    assert_eq!(
+        status.error_reason,
+        Some(gateway_core::account::AccountErrorReason::AccessTokenExpired)
+    );
 }

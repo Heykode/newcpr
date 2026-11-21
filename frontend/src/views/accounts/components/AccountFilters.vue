@@ -93,7 +93,7 @@ function resetFilters() {
       <BaseFormItem label="账号分组">
         <BaseSelect v-model="group" :options="groupOptions" :disabled="groupsLoading" :aria-label="t('accounts.filters.groupLabel')" />
       </BaseFormItem>
-      <BaseFormItem label="账号套餐">
+      <BaseFormItem label="账号套餐" class="account-filter-plan">
         <BaseSelect v-model="planType" :options="planOptions" aria-label="按套餐筛选" />
       </BaseFormItem>
       <BaseFormItem label="平台" class="account-filter-provider">
@@ -187,6 +187,9 @@ function resetFilters() {
 }
 .account-filter-fields > .account-filter-provider {
   flex: 0 1 130px;
+}
+.account-filter-fields > .account-filter-plan {
+  flex-basis: 230px;
 }
 @media (max-width: 600px) {
   .account-filter-fields > .account-filter-search {

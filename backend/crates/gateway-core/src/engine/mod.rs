@@ -373,6 +373,7 @@ pub struct RequestAttemptContext {
     codex_quota_overdraft_probe_model: crate::routing::UpstreamModelId,
     config_revision: crate::routing::ConfigRevision,
     request_location: Option<crate::account::RequestLocation>,
+    request_country: crate::account::OpenAiRequestCountry,
     request_id: ModelRequestId,
     client_api_key_ref: ClientApiKeyId,
     timing_started_at: Instant,
@@ -439,6 +440,12 @@ impl RequestAttemptContext {
     }
 
     #[must_use]
+    pub fn with_request_country(mut self, country: crate::account::OpenAiRequestCountry) -> Self {
+        self.request_country = country;
+        self
+    }
+
+    #[must_use]
     pub fn with_request_location(
         mut self,
         location: Option<crate::account::RequestLocation>,
@@ -464,6 +471,7 @@ impl RequestAttemptContext {
             config_revision: crate::routing::ConfigRevision::new(1)
                 .expect("valid initial config revision"),
             request_location: None,
+            request_country: Default::default(),
             request_profile: None,
             timing_started_at: Instant::now(),
             trace: crate::diagnostics::TraceContext::default(),
@@ -576,6 +584,11 @@ impl AttemptContext {
     #[must_use]
     pub const fn config_revision(&self) -> crate::routing::ConfigRevision {
         self.request.config_revision
+    }
+
+    #[must_use]
+    pub fn request_country(&self) -> &crate::account::OpenAiRequestCountry {
+        &self.request.request_country
     }
 
     #[must_use]

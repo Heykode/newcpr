@@ -346,7 +346,7 @@ test('both refresh paths preserve current paging, all filters and sort, updating
     [query.providerQuery, 'openai'],
     [query.statusQuery, 'normal'],
     [query.groupQuery, 'group-test'],
-    [query.planTypeQuery, 'team'],
+    [query.planTypeQuery, 'openai:team'],
   ]) {
     filter.value = value
     await vue.nextTick()
@@ -368,7 +368,7 @@ test('both refresh paths preserve current paging, all filters and sort, updating
     provider: 'openai',
     status: 'normal',
     groupId: 'group-test',
-    planType: 'team',
+    planType: 'openai:team',
     sortBy: 'name',
     sortDirection: 'asc',
   }

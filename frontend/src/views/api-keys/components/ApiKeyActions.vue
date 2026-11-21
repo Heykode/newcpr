@@ -23,6 +23,8 @@ const emit = defineEmits<{
   importCcs: [apiKey: ApiKeyRow]
   toggle: [apiKey: ApiKeyRow]
   delete: [apiKey: ApiKeyRow]
+  statistics: [apiKey: ApiKeyRow]
+  alignBudget: [apiKey: ApiKeyRow]
   edit: [apiKey: ApiKeyRow]
   resetBudget: [apiKey: ApiKeyRow]
 }>()
@@ -55,6 +57,12 @@ const emit = defineEmits<{
           <Upload class="size-3.5" />
         </template>
         导入 CCSwitch
+      </BaseMenuItem>
+      <BaseMenuItem @click.stop="emit('statistics', apiKey)">
+        用量统计
+      </BaseMenuItem>
+      <BaseMenuItem @click.stop="emit('alignBudget', apiKey)">
+        对齐本期预算窗口
       </BaseMenuItem>
       <BaseMenuItem @click.stop="emit('resetBudget', apiKey)">
         <template #icon>

@@ -23,6 +23,7 @@ use crate::transport::egress::CodexEgressError;
 /// WebSocket 连接池 key。
 #[derive(Debug, Clone)]
 pub struct CodexWebSocketPoolKey {
+    fedramp_routing: bool,
     base_url: String,
     account_id: String,
     client_scope: String,
@@ -47,7 +48,8 @@ pub(crate) struct CodexWebSocketRouting {
 
 impl PartialEq for CodexWebSocketPoolKey {
     fn eq(&self, other: &Self) -> bool {
-        self.base_url == other.base_url
+        self.fedramp_routing == other.fedramp_routing
+            && self.base_url == other.base_url
             && self.account_id == other.account_id
             && self.client_scope == other.client_scope
             && self.conversation_id == other.conversation_id
@@ -63,6 +65,7 @@ impl Eq for CodexWebSocketPoolKey {}
 
 impl Hash for CodexWebSocketPoolKey {
     fn hash<H: Hasher>(&self, state: &mut H) {
+        self.fedramp_routing.hash(state);
         self.base_url.hash(state);
         self.account_id.hash(state);
         self.conversation_id.hash(state);
@@ -78,6 +81,11 @@ impl Hash for CodexWebSocketPoolKey {
 }
 
 impl CodexWebSocketPoolKey {
+    pub(crate) fn with_fedramp_routing(mut self, enabled: bool) -> Self {
+        self.fedramp_routing = enabled;
+        self
+    }
+
     pub(crate) fn with_installation_id(mut self, id: Option<&str>) -> Self {
         self.installation_id = id.map(str::to_owned);
         self
@@ -97,6 +105,7 @@ impl CodexWebSocketPoolKey {
         conversation_id: impl Into<String>,
     ) -> Self {
         Self {
+            fedramp_routing: false,
             base_url: base_url.into().trim_end_matches('/').to_string(),
             account_id: account_id.into(),
             client_scope: String::new(),
@@ -161,7 +170,8 @@ impl CodexWebSocketPoolKey {
     pub(super) fn matches_routing_owner(&self, other: &Self) -> bool {
         // Exact response ownership survives a downstream reconnect. Independent
         // chains still use the full key, including the downstream lane.
-        self.base_url == other.base_url
+        self.fedramp_routing == other.fedramp_routing
+            && self.base_url == other.base_url
             && self.account_id == other.account_id
             && self.client_scope == other.client_scope
             && self.conversation_id == other.conversation_id
@@ -224,7 +234,8 @@ impl CodexWebSocketPoolKey {
     }
 
     pub(super) fn same_logical_connection(&self, other: &Self) -> bool {
-        self.base_url == other.base_url
+        self.fedramp_routing == other.fedramp_routing
+            && self.base_url == other.base_url
             && self.account_id == other.account_id
             && self.installation_id == other.installation_id
             && self.client_scope == other.client_scope

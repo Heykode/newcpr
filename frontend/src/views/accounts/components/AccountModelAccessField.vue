@@ -3,7 +3,7 @@ import type { AccountModelAccess } from '@/api'
 import { CircleAlert, ListChecks, ListMinus, Plus, RefreshCw, Search } from '@lucide/vue'
 
 import { computed, ref, useId, useTemplateRef, watch } from 'vue'
-import { getAccountModels, refreshAccountModels } from '@/api'
+import { getAccountGroupModels, getAccountModels, refreshAccountModels } from '@/api'
 import { getQualityModels } from '@/api/modules/quality-ops'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseEmpty from '@/components/base/BaseEmpty.vue'
@@ -14,7 +14,7 @@ import BasePopover from '@/components/base/BasePopover.vue'
 import BaseSegmented from '@/components/base/BaseSegmented.vue'
 import { useRequestState } from '@/composables/useRequestState'
 import { t } from '@/i18n'
-import { accountModelAccessError, accountModelIdError } from '../utils/modelAccess'
+import { accountModelAccessError, accountModelIdError, commonImageModels } from '../utils/modelAccess'
 import AccountModelCleanupPopover from './AccountModelCleanupPopover.vue'
 import AccountModelOption from './AccountModelOption.vue'
 
@@ -22,6 +22,7 @@ const props = withDefaults(defineProps<{
   accountId?: string
   formProp?: string
   knownModelCatalog?: boolean
+  groupCatalog?: boolean
   disabled?: boolean
   allowPreserve?: boolean
 }>(), { disabled: false, allowPreserve: false, knownModelCatalog: false })
@@ -37,7 +38,7 @@ const nextPage = ref<number | null>(1)
 const partialCatalog = ref(false)
 const catalogLoaded = ref(false)
 const retryAppend = ref(false)
-const useKnownCatalog = computed(() => !props.accountId && props.knownModelCatalog)
+const useKnownCatalog = computed(() => !props.accountId && (props.knownModelCatalog || props.groupCatalog))
 const search = ref('')
 const selectionError = ref('')
 const searchInput = useTemplateRef<InstanceType<typeof BaseInput>>('searchInput')
@@ -98,6 +99,15 @@ const newModelId = computed(() => groups.value.length
   : search.value.trim())
 const inputError = computed(() => selectionError.value || (newModelId.value && accountModelIdError(newModelId.value)))
 const canAdd = computed(() => Boolean(newModelId.value) && !inputError.value)
+
+function addImageModels() {
+  if (props.disabled || mode.value !== 'allowlist')
+    return
+  const next = { mode: 'allowlist' as const, models: [...new Set([...(model.value?.models ?? []), ...commonImageModels])] }
+  selectionError.value = accountModelAccessError(next) ?? ''
+  if (!selectionError.value)
+    model.value = next
+}
 
 function removeMissingModels(ids: string[]) {
   if (props.disabled || model.value?.mode !== 'allowlist')
@@ -179,7 +189,15 @@ async function load(refresh = false, append = false) {
     return
   const requestId = request.start()
   try {
-    if (useKnownCatalog.value) {
+    if (props.groupCatalog) {
+      const result = await getAccountGroupModels({ signal: request.signal, silent: true })
+      if (request.isCurrent(requestId)) {
+        catalog.value = result.models
+        nextPage.value = null
+        catalogLoaded.value = true
+      }
+    }
+    else if (useKnownCatalog.value) {
       const result = await getQualityModels({}, page, { signal: request.signal, silent: true })
       if (request.isCurrent(requestId)) {
         const entries = new Map((append ? catalog.value : []).map(item => [item.id, item]))
@@ -228,7 +246,7 @@ watch([
   ]
 }, { immediate: true })
 
-watch([() => props.accountId, () => props.knownModelCatalog, restricted, () => props.disabled], () => {
+watch([() => props.accountId, () => props.knownModelCatalog, () => props.groupCatalog, restricted, () => props.disabled], () => {
   request.invalidate()
   catalog.value = []
   catalogObservedAtDisplay.value = undefined
@@ -289,6 +307,9 @@ watch(search, () => {
           <RefreshCw class="size-3.5" />
         </BaseIconButton>
       </template>
+      <BaseButton v-if="mode === 'allowlist'" variant="secondary" size="sm" :disabled="disabled" @click="addImageModels">
+        加入图片模型
+      </BaseButton>
       <BaseSegmented v-model="mode" class="w-full" :label="t('accounts.modelAccess.modelRestrictionMode')" :options="modes" :disabled="disabled" />
     </BaseFormItem>
     <template v-if="restricted">

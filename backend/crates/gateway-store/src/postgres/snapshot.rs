@@ -21,6 +21,8 @@ use super::ClientApiKeySnapshot;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SnapshotRuntimeSettings {
+    pub openai_oauth_guardian_review_model: bool,
+    pub openai_request_country: gateway_core::account::OpenAiRequestCountry,
     pub request_profiles:
         BTreeMap<gateway_core::routing::ProviderKind, gateway_core::account::OpaqueProviderData>,
     pub responses_max_decompressed_body_bytes: u64,
@@ -54,6 +56,8 @@ pub struct RuntimeSnapshotData {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SnapshotAccountGroupData {
+    pub allow_subagents: bool,
+    pub model_access: gateway_core::account::AccountModelAccess,
     pub allow_image_generation: bool,
     pub fast_mode: gateway_core::account::FastMode,
     pub id: AccountGroupId,
@@ -64,6 +68,7 @@ pub struct SnapshotAccountGroupData {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SnapshotProviderAccountData {
+    pub excel_models: std::collections::BTreeSet<String>,
     pub id: String,
     pub provider_kind: String,
     pub concurrency_limit: Option<u32>,
@@ -171,6 +176,10 @@ impl SnapshotStorePort for PgRuntimeSnapshotRepository {
                 data.settings.responses_max_decompressed_body_bytes,
             )
             .with_request_location(data.settings.request_tuning.effective_request_location())
+            .with_openai_request_settings(
+                data.settings.openai_oauth_guardian_review_model,
+                data.settings.openai_request_country,
+            )
             .with_excel_image_transport(data.settings.request_tuning.excel_image_transport.clone())
             .with_account_error_protection(
                 data.settings
@@ -210,6 +219,8 @@ impl SnapshotStorePort for PgRuntimeSnapshotRepository {
                         .with_disable_fast(group.disable_fast)
                         .with_fast_mode(group.fast_mode)
                         .with_image_generation(group.allow_image_generation)
+                        .with_subagents(group.allow_subagents)
+                        .with_model_access(group.model_access)
                 })
                 .collect();
             let provider_accounts = data
@@ -219,6 +230,7 @@ impl SnapshotStorePort for PgRuntimeSnapshotRepository {
                     ProviderAccountId::new(account.id)
                         .map(|id| {
                             SnapshotProviderAccountFacts::new(id, account.provider_kind)
+                                .with_excel_models(account.excel_models)
                                 .with_concurrency_limit(account.concurrency_limit)
                                 .with_model_access(account.model_access)
                         })
@@ -367,6 +379,8 @@ async fn load_settings(
 ) -> StoreResult<(Revision, SnapshotRuntimeSettings)> {
     #[derive(sqlx::FromRow)]
     struct SettingsRow {
+        openai_oauth_guardian_review_model: bool,
+        openai_request_country: sqlx::types::Json<gateway_core::account::OpenAiRequestCountry>,
         request_profiles:
             sqlx::types::Json<BTreeMap<String, serde_json::Map<String, serde_json::Value>>>,
         config_revision: i64,
@@ -390,7 +404,7 @@ async fn load_settings(
     }
     let row = sqlx::query_as::<_, SettingsRow>(
         "select coalesce((select jsonb_object_agg(provider_kind, configuration_json) from provider_outbound_user_agents where mode = 'configuration'), '{}'::jsonb) as request_profiles,
-                config_revision, refresh_margin_seconds, refresh_concurrency,
+                openai_oauth_guardian_review_model, openai_request_country_json as openai_request_country, config_revision, refresh_margin_seconds, refresh_concurrency,
                 max_concurrent_per_account, request_interval_ms, rotation_strategy, quota_reset_window_weights_json,
                 model_mappings_json, min_codex_desktop_version,
                 min_codex_cli_version, request_tuning_json,
@@ -409,6 +423,8 @@ async fn load_settings(
     Ok((
         revision_from_i64(row.config_revision)?,
         SnapshotRuntimeSettings {
+            openai_oauth_guardian_review_model: row.openai_oauth_guardian_review_model,
+            openai_request_country: row.openai_request_country.0,
             request_profiles: super::client_keys::decode_request_profiles(row.request_profiles.0)?,
             openai_account_affinity: gateway_core::account::AccountAffinity::parse(
                 &row.openai_account_affinity,
@@ -478,16 +494,27 @@ async fn load_client_keys(
 async fn load_account_groups(
     transaction: &mut Transaction<'_, Postgres>,
 ) -> StoreResult<Vec<SnapshotAccountGroupData>> {
-    let rows = sqlx::query_as::<_, (String, String, bool, bool, String, bool)>(
-        "select id, name, enabled, disable_fast, fast_mode, allow_image_generation from account_groups order by id",
+    let rows = sqlx::query_as::<_, (String, String, bool, bool, String, bool, bool, sqlx::types::Json<gateway_core::account::AccountModelAccess>)>(
+        "select id, name, enabled, disable_fast, fast_mode, allow_image_generation, allow_subagents, model_access_json from account_groups order by id",
     )
     .fetch_all(&mut **transaction)
     .await
     .map_err(|error| postgres_unavailable("load snapshot account groups").with_source(error))?;
     rows.into_iter()
         .map(
-            |(id, name, enabled, disable_fast, fast_mode, allow_image_generation)| {
+            |(
+                id,
+                name,
+                enabled,
+                disable_fast,
+                fast_mode,
+                allow_image_generation,
+                allow_subagents,
+                model_access,
+            )| {
                 Ok(SnapshotAccountGroupData {
+                    allow_subagents,
+                    model_access: model_access.0,
                     allow_image_generation,
                     fast_mode: gateway_core::account::FastMode::parse(&fast_mode)
                         .ok_or_else(|| invalid("invalid fast_mode"))?,
@@ -508,22 +535,26 @@ async fn load_provider_accounts(
         String,
         String,
         Option<i64>,
+        Vec<String>,
         sqlx::types::Json<gateway_core::account::AccountModelAccess>,
     )>(
-        "select id, provider_kind, concurrency_limit, model_access_json from provider_accounts order by id",
+        "select id, provider_kind, concurrency_limit, case when responses_upstream = 'excel' then case when excel_models_follow_global then (select excel_default_models from runtime_settings where id = 1) else excel_models end else array[]::text[] end, model_access_json from provider_accounts order by id",
     )
     .fetch_all(&mut **transaction)
     .await
     .map_err(|error| postgres_unavailable("load snapshot provider accounts").with_source(error))?;
     rows.into_iter()
-        .map(|(id, provider_kind, concurrency_limit, model_access)| {
-            Ok(SnapshotProviderAccountData {
-                id,
-                provider_kind,
-                concurrency_limit: concurrency_limit.map(to_u32).transpose()?,
-                model_access: model_access.0,
-            })
-        })
+        .map(
+            |(id, provider_kind, concurrency_limit, excel_models, model_access)| {
+                Ok(SnapshotProviderAccountData {
+                    id,
+                    excel_models: excel_models.into_iter().collect(),
+                    provider_kind,
+                    concurrency_limit: concurrency_limit.map(to_u32).transpose()?,
+                    model_access: model_access.0,
+                })
+            },
+        )
         .collect()
 }
 

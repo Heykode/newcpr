@@ -15,3 +15,8 @@ export function accountModelIdError(id: string): string | undefined {
   if (!id || id.trim() !== id || id.startsWith('__') || id.includes('*') || /\p{Cc}/u.test(id) || new TextEncoder().encode(id).length > 256)
     return '请输入有效的精确模型 ID，最多 256 字节，不支持通配符'
 }
+
+export const commonImageModels = [
+  'gpt-image-2',
+  'gpt-image-1.5',
+]

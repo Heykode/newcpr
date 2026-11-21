@@ -151,11 +151,8 @@ export interface DashboardAccountUsage {
   requestBuckets: DashboardAccountRequestBucket[]
   quotaUsedPercent: number | null
   usageWindow: AccountQuotaWindow | null
-  metricLabel: string
-  metricValue: string
   metric?: 'tokens' | 'requests'
   metricValueRaw?: number | null
-  lastUsed: string
   lastUsedAt?: string | null
   lastUsedRelative?: import('../time').RelativeTimeView | null
 }

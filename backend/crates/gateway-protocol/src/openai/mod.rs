@@ -38,3 +38,9 @@ pub use scheduling::{
     OPENAI_SCHEDULING_SESSION_HINT_CONTEXT_KEY, OPENAI_SCHEDULING_SESSION_HINT_HEADERS,
     OpenAiSchedulingSessionHint, is_openai_scheduling_session_hint_header,
 };
+
+mod guardian;
+pub use guardian::{
+    CODEX_AUTO_REVIEW_MODEL, CodexGuardianRole, capture_codex_guardian_identity,
+    codex_guardian_role,
+};

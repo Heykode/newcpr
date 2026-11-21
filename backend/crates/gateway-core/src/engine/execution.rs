@@ -457,25 +457,21 @@ impl DefaultExecutionService {
             )
             .with_client_code("image_generation_disabled"));
         }
-        let plan = match &request.target {
-            ExecutionTarget::ProviderEndpoint {
-                provider,
-                upstream_model,
-            } => request.client.snapshot.plan_provider_endpoint(
-                provider,
-                upstream_model.as_ref(),
-                &request.operation,
-                account_scope,
-                &routing_context,
-            ),
-            ExecutionTarget::Model(public_model) => request.client.snapshot.plan(
-                public_model,
-                &request.operation,
-                account_scope,
-                &routing_context,
-            ),
+        if !account_scope.allows_subagents()
+            && let Operation::Generate(generate) = &request.operation
+            && generate.protocol_payload().protocol() == gateway_protocol::openai::OPENAI_PROTOCOL
+            && gateway_protocol::openai::codex::collaboration_subagent_requested(
+                generate.protocol_payload().body(),
+                generate.protocol_payload().context(),
+                |_| None,
+            )
+        {
+            return Err(GatewayError::new(
+                GatewayErrorKind::PolicyDenied,
+                "Collaborative subagents are not allowed by the API key's account groups.",
+            )
+            .with_client_code("subagents_disabled"));
         }
-        .map_err(map_routing_error)?;
         let continuation = match request.metadata.previous_response_id.as_ref() {
             Some(previous) => {
                 let resolve = self
@@ -520,7 +516,7 @@ impl DefaultExecutionService {
                     },
                     _ = timeout => None,
                 };
-                match pin {
+                Some(match pin {
                     Some(pin) if !pin.matches_client(request.client.policy.key_id()) => {
                         return Err(GatewayError::new(
                             GatewayErrorKind::PolicyDenied,
@@ -533,44 +529,82 @@ impl DefaultExecutionService {
                             "Continuation account is outside the client account scope.",
                         ));
                     }
-                    Some(pin)
-                        if !plan
-                            .candidates()
-                            .iter()
-                            .any(|candidate| candidate.provider() == pin.provider()) =>
-                    {
-                        return Err(GatewayError::new(
-                            GatewayErrorKind::NoAvailableProvider,
-                            "Continuation provider is not available.",
-                        ));
-                    }
-                    Some(pin) => {
-                        attach_continuation_session_state(&mut request.operation, &pin);
-                        ContinuationBinding::Pinned(pin)
-                    }
+                    Some(pin) => ContinuationBinding::Pinned(pin),
                     None => ContinuationBinding::External(previous.clone()),
+                })
+            }
+            None => None,
+        };
+        let plan = match &request.target {
+            ExecutionTarget::ProviderEndpoint {
+                provider,
+                upstream_model,
+            } => request.client.snapshot.plan_provider_endpoint(
+                provider,
+                upstream_model.as_ref(),
+                &request.operation,
+                account_scope,
+                &routing_context,
+            ),
+            ExecutionTarget::Model(public_model) => {
+                let pin = continuation.as_ref().and_then(ContinuationBinding::pinned);
+                let direct = account_scope.provider_kinds().iter().find_map(|kind| {
+                    if routing_context.blocked_providers.contains(kind) {
+                        return None;
+                    }
+                    let provider = self.providers.get(kind)?;
+                    let previous = pin
+                        .filter(|pin| pin.provider() == kind)
+                        .and_then(NativeContinuationPin::session_state);
+                    provider
+                        .direct_account_model(
+                            public_model,
+                            &request.operation,
+                            previous,
+                            &request.client.snapshot,
+                        )
+                        .map(|model| (kind.clone(), model))
+                });
+                if let Some((kind, model)) = direct {
+                    request.client.snapshot.plan_with_direct_account_model(
+                        public_model,
+                        &request.operation,
+                        account_scope,
+                        &routing_context,
+                        &kind,
+                        &model,
+                        pin.map(NativeContinuationPin::account),
+                    )
+                } else {
+                    request.client.snapshot.plan(
+                        public_model,
+                        &request.operation,
+                        account_scope,
+                        &routing_context,
+                    )
                 }
             }
-            None => {
-                return self
-                    .start_without_continuation(
-                        request,
-                        request_id,
-                        started_at,
-                        deadline_at,
-                        plan,
-                        None,
-                    )
-                    .await;
+        }
+        .map_err(map_routing_error)?;
+        if let Some(pin) = continuation.as_ref().and_then(ContinuationBinding::pinned) {
+            if !plan.candidates().iter().any(|candidate| {
+                candidate.provider() == pin.provider()
+                    && candidate.account_scope().allows(pin.account())
+            }) {
+                return Err(GatewayError::new(
+                    GatewayErrorKind::NoAvailableProvider,
+                    "Continuation provider is not available.",
+                ));
             }
-        };
+            attach_continuation_session_state(&mut request.operation, pin);
+        }
         self.start_without_continuation(
             request,
             request_id,
             started_at,
             deadline_at,
             plan,
-            Some(continuation),
+            continuation,
         )
         .await
     }
@@ -1946,6 +1980,11 @@ fn new_request_id() -> Result<ModelRequestId, GatewayError> {
 
 fn map_routing_error(error: crate::validation::RoutingError) -> GatewayError {
     match error {
+        crate::validation::RoutingError::GroupModelDenied => GatewayError::new(
+            GatewayErrorKind::PolicyDenied,
+            crate::validation::GROUP_MODEL_DENIED_MESSAGE,
+        )
+        .with_client_code(crate::validation::GROUP_MODEL_DENIED_CODE),
         crate::validation::RoutingError::ModelNotFound {
             model,
             mapped_model,

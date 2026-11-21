@@ -14,6 +14,7 @@ import BaseSelect from '@/components/base/BaseSelect.vue'
 import BaseSwitch from '@/components/base/BaseSwitch.vue'
 import BaseTextarea from '@/components/base/BaseTextarea.vue'
 import { t } from '@/i18n'
+import AccountModelAccessField from '@/views/accounts/components/AccountModelAccessField.vue'
 import { ACCOUNT_GROUP_COLOR_PRESETS } from '../constants'
 
 const props = defineProps<{
@@ -83,11 +84,14 @@ const description = computed(() => props.group
           :options="[
             { value: 'default', label: '默认（跟随客户端）' },
             { value: 'enabled', label: '开启' },
+            { value: 'ultrafast', label: 'Ultrafast' },
             { value: 'disabled', label: '关闭' },
           ]"
           :disabled="saving"
         />
       </BaseFormItem>
+      <AccountModelAccessField v-model="form.modelAccess" group-catalog :disabled="saving" />
+      <BaseSwitch v-model="form.allowSubagents" label="允许子代理" show-label :disabled="saving" />
       <BaseSwitch v-model="form.allowImageGeneration" label="允许生图" show-label :disabled="saving" />
     </BaseForm>
 

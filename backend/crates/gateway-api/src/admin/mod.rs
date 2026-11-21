@@ -12,6 +12,7 @@ pub mod account_groups;
 pub mod accounts;
 pub mod auth;
 pub mod backups;
+mod client_key_usage;
 pub mod client_keys;
 mod compression;
 pub mod egress;
@@ -59,6 +60,7 @@ where
         .merge(auth::router::<S>())
         .merge(backups::router::<S>())
         .merge(client_keys::router::<S>())
+        .merge(client_key_usage::router::<S>())
         .merge(observability::router::<S>())
         .merge(notifications::router::<S>())
         .merge(settings::router::<S>())

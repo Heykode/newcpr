@@ -108,6 +108,7 @@ pub(super) struct AdminTestFixture {
     pub metric_observation:
         Arc<Mutex<Option<gateway_admin::model::observability::UsageInsightsObservation>>>,
     pub metric_query: Arc<Mutex<Option<(TimeRange, UsageFilter)>>>,
+    pub key_usage_queries: Arc<Mutex<Vec<(TimeRange, String)>>>,
     pub diagnostics: Arc<Mutex<Vec<DiagnosticObservation>>>,
     pub ops_errors: Arc<Mutex<Vec<OpsError>>>,
     pub dashboard_observation: Arc<Mutex<Option<DashboardObservation>>>,
@@ -142,6 +143,7 @@ impl AdminTestFixture {
         let usage_detail = Arc::new(Mutex::new(None));
         let metric_observation = Arc::new(Mutex::new(None));
         let metric_query = Arc::new(Mutex::new(None));
+        let key_usage_queries = Arc::new(Mutex::new(Vec::new()));
         let diagnostics = Arc::new(Mutex::new(Vec::new()));
         let ops_errors = Arc::new(Mutex::new(Vec::new()));
         let dashboard_observation = Arc::new(Mutex::new(None));
@@ -155,6 +157,7 @@ impl AdminTestFixture {
             usage_detail: Arc::clone(&usage_detail),
             metric_observation: Arc::clone(&metric_observation),
             metric_query: Arc::clone(&metric_query),
+            key_usage_queries: Arc::clone(&key_usage_queries),
             diagnostics: Arc::clone(&diagnostics),
             ops_errors: Arc::clone(&ops_errors),
             dashboard_observation: Arc::clone(&dashboard_observation),
@@ -201,6 +204,7 @@ impl AdminTestFixture {
             stores,
             providers,
             Arc::new(NoopSnapshot),
+            gateway_core::runtime::RuntimeSnapshotHandle::default(),
             (Arc::new(NoopProbe), Arc::new(proxies::SuccessfulProbe)),
             Arc::new(StaticClientDistribution),
             (
@@ -219,6 +223,7 @@ impl AdminTestFixture {
             usage_detail,
             metric_observation,
             metric_query,
+            key_usage_queries,
             diagnostics,
             ops_errors,
             dashboard_observation,
@@ -471,6 +476,9 @@ impl SettingsStore for MemorySettingsStore {
             ));
         }
         let updated = RuntimeSettings {
+            openai_oauth_guardian_review_model: true,
+            openai_request_country: Default::default(),
+
             openai_account_affinity: command
                 .openai_account_affinity
                 .unwrap_or(settings.openai_account_affinity),
@@ -581,6 +589,9 @@ impl MemoryAccountGroupStore {
             (
                 primary_id.clone(),
                 AccountGroupRecord {
+                    allow_subagents: true,
+                    model_access: Default::default(),
+
                     allow_image_generation: true,
                     id: primary_id,
                     name: "Alpha routing".to_owned(),
@@ -605,6 +616,9 @@ impl MemoryAccountGroupStore {
             (
                 secondary_id.clone(),
                 AccountGroupRecord {
+                    allow_subagents: true,
+                    model_access: Default::default(),
+
                     allow_image_generation: true,
                     id: secondary_id,
                     name: "Beta routing".to_owned(),
@@ -801,6 +815,9 @@ impl AccountGroupStore for MemoryAccountGroupStore {
             command.fast_mode
         };
         let record = AccountGroupRecord {
+            allow_subagents: true,
+            model_access: Default::default(),
+
             allow_image_generation: true,
             id: command.id.clone(),
             name: command.name,
@@ -898,6 +915,69 @@ fn mutation(
 
 #[async_trait]
 impl ClientKeyStore for MemoryClientKeyStore {
+    async fn budget_reference_accounts(
+        &self,
+        _: &gateway_core::policy::ClientApiKeyId,
+        _: &str,
+        _: &str,
+    ) -> AdminStoreResult<gateway_admin::model::client_keys::BudgetReferenceAccountPage> {
+        Err(AdminStoreError::new(
+            AdminStoreErrorKind::Unavailable,
+            "test",
+            "unused key operation",
+        ))
+    }
+    async fn client_key_budget_window(
+        &self,
+        _: &gateway_core::policy::ClientApiKeyId,
+        _: gateway_admin::model::client_keys::ClientKeyBudgetWindowPeriod,
+    ) -> AdminStoreResult<gateway_admin::model::client_keys::ClientKeyBudgetWindow> {
+        Err(AdminStoreError::new(
+            AdminStoreErrorKind::Unavailable,
+            "test",
+            "unused key operation",
+        ))
+    }
+    async fn set_client_key_budget_window(
+        &self,
+        _: gateway_admin::model::client_keys::SetClientKeyBudgetWindow,
+        _: &gateway_admin::model::MutationContext,
+    ) -> AdminStoreResult<u64> {
+        Err(AdminStoreError::new(
+            AdminStoreErrorKind::Unavailable,
+            "test",
+            "unused key operation",
+        ))
+    }
+    async fn get_client_key(
+        &self,
+        _: &gateway_core::policy::ClientApiKeyId,
+    ) -> AdminStoreResult<Option<gateway_admin::model::client_keys::ClientKeyRecord>> {
+        Err(AdminStoreError::new(
+            AdminStoreErrorKind::Unavailable,
+            "test",
+            "unused key operation",
+        ))
+    }
+    async fn client_key_budget(
+        &self,
+        id: &gateway_core::policy::ClientApiKeyId,
+    ) -> AdminStoreResult<Option<gateway_core::engine::budget::ClientBudgetStatus>> {
+        Ok((id.as_str() != "key_missing").then(Default::default))
+    }
+    async fn batch_update_client_keys(
+        &self,
+        _: gateway_admin::model::client_keys::BatchUpdateClientKeys,
+        _: gateway_admin::ports::store::BatchClientKeyProfileMerger,
+        _: &gateway_admin::model::MutationContext,
+    ) -> AdminStoreResult<gateway_admin::model::Revision> {
+        Err(AdminStoreError::new(
+            AdminStoreErrorKind::Unavailable,
+            "test",
+            "unused key operation",
+        ))
+    }
+
     async fn reset_client_key_budget(
         &self,
         _: gateway_admin::model::client_keys::ResetClientKeyBudget,
@@ -979,6 +1059,7 @@ struct UnusedStore {
     metric_observation:
         Arc<Mutex<Option<gateway_admin::model::observability::UsageInsightsObservation>>>,
     metric_query: Arc<Mutex<Option<(TimeRange, UsageFilter)>>>,
+    key_usage_queries: Arc<Mutex<Vec<(TimeRange, String)>>>,
     diagnostics: Arc<Mutex<Vec<DiagnosticObservation>>>,
     ops_errors: Arc<Mutex<Vec<OpsError>>>,
     dashboard_observation: Arc<Mutex<Option<DashboardObservation>>>,
@@ -1238,6 +1319,33 @@ impl AccountRuntimeStore for UnusedStore {
 
 #[async_trait]
 impl ObservabilityStore for UnusedStore {
+    async fn client_key_statistics(
+        &self,
+        range: TimeRange,
+        key: &ClientApiKeyId,
+        _: gateway_admin::model::observability::KeyUsageMetric,
+    ) -> AdminStoreResult<gateway_admin::model::observability::KeyStatisticsOverview> {
+        self.key_usage_queries
+            .lock()
+            .unwrap()
+            .push((range, key.as_str().into()));
+        Ok(serde_json::from_value(serde_json::json!({
+            "totals":{"requests":0,"tokens":null,"costUsd":null,"hasEstimatedCost":false,"hasMissingCost":false},
+            "modelCount":0,"series":[]
+        })).unwrap())
+    }
+    async fn client_key_models(
+        &self,
+        range: TimeRange,
+        key: &ClientApiKeyId,
+    ) -> AdminStoreResult<Vec<gateway_admin::model::observability::KeyModelRow>> {
+        self.key_usage_queries
+            .lock()
+            .unwrap()
+            .push((range, key.as_str().into()));
+        Ok(Vec::new())
+    }
+
     async fn usage_metric_observation(
         &self,
         range: TimeRange,
@@ -1663,6 +1771,9 @@ fn test_runtime_settings() -> RuntimeSettings {
         ),
     ]);
     RuntimeSettings {
+        openai_oauth_guardian_review_model: true,
+        openai_request_country: Default::default(),
+
         openai_account_affinity: Default::default(),
         openai_session_binding_ttl_hours: 24,
         config_revision: Revision::new(7).expect("revision"),

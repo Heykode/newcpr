@@ -2,6 +2,10 @@
 //!
 //! 端口按业务资源拆分，方法使用领域模型，不暴露连接池、事务或 Redis client。
 
+use crate::model::client_keys::{
+    BudgetReferenceAccountPage, ClientKeyBudgetWindow, ClientKeyBudgetWindowPeriod,
+    SetClientKeyBudgetWindow,
+};
 use std::{collections::BTreeMap, sync::Arc};
 
 use async_trait::async_trait;
@@ -102,6 +106,12 @@ impl AdminStoreError {
 }
 
 pub type AdminStoreResult<T> = Result<T, AdminStoreError>;
+
+pub type BatchClientKeyProfileMerger = Box<
+    dyn Fn(&mut crate::model::client_keys::ProviderRequestProfileOverrides) -> AdminStoreResult<()>
+        + Send
+        + Sync,
+>;
 
 #[async_trait]
 pub trait ProviderEgressStore: Send + Sync {
@@ -472,6 +482,38 @@ pub trait AuthStore: Send + Sync {
 /// Client API Key 管理写入。
 #[async_trait]
 pub trait ClientKeyStore: Send + Sync {
+    async fn budget_reference_accounts(
+        &self,
+        id: &gateway_core::policy::ClientApiKeyId,
+        search: &str,
+        after: &str,
+    ) -> AdminStoreResult<BudgetReferenceAccountPage>;
+    async fn client_key_budget_window(
+        &self,
+        id: &gateway_core::policy::ClientApiKeyId,
+        period: ClientKeyBudgetWindowPeriod,
+    ) -> AdminStoreResult<ClientKeyBudgetWindow>;
+    async fn set_client_key_budget_window(
+        &self,
+        command: SetClientKeyBudgetWindow,
+        context: &MutationContext,
+    ) -> AdminStoreResult<u64>;
+    async fn get_client_key(
+        &self,
+        id: &gateway_core::policy::ClientApiKeyId,
+    ) -> AdminStoreResult<Option<ClientKeyRecord>>;
+    async fn client_key_budget(
+        &self,
+        id: &gateway_core::policy::ClientApiKeyId,
+    ) -> AdminStoreResult<Option<gateway_core::engine::budget::ClientBudgetStatus>>;
+
+    async fn batch_update_client_keys(
+        &self,
+        command: crate::model::client_keys::BatchUpdateClientKeys,
+        merge_profiles: BatchClientKeyProfileMerger,
+        context: &MutationContext,
+    ) -> AdminStoreResult<Revision>;
+
     async fn reset_client_key_budget(
         &self,
         command: crate::model::client_keys::ResetClientKeyBudget,
@@ -782,6 +824,19 @@ pub trait ObservabilityStore: Send + Sync {
         }
         Ok(result)
     }
+
+    async fn client_key_statistics(
+        &self,
+        range: TimeRange,
+        id: &gateway_core::policy::ClientApiKeyId,
+        query: crate::model::observability::KeyUsageMetric,
+    ) -> AdminStoreResult<crate::model::observability::KeyStatisticsOverview>;
+
+    async fn client_key_models(
+        &self,
+        range: TimeRange,
+        id: &gateway_core::policy::ClientApiKeyId,
+    ) -> AdminStoreResult<Vec<crate::model::observability::KeyModelRow>>;
 
     async fn usage_trend(
         &self,

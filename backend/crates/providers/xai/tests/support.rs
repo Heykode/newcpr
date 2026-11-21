@@ -389,6 +389,7 @@ impl ProviderAccountStore for MemoryProviderAccountStore {
             profile,
             preserve_profile,
             preserve_turn_state_binding: _,
+            preserve_access_token_expiry,
             credential,
             has_refresh_token,
             access_token_expires_at,
@@ -400,6 +401,11 @@ impl ProviderAccountStore for MemoryProviderAccountStore {
         if stored.account.revision() != expected_revision {
             return Ok(CredentialCasOutcome::Conflict);
         }
+        let access_token_expires_at = if preserve_access_token_expiry {
+            stored.account.access_token_expires_at()
+        } else {
+            access_token_expires_at
+        };
         let next = expected_revision.next().map_err(|_| invalid())?;
         let credential_state = account_state
             .as_ref()

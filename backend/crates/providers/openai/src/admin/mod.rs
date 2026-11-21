@@ -1,5 +1,7 @@
 //! OpenAI 管理边界：Provider preparation 与 Redis OAuth pending 适配。
 
+mod plans;
+
 use gateway_protocol::openai::OPENAI_PROTOCOL;
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -199,6 +201,24 @@ impl ProviderAdmin for OpenAiAdminProvider {
             })
     }
 
+    fn merge_batch_key_profile(
+        &self,
+        current: Option<&gateway_core::account::OpaqueProviderData>,
+        update: Option<&Option<gateway_core::account::OpaqueProviderData>>,
+        installation_seed: Option<uuid::Uuid>,
+    ) -> Result<Option<gateway_core::account::OpaqueProviderData>, ProviderAdminError> {
+        crate::transport::profile::identity::merge_batch_key_profile(
+            current,
+            update,
+            installation_seed,
+        )
+        .map_err(|source| {
+            provider_admin_error(ProviderAdminErrorKind::Invalid)
+                .with_public_message("无效的 OpenAI 请求画像或安装 ID")
+                .with_source(source)
+        })
+    }
+
     fn validate_key_client_profile(
         &self,
         profile: &OpaqueProviderData,
@@ -263,28 +283,12 @@ impl ProviderAdmin for OpenAiAdminProvider {
     }
 
     fn plan_type_display(&self, plan_type: &str) -> String {
-        // Pro 系列使用短名；其余已知套餐对应 Codex /status。
-        match plan_type.to_ascii_lowercase().as_str() {
-            "free" | "free_workspace" | "guest" => "Free",
-            "go" => "Go",
-            "plus" => "Plus",
-            "pro" => "Pro",
-            "prolite" => "ProLite",
-            "promax" => "ProMax",
-            "team" | "self_serve_business_usage_based" => "Business",
-            "self_serve_business_prolite" => "Business Premium",
-            "business" | "ent26" | "enterprise" | "hc" | "enterprise_cbp_usage_based" => {
-                "Enterprise"
-            }
-            "enterprise_cbp_automation" => "Enterprise (Automation)",
-            "edu" | "education" => "Edu",
-            "edu_plus" => "Edu Plus",
-            "edu_pro" => "Edu Pro",
-            "sci" => "Academic Researchers",
-            "sci_plus" => "Academic Researchers Plus",
-            _ => plan_type,
-        }
-        .to_owned()
+        plans::display_name(plan_type).to_owned()
+    }
+
+    fn plan_type_aliases(&self, plan_type: &str) -> Option<Vec<String>> {
+        plans::aliases(plan_type)
+            .map(|values| values.iter().map(|value| (*value).to_owned()).collect())
     }
 
     async fn account_unavailable(&self, account_id: &ProviderAccountId) {
@@ -1082,6 +1086,7 @@ fn prepared_rotation(
         expected_revision,
         profile: credential_profile,
         preserve_profile,
+        preserve_access_token_expiry,
         preserve_turn_state_binding: _,
         credential,
         has_refresh_token,
@@ -1097,6 +1102,7 @@ fn prepared_rotation(
     Ok(PreparedCredentialRotation::new(
         PreparedCredentialRotationFacts {
             preserve_profile,
+            preserve_access_token_expiry,
             account_id,
             provider_kind,
             expected_credential_revision,
@@ -2180,9 +2186,24 @@ fn bounded_upstream_body(body: &str) -> String {
 }
 
 fn map_catalog_error(error: CodexCredentialCatalogError) -> ProviderAdminError {
+    use crate::credential::CredentialRepositoryError;
     use CodexCredentialCatalogError as Error;
     use ProviderAdminErrorKind as Kind;
     let (kind, message) = match error {
+        Error::Credential(source) => {
+            let (kind, message) = match &source {
+                CredentialRepositoryError::InvalidCredentialData(_) => {
+                    (Kind::Invalid, "查询模型的凭据无效，请检查账号授权")
+                }
+                CredentialRepositoryError::RevisionConflict(_) => {
+                    (Kind::Conflict, "账号已更新，请重新查询模型")
+                }
+                CredentialRepositoryError::Store(_) => (Kind::Unavailable, "账号存储暂不可用"),
+            };
+            return provider_admin_error(kind)
+                .with_public_message(message)
+                .with_source(source);
+        }
         Error::InvalidCredentialData => (Kind::Invalid, "OpenAI 模型查询凭据无效，请检查账号授权"),
         Error::InvalidEtag => (Kind::Invalid, "OpenAI 模型目录版本标识无效，请重新查询"),
         Error::NoEligibleCredential => (Kind::NotFound, "没有可用于查询 OpenAI 模型的账号"),

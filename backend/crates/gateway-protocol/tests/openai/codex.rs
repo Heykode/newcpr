@@ -388,3 +388,93 @@ fn request_observation_classifies_prewarm_from_generate() {
         assert_eq!(observation.subagent_kind.as_deref(), Some("worker"));
     }
 }
+
+#[test]
+fn only_collaboration_children_match_subagent_policy() {
+    use gateway_protocol::openai::codex::collaboration_subagent_requested;
+
+    let context = object(json!({}));
+    for (kind, expected) in [
+        ("thread_spawn", true),
+        ("collab_spawn", true),
+        ("review", false),
+        ("compact", false),
+        ("guardian", false),
+        ("future", false),
+    ] {
+        let body = object(json!({"input": [{"type":"function_call", "name":"spawn_agent"}]}));
+        assert!(!collaboration_subagent_requested(&body, &context, |_| None));
+        let metadata = json!({"subagent_kind": kind}).to_string();
+        assert_eq!(
+            collaboration_subagent_requested(&body, &context, |name| (name
+                == "x-codex-turn-metadata")
+                .then_some(metadata.as_str())),
+            expected
+        );
+        assert_eq!(
+            collaboration_subagent_requested(&body, &context, |name| (name == "x-openai-subagent")
+                .then_some(kind)),
+            expected
+        );
+        let body = object(json!({"client_metadata": {"x-openai-subagent": kind}}));
+        assert_eq!(
+            collaboration_subagent_requested(&body, &context, |_| None),
+            expected
+        );
+    }
+}
+
+#[test]
+fn guardian_identity_requires_complete_unambiguous_original_source() {
+    use gateway_protocol::openai::{
+        CodexGuardianRole, WEBSOCKET_FRAME_CONTEXT_KEY, capture_codex_guardian_identity,
+        codex_guardian_role,
+    };
+    let review = json!({"thread_source":"guardian_review"}).to_string();
+    let classifier = json!({"thread_source":"guardian_classifier"}).to_string();
+    for (turn, expected) in [
+        (review.clone(), Some(CodexGuardianRole::Reviewer)),
+        (classifier.clone(), Some(CodexGuardianRole::Classifier)),
+        (
+            json!({"turn_trigger":"guardian_housekeeper"}).to_string(),
+            Some(CodexGuardianRole::Housekeeper),
+        ),
+        (
+            "{\"thread_source\":\"guardian_review\",\"thread_source\":\"guardian_classifier\"}"
+                .into(),
+            None,
+        ),
+        (
+            json!({"thread_source":"guardian_review","turn_trigger":"guardian_classifier"})
+                .to_string(),
+            None,
+        ),
+    ] {
+        let body = object(
+            json!({"client_metadata":{"x-openai-subagent":"guardian","x-codex-turn-metadata":turn}}),
+        );
+        let mut context = Map::new();
+        capture_codex_guardian_identity(&body, &mut context, None, false);
+        assert_eq!(codex_guardian_role(&body, &context), expected);
+    }
+    let body = object(
+        json!({"client_metadata":{"x-openai-subagent":"guardian","x-codex-turn-metadata":review}}),
+    );
+    for (websocket, ambiguous, expected) in [
+        (false, false, None),
+        (false, true, None),
+        (true, false, Some(CodexGuardianRole::Reviewer)),
+    ] {
+        let mut context = object(json!({"subagent":"guardian","turn_metadata":classifier}));
+        context.insert(WEBSOCKET_FRAME_CONTEXT_KEY.into(), json!(websocket));
+        capture_codex_guardian_identity(&body, &mut context, Some("classifier"), ambiguous);
+        assert_eq!(codex_guardian_role(&body, &context), expected);
+    }
+    let body = object(json!({"client_metadata":{"x-openai-subagent":"guardian"}}));
+    let mut context = object(json!({"turn_metadata":review}));
+    capture_codex_guardian_identity(&body, &mut context, None, false);
+    assert!(
+        codex_guardian_role(&body, &context).is_none(),
+        "do not combine two incomplete sources"
+    );
+}

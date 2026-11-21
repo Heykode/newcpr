@@ -120,6 +120,8 @@ impl SettingsStore for AdminSettingsStoreAdapter {
                 refresh_margin_seconds: command.refresh_margin_seconds,
                 refresh_concurrency: command.refresh_concurrency,
                 max_concurrent_per_account: command.max_concurrent_per_account,
+                openai_oauth_guardian_review_model: command.openai_oauth_guardian_review_model,
+                openai_request_country: command.openai_request_country,
                 openai_guardian_reserved_concurrency: command
                     .openai_guardian_reserved_concurrency
                     .unwrap_or(current.settings.openai_guardian_reserved_concurrency),
@@ -268,6 +270,8 @@ pub(crate) fn admin_runtime_settings(
         })
         .collect::<AdminStoreResult<ModelMappings>>()?;
     Ok(AdminRuntimeSettings {
+        openai_oauth_guardian_review_model: settings.openai_oauth_guardian_review_model,
+        openai_request_country: settings.openai_request_country,
         config_revision: admin_revision(settings.config_revision)?,
         excel_default_models: settings.excel_default_models,
         turn_state_injection_enabled: settings.turn_state_injection_enabled,

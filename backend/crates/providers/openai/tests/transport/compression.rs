@@ -44,7 +44,7 @@ fn compression_request(body: Map<String, Value>) -> CodexResponsesRequest {
 }
 
 #[tokio::test]
-async fn http_compression_threshold_preserves_identity_and_bytes_across_profiles() {
+async fn http_compression_at_every_size_preserves_identity_and_bytes_across_profiles() {
     for selection in [
         ProviderUserAgentOverride::Default,
         ProviderUserAgentOverride::Custom {
@@ -106,7 +106,7 @@ async fn http_compression_threshold_preserves_identity_and_bytes_across_profiles
             let separator = raw.windows(4).position(|part| part == b"\r\n\r\n").unwrap();
             let head = std::str::from_utf8(&raw[..separator]).unwrap();
             let sent = &raw[separator + 4..];
-            let compressed = size >= 1024;
+            let compressed = true;
             assert_eq!(
                 read_header_value(head, "content-encoding"),
                 compressed.then_some("zstd"),

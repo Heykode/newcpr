@@ -10,7 +10,7 @@ use gateway_core::{
 };
 use heck::ToUpperCamelCase;
 
-use crate::model::accounts::{ConnectionTestEndpoint, TurnStateProbeOutcome};
+use crate::model::accounts::{AccountPlanFilter, ConnectionTestEndpoint, TurnStateProbeOutcome};
 use crate::model::observability::{
     CalculatedBillingBreakdown, DashboardWireProfile, ProviderBillingInput,
 };
@@ -185,6 +185,18 @@ impl ProviderAdminError {
 /// 全部由 [`crate::ports::store::AccountStore`] 提交。运行时资源通知只在事务成功后发生。
 #[async_trait]
 pub trait ProviderAdmin: Send + Sync {
+    fn merge_batch_key_profile(
+        &self,
+        current: Option<&gateway_core::account::OpaqueProviderData>,
+        update: Option<&Option<gateway_core::account::OpaqueProviderData>>,
+        installation_seed: Option<uuid::Uuid>,
+    ) -> Result<Option<gateway_core::account::OpaqueProviderData>, ProviderAdminError> {
+        if installation_seed.is_some() {
+            return Err(ProviderAdminError::new(ProviderAdminErrorKind::Unsupported));
+        }
+        Ok(update.map_or_else(|| current.cloned(), Clone::clone))
+    }
+
     fn validate_key_client_profile(
         &self,
         _profile: &gateway_core::account::OpaqueProviderData,
@@ -256,6 +268,11 @@ pub trait ProviderAdmin: Send + Sync {
     /// 提供最终套餐展示名称；未覆盖时采用通用的大驼峰格式。
     fn plan_type_display(&self, plan_type: &str) -> String {
         default_plan_type_display(plan_type)
+    }
+
+    /// 返回与套餐列同名的全部原始类型；未提供筛选目录时不接受套餐组查询。
+    fn plan_type_aliases(&self, _plan_type: &str) -> Option<Vec<String>> {
+        None
     }
 
     /// 账号已经由控制面提交为不可调度状态，释放 Provider 持有的账号级运行时资源。
@@ -533,6 +550,33 @@ impl ProviderAdminRegistry {
             quota.fill_missing_plan_type(plan_type);
         }
         self.plan_type_display(provider_kind, plan_type.as_deref())
+    }
+
+    /// 显式的 provider:plan 查询复用 Provider 名称映射；旧原始值保持精确查询。
+    pub(crate) fn resolve_account_plan_filter(
+        &self,
+        filter: AccountPlanFilter,
+    ) -> Result<AccountPlanFilter, ProviderAdminError> {
+        let AccountPlanFilter::Raw(raw) = &filter else {
+            return Ok(filter);
+        };
+        let Some((provider, plan)) = raw.split_once(':') else {
+            return Ok(filter);
+        };
+        let Ok(kind) = ProviderKind::new(provider.to_owned()) else {
+            return Ok(filter);
+        };
+        let Some(provider) = self.providers.get(&kind) else {
+            return Ok(filter);
+        };
+        let plan_types = provider
+            .plan_type_aliases(plan)
+            .filter(|plans| !plans.is_empty())
+            .ok_or_else(|| ProviderAdminError::new(ProviderAdminErrorKind::Invalid))?;
+        Ok(AccountPlanFilter::ProviderPlans {
+            provider_kind: kind,
+            plan_types,
+        })
     }
 
     /// 账号页和 Dashboard 共用 Provider 的最终名称，不改写官方拼写或原始套餐值。

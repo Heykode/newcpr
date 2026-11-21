@@ -413,8 +413,8 @@ HTTP 与 WS 新请求在明确未发送的瞬时建连失败下共享最多 4 �
 | `POST` | `/api/admin/accounts/refresh` | `{ accountId }` | 手工刷新 OAuth credential（`idToken` / `accessToken` / `refreshToken`），不刷新额度 |
 | `POST` | `/api/admin/accounts/recover` | `{ accountId }` | 停用账号仅启用；已启用账号显式清除本地错误/额度/cooldown，不访问上游 |
 | `POST` | `/api/admin/accounts/rotate` | OpenAI rotation 字段 | 手工替换 OpenAI OAuth token |
-| `POST` | `/api/admin/accounts/update` | `{ accountId, enabled, concurrencyLimit, weight, groupIds, outboundProxyId?, outboundProxyUrl? }` | 一次更新账号调度状态、并发上限（`null` 表示继承运行参数）、权重（1–100）、所属分组与出站代理 |
-| `POST` | `/api/admin/accounts/batch-update` | `{ accountIds, enabled, concurrencyLimit, weight, groupIds, outboundProxyId?, outboundProxyUrl? }` | 一次事务统一更新所选账号的调度字段、完整分组集合与可选代理 |
+| `POST` | `/api/admin/accounts/update` | `{ accountId, enabled, concurrencyLimit, weight, groupIds, outboundProxyId? }` | 一次更新账号调度状态、并发上限（`null` 表示继承运行参数）、权重（1–100）、所属分组与出站代理 |
+| `POST` | `/api/admin/accounts/batch-update` | `{ accountIds, enabled, concurrencyLimit, weight, groupIds, outboundProxyId? }` | 一次事务统一更新所选账号的调度字段、完整分组集合与可选代理 |
 | `POST` | `/api/admin/accounts/delete` | `{ provider, accountIds }` | 批量删除 1–200 个账号 |
 | `GET` | `/api/admin/accounts/quota` | `accountId` | 读取当前额度，不强制访问上游 |
 | `POST` | `/api/admin/accounts/quota/refresh` | `{ accountId }` | 访问 Provider 并刷新额度，同时同步额度所属状态 |
@@ -424,7 +424,7 @@ HTTP 与 WS 新请求在明确未发送的瞬时建连失败下共享最多 4 �
 | `GET` | `/api/admin/accounts/models` | `accountId` | 优先读取 Provider 模型目录缓存，缺失时有限实时拉取；返回 `{ models, observedAt, observedAtDisplay }` |
 | `POST` | `/api/admin/accounts/models/refresh` | `{ accountId }` | 强制拉取最新模型并覆盖缓存，响应结构与模型目录查询相同 |
 | `POST` | `/api/admin/accounts/connection-test` | JSON：`accountId`、`modelId`、`interface`、`stream`、`prompt` | 通过 SSE 返回实时连接测试事件，不作为业务 Responses 用量记录 |
-| `POST` | `/api/admin/accounts/oauth/start` | `{ provider, name, accountId?, outboundProxyId?, outboundProxyUrl? }` | 创建 OpenAI 或 xAI OAuth flow；`accountId` 表示重新授权 |
+| `POST` | `/api/admin/accounts/oauth/start` | `{ provider, name, accountId?, outboundProxyId? }` | 创建 OpenAI 或 xAI OAuth flow；`accountId` 表示重新授权 |
 | `POST` | `/api/admin/accounts/oauth/complete` | `{ provider, flowId, callbackUrl, settings? }` | 消费 OAuth callback；首次授权可附带账号设置，重新授权保留原设置 |
 
 模型目录查询和刷新响应中的 `observedAt` 表示 Provider 最近一次成功获取目录的时间，
@@ -534,8 +534,8 @@ OpenAI 原位替换接受重登文档中的 `email`、`account_id`、`type: code
 不会自动合并历史。此统计不更改官方额度、消费计算或调度规则。
 
 `outboundProxyId` 绑定已保存且启用的代理（测试结果不作为绑定准入条件）；省略或 `null` 保留当前绑定，空字符串清除绑定。
-`outboundProxyUrl` 兼容 HTTP、HTTPS、SOCKS5、SOCKS5H 代理 URL，可带用户名和密码；不能与 ID 同时设置。
-编辑时省略或 `null` 表示保持原配置，空字符串表示清除显式代理，随后按账号其他出口策略或部署默认出口执行。列表和详情只返回
+`outboundProxyUrl` 已从账号更新、批改和 OAuth start 请求中移除，传入会拒绝。先保存代理，再用 ID 绑定；导入文档中的代理 URL 仍按导入合同解析。
+清除显式代理后按账号其他出口策略或部署默认出口执行。列表和详情只返回
 不含认证信息的 `outboundProxyEndpoint`（未绑定显式代理时为 `null`）；只有显式敏感导出包含完整 URL。
 指定代理后，推理、OAuth 服务端交换/刷新及账号辅助请求使用同一出口；代理失败不会退回直连。
 浏览器打开的第三方 OAuth 授权页仍使用浏览器自身网络。
@@ -1005,10 +1005,15 @@ PostgreSQL 或 Redis。管理端只在用户打开弹窗或点击刷新时调用
 | `POST` | `/api/admin/account-groups/disable` | `{ id }` | 禁用；已绑定 Key 保持受限，不回退到全部账号 |
 | `POST` | `/api/admin/account-groups/delete` | `{ id }` | 删除未被 Client Key 引用的组 |
 
-创建和更新支持 `fastMode: "default" | "enabled" | "disabled"`，分别为跟随客户端、
-开启和关闭。多分组以关闭优先，其次开启；全局 Fast 关闭仍优先。
+创建和更新支持 `fastMode: "default" | "enabled" | "disabled" | "ultrafast"`，分别为跟随客户端、
+开启 Fast、关闭和 Ultrafast。多分组优先级为关闭、Fast、Ultrafast、默认。
+Fast/Ultrafast 以实际选中账号的模型目录能力为准。
 旧 `disableFast` 字段继续兼容：创建时旧字段为 true 保留关闭意图；更新时显式
 `fastMode` 优先，否则旧 true/false 映射为关闭/默认，两字段均省略则保留原设置。
+
+创建和更新另支持 `allowSubagents`（默认 true）和 `modelAccess: { mode, models }`（默认 all）；省略时保留旧设置。
+`mode` 为 all/allowlist/denylist，规则沿用账号模型限制。受限 Key 必须存在同时授权所选账号和映射后模型的有效分组，不能跨两个组拼接权限；账号自身限制继续生效。多个绑定分组的功能权限按拒绝优先合并。
+`GET /api/admin/account-groups/models` 返回可配置模型目录，供分组编辑器使用。
 
 列表数据为 `{ items, page, configRevision }`，其中 item 返回 `memberCount`、按 Provider 聚合的
 `providerCounts` 和 `clientKeyCount`。查询分组成员使用账号列表的 `groupId` 筛选，
@@ -1089,6 +1094,12 @@ Store 统计使用同一只读重复读快照，每条 SQL 最多 2 秒。监控
 | `POST` | `/api/admin/client-keys/enable` | `{ id }` | 启用 |
 | `POST` | `/api/admin/client-keys/disable` | `{ id }` | 禁用 |
 | `POST` | `/api/admin/client-keys/delete` | `{ id }` | 删除 |
+| `POST` | `/api/admin/client-keys/batch-update` | `{ ids, enabled?, groupIds?, maxConcurrency?, requestsPerMinute?, dailyLimitUsd?, weeklyLimitUsd?, providerRequestProfileOverrides?, installationSeed? }` | 仅修改提供的字段；1–1000 个不同 Key，整批事务提交 |
+| `GET` | `/api/admin/client-keys/statistics` | `id`、`period=7d/30d`、`metric=costUsd/tokens/requests`、可选 `asOf` | 返回预算概览、dates、asOf、totals、modelCount 和趋势 series |
+| `GET` | `/api/admin/client-keys/statistics/models` | 同上 | 模型明细含 totals、peakRequests、activeDays；与趋势复用 asOf |
+| `GET` | `/api/admin/client-keys/budget-reference-accounts` | `id`、`search`、`cursor` | 搜索分页返回该 Key 可访问的参考账号 |
+| `GET` | `/api/admin/client-keys/budget-alignment` | `id`、`accountId` | 预览预算 revision 和参考窗口 windows |
+| `POST` | `/api/admin/client-keys/budget-alignment` | `{ id, accountId, windowKey, startsAt, endsAt, revision }` | 重验参考窗口，以独立预算版本一次性对齐本期日或周窗口 |
 | `POST` | `/api/admin/client-keys/reset-budget` | `{ id, period: "daily" | "weekly" | "all" }` | 清零指定日／周窗口的已用金额 |
 
 创建字段为 `name`、可选 `label`、`groupIds`、`maxConcurrency`、`requestsPerMinute`、可选
@@ -1125,6 +1136,13 @@ HTTP 返回 `429`，`error.code` 为 `key_daily_budget_exceeded` 或 `key_weekly
 同样留下重置边界，之后首次使用再开启正常窗口。重置前完成但延迟结算的请求不回扣新窗口，
 未选择的周期保持不变。未开始或已过期的原生窗口不显示有效到期时间。
 前端不自动重试重置操作；响应不明确时先刷新列表确认已用金额，再决定是否重新操作。
+
+批改拒绝空变更、重复 ID、不存在的 Key 和非法分组；失败整批回滚。修改限额或画像不重置用量、预算窗口与未选择字段。画像使用 `providerRequestProfileOverrides`，旧 `openaiClientProfileOverride` / `xaiClientProfileOverride` 已拒绝。
+
+统计日期按部署时区计算，`asOf` 为不晚于当前时间的毫秒时间戳，趋势与模型表应使用同一个值。未知费用为 null 并标记 `hasMissingCost`，估算费用用 `hasEstimatedCost` 标注，不将缺失当成确定零。
+预算对齐只接受缓存中当前有效的 86400 秒日窗口或 604800 秒周窗口，不用 5 小时窗口代替一天，也不发起上游刷新。确认重读账号访问范围和窗口边界；失效或变化返回冲突。
+独立预算 revision 在 Key 行锁中校验，与结算共享锁；同版本同参数的最近一次重试幂等，冲突参数拒绝。按永久费用账本的 `completed_at` 重算所选窗口，保留另一周期、历史费用和限额；到期后恢复 Key 自身日/周规则。
+参考账号资格重读与预算写事务并非全局配置 CAS；不承诺阻止二者之间发生的所有管理员配置变化。
 
 ### 自动重置卡的周额度模式
 
@@ -1168,6 +1186,8 @@ maxConcurrentPerAccount
 openaiGuardianReservedConcurrency
 openaiSessionBindingTtlHours
 openaiAccountAffinity
+openaiOauthGuardianReviewModel
+openaiRequestCountry
 requestIntervalMs
 rotationStrategy
 quotaResetWindowWeights
@@ -1184,6 +1204,11 @@ requestTuning
 前端遇到 409 保留当前草稿，不自动刷新或重试覆盖；重新加载后再编辑保存。
 账号、代理等其他推进全局配置版本的变更也可能使旧表单过期，与官方全局版本合同一致。
 缺少版本号的旧页面或脚本需要重新读取设置并携带该字段，不能以服务端当前值代填绕过保护。
+
+全量保存必须包含布尔 `openaiOauthGuardianReviewModel` 和 `openaiRequestCountry` 对象；旧页面须刷新后再保存。
+Guardian 开关默认 true，仅结构化同步审核且有权限的原生账号优先使用 `codex-auto-review`，不覆盖显式模型映射或已确认的续接模型。
+国家策略为 `{"mode":"follow_location"}`（默认，代理位置优先于已启用全局位置，无位置发送 null）、`{"mode":"default"}`（发送 null）、`{"mode":"passthrough"}`（保留原字段）或 `{"mode":"custom","country":"JP"}`（两个大写 ASCII 字母）。策略在实际选号后应用于原生 HTTP/WS 正文。
+本地自动重置卡 `AutoResetConfig.onLowWeeklyQuota` 与全局 UA `/api/admin/settings/openai-user-agent` 仍使用各自接口，不复制官方完整 settings 结构。
 
 `rotationStrategy` 可取 `smart`、`quota_reset_priority`、`round_robin`、`sticky`。
 `requestTuning.smartScheduling.resetWindowWeights` 为 `{ fiveHour, weekly, monthly }`，各项

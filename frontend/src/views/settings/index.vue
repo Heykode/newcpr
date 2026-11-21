@@ -21,6 +21,7 @@ import AccountErrorProtectionCard from './components/error-protection/AccountErr
 import ExcelSettingsCard from './components/ExcelSettingsCard.vue'
 import ModelAliasesCard from './components/ModelAliasesCard.vue'
 import NotificationChannelsCard from './components/NotificationChannelsCard.vue'
+import OpenAiRequestSettingsCard from './components/OpenAiRequestSettingsCard.vue'
 import OutboundUserAgentCard from './components/OutboundUserAgentCard.vue'
 import RotationStrategyCard from './components/RotationStrategyCard.vue'
 import RuntimeSettingsCard from './components/RuntimeSettingsCard.vue'
@@ -216,6 +217,8 @@ watch(
         />
 
         <OutboundUserAgentCard />
+
+        <OpenAiRequestSettingsCard v-model:guardian="form.openaiOauthGuardianReviewModel" v-model:country="form.openaiRequestCountry" :disabled="loading || saving" />
 
         <ModelAliasesCard
           :mappings="mappings"

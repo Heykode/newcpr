@@ -1,5 +1,7 @@
 //! 统一账号目录与跨 Provider 动态分派。
 
+use crate::model::account_groups::AccountGroupRef;
+use crate::model::client_keys::ClientKeyBudgetReference;
 use crate::model::provider_credentials::ProviderQuotaReadRequest;
 
 use std::{collections::BTreeMap, num::NonZeroU32, sync::Arc};
@@ -109,6 +111,12 @@ fn apply_current_quota_estimates(quota: &ProviderQuota, report: &mut AccountQuot
 /// 统一账号页消费的服务。
 #[async_trait]
 pub trait AccountsService: Send + Sync {
+    async fn key_budget_references(
+        &self,
+        account_id: &ProviderAccountId,
+        key_groups: &[AccountGroupRef],
+    ) -> Result<Vec<ClientKeyBudgetReference>, AdminError>;
+
     async fn concurrency(
         &self,
         _account_id: &ProviderAccountId,
@@ -689,7 +697,12 @@ impl AccountsService for DefaultAccountsService {
             .map_err(|error| map_store_error(error, "account concurrency"))
     }
 
-    async fn list(&self, query: AccountListQuery) -> Result<AccountDirectoryPage, AdminError> {
+    async fn list(&self, mut query: AccountListQuery) -> Result<AccountDirectoryPage, AdminError> {
+        query.plan_type = query
+            .plan_type
+            .map(|filter| self.providers.resolve_account_plan_filter(filter))
+            .transpose()
+            .map_err(|error| map_provider_error(error, "account plan filter"))?;
         let runtime = self
             .account_runtime
             .active_rate_limits()
@@ -1319,6 +1332,44 @@ impl AccountsService for DefaultAccountsService {
         )
         .await?;
         Ok(quota)
+    }
+
+    async fn key_budget_references(
+        &self,
+        account_id: &ProviderAccountId,
+        key_groups: &[AccountGroupRef],
+    ) -> Result<Vec<ClientKeyBudgetReference>, AdminError> {
+        let (stored, provider) = self.provider_for_account(account_id).await?;
+        if !key_groups.is_empty()
+            && !stored.account.groups.iter().any(|account_group| {
+                account_group.enabled && key_groups.iter().any(|group| group.id == account_group.id)
+            })
+        {
+            return Err(AdminError::invalid("参考账号不在此密钥的账号范围内"));
+        }
+        // 只取已观测的额度边界，预览与确认都不触发上游刷新或账号用量聚合
+        let quota = match provider
+            .quota(ProviderQuotaRequest {
+                account_id: account_id.clone(),
+                refresh: false,
+                rolling_usage: None,
+            })
+            .await
+        {
+            Ok(quota) => quota,
+            Err(error)
+                if error.kind() == crate::ports::provider::ProviderAdminErrorKind::Unsupported =>
+            {
+                return Ok(Vec::new());
+            }
+            Err(error) => return Err(map_provider_error(error, "provider quota")),
+        };
+        let now = Utc::now();
+        Ok(quota
+            .windows
+            .into_iter()
+            .filter_map(|window| ClientKeyBudgetReference::from_current_window(window, now))
+            .collect())
     }
 
     async fn quota_forecast(

@@ -306,8 +306,6 @@ export function createThemeDashboardSummary(): DashboardSummaryResponse {
         requestCount: 1_284,
         requestBuckets: [],
         quotaUsedPercent: 32,
-        metricLabel: t('appearance.preview.dashboard.todaySToken'),
-        metricValue: '926K',
         metric: 'tokens',
         metricValueRaw: 926_000,
         usageWindow: {
@@ -325,7 +323,6 @@ export function createThemeDashboardSummary(): DashboardSummaryResponse {
           limitReached: false,
           resetAtDisplay: '—',
         },
-        lastUsed: t('appearance.preview.components.justNow'),
         lastUsedAt: '2026-08-23T10:30:00+08:00',
         lastUsedRelative: { kind: 'just_now' },
       },
@@ -343,8 +340,6 @@ export function createThemeDashboardSummary(): DashboardSummaryResponse {
           requestCount: Math.round(requestCount / 3),
         })),
         quotaUsedPercent: null,
-        metricLabel: '次数',
-        metricValue: '894',
         usageWindow: {
           key: 'free-rolling-24h',
           group: 'shortTerm',
@@ -368,7 +363,6 @@ export function createThemeDashboardSummary(): DashboardSummaryResponse {
             })),
           },
         },
-        lastUsed: '2 分钟前',
       },
       {
         id: 'preview-openai-2',
@@ -381,8 +375,6 @@ export function createThemeDashboardSummary(): DashboardSummaryResponse {
         requestCount: 742,
         requestBuckets: [],
         quotaUsedPercent: 68,
-        metricLabel: t('appearance.preview.dashboard.todaySToken'),
-        metricValue: '512K',
         metric: 'tokens',
         metricValueRaw: 512_000,
         usageWindow: {
@@ -400,7 +392,6 @@ export function createThemeDashboardSummary(): DashboardSummaryResponse {
           limitReached: false,
           resetAtDisplay: '—',
         },
-        lastUsed: t('common.time.minutesAgo', { count: 8 }),
         lastUsedAt: '2026-08-23T10:22:00+08:00',
         lastUsedRelative: { kind: 'elapsed', value: 8, unit: 'minute' },
       },

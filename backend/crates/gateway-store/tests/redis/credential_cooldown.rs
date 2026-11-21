@@ -1062,3 +1062,108 @@ async fn protection_batch_preserves_revisions_probe_state_order_and_partial_erro
     proxy.verify_script_miss().await;
     proxy.finish().await;
 }
+
+#[tokio::test]
+async fn legacy_probe_migration_survives_reads_writes_and_manual_clear_races() {
+    use gateway_admin::ports::store::AccountRuntimeStore;
+    for read_first in [true, false] {
+        let Some((repository, mut connection, namespace)) = repository().await else {
+            return;
+        };
+        let account = ProviderAccountId::new("acct_legacy_probe").unwrap();
+        let revision = CredentialRevision::new(1).unwrap();
+        let policy = protection_policy();
+        repository
+            .publish_protection_policy(
+                &policy,
+                gateway_core::routing::ConfigRevision::new(1).unwrap(),
+            )
+            .await
+            .unwrap();
+        repository
+            .cache_credential_cooldown(&cooldown(account.as_str(), 1, 60))
+            .await
+            .unwrap();
+        let key = namespace_keys(&mut connection, &namespace)
+            .await
+            .into_iter()
+            .find(|key| key.ends_with(":cooldown"))
+            .unwrap();
+        redis::cmd("HSET")
+            .arg(&key)
+            .arg("kind")
+            .arg("capacity_freeze_probe")
+            .arg("until_ms")
+            .arg(Utc::now().timestamp_millis() - 1000)
+            .arg("generation")
+            .arg("legacy-generation")
+            .arg("duration")
+            .arg(300)
+            .arg("model")
+            .arg("fixture-model")
+            .arg("rules")
+            .arg("[]")
+            .query_async::<i64>(&mut connection)
+            .await
+            .unwrap();
+        // A read must move an expired probe, not delete it as expired quota cooldown.
+        if read_first {
+            assert!(
+                ProviderCooldownPort::read(&repository, &account)
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+            let frozen = repository
+                .read_protection(&account, revision)
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(frozen.requires_probe);
+            assert_eq!(frozen.generation, "legacy-generation");
+        }
+        let newer = cooldown(account.as_str(), 1, 120);
+        let (read, write) = tokio::join!(
+            repository.read_protection(&account, revision),
+            repository.cache_credential_cooldown(&newer)
+        );
+        assert_eq!(read.unwrap().unwrap().generation, "legacy-generation");
+        write.unwrap();
+        let runtime = protection_runtime(repository.clone(), connection.clone(), &namespace);
+        let (cleared, repeated) = tokio::join!(
+            runtime.clear_protection(
+                account.as_str(),
+                gateway_admin::model::Revision::new(1).unwrap()
+            ),
+            repository.cache_credential_cooldown(&newer)
+        );
+        assert!(cleared.unwrap());
+        repeated.unwrap();
+        assert!(
+            repository
+                .read_protection(&account, revision)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            ProviderCooldownPort::read(&repository, &account)
+                .await
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            repository
+                .read_protection(&account, revision)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let keys = namespace_keys(&mut connection, &namespace).await;
+        redis::cmd("DEL")
+            .arg(keys)
+            .query_async::<i64>(&mut connection)
+            .await
+            .unwrap();
+    }
+}

@@ -1,0 +1,11 @@
+{
+  "from_version": "3.53.0",
+  "to_version": "3.54.0",
+  "from_migrations_tree": "f7325979e9edc21afd695b9a4d8388c12c3695ef",
+  "to_migrations_tree": "5d1be6073d3c5d838d1dc39071013712b0f98c01",
+  "added": [
+    "0098_account_group_policies_and_openai_request_settings.sql",
+    "0099_client_key_budget_alignment.sql"
+  ],
+  "recovery": "manual"
+}

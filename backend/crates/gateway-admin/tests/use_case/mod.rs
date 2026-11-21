@@ -262,6 +262,7 @@ impl AdminHarness {
             stores,
             self.providers,
             self.snapshot,
+            gateway_core::runtime::RuntimeSnapshotHandle::default(),
             (self.probe, self.proxy_probe),
             Arc::new(NoopClientDistribution),
             (
@@ -598,6 +599,49 @@ impl AccountRuntimeStore for UnavailableStore {
 
 #[async_trait]
 impl ClientKeyStore for UnavailableStore {
+    async fn budget_reference_accounts(
+        &self,
+        _: &gateway_core::policy::ClientApiKeyId,
+        _: &str,
+        _: &str,
+    ) -> AdminStoreResult<gateway_admin::model::client_keys::BudgetReferenceAccountPage> {
+        Err(unavailable("client keys"))
+    }
+    async fn client_key_budget_window(
+        &self,
+        _: &gateway_core::policy::ClientApiKeyId,
+        _: gateway_admin::model::client_keys::ClientKeyBudgetWindowPeriod,
+    ) -> AdminStoreResult<gateway_admin::model::client_keys::ClientKeyBudgetWindow> {
+        Err(unavailable("client keys"))
+    }
+    async fn set_client_key_budget_window(
+        &self,
+        _: gateway_admin::model::client_keys::SetClientKeyBudgetWindow,
+        _: &gateway_admin::model::MutationContext,
+    ) -> AdminStoreResult<u64> {
+        Err(unavailable("client keys"))
+    }
+    async fn get_client_key(
+        &self,
+        _: &gateway_core::policy::ClientApiKeyId,
+    ) -> AdminStoreResult<Option<gateway_admin::model::client_keys::ClientKeyRecord>> {
+        Err(unavailable("client keys"))
+    }
+    async fn client_key_budget(
+        &self,
+        _: &gateway_core::policy::ClientApiKeyId,
+    ) -> AdminStoreResult<Option<gateway_core::engine::budget::ClientBudgetStatus>> {
+        Err(unavailable("client keys"))
+    }
+    async fn batch_update_client_keys(
+        &self,
+        _: gateway_admin::model::client_keys::BatchUpdateClientKeys,
+        _: gateway_admin::ports::store::BatchClientKeyProfileMerger,
+        _: &gateway_admin::model::MutationContext,
+    ) -> AdminStoreResult<gateway_admin::model::Revision> {
+        Err(unavailable("client keys"))
+    }
+
     async fn reset_client_key_budget(
         &self,
         _: gateway_admin::model::client_keys::ResetClientKeyBudget,
@@ -651,6 +695,22 @@ impl ClientKeyStore for UnavailableStore {
 
 #[async_trait]
 impl ObservabilityStore for UnavailableStore {
+    async fn client_key_statistics(
+        &self,
+        _: gateway_admin::model::observability::TimeRange,
+        _: &gateway_core::policy::ClientApiKeyId,
+        _: gateway_admin::model::observability::KeyUsageMetric,
+    ) -> AdminStoreResult<gateway_admin::model::observability::KeyStatisticsOverview> {
+        Err(unavailable("observability"))
+    }
+    async fn client_key_models(
+        &self,
+        _: gateway_admin::model::observability::TimeRange,
+        _: &gateway_core::policy::ClientApiKeyId,
+    ) -> AdminStoreResult<Vec<gateway_admin::model::observability::KeyModelRow>> {
+        Err(unavailable("observability"))
+    }
+
     async fn usage_concurrency(
         &self,
         _range: gateway_admin::model::observability::TimeRange,

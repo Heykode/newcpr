@@ -289,6 +289,9 @@ async fn group(pool: &sqlx::PgPool) -> AccountGroupId {
     PgAccountGroupRepository::new(pool.clone())
         .create_account_group(
             NewAccountGroup {
+                allow_subagents: true,
+                model_access: Default::default(),
+
                 allow_image_generation: true,
                 id: id.clone(),
                 name: format!("Synthetic {}", id.as_str()),
@@ -683,7 +686,9 @@ async fn bark_schedule_upgrade_preserves_legacy_policy_and_pending_delivery() {
     let Some(db) = TestDatabase::create_with_migrator("bark_schedule_upgrade", &old).await else {
         return;
     };
-    let id = group(&db.pool).await;
+    let id = AccountGroupId::new(format!("grp_{}", uuid::Uuid::now_v7().simple())).unwrap();
+    sqlx::query("insert into account_groups(id,name,color,created_at,updated_at) values($1,'Legacy group','#2563EBFF',now(),now())")
+        .bind(id.as_str()).execute(&db.pool).await.unwrap();
     let now = Utc::now();
     sqlx::query("insert into account_group_alert_policies(group_id,enabled,concurrency_threshold,bark_enabled,updated_at)
                  values($1,true,88,true,$2)")

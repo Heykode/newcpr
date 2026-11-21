@@ -40,7 +40,8 @@
       "currentlyUsed": "当前已用",
       "afterReset": "重置后",
       "remainUnchanged": "保持不变",
-      "confirmReset": "确认重置"
+      "confirmReset": "确认重置",
+      "title": "重置额度"
     },
     "created": {
       "apiKeyCreated": "API密钥已创建",
@@ -108,6 +109,49 @@
         "confirm": "允许访问",
         "description": "此密钥可访问全部账号，包括未分组和以后新增的账号"
       }
+    },
+    "statistics": {
+      "title": "用量统计",
+      "heading": "用量统计 · {name}",
+      "metric": "统计指标",
+      "period": "统计周期",
+      "days": "近 {days} 天",
+      "showingPrevious": "当前显示近 {days} 天的数据",
+      "costUsd": "费用",
+      "tokens": "用量",
+      "requests": "请求数",
+      "trend": "每日用量趋势",
+      "model": "模型",
+      "other": "其他 {count} 个模型",
+      "unknownModel": "未记录模型",
+      "knownCost": "仅含已知美元费用",
+      "costShare": "费用占比",
+      "peakRequests": "单日最高请求数",
+      "activeDays": "活跃天数",
+      "includesEstimate": "含本地估算",
+      "empty": "此期间没有用量记录",
+      "missing": "此指标暂无已知数值"
+    },
+    "alignment": {
+      "title": "对齐账号窗口",
+      "description": "重算本期费用，到期恢复原周期",
+      "account": "参考账号",
+      "noAccounts": "没有匹配的账号",
+      "select": "按名称或邮箱搜索",
+      "window": "参考窗口",
+      "empty": "该账号没有可对齐的有效日或周窗口",
+      "start": "本期开始",
+      "end": "本期重置",
+      "confirm": "确认对齐本期",
+      "saved": "本期额度窗口已对齐"
+    },
+    "batch": {
+      "edit": "批量编辑",
+      "updated": "已更新 {count} 个密钥",
+      "description": "已选 {count} 个密钥",
+      "partiallyEnabled": "部分密钥已启用",
+      "mixed": "多个值",
+      "clearLimit": "设为不限"
     }
   }
 }

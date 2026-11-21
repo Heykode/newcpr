@@ -11,6 +11,7 @@ defineProps<{
 }>()
 
 const emit = defineEmits<{
+  editSelected: []
   create: []
   deleteSelected: []
 }>()
@@ -33,6 +34,9 @@ const search = defineModel<string>('search', { required: true })
     </div>
 
     <div class="flex shrink-0 items-center justify-end gap-2 md:ml-auto">
+      <BaseButton v-if="selectedCount > 0" :disabled="batchDeleting || selectedCount > 1000" @click="emit('editSelected')">
+        批量编辑 ({{ selectedCount }})
+      </BaseButton>
       <BaseButton
         v-if="selectedCount > 0"
         variant="destructive"

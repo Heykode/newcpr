@@ -227,7 +227,7 @@ async fn receive_http_profile(
         read_header_value(head, "content-type"),
         Some("application/json")
     );
-    assert_eq!(read_header_value(head, "content-encoding"), None);
+    assert_eq!(read_header_value(head, "content-encoding"), Some("zstd"));
     assert_eq!(
         read_header_value(head, "x-codex-routing-hint"),
         Some("model=gpt-test;tier=priority")
@@ -237,7 +237,7 @@ async fn receive_http_profile(
     }
     assert!(read_header_value(head, "openai-beta").is_none());
     assert_body(
-        &serde_json::from_slice(&raw[head_end + 4..]).unwrap(),
+        &serde_json::from_slice(&zstd::stream::decode_all(&raw[head_end + 4..]).unwrap()).unwrap(),
         false,
         None,
     );
@@ -440,9 +440,12 @@ async fn both_profiles_use_selected_installation_headers_over_http_and_ws() {
                                 .count(),
                             0
                         );
-                        assert_eq!(read_header_value(head, "content-encoding"), None);
+                        assert_eq!(read_header_value(head, "content-encoding"), Some("zstd"));
                         assert_body(
-                            &serde_json::from_slice(&raw[end + 4..]).unwrap(),
+                            &serde_json::from_slice(
+                                &zstd::stream::decode_all(&raw[end + 4..]).unwrap(),
+                            )
+                            .unwrap(),
                             false,
                             None,
                         );

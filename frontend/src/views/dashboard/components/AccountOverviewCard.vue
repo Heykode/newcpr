@@ -249,12 +249,12 @@ const statusBars = computed(() => {
               >
                 <span class="grid min-w-0 gap-1">
                   <span class="text-cp-xs leading-none font-bold text-cp-text-quaternary">
-                    {{ account.metric === 'requests' ? t('dashboard.metrics.requestCount') : account.metric === 'tokens' ? t('dashboard.activeAccounts.todayTokens') : account.metricLabel }}
+                    {{ account.metric === 'requests' ? t('dashboard.metrics.requestCount') : t('dashboard.activeAccounts.todayTokens') }}
                   </span>
                   <strong
                     class="font-mono text-sm leading-[1.15] font-heavy tabular-nums text-cp-text"
                   >
-                    {{ account.metricValueRaw == null || (account.metric === 'requests' && account.metricValueRaw === 0) ? account.metricValue : formatCompactNumber(account.metricValueRaw) }}
+                    {{ account.metricValueRaw == null ? '—' : formatCompactNumber(account.metricValueRaw) }}
                   </strong>
                 </span>
 
@@ -263,7 +263,7 @@ const statusBars = computed(() => {
                   <span
                     class="min-w-0 truncate text-xs leading-[1.15] font-bold text-cp-text-secondary xl:whitespace-nowrap"
                   >
-                    {{ formatRelativeTime(account.lastUsedRelative, account.lastUsed) }}
+                    {{ formatRelativeTime(account.lastUsedRelative, '—') }}
                   </span>
                 </span>
 

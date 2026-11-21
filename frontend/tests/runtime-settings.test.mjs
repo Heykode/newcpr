@@ -348,6 +348,8 @@ function mountSettings(initial, onWarning = assert.fail, apiOverrides = {}) {
 
 function settings() {
   return {
+    openaiOauthGuardianReviewModel: true,
+    openaiRequestCountry: { mode: 'follow_location' },
     configRevision: 7,
     modelMappings: { 'client-model': 'upstream-model' },
     refreshMarginSeconds: 1800,

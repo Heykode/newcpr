@@ -18,6 +18,7 @@ mod analytics_buckets;
 mod analytics_reset;
 mod backup;
 mod client_budget_buffer;
+mod client_budget_windows;
 mod client_budgets;
 mod client_keys;
 mod egress;

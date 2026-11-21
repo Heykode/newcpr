@@ -176,7 +176,8 @@ async fn warmup_uses_selected_pool_preserves_identity_and_releases_lease() {
             assert!(!request.headers.contains_key("x-codex-installation-id"));
             assert!(!request.headers.contains_key("x-codex-turn-state"));
             assert!(!request.headers.contains_key("cookie"));
-            let body: Value = serde_json::from_slice(&request.body).unwrap();
+            let decoded = zstd::stream::decode_all(request.body.as_slice()).unwrap();
+            let body: Value = serde_json::from_slice(&decoded).unwrap();
             assert!(body.get("generate").is_none());
             assert_eq!(body["reasoning"]["effort"], "low");
             assert_eq!(body["store"], false);

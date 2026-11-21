@@ -1,5 +1,6 @@
 use std::fmt;
 
+use gateway_protocol::openai::{CODEX_AUTO_REVIEW_MODEL, CodexGuardianRole};
 use gateway_protocol::openai::{
     CodexResponsesRequestSemantics as CodexRequestSemantics, OpenAiSchedulingSessionHint, events,
 };
@@ -119,6 +120,21 @@ impl ResponseTimingMetrics {
 /// Excel Provider precommit grace; native Responses delivery never waits on it.
 pub(crate) const STREAM_REPLAY_GRACE: std::time::Duration = std::time::Duration::from_millis(2_500);
 
+// 同一来源的多个头照常透传，只有值一致才能用来决定本地传输策略
+fn explicit_guardian_role<'a>(
+    first: &[u8],
+    mut remaining: impl Iterator<Item = &'a [u8]>,
+) -> Option<CodexGuardianRole> {
+    if remaining.any(|value| value != first) {
+        return None;
+    }
+    match first {
+        b"reviewer" => Some(CodexGuardianRole::Reviewer),
+        b"classifier" => Some(CodexGuardianRole::Classifier),
+        _ => None,
+    }
+}
+
 /// 官方 Codex 客户端据此触发完整历史重放的稳定错误码。
 pub(crate) const PREVIOUS_RESPONSE_NOT_FOUND_CODE: &str = "previous_response_not_found";
 /// Responses WebSocket 用于回传同一 turn 不透明状态的官方 client metadata 键。
@@ -147,6 +163,7 @@ pub struct CodexResponsesRequest {
     body: Map<String, Value>,
     /// API 边界保存、Provider 逐条恢复的普通客户端请求头。
     pub(crate) passthrough_headers: HeaderMap,
+    pub(crate) guardian_role: Option<CodexGuardianRole>,
     /// 是否由客户端显式提供了 prompt cache key。
     pub explicit_prompt_cache_key: bool,
     /// 客户端会话 ID。
@@ -640,6 +657,7 @@ impl CodexResponsesRequest {
             excel_recovery_nonce: None,
             body,
             passthrough_headers: HeaderMap::new(),
+            guardian_role: None,
             explicit_prompt_cache_key: false,
             client_conversation_id: None,
             client_session_id: None,
@@ -764,35 +782,6 @@ impl CodexResponsesRequest {
         self.body.get("service_tier").and_then(Value::as_str)
     }
 
-    /// Only change the top-level tier; enabling Fast requires catalog evidence.
-    pub(crate) fn apply_fast_policy(
-        &mut self,
-        mode: gateway_core::account::FastMode,
-        supports_priority: bool,
-    ) -> bool {
-        use gateway_core::account::FastMode;
-        let tier = self.service_tier().map(str::trim);
-        let target = match mode {
-            FastMode::Disabled
-                if tier.is_some_and(|tier| {
-                    tier.eq_ignore_ascii_case("priority") || tier.eq_ignore_ascii_case("fast")
-                }) =>
-            {
-                "default"
-            }
-            FastMode::Enabled
-                if supports_priority
-                    && (matches!(self.body.get("service_tier"), None | Some(Value::Null))
-                        || tier.is_some_and(|tier| tier.eq_ignore_ascii_case("default"))) =>
-            {
-                "priority"
-            }
-            _ => return false,
-        };
-        self.body
-            .insert("service_tier".to_owned(), Value::String(target.to_owned()));
-        true
-    }
     /// 前一个 response ID。
     pub fn previous_response_id(&self) -> Option<&str> {
         self.body
@@ -922,6 +911,22 @@ impl CodexResponsesRequest {
         self.subagent_kind().as_deref() == Some("guardian")
     }
 
+    /// Codex 仅为实际选中的专用审核模型补 reviewer 标记，显式头及中间件仍有各自的覆盖权
+    pub(crate) fn oauth_guardian_role(&self) -> Option<CodexGuardianRole> {
+        const HEADER: &str = "x-codex-guardian";
+        let mut client = self
+            .passthrough_headers
+            .get_all(HEADER)
+            .iter()
+            .map(|v| v.as_bytes());
+        if let Some(first) = client.next() {
+            return explicit_guardian_role(first, client);
+        }
+        self.guardian_role.filter(|role| {
+            *role != CodexGuardianRole::Reviewer || self.model() == CODEX_AUTO_REVIEW_MODEL
+        })
+    }
+
     /// 设置 / 合并 client metadata。
     pub fn set_client_metadata(&mut self, client_metadata: Option<Value>) {
         match client_metadata {
@@ -997,4 +1002,27 @@ impl CodexResponsesRequest {
             }
         }
     }
+}
+
+pub(crate) fn fast_policy_tier(
+    mode: gateway_core::account::FastMode,
+    current: Option<&str>,
+    advertises: impl Fn(&str) -> bool,
+) -> Option<&'static str> {
+    use gateway_core::account::FastMode;
+    let target = match mode {
+        FastMode::Enabled if advertises("priority") => "priority",
+        FastMode::Ultrafast if advertises("ultrafast") => "ultrafast",
+        FastMode::Disabled
+            if current.is_some_and(|tier| {
+                ["priority", "fast", "ultrafast"]
+                    .iter()
+                    .any(|name| tier.trim().eq_ignore_ascii_case(name))
+            }) =>
+        {
+            "default"
+        }
+        _ => return None,
+    };
+    (current != Some(target)).then_some(target)
 }

@@ -1181,6 +1181,57 @@ match window statistics by exact stable window key.
   Browser coverage verifies search removal, plan reset, retained sort, pagination,
   selection, groups, quota refresh and account actions.
 
+### Codex plan filters
+
+#### Scope
+
+The account toolbar uses a fixed Codex catalog, independent of loaded accounts or
+current filters. Include All plans and the 15 names in `codexPlanFilterOptions`;
+do not add xAI, Other or Unknown options. Reserve enough plan-field width for full
+option names; let the toolbar wrap its fields on narrow screens.
+
+#### Signatures
+
+`GET /api/admin/accounts?planType=openai:<raw-alias>` reaches
+`AccountPlanFilter::Raw(String)`. `ProviderAdmin::plan_type_aliases(&str)` resolves
+it to `ProviderPlans { provider_kind, plan_types }` before the Store query.
+
+#### Contracts
+
+OpenAI owns display names and aliases in `providers/openai/src/admin/plans.rs`.
+Free includes `free/free_workspace/guest`; Business includes
+`team/self_serve_business_usage_based`; Business Premium uses
+`self_serve_business_prolite`. Enterprise includes
+`business/ent26/enterprise/hc/enterprise_cbp_usage_based`; Edu includes
+`edu/education`. Other entries are distinct, including ProLite, Pro and ProMax.
+SQL matches the stored account plan, trims grouped values, and applies the alias
+set and provider intersection before counting/paging. This change does not add
+quota-snapshot fallback to filtering. Raw queries retain single-value matching.
+
+#### Validation and errors
+
+- Known provider plus unknown plan: reject as invalid before querying the Store.
+- Unknown prefix: retain raw query behavior; do not guess another provider.
+- Conflicting provider filter: return an empty intersection, never override it.
+- No matching accounts: keep all 16 selector entries; clearing removes planType.
+
+#### Cases
+
+Good: `openai:team` matches both Business aliases on OpenAI accounts.
+Base: raw `business` still matches only that raw value, case-insensitively.
+Bad: treating raw `business` as Business would contradict the Enterprise badge.
+
+#### Required tests
+
+Cover all display aliases, distinct Pro tiers, legacy raw queries, invalid groups,
+provider intersection, SQL totals and every page. Browser checks at 1440/390/320px
+select each option, check request values, clear filters and verify readable labels.
+
+#### Wrong and correct
+
+Wrong: derive options from the current page or filter already paginated records.
+Correct: fixed UI options, provider-owned aliases, bound SQL before pagination.
+
 ### Shared controls and subpath hosting
 
 Base controls resolve size from explicit prop, nearest form, config provider, then their existing
@@ -1193,3 +1244,23 @@ uses caller overrides when present. Keep NewCPR tokens and existing public compo
 `CPR_WEB_BASE_PATH` is a build-time base (default `/`). Router history, management API requests,
 static icons/PWA and browser session restoration use that base. Reverse proxies must strip the
 prefix for backend routes and rewrite Cookie Path and relative Location, including Realtime calls.
+
+
+## v3.54.0 Native Admin Integration
+
+- Group forms persist modelAccess, allowSubagents and ultrafast through the real API.
+  Model shortcuts add gpt-image-2 and gpt-image-1.5 with exact-ID deduplication.
+- Client Key batch editing resets the draft when reopened and sends only selected
+  patch fields. Closing statistics/alignment invalidates pending loads before the
+  modal's leave transition; clear content after leave, preserving the existing body lock.
+- Statistics trend/model table share the server asOf. Missing values remain unknown
+  and estimated costs retain their marker. Reference account search is paginated;
+  alignment is a one-period action, not an ongoing upstream budget controller.
+- Runtime settings require Guardian and country policy fields. The independent
+  user-agent and reset-credit forms keep their own save contracts.
+- Usage errors keep the error column left, time second and actions right. A bounded
+  keyboard-dismissable popover exposes the full detail; preserve specific local WS
+  close/continuation reasons before the official generic reason/message fallback.
+- Browser regression covers 1440/390/320px error details and the existing 15 Codex
+  plan filters; group/key/settings dialogs use 1440/390px with synthetic network
+  fixtures. Check geometry and interactions, not only classes or source text.

@@ -34,6 +34,8 @@ pub struct RuntimeSettings {
     pub refresh_concurrency: u32,
     pub max_concurrent_per_account: u32,
     pub openai_guardian_reserved_concurrency: u32,
+    pub openai_oauth_guardian_review_model: bool,
+    pub openai_request_country: gateway_core::account::OpenAiRequestCountry,
     pub account_warmup_enabled: bool,
     pub account_warmup_cron: String,
     pub account_warmup_model: Option<String>,
@@ -116,6 +118,8 @@ pub struct RuntimeSettingsUpdate {
     pub refresh_concurrency: u32,
     pub max_concurrent_per_account: u32,
     pub openai_guardian_reserved_concurrency: u32,
+    pub openai_oauth_guardian_review_model: bool,
+    pub openai_request_country: gateway_core::account::OpenAiRequestCountry,
     pub account_warmup_enabled: bool,
     pub account_warmup_cron: String,
     pub account_warmup_model: Option<String>,
@@ -248,7 +252,7 @@ pub(crate) async fn load_runtime_settings_from_pool(pool: &PgPool) -> StoreResul
                     rotation_strategy, quota_reset_window_weights_json, model_mappings_json, usage_retention_days, ops_event_retention_days,
                     audit_retention_days, min_codex_desktop_version,
                     min_codex_cli_version, request_tuning_json, updated_at, turn_state_probe_concurrency,
-                    openai_guardian_reserved_concurrency,
+                    openai_guardian_reserved_concurrency, openai_oauth_guardian_review_model, openai_request_country_json,
                     account_warmup_enabled, account_warmup_cron, account_warmup_model, codex_quota_overdraft_enabled, codex_quota_overdraft_probe_model, openai_session_binding_ttl_hours, openai_account_affinity
              from runtime_settings where id = 1",
         )
@@ -370,7 +374,7 @@ pub(crate) async fn load_runtime_settings_in_transaction(
                 rotation_strategy, quota_reset_window_weights_json, model_mappings_json, usage_retention_days, ops_event_retention_days,
                 audit_retention_days, min_codex_desktop_version,
                 min_codex_cli_version, request_tuning_json, updated_at, turn_state_probe_concurrency,
-                openai_guardian_reserved_concurrency,
+                openai_guardian_reserved_concurrency, openai_oauth_guardian_review_model, openai_request_country_json,
                 account_warmup_enabled, account_warmup_cron, account_warmup_model, codex_quota_overdraft_enabled, codex_quota_overdraft_probe_model, openai_session_binding_ttl_hours, openai_account_affinity
          from runtime_settings where id = 1",
     )
@@ -460,6 +464,8 @@ pub(crate) async fn update_runtime_settings_in_transaction(
                  openai_session_binding_ttl_hours = coalesce($27, openai_session_binding_ttl_hours),
                  openai_account_affinity = coalesce($28, openai_account_affinity),
                  quota_reset_window_weights_json = $29,
+                 openai_oauth_guardian_review_model = $30,
+                 openai_request_country_json = $31,
                  updated_at = now()
 	             where id = 1
 	             returning config_revision",
@@ -496,6 +502,8 @@ pub(crate) async fn update_runtime_settings_in_transaction(
     .bind(update.openai_session_binding_ttl_hours.map(i64::from))
     .bind(update.openai_account_affinity.map(|mode| mode.as_str()))
     .bind(sqlx::types::Json(update.quota_reset_window_weights))
+    .bind(update.openai_oauth_guardian_review_model)
+    .bind(sqlx::types::Json(&update.openai_request_country))
     .fetch_optional(&mut **transaction)
     .await
     .map_err(|error| postgres_unavailable("update runtime settings in transaction").with_source(error))?
@@ -549,6 +557,8 @@ pub(crate) async fn update_admin_api_key_in_transaction(
 
 #[derive(sqlx::FromRow)]
 struct RuntimeSettingsRow {
+    openai_oauth_guardian_review_model: bool,
+    openai_request_country_json: sqlx::types::Json<gateway_core::account::OpenAiRequestCountry>,
     config_revision: i64,
     admin_api_key: Option<String>,
     turn_state_injection_enabled: bool,
@@ -583,6 +593,8 @@ struct RuntimeSettingsRow {
 
 fn runtime_settings_from_row(row: RuntimeSettingsRow) -> StoreResult<RuntimeSettings> {
     Ok(RuntimeSettings {
+        openai_oauth_guardian_review_model: row.openai_oauth_guardian_review_model,
+        openai_request_country: row.openai_request_country_json.0,
         openai_account_affinity: gateway_core::account::AccountAffinity::parse(
             &row.openai_account_affinity,
         )

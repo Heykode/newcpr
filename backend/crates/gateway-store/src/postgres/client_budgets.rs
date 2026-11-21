@@ -55,9 +55,10 @@ pub(super) async fn reset_client_key_budget(
     // 官方重置边界同时收拢起止；首次重置也保存 fence，迟到费用不能重新开启旧窗口。
     sqlx::query(
         "insert into client_key_budget_windows
-        (client_api_key_id,daily_start,daily_end,weekly_start,weekly_end)
-        values ($1,$4,$4,$4,$4)
+        (client_api_key_id,daily_start,daily_end,weekly_start,weekly_end,revision)
+        values ($1,$4,$4,$4,$4,1)
         on conflict (client_api_key_id) do update set
+        revision = client_key_budget_windows.revision + 1, last_operation_request = null,
         daily_used_usd = case when $2 then 0 else client_key_budget_windows.daily_used_usd end,
         daily_start = case when $2 then $4 else client_key_budget_windows.daily_start end,
         daily_end = case when $2 then $4 else client_key_budget_windows.daily_end end,

@@ -554,7 +554,9 @@ impl CodexCredentialRefreshService {
             message,
             upstream,
         } = failure;
-        match self.repository.load_runtime_credential(account).await {
+        // A concurrent quota revocation changes expiry without changing credential identity.
+        // The revision-fenced load keeps terminal RT failures authoritative.
+        match self.repository.load_complete_data(account).await {
             Ok(_) => {}
             Err(CredentialRepositoryError::RevisionConflict(_)) => {
                 return Ok(CodexCredentialRefreshOutcome::Stale {

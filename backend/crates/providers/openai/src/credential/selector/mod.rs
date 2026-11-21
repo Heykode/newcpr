@@ -1,5 +1,6 @@
 //! AttemptContext 驱动的 Codex 账号选择与 Redis lease port。
 
+use gateway_core::account::AccountModelAccessMode;
 use std::collections::{BTreeSet, HashMap};
 use std::fmt;
 use std::num::NonZeroU32;
@@ -8,9 +9,9 @@ use std::time::{Duration, SystemTime};
 
 use gateway_core::account::{
     AccountCandidate, AccountCapacitySnapshot, AccountEligibilityPolicy, AccountErrorReason,
-    AccountFeedbackStats, AccountModelAccessMode, AccountRuntimeSignals, AccountSchedulingBlocker,
-    AccountSelectionContext, AccountSelector, AccountStatus, CredentialState,
-    PreferredAccountSelection, ProviderAccount, ProviderAccountId, QuotaEvidence,
+    AccountFeedbackStats, AccountRuntimeSignals, AccountSchedulingBlocker, AccountSelectionContext,
+    AccountSelector, AccountStatus, CredentialState, PreferredAccountSelection, ProviderAccount,
+    ProviderAccountId, QuotaEvidence,
 };
 use gateway_core::engine::{AttemptContext, ContinuationAttempt};
 use gateway_core::provider_ports::{
@@ -494,13 +495,7 @@ impl CodexCredentialSelector {
                     ) {
                         (_, Some(model)) => scope.allows_model(account.id(), model),
                         (true, None) => {
-                            scope.allows(account.id())
-                                && scope
-                                    .directory()
-                                    .account(account.id())
-                                    .is_some_and(|entry| {
-                                        entry.model_access().mode() == AccountModelAccessMode::All
-                                    })
+                            scope.allows_unidentified_model(account.id())
                         }
                         (false, None) => scope.allows(account.id()),
                     }

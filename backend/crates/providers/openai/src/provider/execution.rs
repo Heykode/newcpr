@@ -298,12 +298,20 @@ impl CodexProvider {
         let session = session_affinity
             .as_ref()
             .and_then(CodexSessionAffinity::persistence_hash);
-        let client = self.account_exit_client(
-            &context,
-            lease.account(),
-            excel.is_some() || excel_image.is_some(),
-            session,
-        )?;
+        let client = self
+            .account_exit_client(
+                &context,
+                lease.account(),
+                excel.is_some() || excel_image.is_some(),
+                session,
+            )?
+            .with_fedramp_routing(
+                excel.is_none()
+                    && excel_image.is_none()
+                    && lease.authentication().oauth().is_some_and(
+                        crate::credential::CodexOAuthSecret::has_fedramp_routing_claim,
+                    ),
+            );
         if let Some(prepared) = excel.as_mut().and_then(|request| request.excel.as_mut()) {
             prepared.exit_lease = client.session_proxy_lease();
         }
@@ -391,6 +399,8 @@ pub(super) struct ColdJsonResponse {
 
 #[derive(Clone, Serialize, Deserialize)]
 pub(super) struct OpenAiSessionState {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) reviewer_model: Option<String>,
     #[serde(default)]
     pub(super) responses_upstream: gateway_core::account::ResponsesUpstream,
     pub(super) account_id: String,
@@ -416,6 +426,7 @@ pub(super) enum OpenAiContinuationScope {
 
 #[derive(Clone)]
 pub(super) struct OpenAiSessionCapture {
+    pub(super) reviewer_model: Option<String>,
     pub(super) responses_upstream: gateway_core::account::ResponsesUpstream,
     pub(super) account_id: String,
     pub(super) oauth_identity: Option<String>,
@@ -459,6 +470,7 @@ fn encode_openai_session_capture(
         ));
     };
     encode_openai_session_state(OpenAiSessionState {
+        reviewer_model: capture.reviewer_model.clone(),
         responses_upstream: capture.responses_upstream,
         account_id: capture.account_id.clone(),
         oauth_identity: capture.oauth_identity.clone(),
@@ -1301,10 +1313,10 @@ pub(super) fn cold_response_stream_once(response: ColdResponse) -> EventStream {
                 )
             });
             let timing_signals = decoder.take_timing_signals();
-            if let Some(affinity) = &routing_affinity {
+            if request.excel.is_none() {
                 for fact in events.iter().flat_map(ProviderEvent::canonical_facts) {
                     if let GatewayEvent::Started(meta) = fact {
-                        guardian_routing.remember(context.client_api_key_ref(), &active_account, meta.response_id(), affinity);
+                        guardian_routing.remember(context.client_api_key_ref(), &active_account, meta.response_id(), routing_affinity.as_ref());
                     }
                 }
             }

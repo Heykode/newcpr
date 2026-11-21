@@ -28,7 +28,7 @@ use crate::transport::{
         responses::{CodexResponsesRequest, TransportRequirement, transport_requirement},
         websocket::{
             websocket_audit_artifact_from_attempt, websocket_connection_limit_failure,
-            websocket_payload_audit_snapshot,
+            websocket_payload_audit_snapshot, websocket_response_create_payload_text,
         },
     },
     request::normalize_generate_upstream_body,
@@ -44,7 +44,6 @@ use crate::transport::{
 
 use super::client::*;
 
-const HTTP_ZSTD_MIN_BYTES: usize = 1024;
 impl CodexBackendClient {
     /// 构造客户端。
     pub fn new(
@@ -55,6 +54,7 @@ impl CodexBackendClient {
         let base_url = base_url.into().trim_end_matches('/').to_string();
         Self {
             routing_affinity: None,
+            fedramp_routing: false,
             connection_budget: None,
             session_proxy: None,
             default_client: client.clone(),
@@ -401,7 +401,10 @@ impl CodexBackendClient {
             Some(&headers),
         );
         trace.capture("upstream.request.body", &body);
-        let compressed = excel.is_none() && body.len() >= HTTP_ZSTD_MIN_BYTES;
+        let compressed = excel.is_none()
+            && !upstream_request
+                .oauth_guardian_role()
+                .is_some_and(gateway_protocol::openai::CodexGuardianRole::uses_sampler_transport);
         let body = if compressed {
             zstd::stream::encode_all(std::io::Cursor::new(body), 3)
                 .map_err(CodexClientError::RequestCompression)?
@@ -638,7 +641,7 @@ impl CodexBackendClient {
         }
 
         // Preserve the original seed for the subsequent opening-header projection too.
-        let websocket_request = super::qx_application::project_response_request(
+        let mut websocket_request = super::qx_application::project_response_request(
             &websocket_upstream_request(request),
             context,
         );
@@ -650,21 +653,20 @@ impl CodexBackendClient {
                 &mut headers,
             );
         }
-        let mut websocket_create = CodexWebSocketConnection::responses_create_request(
+        let mut websocket_create = CodexWebSocketConnection::response_create_opening(
             &self.base_url,
             &generate_key(),
             websocket_header_pairs(&headers),
             &websocket_request,
-        )
-        .map_err(CodexClientError::WebSocketEncode)?;
-        websocket_create.connection.outbound_proxy = self.outbound_proxy.clone();
-        super::evidence::record_request(
-            &context.trace.cloned().unwrap_or_default(),
-            "provider.request.outbound",
-            websocket_request.body(),
-            "websocket",
-            Some(&headers),
         );
+        let initial_start_ms = websocket_request
+            .body()
+            .get("client_metadata")
+            .and_then(|m| {
+                m.get(super::client::X_CODEX_WS_STREAM_REQUEST_START_MS_CLIENT_METADATA_KEY)
+            })
+            .cloned();
+        websocket_create.connection.outbound_proxy = self.outbound_proxy.clone();
         websocket_create.connection.session_proxy = self
             .session_proxy_lease()
             .map(super::session_proxy::SessionProxyHold);
@@ -679,21 +681,6 @@ impl CodexBackendClient {
                 .iter()
                 .map(|(name, value)| (name.as_str(), value.as_bytes())),
         );
-        // 审计未启用时跳过 artifact 构造：payload 快照会深拷贝整个请求 body，
-        // 且位于首字节前的关键路径上。
-        if websocket_audit_dir().is_some() {
-            let artifact = websocket_audit_artifact_from_attempt(
-                &websocket_request,
-                websocket_create.connection().opening_audit_snapshot(),
-                websocket_payload_audit_snapshot(&websocket_request),
-            );
-            if let Err(error) =
-                write_websocket_audit_artifact_from_env_with_timezone(&artifact, self.timezone)
-                    .await
-            {
-                tracing::warn!(error = %error, "Failed to write Codex WebSocket audit artifact");
-            }
-        }
         let connection_profile = websocket_connection_profile(&headers);
         let pool_key =
             self.websocket_pool_key(request, context, pool_account_id, &connection_profile);
@@ -795,6 +782,47 @@ impl CodexBackendClient {
             }
             Err(error) => return Err(websocket_exchange_error_to_client_error(error)),
         };
+        // 租用或握手完成后更新发送时间，后置投影改写过的值保留
+        if let Some(stamp) = websocket_request
+            .body_mut()
+            .get_mut("client_metadata")
+            .and_then(|m| {
+                m.get_mut(super::client::X_CODEX_WS_STREAM_REQUEST_START_MS_CLIENT_METADATA_KEY)
+            })
+            && Some(&*stamp) == initial_start_ms.as_ref()
+        {
+            *stamp = serde_json::Value::String(now_unix_timestamp_millis().to_string());
+        }
+        let payload = match websocket_response_create_payload_text(&websocket_request) {
+            Ok(payload) => payload,
+            Err(error) => {
+                prepared.discard().await;
+                return Err(CodexClientError::WebSocketEncode(error));
+            }
+        };
+        let websocket_create = websocket_create.with_payload(payload);
+        super::evidence::record_request(
+            &context.trace.cloned().unwrap_or_default(),
+            "provider.request.outbound",
+            websocket_request.body(),
+            "websocket",
+            Some(&headers),
+        );
+        // 审计未启用时跳过 artifact 构造：payload 快照会深拷贝整个请求 body，
+        // 且位于首字节前的关键路径上。
+        if websocket_audit_dir().is_some() {
+            let artifact = websocket_audit_artifact_from_attempt(
+                &websocket_request,
+                websocket_create.connection().opening_audit_snapshot(),
+                websocket_payload_audit_snapshot(&websocket_request),
+            );
+            if let Err(error) =
+                write_websocket_audit_artifact_from_env_with_timezone(&artifact, self.timezone)
+                    .await
+            {
+                tracing::warn!(error = %error, "Failed to write Codex WebSocket audit artifact");
+            }
+        }
         // 按最终出站帧的 UTF-8 字节数判断，握手上限只属于当前物理连接
         if let Some(limit) = prepared.max_message_bytes()
             && websocket_create.payload_text().len() > limit
@@ -1101,6 +1129,7 @@ impl CodexBackendClient {
             .with_egress_key(&self.egress_key)
             .with_connection_profile(connection_profile)
             .with_installation_id(context.installation_id)
+            .with_fedramp_routing(self.fedramp_routing)
             .with_routing_affinity(self.routing_affinity.as_ref().map(|pin| pin.id()));
         if let Some(connection_id) = request.downstream_websocket_connection_id.as_deref() {
             key = key.with_downstream_connection_id(connection_id);

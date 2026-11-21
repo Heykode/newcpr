@@ -82,7 +82,30 @@ async fn capture_fast_request(
             .expect("payload")
             .with_context(Map::from_iter([("use_websocket".to_owned(), json!(false))])),
     ));
-    let provider = provider_with_base_url(&store, server.uri());
+    let mut model: Value =
+        serde_json::from_slice::<Value>(OFFICIAL_FIXTURE).unwrap()["models"][0].clone();
+    model["service_tiers"] = if priority_catalog {
+        json!([
+            {"id":"priority","name":"Fast","description":"Fast"},
+            {"id":"ultrafast","name":"Ultrafast","description":"Ultrafast"}
+        ])
+    } else {
+        json!([])
+    };
+    Mock::given(method("GET"))
+        .and(path("/codex/models"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"models":[model]})))
+        .mount(&server)
+        .await;
+    let (provider, catalog, _) = super::scheduling::waiting_provider_with_catalog(
+        &store,
+        Arc::new(TestLeaseCoordinator::default()),
+        server.uri(),
+        Arc::default(),
+        Arc::default(),
+        NonZeroU32::MIN,
+    );
+    catalog.refresh_catalogs().await.unwrap();
     for selected_mode in [FastMode::Default, mode] {
         let mut stream = provider
             .execute(
@@ -101,7 +124,13 @@ async fn capture_fast_request(
         }
         assert!(completed);
     }
-    let requests = server.received_requests().await.expect("captured request");
+    let requests: Vec<_> = server
+        .received_requests()
+        .await
+        .expect("captured request")
+        .into_iter()
+        .filter(|r| r.method.as_str() == "POST")
+        .collect();
     assert_eq!(requests.len(), 2);
     (
         captured_request_body(&requests[0]),
@@ -133,19 +162,32 @@ async fn fast_group_policy_only_changes_the_supported_top_level_service_tier() {
             Some(json!("priority")),
         ),
         (FastMode::Enabled, false, None, None),
+        (FastMode::Ultrafast, true, None, Some(json!("ultrafast"))),
+        (FastMode::Ultrafast, false, None, None),
+        (
+            FastMode::Disabled,
+            true,
+            Some(json!("ultrafast")),
+            Some(json!("default")),
+        ),
         (
             FastMode::Enabled,
             true,
             Some(json!("flex")),
-            Some(json!("flex")),
+            Some(json!("priority")),
         ),
         (
             FastMode::Enabled,
             true,
             Some(json!("auto")),
-            Some(json!("auto")),
+            Some(json!("priority")),
         ),
-        (FastMode::Enabled, true, Some(json!(17)), Some(json!(17))),
+        (
+            FastMode::Enabled,
+            true,
+            Some(json!(17)),
+            Some(json!("priority")),
+        ),
         (
             FastMode::Disabled,
             true,

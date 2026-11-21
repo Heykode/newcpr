@@ -944,17 +944,6 @@ pub(crate) fn wire_profile_view(profile: domain::DashboardWireProfile) -> Dashbo
     }
 }
 
-pub(crate) fn relative_time_with_timezone(
-    value: Option<DateTime<Utc>>,
-    now: DateTime<Utc>,
-    timezone: DeploymentTimeZone,
-) -> String {
-    let Some(value) = value else {
-        return "从未使用".to_owned();
-    };
-    crate::time::relative_view(value, now, timezone).legacy_display()
-}
-
 pub(crate) fn dashboard_view_with_timezone(
     result: domain::DashboardResult,
     kind: TrendKind,
@@ -989,22 +978,6 @@ pub(crate) fn dashboard_view_with_timezone(
             .filter(|window| window.used_percent.is_none())
             .and_then(|window| window.local_usage.as_ref())
             .map(|usage| usage.request_count);
-        let (metric_label, metric_value) = match local_requests {
-            Some(count) => (
-                "次数".to_owned(),
-                if count > 0 {
-                    format_compact_number(count)
-                } else {
-                    "—".to_owned()
-                },
-            ),
-            None => (
-                "今日 Token".to_owned(),
-                credential
-                    .total_tokens
-                    .map_or_else(|| "—".to_owned(), format_compact_number),
-            ),
-        };
         account_usage_views.push(DashboardAccountUsageView {
             id: credential.account_id.clone(),
             provider: credential.provider_kind.clone(),
@@ -1034,15 +1007,12 @@ pub(crate) fn dashboard_view_with_timezone(
             usage_window: credential.quota_window.map(|window| {
                 crate::admin::accounts::quota_window_view_with_timezone(window, timezone)
             }),
-            metric_label,
-            metric_value,
             metric: if local_requests.is_some() {
                 "requests"
             } else {
                 "tokens"
             },
             metric_value_raw: local_requests.or(credential.total_tokens),
-            last_used: relative_time_with_timezone(credential.last_used_at, range.end, timezone),
             last_used_at: credential.last_used_at,
             last_used_relative: credential
                 .last_used_at

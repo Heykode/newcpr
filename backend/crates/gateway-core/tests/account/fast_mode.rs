@@ -2,9 +2,13 @@ use gateway_core::account::FastMode;
 
 #[test]
 fn group_policy_merge_is_order_independent_and_disabled_wins() {
-    use FastMode::{Default, Disabled, Enabled};
+    use FastMode::{Default, Disabled, Enabled, Ultrafast};
     for (left, right, expected) in [
         (Default, Default, Default),
+        (Default, Ultrafast, Ultrafast),
+        (Enabled, Ultrafast, Enabled),
+        (Disabled, Ultrafast, Disabled),
+        (Ultrafast, Ultrafast, Ultrafast),
         (Default, Enabled, Enabled),
         (Default, Disabled, Disabled),
         (Enabled, Enabled, Enabled),
@@ -18,7 +22,12 @@ fn group_policy_merge_is_order_independent_and_disabled_wins() {
 
 #[test]
 fn wire_values_are_strict_and_round_trip() {
-    for mode in [FastMode::Default, FastMode::Enabled, FastMode::Disabled] {
+    for mode in [
+        FastMode::Default,
+        FastMode::Enabled,
+        FastMode::Disabled,
+        FastMode::Ultrafast,
+    ] {
         assert_eq!(FastMode::parse(mode.as_str()), Some(mode));
         assert_eq!(
             serde_json::from_value::<FastMode>(serde_json::json!(mode.as_str())).unwrap(),

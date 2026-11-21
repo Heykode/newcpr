@@ -408,7 +408,6 @@ async fn backend_websocket_should_forward_context_headers_and_preserve_payload_f
     for (name, expected) in [
         ("x-client-request-id", "cp_derived"),
         ("openai-beta", "responses_websockets=2026-02-06"),
-        ("x-codex-turn-state", "turn-state"),
         ("x-codex-turn-metadata", "{\"thread_source\":\"subagent\"}"),
         ("x-codex-beta-features", "feature-a"),
         ("x-responsesapi-include-timing-metrics", "true"),
@@ -488,6 +487,10 @@ async fn backend_http_should_preserve_business_headers_without_downstream_transp
     let raw = server.await.expect("opaque HTTP server task");
 
     for &(name, _) in DOWNSTREAM_TRANSPORT_HEADERS {
+        if name == "content-encoding" {
+            assert_eq!(raw_header_values(&raw, name), vec![b"zstd".to_vec()]);
+            continue;
+        }
         assert!(
             raw_header_values(&raw, name).is_empty(),
             "unexpected downstream transport header {name}"
@@ -724,7 +727,7 @@ async fn backend_websocket_should_preserve_business_headers_without_downstream_t
         vec![b"lease-account".to_vec()]
     );
     assert!(values("x-codex-installation-id").is_empty());
-    assert_eq!(values("x-codex-turn-state"), vec![b"turn-ascii".to_vec()]);
+    assert!(values("x-codex-turn-state").is_empty());
     assert_eq!(values("traceparent"), vec![b"synthetic-trace".to_vec()]);
     assert_eq!(values("tracestate"), vec![b"synthetic-state".to_vec()]);
     assert_eq!(
@@ -1096,9 +1099,10 @@ async fn backend_http_should_force_upstream_sse_for_non_streaming_client_request
         Some(test_wire_profile().snapshot().user_agent().as_str())
     );
     assert_eq!(read_header_value(head, "x-codex-installation-id"), None);
-    assert_eq!(read_header_value(head, "content-encoding"), None);
+    assert_eq!(read_header_value(head, "content-encoding"), Some("zstd"));
     let json: serde_json::Value =
-        serde_json::from_slice(&raw[separator + 4..]).expect("small body should be valid JSON");
+        serde_json::from_slice(&zstd::stream::decode_all(&raw[separator + 4..]).unwrap())
+            .expect("decoded body should be valid JSON");
     assert_eq!(json["stream"], true);
     assert!(
         !request.stream(),

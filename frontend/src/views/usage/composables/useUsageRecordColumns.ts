@@ -6,9 +6,11 @@ import { useTableColumns } from '@/components/base/BaseTable/useTableColumns'
 import { usageRecordColumns } from '../constants'
 
 export function useUsageRecordColumns(status: Ref<'success' | 'error' | 'all'>, tableWidth: Readonly<Ref<number>>) {
-  const columns = computed(() => usageRecordColumns.map(column => column.key === 'accountEmail'
-    ? { ...column, width: 280, hideable: true }
-    : column.key === 'actions' ? { ...column, fixed: 'right' as const } : column))
+  const columns = computed(() => usageRecordColumns.map(column => column.key === 'createdAtDisplay'
+    ? { ...column, width: 128 }
+    : column.key === 'accountEmail'
+      ? { ...column, width: 280, hideable: true }
+      : column.key === 'actions' ? { ...column, fixed: 'right' as const } : column))
   const usage = useTableColumns(() => status.value === 'all'
     ? columns.value.flatMap(column => column.key === 'route'
         ? [column, { key: 'errorMessage', label: '最终错误', kind: 'custom' as const, size: '4xl' as const, hideable: false }]
@@ -23,11 +25,11 @@ export function useUsageRecordColumns(status: Ref<'success' | 'error' | 'all'>, 
         label: '错误',
         kind: 'custom',
         fixed: 'left',
-        minWidth: tableWidth.value ? Math.min(310, Math.max(96, (tableWidth.value - actionWidth) / 2)) : 310,
+        minWidth: tableWidth.value ? Math.min(370, Math.max(96, (tableWidth.value - actionWidth) / 2)) : 370,
         grow: 1,
         hideable: false,
       },
-      { ...time, width: 112 },
+      time,
       ...columns.value.filter(column => column.key !== time.key).map(column => column.key === 'actions'
         ? { ...column, width: actionWidth }
         : column),

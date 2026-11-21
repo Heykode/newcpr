@@ -253,16 +253,8 @@ async fn http_generate_compat_preserves_the_encoded_request_when_sending() {
             assert_identity_header(name, read_header_value(head, name));
         }
         assert_routing_hint(read_header_value(head, "x-codex-routing-hint"), &expected);
-        let expected_len = serde_json::to_vec(&expected).unwrap().len();
-        assert_eq!(
-            read_header_value(head, "content-encoding"),
-            (expected_len >= 1024).then_some("zstd")
-        );
-        let body = if expected_len >= 1024 {
-            zstd::stream::decode_all(&raw[separator + 4..]).unwrap()
-        } else {
-            raw[separator + 4..].to_vec()
-        };
+        assert_eq!(read_header_value(head, "content-encoding"), Some("zstd"));
+        let body = zstd::stream::decode_all(&raw[separator + 4..]).unwrap();
         let body: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(body, expected);
         assert_eq!(request.body(), &local_body);

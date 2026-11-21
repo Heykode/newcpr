@@ -1,4 +1,5 @@
 import type { RequestOptions } from '../request'
+import type { AccountModelAccess } from './accounts'
 import request from '../request'
 
 export interface AccountGroupRef {
@@ -24,9 +25,11 @@ export interface AccountGroupUsage {
   retainedTotalUsd: string
 }
 
-export type GroupFastMode = 'default' | 'enabled' | 'disabled'
+export type GroupFastMode = 'default' | 'enabled' | 'disabled' | 'ultrafast'
 
 export interface AccountGroup extends AccountGroupRef {
+  allowSubagents: boolean
+  modelAccess: AccountModelAccess
   allowImageGeneration: boolean
   fastMode: GroupFastMode
   description: string | null
@@ -68,6 +71,8 @@ interface AccountGroupListParams {
 }
 
 interface AccountGroupCreateParam {
+  allowSubagents?: boolean
+  modelAccess?: AccountModelAccess
   allowImageGeneration?: boolean
   fastMode: GroupFastMode
   name: string
@@ -77,6 +82,8 @@ interface AccountGroupCreateParam {
 }
 
 interface AccountGroupUpdateParam {
+  allowSubagents?: boolean
+  modelAccess?: AccountModelAccess
   allowImageGeneration?: boolean
   fastMode?: GroupFastMode
   id: string
@@ -140,6 +147,14 @@ export function deleteAccountGroup(data: AccountGroupIdParam, options: RequestOp
     url: '/api/admin/account-groups/delete',
     method: 'POST',
     data,
+    ...options,
+  })
+}
+
+export function getAccountGroupModels(options: RequestOptions = {}) {
+  return request<{ models: Array<{ id: string, label: string }> }>({
+    url: '/api/admin/account-groups/models',
+    method: 'GET',
     ...options,
   })
 }

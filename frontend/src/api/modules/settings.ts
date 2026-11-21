@@ -78,7 +78,11 @@ export type RequestTuningOverrides = { accountErrorProtection?: AccountErrorProt
 
 export type AccountAffinity = 'strict' | 'preferred' | 'relaxed'
 
+export type OpenAiRequestCountry = { mode: 'follow_location' | 'default' | 'passthrough' } | { mode: 'custom', country: string }
+
 export interface RuntimeSettings {
+  openaiOauthGuardianReviewModel: boolean
+  openaiRequestCountry: OpenAiRequestCountry
   configRevision: number
   excelDefaultModels?: string[]
   turnStateInjectionEnabled?: boolean
