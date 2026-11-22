@@ -56,6 +56,15 @@
   cancel paths, batch editing, unknown quota/capacity, and quota refresh without a GET.
   Use synthetic APIs in the isolated test server; no production credentials or traffic.
 
+## Account Quota Panel
+
+- Filter `account.quota.windows` by `accountWide` at the `AccountQuotaPanel`
+  consumer before ordering/grouping. Model-specific and unattributed windows
+  stay in the raw data and their own consumers, not the account quota cards.
+- Preserve credits, overdraft, refresh, profile, reset/settings actions and Excel
+  notes. With no account-wide windows, retain the existing unobserved state.
+  Verify mixed/model-only/empty data and desktop/mobile presentation.
+
 ## Account Menus And Quota Settings
 
 - Account row menus reuse `RowActionMenu` on desktop and mobile. Keep immediate

@@ -38,7 +38,9 @@ use crate::{
             AccountQuotaForecastReport, account_quota_forecasts, current_window_estimate,
             forecast_window,
         },
-        quota_forecast_sampling::{QuotaForecastPoint, select_forecast_sample},
+        quota_forecast_sampling::{
+            QuotaForecastPoint, QuotaForecastSample, select_forecast_sample,
+        },
         quota_learning::{
             LearnedQuotaWindow, QuotaLearningEstimate, QuotaLearningObservation,
             QuotaLearningSource,
@@ -67,7 +69,11 @@ fn account_health_range(now: chrono::DateTime<Utc>) -> TimeRange {
     }
 }
 
-fn apply_current_quota_estimates(quota: &ProviderQuota, report: &mut AccountQuotaForecastReport) {
+fn apply_current_quota_estimates(
+    quota: &ProviderQuota,
+    samples: &[QuotaForecastSample],
+    report: &mut AccountQuotaForecastReport,
+) {
     for (forecast, period) in report
         .forecasts
         .iter_mut()
@@ -79,6 +85,14 @@ fn apply_current_quota_estimates(quota: &ProviderQuota, report: &mut AccountQuot
         let Some((window, _)) = selected else {
             continue;
         };
+        // Preserve the paired report's usage and pause reason until independent
+        // requests confirm the cycle. Other sampling limits do not block dynamic USD.
+        if samples
+            .iter()
+            .any(|sample| sample.key == window.key && sample.awaiting_cycle_confirmation)
+        {
+            continue;
+        }
         let Some(estimate) = current_window_estimate(window, report.generated_at) else {
             if forecast.estimated_tokens.is_none() {
                 forecast
@@ -1409,6 +1423,7 @@ impl AccountsService for DefaultAccountsService {
                 continue;
             }
             let reset_at = query.range.end;
+            let window_duration = reset_at - query.range.start;
             query.range.start = query.range.start.max(stored.account.created_at);
             if query.range.start >= observed {
                 continue;
@@ -1420,27 +1435,37 @@ impl AccountsService for DefaultAccountsService {
                 .await
                 .map_err(|error| map_store_error(error, "forecast paired usage"))?;
             let mut points = Vec::new();
-            let mut interrupted = false;
+            let mut plan_changed = false;
             for point in history.points {
                 let Some(fact) =
                     provider.quota_forecast_observation(&point.provider_observation, window)
                 else {
                     continue;
                 };
-                let same_plan = quota
-                    .plan_type
-                    .as_deref()
-                    .zip(fact.plan_type.as_deref())
-                    .is_some_and(|(current, previous)| current.eq_ignore_ascii_case(previous));
-                // 仅容纳已观测到的秒级量化抖动，不用宽时间容差合并实际重置。
-                // 不匹配的段截断基线；之后的有效观测可以重新积累。
-                if !same_plan || (fact.reset_at - reset_at).abs() > Duration::seconds(2) {
+                let (Some(current_plan), Some(previous_plan)) =
+                    (quota.plan_type.as_deref(), fact.plan_type.as_deref())
+                else {
+                    continue;
+                };
+                let Some(start) = fact.reset_at.checked_sub_signed(window_duration) else {
+                    continue;
+                };
+                if point.completed_at >= observed
+                    || point.started_at < query.range.start
+                    || point.completed_at < start
+                    || point.completed_at >= fact.reset_at
+                {
+                    continue;
+                }
+                if !current_plan.eq_ignore_ascii_case(previous_plan) {
                     points.clear();
-                    interrupted = true;
+                    plan_changed = true;
                     continue;
                 }
                 points.push(QuotaForecastPoint {
+                    started_at: point.started_at,
                     observed_at: point.completed_at,
+                    reset_at: fact.reset_at,
                     used_percent: fact.used_percent,
                     usage: point.usage,
                 });
@@ -1449,13 +1474,15 @@ impl AccountsService for DefaultAccountsService {
                 window.key.clone(),
                 query.range.start,
                 QuotaForecastPoint {
+                    started_at: observed,
                     observed_at: observed,
+                    reset_at,
                     used_percent: percent,
                     usage: history.usage,
                 },
                 points,
                 history.pending_request_count,
-                interrupted,
+                plan_changed,
             );
             samples.push(sample);
         }
@@ -1470,7 +1497,7 @@ impl AccountsService for DefaultAccountsService {
             forecasts: account_quota_forecasts(&quota, stored.account.created_at, now, &samples),
             learned_windows: Vec::new(),
         };
-        apply_current_quota_estimates(&quota, &mut report);
+        apply_current_quota_estimates(&quota, &samples, &mut report);
         Ok(report)
     }
 

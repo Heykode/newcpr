@@ -11,7 +11,7 @@
   列表每 30 秒请求时现算。分组每 10 秒通过 `AccountsService::monitor_quotas`
   读取缓存百分比，并用 `AccountStore::load_quota_learning_usage` 对齐观察时刻的费用；
   不加载健康/累计/Token 预测历史，也不增加上游流量。
-- 详情美元值同样动态计算，Token 配对算法保留。详情缓存 10 秒，打开时 30 秒重读；
+- 详情美元值同样动态计算，Token 配对算法保留；疑似跨周期且仍待独立请求确认时，两者均暂停估算并保留来源累计。详情缓存 10 秒，打开时 30 秒重读；
   列表不预取详情。所有读取均不主动请求上游额度/认证。
 - 分组汇总可用账号的真实账号级窗口，多窗口取最小剩余，不累加或外推。
   复用 `0014` 两张表，用 `monitor-v2:` 加结构化窗口维度键隔离旧样本；
@@ -127,7 +127,8 @@ estimates are not balances, billing facts or scheduling inputs.
 - Token forecasts require a current snapshot, compatible plan/reset boundaries
   and at least five sampled percentage points. Truncated history and counter
   regressions must not silently become full-window samples. List/detail USD
-  capacity remains the dynamic ratio; section 9 applies only to group monitoring.
+  capacity remains the dynamic ratio except while the selected sample explicitly
+  awaits cycle confirmation; section 9 applies only to group monitoring.
 - Parse each historical response through `history_window` and the shared native
   quota parser. Match the window key, source, role and duration; account-wide
   forecasts cannot consume a default window that only mirrors a named bucket.
@@ -147,7 +148,8 @@ estimates are not balances, billing facts or scheduling inputs.
   contracts. See `account-cumulative-costs.md`, including its historical
   client-supplied-label limitation.
 - The historical detail modal retains a page-scoped cache (concurrency <=2,
-  <=200 entries, five-minute TTL, failure backoff 30 seconds).
+  <=200 entries, 10-second TTL, failure backoff 30 seconds); while open, the
+  modal re-reads every 30 seconds.
   Account list refreshes only synchronize Plan/reset signatures; they never
   prefetch or periodically revalidate historical forecasts.
   The list weekly estimate instead uses `usage.costs` and `usage.quotaWindow`,
@@ -163,6 +165,29 @@ estimates are not balances, billing facts or scheduling inputs.
   Display exact-format USD text without an approximation sign; retain the
   estimate/partial/extrapolation qualification in details and title.
 
+### Cycle evidence and local USD adaptation
+
+- Carry request `started_at`, `completed_at` and each observation's own `reset_at`
+  from Store through Provider decoding into `QuotaForecastPoint`. Filter facts
+  outside their own window, before the query start, or at/after the snapshot.
+  Derive each fact's start from the original window duration before clamping the
+  query start to the account creation time; no reset timestamp tolerance cutoff.
+- Two sequential old requests must report deadlines already elapsed before the
+  first new request. Both new requests must be independent and show a drop over
+  1pp; a cached snapshot, copied read or overlapping request cannot confirm reset.
+  A same-window reversal preserves accumulated usage. An explicitly changed Plan
+  or confirmed cycle boundary subtracts the first matching new observation.
+- `QuotaForecastSample.awaiting_cycle_confirmation` is internal evidence, not an
+  API field or text-matching convention. `apply_current_quota_estimates` checks
+  the selected window key, preserves source usage/reason and returns no USD
+  estimate while waiting. Do not use the broader `discontinuous` flag to disable
+  USD for every insufficient Token sample.
+- Once confirmed, USD continues using the current window's billed cost and
+  `current_window_estimate`; Token source uses the confirmed paired-cycle total.
+  These sources can differ after reset or import. Never substitute history USD
+  for missing current-window cost. List estimates and group learning do not load
+  paired history and do not acquire this detail-only waiting state.
+
 ## 4. Validation & Error Matrix
 
 | Input / state | Required result |
@@ -174,7 +199,10 @@ estimates are not balances, billing facts or scheduling inputs.
 | Missing fees but complete tokens | Token estimate may remain valid; no new USD binding |
 | Some fees/tokens known, some missing | Partial Token estimate retains coverage; learned USD can still be inherited |
 | Every metric is unknown or unusable | Null estimates with an explanation, never a zero-capacity claim |
-| Plan/reset mismatch or decreasing counters | Reset/disqualify the sample segment |
+| Reset timestamp jitter alone | Preserve recorded cycle usage; expired readings cannot anchor remaining estimates |
+| Suspected cycle boundary | Two expired independent old requests plus a drop over 1pp pause estimates until a second independent new request confirms the drop |
+| Missing / changed explicit Plan | Skip missing Plan; rebuild only after a confirmed Plan change |
+| Decreasing counters | Disqualify the sample segment |
 | Store unavailable | Existing safe admin error; not a successful zero report |
 | Cancel/close/switch modal | No stale account replacement or notification from cancellation |
 
