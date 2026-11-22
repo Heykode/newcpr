@@ -33,10 +33,21 @@ function component(path, dependencies = {}) {
 const credits = component('AccountQuotaPanel/Credits.vue', {
   '@/composables/useAsyncAction': { useAsyncAction: () => ({ loading: vue.ref(false), run: task => task() }) },
 })
+const quotaConstants = {}
+runInNewContext(ts.transpileModule(readFileSync(new URL('../src/views/accounts/constants.ts', import.meta.url), 'utf8'), {
+  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+}).outputText, {
+  exports: quotaConstants,
+  require: name => name === '@/i18n' ? translations : { defineTableColumns: columns => columns },
+})
 const panel = component('AccountQuotaPanel/index.vue', {
   '@/utils/relative-time': relativeTime,
   './Credits.vue': credits,
-  '../../constants': { groupedAccountQuotaWindows: () => [], orderedPanelQuotaWindows: () => [] },
+  '../../constants': quotaConstants,
+  './Entry.vue': {
+    __esModule: true,
+    default: { props: ['windows'], setup: props => () => vue.h('div', props.windows.map(window => window.key).join(',')) },
+  },
 })
 const summary = component('AccountQuotaSummaryCell/index.vue', {
   '../AccountQuotaPanel/Credits.vue': credits,
@@ -87,5 +98,27 @@ test('embedded mobile quota panel removes only the desktop frame and uses the av
     assert.equal(html.includes('flex-wrap break-all'), mobile)
     assert.equal(html.includes('max-sm:w-[calc(100vw-5.5rem)]'), !mobile)
     assert.ok(html.includes('123.45'))
+  }
+})
+
+test('quota panel displays only account-wide windows while retaining the underlying quota data', async () => {
+  for (const mobile of [false, true]) {
+    for (const mode of ['mixed', 'model-only', 'empty']) {
+      const account = structuredClone(accounts[0])
+      const windows = [
+        { key: 'account-week', accountWide: true, group: 'longTerm' },
+        { key: 'model-week', accountWide: false, group: 'longTerm' },
+        { key: 'unattributed-week', group: 'longTerm' },
+      ]
+      account.quota.windows = mode === 'mixed' ? windows : mode === 'model-only' ? windows.slice(1) : []
+      const before = structuredClone(account.quota.windows)
+      const html = await renderToString(vue.createSSRApp(panel.default, { account, refreshing: false, mobile }))
+      assert.equal(html.includes('account-week'), mode === 'mixed')
+      assert.ok(!html.includes('model-week'))
+      assert.ok(!html.includes('unattributed-week'))
+      assert.equal(html.includes(translations.t('accounts.quota.unobserved')), mode !== 'mixed')
+      assert.deepEqual(account.quota.windows, before)
+      assert.ok(html.includes('Codex 点数'))
+    }
   }
 })

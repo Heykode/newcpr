@@ -172,12 +172,16 @@ fn weekly_usd_forecast_pairs_ten_dollars_with_twenty_percentage_points() {
         "week".to_owned(),
         imported,
         QuotaForecastPoint {
+            started_at: now(),
             observed_at: now(),
+            reset_at: full.windows[0].reset_at.unwrap(),
             used_percent: 60.0,
             usage: current_usage,
         },
         vec![QuotaForecastPoint {
+            started_at: observed - Duration::seconds(1),
             observed_at: observed,
+            reset_at: full.windows[0].reset_at.unwrap(),
             used_percent: 40.0,
             usage: baseline_usage,
         }],
@@ -233,6 +237,7 @@ fn samples(quota: &ProviderQuota) -> Vec<QuotaForecastSample> {
                 observation_count: 0,
                 pending_request_count: 0,
                 discontinuous: false,
+                awaiting_cycle_confirmation: false,
                 cycle_usage: usage.clone(),
                 usage,
             })

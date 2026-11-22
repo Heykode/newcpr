@@ -29,7 +29,7 @@ const emit = defineEmits<{
 }>()
 
 const quotaEntries = computed(() => groupedAccountQuotaWindows(
-  orderedPanelQuotaWindows(props.account.quota.windows),
+  orderedPanelQuotaWindows(props.account.quota.windows.filter(window => window.accountWide)),
 ))
 const profileOpen = shallowRef(false)
 const lastRefreshed = computed(() => props.account.quota.refreshedAtRelative
