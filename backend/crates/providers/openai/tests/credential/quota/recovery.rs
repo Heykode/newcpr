@@ -479,9 +479,11 @@ async fn same_window_recovery_requires_consecutive_known_account_wide_observatio
         "limit_name": "separate_model",
         "rate_limit": {"primary_window": same_window_usage(50, 18)["rate_limit"]["secondary_window"]}
     }]);
-    let mut advanced_high_usage = same_window_usage(50, 18);
-    advanced_high_usage["rate_limit"]["secondary_window"]["reset_at"] =
-        json!(SAME_WINDOW_WEEK_RESET + 604_800);
+    let mut missing_usage = same_window_usage(50, 18);
+    missing_usage["rate_limit"]["secondary_window"]
+        .as_object_mut()
+        .unwrap()
+        .remove("used_percent");
     let mut explicit_limit = same_window_usage(50, 18);
     explicit_limit["rate_limit"]["secondary_window"]["limit_reached"] = json!(true);
     for interruption in [
@@ -489,7 +491,7 @@ async fn same_window_recovery_requires_consecutive_known_account_wide_observatio
         explicit_limit,
         missing_window,
         model_only,
-        advanced_high_usage,
+        missing_usage,
     ] {
         let (_, server, service, account) = seed_same_window_exhaustion(50).await;
         for (usage, exhausted) in [
@@ -509,12 +511,10 @@ async fn same_window_recovery_requires_consecutive_known_account_wide_observatio
 }
 
 #[tokio::test]
-async fn same_window_recovery_accepts_upstream_unadvanced_reset_without_percent() {
-    let mut missing_usage = same_window_usage(50, 18);
-    missing_usage["rate_limit"]["secondary_window"]
-        .as_object_mut()
-        .unwrap()
-        .remove("used_percent");
+async fn same_window_recovery_accepts_reset_drift_with_known_nonfull_usage() {
+    let mut advanced_high_usage = same_window_usage(50, 18);
+    advanced_high_usage["rate_limit"]["secondary_window"]["reset_at"] =
+        json!(SAME_WINDOW_WEEK_RESET + 604_800);
     let mut missing_reset = same_window_usage(50, 18);
     missing_reset["rate_limit"]["secondary_window"]
         .as_object_mut()
@@ -522,7 +522,7 @@ async fn same_window_recovery_accepts_upstream_unadvanced_reset_without_percent(
         .remove("reset_at");
     let mut older_reset = same_window_usage(50, 18);
     older_reset["rate_limit"]["secondary_window"]["reset_at"] = json!(SAME_WINDOW_WEEK_RESET - 1);
-    for usage in [missing_usage, missing_reset, older_reset] {
+    for usage in [advanced_high_usage, missing_reset, older_reset] {
         let (_, server, service, account) = seed_same_window_exhaustion(50).await;
         for exhausted in [true, false] {
             mount_same_window_usage(&server, usage.clone()).await;
@@ -567,7 +567,7 @@ async fn same_window_recovery_new_exhaustion_discards_previous_candidates() {
 
 #[tokio::test]
 async fn same_window_recovery_legacy_documents_need_two_fresh_observations() {
-    for retain_unstamped_candidate in [false, true] {
+    for legacy in ["missing", "unstamped", "numeric"] {
         let (store, server, service, account) = seed_same_window_exhaustion(50).await;
         mount_same_window_usage(&server, same_window_usage(50, 18)).await;
         let first = service.refresh_account(account.id()).await.expect("first");
@@ -575,9 +575,15 @@ async fn same_window_recovery_legacy_documents_need_two_fresh_observations() {
         let recovery = document["_quota_recovery"]
             .as_object_mut()
             .expect("recovery");
-        recovery.remove("last_observed_at_micros");
-        if !retain_unstamped_candidate {
-            recovery.remove("candidates");
+        if legacy == "numeric" {
+            for value in recovery["candidates"].as_object_mut().unwrap().values_mut() {
+                *value = json!(50.0);
+            }
+        } else {
+            recovery.remove("last_observed_at_micros");
+            if legacy == "missing" {
+                recovery.remove("candidates");
+            }
         }
         replace_same_window_document(
             &store,

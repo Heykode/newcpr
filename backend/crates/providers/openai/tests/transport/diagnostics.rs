@@ -593,3 +593,23 @@ fn explicit_unsupported_value_remains_a_request_error() {
         CodexFailureCategory::InvalidRequest
     );
 }
+
+#[test]
+fn spend_limit_requires_structured_code_and_429() {
+    for code in [
+        "api_key_spend_limit_exceeded",
+        "project_spend_limit_exceeded",
+        "organization_spend_limit_exceeded",
+    ] {
+        for status in [400, 403, 429, 500] {
+            let body =
+                serde_json::json!({"error":{"code":code,"message":"budget reached"}}).to_string();
+            assert_eq!(
+                classify(status, &body) == CodexFailureCategory::SpendLimitExceeded,
+                status == 429
+            );
+        }
+        let prose = serde_json::json!({"error":{"message":code}}).to_string();
+        assert_eq!(classify(429, &prose), CodexFailureCategory::RateLimited);
+    }
+}

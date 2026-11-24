@@ -9,7 +9,7 @@ use tokio::io::BufWriter;
 use tokio::time::timeout;
 use tokio_tungstenite::{Connector, MaybeTlsStream, client_async_tls_with_config};
 use tungstenite::{
-    self, Message,
+    self,
     extensions::{ExtensionsConfig, compression::deflate::DeflateConfig},
     handshake::client::Request as WsRequest,
     http::Response as WsResponse,
@@ -27,7 +27,7 @@ use crate::{
 };
 
 use super::{
-    error::CodexWebSocketExchangeError,
+    error::{CodexWebSocketExchangeError, CodexWebSocketUpstreamError},
     model::{
         CodexWebSocketConnection, CodexWebSocketRequest, ResponseCreateOpening,
         WebSocketContinuationRequirement,
@@ -38,7 +38,19 @@ use super::{
 
 const WEBSOCKET_EXTENSIONS: &str = "permessage-deflate; client_max_window_bits";
 pub(crate) const WEBSOCKET_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
-const WEBSOCKET_SEND_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+pub(super) async fn send_websocket_request(
+    websocket: &PumpedWebSocket,
+    payload: &str,
+) -> Result<(), CodexWebSocketExchangeError> {
+    timeout(
+        super::control::WEBSOCKET_SEND_TIMEOUT,
+        websocket.send(tungstenite::Message::Text(payload.to_owned().into())),
+    )
+    .await
+    .map_err(|_| CodexWebSocketExchangeError::SendTimeout {
+        timeout: super::control::WEBSOCKET_SEND_TIMEOUT,
+    })?
+}
 
 impl CodexWebSocketConnection {
     /// 构造 Responses WebSocket 连接描述。
@@ -155,21 +167,6 @@ fn negotiated_compression_threshold(response: &WsResponse<Option<Vec<u8>>>) -> O
                 },
             )
         })
-}
-
-pub(super) async fn send_websocket_request(
-    websocket: &PumpedWebSocket,
-    payload_text: &str,
-) -> Result<(), CodexWebSocketExchangeError> {
-    timeout(
-        WEBSOCKET_SEND_TIMEOUT,
-        websocket.send(Message::Text(payload_text.to_string().into())),
-    )
-    .await
-    .map_err(|_| CodexWebSocketExchangeError::SendTimeout {
-        timeout: WEBSOCKET_SEND_TIMEOUT,
-    })??;
-    Ok(())
 }
 
 pub(super) fn websocket_connection_metadata(
@@ -479,11 +476,11 @@ fn websocket_opening_error(response: &WsResponse<Option<Vec<u8>>>) -> CodexWebSo
         .and_then(|value| value.to_str().ok())
         .and_then(gateway_protocol::openai::parse_retry_after_seconds)
         .or_else(|| events::retry_after_seconds_from_body(&body));
-    CodexWebSocketExchangeError::upstream(
+    CodexWebSocketExchangeError::Upstream(Box::new(CodexWebSocketUpstreamError {
         status_code,
         retry_after_seconds,
         body,
-        reqwest::StatusCode::from_u16(status_code)
+        client_response: reqwest::StatusCode::from_u16(status_code)
             .ok()
             .map(|status| {
                 Box::new(CodexClientVisibleUpstreamResponse::new(
@@ -493,10 +490,11 @@ fn websocket_opening_error(response: &WsResponse<Option<Vec<u8>>>) -> CodexWebSo
                     raw_body,
                 ))
             }),
-        response_meta::set_cookie_headers(response.headers()),
-        response_meta::diagnostics(Some(status_code), response.headers()),
-        CodexUpstreamSendPhase::BeforePayload,
-    )
+        set_cookie_headers: response_meta::set_cookie_headers(response.headers()),
+        rate_limit_headers: response_meta::rate_limit_headers(response.headers()),
+        diagnostics: response_meta::diagnostics(Some(status_code), response.headers()),
+        send_phase: CodexUpstreamSendPhase::BeforePayload,
+    }))
 }
 
 fn websocket_host_header(endpoint: &str) -> Option<String> {
@@ -511,6 +509,7 @@ fn websocket_host_header(endpoint: &str) -> Option<String> {
 #[cfg(test)]
 mod live_header_tests {
     use super::*;
+    use tungstenite::Message;
 
     struct VerifyBusinessHeaders;
 

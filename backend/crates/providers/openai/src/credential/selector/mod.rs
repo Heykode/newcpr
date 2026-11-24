@@ -62,6 +62,8 @@ const CYBER_POLICY_SESSION_TTL: Duration = Duration::from_secs(60 * 60);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CodexAccountFailure {
+    /// The upstream spend cap forbids retries and account switching.
+    SpendLimitExceeded,
     /// Access token 已被上游明确判定为过期或失效。
     CredentialExpired,
     /// Explicit revocation cannot recover through automatic refresh.
@@ -76,6 +78,7 @@ pub enum CodexAccountFailure {
     UsageLimitExhausted {
         /// 上游返回的窗口绝对重置时刻。
         reset_at: Option<SystemTime>,
+        window_minutes: Option<u16>,
     },
     /// 账号触发临时用量限制。
     RateLimited {
@@ -135,6 +138,7 @@ struct CredentialSelectionInput<'a> {
     session_affinity_key: Option<&'a ProviderSessionAffinityKey>,
     session_affinity_observation: Option<&'a CodexSessionAffinity>,
     cache_preference_disabled: std::sync::atomic::AtomicBool,
+    image_borrowing: std::sync::atomic::AtomicBool,
     guardian: bool,
 }
 
@@ -167,10 +171,14 @@ impl CredentialSelectionInput<'_> {
     }
 
     fn follows_root(&self) -> bool {
-        self.attempt
-            .account_selection_policy()
-            .openai_account_affinity()
-            == gateway_core::account::AccountAffinity::Strict
+        !self
+            .image_borrowing
+            .load(std::sync::atomic::Ordering::Relaxed)
+            && self
+                .attempt
+                .account_selection_policy()
+                .openai_account_affinity()
+                == gateway_core::account::AccountAffinity::Strict
             && !self.attempt.is_diagnostic_required_account()
             && self.attempt.required_account().is_none()
             && matches!(
@@ -523,6 +531,7 @@ impl CodexCredentialSelector {
     ) -> Result<CodexCredentialLease, CredentialSelectionError> {
         let input = CredentialSelectionInput {
             cache_preference_disabled: std::sync::atomic::AtomicBool::new(false),
+            image_borrowing: std::sync::atomic::AtomicBool::new(false),
             upstream_model: Some(request.upstream_model),
             responses_model: true,
             image_request: false,
@@ -545,6 +554,7 @@ impl CodexCredentialSelector {
     ) -> Result<CodexCredentialLease, CredentialSelectionError> {
         let input = CredentialSelectionInput {
             cache_preference_disabled: std::sync::atomic::AtomicBool::new(false),
+            image_borrowing: std::sync::atomic::AtomicBool::new(false),
             upstream_model: Some(request.upstream_model),
             responses_model: true,
             image_request: false,
@@ -569,6 +579,7 @@ impl CodexCredentialSelector {
     ) -> Result<CodexCredentialLease, CredentialSelectionError> {
         let input = CredentialSelectionInput {
             cache_preference_disabled: std::sync::atomic::AtomicBool::new(false),
+            image_borrowing: std::sync::atomic::AtomicBool::new(false),
             upstream_model: request.upstream_model,
             responses_model: false,
             image_request: request.image_request,
@@ -971,7 +982,14 @@ impl CodexCredentialSelector {
         {
             return Err(CredentialSelectionError::ContinuationOwnerChanged);
         }
-        if !diagnostic && pinned_account.is_none() && request.follows_root() {
+        let image_primary = self
+            .image_primary_to_keep(request, affinity.bound_account(), pinned_account.is_some())
+            .await?;
+        if !diagnostic
+            && pinned_account.is_none()
+            && request.follows_root()
+            && image_primary.is_none()
+        {
             pinned_account = affinity.bound_account().cloned();
         }
         let cyber_policy_scope = self
@@ -1039,6 +1057,7 @@ impl CodexCredentialSelector {
                 request,
                 observed_affinity_binding.as_ref(),
                 pinned_account.is_some(),
+                image_primary.is_some(),
             )
             .await?;
         let round_robin_cursor = assignment_cursor.unwrap_or(round_robin_cursor);
@@ -1214,6 +1233,7 @@ impl CodexCredentialSelector {
                             observed_affinity_binding.as_ref(),
                             account.id(),
                             pinned_account.is_some(),
+                            image_primary.as_ref(),
                             queue_rejection,
                             assignment_cursor.filter(|_| {
                                 selection.preferred() != PreferredAccountSelection::Hit
@@ -1505,6 +1525,18 @@ impl CodexCredentialSelector {
         Ok(recorded || !affinity.turn_alias_required())
     }
 
+    pub(crate) async fn allows_bound_account_scope(
+        &self,
+        key: &ProviderSessionAffinityKey,
+        scope: &gateway_core::routing::FrozenAccountScope,
+    ) -> Result<bool, CredentialSelectionError> {
+        match self.lookup_session_affinity(key).await {
+            SessionAffinityLookup::Bound(binding) => Ok(scope.allows(binding.account_id())),
+            SessionAffinityLookup::Missing => Ok(true),
+            SessionAffinityLookup::Unavailable => Err(binding_unavailable()),
+        }
+    }
+
     async fn lookup_session_affinity(
         &self,
         key: &ProviderSessionAffinityKey,
@@ -1720,16 +1752,41 @@ impl CodexCredentialSelector {
             }
             CodexAccountFailure::QuotaExhausted => self
                 .quota
-                .record_confirmed_exhaustion(account, QuotaEvidence::PaymentRequired, None, now)
+                .record_confirmed_exhaustion(
+                    account,
+                    gateway_core::account::QuotaState::exhausted(
+                        QuotaEvidence::PaymentRequired,
+                        now,
+                        None,
+                    ),
+                )
                 .await
                 .map_err(|source| CredentialSelectionError::Store(Some(source.into()))),
-            CodexAccountFailure::UsageLimitExhausted { reset_at } => self
+            CodexAccountFailure::SpendLimitExceeded => self
                 .quota
                 .record_confirmed_exhaustion(
                     account,
-                    QuotaEvidence::UsageLimitReached,
-                    reset_at,
-                    now,
+                    gateway_core::account::QuotaState::exhausted(
+                        QuotaEvidence::ProviderDenied,
+                        now,
+                        None,
+                    ),
+                )
+                .await
+                .map_err(|source| CredentialSelectionError::Store(Some(source.into()))),
+            CodexAccountFailure::UsageLimitExhausted {
+                reset_at,
+                window_minutes,
+            } => self
+                .quota
+                .record_confirmed_exhaustion(
+                    account,
+                    gateway_core::account::QuotaState::exhausted(
+                        QuotaEvidence::UsageLimitReached,
+                        now,
+                        reset_at,
+                    )
+                    .with_limit_window_minutes(window_minutes),
                 )
                 .await
                 .map_err(|source| CredentialSelectionError::Store(Some(source.into()))),

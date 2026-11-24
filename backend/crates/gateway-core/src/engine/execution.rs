@@ -563,18 +563,44 @@ impl DefaultExecutionService {
                             previous,
                             &request.client.snapshot,
                         )
-                        .map(|model| (kind.clone(), model))
+                        .map(|model| (kind.clone(), provider, model))
                 });
-                if let Some((kind, model)) = direct {
-                    request.client.snapshot.plan_with_direct_account_model(
-                        public_model,
-                        &request.operation,
-                        account_scope,
-                        &routing_context,
-                        &kind,
-                        &model,
-                        pin.map(NativeContinuationPin::account),
-                    )
+                if let Some((kind, provider, model)) = direct {
+                    let plan = request
+                        .client
+                        .snapshot
+                        .plan_with_direct_account_model(
+                            public_model,
+                            &request.operation,
+                            Arc::clone(&account_scope),
+                            &routing_context,
+                            &kind,
+                            &model,
+                            pin.map(NativeContinuationPin::account),
+                        )
+                        .map_err(map_routing_error)?;
+                    if pin.is_none()
+                        && let Some(candidate) = plan.candidates().first()
+                        && candidate.requires_direct_authentication()
+                        && !provider
+                            .allows_direct_model_scope(
+                                &request.operation,
+                                request.client.policy.key_id(),
+                                candidate.account_scope(),
+                                plan.account_selection_policy(),
+                            )
+                            .await
+                            .map_err(|error| GatewayError::from_provider(&error))?
+                    {
+                        request.client.snapshot.plan(
+                            public_model,
+                            &request.operation,
+                            account_scope,
+                            &routing_context,
+                        )
+                    } else {
+                        Ok(plan)
+                    }
                 } else {
                     request.client.snapshot.plan(
                         public_model,

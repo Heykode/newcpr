@@ -40,7 +40,9 @@ fn log_cleanup_deletes_only_closed_old_managed_files() {
     for name in names {
         let path = directory.join(name);
         fs::write(&path, "fixture").unwrap();
-        filetime::set_file_mtime(path, filetime::FileTime::from_unix_time(1_577_836_800, 0))
+        fs::File::open(path)
+            .unwrap()
+            .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_577_836_800))
             .unwrap();
     }
     #[cfg(unix)]
@@ -62,11 +64,10 @@ fn log_cleanup_deletes_only_closed_old_managed_files() {
     let today = deployment_today();
     let closed_today = directory.join(format!("{APPLICATION_LOG_FILE_PREFIX}{today}.1.log.gz"));
     fs::write(&closed_today, "closed fixture").unwrap();
-    filetime::set_file_mtime(
-        &closed_today,
-        filetime::FileTime::from_unix_time(1_577_836_800, 0),
-    )
-    .unwrap();
+    fs::File::open(&closed_today)
+        .unwrap()
+        .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_577_836_800))
+        .unwrap();
     let zero_day = runtime
         .block_on(maintenance.clean(chrono::Utc::now(), 100))
         .unwrap();

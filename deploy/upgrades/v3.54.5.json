@@ -1,0 +1,10 @@
+{
+  "from_version": "3.54.3",
+  "to_version": "3.54.5",
+  "from_migrations_tree": "5d1be6073d3c5d838d1dc39071013712b0f98c01",
+  "to_migrations_tree": "2fd74c411348df0a064cec355b90d5ab03fb9936",
+  "added": [
+    "0100_quota_limit_window.sql"
+  ],
+  "recovery": "manual"
+}

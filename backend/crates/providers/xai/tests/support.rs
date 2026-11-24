@@ -302,13 +302,17 @@ impl ProviderAccountStore for MemoryProviderAccountStore {
     async fn list_for_provider(
         &self,
         provider: &ProviderKind,
+        include_disabled: bool,
     ) -> Result<Vec<ProviderAccount>, StoreError> {
         if self.fail_provider_listing.load(Ordering::SeqCst) {
             return Err(invalid());
         }
         Ok(lock(&self.accounts)
             .values()
-            .filter(|stored| stored.account.provider() == provider && stored.account.enabled())
+            .filter(|stored| {
+                stored.account.provider() == provider
+                    && (include_disabled || stored.account.enabled())
+            })
             .map(|stored| stored.account.clone())
             .collect())
     }

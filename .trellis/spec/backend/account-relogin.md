@@ -707,3 +707,20 @@ make the OAuth code exchange explicit and preserve unknown states until reconcil
 - A committed matching pool write ends an outstanding schedule inside the pool transaction. Rolling back the pool write must also roll back completion. Removing the account does not reactivate it. Keep the current pool state separate from the last plan outcome; preserve the original deadline across an unsuccessful early attempt.
 - Library import returns the written IDs and revisions. Authenticated `POST /api/admin/relogin/import/plans` accepts those revisions, one mode (draft/now/scheduled), optional shared time and frozen new-account settings/template. Resolve settings once per batch and reuse single-account plan transitions under the shared gate and per-entry CAS/audit. Skip already pooled/changed/planned entries and return each outcome. Draft never queues; now queues all accepted entries; scheduled entries become eligible at the shared time. Actual starts obey the existing configured login concurrency, pause, retries and workspace policy. Closing the dialog does not write a plan. A displayed plan must not hide live operations or workspace selection on either layout.
 - New-account OAuth completion must match the maintenance route bound when the link was created. Reject a mismatch before exchanging the code; route changes in the form also discard late start responses. Reauthorization retains existing account settings.
+
+## Same-identity Quota Preservation (v3.54.5)
+
+1. Scope: manual reauthorization and ordinary credential refresh.
+2. Signature: `rotate_with_workspace_policy` preserves quota when identity is
+   unchanged and reauthorization or `preserve_profile` is set.
+3. Contract: retain quota JSON, observation/access clocks, window hint, warmup
+   progress and quota pause in the credential transaction. Credential revision still
+   advances; old in-flight quota writes conflict. Changed user/workspace clears
+   those facts. Preserve local expiry/device/State revision and enable settings.
+4. Error boundary: identity collision or transaction failure changes nothing.
+5. Good/base/bad: same user re-login retains denial; identity replacement starts
+   unknown; copying an old identity's quota to its replacement is invalid.
+6. Verify both branches on real PostgreSQL, including a disabled account and a late
+   old-revision observation, with unchanged settings and current remote profile.
+7. Wrong: clear quota on every login. Correct: decide from committed identity in
+   the same transaction, then let background observations update current facts.

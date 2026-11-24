@@ -333,6 +333,50 @@ impl Provider for CodexProvider {
         )
     }
 
+    async fn allows_direct_model_scope(
+        &self,
+        operation: &Operation,
+        client_key: &gateway_core::policy::ClientApiKeyId,
+        scope: &gateway_core::routing::FrozenAccountScope,
+        policy: gateway_core::account::AccountSelectionPolicy,
+    ) -> Result<bool, ProviderError> {
+        let Operation::Generate(generate) = operation else {
+            return Ok(true);
+        };
+        let payload = generate.protocol_payload();
+        if policy.openai_account_affinity() != gateway_core::account::AccountAffinity::Strict {
+            return Ok(true);
+        }
+        let session =
+            gateway_protocol::openai::codex_account_session_id(payload.body(), payload.context());
+        let thread =
+            gateway_protocol::openai::codex_account_thread_id(payload.body(), payload.context());
+        let follows_root = match session.as_ref().zip(thread.as_ref()) {
+            Some((session, thread)) => session != thread,
+            None => gateway_protocol::openai::codex_responses_request_semantics(
+                payload.body(),
+                payload.context(),
+            )
+            .subagent_kind
+            .is_some(),
+        };
+        if !follows_root {
+            return Ok(true);
+        }
+        let Some(affinity) =
+            crate::credential::root_session_affinity(session.as_deref(), client_key)
+        else {
+            return Ok(true);
+        };
+        let Some(key) = affinity.key() else {
+            return Ok(true);
+        };
+        self.selector
+            .allows_bound_account_scope(key, scope)
+            .await
+            .map_err(map_selection_error)
+    }
+
     fn resolve_key_request_profile(
         &self,
         profile: Option<&gateway_core::account::OpaqueProviderData>,

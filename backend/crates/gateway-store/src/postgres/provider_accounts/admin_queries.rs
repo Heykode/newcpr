@@ -159,7 +159,7 @@ pub(crate) async fn load_admin_account_page(
                 case when a.excel_models_follow_global then (select excel_default_models from runtime_settings where id = 1) else a.excel_models end as effective_excel_models,
                 a.concurrency_limit, a.weight, a.model_access_json,
                 a.credential_state, a.quota_access_state, a.quota_evidence,
-                a.quota_access_observed_at, a.quota_reset_at, a.last_error_reason,
+                a.quota_access_observed_at, a.quota_reset_at, a.quota_limit_window_minutes, a.last_error_reason,
                 coalesce((select status = 'passed' and a.quota_access_state='exhausted' and account_subject=a.upstream_account_id from codex_quota_overdraft_states where account_id = a.id and credential_revision = a.credential_revision and config_revision = settings.config_revision and settings.codex_quota_overdraft_enabled), false) as codex_quota_overdraft_passed, a.auto_use_quota_credits, a.quota_settings, a.quota_paused,
                 a.last_error_message, a.credential_observed_at, a.created_at, a.updated_at,
                 filtered_total.filtered_total,

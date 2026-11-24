@@ -342,7 +342,7 @@ fn usage_window_should_not_use_daily_rolling_usage_for_weekly_statistics() {
 }
 
 #[test]
-fn exhausted_quota_should_project_full_usage_to_only_the_representative_window() {
+fn exhausted_quota_keeps_measured_usage_without_a_confirmed_reached_window() {
     let mut quota = ProviderQuota {
         paused_windows: Default::default(),
         credits: None,
@@ -359,14 +359,14 @@ fn exhausted_quota_should_project_full_usage_to_only_the_representative_window()
         provider_data: None,
     };
 
-    assert_eq!(quota.representative_used_percent(), Some(100.0));
+    assert_eq!(quota.representative_used_percent(), Some(95.0));
     quota.apply_limit_reached_display();
 
     assert_eq!(quota.windows[0].used_percent, Some(99.0));
     assert_eq!(quota.windows[1].used_percent, Some(80.0));
     assert_eq!(quota.windows[2].used_percent, Some(30.0));
-    assert_eq!(quota.windows[3].used_percent, Some(100.0));
-    assert!(quota.windows[3].limit_reached);
+    assert_eq!(quota.windows[3].used_percent, Some(95.0));
+    assert!(!quota.windows[3].limit_reached);
 }
 
 #[test]
@@ -411,4 +411,31 @@ fn quota_window(
         local_usage: None,
         provider_data: None,
     }
+}
+
+#[test]
+fn account_exhaustion_preserves_measured_and_unknown_window_usage() {
+    let mut quota = ProviderQuota {
+        paused_windows: Vec::new(),
+        credits: None,
+        plan_type: None,
+        observed_at: None,
+        refresh_token_expires_at: None,
+        windows: vec![
+            quota_window("shortTerm", Some(18_000), Some(0.0)),
+            quota_window("weekly", Some(604_800), Some(16.0)),
+            quota_window("monthly", Some(2_592_000), None),
+        ],
+        limit_reached: true,
+        provider_data: None,
+    };
+
+    quota.apply_limit_reached_display();
+
+    assert!(quota.limit_reached);
+    assert_eq!(quota.representative_used_percent(), Some(0.0));
+    assert_eq!(quota.windows[0].used_percent, Some(0.0));
+    assert_eq!(quota.windows[1].used_percent, Some(16.0));
+    assert_eq!(quota.windows[2].used_percent, None);
+    assert!(quota.windows.iter().all(|window| !window.limit_reached));
 }

@@ -34,8 +34,76 @@ impl CodexCredentialSelector {
                 Ok(self.repository.list_for_accounts(&ids).await?)
             }
         } else {
-            Ok(self.repository.list_for_provider().await?)
+            Ok(self.repository.list_for_provider(false).await?)
         }
+    }
+
+    // Images may borrow only when the authorized primary fails request eligibility.
+    // Capacity, quota and cooldown are deliberately not part of this predicate.
+    pub(super) async fn image_primary_to_keep(
+        &self,
+        request: &CredentialSelectionInput<'_>,
+        primary: Option<&ProviderAccountId>,
+        pinned: bool,
+    ) -> Result<Option<ProviderAccountId>, CredentialSelectionError> {
+        request
+            .image_borrowing
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+        if !request.image_request
+            || pinned
+            || request.attempt.is_diagnostic_required_account()
+            || request
+                .attempt
+                .account_selection_policy()
+                .openai_account_affinity()
+                != AccountAffinity::Strict
+        {
+            return Ok(None);
+        }
+        let Some(primary) = primary else {
+            return Ok(None);
+        };
+        let Some(account) = self
+            .repository
+            .store()
+            .get_account(primary)
+            .await
+            .map_err(|source| CredentialSelectionError::Store(Some(source.into())))?
+        else {
+            return Ok(None);
+        };
+        if !account.enabled()
+            || account.provider() != &self.provider_kind
+            || !request
+                .attempt
+                .account_scope()
+                .is_some_and(|scope| scope.allows(account.id()))
+        {
+            return Ok(None);
+        }
+        // Only request eligibility can authorize borrowing. Live credential/auth
+        // protection, route recovery, quota and capacity must keep their own gates.
+        let scope = request.attempt.account_scope().expect("authorized scope");
+        let model_allowed = request.upstream_model.map_or_else(
+            || scope.allows_unidentified_model(account.id()),
+            |model| scope.allows_model(account.id(), model),
+        );
+        let free = account
+            .plan_type()
+            .is_some_and(|plan| plan.trim().eq_ignore_ascii_case("free"));
+        let oauth = account.authentication_kind() == CODEX_AUTHENTICATION_KIND_OAUTH;
+        let native_free = Self::request_upstream(&account, request)
+            == gateway_core::account::ResponsesUpstream::Codex
+            && oauth
+            && free;
+        let image_primary =
+            (!model_allowed || native_free || (request.requires_oauth && (!oauth || free)))
+                .then(|| account.id().clone());
+        request.image_borrowing.store(
+            image_primary.is_some(),
+            std::sync::atomic::Ordering::Relaxed,
+        );
+        Ok(image_primary)
     }
 
     pub(super) fn session_round_robin_cursor(
@@ -67,13 +135,14 @@ impl CodexCredentialSelector {
         request: &CredentialSelectionInput<'_>,
         binding: Option<&ProviderSessionAffinityBinding>,
         pinned: bool,
+        image_borrow: bool,
     ) -> Result<Option<u64>, CredentialSelectionError> {
         let policy = request.attempt.account_selection_policy();
         if request.attempt.is_diagnostic_required_account()
             || pinned
             || policy.strategy() != RotationStrategy::RoundRobin
             || (binding.is_some()
-                && (request.follows_root()
+                && ((request.follows_root() && !image_borrow)
                     || policy.openai_account_affinity() == AccountAffinity::Preferred))
         {
             return Ok(None);
@@ -85,20 +154,40 @@ impl CodexCredentialSelector {
             .map_err(Into::into)
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Admission keeps the observed primary and cursor in one CAS"
+    )]
     pub(super) async fn admit_selected_session(
         &self,
         request: &CredentialSelectionInput<'_>,
         expected: Option<&ProviderSessionAffinityBinding>,
         account: &ProviderAccountId,
         pinned: bool,
+        image_primary: Option<&ProviderAccountId>,
         queue_rejection: Option<gateway_core::concurrency::QueueRejection>,
         assignment_cursor: Option<u64>,
     ) -> Result<Option<ProviderSessionAffinityBinding>, CredentialSelectionError> {
+        if request.image_request
+            && self
+                .image_primary_to_keep(
+                    request,
+                    expected
+                        .map(ProviderSessionAffinityBinding::account_id)
+                        .or(image_primary),
+                    pinned,
+                )
+                .await?
+                .as_ref()
+                != image_primary
+        {
+            return Ok(None);
+        }
         let key = request
             .affinity_key()
             .filter(|_| !request.attempt.is_diagnostic_required_account());
         let policy = request.attempt.account_selection_policy();
-        let mut binding_account = account;
+        let mut binding_account = image_primary.unwrap_or(account);
         if policy.openai_account_affinity() == AccountAffinity::Preferred
             && let Some(primary) = expected
             && (primary.account_id() == account

@@ -11,6 +11,7 @@ mod excel_recovery;
 mod model_access;
 mod plan_filters;
 mod quota_forecast;
+mod quota_reauthorization;
 mod state_retention;
 
 use chrono::{TimeDelta, Utc};

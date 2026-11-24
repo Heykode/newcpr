@@ -256,8 +256,19 @@ async fn v3540_upgrade_preserves_existing_settings_groups_keys_and_budget() {
             .unwrap(),
         );
     }
-    super::super::TEST_MIGRATOR.run(&db.pool).await.unwrap();
-    super::super::TEST_MIGRATOR.run(&db.pool).await.unwrap();
+    // This historical fixture verifies the exact v3.54.0 schema, independently
+    // of nullable columns introduced by later releases.
+    let target = sqlx::migrate::Migrator {
+        migrations: super::super::TEST_MIGRATOR
+            .iter()
+            .filter(|migration| migration.version <= 99)
+            .cloned()
+            .collect::<Vec<_>>()
+            .into(),
+        ..sqlx::migrate::Migrator::DEFAULT
+    };
+    target.run(&db.pool).await.unwrap();
+    target.run(&db.pool).await.unwrap();
     for (table, expected) in tables.into_iter().zip(before) {
         let remove = match table {
             "account_groups" => " - 'allow_subagents' - 'model_access_json'",

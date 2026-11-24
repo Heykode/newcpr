@@ -150,6 +150,10 @@ impl PgProviderAccountRepository {
                    when $7::timestamptz is not null
                      and (quota_access_observed_at is null or quota_access_observed_at <= $7)
                    then $8 else quota_reset_at end,
+                 quota_limit_window_minutes = case
+                   when $7::timestamptz is not null
+                     and (quota_access_observed_at is null or quota_access_observed_at <= $7)
+                   then $14 else quota_limit_window_minutes end,
                  updated_at = greatest(now(), updated_at, $4, $7)
              where id = $1 and credential_revision = $2
                and (quota_observed_at is null or quota_observed_at <= $4)
@@ -169,6 +173,7 @@ impl PgProviderAccountRepository {
         .bind(quota_pause.map(|d| sqlx::types::Json(&d.limits)))
         .bind(merge_base.is_some())
         .bind(merge_base.and_then(|base| base.observed_at).map(DateTime::<Utc>::from))
+        .bind(state.limit_window_minutes().map(i32::from))
         .execute(&mut *transaction)
         .await
         .map_err(|error| {
@@ -207,7 +212,7 @@ impl PgProviderAccountRepository {
                     access_token_expires_at, next_refresh_at, enabled, turn_state_injection_enabled, responses_upstream, excel_models, excel_models_follow_global, excel_cache_creation_as_input, excel_ignore_encrypted_content, request_proxy_source, excel_auto_disable_on_403, excel_403_action, excel_auto_disabled_at, excel_403_warning_at, excel_mode_disabled_at,
             case when excel_models_follow_global then (select excel_default_models from runtime_settings where id = 1) else excel_models end as effective_excel_models, concurrency_limit, weight, model_access_json, credential_state,
                     credential_observed_at, quota_access_state, quota_evidence,
-                    quota_access_observed_at, quota_reset_at,
+                    quota_access_observed_at, quota_reset_at, quota_limit_window_minutes,
                     coalesce((select status = 'passed' and provider_accounts.quota_access_state='exhausted' and account_subject=provider_accounts.upstream_account_id from codex_quota_overdraft_states where account_id = provider_accounts.id and credential_revision = provider_accounts.credential_revision and config_revision = (select config_revision from runtime_settings where id = 1) and exists(select 1 from runtime_settings where id = 1 and codex_quota_overdraft_enabled)), false) as codex_quota_overdraft_passed, auto_use_quota_credits, quota_settings, quota_paused,
                     quota_observed_at, last_error_reason, last_error_message, created_at, updated_at,
                     relogin_count, last_relogin_at
@@ -570,7 +575,7 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
         let result = sqlx::query(
             "update provider_accounts
              set quota_access_observed_at = $3, quota_access_state = $4,
-                 quota_evidence = $5, quota_reset_at = $6,
+                 quota_evidence = $5, quota_reset_at = $6, quota_limit_window_minutes = $7,
                  updated_at = greatest(now(), updated_at, $3)
              where id = $1 and credential_revision = $2
                and (quota_access_observed_at is null or quota_access_observed_at <= $3)",
@@ -581,6 +586,7 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
         .bind(state.access().as_str())
         .bind(state.evidence().map(QuotaEvidence::as_str))
         .bind(state.reset_at().map(DateTime::<Utc>::from))
+        .bind(state.limit_window_minutes().map(i32::from))
         .execute(&mut *transaction)
         .await
         .map_err(|error| postgres_unavailable("apply provider quota access").with_source(error))?;
@@ -991,7 +997,7 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
                 sqlx::query(
                     "update provider_accounts set provider_quota_json=null, quota_observed_at=null,
                      quota_access_state='unknown', quota_evidence=null, quota_access_observed_at=null,
-                     quota_reset_at=null where id=$1",
+                     quota_reset_at=null, quota_limit_window_minutes=null where id=$1",
                 ).bind(&credential.account_id).execute(&mut *transaction).await
                     .map_err(|error| postgres_unavailable("clear previous workspace quota").with_source(error))?;
             }
@@ -1200,6 +1206,7 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
                      quota_evidence = null,
                      quota_access_observed_at = now(),
                      quota_reset_at = null,
+           quota_limit_window_minutes = null,
                      last_error_reason = null,
                      last_error_message = null,
                      updated_at = greatest(now(), updated_at)
@@ -1386,6 +1393,7 @@ pub(crate) async fn upsert_provider_account_in_transaction(
            quota_evidence = null,
            quota_access_observed_at = null,
            quota_reset_at = null,
+           quota_limit_window_minutes = null,
            credential_observed_at = excluded.credential_observed_at,
            quota_observed_at = null,
            last_error_reason = null,
@@ -1446,9 +1454,10 @@ pub(crate) async fn rotate_provider_account_in_transaction(
     profile: &UpdateProviderAccount,
     replacement_identity: Option<&ProviderAccountIdentity>,
     update: &ProviderCredentialUpdate,
-    preserve_name: bool,
+    reauthorization: bool,
 ) -> StoreResult<Revision> {
     let replace_identity = replacement_identity.is_some();
+    let preserve_quota = !replace_identity && (reauthorization || update.preserve_profile);
     let upstream_user_id = replacement_identity.map(ProviderAccountIdentity::upstream_user_id);
     let upstream_account_id =
         replacement_identity.and_then(ProviderAccountIdentity::upstream_account_id);
@@ -1457,12 +1466,14 @@ pub(crate) async fn rotate_provider_account_in_transaction(
          set name = case when $14 or $15 then name else $4 end,
              email = case when $14 then email else $5 end,
              plan_type = case when $14 then plan_type else $6 end,
-             quota_warmup_state = case when $14 then quota_warmup_state else '{}'::jsonb end, quota_warmup_revision = provider_accounts.quota_warmup_revision + 1, provider_quota_json = case when $14 then provider_quota_json else null end,
-             quota_observed_at = case when $14 then quota_observed_at else null end,
+             quota_warmup_state = case when $17 then quota_warmup_state else '{}'::jsonb end, quota_warmup_revision = provider_accounts.quota_warmup_revision + 1, provider_quota_json = case when $17 then provider_quota_json else null end,
+             quota_paused = case when $17 then quota_paused else false end,
+             quota_observed_at = case when $17 then quota_observed_at else null end,
              quota_access_state = case when $11 then 'unknown' else quota_access_state end,
              quota_evidence = case when $11 then null else quota_evidence end,
              quota_access_observed_at = case when $11 then null else quota_access_observed_at end,
              quota_reset_at = case when $11 then null else quota_reset_at end,
+             quota_limit_window_minutes = case when $11 then null else quota_limit_window_minutes end,
              provider_credentials_json = $7,
              credential_revision = credential_revision + 1,
              turn_state_binding_revision = credential_revision + 1,
@@ -1497,8 +1508,9 @@ pub(crate) async fn rotate_provider_account_in_transaction(
     .bind(upstream_user_id)
     .bind(upstream_account_id)
     .bind(update.preserve_profile)
-    .bind(preserve_name)
+    .bind(reauthorization)
     .bind(update.preserve_access_token_expiry)
+    .bind(preserve_quota)
     .fetch_optional(&mut **transaction)
     .await
     .map_err(|error| {

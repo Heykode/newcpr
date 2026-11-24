@@ -695,3 +695,16 @@ pub(crate) fn derive_codex_transport_key(
         .or_else(|| derive_conversation_anchor(request))?;
     session_affinity(source, anchor, None, client)?.into_key()
 }
+
+pub(crate) fn root_session_affinity(
+    session_id: Option<&str>,
+    client_api_key_id: &ClientApiKeyId,
+) -> Option<CodexSessionAffinity> {
+    let session_id = non_empty(session_id)?;
+    session_affinity(
+        "root-session",
+        session_id.to_owned(),
+        Some(session_id.to_owned()),
+        client_api_key_id,
+    )
+}

@@ -144,8 +144,8 @@ do not replace transport identity, account authorization or billing contracts.
   cannot spill. With ordinary waiting disabled, a root may select another eligible
   account and CAS the new primary before send, as upstream does. Authorized Core
   retries that exclude the old root may also migrate; late completion cannot undo it.
-  A local interval-only blocker does not add another Strict migration prohibition. Strict children remain follow-only and wait for
-  the root to recover or migrate rather than independently changing the root.
+  A local interval-only blocker does not add another Strict migration prohibition. Strict children follow the root, except the image eligibility borrow rule below;
+  other failures wait for the root to recover or migrate.
 - Redis admission accepts legacy raw and JSON bindings, upgrades to a new token,
   and fences both observed-miss and observed-generation races. Conflict must not
   refresh TTL; an expired observed generation cannot recreate a key.
@@ -250,3 +250,27 @@ checks that explicit release makes the slot available before returning.
 Wrong: increment during snapshot reads, or `drop(guard)` then immediately reselect
 while the slot may remain occupied. Correct: `admit_account(...)` after acquisition;
 on CAS conflict, `guard.release().await?` before refreshing the current selection.
+
+## Strict Images and Guardian (v3.54.5)
+
+1. Scope: native Images generation/edit and strict Guardian specialized routing.
+2. Signatures: selector `image_primary_to_keep` feeds immediate/waiting admission;
+   `Provider::allows_direct_model_scope` gates Core's direct-model plan before start.
+3. Contracts: only an enabled, authorized primary rejected by image model/plan/
+   protocol eligibility permits borrowing. Keep the primary generation in the same
+   Redis admission CAS and release acquired capacity on conflict. Child follow,
+   queue budget and queue-failure reselect use the current borrow decision.
+   Busy/disabled/quota/cooldown/auth-protection alone does not authorize borrowing.
+   Recheck eligibility before admission and during waits. Excel keeps its existing
+   image route; exact continuation and required accounts cannot borrow.
+4. Errors: missing/unavailable binding storage is not authorization; CAS conflict
+   reselects without sending. Eligible busy children wait for their primary.
+   Strict Guardian whose parent is outside the direct model scope uses the original
+   model route; explicit mappings and native continuation retain precedence.
+5. Cases: a text-only authorized primary can lend an image request and receive the
+   next text turn; a disabled primary cannot be revived or bypassed by this rule.
+6. Tests: direct and queued borrow, busy/disabled negatives, group/model filters,
+   changed binding during acquisition, preserved root and released lease; Core
+   actual execution must test both direct model and original-route fallback.
+7. Wrong: rewrite primary to the temporary image account on completion. Correct:
+   admit with the observed primary and preserve the independent transport owner.

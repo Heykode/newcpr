@@ -245,7 +245,7 @@ async fn proxy_disable_projects_direct_and_reenable_restores_unchanged_accounts(
             );
             projected.push(accounts.get_account(&id).await.unwrap().unwrap());
             projected.push(accounts.load_current_credential(&id).await.unwrap().account);
-            projected.extend(accounts.list_for_provider(&kind).await.unwrap());
+            projected.extend(accounts.list_for_provider(&kind, false).await.unwrap());
             let now = SystemTime::now();
             projected.extend(
                 accounts

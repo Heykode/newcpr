@@ -159,6 +159,13 @@ async fn model_access_and_excel_upgrade_default_without_touching_identity_or_inh
         after.as_object_mut().unwrap().remove("credential_proxy_id"),
         Some(serde_json::Value::Null)
     );
+    assert_eq!(
+        after
+            .as_object_mut()
+            .unwrap()
+            .remove("quota_limit_window_minutes"),
+        Some(serde_json::Value::Null)
+    );
     assert_eq!(before, after);
     database.close().await;
 }
@@ -252,6 +259,13 @@ async fn excel_policy_upgrade_preserves_existing_choices_and_pause_diagnostics()
     );
     assert_eq!(
         after.as_object_mut().unwrap().remove("credential_proxy_id"),
+        Some(serde_json::Value::Null)
+    );
+    assert_eq!(
+        after
+            .as_object_mut()
+            .unwrap()
+            .remove("quota_limit_window_minutes"),
         Some(serde_json::Value::Null)
     );
     assert_eq!(before, after);
@@ -580,6 +594,13 @@ async fn quota_settings_upgrade_preserves_limits_and_identity_with_warmup_disabl
     );
     assert_eq!(
         after.as_object_mut().unwrap().remove("credential_proxy_id"),
+        Some(serde_json::Value::Null)
+    );
+    assert_eq!(
+        after
+            .as_object_mut()
+            .unwrap()
+            .remove("quota_limit_window_minutes"),
         Some(serde_json::Value::Null)
     );
     assert_eq!(before, after);

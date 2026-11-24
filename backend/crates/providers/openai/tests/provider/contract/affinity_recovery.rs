@@ -567,3 +567,181 @@ async fn strict_missing_root_binding_can_be_reclaimed_without_sending_to_expired
     drop(stream);
     assert_eq!(f.leases.capacity.waiting.load(Ordering::SeqCst), 0);
 }
+
+fn image_request() -> ProviderRequest {
+    planned_provider_endpoint_request("openai", Operation::GenerateImage(ImageRequest::from_raw_json(
+        ImageRequestKind::Generation,
+        RawJsonPayload::new("openai", Bytes::from_static(br#"{"session_id":"root","thread_id":"child","model":"gpt-image-2","prompt":"draw"}"#)).unwrap(),
+    )))
+}
+
+fn image_borrow_scope(deny_primary: bool) -> Arc<FrozenAccountScope> {
+    use gateway_core::account::{AccountModelAccess, AccountModelAccessMode};
+    Arc::new(FrozenAccountScope::new(
+        Arc::new(RuntimeAccountDirectory::new(
+            ["acct_scope_old", "acct_scope_new"]
+                .map(|id| {
+                    let access = if deny_primary && id == "acct_scope_old" {
+                        AccountModelAccess::new(
+                            AccountModelAccessMode::Denylist,
+                            vec!["gpt-image-2".into()],
+                        )
+                        .unwrap()
+                    } else {
+                        AccountModelAccess::all()
+                    };
+                    (
+                        ProviderAccountId::new(id).unwrap(),
+                        RuntimeAccount::new(ProviderKind::new("openai").unwrap(), BTreeSet::new())
+                            .with_model_access(access),
+                    )
+                })
+                .into(),
+        )),
+        ClientRoutingScope::all_accounts(),
+    ))
+}
+
+#[tokio::test]
+async fn strict_image_borrow_keeps_primary_after_immediate_and_queued_admission() {
+    for wait in [false, true] {
+        let f = fixture(true).await;
+        Mock::given(method("POST"))
+            .and(path("/codex/images/generations"))
+            .and(header("chatgpt-account-id", "chatgpt-acct_scope_new"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data":[]})))
+            .expect(1)
+            .mount(&f.upstream)
+            .await;
+        if wait {
+            f.leases.capacity.set_load("acct_scope_new", 1);
+        }
+        let mut pending = Box::pin(f.provider.execute(
+            image_request(),
+            attempt_in_scope(
+                wait,
+                false,
+                CancellationToken::new(),
+                image_borrow_scope(true),
+            ),
+        ));
+        if wait {
+            queued(&mut pending, &f).await;
+            assert!(f.upstream.received_requests().await.unwrap().is_empty());
+            f.leases.capacity.set_load("acct_scope_new", 0);
+        }
+        let mut stream = timeout(Duration::from_secs(2), pending)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            stream.metadata().provider_account_id().as_str(),
+            "acct_scope_new"
+        );
+        while let Some(event) = stream.next().await {
+            event.unwrap();
+        }
+        assert_eq!(
+            f.affinity
+                .load(&ProviderKind::new("openai").unwrap(), &f.key)
+                .await
+                .unwrap()
+                .unwrap()
+                .as_str(),
+            "acct_scope_old"
+        );
+        assert_eq!(f.leases.capacity.waiting.load(Ordering::SeqCst), 0);
+    }
+}
+
+#[tokio::test]
+async fn strict_image_does_not_borrow_for_busy_or_disabled_primary() {
+    for disabled in [false, true] {
+        let f = fixture(true).await;
+        if disabled {
+            f.store
+                .set_enabled(&ProviderAccountId::new("acct_scope_old").unwrap(), false)
+                .await
+                .unwrap();
+        } else {
+            f.leases.capacity.set_load("acct_scope_old", 1);
+        }
+        let cancel = CancellationToken::new();
+        let mut pending = Box::pin(f.provider.execute(
+            image_request(),
+            attempt_in_scope(true, false, cancel.clone(), image_borrow_scope(disabled)),
+        ));
+        queued(&mut pending, &f).await;
+        assert!(
+            !f.leases
+                .requests
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|request| request.account_id().as_str() == "acct_scope_new")
+        );
+        cancel.cancel();
+        assert_eq!(
+            pending.await.err().unwrap().kind(),
+            ProviderErrorKind::Cancelled
+        );
+        assert!(f.upstream.received_requests().await.unwrap().is_empty());
+        assert_eq!(f.leases.capacity.waiting.load(Ordering::SeqCst), 0);
+    }
+}
+
+#[tokio::test]
+async fn strict_image_borrow_rechecks_binding_cas_before_send() {
+    for wait in [false, true] {
+        let f = fixture(true).await;
+        let affinity = f.affinity.clone();
+        let key = f.key.clone();
+        *f.leases.capacity.after_acquire.lock().unwrap() = Some(Box::new(move || {
+            affinity.seed_binding(
+                &ProviderKind::new("openai").unwrap(),
+                key.expose_to_store(),
+                ProviderAccountId::new("acct_scope_new").unwrap(),
+            );
+        }));
+        Mock::given(method("POST"))
+            .and(path("/codex/images/generations"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data":[]})))
+            .expect(1)
+            .mount(&f.upstream)
+            .await;
+        let mut stream = f
+            .provider
+            .execute(
+                image_request(),
+                attempt_in_scope(
+                    wait,
+                    false,
+                    CancellationToken::new(),
+                    image_borrow_scope(true),
+                ),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            stream.metadata().provider_account_id().as_str(),
+            "acct_scope_new"
+        );
+        while let Some(event) = stream.next().await {
+            event.unwrap();
+        }
+        assert_eq!(
+            f.affinity
+                .load(&ProviderKind::new("openai").unwrap(), &f.key)
+                .await
+                .unwrap()
+                .unwrap()
+                .as_str(),
+            "acct_scope_new"
+        );
+        assert!(
+            f.leases.requests.lock().unwrap().len() >= 3,
+            "initial root plus rejected and successful image admissions"
+        );
+        assert_eq!(f.leases.capacity.waiting.load(Ordering::SeqCst), 0);
+    }
+}

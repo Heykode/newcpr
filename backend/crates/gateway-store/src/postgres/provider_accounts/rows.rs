@@ -413,7 +413,7 @@ pub(crate) const ACCOUNT_SELECT: &str = "select
             upstream_account_id, plan_type, authentication_kind, provider_credentials_json, credential_revision, turn_state_binding_revision,
             has_refresh_token, access_token_expires_at, next_refresh_at, enabled, turn_state_injection_enabled, responses_upstream, excel_models, excel_models_follow_global, excel_cache_creation_as_input, excel_ignore_encrypted_content, request_proxy_source, excel_auto_disable_on_403, excel_403_action, excel_auto_disabled_at, excel_403_warning_at, excel_mode_disabled_at,
             case when excel_models_follow_global then (select excel_default_models from runtime_settings where id = 1) else excel_models end as effective_excel_models, concurrency_limit, weight, model_access_json, credential_state,
-            provider_quota_json, quota_access_state, quota_evidence, quota_access_observed_at, quota_reset_at,
+            provider_quota_json, quota_access_state, quota_evidence, quota_access_observed_at, quota_reset_at, quota_limit_window_minutes,
             coalesce((select status = 'passed' and provider_accounts.quota_access_state='exhausted' and account_subject=provider_accounts.upstream_account_id from codex_quota_overdraft_states where account_id = provider_accounts.id and credential_revision = provider_accounts.credential_revision and config_revision = (select config_revision from runtime_settings where id = 1) and exists(select 1 from runtime_settings where id = 1 and codex_quota_overdraft_enabled)), false) as codex_quota_overdraft_passed, auto_use_quota_credits, quota_settings, quota_paused,
             last_error_reason, last_error_message,
             credential_observed_at, quota_observed_at, created_at, updated_at, relogin_count, last_relogin_at
@@ -427,7 +427,7 @@ pub(crate) const ACCOUNT_SELECT_BY_IDS: &str = "select
             upstream_account_id, plan_type, authentication_kind, provider_credentials_json, credential_revision, turn_state_binding_revision,
             has_refresh_token, access_token_expires_at, next_refresh_at, enabled, turn_state_injection_enabled, responses_upstream, excel_models, excel_models_follow_global, excel_cache_creation_as_input, excel_ignore_encrypted_content, request_proxy_source, excel_auto_disable_on_403, excel_403_action, excel_auto_disabled_at, excel_403_warning_at, excel_mode_disabled_at,
             case when excel_models_follow_global then (select excel_default_models from runtime_settings where id = 1) else excel_models end as effective_excel_models, concurrency_limit, weight, model_access_json, credential_state,
-            provider_quota_json, quota_access_state, quota_evidence, quota_access_observed_at, quota_reset_at,
+            provider_quota_json, quota_access_state, quota_evidence, quota_access_observed_at, quota_reset_at, quota_limit_window_minutes,
             coalesce((select status = 'passed' and provider_accounts.quota_access_state='exhausted' and account_subject=provider_accounts.upstream_account_id from codex_quota_overdraft_states where account_id = provider_accounts.id and credential_revision = provider_accounts.credential_revision and config_revision = (select config_revision from runtime_settings where id = 1) and exists(select 1 from runtime_settings where id = 1 and codex_quota_overdraft_enabled)), false) as codex_quota_overdraft_passed, auto_use_quota_credits, quota_settings, quota_paused,
             last_error_reason, last_error_message,
             credential_observed_at, quota_observed_at, created_at, updated_at, relogin_count, last_relogin_at
@@ -443,7 +443,7 @@ pub(crate) const REFRESH_CANDIDATES_SELECT: &str = "select
             upstream_account_id, plan_type, authentication_kind, provider_credentials_json, credential_revision, turn_state_binding_revision,
             has_refresh_token, access_token_expires_at, next_refresh_at, enabled, turn_state_injection_enabled, responses_upstream, excel_models, excel_models_follow_global, excel_cache_creation_as_input, excel_ignore_encrypted_content, request_proxy_source, excel_auto_disable_on_403, excel_403_action, excel_auto_disabled_at, excel_403_warning_at, excel_mode_disabled_at,
             case when excel_models_follow_global then (select excel_default_models from runtime_settings where id = 1) else excel_models end as effective_excel_models, concurrency_limit, weight, model_access_json, credential_state,
-            provider_quota_json, quota_access_state, quota_evidence, quota_access_observed_at, quota_reset_at,
+            provider_quota_json, quota_access_state, quota_evidence, quota_access_observed_at, quota_reset_at, quota_limit_window_minutes,
             coalesce((select status = 'passed' and provider_accounts.quota_access_state='exhausted' and account_subject=provider_accounts.upstream_account_id from codex_quota_overdraft_states where account_id = provider_accounts.id and credential_revision = provider_accounts.credential_revision and config_revision = (select config_revision from runtime_settings where id = 1) and exists(select 1 from runtime_settings where id = 1 and codex_quota_overdraft_enabled)), false) as codex_quota_overdraft_passed, auto_use_quota_credits, quota_settings, quota_paused,
             last_error_reason, last_error_message,
             credential_observed_at, quota_observed_at, created_at, updated_at, relogin_count, last_relogin_at
@@ -689,13 +689,7 @@ pub(crate) fn account_status_facts_from_row(
     row: &sqlx::postgres::PgRow,
 ) -> StoreResult<gateway_core::account::AccountStatusFacts> {
     let credential_state = get::<String>(row, "credential_state")?;
-    let quota = QuotaState::from_persisted(
-        parse_quota_access_state(&get::<String>(row, "quota_access_state")?)?,
-        parse_quota_evidence(get(row, "quota_evidence")?)?,
-        get::<Option<DateTime<Utc>>>(row, "quota_access_observed_at")?.map(Into::into),
-        get::<Option<DateTime<Utc>>>(row, "quota_reset_at")?.map(Into::into),
-    )
-    .ok_or_else(|| invalid("invalid persisted quota fact"))?;
+    let quota = quota_state_from_row(row)?;
     Ok(gateway_core::account::AccountStatusFacts {
         quota_paused: get(row, "quota_paused")?,
         enabled: get(row, "enabled")?,
@@ -747,4 +741,23 @@ pub(crate) fn invalid(message: &str) -> StoreError {
         entity: ENTITY,
         message: message.to_owned(),
     }
+}
+
+pub(super) fn quota_state_from_row(row: &sqlx::postgres::PgRow) -> StoreResult<QuotaState> {
+    let quota_access_state = parse_quota_access_state(&get::<String>(row, "quota_access_state")?)?;
+    let quota_evidence = parse_quota_evidence(get(row, "quota_evidence")?)?;
+    let quota_access_observed_at = get::<Option<DateTime<Utc>>>(row, "quota_access_observed_at")?;
+    let quota_reset_at = get::<Option<DateTime<Utc>>>(row, "quota_reset_at")?;
+    let minutes = get::<Option<i32>>(row, "quota_limit_window_minutes")?
+        .map(u16::try_from)
+        .transpose()
+        .map_err(|_| invalid("invalid quota limit window"))?;
+    QuotaState::from_persisted(
+        quota_access_state,
+        quota_evidence,
+        quota_access_observed_at.map(Into::into),
+        quota_reset_at.map(Into::into),
+    )
+    .map(|state| state.with_limit_window_minutes(minutes))
+    .ok_or_else(|| invalid("invalid persisted quota fact"))
 }

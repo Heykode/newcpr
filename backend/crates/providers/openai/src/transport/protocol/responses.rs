@@ -534,6 +534,64 @@ fn is_tool_execution_event(event_type: &str) -> bool {
         )
 }
 
+/// 上游用量拒绝标明的时间边界与窗口时长，两者可独立缺失
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct UsageLimitWindow {
+    pub(crate) reset_at: Option<std::time::SystemTime>,
+    pub(crate) minutes: Option<u16>,
+}
+
+impl UsageLimitWindow {
+    pub(crate) fn from_payload(value: &Value) -> Self {
+        let error = upstream_error_object(value);
+        let now = chrono::Utc::now().timestamp();
+        let seconds = |value: &Value| {
+            value
+                .as_i64()
+                .or_else(|| value.as_str()?.trim().parse().ok())
+                .filter(|value| *value > 0)
+        };
+        let reset_at = error
+            .get("resets_at")
+            .and_then(seconds)
+            .filter(|value| *value > now)
+            .filter(|value| chrono::DateTime::from_timestamp(*value, 0).is_some())
+            .or_else(|| now.checked_add(error.get("resets_in_seconds").and_then(seconds)?))
+            .and_then(|value| chrono::DateTime::from_timestamp(value, 0))
+            .map(Into::into);
+        let mut window = Self {
+            reset_at,
+            minutes: error
+                .get("limit_window_minutes")
+                .and_then(Value::as_u64)
+                .and_then(|minutes| u16::try_from(minutes).ok())
+                .filter(|minutes| *minutes > 0),
+        };
+        if let Some(headers) = value.get("headers").and_then(Value::as_object) {
+            window = window.for_headers(
+                headers
+                    .iter()
+                    .filter_map(|(key, value)| Some((key.as_str(), value.as_str()?))),
+            );
+        }
+        window
+    }
+
+    pub(crate) fn for_headers<'a>(
+        mut self,
+        mut headers: impl Iterator<Item = (&'a str, &'a str)>,
+    ) -> Self {
+        // 具名桶即使与通用窗口周期相同，也不能当作通用窗口的耗尽证据
+        if headers.any(|(name, value)| {
+            name.eq_ignore_ascii_case("x-codex-active-limit")
+                && !value.trim().eq_ignore_ascii_case("codex")
+        }) {
+            self.minutes = None;
+        }
+        self
+    }
+}
+
 /// Codex Responses SSE 失败事件。
 #[derive(Clone, PartialEq, Eq)]
 pub struct ResponsesSseFailure {
@@ -548,6 +606,7 @@ pub struct ResponsesSseFailure {
     pub upstream_type: Option<String>,
     /// 上游显式状态码；不从业务码或错误类型推导。
     pub explicit_status_code: Option<u16>,
+    pub(crate) usage_limit: UsageLimitWindow,
     /// 上游显式重试间隔，或从官方限流消息中解析出的重试间隔。
     pub retry_after_seconds: Option<u64>,
     /// 上游 `x-retry-metadata: NO_MORE_RETRY`，与重试间隔独立
@@ -587,6 +646,7 @@ impl ResponsesSseFailure {
             upstream_message: failure_message(value),
             upstream_type: failure_type(value),
             explicit_status_code: failure_explicit_status_code(value),
+            usage_limit: UsageLimitWindow::from_payload(value),
             retry_after_seconds: events::retry_after_seconds_from_value(value),
             no_more_retry: events::upstream_no_more_retry(value),
             request_id:
@@ -635,6 +695,12 @@ fn failure_explicit_status_code(value: &Value) -> Option<u16> {
         .or_else(|| value.get("status_code"))
         .and_then(Value::as_u64)
         .and_then(|status| u16::try_from(status).ok())
+}
+
+pub(crate) fn upstream_error_object(value: &Value) -> &Value {
+    failure_error(value)
+        .or_else(|| value.get("detail"))
+        .unwrap_or(value)
 }
 
 fn failure_error(value: &Value) -> Option<&Value> {

@@ -7,7 +7,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use filetime::FileTime;
 use flate2::{Compression, write::GzEncoder};
 use futures::StreamExt as _;
 use gateway_admin::model::system::{
@@ -849,7 +848,10 @@ async fn update_should_remove_stale_file_lock_and_continue() {
         )
         .await;
     fs::write(fixture.lock(), "stale").expect("lock");
-    filetime::set_file_mtime(fixture.lock(), FileTime::from_unix_time(1, 0)).expect("old mtime");
+    fs::File::open(fixture.lock())
+        .unwrap()
+        .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1))
+        .expect("old mtime");
 
     assert_eq!(
         complete_update(&fixture.service(&server), TARGET_VERSION)

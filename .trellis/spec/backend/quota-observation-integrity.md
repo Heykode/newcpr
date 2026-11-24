@@ -134,17 +134,41 @@ different test outcomes. A one-account run cannot validate account-switch
 cleaning, and unchanged tokens/device identity do not imply an unchanged
 credential CAS or Cookie material.
 
-## Same-window Recovery
+## Window Recovery (v3.54.5 target)
 
-The official recovery rule accepts two fresh account-wide observations with no
-forward reset and no reached limit. A missing percent or a reset moving backward
-is not an extra blocker. A missing window, reached limit, or a forward reset
-without sufficiently low usage breaks this evidence. An unknown baseline reset
-must first be anchored. Preserve independent observation clocks: duplicate,
-out-of-order and pre-exhaustion observations cannot advance recovery. These are
-separate concerns; do not reinstate strict reset equality to enforce freshness.
-The quota recovery tests cover both upstream business conditions and local clock
-fences; update old fixture expectations when upstream changes these conditions.
+`QuotaState.limit_window_minutes: Option<u16>` belongs to the latest exhaustion
+fact. Persist it as `provider_accounts.quota_limit_window_minutes` via migration
+0100, carry it through every account query, and clear it on allowed/unknown access.
+An older quota document may update independently but cannot replace a newer access
+clock or window hint. Credential revision fences apply to both writes.
+
+Match a positive denial duration to exactly one generic account-wide window;
+named buckets never identify a subscription window. Preserve other reached
+windows. With no matching baseline, a future denial reset creates an unmatched
+boundary. Recovery after that boundary needs explicit allowed access and all
+previously known generic windows with known nonfull percentages. Time alone
+never grants access or changes displayed percentages.
+
+Two fresh known nonfull observations may recover a pending window when access is
+explicitly allowed, even while reset keeps advancing. Missing percent/window or
+a reached limit breaks consecutive evidence. Unknown access retains the same-window
+nonforward rule; a forward reset plus usage below 10% still proves a new window.
+An unknown baseline must first be anchored. Duplicate, out-of-order and
+pre-exhaustion observations cannot advance evidence. Legacy numeric candidate
+records preserve pending baselines but need fresh confirmation after upgrade.
+
+Disabled OAuth accounts still receive initial and periodic quota observations;
+selection, catalog prewarm and bucket warmup remain restricted to enabled accounts.
+Refresh success never enables an account. A pending account-level denial does not
+turn every displayed window into 100%; preserve measured and unknown percentages.
+
+Validation: unmatched reset, unique/ambiguous duration, drifting reset, missing
+percent, newer denial, stale observation, legacy candidate, disabled initial/reset
+maintenance; real PostgreSQL must verify independent clocks and hint clearing.
+Good: two fresh allowed 40% observations restore a drifting window. Base: known
+reached windows remain blocked. Bad: infer recovery from elapsed wall time alone.
+Wrong: zero the UI or reuse an old candidate. Correct: keep measured usage and
+require the current denial's fresh evidence.
 
 ## Quota Bucket Warmup (v3.50.0)
 
