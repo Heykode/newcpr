@@ -270,7 +270,7 @@ async fn excel_auto_pause_403_is_atomic_fenced_and_preserves_other_account_field
     assert!(updated.excel_cache_creation_as_input());
     assert!(
         repository
-            .list_for_provider(updated.provider())
+            .list_for_provider(updated.provider(), false)
             .await
             .unwrap()
             .is_empty()

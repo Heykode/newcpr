@@ -675,6 +675,17 @@ pub trait Provider: Send + Sync {
         None
     }
 
+    /// 自动替换模型前校验必须跟随的会话账号是否在候选范围内
+    async fn allows_direct_model_scope(
+        &self,
+        _operation: &Operation,
+        _client_key: &ClientApiKeyId,
+        _scope: &crate::routing::FrozenAccountScope,
+        _policy: crate::account::AccountSelectionPolicy,
+    ) -> Result<bool, ProviderError> {
+        Ok(true)
+    }
+
     fn model_catalog_is_exhaustive(&self) -> bool {
         true
     }

@@ -20,14 +20,30 @@ use tokio_tungstenite::tungstenite::{
 
 use super::CodexWebSocketExchangeError;
 
+pub(super) const WEBSOCKET_SEND_TIMEOUT: std::time::Duration =
+    std::time::Duration::from_secs(5 * 60);
+
 pub(super) enum PumpCommand {
+    Upload {
+        compression_threshold: Option<usize>,
+        text: tungstenite::Utf8Bytes,
+        deadline: tokio::time::Instant,
+        accepted:
+            oneshot::Sender<oneshot::Receiver<Result<UploadOutcome, CodexWebSocketExchangeError>>>,
+    },
     Send {
         message: Message,
         ack: oneshot::Sender<Result<(), CodexWebSocketExchangeError>>,
     },
 }
 
-pub(super) type SharedMessages = Arc<Mutex<mpsc::Receiver<Result<Message, tungstenite::Error>>>>;
+pub(super) enum UploadOutcome {
+    Flushed,
+    InterruptedWithReply,
+}
+
+pub(super) type SharedMessages =
+    Arc<Mutex<mpsc::Receiver<Result<Message, CodexWebSocketExchangeError>>>>;
 
 pub(super) struct PumpControl {
     pub(super) tx_command: mpsc::Sender<PumpCommand>,
@@ -77,7 +93,7 @@ impl ResponseControlTransport for PumpControl {
             biased;
             _ = self.cancellation.cancelled() => Err(ResponseControlUnavailable),
             result = tokio::time::timeout(
-            std::time::Duration::from_secs(5 * 60),
+            WEBSOCKET_SEND_TIMEOUT,
             send_message(
                 &self.tx_command,
                 &self.closed,

@@ -116,6 +116,7 @@ struct WaitingSelection {
     assignment_cursor: Option<u64>,
     projection: projection::SelectionProjection,
     follows_root: bool,
+    image_primary: Option<ProviderAccountId>,
     universe: BTreeSet<ProviderAccountId>,
     invalid_credentials: BTreeSet<ProviderAccountId>,
     context: AccountSelectionContext,
@@ -320,7 +321,7 @@ impl CodexCredentialSelector {
             .required_account()
             .cloned()
             .or_else(|| continuation.clone());
-        let follows_root = pinned.is_none() && request.follows_root();
+        let explicitly_pinned = pinned.is_some();
         let mut affinity = control
             .run(async {
                 self.resolve_session_affinity(
@@ -356,6 +357,11 @@ impl CodexCredentialSelector {
         {
             return Err(CredentialSelectionError::ContinuationOwnerChanged);
         }
+        let image_primary = control
+            .run(self.image_primary_to_keep(request, affinity.bound_account(), explicitly_pinned))
+            .await?;
+        let follows_root = !explicitly_pinned && request.follows_root() && image_primary.is_none();
+        control.follows_root = follows_root;
         if follows_root {
             pinned = affinity.bound_account().cloned();
         }
@@ -438,6 +444,7 @@ impl CodexCredentialSelector {
             assignment_cursor: None,
             projection,
             follows_root,
+            image_primary,
             universe,
             invalid_credentials: BTreeSet::new(),
             context: AccountSelectionContext {
@@ -495,7 +502,8 @@ impl CodexCredentialSelector {
                 state.observed_affinity_binding = None;
                 state.affinity = AffinitySelection::default();
             }
-            if (state.follows_root || (refresh_affinity && state.pinned.is_none()))
+            if ((!explicitly_pinned && request.follows_root())
+                || (refresh_affinity && state.pinned.is_none()))
                 && let Some(key) = request.affinity_key()
             {
                 match control
@@ -525,6 +533,27 @@ impl CodexCredentialSelector {
                         state.affinity = AffinitySelection::default();
                     }
                 }
+            }
+            state.image_primary = control
+                .run(
+                    self.image_primary_to_keep(
+                        request,
+                        state
+                            .observed_affinity_binding
+                            .as_ref()
+                            .map(ProviderSessionAffinityBinding::account_id),
+                        explicitly_pinned,
+                    ),
+                )
+                .await?;
+            state.follows_root =
+                !explicitly_pinned && request.follows_root() && state.image_primary.is_none();
+            control.follows_root = state.follows_root;
+            if !explicitly_pinned {
+                state.pinned = state
+                    .follows_root
+                    .then(|| state.observed_affinity.clone())
+                    .flatten();
             }
             control
                 .run(self.reload_wait_exclusions(&mut state, request))
@@ -574,6 +603,7 @@ impl CodexCredentialSelector {
                     request,
                     state.observed_affinity_binding.as_ref(),
                     state.pinned.is_some(),
+                    state.image_primary.is_some(),
                 ))
                 .await?;
             if let Some(cursor) = state.assignment_cursor {
@@ -1379,6 +1409,24 @@ impl CodexCredentialSelector {
                             }
                         }
                     }
+                    if self
+                        .image_primary_to_keep(
+                            request,
+                            state
+                                .observed_affinity_binding
+                                .as_ref()
+                                .map(ProviderSessionAffinityBinding::account_id),
+                            request.attempt.required_account().is_some()
+                                || !matches!(
+                                    request.attempt.continuation_attempt(),
+                                    ContinuationAttempt::None | ContinuationAttempt::ReplayAny
+                                ),
+                        )
+                        .await?
+                        != state.image_primary
+                    {
+                        return Ok(WaitOutcome::Changed);
+                    }
                     if !fixed_wait && tokio::time::Instant::now() >= next_pool_recheck {
                         next_pool_recheck =
                             tokio::time::Instant::now() + Duration::from_millis(500);
@@ -1739,6 +1787,7 @@ impl CodexCredentialSelector {
                 state.observed_affinity_binding.as_ref(),
                 id,
                 state.pinned.is_some(),
+                state.image_primary.as_ref(),
                 None,
                 state
                     .assignment_cursor

@@ -152,6 +152,13 @@ async fn websocket_close_diagnosis_requires_an_actual_close_frame() {
             let (stream, _) = listener.accept().await.unwrap();
             let mut websocket = accept_codex_test_websocket(stream).await;
             websocket.next().await.unwrap().unwrap();
+            // A metadata reply closes the early-1009 HTTP fallback window.
+            websocket
+                .send(Message::Text(
+                    json!({"type":"codex.rate_limits"}).to_string().into(),
+                ))
+                .await
+                .unwrap();
             websocket
                 .send(Message::Close(code.map(|code| CloseFrame {
                     code,
@@ -191,14 +198,7 @@ async fn websocket_close_diagnosis_requires_an_actual_close_frame() {
             .unwrap();
         assert_eq!(error.send_state(), UpstreamSendState::Ambiguous);
         assert!(!error.replay_is_safe());
-        if code == Some(CloseCode::Size) {
-            assert!(matches!(
-                error.pre_delivery_retry(),
-                Some(PreDeliveryRetry::SameAccountTransportRetry { .. })
-            ));
-        } else {
-            assert_eq!(error.pre_delivery_retry(), None);
-        }
+        assert_eq!(error.pre_delivery_retry(), None);
         let diagnostic = error.diagnostic().unwrap();
         assert_eq!(diagnostic.stage(), Some("receive"));
         assert_eq!(

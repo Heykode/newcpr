@@ -14,7 +14,7 @@ impl CodexCredentialCatalogService {
             .load_account_catalogs(&provider)
             .await
             .map_err(|_| CodexCredentialCatalogError::Cache)?;
-        let accounts = self.repository.list_for_provider().await?;
+        let accounts = self.repository.list_for_provider(false).await?;
         self.record_excel_accounts(&accounts, true)?;
         let current = accounts
             .into_iter()
@@ -262,7 +262,7 @@ impl CodexCredentialCatalogService {
         }
         let revision = self.state_revision()?;
         let now = SystemTime::now();
-        let accounts = self.repository.list_for_provider().await?;
+        let accounts = self.repository.list_for_provider(false).await?;
         self.record_excel_accounts(&accounts, true)?;
         let current: BTreeMap<_, _> = accounts
             .into_iter()

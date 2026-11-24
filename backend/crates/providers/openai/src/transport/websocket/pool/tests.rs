@@ -75,6 +75,14 @@ fn client_scope_fences_routing_owner_and_logical_connection_matches() {
     assert_ne!(owner, reconnected);
     assert!(owner.matches_routing_owner(&reconnected));
     assert!(owner.same_logical_connection(&reconnected));
+    let excluded = reconnected
+        .clone()
+        .with_response_exclusions(&[("x-codex-exclude".into(), "output".into())]);
+    assert!(!owner.matches_routing_owner(&excluded));
+    assert!(!excluded.matches_routing_owner(&owner));
+    assert!(!owner.same_logical_connection(&excluded));
+    assert_ne!(owner.stable_hash(), excluded.stable_hash());
+
     for scope in ["client-key-b", ""] {
         let other = reconnected.clone().with_client_scope(scope);
         assert!(!owner.matches_routing_owner(&other));

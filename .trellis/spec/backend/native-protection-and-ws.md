@@ -101,3 +101,26 @@
 迁移和当前操作在同一 Lua 内执行，不能先读后删造成并发丢失或复活。
 保留凭据修订、策略代次、重置代次与 observation_token 栅栏。发布策略时迁移遗留索引，
 真实 Redis 验证读/写/清除竞争；旧新版实例混跑持续写 legacy 状态需另行验证，不能承诺无差异。
+
+## Upload and Response Exclusions (v3.54.5)
+
+1. Scope: Responses WebSocket upload, pooling, HTTP size fallback and continuation.
+2. Signatures: `PumpCommand::Upload` carries the local compression threshold;
+   `CodexWebSocketPoolKey::with_response_exclusions` receives final opening headers.
+3. Contract: upload and peer reads progress together, Ping receives Pong, one send
+   deadline bounds upload. Preserve the 1 MiB framing rule and compression threshold.
+   An explicit 1009 before first response text uses the advertised-size decision;
+   metadata text closes this recovery opportunity. Bare disconnect stays ambiguous.
+   HTTP recovery after an explicit early rejection is not cancelled by the expired
+   connection-only budget. Required warmup stays WebSocket; connection-local
+   continuation asks the client for full replay.
+4. Identity/error matrix: all final `x-codex-exclude` values partition reuse and exact
+   owner lookup, including forced keys and egress routing. Changed values cannot
+   reuse an old exact connection; unchanged values preserve normal reuse.
+5. Good: peer rejection while uploading is observed promptly. Base: small payload
+   stays below the configured compression threshold. Bad: replay after metadata.
+6. Tests: partial upload/peer reply, ambiguous disconnect, Ping, compression,
+   advertised and early 1009, slow upload budget, metadata/no replay, exact owner,
+   repeated exclusion headers and local egress matching.
+7. Wrong: finish blocking upload before reading a close. Correct: let pump upload
+   progress and read simultaneously while retaining original delivery ownership.

@@ -4504,6 +4504,15 @@ async fn websocket_interrupt_is_sent_on_owner_socket_and_retires_after_terminal(
 
 #[tokio::test]
 async fn advertised_size_fallback_preserves_next_request_websocket_for_oauth_credentials() {
+    check_native_size_fallback(true).await;
+}
+
+#[tokio::test]
+async fn early_size_close_preserves_next_request_websocket_for_oauth_credentials() {
+    check_native_size_fallback(false).await;
+}
+
+async fn check_native_size_fallback(advertised: bool) {
     for downstream_websocket in [false, true] {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base_url = format!("http://{}", listener.local_addr().unwrap());
@@ -4511,13 +4520,30 @@ async fn advertised_size_fallback_preserves_next_request_websocket_for_oauth_cre
             let (socket, _) = listener.accept().await.unwrap();
             let mut websocket =
                 crate::transport::accept_codex_test_websocket_with(socket, |_, response| {
-                    response
-                        .headers_mut()
-                        .insert("x-codex-websocket-max-message-bytes", "1".parse().unwrap());
+                    if advertised {
+                        response
+                            .headers_mut()
+                            .insert("x-codex-websocket-max-message-bytes", "1".parse().unwrap());
+                    }
                 })
                 .await;
-            while let Some(Ok(message)) = websocket.next().await {
-                assert!(!message.is_text(), "size fallback must precede upload");
+            if advertised {
+                while let Some(Ok(message)) = websocket.next().await {
+                    assert!(!message.is_text(), "size fallback must precede upload");
+                }
+            } else {
+                assert!(websocket.next().await.unwrap().unwrap().is_text());
+                // Explicit early rejection may arrive after the connection budget.
+                tokio::time::pause();
+                tokio::time::advance(Duration::from_secs(31)).await;
+                tokio::time::resume();
+                websocket
+                    .close(Some(CloseFrame {
+                        code: CloseCode::Size,
+                        reason: "too large".into(),
+                    }))
+                    .await
+                    .unwrap();
             }
             let (mut http, _) = listener.accept().await.unwrap();
             let request = crate::transport::read_http_request_with_body(&mut http).await;

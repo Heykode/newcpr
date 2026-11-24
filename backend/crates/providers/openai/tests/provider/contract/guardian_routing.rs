@@ -459,3 +459,84 @@ async fn guardian_review_model_and_account_claim_reach_native_http_and_websocket
         assert!(!headers.contains_key("x-codex-routing-hint"));
     }
 }
+
+#[tokio::test]
+async fn guardian_direct_model_respects_the_strict_parent_account() {
+    let store = Arc::new(MemoryAccountStore::default());
+    let affinity = Arc::new(MemorySessionAffinity::default());
+    let provider = provider_with_affinity(&store, affinity.clone());
+    let kind = ProviderKind::new("openai").unwrap();
+    let key = ClientApiKeyId::new("key_openai_contract").unwrap();
+    let oauth = ProviderAccountId::new("acct_oauth").unwrap();
+    let api_key = ProviderAccountId::new("acct_api_key").unwrap();
+    let root = super::image_account_eligibility::borrow_text("root", "root-turn");
+    let hash = provider
+        .request_observation(&root, &key)
+        .continuation
+        .affinity_hash
+        .unwrap();
+    let body = json!({
+        "model": "custom-review-model", "input": [],
+        "client_metadata": {
+            "x-openai-subagent": "guardian",
+            "x-codex-turn-metadata": json!({
+                "thread_source": "guardian_review", "session_id": "root", "thread_id": "child"
+            }).to_string()
+        }
+    });
+    let reviewer = Operation::Generate(GenerateRequest::from_protocol_payload(
+        ProtocolPayload::json_object("openai", body.as_object().unwrap().clone()).unwrap(),
+    ));
+    let scope = FrozenAccountScope::new(
+        Arc::new(RuntimeAccountDirectory::new(
+            [(
+                oauth.clone(),
+                RuntimeAccount::new(kind.clone(), BTreeSet::new()),
+            )]
+            .into(),
+        )),
+        ClientRoutingScope::all_accounts(),
+    );
+    let strict = crate::support::account_policy();
+    assert!(
+        provider
+            .allows_direct_model_scope(&reviewer, &key, &scope, strict)
+            .await
+            .unwrap()
+    );
+    affinity.seed_binding(&kind, &hash, api_key);
+    assert!(
+        !provider
+            .allows_direct_model_scope(&reviewer, &key, &scope, strict)
+            .await
+            .unwrap()
+    );
+    assert!(
+        provider
+            .allows_direct_model_scope(&root, &key, &scope, strict)
+            .await
+            .unwrap()
+    );
+    let other_key = ClientApiKeyId::new("key_other").unwrap();
+    assert!(
+        provider
+            .allows_direct_model_scope(&reviewer, &other_key, &scope, strict)
+            .await
+            .unwrap()
+    );
+    let preferred =
+        strict.with_openai_account_affinity(gateway_core::account::AccountAffinity::Preferred);
+    assert!(
+        provider
+            .allows_direct_model_scope(&reviewer, &key, &scope, preferred)
+            .await
+            .unwrap()
+    );
+    affinity.seed_binding(&kind, &hash, oauth);
+    assert!(
+        provider
+            .allows_direct_model_scope(&reviewer, &key, &scope, strict)
+            .await
+            .unwrap()
+    );
+}

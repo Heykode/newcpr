@@ -504,7 +504,7 @@ impl GrokCredentialRepository {
             .map_err(|_| GrokCredentialRepositoryError::InvalidCredentialData)?;
         let accounts = self
             .store
-            .list_for_provider(&provider)
+            .list_for_provider(&provider, false)
             .await
             .map_err(map_store_error)?;
         let mut loaded = Vec::with_capacity(accounts.len());
@@ -533,7 +533,7 @@ impl GrokCredentialRepository {
             .map_err(|_| GrokCredentialRepositoryError::InvalidCredentialData)?;
         let accounts = self
             .store
-            .list_for_provider(&provider)
+            .list_for_provider(&provider, false)
             .await
             .map_err(map_store_error)?;
         for account in &accounts {

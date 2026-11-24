@@ -239,7 +239,7 @@ fn only_explicit_sessions_supply_continuation_affinity() {
 }
 
 #[tokio::test]
-async fn message_too_big_on_required_websocket_without_retries_is_request_scoped() {
+async fn message_too_big_after_metadata_on_required_websocket_is_request_scoped() {
     const ACCOUNT: &str = "acct_provider_contract";
     for (reused, reason) in [
         (false, "opaque upstream size detail"),
@@ -266,6 +266,12 @@ async fn message_too_big_on_required_websocket_without_retries_is_request_scoped
             }
             socket.next().await.unwrap().unwrap();
             socket
+                .send(Message::Text(
+                    json!({"type":"codex.rate_limits"}).to_string().into(),
+                ))
+                .await
+                .unwrap();
+            socket
                 .close(Some(CloseFrame {
                     code: CloseCode::Size,
                     reason: reason.into(),
@@ -276,7 +282,7 @@ async fn message_too_big_on_required_websocket_without_retries_is_request_scoped
                 timeout(Duration::from_millis(150), listener.accept())
                     .await
                     .is_err(),
-                "1009 must not replay on a new WS or HTTP connection"
+                "1009 after metadata must not replay on a new WS or HTTP connection"
             );
             no_replay_tx.send(()).unwrap();
             let (socket, _) = listener.accept().await.unwrap();

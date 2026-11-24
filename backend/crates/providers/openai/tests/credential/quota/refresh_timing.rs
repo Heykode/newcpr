@@ -1,16 +1,21 @@
 //! 通过 quota 服务验证周期复核与 reset 宽限期，不依赖内部调度状态。
 
+use gateway_core::account::ProviderAccountId;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use super::*;
 
 #[tokio::test]
-async fn initial_observation_draws_one_stable_deadline_per_account() {
+async fn initial_observation_draws_one_stable_deadline_including_disabled_accounts() {
     let store = Arc::new(MemoryAccountStore::default());
     for id in ["acct_stagger_a", "acct_stagger_b", "acct_stagger_c"] {
         create_account(&store, id).await;
     }
+    store
+        .set_enabled(&ProviderAccountId::new("acct_stagger_b").unwrap(), false)
+        .await
+        .unwrap();
     let server = MockServer::start().await;
     mount_usage(
         &server,
@@ -43,6 +48,7 @@ async fn initial_observation_draws_one_stable_deadline_per_account() {
     assert_eq!(service.synchronize().await.unwrap().updated, 1);
     assert_eq!(draws.load(Ordering::SeqCst), 3);
     assert_eq!(server.received_requests().await.unwrap().len(), 3);
+    assert!(!store.account("acct_stagger_b").unwrap().enabled());
 }
 
 #[tokio::test]
@@ -262,9 +268,9 @@ async fn allowed_nonzero_expired_windows_refresh_once_without_resetting_local_us
 }
 
 #[tokio::test]
-async fn allowed_expired_window_uses_authoritative_replacement_after_grace() {
+async fn disabled_expired_window_uses_authoritative_replacement_after_grace() {
     let store = Arc::new(MemoryAccountStore::default());
-    create_account(&store, "acct_allowed_replacement").await;
+    create_account_with_enabled(&store, "acct_allowed_replacement", false).await;
     let account = store.account("acct_allowed_replacement").unwrap();
     let server = MockServer::start().await;
     let service = quota_service_with_base_url(&store, reqwest::Client::new(), server.uri());
@@ -293,5 +299,51 @@ async fn allowed_expired_window_uses_authoritative_replacement_after_grace() {
             .windows()[0]
             .used_percent(),
         Some(0.0)
+    );
+}
+
+#[tokio::test]
+async fn duration_only_denial_schedules_the_weekly_reset_despite_recent_refresh() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_duration_timing").await;
+    let account = store.account("acct_duration_timing").unwrap();
+    let server = MockServer::start().await;
+    let service = quota_service_with_base_url(&store, reqwest::Client::new(), server.uri());
+    let reset = Utc::now().timestamp() + 2;
+    let usage = |allowed, used, week_reset| {
+        json!({"rate_limit": {
+            "allowed": allowed,
+            "primary_window": {"used_percent": 45, "limit_window_seconds": 18000, "reset_at": reset + 3600},
+            "secondary_window": {"used_percent": used, "limit_window_seconds": 604800, "reset_at": week_reset}
+        }})
+    };
+    mount_usage(&server, usage(false, 99, reset)).await;
+    service.refresh_account(account.id()).await.unwrap();
+    service.synchronize().await.unwrap();
+
+    let denied = QuotaState::exhausted(QuotaEvidence::UsageLimitReached, SystemTime::now(), None)
+        .with_limit_window_minutes(Some(10080));
+    store
+        .apply_quota_access(QuotaAccessChange {
+            account_id: account.id().clone(),
+            expected_revision: account.revision(),
+            state: denied,
+        })
+        .await
+        .unwrap();
+    mount_usage(&server, usage(true, 0, reset + 604800)).await;
+    service.synchronize().await.unwrap();
+    assert!(server.received_requests().await.unwrap().is_empty());
+    wait_for_reset_grace(reset).await;
+    let summary = service.synchronize().await.unwrap();
+    assert_eq!(summary.updated, 1);
+    assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    assert_eq!(
+        store
+            .account("acct_duration_timing")
+            .unwrap()
+            .quota()
+            .access(),
+        QuotaAccessState::Allowed
     );
 }

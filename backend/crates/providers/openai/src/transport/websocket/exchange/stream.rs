@@ -6,7 +6,7 @@ use bytes::Bytes;
 use gateway_core::diagnostics::{TraceContext, diagnostic_json};
 use gateway_core::engine::response_control::{ActiveResponseInterrupt, ResponseControl};
 use serde_json::json;
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::{Mutex, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
 use super::super::{
@@ -64,16 +64,20 @@ impl StreamWebSocketDiscardReason {
     }
 }
 
-pub(in crate::transport::websocket) fn stream_websocket_response(
-    websocket: PumpedWebSocket,
+pub(in crate::transport::websocket) async fn stream_websocket_response(
+    mut websocket: PumpedWebSocket,
     mut metadata: CodexWebSocketConnectionMetadata,
     pool_return: Option<WebSocketStreamPoolReturn>,
     reused_connection: bool,
     stream_idle_timeout: Option<Duration>,
     trace: TraceContext,
     response_control: Option<ResponseControl>,
-) -> CodexWebSocketStreamingExchange {
+) -> Result<CodexWebSocketStreamingExchange, CodexWebSocketExchangeError> {
     let session_proxy = metadata.session_proxy.take();
+    websocket.bind_control(response_control.as_ref());
+    let downstream_cancellation = response_control
+        .as_ref()
+        .and_then(ResponseControl::connection_cancellation);
     let websocket_connection_id = websocket.connection_id();
     let response_metadata = metadata.clone();
     let rate_limit_updates = Arc::new(Mutex::new(Vec::new()));
@@ -83,6 +87,7 @@ pub(in crate::transport::websocket) fn stream_websocket_response(
     }));
     let response_metadata_updates_for_task = Arc::clone(&response_metadata_updates);
     let (tx, rx) = mpsc::channel(WEBSOCKET_STREAM_BUFFER);
+    let (first_reply, size_rejection) = oneshot::channel();
     let (task_tracker, shutdown) = pool_return
         .as_ref()
         .map(|pool_return| pool_return.lease.stream_task_context())
@@ -90,9 +95,6 @@ pub(in crate::transport::websocket) fn stream_websocket_response(
             || (None, CancellationToken::new()),
             |(tasks, shutdown)| (Some(tasks), shutdown),
         );
-    let downstream_cancellation = response_control
-        .as_ref()
-        .and_then(ResponseControl::connection_cancellation);
     let forward = async move {
         forward_websocket_response_stream(WebSocketStreamForwardState {
             session_proxy,
@@ -102,6 +104,7 @@ pub(in crate::transport::websocket) fn stream_websocket_response(
             pool_return,
             reused_connection,
             stream_idle_timeout,
+            first_reply: Some(first_reply),
             delivery: WebSocketStreamDelivery {
                 trace,
                 shutdown,
@@ -123,7 +126,11 @@ pub(in crate::transport::websocket) fn stream_websocket_response(
         rx.recv().await.map(|item| (item, rx))
     });
 
-    CodexWebSocketStreamingExchange {
+    // 在暴露传输类型前处理上游对当前请求的明确拒绝；首个文本（含内部元数据）即确定 WS
+    if let Ok(error) = size_rejection.await {
+        return Err(error);
+    }
+    Ok(CodexWebSocketStreamingExchange {
         routing_affinity: response_metadata.routing_affinity,
         websocket_connection_id,
         body: Box::pin(body),
@@ -137,7 +144,7 @@ pub(in crate::transport::websocket) fn stream_websocket_response(
         connection_local_continuation: false,
         diagnostics: response_metadata.diagnostics,
         response_metadata: response_metadata.response_metadata,
-    }
+    })
 }
 
 struct WebSocketStreamForwardState {
@@ -151,6 +158,7 @@ struct WebSocketStreamForwardState {
     stream_idle_timeout: Option<Duration>,
     rate_limit_updates: CodexWebSocketRateLimitUpdates,
     response_metadata_updates: CodexWebSocketResponseMetadataUpdates,
+    first_reply: Option<oneshot::Sender<CodexWebSocketExchangeError>>,
 }
 
 struct WebSocketStreamDelivery {
@@ -206,6 +214,7 @@ async fn forward_websocket_response_stream(state: WebSocketStreamForwardState) {
         stream_idle_timeout,
         rate_limit_updates,
         response_metadata_updates,
+        mut first_reply,
     } = state;
     let trace = &delivery.trace;
     let mut session_proxy = session_proxy;
@@ -291,7 +300,10 @@ async fn forward_websocket_response_stream(state: WebSocketStreamForwardState) {
             break;
         };
         let raw = match message {
-            tungstenite::Message::Text(text) => text.to_string(),
+            tungstenite::Message::Text(text) => {
+                first_reply.take();
+                text.to_string()
+            }
             tungstenite::Message::Binary(bytes) => {
                 drop(active_interrupt.take());
                 trace.capture("upstream.binary", &bytes);
@@ -335,6 +347,12 @@ async fn forward_websocket_response_stream(state: WebSocketStreamForwardState) {
                 )
                 .await;
                 let error = error.with_connection_observation(observation);
+                if error.message_too_big_close()
+                    && let Some(first_reply) = first_reply.take()
+                {
+                    let _ = first_reply.send(error);
+                    return;
+                }
                 let error = if reused_connection {
                     reused_stream_receive_error(error)
                 } else {

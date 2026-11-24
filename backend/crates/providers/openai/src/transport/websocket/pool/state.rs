@@ -29,6 +29,7 @@ pub struct CodexWebSocketPoolKey {
     client_scope: String,
     conversation_id: String,
     connection_profile: String,
+    response_exclusions: Vec<String>,
     installation_id: Option<String>,
     routing_affinity_id: Option<Uuid>,
     pub(super) downstream_connection_id: String,
@@ -54,6 +55,7 @@ impl PartialEq for CodexWebSocketPoolKey {
             && self.client_scope == other.client_scope
             && self.conversation_id == other.conversation_id
             && self.routing_affinity_id == other.routing_affinity_id
+            && self.response_exclusions == other.response_exclusions
             && self.connection_profile == other.connection_profile
             && self.installation_id == other.installation_id
             && self.downstream_connection_id == other.downstream_connection_id
@@ -70,6 +72,7 @@ impl Hash for CodexWebSocketPoolKey {
         self.account_id.hash(state);
         self.conversation_id.hash(state);
         self.connection_profile.hash(state);
+        self.response_exclusions.hash(state);
         self.installation_id.hash(state);
         self.downstream_connection_id.hash(state);
         self.egress_key.hash(state);
@@ -111,6 +114,7 @@ impl CodexWebSocketPoolKey {
             client_scope: String::new(),
             conversation_id: conversation_id.into(),
             connection_profile: String::new(),
+            response_exclusions: Vec::new(),
             installation_id: None,
             routing_affinity_id: None,
             downstream_connection_id: String::new(),
@@ -136,6 +140,16 @@ impl CodexWebSocketPoolKey {
     /// 区分实际 WebSocket opening 画像，防止复用旧 UA 或不同握手语义的连接。
     pub(crate) fn with_connection_profile(mut self, connection_profile: impl Into<String>) -> Self {
         self.connection_profile = connection_profile.into();
+        self
+    }
+
+    /// 上游只在握手时读取响应排除项，精确续接也必须匹配最终发出的头值
+    pub(crate) fn with_response_exclusions(mut self, opening_headers: &[(String, String)]) -> Self {
+        self.response_exclusions = opening_headers
+            .iter()
+            .filter(|(name, _)| name.eq_ignore_ascii_case("x-codex-exclude"))
+            .map(|(_, value)| value.clone())
+            .collect();
         self
     }
 
@@ -175,6 +189,7 @@ impl CodexWebSocketPoolKey {
             && self.account_id == other.account_id
             && self.client_scope == other.client_scope
             && self.conversation_id == other.conversation_id
+            && self.response_exclusions == other.response_exclusions
             && self.routing_affinity_id == other.routing_affinity_id
             && self
                 .routing
@@ -215,7 +230,10 @@ impl CodexWebSocketPoolKey {
     }
 
     pub(crate) fn stable_hash(&self) -> String {
-        let routing_affinity = self.routing_affinity_id.map(|id| id.to_string());
+        let routing_affinity = self
+            .routing_affinity_id
+            .map(|id| id.to_string())
+            .unwrap_or_default();
         let parts = [
             self.base_url.as_str(),
             self.account_id.as_str(),
@@ -229,7 +247,8 @@ impl CodexWebSocketPoolKey {
             parts
                 .into_iter()
                 .chain((!self.client_scope.is_empty()).then_some(self.client_scope.as_str()))
-                .chain(routing_affinity.as_deref()),
+                .chain((!routing_affinity.is_empty()).then_some(routing_affinity.as_str()))
+                .chain(self.response_exclusions.iter().map(String::as_str)),
         )
     }
 
@@ -242,6 +261,7 @@ impl CodexWebSocketPoolKey {
             && self.conversation_id == other.conversation_id
             && self.routing_affinity_id == other.routing_affinity_id
             && self.egress_key == other.egress_key
+            && self.response_exclusions == other.response_exclusions
     }
 }
 

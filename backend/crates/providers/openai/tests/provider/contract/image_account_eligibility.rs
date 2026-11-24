@@ -286,3 +286,121 @@ async fn free_excel_image_account_keeps_its_separate_route() {
     assert_eq!(rejected.send_state(), UpstreamSendState::NotSent);
     assert!(server.received_requests().await.unwrap().is_empty());
 }
+
+pub(super) fn borrow_text(root: &str, turn: &str) -> Operation {
+    let body = json!({"model":"gpt-5.4","input":"hello","stream":true,"client_metadata":{"session_id":root,"turn_id":turn}});
+    Operation::Generate(GenerateRequest::from_protocol_payload(
+        ProtocolPayload::json_object("openai", body.as_object().unwrap().clone())
+            .unwrap()
+            .with_context(Map::from_iter([("use_websocket".into(), json!(false))])),
+    ))
+}
+
+fn borrow_image(kind: ImageRequestKind, body: &[u8]) -> Operation {
+    Operation::GenerateImage(ImageRequest::from_raw_json(
+        kind,
+        RawJsonPayload::new("openai", Bytes::copy_from_slice(body)).unwrap(),
+    ))
+}
+
+#[tokio::test]
+async fn strict_session_images_borrow_within_group_and_account_model_access() {
+    use gateway_core::routing::{AccountGroupId, RoutingGroupSnapshot};
+
+    const CPA_ACCOUNT: &str = "acct_provider_contract";
+    const IMAGE_ACCOUNT: &str = "acct_scope_new";
+    const TEXT_ONLY: &str = "acct_text_only";
+    let chat = AccountGroupId::new("grp_00000000000000000000000000000001").unwrap();
+    let mixed = AccountGroupId::new("grp_00000000000000000000000000000002").unwrap();
+    let openai = ProviderKind::new("openai").unwrap();
+    let deny_image =
+        AccountModelAccess::new(AccountModelAccessMode::Denylist, vec!["gpt-image-2".into()])
+            .unwrap();
+    let accounts = [
+        (CPA_ACCOUNT, &chat, AccountModelAccess::all()),
+        (TEXT_ONLY, &mixed, deny_image.clone()),
+        (IMAGE_ACCOUNT, &mixed, AccountModelAccess::all()),
+    ]
+    .map(|(id, group, access)| {
+        (
+            ProviderAccountId::new(id).unwrap(),
+            RuntimeAccount::new(openai.clone(), [group.clone()].into()).with_model_access(access),
+        )
+    });
+    let scope = Arc::new(FrozenAccountScope::new(
+        Arc::new(
+            RuntimeAccountDirectory::new(accounts.into())
+                .with_group_model_access([(chat.clone(), deny_image)].into()),
+        ),
+        ClientRoutingScope::restricted(
+            vec![
+                RoutingGroupSnapshot::new(chat.clone(), "Chat".into()),
+                RoutingGroupSnapshot::new(mixed.clone(), "Mixed".into()),
+            ],
+            [chat, mixed].into(),
+            [openai].into(),
+        )
+        .unwrap(),
+    ));
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .and(header(
+            "chatgpt-account-id",
+            format!("chatgpt-{CPA_ACCOUNT}"),
+        ))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw(CAPTURE_COMPLETED_SSE, "text/event-stream"),
+        )
+        .expect(3)
+        .mount(&server)
+        .await;
+    for endpoint in ["/codex/images/generations", "/codex/images/edits"] {
+        Mock::given(method("POST"))
+            .and(path(endpoint))
+            .and(header(
+                "chatgpt-account-id",
+                format!("chatgpt-{IMAGE_ACCOUNT}"),
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data":[]})))
+            .expect(1)
+            .mount(&server)
+            .await;
+    }
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, CPA_ACCOUNT).await;
+    let provider = provider_with_base_url(&store, server.uri());
+    let send = async |request| {
+        let mut stream = provider
+            .execute(
+                request,
+                context_with_account_scope(
+                    "req_image_borrow",
+                    CancellationToken::new(),
+                    scope.clone(),
+                ),
+            )
+            .await
+            .unwrap();
+        while let Some(event) = stream.next().await {
+            event.unwrap();
+        }
+    };
+    let text = |turn| planned_request("openai", borrow_text("root", turn));
+    send(text("first")).await;
+    create_account(&store, TEXT_ONLY).await;
+    create_account(&store, IMAGE_ACCOUNT).await;
+    store.set_scheduling(TEXT_ONLY, None, AccountWeight::new(100).unwrap());
+    let generation = borrow_image(
+        ImageRequestKind::Generation,
+        br#"{"session_id":"root","model":"gpt-image-2","prompt":"draw"}"#,
+    );
+    let edit = borrow_image(
+        ImageRequestKind::Edit,
+        br#"{"session_id":"root","thread_id":"child","model":"gpt-image-2","prompt":"edit"}"#,
+    );
+    for (image, next_turn) in [(generation, "after-generation"), (edit, "after-edit")] {
+        send(planned_provider_endpoint_request("openai", image)).await;
+        send(text(next_turn)).await;
+    }
+}

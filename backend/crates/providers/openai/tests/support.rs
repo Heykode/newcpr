@@ -425,6 +425,7 @@ impl ProviderAccountStore for MemoryAccountStore {
     async fn list_for_provider(
         &self,
         provider: &ProviderKind,
+        include_disabled: bool,
     ) -> Result<Vec<ProviderAccount>, StoreError> {
         self.provider_list_reads.fetch_add(1, Ordering::SeqCst);
         let hook = self.before_provider_list.lock().unwrap().take();
@@ -445,7 +446,10 @@ impl ProviderAccountStore for MemoryAccountStore {
             .lock()
             .expect("account store lock")
             .values()
-            .filter(|stored| stored.account.provider() == provider && stored.account.enabled())
+            .filter(|stored| {
+                stored.account.provider() == provider
+                    && (include_disabled || stored.account.enabled())
+            })
             .map(|stored| stored.account.clone())
             .collect())
     }

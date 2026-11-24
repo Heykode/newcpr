@@ -11,19 +11,18 @@ use std::sync::{
 };
 use std::time::Duration;
 
-use bytes::Bytes;
 use futures::{Sink, SinkExt, Stream, StreamExt};
 use tokio::{sync::mpsc, task::JoinHandle, time::Instant};
 use tokio_util::sync::{CancellationToken, DropGuard};
-use tungstenite::{
-    Message,
-    protocol::frame::{Fragment, Frame, coding::Data},
-};
+use tungstenite::Message;
 use uuid::Uuid;
 
 use super::{
     CodexWebSocketCloseError, CodexWebSocketExchangeError,
-    control::{PumpCommand, PumpControl, SharedMessages, send_message},
+    control::{
+        PumpCommand, PumpControl, SharedMessages, UploadOutcome, WEBSOCKET_SEND_TIMEOUT,
+        send_message,
+    },
 };
 
 /// 底层 tungstenite WebSocket 流
@@ -99,6 +98,20 @@ pub(crate) enum PumpExitReason {
 }
 
 impl PumpExitReason {
+    pub(super) fn from_close(message: &Message) -> Option<Self> {
+        let Message::Close(frame) = message else {
+            return None;
+        };
+        Some(Self::UpstreamCloseFrame {
+            close: frame.as_ref().map(|frame| {
+                CodexWebSocketCloseError::new(
+                    Some(u16::from(frame.code)),
+                    Some(frame.reason.to_string()),
+                )
+            }),
+        })
+    }
+
     pub(crate) fn as_str(&self) -> &'static str {
         match self {
             Self::CommandChannelClosed => "command_channel_closed",
@@ -181,7 +194,7 @@ impl PumpExitReason {
 }
 
 struct PendingInbound {
-    item: Result<Message, tungstenite::Error>,
+    item: Result<Message, CodexWebSocketExchangeError>,
     exit_reason: Option<PumpExitReason>,
 }
 
@@ -374,6 +387,36 @@ impl PumpedWebSocket {
         .await
     }
 
+    pub(super) async fn upload(
+        &self,
+        text: tungstenite::Utf8Bytes,
+    ) -> Result<UploadOutcome, CodexWebSocketExchangeError> {
+        let deadline = Instant::now() + WEBSOCKET_SEND_TIMEOUT;
+        let (accepted, admission) = tokio::sync::oneshot::channel();
+        let result = tokio::time::timeout_at(deadline, async {
+            self.tx_command
+                .send(PumpCommand::Upload {
+                    compression_threshold: self.compression_threshold,
+                    text,
+                    deadline,
+                    accepted,
+                })
+                .await
+                .map_err(|_| CodexWebSocketExchangeError::SendNotStarted)?;
+            admission
+                .await
+                .map_err(|_| CodexWebSocketExchangeError::SendNotStarted)
+        })
+        .await
+        .map_err(|_| CodexWebSocketExchangeError::SendTimeout {
+            timeout: WEBSOCKET_SEND_TIMEOUT,
+        })??;
+        // 接单后由 pump 执行同一截止时间，调用方不能先超时并丢弃已经读到的上游回复
+        result
+            .await
+            .unwrap_or_else(|_| Err(tungstenite::Error::ConnectionClosed.into()))
+    }
+
     /// 每轮发送后替换控制 owner，旧执行的弱引用不能控制下一轮连接
     pub(crate) fn bind_control(&mut self, control: Option<&ResponseControl>) {
         self.revoke_control();
@@ -401,7 +444,7 @@ impl PumpedWebSocket {
     /// 取出下一帧入站消息（`Ping`/`Pong` 已被 pump 处理，不会到达这里）
     ///
     /// 返回 `None` 表示连接已结束（pump 已退出且缓冲已排空）
-    pub(crate) async fn next(&mut self) -> Option<Result<Message, tungstenite::Error>> {
+    pub(crate) async fn next(&mut self) -> Option<Result<Message, CodexWebSocketExchangeError>> {
         self.rx_message.lock().await.recv().await
     }
 
@@ -470,7 +513,7 @@ async fn pump_loop(
     connection_id: Uuid,
     mut inner: PumpSocket,
     mut rx_command: mpsc::Receiver<PumpCommand>,
-    tx_message: mpsc::Sender<Result<Message, tungstenite::Error>>,
+    tx_message: mpsc::Sender<Result<Message, CodexWebSocketExchangeError>>,
     context: PumpLogContext,
     closed: Arc<AtomicBool>,
     lifecycle: Arc<Mutex<PumpLifecycleState>>,
@@ -497,7 +540,7 @@ async fn pump_loop(
                     let Some(command) = command else {
                         break 'pump PumpExitReason::CommandChannelClosed;
                     };
-                    if let Some(reason) = handle_command(&mut inner, command, closed.load(Ordering::Acquire)).await {
+                    if let Some(reason) = handle_command(&mut inner, command, &tx_message, &mut pending_inbound, &closed, &lifecycle).await {
                         break 'pump reason;
                     }
                 }
@@ -510,7 +553,7 @@ async fn pump_loop(
                 let Some(command) = command else {
                     break 'pump PumpExitReason::CommandChannelClosed;
                 };
-                if let Some(reason) = handle_command(&mut inner, command, closed.load(Ordering::Acquire)).await {
+                if let Some(reason) = handle_command(&mut inner, command, &tx_message, &mut pending_inbound, &closed, &lifecycle).await {
                     break 'pump reason;
                 }
             }
@@ -556,17 +599,7 @@ async fn pump_loop(
                             }
                             Message::Pong(_) => {}
                             message => {
-                                let terminal_reason = match &message {
-                                    Message::Close(frame) => Some(PumpExitReason::UpstreamCloseFrame {
-                                        close: frame.as_ref().map(|frame| {
-                                            CodexWebSocketCloseError::new(
-                                                Some(u16::from(frame.code)),
-                                                Some(frame.reason.to_string()),
-                                            )
-                                        }),
-                                    }),
-                                    _ => None,
-                                };
+                                let terminal_reason = PumpExitReason::from_close(&message);
                                 if let Some(reason) = &terminal_reason {
                                     record_closed(&closed, &lifecycle, reason);
                                 }
@@ -597,7 +630,7 @@ async fn pump_loop(
                             connection_id,
                             &mut backpressure_events,
                             PendingInbound {
-                                item: Err(err),
+                                item: Err(err.into()),
                                 exit_reason: Some(terminal_reason),
                             },
                         ) {
@@ -612,8 +645,10 @@ async fn pump_loop(
     record_closed(&closed, &lifecycle, &reason);
     // 排队命令尚未进入底层发送，关闭握手前即回绝，避免调用方等待或误判为已发送
     rx_command.close();
-    while let Ok(PumpCommand::Send { ack, .. }) = rx_command.try_recv() {
-        let _ = ack.send(Err(CodexWebSocketExchangeError::SendNotStarted));
+    while let Ok(command) = rx_command.try_recv() {
+        if let PumpCommand::Send { ack, .. } = command {
+            let _ = ack.send(Err(CodexWebSocketExchangeError::SendNotStarted));
+        }
     }
     let observation = {
         let lifecycle = lifecycle
@@ -641,8 +676,8 @@ async fn pump_loop(
 }
 
 fn enqueue_inbound(
-    tx_message: &mpsc::Sender<Result<Message, tungstenite::Error>>,
-    pending_inbound: &mut Option<Result<Message, tungstenite::Error>>,
+    tx_message: &mpsc::Sender<Result<Message, CodexWebSocketExchangeError>>,
+    pending_inbound: &mut Option<Result<Message, CodexWebSocketExchangeError>>,
     connection_id: Uuid,
     backpressure_events: &mut u64,
     inbound: PendingInbound,
@@ -669,19 +704,80 @@ fn enqueue_inbound(
 async fn handle_command(
     inner: &mut RawWsStream,
     command: PumpCommand,
-    closed: bool,
+    messages: &mpsc::Sender<Result<Message, CodexWebSocketExchangeError>>,
+    pending: &mut Option<Result<Message, CodexWebSocketExchangeError>>,
+    closed: &AtomicBool,
+    lifecycle: &Mutex<PumpLifecycleState>,
 ) -> Option<PumpExitReason> {
-    let PumpCommand::Send { message, ack } = command;
+    let (message, ack) = match command {
+        PumpCommand::Send { message, ack } => (message, ack),
+        PumpCommand::Upload {
+            compression_threshold,
+            text,
+            deadline,
+            accepted,
+        } => {
+            let (ack, result) = tokio::sync::oneshot::channel();
+            if closed.load(Ordering::Acquire)
+                || Instant::now() >= deadline
+                || accepted.send(result).is_err()
+            {
+                return None;
+            }
+            let mut upload = super::upload::Upload::new(messages, pending.is_some());
+            let write =
+                tokio::time::timeout_at(deadline, upload.send(inner, text, compression_threshold))
+                    .await;
+            if let Some(activity) = upload.last_activity {
+                record_activity(lifecycle, activity);
+            }
+            let (error, metric_reason) = match write {
+                Ok(Ok(())) => {
+                    let _ = ack.send(Ok(UploadOutcome::Flushed));
+                    return None;
+                }
+                Ok(Err(error)) => {
+                    let reason = transport_metric_reason(&error);
+                    (CodexWebSocketExchangeError::Transport(error), reason)
+                }
+                Err(_) => (
+                    CodexWebSocketExchangeError::SendTimeout {
+                        timeout: WEBSOCKET_SEND_TIMEOUT,
+                    },
+                    "send_timeout",
+                ),
+            };
+            let reason = upload
+                .close
+                .unwrap_or_else(|| PumpExitReason::OutboundTransportError {
+                    message: error.to_string(),
+                    metric_reason,
+                });
+            record_closed(closed, lifecycle, &reason);
+            let result = if !upload.started {
+                Err(CodexWebSocketExchangeError::SendNotStarted)
+            } else if upload.received_reply {
+                if !matches!(reason, PumpExitReason::UpstreamCloseFrame { .. }) {
+                    *pending = Some(Err(error));
+                }
+                Ok(UploadOutcome::InterruptedWithReply)
+            } else {
+                Err(error)
+            };
+            let _ = ack.send(result);
+            return Some(reason);
+        }
+    };
     // 发送超时或取消后，尚在队列里的业务帧不应继续打到上游
     if ack.is_closed() {
         return None;
     }
-    if closed {
+    if closed.load(Ordering::Acquire) {
         let _ = ack.send(Err(CodexWebSocketExchangeError::SendNotStarted));
         return None;
     }
     let is_close = matches!(message, Message::Close(_));
-    let result = write_message(inner, message).await;
+    let result = inner.send(message).await;
     let transport_error = result
         .as_ref()
         .err()
@@ -695,31 +791,6 @@ async fn handle_command(
         None if is_close => Some(PumpExitReason::LocalClose),
         None => None,
     }
-}
-
-/// 同一命令内逐帧写完大文本，保持一条消息的压缩上下文和发送回执
-async fn write_message(
-    inner: &mut RawWsStream,
-    message: Message,
-) -> Result<(), tungstenite::Error> {
-    const FRAGMENT_BYTES: usize = 1024 * 1024;
-    let mut remaining = match message {
-        Message::Text(text) if text.len() > FRAGMENT_BYTES => Bytes::from(text),
-        other => return inner.send(other).await,
-    };
-    let mut opcode = Data::Text;
-    while !remaining.is_empty() {
-        let payload = remaining.split_to(remaining.len().min(FRAGMENT_BYTES));
-        let fragment = if remaining.is_empty() {
-            Fragment::Final
-        } else {
-            Fragment::More
-        };
-        let frame = Frame::message_fragment(payload, opcode, fragment);
-        inner.send(Message::Frame(frame)).await?;
-        opcode = Data::Continue;
-    }
-    Ok(())
 }
 
 fn record_activity(lifecycle: &Mutex<PumpLifecycleState>, observed_at: Instant) {

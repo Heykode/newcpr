@@ -447,7 +447,7 @@ credential 与 quota 是两组独立事实：credential refresh 不等于 quota 
   自动续期能力。OAuth 身份只从官方 JWT claims 投影，不信任导入文档顶层身份字段。
 - xAI 使用 OAuth session；API Key 不是受支持的账号 credential。
 - 新账号导入和 OAuth complete（包括重新授权）在 credential 提交后尽力读取一次额度；失败只留下观测，不回滚账号事务。
-- 人工 OAuth 按本次 ID token/AT 更新 user/workspace，保留本地槽位名称与设置。身份变化清旧
+- 人工 OAuth 按本次 ID token/AT 更新 user/workspace，保留本地槽位名称与设置。同身份重新授权保留最近额度快照、耗尽、窗口提示和预热进度；身份变化清旧
   Cookie/principal、额度耗尽与重置证据；普通 RT 续期保留身份和资料。设备重绑、凭据 CAS、
   State binding revision 在同一 PG 事务内完成，活账号重复身份回滚，目标仅有历史设备归档时允许重绑。
 - `oauth_identity_key` 将本地 ID、上游 user 和 workspace 纳入账号/session-proxy client 的池 key，
@@ -674,3 +674,10 @@ Core 将本请求确认不可达的代理入口传入 Provider 直接及等待�
 费用图的图例、曲线和提示从同一序列定义派生；空桶可以补零，有请求但未知费用保持未知。
 批量代理新增、测试列表及通知共用统计规则，地区识别失败不改变连接测试成功状态。
 具体来源、保留差异和验证范围见 [v3.54.1 接入记录](upstream-v3541-native-parity.md)。
+
+
+### v3.54.5 原生路径边界
+
+严格 Images 借号把实际执行账号与会话主绑定分别交给同一准入 CAS；本地 Redis 代次、队列容量、Excel 路由和身份防线继续生效。Guardian 专用模型计划在 Core 执行入口核对严格父绑定的候选范围，不合格则重建原模型计划。WS 池同时核对最终响应排除头与原账号、出口、线程、凭据身份；上传由 pump 同时处理写入、读取和控制帧。
+
+配额限制时长随拒绝事实保存于 `quota_limit_window_minutes`，各账号查询统一解析。PostgreSQL 分别保护文档与访问时钟；同身份重授权保留事实但推进凭据版本。后台维护包括停用 OAuth 账号，客户端选号与预热不因此放宽。恢复规则和失败边界见 [账号 API](api.md#v3545-配额与原生调度补充)。
