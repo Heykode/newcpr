@@ -202,7 +202,7 @@ impl QuotaService {
         };
         if self
             .accounts
-            .compare_and_swap_quota(observation)
+            .compare_and_swap_connected_quota(&current.account, observation)
             .await
             .map_err(unavailable)?
             == QuotaWriteOutcome::Conflict

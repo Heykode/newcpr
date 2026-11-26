@@ -192,6 +192,15 @@ pub trait ProviderAccountStore: Send + Sync {
         observation: QuotaObservation,
     ) -> Result<QuotaWriteOutcome, StoreError>;
 
+    /// 主动查询返回时，写入事务还须核对账号仍启用且实际请求出口未变。
+    async fn compare_and_swap_connected_quota(
+        &self,
+        _account: &ProviderAccount,
+        _observation: QuotaObservation,
+    ) -> Result<QuotaWriteOutcome, StoreError> {
+        Err(StoreError::new(crate::error::StoreErrorKind::InvalidData))
+    }
+
     async fn touch_quota_observation(
         &self,
         touch: QuotaObservationTouch,

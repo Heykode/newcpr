@@ -273,6 +273,48 @@ async fn unknown_quota_preserves_only_observed_windows_without_inventing_percent
 }
 
 #[tokio::test]
+async fn quota_refresh_discards_response_after_account_proxy_changes() {
+    let server = MockServer::start().await;
+    upstream(&server, json!(0.5), Duration::ZERO).await;
+    let f = Fixture::new(&server.uri());
+    let account = f.store.primary().loaded.lock().unwrap().account.clone();
+    f.quota.refresh(account.id()).await.unwrap();
+    let before = f.store.primary().quota.lock().unwrap().clone();
+    let generation = f
+        .catalog
+        .generation
+        .load(std::sync::atomic::Ordering::Relaxed);
+    let store = f.store.clone();
+    Mock::given(path("/v1internal:retrieveUserQuotaSummary"))
+        .respond_with(move |_: &wiremock::Request| {
+            let mut loaded = store.primary().loaded.lock().unwrap();
+            loaded.account = loaded.account.clone().with_outbound_proxy(Some(
+                gateway_core::account::OutboundProxy::parse("http://proxy.example:8080").unwrap(),
+            ));
+            ResponseTemplate::new(200).set_body_json(json!({"groups":[]}))
+        })
+        .with_priority(1)
+        .mount(&server)
+        .await;
+    let error = f
+        .quota
+        .refresh(account.id())
+        .await
+        .expect_err("stale connection");
+    assert_eq!(
+        error.kind(),
+        gateway_admin::ports::provider::ProviderAdminErrorKind::Conflict
+    );
+    assert_eq!(*f.store.primary().quota.lock().unwrap(), before);
+    assert_eq!(
+        f.catalog
+            .generation
+            .load(std::sync::atomic::Ordering::Relaxed),
+        generation
+    );
+}
+
+#[tokio::test]
 async fn failed_or_stale_refresh_preserves_persisted_quota() {
     let server = MockServer::start().await;
     upstream(&server, json!(0.5), Duration::ZERO).await;

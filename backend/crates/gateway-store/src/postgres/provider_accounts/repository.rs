@@ -111,6 +111,14 @@ impl PgProviderAccountRepository {
         &self,
         observation: QuotaObservation,
     ) -> StoreResult<bool> {
+        self.write_observed_quota(observation, None).await
+    }
+
+    pub(super) async fn write_observed_quota(
+        &self,
+        observation: QuotaObservation,
+        connection: Option<&CoreProviderAccount>,
+    ) -> StoreResult<bool> {
         let account_id = observation.account_id.as_str();
         let expected_revision = Revision::new(observation.expected_revision.get())?;
         let quota = JsonObject::try_from_value(
@@ -129,6 +137,46 @@ impl PgProviderAccountRepository {
         let mut transaction = self.pool.begin().await.map_err(|error| {
             postgres_unavailable("begin provider quota update").with_source(error)
         })?;
+        if let Some(account) = connection {
+            if account.id() != &observation.account_id
+                || account.revision() != observation.expected_revision
+            {
+                return Ok(false);
+            }
+            // 账号行锁可能等待并发管理操作。取得锁后以新语句读取已提交的有效代理。
+            sqlx::query("select id from provider_accounts where id=$1 for update")
+                .bind(account_id)
+                .execute(&mut *transaction)
+                .await
+                .map_err(|e| postgres_unavailable("lock quota account").with_source(e))?;
+            let current = sqlx::query_scalar::<_, Option<String>>(
+                "select case when coalesce(p.enabled, true) then a.outbound_proxy_url end
+                 from provider_accounts a left join outbound_proxies p on p.id=a.outbound_proxy_id
+                 where a.id=$1 and a.enabled and a.credential_revision=$2",
+            )
+            .bind(account_id)
+            .bind(to_i64(expected_revision.get())?)
+            .fetch_optional(&mut *transaction)
+            .await
+            .map_err(|e| postgres_unavailable("read quota connection").with_source(e))?;
+            let Some(proxy) = current else {
+                return Ok(false);
+            };
+            let proxy = proxy
+                .as_deref()
+                .map(gateway_core::account::OutboundProxy::parse)
+                .transpose()
+                .map_err(|e| invalid("invalid quota account proxy").with_source(e))?;
+            if proxy
+                .as_ref()
+                .map(gateway_core::account::OutboundProxy::expose_url)
+                != account
+                    .outbound_proxy()
+                    .map(gateway_core::account::OutboundProxy::expose_url)
+            {
+                return Ok(false);
+            }
+        }
         let result = sqlx::query(
             "update provider_accounts
              set provider_quota_json = $3, quota_observed_at = $4,

@@ -3103,8 +3103,8 @@
       "upstream_new": "backend/crates/providers/antigravity/src/credential/quota/service.rs",
       "disposition": "adapted",
       "local": "backend/crates/providers/antigravity/src/credential/quota/service.rs",
-      "review": "OAuth账号以credential revision进行CAS，无上游连接类型；本地get_quotas读取同样版本/时间事实。",
-      "evidence": "See version parity record for the applicable package/behavior validation; no live upstream claim."
+      "review": "原整合只核对凭据版本，遗漏官方主动额度查询对启用状态及有效代理的写回保护。两批复查补回，决策及回归见 v3.55.3 记录。",
+      "evidence": "quota_refresh_discards_response_after_account_proxy_changes；connected_quota_rejects_disabled_account_and_changed_effective_proxy"
     },
     {
       "change": "A",

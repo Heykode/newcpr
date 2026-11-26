@@ -458,6 +458,24 @@ impl ProviderAccountStore for PgProviderAccountRepository {
         })
     }
 
+    async fn compare_and_swap_connected_quota(
+        &self,
+        account: &CoreProviderAccount,
+        observation: QuotaObservation,
+    ) -> Result<QuotaWriteOutcome, CoreStoreError> {
+        Ok(
+            if self
+                .write_observed_quota(observation, Some(account))
+                .await
+                .map_err(core_store_error)?
+            {
+                QuotaWriteOutcome::Updated
+            } else {
+                QuotaWriteOutcome::Conflict
+            },
+        )
+    }
+
     async fn get_quota_versions(
         &self,
         accounts: &[CoreProviderAccountId],

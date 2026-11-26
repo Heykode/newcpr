@@ -557,7 +557,7 @@
       "local": "backend/crates/providers/antigravity/src/credential/quota/service.rs",
       "action": "adapted",
       "plan": "E02/E03",
-      "reason": "reconcile使用轻量版本和活动查询；首次/凭据变更/耗尽复查不依赖活动查询成功，其他读取仍用完整额度。",
+      "reason": "reconcile 批读版本与活动。缺少匹配快照和耗尽到期时独立复查，同身份续期沿用快照。主动刷新写入时核对当前账号、凭据版本、启用状态和有效出口。",
       "excluded_parts": [],
       "validation": [
         "provider-antigravity 全包"

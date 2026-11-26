@@ -14,7 +14,7 @@
 | 编号 | 本地实际调用链与行为 | 适配及验证 |
 | --- | --- | --- |
 | E01 | 75个官方变更文件逐项归类，记录真实owner和排除部分 | 无依赖或迁移增量，验证状态见下文 |
-| E02 | AGY quota worker→reconcile→ProviderAccountStore轻量版本/活动查询→PG request_analytics_facts | 健康快照满五分钟且之后有成功生成才补查；初次、凭据变更和耗尽复查独立于活动查询失败。PG补齐轻量版本SQL，内存Store保留默认投影 |
+| E02 | AGY quota worker→reconcile→ProviderAccountStore轻量版本/活动查询→PG request_analytics_facts | 健康快照满五分钟且之后有成功生成才补查。缺少匹配快照和耗尽到期时独立复查。PostgreSQL 在同身份续期时沿用已有快照和原观测时间 |
 | E03 | 同次目录确认bucket_models→ProviderQuota Models→AccountsService窗口查询→PG聚合→前端窗口Token | 保留本地reset/window_seconds边界；已知无用量显示0，未知不补0。Models不进入整号估值、预测、恢复或分组监控 |
 | E04 | 原生GenAI路由→stream_execution_response_as→首帧等待/输出循环 | 关闭该协议首帧前与帧间保活；其他协议和取消/结算owner保留，删除不再使用的GenAI保活错误helper |
 | E05 | AGY catalog/model_groups→Core snapshot→ExecutionService::client_model_catalog实际fallback | 按Key授权成员裁剪档位、默认档位、图片、上下文及描述；映射覆盖使用目标画像。真实客户端调用者必须同步，不能只移植snapshot helper |
@@ -79,3 +79,11 @@ E01–E12的源码实施与隔离验收完成。共85个本地变更文件，包
 本轮没有提交、推送、合main、打标签或部署；本地没有生成target、node_modules、dist或浏览器测试产物。
 未执行真实Google OAuth、付费上游推理或生产压力测试；模拟协议、真实隔离PG和浏览器通过不能替代这些验证。
 未修改Redis实现；其真实后端合同复用上一批已记录证据，本轮Core/OpenAI回归不能代替新的Redis服务端测试。
+
+## 两批提交后的复查
+
+复查 `60ebb0f175` 和 `8830fd30fe` 时确认一处原生行为漏接。v3.55.2 官方 AGY 主动查额度时会记录账号当时的连接信息。此前本地只核对凭据版本，查询期间换代理或停用账号都可能让旧结果写回套餐、额度并继续发布模型目录。现由 AGY 调用带连接校验的 Store 写入。PostgreSQL 在更新事务内核对启用状态、凭据版本和有效代理 URL。冲突时停止后续目录发布。OpenAI 和 xAI 继续沿用各自原有的额度写入规则。
+
+OVH 的 `quota_refresh_discards_response_after_account_proxy_changes` 在旧实现下实际运行一项并失败，修正后通过。AGY 全包 104 项通过。PostgreSQL 账号适配器 6 项通过，其中新增用例覆盖只停代理、停用账号、冲突后无快照，以及恢复后当前连接可正常写入。全工作区所有目标和特性的严格 Clippy 通过。该验证使用模拟上游和隔离 PostgreSQL。
+
+另核对了同身份令牌续期。官方与本地 PostgreSQL 均保留已有健康额度和原观测时间，续期本身不会强制重查。已修订 E02、API 及版本说明。强制搜索对原型号和实际搜索型号均校验已知输出上限，两者须获同一账号和分组授权。Codex 分组 Fast 策略、严格排队与续接、Excel/State、只读共享、独立设置版本和套餐筛选，沿实际入口抽查并参考此前 OVH 证据，未发现本次新增回退。

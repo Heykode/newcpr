@@ -665,6 +665,13 @@ impl ProviderAccountStore for MemoryPorts {
     }
     async fn compare_and_swap_quota(
         &self,
+        _: QuotaObservation,
+    ) -> Result<QuotaWriteOutcome, StoreError> {
+        unreachable!("Antigravity quota refresh requires a connection")
+    }
+    async fn compare_and_swap_connected_quota(
+        &self,
+        expected: &ProviderAccount,
         observation: QuotaObservation,
     ) -> Result<QuotaWriteOutcome, StoreError> {
         let Some(account) = self.accounts.get(&observation.account_id) else {
@@ -672,7 +679,15 @@ impl ProviderAccountStore for MemoryPorts {
         };
         let mut current = account.loaded.lock().unwrap();
         let mut quota = account.quota.lock().unwrap();
-        if current.account.revision() != observation.expected_revision
+        if expected.id() != &observation.account_id
+            || expected.revision() != observation.expected_revision
+            || !current.account.enabled()
+            || current
+                .account
+                .outbound_proxy()
+                .map(OutboundProxy::expose_url)
+                != expected.outbound_proxy().map(OutboundProxy::expose_url)
+            || current.account.revision() != observation.expected_revision
             || quota
                 .as_ref()
                 .is_some_and(|q| q.observed_at > observation.observed_at)
