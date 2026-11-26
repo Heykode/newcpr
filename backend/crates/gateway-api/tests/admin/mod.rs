@@ -99,6 +99,10 @@ mod system;
 mod wire;
 
 pub(super) struct AdminTestFixture {
+    pub client_key: Arc<Mutex<Option<ClientKeyRecord>>>,
+    pub provider_quota: Arc<Mutex<Option<ProviderQuota>>>,
+    pub provider_quota_gate: Arc<Mutex<Option<Arc<ProviderQuotaGate>>>>,
+
     pub services: AdminServices,
     pub auth: Arc<MemoryAuthStore>,
     pub settings: Arc<MemorySettingsStore>,
@@ -137,7 +141,10 @@ impl AdminTestFixture {
         let api_key = Arc::new(Mutex::new(None));
         let auth = Arc::new(MemoryAuthStore::new(api_key.clone()));
         let settings = Arc::new(MemorySettingsStore::new(api_key));
-        let client_keys = Arc::new(MemoryClientKeyStore);
+        let client_key = Arc::new(Mutex::new(None));
+        let provider_quota = Arc::new(Mutex::new(None));
+        let provider_quota_gate = Arc::new(Mutex::new(None));
+        let client_keys = Arc::new(MemoryClientKeyStore(client_key.clone()));
         let account_groups = Arc::new(MemoryAccountGroupStore::new());
         let usage_records = Arc::new(Mutex::new(Vec::new()));
         let usage_detail = Arc::new(Mutex::new(None));
@@ -186,12 +193,16 @@ impl AdminTestFixture {
                 Arc::clone(&account),
                 Arc::clone(&provider_error),
                 Arc::clone(&provider_models),
+                Arc::clone(&provider_quota),
+                Arc::clone(&provider_quota_gate),
             )),
             Arc::new(UnusedProvider::new(
                 "xai",
                 Arc::clone(&account),
                 Arc::clone(&provider_error),
                 Arc::clone(&provider_models),
+                Arc::clone(&provider_quota),
+                Arc::clone(&provider_quota_gate),
             )),
         ];
         let bundle = gateway_admin::initialize(
@@ -207,6 +218,7 @@ impl AdminTestFixture {
             gateway_core::runtime::RuntimeSnapshotHandle::default(),
             (Arc::new(NoopProbe), Arc::new(proxies::SuccessfulProbe)),
             Arc::new(StaticClientDistribution),
+            Arc::new(OfflinePricing),
             (
                 system,
                 Arc::new(gateway_admin::ports::notification::DisabledNotificationDelivery),
@@ -215,6 +227,9 @@ impl AdminTestFixture {
         .await
         .expect("initialize test admin services");
         Self {
+            client_key,
+            provider_quota,
+            provider_quota_gate,
             services: bundle.services(),
             auth,
             settings,
@@ -475,16 +490,29 @@ impl SettingsStore for MemorySettingsStore {
                 "stale settings revision",
             ));
         }
+        let mut request_profiles = settings.request_profiles.clone();
+        for (provider, update) in &command.request_profile_updates {
+            if let Some(profile) = update {
+                request_profiles.insert(provider.clone(), profile.clone());
+            } else {
+                request_profiles.remove(provider);
+            }
+        }
         let updated = RuntimeSettings {
+            request_profiles,
+            codex_privacy_policy: command
+                .codex_privacy_policy
+                .clone()
+                .unwrap_or_else(|| settings.codex_privacy_policy.clone()),
             openai_oauth_guardian_review_model: true,
             openai_request_country: Default::default(),
 
-            openai_account_affinity: command
-                .openai_account_affinity
-                .unwrap_or(settings.openai_account_affinity),
-            openai_session_binding_ttl_hours: command
-                .openai_session_binding_ttl_hours
-                .unwrap_or(settings.openai_session_binding_ttl_hours),
+            account_affinity: command
+                .account_affinity
+                .unwrap_or(settings.account_affinity),
+            session_affinity_ttl_hours: command
+                .session_affinity_ttl_hours
+                .unwrap_or(settings.session_affinity_ttl_hours),
             turn_state_probe_proxy_id: command
                 .turn_state_probe_proxy_id
                 .unwrap_or_else(|| settings.turn_state_probe_proxy_id.clone()),
@@ -565,7 +593,12 @@ impl SettingsStore for MemorySettingsStore {
     }
 }
 
-pub(super) struct MemoryClientKeyStore;
+pub(super) struct MemoryClientKeyStore(Arc<Mutex<Option<ClientKeyRecord>>>);
+
+pub(super) struct ProviderQuotaGate {
+    pub entered: tokio::sync::Semaphore,
+    pub release: tokio::sync::Semaphore,
+}
 
 pub(super) const PRIMARY_GROUP_ID: &str = "grp_11111111111111111111111111111111";
 pub(super) const SECONDARY_GROUP_ID: &str = "grp_22222222222222222222222222222222";
@@ -951,13 +984,9 @@ impl ClientKeyStore for MemoryClientKeyStore {
     }
     async fn get_client_key(
         &self,
-        _: &gateway_core::policy::ClientApiKeyId,
-    ) -> AdminStoreResult<Option<gateway_admin::model::client_keys::ClientKeyRecord>> {
-        Err(AdminStoreError::new(
-            AdminStoreErrorKind::Unavailable,
-            "test",
-            "unused key operation",
-        ))
+        id: &ClientApiKeyId,
+    ) -> AdminStoreResult<Option<ClientKeyRecord>> {
+        Ok(self.0.lock().unwrap().clone().filter(|key| &key.id == id))
     }
     async fn client_key_budget(
         &self,
@@ -1001,6 +1030,7 @@ impl ClientKeyStore for MemoryClientKeyStore {
         let now = Utc::now();
         Ok(Some(ClientKeySecret::new(
             ClientKeyRecord {
+                peer_sharing: Default::default(),
                 request_profile_overrides: Default::default(),
                 budget: Default::default(),
                 id: id.clone(),
@@ -1516,6 +1546,8 @@ impl ObservabilityStore for UnusedStore {
 }
 
 struct UnusedProvider {
+    peer_quota: Arc<Mutex<Option<ProviderQuota>>>,
+    peer_quota_gate: Arc<Mutex<Option<Arc<ProviderQuotaGate>>>>,
     kind: ProviderKind,
     account: Arc<Mutex<Option<AccountDirectoryItem>>>,
     error: Arc<Mutex<Option<ProviderAdminError>>>,
@@ -1528,8 +1560,12 @@ impl UnusedProvider {
         account: Arc<Mutex<Option<AccountDirectoryItem>>>,
         error: Arc<Mutex<Option<ProviderAdminError>>>,
         models: Arc<Mutex<Option<ProviderModels>>>,
+        peer_quota: Arc<Mutex<Option<ProviderQuota>>>,
+        peer_quota_gate: Arc<Mutex<Option<Arc<ProviderQuotaGate>>>>,
     ) -> Self {
         Self {
+            peer_quota,
+            peer_quota_gate,
             kind: ProviderKind::new(kind).expect("provider kind"),
             account,
             error,
@@ -1540,6 +1576,43 @@ impl UnusedProvider {
 
 #[async_trait]
 impl ProviderAdmin for UnusedProvider {
+    fn is_direct_account(&self, authentication_kind: &str) -> bool {
+        authentication_kind == "oauth"
+    }
+    fn peer_model_eligible(
+        &self,
+        account: &gateway_admin::model::accounts::AccountRecord,
+        _: &str,
+    ) -> Option<bool> {
+        Some(account.authentication_kind == "oauth")
+    }
+    async fn read_quotas(
+        &self,
+        requests: &[gateway_admin::model::provider_credentials::ProviderQuotaReadRequest<'_>],
+    ) -> Vec<Result<ProviderQuota, ProviderAdminError>> {
+        let gate = self.peer_quota_gate.lock().unwrap().clone();
+        if let Some(gate) = gate {
+            gate.entered.add_permits(1);
+            gate.release.acquire().await.unwrap().forget();
+        }
+        let quota = self.peer_quota.lock().unwrap().clone();
+        if let Some(quota) = quota {
+            return requests.iter().map(|_| Ok(quota.clone())).collect();
+        }
+        futures::future::join_all(requests.iter().map(|request| async {
+            self.quota(
+                gateway_admin::model::provider_credentials::ProviderQuotaRequest {
+                    account_id: ProviderAccountId::new(request.account.id.clone())
+                        .map_err(|_| ProviderAdminError::new(ProviderAdminErrorKind::Invalid))?,
+                    refresh: false,
+                    rolling_usage: request.rolling_usage.cloned(),
+                },
+            )
+            .await
+        }))
+        .await
+    }
+
     fn provider_kind(&self) -> &ProviderKind {
         &self.kind
     }
@@ -1771,11 +1844,13 @@ fn test_runtime_settings() -> RuntimeSettings {
         ),
     ]);
     RuntimeSettings {
+        request_profiles: Default::default(),
+        codex_privacy_policy: Default::default(),
         openai_oauth_guardian_review_model: true,
         openai_request_country: Default::default(),
 
-        openai_account_affinity: Default::default(),
-        openai_session_binding_ttl_hours: 24,
+        account_affinity: Default::default(),
+        session_affinity_ttl_hours: 24,
         config_revision: Revision::new(7).expect("revision"),
         turn_state_probe_proxy_id: None,
         turn_state_probe_concurrency: 3,
@@ -1860,4 +1935,18 @@ fn unsupported_provider() -> ProviderAdminError {
 
 fn unavailable_system() -> SystemOperationError {
     SystemOperationError::new(SystemOperationErrorKind::Internal, "unused test operation")
+}
+
+struct OfflinePricing;
+#[async_trait::async_trait]
+impl gateway_admin::ports::pricing::PricingSource for OfflinePricing {
+    async fn fetch(
+        &self,
+        _scope: &gateway_admin::ports::pricing::PricingSourceScope,
+    ) -> Result<gateway_admin::model::pricing::PricingSyncPreview, gateway_admin::model::AdminError>
+    {
+        Err(gateway_admin::model::AdminError::invalid(
+            "offline pricing source",
+        ))
+    }
 }

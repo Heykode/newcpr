@@ -36,8 +36,9 @@ fn context() -> MutationContext {
     }
 }
 
-fn storage_command(endpoint: &str) -> UpdateBackupStorageCommand {
+fn storage_command(endpoint: &str, storage_revision: u64) -> UpdateBackupStorageCommand {
     UpdateBackupStorageCommand {
+        storage_revision,
         endpoint: endpoint.to_owned(),
         region: "auto".to_owned(),
         bucket: "backup-bucket".to_owned(),
@@ -50,7 +51,7 @@ fn storage_command(endpoint: &str) -> UpdateBackupStorageCommand {
 
 async fn enable_verified_schedule(repository: &PgBackupRepository) -> BackupSettings {
     let (settings, _) = repository
-        .update_storage_settings(storage_command("https://one.example.com"), &context())
+        .update_storage_settings(storage_command("https://one.example.com", 1), &context())
         .await
         .expect("configure storage");
     repository
@@ -60,6 +61,7 @@ async fn enable_verified_schedule(repository: &PgBackupRepository) -> BackupSett
     repository
         .update_schedule_settings(
             UpdateBackupScheduleCommand {
+                storage_revision: settings.storage_revision,
                 schedule_enabled: true,
                 cron_expression: "0 2 * * *".to_owned(),
                 schedule_timezone: "Asia/Shanghai".to_owned(),
@@ -208,7 +210,7 @@ async fn storage_rotation_pauses_schedule_and_rejects_stale_verification() {
     };
     let repository = PgBackupRepository::new(db.pool.clone());
     let before = enable_verified_schedule(&repository).await;
-    let mut command = storage_command("https://one.example.com");
+    let mut command = storage_command("https://one.example.com", before.storage_revision);
     command.secret_access_key = Some(SecretString::from("rotated-secret"));
     let (after, _) = repository
         .update_storage_settings(command, &context())
@@ -225,6 +227,35 @@ async fn storage_rotation_pauses_schedule_and_rejects_stale_verification() {
             .await
             .expect("stale verification is ignored")
     );
+    let mut stale_save = storage_command("https://one.example.com", before.storage_revision);
+    stale_save.secret_access_key = None;
+    assert_eq!(
+        repository
+            .update_storage_settings(stale_save, &context())
+            .await
+            .unwrap_err()
+            .kind(),
+        AdminStoreErrorKind::StaleRevision,
+    );
+    let mut enable = UpdateBackupScheduleCommand {
+        storage_revision: before.storage_revision,
+        schedule_enabled: true,
+        cron_expression: "0 2 * * *".into(),
+        schedule_timezone: "UTC".into(),
+        retention_days: 7,
+        retention_count: 5,
+    };
+    for expected in [
+        AdminStoreErrorKind::StaleRevision,
+        AdminStoreErrorKind::Conflict,
+    ] {
+        let failure = repository
+            .update_schedule_settings(enable.clone(), Some(Utc::now()), &context())
+            .await
+            .unwrap_err();
+        assert_eq!(failure.kind(), expected);
+        enable.storage_revision = after.storage_revision;
+    }
     let changed: Vec<String> = sqlx::query_scalar(
         "select changed_fields from admin_audit_events
          where action = 'backup.s3_config_updated' and 'schedule_enabled' = any(changed_fields)",
@@ -262,7 +293,7 @@ async fn unchanged_storage_preserves_verification_schedule_and_revision() {
         .await
         .expect("current audit count");
     for include_secret in [true, false] {
-        let mut command = storage_command("https://one.example.com");
+        let mut command = storage_command("https://one.example.com", before.storage_revision);
         if !include_secret {
             command.secret_access_key = None;
         }
@@ -457,18 +488,14 @@ async fn storage_identity_is_locked_once_records_exist() {
     };
     let repository = PgBackupRepository::new(db.pool.clone());
 
-    repository
-        .update_storage_settings(storage_command("https://one.example.com"), &context())
+    let (first, _) = repository
+        .update_storage_settings(storage_command("https://one.example.com", 1), &context())
         .await
         .expect("configure storage with no records");
 
-    let changed_endpoint = {
-        let mut command = storage_command("https://two.example.com");
-        command.endpoint = "https://two.example.com".to_owned();
-        command
-    };
-    // 尚无记录时允许切换 endpoint。
-    repository
+    let changed_endpoint = storage_command("https://two.example.com", first.storage_revision);
+    // 尚无记录时允许切换 endpoint
+    let (second, _) = repository
         .update_storage_settings(changed_endpoint, &context())
         .await
         .expect("endpoint change allowed with no records");
@@ -482,14 +509,17 @@ async fn storage_identity_is_locked_once_records_exist() {
         .expect("insert queued");
 
     let locked = repository
-        .update_storage_settings(storage_command("https://three.example.com"), &context())
+        .update_storage_settings(
+            storage_command("https://three.example.com", second.storage_revision),
+            &context(),
+        )
         .await
         .expect_err("endpoint change must be rejected with records");
     assert_eq!(locked.kind(), AdminStoreErrorKind::Conflict);
 
     // 只轮换凭据与修改 prefix 仍然允许。
     let rotation = {
-        let mut command = storage_command("https://two.example.com");
+        let mut command = storage_command("https://two.example.com", second.storage_revision);
         command.access_key_id = "new-ak".to_owned();
         command.secret_access_key = Some(SecretString::from("new-sk"));
         command.prefix = "codex/production".to_owned();
@@ -512,7 +542,7 @@ async fn schedule_update_persists_cursor_and_clears_on_disable() {
 
     // 启用计划前必须先配置存储并通过连接测试（DB 约束要求）。
     repository
-        .update_storage_settings(storage_command("https://one.example.com"), &context())
+        .update_storage_settings(storage_command("https://one.example.com", 1), &context())
         .await
         .expect("configure storage");
     let settings = repository.load_settings().await.expect("load settings");
@@ -524,6 +554,7 @@ async fn schedule_update_persists_cursor_and_clears_on_disable() {
     let enabled = repository
         .update_schedule_settings(
             UpdateBackupScheduleCommand {
+                storage_revision: settings.storage_revision,
                 schedule_enabled: true,
                 cron_expression: "0 2 * * *".to_owned(),
                 schedule_timezone: "Asia/Shanghai".to_owned(),
@@ -541,6 +572,7 @@ async fn schedule_update_persists_cursor_and_clears_on_disable() {
     let disabled = repository
         .update_schedule_settings(
             UpdateBackupScheduleCommand {
+                storage_revision: settings.storage_revision,
                 schedule_enabled: false,
                 cron_expression: "0 2 * * *".to_owned(),
                 schedule_timezone: "Asia/Shanghai".to_owned(),

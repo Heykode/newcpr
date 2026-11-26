@@ -359,6 +359,8 @@ pub struct UsageCalculatedBillingFact {
 /// Provider 已确认的逐项费用与单价。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CalculatedBillingBreakdown {
+    pub image: Option<ImageBillingBreakdown>,
+    pub custom_multiplier_bps: u32,
     pub long_context_billing_applied: bool,
     pub input_amount: CurrencyCost,
     pub output_amount: CurrencyCost,
@@ -372,6 +374,16 @@ pub struct CalculatedBillingBreakdown {
     pub cache_write_price_per_million: CurrencyCost,
     pub service_tier: Option<String>,
     pub multiplier_percent: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImageBillingBreakdown {
+    pub input_tokens: u64,
+    pub cached_input_tokens: u64,
+    pub input_amount: CurrencyCost,
+    pub cache_read_amount: CurrencyCost,
+    pub input_price_per_million: CurrencyCost,
+    pub cache_read_price_per_million: CurrencyCost,
 }
 
 /// 单次请求的费用语义。

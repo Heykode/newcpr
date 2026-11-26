@@ -804,6 +804,7 @@ dependencies = [
  "gateway-core",
  "gateway-host",
  "gateway-store",
+ "provider-antigravity",
  "provider-openai",
  "provider-xai",
  "redis",
@@ -3143,6 +3144,42 @@ dependencies = [
 ]
 
 [[package]]
+name = "provider-antigravity"
+version = "0.0.0"
+dependencies = [
+ "async-compression",
+ "async-stream",
+ "async-trait",
+ "base64 0.23.1",
+ "bytes",
+ "chrono",
+ "flate2",
+ "futures",
+ "gateway-admin",
+ "gateway-core",
+ "gateway-egress",
+ "gateway-protocol",
+ "getrandom 0.4.3",
+ "hex",
+ "http",
+ "http-body-util",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tar",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "url",
+ "uuid",
+ "wiremock",
+ "zip",
+]
+
+[[package]]
 name = "provider-openai"
 version = "0.0.0"
 dependencies = [
@@ -3172,6 +3209,7 @@ dependencies = [
  "jsonschema",
  "native-tls",
  "openssl",
+ "regex",
  "reqwest",
  "roxmltree",
  "rustls",
@@ -4852,6 +4890,7 @@ dependencies = [
  "idna",
  "percent-encoding",
  "serde",
+ "serde_derive",
 ]
 
 [[package]]
@@ -5457,9 +5496,9 @@ dependencies = [
 
 [[package]]
 name = "zip"
-version = "9.5.1"
+version = "9.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e3476fd497ac8af5b1ec7b51acab7bef380f7e8dd8e0487595bafd839417a302"
+checksum = "2d8dbe089cf6b0448b78f5fc50139ab5aaa40d08ac07cdc1baf2c13add35fcce"
 dependencies = [
  "constant_time_eq",
  "crc32fast",

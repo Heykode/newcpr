@@ -1,3 +1,4 @@
+mod session_affinity;
 use std::collections::BTreeMap;
 use std::num::NonZeroU32;
 use std::time::{Duration, SystemTime};

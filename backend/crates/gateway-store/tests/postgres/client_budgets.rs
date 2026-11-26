@@ -125,8 +125,8 @@ async fn empty_future_budget_windows_do_not_publish_usage_or_reset_time() {
     let value = status(&database, "key").await;
     assert_eq!(value.daily_used_usd.canonical(), "0");
     assert_eq!(value.weekly_used_usd.canonical(), "0");
-    assert!(value.daily_resets_at.is_none());
-    assert!(value.weekly_resets_at.is_none());
+    assert!(value.daily_resets_at().is_none());
+    assert!(value.weekly_resets_at().is_none());
     database.close().await;
 }
 
@@ -171,7 +171,7 @@ async fn window_rollover_is_shanghai_midnight_and_seven_days_with_late_settlemen
     let reset = status(&database, "key").await;
     assert_eq!(reset.daily_used_usd.canonical(), "0");
     assert_eq!(reset.weekly_used_usd.canonical(), "0");
-    assert!(reset.weekly_resets_at.is_some());
+    assert!(reset.weekly_resets_at().is_some());
     database.close().await;
 }
 
@@ -339,6 +339,7 @@ async fn budget_updates_preserve_omitted_limits_and_do_not_clear_usage() {
         .await
         .unwrap();
     let update = UpdateClientKey {
+        peer_sharing: None,
         request_profile_override_updates: Default::default(),
         id: ClientApiKeyId::new("key").unwrap(),
         name: "key".to_owned(),
@@ -502,8 +503,8 @@ async fn manual_budget_reset_preserves_history_limits_and_fences_late_charges() 
     assert_eq!(after.daily_used_usd.canonical(), "0");
     assert_eq!(after.weekly_used_usd.canonical(), "1");
     assert_eq!(after.limits, before.limits);
-    assert_eq!(after.daily_resets_at, None);
-    assert_eq!(after.weekly_resets_at, before.weekly_resets_at);
+    assert_eq!(after.daily_resets_at(), None);
+    assert_eq!(after.weekly_resets_at(), before.weekly_resets_at());
     store.admit(key_id("key")).await.unwrap();
     store.settle(original).await.unwrap();
     store.settle(late).await.unwrap();
@@ -548,7 +549,12 @@ async fn manual_budget_reset_preserves_history_limits_and_fences_late_charges() 
         )
         .await
         .unwrap();
-    assert!(status(&database, "unused").await.daily_resets_at.is_none());
+    assert!(
+        status(&database, "unused")
+            .await
+            .daily_resets_at()
+            .is_none()
+    );
     let events: i64 = sqlx::query_scalar("select count(*) from client_key_charge_events")
         .fetch_one(&database.pool)
         .await
@@ -649,8 +655,8 @@ async fn manual_reset_restarts_selected_windows_only_after_new_usage() {
         // 重置前完成的迟到费用保留历史，但不能开启窗口或重新扣入所选周期
         store.settle(delayed).await.unwrap();
         let delayed = status(&database, key).await;
-        assert_eq!(delayed.daily_resets_at, reset.daily_resets_at);
-        assert_eq!(delayed.weekly_resets_at, reset.weekly_resets_at);
+        assert_eq!(delayed.daily_resets_at(), reset.daily_resets_at());
+        assert_eq!(delayed.weekly_resets_at(), reset.weekly_resets_at());
         assert_eq!(
             delayed.daily_used_usd.canonical(),
             if period == ClientKeyBudgetPeriod::Weekly {
@@ -670,21 +676,21 @@ async fn manual_reset_restarts_selected_windows_only_after_new_usage() {
 
         store.admit(key_id(key)).await.unwrap();
         let restarted = status(&database, key).await;
-        assert_eq!(restarted.daily_resets_at, before.daily_resets_at);
+        assert_eq!(restarted.daily_resets_at(), before.daily_resets_at());
         if period == ClientKeyBudgetPeriod::Daily {
-            assert_eq!(restarted.weekly_resets_at, before.weekly_resets_at);
+            assert_eq!(restarted.weekly_resets_at(), before.weekly_resets_at());
         } else {
             assert_eq!(
-                restarted.weekly_resets_at.unwrap(),
-                restarted.daily_resets_at.unwrap() + std::time::Duration::from_secs(6 * 86400)
+                restarted.weekly_resets_at().unwrap(),
+                restarted.daily_resets_at().unwrap() + std::time::Duration::from_secs(6 * 86400)
             );
-            assert_ne!(restarted.weekly_resets_at, before.weekly_resets_at);
+            assert_ne!(restarted.weekly_resets_at(), before.weekly_resets_at());
         }
         // 开启窗口后仍保留重置边界，另一笔重置前的迟到费用也不能重新扣额
         store.settle(old).await.unwrap();
         let after_old = status(&database, key).await;
-        assert_eq!(after_old.daily_resets_at, restarted.daily_resets_at);
-        assert_eq!(after_old.weekly_resets_at, restarted.weekly_resets_at);
+        assert_eq!(after_old.daily_resets_at(), restarted.daily_resets_at());
+        assert_eq!(after_old.weekly_resets_at(), restarted.weekly_resets_at());
         assert_eq!(
             after_old.daily_used_usd.canonical(),
             if period == ClientKeyBudgetPeriod::Weekly {
@@ -793,8 +799,8 @@ async fn manual_reset_leaves_unused_and_expired_windows_inactive_and_reports_mis
             .await
             .unwrap();
         let after = status(&database, key).await;
-        assert!(after.daily_resets_at.is_none());
-        assert!(after.weekly_resets_at.is_none());
+        assert!(after.daily_resets_at().is_none());
+        assert!(after.weekly_resets_at().is_none());
         assert_eq!(after.daily_used_usd.canonical(), "0");
     }
     for key in ["unused", "expired"] {

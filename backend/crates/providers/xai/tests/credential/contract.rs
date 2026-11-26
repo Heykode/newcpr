@@ -387,7 +387,7 @@ async fn oauth_bundle_export_is_provider_owned_canonical_and_debug_redacted() {
     assert_eq!(value["accounts"][0]["credentials"]["idToken"], "id-export");
     assert_eq!(value["accounts"][0]["credentials"]["tokenType"], "Bearer");
     assert!(
-        value["accounts"][0]["credentials"]["expiresAt"]
+        value["accounts"][0]["credentials"]["accessTokenExpiresAt"]
             .as_str()
             .is_some()
     );
@@ -396,8 +396,15 @@ async fn oauth_bundle_export_is_provider_owned_canonical_and_debug_redacted() {
         provider_xai::OFFICIAL_CLIENT_ID
     );
     assert_eq!(
-        value["accounts"][0]["credentials"]["scope"],
-        "openid profile email offline_access grok-cli:access api:access"
+        value["accounts"][0]["credentials"]["scopes"],
+        serde_json::json!([
+            "openid",
+            "profile",
+            "email",
+            "offline_access",
+            "grok-cli:access",
+            "api:access"
+        ])
     );
     for field in [
         "access_token",
@@ -410,6 +417,14 @@ async fn oauth_bundle_export_is_provider_owned_canonical_and_debug_redacted() {
     ] {
         assert!(value["accounts"][0]["credentials"].get(field).is_none());
     }
+    assert!(value["accounts"][0].get("name").is_none());
+    assert!(value["accounts"][0]["label"].is_string());
+    assert!(value["accounts"][0]["credentials"].get("scope").is_none());
+    assert!(
+        value["accounts"][0]["credentials"]
+            .get("expiresAt")
+            .is_none()
+    );
     assert_eq!(value["proxies"], serde_json::json!([]));
     let imported = provider_xai::GrokOAuthImportDocument::parse_json(
         &serde_json::to_vec(&value).expect("JSON"),

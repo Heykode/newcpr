@@ -3318,5 +3318,117 @@
     "file_sha256": "3a38dcc2afe594b7eaa25b0df44ffb9d201526283d165d30f8f04e3b49ca8100",
     "line_sha256": "c85204f4407a8fb3204045ad397ed644fc6cb87825bfac0e6e809b0324b82079",
     "reason": "Manually re-reviewed the unchanged documentation-domain authenticated proxy fixture after removal of the legacy outboundProxyUrl mutation field. This pending-authorization serialization test uses synthetic in-memory inputs and performs no network access."
+  },
+  {
+    "path": "backend/crates/gateway-core/tests/provider_ports/mod.rs",
+    "rule": "non-example-ip",
+    "line": 109,
+    "file_sha256": "60f5fdc56ae8d9ab7a4cbdf2d56459628f47d3deadd073c86ae71f5d98817cd2",
+    "line_sha256": "05d89b4df3a4f65f2e9099ae7ccd18b0f07bc27a3581c139da0ef893ab85b149",
+    "reason": "Manually re-reviewed unchanged IPv6 source-category fixtures after adding session-affinity tests. Each line matches a previously reviewed fixture exactly; these assertions only parse documentation, mapped, link-local, multicast, site-local and unique-local address categories and make no network requests."
+  },
+  {
+    "path": "backend/crates/gateway-core/tests/provider_ports/mod.rs",
+    "rule": "non-example-ip",
+    "line": 110,
+    "file_sha256": "60f5fdc56ae8d9ab7a4cbdf2d56459628f47d3deadd073c86ae71f5d98817cd2",
+    "line_sha256": "126f7e34cdcf2e64e4165af6d03bceb76dc979de37bd316e3032c0b0164d7fcb",
+    "reason": "Manually re-reviewed unchanged IPv6 source-category fixtures after adding session-affinity tests. Each line matches a previously reviewed fixture exactly; these assertions only parse documentation, mapped, link-local, multicast, site-local and unique-local address categories and make no network requests."
+  },
+  {
+    "path": "backend/crates/gateway-core/tests/provider_ports/mod.rs",
+    "rule": "non-example-ip",
+    "line": 111,
+    "file_sha256": "60f5fdc56ae8d9ab7a4cbdf2d56459628f47d3deadd073c86ae71f5d98817cd2",
+    "line_sha256": "abf54a266f9141c37476c644e9c9a11de98856acf1241ba8b563d7d7e6b5c838",
+    "reason": "Manually re-reviewed unchanged IPv6 source-category fixtures after adding session-affinity tests. Each line matches a previously reviewed fixture exactly; these assertions only parse documentation, mapped, link-local, multicast, site-local and unique-local address categories and make no network requests."
+  },
+  {
+    "path": "backend/crates/gateway-core/tests/provider_ports/mod.rs",
+    "rule": "non-example-ip",
+    "line": 112,
+    "file_sha256": "60f5fdc56ae8d9ab7a4cbdf2d56459628f47d3deadd073c86ae71f5d98817cd2",
+    "line_sha256": "3205b3a46a19d6eb2fea5855b6f7792ada9cf87e5ceb7af955077f4a4b8a5e3d",
+    "reason": "Manually re-reviewed unchanged IPv6 source-category fixtures after adding session-affinity tests. Each line matches a previously reviewed fixture exactly; these assertions only parse documentation, mapped, link-local, multicast, site-local and unique-local address categories and make no network requests."
+  },
+  {
+    "path": "backend/crates/gateway-core/tests/provider_ports/mod.rs",
+    "rule": "non-example-ip",
+    "line": 119,
+    "file_sha256": "60f5fdc56ae8d9ab7a4cbdf2d56459628f47d3deadd073c86ae71f5d98817cd2",
+    "line_sha256": "866bff72cf6ad4b537e5f863f4ded96b3cf59862650e132cbcde1167ef1d25a6",
+    "reason": "Manually re-reviewed unchanged IPv6 source-category fixtures after adding session-affinity tests. Each line matches a previously reviewed fixture exactly; these assertions only parse documentation, mapped, link-local, multicast, site-local and unique-local address categories and make no network requests."
+  },
+  {
+    "path": "backend/crates/providers/antigravity/src/credential/oauth.rs",
+    "rule": "gitleaks:generic-api-key",
+    "line": 194,
+    "file_sha256": "1b09aa1b27bbdad68b6de14c0ca969d9f4e516c548d74206c5d89d36ea83c04f",
+    "line_sha256": "adf2f6106f4ff9c6d9e9b625f8e0e27fd6ee7f031c3a99063481f75e6929990e",
+    "reason": "Manually reviewed public installed-client OAuth registration distributed with Antigravity Desktop, copied byte-for-byte from pinned upstream 20d04ae57abf61ffc7c176eb73730577aaf1b0af. This application registration is not an account access token, refresh token or private deployment credential; the surrounding upstream comment documents its public desktop distribution."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/credential/token_client.rs",
+    "rule": "gitleaks:generic-api-key",
+    "line": 72,
+    "file_sha256": "a556d0650378e934cddc7612146c5721461fbf651e03e506a0d5febb3f21ab04",
+    "line_sha256": "e08f3e5adfbd37e055a284d9e81db7a0ca0b59c809eb7c60cd2f91ebc8cb95f9",
+    "reason": "Manually re-reviewed unsigned mock JWT response in loopback OAuth token-client tests after global identity coverage was added. Every flagged line matches a previously reviewed synthetic fixture; no real account token is used."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/credential/token_client.rs",
+    "rule": "gitleaks:generic-api-key",
+    "line": 379,
+    "file_sha256": "a556d0650378e934cddc7612146c5721461fbf651e03e506a0d5febb3f21ab04",
+    "line_sha256": "866aaa0977c3b9fa9b43fe03981074ea2d58b2b0eefb046ffd37628fb4fe5f05",
+    "reason": "Manually re-reviewed unsigned mock JWT response in loopback OAuth token-client tests after global identity coverage was added. Every flagged line matches a previously reviewed synthetic fixture; no real account token is used."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/credential/token_client.rs",
+    "rule": "gitleaks:generic-api-key",
+    "line": 414,
+    "file_sha256": "a556d0650378e934cddc7612146c5721461fbf651e03e506a0d5febb3f21ab04",
+    "line_sha256": "9de12eaf8ba8b0e4858b4328471402834f850fcf52eeb8962f910183467f1026",
+    "reason": "Manually re-reviewed unsigned mock JWT response in loopback OAuth token-client tests after global identity coverage was added. Every flagged line matches a previously reviewed synthetic fixture; no real account token is used."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/credential/token_client.rs",
+    "rule": "gitleaks:generic-api-key",
+    "line": 538,
+    "file_sha256": "a556d0650378e934cddc7612146c5721461fbf651e03e506a0d5febb3f21ab04",
+    "line_sha256": "61848d28dd41e959f480609bf1437a9575194a9527f3a563c1fcb2fd8448783d",
+    "reason": "Manually re-reviewed unsigned mock JWT response in loopback OAuth token-client tests after global identity coverage was added. Every flagged line matches a previously reviewed synthetic fixture; no real account token is used."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/credential/token_client.rs",
+    "rule": "gitleaks:generic-api-key",
+    "line": 1009,
+    "file_sha256": "a556d0650378e934cddc7612146c5721461fbf651e03e506a0d5febb3f21ab04",
+    "line_sha256": "9de12eaf8ba8b0e4858b4328471402834f850fcf52eeb8962f910183467f1026",
+    "reason": "Manually re-reviewed unsigned mock JWT response in loopback OAuth token-client tests after global identity coverage was added. Every flagged line matches a previously reviewed synthetic fixture; no real account token is used."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/transport/privacy/mod.rs",
+    "rule": "personal-home-path",
+    "line": 139,
+    "file_sha256": "146e6e9473146a6d2f0746a5524a1bccebf5f2f66c33b29ac7814d62645131ed",
+    "line_sha256": "672e8c043762f0d19731edafc8593ae53d3e2ceed9684b233c709941e6c6a91e",
+    "reason": "Manually reviewed upstream privacy rename-key regular expression, identical to pinned upstream 20d04ae57abf61ffc7c176eb73730577aaf1b0af. The home-directory username is a negated character class, not a personal name or real filesystem path."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/transport/privacy/steps.rs",
+    "rule": "personal-home-path",
+    "line": 15,
+    "file_sha256": "a7763045285fb214dda105cab9c79ee00a5941e451cea31528b8e9405de32828",
+    "line_sha256": "dffb449f39fb45f1ace239dee78f917ab94fa0586a21fcc40eb67e221e1f0745",
+    "reason": "Manually reviewed upstream aggregate privacy-step regular expression, identical to pinned upstream 20d04ae57abf61ffc7c176eb73730577aaf1b0af. It matches any home-directory segment and contains no personal directory value."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/transport/profile_avatar.rs",
+    "rule": "authenticated-url",
+    "line": 121,
+    "file_sha256": "00c02e7a3fba2fbf6406e2f10a55fe5a9f8e4a00f0a4f7e79325356309831373",
+    "line_sha256": "f4353a6e313c2dbdeae6c5667a6bcc2057cfc148de0390aae6d8a95869af4ab9",
+    "reason": "Manually re-reviewed unchanged synthetic authenticated official-host URL used by the avatar source-rejection test before any request. The line matches the previous reviewed record and pinned upstream; only the custom identity assertion elsewhere in this file changed."
   }
 ]

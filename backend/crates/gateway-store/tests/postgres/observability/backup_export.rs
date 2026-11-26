@@ -17,11 +17,13 @@ async fn business_backup_restore_preserves_ledgers_and_global_usage_without_deta
         .unwrap();
     sqlx::query("insert into client_api_keys(id,name,key,created_at,updated_at) values('backup_key','Backup key',$1,now(),now())")
         .bind(format!("sk_{}", "b".repeat(43))).execute(&db.pool).await.unwrap();
+    let sharing = serde_json::json!({"enabled": false, "sharePool": true, "shareQuota": true, "sharePlans": false});
     let key_profile = serde_json::json!({"openai":{"inherit":{"installationId":"12345678-1234-4234-8234-123456789abc"}}});
     sqlx::query(
-        "update client_api_keys set provider_request_profiles_json=$1 where id='backup_key'",
+        "update client_api_keys set provider_request_profiles_json=$1, peer_sharing_json=$2 where id='backup_key'",
     )
     .bind(&key_profile)
+    .bind(&sharing)
     .execute(&db.pool)
     .await
     .unwrap();
@@ -114,6 +116,13 @@ async fn business_backup_restore_preserves_ledgers_and_global_usage_without_deta
         .await
         .unwrap();
         assert_eq!(restored_profile, key_profile);
+        let restored_sharing: serde_json::Value = sqlx::query_scalar(
+            "select peer_sharing_json from client_api_keys where id='backup_key'",
+        )
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(restored_sharing, sharing);
         drain_analytics(&db.pool).await;
         let restored = repo
             .usage_summary(range, UsageRecordFilter::default())

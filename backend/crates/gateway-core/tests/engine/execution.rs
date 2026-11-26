@@ -3815,3 +3815,101 @@ fn direct_model_uses_the_original_route_when_the_parent_is_outside_its_scope() {
         }
     });
 }
+
+#[test]
+fn fixed_account_probe_reaches_the_provider_for_a_model_absent_from_its_public_catalog() {
+    use gateway_core::error::RoutingError;
+
+    let provider = ProviderKind::new("openai").unwrap();
+    let account = ProviderAccountId::new("acct_probe").unwrap();
+    let model = "unlisted-probe-model";
+    let snapshot = probe_snapshot();
+    let ordinary = snapshot.plan(
+        &PublicModelId::new(model).unwrap(),
+        &probe_operation(),
+        account_scope(&provider, account.as_str()),
+        &Default::default(),
+    );
+    assert!(matches!(ordinary, Err(RoutingError::ModelNotFound { .. })));
+
+    let service = DefaultExecutionService::new(
+        RuntimeSnapshotHandle::new(snapshot),
+        Arc::new(TrackingExecutionStore::default()),
+        ProviderRegistry::new([Arc::new(LocalFailingProvider) as Arc<dyn Provider>]).unwrap(),
+        Arc::new(UnusedAdmissions),
+        Arc::new(UnusedCircuits),
+        Arc::new(UnusedContinuation),
+        Arc::new(RecordingClientApiKeyUsage::default()),
+    );
+    let error = block_on(service.probe(AccountProbeRequest {
+        target: account.into(),
+        provider_kind: provider,
+        upstream_model: UpstreamModelId::new(model).unwrap(),
+        operation: probe_operation(),
+    }))
+    .expect_err("the fixed provider reports its own connection failure");
+    assert_eq!(error.source(), AccountProbeErrorSource::Provider);
+}
+
+use gateway_core::{engine::provider::NativeResponseTranslator, event::ProtocolWireEvent};
+struct EofResponseTranslator {
+    protocol: &'static str,
+}
+
+impl NativeResponseTranslator for EofResponseTranslator {
+    fn source_protocol(&self) -> &str {
+        "native-test"
+    }
+    fn target_protocol(&self) -> &str {
+        "openai"
+    }
+    fn translate(
+        &mut self,
+        _: &ProtocolWireEvent,
+    ) -> Result<Vec<ProtocolWireEvent>, ProviderError> {
+        Ok(Vec::new())
+    }
+    fn finish(&mut self) -> Result<Vec<ProtocolWireEvent>, ProviderError> {
+        Ok(vec![
+            ProtocolWireEvent::json(
+                self.protocol,
+                None,
+                json!({"type":"response.output_item.done"}),
+            )
+            .unwrap(),
+            ProtocolWireEvent::json(self.protocol, None, json!({"type":"response.completed"}))
+                .unwrap(),
+        ])
+    }
+}
+
+#[test]
+fn eof_translation_preserves_terminal_facts_and_validates_output_protocol() {
+    for protocol in ["openai", "foreign"] {
+        let metadata = ProviderCallMetadata::new(
+            ProviderKind::new("fixture").unwrap(),
+            UpstreamModelId::new("model").unwrap(),
+            ProviderAccountId::new("acct_fixture").unwrap(),
+            UpstreamTransport::new("http").unwrap(),
+        );
+        let mut stream = ProviderStream::new(metadata, futures::stream::empty(), ())
+            .with_native_response_translator(EofResponseTranslator { protocol });
+        let result = stream.translate_native_response(
+            ProviderEvent::canonical(GatewayEvent::Completed(ResponseMeta::new(
+                "response", "model",
+            ))),
+            true,
+        );
+        if protocol == "foreign" {
+            assert!(result.is_err());
+            continue;
+        }
+        let events = result.unwrap();
+        assert_eq!(events.len(), 2);
+        assert!(events[0].canonical_facts().is_empty());
+        assert!(matches!(
+            events[1].canonical_facts(),
+            [GatewayEvent::Completed(_)]
+        ));
+    }
+}

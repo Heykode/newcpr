@@ -311,6 +311,7 @@ fn client_key_responses_should_keep_shape_and_redact_creation_debug() {
         .single()
         .expect("valid time");
     let view = ClientKeyView::from(gateway_admin::model::client_keys::ClientKeyRecord {
+        peer_sharing: Default::default(),
         request_profile_overrides: Default::default(),
         budget: Default::default(),
         id: gateway_core::policy::ClientApiKeyId::new("key_visible").expect("Client Key ID"),
@@ -569,4 +570,63 @@ fn batch_key_wire_preserves_zero_and_omission_and_rejects_removed_profile_fields
         input[legacy] = json!({});
         assert!(serde_json::from_value::<BatchUpdateClientKeysRequest>(input).is_err());
     }
+}
+
+#[test]
+fn profile_override_commands_preserve_valid_provider_identifiers() {
+    use gateway_core::routing::ProviderKind;
+    let profile = json!({"preset":"desktop"});
+    let xai = json!({"preset":"managed"});
+    let request: CreateClientKeyRequest = serde_json::from_value(json!({
+        "name":"profile",
+        "groupIds":[],
+        "maxConcurrency":0,
+        "requestsPerMinute":0,
+        "providerRequestProfileOverrides": {
+            "openai": profile,
+            "xai": xai,
+            "antigravity": {"versionMode":"fixed","desktopVersion":"2.34.0"},
+        },
+    }))
+    .unwrap();
+    let command = request.into_command().unwrap();
+    assert_eq!(command.request_profile_overrides.len(), 3);
+    assert!(
+        command
+            .request_profile_overrides
+            .contains_key(&gateway_core::routing::ProviderKind::new("xai").expect("Provider kind"))
+    );
+
+    let unknown: CreateClientKeyRequest = serde_json::from_value(json!({
+        "name":"profile",
+        "groupIds":[],
+        "maxConcurrency":0,
+        "requestsPerMinute":0,
+        "providerRequestProfileOverrides": {"provider.example":{"preset":"managed"}},
+    }))
+    .unwrap();
+    assert!(
+        unknown
+            .into_command()
+            .unwrap()
+            .request_profile_overrides
+            .contains_key(&ProviderKind::new("provider.example").unwrap())
+    );
+
+    let unknown_clear: UpdateClientKeyRequest = serde_json::from_value(json!({
+        "id":"key_profile",
+        "name":"profile",
+        "groupIds":[],
+        "maxConcurrency":0,
+        "requestsPerMinute":0,
+        "providerRequestProfileOverrides": {"provider.example":null},
+    }))
+    .unwrap();
+    assert!(
+        unknown_clear
+            .into_command()
+            .unwrap()
+            .request_profile_override_updates
+            .contains_key(&ProviderKind::new("provider.example").unwrap())
+    );
 }

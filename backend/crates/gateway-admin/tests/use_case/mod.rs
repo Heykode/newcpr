@@ -99,6 +99,7 @@ pub(super) struct AdminHarness {
     client_keys: Arc<dyn ClientKeyStore>,
     observability: Arc<dyn ObservabilityStore>,
     settings: Arc<dyn SettingsStore>,
+    pricing_source: Arc<dyn gateway_admin::ports::pricing::PricingSource>,
     backup: BackupStorePorts,
     relogin: Option<Arc<dyn gateway_admin::ports::relogin::ReloginStore>>,
     providers: Vec<Arc<dyn ProviderAdmin>>,
@@ -122,6 +123,7 @@ impl AdminHarness {
             client_keys: unavailable.clone(),
             observability: unavailable.clone(),
             settings: unavailable,
+            pricing_source: Arc::new(OfflinePricing),
             backup: BackupStorePorts::disabled(),
             relogin: None,
             providers: vec![
@@ -133,6 +135,14 @@ impl AdminHarness {
             system: Arc::new(UnavailableSystem),
             snapshot: Arc::new(NoopSnapshot),
         }
+    }
+
+    pub(super) fn pricing_source(
+        mut self,
+        source: Arc<dyn gateway_admin::ports::pricing::PricingSource>,
+    ) -> Self {
+        self.pricing_source = source;
+        self
     }
 
     pub(super) fn default_password(mut self, password: &str) -> Self {
@@ -265,6 +275,7 @@ impl AdminHarness {
             gateway_core::runtime::RuntimeSnapshotHandle::default(),
             (self.probe, self.proxy_probe),
             Arc::new(NoopClientDistribution),
+            self.pricing_source,
             (
                 self.system,
                 Arc::new(gateway_admin::ports::notification::DisabledNotificationDelivery),
@@ -817,6 +828,8 @@ impl SettingsStore for UnavailableStore {
 }
 
 struct UnavailableProvider {
+    pricing_bands: &'static [&'static str],
+    pricing_references: BTreeMap<String, (String, String)>,
     kind: ProviderKind,
     dashboard_profile: Option<DashboardWireProfile>,
     calculated_billing: Option<gateway_admin::model::observability::CalculatedBillingBreakdown>,
@@ -826,6 +839,8 @@ impl UnavailableProvider {
     fn new(kind: &str) -> Self {
         Self {
             kind: ProviderKind::new(kind).expect("provider kind"),
+            pricing_bands: &["standard"],
+            pricing_references: BTreeMap::new(),
             dashboard_profile: None,
             calculated_billing: None,
         }
@@ -834,6 +849,31 @@ impl UnavailableProvider {
 
 #[async_trait]
 impl ProviderAdmin for UnavailableProvider {
+    fn supported_pricing_bands(&self) -> &'static [&'static str] {
+        self.pricing_bands
+    }
+    fn pricing_source(&self) -> gateway_admin::ports::pricing::PricingCatalogSource {
+        use gateway_admin::ports::pricing::{PricingCatalogSource, PricingSourceModel};
+        if self.pricing_references.is_empty() {
+            PricingCatalogSource::Direct
+        } else {
+            PricingCatalogSource::References(
+                self.pricing_references
+                    .iter()
+                    .map(|(model, (provider, source))| {
+                        (
+                            model.clone(),
+                            PricingSourceModel {
+                                provider: provider.clone(),
+                                model: source.clone(),
+                            },
+                        )
+                    })
+                    .collect(),
+            )
+        }
+    }
+
     fn provider_kind(&self) -> &ProviderKind {
         &self.kind
     }
@@ -922,6 +962,8 @@ impl ProviderAdmin for UnavailableProvider {
 
 pub(super) fn dashboard_profile_provider() -> Arc<dyn ProviderAdmin> {
     Arc::new(UnavailableProvider {
+        pricing_bands: &["standard"],
+        pricing_references: std::collections::BTreeMap::new(),
         kind: ProviderKind::new("openai").expect("provider kind"),
         dashboard_profile: Some(DashboardWireProfile {
             provider: "openai".to_owned(),
@@ -966,10 +1008,14 @@ pub(super) fn calculated_billing_provider() -> Arc<dyn ProviderAdmin> {
             .expect("test billing amount"),
     };
     Arc::new(UnavailableProvider {
+        pricing_bands: &["standard"],
+        pricing_references: std::collections::BTreeMap::new(),
         kind: ProviderKind::new("openai").expect("provider kind"),
         dashboard_profile: None,
         calculated_billing: Some(
             gateway_admin::model::observability::CalculatedBillingBreakdown {
+                image: None,
+                custom_multiplier_bps: 10_000,
                 long_context_billing_applied: false,
                 input_amount: amount("0.8"),
                 output_amount: amount("0.2"),
@@ -1071,4 +1117,18 @@ fn unavailable_system() -> SystemOperationError {
         SystemOperationErrorKind::Internal,
         "unavailable in this test",
     )
+}
+
+struct OfflinePricing;
+#[async_trait::async_trait]
+impl gateway_admin::ports::pricing::PricingSource for OfflinePricing {
+    async fn fetch(
+        &self,
+        _scope: &gateway_admin::ports::pricing::PricingSourceScope,
+    ) -> Result<gateway_admin::model::pricing::PricingSyncPreview, gateway_admin::model::AdminError>
+    {
+        Err(gateway_admin::model::AdminError::invalid(
+            "offline pricing source",
+        ))
+    }
 }

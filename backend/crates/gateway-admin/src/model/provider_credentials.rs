@@ -862,6 +862,7 @@ pub enum AccountUsagePeriod {
     Weekly,
     Monthly,
     Daily,
+    RecentWeek,
 }
 
 /// Provider 解释 quota 所需的公共请求事实。
@@ -878,7 +879,7 @@ pub struct ProviderQuotaReadRequest<'a> {
 }
 
 /// Provider 已解析的 quota 结果及其不透明差异字段。
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct ProviderQuota {
     pub paused_windows: Vec<String>,
     /// 上游额度响应明确提供的套餐，可用于补全账号展示。
@@ -1235,6 +1236,7 @@ impl fmt::Debug for ProviderExport {
 /// 统一账号目录的一行完整结果。
 #[derive(Debug, Clone, PartialEq)]
 pub struct AccountDirectoryItem {
+    pub capabilities: super::accounts::ProviderAccountCapabilities,
     pub error_protection: Option<super::accounts::AccountProtectionView>,
     pub turn_state: Option<super::accounts::AccountTurnStateStatus>,
     pub codex_quota_overdraft: Option<super::codex_quota_overdraft::CodexQuotaOverdraftState>,
@@ -1250,6 +1252,7 @@ pub struct AccountDirectoryItem {
     pub plan_type_display: Option<String>,
     pub projection: gateway_core::account::AccountStatusProjection,
     pub usage: Option<super::accounts::AccountUsage>,
+    pub usage_period: Option<AccountUsagePeriod>,
     pub quota: ProviderQuota,
 }
 
@@ -1311,5 +1314,42 @@ impl ProviderQuotaWindow {
         let ends_at = self.reset_at?;
         let duration = chrono::Duration::try_seconds(i64::try_from(self.window_seconds?).ok()?)?;
         Some((ends_at.checked_sub_signed(duration)?, ends_at))
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum AccountUsageLookback {
+    #[default]
+    RollingDay,
+    RecentWeek,
+}
+
+impl AccountUsageLookback {
+    pub(crate) fn range(
+        self,
+        now: DateTime<Utc>,
+        timezone: gateway_core::time::DeploymentTimeZone,
+    ) -> Result<super::observability::TimeRange, super::AdminModelError> {
+        use super::observability::TimeRange;
+
+        match self {
+            Self::RollingDay => Ok(TimeRange {
+                start: now - chrono::Duration::hours(24),
+                end: now,
+            }),
+            Self::RecentWeek => TimeRange::new(
+                timezone
+                    .days_before(now, 6)
+                    .ok_or(super::AdminModelError::InvalidTimeRange)?,
+                now,
+            ),
+        }
+    }
+
+    pub(crate) fn period(self) -> AccountUsagePeriod {
+        match self {
+            Self::RollingDay => AccountUsagePeriod::Daily,
+            Self::RecentWeek => AccountUsagePeriod::RecentWeek,
+        }
     }
 }

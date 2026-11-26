@@ -3,7 +3,7 @@ import type { FormValidationTrigger } from '../types'
 import { computed, inject, nextTick, onBeforeUnmount, onBeforeUpdate, shallowRef, useId } from 'vue'
 import { formFieldKey } from '../context'
 
-export function useFormField(attrs: ReturnType<typeof useAttrs>, validateEvent: () => boolean = () => true, fallbackId?: string) {
+export function useFormField(attrs: ReturnType<typeof useAttrs>, validateEvent: () => boolean = () => true, fallbackId?: string, options: { labelable?: boolean } = {}) {
   const field = inject(formFieldKey, null)
   const generatedId = useId()
   const resolveId = () => typeof attrs.id === 'string' ? attrs.id : (fallbackId ?? `control-${generatedId}`)
@@ -12,7 +12,7 @@ export function useFormField(attrs: ReturnType<typeof useAttrs>, validateEvent: 
   onBeforeUpdate(() => {
     controlId.value = resolveId()
   })
-  const unregister = field?.registerControl(controlId)
+  const unregister = field?.registerControl({ id: controlId, labelable: options.labelable ?? true })
   onBeforeUnmount(() => unregister?.())
   const belongsToField = computed(() => field && (!field.controlId.value || field.controlId.value === controlId.value))
   const labelledBy = computed(() => field?.controlId.value === controlId.value ? field.labelledBy.value : undefined)

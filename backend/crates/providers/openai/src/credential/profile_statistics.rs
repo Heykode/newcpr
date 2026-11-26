@@ -113,6 +113,7 @@ pub struct CodexCredentialProfileService {
     http: Client,
     base_url: String,
     avatar_sources: Mutex<HashMap<String, CachedProfileAvatarSource>>,
+    runtime_policy: Option<Arc<dyn gateway_core::provider_ports::ProviderRuntimePolicyPort>>,
 }
 
 impl CodexCredentialProfileService {
@@ -130,7 +131,17 @@ impl CodexCredentialProfileService {
             http,
             base_url,
             avatar_sources: Mutex::new(HashMap::new()),
+            runtime_policy: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_runtime_policy(
+        mut self,
+        policy: Arc<dyn gateway_core::provider_ports::ProviderRuntimePolicyPort>,
+    ) -> Self {
+        self.runtime_policy = Some(policy);
+        self
     }
 
     #[must_use]
@@ -139,16 +150,26 @@ impl CodexCredentialProfileService {
         self
     }
 
-    fn backend_client(&self) -> CodexBackendClient {
+    async fn global_profile_client(
+        &self,
+    ) -> Result<CodexBackendClient, CodexProfileStatisticsError> {
+        let profile = match &self.runtime_policy {
+            Some(policy) => self
+                .profile
+                .resolve_global_request_profile(policy.as_ref())
+                .await
+                .map_err(|_| CodexProfileStatisticsError::TransportUnavailable)?,
+            None => self.profile.snapshot(),
+        };
         let client = CodexBackendClient::new(
             self.http.clone(),
             self.base_url.clone(),
-            self.profile.frozen(),
+            CodexWireProfileState::new(profile),
         );
-        match &self.egress_runtime {
+        Ok(match &self.egress_runtime {
             Some(runtime) => client.with_egress_runtime(Arc::clone(runtime)),
             None => client,
-        }
+        })
     }
 
     /// 订阅只按需读取；不缓存、不刷新凭据，也不更新额度状态。
@@ -163,7 +184,8 @@ impl CodexCredentialProfileService {
         };
         let request_id = format!("subscription_{}", Uuid::now_v7().simple());
         let subscription = self
-            .backend_client()
+            .global_profile_client()
+            .await?
             .for_account(&account)
             .map_err(map_client_error)?
             .fetch_subscription(
@@ -201,19 +223,25 @@ impl CodexCredentialProfileService {
     ) -> Result<CodexProfileStatistics, CodexProfileStatisticsError> {
         let (authorization, upstream_account_id, account) =
             self.account_authentication(account_id).await?;
-        self.fetch_profile_statistics(&authorization, upstream_account_id.as_deref(), &account)
-            .await
+        let client = self.global_profile_client().await?;
+        self.fetch_profile_statistics(
+            &client,
+            &authorization,
+            upstream_account_id.as_deref(),
+            &account,
+        )
+        .await
     }
 
     async fn fetch_profile_statistics(
         &self,
+        client: &CodexBackendClient,
         authorization: &SecretString,
         upstream_account_id: Option<&str>,
         account: &gateway_core::account::ProviderAccount,
     ) -> Result<CodexProfileStatistics, CodexProfileStatisticsError> {
         let request_id = format!("profile_statistics_{}", Uuid::now_v7().simple());
-        let statistics = self
-            .backend_client()
+        let statistics = client
             .for_account(account)
             .map_err(map_client_error)?
             .fetch_profile_statistics(CodexRequestContext::auxiliary(
@@ -283,15 +311,21 @@ impl CodexCredentialProfileService {
     ) -> Result<CodexProfileAvatar, CodexProfileAvatarError> {
         let (authorization, upstream_account_id, account) =
             self.account_authentication(account_id).await?;
+        let client = self.global_profile_client().await?;
         let source = match self.cached_avatar_source(&super::oauth_identity_key(&account)) {
             Some(source) => source,
             None => self
-                .fetch_profile_statistics(&authorization, upstream_account_id.as_deref(), &account)
+                .fetch_profile_statistics(
+                    &client,
+                    &authorization,
+                    upstream_account_id.as_deref(),
+                    &account,
+                )
                 .await?
                 .image_url
                 .ok_or(CodexProfileAvatarError::Missing)?,
         };
-        let profile = self.profile.desktop_snapshot();
+        let profile = client.profile_state().snapshot();
         let route = self
             .egress_runtime
             .as_ref()

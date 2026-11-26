@@ -66,6 +66,7 @@ const components = '../src/views/accounts/components/'
 const presenter = loadSource(new URL(`${components}AccountUsageWindow/presenter.ts`, import.meta.url))
 const resetView = presenter.quotaWindowResetPresentation
 const windowCode = presenter.quotaWindowCode
+const { quotaWindowLabel } = loadSource(new URL('../src/views/accounts/constants.ts', import.meta.url))
 
 function quotaWindow(minutes = 130, overrides = {}) {
   return {
@@ -175,19 +176,19 @@ function assertSummaryRows(root, expected) {
   rows.forEach((row, index) => {
     const { window, code, countdown } = expected[index]
     const children = row.children.filter(node => !node.tag.startsWith('#'))
-    assert.equal(row.props['aria-label'], `${window.labelDisplay}额度周期`)
+    assert.equal(row.props['aria-label'], `${quotaWindowLabel(window)}周期`)
     assert.match(row.props.class, /(?:^|\s)grid(?:\s|$)/)
     assert.deepEqual(children.map(node => node.tag), ['span', 'div', 'strong', countdown === null ? 'span' : 'time'])
     const [label, bar, percent, reset] = children
     assert.equal(textContent(label), code)
-    assert.equal(label.props.title, window.labelDisplay)
+    assert.equal(label.props.title, quotaWindowLabel(window))
     assert.equal(bar.props.role, 'progressbar')
-    assert.equal(bar.props['aria-label'], window.labelDisplay)
+    assert.equal(bar.props['aria-label'], quotaWindowLabel(window))
     assert.equal(bar.props['aria-valuenow'], window.usedPercent ?? undefined)
     assert.equal(bar.props['aria-valuetext'], window.usedPercentDisplay)
     assert.equal(bar.children[0].props.style.width, `${window.usedPercent ?? 0}%`)
     assert.equal(textContent(percent), window.usedPercentDisplay)
-    assert.equal(percent.props['aria-label'], `${window.labelDisplay}已使用${window.usedPercentDisplay}`)
+    assert.equal(percent.props['aria-label'], `${quotaWindowLabel(window)}已使用${window.usedPercentDisplay}`)
     for (let node = percent; node; node = node.parent) {
       assert.ok(!node.props.hidden)
       assert.notEqual(String(node.props['aria-hidden']), 'true')
@@ -202,7 +203,7 @@ function assertSummaryRows(root, expected) {
     else {
       assert.equal(textContent(reset), countdown)
       assert.equal(reset.props.datetime, window.resetAt)
-      assert.equal(reset.props['aria-label'], `${window.labelDisplay}：${countdown}${countdown === '待确认' ? '' : '后重置'}`)
+      assert.equal(reset.props['aria-label'], `${quotaWindowLabel(window)}：${countdown}${countdown === '待确认' ? '' : '后重置'}`)
     }
   })
   return rows
@@ -363,12 +364,12 @@ test('real summary component pairs each countdown with its own period and unchan
   })
   const times = [...html.matchAll(/<time\b[^>]*>[^<]*<\/time>/g)].map(match => match[0])
   assert.equal(times.length, 2)
-  assert.match(times[0], /Codex 5小时：2h 10m后重置/)
-  assert.match(times[1], /Codex 7天：6d 20h后重置/)
+  assert.match(times[0], /5小时额度：2h 10m后重置/)
+  assert.match(times[1], /周额度：6d 20h后重置/)
   assert.match(html, />5H<\/span>/)
   assert.match(html, />7D<\/span>/)
-  assert.match(html, /aria-label="Codex 5小时"[^>]*aria-valuenow="100"/)
-  assert.match(html, /aria-label="Codex 7天"[^>]*aria-valuenow="35"/)
+  assert.match(html, /aria-label="5小时额度"[^>]*aria-valuenow="100"/)
+  assert.match(html, /aria-label="周额度"[^>]*aria-valuenow="35"/)
 })
 
 test('one shared clock updates mounted summary and detail surfaces without remounting or resetting quota', async (context) => {
@@ -565,7 +566,7 @@ test('real summary grouping keeps timestamps attached after duration sorting and
   ])
   updatedRows.forEach((row, index) => assert.equal(row, initialRows[index]))
   const articles = descendants(root, node => node.tag === 'article')
-  const weeklyDetail = articles.find(node => textContent(node).includes('7天'))
+  const weeklyDetail = articles.find(node => textContent(node).includes('周额度'))
   assert.ok(weeklyDetail)
   assert.doesNotMatch(textContent(weeklyDetail), /6d 0h|周期重置|待确认/)
 

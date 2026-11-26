@@ -766,20 +766,28 @@ impl CodexCredentialQuotaService {
         )
     }
 
-    fn backend_client(&self) -> CodexBackendClient {
+    async fn global_profile_client(&self) -> Result<CodexBackendClient, CodexCredentialQuotaError> {
+        let profile = match &self.runtime_policy {
+            Some(policy) => self
+                .profile
+                .resolve_global_request_profile(policy.as_ref())
+                .await
+                .map_err(CodexCredentialQuotaError::Profile)?,
+            None => self.profile.snapshot(),
+        };
         let client = CodexBackendClient::new(
             self.http.clone(),
             self.base_url.clone(),
-            self.profile.frozen(),
+            CodexWireProfileState::new(profile),
         );
         let client = match &self.request_tuning {
             Some(request_tuning) => client.with_request_tuning(request_tuning.clone()),
             None => client,
         };
-        match &self.egress_runtime {
+        Ok(match &self.egress_runtime {
             Some(runtime) => client.with_egress_runtime(Arc::clone(runtime)),
             None => client,
-        }
+        })
     }
 
     fn warmup_client(
@@ -845,17 +853,7 @@ impl CodexCredentialQuotaService {
             })
             .collect::<BTreeMap<_, _>>();
 
-        let profile = match &self.runtime_policy {
-            Some(policy) => self
-                .profile
-                .resolve_global_request_profile(policy.as_ref())
-                .await
-                .map_err(CodexCredentialQuotaError::Profile)?,
-            None => self.profile.snapshot(),
-        };
-        let client = self
-            .backend_client()
-            .with_request_profile(CodexWireProfileState::new(profile));
+        let client = self.global_profile_client().await?;
 
         for account in accounts {
             if account.quota().is_exhausted() {
@@ -1064,7 +1062,10 @@ impl CodexCredentialQuotaService {
         account_id: &ProviderAccountId,
     ) -> Result<CodexRateLimitResetCredits, CodexResetCreditsError> {
         let account = self.reset_credit_account(account_id).await?;
-        let client = self.backend_client();
+        let client = self
+            .global_profile_client()
+            .await
+            .map_err(|_| CodexResetCreditsError::TransportUnavailable)?;
         let credential = self
             .repository
             .load_runtime_credential(&account)
@@ -1090,7 +1091,10 @@ impl CodexCredentialQuotaService {
         let entry = self.reset_consume_locks.entry(account_id);
         let _guard = entry.lock().await;
         let account = self.reset_credit_account(account_id).await?;
-        let client = self.backend_client();
+        let client = self
+            .global_profile_client()
+            .await
+            .map_err(|_| CodexResetCreditsError::TransportUnavailable)?;
         let credential = self
             .repository
             .load_runtime_credential(&account)
@@ -1280,7 +1284,13 @@ impl CodexCredentialQuotaService {
         if accounts.is_empty() {
             return Ok(summary);
         }
-        let client = self.backend_client();
+        let client = match self.global_profile_client().await {
+            Ok(client) => client,
+            Err(error) => {
+                self.defer_failed_initial_refreshes(pending_initial);
+                return Err(error);
+            }
+        };
         for account in accounts {
             let observed_at = SystemTime::now();
             let cooldown = if account.responses_upstream()
@@ -1367,6 +1377,11 @@ impl CodexCredentialQuotaService {
                 }
             }
         }
+        self.defer_failed_initial_refreshes(pending_initial);
+        Ok(summary)
+    }
+
+    fn defer_failed_initial_refreshes(&self, pending_initial: BTreeSet<ProviderAccountId>) {
         let mut state = self
             .scheduling
             .state
@@ -1378,7 +1393,6 @@ impl CodexCredentialQuotaService {
                 .initial_refresh_not_before
                 .insert(id, now + (self.initial_sync_delays)());
         }
-        Ok(summary)
     }
 
     /// `quota_observed_at` 为空代表首次异步观察尚未成功；不另建同步状态表。
@@ -1844,7 +1858,7 @@ impl CodexCredentialQuotaService {
         if !access_token_is_current(&account, observed_at) {
             return Err(CodexCredentialQuotaError::CredentialRefreshRequired);
         }
-        let client = self.backend_client();
+        let client = self.global_profile_client().await?;
         let cooldown = if matches!(authority, QuotaRefreshAuthority::ObserveAccess)
             && account.responses_upstream() == gateway_core::account::ResponsesUpstream::Excel
         {

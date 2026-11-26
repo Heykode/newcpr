@@ -76,10 +76,10 @@ impl AccountAffinity {
     }
 }
 
-pub const DEFAULT_OPENAI_SESSION_BINDING_TTL_HOURS: u32 = 24;
+pub const DEFAULT_SESSION_AFFINITY_TTL_HOURS: u32 = 24;
 
 #[must_use]
-pub fn parse_openai_session_binding_ttl_hours(hours: u32) -> Option<Duration> {
+pub fn parse_session_affinity_ttl_hours(hours: u32) -> Option<Duration> {
     (1..=720)
         .contains(&hours)
         .then(|| Duration::from_secs(u64::from(hours) * 3_600))
@@ -96,8 +96,8 @@ pub struct AccountSelectionPolicy {
     max_concurrent_per_account: NonZeroU32,
     request_interval: Duration,
     openai_guardian_reserved_concurrency: u32,
-    openai_session_binding_ttl: Duration,
-    openai_account_affinity: AccountAffinity,
+    session_affinity_ttl: Duration,
+    account_affinity: AccountAffinity,
 }
 
 impl AccountSelectionPolicy {
@@ -133,10 +133,10 @@ impl AccountSelectionPolicy {
             max_concurrent_per_account,
             request_interval,
             openai_guardian_reserved_concurrency: 0,
-            openai_session_binding_ttl: Duration::from_secs(
-                DEFAULT_OPENAI_SESSION_BINDING_TTL_HOURS as u64 * 3_600,
+            session_affinity_ttl: Duration::from_secs(
+                DEFAULT_SESSION_AFFINITY_TTL_HOURS as u64 * 3_600,
             ),
-            openai_account_affinity: AccountAffinity::Strict,
+            account_affinity: AccountAffinity::Strict,
         }
     }
 
@@ -152,25 +152,25 @@ impl AccountSelectionPolicy {
     }
 
     #[must_use]
-    pub const fn with_openai_session_binding_ttl(mut self, ttl: Duration) -> Self {
-        self.openai_session_binding_ttl = ttl;
+    pub const fn with_session_affinity_ttl(mut self, ttl: Duration) -> Self {
+        self.session_affinity_ttl = ttl;
         self
     }
 
     #[must_use]
-    pub const fn openai_session_binding_ttl(self) -> Duration {
-        self.openai_session_binding_ttl
+    pub const fn session_affinity_ttl(self) -> Duration {
+        self.session_affinity_ttl
     }
 
     #[must_use]
-    pub const fn with_openai_account_affinity(mut self, mode: AccountAffinity) -> Self {
-        self.openai_account_affinity = mode;
+    pub const fn with_account_affinity(mut self, mode: AccountAffinity) -> Self {
+        self.account_affinity = mode;
         self
     }
 
     #[must_use]
-    pub const fn openai_account_affinity(self) -> AccountAffinity {
-        self.openai_account_affinity
+    pub const fn account_affinity(self) -> AccountAffinity {
+        self.account_affinity
     }
 
     #[must_use]

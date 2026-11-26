@@ -17,6 +17,7 @@ defineProps<{
   hasUpdates: boolean
   excelAvailable: boolean
   requestProxyAvailable: boolean
+  provider?: string
   catalogAccountId?: string
 }>()
 
@@ -101,6 +102,7 @@ const egressMode = defineModel<string>('egressMode', { required: true })
       v-model:update-weight="updateWeight"
       v-model:update-groups="updateGroups"
       v-model:update-proxy="updateProxy"
+      :provider="provider"
       encrypted-content-available
       name-available
       model-access-available

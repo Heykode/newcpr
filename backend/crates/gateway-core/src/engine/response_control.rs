@@ -113,10 +113,15 @@ impl ResponseControl {
     }
 
     pub async fn receive(&self) -> Result<String, ResponseControlUnavailable> {
-        match self.transport() {
-            Some(transport) => transport.receive().await,
-            None => std::future::pending().await,
-        }
+        let Some(binding) = self.binding() else {
+            return std::future::pending().await;
+        };
+        binding
+            .0
+            .upgrade()
+            .ok_or(ResponseControlUnavailable)?
+            .receive()
+            .await
     }
 
     pub fn activate(&self, response_id: String) -> Option<ActiveResponseInterrupt> {

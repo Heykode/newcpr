@@ -196,6 +196,39 @@ impl PgProviderAccountRepository {
         self
     }
 
+    pub(super) async fn load_account_summaries_in_enabled_groups(
+        &self,
+        account_ids: &[String],
+        group_ids: &[AccountGroupId],
+    ) -> StoreResult<Vec<ProviderAccountSummary>> {
+        if account_ids.is_empty() || group_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let groups = group_ids
+            .iter()
+            .map(AccountGroupId::as_str)
+            .collect::<Vec<_>>();
+        let rows = sqlx::query("select
+                    coalesce((select enabled from outbound_proxies where outbound_proxies.id = provider_accounts.outbound_proxy_id), true) as outbound_proxy_enabled,
+            coalesce((select max_websocket_connections from outbound_proxies where outbound_proxies.id = provider_accounts.outbound_proxy_id), 0) as max_websocket_connections,
+            (select case when auto_location then detected_location_json -> 'location' else request_location_json end from outbound_proxies where outbound_proxies.id = provider_accounts.outbound_proxy_id and enabled) as request_location_json,
+                    credential_proxy_id, outbound_proxy_id, outbound_proxy_url, id, provider_kind, name, custom_name, email, upstream_user_id,
+                    upstream_account_id, plan_type, authentication_kind, credential_revision, turn_state_binding_revision, has_refresh_token,
+                    access_token_expires_at, next_refresh_at, enabled, turn_state_injection_enabled, responses_upstream, excel_models, excel_models_follow_global, excel_cache_creation_as_input, excel_ignore_encrypted_content, request_proxy_source, excel_auto_disable_on_403, excel_403_action, excel_auto_disabled_at, excel_403_warning_at, excel_mode_disabled_at,
+            case when excel_models_follow_global then (select excel_default_models from runtime_settings where id = 1) else excel_models end as effective_excel_models, concurrency_limit, weight, model_access_json, credential_state,
+                    credential_observed_at, quota_access_state, quota_evidence,
+                    quota_access_observed_at, quota_reset_at, quota_limit_window_minutes,
+                    coalesce((select status = 'passed' and provider_accounts.quota_access_state='exhausted' and account_subject=provider_accounts.upstream_account_id from codex_quota_overdraft_states where account_id = provider_accounts.id and credential_revision = provider_accounts.credential_revision and config_revision = (select config_revision from runtime_settings where id = 1) and exists(select 1 from runtime_settings where id = 1 and codex_quota_overdraft_enabled)), false) as codex_quota_overdraft_passed, auto_use_quota_credits, quota_settings, quota_paused,
+                    quota_observed_at, last_error_reason, last_error_message, created_at, updated_at,
+                    relogin_count, last_relogin_at
+             from provider_accounts
+             where id = any($1::text[]) and exists (
+ select 1 from account_group_accounts membership join account_groups account_group on account_group.id = membership.account_group_id
+ where membership.provider_account_id = provider_accounts.id and account_group.enabled and account_group.id = any($2::text[])) order by id").bind(account_ids).bind(groups).fetch_all(&self.pool).await
+            .map_err(|error| postgres_unavailable("load account summaries").with_source(error))?;
+        rows.into_iter().map(account_summary_from_row).collect()
+    }
+
     pub(super) async fn list_provider_account_summaries(
         &self,
         provider_kind: Option<&str>,

@@ -50,12 +50,17 @@ impl RedisProviderArtifactProfileRepository {
         })
     }
 
-    fn key(&self, provider_kind: &ProviderKind) -> String {
-        format!(
+    fn key(&self, provider_kind: &ProviderKind, artifact_key: &str) -> String {
+        let base = format!(
             "{}:provider:{}:artifact-profile:v1",
             self.namespace,
             provider_kind.as_str()
-        )
+        );
+        if artifact_key.is_empty() {
+            base
+        } else {
+            format!("{base}:{}", hex::encode(artifact_key))
+        }
     }
 }
 
@@ -66,6 +71,7 @@ impl ProviderArtifactProfileCachePort for RedisProviderArtifactProfileRepository
         ttl: Duration,
     ) -> futures::future::BoxFuture<'_, Result<bool, ProviderStoreError>> {
         Box::pin(async move {
+            validate_artifact_key(profile.artifact_key())?;
             let artifact_sequence = profile.artifact_sequence();
             if artifact_sequence == 0 || artifact_sequence > MAX_REDIS_EXACT_INTEGER {
                 return Err(provider_invalid("validate artifact profile sequence"));
@@ -88,7 +94,7 @@ impl ProviderArtifactProfileCachePort for RedisProviderArtifactProfileRepository
 
             let mut connection = self.connection.clone();
             let outcome = Script::new(REPLACE_SCRIPT)
-                .key(self.key(profile.provider_kind()))
+                .key(self.key(profile.provider_kind(), profile.artifact_key()))
                 .arg(artifact_sequence)
                 .arg(verified_at_ms)
                 .arg(payload)
@@ -115,10 +121,19 @@ impl ProviderArtifactProfileCachePort for RedisProviderArtifactProfileRepository
         provider_kind: &'a ProviderKind,
     ) -> futures::future::BoxFuture<'a, Result<Option<ProviderArtifactProfile>, ProviderStoreError>>
     {
+        self.read_artifact(provider_kind, "")
+    }
+    fn read_artifact<'a>(
+        &'a self,
+        provider_kind: &'a ProviderKind,
+        artifact_key: &'a str,
+    ) -> futures::future::BoxFuture<'a, Result<Option<ProviderArtifactProfile>, ProviderStoreError>>
+    {
         Box::pin(async move {
             let mut connection = self.connection.clone();
+            validate_artifact_key(artifact_key)?;
             let values: (Option<u64>, Option<u64>, Option<Vec<u8>>) = redis::cmd("HMGET")
-                .arg(self.key(provider_kind))
+                .arg(self.key(provider_kind, artifact_key))
                 .arg("artifact_sequence")
                 .arg("verified_at_ms")
                 .arg("profile")
@@ -150,12 +165,15 @@ impl ProviderArtifactProfileCachePort for RedisProviderArtifactProfileRepository
             let verified_at = SystemTime::UNIX_EPOCH
                 .checked_add(Duration::from_millis(verified_at_ms))
                 .ok_or_else(|| provider_invalid("decode artifact profile timestamp"))?;
-            Ok(Some(ProviderArtifactProfile::new(
-                provider_kind.clone(),
-                artifact_sequence,
-                verified_at,
-                OpaqueProviderData::new(fields),
-            )))
+            Ok(Some(
+                ProviderArtifactProfile::new(
+                    provider_kind.clone(),
+                    artifact_sequence,
+                    verified_at,
+                    OpaqueProviderData::new(fields),
+                )
+                .with_artifact_key(artifact_key.to_owned()),
+            ))
         })
     }
 }
@@ -176,4 +194,15 @@ fn provider_unavailable(operation: &'static str) -> ProviderStoreError {
 
 fn provider_invalid(operation: &'static str) -> ProviderStoreError {
     ProviderStoreError::new(ProviderStoreErrorKind::InvalidData, operation)
+}
+
+fn validate_artifact_key(key: &str) -> Result<(), ProviderStoreError> {
+    if key.len() > 128
+        || !key
+            .bytes()
+            .all(|value| value.is_ascii_alphanumeric() || matches!(value, b'-' | b'_' | b'.'))
+    {
+        return Err(provider_invalid("validate artifact profile key"));
+    }
+    Ok(())
 }

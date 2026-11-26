@@ -2,6 +2,8 @@
 
 mod admin;
 mod admin_user_agent;
+mod automatic_context;
+mod billing;
 mod compat;
 pub mod config;
 mod jitter;
@@ -217,7 +219,8 @@ async fn initialize_with_request_tuning_mode(
         profile.clone(),
         http.clone(),
         config.base_url().to_owned(),
-    );
+    )
+    .with_runtime_policy(Arc::clone(&runtime_policy));
     let profile_statistics = Arc::new(match &egress_runtime {
         Some(runtime) => profile_statistics.with_egress_runtime(Arc::clone(runtime)),
         None => profile_statistics,
@@ -267,7 +270,8 @@ async fn initialize_with_request_tuning_mode(
             config.token_client_config(),
             profile.clone(),
         )
-        .map_err(|_| OpenAiInitializeError::TokenClient)?,
+        .map_err(|_| OpenAiInitializeError::TokenClient)?
+        .with_runtime_policy(Arc::clone(&runtime_policy)),
     );
     let refresher: Arc<dyn TokenRefresher> = token_client.clone();
     let exchanger: Arc<dyn AuthorizationCodeExchanger> = token_client.clone();
@@ -302,7 +306,8 @@ async fn initialize_with_request_tuning_mode(
             CodexCredentialAdmin,
             profile.clone(),
         )
-        .with_oauth_client_id(config.oauth_client_id()),
+        .with_oauth_client_id(config.oauth_client_id())
+        .with_runtime_policy(Arc::clone(&runtime_policy)),
     );
     let admin_provider = OpenAiAdminProvider::new(
         provider_kind,

@@ -821,6 +821,15 @@ pub struct ProviderEvent {
 }
 
 impl ProviderEvent {
+    pub fn attach_observation(&mut self, observation: ProviderResponseObservation) {
+        self.observation = Some(Box::new(observation));
+    }
+
+    pub fn with_fact(mut self, fact: GatewayEvent) -> Self {
+        self.canonical.push(fact);
+        self
+    }
+
     /// 创建只有一个 canonical fact 的事件。
     #[must_use]
     pub fn canonical(event: GatewayEvent) -> Self {

@@ -2,11 +2,12 @@
 import type { AccountQuotaWindow } from '../../constants'
 import type { CodexQuotaOverdraftState } from '@/api/modules/accounts'
 import { computed } from 'vue'
-
 import BasePopover from '@/components/base/BasePopover.vue'
 
 import { useUiClock } from '@/composables/useUiClock'
+
 import { t } from '@/i18n'
+import { quotaWindowLabel } from '../../constants'
 import AccountRequestTimeline from '../AccountUsageWindow/AccountRequestTimeline.vue'
 import AccountUsageWindow from '../AccountUsageWindow/index.vue'
 import { quotaWindowCode, resolveAccountUsageWindowPresentation } from '../AccountUsageWindow/presenter'
@@ -21,8 +22,8 @@ const props = defineProps<{
 
 const now = useUiClock()
 const detailHeading = computed(() => props.label)
-const detailTitle = computed(() => detailHeading.value ?? props.windows[0]?.labelDisplay ?? '额度详情')
-const summaryLabel = computed(() => props.label ?? props.windows[0]?.labelDisplay ?? '额度')
+const detailTitle = computed(() => detailHeading.value ?? (props.windows[0] ? quotaWindowLabel(props.windows[0]) : '额度详情'))
+const summaryLabel = computed(() => props.label ?? (props.windows[0] ? quotaWindowLabel(props.windows[0]) : '额度'))
 const detailItems = computed(() =>
   props.windows.map((window) => {
     const view = resolveAccountUsageWindowPresentation({
@@ -41,7 +42,7 @@ const detailItems = computed(() =>
       timelineTitle: view.local.timelineTitle,
       durationDisplay: view.local.durationDisplay,
       code: quotaWindowCode(window.windowSeconds, window.role),
-      label: window.windowLabelDisplay,
+      label: quotaWindowLabel(window, false),
       usedPercent: window.usedPercent,
       usedPercentDisplay: window.usedPercentDisplay,
       resetAtDisplay: window.resetAtDisplay,

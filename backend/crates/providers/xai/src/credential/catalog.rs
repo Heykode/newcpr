@@ -174,7 +174,7 @@ impl GrokQuotaSnapshot {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum GrokQuotaError {
     #[error("xAI quota account is unavailable")]
     AccountUnavailable,
@@ -186,6 +186,8 @@ pub enum GrokQuotaError {
     Upstream,
     #[error("xAI quota store is unavailable")]
     Store,
+    #[error("xAI global request profile is unavailable")]
+    Profile(#[source] gateway_core::error::ErrorSource),
 }
 
 /// 官方 Grok Build billing 同步与 Provider-owned quota JSON 解析服务。
@@ -195,6 +197,7 @@ pub struct GrokCredentialQuotaService {
     client: Arc<GrokBillingClient>,
     scheduling: GrokQuotaSchedulingProjection,
     wire_profile: XaiWireProfileState,
+    runtime_policy: Option<Arc<dyn gateway_core::provider_ports::ProviderRuntimePolicyPort>>,
 }
 
 #[derive(Clone, Default)]
@@ -381,7 +384,29 @@ impl GrokCredentialQuotaService {
             client: Arc::new(GrokBillingClient::new(transport)),
             scheduling: GrokQuotaSchedulingProjection::default(),
             wire_profile,
+            runtime_policy: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_runtime_policy(
+        mut self,
+        policy: Arc<dyn gateway_core::provider_ports::ProviderRuntimePolicyPort>,
+    ) -> Self {
+        self.runtime_policy = Some(policy);
+        self
+    }
+
+    async fn global_profile(&self) -> Result<XaiWireProfileState, GrokQuotaError> {
+        let profile = match &self.runtime_policy {
+            Some(policy) => self
+                .wire_profile
+                .resolve_global_request_profile(policy.as_ref())
+                .await
+                .map_err(GrokQuotaError::Profile)?,
+            None => self.wire_profile.snapshot(),
+        };
+        Ok(XaiWireProfileState::new(profile))
     }
 
     /// 批量预热请求级额度投影；持久层或 Provider JSON 异常只退化为未知额度。
@@ -449,7 +474,8 @@ impl GrokCredentialQuotaService {
         {
             return Err(GrokQuotaError::AccountUnavailable);
         }
-        let session = billing_session(&loaded, &self.wire_profile)?;
+        let profile = self.global_profile().await?;
+        let session = billing_session(&loaded, &profile)?;
         let billing = self
             .client
             .fetch(&session)
@@ -842,6 +868,8 @@ pub enum GrokCredentialCatalogError {
     Cache,
     #[error("Grok provider account store is unavailable")]
     Store,
+    #[error("xAI global request profile is unavailable")]
+    Profile(#[source] gateway_core::error::ErrorSource),
 }
 
 #[derive(Clone)]
@@ -851,6 +879,7 @@ pub struct GrokCredentialCatalogService {
     cache: Arc<dyn GrokCredentialCatalogCache>,
     published: Arc<RwLock<PublishedCatalogState>>,
     wire_profile: XaiWireProfileState,
+    runtime_policy: Option<Arc<dyn gateway_core::provider_ports::ProviderRuntimePolicyPort>>,
 }
 
 #[derive(Default)]
@@ -873,7 +902,29 @@ impl GrokCredentialCatalogService {
             cache,
             published: Arc::new(RwLock::new(PublishedCatalogState::default())),
             wire_profile,
+            runtime_policy: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_runtime_policy(
+        mut self,
+        policy: Arc<dyn gateway_core::provider_ports::ProviderRuntimePolicyPort>,
+    ) -> Self {
+        self.runtime_policy = Some(policy);
+        self
+    }
+
+    async fn global_profile(&self) -> Result<XaiWireProfileState, GrokCredentialCatalogError> {
+        let profile = match &self.runtime_policy {
+            Some(policy) => self
+                .wire_profile
+                .resolve_global_request_profile(policy.as_ref())
+                .await
+                .map_err(GrokCredentialCatalogError::Profile)?,
+            None => self.wire_profile.snapshot(),
+        };
+        Ok(XaiWireProfileState::new(profile))
     }
 
     #[must_use]
@@ -891,9 +942,13 @@ impl GrokCredentialCatalogService {
         user_id: SecretValue,
         email: Option<SecretValue>,
     ) -> Result<GrokCredentialCatalogSeed, GrokCredentialCatalogError> {
-        let session =
-            GrokModelCatalogSession::new(access_token, user_id, email, self.wire_profile.clone())
-                .map_err(|_| GrokCredentialCatalogError::InvalidCredentialData)?;
+        let session = GrokModelCatalogSession::new(
+            access_token,
+            user_id,
+            email,
+            self.global_profile().await?,
+        )
+        .map_err(|_| GrokCredentialCatalogError::InvalidCredentialData)?;
         let snapshot = self
             .client
             .fetch(&session)
@@ -1063,12 +1118,13 @@ impl GrokCredentialCatalogService {
         candidates: Vec<LoadedGrokCredential>,
     ) -> Result<FetchedCredentialCatalog, GrokCredentialCatalogError> {
         let mut last_error = None;
+        let profile = self.global_profile().await?;
         for candidate in candidates.into_iter().take(MAX_CATALOG_FETCH_ATTEMPTS) {
             match fetch_candidate_catalog(
                 Arc::clone(&self.client),
                 scope.clone(),
                 candidate,
-                self.wire_profile.clone(),
+                profile.clone(),
             )
             .await
             {

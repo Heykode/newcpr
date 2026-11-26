@@ -53,6 +53,7 @@ impl CodexBackendClient {
     ) -> Self {
         let base_url = base_url.into().trim_end_matches('/').to_string();
         Self {
+            privacy: None,
             routing_affinity: None,
             fedramp_routing: false,
             connection_budget: None,
@@ -352,8 +353,6 @@ impl CodexBackendClient {
                 .or_insert(serde_json::Value::Bool(false));
             body
         };
-        let body =
-            serde_json::to_vec(&upstream_body).map_err(CodexClientError::RequestBodyEncode)?;
         let endpoint = if let Some(prepared) = excel {
             prepared.endpoint.clone()
         } else {
@@ -364,6 +363,16 @@ impl CodexBackendClient {
         {
             affinity.apply(&endpoint, &mut headers);
         }
+        let mut upstream_body = serde_json::Value::Object(upstream_body);
+        self.apply_privacy(&mut upstream_body, &mut headers)?;
+        let upstream_body = upstream_body.as_object().ok_or_else(|| {
+            CodexClientError::Privacy(gateway_core::settings::privacy::PrivacyError {
+                rule_index: 0,
+                reason: "请求正文必须是对象",
+            })
+        })?;
+        let body =
+            serde_json::to_vec(upstream_body).map_err(CodexClientError::RequestBodyEncode)?;
         let trace = context
             .trace
             .cloned()
@@ -376,7 +385,7 @@ impl CodexBackendClient {
         if excel.is_some() && trace.is_enabled() {
             trace.record(
                 "excel.request.structure",
-                super::excel::diagnostics::request_summary(&upstream_body, body.len()),
+                super::excel::diagnostics::request_summary(upstream_body, body.len()),
             );
         }
         trace.headers(
@@ -392,7 +401,7 @@ impl CodexBackendClient {
         super::evidence::record_request(
             &trace,
             "provider.request.outbound",
-            &upstream_body,
+            upstream_body,
             if excel.is_some() {
                 "excel_http_sse"
             } else {
@@ -653,12 +662,6 @@ impl CodexBackendClient {
                 &mut headers,
             );
         }
-        let mut websocket_create = CodexWebSocketConnection::response_create_opening(
-            &self.base_url,
-            &generate_key(),
-            websocket_header_pairs(&headers),
-            &websocket_request,
-        );
         let initial_start_ms = websocket_request
             .body()
             .get("client_metadata")
@@ -666,6 +669,25 @@ impl CodexBackendClient {
                 m.get(super::client::X_CODEX_WS_STREAM_REQUEST_START_MS_CLIENT_METADATA_KEY)
             })
             .cloned();
+        let original_headers = self.privacy.as_ref().map(|_| headers.clone());
+        let mut privacy_body =
+            serde_json::Value::Object(std::mem::take(websocket_request.body_mut()));
+        self.apply_privacy(&mut privacy_body, &mut headers)?;
+        let serde_json::Value::Object(privacy_body) = privacy_body else {
+            return Err(CodexClientError::Privacy(
+                gateway_core::settings::privacy::PrivacyError {
+                    rule_index: 0,
+                    reason: "WS 请求正文必须是对象",
+                },
+            ));
+        };
+        *websocket_request.body_mut() = privacy_body;
+        let mut websocket_create = CodexWebSocketConnection::response_create_opening(
+            &self.base_url,
+            &generate_key(),
+            websocket_header_pairs(&headers),
+            &websocket_request,
+        );
         websocket_create.connection.outbound_proxy = self.outbound_proxy.clone();
         websocket_create.connection.session_proxy = self
             .session_proxy_lease()
@@ -681,7 +703,12 @@ impl CodexBackendClient {
                 .iter()
                 .map(|(name, value)| (name.as_str(), value.as_bytes())),
         );
-        let connection_profile = websocket_connection_profile(&headers);
+        let mut connection_profile = websocket_connection_profile(&headers);
+        append_privacy_connection_profile(
+            &mut connection_profile,
+            &headers,
+            original_headers.as_ref(),
+        );
         let pool_key = self.websocket_pool_key(
             request,
             context,
@@ -1151,6 +1178,7 @@ impl CodexBackendClient {
         if let Some(key) = &self.forced_pool_key {
             return Some(
                 key.clone()
+                    .with_connection_profile(connection_profile)
                     .with_response_exclusions(opening_headers)
                     .with_downstream_connection_id(
                         request
@@ -1411,5 +1439,44 @@ async fn append_http_sse_rate_limit_updates(
     }
     if !observations.is_empty() {
         updates.lock().await.extend(observations);
+    }
+}
+
+fn append_privacy_connection_profile(
+    profile: &mut String,
+    headers: &HeaderMap,
+    original_headers: Option<&HeaderMap>,
+) {
+    if let Some(original) = original_headers {
+        use sha2::{Digest, Sha256};
+        let names: std::collections::BTreeSet<_> = original
+            .keys()
+            .chain(headers.keys())
+            .map(|name| name.as_str())
+            .collect();
+        let mut digest = Sha256::new();
+        let mut changed = false;
+        for name in names {
+            if original
+                .get_all(name)
+                .iter()
+                .eq(headers.get_all(name).iter())
+            {
+                continue;
+            }
+            changed = true;
+            digest.update(name.len().to_le_bytes());
+            digest.update(name.as_bytes());
+            digest.update(headers.get_all(name).iter().count().to_le_bytes());
+            for value in headers.get_all(name) {
+                digest.update(value.len().to_le_bytes());
+                digest.update(value.as_bytes());
+            }
+        }
+        // 改写后的握手头必须参与池身份，避免复用仍携带旧隐私值的连接
+        if changed {
+            profile.push('\0');
+            profile.push_str(&hex::encode(digest.finalize()));
+        }
     }
 }

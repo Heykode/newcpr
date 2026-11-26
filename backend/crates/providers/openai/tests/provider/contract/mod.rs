@@ -89,6 +89,7 @@ mod metadata_recovery;
 mod model_account_eligibility;
 mod native_encrypted_history;
 mod precommit;
+mod privacy;
 mod quota_continuation;
 mod quota_observation;
 mod quota_usage;
@@ -674,8 +675,7 @@ fn relaxed_context(request_id: &str, cancellation: CancellationToken) -> Attempt
         request_id,
         cancellation,
         contract_account_scope(),
-        account_policy()
-            .with_openai_account_affinity(gateway_core::account::AccountAffinity::Relaxed),
+        account_policy().with_account_affinity(gateway_core::account::AccountAffinity::Relaxed),
     )
 }
 
@@ -6006,9 +6006,8 @@ async fn thread_spawn_children_share_the_root_binding_but_keep_client_and_root_i
                     ),
                     NonZeroU32::MIN,
                     SystemTime::now() + Duration::from_secs(30),
-                    account_policy().with_openai_account_affinity(
-                        gateway_core::account::AccountAffinity::Relaxed,
-                    ),
+                    account_policy()
+                        .with_account_affinity(gateway_core::account::AccountAffinity::Relaxed),
                     AccountAttemptContext::new(BTreeSet::new(), None, None)
                         .with_account_scope(contract_account_scope()),
                     None,
@@ -6078,8 +6077,7 @@ async fn relaxed_child_migration_preserves_running_parent_and_late_completion_ca
             ),
             NonZeroU32::MIN,
             SystemTime::now() + Duration::from_secs(30),
-            account_policy()
-                .with_openai_account_affinity(gateway_core::account::AccountAffinity::Relaxed),
+            account_policy().with_account_affinity(gateway_core::account::AccountAffinity::Relaxed),
             AccountAttemptContext::new(
                 BTreeSet::new(),
                 None,

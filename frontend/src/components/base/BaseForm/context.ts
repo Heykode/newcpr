@@ -15,6 +15,11 @@ export interface FormContext extends FormInstance {
   emitValidate: (prop: FormItemProp, valid: boolean, message: string) => void
 }
 
+export interface FormFieldControl {
+  id: Readonly<Ref<string>>
+  labelable: boolean
+}
+
 interface FormFieldContext {
   controlId: ComputedRef<string | undefined>
   labelledBy: ComputedRef<string | undefined>
@@ -23,7 +28,7 @@ interface FormFieldContext {
   required: ComputedRef<boolean>
   isResetting: Readonly<Ref<boolean>>
   validate: FormItemContext['validate']
-  registerControl: (id: Readonly<Ref<string>>) => () => void
+  registerControl: (control: FormFieldControl) => () => void
 }
 
 export const formFieldKey: InjectionKey<FormFieldContext | null> = Symbol('form-field')

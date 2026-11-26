@@ -79,7 +79,11 @@
       "enterApiKeyName": "Please enter API key name",
       "invalidKey": "Use visible HTTP header characters, without spaces or line breaks",
       "requestsPerMinute": "Requests per minute",
-      "peerSharingHelp": "Other nodes can check this key’s budget, concurrency limit and RPM and use OAuth and API accounts in the selected groups for model requests"
+      "peerSharingHelp": "Allow other nodes to read this key’s budget, concurrency limit and RPM, plus the selected groups’ OAuth account pool, quota and plan summaries according to the permissions below.",
+      "peerSharing": "CPR Link",
+      "sharePlans": "Share plan breakdown",
+      "sharePool": "Share account pool summary",
+      "shareQuota": "Share account quotas"
     },
     "fields": {
       "copyFullKey": "Copy full key",

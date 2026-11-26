@@ -1,3 +1,4 @@
+mod privacy;
 mod recovery;
 
 use super::*;

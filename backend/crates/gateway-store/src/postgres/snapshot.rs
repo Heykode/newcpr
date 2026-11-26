@@ -21,15 +21,17 @@ use super::ClientApiKeySnapshot;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SnapshotRuntimeSettings {
+    pub codex_privacy_policy: gateway_core::settings::privacy::CodexPrivacyPolicy,
+    pub pricing: gateway_core::metering::PricingOverrides,
     pub openai_oauth_guardian_review_model: bool,
     pub openai_request_country: gateway_core::account::OpenAiRequestCountry,
     pub request_profiles:
         BTreeMap<gateway_core::routing::ProviderKind, gateway_core::account::OpaqueProviderData>,
     pub responses_max_decompressed_body_bytes: u64,
-    pub openai_account_affinity: gateway_core::account::AccountAffinity,
+    pub account_affinity: gateway_core::account::AccountAffinity,
     pub codex_quota_overdraft_enabled: bool,
     pub codex_quota_overdraft_probe_model: String,
-    pub openai_session_binding_ttl_hours: u32,
+    pub session_affinity_ttl_hours: u32,
     pub refresh_margin_seconds: u64,
     pub refresh_concurrency: u32,
     pub max_concurrent_per_account: u32,
@@ -171,6 +173,8 @@ impl SnapshotStorePort for PgRuntimeSnapshotRepository {
                 data.settings.min_codex_cli_version,
             )
             .with_request_profiles(data.settings.request_profiles)
+            .with_pricing(data.settings.pricing)
+            .with_codex_privacy_policy(data.settings.codex_privacy_policy)
             .with_quota_reset_window_weights(data.settings.quota_reset_window_weights)
             .with_responses_max_decompressed_body_bytes(
                 data.settings.responses_max_decompressed_body_bytes,
@@ -192,8 +196,8 @@ impl SnapshotStorePort for PgRuntimeSnapshotRepository {
             .with_openai_guardian_reserved_concurrency(
                 data.settings.openai_guardian_reserved_concurrency,
             )
-            .with_openai_session_binding_ttl_hours(data.settings.openai_session_binding_ttl_hours)
-            .with_openai_account_affinity(data.settings.openai_account_affinity);
+            .with_session_affinity_ttl_hours(data.settings.session_affinity_ttl_hours)
+            .with_account_affinity(data.settings.account_affinity);
             let settings = settings.with_codex_quota_overdraft(
                 data.settings.codex_quota_overdraft_enabled,
                 data.settings.codex_quota_overdraft_probe_model,
@@ -209,6 +213,7 @@ impl SnapshotStorePort for PgRuntimeSnapshotRepository {
                         key.limits,
                     )
                     .with_request_profiles(key.request_profiles)
+                    .with_peer_sharing(key.peer_sharing)
                 })
                 .collect();
             let account_groups = data
@@ -379,6 +384,10 @@ async fn load_settings(
 ) -> StoreResult<(Revision, SnapshotRuntimeSettings)> {
     #[derive(sqlx::FromRow)]
     struct SettingsRow {
+        codex_privacy_policy_json:
+            sqlx::types::Json<gateway_core::settings::privacy::CodexPrivacyPolicy>,
+        pricing_overrides_json: sqlx::types::Json<gateway_core::metering::PricingOverrides>,
+        pricing_synced_json: sqlx::types::Json<gateway_core::metering::PricingOverrides>,
         openai_oauth_guardian_review_model: bool,
         openai_request_country: sqlx::types::Json<gateway_core::account::OpenAiRequestCountry>,
         request_profiles:
@@ -397,19 +406,19 @@ async fn load_settings(
         request_tuning_json: Option<sqlx::types::Json<RequestTuningOverrides>>,
         responses_max_decompressed_body_bytes: i64,
         openai_guardian_reserved_concurrency: i64,
-        openai_session_binding_ttl_hours: i64,
-        openai_account_affinity: String,
+        session_affinity_ttl_hours: i64,
+        account_affinity: String,
         codex_quota_overdraft_enabled: bool,
         codex_quota_overdraft_probe_model: String,
     }
     let row = sqlx::query_as::<_, SettingsRow>(
-        "select coalesce((select jsonb_object_agg(provider_kind, configuration_json) from provider_outbound_user_agents where mode = 'configuration'), '{}'::jsonb) as request_profiles,
+        "select codex_privacy_policy_json, pricing_overrides_json, pricing_synced_json, coalesce((select jsonb_object_agg(provider_kind, configuration_json) from provider_outbound_user_agents where mode = 'configuration'), '{}'::jsonb) as request_profiles,
                 openai_oauth_guardian_review_model, openai_request_country_json as openai_request_country, config_revision, refresh_margin_seconds, refresh_concurrency,
                 max_concurrent_per_account, request_interval_ms, rotation_strategy, quota_reset_window_weights_json,
                 model_mappings_json, min_codex_desktop_version,
                 min_codex_cli_version, request_tuning_json,
                 responses_max_decompressed_body_bytes,
-                openai_guardian_reserved_concurrency, openai_session_binding_ttl_hours, openai_account_affinity,
+                openai_guardian_reserved_concurrency, session_affinity_ttl_hours, account_affinity,
                 codex_quota_overdraft_enabled, codex_quota_overdraft_probe_model
          from runtime_settings where id = 1",
     )
@@ -423,16 +432,19 @@ async fn load_settings(
     Ok((
         revision_from_i64(row.config_revision)?,
         SnapshotRuntimeSettings {
+            codex_privacy_policy: row.codex_privacy_policy_json.0,
+            pricing: gateway_core::metering::merge_pricing(
+                row.pricing_synced_json.0,
+                &row.pricing_overrides_json.0,
+            ),
             openai_oauth_guardian_review_model: row.openai_oauth_guardian_review_model,
             openai_request_country: row.openai_request_country.0,
             request_profiles: super::client_keys::decode_request_profiles(row.request_profiles.0)?,
-            openai_account_affinity: gateway_core::account::AccountAffinity::parse(
-                &row.openai_account_affinity,
-            )
-            .ok_or_else(|| invalid("invalid account affinity"))?,
+            account_affinity: gateway_core::account::AccountAffinity::parse(&row.account_affinity)
+                .ok_or_else(|| invalid("invalid account affinity"))?,
             codex_quota_overdraft_enabled: row.codex_quota_overdraft_enabled,
             codex_quota_overdraft_probe_model: row.codex_quota_overdraft_probe_model,
-            openai_session_binding_ttl_hours: to_u32(row.openai_session_binding_ttl_hours)?,
+            session_affinity_ttl_hours: to_u32(row.session_affinity_ttl_hours)?,
             refresh_margin_seconds: to_u64(row.refresh_margin_seconds)?,
             refresh_concurrency: to_u32(row.refresh_concurrency)?,
             max_concurrent_per_account: to_u32(row.max_concurrent_per_account)?,
@@ -467,12 +479,13 @@ async fn load_client_keys(
             sqlx::types::Json<
                 std::collections::BTreeMap<String, serde_json::Map<String, serde_json::Value>>,
             >,
+            sqlx::types::Json<gateway_core::policy::ClientPeerSharing>,
         ),
     >(
         "select k.id, k.key,
                 coalesce(array_agg(kg.account_group_id order by kg.account_group_id)
                   filter (where kg.account_group_id is not null), '{}') as group_ids,
-                k.max_concurrency, k.requests_per_minute, k.provider_request_profiles_json
+                k.max_concurrency, k.requests_per_minute, k.provider_request_profiles_json, k.peer_sharing_json
          from client_api_keys k
          left join client_api_key_groups kg on kg.client_api_key_id = k.id
          where k.enabled
@@ -485,6 +498,7 @@ async fn load_client_keys(
     rows.into_iter()
         .map(|row| {
             let mut key = ClientApiKeySnapshot::from_persisted(row.0, row.1, row.2, row.3, row.4)?;
+            key.peer_sharing = row.6.0;
             key.request_profiles = super::client_keys::decode_request_profiles(row.5.0)?;
             Ok(key)
         })

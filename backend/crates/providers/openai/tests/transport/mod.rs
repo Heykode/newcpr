@@ -64,6 +64,7 @@ mod media_compat;
 mod native_http;
 mod native_reqwest;
 mod native_tls;
+pub(crate) mod privacy;
 mod profile;
 mod profile_avatar;
 mod profile_contract;

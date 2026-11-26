@@ -18,16 +18,21 @@ function load(path, dependencies = {}) {
   return exports
 }
 
-function mountExporter(t, getAccountModelCatalog, downloadJson) {
+function mountExporter(t, getAccountModelCatalog, downloadJson, selection = {}) {
   const files = []
   const errors = []
   const successes = []
+  const warnings = []
+  const exports = []
   const { useAccountMutations } = load('../src/views/accounts/composables/useAccountMutations.ts', {
     vue,
-    '@/api': { getAccountModelCatalog },
-    '@/components/base/BaseToast': { toast: { error: text => errors.push(text), success: text => successes.push(text) } },
+    '@/api': { getAccountModelCatalog, exportAccounts: async (payload) => {
+      exports.push(payload)
+      return { accounts: [] }
+    } },
+    '@/components/base/BaseToast': { toast: { error: text => errors.push(text), success: text => successes.push(text), warning: text => warnings.push(text) } },
     '@/composables/useIdSet': load('../src/composables/useIdSet.ts', { vue }),
-    '@/composables/useAsyncAction': { useAsyncAction: () => ({ loading: vue.ref(false) }) },
+    '@/composables/useAsyncAction': { useAsyncAction: () => ({ loading: vue.ref(false), run: action => action() }) },
     '@/composables/useDownload': { useDownload: () => ({
       downloadJson: downloadJson ?? (async (payload, name) => files.push({ payload, name })),
     }) },
@@ -37,13 +42,13 @@ function mountExporter(t, getAccountModelCatalog, downloadJson) {
   const scope = vue.effectScope()
   t.after(() => scope.stop())
   const state = scope.run(() => useAccountMutations({
-    accounts: vue.ref([]),
-    selectedIds: vue.ref(new Set(['unrelated-selected-account'])),
+    accounts: selection.accounts ?? vue.ref([]),
+    selectedIds: selection.ids ?? vue.ref(new Set(['unrelated-selected-account'])),
     reload: assert.fail,
     replaceAccount: assert.fail,
     onImportTaskCreated: assert.fail,
   }))
-  return { state, files, errors, successes, stop: () => scope.stop() }
+  return { state, files, errors, successes, warnings, exports, stop: () => scope.stop() }
 }
 
 test('catalog API uses a single account GET and forwards cancellation options', async () => {
@@ -187,4 +192,34 @@ test('avatar URLs preserve deployment prefixes and encode account IDs', () => {
     assert.equal(url.pathname, `${base}/api/admin/accounts/profile-avatar`)
     assert.equal(url.searchParams.get('accountId'), 'acct / one')
   }
+})
+
+test('credential export checks every selected capability before opening and again before confirmation', async (t) => {
+  const account = { id: 'acct_oauth', provider: 'antigravity', capabilities: { credentialExport: true } }
+  const accounts = vue.ref([account])
+  const ids = vue.ref(new Set([account.id]))
+  const h = mountExporter(t, assert.fail, undefined, { accounts, ids })
+  await h.state.handleExportAccounts()
+  assert.equal(h.state.showExportModal.value, true)
+  accounts.value = [{ ...account, capabilities: { credentialExport: false } }]
+  await vue.nextTick()
+  await h.state.confirmExportAccounts()
+  assert.equal(h.exports.length, 0)
+  assert.equal(h.warnings.length, 1)
+  h.state.showExportModal.value = false
+  ids.value = new Set(['acct_missing'])
+  await vue.nextTick()
+  await h.state.handleExportAccounts()
+  assert.equal(h.state.showExportModal.value, false)
+  assert.equal(h.warnings.length, 2)
+  ids.value = new Set([account.id])
+  accounts.value = [account]
+  await vue.nextTick()
+  accounts.value = [] // Retain the selected capability across pagination.
+  await vue.nextTick()
+  await h.state.handleExportAccounts()
+  await h.state.confirmExportAccounts()
+  assert.equal(h.exports.length, 1)
+  assert.equal(h.exports[0].accountIds, account.id)
+  assert.equal(h.files.length, 1)
 })

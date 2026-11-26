@@ -231,11 +231,22 @@ fn encode_collected_events(
     format: &HttpResponseFormat,
 ) -> Result<Vec<u8>, HttpEncodeError> {
     let response = HttpResponseEncoder::new(format).finish_collected(events)?;
-    if format.is_messages()
+    if (format.is_messages()
+        || matches!(
+            format,
+            HttpResponseFormat::GenAi | HttpResponseFormat::GenAiTokenCount
+        ))
         && let Some(raw) = events
             .iter()
             .filter_map(ProviderEvent::wire_event)
-            .filter(|wire| wire.protocol() == ANTHROPIC_PROTOCOL)
+            .filter(|wire| {
+                wire.protocol()
+                    == if format.is_messages() {
+                        ANTHROPIC_PROTOCOL
+                    } else {
+                        gateway_protocol::genai::GENAI_PROTOCOL
+                    }
+            })
             .find_map(|wire| wire.raw_json_body())
     {
         return Ok(raw.to_vec());
@@ -308,7 +319,9 @@ fn encoding_error_response(error: &HttpEncodeError, format: &HttpResponseFormat)
                 _,
                 HttpResponseFormat::Chat { .. }
                 | HttpResponseFormat::Messages
-                | HttpResponseFormat::MessageTokenCount,
+                | HttpResponseFormat::MessageTokenCount
+                | HttpResponseFormat::GenAi
+                | HttpResponseFormat::GenAiTokenCount,
             ) => StatusCode::BAD_GATEWAY,
         },
         error.protocol_body(),
@@ -329,7 +342,23 @@ pub(in crate::openai) async fn stream_execution_response_as(
     format: HttpResponseFormat,
 ) -> Response {
     let commit = session.response_commit();
-    if format.is_messages() {
+    if matches!(
+        format,
+        HttpResponseFormat::GenAi | HttpResponseFormat::GenAiTokenCount
+    ) {
+        super::keepalive::response_with_protocol(
+            async move {
+                crate::openai::genai::project_error_response(
+                    stream_execution_response_inner(session, connection_guard, format).await,
+                )
+                .await
+            },
+            commit,
+            Some(crate::openai::genai::stream_error),
+            Bytes::new(),
+        )
+        .await
+    } else if format.is_messages() {
         super::keepalive::response_with_protocol(
             async move {
                 crate::openai::messages::project_error_response(

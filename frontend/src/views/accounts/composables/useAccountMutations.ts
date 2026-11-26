@@ -160,13 +160,28 @@ export function useAccountMutations(options: {
       toast.warning('请选择要导出的账号')
       return
     }
+    if (!canExportSelection(selected))
+      return
     showExportModal.value = true
+  }
+
+  function canExportSelection(ids: string[]) {
+    for (const id of ids) {
+      const account = selectedAccountsById.get(id)
+      if (!account || !account.capabilities?.credentialExport) {
+        toast.warning(t(account ? 'accounts.actions.exportUnsupported' : 'accounts.actions.staleSelection'))
+        return false
+      }
+    }
+    return ids.length > 0
   }
 
   async function confirmExportAccounts() {
     if (exportingAccounts.value)
       return
     const selected = [...options.selectedIds.value]
+    if (!canExportSelection(selected))
+      return
     await exportingAccountsAction.run(
       async () => {
         const payload = await exportAccounts({

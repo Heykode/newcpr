@@ -44,7 +44,7 @@ fn attempt_with(
             NonZeroU32::new(2).unwrap(),
             Duration::ZERO,
         )
-        .with_openai_account_affinity(mode)
+        .with_account_affinity(mode)
         .with_queue(gateway_core::concurrency::ConcurrencyQueuePolicy {
             max_waiting: 1,
             timeout: Duration::from_secs(2),

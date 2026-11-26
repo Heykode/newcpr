@@ -83,8 +83,10 @@ fn update_body() -> Value {
             "accountQueueTimeoutSeconds": 120,
         }
     });
-    body["openaiAccountAffinity"] = json!("strict");
-    body["openaiSessionBindingTtlHours"] = json!(24);
+    body["providerRequestProfiles"] = json!({});
+    body["codexPrivacyPolicy"] = json!({"enabled": false, "onError": "skip_rule", "rules": []});
+    body["accountAffinity"] = json!("strict");
+    body["sessionAffinityTtlHours"] = json!(24);
     body["openaiGuardianReservedConcurrency"] = json!(0);
     body["accountWarmupEnabled"] = json!(false);
     body["accountWarmupCron"] = json!("0 8 * * *");
@@ -121,22 +123,19 @@ async fn with_current_revision(fixture: &AdminTestFixture, mut body: Value) -> V
 fn account_affinity_rejects_invalid_values_and_preserves_omission() {
     use gateway_core::account::AccountAffinity;
     let mut old_body = update_body();
-    old_body
-        .as_object_mut()
-        .unwrap()
-        .remove("openaiAccountAffinity");
+    old_body.as_object_mut().unwrap().remove("accountAffinity");
     let omitted: UpdateRuntimeSettingsRequest = serde_json::from_value(old_body).unwrap();
-    assert_eq!(omitted.openai_account_affinity, None);
+    assert_eq!(omitted.account_affinity, None);
     for (value, mode) in [
         ("strict", AccountAffinity::Strict),
         ("relaxed", AccountAffinity::Relaxed),
         ("preferred", AccountAffinity::Preferred),
     ] {
         let mut body = update_body();
-        body["openaiAccountAffinity"] = json!(value);
+        body["accountAffinity"] = json!(value);
         let parsed: UpdateRuntimeSettingsRequest = serde_json::from_value(body).unwrap();
         parsed.validate().unwrap();
-        assert_eq!(parsed.openai_account_affinity, Some(mode));
+        assert_eq!(parsed.account_affinity, Some(mode));
     }
     for invalid in [
         json!(null),
@@ -147,7 +146,7 @@ fn account_affinity_rejects_invalid_values_and_preserves_omission() {
         json!(true),
     ] {
         let mut body = update_body();
-        body["openaiAccountAffinity"] = invalid;
+        body["accountAffinity"] = invalid;
         assert!(serde_json::from_value::<UpdateRuntimeSettingsRequest>(body).is_err());
     }
 }
@@ -164,16 +163,13 @@ async fn account_affinity_saves_and_old_api_clients_keep_the_saved_mode() {
         .unwrap();
     assert_eq!(loaded.status(), StatusCode::OK);
     assert_eq!(
-        response_json(loaded).await["data"]["openaiAccountAffinity"],
+        response_json(loaded).await["data"]["accountAffinity"],
         "strict"
     );
     let mut body = update_body();
-    body["openaiAccountAffinity"] = json!("relaxed");
+    body["accountAffinity"] = json!("relaxed");
     let mut old_body = update_body();
-    old_body
-        .as_object_mut()
-        .unwrap()
-        .remove("openaiAccountAffinity");
+    old_body.as_object_mut().unwrap().remove("accountAffinity");
     for body in [body, old_body] {
         let body = with_current_revision(&fixture, body).await;
         let saved = router
@@ -187,7 +183,7 @@ async fn account_affinity_saves_and_old_api_clients_keep_the_saved_mode() {
             .unwrap();
         assert_eq!(saved.status(), StatusCode::OK);
         assert_eq!(
-            response_json(saved).await["data"]["openaiAccountAffinity"],
+            response_json(saved).await["data"]["accountAffinity"],
             "relaxed"
         );
     }
@@ -199,9 +195,9 @@ fn session_binding_ttl_rejects_null_and_out_of_range_values_but_preserves_omissi
     old_body
         .as_object_mut()
         .unwrap()
-        .remove("openaiSessionBindingTtlHours");
+        .remove("sessionAffinityTtlHours");
     let omitted: UpdateRuntimeSettingsRequest = serde_json::from_value(old_body).unwrap();
-    assert_eq!(omitted.openai_session_binding_ttl_hours, None);
+    assert_eq!(omitted.session_affinity_ttl_hours, None);
     for invalid in [
         json!(null),
         json!(0),
@@ -211,16 +207,16 @@ fn session_binding_ttl_rejects_null_and_out_of_range_values_but_preserves_omissi
         json!("24"),
     ] {
         let mut body = update_body();
-        body["openaiSessionBindingTtlHours"] = invalid;
+        body["sessionAffinityTtlHours"] = invalid;
         let parsed = serde_json::from_value::<UpdateRuntimeSettingsRequest>(body);
         assert!(parsed.is_err() || parsed.unwrap().validate().is_err());
     }
     for hours in [1, 24, 720] {
         let mut body = update_body();
-        body["openaiSessionBindingTtlHours"] = json!(hours);
+        body["sessionAffinityTtlHours"] = json!(hours);
         let parsed: UpdateRuntimeSettingsRequest = serde_json::from_value(body).unwrap();
         parsed.validate().unwrap();
-        assert_eq!(parsed.openai_session_binding_ttl_hours, Some(hours));
+        assert_eq!(parsed.session_affinity_ttl_hours, Some(hours));
     }
 }
 
@@ -444,13 +440,16 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
     use gateway_core::routing::{PublicModelId, UpstreamModelId};
 
     let settings = RuntimeSettings {
+        request_profiles: Default::default(),
+
+        codex_privacy_policy: Default::default(),
         openai_oauth_guardian_review_model: true,
         openai_request_country: Default::default(),
 
         turn_state_probe_proxy_id: None,
         turn_state_probe_concurrency: 3,
-        openai_account_affinity: Default::default(),
-        openai_session_binding_ttl_hours: 24,
+        account_affinity: Default::default(),
+        session_affinity_ttl_hours: 24,
         config_revision: Revision::new(7).expect("revision"),
         turn_state_injection_enabled: false,
         excel_default_models: Default::default(),
@@ -577,8 +576,10 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
     expected["openaiOauthGuardianReviewModel"] = json!(true);
     expected["openaiRequestCountry"] = json!({"mode": "follow_location"});
     expected["configRevision"] = json!(7);
-    expected["openaiAccountAffinity"] = json!("strict");
-    expected["openaiSessionBindingTtlHours"] = json!(24);
+    expected["providerRequestProfiles"] = json!({});
+    expected["codexPrivacyPolicy"] = json!({"enabled": false, "onError": "skip_rule", "rules": []});
+    expected["accountAffinity"] = json!("strict");
+    expected["sessionAffinityTtlHours"] = json!(24);
     expected["openaiGuardianReservedConcurrency"] = json!(0);
     expected["accountWarmupEnabled"] = json!(false);
     expected["accountWarmupCron"] = json!("0 8 * * *");
@@ -624,11 +625,13 @@ fn settings_request_and_response_fields_should_stay_in_lockstep() {
         .cloned()
         .collect();
     let settings = RuntimeSettings {
+        request_profiles: Default::default(),
+        codex_privacy_policy: Default::default(),
         openai_oauth_guardian_review_model: true,
         openai_request_country: Default::default(),
 
-        openai_account_affinity: Default::default(),
-        openai_session_binding_ttl_hours: 24,
+        account_affinity: Default::default(),
+        session_affinity_ttl_hours: 24,
         config_revision: Revision::new(7).expect("revision"),
         turn_state_probe_proxy_id: request.turn_state_probe_proxy_id.clone().flatten(),
         turn_state_probe_concurrency: request.turn_state_probe_concurrency.unwrap_or(3),
@@ -1435,4 +1438,35 @@ async fn quota_reset_weights_are_independent_complete_and_round_trip() {
         .await
         .unwrap();
     assert_eq!(response_json(response).await["data"], data["data"]);
+}
+
+#[test]
+fn backup_settings_report_secret_presence_without_serializing_the_secret() {
+    use gateway_admin::model::backup::BackupSettings;
+    use gateway_api::admin::backups::BackupSettingsView;
+
+    for configured in [false, true] {
+        let settings = BackupSettings {
+            storage_revision: 1,
+            endpoint: None,
+            region: None,
+            bucket: None,
+            access_key_id: None,
+            secret_access_key: configured.then(|| secrecy::SecretString::from("fixture-secret")),
+            prefix: None,
+            force_path_style: false,
+            schedule_enabled: false,
+            cron_expression: None,
+            schedule_timezone: None,
+            retention_days: 0,
+            retention_count: 0,
+            next_run_at: None,
+            last_verified_at: None,
+            updated_at: chrono::Utc::now(),
+        };
+        let response = serde_json::to_value(BackupSettingsView::from(settings)).unwrap();
+        assert_eq!(response["secretConfigured"], configured);
+        assert!(response.get("secretAccessKey").is_none());
+        assert!(!response.to_string().contains("fixture-secret"));
+    }
 }

@@ -122,6 +122,7 @@ impl GrokModelCatalogRequest {
                 session.wire_profile.client_version(),
             ),
             GrokHeader::public("x-grok-client-mode", session.wire_profile.client_mode()),
+            GrokHeader::public("user-agent", session.wire_profile.user_agent()),
             GrokHeader::public("accept", "application/json"),
         ];
         if let Some(email) = &session.email {
@@ -279,6 +280,7 @@ impl GrokBillingRequest {
                 session.wire_profile.client_version(),
             ),
             GrokHeader::public("x-grok-client-mode", session.wire_profile.client_mode()),
+            GrokHeader::public("user-agent", session.wire_profile.user_agent()),
             GrokHeader::public("accept", "application/json"),
         ];
         if let Some(email) = &session.email {

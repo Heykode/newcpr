@@ -12,8 +12,10 @@ import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseModal from '@/components/base/BaseModal/index.vue'
 import HelpPopover from '@/components/HelpPopover.vue'
+import ProviderRequestProfilesEditor from '@/components/request-profile/index.vue'
 import { t } from '@/i18n'
 import { apiKeyFormErrors } from '../utils/formValidation'
+import ApiKeyPeerSharingField from './ApiKeyPeerSharingField.vue'
 
 const props = defineProps<{
   groups: AccountGroup[]
@@ -109,7 +111,7 @@ watch(open, () => {
         </div>
       </BaseFormItem>
 
-      <BaseFormItem :label="t('accounts.fields.accountGrouping')">
+      <BaseFormItem :label="t('accounts.fields.accountGrouping')" :error="fieldError('groupIds')" :required="form.peerSharing.enabled">
         <AccountGroupCheckboxGrid
           v-model="form.groupIds"
           :groups="groups"
@@ -117,6 +119,9 @@ watch(open, () => {
           :disabled="saving"
         />
       </BaseFormItem>
+
+      <ApiKeyPeerSharingField v-model="form.peerSharing" :disabled="saving" />
+      <ProviderRequestProfilesEditor v-model="form.providerRequestProfileOverrides" allow-inherit :active="open" :disabled="saving" />
 
       <div class="grid gap-6 sm:grid-cols-2">
         <BaseFormItem :error="fieldError('dailyLimitUsd')" :label="t('keys.editor.dailyLimit')">

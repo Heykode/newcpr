@@ -92,6 +92,7 @@ pub(crate) fn queued_record(seed: &BackupRecordSeed) -> BackupRecord {
 /// 内存版备份仓储。
 pub(crate) struct FakeBackupRepository {
     settings: Mutex<BackupSettings>,
+    rotate_before_verification: bool,
     records: Mutex<Vec<BackupRecord>>,
     pub(crate) audits: Mutex<Vec<String>>,
 }
@@ -100,9 +101,15 @@ impl FakeBackupRepository {
     pub(crate) fn new(settings: BackupSettings) -> Self {
         Self {
             settings: Mutex::new(settings),
+            rotate_before_verification: false,
             records: Mutex::new(Vec::new()),
             audits: Mutex::new(Vec::new()),
         }
+    }
+
+    pub(crate) fn rotating_before_verification(mut self) -> Self {
+        self.rotate_before_verification = true;
+        self
     }
 
     /// 测试辅助：读取当前全部记录。
@@ -186,6 +193,10 @@ impl BackupRepository for FakeBackupRepository {
         at: DateTime<Utc>,
     ) -> AdminStoreResult<bool> {
         let mut settings = self.settings.lock().expect("settings");
+        if self.rotate_before_verification {
+            settings.storage_revision += 1;
+            settings.last_verified_at = None;
+        }
         if settings.storage_revision != storage_revision {
             return Ok(false);
         }
@@ -528,6 +539,7 @@ impl DatabaseDumpPort for FakeDumpPort {
 pub(crate) struct FakeObjectStore {
     pub(crate) objects: Mutex<std::collections::HashMap<String, Vec<u8>>>,
     upload_error: Option<BackupError>,
+    connection_error: Option<BackupError>,
     delete_error: Option<BackupError>,
 }
 
@@ -536,6 +548,7 @@ impl FakeObjectStore {
         Self {
             objects: Mutex::new(std::collections::HashMap::new()),
             upload_error: None,
+            connection_error: None,
             delete_error: None,
         }
     }
@@ -543,6 +556,11 @@ impl FakeObjectStore {
     /// 让上传返回指定的脱敏 S3 错误。
     pub(crate) fn fail_upload(mut self, code: &'static str, message: impl Into<String>) -> Self {
         self.upload_error = Some(BackupError::new(code, message.into()));
+        self
+    }
+
+    pub(crate) fn fail_connection(mut self, code: &'static str) -> Self {
+        self.connection_error = Some(BackupError::new(code, "DELETE failed".into()));
         self
     }
 
@@ -565,6 +583,14 @@ impl BackupObjectStorePort for FakeObjectStore {
         &self,
         _config: &BackupStorageConfig,
     ) -> Result<ConnectionTestResult, gateway_admin::model::backup::BackupError> {
+        if let Some(error) = &self.connection_error {
+            return Ok(ConnectionTestResult {
+                ok: false,
+                stage: "deleteObject",
+                code: Some(error.code()),
+                message: error.message().into(),
+            });
+        }
         Ok(ConnectionTestResult {
             ok: true,
             stage: "deleteObject",

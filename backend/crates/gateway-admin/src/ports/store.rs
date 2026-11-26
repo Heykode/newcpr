@@ -152,6 +152,35 @@ pub trait AccountStore: Send + Sync {
         runtime: AccountRuntimeSnapshot,
     ) -> AdminStoreResult<Option<AccountPageItem>>;
 
+    /// 批量读取指定账号与当前启用分组的交集，分组只用于授权筛选，不加载展示信息
+    /// 不加载凭据正文或触发 Provider 查询
+    async fn load_accounts_in_enabled_groups(
+        &self,
+        account_ids: &[gateway_core::account::ProviderAccountId],
+        group_ids: &[gateway_core::routing::AccountGroupId],
+    ) -> AdminStoreResult<Vec<crate::model::accounts::AccountRecord>> {
+        if group_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut accounts = Vec::with_capacity(account_ids.len());
+        for id in account_ids {
+            if let Some(item) = self
+                .load_account(id.as_str(), AccountRuntimeSnapshot::default())
+                .await?
+                && item
+                    .account
+                    .groups
+                    .iter()
+                    .any(|group| group.enabled && group_ids.contains(&group.id))
+            {
+                let mut account = item.account;
+                account.groups.clear();
+                accounts.push(account);
+            }
+        }
+        Ok(accounts)
+    }
+
     async fn load_account_usage(
         &self,
         range: TimeRange,
@@ -882,6 +911,38 @@ pub trait ObservabilityStore: Send + Sync {
 /// Runtime settings 与管理员 API Key 写入。
 #[async_trait]
 pub trait SettingsStore: Send + Sync {
+    async fn load_pricing(&self) -> AdminStoreResult<crate::model::pricing::StoredPricing> {
+        Err(AdminStoreError::new(
+            AdminStoreErrorKind::Unavailable,
+            "model pricing",
+            "not supported",
+        ))
+    }
+    async fn sync_pricing(
+        &self,
+        changes: crate::model::pricing::PricingSyncChanges,
+        context: &MutationContext,
+    ) -> AdminStoreResult<Revision> {
+        let _ = (changes, context);
+        Err(AdminStoreError::new(
+            AdminStoreErrorKind::Unavailable,
+            "model pricing",
+            "not supported",
+        ))
+    }
+    async fn update_pricing(
+        &self,
+        command: crate::model::pricing::UpdatePricing,
+        context: &MutationContext,
+    ) -> AdminStoreResult<Revision> {
+        let _ = (command, context);
+        Err(AdminStoreError::new(
+            AdminStoreErrorKind::Unavailable,
+            "model pricing",
+            "not supported",
+        ))
+    }
+
     async fn load_notification_channels(&self) -> AdminStoreResult<StoredNotificationChannels> {
         Ok(StoredNotificationChannels {
             smtp: crate::model::notifications::StoredSmtpChannel {

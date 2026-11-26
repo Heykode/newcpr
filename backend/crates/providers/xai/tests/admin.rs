@@ -723,7 +723,7 @@ fn provider_ports_with_catalog(
     ProviderStorePorts::new(
         accounts,
         Arc::new(TestLeases),
-        Arc::new(TestSessionAffinity),
+        Arc::new(TestSessionAffinity::default()),
         Arc::new(TestSessionExclusions),
         catalog_cache,
         Arc::new(TestArtifactProfiles),

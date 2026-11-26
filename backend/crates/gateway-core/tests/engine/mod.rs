@@ -7,6 +7,7 @@ mod execution;
 mod probe;
 mod provider;
 mod response_control;
+mod response_control_binding;
 
 use gateway_core::engine::AttemptTrigger;
 

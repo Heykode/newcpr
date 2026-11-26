@@ -189,10 +189,10 @@ pub async fn initialize_with_request_tuning(
     )
     .await
     .map_err(|_| CoreError::AdmissionRecoveryUnavailable)?;
-    let compiler = Arc::new(RuntimeSnapshotCompiler::new(
-        Arc::clone(&ports.snapshots),
-        Arc::new(providers.clone()),
-    ));
+    let compiler = Arc::new(
+        RuntimeSnapshotCompiler::new(Arc::clone(&ports.snapshots), Arc::new(providers.clone()))
+            .with_privacy_compiler(Arc::new(providers.clone())),
+    );
     let initial = compiler
         .compile()
         .await
@@ -270,3 +270,5 @@ pub enum CoreError {
     #[error(transparent)]
     WorkerDefinition(#[from] WorkerDefinitionError),
 }
+
+pub mod settings;

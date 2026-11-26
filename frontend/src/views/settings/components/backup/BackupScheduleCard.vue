@@ -20,6 +20,7 @@ interface ScheduleForm {
 
 defineProps<{
   loading: boolean
+  busy: boolean
   saving: boolean
   storageReady: boolean
 }>()
@@ -45,7 +46,7 @@ const TIMEZONE_OPTIONS = [
     description="配置自动定时备份"
   >
     <template #actions>
-      <BaseButton variant="primary" :loading="saving" :disabled="loading" @click="emit('save')">
+      <BaseButton variant="primary" :loading="saving" :disabled="loading || busy" @click="emit('save')">
         <template #icon>
           <Save class="size-4" />
         </template>

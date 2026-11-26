@@ -53,6 +53,7 @@ export function useAccountBatchEditor(options: {
   const weight = shallowRef('1')
   const modelAccess = ref<AccountModelAccess | undefined>()
   const updateModelAccess = ref(false)
+  const provider = shallowRef<string>()
   const catalogAccountId = shallowRef<string>()
   const proxyMode = shallowRef('preserve')
   const proxyId = shallowRef('')
@@ -128,6 +129,7 @@ export function useAccountBatchEditor(options: {
     concurrencyLimit.value = sharedConcurrencyLimit(accounts)
     weight.value = sharedWeight(accounts)
     modelAccess.value = { mode: 'all', models: [] }
+    provider.value = accounts.every(account => account.provider === accounts[0]?.provider) ? accounts[0]?.provider : undefined
     catalogAccountId.value = accounts[0]?.id
     selectedGroupIds.value = sharedGroupIds(accounts)
     resetUpdateSelection()
@@ -288,6 +290,7 @@ export function useAccountBatchEditor(options: {
     modelAccess,
     updateModelAccess,
     catalogAccountId,
+    provider,
     proxyMode,
     proxyId,
     selectedGroupIds,

@@ -271,3 +271,30 @@ test('real menu renders relogin only with material and exposes busy and failure 
   assert.match(await render(action({ busy: true })), /<button disabled[^>]*>\s*重登处理中\s*<\/button>/)
   assert.match(await render(action({ status: 'failed', message: '<script>failed' })), /&lt;script&gt;failed/)
 })
+
+test('native account capabilities control refresh, reauthorization and catalog download without changing Excel scope', async () => {
+  const passthrough = vue.defineComponent({ setup: (_, { slots }) => () => vue.h('div', slots.default?.({ close() {} })) })
+  const button = vue.defineComponent({ setup: (_, { slots }) => () => vue.h('button', slots.default?.()) })
+  const component = load(new URL('../src/views/accounts/components/AccountTableActions.vue', import.meta.url), {
+    '@/components/RowActionMenu.vue': passthrough,
+    '@/components/base/BaseMenuItem.vue': button,
+    '@/components/base/BaseIconButton.vue': button,
+  }).default
+  const labels = [require('@/i18n').t('accounts.actions.refreshToken'), require('@/i18n').t('accounts.actions.reauthorize'), '导出模型目录']
+  for (const [provider, capabilities, responsesUpstream, expected] of [
+    ['openai', undefined, 'codex', [true, true, true]],
+    ['antigravity', { credentialRefresh: true, reauthorize: true, modelCatalogDownload: false }, 'codex', [true, true, false]],
+    ['xai', { credentialRefresh: false, reauthorize: false, modelCatalogDownload: false }, 'codex', [false, false, false]],
+    ['openai', { credentialRefresh: true, reauthorize: true, modelCatalogDownload: true }, 'excel', [true, true, false]],
+  ]) {
+    const html = await renderToString(vue.createSSRApp(component, {
+      account: { ...account, provider, authenticationKind: 'oauth', capabilities, responsesUpstream },
+      deleting: false,
+      recovering: false,
+      refreshing: false,
+      testing: false,
+    }))
+    for (const [index, label] of labels.entries())
+      assert.equal(html.includes(label), expected[index], `${provider}/${responsesUpstream}: ${label}`)
+  }
+})

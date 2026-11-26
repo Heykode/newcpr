@@ -17,6 +17,7 @@ use super::{
 };
 
 use crate::ApiState;
+pub(super) const PEER_LINK_PATH: &str = "/v1/cpr/link";
 
 /// 构造 OpenAI 客户端协议路由。
 pub(crate) fn router() -> Router<ApiState> {
@@ -36,7 +37,60 @@ pub(crate) fn router() -> Router<ApiState> {
         // 官方 OpenAI 模型详情合同使用 path ID；它不属于 Admin API 约束。
         .route("/v1/models/{model_id}", get(model_detail))
         .merge(live::router())
+        .merge(super::peer_link::router())
         // OpenAI 数据面正文属于客户端/上游协议；代理不能用私有大小上限提前拒绝
         // 上游本可接受的未来 payload。
         .layer(DefaultBodyLimit::disable())
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum DataPlaneNamespace {
+    V1,
+    GenAi,
+}
+
+impl DataPlaneNamespace {
+    pub(crate) fn for_path(path: &str) -> Option<Self> {
+        if path == "/v1" || path.starts_with("/v1/") {
+            Some(Self::V1)
+        } else if path == "/v1beta" || path.starts_with("/v1beta/") || path.starts_with("/v1beta:")
+        {
+            Some(Self::GenAi)
+        } else {
+            None
+        }
+    }
+
+    pub(crate) const fn unmatched_path(self) -> &'static str {
+        match self {
+            Self::V1 => "/v1/<unmatched>",
+            Self::GenAi => "/v1beta/<unmatched>",
+        }
+    }
+}
+
+/// 模型数据面的未知路径由协议答复，其余未匹配路径交给静态资源服务
+pub(crate) async fn fallback(
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    use super::responses::{ProtocolError, ProtocolErrorBody};
+    let Some(namespace) = DataPlaneNamespace::for_path(request.uri().path()) else {
+        return next.run(request).await;
+    };
+    let response = super::error::protocol_error_response(
+        axum::http::StatusCode::NOT_FOUND,
+        ProtocolErrorBody {
+            error: ProtocolError {
+                kind: "invalid_request_error",
+                code: "unknown_endpoint",
+                message: "The requested API endpoint does not exist.".into(),
+                param: None,
+            },
+        },
+    );
+    match namespace {
+        DataPlaneNamespace::V1 => response,
+        DataPlaneNamespace::GenAi => super::genai::project_error_response(response).await,
+    }
 }

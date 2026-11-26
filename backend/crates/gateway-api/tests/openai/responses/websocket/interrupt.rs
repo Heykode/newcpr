@@ -75,9 +75,10 @@ struct InterruptProvider {
     fail_first: bool,
     delay_interrupt: bool,
     http_only: bool,
+    drop_transport_at_terminal: bool,
     retry_started: tokio::sync::Notify,
     retry_release: tokio::sync::Notify,
-    transport: Mutex<Option<Arc<ControlTransport>>>,
+    transport: Arc<Mutex<Option<Arc<ControlTransport>>>>,
     complete: Arc<tokio::sync::Notify>,
     initial_messages: Arc<Mutex<std::collections::VecDeque<ProtocolWireEvent>>>,
 }
@@ -136,14 +137,18 @@ impl Provider for InterruptProvider {
             .unwrap(),
         );
         let fail_first = self.fail_first;
+        let drop_transport_at_terminal = self.drop_transport_at_terminal;
+        let transport_owner = self.transport.clone();
         let body = futures::stream::unfold(
             (
                 0,
-                transport,
+                Some(transport),
+                transport_owner,
                 self.complete.clone(),
                 self.initial_messages.clone(),
             ),
-            move |(phase, transport, complete, initial_messages)| async move {
+            move |(phase, transport, transport_owner, complete, initial_messages)| async move {
+                let transport = transport?;
                 let pending = if phase == 1 {
                     initial_messages.lock().unwrap().pop_front()
                 } else {
@@ -152,7 +157,13 @@ impl Provider for InterruptProvider {
                 if let Some(wire) = pending {
                     return Some((
                         Ok(ProviderEvent::wire(wire)),
-                        (phase, transport, complete, initial_messages),
+                        (
+                            phase,
+                            Some(transport),
+                            transport_owner,
+                            complete,
+                            initial_messages,
+                        ),
                     ));
                 }
                 if phase == 1 && fail_first && transport.id == "resp_interrupt_0" {
@@ -164,7 +175,13 @@ impl Provider for InterruptProvider {
                             UpstreamSendState::Sent,
                         )
                         .with_replay_safe()),
-                        (2, transport, complete, initial_messages),
+                        (
+                            2,
+                            Some(transport),
+                            transport_owner,
+                            complete,
+                            initial_messages,
+                        ),
                     ));
                 }
                 let (wire, events, next_phase) = match phase {
@@ -208,9 +225,21 @@ impl Provider for InterruptProvider {
                 if phase == 0 && fail_first {
                     event = event.with_replayable_prelude();
                 }
+                let transport = if next_phase == 2 && drop_transport_at_terminal {
+                    transport_owner.lock().unwrap().take();
+                    None
+                } else {
+                    Some(transport)
+                };
                 Some((
                     Ok(event),
-                    (next_phase, transport, complete, initial_messages),
+                    (
+                        next_phase,
+                        transport,
+                        transport_owner,
+                        complete,
+                        initial_messages,
+                    ),
                 ))
             },
         );
@@ -890,53 +919,60 @@ async fn non_replayable_delivery_blocks_retry_even_after_a_replayable_prelude() 
 
 #[tokio::test]
 async fn unavailable_idle_upstream_closes_client_and_allows_a_fresh_request() {
-    let provider = Arc::new(InterruptProvider::default());
-    let admissions = Arc::new(InterruptAdmissions::default());
-    let (mut socket, _server) = connect(provider.clone(), admissions.clone()).await;
-    let create = json!({"type":"response.create","model":"model-a","input":"hello"});
-    send(&mut socket, create.clone()).await;
-    assert_eq!(next(&mut socket).await["type"], "response.created");
-    provider.complete.notify_one();
-    assert_eq!(next(&mut socket).await["type"], "response.completed");
-    tokio::time::timeout(Duration::from_secs(5), async {
-        while admissions.active.load(Ordering::SeqCst) != 0 {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .unwrap();
-    provider
-        .transport
-        .lock()
-        .unwrap()
-        .as_ref()
-        .unwrap()
-        .closed
-        .cancel();
-    assert_replay_close(&mut socket).await;
-    assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
-    assert_eq!(provider.store.finalizations.lock().unwrap().len(), 1);
-
-    let tokio_tungstenite::MaybeTlsStream::Plain(transport) = socket.get_ref() else {
-        panic!("test server must use plain TCP");
-    };
-    let mut request = format!("ws://{}/v1/responses", transport.peer_addr().unwrap())
-        .into_client_request()
+    for drop_transport_at_terminal in [false, true] {
+        let provider = Arc::new(InterruptProvider {
+            drop_transport_at_terminal,
+            ..Default::default()
+        });
+        let admissions = Arc::new(InterruptAdmissions::default());
+        let (mut socket, _server) = connect(provider.clone(), admissions.clone()).await;
+        let create = json!({"type":"response.create","model":"model-a","input":"hello"});
+        send(&mut socket, create.clone()).await;
+        assert_eq!(next(&mut socket).await["type"], "response.created");
+        provider.complete.notify_one();
+        assert_eq!(next(&mut socket).await["type"], "response.completed");
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while admissions.active.load(Ordering::SeqCst) != 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
         .unwrap();
-    request.headers_mut().insert(
-        AUTHORIZATION,
-        HeaderValue::from_static("Bearer sk_ws_interrupt"),
-    );
-    let (mut reconnected, _) = connect_async(request).await.unwrap();
-    send(&mut reconnected, create).await;
-    assert_eq!(
-        next(&mut reconnected).await["response"]["id"],
-        "resp_interrupt_1"
-    );
-    provider.complete.notify_one();
-    assert_eq!(next(&mut reconnected).await["type"], "response.completed");
-    assert_eq!(provider.calls.load(Ordering::SeqCst), 2);
-    reconnected.close(None).await.unwrap();
+        if !drop_transport_at_terminal {
+            provider
+                .transport
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .closed
+                .cancel();
+        }
+        assert_replay_close(&mut socket).await;
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(provider.store.finalizations.lock().unwrap().len(), 1);
+
+        let tokio_tungstenite::MaybeTlsStream::Plain(transport) = socket.get_ref() else {
+            panic!("test server must use plain TCP");
+        };
+        let mut request = format!("ws://{}/v1/responses", transport.peer_addr().unwrap())
+            .into_client_request()
+            .unwrap();
+        request.headers_mut().insert(
+            AUTHORIZATION,
+            HeaderValue::from_static("Bearer sk_ws_interrupt"),
+        );
+        let (mut reconnected, _) = connect_async(request).await.unwrap();
+        send(&mut reconnected, create).await;
+        assert_eq!(
+            next(&mut reconnected).await["response"]["id"],
+            "resp_interrupt_1"
+        );
+        provider.complete.notify_one();
+        assert_eq!(next(&mut reconnected).await["type"], "response.completed");
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 2);
+        reconnected.close(None).await.unwrap();
+    }
 }
 
 #[tokio::test]

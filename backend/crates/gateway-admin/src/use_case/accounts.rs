@@ -29,10 +29,10 @@ use crate::{
         observability::TimeRange,
         provider_credentials::{
             AccountDirectoryItem, AccountDirectoryPage, AccountExportBundle, AccountPersonalInfo,
-            AccountRefreshResult, AccountUsagePeriod, ConsumeProviderResetCredit,
-            PrepareCredentialRefresh, ProviderModels, ProviderProfileAvatar, ProviderQuota,
-            ProviderQuotaRequest, ProviderQuotaWindow, ProviderResetCreditResult,
-            ProviderResetCredits, QuotaLocalUsageAttribution,
+            AccountRefreshResult, AccountUsageLookback, AccountUsagePeriod,
+            ConsumeProviderResetCredit, PrepareCredentialRefresh, ProviderModels,
+            ProviderProfileAvatar, ProviderQuota, ProviderQuotaRequest, ProviderQuotaWindow,
+            ProviderResetCreditResult, ProviderResetCredits, QuotaLocalUsageAttribution,
         },
         quota_forecast::{
             AccountQuotaForecastReport, account_quota_forecasts, current_window_estimate,
@@ -260,6 +260,7 @@ pub trait AccountsService: Send + Sync {
 }
 
 pub(crate) struct DefaultAccountsService {
+    timezone: gateway_core::time::DeploymentTimeZone,
     accounts: Arc<dyn AccountStore>,
     account_runtime: Arc<dyn AccountRuntimeStore>,
     settings: Arc<dyn SettingsStore>,
@@ -289,6 +290,7 @@ impl DefaultAccountsService {
         probe: Arc<dyn AccountProbe>,
     ) -> Self {
         Self {
+            timezone: Default::default(),
             accounts,
             account_runtime,
             settings,
@@ -299,6 +301,45 @@ impl DefaultAccountsService {
             relogin_store: None,
             reset_credit_locks: Arc::new(futures::lock::Mutex::new(BTreeMap::new())),
         }
+    }
+
+    pub(crate) fn with_timezone(
+        mut self,
+        timezone: gateway_core::time::DeploymentTimeZone,
+    ) -> Self {
+        self.timezone = timezone;
+        self
+    }
+
+    async fn load_lookback_usage(
+        &self,
+        items: &[AccountPageItem],
+        now: chrono::DateTime<Utc>,
+    ) -> Result<Vec<AccountUsage>, crate::ports::store::AdminStoreError> {
+        let mut groups = BTreeMap::<AccountUsageLookback, Vec<String>>::new();
+        for item in items {
+            let lookback = self
+                .providers
+                .require(&item.account.provider_kind)
+                .map(|provider| provider.account_usage_lookback())
+                .unwrap_or_default();
+            groups
+                .entry(lookback)
+                .or_default()
+                .push(item.account.id.clone());
+        }
+        let mut usage = Vec::new();
+        for (lookback, ids) in groups {
+            let range = lookback.range(now, self.timezone).map_err(|_| {
+                crate::ports::store::AdminStoreError::new(
+                    crate::ports::store::AdminStoreErrorKind::Invalid,
+                    "account usage",
+                    "time range is unsupported",
+                )
+            })?;
+            usage.extend(self.accounts.load_account_usage(range, &ids).await?);
+        }
+        Ok(usage)
     }
 
     pub(crate) fn with_reset_store(
@@ -557,10 +598,10 @@ impl DefaultAccountsService {
             .await
             .map_err(|e| map_store_error(e, "account protection"))?;
         let now = Utc::now();
-        let rolling_range = TimeRange {
-            start: now - Duration::hours(24),
-            end: now,
-        };
+        let lookback = provider.account_usage_lookback();
+        let rolling_range = lookback
+            .range(now, self.timezone)
+            .map_err(|_| AdminError::internal("时间超出支持范围"))?;
         let ids = vec![account.id.clone()];
         let (
             rolling_usage,
@@ -632,9 +673,7 @@ impl DefaultAccountsService {
             std::slice::from_mut(&mut quota),
         )
         .await?;
-        let usage = quota
-            .usage_window()
-            .and_then(|(window, _)| window.local_usage.clone());
+        let (usage, usage_period) = resolve_account_usage(&quota, rolling_usage, lookback);
         let mut overdraft = codex_quota_overdraft.remove(account_id.as_str());
         if let Some(state) = overdraft.as_mut() {
             let mut active_windows = Vec::new();
@@ -665,6 +704,8 @@ impl DefaultAccountsService {
         }
         let default_concurrency = self.default_concurrency_limit().await?;
         Ok(AccountDirectoryItem {
+            capabilities: provider
+                .account_capabilities(account_id, &stored.account.authentication_kind),
             error_protection: protections.remove(account_id.as_str()).map(Into::into),
             codex_quota_overdraft: overdraft,
             excel_recovery: excel_recoveries.remove(account_id.as_str()),
@@ -686,6 +727,7 @@ impl DefaultAccountsService {
             ),
             projection: stored.projection,
             usage,
+            usage_period,
             account: stored.account,
             quota,
         })
@@ -754,10 +796,6 @@ impl AccountsService for DefaultAccountsService {
             }
         }
         let now = Utc::now();
-        let rolling_range = TimeRange {
-            start: now - Duration::hours(24),
-            end: now,
-        };
         let ids = page
             .items
             .iter()
@@ -771,7 +809,7 @@ impl AccountsService for DefaultAccountsService {
             mut excel_recoveries,
             mut codex_quota_overdraft,
         ) = futures::try_join!(
-            self.accounts.load_account_usage(rolling_range, &ids),
+            self.load_lookback_usage(&page.items, now),
             self.accounts
                 .load_account_health_timeline(account_health_range(now), &ids),
             self.accounts.load_account_cumulative_costs(&ids),
@@ -808,7 +846,7 @@ impl AccountsService for DefaultAccountsService {
                     .cloned();
             }
         }
-        let rolling_usage = rolling_usage
+        let mut rolling_usage = rolling_usage
             .into_iter()
             .map(|usage| (usage.account_id.clone(), usage))
             .collect::<BTreeMap<_, _>>();
@@ -857,10 +895,28 @@ impl AccountsService for DefaultAccountsService {
                     .get(&item.account.id)
                     .map(|usage| usage.request_buckets.clone())
                     .unwrap_or_default();
-                let usage = quota
-                    .usage_window()
-                    .and_then(|(window, _)| window.local_usage.clone());
+                let lookback = self
+                    .providers
+                    .require(&item.account.provider_kind)
+                    .map(|provider| provider.account_usage_lookback())
+                    .unwrap_or_default();
+                let (usage, usage_period) =
+                    resolve_account_usage(&quota, rolling_usage.remove(&item.account.id), lookback);
+                let capabilities = self
+                    .providers
+                    .require(&item.account.provider_kind)
+                    .ok()
+                    .and_then(|provider| {
+                        ProviderAccountId::new(item.account.id.clone())
+                            .ok()
+                            .map(|id| {
+                                provider
+                                    .account_capabilities(&id, &item.account.authentication_kind)
+                            })
+                    })
+                    .unwrap_or_default();
                 AccountDirectoryItem {
+                    capabilities,
                     error_protection: protections.remove(&item.account.id).map(Into::into),
                     codex_quota_overdraft: overdraft,
                     excel_recovery: excel_recoveries.remove(&item.account.id),
@@ -881,6 +937,7 @@ impl AccountsService for DefaultAccountsService {
                         Some(&quota),
                     ),
                     usage,
+                    usage_period,
                     account: item.account,
                     projection: item.projection,
                     quota,
@@ -907,7 +964,13 @@ impl AccountsService for DefaultAccountsService {
         let mut grouped = BTreeMap::<ProviderKind, Vec<ProviderAccountId>>::new();
         let mut relogin_candidates = Vec::new();
         for account_id in account_ids {
-            let account = self.load_account(&account_id).await?;
+            let (account, provider) = self.provider_for_account(&account_id).await?;
+            if !provider
+                .account_capabilities(&account_id, &account.account.authentication_kind)
+                .credential_export
+            {
+                return Err(AdminError::invalid("所选账号不支持导出"));
+            }
             if account.account.provider_kind.as_str() == "openai"
                 && account.account.authentication_kind == "oauth"
                 && let Some(email) = account.account.email.clone()
@@ -1880,4 +1943,15 @@ fn quota_usage_window(
         key: window.key.clone(),
         range,
     })
+}
+
+fn resolve_account_usage(
+    quota: &ProviderQuota,
+    rolling_usage: Option<AccountUsage>,
+    lookback: AccountUsageLookback,
+) -> (Option<AccountUsage>, Option<AccountUsagePeriod>) {
+    if let Some((window, period)) = quota.usage_window() {
+        return (window.local_usage.clone(), Some(period));
+    }
+    (rolling_usage, Some(lookback.period()))
 }

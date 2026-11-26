@@ -32,6 +32,7 @@ mod notifications;
 mod observability;
 mod ops_events;
 mod outbound_user_agent;
+mod pricing;
 mod provider_accounts;
 mod proxies;
 mod relogin;
@@ -230,7 +231,7 @@ impl ControlPlaneRepository for PgControlPlaneRepository {
         let result = async {
             // Check the form revision under the same row lock used by all configuration writes.
             let current = sqlx::query_scalar::<_, i64>(
-                "select config_revision from runtime_settings where id = 1 for update",
+                "select settings_revision from runtime_settings where id = 1 for update",
             )
             .fetch_one(&mut *transaction)
             .await

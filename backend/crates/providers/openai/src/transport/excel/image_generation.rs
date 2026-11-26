@@ -144,6 +144,25 @@ impl CodexBackendClient {
             header::ACCEPT,
             header::HeaderValue::from_static("application/json"),
         );
+        let mut form = multipart::Form::new();
+        if !image.pictures.is_empty() {
+            headers.insert(
+                header::CONTENT_TYPE,
+                header::HeaderValue::from_str(&format!(
+                    "multipart/form-data; boundary={}",
+                    form.boundary()
+                ))?,
+            );
+        }
+        // Apply rules to the final text fields and headers before either wire encoding.
+        let mut fields = Value::Object(image.fields.clone());
+        self.apply_privacy(&mut fields, &mut headers)?;
+        let fields = fields.as_object().ok_or_else(|| {
+            CodexClientError::Privacy(gateway_core::settings::privacy::PrivacyError {
+                rule_index: 0,
+                reason: "图片请求正文必须是对象",
+            })
+        })?;
         let trace = context
             .trace
             .cloned()
@@ -160,17 +179,13 @@ impl CodexBackendClient {
         );
         let started = std::time::Instant::now();
         let response = if image.pictures.is_empty() {
+            let body = serde_json::to_vec(fields).map_err(CodexClientError::RequestBodyEncode)?;
             self.send_profiled(&profile, false, |client| {
-                client
-                    .post(&image.endpoint)
-                    .headers(headers)
-                    .json(&image.fields)
+                client.post(&image.endpoint).headers(headers).body(body)
             })
             .await?
         } else {
-            headers.remove(header::CONTENT_TYPE);
-            let mut form = multipart::Form::new();
-            for (name, value) in &image.fields {
+            for (name, value) in fields {
                 form = form.text(
                     name.clone(),
                     value
@@ -192,10 +207,13 @@ impl CodexBackendClient {
                 form = form.part(name, part);
             }
             self.send_profiled(&profile, false, |client| {
-                client
-                    .post(&image.endpoint)
-                    .headers(headers)
-                    .multipart(form)
+                let request = client.post(&image.endpoint).headers(headers);
+                if self.privacy.is_some() {
+                    // Avoid reintroducing a Content-Type changed or removed by a rule.
+                    request.body(reqwest::Body::wrap_stream(form.into_stream()))
+                } else {
+                    request.multipart(form)
+                }
             })
             .await?
         };

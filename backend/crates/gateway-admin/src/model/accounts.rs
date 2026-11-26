@@ -617,6 +617,10 @@ pub enum TurnStateProbeOutcome {
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct ProviderAccountCapabilities {
+    pub credential_refresh: bool,
+    pub reauthorize: bool,
+    pub credential_export: bool,
+    pub model_catalog_download: bool,
     pub quota_settings_supported: bool,
     pub quota_credits: bool,
     pub quota: bool,

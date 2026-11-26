@@ -127,6 +127,7 @@ impl fmt::Display for BackupStatus {
 /// S3 存储配置更新命令；`secret_access_key` 为 `None` 表示保留旧值。
 #[derive(Clone)]
 pub struct UpdateBackupStorageCommand {
+    pub storage_revision: u64,
     pub endpoint: String,
     pub region: String,
     pub bucket: String,
@@ -154,6 +155,7 @@ impl fmt::Debug for UpdateBackupStorageCommand {
 /// 调度配置更新命令。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UpdateBackupScheduleCommand {
+    pub storage_revision: u64,
     pub schedule_enabled: bool,
     pub cron_expression: String,
     pub schedule_timezone: String,

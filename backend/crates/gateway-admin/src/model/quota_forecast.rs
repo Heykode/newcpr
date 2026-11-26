@@ -115,7 +115,7 @@ pub fn account_quota_forecasts(
             target_seconds,
             extrapolated: false,
             source: None,
-            unavailable_reason: Some("缺少周/月额度窗口，请刷新账号额度"),
+            unavailable_reason: Some("缺少可归属整个账号的周/月额度窗口"),
             low_sample: false,
             incomplete_cost: false,
             incomplete_tokens: false,

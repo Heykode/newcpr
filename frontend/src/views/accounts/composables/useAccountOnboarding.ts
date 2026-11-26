@@ -17,7 +17,7 @@ import { accountCreateEgress, accountImportQualityTemplate, accountImportSetting
 import { accountImportBatches, splitAccountDocuments } from './account-import-batches'
 
 type AccountRow = Awaited<ReturnType<typeof getAccounts>>['items'][number]
-type ImportProvider = 'openai' | 'xai'
+type ImportProvider = 'openai' | 'xai' | 'antigravity'
 
 interface MixedImportDocument {
   provider: ImportProvider
@@ -238,9 +238,7 @@ export function useAccountOnboarding(options: {
         await finishCreate(
           reauthorizingAccount.value
             ? '账号重新授权成功'
-            : createForm.value.provider === 'xai'
-              ? 'xAI OAuth 账号已添加'
-              : 'OpenAI OAuth 账号已添加',
+            : `${formatProviderLabel(createForm.value.provider)} OAuth 账号已添加`,
           templateWarning,
         )
       },
@@ -255,7 +253,7 @@ export function useAccountOnboarding(options: {
   }
 
   function openReauthorizeAccount(account: AccountRow) {
-    if (account.provider !== 'openai' && account.provider !== 'xai')
+    if (!isSupportedProvider(account.provider) || !account.capabilities?.reauthorize)
       return
     clearSubmission()
     reauthorizingAccount.value = account

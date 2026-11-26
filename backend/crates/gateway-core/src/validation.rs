@@ -78,6 +78,8 @@ pub enum RoutingError {
     /// 已启用的绑定分组均明确禁止请求模型
     #[error("{GROUP_MODEL_DENIED_MESSAGE}")]
     GroupModelDenied,
+    #[error("model group requires a supported reasoning level")]
+    InvalidReasoningVariant,
     /// 快照中存在重复实体
     #[error("duplicate {entity} `{id}`")]
     DuplicateEntity {

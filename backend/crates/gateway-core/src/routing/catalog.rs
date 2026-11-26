@@ -12,6 +12,13 @@ use super::{
     ModelCapabilities, ModelPresentation, PublicModelId, PublicModelProfile, UpstreamModelId,
 };
 
+/// Provider 声明的推理档位目标及确认该分组成员关系的账号
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReasoningModelVariant {
+    pub model: UpstreamModelId,
+    pub accounts: BTreeSet<ProviderAccountId>,
+}
+
 /// Provider 原生客户端目录条目；Core 只解释模型标识，不解释协议正文。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderModelDescriptor {

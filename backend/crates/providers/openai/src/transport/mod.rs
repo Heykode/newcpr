@@ -13,6 +13,7 @@ pub mod endpoints;
 pub(crate) mod evidence;
 pub(crate) mod excel;
 pub mod headers;
+pub mod privacy;
 pub mod profile;
 pub mod profile_avatar;
 pub mod profile_statistics;

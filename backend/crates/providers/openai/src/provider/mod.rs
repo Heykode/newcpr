@@ -318,6 +318,16 @@ impl fmt::Debug for CodexProvider {
 
 #[async_trait]
 impl Provider for CodexProvider {
+    fn compile_privacy_policy(
+        &self,
+        policy: &gateway_core::settings::privacy::CodexPrivacyPolicy,
+    ) -> Result<
+        Arc<dyn gateway_core::settings::privacy::CompiledPrivacyPolicy>,
+        gateway_core::settings::privacy::PrivacyError,
+    > {
+        crate::transport::privacy::compile(policy)
+    }
+
     fn direct_account_model(
         &self,
         model: &gateway_core::routing::PublicModelId,
@@ -344,7 +354,7 @@ impl Provider for CodexProvider {
             return Ok(true);
         };
         let payload = generate.protocol_payload();
-        if policy.openai_account_affinity() != gateway_core::account::AccountAffinity::Strict {
+        if policy.account_affinity() != gateway_core::account::AccountAffinity::Strict {
             return Ok(true);
         }
         let session =
@@ -606,7 +616,7 @@ impl Provider for CodexProvider {
             context.client_api_key_ref(),
         )
         .map(|affinity| {
-            affinity.with_policy(context.account_selection_policy().openai_account_affinity())
+            affinity.with_policy(context.account_selection_policy().account_affinity())
         });
         let mut messages_translator = None;
         let translated;
@@ -811,7 +821,7 @@ impl Provider for CodexProvider {
                 });
                 affinity
                     .with_turn_alias(turn_alias)
-                    .with_policy(context.account_selection_policy().openai_account_affinity())
+                    .with_policy(context.account_selection_policy().account_affinity())
             });
         // Restored and native owners take precedence over a client turn alias.
         let session_affinity = if previous_session.is_some()
@@ -832,7 +842,7 @@ impl Provider for CodexProvider {
                 .and_then(CodexSessionAffinity::key)
                 .is_none()
             && previous_session.is_none()
-            && context.account_selection_policy().openai_account_affinity()
+            && context.account_selection_policy().account_affinity()
                 != gateway_core::account::AccountAffinity::Relaxed
             && context.continuation_attempt() == ContinuationAttempt::None
             && !continuation_requested
@@ -850,7 +860,7 @@ impl Provider for CodexProvider {
             && (account_affinity
                 .and_then(CodexSessionAffinity::key)
                 .is_none()
-                || context.account_selection_policy().openai_account_affinity()
+                || context.account_selection_policy().account_affinity()
                     == gateway_core::account::AccountAffinity::Relaxed)
         {
             return Err(provider_error(
@@ -1200,6 +1210,12 @@ impl Provider for CodexProvider {
             });
         let client = self
             .account_exit_client(&context, lease.account(), excel, session)?
+            .with_account_privacy(
+                context.privacy(),
+                context.cancellation().clone(),
+                lease.account(),
+                session_affinity_key_hash.as_deref(),
+            )
             .with_fedramp_routing(
                 !excel
                     && lease.authentication().oauth().is_some_and(

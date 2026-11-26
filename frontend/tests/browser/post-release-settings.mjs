@@ -13,12 +13,14 @@ async function main() {
   const originalUa = 'codex_cli_rs/0.146.0 (Linux 6.8.0; x86_64) unknown'
   let settings = {
     configRevision: 1,
+    openaiOauthGuardianReviewModel: true,
+    openaiRequestCountry: { mode: 'follow_location' },
     modelMappings: {},
     refreshMarginSeconds: 300,
     refreshConcurrency: 4,
     maxConcurrentPerAccount: 5,
     requestIntervalMs: 0,
-    openaiSessionBindingTtlHours: 24,
+    sessionAffinityTtlHours: 24,
     rotationStrategy: 'smart',
     minCodexDesktopVersion: null,
     minCodexCliVersion: null,
@@ -76,6 +78,9 @@ async function main() {
         }
         data = ua
       }
+      else if (path === '/api/admin/system/update/detail') {
+        data = { enabled: false, status: 'idle', currentVersion: 'isolated-test' }
+      }
       else if (path === '/api/admin/system/version') {
         data = { version: 'local-test', buildType: 'test' }
       }
@@ -94,20 +99,21 @@ async function main() {
       await route.fulfill({ json: { code: 200, message: 'ok', data } })
     })
     await page.goto(`${process.env.QA_BASE_URL || 'http://127.0.0.1:5177'}/settings`)
-    const ttl = page.getByRole('spinbutton', { name: 'OpenAI 会话账号绑定时长（小时）', exact: true })
+    const ttl = page.getByRole('spinbutton', { name: '会话账号绑定时长（小时）', exact: true })
     await ttl.waitFor()
+    await page.waitForFunction(input => input.value !== '', await ttl.elementHandle())
     const guardian = page.getByRole('spinbutton', { name: 'Guardian 独立并发', exact: true })
     assert.equal(await guardian.inputValue(), '0')
     await guardian.fill('3')
     assert.equal(await ttl.inputValue(), '24')
-    const affinity = page.getByRole('radiogroup', { name: 'OpenAI 账号亲和模式', exact: true })
+    const affinity = page.getByRole('radiogroup', { name: '账号亲和模式', exact: true })
     assert.equal(await affinity.getByRole('radio', { name: '严格', exact: true }).getAttribute('aria-checked'), 'true')
     await affinity.getByRole('radio', { name: '宽松', exact: true }).click()
     await ttl.fill('48')
     await page.getByRole('button', { name: '保存全部设置', exact: true }).click()
     await page.getByText('设置已保存', { exact: true }).waitFor()
-    assert.equal(writes[0].openaiSessionBindingTtlHours, 48)
-    assert.equal(writes[0].openaiAccountAffinity, 'relaxed')
+    assert.equal(writes[0].sessionAffinityTtlHours, 48)
+    assert.equal(writes[0].accountAffinity, 'relaxed')
     assert.equal(writes[0].rotationStrategy, 'smart')
     assert.equal(writes[0].openaiGuardianReservedConcurrency, 3)
     const os = page.getByRole('textbox', { name: 'OpenAI 出站系统版本', exact: true })
@@ -120,6 +126,7 @@ async function main() {
     assert.equal(Object.hasOwn(writes[1], 'sessionPolicy'), false)
     await page.reload()
     await ttl.waitFor()
+    await page.waitForFunction(input => input.value !== '', await ttl.elementHandle())
     assert.equal(await ttl.inputValue(), '48')
     assert.equal(await guardian.inputValue(), '3')
     assert.equal(await affinity.getByRole('radio', { name: '宽松', exact: true }).getAttribute('aria-checked'), 'true')
@@ -134,6 +141,7 @@ async function main() {
     assert.equal(settings.requestTuning.maxRetryAfterSeconds, 400)
     await page.reload()
     await ttl.waitFor()
+    await page.waitForFunction(input => input.value !== '', await ttl.elementHandle())
     await page.getByRole('button', { name: '共享重试与原生连接高级参数', exact: true }).click()
     assert.equal(await retryAfter.inputValue(), '400')
     for (const [name, width, height] of [['desktop', 1440, 1000], ['mobile', 390, 844]]) {
@@ -144,6 +152,7 @@ async function main() {
       assert.equal((await saved).status(), 200)
       await page.reload()
       await ttl.waitFor()
+      await page.waitForFunction(input => input.value !== '', await ttl.elementHandle())
       assert.equal(await affinity.getByRole('radio', { name: '严格', exact: true }).getAttribute('aria-checked'), 'true')
       await ttl.scrollIntoViewIfNeeded()
       await page.screenshot({ path: `${output}/${name}-runtime.png` })

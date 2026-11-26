@@ -26,6 +26,9 @@ defineProps<{
   saving: boolean
   testing: boolean
   verified: boolean
+  busy: boolean
+  storageDirty: boolean
+  secretConfigured: boolean
 }>()
 
 const emit = defineEmits<{
@@ -72,7 +75,7 @@ function toggleSecretVisible(): void {
         <BaseButton
           variant="secondary"
           :loading="testing"
-          :disabled="loading"
+          :disabled="loading || busy || storageDirty"
           :title="verified ? '已通过连接测试' : '尚未通过连接测试'"
           @click="emit('test')"
         >
@@ -82,7 +85,7 @@ function toggleSecretVisible(): void {
           </template>
           {{ testing ? '测试中...' : '测试连接' }}
         </BaseButton>
-        <BaseButton variant="primary" :loading="saving" :disabled="loading" @click="emit('save')">
+        <BaseButton variant="primary" :loading="saving" :disabled="loading || busy" @click="emit('save')">
           <template #icon>
             <Save class="size-4" />
           </template>
@@ -139,10 +142,11 @@ function toggleSecretVisible(): void {
           </BaseInput>
         </BaseFormItem>
 
-        <BaseFormItem label="Secret Access Key" :description="t('settings.backup.storage.objectStorageSpecificSecret')">
+        <BaseFormItem label="Secret Access Key" :description="secretConfigured ? '已配置，留空保留原密钥；输入新值后更换' : t('settings.backup.storage.objectStorageSpecificSecret')">
           <BaseInput
             v-model="storage.secretAccessKey"
             aria-label="Secret Access Key"
+            :placeholder="secretConfigured ? '已配置，留空不变' : '请输入 Secret Access Key'"
             :type="secretInputType"
             autocomplete="new-password"
           >

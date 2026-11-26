@@ -8,7 +8,7 @@ import { t } from '@/i18n'
 import { formatDateTime } from '@/utils/date'
 import { DEFAULT_EXCEL_MODELS } from '@/utils/excel-defaults'
 import { formatRelativeTime } from '@/utils/relative-time'
-import { groupedAccountQuotaWindows, orderedPanelQuotaWindows } from '../../constants'
+import { groupedAccountQuotaWindows, orderedPanelQuotaWindows, panelQuotaWindows } from '../../constants'
 import AccountPlanBadge from '../AccountPlanBadge.vue'
 import AccountProfileModal from '../AccountProfileModal/index.vue'
 import AccountQuotaOverdraftStatus from '../AccountQuotaOverdraft/Status.vue'
@@ -29,7 +29,7 @@ const emit = defineEmits<{
 }>()
 
 const quotaEntries = computed(() => groupedAccountQuotaWindows(
-  orderedPanelQuotaWindows(props.account.quota.windows.filter(window => window.accountWide)),
+  orderedPanelQuotaWindows(panelQuotaWindows(props.account.quota.windows)),
 ))
 const profileOpen = shallowRef(false)
 const lastRefreshed = computed(() => props.account.quota.refreshedAtRelative

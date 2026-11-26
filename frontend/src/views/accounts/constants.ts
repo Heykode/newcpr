@@ -1,6 +1,7 @@
 import type { AccountErrorReason, AccountStatus, getAccounts } from '@/api'
 import { defineTableColumns } from '@/components/base/BaseTable/columns'
 import { t } from '@/i18n'
+import { formatInteger } from '@/utils/number'
 
 export type AccountRow = Awaited<ReturnType<typeof getAccounts>>['items'][number]
 export type AccountQuotaWindow = AccountRow['quota']['windows'][number]
@@ -188,6 +189,11 @@ export function visibleSummaryQuotaWindows(windows: AccountQuotaWindow[]) {
   return known.length > 0 ? known : [...windows].sort(compareQuotaWindows)
 }
 
+export function panelQuotaWindows(windows: AccountQuotaWindow[]) {
+  const accountWindows = windows.filter(window => window.accountWide)
+  return accountWindows.some(window => typeof window.usedPercent === 'number') ? accountWindows : windows
+}
+
 export function orderedPanelQuotaWindows(windows: AccountQuotaWindow[]) {
   return [...windows].sort(compareQuotaWindows)
 }
@@ -274,10 +280,94 @@ function windowRoleOrder(role: AccountQuotaWindow['role']) {
   }
 }
 
-function quotaLimitLabel(window: AccountQuotaWindow) {
+const quotaLimitLabels = new Map([
+  [
+    'gemini models',
+    () => t('accounts.quota.groups.geminiModels'),
+  ],
+  [
+    'claude and gpt models',
+    () => t('accounts.quota.groups.claudeGptModels'),
+  ],
+])
+
+export function quotaLimitLabel(window: AccountQuotaWindow) {
   if (window.limitId === 'codex')
     return t('accounts.quota.general')
-  return window.limitName
+
+  const name = window.limitName?.trim().toLowerCase().replace(/\s+/g, ' ')
+  const label = quotaLimitLabels.get(name ?? '')
+  return label?.() ?? window.limitName
+}
+
+const quotaWindowPeriods = [
+  {
+    seconds: 18_000,
+    label: () => t('accounts.quota.windows.fiveHour'),
+  },
+  {
+    seconds: 86_400,
+    label: () => t('accounts.quota.windows.daily'),
+  },
+  {
+    seconds: 604_800,
+    label: () => t('accounts.quota.windows.weekly'),
+  },
+  {
+    seconds: 2_592_000,
+    label: () => t('accounts.quota.windows.monthly'),
+  },
+  {
+    seconds: 31_536_000,
+    label: () => t('accounts.quota.windows.annual'),
+  },
+]
+
+export function quotaWindowLabel(window: AccountQuotaWindow, includeLimitName = true) {
+  const seconds = window.windowSeconds
+  // 沿用 Codex 官方的显示时长容差；仅决定文案，不改变后端窗口归属或额度判定。
+  const period = seconds === null
+    ? undefined
+    : quotaWindowPeriods.find(period =>
+        seconds >= period.seconds * 0.95 && seconds <= period.seconds * 1.05,
+      )
+  let label: string
+  if (period) {
+    label = period.label()
+  }
+  else if (seconds !== null && seconds > 0) {
+    if (seconds % 86_400 === 0) {
+      label = t('accounts.quota.windows.days', {
+        duration: formatInteger(seconds / 86_400),
+      })
+    }
+    else if (seconds % 3_600 === 0) {
+      label = t('accounts.quota.windows.hours', {
+        duration: formatInteger(seconds / 3_600),
+      })
+    }
+    else {
+      label = t('accounts.quota.windows.minutes', {
+        duration: formatInteger(Math.ceil(seconds / 60)),
+      })
+    }
+  }
+  else if (window.role === 'monthly') {
+    label = t('accounts.quota.windows.monthly')
+  }
+  else if (window.role === 'primary') {
+    label = t('accounts.quota.windows.primary')
+  }
+  else if (window.role === 'secondary') {
+    label = t('accounts.quota.windows.secondary')
+  }
+  else {
+    label = window.windowLabelDisplay
+  }
+
+  return includeLimitName && window.limitName && window.limitId !== 'codex'
+    ? `${quotaLimitLabel(window)} · ${label}`
+    : label
 }
 
 function optionalAccountCell(value: unknown) {

@@ -235,8 +235,9 @@ the request interval or replace a hard continuation owner.
   observation. Keep semantic, reasoning and text boundaries independent. Test
   structural-only frames through both real HTTP/SSE and WS, including a delayed
   request origin and subsequent content. A protocol-only unit test is insufficient.
-- Usage-row throughput divides output tokens by total request milliseconds,
-  matching the existing SQL aggregates; absent TTFT must not hide valid throughput.
+- Usage-row throughput prefers the completed upstream duration. Only the list may
+  fall back to total request time with an explicit approximation marker; upstream
+  performance aggregates exclude that estimate. Absent TTFT does not hide throughput.
 - Dashboard counts and capacity share one minimal account-facts snapshot. Reuse
   the existing status resolver, including disabled-account priority. Bounded
   Redis reads (128 per batch) preserve every result and order; they are not a

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Openai, Xai } from '@boxicons/vue'
+import { GoogleAntigravity, Openai, Xai } from '@boxicons/vue'
 import { LayoutGrid } from '@lucide/vue'
 import { t } from '@/i18n'
 
@@ -21,6 +21,7 @@ const providerOptions = [
   { label: '全部平台', value: '', icon: LayoutGrid },
   { label: PROVIDER_DISPLAY_NAMES.openai, value: 'openai', icon: Openai },
   { label: PROVIDER_DISPLAY_NAMES.xai, value: 'xai', icon: Xai },
+  { label: PROVIDER_DISPLAY_NAMES.antigravity, value: 'antigravity', icon: GoogleAntigravity },
 ]
 </script>
 

@@ -103,7 +103,8 @@
       "attributes": "请求身份组成",
       "authProtocol": "认证协议",
       "emulatedEnvironment": "模拟运行环境",
-      "environment": "运行环境"
+      "environment": "运行环境",
+      "versionUpToDate": "版本一致"
     },
     "health": {
       "title": "请求健康时间线",

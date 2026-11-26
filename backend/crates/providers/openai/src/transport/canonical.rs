@@ -24,8 +24,7 @@ use super::protocol::responses::{
     ResponseEventSignals, ResponseTimingMetrics, ResponsesSseFailure, response_event_signals,
 };
 use super::usage::{
-    OpenAiBillingUsage, WebSearchPricing, normalize_service_tier, openai_billing_breakdown,
-    web_search_pricing,
+    OpenAiBillingUsage, WebSearchPricing, normalize_service_tier, web_search_pricing,
 };
 
 enum RawResponseFrame {
@@ -40,6 +39,7 @@ const CONTENTS_PER_OUTPUT: u32 = 1_024;
 /// 上游 wire 是客户端可见的事实来源；canonical facts 只用于观测、亲和和计费。
 /// 因而未知或形状变化的 JSON event 只能放弃 canonical 投影，不能截断 wire 流。
 pub struct CodexCanonicalDecoder {
+    pricing: Option<gateway_core::metering::ModelPriceOverride>,
     trace: gateway_core::diagnostics::TraceContext,
     decoder: SseEventDecoder,
     upstream_model: String,
@@ -137,6 +137,16 @@ impl CodexCanonicalFailure {
 }
 
 impl CodexCanonicalDecoder {
+    /// 使用本次请求冻结的精确模型价目，不读取可变管理设置。
+    #[must_use]
+    pub fn with_pricing(
+        mut self,
+        pricing: Option<gateway_core::metering::ModelPriceOverride>,
+    ) -> Self {
+        self.pricing = pricing;
+        self
+    }
+
     pub(crate) fn upstream_timing_metrics(&self) -> ResponseTimingMetrics {
         self.upstream_timing_metrics
     }
@@ -144,6 +154,7 @@ impl CodexCanonicalDecoder {
     /// 使用路由后最终发往上游的请求模型计价，并在响应缺少模型时用于canonical兜底。
     pub fn new(upstream_model: impl Into<String>) -> Self {
         Self {
+            pricing: None,
             trace: Default::default(),
             decoder: SseEventDecoder::default(),
             upstream_model: upstream_model.into(),
@@ -966,12 +977,13 @@ impl CodexCanonicalDecoder {
             .filter(|usage| billable_usage_is_complete(response, *usage))
             .and_then(|usage| {
                 let (web_search_calls, file_search_calls) = tool_calls?;
-                openai_billing_breakdown(
+                crate::billing::openai_billing_breakdown_with_override(
                     &self.upstream_model,
                     OpenAiBillingUsage::from(usage)
                         .with_web_search_calls(web_search_calls, self.web_search_pricing)
                         .with_file_search_calls(file_search_calls),
                     service_tier,
+                    self.pricing.as_ref(),
                 )
             })
         {

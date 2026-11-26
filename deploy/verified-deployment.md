@@ -693,3 +693,12 @@ CPR_EGRESS_DOCKER_TEST=1 python3 -m unittest discover \
 测试覆盖来源/摘要/有效期、相同树复用、旧窗口和配置竞态、迁移拒绝、失败回滚及
 受保护服务边界。真实工作流的产物往返验证需要本次改动进入 GitHub Actions 后执行；
 本地单元测试不能替代该验收。
+
+## v3.55.2 原生多平台与设置升级
+
+从 v3.54.5 升级选择 `--migration-plan v3.55.2`，绑定完整迁移目录，
+仅新增 `0101_native_platform_settings.sql`、`0102_native_peer_sharing.sql`。
+首项保留旧亲和与 TTL 的值，新增独立设置编辑版本、隐私和价目字段；第二项将
+旧下游 Key 的只读共享权限设为关闭，不引入上游 API Key 账号。
+迁移后禁止自动回滚到旧 schema 的镜像，失败采用人工向前恢复。
+生产应用切换、免备份及正式发布仍以对应操作的用户授权为准。

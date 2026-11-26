@@ -77,6 +77,12 @@ impl PgControlPlaneRepository {
             postgres_unavailable("begin outbound user-agent update").with_source(error)
         })?;
         let revision = bump_config_revision_in_transaction(&mut transaction).await?;
+        sqlx::query("update runtime_settings set settings_revision = config_revision where id = 1")
+            .execute(&mut *transaction)
+            .await
+            .map_err(|error| {
+                postgres_unavailable("advance profile settings revision").with_source(error)
+            })?;
         sqlx::query(
             "insert into provider_outbound_user_agents
                  (provider_kind, mode, custom_user_agent, configuration_json)

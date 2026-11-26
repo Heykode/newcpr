@@ -3,13 +3,16 @@ mod compact;
 mod diagnostics;
 mod endpoint;
 mod error;
+mod genai;
 mod images;
 mod live;
 mod messages;
 mod models;
+mod peer_link;
 mod responses;
 mod router;
 mod search;
+mod session;
 
 use std::collections::BTreeSet;
 use std::num::NonZeroU32;
@@ -103,8 +106,15 @@ pub(super) fn authenticated_client_for_provider(
     plaintext: &str,
     provider_name: &str,
 ) -> AuthenticatedClient {
+    authenticated_client_from_snapshot(plaintext, snapshot(plaintext, provider_name))
+}
+
+pub(super) fn authenticated_client_from_snapshot(
+    plaintext: &str,
+    snapshot: RuntimeSnapshot,
+) -> AuthenticatedClient {
     let source = DefaultExecutionService::new(
-        RuntimeSnapshotHandle::new(snapshot(plaintext, provider_name)),
+        RuntimeSnapshotHandle::new(snapshot),
         Arc::new(UnusedExecutionStore),
         ProviderRegistry::default(),
         Arc::new(UnusedAdmissions),

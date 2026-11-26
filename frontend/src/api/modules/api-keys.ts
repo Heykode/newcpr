@@ -5,7 +5,19 @@ import request from '../request'
 export type ApiKeyRoutingScope = 'all' | 'groups'
 export type ApiKeyBudgetPeriod = 'daily' | 'weekly' | 'all'
 
+export interface ApiKeyPeerSharing {
+  enabled: boolean
+  sharePool: boolean
+  shareQuota: boolean
+  sharePlans: boolean
+}
+
+export function defaultApiKeyPeerSharing(): ApiKeyPeerSharing {
+  return { enabled: false, sharePool: false, shareQuota: false, sharePlans: false }
+}
+
 export interface ApiKey {
+  peerSharing: ApiKeyPeerSharing
   providerRequestProfileOverrides: Record<string, Record<string, unknown>>
   id: string
   name: string
@@ -61,6 +73,7 @@ interface ApiKeyListParams {
 }
 
 export interface ApiKeyWriteParam {
+  peerSharing?: ApiKeyPeerSharing
   providerRequestProfileOverrides?: Record<string, Record<string, unknown> | null>
   name: string
   label: string | null
@@ -242,7 +255,8 @@ export function alignKeyBudget(data: { id: string, accountId: string, revision: 
   return request<number>({ url: '/api/admin/client-keys/budget-alignment', method: 'POST', data })
 }
 
-export interface ApiKeyBatchChanges extends Partial<Omit<ApiKeyWriteParam, 'name' | 'label'>> {
+export interface ApiKeyBatchChanges extends Partial<Omit<ApiKeyWriteParam, 'name' | 'label' | 'peerSharing'>> {
+  peerSharing?: Partial<ApiKeyPeerSharing>
   enabled?: boolean
   installationSeed?: string
 }

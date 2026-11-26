@@ -13,10 +13,26 @@ use url::Url;
 
 use crate::config::XaiWireProfileConfig;
 
+pub mod selection;
+
 #[derive(Debug, Clone)]
 pub struct XaiWireProfileState(Arc<RwLock<XaiWireProfileConfig>>);
 
 impl XaiWireProfileState {
+    /// 账号后台操作按当前全局配置冻结身份，不读取 Client Key 覆盖
+    pub(crate) async fn resolve_global_request_profile(
+        &self,
+        policy: &dyn gateway_core::provider_ports::ProviderRuntimePolicyPort,
+    ) -> Result<XaiWireProfileConfig, gateway_core::error::ErrorSource> {
+        let kind = gateway_core::routing::ProviderKind::new("xai")?;
+        let Some(configuration) = policy.load_request_profile(&kind).await? else {
+            return Ok(self.snapshot());
+        };
+        selection::GrokClientProfileSelection::parse(&configuration)
+            .and_then(|selection| selection.resolve(self))
+            .map_err(Into::into)
+    }
+
     #[must_use]
     pub fn new(profile: XaiWireProfileConfig) -> Self {
         Self(Arc::new(RwLock::new(profile)))
@@ -49,14 +65,7 @@ impl XaiWireProfileState {
 
     #[must_use]
     pub fn user_agent(&self) -> String {
-        let profile = self.snapshot();
-        format!(
-            "{}/{} ({}; {})",
-            profile.client_identifier,
-            profile.client_version,
-            profile.target_os,
-            profile.target_arch
-        )
+        self.snapshot().user_agent()
     }
 
     #[must_use]
@@ -74,6 +83,7 @@ impl XaiWireProfileState {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if profile.client_version != version {
             profile.client_version = version.to_owned();
+            profile.verified_at = Utc::now();
         }
     }
 }

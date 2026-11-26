@@ -20,6 +20,9 @@ const {
   loaded,
   hasChanges,
   verified,
+  busy,
+  storageDirty,
+  secretConfigured,
   storage,
   schedule,
   load: loadSettings,
@@ -65,7 +68,7 @@ const storageConfigured = computed(
       && storage.region.trim()
       && storage.bucket.trim()
       && storage.accessKeyId.trim()
-      && storage.secretAccessKey.trim(),
+      && (secretConfigured.value || storage.secretAccessKey),
     ),
 )
 
@@ -94,9 +97,12 @@ watch(
     <BackupStorageCard
       v-model:storage="storage"
       :loading="settingsLoading"
+      :busy="busy"
       :saving="savingStorage"
       :testing="testing"
       :verified="verified"
+      :storage-dirty="storageDirty"
+      :secret-configured="secretConfigured"
       @save="saveStorage()"
       @test="runTest()"
       @open-r2-guide="showR2Guide = true"
@@ -105,6 +111,7 @@ watch(
     <BackupScheduleCard
       v-model:schedule="schedule"
       :loading="settingsLoading"
+      :busy="busy"
       :saving="savingSchedule"
       :storage-ready="storageReady"
       @save="saveSchedule()"

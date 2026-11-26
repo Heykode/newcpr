@@ -29,6 +29,27 @@ use crate::model::{
     quota_forecast_sampling::QuotaForecastObservation,
 };
 
+/// 按原生 Token 口径计算的报价输入，额外费用由调用方处理
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderUsagePricingInput {
+    pub upstream_model_id: String,
+    pub service_tier: Option<String>,
+    pub usage: gateway_core::metering::Usage,
+}
+
+/// 账号目录中的模型与独立额度观测，缺少观测不能解释为可用
+#[derive(Debug, Clone)]
+pub struct ProviderPeerAccountModels {
+    pub credential_revision: gateway_core::account::CredentialRevision,
+    pub models: BTreeMap<String, Option<ProviderPeerModelQuota>>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ProviderPeerModelQuota {
+    pub state: gateway_core::account::QuotaState,
+    pub valid_until: std::time::SystemTime,
+}
+
 /// Provider 管理失败的稳定分类。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderAdminErrorKind {
@@ -185,6 +206,89 @@ impl ProviderAdminError {
 /// 全部由 [`crate::ports::store::AccountStore`] 提交。运行时资源通知只在事务成功后发生。
 #[async_trait]
 pub trait ProviderAdmin: Send + Sync {
+    /// 独立本地统计不借用模型分组额度的重置时间
+    fn account_usage_lookback(&self) -> crate::model::provider_credentials::AccountUsageLookback {
+        Default::default()
+    }
+
+    fn compile_privacy_policy(
+        &self,
+        _policy: &gateway_core::settings::privacy::CodexPrivacyPolicy,
+    ) -> Result<
+        Arc<dyn gateway_core::settings::privacy::CompiledPrivacyPolicy>,
+        gateway_core::settings::privacy::PrivacyError,
+    > {
+        Err(gateway_core::settings::privacy::PrivacyError {
+            rule_index: 0,
+            reason: "该服务商不支持隐私策略",
+        })
+    }
+
+    fn preview_privacy_policy(
+        &self,
+        _request: gateway_core::settings::privacy::PrivacyPreviewRequest,
+    ) -> Result<
+        gateway_core::settings::privacy::PrivacyPreviewResult,
+        gateway_core::settings::privacy::PrivacyError,
+    > {
+        Err(gateway_core::settings::privacy::PrivacyError {
+            rule_index: 0,
+            reason: "该服务商不支持隐私策略",
+        })
+    }
+
+    /// 管理端允许为当前 Provider 覆盖的计费档位
+    fn supported_pricing_bands(&self) -> &'static [&'static str] {
+        &["standard"]
+    }
+
+    /// 只读内置价目，没有本地计价能力时返回空目录
+    fn pricing_catalog(&self) -> crate::model::pricing::ProviderPricingCatalog {
+        Default::default()
+    }
+
+    /// 外部参考价到本 Provider 上游模型的对应关系，与内置价共用登记
+    fn pricing_source(&self) -> crate::ports::pricing::PricingCatalogSource {
+        crate::ports::pricing::PricingCatalogSource::Direct
+    }
+
+    fn evaluate_usage_pricing(
+        &self,
+        _input: &ProviderUsagePricingInput,
+        _pricing: Option<&gateway_core::metering::ModelPriceOverride>,
+    ) -> Result<Option<gateway_core::metering::CalculatedCostBreakdown>, ProviderAdminError> {
+        Err(ProviderAdminError::new(ProviderAdminErrorKind::Unsupported))
+    }
+
+    /// 提供该 Provider 的可选客户端身份；通用管理层不解释内部字段
+    fn client_profile_options(
+        &self,
+    ) -> Result<gateway_core::account::OpaqueProviderData, ProviderAdminError> {
+        Err(ProviderAdminError::new(ProviderAdminErrorKind::Unsupported))
+    }
+
+    /// 没有持久选择时使用的 Provider 默认画像；只返回已准备的本地事实
+    fn default_client_profile(&self) -> Option<gateway_core::account::OpaqueProviderData> {
+        None
+    }
+
+    /// 校验并投影客户端身份，结果不含认证或账号材料
+    fn preview_client_profile(
+        &self,
+        _configuration: &gateway_core::account::OpaqueProviderData,
+    ) -> Result<gateway_core::account::OpaqueProviderData, ProviderAdminError> {
+        Err(ProviderAdminError::new(ProviderAdminErrorKind::Unsupported))
+    }
+
+    /// Key 可以继承当前全局画像；额外字段的合法性由对应 Provider 判定
+    fn preview_key_client_profile(
+        &self,
+        key: &gateway_core::account::OpaqueProviderData,
+        _global: Option<&gateway_core::account::OpaqueProviderData>,
+    ) -> Result<gateway_core::account::OpaqueProviderData, ProviderAdminError> {
+        self.preview_client_profile(key)
+    }
+
     fn merge_batch_key_profile(
         &self,
         current: Option<&gateway_core::account::OpaqueProviderData>,
@@ -205,6 +309,27 @@ pub trait ProviderAdmin: Send + Sync {
     }
 
     fn provider_kind(&self) -> &ProviderKind;
+    /// 与执行 Provider 共用的直连资格，未知实现默认不公开账号
+    fn is_direct_account(&self, _authentication_kind: &str) -> bool {
+        false
+    }
+
+    /// 仅依据本地账号事实判断通用模型资格；未知实现不能宣称完整覆盖
+    fn peer_model_eligible(
+        &self,
+        _account: &crate::model::accounts::AccountRecord,
+        _model: &str,
+    ) -> Option<bool> {
+        None
+    }
+
+    /// 批量读取已授权账号的原生模型事实，不访问上游；None 沿用整号额度合同
+    async fn peer_model_facts(
+        &self,
+        _accounts: &[crate::model::accounts::AccountRecord],
+    ) -> Result<Option<BTreeMap<String, ProviderPeerAccountModels>>, ProviderAdminError> {
+        Ok(None)
+    }
 
     fn account_capabilities(
         &self,
@@ -343,6 +468,13 @@ pub trait ProviderAdmin: Send + Sync {
 
     /// 返回该 Provider 实际持有的 Dashboard 上游身份画像。
     fn dashboard_wire_profile(&self) -> Option<DashboardWireProfile>;
+
+    fn configured_wire_profile(
+        &self,
+        _configuration: &gateway_core::account::OpaqueProviderData,
+    ) -> Option<DashboardWireProfile> {
+        self.dashboard_wire_profile()
+    }
 
     /// 使用 Provider-owned 价格规则恢复持久请求的逐项费用。
     fn calculated_billing(
@@ -491,6 +623,37 @@ pub struct ProviderAdminRegistry {
 }
 
 impl ProviderAdminRegistry {
+    pub(crate) fn pricing_source_scope(&self) -> crate::ports::pricing::PricingSourceScope {
+        crate::ports::pricing::PricingSourceScope {
+            catalogs: self
+                .providers
+                .iter()
+                .map(|(kind, provider)| (kind.to_string(), provider.pricing_source()))
+                .collect(),
+        }
+    }
+
+    pub(crate) fn supported_pricing_bands(&self) -> BTreeMap<String, Vec<String>> {
+        self.providers
+            .iter()
+            .map(|(kind, provider)| {
+                let bands = provider
+                    .supported_pricing_bands()
+                    .iter()
+                    .map(|&band| band.to_owned())
+                    .collect();
+                (kind.to_string(), bands)
+            })
+            .collect()
+    }
+
+    pub fn pricing_catalog(&self) -> gateway_core::metering::PricingOverrides {
+        self.providers
+            .iter()
+            .map(|(kind, provider)| (kind.as_str().to_owned(), provider.pricing_catalog()))
+            .collect()
+    }
+
     /// 创建无重复 ProviderKind 的注册表。
     ///
     /// # Errors
@@ -615,4 +778,10 @@ impl ProviderAdminRegistry {
 
 fn default_plan_type_display(plan_type: &str) -> String {
     plan_type.replace('+', " Plus ").to_upper_camel_case()
+}
+
+pub struct ProviderBundle {
+    pub core: Arc<dyn gateway_core::engine::provider::Provider>,
+    pub admin: Arc<dyn ProviderAdmin>,
+    pub workers: Vec<gateway_core::task::WorkerContribution>,
 }

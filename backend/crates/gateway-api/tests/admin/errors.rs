@@ -565,6 +565,11 @@ mod provider {
             last_error_message: None,
         };
         AccountDirectoryItem {
+            capabilities: gateway_admin::model::accounts::ProviderAccountCapabilities {
+                quota_settings_supported: provider == "openai",
+                ..Default::default()
+            },
+            usage_period: None,
             error_protection: None,
             excel_recovery: None,
             purchase_cost: None,

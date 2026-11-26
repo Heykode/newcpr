@@ -272,18 +272,28 @@ export type UsagePerformanceRecord = Pick<UsageCommonRecord, 'latencyDetails' | 
 
 export function usagePerformanceDetails(record: UsagePerformanceRecord) {
   const firstTokenMs = usageFirstTokenMs(record)
-  const upstreamMs = durationValue(record.latencyDetails?.upstreamResponseMs)
+  const measuredMs = durationValue(record.latencyDetails?.upstreamResponseMs)
+  const upstreamMs = measuredMs !== null && measuredMs > 0 ? measuredMs : null
+  const responseMs = upstreamMs ?? durationValue(record.latencyMs)
   const outputTokens = record.tokenDetails?.outputTokens
   const throughput = typeof outputTokens === 'number'
     && Number.isFinite(outputTokens)
     && outputTokens > 0
-    && upstreamMs !== null
-    && upstreamMs > 0
-    ? outputTokens * 1000 / upstreamMs
+    && responseMs !== null
+    && responseMs > 0
+    ? outputTokens * 1000 / responseMs
     : null
+  const estimated = throughput !== null && upstreamMs === null
+  const throughputValue = throughput !== null && throughput < 1000
+    ? new Intl.NumberFormat('en-US', { maximumSignificantDigits: 3 }).format(throughput)
+    : throughput === null ? '' : formatCompactNumber(throughput)
 
   return {
-    throughputDisplay: throughput === null ? '—' : `${formatCompactNumber(throughput)} tok/s`,
+    // 总耗时回退仅用于列表估算，不改写上游计时或性能聚合样本。
+    throughputDisplay: throughput === null ? '—' : `${estimated ? '≈ ' : ''}${throughputValue} tok/s`,
+    throughputDescription: estimated
+      ? '按请求总耗时估算，包含等待、重试和网络时间；不代表上游生成速度。'
+      : '按同一完成响应的上游耗时计算，输出 Token 包含推理。',
     firstTokenDisplay: formatDuration(firstTokenMs),
   }
 }

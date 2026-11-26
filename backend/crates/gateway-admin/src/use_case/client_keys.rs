@@ -294,6 +294,7 @@ impl ClientKeyService for DefaultClientKeyService {
         context: &MutationContext,
         command: CreateClientKey,
     ) -> Result<CreatedClientKey, AdminError> {
+        validate_peer_sharing(command.peer_sharing, &command.group_ids)?;
         for (provider, profile) in &command.request_profile_overrides {
             self.providers
                 .require(provider)
@@ -309,6 +310,7 @@ impl ClientKeyService for DefaultClientKeyService {
             .store
             .create_client_key(
                 NewClientKey {
+                    peer_sharing: command.peer_sharing,
                     request_profile_overrides: command.request_profile_overrides,
                     id,
                     name: command.name,
@@ -334,11 +336,17 @@ impl ClientKeyService for DefaultClientKeyService {
         context: &MutationContext,
         command: UpdateClientKey,
     ) -> Result<ClientKeyMutation, AdminError> {
+        if let Some(sharing) = command.peer_sharing {
+            validate_peer_sharing(sharing, &command.group_ids)?;
+        }
         for (provider, profile) in &command.request_profile_override_updates {
+            let provider = self
+                .providers
+                .require(provider)
+                .map_err(|error| super::map_provider_error(error, "client profile"))?;
             if let Some(profile) = profile {
-                self.providers
-                    .require(provider)
-                    .and_then(|provider| provider.validate_key_client_profile(profile))
+                provider
+                    .validate_key_client_profile(profile)
                     .map_err(|error| super::map_provider_error(error, "client profile"))?;
             }
         }
@@ -423,4 +431,17 @@ fn validate_cursor(query: &ClientKeyListQuery) -> Result<(), AdminError> {
     } else {
         Err(AdminError::invalid("API Key 分页游标不合法"))
     }
+}
+
+fn validate_peer_sharing(
+    sharing: gateway_core::policy::ClientPeerSharing,
+    groups: &[gateway_core::routing::AccountGroupId],
+) -> Result<(), AdminError> {
+    sharing.validate(!groups.is_empty()).map_err(|error| {
+        use gateway_core::policy::ClientPeerSharingError;
+        AdminError::invalid(match error {
+            ClientPeerSharingError::MissingGroupScope => "开启 CPR 互联需要指定账号分组",
+            ClientPeerSharingError::PlansWithoutPool => "公开套餐分布需要先公开账号池",
+        })
+    })
 }

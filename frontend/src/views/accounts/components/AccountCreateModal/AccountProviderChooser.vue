@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { AccountCreateProvider } from './model'
-import { Openai, Xai } from '@boxicons/vue'
+import { GoogleAntigravity, Openai, Xai } from '@boxicons/vue'
 import { LayoutGrid } from '@lucide/vue'
 import { t } from '@/i18n'
 import { PROVIDER_DISPLAY_NAMES } from '@/utils/providers'
@@ -16,7 +16,7 @@ withDefaults(
 )
 
 const emit = defineEmits<{
-  select: [provider: 'openai' | 'xai' | 'batch']
+  select: [provider: AccountCreateProvider]
 }>()
 
 const providers = [
@@ -35,11 +35,12 @@ const providers = [
     label: PROVIDER_DISPLAY_NAMES.xai,
     icon: Xai,
   },
+  { value: 'antigravity' as const, label: PROVIDER_DISPLAY_NAMES.antigravity, icon: GoogleAntigravity },
 ]
 </script>
 
 <template>
-  <div class="grid grid-cols-3 gap-3" role="group" :aria-label="t('accounts.onboarding.selectAccountPlatform')">
+  <div class="grid grid-cols-2 gap-3 sm:grid-cols-4" role="group" :aria-label="t('accounts.onboarding.selectAccountPlatform')">
     <button
       v-for="provider in providers"
       :key="provider.value"

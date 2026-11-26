@@ -1,5 +1,7 @@
 import type { RequestOptions } from '../request'
+import type { ProviderRequestProfiles, ProviderRequestProfileUpdates } from '../types/request-profile'
 import type { RequestLocation } from './proxies'
+import type { CodexPrivacyPolicy } from './settings/privacy'
 import type { AccountErrorProtection } from './settings/protection'
 import request from '../request'
 
@@ -81,6 +83,8 @@ export type AccountAffinity = 'strict' | 'preferred' | 'relaxed'
 export type OpenAiRequestCountry = { mode: 'follow_location' | 'default' | 'passthrough' } | { mode: 'custom', country: string }
 
 export interface RuntimeSettings {
+  providerRequestProfiles: ProviderRequestProfiles
+  codexPrivacyPolicy: CodexPrivacyPolicy
   openaiOauthGuardianReviewModel: boolean
   openaiRequestCountry: OpenAiRequestCountry
   configRevision: number
@@ -90,7 +94,7 @@ export interface RuntimeSettings {
   turnStateProbeProxyId?: string | null
   turnStateProbeConcurrency?: number
   responsesMaxDecompressedBodyBytes?: number
-  openaiAccountAffinity: AccountAffinity
+  accountAffinity: AccountAffinity
   modelMappings: Record<string, string>
   refreshMarginSeconds: number
   refreshConcurrency: number
@@ -102,7 +106,7 @@ export interface RuntimeSettings {
   codexQuotaOverdraftEnabled?: boolean
   codexQuotaOverdraftProbeModel?: string | null
   requestIntervalMs: number
-  openaiSessionBindingTtlHours: number
+  sessionAffinityTtlHours: number
   rotationStrategy: RotationStrategy
   quotaResetWindowWeights: ResetWindowWeights
   quotaResetWindowWeightsDefaults: ResetWindowWeights
@@ -156,7 +160,7 @@ export function getSettings(options: RequestOptions = {}) {
   })
 }
 
-type UpdateSettingsParam = Omit<RuntimeSettings, 'updatedAt' | 'requestTuningDefaults' | 'quotaResetWindowWeightsDefaults'>
+type UpdateSettingsParam = Omit<RuntimeSettings, 'updatedAt' | 'requestTuningDefaults' | 'quotaResetWindowWeightsDefaults' | 'providerRequestProfiles'> & { providerRequestProfiles?: ProviderRequestProfileUpdates }
 
 export function updateSettings(data: UpdateSettingsParam, options: RequestOptions = {}) {
   return request<RuntimeSettings>({

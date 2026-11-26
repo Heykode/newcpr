@@ -47,7 +47,7 @@ fn attempt_in_scope(
         NonZeroU32::MIN,
         SystemTime::now() + Duration::from_secs(5),
         AccountSelectionPolicy::new(RotationStrategy::Sticky, NonZeroU32::MIN, Duration::ZERO)
-            .with_openai_account_affinity(AccountAffinity::Strict),
+            .with_account_affinity(AccountAffinity::Strict),
         AccountAttemptContext::new(
             if excluded {
                 [ProviderAccountId::new("acct_scope_old").unwrap()].into()

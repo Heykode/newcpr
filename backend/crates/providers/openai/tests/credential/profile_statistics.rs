@@ -62,7 +62,7 @@ async fn service(
 }
 
 #[tokio::test]
-async fn profile_statistics_global_qx_preserves_desktop() {
+async fn profile_statistics_uses_the_selected_global_profile() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/backend-api/wham/profiles/me"))
@@ -82,7 +82,8 @@ async fn profile_statistics_global_qx_preserves_desktop() {
             user_agent: provider_openai::transport::profile::qx::DEFAULT_USER_AGENT.to_owned(),
         })
         .expect("global QX selection");
-    assert_ne!(profile.snapshot().user_agent(), desktop_ua);
+    let global_ua = profile.snapshot().user_agent();
+    assert_ne!(global_ua, desktop_ua);
     let service = CodexCredentialProfileService::new(
         store.repository(),
         profile,
@@ -102,7 +103,7 @@ async fn profile_statistics_global_qx_preserves_desktop() {
     let requests = server.received_requests().await.expect("requests");
     assert_eq!(requests.len(), 1);
     let request = &requests[0];
-    assert_eq!(request.headers["user-agent"], desktop_ua);
+    assert_eq!(request.headers["user-agent"], global_ua);
     assert_eq!(
         request.headers["authorization"],
         "Bearer token-acct_qx_profile"
@@ -369,4 +370,58 @@ async fn subscription_discards_response_when_credential_rotates_during_query() {
             .unwrap();
     });
     assert!(result.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn profile_subscription_and_avatar_follow_global_identity_changes() {
+    let server = MockServer::start().await;
+    let (store, _) = service("acct_global_profile", &server).await;
+    let account = store.account("acct_global_profile").unwrap();
+    for (endpoint, body) in [
+        (
+            "/api/codex/profiles/me",
+            json!({"profile":{"profile_picture_url":"https://chatgpt.com/backend-api/estuary/public_content/enc/avatar-token="},"stats":{}}),
+        ),
+        ("/backend-api/subscriptions", json!({"will_renew":true})),
+    ] {
+        Mock::given(path(endpoint))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+    }
+    Mock::given(path("/estuary/public_content/enc/avatar-token="))
+        .respond_with(ResponseTemplate::new(200).set_body_raw("<svg/>", "image/svg+xml"))
+        .mount(&server)
+        .await;
+    let policy = Arc::new(crate::support::RequestProfileRuntimePolicy(
+        std::sync::Mutex::new(gateway_core::account::OpaqueProviderData::new(
+            Default::default(),
+        )),
+    ));
+    let service = CodexCredentialProfileService::new(
+        store.repository(),
+        wire_profile(),
+        reqwest::Client::builder().no_proxy().build().unwrap(),
+        server.uri(),
+    )
+    .with_runtime_policy(policy.clone());
+    for os in ["27.0.1", "27.0.2"] {
+        let ua = format!("codex_cli_rs/0.170.0 (Mac OS {os}; arm64) global-test");
+        *policy.0.lock().unwrap() = gateway_core::account::OpaqueProviderData::new(
+            json!({"mode":"custom","userAgent":ua})
+                .as_object()
+                .unwrap()
+                .clone(),
+        );
+        let before = server.received_requests().await.unwrap().len();
+        service.profile_statistics(account.id()).await.unwrap();
+        service.subscription(account.id()).await.unwrap();
+        let mut avatar = service.profile_avatar(account.id()).await.unwrap();
+        while avatar.body.try_next().await.unwrap().is_some() {}
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(requests.len() - before, 3);
+        for request in &requests[before..] {
+            assert_eq!(request.headers["user-agent"], ua);
+        }
+    }
 }

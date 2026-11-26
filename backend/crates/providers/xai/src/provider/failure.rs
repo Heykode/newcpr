@@ -387,6 +387,12 @@ pub(super) fn map_request_error(error: GrokRequestEncodeError) -> ProviderError 
 /// 将选择阶段失败映射为带结构化 code 与 retry_after 的 Provider 错误。
 pub(super) fn map_selection_error(error: GrokSessionSelectorError) -> ProviderError {
     let (retry_after, message, code) = match error {
+        GrokSessionSelectorError::Cancelled => {
+            return provider_error(ProviderErrorKind::Cancelled, UpstreamSendState::NotSent);
+        }
+        GrokSessionSelectorError::DeadlineElapsed => {
+            return provider_error(ProviderErrorKind::Timeout, UpstreamSendState::NotSent);
+        }
         GrokSessionSelectorError::QueueRejected(reason) => {
             return provider_error(reason.provider_kind(), UpstreamSendState::NotSent);
         }

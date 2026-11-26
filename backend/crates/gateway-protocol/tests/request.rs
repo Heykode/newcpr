@@ -1,6 +1,35 @@
 //! 验证不同协议的共享请求事实
 
 use gateway_protocol::request::{request_facts, request_observation};
+
+#[test]
+fn token_count_observation_uses_the_nested_generation_request() {
+    for (body, expected) in [
+        (
+            serde_json::json!({"generationConfig":{"thinkingConfig":{"thinkingLevel":"MEDIUM"}}}),
+            Some("medium"),
+        ),
+        (
+            serde_json::json!({"generation_config":{"thinking_config":{"thinking_level":"HIGH"}}}),
+            Some("high"),
+        ),
+        (
+            serde_json::json!({"generationConfig":{"thinkingConfig":{"thinkingLevel":"HIGH"}},"generateContentRequest":{"generationConfig":{"thinkingConfig":{"thinkingLevel":"MEDIUM"}}}}),
+            Some("medium"),
+        ),
+        (
+            serde_json::json!({"generationConfig":{"thinkingConfig":{"thinkingLevel":"HIGH"}},"generateContentRequest":{"contents":[]}}),
+            None,
+        ),
+    ] {
+        let observation = gateway_protocol::request::token_count_observation(
+            "genai",
+            body.as_object().unwrap(),
+            &Default::default(),
+        );
+        assert_eq!(observation.reasoning_effort.as_deref(), expected);
+    }
+}
 use serde_json::{Map, json};
 
 #[test]
@@ -92,5 +121,44 @@ fn messages_request_observation_preserves_explicit_effort_without_inventing_defa
             expected,
             "{options}"
         );
+    }
+}
+
+#[test]
+fn genai_native_fields_preserve_tool_arguments_and_separate_vision_from_image_generation() {
+    let body = json!({
+        "tools": [{"functionDeclarations": [{"name": "lookup"}]}],
+        "contents": [{"role": "user", "parts": [{
+            "functionResponse": {
+                "parts": [{"inlineData": {"mimeType": "image/png", "data": "AA=="}}],
+                "response": {"responseFormat": [{"image": {}}]}
+            }
+        }]}],
+        "generationConfig": {
+            "maxOutputTokens": 128,
+            "responseFormat": [{"text":{"schema":{"type":"object"}}}],
+            "thinkingConfig": {"thinkingLevel":"HIGH"}
+        }
+    });
+    let body = body.as_object().expect("请求正文");
+    let facts = request_facts("genai", body);
+    assert_eq!(facts.max_output_tokens, Some(128));
+    assert!(facts.tools && facts.vision && facts.reasoning && facts.json_schema);
+    assert!(!facts.image_generation && !facts.native_continuation);
+    assert_eq!(
+        request_observation("genai", body, &Map::new(), None)
+            .reasoning_effort
+            .as_deref(),
+        Some("high")
+    );
+
+    for config in [
+        json!({"response_modalities": ["TEXT", "IMAGE"]}),
+        json!({"responseModalities": [2]}),
+        json!({"response_format":[{"image":{}}]}),
+        json!({"image_config":{}}),
+    ] {
+        let body = json!({"generation_config": config});
+        assert!(request_facts("genai", body.as_object().expect("请求正文")).image_generation);
     }
 }

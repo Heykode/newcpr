@@ -40,7 +40,7 @@ impl CodexCredentialSelector {
                     && request
                         .attempt
                         .account_selection_policy()
-                        .openai_account_affinity()
+                        .account_affinity()
                         != AccountAffinity::Relaxed =>
             {
                 Some(SchedulingProjectionKey {

@@ -21,7 +21,7 @@ export function useSettingsFormRules(form: SettingsForm) {
     'refreshConcurrency': integer(0, 4_294_967_295),
     'maxConcurrentPerAccount': integer(0, 4_294_967_295),
     'openaiGuardianReservedConcurrency': integer(0, 4_294_967_295),
-    'openaiSessionBindingTtlHours': integer(1, 720),
+    'sessionAffinityTtlHours': integer(1, 720),
     'requestIntervalMs': integer(0, Number.MAX_SAFE_INTEGER),
     'responsesMaxDecompressedBodyBytes': integer(1, 256 * 1024 * 1024),
     'requestTuning.maxWaitingPerKey': integer(0, 1024),

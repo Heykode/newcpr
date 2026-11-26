@@ -2,10 +2,11 @@
 import type { AccountGroupFormValue } from '../composables/useAccountGroups'
 import type { AccountGroup } from '@/api'
 import type { FormRules } from '@/components/base/BaseForm/types'
-import { computed, useTemplateRef, watch } from 'vue'
+import type { BuiltinProvider } from '@/providers/catalog'
+import { computed, shallowRef, useTemplateRef, watch } from 'vue'
 import BaseButton from '@/components/base/BaseButton.vue'
-
 import BaseColorPicker from '@/components/base/BaseColorPicker/index.vue'
+
 import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
 import BaseForm from '@/components/base/BaseForm/index.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
@@ -13,8 +14,10 @@ import BaseModal from '@/components/base/BaseModal/index.vue'
 import BaseSelect from '@/components/base/BaseSelect.vue'
 import BaseSwitch from '@/components/base/BaseSwitch.vue'
 import BaseTextarea from '@/components/base/BaseTextarea.vue'
+import ProviderSettingsSection from '@/components/ProviderSettingsSection.vue'
 import { t } from '@/i18n'
 import AccountModelAccessField from '@/views/accounts/components/AccountModelAccessField.vue'
+import { commonImageModels } from '@/views/accounts/utils/modelAccess'
 import { ACCOUNT_GROUP_COLOR_PRESETS } from '../constants'
 
 const props = defineProps<{
@@ -26,12 +29,17 @@ const emit = defineEmits<{
 }>()
 const open = defineModel<boolean>({ required: true })
 const form = defineModel<AccountGroupFormValue>('form', { required: true })
+const provider = shallowRef<BuiltinProvider>('openai')
 const formRef = useTemplateRef<InstanceType<typeof BaseForm>>('formElement')
 const rules: FormRules = {
   name: { required: true, whitespace: true, trigger: ['blur', 'change'], message: '请输入分组名称' },
   color: { pattern: /^#[\da-f]{6}(?:[\da-f]{2})?$/i, required: true, trigger: 'change', message: '请选择有效的分组颜色' },
 }
-watch(open, () => formRef.value?.clearValidate())
+watch(open, (visible) => {
+  formRef.value?.clearValidate()
+  if (visible)
+    provider.value = 'openai'
+})
 async function requestSave() {
   if (!props.saving && await formRef.value?.validate().catch(() => false))
     emit('save')
@@ -76,23 +84,30 @@ const description = computed(() => props.group
           :disabled="saving"
         />
       </BaseFormItem>
-      <BaseFormItem :label="t('usage.billing.fastMode')">
-        <BaseSelect
-          v-model="form.fastMode"
-          class="w-full"
-          :aria-label="t('usage.billing.fastMode')"
-          :options="[
-            { value: 'default', label: '默认（跟随客户端）' },
-            { value: 'enabled', label: '开启' },
-            { value: 'ultrafast', label: 'Ultrafast' },
-            { value: 'disabled', label: '关闭' },
-          ]"
-          :disabled="saving"
-        />
-      </BaseFormItem>
-      <AccountModelAccessField v-model="form.modelAccess" group-catalog :disabled="saving" />
-      <BaseSwitch v-model="form.allowSubagents" label="允许子代理" show-label :disabled="saving" />
+      <AccountModelAccessField v-model="form.modelAccess" group-catalog :image-model-presets="commonImageModels" :disabled="saving" />
       <BaseSwitch v-model="form.allowImageGeneration" label="允许生图" show-label :disabled="saving" />
+      <ProviderSettingsSection v-model="provider" :disabled="saving">
+        <div v-if="provider === 'openai'" class="grid gap-4">
+          <BaseFormItem :label="t('usage.billing.fastMode')">
+            <BaseSelect
+              v-model="form.fastMode"
+              class="w-full"
+              :aria-label="t('usage.billing.fastMode')"
+              :options="[
+                { value: 'default', label: '默认（跟随客户端）' },
+                { value: 'enabled', label: '开启' },
+                { value: 'ultrafast', label: 'Ultrafast' },
+                { value: 'disabled', label: '关闭' },
+              ]"
+              :disabled="saving"
+            />
+          </BaseFormItem>
+          <BaseSwitch v-model="form.allowSubagents" label="允许子代理" show-label :disabled="saving" />
+        </div>
+        <p v-else class="m-0 text-cp-sm text-cp-text-tertiary">
+          此平台暂无独立分组设置
+        </p>
+      </ProviderSettingsSection>
     </BaseForm>
 
     <template #footer>

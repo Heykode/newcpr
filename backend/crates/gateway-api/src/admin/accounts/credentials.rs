@@ -6,6 +6,7 @@ use super::*;
 pub(super) enum AccountProvider {
     OpenAi,
     Xai,
+    Antigravity,
 }
 
 impl AccountProvider {
@@ -13,6 +14,7 @@ impl AccountProvider {
         match value.trim() {
             "openai" => Ok(Self::OpenAi),
             "xai" => Ok(Self::Xai),
+            "antigravity" => Ok(Self::Antigravity),
             _ => Err(WireValidationError::new("provider")),
         }
     }
@@ -274,7 +276,7 @@ impl CompleteAccountAuthorizationRequest {
             return Err(WireValidationError::new("turnStateInjectionEnabled"));
         }
         match provider {
-            AccountProvider::OpenAi => {
+            AccountProvider::OpenAi | AccountProvider::Antigravity => {
                 if !URL_SAFE_NO_PAD
                     .decode(&self.flow_id)
                     .is_ok_and(|decoded| decoded.len() == 32)

@@ -103,7 +103,8 @@
       "attributes": "Request identity details",
       "authProtocol": "Authentication protocol",
       "emulatedEnvironment": "Emulated environment",
-      "environment": "Environment"
+      "environment": "Environment",
+      "versionUpToDate": "Version matches"
     },
     "health": {
       "title": "Request health",

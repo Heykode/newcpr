@@ -1,7 +1,7 @@
 import { isRecord } from '@/utils/object'
 
 export interface ImportDocument {
-  provider: 'openai' | 'xai'
+  provider: 'openai' | 'xai' | 'antigravity'
   document: Record<string, unknown>
 }
 

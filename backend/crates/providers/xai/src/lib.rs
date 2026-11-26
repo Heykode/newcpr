@@ -1,6 +1,7 @@
 //! 官方 Grok Build OAuth Provider 边界。
 
 mod admin;
+mod billing;
 pub mod config;
 pub mod credential;
 mod provider;
@@ -126,17 +127,19 @@ pub async fn initialize(
     );
     let catalog_transport: Arc<dyn GrokModelCatalogTransport> = upstream_catalog.clone();
     let billing_transport: Arc<dyn GrokBillingTransport> = upstream_catalog;
-    let catalog = Arc::new(GrokCredentialCatalogService::new(
-        repository.clone(),
-        catalog_transport,
-        catalog_cache_port,
-        profile.clone(),
-    ));
-    let quota = Arc::new(GrokCredentialQuotaService::new(
-        repository.clone(),
-        billing_transport,
-        profile.clone(),
-    ));
+    let catalog = Arc::new(
+        GrokCredentialCatalogService::new(
+            repository.clone(),
+            catalog_transport,
+            catalog_cache_port,
+            profile.clone(),
+        )
+        .with_runtime_policy(Arc::clone(&runtime_policy)),
+    );
+    let quota = Arc::new(
+        GrokCredentialQuotaService::new(repository.clone(), billing_transport, profile.clone())
+            .with_runtime_policy(Arc::clone(&runtime_policy)),
+    );
     let selector: Arc<dyn GrokSessionSelector> = Arc::new(GrokAccountSessionSelector::new(
         provider_kind.clone(),
         repository.clone(),
@@ -145,6 +148,7 @@ pub async fn initialize(
         Arc::clone(&leases),
         Arc::clone(&cooldowns),
         Arc::clone(&account_feedback),
+        ports.session_affinity(),
     ));
     let inference: Arc<dyn GrokInferenceTransport> = Arc::new(
         ReqwestGrokInferenceTransport::new(Arc::clone(&endpoint_policy))
@@ -158,12 +162,15 @@ pub async fn initialize(
         ReqwestOidcTokenVerifier::new(endpoint_policy, Duration::from_secs(60 * 60))
             .map_err(|_| XaiInitializeError::Transport)?,
     );
-    let oauth = Arc::new(GrokOAuthClient::new(
-        oauth_config.clone(),
-        profile.clone(),
-        oauth_transport,
-        token_verifier,
-    ));
+    let oauth = Arc::new(
+        GrokOAuthClient::new(
+            oauth_config.clone(),
+            profile.clone(),
+            oauth_transport,
+            token_verifier,
+        )
+        .with_runtime_policy(Arc::clone(&runtime_policy)),
+    );
     let refresher: Arc<dyn GrokCredentialRefresher> =
         Arc::new(GrokOAuthRefreshClient::new(Arc::clone(&oauth)));
     let refresh = Arc::new(GrokCredentialRefreshService::new(
@@ -254,3 +261,6 @@ pub enum XaiInitializeError {
     #[error("xAI worker plan is invalid")]
     Worker,
 }
+
+/// Resolved xAI identity, retaining the deployment configuration contract.
+pub type XaiWireProfile = config::XaiWireProfileConfig;

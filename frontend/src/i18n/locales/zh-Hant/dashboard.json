@@ -103,7 +103,8 @@
       "attributes": "請求身份組成",
       "authProtocol": "認證協議",
       "emulatedEnvironment": "模擬運行環境",
-      "environment": "運行環境"
+      "environment": "運行環境",
+      "versionUpToDate": "版本一致"
     },
     "health": {
       "title": "請求健康時間線",

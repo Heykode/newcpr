@@ -50,6 +50,9 @@ async function main() {
       else if (path === '/api/admin/client-keys') {
         data = { items: [], nextCursor: null, configRevision: 1 }
       }
+      else if (path === '/api/admin/system/update/detail') {
+        data = { enabled: false, status: 'idle', currentVersion: 'isolated-test' }
+      }
       else if (path === '/api/admin/system/version') {
         data = { version: 'local-test', buildType: 'test' }
       }
@@ -87,7 +90,7 @@ async function main() {
       const images = dialog.getByRole('switch', { name: '允许生图', exact: true })
       assert.equal(await images.isChecked(), true)
       await dialog.getByText('允许生图', { exact: true }).click()
-      for (const [mode, label] of [['enabled', '开启'], ['disabled', '关闭'], ['default', '默认（跟随客户端）']]) {
+      for (const [mode, label] of [['enabled', '开启'], ['ultrafast', 'Ultrafast'], ['disabled', '关闭'], ['default', '默认（跟随客户端）']]) {
         await choose(dialog, label)
         await page.screenshot({ path: `${output}/${name}-${mode}.png` })
         assert.equal(await dialog.evaluate(el => el.scrollWidth <= el.clientWidth), true)

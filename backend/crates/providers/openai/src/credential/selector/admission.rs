@@ -55,7 +55,7 @@ impl CodexCredentialSelector {
             || request
                 .attempt
                 .account_selection_policy()
-                .openai_account_affinity()
+                .account_affinity()
                 != AccountAffinity::Strict
         {
             return Ok(None);
@@ -114,7 +114,7 @@ impl CodexCredentialSelector {
         if request
             .attempt
             .account_selection_policy()
-            .openai_account_affinity()
+            .account_affinity()
             == AccountAffinity::Preferred
             && binding.is_some()
         {
@@ -143,7 +143,7 @@ impl CodexCredentialSelector {
             || policy.strategy() != RotationStrategy::RoundRobin
             || (binding.is_some()
                 && ((request.follows_root() && !image_borrow)
-                    || policy.openai_account_affinity() == AccountAffinity::Preferred))
+                    || policy.account_affinity() == AccountAffinity::Preferred))
         {
             return Ok(None);
         }
@@ -188,7 +188,7 @@ impl CodexCredentialSelector {
             .filter(|_| !request.attempt.is_diagnostic_required_account());
         let policy = request.attempt.account_selection_policy();
         let mut binding_account = image_primary.unwrap_or(account);
-        if policy.openai_account_affinity() == AccountAffinity::Preferred
+        if policy.account_affinity() == AccountAffinity::Preferred
             && let Some(primary) = expected
             && (primary.account_id() == account
                 || pinned
@@ -226,7 +226,7 @@ impl CodexCredentialSelector {
             key,
             expected,
             binding: &binding,
-            ttl: policy.openai_session_binding_ttl(),
+            ttl: policy.session_affinity_ttl(),
         });
         let admission = match assignment_cursor {
             Some(cursor) => Some(ProviderAccountAdmission::RoundRobin {

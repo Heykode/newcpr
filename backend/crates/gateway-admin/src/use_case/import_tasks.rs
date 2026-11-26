@@ -130,6 +130,7 @@ pub(crate) struct DefaultImportTasksService {
     notify: Notify,
     openai: Arc<dyn OpenAiService>,
     xai: Arc<dyn XaiService>,
+    antigravity: Option<Arc<dyn super::native_credentials::NativeCredentialService>>,
     quality_ops: Option<Arc<QualityOpsService>>,
 }
 
@@ -137,6 +138,7 @@ impl DefaultImportTasksService {
     pub(crate) fn new_with_quality_ops(
         openai: Arc<dyn OpenAiService>,
         xai: Arc<dyn XaiService>,
+        antigravity: Option<Arc<dyn super::native_credentials::NativeCredentialService>>,
         quality_ops: Option<Arc<QualityOpsService>>,
     ) -> Arc<Self> {
         Arc::new(Self {
@@ -144,6 +146,7 @@ impl DefaultImportTasksService {
             notify: Notify::new(),
             openai,
             xai,
+            antigravity,
             quality_ops,
         })
     }
@@ -191,6 +194,10 @@ impl DefaultImportTasksService {
             match provider.as_str() {
                 "openai" => self.openai.import_document(command).await,
                 "xai" => self.xai.import_document(command).await,
+                "antigravity" => match &self.antigravity {
+                    Some(service) => service.import_document(command).await,
+                    None => Err(AdminError::invalid("Antigravity provider is unavailable")),
+                },
                 _ => Err(AdminError::invalid("Unsupported import provider")),
             }
         };
@@ -272,7 +279,7 @@ impl ImportTasksService for DefaultImportTasksService {
             || command.items.is_empty()
             || command.items.len() > MAX_IMPORT_TASK_ITEMS
             || command.items.iter().any(|item| {
-                !matches!(item.provider.as_str(), "openai" | "xai")
+                !matches!(item.provider.as_str(), "openai" | "xai" | "antigravity")
                     || item.command.context.actor != command.context.actor
             })
         {

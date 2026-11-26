@@ -28,6 +28,8 @@ pub(in crate::openai) enum HttpResponseFormat {
     Responses,
     Messages,
     MessageTokenCount,
+    GenAi,
+    GenAiTokenCount,
     Chat {
         include_usage: bool,
         identity: ChatIdentity,
@@ -47,6 +49,7 @@ pub(in crate::openai) struct HttpResponseEncoder {
     decoder: SseEventDecoder,
     messages: Option<super::messages_response::MessagesEncoder>,
     token_count: bool,
+    genai: Option<super::genai_response::GenAiEncoder>,
 }
 
 impl HttpResponseEncoder {
@@ -56,7 +59,9 @@ impl HttpResponseEncoder {
             chat: match format {
                 HttpResponseFormat::Responses
                 | HttpResponseFormat::Messages
-                | HttpResponseFormat::MessageTokenCount => None,
+                | HttpResponseFormat::MessageTokenCount
+                | HttpResponseFormat::GenAi
+                | HttpResponseFormat::GenAiTokenCount => None,
                 HttpResponseFormat::Chat {
                     include_usage,
                     identity,
@@ -66,13 +71,23 @@ impl HttpResponseEncoder {
                 HttpResponseFormat::Chat { identity, .. } => Some(identity.clone()),
                 HttpResponseFormat::Responses
                 | HttpResponseFormat::Messages
-                | HttpResponseFormat::MessageTokenCount => None,
+                | HttpResponseFormat::MessageTokenCount
+                | HttpResponseFormat::GenAi
+                | HttpResponseFormat::GenAiTokenCount => None,
             },
             decoder: SseEventDecoder::default(),
             messages: format
                 .is_messages()
                 .then(super::messages_response::MessagesEncoder::default),
-            token_count: matches!(format, HttpResponseFormat::MessageTokenCount),
+            token_count: matches!(
+                format,
+                HttpResponseFormat::MessageTokenCount | HttpResponseFormat::GenAiTokenCount
+            ),
+            genai: matches!(
+                format,
+                HttpResponseFormat::GenAi | HttpResponseFormat::GenAiTokenCount
+            )
+            .then(super::genai_response::GenAiEncoder::default),
         }
     }
 
@@ -81,10 +96,10 @@ impl HttpResponseEncoder {
     }
 
     pub(in crate::openai) fn requires_terminal_confirmation(&self) -> bool {
-        self.is_chat() || self.messages.is_some()
+        self.is_chat() || self.messages.is_some() || self.genai.is_some()
     }
     pub(in crate::openai) fn terminal_bytes(&self) -> Bytes {
-        if self.messages.is_some() {
+        if self.messages.is_some() || self.genai.is_some() {
             Bytes::new()
         } else {
             Bytes::from_static(gateway_protocol::openai::sse::DONE_SSE_FRAME.as_bytes())
@@ -106,6 +121,9 @@ impl HttpResponseEncoder {
         &mut self,
         event: &ProviderEvent,
     ) -> Result<Vec<Bytes>, HttpEncodeError> {
+        if let Some(genai) = self.genai.as_mut() {
+            return genai.push_sse(event).map_err(HttpEncodeError::Responses);
+        }
         if let Some(messages) = self.messages.as_mut() {
             return Ok(messages.push_sse(event));
         }
@@ -131,6 +149,9 @@ impl HttpResponseEncoder {
     }
 
     pub(in crate::openai) fn is_completed(&self) -> bool {
+        if let Some(genai) = &self.genai {
+            return genai.is_completed();
+        }
         if let Some(messages) = &self.messages {
             return messages.is_completed();
         }
@@ -141,6 +162,9 @@ impl HttpResponseEncoder {
     }
 
     pub(in crate::openai) fn has_wire_failure(&self) -> bool {
+        if let Some(genai) = &self.genai {
+            return genai.has_wire_failure();
+        }
         if let Some(messages) = &self.messages {
             return messages.has_wire_failure();
         }
@@ -151,6 +175,9 @@ impl HttpResponseEncoder {
     }
 
     pub(in crate::openai) fn finish_sse(&mut self) -> Result<(), HttpEncodeError> {
+        if let Some(genai) = self.genai.as_mut() {
+            return genai.finish().map_err(HttpEncodeError::Responses);
+        }
         if let Some(chat) = self.chat.as_mut() {
             for event in self.decoder.finish().map_err(|_| invalid_chat_response())? {
                 let data =
@@ -171,6 +198,10 @@ impl HttpResponseEncoder {
         mut self,
         events: &[ProviderEvent],
     ) -> Result<Value, HttpEncodeError> {
+        if self.genai.is_some() {
+            return super::genai_response::collect(events, self.token_count)
+                .map_err(HttpEncodeError::Responses);
+        }
         if self.messages.is_some() {
             return super::messages_response::collect(events, self.token_count)
                 .map_err(HttpEncodeError::Responses);
@@ -205,6 +236,9 @@ impl HttpResponseEncoder {
 
     pub(in crate::openai) fn error_frame(&self, error: &GatewayError) -> Bytes {
         let (status, default_type, default_code) = gateway_error_contract(error.kind());
+        if self.genai.is_some() {
+            return super::genai::error_frame(status, error.client_message());
+        }
         if self.messages.is_some() {
             return super::messages::stream_error(&super::messages::error_payload(
                 &json!({"error":{"message":error.client_message()}}),

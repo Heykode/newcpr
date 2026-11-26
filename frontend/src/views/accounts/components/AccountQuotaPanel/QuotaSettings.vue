@@ -14,6 +14,7 @@ import BaseModal from '@/components/base/BaseModal/index.vue'
 import BaseSelect from '@/components/base/BaseSelect.vue'
 import BaseSwitch from '@/components/base/BaseSwitch.vue'
 import { useAsyncAction } from '@/composables/useAsyncAction'
+import { quotaWindowLabel } from '../../constants'
 
 interface BucketDraft {
   key: string
@@ -64,7 +65,7 @@ async function edit() {
     return {
       key,
       label: window
-        ? window.labelDisplay
+        ? quotaWindowLabel(window)
         : key,
       limit: settings?.limitPercent == null
         ? ''

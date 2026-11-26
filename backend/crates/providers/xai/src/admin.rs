@@ -322,6 +322,30 @@ impl XaiAdminProvider {
 
 #[async_trait]
 impl ProviderAdmin for XaiAdminProvider {
+    fn account_capabilities(
+        &self,
+        _account_id: &ProviderAccountId,
+        authentication_kind: &str,
+    ) -> gateway_admin::model::accounts::ProviderAccountCapabilities {
+        let oauth = authentication_kind == crate::credential::XAI_AUTHENTICATION_KIND_OAUTH;
+        gateway_admin::model::accounts::ProviderAccountCapabilities {
+            credential_refresh: oauth,
+            reauthorize: oauth,
+            credential_export: oauth,
+            quota: oauth,
+            quota_refresh: oauth,
+            ..Default::default()
+        }
+    }
+
+    fn is_direct_account(&self, authentication_kind: &str) -> bool {
+        authentication_kind == crate::credential::XAI_AUTHENTICATION_KIND_OAUTH
+    }
+
+    fn peer_model_eligible(&self, account: &AccountRecord, _model: &str) -> Option<bool> {
+        Some(self.is_direct_account(&account.authentication_kind))
+    }
+
     fn provider_kind(&self) -> &ProviderKind {
         &self.provider_kind
     }
@@ -341,6 +365,48 @@ impl ProviderAdmin for XaiAdminProvider {
         input_text: &str,
     ) -> Result<Operation, ProviderAdminError> {
         build_connection_test_operation(upstream_model, input_text)
+    }
+
+    fn client_profile_options(
+        &self,
+    ) -> Result<gateway_core::account::OpaqueProviderData, ProviderAdminError> {
+        crate::transport::profile::selection::object(&serde_json::json!({
+            "defaults": crate::transport::profile::selection::GrokClientProfileSelection::default(),
+        }))
+        .map_err(|_| provider_error(ProviderAdminErrorKind::Invalid))
+    }
+
+    fn default_client_profile(&self) -> Option<gateway_core::account::OpaqueProviderData> {
+        use crate::transport::profile::selection::{GrokClientProfileSelection, VersionMode};
+        let profile = self.wire_profile.snapshot();
+        GrokClientProfileSelection {
+            version_mode: VersionMode::Latest,
+            client_version: None,
+            client_identifier: profile.client_identifier,
+            client_mode: profile.client_mode,
+            target_os: profile.target_os,
+            target_arch: profile.target_arch,
+        }
+        .document()
+        .ok()
+    }
+
+    fn preview_client_profile(
+        &self,
+        configuration: &gateway_core::account::OpaqueProviderData,
+    ) -> Result<gateway_core::account::OpaqueProviderData, ProviderAdminError> {
+        crate::transport::profile::selection::GrokClientProfileSelection::parse(configuration)
+            .and_then(|selection| {
+                selection.preview(&self.wire_profile, &self.cli_release.snapshot())
+            })
+            .map_err(|_| provider_error(ProviderAdminErrorKind::Invalid))
+    }
+
+    fn validate_key_client_profile(
+        &self,
+        configuration: &gateway_core::account::OpaqueProviderData,
+    ) -> Result<(), ProviderAdminError> {
+        self.preview_client_profile(configuration).map(|_| ())
     }
 
     fn dashboard_wire_profile(&self) -> Option<DashboardWireProfile> {
@@ -386,6 +452,14 @@ impl ProviderAdmin for XaiAdminProvider {
         })
     }
 
+    fn pricing_catalog(&self) -> gateway_admin::model::pricing::ProviderPricingCatalog {
+        crate::billing::pricing_catalog()
+    }
+
+    fn supported_pricing_bands(&self) -> &'static [&'static str] {
+        crate::billing::SUPPORTED_PRICING_BANDS
+    }
+
     fn calculated_billing(
         &self,
         input: &ProviderBillingInput,
@@ -408,6 +482,8 @@ impl ProviderAdmin for XaiAdminProvider {
             return Ok(None);
         }
         Ok(Some(CalculatedBillingBreakdown {
+            image: None,
+            custom_multiplier_bps: 10_000,
             long_context_billing_applied: false,
             input_amount: currency_cost(breakdown.input_amount())?,
             output_amount: currency_cost(breakdown.output_amount())?,
@@ -424,6 +500,33 @@ impl ProviderAdmin for XaiAdminProvider {
             service_tier: breakdown.service_tier().map(str::to_owned),
             multiplier_percent: breakdown.multiplier_percent(),
         }))
+    }
+
+    fn evaluate_usage_pricing(
+        &self,
+        input: &gateway_admin::ports::provider::ProviderUsagePricingInput,
+        pricing: Option<&gateway_core::metering::ModelPriceOverride>,
+    ) -> Result<Option<gateway_core::metering::CalculatedCostBreakdown>, ProviderAdminError> {
+        let (Some(input_tokens), Some(output_tokens), Some(cached), Some(written)) = (
+            input.usage.input_tokens,
+            input.usage.output_tokens,
+            input.usage.cached_tokens,
+            input.usage.cache_write_tokens,
+        ) else {
+            return Ok(None);
+        };
+        if input.usage.image_input_tokens != Some(0) || input.usage.image_output_tokens != Some(0) {
+            return Ok(None);
+        }
+        Ok(crate::billing::grok_billing_breakdown_with_override(
+            &input.upstream_model_id,
+            input_tokens,
+            output_tokens,
+            cached,
+            written,
+            input.service_tier.as_deref(),
+            pricing,
+        ))
     }
 
     async fn prepare_import(
@@ -1450,6 +1553,11 @@ fn map_quota_error(error: GrokQuotaError) -> ProviderAdminError {
         Error::StaleCredentialSnapshot => ProviderAdminErrorKind::Conflict,
         Error::InvalidData => ProviderAdminErrorKind::Invalid,
         Error::Upstream | Error::Store => ProviderAdminErrorKind::Unavailable,
+        Error::Profile(source) => {
+            return provider_error(ProviderAdminErrorKind::Unavailable)
+                .with_public_message("客户端身份不可用")
+                .with_source(source);
+        }
     })
 }
 
@@ -1462,5 +1570,33 @@ fn map_catalog_error(error: GrokCredentialCatalogError) -> ProviderAdminError {
         Error::NoEligibleCredential => ProviderAdminErrorKind::NotFound,
         Error::StaleCredentialSnapshot => ProviderAdminErrorKind::Conflict,
         Error::Upstream | Error::Cache | Error::Store => ProviderAdminErrorKind::Unavailable,
+        Error::Profile(source) => {
+            return provider_error(ProviderAdminErrorKind::Unavailable)
+                .with_public_message("客户端身份不可用")
+                .with_source(source);
+        }
     })
+}
+
+#[cfg(test)]
+mod error_tests {
+    use crate::credential::{GrokCredentialCatalogError, GrokQuotaError};
+    use gateway_admin::ports::provider::ProviderAdminErrorKind;
+    use std::error::Error as _;
+
+    #[test]
+    fn global_profile_errors_preserve_source_without_exposing_details() {
+        let source = || {
+            gateway_core::error::ErrorSource::new(std::io::Error::other("fixture-private-detail"))
+        };
+        for error in [
+            crate::admin::map_quota_error(GrokQuotaError::Profile(source())),
+            crate::admin::map_catalog_error(GrokCredentialCatalogError::Profile(source())),
+        ] {
+            assert_eq!(error.kind(), ProviderAdminErrorKind::Unavailable);
+            assert_eq!(error.public_message(), Some("客户端身份不可用"));
+            assert!(error.source().is_some());
+            assert!(!format!("{error:?}").contains("fixture-private-detail"));
+        }
+    }
 }

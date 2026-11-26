@@ -59,6 +59,10 @@ impl BackupRepository for PgBackupRepository {
             .map_err(|_| store_unavailable("begin backup storage update"))?;
         let result = async {
             let current = lock_settings_in_transaction(&mut transaction).await?;
+            require_storage_revision(&current, command.storage_revision)?;
+            if current.secret_access_key.is_none() && command.secret_access_key.is_none() {
+                return Err(store_invalid("missing backup storage secret"));
+            }
             let mut changed = storage_changed_fields(&current, &command);
             if changed.is_empty() {
                 let revision: i64 =
@@ -161,6 +165,17 @@ impl BackupRepository for PgBackupRepository {
             .await
             .map_err(|_| store_unavailable("begin backup schedule update"))?;
         let result = async {
+            if command.schedule_enabled {
+                let current = lock_settings_in_transaction(&mut transaction).await?;
+                require_storage_revision(&current, command.storage_revision)?;
+                if !current.storage_verified() {
+                    return Err(AdminStoreError::new(
+                        AdminStoreErrorKind::Conflict,
+                        "backup storage",
+                        "storage has not been verified",
+                    ));
+                }
+            }
             sqlx::query(
                 "update backup_settings
                     set schedule_enabled = $1,
@@ -764,6 +779,17 @@ async fn ensure_storage_identity_stable(
             AdminStoreErrorKind::Conflict,
             "backup storage",
             "storage identity cannot change while backup records exist",
+        ));
+    }
+    Ok(())
+}
+
+fn require_storage_revision(current: &BackupSettings, expected: u64) -> AdminStoreResult<()> {
+    if current.storage_revision != expected {
+        return Err(AdminStoreError::new(
+            AdminStoreErrorKind::StaleRevision,
+            "backup storage",
+            "storage revision changed",
         ));
     }
     Ok(())

@@ -1,9 +1,9 @@
 import type { Component } from 'vue'
 import type { Account, AccountErrorReason, AccountStatus } from '@/api'
 import { AlertTriangle, CircleCheck, Gauge, Power, Timer } from '@lucide/vue'
-
 import { formatDateTime, parseTimestamp } from '@/utils/date'
-import { errorReasonLabels, statusLabels, statusTones } from '../../constants'
+
+import { errorReasonLabels, quotaWindowLabel, statusLabels, statusTones } from '../../constants'
 
 export type AccountStatusDisplayMode = AccountStatus | 'refresh_backoff'
 
@@ -172,7 +172,7 @@ export function resolveAccountStatusPresentation(
   const mode: AccountStatusDisplayMode = isBackoff && input.status !== 'quota_paused' ? 'refresh_backoff' : input.status
   const definition = displayDefinitions[mode]
   const paused = mode === 'quota_paused' ? input.quota?.pausedWindows.map(key => input.quota?.windows.find(window => window.key === key)).filter(window => window !== undefined) ?? [] : []
-  const description = paused.length ? `已达到 ${paused.map(window => window.labelDisplay).join(' / ')} 使用上限。` : definition.description
+  const description = paused.length ? `已达到 ${paused.map(window => quotaWindowLabel(window)).join(' / ')} 使用上限。` : definition.description
   const nextRefreshDisplay = isBackoff ? formatDateTime(nextRefreshTimestamp) : null
   const reasonLabel = input.errorReason ? errorReasonLabels[input.errorReason] : null
   const title = definition.title ?? reasonLabel ?? definition.label
@@ -199,7 +199,7 @@ export function resolveAccountStatusPresentation(
     hasDetail,
     errorText: input.errorMessage || null,
     nextRefreshDisplay,
-    rateLimitRecovery: mode === 'quota_paused' ? paused.map(window => `${window.labelDisplay}：${window.resetAtDisplay}`).join(' / ') || null : rateLimitRecovery,
+    rateLimitRecovery: mode === 'quota_paused' ? paused.map(window => `${quotaWindowLabel(window)}：${window.resetAtDisplay}`).join(' / ') || null : rateLimitRecovery,
     triggerLabel,
   }
 }

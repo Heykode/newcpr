@@ -14,7 +14,7 @@ import BasePopover from '@/components/base/BasePopover.vue'
 import BaseSegmented from '@/components/base/BaseSegmented.vue'
 import { useRequestState } from '@/composables/useRequestState'
 import { t } from '@/i18n'
-import { accountModelAccessError, accountModelIdError, commonImageModels } from '../utils/modelAccess'
+import { accountModelAccessError, accountModelIdError } from '../utils/modelAccess'
 import AccountModelCleanupPopover from './AccountModelCleanupPopover.vue'
 import AccountModelOption from './AccountModelOption.vue'
 
@@ -25,7 +25,8 @@ const props = withDefaults(defineProps<{
   groupCatalog?: boolean
   disabled?: boolean
   allowPreserve?: boolean
-}>(), { disabled: false, allowPreserve: false, knownModelCatalog: false })
+  imageModelPresets?: readonly string[]
+}>(), { disabled: false, allowPreserve: false, knownModelCatalog: false, imageModelPresets: () => [] })
 const model = defineModel<AccountModelAccess | undefined>({ required: true })
 const formItem = useTemplateRef<InstanceType<typeof BaseFormItem>>('modelAccessItem')
 watch(model, () => formItem.value?.clearValidate())
@@ -103,7 +104,7 @@ const canAdd = computed(() => Boolean(newModelId.value) && !inputError.value)
 function addImageModels() {
   if (props.disabled || mode.value !== 'allowlist')
     return
-  const next = { mode: 'allowlist' as const, models: [...new Set([...(model.value?.models ?? []), ...commonImageModels])] }
+  const next = { mode: 'allowlist' as const, models: [...new Set([...(model.value?.models ?? []), ...props.imageModelPresets])] }
   selectionError.value = accountModelAccessError(next) ?? ''
   if (!selectionError.value)
     model.value = next
@@ -307,7 +308,7 @@ watch(search, () => {
           <RefreshCw class="size-3.5" />
         </BaseIconButton>
       </template>
-      <BaseButton v-if="mode === 'allowlist'" variant="secondary" size="sm" :disabled="disabled" @click="addImageModels">
+      <BaseButton v-if="mode === 'allowlist' && imageModelPresets.length" variant="secondary" size="sm" :disabled="disabled" @click="addImageModels">
         加入图片模型
       </BaseButton>
       <BaseSegmented v-model="mode" class="w-full" :label="t('accounts.modelAccess.modelRestrictionMode')" :options="modes" :disabled="disabled" />

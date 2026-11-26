@@ -60,7 +60,7 @@ fn code_grant() -> AuthorizationCodeGrant {
 }
 
 #[tokio::test]
-async fn unified_token_routes_keep_proxies_and_bare_authorization_code_form() {
+async fn unified_token_routes_keep_proxies_and_profiled_authorization_code_form() {
     let origin = MockServer::start().await;
     let profile = qx_profile();
     let client = native_client(format!("{}/oauth/token", origin.uri()), profile.clone());
@@ -111,7 +111,7 @@ async fn unified_token_routes_keep_proxies_and_bare_authorization_code_form() {
             3,
             "PAT must not trigger an extra token refresh"
         );
-        for index in [0, 2] {
+        for index in [0, 1, 2] {
             assert_eq!(
                 requests[index].headers["user-agent"],
                 profile.snapshot().user_agent()
@@ -130,13 +130,7 @@ async fn unified_token_routes_keep_proxies_and_bare_authorization_code_form() {
             requests[1].headers["content-type"],
             "application/x-www-form-urlencoded"
         );
-        for name in [
-            "user-agent",
-            "originator",
-            "version",
-            "authorization",
-            "chatgpt-account-id",
-        ] {
+        for name in ["version", "authorization", "chatgpt-account-id"] {
             assert!(
                 !requests[1].headers.contains_key(name),
                 "QX auth exchange: {name}"
@@ -412,7 +406,7 @@ async fn refresh_and_code_exchange_use_the_selected_account_proxy() {
 }
 
 #[tokio::test]
-async fn refresh_tracks_the_online_profile_without_contaminating_code_exchange() {
+async fn refresh_and_code_exchange_track_the_same_online_global_profile() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/oauth/token"))
@@ -464,10 +458,18 @@ async fn refresh_tracks_the_online_profile_without_contaminating_code_exchange()
             exchange.headers["content-type"],
             "application/x-www-form-urlencoded"
         );
+        assert_eq!(
+            exchange.headers["user-agent"],
+            profile.snapshot().user_agent()
+        );
+        assert_eq!(
+            exchange.headers["originator"],
+            profile.snapshot().originator
+        );
         for name in [
-            "originator",
-            "user-agent",
             "version",
+            "authorization",
+            "chatgpt-account-id",
             "x-openai-internal-codex-residency",
         ] {
             assert!(!exchange.headers.contains_key(name), "raw exchange: {name}");
@@ -996,4 +998,102 @@ async fn refresh_failure(status: u16, body: &str) -> RefreshFailure {
         .refresh("refresh-secret")
         .await
         .expect_err("refresh must fail")
+}
+
+#[tokio::test]
+async fn authentication_requests_track_global_identity_and_releases() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "access_token": "audit-access", "refresh_token": "audit-refresh", "id_token": "header.e30.signature"
+        })))
+        .expect(4)
+        .mount(&server)
+        .await;
+    let profile = provider_openai::OpenAiConfig::default().wire_profile_state();
+    let policy = std::sync::Arc::new(crate::support::RequestProfileRuntimePolicy(
+        std::sync::Mutex::new(gateway_core::account::OpaqueProviderData::new(
+            Default::default(),
+        )),
+    ));
+    let client = provider_openai::credential::token_client::openai_token_client(
+        TokenClientConfig {
+            client_id: "audit-client".to_owned(),
+            token_endpoint: format!("{}/oauth/token", server.uri()),
+        },
+        profile.clone(),
+    )
+    .expect("production auth transport")
+    .with_runtime_policy(policy.clone());
+    for (core, desktop, build, os_version) in [
+        ("1.2.3", "26.800.10000", "8000", "27.0.1"),
+        ("1.2.4", "26.901.10000", "8109", "27.0.2"),
+    ] {
+        *policy.0.lock().unwrap() = gateway_core::account::OpaqueProviderData::new(
+            serde_json::json!({
+                "client": "desktop", "platform": "macos", "versionMode": "latest",
+                "osVersion": os_version
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+        );
+        profile.update_bundled_release(
+            &provider_openai::transport::profile::CodexBundledReleaseProfile {
+                codex_version: core.to_owned(),
+                desktop_version: desktop.to_owned(),
+                desktop_build: build.to_owned(),
+                verified_at: chrono::Utc::now(),
+            },
+        );
+        client.refresh("audit-refresh").await.expect("refresh");
+        client
+            .exchange_authorization_code(AuthorizationCodeGrant {
+                code: SecretString::from("audit-code"),
+                code_verifier: SecretString::from("audit-verifier"),
+            })
+            .await
+            .expect("code exchange");
+        let requests = server.received_requests().await.expect("requests");
+        let refresh = &requests[requests.len() - 2];
+        let exchange = &requests[requests.len() - 1];
+        assert_eq!(
+            refresh.headers["user-agent"],
+            format!(
+                "Codex Desktop/{core} (Mac OS {os_version}; arm64) unknown (Codex Desktop; {desktop})"
+            )
+        );
+        assert_eq!(refresh.headers["originator"], "Codex Desktop");
+        assert_eq!(refresh.headers["content-type"], "application/json");
+        assert_eq!(
+            exchange.headers["content-type"],
+            "application/x-www-form-urlencoded"
+        );
+        assert_eq!(
+            exchange.headers["user-agent"],
+            refresh.headers["user-agent"]
+        );
+        assert_eq!(exchange.headers["originator"], "Codex Desktop");
+        for request in [refresh, exchange] {
+            for name in ["authorization", "chatgpt-account-id", "version"] {
+                assert!(!request.headers.contains_key(name), "auth request: {name}");
+            }
+        }
+    }
+    *policy.0.lock().unwrap() = gateway_core::account::OpaqueProviderData::new(Default::default());
+    assert!(matches!(
+        client.refresh("audit-refresh").await,
+        Err(RefreshFailure::RetryableTransport { .. })
+    ));
+    assert!(matches!(
+        client
+            .exchange_authorization_code(AuthorizationCodeGrant {
+                code: SecretString::from("audit-code"),
+                code_verifier: SecretString::from("audit-verifier")
+            })
+            .await,
+        Err(AuthorizationCodeExchangeError::Unavailable)
+    ));
+    assert_eq!(server.received_requests().await.unwrap().len(), 4);
 }

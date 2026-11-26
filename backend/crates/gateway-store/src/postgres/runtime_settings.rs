@@ -20,9 +20,12 @@ use gateway_admin::model::settings::RequestTuningOverrides;
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct RuntimeSettings {
-    pub openai_account_affinity: gateway_core::account::AccountAffinity,
-    pub openai_session_binding_ttl_hours: u32,
+    pub request_profiles: gateway_admin::model::settings::ProviderRequestProfiles,
+    pub codex_privacy_policy: gateway_core::settings::privacy::CodexPrivacyPolicy,
+    pub account_affinity: gateway_core::account::AccountAffinity,
+    pub session_affinity_ttl_hours: u32,
     pub config_revision: Revision,
+    pub settings_revision: Revision,
     pub admin_api_key: Option<String>,
     pub turn_state_injection_enabled: bool,
     pub turn_state_models: Vec<String>,
@@ -105,9 +108,10 @@ impl fmt::Debug for RuntimeSettings {
 
 #[derive(Clone)]
 pub struct RuntimeSettingsUpdate {
-    pub openai_account_affinity: Option<gateway_core::account::AccountAffinity>,
-    pub openai_session_binding_ttl_hours: Option<u32>,
-    pub admin_api_key: Option<String>,
+    pub request_profile_updates: gateway_admin::model::settings::ProviderRequestProfileUpdates,
+    pub codex_privacy_policy: Option<gateway_core::settings::privacy::CodexPrivacyPolicy>,
+    pub account_affinity: Option<gateway_core::account::AccountAffinity>,
+    pub session_affinity_ttl_hours: Option<u32>,
     pub turn_state_injection_enabled: Option<bool>,
     pub turn_state_models: Vec<String>,
     pub excel_default_models: gateway_core::account::ExcelModels,
@@ -142,10 +146,6 @@ impl fmt::Debug for RuntimeSettingsUpdate {
         formatter
             .debug_struct("RuntimeSettingsUpdate")
             .field(
-                "admin_api_key",
-                &self.admin_api_key.as_ref().map(|_| "[REDACTED]"),
-            )
-            .field(
                 "turn_state_injection_enabled",
                 &self.turn_state_injection_enabled,
             )
@@ -167,8 +167,8 @@ impl fmt::Debug for RuntimeSettingsUpdate {
 impl RuntimeSettingsUpdate {
     pub fn validate(&self) -> StoreResult<()> {
         if self.refresh_margin_seconds == 0
-            || self.openai_session_binding_ttl_hours.is_some_and(|hours| {
-                gateway_core::account::parse_openai_session_binding_ttl_hours(hours).is_none()
+            || self.session_affinity_ttl_hours.is_some_and(|hours| {
+                gateway_core::account::parse_session_affinity_ttl_hours(hours).is_none()
             })
             || self.refresh_concurrency == 0
             || self.max_concurrent_per_account == 0
@@ -247,13 +247,13 @@ impl RuntimeSettingsRepository for PgRuntimeSettingsRepository {
 
 pub(crate) async fn load_runtime_settings_from_pool(pool: &PgPool) -> StoreResult<RuntimeSettings> {
     let row = sqlx::query_as::<_, RuntimeSettingsRow>(
-            "select config_revision, admin_api_key, turn_state_injection_enabled, excel_default_models, turn_state_models, turn_state_probe_proxy_id, responses_max_decompressed_body_bytes, refresh_margin_seconds,
+            "select coalesce((select jsonb_object_agg(provider_kind, configuration_json) from provider_outbound_user_agents where mode = 'configuration'), '{}'::jsonb) as request_profiles_json, codex_privacy_policy_json, settings_revision, config_revision, admin_api_key, turn_state_injection_enabled, excel_default_models, turn_state_models, turn_state_probe_proxy_id, responses_max_decompressed_body_bytes, refresh_margin_seconds,
                     refresh_concurrency, max_concurrent_per_account, request_interval_ms,
                     rotation_strategy, quota_reset_window_weights_json, model_mappings_json, usage_retention_days, ops_event_retention_days,
                     audit_retention_days, min_codex_desktop_version,
                     min_codex_cli_version, request_tuning_json, updated_at, turn_state_probe_concurrency,
                     openai_guardian_reserved_concurrency, openai_oauth_guardian_review_model, openai_request_country_json,
-                    account_warmup_enabled, account_warmup_cron, account_warmup_model, codex_quota_overdraft_enabled, codex_quota_overdraft_probe_model, openai_session_binding_ttl_hours, openai_account_affinity
+                    account_warmup_enabled, account_warmup_cron, account_warmup_model, codex_quota_overdraft_enabled, codex_quota_overdraft_probe_model, session_affinity_ttl_hours, account_affinity
              from runtime_settings where id = 1",
         )
     .fetch_optional(pool)
@@ -369,13 +369,13 @@ pub(crate) async fn load_runtime_settings_in_transaction(
     transaction: &mut Transaction<'_, Postgres>,
 ) -> StoreResult<RuntimeSettings> {
     let row = sqlx::query_as::<_, RuntimeSettingsRow>(
-        "select config_revision, admin_api_key, turn_state_injection_enabled, excel_default_models, turn_state_models, turn_state_probe_proxy_id, responses_max_decompressed_body_bytes, refresh_margin_seconds,
+        "select coalesce((select jsonb_object_agg(provider_kind, configuration_json) from provider_outbound_user_agents where mode = 'configuration'), '{}'::jsonb) as request_profiles_json, codex_privacy_policy_json, settings_revision, config_revision, admin_api_key, turn_state_injection_enabled, excel_default_models, turn_state_models, turn_state_probe_proxy_id, responses_max_decompressed_body_bytes, refresh_margin_seconds,
                 refresh_concurrency, max_concurrent_per_account, request_interval_ms,
                 rotation_strategy, quota_reset_window_weights_json, model_mappings_json, usage_retention_days, ops_event_retention_days,
                 audit_retention_days, min_codex_desktop_version,
                 min_codex_cli_version, request_tuning_json, updated_at, turn_state_probe_concurrency,
                 openai_guardian_reserved_concurrency, openai_oauth_guardian_review_model, openai_request_country_json,
-                account_warmup_enabled, account_warmup_cron, account_warmup_model, codex_quota_overdraft_enabled, codex_quota_overdraft_probe_model, openai_session_binding_ttl_hours, openai_account_affinity
+                account_warmup_enabled, account_warmup_cron, account_warmup_model, codex_quota_overdraft_enabled, codex_quota_overdraft_probe_model, session_affinity_ttl_hours, account_affinity
          from runtime_settings where id = 1",
     )
     .fetch_optional(&mut **transaction)
@@ -436,41 +436,41 @@ pub(crate) async fn update_runtime_settings_in_transaction(
     let next = sqlx::query_scalar::<_, i64>(
         "update runtime_settings
              set config_revision = config_revision + 1,
-	                 admin_api_key = $1,
-	                 refresh_margin_seconds = $2,
-	                 refresh_concurrency = $3,
-	                 max_concurrent_per_account = $4,
-	                 request_interval_ms = $5,
-	                 rotation_strategy = $6,
-	                 model_mappings_json = $7,
-	                 usage_retention_days = $8,
-	                 ops_event_retention_days = $9,
-	                 audit_retention_days = $10,
-	                 min_codex_desktop_version = $11,
-	                 min_codex_cli_version = $12,
-	                 request_tuning_json = $13,
-	                 responses_max_decompressed_body_bytes = $14,
-	                 turn_state_injection_enabled = coalesce($15, turn_state_injection_enabled),
-	                 turn_state_models = $16,
-	                 turn_state_probe_proxy_id = case when $17 then $18 else turn_state_probe_proxy_id end,
-	                 turn_state_probe_concurrency = coalesce($19, turn_state_probe_concurrency),
-                 excel_default_models = $20,
-                 openai_guardian_reserved_concurrency = $21,
-                 account_warmup_enabled = $22,
-                 account_warmup_cron = $23,
-                 account_warmup_model = $24,
-                 codex_quota_overdraft_enabled = $25,
-                 codex_quota_overdraft_probe_model = $26,
-                 openai_session_binding_ttl_hours = coalesce($27, openai_session_binding_ttl_hours),
-                 openai_account_affinity = coalesce($28, openai_account_affinity),
-                 quota_reset_window_weights_json = $29,
-                 openai_oauth_guardian_review_model = $30,
-                 openai_request_country_json = $31,
+                     settings_revision = config_revision + 1,
+	                 refresh_margin_seconds = $1,
+	                 refresh_concurrency = $2,
+	                 max_concurrent_per_account = $3,
+	                 request_interval_ms = $4,
+	                 rotation_strategy = $5,
+	                 model_mappings_json = $6,
+	                 usage_retention_days = $7,
+	                 ops_event_retention_days = $8,
+	                 audit_retention_days = $9,
+	                 min_codex_desktop_version = $10,
+	                 min_codex_cli_version = $11,
+	                 request_tuning_json = $12,
+	                 responses_max_decompressed_body_bytes = $13,
+	                 turn_state_injection_enabled = coalesce($14, turn_state_injection_enabled),
+	                 turn_state_models = $15,
+	                 turn_state_probe_proxy_id = case when $16 then $17 else turn_state_probe_proxy_id end,
+	                 turn_state_probe_concurrency = coalesce($18, turn_state_probe_concurrency),
+                 excel_default_models = $19,
+                 openai_guardian_reserved_concurrency = $20,
+                 account_warmup_enabled = $21,
+                 account_warmup_cron = $22,
+                 account_warmup_model = $23,
+                 codex_quota_overdraft_enabled = $24,
+                 codex_quota_overdraft_probe_model = $25,
+                 session_affinity_ttl_hours = coalesce($26, session_affinity_ttl_hours),
+                 account_affinity = coalesce($27, account_affinity),
+                 quota_reset_window_weights_json = $28,
+                 openai_oauth_guardian_review_model = $29,
+                 openai_request_country_json = $30,
+                 codex_privacy_policy_json = coalesce($31, codex_privacy_policy_json),
                  updated_at = now()
 	             where id = 1
 	             returning config_revision",
     )
-    .bind(update.admin_api_key.as_deref())
     .bind(refresh_margin_seconds)
     .bind(i64::from(update.refresh_concurrency))
     .bind(i64::from(update.max_concurrent_per_account))
@@ -499,11 +499,12 @@ pub(crate) async fn update_runtime_settings_in_transaction(
     .bind(update.account_warmup_model.as_deref())
     .bind(update.codex_quota_overdraft_enabled)
     .bind(&update.codex_quota_overdraft_probe_model)
-    .bind(update.openai_session_binding_ttl_hours.map(i64::from))
-    .bind(update.openai_account_affinity.map(|mode| mode.as_str()))
+    .bind(update.session_affinity_ttl_hours.map(i64::from))
+    .bind(update.account_affinity.map(|mode| mode.as_str()))
     .bind(sqlx::types::Json(update.quota_reset_window_weights))
     .bind(update.openai_oauth_guardian_review_model)
     .bind(sqlx::types::Json(&update.openai_request_country))
+    .bind(update.codex_privacy_policy.as_ref().map(sqlx::types::Json))
     .fetch_optional(&mut **transaction)
     .await
     .map_err(|error| postgres_unavailable("update runtime settings in transaction").with_source(error))?
@@ -511,6 +512,25 @@ pub(crate) async fn update_runtime_settings_in_transaction(
         entity: "runtime settings",
         id: "1".to_owned(),
     })?;
+    for (provider, profile) in &update.request_profile_updates {
+        match profile {
+            Some(profile) => {
+                sqlx::query("insert into provider_outbound_user_agents (provider_kind, mode, custom_user_agent, configuration_json) values ($1, 'configuration', null, $2) on conflict (provider_kind) do update set mode = 'configuration', custom_user_agent = null, configuration_json = excluded.configuration_json, updated_at = now()")
+                    .bind(provider.as_str()).bind(sqlx::types::Json(profile.expose_to_provider()))
+                    .execute(&mut **transaction).await
+                    .map_err(|error| postgres_unavailable("save global client profile").with_source(error))?;
+            }
+            None => {
+                sqlx::query("delete from provider_outbound_user_agents where provider_kind = $1")
+                    .bind(provider.as_str())
+                    .execute(&mut **transaction)
+                    .await
+                    .map_err(|error| {
+                        postgres_unavailable("reset global client profile").with_source(error)
+                    })?;
+            }
+        }
+    }
     Revision::new(u64::try_from(next).map_err(|_| invalid_numeric())?)
 }
 
@@ -557,9 +577,14 @@ pub(crate) async fn update_admin_api_key_in_transaction(
 
 #[derive(sqlx::FromRow)]
 struct RuntimeSettingsRow {
+    request_profiles_json:
+        sqlx::types::Json<BTreeMap<String, serde_json::Map<String, serde_json::Value>>>,
+    codex_privacy_policy_json:
+        sqlx::types::Json<gateway_core::settings::privacy::CodexPrivacyPolicy>,
     openai_oauth_guardian_review_model: bool,
     openai_request_country_json: sqlx::types::Json<gateway_core::account::OpenAiRequestCountry>,
     config_revision: i64,
+    settings_revision: i64,
     admin_api_key: Option<String>,
     turn_state_injection_enabled: bool,
     turn_state_models: Vec<String>,
@@ -587,22 +612,23 @@ struct RuntimeSettingsRow {
     account_warmup_model: Option<String>,
     codex_quota_overdraft_enabled: bool,
     codex_quota_overdraft_probe_model: String,
-    openai_session_binding_ttl_hours: i64,
-    openai_account_affinity: String,
+    session_affinity_ttl_hours: i64,
+    account_affinity: String,
 }
 
 fn runtime_settings_from_row(row: RuntimeSettingsRow) -> StoreResult<RuntimeSettings> {
     Ok(RuntimeSettings {
+        request_profiles: super::client_keys::decode_request_profiles(row.request_profiles_json.0)?,
+        codex_privacy_policy: row.codex_privacy_policy_json.0,
         openai_oauth_guardian_review_model: row.openai_oauth_guardian_review_model,
         openai_request_country: row.openai_request_country_json.0,
-        openai_account_affinity: gateway_core::account::AccountAffinity::parse(
-            &row.openai_account_affinity,
-        )
-        .ok_or_else(|| StoreError::InvalidData {
-            entity: "runtime settings",
-            message: "invalid account affinity".to_owned(),
-        })?,
+        account_affinity: gateway_core::account::AccountAffinity::parse(&row.account_affinity)
+            .ok_or_else(|| StoreError::InvalidData {
+                entity: "runtime settings",
+                message: "invalid account affinity".to_owned(),
+            })?,
         config_revision: Revision::new(to_u64(row.config_revision)?)?,
+        settings_revision: Revision::new(to_u64(row.settings_revision)?)?,
         admin_api_key: row.admin_api_key,
         turn_state_injection_enabled: row.turn_state_injection_enabled,
         turn_state_models: row.turn_state_models,
@@ -635,7 +661,7 @@ fn runtime_settings_from_row(row: RuntimeSettingsRow) -> StoreResult<RuntimeSett
         codex_quota_overdraft_enabled: row.codex_quota_overdraft_enabled,
         codex_quota_overdraft_probe_model: row.codex_quota_overdraft_probe_model,
         updated_at: row.updated_at,
-        openai_session_binding_ttl_hours: to_u32(row.openai_session_binding_ttl_hours)?,
+        session_affinity_ttl_hours: to_u32(row.session_affinity_ttl_hours)?,
     })
 }
 

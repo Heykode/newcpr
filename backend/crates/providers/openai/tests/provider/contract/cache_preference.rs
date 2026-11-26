@@ -140,7 +140,7 @@ async fn cache_preference_storage_timeouts_follow_the_affinity_mode() {
                             "req_cache_store_timeout",
                             CancellationToken::new(),
                             contract_account_scope(),
-                            account_policy().with_openai_account_affinity(mode),
+                            account_policy().with_account_affinity(mode),
                         )
                         .with_request_tuning(
                             gateway_core::routing::RequestTuning {
@@ -408,9 +408,8 @@ async fn content_preference_spills_over_in_preferred_mode_and_preserves_turn_sta
                     "req_preference_wire",
                     CancellationToken::new(),
                     contract_account_scope(),
-                    account_policy().with_openai_account_affinity(
-                        gateway_core::account::AccountAffinity::Preferred,
-                    ),
+                    account_policy()
+                        .with_account_affinity(gateway_core::account::AccountAffinity::Preferred),
                 ),
             )
         };
@@ -482,7 +481,7 @@ async fn preferred_queued_cache_read_failure_discards_preference_without_rebindi
                     NonZeroU32::new(2).unwrap(),
                     Duration::ZERO,
                 )
-                .with_openai_account_affinity(AccountAffinity::Preferred),
+                .with_account_affinity(AccountAffinity::Preferred),
             )
             .with_request_tuning(gateway_core::routing::RequestTuning {
                 account_busy_wait_enabled: true,
@@ -544,7 +543,7 @@ async fn round_robin_retains_the_assignment_when_a_cache_preference_cannot_be_sa
             NonZeroU32::MIN,
             Duration::ZERO,
         )
-        .with_openai_account_affinity(AccountAffinity::Preferred),
+        .with_account_affinity(AccountAffinity::Preferred),
     );
     let key = attempt.client_api_key_ref().clone();
     let result = provider

@@ -1,12 +1,13 @@
 export const PROVIDER_DISPLAY_NAMES = {
   openai: 'Codex',
   xai: 'xAI',
+  antigravity: 'Antigravity',
 } as const
 
 export type SupportedProvider = keyof typeof PROVIDER_DISPLAY_NAMES
 
 export function isSupportedProvider(value: unknown): value is SupportedProvider {
-  return typeof value === 'string' && value in PROVIDER_DISPLAY_NAMES
+  return typeof value === 'string' && Object.hasOwn(PROVIDER_DISPLAY_NAMES, value)
 }
 
 export function providerDisplayName(value?: string | null) {
