@@ -14,7 +14,7 @@ use gateway_admin::model::backup::{
     BackupRecord, BackupSettings, BackupStatus, BackupTriggerKind, ConnectionTestResult,
     UpdateBackupScheduleCommand, UpdateBackupStorageCommand,
 };
-use secrecy::{ExposeSecret as _, SecretString};
+use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 
 use super::{
@@ -22,7 +22,7 @@ use super::{
     AdminSessionState, PageMeta, wire::map_admin_service_error,
 };
 
-/// 备份设置视图；`secretAccessKey` 返回已保存的明文凭据，由前端掩码显示。
+/// 读写响应只公开 Secret 的配置状态
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BackupSettingsView {
@@ -31,7 +31,7 @@ pub struct BackupSettingsView {
     pub region: Option<String>,
     pub bucket: Option<String>,
     pub access_key_id: Option<String>,
-    pub secret_access_key: Option<String>,
+    pub secret_configured: bool,
     pub prefix: Option<String>,
     pub force_path_style: bool,
     pub verified: bool,
@@ -54,9 +54,7 @@ impl From<BackupSettings> for BackupSettingsView {
             region: settings.region,
             bucket: settings.bucket,
             access_key_id: settings.access_key_id,
-            secret_access_key: settings
-                .secret_access_key
-                .map(|secret| secret.expose_secret().to_owned()),
+            secret_configured: settings.secret_access_key.is_some(),
             prefix: settings.prefix,
             force_path_style: settings.force_path_style,
             verified,
@@ -72,10 +70,11 @@ impl From<BackupSettings> for BackupSettingsView {
     }
 }
 
-/// 更新 S3 存储配置请求；`secretAccessKey` 缺省表示保留旧值。
-#[derive(Debug, Clone, Deserialize)]
+/// 更新 S3 存储配置请求；`secretAccessKey` 缺省表示保留旧值
+#[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UpdateBackupStorageRequest {
+    pub storage_revision: u64,
     pub endpoint: String,
     pub region: String,
     pub bucket: String,
@@ -90,6 +89,7 @@ pub struct UpdateBackupStorageRequest {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UpdateBackupScheduleRequest {
+    pub storage_revision: u64,
     pub schedule_enabled: bool,
     pub cron_expression: String,
     pub schedule_timezone: String,
@@ -176,19 +176,27 @@ impl From<gateway_admin::model::backup::DownloadUrlResult> for DownloadUrlView {
     }
 }
 
-/// 连接测试响应。
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct TestBackupStorageRequest {
+    storage_revision: u64,
+}
+
+/// 连接测试响应
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConnectionTestView {
+    pub storage_revision: u64,
     pub ok: bool,
     pub stage: String,
     pub code: Option<String>,
     pub message: String,
 }
 
-impl From<ConnectionTestResult> for ConnectionTestView {
-    fn from(result: ConnectionTestResult) -> Self {
+impl From<(u64, ConnectionTestResult)> for ConnectionTestView {
+    fn from((storage_revision, result): (u64, ConnectionTestResult)) -> Self {
         Self {
+            storage_revision,
             ok: result.ok,
             stage: result.stage.to_owned(),
             code: result.code.map(str::to_owned),
@@ -262,6 +270,7 @@ where
     S: AdminSessionState + Send + Sync,
 {
     let command = UpdateBackupStorageCommand {
+        storage_revision: request.storage_revision,
         endpoint: request.endpoint,
         region: request.region,
         bucket: request.bucket,
@@ -285,6 +294,7 @@ where
 async fn test_backup_storage<S>(
     auth: AdminAuth,
     State(state): State<S>,
+    AdminJson(request): AdminJson<TestBackupStorageRequest>,
 ) -> Result<impl IntoResponse, AdminError>
 where
     S: AdminSessionState + Send + Sync,
@@ -292,12 +302,12 @@ where
     let result = state
         .admin_services()
         .backups()
-        .test_connection(&auth.context().mutation_context())
+        .test_connection(&auth.context().mutation_context(), request.storage_revision)
         .await
         .map_err(map_service_error)?;
     Ok(AdminResponse::new(
         StatusCode::OK,
-        AdminEnvelope::ok(ConnectionTestView::from(result)),
+        AdminEnvelope::ok(ConnectionTestView::from((request.storage_revision, result))),
     ))
 }
 
@@ -310,6 +320,7 @@ where
     S: AdminSessionState + Send + Sync,
 {
     let command = UpdateBackupScheduleCommand {
+        storage_revision: request.storage_revision,
         schedule_enabled: request.schedule_enabled,
         cron_expression: request.cron_expression,
         schedule_timezone: request.schedule_timezone,

@@ -1,13 +1,16 @@
 import type { ProtectionDraft } from '../components/error-protection/form'
 import type { rotationOptions } from '../constants'
+import type { CodexPrivacyPolicy, ProviderRequestProfiles } from '@/api'
 import type { AccountAffinity, OpenAiRequestCountry, RequestTuning } from '@/api/modules/settings'
+import { cloneDeep } from 'es-toolkit'
 import { computed, reactive, ref, shallowRef } from 'vue'
 import { getSettings, updateSettings } from '@/api'
 import { defaultRequestLocation } from '@/api/modules/proxies'
 import { defaultResetWindowWeights, defaultSmartScheduling } from '@/api/modules/settings'
 import { ApiError } from '@/api/request'
-
 import { toast } from '@/components/base/BaseToast'
+
+import { requestProfileChanges } from '@/components/request-profile/changes'
 import { useAsyncAction } from '@/composables/useAsyncAction'
 import { t } from '@/i18n'
 import { errorMessage } from '@/utils/async'
@@ -75,13 +78,16 @@ export function useSettingsForm() {
   const error = shallowRef('')
   const configRevision = shallowRef(0)
   const mappings = ref<Array<{ requestedModel: string, upstreamModel: string }>>([])
+  const savedProfiles = shallowRef<ProviderRequestProfiles>({})
   const form = reactive({
+    codexPrivacyPolicy: { enabled: false, onError: 'skip_rule', rules: [] } as CodexPrivacyPolicy,
+    providerRequestProfiles: {} as ProviderRequestProfiles,
     openaiOauthGuardianReviewModel: true,
     openaiRequestCountry: { mode: 'follow_location' } as OpenAiRequestCountry,
     accountErrorProtection: defaultProtection(),
     excelDefaultModels: DEFAULT_EXCEL_MODELS_INPUT,
     responsesMaxDecompressedBodyBytes: 64 * 1024 * 1024,
-    openaiAccountAffinity: 'strict' as AccountAffinity,
+    accountAffinity: 'strict' as AccountAffinity,
     refreshMarginSeconds: null as number | null,
     refreshConcurrency: null as number | null,
     maxConcurrentPerAccount: null as number | null,
@@ -92,7 +98,7 @@ export function useSettingsForm() {
     codexQuotaOverdraftEnabled: false,
     codexQuotaOverdraftProbeModel: 'gpt-6-astra',
     requestIntervalMs: null as number | null,
-    openaiSessionBindingTtlHours: null as number | null,
+    sessionAffinityTtlHours: null as number | null,
     rotationStrategy: '' as RotationStrategy | '',
     quotaResetWindowWeights: defaultResetWindowWeights(),
     quotaResetWindowWeightsDefaults: defaultResetWindowWeights(),
@@ -118,7 +124,7 @@ export function useSettingsForm() {
   })
   const hasChanges = computed(() => savedDraft.value !== '' && savedDraft.value !== draftSnapshot())
 
-  function numericModel(key: 'refreshMarginSeconds' | 'refreshConcurrency' | 'maxConcurrentPerAccount' | 'requestIntervalMs' | 'openaiGuardianReservedConcurrency' | 'openaiSessionBindingTtlHours') {
+  function numericModel(key: 'refreshMarginSeconds' | 'refreshConcurrency' | 'maxConcurrentPerAccount' | 'requestIntervalMs' | 'openaiGuardianReservedConcurrency' | 'sessionAffinityTtlHours') {
     return computed({
       get: () => (form[key] === null ? '' : String(form[key])),
       set: (value: string) => {
@@ -145,7 +151,7 @@ export function useSettingsForm() {
         form.responsesMaxDecompressedBodyBytes = parsed
     },
   })
-  const openaiSessionBindingTtlHoursValue = numericModel('openaiSessionBindingTtlHours')
+  const sessionAffinityTtlHoursValue = numericModel('sessionAffinityTtlHours')
   const minCodexDesktopVersionError = computed(() => versionError(form.minCodexDesktopVersion))
   const minCodexCliVersionError = computed(() => versionError(form.minCodexCliVersion))
 
@@ -156,10 +162,13 @@ export function useSettingsForm() {
 
   function applySettings(data: Awaited<ReturnType<typeof getSettings>>) {
     configRevision.value = data.configRevision
+    form.codexPrivacyPolicy = cloneDeep(data.codexPrivacyPolicy ?? { enabled: false, onError: 'skip_rule', rules: [] })
+    form.providerRequestProfiles = cloneDeep(data.providerRequestProfiles ?? {})
+    savedProfiles.value = cloneDeep(form.providerRequestProfiles)
     form.excelDefaultModels = (data.excelDefaultModels ?? DEFAULT_EXCEL_MODELS).join(', ')
     form.responsesMaxDecompressedBodyBytes
       = data.responsesMaxDecompressedBodyBytes ?? 64 * 1024 * 1024
-    form.openaiAccountAffinity = data.openaiAccountAffinity ?? 'strict'
+    form.accountAffinity = data.accountAffinity ?? 'strict'
     form.openaiOauthGuardianReviewModel = data.openaiOauthGuardianReviewModel
     form.openaiRequestCountry = structuredClone(data.openaiRequestCountry)
     form.refreshMarginSeconds = data.refreshMarginSeconds
@@ -172,7 +181,7 @@ export function useSettingsForm() {
     form.codexQuotaOverdraftEnabled = data.codexQuotaOverdraftEnabled ?? false
     form.codexQuotaOverdraftProbeModel = data.codexQuotaOverdraftProbeModel?.trim() || 'gpt-6-astra'
     form.requestIntervalMs = data.requestIntervalMs
-    form.openaiSessionBindingTtlHours = data.openaiSessionBindingTtlHours ?? 24
+    form.sessionAffinityTtlHours = data.sessionAffinityTtlHours ?? 24
     form.rotationStrategy = data.rotationStrategy
     form.quotaResetWindowWeights = { ...data.quotaResetWindowWeights }
     form.quotaResetWindowWeightsDefaults = { ...data.quotaResetWindowWeightsDefaults }
@@ -269,11 +278,11 @@ export function useSettingsForm() {
       toast.warning('Excel 模型名称不合法，或超过 64 个')
       return
     }
-    if (form.openaiAccountAffinity !== 'strict' && form.openaiAccountAffinity !== 'relaxed' && form.openaiAccountAffinity !== 'preferred') {
+    if (form.accountAffinity !== 'strict' && form.accountAffinity !== 'relaxed' && form.accountAffinity !== 'preferred') {
       toast.warning('请选择有效的账号亲和模式')
       return
     }
-    const ttlHours = form.openaiSessionBindingTtlHours
+    const ttlHours = form.sessionAffinityTtlHours
     if (ttlHours === null || !Number.isInteger(ttlHours) || ttlHours < 1 || ttlHours > 720) {
       toast.warning('会话账号绑定时长须为 1 至 720 小时的整数')
       return
@@ -423,6 +432,8 @@ export function useSettingsForm() {
     await saveAction.run(async () => {
       const result = await updateSettings({
         configRevision: configRevision.value,
+        codexPrivacyPolicy: cloneDeep(form.codexPrivacyPolicy),
+        providerRequestProfiles: requestProfileChanges(savedProfiles.value, form.providerRequestProfiles),
         excelDefaultModels,
         responsesMaxDecompressedBodyBytes: form.responsesMaxDecompressedBodyBytes,
         modelMappings: mappingPayload(),
@@ -438,8 +449,8 @@ export function useSettingsForm() {
         codexQuotaOverdraftEnabled: form.codexQuotaOverdraftEnabled,
         codexQuotaOverdraftProbeModel: effectiveCodexQuotaOverdraftProbeModel,
         requestIntervalMs,
-        openaiSessionBindingTtlHours: ttlHours,
-        openaiAccountAffinity: form.openaiAccountAffinity,
+        sessionAffinityTtlHours: ttlHours,
+        accountAffinity: form.accountAffinity,
         rotationStrategy,
         quotaResetWindowWeights: { ...form.quotaResetWindowWeights },
         minCodexDesktopVersion: form.minCodexDesktopVersion.trim() || null,
@@ -488,7 +499,7 @@ export function useSettingsForm() {
     unitFields,
     requestIntervalMsValue,
     responsesMaxDecompressedBodyBytesValue,
-    openaiSessionBindingTtlHoursValue,
+    sessionAffinityTtlHoursValue,
     minCodexDesktopVersionError,
     minCodexCliVersionError,
     saveSettings,

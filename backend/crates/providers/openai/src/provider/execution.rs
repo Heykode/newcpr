@@ -15,8 +15,7 @@ impl CodexProvider {
         let Some(affinity) = affinity else {
             return Ok(None);
         };
-        let affinity =
-            affinity.with_policy(context.account_selection_policy().openai_account_affinity());
+        let affinity = affinity.with_policy(context.account_selection_policy().account_affinity());
         if context.is_diagnostic_required_account() {
             return Ok(Some(affinity));
         }
@@ -305,6 +304,12 @@ impl CodexProvider {
                 excel.is_some() || excel_image.is_some(),
                 session,
             )?
+            .with_account_privacy(
+                context.privacy(),
+                context.cancellation().clone(),
+                lease.account(),
+                session,
+            )
             .with_fedramp_routing(
                 excel.is_none()
                     && excel_image.is_none()
@@ -716,6 +721,7 @@ pub(super) fn cold_json_response_stream(request: ColdJsonResponse) -> EventStrea
                 &request.body,
                 &response.body,
                 request.upstream_model.as_ref(),
+                request.context.pricing(),
             )?)
         } else {
             None
@@ -781,7 +787,7 @@ pub(super) fn cold_json_response_stream(request: ColdJsonResponse) -> EventStrea
             }
         }
         if image_endpoint
-            && let Some((usage, cost)) = image_response_metering(&request.body, &response.body)
+            && let Some((usage, cost)) = image_response_metering(&request.body, &response.body, request.context.pricing())
         {
             yield ProviderEvent::canonical(GatewayEvent::Usage(usage));
             if let Some(cost) = cost {
@@ -801,6 +807,7 @@ pub(super) fn cold_json_response_stream(request: ColdJsonResponse) -> EventStrea
 fn image_response_metering(
     request_body: &[u8],
     body: &[u8],
+    prices: &gateway_core::metering::PricingOverrides,
 ) -> Option<(Usage, Option<CalculatedCost>)> {
     // 只保留 usage，跳过通常很大的 base64 图片；原始响应仍按字节透传。
     #[derive(Deserialize)]
@@ -825,7 +832,7 @@ fn image_response_metering(
         .and_then(Value::as_u64);
     // 总量是上游独立报告的事实；图片明细是总输入/输出的子集，不能再次相加。
     usage.total_tokens = raw.get("total_tokens").and_then(Value::as_u64);
-    let cost = crate::transport::usage::image_calculated_cost(request_body, &raw);
+    let cost = crate::billing::image_calculated_cost(request_body, &raw, prices);
     (usage != Usage::default()).then_some((usage, cost))
 }
 
@@ -1094,6 +1101,7 @@ pub(super) fn cold_response_stream_once(response: ColdResponse) -> EventStream {
         // WS 帧由 reducer 以 encode_sse_event(&event, raw) 逐字节内嵌上游原始 JSON
         // （transport/protocol/websocket.rs），push_frames 抽出的 data 即上游原文。
         let mut decoder = CodexCanonicalDecoder::new(upstream_model.as_str())
+            .with_pricing(context.pricing().get("openai").and_then(|models| models.get(upstream_model.as_str())).cloned())
             .with_trace(trace.clone())
             .with_requested_service_tier(request.service_tier())
             .with_request_tool_pricing(upstream_model.as_str(), request.tools())
@@ -1108,7 +1116,7 @@ pub(super) fn cold_response_stream_once(response: ColdResponse) -> EventStream {
         let mut quota_success = false;
         loop {
             if context.deadline().is_elapsed() {
-                for event in super::excel::failed_repair_metering(&request) {
+                for event in super::excel::failed_repair_metering(&request, context.pricing()) {
                     yield event;
                 }
                 if allows_account_state_mutation {
@@ -1174,7 +1182,7 @@ pub(super) fn cold_response_stream_once(response: ColdResponse) -> EventStream {
                         failure_context.is_diagnostic,
                         Some(upstream_model.as_str()),
                     ).await;
-                    for event in super::excel::failed_repair_metering(&request) {
+                    for event in super::excel::failed_repair_metering(&request, context.pricing()) {
                         yield event;
                     }
                     let updates = take_rate_limit_updates(rate_limit_updates.as_ref()).await;
@@ -1245,7 +1253,7 @@ pub(super) fn cold_response_stream_once(response: ColdResponse) -> EventStream {
             };
             let Some(chunk) = next else { break; };
             if chunk.is_empty() && request.excel.as_ref().is_some_and(|prepared| prepared.usage.repair_started()) {
-                for event in super::excel::failed_repair_metering(&request) {
+                for event in super::excel::failed_repair_metering(&request, context.pricing()) {
                     yield event;
                 }
                 continue;
@@ -1388,7 +1396,7 @@ pub(super) fn cold_response_stream_once(response: ColdResponse) -> EventStream {
                         .record_success_with_parent_binding(
                             &active_account,
                             request_started_at,
-                            session_affinity_key.as_ref().filter(|_| context.account_selection_policy().openai_account_affinity() != gateway_core::account::AccountAffinity::Preferred),
+                            session_affinity_key.as_ref().filter(|_| context.account_selection_policy().account_affinity() != gateway_core::account::AccountAffinity::Preferred),
                             lease.affinity_expected_binding(),
                             lease.guardian_parent_record_key(),
                             lease.session_binding_ttl(),
@@ -1419,7 +1427,7 @@ pub(super) fn cold_response_stream_once(response: ColdResponse) -> EventStream {
                 yield ProviderEvent::observation(observation);
             }
             if let Some((mut failure, atomic_upstream_failure)) = terminal_failure {
-                for event in super::excel::failed_repair_metering(&request) {
+                for event in super::excel::failed_repair_metering(&request, context.pricing()) {
                     yield event;
                 }
                 let failure_after_commit =
@@ -1547,7 +1555,7 @@ pub(super) fn cold_response_stream_once(response: ColdResponse) -> EventStream {
                         .record_success_with_parent_binding(
                         &active_account,
                         request_started_at,
-                        session_affinity_key.as_ref().filter(|_| context.account_selection_policy().openai_account_affinity() != gateway_core::account::AccountAffinity::Preferred),
+                        session_affinity_key.as_ref().filter(|_| context.account_selection_policy().account_affinity() != gateway_core::account::AccountAffinity::Preferred),
                             lease.affinity_expected_binding(),
                         lease.guardian_parent_record_key(),
                         lease.session_binding_ttl(),

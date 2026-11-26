@@ -51,7 +51,7 @@ const panel = component('AccountQuotaPanel/index.vue', {
 })
 const summary = component('AccountQuotaSummaryCell/index.vue', {
   '../AccountQuotaPanel/Credits.vue': credits,
-  '../../constants': { groupedAccountQuotaWindows: () => [], visibleSummaryQuotaWindows: () => [] },
+  '../../constants': { groupedAccountQuotaWindows: () => [], visibleSummaryQuotaWindows: () => [], panelQuotaWindows: () => [] },
   '@/composables/useUiClock': { useUiClock: () => vue.ref(new Date()) },
   './forecast': { weeklyForecastPresentation: () => ({ amount: '-', title: '' }) },
   './presenter': { recentlyUsedQuotaEntry: () => null },
@@ -101,22 +101,22 @@ test('embedded mobile quota panel removes only the desktop frame and uses the av
   }
 })
 
-test('quota panel displays only account-wide windows while retaining the underlying quota data', async () => {
+test('quota panel prefers observed account-wide windows and otherwise exposes model groups without mutating data', async () => {
   for (const mobile of [false, true]) {
-    for (const mode of ['mixed', 'model-only', 'empty']) {
+    for (const mode of ['mixed', 'unknown-account', 'model-only', 'empty']) {
       const account = structuredClone(accounts[0])
       const windows = [
-        { key: 'account-week', accountWide: true, group: 'longTerm' },
-        { key: 'model-week', accountWide: false, group: 'longTerm' },
+        { key: 'account-week', accountWide: true, group: 'longTerm', usedPercent: mode === 'unknown-account' ? null : 0 },
+        { key: 'model-week', accountWide: false, group: 'longTerm', usedPercent: 25 },
         { key: 'unattributed-week', group: 'longTerm' },
       ]
-      account.quota.windows = mode === 'mixed' ? windows : mode === 'model-only' ? windows.slice(1) : []
+      account.quota.windows = mode === 'mixed' || mode === 'unknown-account' ? windows : mode === 'model-only' ? windows.slice(1) : []
       const before = structuredClone(account.quota.windows)
       const html = await renderToString(vue.createSSRApp(panel.default, { account, refreshing: false, mobile }))
-      assert.equal(html.includes('account-week'), mode === 'mixed')
-      assert.ok(!html.includes('model-week'))
-      assert.ok(!html.includes('unattributed-week'))
-      assert.equal(html.includes(translations.t('accounts.quota.unobserved')), mode !== 'mixed')
+      assert.equal(html.includes('account-week'), mode === 'mixed' || mode === 'unknown-account')
+      assert.equal(html.includes('model-week'), mode === 'model-only' || mode === 'unknown-account')
+      assert.equal(html.includes('unattributed-week'), mode === 'model-only' || mode === 'unknown-account')
+      assert.equal(html.includes(translations.t('accounts.quota.unobserved')), mode === 'empty')
       assert.deepEqual(account.quota.windows, before)
       assert.ok(html.includes('Codex 点数'))
     }

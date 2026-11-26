@@ -12,7 +12,7 @@ import { accountModelAccessError } from '../../utils/modelAccess'
 import { purchaseCostPatch } from '../../utils/purchaseCost'
 import { parseAccountSchedulingForm } from '../../utils/schedulingForm'
 
-export type AccountCreateProvider = 'batch' | 'openai' | 'xai'
+export type AccountCreateProvider = 'batch' | 'openai' | 'xai' | 'antigravity'
 export type AccountImportMode = 'oauth' | 'access_token' | 'refresh_token' | 'json' | 'two_fa'
 export type AccountImportInputMode = Exclude<AccountImportMode, 'oauth'>
 

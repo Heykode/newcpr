@@ -81,6 +81,20 @@ test('fresh input display preserves unknown input and clamps cache underflow to 
   }
 })
 
+test('missing upstream duration uses an explicitly approximate total duration without mutating measurements', () => {
+  for (const upstreamResponseMs of [undefined, null, 0, -1, '2500', Number.NaN, Number.POSITIVE_INFINITY]) {
+    const latencyDetails = Object.freeze({ upstreamResponseMs, firstEventMs: 100, firstTokenMs: 500 })
+    const value = Object.freeze(record({ latencyDetails }))
+    const performance = usagePerformanceDetails(value)
+    assert.equal(performance.throughputDisplay, '≈ 35.7 tok/s')
+    assert.match(performance.throughputDescription, /等待、重试和网络时间/)
+    assert.equal(value.latencyDetails, latencyDetails)
+    assert.equal(value.latencyDetails.upstreamResponseMs, upstreamResponseMs)
+  }
+  assert.equal(usagePerformanceDetails(record({ latencyDetails: null })).throughputDisplay, '≈ 35.7 tok/s')
+  assert.equal(usagePerformanceDetails(record({ latencyDetails: {} })).throughputDisplay, '≈ 35.7 tok/s')
+})
+
 test('missing or invalid measurements never invent throughput or substitute the first lifecycle event', () => {
   for (const overrides of [
     { tokenDetails: null },
@@ -88,10 +102,8 @@ test('missing or invalid measurements never invent throughput or substitute the 
     { tokenDetails: { outputTokens: -1 } },
     { tokenDetails: { outputTokens: Number.NaN } },
     { tokenDetails: { outputTokens: Number.POSITIVE_INFINITY } },
-    { latencyDetails: null },
-    { latencyDetails: {} },
     ...[undefined, null, 0, -1, '2500', Number.NaN, Number.POSITIVE_INFINITY]
-      .map(upstreamResponseMs => ({ latencyDetails: { upstreamResponseMs, firstEventMs: 100, firstTokenMs: 500 } })),
+      .map(latencyMs => ({ latencyMs, latencyDetails: { firstEventMs: 100, firstTokenMs: 500 } })),
   ]) {
     const value = usagePerformanceDetails(record(overrides)).throughputDisplay
     assert.equal(value, '\u2014')

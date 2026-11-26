@@ -97,7 +97,7 @@ async fn profile_avatar_streams_unrestricted_content_type_and_body_size() {
         headers
             .get("user-agent")
             .and_then(|value| value.to_str().ok()),
-        Some("codex_cli_rs/1.2.3 (linux; x86_64)")
+        Some("codex_cli_rs/1.2.3 (linux 6.8; x86_64) transport-test (codex_cli_rs; 1.2.3)")
     );
     assert_eq!(headers["authorization"], "Bearer avatar-token");
     assert_eq!(headers["chatgpt-account-id"], "avatar-account");

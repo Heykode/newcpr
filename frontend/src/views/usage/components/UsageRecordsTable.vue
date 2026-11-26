@@ -125,7 +125,7 @@ const emit = defineEmits<{ filter: [value: UsageFilterParams] }>()
 
     <template #route="{ row }">
       <div class="inline-flex max-w-full items-center gap-1.5 whitespace-nowrap">
-        <code class="font-mono text-cp-sm font-emphasis">{{ row.route || '—' }}</code>
+        <code class="min-w-0 truncate font-mono text-cp-sm font-emphasis" :title="row.route ?? undefined">{{ row.route === '/v1beta/models/{resource}' ? '/v1beta/models' : row.route || '—' }}</code>
         <span
           v-if="usageIsCompact(row)"
           class="inline-flex shrink-0 text-cp-orange-text"

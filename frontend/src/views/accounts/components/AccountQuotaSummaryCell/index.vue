@@ -46,7 +46,7 @@ const accountTypeLabel = computed(() => {
   <div class="box-border grid min-h-16.5 w-full min-w-0 content-center gap-1.5 py-1.5">
     <div data-account-usage-header class="flex min-h-3.5 min-w-0 items-baseline justify-between gap-2 leading-none">
       <span
-        v-if="hasUsage && summaryEntries.length > 0"
+        v-if="hasUsage && (summaryEntries.length > 0 || account.usage.windowKind === 'recent_week')"
         class="flex min-w-0 items-baseline gap-1 font-mono tabular-nums"
         :title="`${account.usage.windowLabelDisplay}总 Token`"
       >
@@ -87,6 +87,10 @@ const accountTypeLabel = computed(() => {
         </span>
       </div>
     </template>
+    <div v-else-if="account.usage.windowKind === 'recent_week'" class="flex flex-wrap items-baseline justify-between gap-2 text-cp-xs" :title="account.usage.windowLabelDisplay">
+      <span class="text-cp-text-secondary">{{ account.usage.windowLabelDisplay }}</span>
+      <span class="font-mono tabular-nums">{{ account.usage.totalTokensDisplay }} Tokens</span>
+    </div>
     <AccountUsageWindow v-else variant="compact" />
     <div :class="comfortable ? 'flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1' : 'contents'" :data-account-inline-billing="comfortable || undefined">
       <AccountQuotaCredits
@@ -97,7 +101,7 @@ const accountTypeLabel = computed(() => {
       />
       <div :class="comfortable ? 'contents' : 'flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1'" class="text-[10px] font-emphasis text-cp-text-tertiary">
         <span
-          v-if="summaryEntries.length > 0"
+          v-if="summaryEntries.length > 0 || account.usage.windowKind === 'recent_week'"
           class="min-w-0 break-all text-cp-text-quaternary"
           :title="usdCost ? undefined : '暂无统计数据，不代表账号不可用'"
         >

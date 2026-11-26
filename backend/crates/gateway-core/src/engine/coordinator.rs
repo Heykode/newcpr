@@ -216,7 +216,7 @@ where
                 "candidateCount": plan.candidates().len(),
                 "accountPolicy": {
                     "strategy": plan.account_selection_policy().strategy().as_str(),
-                    "affinity": plan.account_selection_policy().openai_account_affinity().as_str(),
+                    "affinity": plan.account_selection_policy().account_affinity().as_str(),
                     "maxAccountRotations": plan.request_tuning().max_account_switches,
                     "maxRoutingAttempts": plan.max_attempts().get(),
                     "maxConcurrentPerAccount": plan.account_selection_policy().max_concurrent_per_account().get(),
@@ -224,7 +224,7 @@ where
                     "maxWaitingPerAccount": plan.request_tuning().max_waiting_per_account,
                     "accountConcurrencyWaitTimeoutSeconds": plan.request_tuning().account_concurrency_wait_timeout_seconds,
                     "requestIntervalMs": plan.account_selection_policy().request_interval().as_millis(),
-                    "sessionAffinityTtlMs": plan.account_selection_policy().openai_session_binding_ttl().as_millis(),
+                    "sessionAffinityTtlMs": plan.account_selection_policy().session_affinity_ttl().as_millis(),
                     "smartWeights": plan.account_selection_policy().smart_scheduling().weights(),
                     "preferHigherWeight": plan.account_selection_policy().smart_scheduling().prefer_higher_weight(),
                 },
@@ -1110,6 +1110,8 @@ where
         }
         let context = AttemptContext::new(
             RequestAttemptContext::new(self.request_id.clone(), self.client_api_key_ref.clone())
+                .with_pricing(self.plan.pricing())
+                .with_privacy(self.plan.privacy())
                 .with_client_request(self.endpoint.clone(), self.client_transport)
                 .with_client_ip(self.client_ip)
                 .with_connection_budget(if connection_rotation_reserved {

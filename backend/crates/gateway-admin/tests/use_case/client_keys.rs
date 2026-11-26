@@ -240,3 +240,38 @@ fn budget_alignment_accepts_only_current_account_wide_day_and_week_windows() {
         );
     }
 }
+
+#[tokio::test]
+async fn clearing_an_unregistered_provider_profile_is_rejected_before_writing() {
+    let services = super::AdminHarness::new().build().await;
+    let command = UpdateClientKey {
+        id: ClientApiKeyId::new("key_existing").unwrap(),
+        name: "test".to_owned(),
+        label: None,
+        group_ids: Vec::new(),
+        limits: gateway_core::policy::RateLimits::unlimited(),
+        daily_limit_usd: None,
+        weekly_limit_usd: None,
+        peer_sharing: None,
+        request_profile_override_updates: [(
+            gateway_core::routing::ProviderKind::new("unregistered").unwrap(),
+            None,
+        )]
+        .into(),
+    };
+    assert_eq!(
+        services
+            .client_keys()
+            .update(
+                &MutationContext {
+                    actor: gateway_admin::model::MutationActor::System,
+                    request_id: "clear-unregistered-profile".into()
+                },
+                command
+            )
+            .await
+            .unwrap_err()
+            .kind(),
+        AdminErrorKind::Invalid
+    );
+}

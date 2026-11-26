@@ -8,6 +8,8 @@ import { createServer } from 'vite'
 const root = fileURLToPath(new URL('../..', import.meta.url))
 const initial = {
   configRevision: 1,
+  openaiOauthGuardianReviewModel: true,
+  openaiRequestCountry: { mode: 'follow_location' },
   excelDefaultModels: ['synthetic-model'],
   modelMappings: { 'client-model': 'upstream-model' },
   refreshMarginSeconds: 1800,
@@ -15,7 +17,7 @@ const initial = {
   maxConcurrentPerAccount: 5,
   requestIntervalMs: 25,
   rotationStrategy: 'smart',
-  openaiAccountAffinity: 'strict',
+  accountAffinity: 'strict',
   minCodexDesktopVersion: null,
   minCodexCliVersion: null,
   usageRetentionDays: 31,
@@ -147,7 +149,7 @@ async function main() {
         assert.equal(await waitingLimit.inputValue(), '10')
         assert.equal(await waitingTimeout.inputValue(), '30')
         assert.equal(await common.getByRole('spinbutton', { name: /原绑定账号|全忙时/ }).count(), 0)
-        await common.locator('label').filter({ has: page.getByRole('switch', { name: 'OpenAI 账号忙时等待', exact: true }) }).click()
+        await common.locator('label').filter({ has: page.getByRole('switch', { name: '账号忙时等待（Codex / xAI / Antigravity）', exact: true }) }).click()
         await waitingLimit.fill('5')
         await waitingTimeout.fill('60')
         assert.equal(await page.getByRole('switch', { name: '全局关闭 Fast 档位', exact: true }).count(), 0)
@@ -158,7 +160,7 @@ async function main() {
         assert.equal(await bodyLimit.inputValue(), '64')
         await interval.fill('1.001')
         await bodyLimit.fill('64.5')
-        const affinity = common.getByRole('radiogroup', { name: 'OpenAI 账号亲和模式', exact: true })
+        const affinity = common.getByRole('radiogroup', { name: '账号亲和模式', exact: true })
         assert.equal(await affinity.getByRole('radio', { name: '严格', exact: true }).isChecked(), true)
         await affinity.getByRole('radio', { name: '优先', exact: true }).click()
         assert.equal(await affinity.getByRole('radio', { name: '优先', exact: true }).isChecked(), true)
@@ -212,11 +214,11 @@ async function main() {
         assert.equal(saved.requestTuning.maxRequestAttempts, 9)
         assert.equal(saved.requestTuning.rateLimitCooldownSeconds, 37)
         assert.equal(saved.requestTuning.maxWaitingPerAccount, 5)
-        assert.equal(saved.requestTuning.accountConcurrencyWaitTimeoutSeconds, 60)
+        assert.equal(saved.requestTuning.accountQueueTimeoutSeconds, 60)
         assert.equal(Object.keys(saved.requestTuning).some(key => /accountBusyWait(?:Sticky|Fallback)/.test(key)), false)
         assert.equal(saved.requestTuning.excelImageTransport.publicUrl, 'https://synthetic-images.example.com')
         assert.equal(saved.rotationStrategy, initial.rotationStrategy)
-        assert.equal(saved.openaiAccountAffinity, 'preferred')
+        assert.equal(saved.accountAffinity, 'preferred')
         assert.equal(await size.inputValue(), '20.5')
         await page.evaluate(() => document.fonts.ready)
         const overflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth)

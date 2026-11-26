@@ -315,10 +315,21 @@ impl RequestTuningOverrides {
 pub use gateway_core::account::RotationStrategy;
 
 /// 完整运行设置事实。
+pub type ProviderRequestProfiles = std::collections::BTreeMap<
+    gateway_core::routing::ProviderKind,
+    gateway_core::account::OpaqueProviderData,
+>;
+pub type ProviderRequestProfileUpdates = std::collections::BTreeMap<
+    gateway_core::routing::ProviderKind,
+    Option<gateway_core::account::OpaqueProviderData>,
+>;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeSettings {
-    pub openai_account_affinity: gateway_core::account::AccountAffinity,
-    pub openai_session_binding_ttl_hours: u32,
+    pub request_profiles: ProviderRequestProfiles,
+    pub codex_privacy_policy: gateway_core::settings::privacy::CodexPrivacyPolicy,
+    pub account_affinity: gateway_core::account::AccountAffinity,
+    pub session_affinity_ttl_hours: u32,
     pub config_revision: Revision,
     pub turn_state_injection_enabled: bool,
     pub turn_state_models: Vec<UpstreamModelId>,
@@ -350,9 +361,22 @@ pub struct RuntimeSettings {
     pub updated_at: DateTime<Utc>,
 }
 
+impl RuntimeSettings {
+    pub fn client_profile(
+        &self,
+        provider: &str,
+    ) -> Option<&gateway_core::account::OpaqueProviderData> {
+        gateway_core::routing::ProviderKind::new(provider)
+            .ok()
+            .and_then(|kind| self.request_profiles.get(&kind))
+    }
+}
+
 /// 原子替换运行设置的命令。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReplaceRuntimeSettings {
+    pub request_profile_updates: ProviderRequestProfileUpdates,
+    pub codex_privacy_policy: Option<gateway_core::settings::privacy::CodexPrivacyPolicy>,
     pub expected_revision: Revision,
     pub turn_state_injection_enabled: Option<bool>,
     pub turn_state_models: Option<Vec<UpstreamModelId>>,
@@ -361,8 +385,8 @@ pub struct ReplaceRuntimeSettings {
     pub turn_state_probe_proxy_id: Option<Option<String>>,
     pub turn_state_probe_concurrency: Option<u32>,
     pub responses_max_decompressed_body_bytes: Option<u64>,
-    pub openai_account_affinity: Option<gateway_core::account::AccountAffinity>,
-    pub openai_session_binding_ttl_hours: Option<u32>,
+    pub account_affinity: Option<gateway_core::account::AccountAffinity>,
+    pub session_affinity_ttl_hours: Option<u32>,
     pub model_mappings: ModelMappings,
     pub refresh_margin_seconds: u64,
     pub refresh_concurrency: u32,

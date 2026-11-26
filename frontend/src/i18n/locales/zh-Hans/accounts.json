@@ -56,7 +56,11 @@
         "minutes": "{duration}分钟额度"
       },
       "autoUsePoints": "自动使用额度点数",
-      "autoUsePointsHelp": "订阅额度耗尽后，使用可用点数继续请求"
+      "autoUsePointsHelp": "订阅额度耗尽后，使用可用点数继续请求",
+      "groups": {
+        "geminiModels": "Gemini 模型",
+        "claudeGptModels": "Claude 和 GPT 模型"
+      }
     },
     "account": "账号",
     "connectionTest": {
@@ -276,7 +280,7 @@
       "downloadModelCatalog": "下载模型目录",
       "restoreState": "重置状态",
       "staleSelection": "所选账号数据已失效，请重新选择",
-      "exportUnsupported": "所选账号包含不支持导出的平台",
+      "exportUnsupported": "所选账号中有账号不支持导出凭据",
       "deleted": "账号已删除",
       "deletedAccountDeletedAccounts": "已删除 {count} 个账号",
       "partialDeletion": "已删除 {count} 个账号，其余未删除：{value}",
@@ -319,7 +323,8 @@
         "general": "累计用量",
         "weekly": "周用量",
         "monthly": "月用量",
-        "quota": "周期用量"
+        "quota": "周期用量",
+        "recentWeek": "近一周"
       },
       "cost": "费用"
     },
@@ -378,7 +383,9 @@
       "importTaskCreated": "导入任务已创建",
       "partialSubmission": "部分导入任务已创建，保持输入不变重试可继续提交",
       "accountName": "{provider} 账号",
-      "failedToStartAuthorization": "启动授权失败"
+      "failedToStartAuthorization": "启动授权失败",
+      "fullCallbackHelp": "完成浏览器授权后，将地址栏中的完整回调地址粘贴到这里",
+      "fullCallbackPlaceholder": "粘贴包含 code 和 state 的完整回调地址"
     },
     "importTasks": {
       "needProcessing": "需处理",

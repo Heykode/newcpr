@@ -14,6 +14,7 @@ This directory contains guidelines for backend development. Fill in each file wi
 
 | Guide | Description | Status |
 |-------|-------------|--------|
+| [原生多平台](./native-platforms.md) | 三平台身份、协议、价目、隐私、只读共享和设置版本 | 隔离验证合同 |
 | [业务备份](./business-backup.md) | 同快照业务归档、全局小时基线与新旧恢复格式 | 隔离恢复验证 |
 | [Recent Update Migration](./recent-update-migration.md) | Affinity, refresh, Live, Fast, diagnostics and administration integration boundaries | Local migration verification |
 | [Reset Credits](./reset-credits.md) | Earliest-expiry batch confirmation, persistent deduplication and unknown-result recovery | Local isolated verification |

@@ -2,7 +2,10 @@
 
 use serde_json::{Map, Value};
 
+pub use crate::capabilities::RequestFacts;
+
 use crate::anthropic::{ANTHROPIC_PROTOCOL, messages_request_effort};
+use crate::genai::{self, GENAI_PROTOCOL};
 use crate::openai::OPENAI_PROTOCOL;
 use crate::openai::codex::codex_responses_request_semantics_with_continuation;
 
@@ -19,6 +22,23 @@ pub struct RequestObservation {
     pub subagent_kind: Option<String>,
     /// 当前请求是否声明压缩
     pub compact: bool,
+}
+
+/// 计数入口的生成封套优先于顶层内容，沿用生成请求的协议观测
+#[must_use]
+pub fn token_count_observation(
+    protocol: &str,
+    body: &Map<String, Value>,
+    context: &Map<String, Value>,
+) -> RequestObservation {
+    let body = if protocol == GENAI_PROTOCOL {
+        body.get("generateContentRequest")
+            .and_then(Value::as_object)
+            .unwrap_or(body)
+    } else {
+        body
+    };
+    request_observation(protocol, body, context, None)
 }
 
 /// 旧配置只由状态所属 Provider 提供，是否继承仍由当前协议的续接语义决定
@@ -48,27 +68,12 @@ pub fn request_observation(
             reasoning_effort: messages_request_effort(body).map(str::to_owned),
             ..RequestObservation::default()
         },
+        GENAI_PROTOCOL => RequestObservation {
+            reasoning_effort: genai::thinking_level(body).map(str::to_ascii_lowercase),
+            ..RequestObservation::default()
+        },
         _ => RequestObservation::default(),
     }
-}
-
-/// 请求正文表达的能力要求
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct RequestFacts {
-    /// 显式输出预算
-    pub max_output_tokens: Option<u64>,
-    /// 工具声明
-    pub tools: bool,
-    /// 图片输入
-    pub vision: bool,
-    /// 图片生成工具声明
-    pub image_generation: bool,
-    /// 推理配置
-    pub reasoning: bool,
-    /// JSON Schema 输出
-    pub json_schema: bool,
-    /// 原生服务端续接
-    pub native_continuation: bool,
 }
 
 /// 按协议提取能力事实，未知协议保留空事实供其 owner 补齐
@@ -116,6 +121,7 @@ pub fn request_facts(protocol: &str, body: &Map<String, Value>) -> RequestFacts 
                 .and_then(Value::as_str)
                 == Some("json_schema");
         }
+        GENAI_PROTOCOL => genai::request_facts(body, &mut facts),
         _ => {}
     }
     facts

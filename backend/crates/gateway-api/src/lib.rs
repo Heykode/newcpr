@@ -185,8 +185,15 @@ pub fn initialize_with_timezone(
         .route("/readyz", get(health::readyz))
         .route("/healthz", get(health::healthz))
         .merge(openai::router::router())
+        .merge(openai::genai::router())
         .merge(admin::router::<ApiState>())
-        .fallback_service(ServeDir::new(config.asset_directory).fallback(ServeFile::new(index)));
+        .fallback_service(
+            Router::new()
+                .fallback_service(
+                    ServeDir::new(config.asset_directory).fallback(ServeFile::new(index)),
+                )
+                .layer(axum::middleware::from_fn(openai::router::fallback)),
+        );
     if !config.cors_allowed_origins.is_empty() {
         let origins = config
             .cors_allowed_origins

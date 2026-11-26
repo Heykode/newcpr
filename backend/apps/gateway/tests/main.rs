@@ -153,6 +153,21 @@ fn is_audited_private_test(member: &str, relative: &Path, item: &Item) -> bool {
         return false;
     }
     match (member, relative.to_str(), item) {
+        // Pricing overrides and redacted provider failures stay private to their owners.
+        (
+            "crates/providers/openai" | "crates/providers/xai",
+            Some("billing/calculate.rs"),
+            Item::Mod(module),
+        ) => {
+            module.ident == "tests"
+                && module.content.is_some()
+                && matches!(module.vis, syn::Visibility::Inherited)
+        }
+        ("crates/providers/xai", Some("admin.rs"), Item::Mod(module)) => {
+            module.ident == "error_tests"
+                && module.content.is_some()
+                && matches!(module.vis, syn::Visibility::Inherited)
+        }
         // These owner-local tests cover redacted export data and decoder diagnostics
         // without exporting wire internals or trace mutation APIs.
         ("crates/gateway-api", Some("admin/accounts/wire.rs"), Item::Mod(module)) => {

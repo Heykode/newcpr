@@ -18,6 +18,7 @@ pub(super) const WORKSPACE_MEMBERS: &[&str] = &[
     "crates/gateway-host",
     "crates/gateway-protocol",
     "crates/gateway-store",
+    "crates/providers/antigravity",
     "crates/providers/openai",
     "crates/providers/xai",
 ];
@@ -92,6 +93,7 @@ fn gateway_core_depends_on_no_http_db_redis_or_provider_crate() {
             "redis",
             "gateway-host",
             "gateway-store",
+            "provider-antigravity",
             "provider-openai",
             "provider-xai",
         ],
@@ -189,8 +191,17 @@ fn gateway_protocol_has_no_workspace_dependencies() {
 
 #[test]
 fn provider_crates_do_not_depend_on_each_other() {
-    assert_no_dependency("crates/providers/openai", &["provider-xai"]);
-    assert_no_dependency("crates/providers/xai", &["provider-openai"]);
+    for (package, member) in PACKAGE_TO_MEMBER
+        .iter()
+        .filter(|(_, member)| member.starts_with("crates/providers/"))
+    {
+        let forbidden = PACKAGE_TO_MEMBER
+            .iter()
+            .filter(|(other, member)| other != package && member.starts_with("crates/providers/"))
+            .map(|(other, _)| *other)
+            .collect::<Vec<_>>();
+        assert_no_dependency(member, &forbidden);
+    }
 }
 
 #[test]
@@ -211,12 +222,14 @@ const PACKAGE_TO_MEMBER: &[(&str, &str)] = &[
     ("gateway-host", "crates/gateway-host"),
     ("gateway-protocol", "crates/gateway-protocol"),
     ("gateway-store", "crates/gateway-store"),
+    ("provider-antigravity", "crates/providers/antigravity"),
     ("provider-openai", "crates/providers/openai"),
     ("provider-xai", "crates/providers/xai"),
 ];
 
 /// Adapter/provider 根门面的稳定合同模块；任何增减都必须同步完成边界审计。
 const ADAPTER_PUBLIC_MODULES: &[(&str, &[&str])] = &[
+    ("crates/providers/antigravity", &[]),
     ("crates/gateway-api", &["admin", "openai"]),
     (
         "crates/gateway-host",
@@ -224,6 +237,7 @@ const ADAPTER_PUBLIC_MODULES: &[(&str, &[&str])] = &[
             "client_distribution",
             "config",
             "proxy_probe",
+            "pricing",
             "serve",
             "system_update",
             "workers",
@@ -256,6 +270,7 @@ const ALLOWED_INTERNAL_EDGES: &[(&str, &str)] = &[
     ("codex-proxy-rs", "gateway-core"),
     ("codex-proxy-rs", "gateway-host"),
     ("codex-proxy-rs", "gateway-store"),
+    ("codex-proxy-rs", "provider-antigravity"),
     ("codex-proxy-rs", "provider-openai"),
     ("codex-proxy-rs", "provider-xai"),
     ("gateway-admin", "gateway-core"),
@@ -269,6 +284,10 @@ const ALLOWED_INTERNAL_EDGES: &[(&str, &str)] = &[
     ("gateway-host", "gateway-egress"),
     ("gateway-store", "gateway-admin"),
     ("gateway-store", "gateway-core"),
+    ("provider-antigravity", "gateway-admin"),
+    ("provider-antigravity", "gateway-core"),
+    ("provider-antigravity", "gateway-egress"),
+    ("provider-antigravity", "gateway-protocol"),
     ("provider-openai", "gateway-admin"),
     ("provider-openai", "gateway-core"),
     ("provider-openai", "gateway-egress"),
@@ -460,7 +479,8 @@ fn integration_tests_mirror_production_module_tree() {
         let production = module_layouts(&member_root.join("src"), &["lib.rs", "main.rs"]);
         let tests = module_layouts(&tests_root, &["main.rs"]);
         for (module, test_layout) in tests {
-            if module == Path::new("support") {
+            // Shared fixture helpers may split within the existing support owner.
+            if module.starts_with(Path::new("support")) {
                 continue;
             }
 

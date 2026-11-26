@@ -1,9 +1,10 @@
 import type { Ref } from 'vue'
-import type { ApiKeyBudgetPeriod, getApiKeys } from '@/api'
+import type { ApiKeyBudgetPeriod, ApiKeyPeerSharing, getApiKeys } from '@/api'
 import { cloneDeep } from 'es-toolkit'
 import { onScopeDispose, ref, shallowRef, watch } from 'vue'
 import {
   createApiKey,
+  defaultApiKeyPeerSharing,
   deleteApiKey,
   disableApiKey,
   enableApiKey,
@@ -12,6 +13,7 @@ import {
   updateApiKey,
 } from '@/api'
 import { toast } from '@/components/base/BaseToast'
+import { requestProfileChanges } from '@/components/request-profile/changes'
 import { useAsyncAction } from '@/composables/useAsyncAction'
 import { useCopyText } from '@/composables/useCopyText'
 import { useIdSet } from '@/composables/useIdSet'
@@ -20,6 +22,7 @@ import { apiKeyFormErrors } from '../utils/formValidation'
 type ApiKeyRow = Awaited<ReturnType<typeof getApiKeys>>['items'][number]
 
 export interface ApiKeyFormValue {
+  peerSharing: ApiKeyPeerSharing
   installationSeed: string
   providerRequestProfileOverrides: Record<string, Record<string, unknown>>
   name: string
@@ -107,6 +110,7 @@ export function useApiKeyMutations(options: {
     else if (openai)
       delete openai.installationSeed
     form.value = {
+      peerSharing: { ...(key.peerSharing ?? defaultApiKeyPeerSharing()) },
       installationSeed,
       providerRequestProfileOverrides: profiles,
       name: key.name,
@@ -142,6 +146,7 @@ export function useApiKeyMutations(options: {
     await savingKeyAction.run(
       async () => {
         const payload = {
+          peerSharing: { ...form.value.peerSharing },
           name: form.value.name.trim(),
           label: form.value.label.trim() || null,
           groupIds: [...new Set(form.value.groupIds)],
@@ -150,17 +155,17 @@ export function useApiKeyMutations(options: {
           dailyLimitUsd: form.value.dailyLimitUsd.trim() || '0',
           weeklyLimitUsd: form.value.weeklyLimitUsd.trim() || '0',
         }
-        const profiles: Record<string, Record<string, unknown> | null> = cloneDeep(form.value.providerRequestProfileOverrides)
+        const profiles: Record<string, Record<string, unknown>> = cloneDeep(form.value.providerRequestProfileOverrides)
         const installationSeed = form.value.installationSeed
         if (installationSeed)
           profiles.openai = profiles.openai ? { ...profiles.openai, installationSeed } : { inherit: { installationSeed } }
         const current = editingKey.value
         if (current) {
-          for (const provider of Object.keys(current.providerRequestProfileOverrides ?? {})) {
-            if (!Object.hasOwn(profiles, provider))
-              profiles[provider] = null
-          }
-          await updateApiKey({ id: current.id, ...payload, providerRequestProfileOverrides: profiles })
+          await updateApiKey({
+            id: current.id,
+            ...payload,
+            providerRequestProfileOverrides: requestProfileChanges(current.providerRequestProfileOverrides ?? {}, profiles),
+          })
         }
         else {
           const result = await createApiKey({ ...payload, providerRequestProfileOverrides: profiles })
@@ -338,6 +343,7 @@ export function useApiKeyMutations(options: {
 
 function emptyForm(): ApiKeyFormValue {
   return {
+    peerSharing: defaultApiKeyPeerSharing(),
     installationSeed: '',
     providerRequestProfileOverrides: {},
     name: '',

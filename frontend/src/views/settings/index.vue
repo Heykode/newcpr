@@ -1,19 +1,21 @@
 <script setup lang="ts">
+import type { BuiltinProvider } from '@/providers/catalog'
 import { Save } from '@lucide/vue'
 import { computed, nextTick, ref, useTemplateRef, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseConfirmModal from '@/components/base/BaseConfirmModal.vue'
 import BaseForm from '@/components/base/BaseForm/index.vue'
-
 import BasePageHeader from '@/components/base/BasePageHeader.vue'
 import BaseSegmented from '@/components/base/BaseSegmented.vue'
+import ProviderSelect from '@/components/ProviderSelect.vue'
 import { t } from '@/i18n'
-import AccountWarmupCard from './components/AccountWarmupCard.vue'
 
+import AccountWarmupCard from './components/AccountWarmupCard.vue'
 import AdminApiKeyCard from './components/AdminApiKeyCard.vue'
 import AdminPasswordCard from './components/AdminPasswordCard.vue'
 import SettingsBackupSection from './components/backup/SettingsBackupSection.vue'
+
 import SettingsCleanupSection from './components/cleanup/SettingsCleanupSection.vue'
 import ClientVersionSettings from './components/client-version/index.vue'
 import CodexQuotaOverdraftCard from './components/CodexQuotaOverdraftCard.vue'
@@ -23,6 +25,9 @@ import ModelAliasesCard from './components/ModelAliasesCard.vue'
 import NotificationChannelsCard from './components/NotificationChannelsCard.vue'
 import OpenAiRequestSettingsCard from './components/OpenAiRequestSettingsCard.vue'
 import OutboundUserAgentCard from './components/OutboundUserAgentCard.vue'
+import PricingSettings from './components/pricing/index.vue'
+import PrivacySettings from './components/privacy/index.vue'
+import RequestProfileCard from './components/RequestProfileCard.vue'
 import RotationStrategyCard from './components/RotationStrategyCard.vue'
 import RuntimeSettingsCard from './components/RuntimeSettingsCard.vue'
 import { useAdminApiKey } from './composables/useAdminApiKey'
@@ -34,6 +39,7 @@ import { rotationOptions } from './constants'
 const route = useRoute()
 const router = useRouter()
 const configurationScope = ref('common')
+const provider = ref<BuiltinProvider>('openai')
 
 type SettingsSection = 'runtime' | 'backup' | 'cleanup'
 
@@ -66,7 +72,7 @@ const {
   maxConcurrentPerAccountValue,
   openaiGuardianReservedConcurrencyValue,
   unitFields,
-  openaiSessionBindingTtlHoursValue,
+  sessionAffinityTtlHoursValue,
   minCodexDesktopVersionError,
   minCodexCliVersionError,
   hasChanges,
@@ -164,6 +170,8 @@ watch(
         :options="[
           { label: '通用与 Codex 配置', value: 'common' },
           { label: 'Excel 配置', value: 'excel' },
+          { label: '工作区隐私', value: 'privacy' },
+          { label: '模型价目', value: 'pricing' },
         ]"
       />
       <div v-show="configurationScope === 'common'" class="grid min-w-0 gap-5" role="region" aria-label="通用与 Codex 配置">
@@ -182,8 +190,8 @@ watch(
         <NotificationChannelsCard />
 
         <RuntimeSettingsCard
-          v-model:openai-account-affinity="form.openaiAccountAffinity"
-          v-model:openai-session-binding-ttl-hours="openaiSessionBindingTtlHoursValue"
+          v-model:account-affinity="form.accountAffinity"
+          v-model:session-affinity-ttl-hours="sessionAffinityTtlHoursValue"
           v-model:max-concurrent-per-account="maxConcurrentPerAccountValue"
           v-model:openai-guardian-reserved-concurrency="openaiGuardianReservedConcurrencyValue"
           v-model:refresh-margin-seconds="refreshMarginSecondsValue"
@@ -216,7 +224,11 @@ watch(
           :cli-error="minCodexCliVersionError"
         />
 
-        <OutboundUserAgentCard />
+        <section class="grid min-w-0 gap-4" aria-label="平台客户端身份">
+          <ProviderSelect v-model="provider" class="justify-self-end" :disabled="loading || saving" />
+          <OutboundUserAgentCard v-if="provider === 'openai'" />
+          <RequestProfileCard v-else v-model="form.providerRequestProfiles" :provider="provider" :active="section === 'runtime' && configurationScope === 'common' && !loading" :disabled="loading || saving" />
+        </section>
 
         <OpenAiRequestSettingsCard v-model:guardian="form.openaiOauthGuardianReviewModel" v-model:country="form.openaiRequestCountry" :disabled="loading || saving" />
 
@@ -254,6 +266,8 @@ watch(
           :disabled="loading || saving"
         />
       </div>
+      <PrivacySettings v-show="configurationScope === 'privacy'" v-model="form.codexPrivacyPolicy" :disabled="loading || saving" />
+      <PricingSettings v-if="configurationScope === 'pricing'" />
     </BaseForm>
 
     <div v-else-if="section === 'cleanup'" class="mt-5">

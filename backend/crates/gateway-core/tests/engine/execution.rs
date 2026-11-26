@@ -1823,6 +1823,108 @@ fn client_catalog_forwards_scope_maps_whole_objects_and_omits_unroutable_models(
     }
 }
 
+#[test]
+fn client_catalog_fallback_uses_only_authorized_reasoning_members() {
+    use gateway_core::routing::{
+        AccountModelMetadata, ModelPresentation, PublicModelDescriptor, ReasoningModelVariant,
+    };
+    let provider = ProviderKind::new("openai").unwrap();
+    let account = ProviderAccountId::new("acct_start").unwrap();
+    let other = ProviderAccountId::new("acct_other").unwrap();
+    let caps = || ModelCapabilities::new([OperationKind::Generate].into(), None);
+    let snapshot = RuntimeSnapshot::new(
+        ConfigRevision::new(1).unwrap(),
+        AccountSelectionPolicy::new(
+            RotationStrategy::Smart,
+            std::num::NonZeroU32::new(1).unwrap(),
+            Duration::from_millis(1),
+        ),
+        vec![provider.clone()],
+        vec![
+            ProviderModel::new(
+                provider.clone(),
+                UpstreamModelId::new("family").unwrap(),
+                caps().with_reasoning_variants(BTreeMap::from([
+                    (
+                        "medium".into(),
+                        ReasoningModelVariant {
+                            model: UpstreamModelId::new("family-medium").unwrap(),
+                            accounts: [account.clone()].into(),
+                        },
+                    ),
+                    (
+                        "high".into(),
+                        ReasoningModelVariant {
+                            model: UpstreamModelId::new("family-high").unwrap(),
+                            accounts: [other.clone()].into(),
+                        },
+                    ),
+                ])),
+            )
+            .with_presentation(
+                ModelPresentation::default()
+                    .with_reasoning(Some("high".into()), vec!["medium".into(), "high".into()]),
+            ),
+            ProviderModel::new(
+                provider.clone(),
+                UpstreamModelId::new("family-medium").unwrap(),
+                caps().with_account_metadata(BTreeMap::from([(
+                    account,
+                    AccountModelMetadata {
+                        context_window_tokens: Some(1000),
+                        max_context_window_tokens: Some(1500),
+                        image_input: true,
+                        description: Some("Scoped model".into()),
+                        max_output_tokens: Some(100),
+                    },
+                )])),
+            ),
+            ProviderModel::new(
+                provider.clone(),
+                UpstreamModelId::new("family-high").unwrap(),
+                caps().with_account_metadata(BTreeMap::from([(
+                    other,
+                    AccountModelMetadata::default(),
+                )])),
+            ),
+        ],
+        vec![ClientPolicy::new(
+            ClientApiKeyId::new("key_catalog_scope").unwrap(),
+            PlaintextClientApiKey::new("sk_catalog_scope").unwrap(),
+            account_scope(&provider, "acct_start"),
+            true,
+            RateLimits::unlimited(),
+        )],
+    )
+    .unwrap()
+    .with_model_mappings(BTreeMap::from([("alias".into(), "family".into())]));
+    let service = DefaultExecutionService::new(
+        RuntimeSnapshotHandle::new(snapshot),
+        Arc::new(TrackingExecutionStore::default()),
+        ProviderRegistry::new([Arc::new(FailingProvider) as Arc<dyn Provider>]).unwrap(),
+        Arc::new(UnusedAdmissions),
+        Arc::new(UnusedCircuits),
+        Arc::new(UnusedContinuation),
+        Arc::new(RecordingClientApiKeyUsage::default()),
+    );
+    let client = service.authenticate("sk_catalog_scope").unwrap();
+    let models = block_on(service.client_model_catalog(&client, "codex", "0.154.0")).unwrap();
+    assert_eq!(models.len(), 2);
+    for model in models {
+        let PublicModelDescriptor::Adapted(profile) = model else {
+            panic!("adapted catalog expected")
+        };
+        assert!(["family", "alias"].contains(&profile.model().as_str()));
+        let presentation = profile.presentation();
+        assert_eq!(presentation.supported_reasoning_efforts(), ["medium"]);
+        assert_eq!(presentation.default_reasoning_effort(), Some("medium"));
+        assert_eq!(presentation.context_window_tokens(), Some(1000));
+        assert_eq!(presentation.max_context_window_tokens(), Some(1500));
+        assert!(presentation.image_input());
+        assert_eq!(presentation.description(), Some("Scoped model"));
+    }
+}
+
 #[async_trait]
 impl Provider for FailingProvider {
     fn name(&self) -> &'static str {
@@ -3814,4 +3916,102 @@ fn direct_model_uses_the_original_route_when_the_parent_is_outside_its_scope() {
             );
         }
     });
+}
+
+#[test]
+fn fixed_account_probe_reaches_the_provider_for_a_model_absent_from_its_public_catalog() {
+    use gateway_core::error::RoutingError;
+
+    let provider = ProviderKind::new("openai").unwrap();
+    let account = ProviderAccountId::new("acct_probe").unwrap();
+    let model = "unlisted-probe-model";
+    let snapshot = probe_snapshot();
+    let ordinary = snapshot.plan(
+        &PublicModelId::new(model).unwrap(),
+        &probe_operation(),
+        account_scope(&provider, account.as_str()),
+        &Default::default(),
+    );
+    assert!(matches!(ordinary, Err(RoutingError::ModelNotFound { .. })));
+
+    let service = DefaultExecutionService::new(
+        RuntimeSnapshotHandle::new(snapshot),
+        Arc::new(TrackingExecutionStore::default()),
+        ProviderRegistry::new([Arc::new(LocalFailingProvider) as Arc<dyn Provider>]).unwrap(),
+        Arc::new(UnusedAdmissions),
+        Arc::new(UnusedCircuits),
+        Arc::new(UnusedContinuation),
+        Arc::new(RecordingClientApiKeyUsage::default()),
+    );
+    let error = block_on(service.probe(AccountProbeRequest {
+        target: account.into(),
+        provider_kind: provider,
+        upstream_model: UpstreamModelId::new(model).unwrap(),
+        operation: probe_operation(),
+    }))
+    .expect_err("the fixed provider reports its own connection failure");
+    assert_eq!(error.source(), AccountProbeErrorSource::Provider);
+}
+
+use gateway_core::{engine::provider::NativeResponseTranslator, event::ProtocolWireEvent};
+struct EofResponseTranslator {
+    protocol: &'static str,
+}
+
+impl NativeResponseTranslator for EofResponseTranslator {
+    fn source_protocol(&self) -> &str {
+        "native-test"
+    }
+    fn target_protocol(&self) -> &str {
+        "openai"
+    }
+    fn translate(
+        &mut self,
+        _: &ProtocolWireEvent,
+    ) -> Result<Vec<ProtocolWireEvent>, ProviderError> {
+        Ok(Vec::new())
+    }
+    fn finish(&mut self) -> Result<Vec<ProtocolWireEvent>, ProviderError> {
+        Ok(vec![
+            ProtocolWireEvent::json(
+                self.protocol,
+                None,
+                json!({"type":"response.output_item.done"}),
+            )
+            .unwrap(),
+            ProtocolWireEvent::json(self.protocol, None, json!({"type":"response.completed"}))
+                .unwrap(),
+        ])
+    }
+}
+
+#[test]
+fn eof_translation_preserves_terminal_facts_and_validates_output_protocol() {
+    for protocol in ["openai", "foreign"] {
+        let metadata = ProviderCallMetadata::new(
+            ProviderKind::new("fixture").unwrap(),
+            UpstreamModelId::new("model").unwrap(),
+            ProviderAccountId::new("acct_fixture").unwrap(),
+            UpstreamTransport::new("http").unwrap(),
+        );
+        let mut stream = ProviderStream::new(metadata, futures::stream::empty(), ())
+            .with_native_response_translator(EofResponseTranslator { protocol });
+        let result = stream.translate_native_response(
+            ProviderEvent::canonical(GatewayEvent::Completed(ResponseMeta::new(
+                "response", "model",
+            ))),
+            true,
+        );
+        if protocol == "foreign" {
+            assert!(result.is_err());
+            continue;
+        }
+        let events = result.unwrap();
+        assert_eq!(events.len(), 2);
+        assert!(events[0].canonical_facts().is_empty());
+        assert!(matches!(
+            events[1].canonical_facts(),
+            [GatewayEvent::Completed(_)]
+        ));
+    }
 }

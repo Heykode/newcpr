@@ -17,7 +17,7 @@ export interface SegmentedOption {
 
 const props = withDefaults(
   defineProps<{
-    label: string
+    label?: string
     options: SegmentedOption[]
     disabled?: boolean
     display?: 'label' | 'icon'
@@ -37,7 +37,7 @@ const componentSize = useComponentSize(() => props.size)
 const attrs = useAttrs()
 const rootRef = useTemplateRef<HTMLElement>('root')
 const optionRefs = useTemplateRef<HTMLButtonElement[]>('option')
-const { controlId, labelledBy, describedBy, invalid, ariaRequired, validate } = useFormField(attrs, () => props.validateEvent)
+const { controlId, labelledBy, describedBy, invalid, ariaRequired, validate } = useFormField(attrs, () => props.validateEvent, undefined, { labelable: false })
 defineExpose({ focus: () => rootRef.value?.querySelector<HTMLButtonElement>('[tabindex="0"]')?.focus() })
 const model = defineModel<string>({ required: true })
 
@@ -121,8 +121,8 @@ async function handleKeydown(event: KeyboardEvent, index: number) {
     :class="[rootClasses[componentSize], invalid && !disabled ? 'bg-cp-error-container' : 'bg-(--cp-input-bg)']"
     :style="gridStyle"
     role="radiogroup"
-    :aria-label="label"
-    :aria-labelledby="typeof attrs['aria-labelledby'] === 'string' ? attrs['aria-labelledby'] : label ? undefined : labelledBy"
+    :aria-label="typeof attrs['aria-label'] === 'string' ? attrs['aria-label'] : label"
+    :aria-labelledby="typeof attrs['aria-labelledby'] === 'string' ? attrs['aria-labelledby'] : label || attrs['aria-label'] ? undefined : labelledBy"
     :aria-describedby="describedBy"
     :aria-invalid="invalid || undefined"
     :aria-required="ariaRequired"

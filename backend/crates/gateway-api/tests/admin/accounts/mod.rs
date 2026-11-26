@@ -1838,6 +1838,11 @@ mod response {
         let now = Utc::now();
         let quota = QuotaState::allowed(now.into());
         AccountDirectoryItem {
+            capabilities: gateway_admin::model::accounts::ProviderAccountCapabilities {
+                quota_settings_supported: true,
+                ..Default::default()
+            },
+            usage_period: None,
             error_protection: None,
             excel_recovery: None,
             purchase_cost: None,
@@ -1962,6 +1967,7 @@ mod response {
     #[test]
     fn account_usage_view_should_keep_unobserved_numbers_null() {
         let view = AccountUsageView {
+            window_kind: "quota",
             window_label_display: "周/月额度窗口".to_owned(),
             quota_window: None,
             request_count: None,

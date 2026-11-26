@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use chrono::{DateTime, Utc};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::{GrokOAuthConfig, XaiWireProfileState};
 
@@ -32,7 +32,7 @@ impl XaiConfig {
 }
 
 /// 经参考实现核验的 Grok CLI 请求画像。
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct XaiWireProfileConfig {
     pub client_identifier: String,
@@ -41,6 +41,34 @@ pub struct XaiWireProfileConfig {
     pub target_os: String,
     pub target_arch: String,
     pub verified_at: DateTime<Utc>,
+}
+
+impl Default for XaiWireProfileConfig {
+    fn default() -> Self {
+        Self {
+            client_identifier: "grok-shell".to_owned(),
+            client_version: "1.0.13".to_owned(),
+            client_mode: "headless".to_owned(),
+            target_os: "linux".to_owned(),
+            target_arch: "x86_64".to_owned(),
+            verified_at: DateTime::UNIX_EPOCH + chrono::Duration::seconds(1_788_105_600),
+        }
+    }
+}
+
+impl XaiWireProfileConfig {
+    #[must_use]
+    pub fn user_agent(&self) -> String {
+        // Grok CLI 的产品名独立于 x-grok-client-identifier；自定义请求头不替换 UA 产品名
+        let arch = match self.target_arch.as_str() {
+            "arm64" => "aarch64",
+            arch => arch,
+        };
+        format!(
+            "grok-shell/{} ({}; {arch})",
+            self.client_version, self.target_os
+        )
+    }
 }
 
 impl XaiWireProfileConfig {

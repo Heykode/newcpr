@@ -5,6 +5,7 @@ pub mod config;
 mod logging;
 mod mihomo;
 mod notifications;
+pub mod pricing;
 pub mod proxy_probe;
 pub mod serve;
 pub mod system_update;

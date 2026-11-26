@@ -303,6 +303,7 @@ const {
   modelAccess: batchModelAccess,
   updateModelAccess: batchUpdateModelAccess,
   catalogAccountId: batchCatalogAccountId,
+  provider: batchProvider,
   proxyMode: batchProxyMode,
   proxyId: batchProxyId,
   selectedGroupIds: batchGroupIds,
@@ -848,6 +849,7 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
       v-model:update-proxy="batchUpdateProxy"
       v-model:egress-mode="batchEgressMode"
       :catalog-account-id="batchCatalogAccountId"
+      :provider="batchProvider"
       :has-updates="batchHasUpdates"
       :excel-available="batchExcelAvailable"
       :request-proxy-available="batchRequestProxyAvailable"

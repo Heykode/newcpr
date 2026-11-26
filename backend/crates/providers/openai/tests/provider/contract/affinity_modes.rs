@@ -11,7 +11,7 @@ fn mode_context(mode: AccountAffinity) -> AttemptContext {
         ),
         NonZeroU32::MIN,
         SystemTime::now() + Duration::from_secs(30),
-        account_policy().with_openai_account_affinity(mode),
+        account_policy().with_account_affinity(mode),
         AccountAttemptContext::new(BTreeSet::new(), None, None)
             .with_account_scope(contract_account_scope()),
         None,
@@ -287,7 +287,7 @@ fn native_context(mode: AccountAffinity) -> AttemptContext {
         ),
         NonZeroU32::MIN,
         SystemTime::now() + Duration::from_secs(30),
-        account_policy().with_openai_account_affinity(mode),
+        account_policy().with_account_affinity(mode),
         AccountAttemptContext::new(BTreeSet::new(), None, Some(owner))
             .with_account_scope(contract_account_scope()),
         Some(ContinuationBinding::Pinned(pin)),
@@ -446,7 +446,7 @@ async fn child_model_access_timeout_is_explained_without_changing_affinity_modes
             "req_relaxed_model_access",
             CancellationToken::new(),
             scope.clone(),
-            account_policy().with_openai_account_affinity(mode),
+            account_policy().with_account_affinity(mode),
         )
     };
     for wait in [false, true] {
@@ -473,7 +473,7 @@ async fn child_model_access_timeout_is_explained_without_changing_affinity_modes
                         "req_strict_model_access",
                         CancellationToken::new(),
                         scope,
-                        account_policy().with_openai_account_affinity(AccountAffinity::Strict),
+                        account_policy().with_account_affinity(AccountAffinity::Strict),
                     )
                     .with_request_tuning(
                         gateway_core::routing::RequestTuning {
@@ -1096,7 +1096,7 @@ async fn strict_child_waits_for_root_request_interval_without_switching_accounts
             NonZeroU32::MIN,
             Duration::from_millis(250),
         )
-        .with_openai_account_affinity(AccountAffinity::Strict),
+        .with_account_affinity(AccountAffinity::Strict),
     )
     .with_request_tuning(gateway_core::routing::RequestTuning {
         account_busy_wait_enabled: true,

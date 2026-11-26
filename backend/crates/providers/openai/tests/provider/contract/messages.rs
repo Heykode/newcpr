@@ -198,3 +198,47 @@ async fn translated_messages_service_tiers_follow_the_selected_responses_upstrea
         server.verify().await;
     }
 }
+
+#[tokio::test]
+async fn oauth_messages_translation_preserves_private_error_source() {
+    use gateway_core::event::ProviderEvent;
+    use gateway_protocol::anthropic::TranslationError;
+    use std::error::Error as _;
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_provider_contract").await;
+    let server = MockServer::start().await;
+    let provider = provider_with_base_url(&store, server.uri());
+    let payload =
+        ProtocolPayload::json_object("anthropic", body().as_object().unwrap().clone()).unwrap();
+    let mut stream = provider
+        .execute(
+            planned_request(
+                "openai",
+                Operation::Generate(GenerateRequest::from_protocol_payload(payload)),
+            ),
+            context("req_translation_cause", CancellationToken::new()),
+        )
+        .await
+        .unwrap();
+    let wire = ProtocolWireEvent::json("openai", None, json!({"private":"PRIVATE_INPUT"})).unwrap();
+    let error = stream
+        .translate_native_response(ProviderEvent::wire(wire), false)
+        .unwrap_err();
+    assert_eq!(error.kind(), ProviderErrorKind::Protocol);
+    assert_eq!(error.send_state(), UpstreamSendState::Sent);
+    assert_eq!(
+        error.source().unwrap().downcast_ref::<TranslationError>(),
+        Some(&TranslationError::InvalidEvent(
+            "The Responses event type is missing."
+        ))
+    );
+    assert!(
+        error
+            .error_details()
+            .unwrap()
+            .contains("The Responses event type is missing.")
+    );
+    assert!(!format!("{error:?} {error}").contains("The Responses event type is missing."));
+    assert!(!error.error_details().unwrap().contains("PRIVATE_INPUT"));
+    assert!(server.received_requests().await.unwrap().is_empty());
+}

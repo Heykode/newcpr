@@ -24,7 +24,7 @@ class BackendPlanTests(unittest.TestCase):
         result = plan.backend_plan(["backend/crates/gateway-admin/src/use_case/log_cleanup.rs"])
         self.assertEqual(result["backend_packages"], [
             "codex-proxy-rs", "gateway-admin", "gateway-api", "gateway-host",
-            "gateway-store", "provider-openai", "provider-xai",
+            "gateway-store", "provider-antigravity", "provider-openai", "provider-xai",
         ])
         self.assertTrue(result["redis_acl"])
 

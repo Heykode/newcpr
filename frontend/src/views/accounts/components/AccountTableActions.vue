@@ -80,7 +80,7 @@ const emit = defineEmits<{
         </span>
       </BaseMenuItem>
       <BaseMenuItem
-        v-if="account.provider === 'openai' && account.responsesUpstream !== 'excel'"
+        v-if="(account.capabilities?.modelCatalogDownload ?? (account.provider === 'openai' && account.authenticationKind === 'oauth')) && account.responsesUpstream !== 'excel'"
         :loading="exportingModelCatalog"
         :disabled="exportingModelCatalog"
         @click.stop="emit('exportModelCatalog', account)"
@@ -91,6 +91,7 @@ const emit = defineEmits<{
         导出模型目录
       </BaseMenuItem>
       <BaseMenuItem
+        v-if="account.capabilities?.credentialRefresh ?? account.authenticationKind === 'oauth'"
         :loading="refreshing"
         :disabled="refreshing"
         @click.stop="emit('refresh', account.id)"
@@ -103,7 +104,7 @@ const emit = defineEmits<{
         </template>
         {{ t('accounts.actions.refreshToken') }}
       </BaseMenuItem>
-      <BaseMenuItem @click.stop="emit('reauthorize', account)">
+      <BaseMenuItem v-if="account.capabilities?.reauthorize ?? account.authenticationKind === 'oauth'" @click.stop="emit('reauthorize', account)">
         <template #icon>
           <KeyRound class="size-3.5 text-cp-text-quaternary" />
         </template>

@@ -2,6 +2,7 @@ import type { AccountQuotaWindow } from '../../constants'
 import { clamp } from 'es-toolkit'
 import { formatInteger } from '@/utils/number'
 import { isRecord } from '@/utils/object'
+import { quotaWindowLabel } from '../../constants'
 
 export type AccountUsageWindowVariant = 'compact' | 'detail' | 'metric'
 
@@ -140,7 +141,9 @@ export function resolveAccountUsageWindowPresentation(
   return {
     mode,
     compactValues: definition.compactValues,
-    labelTooltip: definition.labelTooltip ? input.window?.labelDisplay : undefined,
+    label: input.window ? quotaWindowLabel(input.window, input.variant !== 'metric') : '',
+    ariaLabel: input.window ? quotaWindowLabel(input.window) : '',
+    labelTooltip: definition.labelTooltip && input.window ? quotaWindowLabel(input.window) : undefined,
     classes: {
       root: definition.rootClass,
       header: definition.headerClass,
@@ -241,7 +244,7 @@ function localTokenDisplay(localUsage: AccountLocalUsage | null) {
 
 export function quotaWindowLocalUsageDisplay(window: AccountQuotaWindow) {
   const localUsage = accountLocalUsage(window.localUsage)
-  return localTokenDisplay(localUsage) || null
+  return localUsage?.totalTokens === 0 ? '0' : localTokenDisplay(localUsage) || null
 }
 
 export function quotaWindowCode(windowSeconds: number | null, role: AccountQuotaWindow['role']) {

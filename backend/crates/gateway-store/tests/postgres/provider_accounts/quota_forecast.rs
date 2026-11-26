@@ -61,6 +61,7 @@ async fn quota_forecast_excludes_openai_prewarm_but_preserves_inference_and_audi
     .unwrap();
     let store = admin_account_store(&database.pool);
     let query = AccountUsageWindowQuery {
+        models: None,
         account_id: "acct_prewarm".to_owned(),
         key: "week".to_owned(),
         range: TimeRange { start, end },
@@ -268,6 +269,7 @@ async fn quota_forecast_does_not_apply_openai_prewarm_semantics_to_other_provide
         .unwrap();
     let history = admin_account_store(&database.pool)
         .load_quota_forecast_history(&AccountUsageWindowQuery {
+            models: None,
             account_id: "acct_xai_kind".to_owned(),
             key: "week".to_owned(),
             range: TimeRange {
@@ -365,6 +367,7 @@ async fn quota_forecast_pairs_completed_usage_and_preserves_missing_pending_and_
     let store = admin_account_store(&database.pool);
     let history = store
         .load_quota_forecast_history(&AccountUsageWindowQuery {
+            models: None,
             account_id: "acct_forecast".to_owned(),
             key: "week".to_owned(),
             range: TimeRange { start, end },
@@ -381,6 +384,7 @@ async fn quota_forecast_pairs_completed_usage_and_preserves_missing_pending_and_
     assert_eq!(history.pending_request_count, 1);
     let learning = store
         .load_quota_learning_usage(&AccountUsageWindowQuery {
+            models: None,
             account_id: "acct_forecast".to_owned(),
             key: "week".to_owned(),
             range: TimeRange { start, end },
@@ -402,6 +406,7 @@ async fn quota_forecast_pairs_completed_usage_and_preserves_missing_pending_and_
     assert!(!format!("{history:?}").contains("never-debug-this"));
     let empty = store
         .load_quota_forecast_history(&AccountUsageWindowQuery {
+            models: None,
             account_id: "acct_forecast".to_owned(),
             key: "empty".to_owned(),
             range: TimeRange {
@@ -448,6 +453,7 @@ async fn quota_forecast_bounds_documents_without_sampling_away_token_totals() {
         .unwrap();
     let history = admin_account_store(&database.pool)
         .load_quota_forecast_history(&AccountUsageWindowQuery {
+            models: None,
             account_id: "acct_forecast_bound".to_owned(),
             key: "week".to_owned(),
             range: TimeRange {

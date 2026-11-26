@@ -150,10 +150,7 @@ impl CredentialSelectionInput<'_> {
 
     fn discard_optional_cache_preference(&self) -> bool {
         let optional = self.is_cache_preference()
-            && self
-                .attempt
-                .account_selection_policy()
-                .openai_account_affinity()
+            && self.attempt.account_selection_policy().account_affinity()
                 == gateway_core::account::AccountAffinity::Preferred;
         if optional {
             self.cache_preference_disabled
@@ -174,10 +171,7 @@ impl CredentialSelectionInput<'_> {
         !self
             .image_borrowing
             .load(std::sync::atomic::Ordering::Relaxed)
-            && self
-                .attempt
-                .account_selection_policy()
-                .openai_account_affinity()
+            && self.attempt.account_selection_policy().account_affinity()
                 == gateway_core::account::AccountAffinity::Strict
             && !self.attempt.is_diagnostic_required_account()
             && self.attempt.required_account().is_none()
@@ -973,7 +967,7 @@ impl CodexCredentialSelector {
         if request
             .attempt
             .account_selection_policy()
-            .openai_account_affinity()
+            .account_affinity()
             == gateway_core::account::AccountAffinity::Strict
             && affinity
                 .bound_account()
@@ -1008,7 +1002,7 @@ impl CodexCredentialSelector {
                     if request
                         .attempt
                         .account_selection_policy()
-                        .openai_account_affinity()
+                        .account_affinity()
                         == gateway_core::account::AccountAffinity::Strict
                         && request
                             .session_affinity_observation
@@ -1067,8 +1061,7 @@ impl CodexCredentialSelector {
 
         loop {
             let preferred = pinned_account.clone().or_else(|| {
-                (policy.openai_account_affinity()
-                    != gateway_core::account::AccountAffinity::Relaxed)
+                (policy.account_affinity() != gateway_core::account::AccountAffinity::Relaxed)
                     .then(|| affinity.preferred_account().cloned())
                     .flatten()
             });
@@ -1305,7 +1298,7 @@ impl CodexCredentialSelector {
                     if !diagnostic
                         && let Some(observation) = request.session_affinity_observation
                         && !self
-                            .remember_turn_alias(observation, policy.openai_session_binding_ttl())
+                            .remember_turn_alias(observation, policy.session_affinity_ttl())
                             .await?
                     {
                         drop(guard);
@@ -1331,7 +1324,7 @@ impl CodexCredentialSelector {
                         return Err(CredentialSelectionError::AccountSnapshotChanged);
                     }
                     return Ok(CodexCredentialLease {
-                        session_binding_ttl: policy.openai_session_binding_ttl(),
+                        session_binding_ttl: policy.session_affinity_ttl(),
                         installation_id: runtime.installation_id,
                         account,
                         authentication: runtime.authentication,

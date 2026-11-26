@@ -249,6 +249,14 @@ where
                 .await
         }
         AccountProvider::Xai => state.admin_services().xai().import_document(command).await,
+        AccountProvider::Antigravity => {
+            state
+                .admin_services()
+                .antigravity()
+                .map_err(map_service_error)?
+                .import_document(command)
+                .await
+        }
     }
     .map_err(map_service_error)?;
     if let Some(selection) = quality_template {
@@ -294,6 +302,14 @@ where
                 .start_authorization(command)
                 .await
         }
+        AccountProvider::Antigravity => {
+            state
+                .admin_services()
+                .antigravity()
+                .map_err(map_service_error)?
+                .start_authorization(command)
+                .await
+        }
     }
     .map_err(map_service_error)?;
     Ok(AdminResponse::new(
@@ -325,6 +341,14 @@ where
             state
                 .admin_services()
                 .xai()
+                .complete_authorization(command)
+                .await
+        }
+        AccountProvider::Antigravity => {
+            state
+                .admin_services()
+                .antigravity()
+                .map_err(map_service_error)?
                 .complete_authorization(command)
                 .await
         }
@@ -401,6 +425,14 @@ where
         }
         AccountProvider::OpenAi => state.admin_services().openai().delete(command).await,
         AccountProvider::Xai => state.admin_services().xai().delete(command).await,
+        AccountProvider::Antigravity => {
+            state
+                .admin_services()
+                .antigravity()
+                .map_err(map_service_error)?
+                .delete(command)
+                .await
+        }
     }
     .map_err(map_service_error)?;
     Ok(AdminResponse::new(

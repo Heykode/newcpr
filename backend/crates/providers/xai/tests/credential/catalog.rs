@@ -1098,3 +1098,101 @@ async fn billing_projects_only_recognized_periods_with_quota_evidence() {
         );
     }
 }
+
+#[tokio::test]
+async fn catalog_and_billing_use_current_global_identity() {
+    use provider_xai::{
+        GrokBillingRequest, GrokBillingTransport, GrokBillingTransportFuture,
+        GrokBillingTransportResponse, GrokCredentialCatalogService, GrokCredentialQuotaService,
+    };
+    #[derive(Default)]
+    struct RecordingTransport(Mutex<Vec<Vec<(String, String)>>>);
+    impl RecordingTransport {
+        fn record(&self, headers: &[provider_xai::GrokHeader]) {
+            self.0.lock().unwrap().push(
+                headers
+                    .iter()
+                    .filter(|h| matches!(h.name(), "user-agent" | "x-grok-client-version"))
+                    .map(|h| (h.name().to_owned(), h.value().expose().to_owned()))
+                    .collect(),
+            );
+        }
+    }
+    impl GrokModelCatalogTransport for RecordingTransport {
+        fn execute(&self, request: GrokModelCatalogRequest) -> GrokModelCatalogTransportFuture<'_> {
+            self.record(request.headers());
+            Box::pin(async {
+                Ok(GrokModelCatalogTransportResponse::new(
+                    OFFICIAL_FIXTURE,
+                    None,
+                ))
+            })
+        }
+    }
+    impl GrokBillingTransport for RecordingTransport {
+        fn execute(&self, request: GrokBillingRequest) -> GrokBillingTransportFuture<'_> {
+            self.record(request.headers());
+            Box::pin(async {
+                Ok(GrokBillingTransportResponse::new(
+                    br#"{"config":{"creditUsagePercent":25},"subscriptionTier":"SuperGrokPro"}"#,
+                ))
+            })
+        }
+    }
+    let store = MemoryProviderAccountStore::shared();
+    seed_input(&store, &create_input("global_profile", "global-subject"))
+        .await
+        .unwrap();
+    let repository = GrokCredentialRepository::new(store);
+    let selected = |version: &str| {
+        gateway_core::account::OpaqueProviderData::new(
+            serde_json::json!({
+                "versionMode": "fixed", "clientVersion": version,
+                "clientIdentifier": "grok-shell", "clientMode": "headless",
+                "targetOs": "windows", "targetArch": "arm64"
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+        )
+    };
+    let policy = Arc::new(crate::support::RequestProfileRuntimePolicy(Mutex::new(
+        selected("9.8.7"),
+    )));
+    let transport = Arc::new(RecordingTransport::default());
+    let catalog = GrokCredentialCatalogService::new(
+        repository.clone(),
+        transport.clone(),
+        Arc::new(MemoryGrokCatalogCache::default()),
+        crate::support::xai_wire_profile(),
+    )
+    .with_runtime_policy(policy.clone());
+    let quota = GrokCredentialQuotaService::new(
+        repository,
+        transport.clone(),
+        crate::support::xai_wire_profile(),
+    )
+    .with_runtime_policy(policy.clone());
+    for version in ["9.8.7", "9.8.8"] {
+        *policy.0.lock().unwrap() = selected(version);
+        catalog
+            .refresh_account_catalog(&account_id("global_profile"))
+            .await
+            .unwrap();
+        quota
+            .refresh_account(&account_id("global_profile"))
+            .await
+            .unwrap();
+        let mut requests = transport.0.lock().unwrap();
+        // 本地既有服务读取目录与 billing；独立 subscription 查询不在既有接入中。
+        assert_eq!(requests.len(), 2);
+        for headers in requests.drain(..) {
+            let header = |name| headers.iter().find(|h| h.0 == name).unwrap().1.as_str();
+            assert_eq!(
+                header("user-agent"),
+                format!("grok-shell/{version} (windows; aarch64)")
+            );
+            assert_eq!(header("x-grok-client-version"), version);
+        }
+    }
+}

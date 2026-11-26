@@ -319,6 +319,7 @@ async fn cumulative_cost_preserves_prewarm_fees_without_counting_them_as_inferen
 
     let store = admin_account_store(&db.pool);
     let window = AccountUsageWindowQuery {
+        models: None,
         account_id: "acct_prewarm_cost".to_owned(),
         key: "week".to_owned(),
         range: TimeRange {

@@ -17,7 +17,7 @@ import ExcelRecoveryFields from '@/components/ExcelRecoveryFields.vue'
 import { t } from '@/i18n'
 import { normalizeAccountName } from '@/utils/account-name'
 import { DEFAULT_EXCEL_MODELS_INPUT } from '@/utils/excel-defaults'
-import { accountModelAccessError } from '../utils/modelAccess'
+import { accountModelAccessError, commonImageModels } from '../utils/modelAccess'
 import AccountModelAccessField from './AccountModelAccessField.vue'
 import AccountOutboundField from './AccountOutboundField.vue'
 import CredentialEgressField from './CredentialEgressField.vue'
@@ -29,6 +29,7 @@ const props = withDefaults(defineProps<{
   batch?: boolean
   endpoint?: string | null
   currentProxyId?: string | null
+  provider?: string
   accountId?: string
   modelAccountId?: string
   preserveProxy?: boolean
@@ -269,6 +270,7 @@ defineExpose({ validate: () => formRef.value?.validate().catch(() => false) })
       form-prop="modelAccess"
       :account-id="modelAccountId ?? accountId"
       :known-model-catalog="knownModelCatalog"
+      :image-model-presets="provider === 'openai' ? commonImageModels : []"
       :disabled="disabled || (batch && !updateModelAccess)"
       :allow-preserve="preserveModelAccess"
     >

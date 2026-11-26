@@ -48,7 +48,13 @@
       "generateInstallationSeed": "Generate installation seed",
       "installationSeedHelp": "Derives a stable installation identity for each key and upstream account without sending the seed upstream, changing the seed changes the identity",
       "installationSeedPlaceholder": "Leave blank to use the upstream account’s installation ID",
-      "invalidInstallationSeed": "Enter a hyphenated UUID"
+      "invalidInstallationSeed": "Enter a hyphenated UUID",
+      "clientVersion": "Client version",
+      "coreVersion": "Core version",
+      "identityDescription": "Configure the client identity sent upstream",
+      "restoreSystemPrompt": "Restore default",
+      "systemPrompt": "System prompt",
+      "systemPromptHint": "Replaces client system instructions · Default from {source}"
     },
     "pricing": {
       "multiplier": "Multiplier",
@@ -94,7 +100,8 @@
         "title": "Sync source prices",
         "description": "Sync source prices for selected models, keeping custom prices and multipliers",
         "skipped": "Skipped {count} models with incomplete prices or incompatible billing methods",
-        "action": "Sync"
+        "action": "Sync",
+        "unavailable": "No source prices available for this provider. Set prices manually."
       },
       "selectAll": "Select all",
       "selected": "Selected: {count} / {count2}",
@@ -634,7 +641,8 @@
         "reorderHelp": "Drag to reorder steps, or focus the handle and use the up and down arrow keys",
         "dragStep": "Drag step {value}: {field}",
         "step": "Step {value}: {field}, {scope}, {action}, {effect}",
-        "deleteStep": "Delete step {value}: {field}"
+        "deleteStep": "Delete step {value}: {field}",
+        "sessionAliasEffect": "Stable project alias per account and session"
       },
       "presets": {
         "workspaceMetadata": "Additional workspace information",
@@ -652,7 +660,9 @@
         "gitCommitId": "Git commit ID",
         "gitRemoteCollection": "Git remote collection",
         "workspaceFingerprint": "Workspace fingerprint",
-        "unifyWorkspaceInformation": "Unify workspace information"
+        "unifyWorkspaceInformation": "Unify workspace information",
+        "anonymizeProject": "Anonymize project name by account and session",
+        "anonymizeWorkspace": "Anonymize workspace by account and session"
       },
       "testPlaceholder": "Run a test to see results"
     },

@@ -330,8 +330,11 @@ pub(super) fn map_repair_failure(error: CodexClientError) -> MappedProviderFailu
     classify_failure(failure, true)
 }
 
-pub(super) fn failed_repair_metering(request: &CodexResponsesRequest) -> Vec<ProviderEvent> {
-    use crate::transport::usage::{OpenAiBillingUsage, openai_billing_breakdown};
+pub(super) fn failed_repair_metering(
+    request: &CodexResponsesRequest,
+    prices: &gateway_core::metering::PricingOverrides,
+) -> Vec<ProviderEvent> {
+    use crate::billing::{OpenAiBillingUsage, openai_billing_breakdown_with_override};
     use gateway_protocol::openai::events::{billable_usage_is_complete, extract_usage};
     let Some(response) = request
         .excel
@@ -352,10 +355,13 @@ pub(super) fn failed_repair_metering(request: &CodexResponsesRequest) -> Vec<Pro
     usage.total_tokens = Some(raw.total_tokens);
     let cost = billable_usage_is_complete(&response, raw)
         .then(|| {
-            openai_billing_breakdown(
+            openai_billing_breakdown_with_override(
                 request.model(),
                 OpenAiBillingUsage::from(raw),
                 request.service_tier(),
+                prices
+                    .get("openai")
+                    .and_then(|models| models.get(request.model())),
             )
         })
         .flatten()
@@ -715,7 +721,7 @@ mod tests {
                 while let Some(chunk) = body.next().await {
                     let chunk = chunk.expect("successful repair transport");
                     if chunk.is_empty() {
-                        for event in failed_repair_metering(&request) { yield Ok(event); }
+                        for event in failed_repair_metering(&request, &Default::default()) { yield Ok(event); }
                         continue;
                     }
                     match decoder.push(&chunk) {
@@ -1170,9 +1176,13 @@ mod tests {
             let value: Value = serde_json::from_slice(&response.body).unwrap();
             assert_eq!(value["object"], "response.compaction");
             assert_eq!(value["output"], complete["output"]);
-            let (usage, _) =
-                super::super::compact::compact_response_metering(b"{}", &response.body, None)
-                    .unwrap();
+            let (usage, _) = super::super::compact::compact_response_metering(
+                b"{}",
+                &response.body,
+                None,
+                &Default::default(),
+            )
+            .unwrap();
             assert_eq!(usage.unwrap().total_tokens, Some(15));
         }
         for output in [
@@ -1184,6 +1194,7 @@ mod tests {
                     b"{}",
                     &serde_json::to_vec(&json!({"output":output})).unwrap(),
                     None,
+                    &Default::default(),
                 )
                 .is_err()
             );

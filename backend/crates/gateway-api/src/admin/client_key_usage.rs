@@ -329,10 +329,10 @@ impl
             weekly_limit_usd: budget.limits.weekly_usd.canonical(),
             daily_used_usd: budget.daily_used_usd.canonical(),
             weekly_used_usd: budget.weekly_used_usd.canonical(),
-            daily_resets_at: budget.daily_resets_at.map(DateTime::from),
-            weekly_resets_at: budget.weekly_resets_at.map(DateTime::from),
-            daily_resets_at_display: budget.daily_resets_at.map(format),
-            weekly_resets_at_display: budget.weekly_resets_at.map(format),
+            daily_resets_at: budget.daily_resets_at().map(DateTime::from),
+            weekly_resets_at: budget.weekly_resets_at().map(DateTime::from),
+            daily_resets_at_display: budget.daily_resets_at().map(format),
+            weekly_resets_at_display: budget.weekly_resets_at().map(format),
         }
     }
 }

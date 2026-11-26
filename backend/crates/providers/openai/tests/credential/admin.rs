@@ -466,7 +466,7 @@ async fn pat_auth_json_import_and_cpr_round_trip_preserve_a_token_without_email(
                 account: prepared.account.with_model_access(policy.clone()),
                 credential: prepared.credential,
             },
-            added_at: Utc::now(),
+            created_at: Utc::now(),
             updated_at: Utc::now(),
         }])
         .expect("export PAT using the existing credential schema");

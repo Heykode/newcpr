@@ -56,7 +56,11 @@
         "minutes": "{duration} min limit"
       },
       "autoUsePoints": "Automatically use credits",
-      "autoUsePointsHelp": "Use available credits when the subscription limit is reached"
+      "autoUsePointsHelp": "Use available credits when the subscription limit is reached",
+      "groups": {
+        "geminiModels": "Gemini models",
+        "claudeGptModels": "Claude and GPT models"
+      }
     },
     "account": "Account",
     "connectionTest": {
@@ -276,7 +280,7 @@
       "downloadModelCatalog": "Download model catalog",
       "restoreState": "Reset status",
       "staleSelection": "Selected account data is out of date, select the accounts again",
-      "exportUnsupported": "Some selected accounts belong to providers that do not support export",
+      "exportUnsupported": "Some selected accounts do not support credential export",
       "deleted": "Account deleted",
       "deletedAccountDeletedAccounts": "Deleted {count} account | Deleted {count} accounts",
       "partialDeletion": "Deleted {count} accounts, the remaining accounts were not deleted: {value}",
@@ -319,7 +323,8 @@
         "general": "Total usage",
         "weekly": "Weekly usage",
         "monthly": "Monthly usage",
-        "quota": "Period usage"
+        "quota": "Period usage",
+        "recentWeek": "Last 7 days"
       },
       "cost": "Cost"
     },
@@ -378,7 +383,9 @@
       "importTaskCreated": "Import task created",
       "partialSubmission": "Some import tasks were created, retry with the same input to submit the rest",
       "accountName": "{provider} account",
-      "failedToStartAuthorization": "Failed to start authorization"
+      "failedToStartAuthorization": "Failed to start authorization",
+      "fullCallbackHelp": "After authorizing, paste the full callback URL from your browser’s address bar.",
+      "fullCallbackPlaceholder": "Paste the full callback URL containing code and state"
     },
     "importTasks": {
       "needProcessing": "Need processing",

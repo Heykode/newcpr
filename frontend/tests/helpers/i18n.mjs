@@ -1,5 +1,7 @@
 import { readdirSync, readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
+import { runInNewContext } from 'node:vm'
+import ts from 'typescript'
 import { createI18n } from 'vue-i18n'
 
 const directory = new URL('../../src/i18n/locales/zh-Hans/', import.meta.url)
@@ -18,5 +20,20 @@ export const { t, locale } = i18n.global
 
 export function createTestRequire(url) {
   const require = createRequire(url)
-  return Object.assign(name => name === '@/i18n' ? { i18n, t, locale } : require(name), require)
+  let numberExports
+  const resolve = (name) => {
+    if (name === '@/i18n')
+      return { i18n, t, locale }
+    if (name === '@/utils/number') {
+      if (!numberExports) {
+        numberExports = {}
+        const source = readFileSync(new URL('../../src/utils/number.ts', import.meta.url), 'utf8')
+        const { outputText } = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2024 } })
+        runInNewContext(outputText, { exports: numberExports, require: resolve })
+      }
+      return numberExports
+    }
+    return require(name)
+  }
+  return Object.assign(resolve, require)
 }

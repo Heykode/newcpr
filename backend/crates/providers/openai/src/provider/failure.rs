@@ -1054,6 +1054,19 @@ pub(super) fn map_client_error(
         return map_upstream_failure(failure, observation, ReplayBoundary::BeforeSemanticOutput);
     }
     let mut failure = match &error {
+        CodexClientError::Privacy(_) => MappedProviderFailure::plain(
+            provider_error(
+                ProviderErrorKind::InvalidRequest,
+                UpstreamSendState::NotSent,
+            )
+            .with_retry_prohibited()
+            .with_client_visible_upstream_error(ClientVisibleUpstreamError::new(
+                "A gateway privacy rule could not process this request.",
+                Some("privacy_policy_rejected".to_owned()),
+                Some("invalid_request_error".to_owned()),
+            )),
+        ),
+
         CodexClientError::ConnectionBudgetExhausted => MappedProviderFailure::plain(
             provider_error(ProviderErrorKind::Timeout, UpstreamSendState::NotSent)
                 .with_retry_prohibited(),
@@ -1277,6 +1290,12 @@ pub(super) fn client_diagnostic(
     uses_account_proxy: bool,
 ) -> Option<ProviderDiagnostic> {
     let (stage, code, message) = match error {
+        CodexClientError::Privacy(error) => (
+            "prepare",
+            "privacy_policy_rejected",
+            format!("Privacy rule {}: {}", error.rule_index + 1, error.reason),
+        ),
+
         CodexClientError::ConnectionBudgetExhausted => (
             "connect",
             "connection_budget_exhausted",

@@ -18,11 +18,13 @@ export function useBackupSettings() {
   const savingSchedule = shallowRef(false)
   const error = shallowRef('')
   const loaded = shallowRef(false)
+  const busy = computed(() => loading.value || savingStorage.value || testing.value || savingSchedule.value)
 
   const storageRevision = shallowRef(0)
-  const verified = shallowRef(false)
+  const savedVerified = shallowRef(false)
+  const secretConfigured = shallowRef(false)
 
-  // 存储表单；secretAccessKey 由 GET 回填，保存时始终整体提交。
+  // Secret 只在主动更换时提交，读取设置不回填已保存的凭据。
   const storage = reactive({
     endpoint: '',
     region: 'auto',
@@ -43,12 +45,14 @@ export function useBackupSettings() {
 
   const savedStorage = shallowRef('')
   const savedSchedule = shallowRef('')
+  const storageDirty = computed(() => JSON.stringify(storage) !== savedStorage.value)
+  const verified = computed(() => !storageDirty.value && savedVerified.value)
   const hasChanges = computed(() => loaded.value && (
-    JSON.stringify(storage) !== savedStorage.value || JSON.stringify(schedule) !== savedSchedule.value
+    storageDirty.value || JSON.stringify(schedule) !== savedSchedule.value
   ))
 
   async function load(): Promise<void> {
-    if (loaded.value)
+    if (loaded.value || busy.value)
       return
     loading.value = true
     error.value = ''
@@ -72,12 +76,13 @@ export function useBackupSettings() {
 
   function applyStorage(data: BackupSettingsView): void {
     storageRevision.value = data.storageRevision
-    verified.value = data.verified
+    savedVerified.value = data.verified
+    secretConfigured.value = data.secretConfigured
     storage.endpoint = data.endpoint ?? ''
     storage.region = data.region ?? 'auto'
     storage.bucket = data.bucket ?? ''
     storage.accessKeyId = data.accessKeyId ?? ''
-    storage.secretAccessKey = data.secretAccessKey ?? ''
+    storage.secretAccessKey = ''
     storage.prefix = data.prefix ?? 'backups/'
     storage.forcePathStyle = data.forcePathStyle
     savedStorage.value = JSON.stringify(storage)
@@ -94,17 +99,20 @@ export function useBackupSettings() {
 
   function storagePayload(): UpdateBackupStoragePayload {
     return {
+      storageRevision: storageRevision.value,
       endpoint: storage.endpoint.trim(),
       region: storage.region.trim(),
       bucket: storage.bucket.trim(),
       accessKeyId: storage.accessKeyId.trim(),
-      secretAccessKey: storage.secretAccessKey.trim(),
+      secretAccessKey: storage.secretAccessKey || undefined,
       prefix: storage.prefix.trim(),
       forcePathStyle: storage.forcePathStyle,
     }
   }
 
   async function saveStorage(): Promise<boolean> {
+    if (busy.value || !loaded.value)
+      return false
     savingStorage.value = true
     try {
       const data = await updateBackupStorage(storagePayload())
@@ -129,20 +137,22 @@ export function useBackupSettings() {
   }
 
   async function runTest(): Promise<void> {
+    if (busy.value || !loaded.value || storageDirty.value)
+      return
     testing.value = true
     try {
-      const result = await testBackupStorage()
-      if (result.ok) {
-        verified.value = true
+      const result = await testBackupStorage(storageRevision.value)
+      savedVerified.value = result.ok && result.storageRevision === storageRevision.value
+      if (savedVerified.value) {
         toast.success('连接测试通过')
       }
       else {
-        verified.value = false
+        savedVerified.value = false
         toast.error(`${result.stage}: ${result.message}`)
       }
     }
     catch {
-      verified.value = false
+      savedVerified.value = false
     }
     finally {
       testing.value = false
@@ -150,9 +160,12 @@ export function useBackupSettings() {
   }
 
   async function saveSchedule(): Promise<boolean> {
+    if (busy.value || !loaded.value)
+      return false
     savingSchedule.value = true
     try {
       const data = await updateBackupSchedule({
+        storageRevision: storageRevision.value,
         scheduleEnabled: schedule.scheduleEnabled,
         cronExpression: schedule.cronExpression.trim(),
         scheduleTimezone: schedule.scheduleTimezone.trim(),
@@ -173,6 +186,9 @@ export function useBackupSettings() {
 
   return {
     hasChanges,
+    busy,
+    storageDirty,
+    secretConfigured,
     loading,
     savingStorage,
     testing,

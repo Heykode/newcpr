@@ -37,7 +37,6 @@ const AUTHORIZATION_ENDPOINT: &str = "https://auth.openai.com/oauth/authorize";
 const DESKTOP_AUTH_ENDPOINT: &str = "https://chatgpt.com/codex/desktop-auth";
 const AUTHORIZATION_SCOPE: &str =
     "openid profile email offline_access api.connectors.read api.connectors.invoke";
-const AUTHORIZATION_ORIGINATOR: &str = "Codex Desktop";
 const STREAMLINED_LOGIN_QUERY: &str = "codex_streamlined_login";
 const NO_UNIVERSAL_LINKS_QUERY: &str = "no_universal_links";
 const SURFACE_STABLE_ID_DOMAIN: &[u8] = b"openai/codex-desktop/surface-stable-id/v1\0";
@@ -338,6 +337,8 @@ pub enum CodexOAuthAdminError {
     StorageUnavailable,
     #[error("Codex OAuth account mutation failed")]
     Credential,
+    #[error("Codex OAuth request profile is unavailable")]
+    Profile(#[source] gateway_core::error::ErrorSource),
 }
 
 #[async_trait]
@@ -360,6 +361,7 @@ pub struct CodexOAuthAdminService {
     credentials: CodexCredentialAdmin,
     oauth_client_id: String,
     profile: CodexWireProfileState,
+    runtime_policy: Option<Arc<dyn gateway_core::provider_ports::ProviderRuntimePolicyPort>>,
 }
 
 struct CodexOAuthAuthorizationCommitGuard {
@@ -418,7 +420,17 @@ impl CodexOAuthAdminService {
             credentials,
             oauth_client_id: OFFICIAL_CODEX_OAUTH_CLIENT_ID.to_owned(),
             profile,
+            runtime_policy: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_runtime_policy(
+        mut self,
+        policy: Arc<dyn gateway_core::provider_ports::ProviderRuntimePolicyPort>,
+    ) -> Self {
+        self.runtime_policy = Some(policy);
+        self
     }
 
     #[must_use]
@@ -620,9 +632,15 @@ impl CodexOAuthAdminService {
             mutation,
         })
         .map_err(map_pending_error)?;
-        let profile = self.profile.snapshot();
-        let authorization_url =
-            authorization_url(&pending, &self.oauth_client_id, &profile.desktop_version)?;
+        let profile = match &self.runtime_policy {
+            Some(policy) => self
+                .profile
+                .resolve_global_request_profile(policy.as_ref())
+                .await
+                .map_err(CodexOAuthAdminError::Profile)?,
+            None => self.profile.snapshot(),
+        };
+        let authorization_url = authorization_url(&pending, &self.oauth_client_id, &profile)?;
         self.pending
             .create(&pending)
             .await
@@ -753,11 +771,8 @@ fn derive_surface_stable_id(installation_id: &str) -> Result<String, CodexOAuthA
 fn authorization_url(
     pending: &CodexPendingAuthorization,
     oauth_client_id: &str,
-    desktop_version: &str,
+    profile: &crate::transport::profile::CodexWireProfile,
 ) -> Result<String, CodexOAuthAdminError> {
-    if !valid_text(desktop_version) {
-        return Err(CodexOAuthAdminError::InvalidInput);
-    }
     let mut inner =
         Url::parse(AUTHORIZATION_ENDPOINT).map_err(|_| CodexOAuthAdminError::InvalidInput)?;
     let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(
@@ -776,8 +791,11 @@ fn authorization_url(
             .append_pair("scope", AUTHORIZATION_SCOPE)
             .append_pair("id_token_add_organizations", "true")
             .append_pair("codex_cli_simplified_flow", "true")
-            .append_pair("originator", AUTHORIZATION_ORIGINATOR)
-            .append_pair("codex_app_version", desktop_version)
+            .append_pair("originator", &profile.originator);
+        if !profile.desktop_version.is_empty() {
+            query.append_pair("codex_app_version", &profile.desktop_version);
+        }
+        query
             .append_pair("source_surface_stable_id", &stable_id)
             .append_pair("codex_origin_stable_id", &stable_id)
             .append_pair(STREAMLINED_LOGIN_QUERY, "true");

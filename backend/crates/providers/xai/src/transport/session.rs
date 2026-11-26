@@ -11,7 +11,6 @@ use gateway_core::account::{
 };
 use gateway_core::policy::ClientApiKeyId;
 use gateway_core::routing::{FrozenAccountScope, UpstreamModelId};
-use sha2::{Digest as _, Sha256};
 
 use crate::SecretValue;
 
@@ -72,14 +71,18 @@ impl GrokSessionAffinityKey {
         Self(digest)
     }
 
-    /// 为候选账号计算稳定 rendezvous 分值，原始会话值不会离开 Provider。
-    pub(crate) fn score(&self, account_id: &ProviderAccountId) -> [u8; 32] {
-        let mut hasher = Sha256::new();
-        hasher.update(b"xai-account-affinity-v1\0");
-        hasher.update(self.0);
-        hasher.update(b"\0");
-        hasher.update(account_id.as_str().as_bytes());
-        hasher.finalize().into()
+    pub(crate) fn store_key(
+        &self,
+    ) -> Result<
+        gateway_core::provider_ports::ProviderSessionAffinityKey,
+        gateway_core::provider_ports::ProviderStoreError,
+    > {
+        gateway_core::provider_ports::ProviderSessionAffinityKey::try_new(
+            self.0
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>(),
+        )
     }
 }
 
@@ -108,6 +111,11 @@ pub struct SelectedGrokSession {
 }
 
 impl SelectedGrokSession {
+    pub(crate) fn with_lease_guard(mut self, guard: impl GrokSessionLeaseGuard) -> Self {
+        self._guard = Box::new(guard);
+        self
+    }
+
     /// 从 Provider 持有的明文 OAuth 材料构造选中会话。
     ///
     /// # Errors
@@ -465,6 +473,11 @@ pub trait GrokSessionSelector: Send + Sync {
 /// 不含密钥的选择器失败。
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum GrokSessionSelectorError {
+    #[error("Grok account selection was cancelled")]
+    Cancelled,
+    #[error("Grok account selection deadline elapsed")]
+    DeadlineElapsed,
+
     #[error(transparent)]
     QueueRejected(#[from] gateway_core::concurrency::QueueRejection),
     /// 没有会话同时满足模型、状态与排除约束。

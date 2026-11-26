@@ -894,7 +894,7 @@ test('OAuth creation and existing-account relogin keep their original APIs and s
     })
     assert.equal(h.reloads(), 1)
 
-    h.state.openReauthorizeAccount({ id: 'account-existing', provider, name: 'Existing', enabled: false })
+    h.state.openReauthorizeAccount({ id: 'account-existing', provider, name: 'Existing', enabled: false, capabilities: { reauthorize: true } })
     await flush()
     assert.equal(h.oauthStarts[1].accountId, 'account-existing')
     assert.equal(h.oauthStarts[1].outboundProxyId, undefined)

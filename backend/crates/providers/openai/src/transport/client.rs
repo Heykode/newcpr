@@ -466,6 +466,8 @@ impl fmt::Debug for CodexClientVisibleUpstreamResponse {
 /// Codex 上游 HTTP 客户端错误。
 #[derive(Error)]
 pub enum CodexClientError {
+    #[error("privacy policy rejected the request: {0}")]
+    Privacy(#[from] gateway_core::settings::privacy::PrivacyError),
     #[error("connection recovery budget exhausted")]
     ConnectionBudgetExhausted,
     /// Reqwest 传输失败。
@@ -549,6 +551,10 @@ pub enum CodexClientError {
 impl fmt::Debug for CodexClientError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Privacy(error) => formatter
+                .debug_tuple("CodexClientError::Privacy")
+                .field(error)
+                .finish(),
             Self::ConnectionBudgetExhausted => {
                 formatter.write_str("CodexClientError::ConnectionBudgetExhausted")
             }
@@ -626,7 +632,8 @@ impl CodexClientError {
             | Self::InvalidHeaderValue(_)
             | Self::WebSocketEncode(_)
             | Self::RequestBodyEncode(_)
-            | Self::RequestCompression(_) => None,
+            | Self::RequestCompression(_)
+            | Self::Privacy(_) => None,
         }
     }
 
@@ -951,6 +958,11 @@ pub(super) struct RecoveryAttemptRoute {
 /// Codex HTTP/SSE 上游客户端。
 #[derive(Clone)]
 pub struct CodexBackendClient {
+    pub(super) privacy: Option<(
+        Arc<dyn gateway_core::settings::privacy::CompiledPrivacyPolicy>,
+        gateway_core::lifecycle::CancellationToken,
+        Option<String>,
+    )>,
     pub(super) fedramp_routing: bool,
     pub(super) routing_affinity: Option<super::routing_affinity::ChatGptRoutingAffinity>,
     pub(super) connection_budget: Option<gateway_core::engine::connection::ConnectionBudget>,

@@ -2,7 +2,7 @@
 import type { AccountRow } from '../../constants'
 import type { AccountCreateForm, AccountImportMode } from './model'
 import type { AccountGroup } from '@/api'
-import { Openai, Xai } from '@boxicons/vue'
+import { GoogleAntigravity, Openai, Xai } from '@boxicons/vue'
 import { Copy, LayoutGrid, Settings2 } from '@lucide/vue'
 import { computed, shallowRef, useTemplateRef } from 'vue'
 import BaseButton from '@/components/base/BaseButton.vue'
@@ -119,6 +119,7 @@ async function importExample() {
       <Settings2 v-if="view.configuring" class="text-cp-text" :size="20" aria-hidden="true" />
       <LayoutGrid v-else-if="view.isBatch" class="text-cp-text" :size="20" aria-hidden="true" />
       <Xai v-else-if="view.isXai" class="text-cp-text" :width="20" :height="20" aria-hidden="true" />
+      <GoogleAntigravity v-else-if="view.isAntigravity" class="text-cp-text" :width="20" :height="20" aria-hidden="true" />
       <Openai v-else class="text-cp-text" :width="20" :height="20" aria-hidden="true" />
     </template>
 
@@ -182,8 +183,8 @@ async function importExample() {
           v-if="mode === 'oauth'"
           v-model="form.oauthCallback"
           :auth-url="view.oauth.authUrl"
-          :panel-title="`${view.isXai ? 'xAI' : 'OpenAI'} OAuth ${reauthorizing ? '重新授权' : '授权'}`"
-          :panel-description="view.isXai ? '生成并打开授权链接、完成浏览器授权、粘贴回调地址或授权码' : '生成并打开授权链接、完成浏览器授权、粘贴回调地址'"
+          :panel-title="`${view.providerLabel} OAuth ${reauthorizing ? '重新授权' : '授权'}`"
+          :panel-description="view.isXai ? '生成并打开授权链接、完成浏览器授权、粘贴回调地址或授权码' : '生成并打开授权链接、完成浏览器授权、粘贴完整回调地址（包括 code 和 state）'"
           :loading="oauthLoading"
           :callback-label="view.oauth.callbackLabel"
           :callback-placeholder="view.oauth.callbackPlaceholder"

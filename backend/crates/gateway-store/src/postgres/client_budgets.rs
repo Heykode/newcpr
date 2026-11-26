@@ -202,8 +202,9 @@ impl PgClientBudgetStore {
                         .ok_or_else(unavailable)?;
                 }
             }
-            let daily_exceeded = limits.daily_usd != Decimal::ZERO && daily >= limits.daily_usd;
-            let weekly_exceeded = limits.weekly_usd != Decimal::ZERO && weekly >= limits.weekly_usd;
+            let access = limits.access(daily, weekly);
+            let daily_exceeded = access.daily_limit_reached;
+            let weekly_exceeded = access.weekly_limit_reached;
             if daily_exceeded || weekly_exceeded {
                 let (reset, code, message) = if weekly_exceeded {
                     (
@@ -388,6 +389,8 @@ pub(super) async fn load_client_key_budgets(
         "select k.id, k.daily_limit_usd::text, k.weekly_limit_usd::text,
         (case when w.daily_end > w.daily_start and w.daily_end > now() then w.daily_used_usd else 0 end)::text as daily_used,
         (case when w.weekly_end > w.weekly_start and w.weekly_end > now() then w.weekly_used_usd else 0 end)::text as weekly_used,
+        case when w.daily_end > w.daily_start and w.daily_end > now() then w.daily_start end as daily_start,
+        case when w.weekly_end > w.weekly_start and w.weekly_end > now() then w.weekly_start end as weekly_start,
         case when w.daily_end > w.daily_start and w.daily_end > now() then w.daily_end end as daily_end,
         case when w.weekly_end > w.weekly_start and w.weekly_end > now() then w.weekly_end end as weekly_end
         from client_api_keys k left join client_key_budget_windows w on w.client_api_key_id = k.id
@@ -413,12 +416,26 @@ pub(super) async fn load_client_key_budgets(
                 },
                 daily_used_usd: parse("daily_used")?,
                 weekly_used_usd: parse("weekly_used")?,
-                daily_resets_at: row
-                    .get::<Option<DateTime<Utc>>, _>("daily_end")
-                    .map(Into::into),
-                weekly_resets_at: row
-                    .get::<Option<DateTime<Utc>>, _>("weekly_end")
-                    .map(Into::into),
+                daily_window: row
+                    .get::<Option<DateTime<Utc>>, _>("daily_start")
+                    .zip(row.get::<Option<DateTime<Utc>>, _>("daily_end"))
+                    .map(
+                        |(start, end)| gateway_core::engine::budget::ClientBudgetWindow {
+                            start: start.into(),
+                            end: end.into(),
+                            explicit: false,
+                        },
+                    ),
+                weekly_window: row
+                    .get::<Option<DateTime<Utc>>, _>("weekly_start")
+                    .zip(row.get::<Option<DateTime<Utc>>, _>("weekly_end"))
+                    .map(
+                        |(start, end)| gateway_core::engine::budget::ClientBudgetWindow {
+                            start: start.into(),
+                            end: end.into(),
+                            explicit: false,
+                        },
+                    ),
             },
         );
     }

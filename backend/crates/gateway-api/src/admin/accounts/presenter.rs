@@ -78,6 +78,7 @@ pub(super) fn account_view(
     timezone: DeploymentTimeZone,
 ) -> AccountView {
     let AccountDirectoryItem {
+        capabilities,
         error_protection,
         turn_state,
         codex_quota_overdraft,
@@ -86,6 +87,7 @@ pub(super) fn account_view(
         plan_type_display,
         projection,
         usage,
+        usage_period,
         cumulative_costs,
         purchase_cost,
         excel_recovery,
@@ -101,15 +103,16 @@ pub(super) fn account_view(
         .map(|value| timezone_rfc3339(value, timezone));
     let added_at = timezone_rfc3339(&account.created_at, timezone);
     let updated_at = timezone_rfc3339(&account.updated_at, timezone);
-    let usage = account_usage_view(usage, quota.usage_window(), now, timezone);
+    let usage =
+        account_usage_view_with_period(usage, quota.usage_window(), usage_period, now, timezone);
     let (mut quota, refresh_token_expires_at) =
         account_quota_view(quota, rate_limited_until, now, timezone);
     quota.overdraft =
         codex_quota_overdraft.map(|state| codex_quota_overdraft_view(state, timezone));
     AccountView {
+        capabilities: capabilities.into(),
         quota_settings: account.quota_settings,
-        quota_settings_supported: account.provider_kind.as_str() == "openai"
-            && account.authentication_kind == "oauth",
+        quota_settings_supported: capabilities.quota_settings_supported,
         auto_use_quota_credits: account.auto_use_quota_credits,
         error_protection,
         purchase_cost,
@@ -278,6 +281,7 @@ fn quota_forecast_view(
     AccountQuotaForecastView {
         period: match forecast.period {
             AccountUsagePeriod::Daily => "daily",
+            AccountUsagePeriod::RecentWeek => "recent_week",
             AccountUsagePeriod::Weekly => "weekly",
             AccountUsagePeriod::Monthly => "monthly",
         },
@@ -533,14 +537,26 @@ pub(super) fn quota_local_usage(usage: &AccountUsage) -> Value {
     })
 }
 
-pub(super) fn account_usage_view(
+fn account_usage_view_with_period(
     usage: Option<AccountUsage>,
     source: Option<(&ProviderQuotaWindow, AccountUsagePeriod)>,
+    period: Option<AccountUsagePeriod>,
     now: DateTime<Utc>,
     timezone: DeploymentTimeZone,
 ) -> AccountUsageView {
+    let (window_kind, label) = match period {
+        Some(AccountUsagePeriod::Daily) => ("daily", "滚动日用量"),
+        Some(AccountUsagePeriod::RecentWeek) => ("recent_week", "近七日用量"),
+        Some(AccountUsagePeriod::Weekly) => ("weekly", "周额度窗口"),
+        Some(AccountUsagePeriod::Monthly) => ("monthly", "月额度窗口"),
+        None => ("quota", "周/月额度窗口"),
+    };
     let Some(usage) = usage else {
-        return empty_account_usage();
+        return AccountUsageView {
+            window_kind,
+            window_label_display: label.to_owned(),
+            ..empty_account_usage()
+        };
     };
     let known_count = usage
         .cost_coverage
@@ -554,17 +570,13 @@ pub(super) fn account_usage_view(
         "known"
     };
     AccountUsageView {
-        window_label_display: match source.map(|(_, period)| period) {
-            Some(AccountUsagePeriod::Daily) => "滚动日用量",
-            Some(AccountUsagePeriod::Weekly) => "周额度窗口",
-            Some(AccountUsagePeriod::Monthly) => "月额度窗口",
-            None => "周/月额度窗口",
-        }
-        .to_owned(),
+        window_kind,
+        window_label_display: label.to_owned(),
         quota_window: source.map(|(window, period)| AccountUsageQuotaWindowView {
             key: window.key.clone(),
             period: match period {
                 AccountUsagePeriod::Daily => "daily",
+                AccountUsagePeriod::RecentWeek => "recent_week",
                 AccountUsagePeriod::Weekly => "weekly",
                 AccountUsagePeriod::Monthly => "monthly",
             },
@@ -713,6 +725,7 @@ pub(super) fn display_optional_tokens(value: Option<u64>) -> String {
 
 pub(super) fn empty_account_usage() -> AccountUsageView {
     AccountUsageView {
+        window_kind: "quota",
         window_label_display: "周/月额度窗口".to_owned(),
         quota_window: None,
         request_count: None,

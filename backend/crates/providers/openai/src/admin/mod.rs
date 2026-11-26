@@ -169,6 +169,26 @@ impl OpenAiAdminProvider {
 
 #[async_trait]
 impl ProviderAdmin for OpenAiAdminProvider {
+    fn compile_privacy_policy(
+        &self,
+        policy: &gateway_core::settings::privacy::CodexPrivacyPolicy,
+    ) -> Result<
+        Arc<dyn gateway_core::settings::privacy::CompiledPrivacyPolicy>,
+        gateway_core::settings::privacy::PrivacyError,
+    > {
+        crate::transport::privacy::compile(policy)
+    }
+
+    fn preview_privacy_policy(
+        &self,
+        request: gateway_core::settings::privacy::PrivacyPreviewRequest,
+    ) -> Result<
+        gateway_core::settings::privacy::PrivacyPreviewResult,
+        gateway_core::settings::privacy::PrivacyError,
+    > {
+        crate::transport::privacy::preview(request)
+    }
+
     fn relogin_egress_state(
         &self,
     ) -> Result<
@@ -239,6 +259,10 @@ impl ProviderAdmin for OpenAiAdminProvider {
     ) -> gateway_admin::model::accounts::ProviderAccountCapabilities {
         let oauth = authentication_kind == crate::credential::CODEX_AUTHENTICATION_KIND_OAUTH;
         gateway_admin::model::accounts::ProviderAccountCapabilities {
+            credential_refresh: oauth,
+            reauthorize: oauth,
+            credential_export: oauth,
+            model_catalog_download: oauth,
             quota_settings_supported: oauth,
             quota_credits: oauth,
             quota: oauth,
@@ -251,8 +275,77 @@ impl ProviderAdmin for OpenAiAdminProvider {
         }
     }
 
+    fn is_direct_account(&self, authentication_kind: &str) -> bool {
+        authentication_kind == crate::credential::CODEX_AUTHENTICATION_KIND_OAUTH
+    }
+
+    fn peer_model_eligible(&self, account: &AccountRecord, model: &str) -> Option<bool> {
+        let account = account_from_record(account).ok()?;
+        if account.responses_upstream_for_model(model)
+            == gateway_core::account::ResponsesUpstream::Excel
+        {
+            // Excel 执行不消耗本地 OAuth 额度，不能用 OAuth 观测宣称该模型可用。
+            return None;
+        }
+        let model = model.rsplit('/').next().unwrap_or(model);
+        Some(
+            account.authentication_kind() == crate::credential::CODEX_AUTHENTICATION_KIND_OAUTH
+                && !model.eq_ignore_ascii_case("grok")
+                && !model
+                    .get(..5)
+                    .is_some_and(|prefix| prefix.eq_ignore_ascii_case("grok-")),
+        )
+    }
+
     fn provider_kind(&self) -> &ProviderKind {
         &self.provider_kind
+    }
+
+    fn client_profile_options(
+        &self,
+    ) -> Result<gateway_core::account::OpaqueProviderData, ProviderAdminError> {
+        self.profile.selection_options().map_err(|error| {
+            provider_admin_error(ProviderAdminErrorKind::Invalid).with_source(error)
+        })
+    }
+
+    fn default_client_profile(&self) -> Option<gateway_core::account::OpaqueProviderData> {
+        let profile = self.profile.snapshot();
+        serde_json::json!({"mode": "custom", "userAgent": profile.user_agent(), "originator": profile.originator, "codexVersion": profile.codex_version})
+            .as_object().cloned().map(gateway_core::account::OpaqueProviderData::new)
+    }
+
+    fn preview_client_profile(
+        &self,
+        configuration: &gateway_core::account::OpaqueProviderData,
+    ) -> Result<gateway_core::account::OpaqueProviderData, ProviderAdminError> {
+        if configuration
+            .expose_to_provider()
+            .contains_key("installationSeed")
+            || gateway_core::request_profiles::inherited_fields(configuration).is_some()
+        {
+            return Err(provider_admin_error(ProviderAdminErrorKind::Invalid)
+                .with_public_message("安装身份种子只能在 API 密钥中设置"));
+        }
+        self.profile
+            .preview_selection(configuration)
+            .map_err(|error| {
+                provider_admin_error(ProviderAdminErrorKind::Invalid).with_source(error)
+            })
+    }
+
+    fn preview_key_client_profile(
+        &self,
+        key: &gateway_core::account::OpaqueProviderData,
+        global: Option<&gateway_core::account::OpaqueProviderData>,
+    ) -> Result<gateway_core::account::OpaqueProviderData, ProviderAdminError> {
+        crate::transport::profile::identity::inherited_identity_fields(key).map_err(|error| {
+            provider_admin_error(ProviderAdminErrorKind::Invalid).with_source(error)
+        })?;
+        let profile = gateway_core::request_profiles::resolve_key_profile(key, global);
+        self.profile.preview_selection(&profile).map_err(|error| {
+            provider_admin_error(ProviderAdminErrorKind::Invalid).with_source(error)
+        })
     }
 
     fn outbound_user_agent(
@@ -432,6 +525,14 @@ impl ProviderAdmin for OpenAiAdminProvider {
         })
     }
 
+    fn pricing_catalog(&self) -> gateway_admin::model::pricing::ProviderPricingCatalog {
+        crate::billing::pricing_catalog()
+    }
+
+    fn supported_pricing_bands(&self) -> &'static [&'static str] {
+        crate::billing::SUPPORTED_PRICING_BANDS
+    }
+
     fn calculated_billing(
         &self,
         input: &ProviderBillingInput,
@@ -457,6 +558,8 @@ impl ProviderAdmin for OpenAiAdminProvider {
             return Ok(None);
         }
         Ok(Some(CalculatedBillingBreakdown {
+            image: None,
+            custom_multiplier_bps: 10_000,
             long_context_billing_applied: false,
             input_amount: currency_cost(breakdown.input_amount())?,
             output_amount: currency_cost(breakdown.output_amount())?,
@@ -488,6 +591,31 @@ impl ProviderAdmin for OpenAiAdminProvider {
         request: gateway_admin::model::relogin::ReloginRequest,
     ) -> Result<gateway_admin::model::relogin::ReloginCredential, ProviderAdminError> {
         crate::credential::relogin::login(self, request).await
+    }
+
+    fn evaluate_usage_pricing(
+        &self,
+        input: &gateway_admin::ports::provider::ProviderUsagePricingInput,
+        pricing: Option<&gateway_core::metering::ModelPriceOverride>,
+    ) -> Result<Option<gateway_core::metering::CalculatedCostBreakdown>, ProviderAdminError> {
+        let (Some(input_tokens), Some(output_tokens), Some(cached), Some(written)) = (
+            input.usage.input_tokens,
+            input.usage.output_tokens,
+            input.usage.cached_tokens,
+            input.usage.cache_write_tokens,
+        ) else {
+            return Ok(None);
+        };
+        if input.usage.image_input_tokens != Some(0) || input.usage.image_output_tokens != Some(0) {
+            return Ok(None);
+        }
+        let usage = OpenAiBillingUsage::new(input_tokens, output_tokens, cached, written);
+        Ok(crate::billing::openai_billing_breakdown_with_override(
+            &input.upstream_model_id,
+            usage,
+            input.service_tier.as_deref(),
+            pricing,
+        ))
     }
 
     async fn prepare_import(
@@ -1019,7 +1147,7 @@ impl ProviderAdmin for OpenAiAdminProvider {
             account_ids.push(current.account.id().clone());
             items.push(ExportManagedCodexCredential {
                 current,
-                added_at: input.account.created_at,
+                created_at: input.account.created_at,
                 updated_at: input.account.updated_at,
             });
         }
@@ -1986,6 +2114,10 @@ fn map_oauth_error(error: CodexOAuthAdminError) -> ProviderAdminError {
             Kind::Unavailable,
             "OpenAI 授权服务暂不可用，请检查出站连接后重试",
         ),
+        Error::Profile(_) => (
+            Kind::Unavailable,
+            "OpenAI 全局客户端画像暂不可用，请检查设置",
+        ),
         Error::StorageUnavailable => (Kind::Unavailable, "OpenAI 授权状态存储暂不可用，请稍后重试"),
     };
     provider_admin_error(kind)
@@ -2011,6 +2143,7 @@ const fn oauth_error_code(error: &CodexOAuthAdminError) -> &'static str {
             timed_out: false, ..
         }) => "connect_failed",
         CodexOAuthAdminError::Exchange(Exchange::Ambiguous { .. }) => "ambiguous",
+        CodexOAuthAdminError::Profile(_) => "profile_unavailable",
         CodexOAuthAdminError::StorageUnavailable => "storage_unavailable",
         CodexOAuthAdminError::Credential => "credential",
     }

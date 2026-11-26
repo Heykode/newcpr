@@ -10,7 +10,7 @@ use super::{
     AccountStateChange, CredentialCasOutcome, CredentialCasUpdate, CredentialRevision,
     LoadedCredential, NewProviderAccount, ProviderAccount, ProviderAccountId,
     ProviderAccountUpdate, ProviderDeviceCodec, ProviderRefreshQuery, QuotaAccessChange,
-    QuotaObservation, QuotaObservationTouch, QuotaWriteOutcome,
+    QuotaObservation, QuotaObservationTouch, QuotaObservationVersion, QuotaWriteOutcome,
 };
 
 /// 一个账号最后成功的目录观测；正文由 Provider 解释，归属不能按相同正文合并
@@ -162,10 +162,44 @@ pub trait ProviderAccountStore: Send + Sync {
         accounts: &[ProviderAccountId],
     ) -> Result<Vec<QuotaObservation>, StoreError>;
 
+    /// 仅查询快照版本，列表缓存校验不物化额度正文
+    async fn get_quota_versions(
+        &self,
+        accounts: &[ProviderAccountId],
+    ) -> Result<Vec<QuotaObservationVersion>, StoreError> {
+        Ok(self
+            .get_quotas(accounts)
+            .await?
+            .into_iter()
+            .map(|quota| QuotaObservationVersion {
+                account_id: quota.account_id,
+                credential_revision: quota.expected_revision,
+                observed_at: quota.observed_at,
+            })
+            .collect())
+    }
+
+    /// 批量返回在各自额度快照之后有成功生成请求完成的账号
+    async fn accounts_used_since_quota(
+        &self,
+        _snapshots: &[QuotaObservationVersion],
+    ) -> Result<Vec<ProviderAccountId>, StoreError> {
+        Err(StoreError::new(crate::error::StoreErrorKind::InvalidData))
+    }
+
     async fn compare_and_swap_quota(
         &self,
         observation: QuotaObservation,
     ) -> Result<QuotaWriteOutcome, StoreError>;
+
+    /// 主动查询返回时，写入事务还须核对账号仍启用且实际请求出口未变。
+    async fn compare_and_swap_connected_quota(
+        &self,
+        _account: &ProviderAccount,
+        _observation: QuotaObservation,
+    ) -> Result<QuotaWriteOutcome, StoreError> {
+        Err(StoreError::new(crate::error::StoreErrorKind::InvalidData))
+    }
 
     async fn touch_quota_observation(
         &self,

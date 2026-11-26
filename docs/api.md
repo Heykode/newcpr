@@ -23,7 +23,7 @@ Codex 原生生图配置还会携带 `X-OpenAI-Actor-Authorization: proxy-manage
 上游账号身份只由服务端选中的账号提供；不要把真实账号 token 放进该标记。
 
 Client Key 通过账号分组限定路由范围：未绑定分组时可使用全部账号，绑定一个或多个分组时只能使用
-已启用分组成员的并集。分组可以混合 `openai` 与 `xai` 账号；同一请求只会在模型能力明确匹配且满足
+已启用分组成员的并集。分组可以混合 `openai`、`xai` 与 `antigravity` 账号；同一请求只会在模型能力明确匹配且满足
 重放安全边界时跨 Provider fallback。
 
 运行设置可以分别配置 `minCodexDesktopVersion` 与 `minCodexCliVersion`。两者只接受 SemVer，`null`
@@ -155,7 +155,7 @@ WebSocket message 和 frame 不设置网关私有长度上限；协议可接受�
 
 会话亲和优先读取 `x-claude-code-session-id`，再读取 `metadata.user_id` JSON 字符串的
 `session_id`，最后兼容旧 `_session_<id>` 后缀。会话最多 256 字节且不含控制字符。
-相同 Client Key 下沿用 `openaiAccountAffinity` 模式及现有换号预算；不同 Key 隔离。
+相同 Client Key 下沿用 `accountAffinity` 模式及现有换号预算；不同 Key 隔离。
 普通用户标识和对话正文不绑定账号，也不建立 Codex turn 或原生续接归属。
 
 `/v1/messages/count_tokens` 使用同一鉴权、模型及账号准入，将 Messages 内容投影后由本地
@@ -1158,6 +1158,42 @@ HTTP 返回 `429`，`error.code` 为 `key_daily_budget_exceeded` 或 `key_weekly
 重置时间变动本身不能解除等待，同身份编辑设置保留等待；身份改变后重新保存才清旧等待。
 不可确认的消费结果仍保留既有去重保护。
 
+## 7.1 Antigravity 原生接口
+
+使用本实例下游 Client Key，原生端点为：
+
+| 方法 | 路由 | 作用 |
+| --- | --- | --- |
+| GET | `/v1beta/models` | 当前 Key 有权使用且支持 GenAI 的模型目录 |
+| GET | `/v1beta/models/{model}` | 模型详情 |
+| POST | `/v1beta/models/{model}:generateContent` | 非流式生成 |
+| POST | `/v1beta/models/{model}:streamGenerateContent?alt=sse` | SSE生成 |
+| POST | `/v1beta/models/{model}:countTokens` | Token计数 |
+
+基础模型组按 `generationConfig.thinkingConfig.thinkingLevel` 解析真实型号，随后核对账号与分组模型权限；
+显式完整型号不因正文中的另一档位重定向。Codex 客户端目录也按当前 Key 的实际可用成员裁剪推理档位，
+图片能力取交集，上下文取共同安全范围；型号映射使用目标画像。显式输出上限按实际型号与候选账号校验，未知上限交上游验证。
+Responses、Chat Completions、Messages 可调用已获授权的 AGY 模型；兼容转换不支持非 null `previous_response_id` 续接。
+Responses 生成参数直接映射到 GenAI：省略或 null 的 `max_output_tokens` 不补默认上限，推理预算不继承 Messages 专有约束，采样与 JSON Schema 保留。
+AGY 常规生成和计数使用服务端系统提示词，取代客户端系统指令；全局及 Key 画像覆盖共同决定最终内容。
+原生 GenAI SSE 在首帧前及帧间不插入网关心跳，首帧前失败保留对应 HTTP 错误；Responses/Chat/Messages 保留原有保活。
+
+Responses 可声明可选 `web_search` 并同时使用函数工具；只有明确要求搜索才派发独立搜索。
+搜索目标来自账号目录 `webSearchModelIds`，同一账号及授权该账号的同一分组必须同时允许原型号和搜索型号。
+无搜索目录、缺失或重复工具声明、不支持的强制选项会明确拒绝，不退回普通生成。
+独立搜索要求最后输入项为用户文本，仅发送该查询，使用固定搜索系统指令；支持实时联网和
+`filters.allowed_domains` / `filters.blocked_domains`，只支持文本输出。显式禁用实时联网、位置及其他未支持选项会拒绝。
+返回正文 URL 引用；通过 `include: ["web_search_call.action.sources"]` 可取得来源列表。
+上游搜索返回完整 JSON，再转换为下游 JSON/SSE；本地费用和记录基于实际搜索型号与真实 usage。
+已有账号需刷新目录取得搜索目标。
+
+账号目录/详情的 `usagePeriod=recent_week` 表示部署时区当天及前六天的本地统计，独立于模型分组额度周期。
+额度刷新会用同次目录确认模型组完整成员；5 小时/周窗口只汇总这些型号的本地 Token，已知无用量显示 0，成员无法确认仍为未知。
+模型组用量不参与整号容量预测、自动恢复或分组监控。健康账号只在快照满五分钟且之后有成功生成时补查，
+首次观测、缺少匹配快照、耗尽到期及手动刷新均可独立触发查询。同一身份续期令牌会沿用已有快照及其观测时间。
+查询结果返回时，若账号已停用、凭据版本或实际代理已改变，网关丢弃这次结果并保留已有额度、套餐和目录。
+`capabilities` 描述刷新、重授权、凭据导出、模型目录下载和额度/资料操作能力；批量导出在读取任何明文凭据前检查全部所选账号。
+
 ## 8. 运行设置
 
 账号预激活的 `accountWarmupCron` 使用分号连接多条独立五段表达式，例如
@@ -1189,8 +1225,10 @@ refreshMarginSeconds
 refreshConcurrency
 maxConcurrentPerAccount
 openaiGuardianReservedConcurrency
-openaiSessionBindingTtlHours
-openaiAccountAffinity
+sessionAffinityTtlHours
+accountAffinity
+providerRequestProfiles
+codexPrivacyPolicy
 openaiOauthGuardianReviewModel
 openaiRequestCountry
 requestIntervalMs
@@ -1207,7 +1245,7 @@ requestTuning
 `configRevision` 必须使用读取设置时返回的正整数版本号，保存成功返回新的版本号。
 数据库在同一事务中锁定配置行并校验版本；过期版本返回 HTTP 409，不写设置或审计。
 前端遇到 409 保留当前草稿，不自动刷新或重试覆盖；重新加载后再编辑保存。
-账号、代理等其他推进全局配置版本的变更也可能使旧表单过期，与官方全局版本合同一致。
+从 v3.55.2 起，该字段投影独立的设置编辑版本；修改价目、轮换管理 Key 或修改其他路由资源不会使设置草稿误冲突。真实运行设置变更仍推进编辑版本并拒绝过期草稿。
 缺少版本号的旧页面或脚本需要重新读取设置并携带该字段，不能以服务端当前值代填绕过保护。
 
 全量保存必须包含布尔 `openaiOauthGuardianReviewModel` 和 `openaiRequestCountry` 对象；旧页面须刷新后再保存。
@@ -1385,25 +1423,54 @@ Windows 离线包接口固定解析 Microsoft Store Product ID `9PLM9XGG6VKS` �
 Desktop 三段 SemVer 门禁，也不会自动回写最低版本设置。门禁规则见
 [鉴权与公共约定](#1-鉴权与公共约定)，解析器职责见 [架构文档](architecture.md#11-生命周期安全与恢复)。
 
+### v3.55.2 原生平台设置与共享
+
+`accountAffinity`（strict/preferred/relaxed）与 `sessionAffinityTtlHours` 现为三平台通用设置。
+更新时兼容旧 `openaiAccountAffinity`、`openaiSessionBindingTtlHours` 和
+`openaiSessionAffinityTtlHours` 名称，响应统一使用新名称。原生续接的固定账号归属仍优先。
+`providerRequestProfiles` 按 `openai`、`xai`、`antigravity` 保存全局画像；管理端后台操作使用全局画像，
+下游 Key 可按平台独立覆盖推理画像。未知平台的配置或清空操作均拒绝，不能静默写入。
+
+| 方法 | 路由 | 作用 |
+| --- | --- | --- |
+| GET | `/api/admin/settings/client-profiles?provider=antigravity` | 读取平台预设、默认值和当前配置 |
+| POST | `/api/admin/settings/client-profiles/preview` | 预览平台画像，不保存 |
+| GET | `/api/admin/settings/pricing` | 平台支持的档位、内置/同步/覆盖价目 |
+| POST | `/api/admin/settings/pricing/update` | `provider`、`models`、`change`；替换、倍率、重置或删除 |
+| POST | `/api/admin/settings/pricing/sync/preview` | 读取并投影已注册模型的外部参考价 |
+| POST | `/api/admin/settings/pricing/sync` | 按确认的预览与选中模型重新校验后保存 |
+| POST | `/api/admin/settings/privacy/preview` | 预览隐私规则，执行策略通过运行设置保存 |
+
+`codexPrivacyPolicy` 默认关闭；规则按请求快照编译，项目名、用户名、Git远端和提交元数据动作独立。
+预览不写配置。最终出站正文和头在 HTTP/WS 路径执行；同账号/会话重试保持稳定，不改历史账单。
+价目档位由各平台声明，参考价格不会增加可用模型。图片缓存价与文本缓存价分别记录并用于费用推算；
+历史账单优先读取请求当时保存的快照，不使用当前价目重算。
+
+`GET /v1/cpr/link` 使用下游 Client Key 鉴权，不接受查询参数，返回 `Cache-Control: no-store`。
+Key 的 `peerSharing` 包含 `enabled/sharePool/shareQuota/sharePlans`，默认全部关闭；
+未开启返回403。共享套餐须先开启账号池共享，并且只能读取 Key 授权分组内的本地 OAuth 账号事实。
+接口按共享选项公开池、额度、套餐和 Key 的预算/并发/RPM 信息，不返回账号凭据，
+不主动查询或转发到另一套 CPR。缺失或过期的模型额度观测不视为可用。
+
 ## 9. 备份
 
 全部备份端点位于 `/api/admin/settings/backups/*`，内部由独立 BackupService 承担，不并入设置用例。响应继续使用 `AdminEnvelope`，wire 字段 camelCase，`Cache-Control: no-store`。
 
 | 方法 | 路由 | 请求 | 说明 |
 | --- | --- | --- | --- |
-| `GET` | `/api/admin/settings/backups` | 无 | 读取存储配置（含明文 Secret）、验证状态与调度配置 |
+| `GET` | `/api/admin/settings/backups` | 无 | 读取存储配置、`secretConfigured`、验证状态与调度配置 |
 | `POST` | `/api/admin/settings/backups/storage/update` | S3 配置 | 更新存储配置；`secretAccessKey` 为空字符串会校验失败 |
-| `POST` | `/api/admin/settings/backups/storage/test` | 无 | 测试已保存的存储配置（Put/Head/Get/Delete 探针） |
+| `POST` | `/api/admin/settings/backups/storage/test` | `{ storageRevision }` | 测试已保存的存储配置（Put/Head/Get/Delete 探针） |
 | `POST` | `/api/admin/settings/backups/schedule/update` | 调度配置 | 更新 Cron、时区与保留策略 |
 | `GET` | `/api/admin/settings/backups/records` | 查询参数 | 分页查询备份记录 |
 | `POST` | `/api/admin/settings/backups/create` | `{ expiresInDays? }` | 创建手动备份，返回 `202 Accepted`；`expiresInDays` 为过期天数（0 或缺省表示不过期） |
 | `POST` | `/api/admin/settings/backups/download-url` | `{ backupId }` | 创建 5 分钟有效预签名下载地址（仅 completed） |
 | `POST` | `/api/admin/settings/backups/delete` | `{ backupId }` | 请求删除（进入 `deleting`，由 Worker 收敛硬删除） |
 
-读取设置响应（Secret 以明文返回，由前端掩码显示）：
+读取设置响应（不返回已保存的 Secret）：
 
 ```text
-storageRevision, endpoint, region, bucket, accessKeyId, secretAccessKey, prefix,
+storageRevision, endpoint, region, bucket, accessKeyId, secretConfigured, prefix,
 forcePathStyle, verified, scheduleEnabled, cronExpression, scheduleTimezone,
 retentionDays, retentionCount, nextRunAt, lastVerifiedAt, updatedAt
 ```
@@ -1411,17 +1478,17 @@ retentionDays, retentionCount, nextRunAt, lastVerifiedAt, updatedAt
 更新存储请求字段：
 
 ```text
-endpoint, region, bucket, accessKeyId, secretAccessKey, prefix, forcePathStyle
+storageRevision, endpoint, region, bucket, accessKeyId, secretAccessKey?, prefix, forcePathStyle
 ```
 
-`secretAccessKey` 为空字符串会校验失败；由于 GET 会回传已保存的明文 Secret，保存时始终整体提交当前值。已有备份记录时，endpoint/region/bucket/forcePathStyle 不允许变化（存储身份锁定，`409`）；只允许轮换凭据与修改 prefix。
+`secretAccessKey` 省略时保留已保存密钥；显式空字符串校验失败，首次配置必须提供密钥。保存必须携带读取时的 `storageRevision`，过期返回 `409`。已有备份记录时，endpoint/region/bucket/forcePathStyle 不允许变化（存储身份锁定，`409`）；只允许轮换凭据与修改 prefix。
 
 保存相同配置保留验证状态、定时计划及配置版本。存储配置实际变化时，会同时使验证失效、暂停定时计划并清空下次运行时间；连接测试通过后需重新启用计划。
 
 更新调度请求字段：
 
 ```text
-scheduleEnabled, cronExpression, scheduleTimezone, retentionDays, retentionCount
+storageRevision, scheduleEnabled, cronExpression, scheduleTimezone, retentionDays, retentionCount
 ```
 
 `cronExpression` 为 5 段格式；`retentionDays`/`retentionCount` 为 0 表示禁用对应清理。启用计划前必须已保存完整存储配置且通过连接测试。
@@ -1445,10 +1512,10 @@ errorCode, errorMessage, startedAt, completedAt, expiresAt, createdAt, updatedAt
 连接测试响应：
 
 ```text
-{ ok, stage, code, message }
+{ storageRevision, ok, stage, code, message }
 ```
 
-`stage` 为 `putObject/headObject/getObject/deleteObject`。探测成功后以 `storageRevision` CAS 写入 `lastVerifiedAt`；测试期间配置变化则丢弃结果。
+`stage` 为 `putObject/headObject/getObject/deleteObject`。探测成功后以 `storageRevision` CAS 写入 `lastVerifiedAt`；测试期间配置变化则返回 `409`，不将旧测试结果用于新配置。计划启用同样核对 `storageRevision`，未保存草稿不能用于测试或启用计划。
 
 备份错误映射（`AdminErrorCode` 既有体系）：
 

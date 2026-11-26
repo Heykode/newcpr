@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::VecDeque,
     fmt,
-    sync::{Mutex, OnceLock},
+    sync::{Arc, Mutex, OnceLock},
     time::Duration,
 };
 
@@ -379,6 +379,7 @@ pub struct OpenAiTokenClient {
     client: Client,
     config: TokenClientConfig,
     profile: CodexWireProfileState,
+    runtime_policy: Option<Arc<dyn gateway_core::provider_ports::ProviderRuntimePolicyPort>>,
 }
 
 /// 官方 Codex token client 无法安全构建。
@@ -449,12 +450,35 @@ impl OpenAiTokenClient {
         Ok(selected)
     }
 
-    /// 共享运行时画像；每次操作取快照，CPR 授权码交换保留裸 form。
+    /// 每次后台操作解析当前全局画像，并在该次交换中冻结。
     pub fn new(client: Client, config: TokenClientConfig, profile: CodexWireProfileState) -> Self {
         Self {
             client,
             config,
             profile,
+            runtime_policy: None,
+        }
+    }
+
+    #[must_use]
+    pub fn with_runtime_policy(
+        mut self,
+        policy: Arc<dyn gateway_core::provider_ports::ProviderRuntimePolicyPort>,
+    ) -> Self {
+        self.runtime_policy = Some(policy);
+        self
+    }
+
+    async fn global_profile(
+        &self,
+    ) -> Result<CodexWireProfileState, gateway_core::error::ErrorSource> {
+        match &self.runtime_policy {
+            Some(policy) => self
+                .profile
+                .resolve_global_request_profile(policy.as_ref())
+                .await
+                .map(CodexWireProfileState::new),
+            None => Ok(self.profile.frozen()),
         }
     }
 
@@ -488,7 +512,11 @@ impl OpenAiTokenClient {
         let client = self
             .with_proxy(proxy)
             .map_err(|_| PersonalAccessTokenError::Unavailable)?;
-        let profile = client.profile.snapshot();
+        let profile = self
+            .global_profile()
+            .await
+            .map_err(|_| PersonalAccessTokenError::Unavailable)?
+            .snapshot();
         let headers = build_codex_profile_headers(&profile)
             .map_err(|_| PersonalAccessTokenError::Unavailable)?;
         let request = client
@@ -631,7 +659,17 @@ impl TokenRefresher for OpenAiTokenClient {
         refresh_token: &str,
         proxy: Option<&gateway_core::account::OutboundProxy>,
     ) -> Result<TokenPair, RefreshFailure> {
-        self.with_account(account_id, proxy)
+        let profile = self
+            .global_profile()
+            .await
+            .map_err(|_| proxy_refresh_failure())?;
+        let selected = Self {
+            profile,
+            runtime_policy: None,
+            ..self.clone()
+        };
+        selected
+            .with_account(account_id, proxy)
             .map_err(|_| proxy_refresh_failure())?
             .refresh(refresh_token)
             .await
@@ -648,7 +686,13 @@ impl TokenRefresher for OpenAiTokenClient {
             .await
     }
     async fn refresh(&self, refresh_token: &str) -> Result<TokenPair, RefreshFailure> {
-        let profile = self.profile.snapshot();
+        let profile = self
+            .global_profile()
+            .await
+            .map_err(|_| RefreshFailure::RetryableTransport {
+                message: "OpenAI OAuth refresh profile is unavailable".to_owned(),
+            })?
+            .snapshot();
         let headers =
             build_codex_profile_headers(&profile).map_err(|_| RefreshFailure::Transport {
                 message: Some("OpenAI OAuth refresh profile is invalid".to_owned()),
@@ -730,13 +774,24 @@ impl AuthorizationCodeExchanger for OpenAiTokenClient {
         &self,
         grant: AuthorizationCodeGrant,
     ) -> Result<AuthorizationTokenSet, AuthorizationCodeExchangeError> {
-        let request = self.client.post(&self.config.token_endpoint).form(&[
-            ("grant_type", "authorization_code"),
-            ("client_id", self.config.client_id.as_str()),
-            ("code", grant.code.expose_secret()),
-            ("redirect_uri", OFFICIAL_CODEX_REDIRECT_URI),
-            ("code_verifier", grant.code_verifier.expose_secret()),
-        ]);
+        let profile = self
+            .global_profile()
+            .await
+            .map_err(|_| AuthorizationCodeExchangeError::Unavailable)?
+            .snapshot();
+        let headers = build_codex_profile_headers(&profile)
+            .map_err(|_| AuthorizationCodeExchangeError::Unavailable)?;
+        let request = self
+            .client
+            .post(&self.config.token_endpoint)
+            .headers(headers)
+            .form(&[
+                ("grant_type", "authorization_code"),
+                ("client_id", self.config.client_id.as_str()),
+                ("code", grant.code.expose_secret()),
+                ("redirect_uri", OFFICIAL_CODEX_REDIRECT_URI),
+                ("code_verifier", grant.code_verifier.expose_secret()),
+            ]);
         let response = self.send(request).await.map_err(|error| {
             // 连接阶段包含代理隧道和 TLS 握手，此时授权码尚未发往上游
             if error.0.is_builder() {

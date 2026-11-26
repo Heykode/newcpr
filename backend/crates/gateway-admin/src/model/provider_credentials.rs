@@ -1,6 +1,11 @@
 //! Provider 管理能力交换的中立 Command 与 Result。
 
-use std::{collections::BTreeMap, fmt, num::NonZeroU32, pin::Pin};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt,
+    num::NonZeroU32,
+    pin::Pin,
+};
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -810,12 +815,14 @@ impl fmt::Debug for RotateCredential {
     }
 }
 
-/// 通用账号用量能否可靠归属到一个 Provider quota 窗口。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// 通用账号用量能否可靠归属到一个 Provider quota 窗口
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum QuotaLocalUsageAttribution {
     /// 窗口覆盖账号的全部请求，可按账号与时间范围聚合。
     AccountWide,
-    /// 窗口需要 Provider / 模型级归属，通用账号聚合不可用。
+    /// Provider 已确认该窗口覆盖的上游模型 ID
+    Models(BTreeSet<String>),
+    /// 缺少可用于归属本地用量的事实
     Unavailable,
 }
 
@@ -862,6 +869,7 @@ pub enum AccountUsagePeriod {
     Weekly,
     Monthly,
     Daily,
+    RecentWeek,
 }
 
 /// Provider 解释 quota 所需的公共请求事实。
@@ -878,7 +886,7 @@ pub struct ProviderQuotaReadRequest<'a> {
 }
 
 /// Provider 已解析的 quota 结果及其不透明差异字段。
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct ProviderQuota {
     pub paused_windows: Vec<String>,
     /// 上游额度响应明确提供的套餐，可用于补全账号展示。
@@ -1163,7 +1171,7 @@ impl ProviderQuota {
 fn quota_usage_priority(window: &ProviderQuotaWindow) -> (u8, u8) {
     let attribution = match window.local_usage_attribution {
         QuotaLocalUsageAttribution::AccountWide => 0,
-        QuotaLocalUsageAttribution::Unavailable => 1,
+        QuotaLocalUsageAttribution::Models(_) | QuotaLocalUsageAttribution::Unavailable => 1,
     };
     let duration = match window.group.as_str() {
         "shortTerm" if window.window_seconds.is_some_and(is_week_window) => 1,
@@ -1235,6 +1243,7 @@ impl fmt::Debug for ProviderExport {
 /// 统一账号目录的一行完整结果。
 #[derive(Debug, Clone, PartialEq)]
 pub struct AccountDirectoryItem {
+    pub capabilities: super::accounts::ProviderAccountCapabilities,
     pub error_protection: Option<super::accounts::AccountProtectionView>,
     pub turn_state: Option<super::accounts::AccountTurnStateStatus>,
     pub codex_quota_overdraft: Option<super::codex_quota_overdraft::CodexQuotaOverdraftState>,
@@ -1250,6 +1259,7 @@ pub struct AccountDirectoryItem {
     pub plan_type_display: Option<String>,
     pub projection: gateway_core::account::AccountStatusProjection,
     pub usage: Option<super::accounts::AccountUsage>,
+    pub usage_period: Option<AccountUsagePeriod>,
     pub quota: ProviderQuota,
 }
 
@@ -1311,5 +1321,42 @@ impl ProviderQuotaWindow {
         let ends_at = self.reset_at?;
         let duration = chrono::Duration::try_seconds(i64::try_from(self.window_seconds?).ok()?)?;
         Some((ends_at.checked_sub_signed(duration)?, ends_at))
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum AccountUsageLookback {
+    #[default]
+    RollingDay,
+    RecentWeek,
+}
+
+impl AccountUsageLookback {
+    pub(crate) fn range(
+        self,
+        now: DateTime<Utc>,
+        timezone: gateway_core::time::DeploymentTimeZone,
+    ) -> Result<super::observability::TimeRange, super::AdminModelError> {
+        use super::observability::TimeRange;
+
+        match self {
+            Self::RollingDay => Ok(TimeRange {
+                start: now - chrono::Duration::hours(24),
+                end: now,
+            }),
+            Self::RecentWeek => TimeRange::new(
+                timezone
+                    .days_before(now, 6)
+                    .ok_or(super::AdminModelError::InvalidTimeRange)?,
+                now,
+            ),
+        }
+    }
+
+    pub(crate) fn period(self) -> AccountUsagePeriod {
+        match self {
+            Self::RollingDay => AccountUsagePeriod::Daily,
+            Self::RecentWeek => AccountUsagePeriod::RecentWeek,
+        }
     }
 }

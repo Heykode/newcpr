@@ -56,7 +56,11 @@
         "minutes": "{duration}分鐘額度"
       },
       "autoUsePoints": "自動使用額度點數",
-      "autoUsePointsHelp": "訂閱額度耗盡後，使用可用點數繼續請求"
+      "autoUsePointsHelp": "訂閱額度耗盡後，使用可用點數繼續請求",
+      "groups": {
+        "geminiModels": "Gemini 模型",
+        "claudeGptModels": "Claude 和 GPT 模型"
+      }
     },
     "account": "賬號",
     "connectionTest": {
@@ -276,7 +280,7 @@
       "downloadModelCatalog": "下載模型目錄",
       "restoreState": "重置狀態",
       "staleSelection": "所選賬號數據已失效，請重新選擇",
-      "exportUnsupported": "所選賬號包含不支持導出的平臺",
+      "exportUnsupported": "所選帳號中有帳號不支援匯出憑據",
       "deleted": "賬號已刪除",
       "deletedAccountDeletedAccounts": "已刪除 {count} 個賬號",
       "partialDeletion": "已刪除 {count} 個賬號，其餘未刪除：{value}",
@@ -319,7 +323,8 @@
         "general": "累計用量",
         "weekly": "周用量",
         "monthly": "月用量",
-        "quota": "週期用量"
+        "quota": "週期用量",
+        "recentWeek": "近一週"
       },
       "cost": "費用"
     },
@@ -378,7 +383,9 @@
       "importTaskCreated": "導入任務已創建",
       "partialSubmission": "部分導入任務已創建，保持輸入不變重試可繼續提交",
       "accountName": "{provider} 賬號",
-      "failedToStartAuthorization": "啓動授權失敗"
+      "failedToStartAuthorization": "啓動授權失敗",
+      "fullCallbackHelp": "完成瀏覽器授權後，將網址列中的完整回調網址貼到這裡",
+      "fullCallbackPlaceholder": "貼上含有 code 和 state 的完整回調網址"
     },
     "importTasks": {
       "needProcessing": "需處理",

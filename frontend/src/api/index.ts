@@ -21,9 +21,13 @@ export * from './modules/proxies'
 
 // 设置管理
 export * from './modules/settings'
-
+export * from './modules/settings/pricing'
+export * from './modules/settings/privacy'
+export * from './modules/settings/profiles'
 // 系统更新
 export * from './modules/system'
 
 // 使用记录
 export * from './modules/usage'
+
+export * from './types/request-profile'

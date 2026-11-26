@@ -20,8 +20,8 @@ const maxConcurrentPerAccount = defineModel<string>('maxConcurrentPerAccount', {
 const openaiGuardianReservedConcurrency = defineModel<string>('openaiGuardianReservedConcurrency', { required: true })
 const refreshMarginSeconds = defineModel<string>('refreshMarginSeconds', { required: true })
 const refreshConcurrency = defineModel<string>('refreshConcurrency', { required: true })
-const openaiSessionBindingTtlHours = defineModel<string>('openaiSessionBindingTtlHours', { required: true })
-const openaiAccountAffinity = defineModel<string>('openaiAccountAffinity', { required: true })
+const sessionAffinityTtlHours = defineModel<string>('sessionAffinityTtlHours', { required: true })
+const accountAffinity = defineModel<string>('accountAffinity', { required: true })
 const requestTuning = defineModel<RequestTuning>('requestTuning', { required: true })
 const advancedOpen = ref(false)
 const location = computed({
@@ -100,17 +100,19 @@ const tuningValues = {
     description="请求节奏、并发、重试和账号切换为共用参数，Excel 请求继续遵循；原生 Codex 连接参数另列。"
   >
     <BaseForm class="max-w-6xl sm:grid-cols-2">
-      <BaseFormItem prop="openaiAccountAffinity" label="OpenAI 账号亲和模式">
+      <BaseFormItem prop="accountAffinity" label="账号亲和模式" description="适用于 Codex、xAI 与 Antigravity">
         <BaseSegmented
-          v-model="openaiAccountAffinity"
-          label="OpenAI 账号亲和模式"
+          v-model="accountAffinity"
+          label="账号亲和模式"
+          :disabled="disabled"
           :options="[{ label: '严格', value: 'strict' }, { label: '优先', value: 'preferred' }, { label: '宽松', value: 'relaxed' }]"
         />
       </BaseFormItem>
-      <BaseFormItem prop="openaiSessionBindingTtlHours" label="OpenAI 会话账号绑定时长（小时）">
+      <BaseFormItem prop="sessionAffinityTtlHours" label="会话账号绑定时长（小时）">
         <BaseInput
-          v-model="openaiSessionBindingTtlHours"
-          aria-label="OpenAI 会话账号绑定时长（小时）"
+          v-model="sessionAffinityTtlHours"
+          aria-label="会话账号绑定时长（小时）"
+          :disabled="disabled"
           type="number"
           min="1"
           max="720"
@@ -256,9 +258,9 @@ const tuningValues = {
     <div class="mt-5 border-t border-(--cp-border-color) pt-4">
       <div class="flex items-center justify-between gap-3">
         <h3 class="text-sm font-medium text-cp-text-secondary">
-          账号忙时等待（OpenAI / xAI）
+          账号忙时等待（Codex / xAI / Antigravity）
         </h3>
-        <BaseSwitch v-model="requestTuning.accountBusyWaitEnabled" label="账号忙时等待（OpenAI / xAI）" />
+        <BaseSwitch v-model="requestTuning.accountBusyWaitEnabled" label="账号忙时等待（Codex / xAI / Antigravity）" />
       </div>
       <BaseForm class="mt-4 max-w-6xl sm:grid-cols-2">
         <BaseFormItem prop="requestTuning.maxWaitingPerAccount" label="每账号等待请求数上限">

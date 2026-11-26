@@ -2,9 +2,10 @@
 import type { AccountQuotaWindow } from '../../constants'
 import type { CodexQuotaOverdraftState } from '@/api/modules/accounts'
 import { computed } from 'vue'
-
 import { useUiClock } from '@/composables/useUiClock'
+
 import { t } from '@/i18n'
+import { quotaWindowLabel } from '../../constants'
 import { codexQuotaOverdraftWindow } from '../AccountQuotaOverdraft/presenter'
 import AccountQuotaOverdraftWindowLine from '../AccountQuotaOverdraft/WindowLine.vue'
 import AccountRequestTimeline from '../AccountUsageWindow/AccountRequestTimeline.vue'
@@ -40,9 +41,9 @@ const items = computed(() => props.windows.map((window) => {
     timelineTitle: view.local.timelineTitle,
     durationDisplay: view.local.durationDisplay,
     label: grouped.value
-      ? window.windowLabelDisplay
-      : window.labelDisplay,
-    ariaLabel: window.labelDisplay,
+      ? quotaWindowLabel(window, false)
+      : quotaWindowLabel(window),
+    ariaLabel: quotaWindowLabel(window),
     usedPercent: window.usedPercent,
     usedPercentDisplay: window.usedPercentDisplay,
     localUsageDisplay: quotaWindowLocalUsageDisplay(window),

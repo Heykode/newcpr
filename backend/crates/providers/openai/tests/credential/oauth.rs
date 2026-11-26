@@ -824,3 +824,51 @@ async fn reauthorization_binds_the_selected_slot_to_the_new_oauth_account() {
         "access-token-from-upstream"
     );
 }
+
+#[tokio::test]
+async fn authorization_uses_global_cli_metadata_and_rejects_invalid_configuration() {
+    let document = |value: serde_json::Value| {
+        gateway_core::account::OpaqueProviderData::new(value.as_object().unwrap().clone())
+    };
+    let policy = Arc::new(crate::support::RequestProfileRuntimePolicy(Mutex::new(
+        document(
+            serde_json::json!({"client":"cli","platform":"macos","versionMode":"fixed","codexVersion":"0.170.0"}),
+        ),
+    )));
+    let service = CodexOAuthAdminService::new(
+        Arc::new(PendingStore::default()),
+        Arc::new(Exchanger {
+            id_token: "unused".into(),
+        }),
+        Arc::new(MemoryAccountStore::default()),
+        CodexCredentialAdmin,
+        profile(),
+    )
+    .with_runtime_policy(policy.clone());
+    let started = service
+        .start_authorization(StartCodexOAuthAuthorization {
+            mutation: mutation(),
+        })
+        .await
+        .unwrap();
+    let outer = Url::parse(&started.authorization_url).unwrap();
+    let inner = outer
+        .query_pairs()
+        .find(|(name, _)| name == "authorize_url")
+        .unwrap()
+        .1
+        .into_owned();
+    let inner = Url::parse(&inner).unwrap();
+    let parameters: std::collections::BTreeMap<_, _> = inner.query_pairs().into_owned().collect();
+    assert_eq!(parameters["originator"], "codex_cli_rs");
+    assert!(!parameters.contains_key("codex_app_version"));
+    *policy.0.lock().unwrap() = document(serde_json::json!({"client":"unsupported"}));
+    assert!(matches!(
+        service
+            .start_authorization(StartCodexOAuthAuthorization {
+                mutation: mutation()
+            })
+            .await,
+        Err(CodexOAuthAdminError::Profile(_))
+    ));
+}

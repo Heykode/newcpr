@@ -8,6 +8,7 @@ rust-version.workspace = true
 autotests = false
 
 [dependencies]
+regex = "1.13.0"
 tiktoken-rs = "=0.12.1"
 async-stream = "0.3.6"
 async-trait = "0.1.89"

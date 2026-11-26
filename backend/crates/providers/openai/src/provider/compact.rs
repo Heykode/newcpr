@@ -6,10 +6,7 @@ use gateway_core::{
 };
 
 use super::*;
-use crate::transport::{
-    endpoints::CODEX_RESPONSES_COMPACT_PATH,
-    usage::{OpenAiBillingUsage, openai_billing_breakdown},
-};
+use crate::transport::{endpoints::CODEX_RESPONSES_COMPACT_PATH, usage::OpenAiBillingUsage};
 
 impl CodexProvider {
     pub(super) async fn execute_compact(
@@ -222,6 +219,7 @@ pub(super) fn compact_response_metering(
     request: &[u8],
     response: &[u8],
     model: Option<&UpstreamModelId>,
+    prices: &gateway_core::metering::PricingOverrides,
 ) -> Result<(Option<Usage>, Option<CalculatedCost>), ProviderError> {
     let invalid = || {
         compact_error(
@@ -278,7 +276,16 @@ pub(super) fn compact_response_metering(
             .get("service_tier")
             .or_else(|| request.get("service_tier"))
             .and_then(Value::as_str);
-        Some(openai_billing_breakdown(model?.as_str(), billing, tier)?.calculated_cost())
+        let model = model?.as_str();
+        Some(
+            crate::billing::openai_billing_breakdown_with_override(
+                model,
+                billing,
+                tier,
+                prices.get("openai").and_then(|models| models.get(model)),
+            )?
+            .calculated_cost(),
+        )
     })();
     Ok((Some(usage), cost))
 }

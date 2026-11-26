@@ -24,7 +24,7 @@ fn legacy_settings_migrator() -> sqlx::migrate::Migrator {
     }
 }
 
-fn settings_replacement(
+pub(super) fn settings_replacement(
     revision: gateway_store::Revision,
     id: &str,
     margin: u64,
@@ -294,7 +294,7 @@ async fn settings_revision_concurrent_saves_have_one_winner() {
 }
 
 #[tokio::test]
-async fn settings_revision_audit_failure_rolls_back_and_targeted_writes_invalidate_forms() {
+async fn settings_revision_audit_failure_rolls_back_and_key_rotation_preserves_drafts() {
     let Some(database) = TestDatabase::create("settings_revision_atomic").await else {
         return;
     };
@@ -327,20 +327,28 @@ async fn settings_revision_audit_failure_rolls_back_and_targeted_writes_invalida
         .await
         .unwrap();
     let changed = repository.load_control_plane().await.unwrap();
-    assert!(
-        repository
-            .replace_control_plane(settings_replacement(
-                first.settings.config_revision,
-                "settings-stale-after-key",
-                800,
-            ))
-            .await
-            .is_err()
-    );
-    assert_eq!(repository.load_control_plane().await.unwrap(), changed);
     assert_eq!(
-        changed.settings.admin_api_key.as_deref(),
+        changed.settings.settings_revision,
+        first.settings.settings_revision
+    );
+    assert!(changed.settings.config_revision > first.settings.config_revision);
+    let saved = repository
+        .replace_control_plane(settings_replacement(
+            first.settings.settings_revision,
+            "settings-draft-after-key",
+            800,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(saved.settings.refresh_margin_seconds, 800);
+    assert_eq!(
+        saved.settings.admin_api_key.as_deref(),
         Some("synthetic-settings-key")
+    );
+    assert!(saved.settings.settings_revision > first.settings.settings_revision);
+    assert_eq!(
+        saved.settings.settings_revision,
+        saved.settings.config_revision
     );
     database.close().await;
 }
@@ -405,7 +413,7 @@ async fn preferred_affinity_upgrade_preserves_existing_rows_and_defaults() {
                 .load_runtime_settings()
                 .await
                 .unwrap()
-                .openai_account_affinity,
+                .account_affinity,
             gateway_core::account::AccountAffinity::Preferred
         );
         database.close().await;
@@ -547,16 +555,17 @@ async fn warmup_cursor_is_atomic_durable_and_monotonic_across_configuration_upda
     database.close().await;
 }
 
-fn settings_with_margin(refresh_margin_seconds: u64) -> RuntimeSettingsUpdate {
+pub(super) fn settings_with_margin(refresh_margin_seconds: u64) -> RuntimeSettingsUpdate {
     RuntimeSettingsUpdate {
+        request_profile_updates: Default::default(),
+        codex_privacy_policy: None,
         openai_oauth_guardian_review_model: true,
         openai_request_country: Default::default(),
 
         turn_state_probe_proxy_id: None,
         turn_state_probe_concurrency: None,
-        openai_account_affinity: None,
-        openai_session_binding_ttl_hours: None,
-        admin_api_key: None,
+        account_affinity: None,
+        session_affinity_ttl_hours: None,
         turn_state_injection_enabled: None,
         excel_default_models: Default::default(),
         turn_state_models: vec![
@@ -889,7 +898,7 @@ async fn account_affinity_defaults_strict_and_round_trips_through_settings_and_s
             .load_runtime_settings()
             .await
             .unwrap()
-            .openai_account_affinity,
+            .account_affinity,
         AccountAffinity::Strict
     );
     for mode in [
@@ -899,24 +908,24 @@ async fn account_affinity_defaults_strict_and_round_trips_through_settings_and_s
     ] {
         let before = settings.load_runtime_settings().await.unwrap();
         let mut update = settings_with_margin(300);
-        update.openai_account_affinity = Some(mode);
+        update.account_affinity = Some(mode);
         settings.update_runtime_settings(update).await.unwrap();
         settings
             .update_runtime_settings(settings_with_margin(300))
             .await
             .unwrap();
         let loaded = settings.load_runtime_settings().await.unwrap();
-        assert_eq!(loaded.openai_account_affinity, mode);
+        assert_eq!(loaded.account_affinity, mode);
         assert!(loaded.config_revision > before.config_revision);
         let snapshot = PgRuntimeSnapshotRepository::new(db.pool.clone())
             .load_runtime_snapshot()
             .await
             .unwrap();
-        assert_eq!(snapshot.settings.openai_account_affinity, mode);
-        assert_eq!(loaded.openai_session_binding_ttl_hours, 24);
+        assert_eq!(snapshot.settings.account_affinity, mode);
+        assert_eq!(loaded.session_affinity_ttl_hours, 24);
     }
     assert!(
-        sqlx::query("update runtime_settings set openai_account_affinity = 'invalid' where id = 1")
+        sqlx::query("update runtime_settings set account_affinity = 'invalid' where id = 1")
             .execute(&db.pool)
             .await
             .is_err()
@@ -935,12 +944,12 @@ async fn binding_ttl_round_trips_and_old_settings_clients_do_not_reset_it() {
             .load_runtime_settings()
             .await
             .unwrap()
-            .openai_session_binding_ttl_hours,
+            .session_affinity_ttl_hours,
         24
     );
     for hours in [1, 48, 720] {
         let mut update = settings_with_margin(300);
-        update.openai_session_binding_ttl_hours = Some(hours);
+        update.session_affinity_ttl_hours = Some(hours);
         settings.update_runtime_settings(update).await.unwrap();
         settings
             .update_runtime_settings(settings_with_margin(300))
@@ -951,18 +960,18 @@ async fn binding_ttl_round_trips_and_old_settings_clients_do_not_reset_it() {
                 .load_runtime_settings()
                 .await
                 .unwrap()
-                .openai_session_binding_ttl_hours,
+                .session_affinity_ttl_hours,
             hours
         );
         let snapshot = PgRuntimeSnapshotRepository::new(db.pool.clone())
             .load_runtime_snapshot()
             .await
             .unwrap();
-        assert_eq!(snapshot.settings.openai_session_binding_ttl_hours, hours);
+        assert_eq!(snapshot.settings.session_affinity_ttl_hours, hours);
     }
     for hours in [0, 721] {
         let mut update = settings_with_margin(300);
-        update.openai_session_binding_ttl_hours = Some(hours);
+        update.session_affinity_ttl_hours = Some(hours);
         assert!(update.validate().is_err());
     }
     db.close().await;
@@ -971,6 +980,7 @@ async fn binding_ttl_round_trips_and_old_settings_clients_do_not_reset_it() {
 #[test]
 fn runtime_settings_reject_invalid_model_mapping() {
     let settings = RuntimeSettingsUpdate {
+        request_profile_updates: Default::default(),
         model_mappings: BTreeMap::from([("".to_owned(), "gpt-5.5".to_owned())]),
         ..settings_with_margin(3_600)
     };
@@ -981,6 +991,7 @@ fn runtime_settings_reject_invalid_model_mapping() {
 #[test]
 fn runtime_settings_reject_non_semver_client_min() {
     let settings = RuntimeSettingsUpdate {
+        request_profile_updates: Default::default(),
         min_codex_cli_version: Some("v0.40.0".to_owned()),
         ..settings_with_margin(3_600)
     };
@@ -1713,7 +1724,18 @@ async fn quota_reset_weights_upgrade_and_persist_through_runtime_snapshot() {
         .fetch_one(&database.pool)
         .await
         .unwrap();
-    super::TEST_MIGRATOR.run(&database.pool).await.unwrap();
+    sqlx::migrate::Migrator {
+        migrations: super::TEST_MIGRATOR
+            .iter()
+            .filter(|migration| migration.version <= 93)
+            .cloned()
+            .collect::<Vec<_>>()
+            .into(),
+        ..sqlx::migrate::Migrator::DEFAULT
+    }
+    .run(&database.pool)
+    .await
+    .unwrap();
     let after: Value = sqlx::query_scalar("select to_jsonb(s) from runtime_settings s where id=1")
         .fetch_one(&database.pool)
         .await
@@ -1725,6 +1747,8 @@ async fn quota_reset_weights_upgrade_and_persist_through_runtime_snapshot() {
     for (field, value) in before.as_object().unwrap() {
         assert_eq!(&after[field], value, "{field}");
     }
+    // Verify this historical migration before upgrading to the current repository schema.
+    super::TEST_MIGRATOR.run(&database.pool).await.unwrap();
     let repository = PgRuntimeSettingsRepository::new(database.pool.clone());
     let weights = ResetWindowWeights::new([1.5, 2.0, 0.0]).unwrap();
     for strategy in ["quota_reset_priority", "smart", "sticky"] {

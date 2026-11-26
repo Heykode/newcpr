@@ -25,6 +25,7 @@ pub mod output_recovery;
 mod scheduling;
 /// Server-Sent Events 帧的解析与编码。
 pub mod sse;
+pub mod web_search;
 
 pub use codex::{
     CodexResponsesRequestSemantics, WEBSOCKET_FRAME_CONTEXT_KEY, codex_account_session_id,

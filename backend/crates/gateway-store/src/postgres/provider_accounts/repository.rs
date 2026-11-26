@@ -111,6 +111,14 @@ impl PgProviderAccountRepository {
         &self,
         observation: QuotaObservation,
     ) -> StoreResult<bool> {
+        self.write_observed_quota(observation, None).await
+    }
+
+    pub(super) async fn write_observed_quota(
+        &self,
+        observation: QuotaObservation,
+        connection: Option<&CoreProviderAccount>,
+    ) -> StoreResult<bool> {
         let account_id = observation.account_id.as_str();
         let expected_revision = Revision::new(observation.expected_revision.get())?;
         let quota = JsonObject::try_from_value(
@@ -129,6 +137,46 @@ impl PgProviderAccountRepository {
         let mut transaction = self.pool.begin().await.map_err(|error| {
             postgres_unavailable("begin provider quota update").with_source(error)
         })?;
+        if let Some(account) = connection {
+            if account.id() != &observation.account_id
+                || account.revision() != observation.expected_revision
+            {
+                return Ok(false);
+            }
+            // 账号行锁可能等待并发管理操作。取得锁后以新语句读取已提交的有效代理。
+            sqlx::query("select id from provider_accounts where id=$1 for update")
+                .bind(account_id)
+                .execute(&mut *transaction)
+                .await
+                .map_err(|e| postgres_unavailable("lock quota account").with_source(e))?;
+            let current = sqlx::query_scalar::<_, Option<String>>(
+                "select case when coalesce(p.enabled, true) then a.outbound_proxy_url end
+                 from provider_accounts a left join outbound_proxies p on p.id=a.outbound_proxy_id
+                 where a.id=$1 and a.enabled and a.credential_revision=$2",
+            )
+            .bind(account_id)
+            .bind(to_i64(expected_revision.get())?)
+            .fetch_optional(&mut *transaction)
+            .await
+            .map_err(|e| postgres_unavailable("read quota connection").with_source(e))?;
+            let Some(proxy) = current else {
+                return Ok(false);
+            };
+            let proxy = proxy
+                .as_deref()
+                .map(gateway_core::account::OutboundProxy::parse)
+                .transpose()
+                .map_err(|e| invalid("invalid quota account proxy").with_source(e))?;
+            if proxy
+                .as_ref()
+                .map(gateway_core::account::OutboundProxy::expose_url)
+                != account
+                    .outbound_proxy()
+                    .map(gateway_core::account::OutboundProxy::expose_url)
+            {
+                return Ok(false);
+            }
+        }
         let result = sqlx::query(
             "update provider_accounts
              set provider_quota_json = $3, quota_observed_at = $4,
@@ -194,6 +242,39 @@ impl PgProviderAccountRepository {
     ) -> Self {
         self.protection = Some(store);
         self
+    }
+
+    pub(super) async fn load_account_summaries_in_enabled_groups(
+        &self,
+        account_ids: &[String],
+        group_ids: &[AccountGroupId],
+    ) -> StoreResult<Vec<ProviderAccountSummary>> {
+        if account_ids.is_empty() || group_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let groups = group_ids
+            .iter()
+            .map(AccountGroupId::as_str)
+            .collect::<Vec<_>>();
+        let rows = sqlx::query("select
+                    coalesce((select enabled from outbound_proxies where outbound_proxies.id = provider_accounts.outbound_proxy_id), true) as outbound_proxy_enabled,
+            coalesce((select max_websocket_connections from outbound_proxies where outbound_proxies.id = provider_accounts.outbound_proxy_id), 0) as max_websocket_connections,
+            (select case when auto_location then detected_location_json -> 'location' else request_location_json end from outbound_proxies where outbound_proxies.id = provider_accounts.outbound_proxy_id and enabled) as request_location_json,
+                    credential_proxy_id, outbound_proxy_id, outbound_proxy_url, id, provider_kind, name, custom_name, email, upstream_user_id,
+                    upstream_account_id, plan_type, authentication_kind, credential_revision, turn_state_binding_revision, has_refresh_token,
+                    access_token_expires_at, next_refresh_at, enabled, turn_state_injection_enabled, responses_upstream, excel_models, excel_models_follow_global, excel_cache_creation_as_input, excel_ignore_encrypted_content, request_proxy_source, excel_auto_disable_on_403, excel_403_action, excel_auto_disabled_at, excel_403_warning_at, excel_mode_disabled_at,
+            case when excel_models_follow_global then (select excel_default_models from runtime_settings where id = 1) else excel_models end as effective_excel_models, concurrency_limit, weight, model_access_json, credential_state,
+                    credential_observed_at, quota_access_state, quota_evidence,
+                    quota_access_observed_at, quota_reset_at, quota_limit_window_minutes,
+                    coalesce((select status = 'passed' and provider_accounts.quota_access_state='exhausted' and account_subject=provider_accounts.upstream_account_id from codex_quota_overdraft_states where account_id = provider_accounts.id and credential_revision = provider_accounts.credential_revision and config_revision = (select config_revision from runtime_settings where id = 1) and exists(select 1 from runtime_settings where id = 1 and codex_quota_overdraft_enabled)), false) as codex_quota_overdraft_passed, auto_use_quota_credits, quota_settings, quota_paused,
+                    quota_observed_at, last_error_reason, last_error_message, created_at, updated_at,
+                    relogin_count, last_relogin_at
+             from provider_accounts
+             where id = any($1::text[]) and exists (
+ select 1 from account_group_accounts membership join account_groups account_group on account_group.id = membership.account_group_id
+ where membership.provider_account_id = provider_accounts.id and account_group.enabled and account_group.id = any($2::text[])) order by id").bind(account_ids).bind(groups).fetch_all(&self.pool).await
+            .map_err(|error| postgres_unavailable("load account summaries").with_source(error))?;
+        rows.into_iter().map(account_summary_from_row).collect()
     }
 
     pub(super) async fn list_provider_account_summaries(

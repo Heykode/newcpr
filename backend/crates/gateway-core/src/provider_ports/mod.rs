@@ -970,6 +970,7 @@ pub trait ProviderCatalogCachePort: Send + Sync {
 /// `profile` 中解释。每个 Provider 在 Store 中只保留一份最新画像。
 #[derive(Clone, PartialEq)]
 pub struct ProviderArtifactProfile {
+    artifact_key: String,
     provider_kind: ProviderKind,
     artifact_sequence: u64,
     verified_at: SystemTime,
@@ -978,13 +979,24 @@ pub struct ProviderArtifactProfile {
 
 impl ProviderArtifactProfile {
     #[must_use]
-    pub const fn new(
+    pub fn with_artifact_key(mut self, artifact_key: String) -> Self {
+        self.artifact_key = artifact_key;
+        self
+    }
+    #[must_use]
+    pub fn artifact_key(&self) -> &str {
+        &self.artifact_key
+    }
+
+    #[must_use]
+    pub fn new(
         provider_kind: ProviderKind,
         artifact_sequence: u64,
         verified_at: SystemTime,
         profile: OpaqueProviderData,
     ) -> Self {
         Self {
+            artifact_key: String::new(),
             provider_kind,
             artifact_sequence,
             verified_at,
@@ -1026,6 +1038,23 @@ impl fmt::Debug for ProviderArtifactProfile {
 }
 
 pub trait ProviderArtifactProfileCachePort: Send + Sync {
+    /// 空 key 保留原来的 Provider 默认制品；多平台缓存必须显式实现隔离。
+    fn read_artifact<'a>(
+        &'a self,
+        provider_kind: &'a ProviderKind,
+        artifact_key: &'a str,
+    ) -> BoxFuture<'a, Result<Option<ProviderArtifactProfile>, ProviderStoreError>> {
+        if artifact_key.is_empty() {
+            return self.read(provider_kind);
+        }
+        Box::pin(async {
+            Err(ProviderStoreError::new(
+                ProviderStoreErrorKind::Unavailable,
+                "named artifact cache",
+            ))
+        })
+    }
+
     /// 覆盖同一 Provider 的固定 cache key。
     ///
     /// 返回 `false` 表示 Store 已持有更高的制品序号；相同序号但内容不同必须返回
@@ -2071,3 +2100,6 @@ impl fmt::Debug for ProviderStorePorts {
         formatter.write_str("ProviderStorePorts([CAPABILITIES])")
     }
 }
+
+mod session_affinity;
+pub use session_affinity::ProviderSessionAffinityState;

@@ -159,10 +159,11 @@ export interface AccountModelUsage {
 }
 
 export interface AccountUsage {
+  windowKind: 'general' | 'daily' | 'recent_week' | 'weekly' | 'monthly' | 'quota'
   windowLabelDisplay: string
   quotaWindow: {
     key: string
-    period: 'daily' | 'weekly' | 'monthly'
+    period: 'daily' | 'recent_week' | 'weekly' | 'monthly'
     usedPercent: number | null
     resetAt: string | null
     estimatedUsd: number | null
@@ -224,7 +225,24 @@ export interface AccountQuotaBucketSettings {
   warmup: { model: string } | null
 }
 
+export interface AccountCapabilities {
+  credentialRefresh: boolean
+  reauthorize: boolean
+  credentialExport: boolean
+  modelCatalogDownload: boolean
+  quotaSettingsSupported: boolean
+  quotaCredits: boolean
+  quota: boolean
+  quotaRefresh: boolean
+  profile: boolean
+  subscription: boolean
+  avatar: boolean
+  resetCredits: boolean
+  consumeResetCredit: boolean
+}
+
 export interface Account {
+  capabilities?: AccountCapabilities
   credentialProxyId?: string | null
   quotaSettings: Record<string, AccountQuotaBucketSettings>
   quotaSettingsSupported: boolean

@@ -231,11 +231,22 @@ fn encode_collected_events(
     format: &HttpResponseFormat,
 ) -> Result<Vec<u8>, HttpEncodeError> {
     let response = HttpResponseEncoder::new(format).finish_collected(events)?;
-    if format.is_messages()
+    if (format.is_messages()
+        || matches!(
+            format,
+            HttpResponseFormat::GenAi | HttpResponseFormat::GenAiTokenCount
+        ))
         && let Some(raw) = events
             .iter()
             .filter_map(ProviderEvent::wire_event)
-            .filter(|wire| wire.protocol() == ANTHROPIC_PROTOCOL)
+            .filter(|wire| {
+                wire.protocol()
+                    == if format.is_messages() {
+                        ANTHROPIC_PROTOCOL
+                    } else {
+                        gateway_protocol::genai::GENAI_PROTOCOL
+                    }
+            })
             .find_map(|wire| wire.raw_json_body())
     {
         return Ok(raw.to_vec());
@@ -308,7 +319,9 @@ fn encoding_error_response(error: &HttpEncodeError, format: &HttpResponseFormat)
                 _,
                 HttpResponseFormat::Chat { .. }
                 | HttpResponseFormat::Messages
-                | HttpResponseFormat::MessageTokenCount,
+                | HttpResponseFormat::MessageTokenCount
+                | HttpResponseFormat::GenAi
+                | HttpResponseFormat::GenAiTokenCount,
             ) => StatusCode::BAD_GATEWAY,
         },
         error.protocol_body(),
@@ -329,7 +342,15 @@ pub(in crate::openai) async fn stream_execution_response_as(
     format: HttpResponseFormat,
 ) -> Response {
     let commit = session.response_commit();
-    if format.is_messages() {
+    if matches!(
+        format,
+        HttpResponseFormat::GenAi | HttpResponseFormat::GenAiTokenCount
+    ) {
+        crate::openai::genai::project_error_response(
+            stream_execution_response_inner(session, connection_guard, format).await,
+        )
+        .await
+    } else if format.is_messages() {
         super::keepalive::response_with_protocol(
             async move {
                 crate::openai::messages::project_error_response(
@@ -467,6 +488,10 @@ async fn stream_execution_response_inner(
     let Some(session) = execution.into_session() else {
         return internal_gateway_response("gateway response session is unavailable");
     };
+    let keep_alive = !matches!(
+        format,
+        HttpResponseFormat::GenAi | HttpResponseFormat::GenAiTokenCount
+    );
     let mut state = ResponsesStreamState::new(session, encoder, frames, connection_guard);
     if state.encoder.is_completed()
         || (state.encoder.requires_terminal_confirmation() && state.encoder.has_wire_failure())
@@ -488,11 +513,11 @@ async fn stream_execution_response_inner(
     }));
     // 保活只轮询已固定的输出 stream；不能取消并重建 advance/next_event future，
     // 否则一次心跳就可能丢失正在等待的上游事件或执行终态清理。
-    let body = Body::from_stream(stream::unfold(output, |mut output| async move {
+    let body = Body::from_stream(stream::unfold(output, move |mut output| async move {
         let chunk = tokio::select! {
             biased;
             chunk = output.next() => chunk?,
-            () = tokio::time::sleep(SSE_KEEPALIVE_INTERVAL) => {
+            () = tokio::time::sleep(SSE_KEEPALIVE_INTERVAL), if keep_alive => {
                 Ok(Bytes::from_static(b": keep-alive\n\n"))
             }
         };

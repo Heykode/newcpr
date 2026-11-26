@@ -1,6 +1,10 @@
 //! 多 Provider 账号目录与连接测试的公共事实。
 
-use std::{collections::BTreeMap, pin::Pin, str::FromStr};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    pin::Pin,
+    str::FromStr,
+};
 
 use chrono::{DateTime, Utc};
 use futures::Stream;
@@ -415,6 +419,8 @@ pub struct AccountUsage {
 /// `key` 只用于把聚合结果关联回调用方的窗口，不承载 Provider 私有语义。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountUsageWindowQuery {
+    /// 指定时只汇总这些上游模型的请求
+    pub models: Option<BTreeSet<String>>,
     pub account_id: String,
     pub key: String,
     pub range: TimeRange,
@@ -617,6 +623,10 @@ pub enum TurnStateProbeOutcome {
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct ProviderAccountCapabilities {
+    pub credential_refresh: bool,
+    pub reauthorize: bool,
+    pub credential_export: bool,
+    pub model_catalog_download: bool,
     pub quota_settings_supported: bool,
     pub quota_credits: bool,
     pub quota: bool,

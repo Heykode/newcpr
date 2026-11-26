@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import type { Ref } from 'vue'
 import type { ComponentSize } from '../controls/types'
+import type { FormFieldControl } from './context'
 import type { FormItemContext, FormItemProp, FormItemValidateState, FormLabelPosition, FormRule } from './types'
 import { useResizeObserver } from '@vueuse/core'
 import { computed, inject, onBeforeUnmount, onMounted, provide, reactive, shallowReactive, shallowRef, useId, useTemplateRef, watch } from 'vue'
@@ -33,11 +33,13 @@ const validation = useFormItemValidation(props, form)
 const { propString, validateMessage, isRequired, isResetting, validate } = validation
 const fieldId = `field-${useId()}`
 const labelId = `${fieldId}-label`
-const controls = shallowReactive(new Set<Readonly<Ref<string>>>())
-const controlIds = computed(() => [...controls].map(control => control.value))
+const controls = shallowReactive(new Set<FormFieldControl>())
+const controlIds = computed(() => [...controls].map(control => control.id.value))
 const rootRef = useTemplateRef<HTMLElement>('root')
 const labelRef = useTemplateRef<HTMLElement>('labelContent')
 const resolvedControlId = computed(() => props.for ?? props.controlId ?? (controlIds.value.length === 1 ? controlIds.value[0] : undefined))
+// 分组控件保留真实 ID 与焦点；原生 label 仅关联可标签化控件。
+const labelFor = computed(() => [...controls].find(control => control.id.value === resolvedControlId.value)?.labelable === false ? undefined : resolvedControlId.value)
 const isGroup = computed(() => !resolvedControlId.value && controlIds.value.length > 1)
 const hasLabel = computed(() => Boolean(props.label || slots.label))
 const labelPosition = computed(() => props.labelPosition || form?.labelPosition.value || 'top')
@@ -104,9 +106,9 @@ provide(formFieldKey, {
   required: isRequired,
   isResetting,
   validate,
-  registerControl(id) {
-    controls.add(id)
-    return () => controls.delete(id)
+  registerControl(control) {
+    controls.add(control)
+    return () => controls.delete(control)
   },
 })
 </script>
@@ -128,9 +130,9 @@ provide(formFieldKey, {
       <div ref="labelContent" class="inline-flex items-center gap-1.5" :class="isHorizontal && labelWidth === 'auto' ? 'w-max shrink-0' : 'min-w-0'">
         <!-- 复合字段提供组标签，控件保留独立 ID；显式 for 只关联指定控件 -->
         <component
-          :is="resolvedControlId ? 'label' : 'span'"
+          :is="labelFor ? 'label' : 'span'"
           :id="labelId"
-          :for="resolvedControlId"
+          :for="labelFor"
           class="flex min-w-0 items-center gap-1.5 font-medium text-cp-text-secondary"
           :class="[{ sm: 'text-cp-sm', md: 'text-cp', lg: 'text-cp-lg' }[componentSize], isHorizontal ? 'leading-snug' : 'leading-none']"
         >

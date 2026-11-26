@@ -977,10 +977,8 @@ async fn admitted_requests_use_their_frozen_binding_retention() {
     );
     let key = ProviderSessionAffinityKey::try_new("frozen-retention").unwrap();
     let request_url = Url::parse("https://chatgpt.com/backend-api/codex/responses").unwrap();
-    let old_policy =
-        account_policy().with_openai_session_binding_ttl(Duration::from_secs(48 * 3600));
-    let new_policy =
-        account_policy().with_openai_session_binding_ttl(Duration::from_secs(720 * 3600));
+    let old_policy = account_policy().with_session_affinity_ttl(Duration::from_secs(48 * 3600));
+    let new_policy = account_policy().with_session_affinity_ttl(Duration::from_secs(720 * 3600));
     for policy in [old_policy, new_policy, old_policy] {
         let attempt = AttemptContext::new(
             RequestAttemptContext::new(
@@ -1009,13 +1007,13 @@ async fn admitted_requests_use_their_frozen_binding_retention() {
     }
     assert_eq!(
         affinity.claim_ttls(),
-        vec![old_policy.openai_session_binding_ttl()]
+        vec![old_policy.session_affinity_ttl()]
     );
     assert_eq!(
         affinity.renewal_ttls(),
         vec![
-            new_policy.openai_session_binding_ttl(),
-            old_policy.openai_session_binding_ttl(),
+            new_policy.session_affinity_ttl(),
+            old_policy.session_affinity_ttl(),
         ]
     );
 }
@@ -4923,7 +4921,7 @@ async fn select_strict_round_robin_session(
             NonZeroU32::new(2).expect("concurrency"),
             Duration::ZERO,
         )
-        .with_openai_account_affinity(AccountAffinity::Strict),
+        .with_account_affinity(AccountAffinity::Strict),
         AccountAttemptContext::new(BTreeSet::new(), None, None)
             .with_account_scope(contract_account_scope()),
         None,

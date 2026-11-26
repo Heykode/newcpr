@@ -24,6 +24,7 @@ use super::TestDatabase;
 #[test]
 fn client_key_requires_the_frozen_plaintext_format() {
     let key = NewClientApiKey {
+        peer_sharing: Default::default(),
         request_profile_overrides: Default::default(),
         budget: Default::default(),
         id: "key-1".to_owned(),
@@ -384,6 +385,7 @@ async fn dedicated_reveal_returns_plaintext_without_debug_exposure() {
 fn client_key_debug_redacts_plaintext() {
     let secret = format!("sk_{}", "s".repeat(43));
     let key = NewClientApiKey {
+        peer_sharing: Default::default(),
         request_profile_overrides: Default::default(),
         budget: Default::default(),
         id: "key-1".to_owned(),
@@ -425,6 +427,7 @@ async fn key_profile_override_roundtrips_and_explicit_clear_restores_inheritance
     let (_, record) = store
         .create_client_key(
             NewClientKey {
+                peer_sharing: Default::default(),
                 id: id.clone(),
                 name: "profile".to_owned(),
                 label: None,
@@ -447,6 +450,7 @@ async fn key_profile_override_roundtrips_and_explicit_clear_restores_inheritance
     );
     assert_eq!(record.request_profile_overrides.get(&xai), Some(&profile));
     let update = |override_value: Option<Option<OpaqueProviderData>>| UpdateClientKey {
+        peer_sharing: None,
         id: id.clone(),
         name: "profile".to_owned(),
         label: None,
@@ -508,7 +512,8 @@ async fn key_profile_override_roundtrips_and_explicit_clear_restores_inheritance
 #[tokio::test]
 async fn batch_key_changes_preserve_unselected_fields_and_roll_back_the_whole_selection() {
     use gateway_admin::model::{
-        MutationActor, MutationContext, client_keys::BatchUpdateClientKeys,
+        MutationActor, MutationContext,
+        client_keys::{BatchUpdateClientKeys, ClientPeerSharingPatch},
     };
     use gateway_admin::ports::store::AdminStoreErrorKind;
     use gateway_core::routing::AccountGroupId;
@@ -519,10 +524,11 @@ async fn batch_key_changes_preserve_unselected_fields_and_roll_back_the_whole_se
     let store = PgAdminClientKeyStore::new(database.pool.clone());
     let ids = ["key_batch_a", "key_batch_b"].map(|id| ClientApiKeyId::new(id).unwrap());
     sqlx::query(
-        "insert into client_api_keys (id, name, key, max_concurrency, created_at, updated_at)
-        select id, id, 'sk_' || repeat('q', 32) || id, 7, now(), now() from unnest($1::text[]) id",
+        "insert into client_api_keys (id, name, key, max_concurrency, peer_sharing_json, created_at, updated_at)
+        select id, id, 'sk_' || repeat('q', 32) || id, 7, jsonb_build_object('sharePool', id = $2), now(), now() from unnest($1::text[]) id",
     )
     .bind(ids.iter().map(|id| id.as_str()).collect::<Vec<_>>())
+    .bind(ids[0].as_str())
     .execute(&database.pool)
     .await
     .unwrap();
@@ -537,6 +543,11 @@ async fn batch_key_changes_preserve_unselected_fields_and_roll_back_the_whole_se
         ids: ids.to_vec(),
         enabled: Some(false),
         group_ids: Some(vec![group.clone()]),
+        peer_sharing: ClientPeerSharingPatch {
+            enabled: Some(true),
+            share_quota: Some(true),
+            ..Default::default()
+        },
         ..Default::default()
     };
     let first_revision = store
@@ -548,6 +559,8 @@ async fn batch_key_changes_preserve_unselected_fields_and_roll_back_the_whole_se
         assert!(!record.enabled);
         assert_eq!(record.groups[0].id, group);
         assert_eq!(record.limits.max_concurrency, 7);
+        assert!(record.peer_sharing.enabled && record.peer_sharing.share_quota);
+        assert_eq!(record.peer_sharing.share_pool, *id == ids[0]);
     }
     command.enabled = Some(true);
     command.group_ids = None;
@@ -580,6 +593,25 @@ async fn batch_key_changes_preserve_unselected_fields_and_roll_back_the_whole_se
         assert_eq!(record.groups[0].id, group);
     }
     command.group_ids = None;
+    command.peer_sharing.share_plans = Some(true);
+    assert_eq!(
+        store
+            .batch_update_client_keys(command.clone(), Box::new(|_| Ok(())), &context)
+            .await
+            .unwrap_err()
+            .kind(),
+        AdminStoreErrorKind::Invalid,
+    );
+    assert!(
+        !store
+            .get_client_key(&ids[0])
+            .await
+            .unwrap()
+            .unwrap()
+            .peer_sharing
+            .share_plans
+    );
+    command.peer_sharing.share_plans = None;
     let second_revision = store
         .batch_update_client_keys(command.clone(), Box::new(|_| Ok(())), &context)
         .await
@@ -597,6 +629,7 @@ async fn batch_key_changes_preserve_unselected_fields_and_roll_back_the_whole_se
     );
     command.group_ids = Some(vec![]);
     command.enabled = None;
+    command.peer_sharing.enabled = Some(false);
     store
         .batch_update_client_keys(command, Box::new(|_| Ok(())), &context)
         .await
@@ -604,6 +637,8 @@ async fn batch_key_changes_preserve_unselected_fields_and_roll_back_the_whole_se
     for id in &ids {
         let record = store.get_client_key(id).await.unwrap().unwrap();
         assert!(record.enabled && record.groups.is_empty());
+        assert!(!record.peer_sharing.enabled);
+        assert!(record.peer_sharing.share_quota);
     }
     let audits: i64 = sqlx::query_scalar("select count(*) from admin_audit_events where action='batch_update' and entity_kind='client_api_key'")
         .fetch_one(&database.pool).await.unwrap();
@@ -674,5 +709,143 @@ async fn batch_limits_and_profiles_keep_each_keys_budget_ledger_and_unselected_p
         let other = &record.request_profile_overrides[&ProviderKind::new("other").unwrap()];
         assert_eq!(other.expose_to_provider()["version"], key);
     }
+    database.close().await;
+}
+
+#[tokio::test]
+async fn peer_sharing_persists_across_reads_and_cannot_lose_its_group_scope() {
+    use gateway_admin::{
+        model::{
+            MutationActor, MutationContext,
+            account_groups::{AccountGroupColor, NewAccountGroup},
+            client_keys::{NewClientKey, UpdateClientKey},
+        },
+        ports::store::{AccountGroupStore as _, AdminStoreErrorKind},
+    };
+    use gateway_core::{
+        account::FastMode,
+        policy::{ClientPeerSharing, RateLimits},
+        routing::AccountGroupId,
+    };
+    use gateway_store::postgres::{
+        PgAccountGroupRepository, PgRuntimeSnapshotRepository, RuntimeSnapshotRepository as _,
+    };
+    let Some(database) = TestDatabase::create("peer_key_sharing").await else {
+        return;
+    };
+    let context = MutationContext {
+        actor: MutationActor::System,
+        request_id: "peer-sharing-test".into(),
+    };
+    let group = AccountGroupId::new(format!("grp_{}", "2".repeat(32))).unwrap();
+    let groups = PgAccountGroupRepository::new(database.pool.clone());
+    groups
+        .create_account_group(
+            NewAccountGroup {
+                disable_fast: false,
+                id: group.clone(),
+                name: "Shared".into(),
+                description: None,
+                color: AccountGroupColor::parse("#2563EBFF").unwrap(),
+                fast_mode: FastMode::Default,
+                allow_image_generation: true,
+                allow_subagents: true,
+                model_access: Default::default(),
+            },
+            &context,
+        )
+        .await
+        .unwrap();
+    let store = PgAdminClientKeyStore::new(database.pool.clone());
+    let sharing = ClientPeerSharing {
+        enabled: true,
+        share_pool: true,
+        share_quota: true,
+        share_plans: false,
+    };
+    let id = ClientApiKeyId::new("key_peer_shared").unwrap();
+    store
+        .create_client_key(
+            NewClientKey {
+                peer_sharing: sharing,
+                request_profile_overrides: Default::default(),
+                id: id.clone(),
+                name: "Peer".into(),
+                label: None,
+                group_ids: vec![group.clone()],
+                limits: RateLimits::unlimited(),
+                budget: Default::default(),
+                plaintext: format!("sk_{}", "p".repeat(43)),
+            },
+            &context,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .get_client_key(&id)
+            .await
+            .unwrap()
+            .unwrap()
+            .peer_sharing,
+        sharing
+    );
+    let snapshot = PgRuntimeSnapshotRepository::new(database.pool.clone())
+        .load_runtime_snapshot()
+        .await
+        .unwrap();
+    assert_eq!(snapshot.client_api_keys[0].peer_sharing, sharing);
+    let mut update = UpdateClientKey {
+        peer_sharing: None,
+        request_profile_override_updates: Default::default(),
+        id: id.clone(),
+        name: "Renamed peer".into(),
+        label: None,
+        group_ids: Vec::new(),
+        limits: RateLimits::unlimited(),
+        daily_limit_usd: None,
+        weekly_limit_usd: None,
+    };
+    let error = store
+        .update_client_key(update.clone(), &context)
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), AdminStoreErrorKind::Invalid);
+    assert_eq!(
+        store
+            .get_client_key(&id)
+            .await
+            .unwrap()
+            .unwrap()
+            .groups
+            .len(),
+        1
+    );
+    let error = store
+        .batch_update_client_keys(
+            gateway_admin::model::client_keys::BatchUpdateClientKeys {
+                ids: vec![id.clone()],
+                group_ids: Some(vec![]),
+                enabled: Some(false),
+                ..Default::default()
+            },
+            Box::new(|_| Ok(())),
+            &context,
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), AdminStoreErrorKind::Invalid);
+    assert!(store.get_client_key(&id).await.unwrap().unwrap().enabled);
+    update.group_ids = vec![group];
+    let (_, updated) = store
+        .update_client_key(update.clone(), &context)
+        .await
+        .unwrap();
+    assert_eq!(updated.peer_sharing, sharing);
+    update.group_ids.clear();
+    update.peer_sharing = Some(ClientPeerSharing::default());
+    let (_, updated) = store.update_client_key(update, &context).await.unwrap();
+    assert!(!updated.peer_sharing.enabled);
+    assert!(updated.groups.is_empty());
     database.close().await;
 }

@@ -2,6 +2,10 @@ import type { ApiKeyFormValue } from '../composables/useApiKeyMutations'
 
 export function apiKeyFormErrors(form: ApiKeyFormValue) {
   const errors: Partial<Record<keyof ApiKeyFormValue, string>> = {}
+  if (form.peerSharing?.enabled && !form.groupIds.length)
+    errors.groupIds = '启用账号池共享时必须选择至少一个分组'
+  if (form.peerSharing?.sharePlans && !form.peerSharing.sharePool)
+    errors.peerSharing = '共享套餐信息需要同时共享账号池信息'
   if (form.installationSeed && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(form.installationSeed))
     errors.installationSeed = '安装种子 必须是带连字符的 UUID'
   if (!form.name.trim())

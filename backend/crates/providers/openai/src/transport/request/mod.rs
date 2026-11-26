@@ -1024,3 +1024,14 @@ pub(crate) fn message_text_parts(item: &Value) -> impl Iterator<Item = &str> + C
             .filter_map(|part| part.get("text").and_then(Value::as_str)),
     )
 }
+
+pub(crate) fn serialize_ascii_turn_metadata(value: &Value) -> Option<String> {
+    let mut bytes = Vec::new();
+    value
+        .serialize(&mut serde_json::Serializer::with_formatter(
+            &mut bytes,
+            AsciiTurnMetadataFormatter,
+        ))
+        .ok()?;
+    String::from_utf8(bytes).ok()
+}

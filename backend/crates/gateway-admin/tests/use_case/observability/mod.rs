@@ -1068,11 +1068,13 @@ struct FixtureSettingsStore;
 impl SettingsStore for FixtureSettingsStore {
     async fn load_runtime_settings(&self) -> AdminStoreResult<RuntimeSettings> {
         Ok(RuntimeSettings {
+            request_profiles: Default::default(),
             openai_oauth_guardian_review_model: true,
             openai_request_country: Default::default(),
+            codex_privacy_policy: Default::default(),
 
-            openai_account_affinity: Default::default(),
-            openai_session_binding_ttl_hours: 24,
+            account_affinity: Default::default(),
+            session_affinity_ttl_hours: 24,
             turn_state_probe_proxy_id: None,
             turn_state_probe_concurrency: 3,
             config_revision: Revision::new(1).expect("revision"),
@@ -1509,4 +1511,66 @@ async fn health_views_should_include_incomplete_and_keep_final_outcomes_separate
             }
         }
     }
+}
+
+#[test]
+fn no_cache_projection_uses_separate_image_rates_and_rejects_invalid_subsets() {
+    use gateway_admin::{
+        ProviderUsageBillingProjector,
+        model::observability::{
+            CalculatedBillingBreakdown, ImageBillingBreakdown, UsageCalculatedBillingFact,
+        },
+        ports::{provider::ProviderAdminRegistry, store::UsageBillingProjector},
+    };
+    let usd = |amount: &str| CurrencyCost {
+        currency: "USD".to_owned(),
+        amount: amount.parse().unwrap(),
+    };
+    // Text: 600 uncached + 200 read + 100 write at 2/0.5/3 per million.
+    // Image: 50 uncached + 50 read at 10/1 per million. Output costs 0.002.
+    let breakdown = CalculatedBillingBreakdown {
+        image: Some(ImageBillingBreakdown {
+            input_tokens: 100,
+            cached_input_tokens: 50,
+            input_amount: usd("0.0005"),
+            cache_read_amount: usd("0.00005"),
+            input_price_per_million: usd("10"),
+            cache_read_price_per_million: usd("1"),
+        }),
+        custom_multiplier_bps: 10000,
+        long_context_billing_applied: false,
+        input_amount: usd("0.0012"),
+        output_amount: usd("0.002"),
+        cache_read_amount: usd("0.0001"),
+        cache_write_amount: usd("0.0003"),
+        standard_amount: usd("0.00415"),
+        total_amount: usd("0.00415"),
+        input_price_per_million: usd("2"),
+        output_price_per_million: usd("20"),
+        cache_read_price_per_million: usd("0.5"),
+        cache_write_price_per_million: usd("3"),
+        service_tier: None,
+        multiplier_percent: 100,
+    };
+    let mut fact = UsageCalculatedBillingFact {
+        breakdown: Some(breakdown),
+        bucket_start: Utc::now(),
+        provider_kind: "antigravity".to_owned(),
+        upstream_model_id: "fixture-image-model".to_owned(),
+        service_tier: None,
+        input_tokens: Some(1000),
+        output_tokens: Some(100),
+        cached_tokens: Some(250),
+        cache_write_tokens: Some(100),
+        total: usd("0.00415"),
+    };
+    let projector = ProviderUsageBillingProjector::new(ProviderAdminRegistry::new([]).unwrap());
+    let projected = projector.project(&fact).unwrap();
+    assert_eq!(projected.standard_amount.unwrap().as_str(), "0.00415");
+    assert_eq!(projected.no_cache_amount.unwrap().as_str(), "0.0048");
+    fact.input_tokens = Some(99);
+    assert_eq!(projector.project(&fact).unwrap().no_cache_amount, None);
+    fact.input_tokens = Some(1000);
+    fact.cached_tokens = Some(49);
+    assert_eq!(projector.project(&fact).unwrap().no_cache_amount, None);
 }

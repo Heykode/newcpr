@@ -67,6 +67,7 @@ type ReadGate<T> = Arc<Mutex<Option<oneshot::Receiver<Result<T, SnapshotStoreErr
 
 mod account_concurrency;
 mod catalog_fallback;
+mod privacy;
 mod publication;
 
 #[derive(Clone)]

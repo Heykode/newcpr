@@ -12,8 +12,8 @@ fn preferred_context_with_ttl(
         request_id,
         scope,
         account_policy()
-            .with_openai_account_affinity(gateway_core::account::AccountAffinity::Preferred)
-            .with_openai_session_binding_ttl(ttl),
+            .with_account_affinity(gateway_core::account::AccountAffinity::Preferred)
+            .with_session_affinity_ttl(ttl),
     )
 }
 fn preferred_context_with_policy(
@@ -74,7 +74,7 @@ async fn preferred_primary_migration_distinguishes_temporary_and_persistent_unav
             NonZeroU32::new(2).unwrap(),
             Duration::ZERO,
         )
-        .with_openai_account_affinity(AccountAffinity::Preferred);
+        .with_account_affinity(AccountAffinity::Preferred);
         let select = || {
             provider.execute(
                 planned_request("openai", turn_request("root", "availability-turn")),

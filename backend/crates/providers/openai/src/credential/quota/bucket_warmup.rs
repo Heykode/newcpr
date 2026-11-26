@@ -229,17 +229,7 @@ impl CodexCredentialQuotaService {
                 .await?;
             return Ok(None);
         };
-        let profile = match &self.runtime_policy {
-            Some(policy) => self
-                .profile
-                .resolve_global_request_profile(policy.as_ref())
-                .await
-                .map_err(CodexCredentialQuotaError::Profile)?,
-            None => self.profile.snapshot(),
-        };
-        let client = self
-            .backend_client()
-            .with_request_profile(CodexWireProfileState::new(profile));
+        let client = self.global_profile_client().await?;
         // 先持久化领取再发请求；超时、取消或重启后不重放结果不明的推理
         // 通用窗口共享请求用量，同批到期窗口只发一次轻量请求
         for (key, _, reset) in &due {

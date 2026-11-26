@@ -48,7 +48,13 @@
       "generateInstallationSeed": "生成安装身份种子",
       "installationSeedHelp": "按密钥和上游账号生成独立、稳定的安装身份，种子不会发送给上游，修改种子会切换身份",
       "installationSeedPlaceholder": "留空使用上游账号的安装 ID",
-      "invalidInstallationSeed": "请输入带连字符的 UUID"
+      "invalidInstallationSeed": "请输入带连字符的 UUID",
+      "clientVersion": "客户端版本",
+      "coreVersion": "Core 版本",
+      "identityDescription": "配置发送给上游的客户端标识",
+      "restoreSystemPrompt": "恢复默认",
+      "systemPrompt": "系统提示词",
+      "systemPromptHint": "替换客户端系统提示，默认来自 {source}"
     },
     "pricing": {
       "multiplier": "倍率",
@@ -94,7 +100,8 @@
         "title": "确认同步来源价目",
         "description": "仅同步所选模型的来源价格，保留自定义单价和倍率",
         "skipped": "跳过 {count} 个缺少完整价格或计价方式不匹配的模型",
-        "action": "同步"
+        "action": "同步",
+        "unavailable": "当前平台暂无可同步价目，可手动设置价格"
       },
       "selectAll": "全选",
       "selected": "已选 {count} / {count2}",
@@ -634,7 +641,8 @@
         "reorderHelp": "拖动手柄调整步骤顺序，也可聚焦手柄后使用上下方向键移动",
         "dragStep": "拖动步骤 {value}：{field}",
         "step": "步骤 {value}：{field}，{scope}，{action}，{effect}",
-        "deleteStep": "删除步骤 {value}：{field}"
+        "deleteStep": "删除步骤 {value}：{field}",
+        "sessionAliasEffect": "同账号同会话项目化名固定"
       },
       "presets": {
         "workspaceMetadata": "工作区附加信息",
@@ -652,7 +660,9 @@
         "gitCommitId": "Git 提交 ID",
         "gitRemoteCollection": "Git 远端集合",
         "workspaceFingerprint": "工作区指纹",
-        "unifyWorkspaceInformation": "统一工作区信息"
+        "unifyWorkspaceInformation": "统一工作区信息",
+        "anonymizeProject": "按账号与会话匿名化项目名",
+        "anonymizeWorkspace": "按账号与会话匿名化工作区"
       },
       "testPlaceholder": "点击测试查看结果"
     },

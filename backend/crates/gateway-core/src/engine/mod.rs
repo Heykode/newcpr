@@ -362,6 +362,8 @@ impl ContinuationAttempt {
 /// Provider 每次执行可见的 request-local context。
 #[derive(Debug, Clone)]
 pub struct RequestAttemptContext {
+    privacy: Option<Arc<dyn crate::settings::privacy::CompiledPrivacyPolicy>>,
+    pricing: Arc<crate::metering::PricingOverrides>,
     endpoint: String,
     client_transport: execution::ClientTransport,
     client_ip: Option<IpAddr>,
@@ -381,6 +383,21 @@ pub struct RequestAttemptContext {
 }
 
 impl RequestAttemptContext {
+    #[must_use]
+    pub fn with_privacy(
+        mut self,
+        privacy: Option<Arc<dyn crate::settings::privacy::CompiledPrivacyPolicy>>,
+    ) -> Self {
+        self.privacy = privacy;
+        self
+    }
+
+    #[must_use]
+    pub fn with_pricing(mut self, pricing: Arc<crate::metering::PricingOverrides>) -> Self {
+        self.pricing = pricing;
+        self
+    }
+
     #[must_use]
     pub fn with_client_request(
         mut self,
@@ -457,6 +474,8 @@ impl RequestAttemptContext {
     #[must_use]
     pub fn new(request_id: ModelRequestId, client_api_key_ref: ClientApiKeyId) -> Self {
         Self {
+            privacy: None,
+            pricing: Arc::default(),
             endpoint: String::new(),
             client_transport: execution::ClientTransport::HttpJson,
             client_ip: None,
@@ -526,6 +545,16 @@ pub struct AttemptContext {
 }
 
 impl AttemptContext {
+    #[must_use]
+    pub fn privacy(&self) -> Option<Arc<dyn crate::settings::privacy::CompiledPrivacyPolicy>> {
+        self.request.privacy.clone()
+    }
+
+    #[must_use]
+    pub fn pricing(&self) -> &crate::metering::PricingOverrides {
+        &self.request.pricing
+    }
+
     #[must_use]
     pub fn endpoint(&self) -> &str {
         &self.request.endpoint

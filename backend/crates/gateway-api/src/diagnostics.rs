@@ -32,9 +32,10 @@ pub(crate) async fn record_ingress(
     mut request: Request,
     next: Next,
 ) -> Response {
-    if request.uri().path() != "/v1" && !request.uri().path().starts_with("/v1/") {
+    let Some(namespace) = crate::openai::router::DataPlaneNamespace::for_path(request.uri().path())
+    else {
         return next.run(request).await;
-    }
+    };
     let correlation_id = request
         .extensions()
         .get::<RequestId>()
@@ -94,6 +95,9 @@ pub(crate) async fn record_ingress(
     } else {
         next.run(request).await
     };
+    if matches!(namespace, crate::openai::router::DataPlaneNamespace::GenAi) {
+        response = crate::openai::genai::project_error_response(response).await;
+    }
     let protocol = response.extensions_mut().remove::<ProtocolErrorBody>();
     let gateway = response
         .extensions_mut()
@@ -126,7 +130,7 @@ pub(crate) async fn record_ingress(
                         byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'[' | b']')
                     })
             });
-        let endpoint = endpoint.as_deref().unwrap_or("/v1/<unmatched>");
+        let endpoint = endpoint.as_deref().unwrap_or(namespace.unmatched_path());
         let model_request_id = execution_observed
             .then(|| {
                 response

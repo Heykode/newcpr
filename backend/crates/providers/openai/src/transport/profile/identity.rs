@@ -12,6 +12,9 @@ use sha2::{Digest, Sha256};
 use super::selection::{ClientProfileError, ClientProfileSelection, VersionMode, object};
 use super::{CodexWireProfile, CodexWireProfileState};
 
+pub(super) const USER_AGENT_PRODUCTS: [&str; 4] =
+    ["Codex Desktop", "codex-tui", "codex_exec", "codex_cli_rs"];
+
 impl CodexWireProfileState {
     /// 后台模型操作没有 Client Key，按当前全局选择冻结整套身份
     pub(crate) async fn resolve_global_request_profile(
@@ -275,14 +278,12 @@ impl ExactIdentity {
         if !safe_header(user_agent, 4096) {
             return Err(ClientProfileError::InvalidUserAgent);
         }
-        let known = ["Codex Desktop", "codex-tui", "codex_exec", "codex_cli_rs"]
-            .into_iter()
-            .find_map(|name| {
-                user_agent
-                    .strip_prefix(name)
-                    .and_then(|rest| rest.strip_prefix('/'))
-                    .map(|rest| (name, rest))
-            });
+        let known = USER_AGENT_PRODUCTS.into_iter().find_map(|name| {
+            user_agent
+                .strip_prefix(name)
+                .and_then(|rest| rest.strip_prefix('/'))
+                .map(|rest| (name, rest))
+        });
         let (originator, codex_version, recognized) = if let Some((name, rest)) = known {
             let version = rest.split_once(' ').map_or(rest, |(version, _)| version);
             parse_core_version(version)?;

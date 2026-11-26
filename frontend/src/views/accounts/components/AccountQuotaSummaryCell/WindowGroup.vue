@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import type { AccountQuotaWindow } from '../../constants'
 import type { CodexQuotaOverdraftState } from '@/api/modules/accounts'
-
 import { computed } from 'vue'
+
 import { useUiClock } from '@/composables/useUiClock'
 import { t } from '@/i18n'
+import { quotaWindowLabel } from '../../constants'
 import { codexQuotaOverdraftWindow } from '../AccountQuotaOverdraft/presenter'
 import AccountQuotaOverdraftWindowLine from '../AccountQuotaOverdraft/WindowLine.vue'
 import { quotaWindowCode, quotaWindowPresentation, quotaWindowResetPresentation } from '../AccountUsageWindow/presenter'
@@ -21,7 +22,7 @@ const showLabel = computed(() => props.label !== t('accounts.quota.general'))
 const windowItems = computed(() => props.windows.map(window => ({
   key: window.key,
   code: quotaWindowCode(window.windowSeconds, window.role),
-  labelTooltip: window.labelDisplay,
+  labelTooltip: quotaWindowLabel(window),
   usedPercent: window.usedPercent,
   usedPercentDisplay: window.usedPercentDisplay,
   presentation: quotaWindowPresentation(window, '2px'),
@@ -44,7 +45,7 @@ const windowItems = computed(() => props.windows.map(window => ({
         class="grid min-w-0 items-center gap-x-1.5 leading-4"
         :class="comfortable ? 'min-h-5 grid-cols-[28px_minmax(0,1fr)_44px_64px] text-xs' : 'min-h-4 grid-cols-[24px_minmax(0,1fr)_40px_64px] text-[10px]'"
         role="group"
-        :aria-label="`${item.labelTooltip}额度周期`"
+        :aria-label="`${item.labelTooltip}周期`"
       >
         <AccountQuotaOverdraftWindowLine
           v-if="item.overdraft?.active"

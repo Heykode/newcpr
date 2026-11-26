@@ -23,7 +23,7 @@ function loadText(text, dependencies = {}, globals = {}) {
     exports,
     TextEncoder,
     structuredClone,
-    require: name => dependencies[name] ?? (name === '../utils/warmup-schedule' ? load('views/settings/utils/warmup-schedule.ts') : name === '../components/error-protection/form' ? load('views/settings/components/error-protection/form.ts') : name === '@/utils/excel-defaults' ? load('utils/excel-defaults.ts') : require(name)),
+    require: name => dependencies[name] ?? (name === '@/components/request-profile/changes' ? load('components/request-profile/changes.ts') : name === '../utils/warmup-schedule' ? load('views/settings/utils/warmup-schedule.ts') : name === '../components/error-protection/form' ? load('views/settings/components/error-protection/form.ts') : name === '@/utils/excel-defaults' ? load('utils/excel-defaults.ts') : require(name)),
     AbortController,
     Blob,
     setTimeout,
@@ -94,7 +94,7 @@ test('API key exit cleanup retains content, removes plaintext after leave and ca
   const module = load('views/api-keys/composables/useApiKeyMutations.ts', {
     '../utils/formValidation': load('views/api-keys/utils/formValidation.ts'),
     vue,
-    '@/api': {},
+    '@/api': load('api/modules/api-keys.ts', { '../request': () => {} }),
     '@/components/base/BaseToast': { toast: {} },
     '@/composables/useAsyncAction': api,
     '@/composables/useCopyText': { useCopyText: () => () => {} },

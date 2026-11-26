@@ -41,7 +41,7 @@ const view = computed(() => resolveAccountUsageWindowPresentation({
           :class="view.classes.label"
           :title="showNativeTooltip ? view.labelTooltip : undefined"
         >
-          {{ window.labelDisplay }}
+          {{ view.label }}
         </span>
         <span
           v-if="view.compactValues"
@@ -86,7 +86,7 @@ const view = computed(() => resolveAccountUsageWindowPresentation({
       <div
         :class="[view.classes.track, view.classes.trackOffset]"
         role="progressbar"
-        :aria-label="window.labelDisplay"
+        :aria-label="view.ariaLabel"
         aria-valuemin="0"
         aria-valuemax="100"
         :aria-valuenow="window.usedPercent ?? undefined"

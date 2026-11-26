@@ -106,6 +106,7 @@ async function requestSave() {
         v-model:proxy-id="proxyId"
         v-model:credential-proxy-id="credentialProxyId"
         v-model:egress-mode="egressMode"
+        :provider="account.provider"
         :credential-egress="account.provider === 'openai'"
         encrypted-content-available
         name-available

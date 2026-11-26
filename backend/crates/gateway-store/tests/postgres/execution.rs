@@ -552,7 +552,15 @@ async fn billing_snapshot_survives_finalization_without_repricing_or_duplicate_c
         Some("priority".to_owned()),
         100,
     )
-    .with_long_context_billing(true);
+    .with_long_context_billing(true)
+    .with_image(gateway_core::metering::ImageCostBreakdown {
+        input_tokens: 20,
+        cached_input_tokens: 5,
+        input_amount: money(40),
+        cache_read_amount: money(5),
+        input_price_per_million: money(3000),
+        cache_read_price_per_million: money(500),
+    });
     seed_running_request(&database.pool, "req_snapshot")
         .await
         .unwrap();
@@ -585,6 +593,39 @@ async fn billing_snapshot_survives_finalization_without_repricing_or_duplicate_c
         panic!("request-time details must not require a current model price");
     };
     assert!(saved.long_context_billing_applied);
+    assert_eq!(saved.total_amount.amount, row.0.parse().unwrap());
+    assert_eq!(saved.custom_multiplier_bps, 10_000);
+    let image = saved.image.expect("persist image token pricing");
+    assert_eq!(image.input_tokens, 20);
+    assert_eq!(image.cached_input_tokens, 5);
+    assert_eq!(
+        image.input_amount.amount.as_str(),
+        money(40).amount().canonical()
+    );
+    assert_eq!(
+        image.cache_read_price_per_million.amount.as_str(),
+        money(500).amount().canonical()
+    );
+    let mut legacy = row.1.clone();
+    legacy.as_object_mut().unwrap().remove("image");
+    legacy
+        .as_object_mut()
+        .unwrap()
+        .remove("customMultiplierBps");
+    sqlx::query("update model_requests set billing_snapshot_json=$1 where id='req_snapshot'")
+        .bind(legacy)
+        .execute(&database.pool)
+        .await
+        .unwrap();
+    let detail = admin_observability_store(&database.pool)
+        .usage_record_detail("req_snapshot")
+        .await
+        .unwrap();
+    let Some(admin_observability::UsageBilling::Calculated(saved)) = detail.request.billing else {
+        panic!("legacy snapshot remains readable");
+    };
+    assert!(saved.image.is_none());
+    assert_eq!(saved.custom_multiplier_bps, 10_000);
     assert_eq!(saved.total_amount.amount, row.0.parse().unwrap());
     let charges: (i64, String) = sqlx::query_as("select count(*), sum(amount)::text from account_cumulative_cost_entries where provider_account_ref = 'acct_snapshot'")
         .fetch_one(&database.pool).await.unwrap();

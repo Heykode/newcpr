@@ -1,0 +1,974 @@
+{
+  "upstream_base": "20d04ae57abf61ffc7c176eb73730577aaf1b0af",
+  "upstream_target": "88da31137b32d11015cbe0727b8b056f4476de7e",
+  "local_base": "60ebb0f17522ba1a15c6340260135c85eeb2710f",
+  "file_count": 75,
+  "verification_status": "verified_with_documented_boundaries",
+  "files": [
+    {
+      "upstream": "backend/crates/gateway-admin/src/model/accounts.rs",
+      "local": "backend/crates/gateway-admin/src/model/accounts.rs",
+      "action": "adapted",
+      "plan": "E03",
+      "reason": "Models归属接实际AccountsService，保留reset时间边界；AccountWide独占估值、预测、恢复和分组监控资格。",
+      "excluded_parts": [],
+      "validation": [
+        "gateway-admin 全包"
+      ]
+    },
+    {
+      "upstream": "backend/crates/gateway-admin/src/model/provider_credentials.rs",
+      "local": "backend/crates/gateway-admin/src/model/provider_credentials.rs",
+      "action": "adapted",
+      "plan": "E03",
+      "reason": "Models归属接实际AccountsService，保留reset时间边界；AccountWide独占估值、预测、恢复和分组监控资格。",
+      "excluded_parts": [],
+      "validation": [
+        "gateway-admin 全包"
+      ]
+    },
+    {
+      "upstream": "backend/crates/gateway-admin/src/use_case/accounts/mod.rs",
+      "local": "backend/crates/gateway-admin/src/use_case/accounts.rs",
+      "action": "adapted",
+      "plan": "E03",
+      "reason": "Models归属接实际AccountsService，保留reset时间边界；AccountWide独占估值、预测、恢复和分组监控资格。",
+      "excluded_parts": [],
+      "validation": [
+        "gateway-admin 全包"
+      ]
+    },
+    {
+      "upstream": "backend/crates/gateway-admin/tests/use_case/accounts/mod.rs",
+      "local": "backend/crates/gateway-admin/tests/use_case/accounts.rs",
+      "action": "adapted",
+      "plan": "E03",
+      "reason": "Models归属接实际AccountsService，保留reset时间边界；AccountWide独占估值、预测、恢复和分组监控资格。",
+      "excluded_parts": [],
+      "validation": [
+        "gateway-admin 全包"
+      ]
+    },
+    {
+      "upstream": "backend/crates/gateway-api/src/data_plane/generation/http.rs",
+      "local": "backend/crates/gateway-api/src/openai/responses/http.rs",
+      "action": "adapted",
+      "plan": "E04",
+      "reason": "原生GenAI等待首帧时不包保活，失败按HTTP错误投影。",
+      "excluded_parts": [
+        "插件MiddlewareBody/Frame及ResponseAuthorization；同文件原生等待/心跳规则已接。"
+      ],
+      "validation": [
+        "gateway-api 全包及架构补测"
+      ]
+    },
+    {
+      "upstream": "backend/crates/gateway-api/src/data_plane/middleware/http.rs",
+      "local": "backend/crates/gateway-api/src/openai/responses/http.rs",
+      "action": "adapted",
+      "plan": "E04",
+      "reason": "原生GenAI输出循环关闭保活，保留既有取消与结算owner；删除不再使用的GenAI保活专用error helper。",
+      "excluded_parts": [
+        "插件MiddlewareBody/Frame及ResponseAuthorization；同文件原生等待/心跳规则已接。"
+      ],
+      "validation": [
+        "gateway-api 全包及架构补测"
+      ]
+    },
+    {
+      "upstream": "backend/crates/gateway-api/tests/data_plane/chat_completions/http.rs",
+      "local": "backend/crates/gateway-api/tests/openai/responses/chat_official/delivery_parity.rs",
+      "action": "adapted",
+      "plan": "E04",
+      "reason": "官方仅改共享fixture字段名；本地保留原一次性delay，Chat等待后错误编码测试继续全包回归。",
+      "excluded_parts": [],
+      "validation": [
+        "gateway-api 全包及架构补测"
+      ]
+    },
+    {
+      "upstream": "backend/crates/gateway-api/tests/data_plane/genai/contract.rs",
+      "local": "backend/crates/gateway-api/tests/openai/genai/contract.rs",
+      "action": "adapted",
+      "plan": "E04",
+      "reason": "原生静默SSE接本地共享HTTP交付owner；保留其他协议心跳、取消和结算。",
+      "excluded_parts": [],
+      "validation": [
+        "gateway-api 全包及架构补测"
+      ]
+    },
+    {
+      "upstream": "backend/crates/gateway-api/tests/support/generation.rs",
+      "local": "backend/crates/gateway-api/tests/openai/session.rs",
+      "action": "adapted",
+      "plan": "E04",
+      "reason": "新增每次读帧延迟read_delay用于静默测试；本地既有一次性delay保留。",
+      "excluded_parts": [],
+      "validation": [
+        "gateway-api 全包及架构补测"
+      ]
+    },
+    {
+      "upstream": "backend/crates/gateway-core/src/account/scope.rs",
+      "local": "backend/crates/gateway-core/src/account/scope.rs",
+      "action": "adapted",
+      "plan": "E05/E06/E08/E10",
+      "reason": "allows_model_pair在同一授权分组检查两型号；exclude_accounts用本地restricted_accounts交集实现，保留quality scope且不扩大授权。",
+      "excluded_parts": [],
+      "validation": [
+        "gateway-core 全包"
+      ]
+    },
+    {
+      "upstream": "backend/crates/gateway-core/src/account/store.rs",
+      "local": "backend/crates/gateway-core/src/account/store.rs",
+      "action": "adapted",
+      "plan": "E05/E06/E08/E10",
+      "reason": "增加活动查询与QuotaObservationVersion；内存端口默认投影，生产PG覆盖轻量SQL。",
+      "excluded_parts": [],
+      "validation": [
+        "gateway-core 全包"
+      ]
+    },
+    {
+      "upstream": "backend/crates/gateway-core/src/engine/execution/failure.rs",
+      "local": "backend/crates/gateway-core/src/engine/execution.rs",
+      "action": "adapted",
+      "plan": "E05/E06/E08/E10",
+      "reason": "WebSearchUnavailable映射静态客户端提示；同owner实际客户端目录fallback调用profiles_for_provider_scope。",
+      "excluded_parts": [],
+      "validation": [
+        "gateway-core 全包"
+      ]
+    },
+    {
+      "upstream": "backend/crates/gateway-core/src/engine/provider.rs",
+      "local": "backend/crates/gateway-core/src/engine/provider.rs",
+      "action": "adapted",
+      "plan": "E05/E06/E08/E10",
+      "reason": "沿本地Core owner接入原生目录、权限、输出上限及错误出口；保留本地调度策略。",
+      "excluded_parts": [],
+      "validation": [
+        "gateway-core 全包"
+      ]
+    },
+    {
+      "upstream": "backend/crates/gateway-core/src/error/mod.rs",
+      "local": "backend/crates/gateway-core/src/error/mod.rs",
+      "action": "adapted",
+      "plan": "E05/E06/E08/E10",
+      "reason": "沿本地Core owner接入原生目录、权限、输出上限及错误出口；保留本地调度策略。",
+      "excluded_parts": [],
+      "validation": [
+        "gateway-core 全包"
+      ]
+    },
+    {
+      "upstream": "backend/crates/gateway-core/src/operation.rs",
+      "local": "backend/crates/gateway-core/src/operation/mod.rs",
+      "action": "adapted",
+      "plan": "E05/E06/E08/E10",
+      "reason": "沿本地Core owner接入原生目录、权限、输出上限及错误出口；保留本地调度策略。",
+      "excluded_parts": [],
+      "validation": [
+        "gateway-core 全包"
+      ]
+    },
+    {
+      "upstream": "backend/crates/gateway-core/src/routing/catalog.rs",
+      "local": "backend/crates/gateway-core/src/routing/catalog.rs",
+      "action": "adapted",
+      "plan": "E05/E06/E08/E10",
+      "reason": "沿本地Core owner接入原生目录、权限、输出上限及错误出口；保留本地调度策略。",
+      "excluded_parts": [],
+      "validation": [
+        "gateway-core 全包"
+      ]
+    },
+    {
+      "upstream": "backend/crates/gateway-core/src/routing/mod.rs",
+      "local": "backend/crates/gateway-core/src/routing/mod.rs",
+      "action": "adapted",
+      "plan": "E05/E06/E08/E10",
+      "reason": "沿本地Core owner接入原生目录、权限、输出上限及错误出口；保留本地调度策略。",
+      "excluded_parts": [],
+      "validation": [
+        "gateway-core 全包"
+      ]
+    },
+    {
+      "upstream": "backend/crates/gateway-core/src/routing/snapshot.rs",
+      "local": "backend/crates/gateway-core/src/routing/snapshot.rs",
+      "action": "adapted",
+      "plan": "E05/E06/E08/E10",
+      "reason": "目标画像、授权成员交集、推理档位、输出上限和独立搜索授权接真实路由；restricted_to适配为restricted_to_accounts。",
+      "excluded_parts": [
+        "插件contributions及插件同名模型碰撞分支；原生映射碰撞测试保留。"
+      ],
+      "validation": [
+        "gateway-core 全包"
+      ]
+    },
+    {
+      "upstream": "backend/crates/gateway-core/src/validation.rs",
+      "local": "backend/crates/gateway-core/src/validation.rs",
+      "action": "adapted",
+      "plan": "E05/E06/E08/E10",
+      "reason": "沿本地Core owner接入原生目录、权限、输出上限及错误出口；保留本地调度策略。",
+      "excluded_parts": [],
+      "validation": [
+        "gateway-core 全包"
+      ]
+    },
+    {
+      "upstream": "backend/crates/gateway-core/tests/routing/snapshot.rs",
+      "local": "backend/crates/gateway-core/tests/routing/snapshot.rs",
+      "action": "adapted",
+      "plan": "E05/E06/E08/E10",
+      "reason": "目标画像、授权成员交集、推理档位、输出上限和独立搜索授权接真实路由；restricted_to适配为restricted_to_accounts。",
+      "excluded_parts": [
+        "插件contributions及插件同名模型碰撞分支；原生映射碰撞测试保留。"
+      ],
+      "validation": [
+        "gateway-core 全包"
+      ]
+    },
+    {
+      "upstream": "backend/crates/gateway-protocol/src/anthropic/capabilities.rs",
+      "local": "backend/crates/gateway-protocol/src/anthropic/capabilities.rs",
+      "action": "verbatim",
+      "plan": "E07/E08/E09",
+      "reason": "公共协议与官方正反例直接接入，不依赖Provider运行时。",
+      "excluded_parts": [],
+      "validation": [
+        "gateway-protocol 全包"
+      ]
+    },
+    {
+      "upstream": "backend/crates/gateway-protocol/src/anthropic/mod.rs",
+      "local": "backend/crates/gateway-protocol/src/anthropic/mod.rs",
+      "action": "verbatim",
+      "plan": "E07/E08/E09",
+      "reason": "公共协议与官方正反例直接接入，不依赖Provider运行时。",
+      "excluded_parts": [],
+      "validation": [
+        "gateway-protocol 全包"
+      ]
+    },
+    {
+      "upstream": "backend/crates/gateway-protocol/src/anthropic/request.rs",
+      "local": "backend/crates/gateway-protocol/src/anthropic/request.rs",
+      "action": "verbatim",
+      "plan": "E07/E08/E09",
+      "reason": "公共协议与官方正反例直接接入，不依赖Provider运行时。",
+      "excluded_parts": [],
+      "validation": [
+        "gateway-protocol 全包"
+      ]
+    },
+    {
+      "upstream": "backend/crates/gateway-protocol/src/anthropic/tools.rs",
+      "local": "backend/crates/gateway-protocol/src/anthropic/tools.rs",
+      "action": "verbatim",
+      "plan": "E07/E08/E09",
+      "reason": "公共协议与官方正反例直接接入，不依赖Provider运行时。",
+      "excluded_parts": [],
+      "validation": [
+        "gateway-protocol 全包"
+      ]
+    },
+    {
+      "upstream": "backend/crates/gateway-protocol/src/genai/grounding.rs",
+      "local": "backend/crates/gateway-protocol/src/genai/grounding.rs",
+      "action": "verbatim",
+      "plan": "E07/E08/E09",
+      "reason": "公共协议与官方正反例直接接入，不依赖Provider运行时。",
+      "excluded_parts": [],
+      "validation": [
+        "gateway-protocol 全包"
+      ]
+    },
+    {
+      "upstream": "backend/crates/gateway-protocol/src/genai/messages.rs",
+      "local": "backend/crates/gateway-protocol/src/genai/messages.rs",
+      "action": "verbatim",
+      "plan": "E07/E08/E09",
+      "reason": "公共协议与官方正反例直接接入，不依赖Provider运行时。",
+      "excluded_parts": [],
+      "validation": [
+        "gateway-protocol 全包"
+      ]
+    },
+    {
+      "upstream": "backend/crates/gateway-protocol/src/genai/mod.rs",
+      "local": "backend/crates/gateway-protocol/src/genai/mod.rs",
+      "action": "verbatim",
+      "plan": "E07/E08/E09",
+      "reason": "公共协议与官方正反例直接接入，不依赖Provider运行时。",
+      "excluded_parts": [],
+      "validation": [
+        "gateway-protocol 全包"
+      ]
+    },
+    {
+      "upstream": "backend/crates/gateway-protocol/src/genai/responses.rs",
+      "local": "backend/crates/gateway-protocol/src/genai/responses.rs",
+      "action": "verbatim",
+      "plan": "E07/E08/E09",
+      "reason": "公共协议与官方正反例直接接入，不依赖Provider运行时。",
+      "excluded_parts": [],
+      "validation": [
+        "gateway-protocol 全包"
+      ]
+    },
+    {
+      "upstream": "backend/crates/gateway-protocol/src/openai/mod.rs",
+      "local": "backend/crates/gateway-protocol/src/openai/mod.rs",
+      "action": "adapted",
+      "plan": "E07/E08/E09",
+      "reason": "公共协议与官方正反例直接接入，不依赖Provider运行时。",
+      "excluded_parts": [],
+      "validation": [
+        "gateway-protocol 全包"
+      ]
+    },
+    {
+      "upstream": "backend/crates/gateway-protocol/src/openai/web_search.rs",
+      "local": "backend/crates/gateway-protocol/src/openai/web_search.rs",
+      "action": "verbatim",
+      "plan": "E07/E08/E09",
+      "reason": "公共协议与官方正反例直接接入，不依赖Provider运行时。",
+      "excluded_parts": [],
+      "validation": [
+        "gateway-protocol 全包"
+      ]
+    },
+    {
+      "upstream": "backend/crates/gateway-protocol/tests/anthropic/request.rs",
+      "local": "backend/crates/gateway-protocol/tests/anthropic/request.rs",
+      "action": "verbatim",
+      "plan": "E07/E08/E09",
+      "reason": "公共协议与官方正反例直接接入，不依赖Provider运行时。",
+      "excluded_parts": [],
+      "validation": [
+        "gateway-protocol 全包"
+      ]
+    },
+    {
+      "upstream": "backend/crates/gateway-protocol/tests/genai/messages.rs",
+      "local": "backend/crates/gateway-protocol/tests/genai/messages.rs",
+      "action": "verbatim",
+      "plan": "E07/E08/E09",
+      "reason": "公共协议与官方正反例直接接入，不依赖Provider运行时。",
+      "excluded_parts": [],
+      "validation": [
+        "gateway-protocol 全包"
+      ]
+    },
+    {
+      "upstream": "backend/crates/gateway-protocol/tests/genai/mod.rs",
+      "local": "backend/crates/gateway-protocol/tests/genai/mod.rs",
+      "action": "verbatim",
+      "plan": "E07/E08/E09",
+      "reason": "公共协议与官方正反例直接接入，不依赖Provider运行时。",
+      "excluded_parts": [],
+      "validation": [
+        "gateway-protocol 全包"
+      ]
+    },
+    {
+      "upstream": "backend/crates/gateway-protocol/tests/genai/responses.rs",
+      "local": "backend/crates/gateway-protocol/tests/genai/responses.rs",
+      "action": "verbatim",
+      "plan": "E07/E08/E09",
+      "reason": "公共协议与官方正反例直接接入，不依赖Provider运行时。",
+      "excluded_parts": [],
+      "validation": [
+        "gateway-protocol 全包"
+      ]
+    },
+    {
+      "upstream": "backend/crates/gateway-protocol/tests/openai/mod.rs",
+      "local": "backend/crates/gateway-protocol/tests/openai/mod.rs",
+      "action": "adapted",
+      "plan": "E07/E08/E09",
+      "reason": "公共协议与官方正反例直接接入，不依赖Provider运行时。",
+      "excluded_parts": [],
+      "validation": [
+        "gateway-protocol 全包"
+      ]
+    },
+    {
+      "upstream": "backend/crates/gateway-protocol/tests/openai/web_search.rs",
+      "local": "backend/crates/gateway-protocol/tests/openai/web_search.rs",
+      "action": "verbatim",
+      "plan": "E07/E08/E09",
+      "reason": "公共协议与官方正反例直接接入，不依赖Provider运行时。",
+      "excluded_parts": [],
+      "validation": [
+        "gateway-protocol 全包"
+      ]
+    },
+    {
+      "upstream": "backend/crates/gateway-store/src/postgres/observability/analytics/accounts.rs",
+      "local": "backend/crates/gateway-store/src/postgres/observability/analytics/accounts.rs",
+      "action": "adapted",
+      "plan": "E02/E03",
+      "reason": "适配现有PG账号/analytics owner；模型过滤沿本地终态聚合，活动只用快照后成功生成完成事实。",
+      "excluded_parts": [],
+      "validation": [
+        "真实隔离PG provider_accounts 回归"
+      ]
+    },
+    {
+      "upstream": "backend/crates/gateway-store/src/postgres/provider_accounts/core_adapter.rs",
+      "local": "backend/crates/gateway-store/src/postgres/provider_accounts/core_adapter.rs",
+      "action": "adapted",
+      "plan": "E02/E03",
+      "reason": "适配现有PG账号/analytics owner；模型过滤沿本地终态聚合，活动只用快照后成功生成完成事实。",
+      "excluded_parts": [],
+      "validation": [
+        "真实隔离PG provider_accounts 回归"
+      ]
+    },
+    {
+      "upstream": "backend/crates/gateway-store/src/postgres/provider_accounts/quota/document.rs",
+      "local": "backend/crates/gateway-store/src/postgres/provider_accounts/core_adapter.rs",
+      "action": "adapted",
+      "plan": "E02/E03",
+      "reason": "活动SQL接现有ProviderAccountStore adapter；补齐轻量versions SQL，避免新worker每轮物化额度JSON。",
+      "excluded_parts": [],
+      "validation": [
+        "真实隔离PG provider_accounts 回归"
+      ]
+    },
+    {
+      "upstream": "backend/crates/gateway-store/src/postgres/provider_accounts/quota/forecast.rs",
+      "local": "backend/crates/gateway-store/src/postgres/provider_accounts/quota_forecast.rs",
+      "action": "adapted",
+      "plan": "E02/E03",
+      "reason": "适配现有PG账号/analytics owner；模型过滤沿本地终态聚合，活动只用快照后成功生成完成事实。",
+      "excluded_parts": [],
+      "validation": [
+        "真实隔离PG provider_accounts 回归"
+      ]
+    },
+    {
+      "upstream": "backend/crates/gateway-store/src/postgres/provider_accounts/quota/mod.rs",
+      "local": "backend/crates/gateway-store/src/postgres/provider_accounts/core_adapter.rs",
+      "action": "adapted",
+      "plan": "E02/E03",
+      "reason": "本地无quota子模块；导出所需活动查询直接由现有trait adapter实现。",
+      "excluded_parts": [],
+      "validation": [
+        "真实隔离PG provider_accounts 回归"
+      ]
+    },
+    {
+      "upstream": "backend/crates/gateway-store/tests/postgres/provider_accounts/core_adapter.rs",
+      "local": "backend/crates/gateway-store/tests/postgres/provider_accounts/core_adapter.rs",
+      "action": "adapted",
+      "plan": "E02/E03",
+      "reason": "适配现有PG账号/analytics owner；模型过滤沿本地终态聚合，活动只用快照后成功生成完成事实。",
+      "excluded_parts": [],
+      "validation": [
+        "真实隔离PG provider_accounts 回归"
+      ]
+    },
+    {
+      "upstream": "backend/crates/gateway-store/tests/postgres/provider_accounts/mod.rs",
+      "local": "backend/crates/gateway-store/tests/postgres/provider_accounts/mod.rs",
+      "action": "adapted",
+      "plan": "E02/E03",
+      "reason": "适配现有PG账号/analytics owner；模型过滤沿本地终态聚合，活动只用快照后成功生成完成事实。",
+      "excluded_parts": [],
+      "validation": [
+        "真实隔离PG provider_accounts 回归"
+      ]
+    },
+    {
+      "upstream": "backend/crates/gateway-store/tests/postgres/provider_accounts/quota/forecast.rs",
+      "local": "backend/crates/gateway-store/tests/postgres/provider_accounts/quota_forecast.rs",
+      "action": "adapted",
+      "plan": "E02/E03",
+      "reason": "既有整号查询补models=None；模型组拒绝预测断言在provider_accounts/mod.rs真实PG窗口用例。",
+      "excluded_parts": [],
+      "validation": [
+        "真实隔离PG provider_accounts 回归"
+      ]
+    },
+    {
+      "upstream": "backend/crates/gateway-store/tests/postgres/provider_accounts/usage_projection.rs",
+      "local": "backend/crates/gateway-store/tests/postgres/provider_accounts/mod.rs",
+      "action": "adapted",
+      "plan": "E02/E03",
+      "reason": "官方仅为既有查询补models=None；本地窗口/成功率测试在mod.rs，整号字段已补。",
+      "excluded_parts": [],
+      "validation": [
+        "真实隔离PG provider_accounts 回归"
+      ]
+    },
+    {
+      "upstream": "backend/crates/gateway-store/tests/postgres/usage_data/mod.rs",
+      "local": "backend/crates/gateway-store/tests/postgres/provider_accounts/cumulative_costs.rs",
+      "action": "adapted",
+      "plan": "E02/E03",
+      "reason": "官方仅为整号测试查询补models=None；本地已有累计费用/推理窗口fixture承接，无该拆分测试模块。",
+      "excluded_parts": [],
+      "validation": [
+        "真实隔离PG provider_accounts 回归"
+      ]
+    },
+    {
+      "upstream": "backend/crates/providers/antigravity/src/credential/catalog.rs",
+      "local": "backend/crates/providers/antigravity/src/credential/catalog.rs",
+      "action": "verbatim",
+      "plan": "E05/E06",
+      "reason": "原生Antigravity增量接入既有模块；保留账号revision、出口、Store租约及亲和合同。",
+      "excluded_parts": [],
+      "validation": [
+        "provider-antigravity 全包"
+      ]
+    },
+    {
+      "upstream": "backend/crates/providers/antigravity/src/credential/model_groups.rs",
+      "local": "backend/crates/providers/antigravity/src/credential/model_groups.rs",
+      "action": "verbatim",
+      "plan": "E05/E06",
+      "reason": "原生Antigravity增量接入既有模块；保留账号revision、出口、Store租约及亲和合同。",
+      "excluded_parts": [],
+      "validation": [
+        "provider-antigravity 全包"
+      ]
+    },
+    {
+      "upstream": "backend/crates/providers/antigravity/src/credential/quota/document.rs",
+      "local": "backend/crates/providers/antigravity/src/credential/quota/document.rs",
+      "action": "adapted",
+      "plan": "E02/E03",
+      "reason": "原生Antigravity增量接入既有模块；保留账号revision、出口、Store租约及亲和合同。",
+      "excluded_parts": [],
+      "validation": [
+        "provider-antigravity 全包"
+      ]
+    },
+    {
+      "upstream": "backend/crates/providers/antigravity/src/credential/quota/service.rs",
+      "local": "backend/crates/providers/antigravity/src/credential/quota/service.rs",
+      "action": "adapted",
+      "plan": "E02/E03",
+      "reason": "reconcile 批读版本与活动。缺少匹配快照和耗尽到期时独立复查，同身份续期沿用快照。主动刷新写入时核对当前账号、凭据版本、启用状态和有效出口。",
+      "excluded_parts": [],
+      "validation": [
+        "provider-antigravity 全包"
+      ]
+    },
+    {
+      "upstream": "backend/crates/providers/antigravity/src/provider/candidates.rs",
+      "local": "backend/crates/providers/antigravity/src/provider/candidates.rs",
+      "action": "adapted",
+      "plan": "E07/E08/E09",
+      "reason": "原生Antigravity增量接入既有模块；保留账号revision、出口、Store租约及亲和合同。",
+      "excluded_parts": [],
+      "validation": [
+        "provider-antigravity 全包"
+      ]
+    },
+    {
+      "upstream": "backend/crates/providers/antigravity/src/provider/execution.rs",
+      "local": "backend/crates/providers/antigravity/src/provider/execution.rs",
+      "action": "adapted",
+      "plan": "E07/E08/E09",
+      "reason": "execute_native在选号前确定强制搜索，选择GenerateMode::WebSearch；计价和元数据使用实际型号，翻译后沿原交付owner执行。",
+      "excluded_parts": [
+        "插件execute_middleware及改写后的搜索类型检查：用户排除插件专属运行时，本地原生请求无该改写阶段。"
+      ],
+      "validation": [
+        "provider-antigravity 全包"
+      ]
+    },
+    {
+      "upstream": "backend/crates/providers/antigravity/src/provider/mod.rs",
+      "local": "backend/crates/providers/antigravity/src/provider/mod.rs",
+      "action": "adapted",
+      "plan": "E07/E08/E09",
+      "reason": "原生Antigravity增量接入既有模块；保留账号revision、出口、Store租约及亲和合同。",
+      "excluded_parts": [],
+      "validation": [
+        "provider-antigravity 全包"
+      ]
+    },
+    {
+      "upstream": "backend/crates/providers/antigravity/src/provider/selection.rs",
+      "local": "backend/crates/providers/antigravity/src/provider/selection.rs",
+      "action": "adapted",
+      "plan": "E07/E08/E09",
+      "reason": "原生Antigravity增量接入既有模块；保留账号revision、出口、Store租约及亲和合同。",
+      "excluded_parts": [],
+      "validation": [
+        "provider-antigravity 全包"
+      ]
+    },
+    {
+      "upstream": "backend/crates/providers/antigravity/src/provider/translation.rs",
+      "local": "backend/crates/providers/antigravity/src/provider/translation.rs",
+      "action": "verbatim",
+      "plan": "E07/E08/E09",
+      "reason": "原生Antigravity增量接入既有模块；保留账号revision、出口、Store租约及亲和合同。",
+      "excluded_parts": [],
+      "validation": [
+        "provider-antigravity 全包"
+      ]
+    },
+    {
+      "upstream": "backend/crates/providers/antigravity/src/provider/web_search.rs",
+      "local": "backend/crates/providers/antigravity/src/provider/web_search.rs",
+      "action": "verbatim",
+      "plan": "E07/E08/E09",
+      "reason": "原生Antigravity增量接入既有模块；保留账号revision、出口、Store租约及亲和合同。",
+      "excluded_parts": [],
+      "validation": [
+        "provider-antigravity 全包"
+      ]
+    },
+    {
+      "upstream": "backend/crates/providers/antigravity/src/transport/account.rs",
+      "local": "backend/crates/providers/antigravity/src/transport/account.rs",
+      "action": "verbatim",
+      "plan": "E07/E08/E09",
+      "reason": "原生Antigravity增量接入既有模块；保留账号revision、出口、Store租约及亲和合同。",
+      "excluded_parts": [],
+      "validation": [
+        "provider-antigravity 全包"
+      ]
+    },
+    {
+      "upstream": "backend/crates/providers/antigravity/src/transport/client.rs",
+      "local": "backend/crates/providers/antigravity/src/transport/client.rs",
+      "action": "adapted",
+      "plan": "E07/E08/E09",
+      "reason": "搜索封套、目录元数据、固定搜索指令及生成模式保留；MiddlewareHeader适配本地RequestHeader。",
+      "excluded_parts": [],
+      "validation": [
+        "provider-antigravity 全包"
+      ]
+    },
+    {
+      "upstream": "backend/crates/providers/antigravity/src/transport/mod.rs",
+      "local": "backend/crates/providers/antigravity/src/transport/mod.rs",
+      "action": "verbatim",
+      "plan": "E07/E08/E09",
+      "reason": "原生Antigravity增量接入既有模块；保留账号revision、出口、Store租约及亲和合同。",
+      "excluded_parts": [],
+      "validation": [
+        "provider-antigravity 全包"
+      ]
+    },
+    {
+      "upstream": "backend/crates/providers/antigravity/tests/credential/quota/service.rs",
+      "local": "backend/crates/providers/antigravity/tests/credential/quota/service.rs",
+      "action": "verbatim",
+      "plan": "E02/E03",
+      "reason": "原生Antigravity增量接入既有模块；保留账号revision、出口、Store租约及亲和合同。",
+      "excluded_parts": [],
+      "validation": [
+        "provider-antigravity 全包"
+      ]
+    },
+    {
+      "upstream": "backend/crates/providers/antigravity/tests/provider/execution.rs",
+      "local": "backend/crates/providers/antigravity/tests/provider/execution.rs",
+      "action": "adapted",
+      "plan": "E07/E08/E09",
+      "reason": "官方搜索/参数回归适配本地AccountSelectionPolicy及fixture；追加实际搜索型号计费和租约释放。",
+      "excluded_parts": [],
+      "validation": [
+        "provider-antigravity 全包"
+      ]
+    },
+    {
+      "upstream": "backend/crates/providers/antigravity/tests/support/mod.rs",
+      "local": "backend/crates/providers/antigravity/tests/support/mod.rs",
+      "action": "adapted",
+      "plan": "E07/E08/E09",
+      "reason": "原生Antigravity增量接入既有模块；保留账号revision、出口、Store租约及亲和合同。",
+      "excluded_parts": [],
+      "validation": [
+        "provider-antigravity 全包"
+      ]
+    },
+    {
+      "upstream": "backend/crates/providers/antigravity/tests/support/ports.rs",
+      "local": "backend/crates/providers/antigravity/tests/support/ports.rs",
+      "action": "adapted",
+      "plan": "E07/E08/E09",
+      "reason": "原生Antigravity增量接入既有模块；保留账号revision、出口、Store租约及亲和合同。",
+      "excluded_parts": [],
+      "validation": [
+        "provider-antigravity 全包"
+      ]
+    },
+    {
+      "upstream": "backend/crates/providers/antigravity/tests/transport/client.rs",
+      "local": "backend/crates/providers/antigravity/tests/transport/client.rs",
+      "action": "verbatim",
+      "plan": "E07/E08/E09",
+      "reason": "原生Antigravity增量接入既有模块；保留账号revision、出口、Store租约及亲和合同。",
+      "excluded_parts": [],
+      "validation": [
+        "provider-antigravity 全包"
+      ]
+    },
+    {
+      "upstream": "backend/crates/providers/antigravity/tests/transport/pool.rs",
+      "local": "backend/crates/providers/antigravity/tests/transport/pool.rs",
+      "action": "verbatim",
+      "plan": "E07/E08/E09",
+      "reason": "原生Antigravity增量接入既有模块；保留账号revision、出口、Store租约及亲和合同。",
+      "excluded_parts": [],
+      "validation": [
+        "provider-antigravity 全包"
+      ]
+    },
+    {
+      "upstream": "backend/crates/providers/openai/src/provider/messages/mod.rs",
+      "local": "backend/crates/providers/openai/src/provider/mod.rs",
+      "action": "adapted",
+      "plan": "E10",
+      "reason": "OAuth Messages请求转换保留source，NotSent分类与重试边界不变。",
+      "excluded_parts": [
+        "上游API Key账号专属反向转换及测试；该账号类型未接入，公共协议和OAuth路径保留。"
+      ],
+      "validation": [
+        "provider-openai 全包"
+      ]
+    },
+    {
+      "upstream": "backend/crates/providers/openai/src/provider/messages/translator.rs",
+      "local": "backend/crates/providers/openai/src/provider/messages.rs",
+      "action": "adapted",
+      "plan": "E10",
+      "reason": "OAuth Responses→Messages的JSON/SSE转换保留source，错误仍为Sent/Protocol，公开提示脱敏。",
+      "excluded_parts": [
+        "上游API Key账号专属反向转换及测试；该账号类型未接入，公共协议和OAuth路径保留。"
+      ],
+      "validation": [
+        "provider-openai 全包"
+      ]
+    },
+    {
+      "upstream": "backend/crates/providers/openai/tests/admin/provider.rs",
+      "local": "backend/crates/providers/openai/tests/admin/mod.rs",
+      "action": "adapted",
+      "plan": "E10",
+      "reason": "归属枚举不再Copy，套餐窗口断言改借用；AccountWide/Unavailable预期不变。",
+      "excluded_parts": [],
+      "validation": [
+        "provider-openai 全包"
+      ]
+    },
+    {
+      "upstream": "backend/crates/providers/openai/tests/provider/contract/messages/mod.rs",
+      "local": "backend/crates/providers/openai/tests/provider/contract/messages.rs",
+      "action": "adapted",
+      "plan": "E10",
+      "reason": "真实OAuth ProviderStream回归覆盖source、send_state和私有诊断脱敏。",
+      "excluded_parts": [
+        "上游API Key账号专属反向转换及测试；该账号类型未接入，公共协议和OAuth路径保留。"
+      ],
+      "validation": [
+        "provider-openai 全包"
+      ]
+    },
+    {
+      "upstream": "backend/crates/providers/openai/tests/provider/contract/messages/translator.rs",
+      "local": "backend/crates/providers/openai/tests/provider/contract/messages.rs",
+      "action": "adapted",
+      "plan": "E10",
+      "reason": "实际OAuth ProviderStream覆盖适用错误出口；API Key专属反向转换fixture不引入。",
+      "excluded_parts": [
+        "上游API Key账号专属反向转换及测试；该账号类型未接入，公共协议和OAuth路径保留。"
+      ],
+      "validation": [
+        "provider-openai 全包"
+      ]
+    },
+    {
+      "upstream": "docs/api.md",
+      "local": "docs/api.md",
+      "action": "adapted",
+      "plan": "E12",
+      "reason": "同步原生API/架构/版本说明，保留NewCPR真实发行合同。",
+      "excluded_parts": [],
+      "validation": [
+        "固定源码与文档审阅"
+      ]
+    },
+    {
+      "upstream": "docs/architecture.md",
+      "local": "docs/architecture.md",
+      "action": "adapted",
+      "plan": "E12",
+      "reason": "同步原生API/架构/版本说明，保留NewCPR真实发行合同。",
+      "excluded_parts": [],
+      "validation": [
+        "固定源码与文档审阅"
+      ]
+    },
+    {
+      "upstream": "frontend/src/components/account-usage-window/presenter.ts",
+      "local": "frontend/src/views/accounts/components/AccountUsageWindow/presenter.ts",
+      "action": "adapted",
+      "plan": "E03",
+      "reason": "本地quotaWindowLocalUsageDisplay对已知0显示0，未知仍null。",
+      "excluded_parts": [
+        "API Key amount额度展示。"
+      ],
+      "validation": [
+        "quota countdown回归",
+        "1440/390/320px浏览器"
+      ]
+    },
+    {
+      "upstream": "release/notes.md",
+      "local": "release/notes.md",
+      "action": "adapted",
+      "plan": "E12",
+      "reason": "同步原生API/架构/版本说明，保留NewCPR真实发行合同。",
+      "excluded_parts": [],
+      "validation": [
+        "固定源码与文档审阅"
+      ]
+    },
+    {
+      "upstream": "release/version.yaml",
+      "local": "release/version.yaml",
+      "action": "adapted",
+      "plan": "E12",
+      "reason": "version=3.55.3；published仍为空，不复制官方已发布通道。",
+      "excluded_parts": [],
+      "validation": [
+        "固定源码与文档审阅"
+      ]
+    }
+  ],
+  "additional_local_files": [
+    {
+      "local": ".trellis/spec/backend/native-model-catalog.md",
+      "plan": "E05/E06",
+      "reason": "替换旧目录规则，记录真实客户端fallback、授权档位和账号输出限制。",
+      "validation": [
+        "固定源码与调用链审阅"
+      ]
+    },
+    {
+      "local": ".trellis/spec/backend/native-platforms.md",
+      "plan": "E02/E04/E08/E09",
+      "reason": "同步静默SSE、活动刷新、专用搜索及转换边界。",
+      "validation": [
+        "固定源码与调用链审阅"
+      ]
+    },
+    {
+      "local": ".trellis/spec/backend/protocol-compatibility.md",
+      "plan": "E07/E09/E10",
+      "reason": "记录搜索选择、Responses参数直转及私有错误source合同。",
+      "validation": [
+        "固定源码与调用链审阅"
+      ]
+    },
+    {
+      "local": ".trellis/spec/backend/quota-forecast.md",
+      "plan": "E03",
+      "reason": "模型组窗口可展示用量，但不冒充整号预测或恢复证据。",
+      "validation": [
+        "固定源码与调用链审阅"
+      ]
+    },
+    {
+      "local": ".trellis/spec/frontend/account-management.md",
+      "plan": "E03",
+      "reason": "区分已知零用量与不可归属的未知用量。",
+      "validation": [
+        "固定源码与界面审阅"
+      ]
+    },
+    {
+      "local": "backend/crates/gateway-admin/tests/model/quota_forecast.rs",
+      "plan": "E03",
+      "reason": "模型组归属不进入整号预测的正反例。",
+      "validation": [
+        "gateway-admin 全包"
+      ]
+    },
+    {
+      "local": "backend/crates/gateway-api/src/openai/genai/error.rs",
+      "plan": "E04",
+      "reason": "删除失效的GenAI心跳错误helper。",
+      "validation": [
+        "gateway-api 全包及严格Clippy"
+      ]
+    },
+    {
+      "local": "backend/crates/gateway-api/src/openai/genai/mod.rs",
+      "plan": "E04",
+      "reason": "移除失效helper导出。",
+      "validation": [
+        "gateway-api 全包及严格Clippy"
+      ]
+    },
+    {
+      "local": "backend/crates/gateway-api/tests/architecture.rs",
+      "plan": "E11",
+      "reason": "将上一批陈旧peer_link.rs预期纠正为真实peer_link/mod.rs，不放宽清单约束。",
+      "validation": [
+        "gateway-api 架构5项"
+      ]
+    },
+    {
+      "local": "backend/crates/gateway-core/src/account/model.rs",
+      "plan": "E02",
+      "reason": "本地新增轻量QuotaObservationVersion类型，官方已有类型未在旧本地Store合同中。",
+      "validation": [
+        "gateway-core 全包及PG轻量版本回归"
+      ]
+    },
+    {
+      "local": "backend/crates/gateway-core/tests/engine/execution.rs",
+      "plan": "E05",
+      "reason": "通过实际客户端目录入口证明fallback确实使用授权scope画像。",
+      "validation": [
+        "旧caller失败/新caller通过"
+      ]
+    },
+    {
+      "local": "deploy/upgrades/v3.55.3.json",
+      "plan": "E12",
+      "reason": "绑定现网v3.54.5到候选的精确迁移树，保留0101/0102及人工恢复。",
+      "validation": [
+        "迁移树比对、冻结摘要和部署测试"
+      ]
+    },
+    {
+      "local": "frontend/tests/account-quota-countdown.test.mjs",
+      "plan": "E03",
+      "reason": "覆盖null、已知0和正用量显示。",
+      "validation": [
+        "33项前端回归"
+      ]
+    },
+    {
+      "local": "frontend/tests/browser/native-account-backup.mjs",
+      "plan": "E03/E11",
+      "reason": "真实浏览器确认仅已知桶显示窗口消耗0，保留桌面/窄屏与现有多平台界面回归。",
+      "validation": [
+        "1440/390/320px浏览器"
+      ]
+    }
+  ],
+  "evidence_documents": [
+    "docs/upstream-v3553-file-ledger.json",
+    "docs/upstream-v3553-native-parity.md"
+  ],
+  "verification_record": "docs/upstream-v3553-native-parity.md"
+}

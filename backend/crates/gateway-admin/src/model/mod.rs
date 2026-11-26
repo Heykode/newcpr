@@ -20,6 +20,7 @@ pub mod log_cleanup;
 pub mod mihomo;
 pub mod notifications;
 pub mod observability;
+pub mod peer_link;
 pub mod provider_credentials;
 pub mod proxies;
 pub mod quality_ops;
@@ -237,3 +238,5 @@ pub enum AdminModelError {
 }
 
 pub mod analytics;
+
+pub mod pricing;

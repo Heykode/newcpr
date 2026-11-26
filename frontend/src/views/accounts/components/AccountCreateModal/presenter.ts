@@ -1,5 +1,6 @@
 import type { AccountRow } from '../../constants'
 import type { AccountCreateForm, AccountCreateProvider } from './model'
+import { formatProviderLabel, isSupportedProvider } from '@/utils/providers'
 
 interface AccountCreatePresentationInput {
   form: AccountCreateForm
@@ -10,6 +11,7 @@ interface AccountCreatePresentationInput {
 }
 
 const modeOptions = {
+  antigravity: [{ label: 'OAuth', value: 'oauth' }, { label: '账号文件', value: 'json' }],
   openai: [
     { label: 'OAuth', value: 'oauth' },
     { label: 'AT', value: 'access_token' },
@@ -32,6 +34,8 @@ export function resolveAccountCreatePresentation(input: AccountCreatePresentatio
   return {
     configuring,
     isXai: provider === 'xai',
+    isAntigravity: provider === 'antigravity',
+    providerLabel: formatProviderLabel(provider),
     isBatch: provider === 'batch',
     modeOptions: resolveModeOptions(provider),
     modal: resolveModal(input, provider, configuring),
@@ -43,7 +47,7 @@ export function resolveAccountCreatePresentation(input: AccountCreatePresentatio
 }
 
 function resolveModeOptions(provider: AccountCreateProvider | undefined) {
-  if (provider === 'openai' || provider === 'xai')
+  if (isSupportedProvider(provider))
     return modeOptions[provider]
   return []
 }
@@ -63,7 +67,7 @@ function resolveModal(
   }
 
   if (input.reauthorizing) {
-    const providerName = provider === 'xai' ? 'xAI' : 'OpenAI'
+    const providerName = formatProviderLabel(provider)
     return {
       title: '重新授权账号',
       description: `${input.account?.email || input.account?.name || providerName} · 完成授权后更新账号凭据`,
@@ -75,6 +79,8 @@ function resolveModal(
   let description = '粘贴或上传包含 OAuth Token 的 JSON，匹配已有账号时更新凭据'
   if (provider === 'batch')
     description = '粘贴或上传 CPR 账号包，一次导入多个平台账号'
+  else if (provider === 'antigravity')
+    description = input.form.mode === 'oauth' ? '通过 Google 浏览器授权导入 Antigravity 账号' : '粘贴或上传 Antigravity OAuth 账号文件'
   else if (provider === 'xai' && input.form.mode === 'oauth')
     description = '通过浏览器授权导入 xAI 账号'
   else if (provider === 'xai')
@@ -97,6 +103,8 @@ function resolveModal(
 }
 
 function resolveOAuth(provider: AccountCreateProvider | undefined, authUrl: string) {
+  if (provider === 'antigravity')
+    return { authUrl, callbackLabel: '完整回调地址', callbackPlaceholder: 'http://localhost:8085/auth/callback?code=...&state=...' }
   if (provider === 'xai') {
     return {
       authUrl,
@@ -140,10 +148,10 @@ function resolveImportInput(
       uploadable: true,
     }
   }
-  if (provider === 'xai') {
+  if (provider === 'xai' || provider === 'antigravity') {
     return {
       label: '账号文件',
-      placeholder: '粘贴包含 xAI OAuth 凭据的 JSON 内容',
+      placeholder: `粘贴包含 ${formatProviderLabel(provider)} OAuth 凭据的 JSON 内容`,
       uploadable: true,
     }
   }
@@ -183,5 +191,5 @@ function canSubmit(
 }
 
 function isAccountCreateProvider(value: string): value is AccountCreateProvider {
-  return value === 'openai' || value === 'xai' || value === 'batch'
+  return isSupportedProvider(value) || value === 'batch'
 }

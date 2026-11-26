@@ -12,8 +12,7 @@ use gateway_core::event::{
     ReasoningDelta, ResponseMeta, TextDelta, ToolCallDelta,
 };
 use gateway_core::metering::{
-    CalculatedCost, CalculatedCostAmounts, CalculatedCostBreakdown, CalculatedCostRates,
-    CurrencyCode, Decimal, Money, ProviderReportedCost, Usage,
+    CalculatedCost, CalculatedCostBreakdown, ProviderReportedCost, Usage,
 };
 use gateway_core::upstream::UpstreamSendState;
 use gateway_protocol::openai::events::{TokenUsage, billable_usage_is_complete, extract_usage};
@@ -25,75 +24,8 @@ use super::request::{GrokResponseTransform, GrokResponsesRequest};
 use super::{classify_grok_quota_failure, scrub_account_fingerprints};
 
 const CONTENTS_PER_OUTPUT: u32 = 1_024;
-const LONG_CONTEXT_THRESHOLD: u64 = 200_000;
 const GROK_PING_SSE_COMMENT: &[u8] = b": ping\n\n";
-
-#[derive(Clone, Copy)]
-struct TokenRates {
-    input_ticks: u128,
-    cached_input_ticks: u128,
-    output_ticks: u128,
-}
-
-#[derive(Clone, Copy)]
-struct ModelPricing {
-    short: TokenRates,
-    long: TokenRates,
-}
-
-// 价格来源：https://docs.x.ai/developers/pricing，核验日期 2026-09-09。
-const GROK_46_PRICING: ModelPricing = ModelPricing {
-    short: TokenRates {
-        input_ticks: 20_000,
-        cached_input_ticks: 5_000,
-        output_ticks: 60_000,
-    },
-    long: TokenRates {
-        input_ticks: 40_000,
-        cached_input_ticks: 10_000,
-        output_ticks: 120_000,
-    },
-};
-
-const GROK_45_PRICING: ModelPricing = ModelPricing {
-    short: TokenRates {
-        input_ticks: 20_000,
-        cached_input_ticks: 3_000,
-        output_ticks: 60_000,
-    },
-    long: TokenRates {
-        input_ticks: 40_000,
-        cached_input_ticks: 6_000,
-        output_ticks: 120_000,
-    },
-};
-
-const GROK_BUILD_PRICING: ModelPricing = ModelPricing {
-    short: TokenRates {
-        input_ticks: 10_000,
-        cached_input_ticks: 2_000,
-        output_ticks: 20_000,
-    },
-    long: TokenRates {
-        input_ticks: 20_000,
-        cached_input_ticks: 4_000,
-        output_ticks: 40_000,
-    },
-};
-
-const GROK_43_PRICING: ModelPricing = ModelPricing {
-    short: TokenRates {
-        input_ticks: 12_500,
-        cached_input_ticks: 2_000,
-        output_ticks: 25_000,
-    },
-    long: TokenRates {
-        input_ticks: 25_000,
-        cached_input_ticks: 4_000,
-        output_ticks: 50_000,
-    },
-};
-
+pub use crate::billing::grok_billing_breakdown_with_tier;
 /// 按 xAI Provider 当前受控价格规则计算费用明细。
 #[must_use]
 pub fn grok_billing_breakdown(
@@ -105,69 +37,11 @@ pub fn grok_billing_breakdown(
     grok_billing_breakdown_with_tier(model, input_tokens, output_tokens, cached_tokens, None)
 }
 
-/// 按响应确认的实际档位计算 xAI Token 费用；未知档位不估算。
-#[must_use]
-pub fn grok_billing_breakdown_with_tier(
-    model: &str,
-    input_tokens: u64,
-    output_tokens: u64,
-    cached_tokens: u64,
-    service_tier: Option<&str>,
-) -> Option<CalculatedCostBreakdown> {
-    let (tier, multiplier) = match service_tier.map(str::trim) {
-        None | Some("default" | "standard") => ("default", 1_u128),
-        Some("priority") => ("priority", 2),
-        Some(_) => return None,
-    };
-    let pricing = model_pricing(model)?;
-    let rates = if input_tokens >= LONG_CONTEXT_THRESHOLD {
-        pricing.long
-    } else {
-        pricing.short
-    };
-    let uncached_tokens = input_tokens.checked_sub(cached_tokens)?;
-    let input_amount_ticks = u128::from(uncached_tokens).checked_mul(rates.input_ticks)?;
-    let cache_read_amount_ticks =
-        u128::from(cached_tokens).checked_mul(rates.cached_input_ticks)?;
-    let output_amount_ticks = u128::from(output_tokens).checked_mul(rates.output_ticks)?;
-    let standard_amount_ticks = input_amount_ticks
-        .checked_add(cache_read_amount_ticks)?
-        .checked_add(output_amount_ticks)?;
-    Some(CalculatedCostBreakdown::new(
-        CalculatedCostAmounts::new(
-            usd_money(input_amount_ticks.checked_mul(multiplier)?)?,
-            usd_money(output_amount_ticks.checked_mul(multiplier)?)?,
-            usd_money(cache_read_amount_ticks.checked_mul(multiplier)?)?,
-            usd_money(0)?,
-            usd_money(standard_amount_ticks)?,
-            usd_money(standard_amount_ticks.checked_mul(multiplier)?)?,
-        ),
-        CalculatedCostRates::new(
-            usd_price_per_million(rates.input_ticks.checked_mul(multiplier)?)?,
-            usd_price_per_million(rates.output_ticks.checked_mul(multiplier)?)?,
-            usd_price_per_million(rates.cached_input_ticks.checked_mul(multiplier)?)?,
-            usd_money(0)?,
-        ),
-        Some(tier.to_owned()),
-        if multiplier == 2 { 200 } else { 100 },
-    ))
-}
-
-fn usd_money(ticks: u128) -> Option<Money> {
-    Some(Money::new(
-        Decimal::from_scaled(ticks).ok()?,
-        CurrencyCode::new("USD").ok()?,
-    ))
-}
-
-fn usd_price_per_million(per_token_ticks: u128) -> Option<Money> {
-    usd_money(per_token_ticks.checked_mul(1_000_000)?)
-}
-
 /// 单次官方 Grok Responses 尝试的增量解码器。
 ///
 /// 每个上游 event 同时保留 OpenAI wire，并在可识别时附加 canonical facts。
 pub struct GrokCanonicalDecoder {
+    pricing: Option<gateway_core::metering::ModelPriceOverride>,
     decoder: SseEventDecoder,
     response_transform: GrokResponseTransform,
     fallback_model: String,
@@ -183,8 +57,19 @@ pub struct GrokCanonicalDecoder {
 }
 
 impl GrokCanonicalDecoder {
+    /// 使用本次请求冻结的精确模型价目，不读取可变管理设置。
+    #[must_use]
+    pub fn with_pricing(
+        mut self,
+        pricing: Option<gateway_core::metering::ModelPriceOverride>,
+    ) -> Self {
+        self.pricing = pricing;
+        self
+    }
+
     pub fn new(fallback_model: impl Into<String>) -> Self {
         Self {
+            pricing: None,
             decoder: SseEventDecoder::default(),
             response_transform: GrokResponseTransform::default(),
             fallback_model: fallback_model.into(),
@@ -660,7 +545,13 @@ impl GrokCanonicalDecoder {
             output.push(GatewayEvent::ProviderCost(cost));
         } else if !self.requires_provider_cost
             && let Some(cost) = usage.and_then(|usage| {
-                calculated_cost(response, &model, usage, self.response_service_tier())
+                calculated_cost(
+                    response,
+                    &model,
+                    usage,
+                    self.response_service_tier(),
+                    self.pricing.as_ref(),
+                )
             })
         {
             output.push(GatewayEvent::CalculatedCost(cost));
@@ -845,6 +736,7 @@ fn calculated_cost(
     model: &str,
     usage: TokenUsage,
     service_tier: Option<&str>,
+    pricing: Option<&gateway_core::metering::ModelPriceOverride>,
 ) -> Option<CalculatedCost> {
     if !billable_usage_is_complete(response, usage)
         || usage.image_input_tokens > 0
@@ -852,62 +744,16 @@ fn calculated_cost(
     {
         return None;
     }
-    let breakdown = grok_billing_breakdown_with_tier(
+    let breakdown = crate::billing::grok_billing_breakdown_with_override(
         model,
         usage.input_tokens,
         usage.output_tokens,
         usage.cached_tokens,
+        usage.cache_write_tokens,
         service_tier,
+        pricing,
     )?;
     Some(breakdown.calculated_cost())
-}
-
-fn model_pricing(model: &str) -> Option<ModelPricing> {
-    match model {
-        "grok-4.6" | "grok-4.6-latest" => Some(GROK_46_PRICING),
-        "grok-4.5" | "grok-4.5-latest" | "grok-4.5-build-free" | "grok-build-latest" => {
-            Some(GROK_45_PRICING)
-        }
-        "grok-build-0.1" | "grok-code-fast-1" | "grok-code-fast" | "grok-code-fast-1-0825" => {
-            Some(GROK_BUILD_PRICING)
-        }
-        "grok-4.3"
-        | "grok-4.3-latest"
-        | "grok-latest"
-        | "grok-4.20-multi-agent-0309"
-        | "grok-4.20-multi-agent"
-        | "grok-4.20-multi-agent-latest"
-        | "grok-4.20-multi-agent-beta-latest"
-        | "grok-4.20-multi-agent-experimental-beta-0304"
-        | "grok-4.20-multi-agent-experimental-beta-latest"
-        | "grok-4.20-multi-agent-beta-0309"
-        | "grok-4.20-0309-reasoning"
-        | "grok-4.20-reasoning-latest"
-        | "grok-4.20"
-        | "grok-4.20-reasoning"
-        | "grok-4.20-0309"
-        | "grok-4.20-beta-0309-reasoning"
-        | "grok-4.20-beta"
-        | "grok-4.20-beta-0309"
-        | "grok-4.20-beta-latest"
-        | "grok-4.20-beta-latest-reasoning"
-        | "grok-4.20-beta-reasoning"
-        | "grok-4.20-experimental-beta-0304-reasoning"
-        | "grok-4.20-experimental-beta-0304"
-        | "grok-4.20-experimental-beta-reasoning-latest"
-        | "grok-4.20-experimental-beta-latest"
-        | "grok-4.20-reasoning-gv2"
-        | "grok-4.20-0309-non-reasoning"
-        | "grok-4.20-non-reasoning"
-        | "grok-4.20-non-reasoning-latest"
-        | "grok-4.20-beta-non-reasoning"
-        | "grok-4.20-beta-latest-non-reasoning"
-        | "grok-4.20-experimental-beta-0304-non-reasoning"
-        | "grok-4.20-experimental-beta-non-reasoning-latest"
-        | "grok-4.20-beta-0309-non-reasoning"
-        | "grok-4.20-non-reasoning-gv2" => Some(GROK_43_PRICING),
-        _ => None,
-    }
 }
 
 fn incomplete_finish_reason(response: &Value) -> FinishReason {

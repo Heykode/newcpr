@@ -19,6 +19,7 @@ use serde::Deserialize;
 
 pub mod backup;
 pub mod model;
+pub use use_case::peer_link::{PeerLinkError, PeerLinkService};
 pub mod ports;
 mod use_case;
 mod workers;
@@ -26,6 +27,7 @@ mod workers;
 pub use use_case::account_templates::AccountTemplatesService;
 pub use use_case::group_monitor::GroupMonitorService;
 pub use use_case::import_tasks::ImportTasksService;
+pub use use_case::native_credentials::NativeCredentialService;
 pub use use_case::notifications::NotificationsService;
 pub use use_case::relogin::{ReloginBatchResult, ReloginList, ReloginService, ReloginView};
 pub use use_case::request_capture::RequestCaptureService;
@@ -177,6 +179,7 @@ pub enum AdminConfigError {
 /// 字段全部私有；调用方经 accessor 直接调用能力，不需要命名内部 `use_case` 模块。
 #[derive(Clone)]
 pub struct AdminServices {
+    peer_link: Arc<dyn PeerLinkService>,
     mihomo: Option<Arc<dyn ports::mihomo::MihomoManagement>>,
     quality_ops: Arc<use_case::quality_ops::QualityOpsService>,
     account_templates: Arc<dyn AccountTemplatesService>,
@@ -198,12 +201,16 @@ pub struct AdminServices {
     system: Arc<dyn SystemService>,
     openai: Arc<dyn OpenAiService>,
     xai: Arc<dyn XaiService>,
+    antigravity: Option<Arc<dyn NativeCredentialService>>,
     import_tasks: Arc<dyn ImportTasksService>,
     backups: Arc<dyn BackupService>,
     notifications: Arc<dyn NotificationsService>,
 }
 
 impl AdminServices {
+    pub fn peer_link(&self) -> &dyn PeerLinkService {
+        self.peer_link.as_ref()
+    }
     #[must_use]
     pub fn reset_credits(&self) -> &use_case::reset_credits::ResetCreditsService {
         &self.reset_credits
@@ -316,6 +323,12 @@ impl AdminServices {
         self.xai.as_ref()
     }
 
+    pub fn antigravity(&self) -> Result<&dyn NativeCredentialService, AdminError> {
+        self.antigravity
+            .as_deref()
+            .ok_or_else(|| AdminError::invalid("Antigravity provider is unavailable"))
+    }
+
     #[must_use]
     pub fn backups(&self) -> &dyn BackupService {
         self.backups.as_ref()
@@ -359,6 +372,7 @@ pub async fn initialize(
     published_snapshot: gateway_core::runtime::RuntimeSnapshotHandle,
     probes: (Arc<dyn AccountProbe>, Arc<dyn ports::proxy::ProxyProbe>),
     client_distribution: Arc<dyn ClientDistributionResolver>,
+    pricing_source: Arc<dyn ports::pricing::PricingSource>,
     host_operations: (
         Arc<dyn SystemOperations>,
         Arc<dyn ports::notification::NotificationDelivery>,
@@ -372,6 +386,7 @@ pub async fn initialize(
         published_snapshot,
         probes,
         client_distribution,
+        pricing_source,
         host_operations,
         DeploymentTimeZone::default(),
     )
@@ -388,6 +403,7 @@ pub async fn initialize_with_timezone(
     published_snapshot: gateway_core::runtime::RuntimeSnapshotHandle,
     probes: (Arc<dyn AccountProbe>, Arc<dyn ports::proxy::ProxyProbe>),
     client_distribution: Arc<dyn ClientDistributionResolver>,
+    pricing_source: Arc<dyn ports::pricing::PricingSource>,
     host_operations: (
         Arc<dyn SystemOperations>,
         Arc<dyn ports::notification::NotificationDelivery>,
@@ -438,6 +454,7 @@ pub async fn initialize_with_timezone(
             snapshot.clone(),
             probe.clone(),
         )
+        .with_timezone(timezone)
         .with_reset_store(store.reset_credits())
         .with_relogin_store(store.relogin()),
     );
@@ -501,9 +518,24 @@ pub async fn initialize_with_timezone(
         store.proxies(),
         snapshot.clone(),
     ));
+    let antigravity_service =
+        registry
+            .require(&provider_kind("antigravity")?)
+            .ok()
+            .map(|provider| {
+                Arc::new(
+                    use_case::native_credentials::DefaultNativeCredentialService::new(
+                        provider,
+                        store.accounts(),
+                        store.proxies(),
+                        snapshot.clone(),
+                    ),
+                ) as Arc<dyn NativeCredentialService>
+            });
     let import_tasks = use_case::import_tasks::DefaultImportTasksService::new_with_quality_ops(
         openai_service.clone(),
         xai_service.clone(),
+        antigravity_service.clone(),
         Some(quality_ops.clone()),
     );
     let import_task = use_case::import_tasks::ImportTaskWorker(import_tasks.clone());
@@ -564,21 +596,30 @@ pub async fn initialize_with_timezone(
             snapshot.clone(),
             registry.clone(),
         )),
+        peer_link: Arc::new(use_case::peer_link::DefaultPeerLinkService::new(
+            store.client_keys(),
+            store.accounts(),
+            store.account_runtime(),
+            registry.clone(),
+        )),
         client_distribution: Arc::new(DefaultClientDistributionService::new(client_distribution)),
         observability: Arc::new(DefaultObservabilityService::new_with_timezone(
             store.observability(),
             store.accounts(),
             store.settings(),
-            registry,
+            registry.clone(),
             timezone,
         )),
         settings: Arc::new(DefaultSettingsService::new(
             store.settings(),
             snapshot.clone(),
+            registry,
+            pricing_source,
         )),
         system: Arc::new(DefaultSystemService::new(system)),
         openai: openai_service,
         xai: xai_service,
+        antigravity: antigravity_service,
         import_tasks,
         backups,
         notifications: notifications.clone(),

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Openai, Xai } from '@boxicons/vue'
+import { GoogleAntigravity, Openai, Xai } from '@boxicons/vue'
 import { Box, CheckCircle2, Monitor, RefreshCw, ShieldCheck, Terminal, TriangleAlert } from '@lucide/vue'
 import { computed, shallowRef, watch } from 'vue'
 
@@ -43,7 +43,7 @@ const providerOptions = computed(() =>
   props.profiles.map(profile => ({
     label: providerLabel(profile.provider),
     value: profile.provider,
-    icon: profile.provider === 'openai' ? Openai : profile.provider === 'xai' ? Xai : undefined,
+    icon: profile.provider === 'openai' ? Openai : profile.provider === 'xai' ? Xai : profile.provider === 'antigravity' ? GoogleAntigravity : undefined,
   })),
 )
 
@@ -89,7 +89,7 @@ const releaseStatus = computed(() => {
   const status = current.release.status ?? 'unchecked'
   if (status === 'aligned') {
     return {
-      label: t('dashboard.clientIdentity.upToDate'),
+      label: t(current.provider === 'antigravity' ? 'dashboard.clientIdentity.versionUpToDate' : 'dashboard.clientIdentity.upToDate'),
       title: t('dashboard.clientIdentity.upToDateDescription'),
       tone: 'bg-cp-success-container text-cp-success-on-container',
       icon: CheckCircle2,
@@ -162,6 +162,8 @@ const clientIdentity = computed(() => {
   if (!current)
     return '—'
   const value = current.attributes.find(attribute => attribute.key === 'client_identifier' || (!attribute.key && attribute.label === '客户端标识'))?.value ?? '—'
+  if (current.provider === 'antigravity')
+    return value.replace(/^antigravity\/hub\//, 'Antigravity/Hub/').replace(/^antigravity\/cli\//, 'Antigravity/CLI/')
   return current.provider === 'xai' ? toPascalCase(value) : value
 })
 
@@ -177,8 +179,8 @@ const runtimeEnvironment = computed(() => {
   if (!target)
     return { primary: '—', details: [] as string[] }
 
-  const present = (value: string) => value !== '—' && value.toLowerCase() !== 'unknown'
-  const primary = [target.osType, target.osVersion].filter(present).join(' ')
+  const present = (value: string) => value.trim() !== '' && value !== '—' && value.toLowerCase() !== 'unknown'
+  const primary = [target.osType === 'macOS' ? 'Mac OS' : target.osType, target.osVersion].filter(present).join(' ')
   const details = [target.arch, target.terminal].filter(present)
   return {
     primary: primary || '—',
@@ -209,7 +211,7 @@ function providerLabel(provider: string) {
         :label="t('dashboard.clientIdentity.provider')"
         :options="providerOptions"
         display="icon"
-        class="w-21"
+        class="max-w-full"
       />
     </template>
 
@@ -284,7 +286,7 @@ function providerLabel(provider: string) {
             <div class="min-w-0">
               <dt class="flex items-center gap-1.5 text-[10px] leading-none font-bold text-cp-text-quaternary">
                 <Monitor class="size-3.25 text-cp-text-tertiary" />
-                {{ profile.provider === 'openai' ? '模拟运行环境' : '运行环境' }}
+                {{ profile.provider === 'openai' || profile.provider === 'antigravity' ? '模拟运行环境' : '运行环境' }}
               </dt>
               <dd
                 class="mt-2 mb-0 truncate font-mono text-cp-lg leading-none font-bold tabular-nums text-cp-text"

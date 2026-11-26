@@ -373,6 +373,10 @@ impl CodexWireProfileState {
                 let configuration = ClientProfileSelection {
                     client,
                     platform,
+                    cli_entry: (client == ClientKind::Cli && platform == ClientPlatform::Macos)
+                        .then_some(CliEntry::Tui),
+                    terminal: (client == ClientKind::Cli && platform == ClientPlatform::Macos)
+                        .then(|| baseline::MACOS_CLI_TERMINAL.to_owned()),
                     ..ClientProfileSelection::default()
                 };
                 let available = configuration.resolve(self).is_ok();
@@ -384,7 +388,11 @@ impl CodexWireProfileState {
                 }));
             }
         }
-        object(&json!({ "presets": presets, "maxVersionLag": MAX_VERSION_LAG }))
+        object(&json!({
+            "presets": presets,
+            "maxVersionLag": MAX_VERSION_LAG,
+            "recognizedUserAgentPrefixes": super::identity::USER_AGENT_PRODUCTS.map(|product| format!("{product}/")),
+        }))
     }
 }
 

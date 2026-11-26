@@ -586,3 +586,10 @@ events, then use the existing encoder and single execution finalization.
   返回 previous_response_not_found 供完整历史重放；Excel 保留既有合同。
   成功重放只关联真正要求恢复的同 Key/会话 failed 或 incomplete 记录，
   不改写原错误终态与计费事实。
+
+## Antigravity Responses 与 GenAI 参数
+
+- Responses→GenAI复用Messages内容映射，生成参数直接投影：省略/null输出上限不补默认，推理预算不受Messages强制工具或续轮规则裁剪，采样与JSON Schema保留。
+- 搜索工具选择由公共openai::web_search解析器统一解释。可选搜索不破坏函数工具，强制搜索声明缺失/歧义需明确报错；Provider只支持经检查的实时文本查询与域名过滤。
+- GenAI原生HTTP SSE不注入心跳，首帧前失败保留HTTP错误；Responses/Chat/Messages保留既有保活。转换失败保留私有source和发送状态，不向下游输出原始诊断。
+- 系统提示、previous_response_id和上游完整JSON搜索的边界遵循native-platforms.md，不因转换参数修复而宣称这些限制已消除。

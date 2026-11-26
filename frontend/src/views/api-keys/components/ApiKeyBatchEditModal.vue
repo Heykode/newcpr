@@ -1,9 +1,7 @@
 <script setup lang="ts">
-import type { AccountGroup, ApiKeyBatchChanges } from '@/api'
-import type { ClientProfileConfiguration, OutboundUserAgentSettings } from '@/api/modules/outbound-user-agent'
+import type { AccountGroup, ApiKeyBatchChanges, ApiKeyPeerSharing, ProviderRequestProfileUpdates } from '@/api'
 import { computed, ref, shallowRef, watch } from 'vue'
 import { batchUpdateApiKeys } from '@/api'
-import { getOutboundUserAgent } from '@/api/modules/outbound-user-agent'
 import AccountGroupCheckboxGrid from '@/components/AccountGroupCheckboxGrid.vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCheckbox from '@/components/base/BaseCheckbox.vue'
@@ -12,10 +10,10 @@ import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseModal from '@/components/base/BaseModal/index.vue'
 import BaseSelect from '@/components/base/BaseSelect.vue'
+import BaseSwitch from '@/components/base/BaseSwitch.vue'
 import { toast } from '@/components/base/BaseToast'
+import ProviderRequestProfilesEditor from '@/components/request-profile/index.vue'
 import { useAsyncAction } from '@/composables/useAsyncAction'
-import { useRequestState } from '@/composables/useRequestState'
-import ClientProfileFields from '@/views/settings/components/ClientProfileFields.vue'
 
 const props = defineProps<{ ids: string[], groups: AccountGroup[], groupLoading: boolean }>()
 const emit = defineEmits<{ saved: [ids: string[]] }>()
@@ -28,10 +26,14 @@ const confirmAll = shallowRef(false)
 const groupIds = ref<string[]>([])
 const enabled = shallowRef('true')
 const installationSeed = shallowRef('')
-const profileMode = shallowRef('inherit')
-const configuration = ref<ClientProfileConfiguration>({ client: 'cli', platform: 'linux', versionMode: 'latest' })
-const profileSettings = shallowRef<OutboundUserAgentSettings | null>(null)
-const profileRequest = useRequestState()
+const profiles = ref<ProviderRequestProfileUpdates>({})
+const sharing = ref<ApiKeyPeerSharing>({ enabled: false, sharePool: false, shareQuota: false, sharePlans: false })
+const sharingFields = [
+  { key: 'enabled', label: '启用账号池共享' },
+  { key: 'sharePool', label: '共享账号池信息' },
+  { key: 'shareQuota', label: '共享额度信息' },
+  { key: 'sharePlans', label: '共享套餐信息' },
+] as const
 const limits = ref({ dailyLimitUsd: '', weeklyLimitUsd: '', maxConcurrency: '', requestsPerMinute: '' })
 const fields = [
   { key: 'dailyLimitUsd', label: '日限额（美元）' },
@@ -62,14 +64,22 @@ const changes = computed<ApiKeyBatchChanges>(() => {
     result.groupIds = [...groupIds.value]
   if (selected.value.has('enabled'))
     result.enabled = enabled.value === 'true'
-  if (selected.value.has('identity'))
-    result.providerRequestProfileOverrides = { openai: profileMode.value === 'inherit' ? null : { ...configuration.value } }
+  if (selected.value.has('identity') && Object.keys(profiles.value).length)
+    result.providerRequestProfileOverrides = { ...profiles.value }
+  const sharingPatch: Partial<ApiKeyPeerSharing> = {}
+  for (const { key } of sharingFields) {
+    if (selected.value.has(`sharing-${key}`))
+      sharingPatch[key] = sharing.value[key]
+  }
+  if (sharingPatch.sharePool === false)
+    sharingPatch.sharePlans = false
+  if (Object.keys(sharingPatch).length)
+    result.peerSharing = sharingPatch
   if (selected.value.has('seed'))
     result.installationSeed = installationSeed.value.trim()
   return result
 })
-watch(open, async (visible) => {
-  profileRequest.invalidate()
+watch(open, (visible) => {
   if (!visible)
     return
   frozenIds.value = [...props.ids]
@@ -77,23 +87,14 @@ watch(open, async (visible) => {
   groupIds.value = []
   confirmAll.value = false
   enabled.value = 'true'
-  profileMode.value = 'inherit'
-  configuration.value = { client: 'cli', platform: 'linux', versionMode: 'latest' }
-  profileSettings.value = null
+  profiles.value = {}
+  sharing.value = { enabled: false, sharePool: false, shareQuota: false, sharePlans: false }
   installationSeed.value = ''
   limits.value = { dailyLimitUsd: '', weeklyLimitUsd: '', maxConcurrency: '', requestsPerMinute: '' }
   validation.value = ''
-  const id = profileRequest.start()
-  try {
-    const settings = await getOutboundUserAgent({ signal: profileRequest.signal, silent: true })
-    if (profileRequest.isCurrent(id))
-      profileSettings.value = settings
-  }
-  catch (error) { profileRequest.fail(id, error) }
-  finally { profileRequest.finish(id) }
 })
 async function save() {
-  if (loading.value || !selected.value.size)
+  if (loading.value || !Object.keys(changes.value).length)
     return
   for (const { key, label } of fields) {
     if (!selected.value.has(key))
@@ -109,6 +110,10 @@ async function save() {
   }
   if (selected.value.has('seed') && !/^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$/i.test(installationSeed.value.trim())) {
     validation.value = '安装种子须为带连字符的 UUID'
+    return
+  }
+  if (changes.value.peerSharing?.enabled && selected.value.has('groups') && !groupIds.value.length) {
+    validation.value = '启用账号池共享时必须选择至少一个分组'
     return
   }
   if (selected.value.has('groups') && !groupIds.value.length) {
@@ -150,12 +155,17 @@ async function apply() {
         </div>
       </div>
       <div class="grid gap-2">
-        <BaseCheckbox :model-value="selected.has('identity')" label="修改 Codex 客户端身份" show-label :disabled="loading" @update:model-value="select('identity', $event)" />
-        <template v-if="selected.has('identity')">
-          <BaseSelect v-model="profileMode" aria-label="客户端身份" :disabled="loading" :options="[{ value: 'inherit', label: '继承全局' }, { value: 'custom', label: '单独配置' }]" />
-          <ClientProfileFields v-if="profileMode === 'custom'" v-model="configuration" :settings="profileSettings" :preview="null" :disabled="loading" />
-          <span v-if="profileRequest.error.value" role="alert">{{ profileRequest.error.value }}</span>
-        </template>
+        <BaseCheckbox :model-value="selected.has('identity')" label="修改平台客户端身份" show-label :disabled="loading" @update:model-value="select('identity', $event)" />
+        <ProviderRequestProfilesEditor v-if="selected.has('identity')" v-model:updates="profiles" allow-inherit :active="open" :disabled="loading" />
+      </div>
+      <div class="grid gap-3" role="group" aria-label="账号池共享权限">
+        <p class="m-0 text-cp-sm text-cp-text-secondary">
+          仅修改勾选的共享权限。启用共享的 Key 必须绑定分组；共享套餐信息还需开启账号池信息。
+        </p>
+        <div v-for="field in sharingFields" :key="field.key" class="flex flex-wrap items-center justify-between gap-3">
+          <BaseCheckbox :model-value="selected.has(`sharing-${field.key}`)" :label="`修改：${field.label}`" show-label :disabled="loading" @update:model-value="select(`sharing-${field.key}`, $event)" />
+          <BaseSwitch v-if="selected.has(`sharing-${field.key}`)" v-model="sharing[field.key]" :aria-label="field.label" :disabled="loading || (field.key === 'sharePlans' && selected.has('sharing-sharePool') && !sharing.sharePool)" />
+        </div>
       </div>
       <BaseFormItem>
         <BaseCheckbox :model-value="selected.has('seed')" label="修改安装种子" show-label :disabled="loading" @update:model-value="select('seed', $event)" />
@@ -172,7 +182,7 @@ async function apply() {
       <BaseButton :disabled="loading" @click="open = false">
         取消
       </BaseButton>
-      <BaseButton variant="primary" :loading="loading" :disabled="!selected.size || !frozenIds.length || frozenIds.length > 1000" @click="save">
+      <BaseButton variant="primary" :loading="loading" :disabled="!Object.keys(changes).length || !frozenIds.length || frozenIds.length > 1000" @click="save">
         保存修改
       </BaseButton>
     </template>

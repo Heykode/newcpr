@@ -9,3 +9,7 @@ pub mod openai;
 pub mod anthropic;
 /// Protocol-specific request facts.
 pub mod request;
+
+mod capabilities;
+pub mod genai;
+pub mod peer;

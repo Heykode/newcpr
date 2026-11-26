@@ -12,6 +12,7 @@ name = "main"
 path = "tests/main.rs"
 
 [dependencies]
+provider-antigravity = { path = "../../crates/providers/antigravity" }
 gateway-admin = { path = "../../crates/gateway-admin" }
 gateway-api = { path = "../../crates/gateway-api" }
 gateway-core = { path = "../../crates/gateway-core" }

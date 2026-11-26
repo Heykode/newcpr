@@ -8,9 +8,9 @@
 
 Codex Proxy RS 是单进程、单副本运行的多 Provider AI 网关，同时提供：
 
-- 面向客户端的 OpenAI Responses、Chat 兼容、Anthropic Messages、Images、standalone Search 和模型目录协议；
+- 面向客户端的 OpenAI Responses、Chat 兼容、Anthropic Messages、GenAI、Images、standalone Search 和模型目录协议；
 - 面向管理员的 `/api/admin/*` 控制面和 Vue 管理端；
-- OpenAI 与 xAI 两个编译期 Provider；
+- OpenAI、xAI 与 Antigravity 三个编译期 Provider；
 - PostgreSQL 持久化、Redis 协调状态以及 S3/R2 数据库备份。
 
 `/v1/chat/completions` 在协议层转换后共用 Responses 执行链路。系统不存在 Provider Instance 层，也不支持通过复制应用容器进行多副本
@@ -31,6 +31,8 @@ flowchart LR
   Admin --> Registry
   Registry --> OpenAI[provider-openai]
   Registry --> XAI[provider-xai]
+  Registry --> AGY[provider-antigravity]
+  AGY --> GoogleUpstream[Cloud Code upstream]
   OpenAI --> OpenAIUpstream[OpenAI upstream]
   XAI --> XAIUpstream[xAI upstream]
 
@@ -38,6 +40,7 @@ flowchart LR
   Admin --> Store
   OpenAI --> Store
   XAI --> Store
+  AGY --> Store
   Store --> PG[(PostgreSQL)]
   Store --> Redis[(Redis)]
   Store --> Object[(S3 / R2)]
@@ -55,7 +58,7 @@ flowchart LR
 | 路径 | 责任 |
 | --- | --- |
 | `backend/apps/gateway` | 读取顶层配置、连接 Bundle、注册 Provider 与 Worker |
-| `gateway-protocol` | 跨层共享的 OpenAI/Anthropic wire contract、SSE 编解码与无业务 owner 的解析事实，不依赖其他 workspace crate |
+| `gateway-protocol` | 跨层共享的 OpenAI/Anthropic/GenAI wire contract、SSE 编解码与无业务 owner 的解析事实，不依赖其他 workspace crate |
 | `gateway-core` | operation、canonical event、请求快照、路由、admission、attempt 协调、交付边界和计量 |
 | `gateway-admin` | 管理领域、用例、Provider/Store 端口、审计语义和备份策略 |
 | `gateway-api` | HTTP/WS/SSE 解码与交付、Admin wire、静态管理端；不直接访问 Store 或具体 Provider |
@@ -63,6 +66,7 @@ flowchart LR
 | `gateway-host` | 配置加载、日志、HTTP 生命周期、Worker 监督和系统更新 |
 | `providers/openai` | OpenAI OAuth、账号选择、目录、额度、Responses/Images/Search transport |
 | `providers/xai` | xAI OAuth session、账号选择、目录、额度和 Grok/Responses 转换 |
+| `providers/antigravity` | Google OAuth、账号目录/额度/亲和、Cloud Code transport、GenAI及兼容协议转换 |
 | `frontend` | Vue 管理端，仅通过 Admin API 读写状态 |
 
 依赖方向遵守四条规则：
@@ -90,7 +94,7 @@ flowchart LR
    不能依靠同一 crate 内可见性掩盖循环边界。
 5. 每个 crate 的 `src/` 与 `tests/` 平级，行为测试默认不放在生产源码中。`tests/` 镜像 `src/` 的模块目录形态：例如
    `src/foo/mod.rs` 对应 `tests/foo/mod.rs`，`src/foo/bar.rs` 对应 `tests/foo/bar.rs`。一个生产模块可以没有
-   测试；额外场景测试必须放在最近的生产 owner 目录下。根级 `support` 和冻结的 crate/workspace 架构场景
+   测试；额外场景测试必须放在最近的生产 owner 目录下。根级 `support` 及其测试夹具子模块、冻结的 crate/workspace 架构场景
    是明确例外。
 
 官方独立排队预算由 `gateway-core::concurrency` 共同拥有；账号选择可依赖该模块，
@@ -106,6 +110,8 @@ flowchart LR
 - `providers/openai/src/transport/websocket/coordinator.rs` 的
   `shared_opening_deadline_does_not_double_charge_account_capacity_wait` 单测，
   验证等待预算不重复扣除。
+
+Provider计价覆盖断言位于OpenAI/xAI私有`billing/calculate.rs::tests`，xAI画像错误断言位于`admin.rs::error_tests`；它们只增加精确owner例外，不允许生产路径挂载或公开测试API。Antigravity沿官方测试入口在测试crate中挂载私有模块，保持生产模块私有。
 
 以上代码只在测试构建中编译。CI 同时执行库单测和 `tests/main.rs` 集成测试，
 不再只运行集成测试；其他位置继续遵守原有模块纪律。
@@ -235,8 +241,11 @@ Core 只理解 `Operation`、能力要求、Provider 候选、稳定错误和 ca
 - xAI 是翻译边界。Provider 把 Grok wire 转换为 Responses wire；上游结构化错误的 message/code/type
   可以透出，但账号指纹会先脱敏。
 - response ID 是不透明 UTF-8 bytes，不假设 UUID、固定长度或跨 Provider 可复用。
-- 请求画像以配置为启动基线。OpenAI Desktop 与 xAI CLI 的官方版本检查只更新各自负责的运行时画像，
-  不回写 `config.yaml`。
+- 请求画像以配置为启动基线；三平台的后台OAuth、刷新、目录、额度及资料操作读取全局画像，生成请求可由下游Key覆盖。同一轮操作冻结身份，版本检查只更新对应平台的运行时发布资料，不回写 `config.yaml`。
+- Antigravity 原生 GenAI 保留 wire，HTTP 交付 owner 不为该协议插入 SSE 心跳；兼容 Responses/Chat/Messages 由 Provider 转换，Responses 生成参数直接映射 GenAI，不继承 Messages 的默认上限和推理约束。
+- Core 根据授权成员裁剪基础模型目录，再按实际型号/账号检查输出上限；强制搜索将候选限定在同时允许原型号和搜索目标的同账号、同分组。Provider 使用目录首个搜索目标，完整 JSON 经 grounding 转成来源和引用事件，计费仍按实际型号。
+- 常规 AGY 生成/计数使用服务端系统提示词，独立搜索使用固定指令；转换入口仍拒绝非 null `previous_response_id`。内部转换错误保留 source，公开提示不泄露原始内容。
+- AGY quota worker 先读取轻量版本，再按成功生成完成时间查询活动；额度文档保存同次目录确认的模型组成员，Admin/PG 用明确型号集聚合窗口 Token，整号预测与恢复继续只接受 AccountWide。
 
 ### 账号出站代理
 
@@ -411,8 +420,7 @@ HTTP validation
 ```
 
 会改变路由快照或安全配置的 mutation 在同一 PostgreSQL 事务中提交业务事实、推进内部
-`config_revision` 并写入脱敏审计。Admin mutation 不要求客户端提交 revision；少数账号/分组响应
-返回已提交的 `configRevision`，不将它当作乐观并发前置条件。
+`config_revision` 并写入脱敏审计。运行设置另有`settings_revision`，以API的`configRevision`进行草稿CAS，价目/管理Key等非设置写入不使设置草稿失效。备份存储独立使用`storageRevision`；其他账号/分组mutation保持各自既有合同。
 
 额度、cooldown、目录 generation、请求统计和自动 credential refresh 属于运行时观测，不推进全局
 revision；credential 轮换只推进账号自己的 `credential_revision`。Redis 通知用于缩短收敛延迟，
@@ -445,7 +453,8 @@ credential 与 quota 是两组独立事实：credential refresh 不等于 quota 
 - OpenAI 支持 OAuth、AT/RT 与 OAuth JSON，导入识别 camelCase 和官方 `auth.json` 的 snake_case token 字段；
   RT-only 导入先换取 AT，AT-only 导入没有
   自动续期能力。OAuth 身份只从官方 JWT claims 投影，不信任导入文档顶层身份字段。
-- xAI 使用 OAuth session；API Key 不是受支持的账号 credential。
+- xAI使用OAuth session；Antigravity使用Google OAuth/PKCE并保留账号主身份与凭据版本。上游API Key不是受支持的账号credential。
+- Provider返回credentialRefresh/reauthorize/credentialExport等能力；管理端按能力显示并在执行前验证。导出采用label、createdAt、updatedAt、accessTokenExpiresAt和scopes，继续兼容旧输入。Antigravity本地用量为部署时区当天及前六日，独立于上游分组额度周期。
 - 新账号导入和 OAuth complete（包括重新授权）在 credential 提交后尽力读取一次额度；失败只留下观测，不回滚账号事务。
 - 人工 OAuth 按本次 ID token/AT 更新 user/workspace，保留本地槽位名称与设置。同身份重新授权保留最近额度快照、耗尽、窗口提示和预热进度；身份变化清旧
   Cookie/principal、额度耗尽与重置证据；普通 RT 续期保留身份和资料。设备重绑、凭据 CAS、
@@ -465,7 +474,7 @@ OpenAI 订阅周期属于按需个人信息，不是额度事实。Admin 账号�
 避免重新授权期间展示混合身份信息；单项失败不丢弃另一项可用结果。前端只在打开「个人信息」或手动
 刷新信息时请求，关闭后取消等待，不维护两套请求状态。
 
-主动额度重置是 OpenAI Provider 的不可逆上游操作：列表查询和消费都直接使用当前 Desktop 请求画像；
+主动额度重置是 OpenAI Provider 的不可逆上游操作：列表查询和消费都使用本轮冻结的全局请求画像；
 卡片不写 PostgreSQL/Redis。消费请求携带调用方生成的 UUIDv4 幂等键，同一账号的消费在进程内串行；
 发送结果不明确时必须复用原键。确认成功后管理端再显式刷新卡片与 quota，不能直接改本地重置时间。
 

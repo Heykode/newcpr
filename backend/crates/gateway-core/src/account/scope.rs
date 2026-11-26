@@ -307,6 +307,19 @@ impl FrozenAccountScope {
         scope
     }
 
+    pub(crate) fn exclude_accounts(
+        &mut self,
+        accounts: impl IntoIterator<Item = ProviderAccountId>,
+    ) {
+        let excluded: BTreeSet<_> = accounts.into_iter().collect();
+        self.restricted_accounts = Some(Arc::new(
+            self.allowed_account_ids()
+                .filter(|id| !excluded.contains(*id))
+                .cloned()
+                .collect(),
+        ));
+    }
+
     /// Enumerate the accounts actually authorized by the frozen scope.
     pub fn allowed_account_ids(&self) -> impl Iterator<Item = &ProviderAccountId> {
         self.directory.accounts.keys().filter(|id| self.allows(id))
@@ -448,6 +461,18 @@ impl FrozenAccountScope {
     #[must_use]
     pub fn allows_unidentified_model(&self, account_id: &ProviderAccountId) -> bool {
         self.allows_with_policy(account_id, |access| access.allows_optional_model(None))
+    }
+
+    /// 同一个账号和授权该账号的同一个分组须同时允许请求型号和实际执行型号
+    pub(crate) fn allows_model_pair(
+        &self,
+        account: &ProviderAccountId,
+        requested: &str,
+        actual: &str,
+    ) -> bool {
+        self.allows_with_policy(account, |access| {
+            access.allows(requested) && access.allows(actual)
+        })
     }
 
     /// 只报告所有已启用绑定分组均明确拒绝模型的情况，空池沿用原路由错误

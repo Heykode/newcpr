@@ -722,22 +722,40 @@ fn no_cache_cost(
     fact: &UsageCalculatedBillingFact,
     breakdown: &crate::model::observability::CalculatedBillingBreakdown,
 ) -> Option<DecimalAmount> {
-    let input_tokens = fact.input_tokens?;
-    let cached_tokens = fact.cached_tokens.unwrap_or_default().min(input_tokens);
-    let cache_write_tokens = fact
+    let image = breakdown.image.as_ref();
+    let input_tokens = fact
+        .input_tokens?
+        .checked_sub(image.map_or(0, |i| i.input_tokens))?;
+    let cached_input_tokens = fact
+        .cached_tokens
+        .unwrap_or_default()
+        .checked_sub(image.map_or(0, |i| i.cached_input_tokens))?
+        .min(input_tokens);
+    let cache_write_input_tokens = fact
         .cache_write_tokens
         .unwrap_or_default()
-        .min(input_tokens.saturating_sub(cached_tokens));
+        .min(input_tokens.saturating_sub(cached_input_tokens));
     let input_rate = decimal(&breakdown.input_price_per_million.amount)?;
     let replaced_input_amount = input_rate
         .scaled()
-        .checked_mul(u128::from(cached_tokens.saturating_add(cache_write_tokens)))?
+        .checked_mul(u128::from(
+            cached_input_tokens.saturating_add(cache_write_input_tokens),
+        ))?
         .checked_div(1_000_000)?;
-    let total = decimal(&breakdown.total_amount.amount)?
+    let mut total = decimal(&breakdown.total_amount.amount)?
         .scaled()
         .checked_sub(decimal(&breakdown.cache_read_amount.amount)?.scaled())?
         .checked_sub(decimal(&breakdown.cache_write_amount.amount)?.scaled())?
         .checked_add(replaced_input_amount)?;
+    if let Some(image) = image {
+        let image_no_cache = decimal(&image.input_price_per_million.amount)?
+            .scaled()
+            .checked_mul(u128::from(image.cached_input_tokens))?
+            .checked_div(1_000_000)?;
+        total = total
+            .checked_sub(decimal(&image.cache_read_amount.amount)?.scaled())?
+            .checked_add(image_no_cache)?;
+    }
     DecimalAmount::from_str(
         &gateway_core::metering::Decimal::from_scaled(total)
             .ok()?

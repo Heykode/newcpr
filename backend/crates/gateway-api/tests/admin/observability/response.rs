@@ -190,6 +190,7 @@ fn sensitive_response_views_do_not_require_debug_or_add_secret_fields() {
 #[test]
 fn billing_view_should_preserve_the_original_detail_contract() {
     let value = serde_json::to_value(BillingView {
+        image: None,
         long_context_billing_applied: false,
         input_amount_display: "$0.03".to_owned(),
         output_amount_display: "$0.00".to_owned(),
@@ -1188,6 +1189,8 @@ async fn usage_route_should_expose_table_facts_without_detail_payload() {
             cost_currency: None,
             billing: Some(UsageBilling::Calculated(Box::new(
                 CalculatedBillingBreakdown {
+                    image: None,
+                    custom_multiplier_bps: 10_000,
                     long_context_billing_applied: true,
                     input_amount: usd("0.03"),
                     output_amount: usd("0.07"),

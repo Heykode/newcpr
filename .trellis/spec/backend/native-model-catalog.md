@@ -2,7 +2,7 @@
 
 ## 来源与调用路径
 
-固定参考为官方 v3.48.0 `975b73b33b6d247fbe08a9a23e88066467e71d7a`。
+以下OpenAI目录合同固定参考为官方 v3.48.0 `975b73b33b6d247fbe08a9a23e88066467e71d7a`。
 `GET /v1/models?client_version=...` → `ExecutionService::client_model_catalog` →
 `CodexCredentialCatalogService::client_model_catalog`，只读已发布快照和本地账号事实。
 后台 `restore` / `refresh_catalogs` 负责持久目录恢复、发现与发布。
@@ -104,3 +104,13 @@ API 测试实际执行认证、严格 query 和成功 no-store 路由。执行�
 
 Wrong：用后台聚合目录或同套餐其他账号的缓存替代指定账号导出。
 Correct：直接使用所选 `ProviderAccount` 和冻结 client 的既有辅助 GET。
+
+## Antigravity 模型组客户端目录
+
+固定官方增量见 `docs/upstream-v3553-native-parity.md`。AGY没有原生Codex目录，实际入口为
+`ExecutionService::client_model_catalog` → `profiles_for_provider_scope`，按当前Key授权的
+账号和分组裁剪成员、推理档位与默认档位。描述不一致或缺失时不承诺统一描述，图片取交集，
+上下文取安全共同范围；模型映射覆盖同名项时使用目标画像，目标无画像则撤回旧项。
+运行选路按具体型号和候选账号的输出上限排除超限者；未知上限仍交上游验证。
+独立搜索只能选择同账号、同授权分组同时允许的原型号与搜索目标，不扩大严格绑定范围。
+客户端目录入口回归必须覆盖实际fallback，不以snapshot helper通过替代。

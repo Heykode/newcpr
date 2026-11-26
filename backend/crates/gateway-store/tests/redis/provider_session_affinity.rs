@@ -98,30 +98,32 @@ async fn concurrent_admissions_accept_exactly_one_missing_or_observed_generation
     let Some((repository, _, _)) = affinity_repository().await else {
         return;
     };
-    let provider = ProviderKind::new("openai").unwrap();
-    let key = ProviderSessionAffinityKey::try_new("admission-concurrent").unwrap();
-    let a = ProviderAccountId::new("acct_admission_a").unwrap();
-    let b = ProviderAccountId::new("acct_admission_b").unwrap();
-    let c = ProviderAccountId::new("acct_admission_c").unwrap();
-    let ttl = Duration::from_secs(60);
-    let (first, second) = tokio::join!(
-        repository.admit_binding(&provider, &key, None, &a, ttl),
-        repository.admit_binding(&provider, &key, None, &b, ttl)
-    );
-    let (first, second) = (first.unwrap(), second.unwrap());
-    assert_ne!(first.is_some(), second.is_some());
-    let initial = first.or(second).unwrap();
-    let other = if initial.account_id() == &a { &b } else { &a };
-    let (first, second) = tokio::join!(
-        repository.admit_binding(&provider, &key, Some(&initial), other, ttl),
-        repository.admit_binding(&provider, &key, Some(&initial), &c, ttl)
-    );
-    let (first, second) = (first.unwrap(), second.unwrap());
-    assert_ne!(first.is_some(), second.is_some());
-    assert_eq!(
-        repository.load_binding(&provider, &key).await.unwrap(),
-        first.or(second)
-    );
+    for provider in ["openai", "xai", "antigravity"] {
+        let provider = ProviderKind::new(provider).unwrap();
+        let key = ProviderSessionAffinityKey::try_new("admission-concurrent").unwrap();
+        let a = ProviderAccountId::new("acct_admission_a").unwrap();
+        let b = ProviderAccountId::new("acct_admission_b").unwrap();
+        let c = ProviderAccountId::new("acct_admission_c").unwrap();
+        let ttl = Duration::from_secs(60);
+        let (first, second) = tokio::join!(
+            repository.admit_binding(&provider, &key, None, &a, ttl),
+            repository.admit_binding(&provider, &key, None, &b, ttl)
+        );
+        let (first, second) = (first.unwrap(), second.unwrap());
+        assert_ne!(first.is_some(), second.is_some());
+        let initial = first.or(second).unwrap();
+        let other = if initial.account_id() == &a { &b } else { &a };
+        let (first, second) = tokio::join!(
+            repository.admit_binding(&provider, &key, Some(&initial), other, ttl),
+            repository.admit_binding(&provider, &key, Some(&initial), &c, ttl)
+        );
+        let (first, second) = (first.unwrap(), second.unwrap());
+        assert_ne!(first.is_some(), second.is_some());
+        assert_eq!(
+            repository.load_binding(&provider, &key).await.unwrap(),
+            first.or(second)
+        );
+    }
 }
 
 #[tokio::test]

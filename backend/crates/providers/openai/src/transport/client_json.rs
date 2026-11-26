@@ -49,6 +49,22 @@ impl CodexBackendClient {
             context.turn_metadata,
         );
 
+        let body = if self.privacy.is_some() {
+            let mut value: serde_json::Value =
+                serde_json::from_slice(&body).map_err(CodexClientError::RequestBodyEncode)?;
+            let original = value.clone();
+            self.apply_privacy(&mut value, &mut headers)?;
+            if value == original {
+                body
+            } else {
+                Bytes::from(
+                    serde_json::to_vec(&value).map_err(CodexClientError::RequestBodyEncode)?,
+                )
+            }
+        } else {
+            body
+        };
+
         let trace = context
             .trace
             .cloned()

@@ -55,7 +55,9 @@ Pinned legacy QX defaults become explicit custom CLI UA; independent null UA
 becomes auto-updating Default. Old mode commands are rejected, not silently
 ignored. Rollback requires a schema-compatible restore as well as the old binary.
 Custom Desktop controls its auxiliary Desktop surface; custom CLI retains the
-default auxiliary Desktop snapshot. `verified` describes UA artifact selection,
+default auxiliary Desktop snapshot for legacy consumers. Avatar requests use the current
+global identity and preserve the complete CLI/custom UA; they must not synthesize
+an incomplete Desktop UA. `verified` describes UA artifact selection,
 not full handshake verification. CA remains additive and never selects a backend.
 
 Tests must exercise actual H2/H1 negotiation, streamed delivery and pool reuse,
@@ -80,7 +82,8 @@ editing prior entries.
 - The existing artifact-cache port is scoped by ProviderKind only; platform
   channels use separate namespaced keys. Do not collide with legacy Desktop
   and CLI caches or change the generic cache contract for this feature.
-- Preserve independent auxiliary Desktop identity for CLI requests. Include the
+- Preserve the legacy auxiliary Desktop snapshot for consumers that require it;
+  avatar downloads preserve the selected CLI/custom request identity. Include the
   configuration document in quality/Excel recovery action fences and targeted
   UA audit fields. Business dumps include the entire table, including the new
   nullable column. Old binaries do not understand the new mode.

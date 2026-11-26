@@ -56,6 +56,8 @@ pub struct CostCoverageView {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BillingView {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image: Option<ImageBillingView>,
     pub long_context_billing_applied: bool,
     pub input_amount_display: String,
     pub output_amount_display: String,
@@ -1015,4 +1017,13 @@ impl From<domain::AnalyticsMetadata> for AnalyticsMetadataView {
             generation: value.generation,
         }
     }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageBillingView {
+    pub input_amount_display: String,
+    pub cache_read_amount_display: String,
+    pub input_price_display: String,
+    pub cache_read_price_display: String,
 }

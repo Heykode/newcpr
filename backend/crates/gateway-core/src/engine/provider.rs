@@ -213,9 +213,14 @@ pub trait NativeResponseTranslator: Send + 'static {
         &mut self,
         event: &crate::event::ProtocolWireEvent,
     ) -> Result<Vec<crate::event::ProtocolWireEvent>, ProviderError>;
+    /// 上游以 EOF 而非原生终态帧结束时，在终结事实交付前刷新协议终态
+    fn finish(&mut self) -> Result<Vec<crate::event::ProtocolWireEvent>, ProviderError> {
+        Ok(Vec::new())
+    }
 }
 
-const MAX_NATIVE_RESPONSE_EVENTS_PER_INPUT: usize = 64;
+/// 单个原生输入帧允许展开的 wire 事件数
+pub const MAX_NATIVE_RESPONSE_EVENTS_PER_INPUT: usize = 64;
 
 pub struct ProviderStream {
     native_response_translator: Option<Box<dyn NativeResponseTranslator>>,
@@ -224,7 +229,7 @@ pub struct ProviderStream {
     account_feedback: Option<ProviderStreamAccountFeedback>,
     account_protection: Option<super::account_protection::AttemptProtection>,
     protection_feedback: Option<BoxFuture<'static, Option<Result<ProviderEvent, ProviderError>>>>,
-    validator: EventSequenceValidator,
+    validator: Result<EventSequenceValidator, crate::event::EventSequenceError>,
     strict_canonical_seen: bool,
 }
 
@@ -357,7 +362,7 @@ impl ProviderStream {
             account_feedback: None,
             account_protection: None,
             protection_feedback: None,
-            validator: EventSequenceValidator::new(),
+            validator: Ok(EventSequenceValidator::new()),
             strict_canonical_seen: false,
         }
     }
@@ -411,15 +416,19 @@ impl ProviderStream {
         let Some(translator) = self.native_response_translator.as_mut() else {
             return Ok(vec![event]);
         };
-        let Some(wire) = event.wire_event() else {
+        let had_wire = event.wire_event().is_some();
+        let mut translated = if let Some(wire) = event.wire_event() {
+            if wire.protocol() != translator.source_protocol() {
+                return Err(native_response_protocol_error());
+            }
+            translator.translate(wire)?
+        } else if terminal {
+            translator.finish()?
+        } else {
             return Ok(vec![event]);
         };
-        if wire.protocol() != translator.source_protocol() {
-            return Err(native_response_protocol_error());
-        }
-        let mut translated = translator.translate(wire)?;
         if translated.len() > MAX_NATIVE_RESPONSE_EVENTS_PER_INPUT
-            || (terminal && translated.is_empty())
+            || (terminal && had_wire && translated.is_empty())
             || translated
                 .iter()
                 .any(|wire| wire.protocol() != translator.target_protocol())
@@ -524,22 +533,24 @@ impl ProviderStream {
         match source.events.as_mut().poll_next(context) {
             Poll::Pending => Poll::Pending,
             Poll::Ready(Some(Ok(event))) => {
-                // 带 wire 的 canonical facts 只是旁路观测：wire 才是客户端协议的
-                // 权威表达。只有 canonical-only Provider 输出需要以状态机作为交付条件。
-                if event.wire_event().is_none() && !event.canonical_facts().is_empty() {
-                    this.strict_canonical_seen = true;
-                    for fact in event.canonical_facts() {
-                        if this.validator.observe(fact).is_err() {
-                            let error = ProviderError::new(
-                                ProviderErrorKind::Protocol,
-                                UpstreamSendState::Sent,
-                            );
-                            if let Some(feedback) = this.account_feedback.as_mut() {
-                                feedback.report_failure(&error);
-                            }
-                            return Poll::Ready(Some(Err(error)));
-                        }
+                // 纯 wire 流的 facts 仍只是旁路观测；一旦交付 canonical-only
+                // 事件，就必须校验完整事实序列，不能漏掉带 wire 的开始或终态
+                this.strict_canonical_seen |=
+                    event.wire_event().is_none() && !event.canonical_facts().is_empty();
+                for fact in event.canonical_facts() {
+                    if let Ok(validator) = &mut this.validator
+                        && let Err(error) = validator.observe(fact)
+                    {
+                        this.validator = Err(error);
                     }
+                }
+                if this.strict_canonical_seen && this.validator.is_err() {
+                    let error =
+                        ProviderError::new(ProviderErrorKind::Protocol, UpstreamSendState::Sent);
+                    if let Some(feedback) = this.account_feedback.as_mut() {
+                        feedback.report_failure(&error);
+                    }
+                    return Poll::Ready(Some(Err(error)));
                 }
                 if let Some(feedback) = this.account_feedback.as_mut() {
                     feedback.observe(&event);
@@ -557,7 +568,10 @@ impl ProviderStream {
             }
             Poll::Ready(None) => {
                 let validation = if this.strict_canonical_seen {
-                    this.validator.finish()
+                    this.validator
+                        .as_ref()
+                        .map_err(Clone::clone)
+                        .and_then(EventSequenceValidator::finish)
                 } else {
                     Ok(())
                 };
@@ -650,6 +664,20 @@ impl fmt::Debug for ProviderRequest {
 /// 新的 attempt 再次调用。
 #[async_trait]
 pub trait Provider: Send + Sync {
+    /// Provider 解释自己的隐私规则，Core 仅冻结编译结果
+    fn compile_privacy_policy(
+        &self,
+        _policy: &crate::settings::privacy::CodexPrivacyPolicy,
+    ) -> Result<
+        Arc<dyn crate::settings::privacy::CompiledPrivacyPolicy>,
+        crate::settings::privacy::PrivacyError,
+    > {
+        Err(crate::settings::privacy::PrivacyError {
+            rule_index: 0,
+            reason: "Provider 不支持隐私策略",
+        })
+    }
+
     /// 返回编译期注册名称。
     fn name(&self) -> &'static str;
 
@@ -917,4 +945,32 @@ fn native_response_protocol_error() -> ProviderError {
         crate::upstream::UpstreamSendState::Sent,
     )
     .redact_sensitive_context("invalid native response translation")
+}
+
+impl crate::settings::privacy::PrivacyPolicyCompiler for ProviderRegistry {
+    fn compile(
+        &self,
+        policy: &crate::settings::privacy::CodexPrivacyPolicy,
+    ) -> Result<
+        Arc<dyn crate::settings::privacy::CompiledPrivacyPolicy>,
+        crate::settings::privacy::PrivacyError,
+    > {
+        self.providers
+            .iter()
+            .find(|(kind, _)| kind.as_str() == "openai")
+            .ok_or(crate::settings::privacy::PrivacyError {
+                rule_index: 0,
+                reason: "OpenAI Provider 不可用",
+            })?
+            .1
+            .compile_privacy_policy(policy)
+    }
+}
+
+impl fmt::Debug for ProviderRegistry {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ProviderRegistry")
+            .field("providers", &self.providers.keys().collect::<Vec<_>>())
+            .finish()
+    }
 }

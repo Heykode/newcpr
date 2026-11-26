@@ -8,7 +8,7 @@ use provider_openai::transport::profile::{CodexBundledReleaseProfile, CodexWireP
 use serde_json::json;
 
 #[test]
-fn six_presets_have_explicit_availability_and_cli_has_no_desktop_suffix() {
+fn six_presets_resolve_available_client_identities() {
     let state = CodexWireProfileState::new(
         provider_openai::config::CodexWireProfileConfig::default().into(),
     );
@@ -25,22 +25,29 @@ fn six_presets_have_explicit_availability_and_cli_has_no_desktop_suffix() {
             .iter()
             .all(|preset| preset["automaticAvailable"] == true)
     );
-    for platform in [
-        ClientPlatform::Macos,
-        ClientPlatform::Linux,
-        ClientPlatform::Windows,
-    ] {
-        let selection = ClientProfileSelection {
-            client: ClientKind::Cli,
-            platform,
-            ..Default::default()
-        };
+    for preset in presets
+        .iter()
+        .filter(|preset| preset["configuration"]["client"] == "cli")
+    {
+        let selection: ClientProfileSelection =
+            serde_json::from_value(preset["configuration"].clone()).unwrap();
         let profile = selection.resolve(&state).unwrap();
-        assert_eq!(profile.originator, "codex_cli_rs");
-        assert_eq!(profile.os_type, platform.os_type());
+        if selection.platform == ClientPlatform::Macos {
+            let version = &profile.codex_version;
+            assert_eq!(
+                profile.user_agent(),
+                format!(
+                    "codex-tui/{version} (Mac OS 27.2.1; arm64) Apple_Terminal/488.9 (codex-tui; {version})"
+                )
+            );
+            assert_eq!(profile.originator, "codex-tui");
+        } else {
+            assert_eq!(profile.originator, "codex_cli_rs");
+            assert!(profile.user_agent().ends_with("unknown"));
+        }
+        assert_eq!(profile.os_type, selection.platform.os_type());
         assert!(profile.desktop_version.is_empty());
         assert!(!profile.user_agent().contains("Desktop"));
-        assert!(profile.user_agent().ends_with("unknown"));
         assert!(profile.verified_at > chrono::DateTime::UNIX_EPOCH);
     }
     for platform in [ClientPlatform::Linux, ClientPlatform::Windows] {
@@ -157,6 +164,15 @@ fn version_lag_round_trips_and_falls_back_to_the_oldest_observed_release() {
     assert_eq!(preview.expose_to_provider()["versionSource"], "official");
     let options = state.selection_options().unwrap();
     assert_eq!(options.expose_to_provider()["maxVersionLag"], 10);
+    assert_eq!(
+        options.expose_to_provider()["recognizedUserAgentPrefixes"],
+        serde_json::json!([
+            "Codex Desktop/",
+            "codex-tui/",
+            "codex_exec/",
+            "codex_cli_rs/"
+        ])
+    );
 }
 
 #[test]

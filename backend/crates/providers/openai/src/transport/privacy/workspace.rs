@@ -1,0 +1,126 @@
+//! 工作区项目名的账号会话化名与预览会话识别
+
+use gateway_core::account::ProviderAccount;
+use reqwest::header::HeaderMap;
+use serde_json::{Map, Value};
+use sha2::{Digest, Sha256};
+
+use super::Budget;
+
+pub(super) fn account_session_scope(session: &str, account: &ProviderAccount) -> String {
+    // 与连接和续接隔离复用同一账号身份，正常令牌续期和出口变化不重置化名
+    let identity = crate::credential::oauth_identity_key(account);
+    let mut hash = Sha256::new();
+    hash.update(b"codex-workspace-account-session-v1\0");
+    for part in [session, identity.as_str()] {
+        hash.update((part.len() as u64).to_le_bytes());
+        hash.update(part.as_bytes());
+    }
+    hex::encode(hash.finalize())
+}
+
+pub(super) fn anonymize_project(
+    value: &mut Value,
+    budget: &mut Budget<'_>,
+) -> Result<usize, &'static str> {
+    let workspaces = value.as_object().ok_or("工作区映射必须是对象")?;
+    if workspaces.is_empty() {
+        return Ok(0);
+    }
+    let session = budget
+        .session_scope
+        .filter(|s| !s.trim().is_empty())
+        .ok_or("工作区匿名化缺少稳定的会话标识")?;
+    budget.text(session)?;
+    let mut renamed = Map::new();
+    for (path, metadata) in workspaces {
+        budget.text(path)?;
+        let metadata = metadata.as_object().ok_or("工作区信息必须是对象")?.clone();
+        let alias = alias_path(path, session)?;
+        if renamed.insert(alias, Value::Object(metadata)).is_some() {
+            return Err("工作区匿名化产生重名");
+        }
+    }
+    let count = renamed.len();
+    *value = Value::Object(renamed);
+    Ok(count)
+}
+
+fn alias_path(path: &str, session: &str) -> Result<String, &'static str> {
+    let path = path.trim_end_matches(['/', '\\']);
+    let absolute = path.starts_with(['/', '\\'])
+        || (path.as_bytes().get(1) == Some(&b':')
+            && path
+                .as_bytes()
+                .get(2)
+                .is_some_and(|c| matches!(c, b'/' | b'\\')));
+    if !absolute {
+        return Err("工作区路径必须是绝对路径");
+    }
+    let split = path.rfind(['/', '\\']).ok_or("工作区路径缺少工程目录")?;
+    let mut hash = Sha256::new();
+    hash.update(b"codex-workspace-alias-v2\0");
+    hash.update((session.len() as u64).to_le_bytes());
+    hash.update(session.as_bytes());
+    hash.update(path.as_bytes());
+    let digest = hash.finalize();
+    // 只改工程名，父目录与用户名交给独立的字段名替换步骤
+    let mut alias = path[..=split].to_owned();
+    alias.push_str(&shuffled_project_name(&path[split + 1..], &digest));
+    alias.push_str(&format!(
+        "-{}-{}",
+        u16::from_le_bytes([digest[6], digest[7]]) % 1000 + 1,
+        u16::from_le_bytes([digest[8], digest[9]]) % 1000 + 1
+    ));
+    // 短后缀扩大命名空间，多个工程仍逐一校验冲突，禁止覆盖合并
+    alias.push('-');
+    alias.push_str(&hex::encode(&digest[2..6]));
+    Ok(alias)
+}
+
+fn shuffled_project_name(name: &str, seed: &[u8]) -> String {
+    // 按 Unicode 字符打乱，限制长度使多字节名称加后缀后仍适合作为目录名
+    let original = name.chars().filter(|c| c.is_alphanumeric()).take(48);
+    let mut characters = original.clone().collect::<Vec<_>>();
+    if characters.is_empty() {
+        return "project".to_owned();
+    }
+    for index in (1..characters.len()).rev() {
+        let mut hash = Sha256::new();
+        hash.update(seed);
+        hash.update((index as u64).to_le_bytes());
+        let digest = hash.finalize();
+        let mut bytes = [0; 8];
+        bytes.copy_from_slice(&digest[..8]);
+        let target = (u64::from_le_bytes(bytes) % (index as u64 + 1)) as usize;
+        characters.swap(index, target);
+    }
+    if characters.iter().copied().eq(original) {
+        characters.rotate_left(1);
+    }
+    characters.into_iter().collect()
+}
+
+pub(super) fn preview_session(
+    body: &Value,
+    headers: &HeaderMap,
+    metadata: Option<&str>,
+) -> Option<String> {
+    let header = |name| headers.get(name).and_then(|value| value.to_str().ok());
+    if let Some(session) =
+        header("x-codex-turn-metadata").and_then(gateway_protocol::openai::turn_metadata_session_id)
+    {
+        return Some(session);
+    }
+    let mut context = Map::new();
+    if let Some(metadata) = header("x-codex-turn-metadata").or(metadata) {
+        context.insert(
+            "turn_metadata".to_owned(),
+            Value::String(metadata.to_owned()),
+        );
+    }
+    if let Some(session) = header("session-id") {
+        context.insert("session_id".to_owned(), Value::String(session.to_owned()));
+    }
+    gateway_protocol::openai::codex_account_session_id(body.as_object()?, &context)
+}

@@ -13,3 +13,5 @@ pub mod request_capture;
 pub mod reset_credits;
 pub mod store;
 pub mod system;
+
+pub mod pricing;

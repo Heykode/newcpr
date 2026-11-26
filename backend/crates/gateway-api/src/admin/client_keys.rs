@@ -152,6 +152,8 @@ impl ClientKeySort {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CreateClientKeyRequest {
     #[serde(default)]
+    peer_sharing: gateway_core::policy::ClientPeerSharing,
+    #[serde(default)]
     provider_request_profile_overrides: ProviderRequestProfileOverrides,
     name: String,
     label: Option<String>,
@@ -171,6 +173,7 @@ impl CreateClientKeyRequest {
         validate_limit(self.max_concurrency, "maxConcurrency")?;
         validate_limit(self.requests_per_minute, "requestsPerMinute")?;
         Ok(CreateClientKey {
+            peer_sharing: self.peer_sharing,
             request_profile_overrides: normalize_request_profile_overrides(
                 self.provider_request_profile_overrides,
             )?,
@@ -195,6 +198,8 @@ impl CreateClientKeyRequest {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UpdateClientKeyRequest {
     #[serde(default)]
+    peer_sharing: Option<gateway_core::policy::ClientPeerSharing>,
+    #[serde(default)]
     provider_request_profile_overrides: ProviderRequestProfileOverrideUpdates,
     id: String,
     name: String,
@@ -216,6 +221,7 @@ impl UpdateClientKeyRequest {
         validate_limit(self.max_concurrency, "maxConcurrency")?;
         validate_limit(self.requests_per_minute, "requestsPerMinute")?;
         Ok(UpdateClientKey {
+            peer_sharing: self.peer_sharing,
             request_profile_override_updates: normalize_request_profile_override_updates(
                 self.provider_request_profile_overrides,
             )?,
@@ -274,6 +280,7 @@ impl ClientKeyMutationRequest {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClientKeyView {
+    peer_sharing: gateway_core::policy::ClientPeerSharing,
     provider_request_profile_overrides: ProviderRequestProfileOverrides,
     id: String,
     name: String,
@@ -318,6 +325,7 @@ impl From<ClientKeyRecord> for ClientKeyView {
             "groups"
         };
         Self {
+            peer_sharing: record.peer_sharing,
             provider_request_profile_overrides,
             id: record.id.to_string(),
             name: record.name,
@@ -346,8 +354,8 @@ impl From<ClientKeyRecord> for ClientKeyView {
             weekly_limit_usd: record.budget.limits.weekly_usd.canonical(),
             daily_used_usd: record.budget.daily_used_usd.canonical(),
             weekly_used_usd: record.budget.weekly_used_usd.canonical(),
-            daily_resets_at: record.budget.daily_resets_at.map(DateTime::from),
-            weekly_resets_at: record.budget.weekly_resets_at.map(DateTime::from),
+            daily_resets_at: record.budget.daily_resets_at().map(DateTime::from),
+            weekly_resets_at: record.budget.weekly_resets_at().map(DateTime::from),
             created_at: record.created_at,
             updated_at: record.updated_at,
             last_used_at: record.last_used_at,
@@ -657,9 +665,6 @@ fn normalize_request_profile_overrides(
     let normalized = profiles
         .into_iter()
         .map(|(provider, profile)| {
-            if !matches!(provider.as_str(), "openai" | "xai") {
-                return Err(WireValidationError::new("providerRequestProfileOverrides"));
-            }
             validate_request_profile_size(&profile)?;
             Ok((
                 ProviderKind::new(provider)
@@ -681,9 +686,6 @@ fn normalize_request_profile_override_updates(
     let normalized = profiles
         .into_iter()
         .map(|(provider, profile)| {
-            if !matches!(provider.as_str(), "openai" | "xai") {
-                return Err(WireValidationError::new("providerRequestProfileOverrides"));
-            }
             if let Some(profile) = profile.as_ref() {
                 validate_request_profile_size(profile)?;
             }
@@ -860,6 +862,8 @@ where
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BatchUpdateClientKeysRequest {
+    #[serde(default)]
+    peer_sharing: Option<gateway_admin::model::client_keys::ClientPeerSharingPatch>,
     ids: Vec<String>,
     group_ids: Option<Vec<String>>,
     enabled: Option<bool>,
@@ -892,6 +896,7 @@ impl BatchUpdateClientKeysRequest {
             })
             .transpose()?;
         Ok(BatchUpdateClientKeys {
+            peer_sharing: self.peer_sharing.unwrap_or_default(),
             ids: self
                 .ids
                 .into_iter()

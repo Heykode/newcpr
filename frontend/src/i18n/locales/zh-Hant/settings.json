@@ -48,7 +48,13 @@
       "generateInstallationSeed": "產生安裝身分種子",
       "installationSeedHelp": "依金鑰與上游帳號產生獨立、穩定的安裝身分，種子不會傳送給上游，修改種子會切換身分",
       "installationSeedPlaceholder": "留空使用上游帳號的安裝 ID",
-      "invalidInstallationSeed": "請輸入帶連字號的 UUID"
+      "invalidInstallationSeed": "請輸入帶連字號的 UUID",
+      "clientVersion": "客戶端版本",
+      "coreVersion": "Core 版本",
+      "identityDescription": "設定傳送給上游的客戶端識別資訊",
+      "restoreSystemPrompt": "恢復預設",
+      "systemPrompt": "系統提示詞",
+      "systemPromptHint": "取代客戶端系統提示，預設來自 {source}"
     },
     "pricing": {
       "multiplier": "倍率",
@@ -94,7 +100,8 @@
         "title": "確認同步來源價目",
         "description": "僅同步所選模型的來源價格，保留自定義單價和倍率",
         "skipped": "跳過 {count} 個缺少完整價格或計價方式不匹配的模型",
-        "action": "同步"
+        "action": "同步",
+        "unavailable": "目前平台暫無可同步價目，可手動設定價格"
       },
       "selectAll": "全選",
       "selected": "已選 {count} / {count2}",
@@ -634,7 +641,8 @@
         "reorderHelp": "拖動手柄調整步驟順序，也可聚焦手柄後使用上下方向鍵移動",
         "dragStep": "拖動步驟 {value}：{field}",
         "step": "步驟 {value}：{field}，{scope}，{action}，{effect}",
-        "deleteStep": "刪除步驟 {value}：{field}"
+        "deleteStep": "刪除步驟 {value}：{field}",
+        "sessionAliasEffect": "同賬號同會話專案化名固定"
       },
       "presets": {
         "workspaceMetadata": "工作區附加信息",
@@ -652,7 +660,9 @@
         "gitCommitId": "Git 提交 ID",
         "gitRemoteCollection": "Git 遠端集合",
         "workspaceFingerprint": "工作區指紋",
-        "unifyWorkspaceInformation": "統一工作區信息"
+        "unifyWorkspaceInformation": "統一工作區信息",
+        "anonymizeProject": "按賬號與會話匿名化專案名稱",
+        "anonymizeWorkspace": "按賬號與會話匿名化工作區"
       },
       "testPlaceholder": "點擊測試查看結果"
     },

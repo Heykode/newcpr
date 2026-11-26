@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Key, LinkAlt, Openai, Xai } from '@boxicons/vue'
+import { GoogleAntigravity, Key, LinkAlt, Openai, Xai } from '@boxicons/vue'
 import { computed } from 'vue'
 import { formatProviderLabel } from '@/utils/providers'
 
@@ -44,6 +44,7 @@ const authenticationLabel = computed(() => {
     >
       <Openai v-if="normalizedProvider === 'openai'" :class="classes.icon" />
       <Xai v-else-if="normalizedProvider === 'xai'" :class="classes.icon" />
+      <GoogleAntigravity v-else-if="normalizedProvider === 'antigravity'" :class="classes.icon" />
       <span v-else class="text-[10px] font-heavy text-cp-text-quaternary">?</span>
     </span>
 

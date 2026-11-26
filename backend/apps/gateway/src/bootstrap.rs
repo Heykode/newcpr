@@ -101,9 +101,15 @@ pub async fn run() -> Result<(), BootstrapError> {
     )
     .await?;
     host.report_startup_ready("OpenAI Provider");
-    let mut xai = provider_xai::initialize(xai, provider_ports).await?;
+    let mut xai = provider_xai::initialize(xai, provider_ports.clone()).await?;
     host.report_startup_ready("xAI Provider");
-    let providers = ProviderRegistry::new([openai.core_provider(), xai.core_provider()])?;
+    let mut antigravity = provider_antigravity::initialize(provider_ports)?;
+    host.report_startup_ready("Antigravity Provider");
+    let providers = ProviderRegistry::new([
+        openai.core_provider(),
+        xai.core_provider(),
+        antigravity.core.clone(),
+    ])?;
     let mut core =
         gateway_core::initialize_with_request_tuning(store.core_ports(), providers, request_tuning)
             .await?;
@@ -111,7 +117,11 @@ pub async fn run() -> Result<(), BootstrapError> {
     let mut admin = gateway_admin::initialize_with_timezone(
         admin,
         store.admin_ports(),
-        vec![openai.admin_provider(), xai.admin_provider()],
+        vec![
+            openai.admin_provider(),
+            xai.admin_provider(),
+            antigravity.admin.clone(),
+        ],
         core.snapshot_control(),
         core.snapshot_handle(),
         (
@@ -119,6 +129,7 @@ pub async fn run() -> Result<(), BootstrapError> {
             host.proxy_probe(provider_openai::build_reqwest_client_with_custom_ca),
         ),
         host.client_distribution_resolver(),
+        std::sync::Arc::new(gateway_host::pricing::ModelsDevPricing),
         (host.system_operations(), host.notification_delivery()?),
         timezone,
     )
@@ -148,6 +159,7 @@ pub async fn run() -> Result<(), BootstrapError> {
                 gateway_admin::ports::provider::ProviderAdminRegistry::new([
                     openai.admin_provider(),
                     xai.admin_provider(),
+                    antigravity.admin.clone(),
                 ])
                 .map_err(|error| {
                     gateway_admin::model::AdminError::internal(
@@ -161,6 +173,7 @@ pub async fn run() -> Result<(), BootstrapError> {
     plan.extend(core.take_worker_contributions());
     plan.extend(openai.take_worker_contributions());
     plan.extend(xai.take_worker_contributions());
+    plan.append(&mut antigravity.workers);
     plan.extend(admin.take_worker_contributions());
     host.start_workers(plan, store.worker_leader_lease())?;
     host.report_startup_ready("Workers");
@@ -183,6 +196,8 @@ pub enum BootstrapError {
     Xai(#[from] provider_xai::XaiInitializeError),
     #[error(transparent)]
     Registry(#[from] RegistryError),
+    #[error(transparent)]
+    Antigravity(#[from] provider_antigravity::ConfigError),
     #[error(transparent)]
     Core(#[from] gateway_core::CoreError),
     #[error(transparent)]

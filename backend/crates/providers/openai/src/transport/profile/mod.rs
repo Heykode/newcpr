@@ -224,14 +224,13 @@ impl CodexWireProfile {
     /// 复合 User-Agent 是两个独立 surface。
     #[must_use]
     pub fn desktop_user_agent(&self) -> String {
-        let originator = if self.raw_user_agent.is_some() {
-            "Codex Desktop"
-        } else {
-            self.originator.as_str()
-        };
+        // CLI 和完整自定义 UA 没有独立桌面格式，沿用本轮选定的身份。
+        if self.originator != "Codex Desktop" || self.raw_user_agent.is_some() {
+            return self.user_agent();
+        }
         format!(
-            "{originator}/{} ({}; {})",
-            self.desktop_version, self.os_type, self.arch,
+            "{}/{} ({}; {})",
+            self.originator, self.desktop_version, self.os_type, self.arch,
         )
     }
 }

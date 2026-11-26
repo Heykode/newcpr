@@ -35,6 +35,12 @@ export interface UsageCostCoverage {
 }
 
 export interface UsageBilling {
+  image?: {
+    inputAmountDisplay: string
+    cacheReadAmountDisplay: string
+    inputPriceDisplay: string
+    cacheReadPriceDisplay: string
+  }
   longContextBillingApplied?: boolean
   inputAmountDisplay: string
   outputAmountDisplay: string

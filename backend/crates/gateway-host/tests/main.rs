@@ -2,6 +2,7 @@ mod client_distribution;
 mod config;
 mod logging;
 mod notifications;
+mod pricing;
 mod proxy_probe;
 mod serve;
 mod support;

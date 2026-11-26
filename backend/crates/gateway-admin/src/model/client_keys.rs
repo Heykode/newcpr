@@ -91,6 +91,7 @@ pub struct ClientKeyListQuery {
 /// 不含完整明文 Key 的管理投影。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClientKeyRecord {
+    pub peer_sharing: gateway_core::policy::ClientPeerSharing,
     pub request_profile_overrides: ProviderRequestProfileOverrides,
     pub id: ClientApiKeyId,
     pub name: String,
@@ -150,6 +151,7 @@ impl fmt::Debug for ClientKeySecret {
 /// API 提交的 Client Key 创建命令。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreateClientKey {
+    pub peer_sharing: gateway_core::policy::ClientPeerSharing,
     pub request_profile_overrides: ProviderRequestProfileOverrides,
     pub name: String,
     pub label: Option<String>,
@@ -161,6 +163,7 @@ pub struct CreateClientKey {
 /// 管理用例生成 ID 与明文后的持久化命令。
 #[derive(Clone, PartialEq, Eq)]
 pub struct NewClientKey {
+    pub peer_sharing: gateway_core::policy::ClientPeerSharing,
     pub request_profile_overrides: ProviderRequestProfileOverrides,
     pub id: ClientApiKeyId,
     pub name: String,
@@ -186,6 +189,7 @@ impl fmt::Debug for NewClientKey {
 /// 修改 Client Key 的公开策略字段。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UpdateClientKey {
+    pub peer_sharing: Option<gateway_core::policy::ClientPeerSharing>,
     pub request_profile_override_updates: ProviderRequestProfileOverrideUpdates,
     pub id: ClientApiKeyId,
     pub name: String,
@@ -196,9 +200,40 @@ pub struct UpdateClientKey {
     pub weekly_limit_usd: Option<gateway_core::metering::Decimal>,
 }
 
+/// 批量编辑只覆盖明确选择的互联选项
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ClientPeerSharingPatch {
+    pub enabled: Option<bool>,
+    pub share_pool: Option<bool>,
+    pub share_quota: Option<bool>,
+    pub share_plans: Option<bool>,
+}
+
+impl ClientPeerSharingPatch {
+    #[must_use]
+    pub fn is_empty(self) -> bool {
+        self == Self::default()
+    }
+
+    #[must_use]
+    pub fn apply(
+        self,
+        current: gateway_core::policy::ClientPeerSharing,
+    ) -> gateway_core::policy::ClientPeerSharing {
+        gateway_core::policy::ClientPeerSharing {
+            enabled: self.enabled.unwrap_or(current.enabled),
+            share_pool: self.share_pool.unwrap_or(current.share_pool),
+            share_quota: self.share_quota.unwrap_or(current.share_quota),
+            share_plans: self.share_plans.unwrap_or(current.share_plans),
+        }
+    }
+}
+
 /// 对各个密钥独立应用同一份局部设置
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct BatchUpdateClientKeys {
+    pub peer_sharing: ClientPeerSharingPatch,
     pub ids: Vec<ClientApiKeyId>,
     pub group_ids: Option<Vec<AccountGroupId>>,
     pub enabled: Option<bool>,
@@ -213,7 +248,8 @@ pub struct BatchUpdateClientKeys {
 impl BatchUpdateClientKeys {
     #[must_use]
     pub fn has_changes(&self) -> bool {
-        self.group_ids.is_some()
+        !self.peer_sharing.is_empty()
+            || self.group_ids.is_some()
             || self.enabled.is_some()
             || self.max_concurrency.is_some()
             || self.requests_per_minute.is_some()

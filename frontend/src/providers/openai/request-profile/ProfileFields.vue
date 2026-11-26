@@ -1,0 +1,281 @@
+<script setup lang="ts">
+import type { CustomSelection, PresetSelection, ProfileOptions, ProfilePreview, ProfileSelection } from './profile'
+
+import { computed, shallowRef } from 'vue'
+import { useI18n } from 'vue-i18n'
+import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
+import BaseInput from '@/components/base/BaseInput.vue'
+import BaseSelect from '@/components/base/BaseSelect.vue'
+import BaseTextarea from '@/components/base/BaseTextarea.vue'
+import { needsCompanionHeaders } from './profile'
+
+const props = defineProps<{
+  options: ProfileOptions
+  preview?: ProfilePreview
+  previewing: boolean
+  disabled: boolean
+}>()
+
+const { t } = useI18n({ useScope: 'global' })
+
+const model = defineModel<ProfileSelection | null>({ required: true })
+const presetDraft = shallowRef<PresetSelection>()
+const customDraft = shallowRef<CustomSelection>()
+const preset = computed(() => model.value && !model.value.mode
+  ? model.value
+  : undefined)
+const custom = computed(() => model.value?.mode === 'custom' || preset.value?.versionMode === 'fixed')
+const platforms = { macos: 'MacOS', linux: 'Linux', windows: 'Windows' }
+const presetOptions = computed(() => props.options.presets.map(({ configuration }) => ({
+  value: `${configuration.platform}-${configuration.client}`,
+  label: `${platforms[configuration.platform]} · ${configuration.client === 'desktop'
+    ? 'Desktop'
+    : 'CLI'}`,
+})))
+const currentPreset = computed(() => props.options.presets.find(({ configuration }) =>
+  configuration.client === preset.value?.client && configuration.platform === preset.value?.platform,
+))
+const selectedPreset = computed({
+  get: () => {
+    const selection = preset.value ?? presetDraft.value
+    return selection
+      ? `${selection.platform}-${selection.client}`
+      : ''
+  },
+  set: (value: string) => {
+    const selected = props.options.presets.find(({ configuration }) => `${configuration.platform}-${configuration.client}` === value)
+    if (selected) {
+      customDraft.value = undefined
+      model.value = {
+        ...selected.configuration,
+        versionMode: selected.automaticAvailable ? 'latest' : 'fixed',
+      }
+    }
+  },
+})
+const cliEntry = computed({
+  get: () => preset.value?.cliEntry ?? 'core',
+  set: (value: string) => {
+    if (preset.value && (value === 'core' || value === 'tui' || value === 'exec')) {
+      customDraft.value = undefined
+      model.value = {
+        ...preset.value,
+        cliEntry: value === 'core'
+          ? null
+          : value,
+      }
+    }
+  },
+})
+const versionMode = computed({
+  get: () => custom.value ? 'custom' : 'latest',
+  set: (value: string) => {
+    if (value === 'custom') {
+      if (!props.preview && !customDraft.value)
+        return
+      if (preset.value)
+        presetDraft.value = { ...preset.value }
+      model.value = {
+        ...(customDraft.value ?? { mode: 'custom', userAgent: props.preview!.userAgent }),
+      }
+    }
+    else {
+      if (model.value?.mode === 'custom')
+        customDraft.value = { ...model.value }
+      const selection = preset.value ?? presetDraft.value ?? props.options.presets[0]?.configuration
+      if (selection) {
+        model.value = {
+          ...selection,
+          versionMode: 'latest',
+          codexVersion: null,
+          desktopVersion: null,
+          desktopBuild: null,
+        }
+      }
+    }
+  },
+})
+const versionLag = computed({
+  get: () => preset.value?.versionLag == null
+    ? ''
+    : String(preset.value.versionLag),
+  set: (value: string) => {
+    if (preset.value) {
+      model.value = {
+        ...preset.value,
+        versionLag: value === ''
+          ? null
+          : Number(value),
+      }
+    }
+  },
+})
+const versionLagError = computed(() => {
+  const value = preset.value?.versionLag
+  return value != null && (!Number.isInteger(value) || value < 1 || value > props.options.maxVersionLag)
+    ? t('settings.clientProfile.enterIntegerFromTo', { version: props.options.maxVersionLag })
+    : ''
+})
+const terminal = computed({
+  get: () => preset.value?.terminal ?? '',
+  set: (value: string) => {
+    if (preset.value) {
+      model.value = {
+        ...preset.value,
+        terminal: value === ''
+          ? null
+          : value,
+      }
+    }
+  },
+})
+const osVersion = computed({
+  get: () => preset.value?.osVersion ?? '',
+  set: (value: string) => {
+    if (preset.value) {
+      model.value = {
+        ...preset.value,
+        osVersion: value === ''
+          ? null
+          : value,
+      }
+    }
+  },
+})
+const userAgent = computed({
+  get: () => model.value?.mode === 'custom'
+    ? model.value.userAgent
+    : props.preview?.userAgent ?? '',
+  set: (value: string) => {
+    const previous = model.value?.mode === 'custom'
+      ? model.value
+      : undefined
+    if (preset.value)
+      presetDraft.value = { ...preset.value }
+    // 已知客户端的配套头重新派生，避免修改版本后继续携带旧值。
+    model.value = {
+      mode: 'custom',
+      userAgent: value,
+      ...(needsCompanionHeaders(value, props.options) && previous
+        ? { originator: previous.originator, codexVersion: previous.codexVersion }
+        : {}),
+    }
+  },
+})
+const companionFields = computed(() => ([
+  { key: 'originator', label: 'originator', maxLength: 128 },
+  {
+    key: 'codexVersion',
+    label: t('settings.clientProfile.coreVersion'),
+    maxLength: 64,
+  },
+] as const))
+
+function updateCompanion(key: 'originator' | 'codexVersion', value: string) {
+  if (model.value?.mode === 'custom')
+    model.value = { ...model.value, [key]: value }
+}
+</script>
+
+<template>
+  <div class="grid gap-4">
+    <div class="grid gap-4" :class="preset?.client === 'cli' && !custom ? 'sm:grid-cols-3' : 'sm:grid-cols-2'">
+      <BaseFormItem :label="t('settings.clientProfile.clientDefault')">
+        <BaseSelect v-model="selectedPreset" class="w-full" :options="presetOptions" :placeholder="custom ? t('settings.clientProfile.useCustomUserAgent') : undefined" :disabled="disabled || custom || !options.presets.length" />
+      </BaseFormItem>
+      <BaseFormItem v-if="preset?.client === 'cli' && !custom" :label="t('settings.clientProfile.cliEntry')">
+        <BaseSelect
+          v-model="cliEntry"
+          class="w-full"
+          :options="[
+            { label: t('settings.clientProfile.coreDefaultIdentity'), value: 'core' },
+            { label: t('settings.clientProfile.tuiInteractiveTerminal'), value: 'tui' },
+            { label: t('settings.clientProfile.execNonInteractiveExecution'), value: 'exec' },
+          ]"
+          :disabled="disabled"
+        />
+      </BaseFormItem>
+      <BaseFormItem :label="t('settings.clientProfile.versionStrategy')">
+        <BaseSelect
+          v-model="versionMode"
+          class="w-full"
+          :options="[
+            { label: t('settings.clientProfile.followLatestVersion'), value: 'latest', disabled: !options.presets.length },
+            { label: t('settings.clientProfile.customVersion'), value: 'custom', disabled: !custom && (previewing || !preview) },
+          ]"
+          :disabled="disabled"
+        />
+      </BaseFormItem>
+    </div>
+    <p v-if="!custom && currentPreset?.reason" class="m-0 text-cp-sm text-cp-text-secondary">
+      {{ currentPreset.reason }}
+    </p>
+    <div v-if="!custom" class="grid gap-4 sm:grid-cols-2">
+      <BaseFormItem :label="t('settings.clientProfile.versionLag')" :error="versionLagError">
+        <BaseInput
+          v-model="versionLag"
+          :aria-label="t('settings.clientProfile.versionLag')"
+          type="number"
+          inputmode="numeric"
+          min="1"
+          :max="options.maxVersionLag"
+          step="1"
+          :placeholder="t('settings.clientProfile.versionLagHelp', { version: options.maxVersionLag })"
+          :disabled="disabled"
+        />
+      </BaseFormItem>
+      <div class="grid gap-4" :class="{ 'sm:grid-cols-2': preset?.client === 'desktop' }">
+        <BaseFormItem :label="t('settings.clientProfile.terminalIdentification')">
+          <BaseInput
+            v-model="terminal"
+            :disabled="disabled"
+            :aria-label="t('settings.clientProfile.terminalIdentification')"
+            :placeholder="t('settings.clientProfile.leaveBlankToUseUnknown')"
+            maxlength="128"
+            spellcheck="false"
+            autocomplete="off"
+            class="font-mono"
+          />
+        </BaseFormItem>
+        <BaseFormItem v-if="preset?.client === 'desktop'" :label="t('settings.clientProfile.systemVersion')">
+          <BaseInput
+            v-model="osVersion"
+            :disabled="disabled"
+            :aria-label="t('settings.clientProfile.systemVersion')"
+            :placeholder="currentPreset?.defaults.osVersion ?? undefined"
+            maxlength="128"
+            spellcheck="false"
+            autocomplete="off"
+            class="font-mono"
+          />
+        </BaseFormItem>
+      </div>
+    </div>
+    <template v-if="custom">
+      <BaseTextarea
+        v-model="userAgent"
+        :rows="3"
+        :disabled="disabled || (!model?.mode && previewing)"
+        :aria-label="t('settings.clientProfile.userAgent')"
+        :placeholder="t('settings.clientProfile.userAgentPlaceholder')"
+        spellcheck="false"
+        autocomplete="off"
+        class="font-mono"
+      />
+      <div v-if="model?.mode === 'custom' && needsCompanionHeaders(model.userAgent, options)" class="grid gap-4 sm:grid-cols-2">
+        <BaseFormItem v-for="field in companionFields" :key="field.key" :label="field.label" required>
+          <BaseInput
+            :model-value="model[field.key] ?? ''"
+            :aria-label="field.label"
+            :maxlength="field.maxLength"
+            :disabled="disabled"
+            :spellcheck="false"
+            autocomplete="off"
+            class="font-mono"
+            @update:model-value="updateCompanion(field.key, $event)"
+          />
+        </BaseFormItem>
+      </div>
+    </template>
+  </div>
+</template>

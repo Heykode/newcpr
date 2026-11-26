@@ -568,9 +568,9 @@ fn account_affinity_policy_is_strict_by_default_and_rejects_unknown_values() {
         std::num::NonZeroU32::MIN,
         std::time::Duration::ZERO,
     );
-    assert_eq!(policy.openai_account_affinity(), AccountAffinity::Strict);
+    assert_eq!(policy.account_affinity(), AccountAffinity::Strict);
     assert_eq!(
-        policy.openai_session_binding_ttl(),
+        policy.session_affinity_ttl(),
         std::time::Duration::from_secs(24 * 3600)
     );
     for mode in [

@@ -1,18 +1,19 @@
 <script setup lang="ts">
 import type { AccountGroup } from '@/api'
 import { Download, MoreHorizontal, Pencil, RotateCcw, Search, Settings2, Trash2, Upload, X } from '@lucide/vue'
-import { computed } from 'vue'
+import { computed, watch } from 'vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCheckbox from '@/components/base/BaseCheckbox.vue'
 import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
-
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
+
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseMenuItem from '@/components/base/BaseMenuItem.vue'
 import BasePopover from '@/components/base/BasePopover.vue'
 import BaseSelect from '@/components/base/BaseSelect.vue'
 import ProviderFilterSegmented from '@/components/ProviderFilterSegmented.vue'
 import { t } from '@/i18n'
+import { formatProviderLabel } from '@/utils/providers'
 import { accountStatusFilterOptions } from '../constants'
 
 const props = defineProps<{
@@ -41,6 +42,13 @@ const status = defineModel<string>('status', { required: true })
 const provider = defineModel<string>('provider', { required: true })
 const group = defineModel<string>('group', { required: true })
 const planType = defineModel<string>('planType', { required: true })
+const visiblePlanOptions = computed(() => provider.value === 'antigravity'
+  ? [{ label: '全部套餐', value: '' }, { label: 'Antigravity', value: 'antigravity:free-tier' }, { label: 'Google AI Pro', value: 'antigravity:g1-pro-tier' }]
+  : provider.value && provider.value !== 'openai' ? [{ label: '全部套餐', value: '' }] : props.planOptions)
+watch(provider, (value) => {
+  if (value && planType.value && !planType.value.startsWith(`${value}:`))
+    planType.value = ''
+})
 const groupOptions = computed(() => [
   { label: '全部分组', value: '' },
   { label: '未分组账号', value: 'ungrouped' },
@@ -53,8 +61,8 @@ const activeFilters = computed(() => [
   { key: 'search', label: '搜索', value: search.value },
   { key: 'status', label: '状态', value: status.value, text: accountStatusFilterOptions.find(item => item.value === status.value)?.label },
   { key: 'group', label: '分组', value: group.value, text: groupOptions.value.find(item => item.value === group.value)?.label },
-  { key: 'plan', label: '套餐', value: planType.value, text: props.planOptions.find(item => item.value === planType.value)?.label },
-  { key: 'provider', label: '平台', value: provider.value, text: provider.value === 'openai' ? 'Codex' : 'xAI' },
+  { key: 'plan', label: '套餐', value: planType.value, text: visiblePlanOptions.value.find(item => item.value === planType.value)?.label },
+  { key: 'provider', label: '平台', value: provider.value, text: formatProviderLabel(provider.value) },
 ].filter(item => item.value))
 function clearFilter(key: string) {
   if (key === 'search')
@@ -94,7 +102,7 @@ function resetFilters() {
         <BaseSelect v-model="group" :options="groupOptions" :disabled="groupsLoading" :aria-label="t('accounts.filters.groupLabel')" />
       </BaseFormItem>
       <BaseFormItem label="账号套餐" class="account-filter-plan">
-        <BaseSelect v-model="planType" :options="planOptions" aria-label="按套餐筛选" />
+        <BaseSelect v-model="planType" :options="visiblePlanOptions" aria-label="按套餐筛选" />
       </BaseFormItem>
       <BaseFormItem label="平台" class="account-filter-provider">
         <ProviderFilterSegmented v-model="provider" class="w-full" />
@@ -186,7 +194,7 @@ function resetFilters() {
   flex: 2 1 260px;
 }
 .account-filter-fields > .account-filter-provider {
-  flex: 0 1 130px;
+  flex: 0 1 168px;
 }
 .account-filter-fields > .account-filter-plan {
   flex-basis: 230px;

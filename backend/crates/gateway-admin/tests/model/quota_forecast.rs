@@ -128,6 +128,7 @@ fn current_window_estimates_reject_unknown_or_mismatched_facts() {
         "expired",
         "future",
         "model",
+        "model-group",
     ] {
         let mut changed = source.clone();
         match mode {
@@ -140,6 +141,10 @@ fn current_window_estimates_reject_unknown_or_mismatched_facts() {
             "expired" => changed.reset_at = Some(now()),
             "future" => changed.reset_at = Some(now() + Duration::days(8)),
             "model" => changed.local_usage_attribution = QuotaLocalUsageAttribution::Unavailable,
+            "model-group" => {
+                changed.local_usage_attribution =
+                    QuotaLocalUsageAttribution::Models(["fixture-model".to_owned()].into())
+            }
             _ => unreachable!(),
         }
         assert!(current_window_estimate(&changed, now()).is_none(), "{mode}");
@@ -275,12 +280,17 @@ fn corresponding_actual_window_takes_priority_and_retains_its_duration() {
 
 #[test]
 fn short_or_model_specific_windows_are_not_account_capacity() {
-    let mut model = window("model", 7);
-    model.local_usage_attribution = QuotaLocalUsageAttribution::Unavailable;
-    for item in forecast(&quota(vec![window("day", 1), model])) {
-        assert!(item.source.is_none());
-        assert!(item.unavailable_reason.is_some());
-        assert!(item.estimated_tokens.is_none());
+    for attribution in [
+        QuotaLocalUsageAttribution::Unavailable,
+        QuotaLocalUsageAttribution::Models(["fixture-model".to_owned()].into()),
+    ] {
+        let mut model = window("model", 7);
+        model.local_usage_attribution = attribution;
+        for item in forecast(&quota(vec![window("day", 1), model])) {
+            assert!(item.source.is_none());
+            assert!(item.unavailable_reason.is_some());
+            assert!(item.estimated_tokens.is_none());
+        }
     }
 }
 

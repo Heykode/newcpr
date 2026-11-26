@@ -19,7 +19,7 @@ function loadModule(filename, dependencies = {}) {
     TextEncoder,
     structuredClone,
     exports,
-    require: name => dependencies[name] ?? (name === '../utils/warmup-schedule' ? loadModule(new URL('../src/views/settings/utils/warmup-schedule.ts', import.meta.url)) : name === '../components/error-protection/form' ? loadModule(new URL('../src/views/settings/components/error-protection/form.ts', import.meta.url)) : name === '@/utils/excel-defaults' ? loadModule(new URL('../src/utils/excel-defaults.ts', import.meta.url)) : require(name)),
+    require: name => dependencies[name] ?? (name === '@/components/request-profile/changes' ? loadModule(new URL('../src/components/request-profile/changes.ts', import.meta.url)) : name === '../utils/warmup-schedule' ? loadModule(new URL('../src/views/settings/utils/warmup-schedule.ts', import.meta.url)) : name === '../components/error-protection/form' ? loadModule(new URL('../src/views/settings/components/error-protection/form.ts', import.meta.url)) : name === '@/utils/excel-defaults' ? loadModule(new URL('../src/utils/excel-defaults.ts', import.meta.url)) : require(name)),
   }, { filename: String(filename) })
   return exports
 }
@@ -220,19 +220,19 @@ test('affinity and binding TTL roundtrip without changing smart scheduling or re
   const query = mountSettings({ ...settings(), openaiGuardianReservedConcurrency: 2 })
   try {
     await query.state.loadSettings()
-    assert.equal(query.state.form.openaiAccountAffinity, 'strict')
-    assert.equal(query.state.form.openaiSessionBindingTtlHours, 24)
+    assert.equal(query.state.form.accountAffinity, 'strict')
+    assert.equal(query.state.form.sessionAffinityTtlHours, 24)
     for (const mode of ['relaxed', 'strict', 'preferred']) {
       for (const hours of [1, 48, 720]) {
-        query.state.form.openaiAccountAffinity = mode
-        query.state.form.openaiSessionBindingTtlHours = hours
+        query.state.form.accountAffinity = mode
+        query.state.form.sessionAffinityTtlHours = hours
         await query.state.saveSettings()
         await query.state.loadSettings()
         const saved = query.requests.at(-1)
-        assert.equal(saved.openaiAccountAffinity, mode)
-        assert.equal(saved.openaiSessionBindingTtlHours, hours)
-        assert.equal(query.state.form.openaiAccountAffinity, mode)
-        assert.equal(query.state.form.openaiSessionBindingTtlHours, hours)
+        assert.equal(saved.accountAffinity, mode)
+        assert.equal(saved.sessionAffinityTtlHours, hours)
+        assert.equal(query.state.form.accountAffinity, mode)
+        assert.equal(query.state.form.sessionAffinityTtlHours, hours)
         assert.equal(saved.rotationStrategy, 'smart')
         assert.equal(saved.openaiGuardianReservedConcurrency, 2)
         assert.equal(Object.hasOwn(saved.requestTuning, 'openaiGuardianReservedConcurrency'), false)
@@ -247,11 +247,11 @@ test('invalid affinity or binding TTL never submits a settings update', async ()
   const query = mountSettings(settings(), value => warnings.push(value))
   try {
     await query.state.loadSettings()
-    query.state.form.openaiAccountAffinity = 'unknown'
+    query.state.form.accountAffinity = 'unknown'
     await query.state.saveSettings()
-    query.state.form.openaiAccountAffinity = 'strict'
+    query.state.form.accountAffinity = 'strict'
     for (const invalid of [0, 721, 1.5, Number.NaN, null]) {
-      query.state.form.openaiSessionBindingTtlHours = invalid
+      query.state.form.sessionAffinityTtlHours = invalid
       await query.state.saveSettings()
     }
     assert.equal(query.requests.length, 0)

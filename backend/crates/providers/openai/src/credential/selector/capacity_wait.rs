@@ -348,7 +348,7 @@ impl CodexCredentialSelector {
         if request
             .attempt
             .account_selection_policy()
-            .openai_account_affinity()
+            .account_affinity()
             == gateway_core::account::AccountAffinity::Strict
             && affinity
                 .bound_account()
@@ -456,7 +456,7 @@ impl CodexCredentialSelector {
                     (request
                         .attempt
                         .account_selection_policy()
-                        .openai_account_affinity()
+                        .account_affinity()
                         != gateway_core::account::AccountAffinity::Relaxed)
                         .then(|| affinity.preferred_account().cloned())
                         .flatten()
@@ -593,7 +593,7 @@ impl CodexCredentialSelector {
             }
             state.context.now = SystemTime::now();
             state.context.preferred_account = state.pinned.clone().or_else(|| {
-                (state.context.policy.openai_account_affinity()
+                (state.context.policy.account_affinity()
                     != gateway_core::account::AccountAffinity::Relaxed)
                     .then(|| state.affinity.preferred_account().cloned())
                     .flatten()
@@ -678,7 +678,7 @@ impl CodexCredentialSelector {
                 }
             }
             let limits = self.wait_limits()?;
-            let strict = state.context.policy.openai_account_affinity()
+            let strict = state.context.policy.account_affinity()
                 == gateway_core::account::AccountAffinity::Strict;
             let original = state.pinned.clone().or_else(|| {
                 strict
@@ -690,7 +690,7 @@ impl CodexCredentialSelector {
                     || request
                         .attempt
                         .account_selection_policy()
-                        .openai_account_affinity()
+                        .account_affinity()
                         == gateway_core::account::AccountAffinity::Strict)
                 && !sticky_tried.contains(original)
                 && candidates.iter().any(|candidate| {
@@ -1270,7 +1270,7 @@ impl CodexCredentialSelector {
         let fixed_wait = state.pinned.as_ref() == Some(id)
             || (state.follows_root
                 || (mode == AccountWaitMode::Sticky
-                    && state.context.policy.openai_account_affinity()
+                    && state.context.policy.account_affinity()
                         == gateway_core::account::AccountAffinity::Strict))
                 && state.observed_affinity.as_ref() == Some(id);
         let retain_on_contention = fixed_wait || mode == AccountWaitMode::Fallback;
@@ -1815,7 +1815,7 @@ impl CodexCredentialSelector {
                     request
                         .attempt
                         .account_selection_policy()
-                        .openai_session_binding_ttl(),
+                        .session_affinity_ttl(),
                 )
                 .await?
         {
@@ -1831,7 +1831,7 @@ impl CodexCredentialSelector {
             session_binding_ttl: request
                 .attempt
                 .account_selection_policy()
-                .openai_session_binding_ttl(),
+                .session_affinity_ttl(),
             installation_id: runtime.installation_id,
             account: candidate.account,
             authentication: runtime.authentication,

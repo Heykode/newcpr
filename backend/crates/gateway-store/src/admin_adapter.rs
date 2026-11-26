@@ -15,6 +15,53 @@ pub(crate) struct AdminSettingsStoreAdapter {
 
 #[async_trait::async_trait]
 impl SettingsStore for AdminSettingsStoreAdapter {
+    async fn load_pricing(&self) -> AdminStoreResult<gateway_admin::model::pricing::StoredPricing> {
+        self.control_plane
+            .load_pricing()
+            .await
+            .map_err(|error| admin_store_error("model pricing", error))
+    }
+
+    async fn sync_pricing(
+        &self,
+        changes: gateway_admin::model::pricing::PricingSyncChanges,
+        context: &MutationContext,
+    ) -> AdminStoreResult<gateway_admin::model::Revision> {
+        let audit = mutation_audit(
+            context,
+            "model_pricing.sync",
+            "model_pricing",
+            "models.dev",
+            vec!["synced".to_owned()],
+        );
+        let revision = self
+            .control_plane
+            .sync_pricing(changes, audit)
+            .await
+            .map_err(|error| admin_store_error("model pricing sync", error))?;
+        admin_revision(revision)
+    }
+
+    async fn update_pricing(
+        &self,
+        command: gateway_admin::model::pricing::UpdatePricing,
+        context: &MutationContext,
+    ) -> AdminStoreResult<gateway_admin::model::Revision> {
+        let audit = mutation_audit(
+            context,
+            "model_pricing.update",
+            "model_pricing",
+            &command.provider,
+            command.models.clone(),
+        );
+        let revision = self
+            .control_plane
+            .update_pricing(command, audit)
+            .await
+            .map_err(|error| admin_store_error("model pricing", error))?;
+        admin_revision(revision)
+    }
+
     async fn load_notification_channels(
         &self,
     ) -> AdminStoreResult<gateway_admin::model::notifications::StoredNotificationChannels> {
@@ -97,8 +144,9 @@ impl SettingsStore for AdminSettingsStoreAdapter {
         let replacement = postgres::ControlPlaneReplacement {
             expected_revision: store_revision(command.expected_revision)?,
             settings: postgres::RuntimeSettingsUpdate {
-                openai_account_affinity: command.openai_account_affinity,
-                admin_api_key: current.settings.admin_api_key,
+                request_profile_updates: command.request_profile_updates,
+                codex_privacy_policy: command.codex_privacy_policy,
+                account_affinity: command.account_affinity,
                 excel_default_models: command
                     .excel_default_models
                     .unwrap_or(current.settings.excel_default_models),
@@ -141,7 +189,7 @@ impl SettingsStore for AdminSettingsStoreAdapter {
                     .codex_quota_overdraft_probe_model
                     .unwrap_or(current.settings.codex_quota_overdraft_probe_model),
                 request_interval_ms: command.request_interval_ms,
-                openai_session_binding_ttl_hours: command.openai_session_binding_ttl_hours,
+                session_affinity_ttl_hours: command.session_affinity_ttl_hours,
                 rotation_strategy: command.rotation_strategy.as_str().to_owned(),
                 quota_reset_window_weights: command.quota_reset_window_weights,
                 model_mappings: store_model_mappings(command.model_mappings),
@@ -169,8 +217,8 @@ impl SettingsStore for AdminSettingsStoreAdapter {
                     "refresh_concurrency".to_owned(),
                     "max_concurrent_per_account".to_owned(),
                     "request_interval_ms".to_owned(),
-                    "openai_session_binding_ttl_hours".to_owned(),
-                    "openai_account_affinity".to_owned(),
+                    "session_affinity_ttl_hours".to_owned(),
+                    "account_affinity".to_owned(),
                     "codex_quota_overdraft".to_owned(),
                     "rotation_strategy".to_owned(),
                     "quota_reset_window_weights_json".to_owned(),
@@ -270,9 +318,11 @@ pub(crate) fn admin_runtime_settings(
         })
         .collect::<AdminStoreResult<ModelMappings>>()?;
     Ok(AdminRuntimeSettings {
+        request_profiles: settings.request_profiles,
+        codex_privacy_policy: settings.codex_privacy_policy,
         openai_oauth_guardian_review_model: settings.openai_oauth_guardian_review_model,
         openai_request_country: settings.openai_request_country,
-        config_revision: admin_revision(settings.config_revision)?,
+        config_revision: admin_revision(settings.settings_revision)?,
         excel_default_models: settings.excel_default_models,
         turn_state_injection_enabled: settings.turn_state_injection_enabled,
         turn_state_probe_proxy_id: settings.turn_state_probe_proxy_id,
@@ -302,8 +352,8 @@ pub(crate) fn admin_runtime_settings(
         codex_quota_overdraft_enabled: settings.codex_quota_overdraft_enabled,
         codex_quota_overdraft_probe_model: settings.codex_quota_overdraft_probe_model,
         request_interval_ms: settings.request_interval_ms,
-        openai_session_binding_ttl_hours: settings.openai_session_binding_ttl_hours,
-        openai_account_affinity: settings.openai_account_affinity,
+        session_affinity_ttl_hours: settings.session_affinity_ttl_hours,
+        account_affinity: settings.account_affinity,
         rotation_strategy,
         quota_reset_window_weights: settings.quota_reset_window_weights,
         min_codex_desktop_version: settings.min_codex_desktop_version,

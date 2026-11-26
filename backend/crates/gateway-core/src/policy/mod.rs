@@ -3,6 +3,8 @@
 //! Client API Key 冻结账号分组权限；模型名称不参与权限判断。
 
 mod client_version;
+mod peer_sharing;
+pub use peer_sharing::{ClientPeerSharing, ClientPeerSharingError};
 
 pub use client_version::{
     ClientVersionRejection, CodexClientKind, CodexClientMinVersions, CodexClientVersion,
@@ -93,6 +95,7 @@ impl RateLimits {
 /// 从 `client_api_keys` 冻结的公开准入事实。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClientPolicy {
+    peer_sharing: ClientPeerSharing,
     key_id: ClientApiKeyId,
     plaintext_key: PlaintextClientApiKey,
     account_scope: Arc<FrozenAccountScope>,
@@ -102,6 +105,17 @@ pub struct ClientPolicy {
 
 impl ClientPolicy {
     #[must_use]
+    pub const fn with_peer_sharing(mut self, sharing: ClientPeerSharing) -> Self {
+        self.peer_sharing = sharing;
+        self
+    }
+
+    #[must_use]
+    pub const fn peer_sharing(&self) -> ClientPeerSharing {
+        self.peer_sharing
+    }
+
+    #[must_use]
     pub const fn new(
         key_id: ClientApiKeyId,
         plaintext_key: PlaintextClientApiKey,
@@ -110,6 +124,12 @@ impl ClientPolicy {
         limits: RateLimits,
     ) -> Self {
         Self {
+            peer_sharing: ClientPeerSharing {
+                enabled: false,
+                share_pool: false,
+                share_quota: false,
+                share_plans: false,
+            },
             key_id,
             plaintext_key,
             account_scope,

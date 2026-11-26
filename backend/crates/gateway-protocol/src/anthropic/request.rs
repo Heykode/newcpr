@@ -9,7 +9,7 @@ use super::{
     tools::{ToolSet, messages_tools},
 };
 
-/// 原生 Messages 上游不能消费本网关封装的 OpenAI 思考，仅删除已知外来源载荷
+/// 原生 Messages 上游不能消费本网关封装的外来源思考，仅删除已知载荷
 pub fn strip_foreign_thinking_for_messages(request: &mut Map<String, Value>) {
     let Some(messages) = request.get_mut("messages").and_then(Value::as_array_mut) else {
         return;
@@ -19,7 +19,16 @@ pub fn strip_foreign_thinking_for_messages(request: &mut Map<String, Value>) {
             return true;
         };
         let previous_len = blocks.len();
-        blocks.retain(|block| !content::is_openai_carrier(block));
+        blocks.retain(|block| {
+            !content::is_openai_carrier(block)
+                && !(block["type"] == "thinking"
+                    && block
+                        .get("signature")
+                        .and_then(Value::as_str)
+                        .is_some_and(|signature| {
+                            signature.starts_with(super::content::GENAI_CARRIER)
+                        }))
+        });
         blocks.len() == previous_len || !blocks.is_empty()
     });
 }
@@ -250,7 +259,6 @@ pub fn responses_to_messages_request(
     request: &Map<String, Value>,
     capabilities: &MessagesModelCapabilities,
 ) -> Result<Map<String, Value>, TranslationError> {
-    let tools = ToolSet::from_responses(request);
     let mut result = Map::new();
     copy_fields(
         request,
@@ -282,6 +290,47 @@ pub fn responses_to_messages_request(
         }
         _ => {}
     }
+    result.extend(responses_to_messages_content(
+        request,
+        capabilities.hosted_web_search != Some(false),
+    )?);
+    thinking::apply_to_messages(request, &mut result, capabilities, maximum);
+    if request
+        .get("tool_choice")
+        .is_some_and(|c| c["type"] == "allowed_tools" && c["mode"] == "required")
+        && result["tool_choice"]["type"] != "any"
+    {
+        return Err(TranslationError::InvalidRequest(
+            "The Messages upstream cannot require an allowed tool with this thinking mode.",
+        ));
+    }
+    if matches!(
+        result
+            .get("thinking")
+            .and_then(|value| value.get("type"))
+            .and_then(Value::as_str),
+        Some("enabled" | "adaptive")
+    ) {
+        // CPA 在生成推理配置后移除不相容的采样参数；原生 Messages 不经过此转换
+        result.shift_remove("temperature");
+        result.shift_remove("top_p");
+    }
+    if let Some(format) = request.get("text").and_then(|v| v.get("format"))
+        && format.get("type").and_then(Value::as_str) == Some("json_schema")
+    {
+        let config = result.entry("output_config").or_insert_with(|| json!({}));
+        config["format"] = json!({"type":"json_schema","schema":format.get("schema").cloned().unwrap_or_else(||json!({}))});
+    }
+    Ok(result)
+}
+
+/// 共享对话、签名与工具映射，生成参数由最终目标协议独立处理
+pub(crate) fn responses_to_messages_content(
+    request: &Map<String, Value>,
+    hosted_search: bool,
+) -> Result<Map<String, Value>, TranslationError> {
+    let tools = ToolSet::from_responses(request);
+    let mut result = Map::new();
     let mut system = Vec::new();
     if let Some(instructions) = request.get("instructions").and_then(Value::as_str)
         && !instructions.is_empty()
@@ -377,34 +426,7 @@ pub fn responses_to_messages_request(
         "messages".into(),
         Value::Array(normalize_tool_pairing(messages)),
     );
-    tools.write_messages_tools(request, &mut result)?;
-    thinking::apply_to_messages(request, &mut result, capabilities, maximum);
-    if request
-        .get("tool_choice")
-        .is_some_and(|c| c["type"] == "allowed_tools" && c["mode"] == "required")
-        && result["tool_choice"]["type"] != "any"
-    {
-        return Err(TranslationError::InvalidRequest(
-            "The Messages upstream cannot require an allowed tool with this thinking mode.",
-        ));
-    }
-    if matches!(
-        result
-            .get("thinking")
-            .and_then(|value| value.get("type"))
-            .and_then(Value::as_str),
-        Some("enabled" | "adaptive")
-    ) {
-        // CPA 在生成推理配置后移除不相容的采样参数；原生 Messages 不经过此转换
-        result.shift_remove("temperature");
-        result.shift_remove("top_p");
-    }
-    if let Some(format) = request.get("text").and_then(|v| v.get("format"))
-        && format.get("type").and_then(Value::as_str) == Some("json_schema")
-    {
-        let config = result.entry("output_config").or_insert_with(|| json!({}));
-        config["format"] = json!({"type":"json_schema","schema":format.get("schema").cloned().unwrap_or_else(||json!({}))});
-    }
+    tools.write_messages_tools(request, &mut result, hosted_search)?;
     Ok(result)
 }
 

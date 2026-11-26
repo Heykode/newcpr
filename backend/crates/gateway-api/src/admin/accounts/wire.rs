@@ -344,6 +344,7 @@ pub struct AccountSummaryView {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountView {
+    pub capabilities: AccountCapabilitiesView,
     pub credential_proxy_id: Option<String>,
     pub quota_settings: gateway_core::account::AccountQuotaSettings,
     pub quota_settings_supported: bool,
@@ -601,6 +602,7 @@ pub struct AccountQuotaWindowView {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountUsageView {
+    pub window_kind: &'static str,
     pub window_label_display: String,
     pub quota_window: Option<AccountUsageQuotaWindowView>,
     pub request_count: Option<u64>,
@@ -1414,5 +1416,43 @@ mod account_export_data_tests {
         assert_eq!(value["documents"][0]["provider"], "openai");
         assert_eq!(value["relogin"][0]["accountId"], "acct_export");
         assert_eq!(value["relogin"][0]["mfaSecret"], secret);
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountCapabilitiesView {
+    pub credential_refresh: bool,
+    pub reauthorize: bool,
+    pub credential_export: bool,
+    pub model_catalog_download: bool,
+    pub quota_settings_supported: bool,
+    pub quota_credits: bool,
+    pub quota: bool,
+    pub quota_refresh: bool,
+    pub profile: bool,
+    pub subscription: bool,
+    pub avatar: bool,
+    pub reset_credits: bool,
+    pub consume_reset_credit: bool,
+}
+
+impl From<gateway_admin::model::accounts::ProviderAccountCapabilities> for AccountCapabilitiesView {
+    fn from(value: gateway_admin::model::accounts::ProviderAccountCapabilities) -> Self {
+        Self {
+            credential_refresh: value.credential_refresh,
+            reauthorize: value.reauthorize,
+            credential_export: value.credential_export,
+            model_catalog_download: value.model_catalog_download,
+            quota: value.quota,
+            quota_refresh: value.quota_refresh,
+            profile: value.profile,
+            subscription: value.subscription,
+            avatar: value.avatar,
+            reset_credits: value.reset_credits,
+            quota_settings_supported: value.quota_settings_supported,
+            quota_credits: value.quota_credits,
+            consume_reset_credit: value.consume_reset_credit,
+        }
     }
 }
