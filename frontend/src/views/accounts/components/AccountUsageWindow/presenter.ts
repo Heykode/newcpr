@@ -244,7 +244,7 @@ function localTokenDisplay(localUsage: AccountLocalUsage | null) {
 
 export function quotaWindowLocalUsageDisplay(window: AccountQuotaWindow) {
   const localUsage = accountLocalUsage(window.localUsage)
-  return localTokenDisplay(localUsage) || null
+  return localUsage?.totalTokens === 0 ? '0' : localTokenDisplay(localUsage) || null
 }
 
 export function quotaWindowCode(windowSeconds: number | null, role: AccountQuotaWindow['role']) {

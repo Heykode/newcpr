@@ -626,11 +626,12 @@ impl Provider for CodexProvider {
             let original = generate.protocol_payload().body();
             messages_translator = Some(messages::ResponsesResponseTranslator::new(original));
             let mut body = gateway_protocol::anthropic::messages_to_responses_request(original)
-                .map_err(|_| {
+                .map_err(|error| {
                     provider_error(
                         ProviderErrorKind::InvalidRequest,
                         UpstreamSendState::NotSent,
                     )
+                    .with_source(error)
                 })?;
             // 仅转换生成的 OAuth 默认档位省略；原生 Responses 保留调用方声明。
             if matches!(

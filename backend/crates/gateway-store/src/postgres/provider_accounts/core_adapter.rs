@@ -458,6 +458,73 @@ impl ProviderAccountStore for PgProviderAccountRepository {
         })
     }
 
+    async fn get_quota_versions(
+        &self,
+        accounts: &[CoreProviderAccountId],
+    ) -> Result<Vec<gateway_core::account::QuotaObservationVersion>, CoreStoreError> {
+        let ids = accounts
+            .iter()
+            .map(CoreProviderAccountId::as_str)
+            .collect::<Vec<_>>();
+        let rows = sqlx::query("select id, credential_revision, quota_observed_at from provider_accounts where id = any($1) and quota_observed_at is not null")
+            .bind(ids).fetch_all(&self.pool).await
+            .map_err(|error| CoreStoreError::caused_by(CoreStoreErrorKind::Unavailable, error))?;
+        rows.into_iter()
+            .map(|row| {
+                let id = row.try_get::<String, _>("id").map_err(|error| {
+                    CoreStoreError::caused_by(CoreStoreErrorKind::InvalidData, error)
+                })?;
+                let revision = row
+                    .try_get::<i64, _>("credential_revision")
+                    .ok()
+                    .and_then(|value| u64::try_from(value).ok())
+                    .and_then(|value| CoreCredentialRevision::new(value).ok())
+                    .ok_or_else(|| CoreStoreError::new(CoreStoreErrorKind::InvalidData))?;
+                let observed_at = row
+                    .try_get::<DateTime<Utc>, _>("quota_observed_at")
+                    .map_err(|error| {
+                        CoreStoreError::caused_by(CoreStoreErrorKind::InvalidData, error)
+                    })?;
+                Ok(gateway_core::account::QuotaObservationVersion {
+                    account_id: CoreProviderAccountId::new(id).map_err(|error| {
+                        CoreStoreError::caused_by(CoreStoreErrorKind::InvalidData, error)
+                    })?,
+                    credential_revision: revision,
+                    observed_at: observed_at.into(),
+                })
+            })
+            .collect()
+    }
+
+    async fn accounts_used_since_quota(
+        &self,
+        snapshots: &[gateway_core::account::QuotaObservationVersion],
+    ) -> Result<Vec<CoreProviderAccountId>, CoreStoreError> {
+        let (ids, times): (Vec<_>, Vec<_>) = snapshots
+            .iter()
+            .map(|s| (s.account_id.as_str(), DateTime::<Utc>::from(s.observed_at)))
+            .unzip();
+        // 按账号与完成时间探测共享索引，跨实例及重启复用已记录的请求事实
+        let active: Vec<String> = sqlx::query_scalar(
+            "select s.id from unnest($1::text[], $2::timestamptz[]) as s(id, observed_at)
+             where exists (select 1 from request_analytics_facts r
+                 where r.provider_account_ref = s.id and r.completed_at > s.observed_at
+                 and r.outcome = 'succeeded' and r.operation = 'generate')",
+        )
+        .bind(ids)
+        .bind(times)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|error| CoreStoreError::caused_by(CoreStoreErrorKind::Unavailable, error))?;
+        active
+            .into_iter()
+            .map(|id| {
+                CoreProviderAccountId::new(id)
+                    .map_err(|e| CoreStoreError::caused_by(CoreStoreErrorKind::InvalidData, e))
+            })
+            .collect()
+    }
+
     async fn apply_quota_access(
         &self,
         change: QuotaAccessChange,

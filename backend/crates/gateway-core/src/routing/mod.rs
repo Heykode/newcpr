@@ -16,9 +16,9 @@ pub use crate::account::scope::{
 };
 pub use crate::identity::ProviderKind;
 pub use catalog::{
-    ProviderCatalogGeneration, ProviderCatalogPort, ProviderCatalogUnavailable,
-    ProviderModelCapabilities, ProviderModelDescriptor, PublicModelDescriptor,
-    ReasoningModelVariant,
+    AccountModelMetadata, ProviderCatalogGeneration, ProviderCatalogPort,
+    ProviderCatalogUnavailable, ProviderModelCapabilities, ProviderModelDescriptor,
+    PublicModelDescriptor, ReasoningModelVariant,
 };
 pub use snapshot::RuntimeSnapshot;
 
@@ -403,6 +403,8 @@ pub struct ModelCapabilities {
     generation_protocol: Option<&'static str>,
     translated_generation_protocols: BTreeSet<&'static str>,
     reasoning_variants: BTreeMap<String, ReasoningModelVariant>,
+    account_metadata: BTreeMap<crate::account::ProviderAccountId, AccountModelMetadata>,
+    dedicated_web_search: Option<Arc<BTreeMap<crate::account::ProviderAccountId, UpstreamModelId>>>,
 }
 
 /// Provider 为客户端模型目录提供的展示与交互能力。
@@ -678,6 +680,8 @@ impl ModelCapabilities {
             generation_protocol: None,
             translated_generation_protocols: BTreeSet::new(),
             reasoning_variants: BTreeMap::new(),
+            account_metadata: BTreeMap::new(),
+            dedicated_web_search: None,
         }
     }
 
@@ -700,6 +704,25 @@ impl ModelCapabilities {
     #[must_use]
     pub fn reasoning_variants(&self) -> &BTreeMap<String, ReasoningModelVariant> {
         &self.reasoning_variants
+    }
+
+    #[must_use]
+    pub fn with_account_metadata(
+        mut self,
+        metadata: BTreeMap<crate::account::ProviderAccountId, AccountModelMetadata>,
+    ) -> Self {
+        self.account_metadata = metadata;
+        self
+    }
+
+    /// 声明托管搜索必须独立选型，空目录表示目前没有搜索目标
+    #[must_use]
+    pub fn with_dedicated_web_search(
+        mut self,
+        targets: BTreeMap<crate::account::ProviderAccountId, UpstreamModelId>,
+    ) -> Self {
+        self.dedicated_web_search = Some(Arc::new(targets));
+        self
     }
 
     /// 将请求形态 feature 的最终合法性判断交给上游 wire API

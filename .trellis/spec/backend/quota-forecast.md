@@ -6,7 +6,9 @@
 
 - Admin `current_window_estimate` 是列表/详情动态金额估值 owner：当前窗口已知 USD 消费
   `* 100 / used_percent`，剩余 `max(total-cost, 0)`。有限正数即可，无 $5/3pp/5pp 门槛。
-  `window.local_usage` 与原 `usage_window()` 共用归属，不能混合模型桶或历史累计。
+  仅AccountWide窗口可进入估值与原`usage_window()`；Models窗口只展示其型号集对应的本地Token，不能进入整号预测、自动恢复或分组监控，也不能混合历史累计。
+- AccountUsageWindowQuery的models=None代表整号，Some集合严格过滤型号（空集为已知0）；Unavailable不构造查询。窗口边界仍由reset_at与window_seconds决定，缺少边界不伪造用量。
+- Store预测入口拒绝带models过滤的查询，模型组可见本地用量不改变账号级容量与恢复策略。
 - API `usage.quotaWindow` 投影源窗口及 `estimatedUsd/remainingUsd`，前端不重复计算。
   列表每 30 秒请求时现算。分组每 10 秒通过 `AccountsService::monitor_quotas`
   读取缓存百分比，并用 `AccountStore::load_quota_learning_usage` 对齐观察时刻的费用；

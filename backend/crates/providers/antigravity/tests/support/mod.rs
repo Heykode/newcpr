@@ -71,6 +71,7 @@ pub(crate) struct MemoryAccount {
     pub(crate) catalog: Mutex<Option<(AccountCatalogObservation, bytes::Bytes)>>,
     active_leases: Arc<AtomicUsize>,
     pub(crate) quota: Mutex<Option<gateway_core::account::QuotaObservation>>,
+    pub(crate) last_generation: Mutex<Option<SystemTime>>,
 }
 
 impl MemoryPorts {
@@ -181,6 +182,7 @@ impl Fixture {
                         ))),
                         active_leases: Arc::new(AtomicUsize::new(0)),
                         quota: Mutex::new(None),
+                        last_generation: Mutex::new(None),
                     },
                 )
             })

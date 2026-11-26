@@ -20,8 +20,8 @@ use axum::{
     routing::{get, post},
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD};
+pub(in crate::openai) use error::error_frame;
 pub(crate) use error::project_error_response;
-pub(in crate::openai) use error::{error_frame, stream_error};
 use gateway_core::{
     error::{GatewayError, GatewayErrorKind},
     operation::{GenerateRequest, Operation, ProtocolPayload, RawJsonPayload, TokenCountRequest},

@@ -3,6 +3,7 @@
 use std::collections::BTreeMap;
 
 use super::TranslationError;
+use crate::openai::web_search;
 
 use serde_json::{Map, Value, json};
 
@@ -40,7 +41,7 @@ impl<D> ToolSet<D> {
                 {
                     result.insert(child, Some(namespace), definition(child));
                 }
-            } else if !is_web_search(tool) {
+            } else if !web_search::is_search(tool) {
                 result.insert(tool, None, definition(tool));
             }
         }
@@ -145,6 +146,7 @@ impl<'a> ToolSet<&'a Value> {
         &self,
         request: &Map<String, Value>,
         target: &mut Map<String, Value>,
+        hosted_search: bool,
     ) -> Result<(), TranslationError> {
         let choice = request.get("tool_choice").unwrap_or(&Value::Null);
         let restricted = choice["type"] == "allowed_tools";
@@ -162,21 +164,9 @@ impl<'a> ToolSet<&'a Value> {
             None
         };
         let mut definitions = self.definitions(allowed);
-        for tool in request
-            .get("tools")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter(|t| is_web_search(t))
+        for tool in web_search::allowed_declarations(request)
+            .filter(|tool| hosted_search && web_search::allows_live_access(tool))
         {
-            // Messages 的搜索是实时联网；缓存或索引模式不能升级为实时访问
-            if tool
-                .get("external_web_access")
-                .is_some_and(|v| !v.is_null() && v != true && v != "live")
-                || allowed.is_some_and(|choices| !choices.iter().any(|c| c["type"] == tool["type"]))
-            {
-                continue;
-            }
             let mut search = json!({"type":"web_search_20250305","name":"web_search"});
             if let Some(filters) = tool.get("filters").filter(|v| !v.is_null()) {
                 let filters = filters.as_object().ok_or(TranslationError::InvalidRequest(
@@ -196,7 +186,19 @@ impl<'a> ToolSet<&'a Value> {
             definitions.push(search);
         }
         if definitions.is_empty() {
-            if restricted {
+            // 转往仅支持函数的上游时，可选托管搜索可以省略，强制工具仍须可执行
+            let optional_search = !hosted_search
+                && choice["mode"] == "auto"
+                && allowed.is_some_and(|tools| tools.iter().all(web_search::is_search));
+            if !hosted_search
+                && (choice == "required"
+                    || matches!(choice["type"].as_str(), Some("function" | "custom")))
+            {
+                return Err(TranslationError::InvalidRequest(
+                    "No declared function can satisfy the required tool choice.",
+                ));
+            }
+            if restricted && !optional_search {
                 return Err(TranslationError::InvalidRequest(
                     "No allowed tool can be used with the Messages upstream.",
                 ));
@@ -237,13 +239,6 @@ impl<'a> ToolSet<&'a Value> {
         target.insert("tool_choice".into(), mapped);
         Ok(())
     }
-}
-
-fn is_web_search(tool: &Value) -> bool {
-    matches!(
-        tool["type"].as_str(),
-        Some("web_search" | "web_search_preview")
-    )
 }
 
 pub(super) fn messages_tools(tools: &[Value]) -> Vec<Value> {

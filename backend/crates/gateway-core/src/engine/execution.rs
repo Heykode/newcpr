@@ -1439,7 +1439,7 @@ impl ExecutionService for DefaultExecutionService {
                     )
                     .await?
                 else {
-                    for profile in client.snapshot.public_model_profiles_for_provider(kind) {
+                    for profile in client.snapshot.profiles_for_provider_scope(kind, scope) {
                         if !client.snapshot.catalog_model_allowed_for_scope(
                             kind,
                             profile.model(),
@@ -2006,6 +2006,10 @@ fn new_request_id() -> Result<ModelRequestId, GatewayError> {
 
 fn map_routing_error(error: crate::validation::RoutingError) -> GatewayError {
     match error {
+        crate::validation::RoutingError::WebSearchUnavailable => GatewayError::new(
+            GatewayErrorKind::InvalidRequest,
+            crate::validation::WEB_SEARCH_UNAVAILABLE_MESSAGE,
+        ),
         crate::validation::RoutingError::InvalidReasoningVariant => GatewayError::new(
             GatewayErrorKind::InvalidRequest,
             "A supported reasoning effort is required for this model group.",

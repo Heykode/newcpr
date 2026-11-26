@@ -172,7 +172,7 @@ fn test_tree_should_match_frozen_rust_mirror() {
         "tests/openai/live/websocket.rs",
         "tests/openai/mod.rs",
         "tests/openai/models.rs",
-        "tests/openai/peer_link.rs",
+        "tests/openai/peer_link/mod.rs",
         "tests/openai/messages.rs",
         "tests/openai/endpoint.rs",
         "tests/openai/responses/http.rs",

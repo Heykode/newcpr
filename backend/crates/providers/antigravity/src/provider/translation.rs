@@ -8,12 +8,12 @@ use gateway_core::{
     operation::Operation,
 };
 use gateway_protocol::{
-    anthropic::{
-        ANTHROPIC_PROTOCOL, MessagesModelCapabilities, MessagesToResponsesStream,
-        responses_to_messages_request,
+    anthropic::{ANTHROPIC_PROTOCOL, MessagesToResponsesStream},
+    genai::{
+        GENAI_PROTOCOL, GenAiToMessagesStream, messages_to_genai_request,
+        responses_to_genai_request,
     },
-    genai::{GENAI_PROTOCOL, GenAiToMessagesStream, messages_to_genai_request},
-    openai::OPENAI_PROTOCOL,
+    openai::{OPENAI_PROTOCOL, web_search},
 };
 use serde_json::{Value, json};
 use std::borrow::Cow;
@@ -42,49 +42,50 @@ pub(super) fn prepare(
     {
         return Err(unsent(ProviderErrorKind::InvalidRequest));
     }
-    let responses = if source == OPENAI_PROTOCOL {
-        Some(MessagesToResponsesStream::new(original))
+    let search = if source == OPENAI_PROTOCOL {
+        web_search::required_tool(original)
+            .map_err(|error| ProviderError::invalid_request(error.message()).with_source(error))?
     } else {
         None
     };
-    let mut messages = if source == OPENAI_PROTOCOL {
-        Cow::Owned(
-            responses_to_messages_request(original, &MessagesModelCapabilities::default())
-                .map_err(|e| unsent(ProviderErrorKind::InvalidRequest).with_source(e))?,
-        )
+    let body = if let Some(tool) = search {
+        super::web_search::request(original, tool)?
     } else {
-        Cow::Borrowed(original)
+        if source == OPENAI_PROTOCOL {
+            responses_to_genai_request(original)
+        } else {
+            messages_to_genai_request(original)
+        }
+        .map_err(|e| unsent(ProviderErrorKind::InvalidRequest).with_source(e))?
     };
-    // Messages 的必填输出上限不能成为 GenAI 的隐式默认值
-    if source == OPENAI_PROTOCOL && !original.contains_key("max_output_tokens") {
-        messages.to_mut().remove("max_tokens");
-    }
     let model = original
         .get("model")
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_owned();
-    let body = messages_to_genai_request(&messages)
-        .map_err(|e| unsent(ProviderErrorKind::InvalidRequest).with_source(e))?;
+    let translator = if search.is_some() {
+        Translator::Search(Box::new(super::web_search::SearchResponse::new(original)))
+    } else {
+        Translator::Generate(Box::new(GenerationTranslator {
+            genai: GenAiToMessagesStream::new(model),
+            responses: (source == OPENAI_PROTOCOL)
+                .then(|| MessagesToResponsesStream::new(original)),
+        }))
+    };
     let mut context = payload.context().clone();
-    // 转换路径统一请求 SSE，JSON 客户端沿已有交付层聚合
-    context.insert("stream".into(), json!(true));
+    // Desktop 搜索使用完整 JSON，编码路径保留增量交付
+    context.insert("stream".into(), json!(search.is_none()));
     let bytes = serde_json::to_vec(&body).map_err(|_| unsent(ProviderErrorKind::InvalidRequest))?;
     let operation = operation
         .replace_protocol_wire(None, context)
         .and_then(|operation| operation.translate_protocol_wire(GENAI_PROTOCOL, bytes.into()))
         .map_err(|_| unsent(ProviderErrorKind::InvalidRequest))?;
-    Ok((
-        operation,
-        Some(Translator::Generate(Box::new(GenerationTranslator {
-            genai: GenAiToMessagesStream::new(model),
-            responses,
-        }))),
-    ))
+    Ok((operation, Some(translator)))
 }
 
 pub(super) enum Translator {
     Generate(Box<GenerationTranslator>),
+    Search(Box<super::web_search::SearchResponse>),
     Count(&'static str),
 }
 
@@ -134,6 +135,7 @@ impl NativeResponseTranslator for Translator {
     fn target_protocol(&self) -> &str {
         match self {
             Self::Generate(translator) => translator.target_protocol(),
+            Self::Search(_) => OPENAI_PROTOCOL,
             Self::Count(protocol) => protocol,
         }
     }
@@ -141,6 +143,9 @@ impl NativeResponseTranslator for Translator {
         &mut self,
         event: &ProtocolWireEvent,
     ) -> Result<Vec<ProtocolWireEvent>, ProviderError> {
+        if let Self::Search(search) = self {
+            return search.translate(event);
+        }
         let Self::Generate(translator) = self else {
             let value = match event.raw_json_body() {
                 Some(raw) => Cow::Owned(
@@ -166,9 +171,13 @@ impl NativeResponseTranslator for Translator {
         translator.events(events)
     }
     fn finish(&mut self) -> Result<Vec<ProtocolWireEvent>, ProviderError> {
+        if let Self::Search(search) = self {
+            return search.finish();
+        }
         let Self::Generate(translator) = self else {
             return Ok(Vec::new());
         };
+
         let events = translator
             .genai
             .finish()

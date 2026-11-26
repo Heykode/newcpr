@@ -16,6 +16,154 @@ async fn upstream(server: &MockServer, remaining: serde_json::Value, delay: Dura
 }
 
 #[tokio::test]
+async fn window_usage_requires_every_named_member_to_resolve_in_the_observed_catalog() {
+    use gateway_admin::model::provider_credentials::QuotaLocalUsageAttribution::{
+        Models, Unavailable,
+    };
+    let server = MockServer::start().await;
+    Mock::given(path("/v1internal:loadCodeAssist"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(json!({"cloudaicompanionProject":"p"})),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(path("/v1internal:fetchAvailableModels"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"models":{
+            "gemini-4-neon-high":{"displayName":"Gemini 4 Neon (High)"},
+            "gemini-4-neon-low":{"displayName":"Gemini 4 Neon (Low)"},
+            "orchestrator-alias":{"displayName":"Orchestrator (Neon)"},
+            "gemini-lite":{"displayName":"Gemini Lite"},
+            "gpt-oss-medium":{"displayName":"GPT-OSS (Medium)"}
+        }})))
+        .mount(&server)
+        .await;
+    let group = |description: Option<&str>, name: &str| {
+        json!({
+            "displayName":name, "description":description,
+            "buckets":(["5h", "weekly"].map(|window| json!({
+                "bucketId":format!("{name}-{window}"), "displayName":window, "window":window
+            })))
+        })
+    };
+    Mock::given(path("/v1internal:retrieveUserQuotaSummary"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"groups":[
+            group(Some("Models within this group: Gemini 4 Neon, Orchestrator (Neon)"), "gemini"),
+            group(Some("Models within this group: GPT-OSS"), "3p"),
+            group(Some("Models within this group: Gemini Lite, Missing Model"), "partial"),
+            group(None, "unknown")
+        ]})))
+        .mount(&server)
+        .await;
+    let f = Fixture::new(&server.uri());
+    let account = f.store.primary().loaded.lock().unwrap().account.clone();
+    f.quota.refresh(account.id()).await.unwrap();
+    let view = f.quota.read(account.id()).await.unwrap();
+    for (group, attribution) in [
+        (
+            "gemini",
+            Models(
+                [
+                    "gemini-4-neon-high",
+                    "gemini-4-neon-low",
+                    "orchestrator-alias",
+                ]
+                .map(str::to_owned)
+                .into(),
+            ),
+        ),
+        ("3p", Models(["gpt-oss-medium".to_owned()].into())),
+        ("partial", Unavailable),
+        ("unknown", Unavailable),
+    ] {
+        for window in ["5h", "weekly"] {
+            let key = format!("{group}-{window}");
+            let observed = view.windows.iter().find(|w| w.key == key).unwrap();
+            assert_eq!(observed.local_usage_attribution, attribution);
+        }
+    }
+}
+
+#[tokio::test]
+async fn background_refresh_requires_new_generation_and_an_aged_snapshot() {
+    let server = MockServer::start().await;
+    upstream(&server, json!(0.5), Duration::ZERO).await;
+    let f = Fixture::new(&server.uri());
+    let account = f.store.primary();
+    let cancel = CancellationToken::new();
+    f.quota.reconcile(&cancel).await.unwrap();
+    let initial = account.quota.lock().unwrap().clone().unwrap();
+    let queries = || async {
+        server
+            .received_requests()
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|r| r.url.path() == "/v1internal:retrieveUserQuotaSummary")
+            .count()
+    };
+    assert_eq!(queries().await, 1);
+
+    *account.last_generation.lock().unwrap() = Some(SystemTime::now());
+    f.quota.reconcile(&cancel).await.unwrap();
+    assert_eq!(queries().await, 1);
+
+    let old = initial.observed_at - Duration::from_secs(900);
+    account.quota.lock().unwrap().as_mut().unwrap().observed_at = old;
+    *account.last_generation.lock().unwrap() = Some(old - Duration::from_secs(1));
+    f.quota.read(&initial.account_id).await.unwrap();
+    f.quota.reconcile(&cancel).await.unwrap();
+    assert_eq!(queries().await, 1);
+
+    *account.last_generation.lock().unwrap() = Some(SystemTime::now());
+    f.quota.reconcile(&cancel).await.unwrap();
+    f.quota.reconcile(&cancel).await.unwrap();
+    assert_eq!(queries().await, 2);
+    f.quota.refresh(&initial.account_id).await.unwrap();
+    assert_eq!(queries().await, 3);
+}
+
+#[tokio::test]
+async fn exhausted_quota_is_rechecked_when_due_even_without_generation() {
+    use gateway_core::account::QuotaEvidence;
+    let server = MockServer::start().await;
+    upstream(&server, json!(0.5), Duration::ZERO).await;
+    let f = Fixture::new(&server.uri());
+    let account = f.store.primary();
+    let cancel = CancellationToken::new();
+    f.quota.reconcile(&cancel).await.unwrap();
+    let now = SystemTime::now();
+    let old = now - Duration::from_secs(600);
+    for (observed, reset, due) in [
+        (old, Some(now + Duration::from_secs(300)), false),
+        (old, Some(now), true),
+        (now, None, false),
+        (old, None, true),
+    ] {
+        {
+            let mut loaded = account.loaded.lock().unwrap();
+            loaded.account = loaded.account.clone().with_account_facts(
+                true,
+                CredentialState::Ready,
+                QuotaState::exhausted(QuotaEvidence::UsageLimitReached, observed, reset),
+                None,
+                None,
+            );
+        }
+        f.quota.reconcile(&cancel).await.unwrap();
+        assert_eq!(
+            account
+                .loaded
+                .lock()
+                .unwrap()
+                .account
+                .quota()
+                .is_exhausted(),
+            !due
+        );
+    }
+}
+
+#[tokio::test]
 async fn quota_and_catalog_refresh_use_current_global_identity() {
     let server = MockServer::start().await;
     upstream(&server, json!(0.5), Duration::ZERO).await;
@@ -191,6 +339,16 @@ async fn failed_or_stale_refresh_preserves_persisted_quota() {
     let cancelled = CancellationToken::new();
     cancelled.cancel();
     f.quota.reconcile(&cancelled).await.unwrap();
+    f.quota.reconcile(&CancellationToken::new()).await.unwrap();
+    assert_eq!(
+        f.quota
+            .read(account.id())
+            .await
+            .unwrap()
+            .plan_type
+            .as_deref(),
+        Some("g1-pro-tier")
+    );
 }
 
 #[tokio::test]

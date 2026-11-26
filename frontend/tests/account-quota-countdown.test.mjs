@@ -921,3 +921,9 @@ test('real SummaryCell emits only explicit forecast clicks with the current acco
   assert.equal(events.at(-1), props.value.account)
   assert.equal(stopped, events.length)
 })
+
+test('quota window distinguishes observed zero tokens from unavailable attribution', () => {
+  assert.equal(presenter.quotaWindowLocalUsageDisplay(quotaWindow(130, { localUsage: null })), null)
+  assert.equal(presenter.quotaWindowLocalUsageDisplay(quotaWindow(130, { localUsage: { totalTokens: 0, totalTokensDisplay: '0' } })), '0')
+  assert.equal(presenter.quotaWindowLocalUsageDisplay(quotaWindow(130, { localUsage: { totalTokens: 1200, totalTokensDisplay: '1.2K' } })), '1.2K')
+})

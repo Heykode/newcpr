@@ -346,16 +346,8 @@ pub(in crate::openai) async fn stream_execution_response_as(
         format,
         HttpResponseFormat::GenAi | HttpResponseFormat::GenAiTokenCount
     ) {
-        super::keepalive::response_with_protocol(
-            async move {
-                crate::openai::genai::project_error_response(
-                    stream_execution_response_inner(session, connection_guard, format).await,
-                )
-                .await
-            },
-            commit,
-            Some(crate::openai::genai::stream_error),
-            Bytes::new(),
+        crate::openai::genai::project_error_response(
+            stream_execution_response_inner(session, connection_guard, format).await,
         )
         .await
     } else if format.is_messages() {
@@ -496,6 +488,10 @@ async fn stream_execution_response_inner(
     let Some(session) = execution.into_session() else {
         return internal_gateway_response("gateway response session is unavailable");
     };
+    let keep_alive = !matches!(
+        format,
+        HttpResponseFormat::GenAi | HttpResponseFormat::GenAiTokenCount
+    );
     let mut state = ResponsesStreamState::new(session, encoder, frames, connection_guard);
     if state.encoder.is_completed()
         || (state.encoder.requires_terminal_confirmation() && state.encoder.has_wire_failure())
@@ -517,11 +513,11 @@ async fn stream_execution_response_inner(
     }));
     // 保活只轮询已固定的输出 stream；不能取消并重建 advance/next_event future，
     // 否则一次心跳就可能丢失正在等待的上游事件或执行终态清理。
-    let body = Body::from_stream(stream::unfold(output, |mut output| async move {
+    let body = Body::from_stream(stream::unfold(output, move |mut output| async move {
         let chunk = tokio::select! {
             biased;
             chunk = output.next() => chunk?,
-            () = tokio::time::sleep(SSE_KEEPALIVE_INTERVAL) => {
+            () = tokio::time::sleep(SSE_KEEPALIVE_INTERVAL), if keep_alive => {
                 Ok(Bytes::from_static(b": keep-alive\n\n"))
             }
         };

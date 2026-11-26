@@ -27,34 +27,38 @@ impl NativeResponseTranslator for ResponsesResponseTranslator {
         event: &ProtocolWireEvent,
     ) -> Result<Vec<ProtocolWireEvent>, ProviderError> {
         if let Some(raw) = event.raw_json_body() {
-            let response = serde_json::from_slice(raw).map_err(|_| {
+            let response = serde_json::from_slice(raw).map_err(|error| {
                 provider_error(ProviderErrorKind::Protocol, UpstreamSendState::Sent)
+                    .with_source(error)
             })?;
-            let message = self.stream.complete_json(&response).map_err(|_| {
+            let message = self.stream.complete_json(&response).map_err(|error| {
                 provider_error(ProviderErrorKind::Protocol, UpstreamSendState::Sent)
+                    .with_source(error)
             })?;
-            let raw = serde_json::to_vec(&message).map_err(|_| {
+            let raw = serde_json::to_vec(&message).map_err(|error| {
                 provider_error(ProviderErrorKind::Protocol, UpstreamSendState::Sent)
+                    .with_source(error)
             })?;
             return Ok(vec![
-                ProtocolWireEvent::raw_json(ANTHROPIC_PROTOCOL, raw.into()).map_err(|_| {
+                ProtocolWireEvent::raw_json(ANTHROPIC_PROTOCOL, raw.into()).map_err(|error| {
                     provider_error(ProviderErrorKind::Protocol, UpstreamSendState::Sent)
+                        .with_source(error)
                 })?,
             ]);
         }
         if !event.has_json_data() {
             return Ok(Vec::new());
         }
-        let events = self
-            .stream
-            .push(event.data())
-            .map_err(|_| provider_error(ProviderErrorKind::Protocol, UpstreamSendState::Sent))?;
+        let events = self.stream.push(event.data()).map_err(|error| {
+            provider_error(ProviderErrorKind::Protocol, UpstreamSendState::Sent).with_source(error)
+        })?;
         if matches!(
             event.data().get("type").and_then(Value::as_str),
             Some("response.completed" | "response.incomplete")
         ) {
-            self.stream.finish().map_err(|_| {
+            self.stream.finish().map_err(|error| {
                 provider_error(ProviderErrorKind::Protocol, UpstreamSendState::Sent)
+                    .with_source(error)
             })?;
         }
         wire_events(ANTHROPIC_PROTOCOL, events)
@@ -73,7 +77,10 @@ fn wire_events(
                 value.get("type").and_then(Value::as_str).map(str::to_owned),
                 value,
             )
-            .map_err(|_| provider_error(ProviderErrorKind::Protocol, UpstreamSendState::Sent))
+            .map_err(|error| {
+                provider_error(ProviderErrorKind::Protocol, UpstreamSendState::Sent)
+                    .with_source(error)
+            })
         })
         .collect()
 }

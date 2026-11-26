@@ -38,6 +38,7 @@ async function main() {
               windowLabelDisplay: 'weekly',
               usedPercent: index ? null : 35,
               usedPercentDisplay: index ? '—' : '35%',
+              localUsage: index ? null : { ...accounts[0].usage, totalTokens: 0, totalTokensDisplay: '0' },
               limitReached: false,
               resetAt: new Date(Date.now() + 7200000).toISOString(),
               resetAtDisplay: 'Synthetic reset time',
@@ -119,6 +120,8 @@ async function main() {
         const quotaPanel = page.locator('section').filter({ has: page.getByRole('heading', { name: '账号额度', exact: true }) }).last()
         await quotaPanel.getByText('Gemini 模型 · 周额度', { exact: true }).waitFor()
         await quotaPanel.getByText('Future Models · 周额度', { exact: true }).waitFor()
+        assert.equal(await quotaPanel.getByTitle('窗口消耗：0', { exact: true }).textContent(), '0')
+        assert.equal(await quotaPanel.locator('[title^="窗口消耗："]').count(), 1, 'Unknown model attribution must not display zero')
         assert.equal(await quotaPanel.getByRole('progressbar').first().getAttribute('aria-valuenow'), '35')
         assert.equal(await quotaPanel.getByRole('progressbar').nth(1).getAttribute('aria-valuenow'), null)
         assert.equal(await quotaPanel.evaluate(el => el.scrollWidth <= el.clientWidth + 1), true)

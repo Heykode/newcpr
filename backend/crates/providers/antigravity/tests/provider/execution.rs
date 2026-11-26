@@ -200,7 +200,7 @@ async fn mock_project(upstream: &MockServer) {
 }
 
 #[tokio::test]
-async fn native_model_groups_use_the_declared_effort_for_generate_and_stream() {
+async fn model_group_menu_routes_responses_and_native_generation_to_declared_members() {
     use gateway_core::{
         engine::provider::ProviderRequest,
         operation::{GenerateRequest, Operation, ProtocolPayload},
@@ -213,12 +213,12 @@ async fn native_model_groups_use_the_declared_effort_for_generate_and_stream() {
     Mock::given(path("/v1internal:fetchAvailableModels"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "models": {
-                "gemini-4-hydrogen-medium": {"displayName":"Hydrogen Medium"},
-                "gemini-4-hydrogen-high": {"displayName":"Hydrogen High"},
+                "gemini-4-hydrogen-medium": {"displayName":"Hydrogen Medium","maxTokens":1048576,"maxOutputTokens":65536,"supportsImages":true,"tagDescription":"Leaving on Nov 30."},
+                "gemini-4-hydrogen-high": {"displayName":"Hydrogen High","maxTokens":900000,"maxOutputTokens":262144,"supportsImages":true,"tagDescription":"Leaving on Nov 30."},
                 "gemini-4-hydrogen-sonar": {"displayName":"Hydrogen Sonar"}
             },
             "groupedModels": {
-                "gemini-4-hydrogen": {"supportedThinkingLevels":[
+                "gemini-4-hydrogen": {"displayName":"Gemini 4 Hydrogen","supportedThinkingLevels":[
                     {"thinkingSuffix":"MEDIUM"}, {"thinkingSuffix":"high"},
                     {"thinkingSuffix":"low"}, {"thinkingSuffix":"../sonar"}
                 ]},
@@ -240,14 +240,16 @@ async fn native_model_groups_use_the_declared_effort_for_generate_and_stream() {
         .iter()
         .find(|model| model.upstream_model().as_str() == "gemini-4-hydrogen")
         .unwrap();
+    let menu = group.presentation().unwrap();
+    assert_eq!(menu.display_name(), Some("Gemini 4 Hydrogen"));
+    assert_eq!(menu.supported_reasoning_efforts(), ["medium", "high"]);
+    assert_eq!(menu.default_reasoning_effort(), Some("medium"));
     assert_eq!(
-        group
-            .capabilities()
-            .reasoning_variants()
-            .keys()
-            .map(String::as_str)
-            .collect::<Vec<_>>(),
-        vec!["high", "medium"]
+        models
+            .iter()
+            .filter(|entry| entry.presentation().is_some())
+            .count(),
+        1
     );
     let snapshot = RuntimeSnapshot::new(
         ConfigRevision::new(1).unwrap(),
@@ -260,16 +262,29 @@ async fn native_model_groups_use_the_declared_effort_for_generate_and_stream() {
         models
             .iter()
             .map(|model| {
-                ProviderModel::new(
+                let entry = ProviderModel::new(
                     kind.clone(),
                     model.upstream_model().clone(),
                     model.capabilities().clone(),
-                )
+                );
+                match model.presentation() {
+                    Some(presentation) => entry.with_presentation(presentation.clone()),
+                    None => entry,
+                }
             })
             .collect(),
         vec![],
     )
     .unwrap();
+    let profiles = snapshot.public_model_profiles_for_scope(&fixture.store.account_scope());
+    let menu = profiles[0].presentation();
+    assert!(menu.image_input());
+    assert_eq!(menu.context_window_tokens(), Some(900000));
+    assert_eq!(
+        menu.max_context_window_tokens(),
+        menu.context_window_tokens()
+    );
+    assert_eq!(menu.description(), Some("Leaving on Nov 30."));
     for stream in [false, true] {
         let response = json!({"response":{"candidates":[{"content":{"parts":[{"text":"OK"}]},"finishReason":"STOP"}]}});
         let path_name = if stream {
@@ -316,6 +331,43 @@ async fn native_model_groups_use_the_declared_effort_for_generate_and_stream() {
         assert!(events.iter().any(|event| event.has_client_event()));
         released(&fixture).await;
     }
+    Mock::given(path("/v1internal:streamGenerateContent"))
+        .and(body_partial_json(json!({"model":"gemini-4-hydrogen-high","request":{"contents":[{"role":"user","parts":[{"inlineData":{"mimeType":"image/png","data":"AA=="}}]}]}})))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            "data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"OK\"}]},\"finishReason\":\"STOP\"}]}}\n\n",
+            "text/event-stream",
+        )).expect(1).mount(&upstream).await;
+    let body = json!({"model":group.upstream_model().as_str(),"input":[{"role":"user","content":[{"type":"input_image","image_url":"data:image/png;base64,AA=="}]}],"reasoning":{"effort":"high"}});
+    let operation = Operation::Generate(GenerateRequest::from_protocol_payload(
+        ProtocolPayload::json_object("openai", body.as_object().unwrap().clone()).unwrap(),
+    ));
+    let plan = snapshot
+        .plan(
+            &PublicModelId::new(group.upstream_model().as_str()).unwrap(),
+            &operation,
+            fixture.store.account_scope(),
+            &RoutingContext::default(),
+        )
+        .unwrap();
+    let events = fixture
+        .provider
+        .clone()
+        .execute(
+            ProviderRequest::new(operation, plan.candidates()[0].clone()),
+            context(frozen_profile(), CancellationToken::new()),
+        )
+        .await
+        .unwrap()
+        .try_collect::<Vec<_>>()
+        .await
+        .unwrap();
+    assert!(
+        events
+            .iter()
+            .flat_map(|event| event.canonical_facts())
+            .any(|fact| matches!(fact, gateway_core::event::GatewayEvent::Completed(_)))
+    );
+    released(&fixture).await;
 }
 
 #[tokio::test]
@@ -573,7 +625,7 @@ async fn translated_generation_delivers_terminal_wire_after_tail_usage() {
     for (protocol, body) in [
         (
             "openai",
-            json!({"model":"fixture-model","input":"hello","max_output_tokens":100,"reasoning":{"effort":"none"},"text":{"format":{"type":"json_schema","schema":{"type":"object"}}}}),
+            json!({"model":"fixture-model","input":"hello","max_output_tokens":100,"reasoning":{"effort":"high"},"temperature":0.3,"top_p":0.8,"tools":[{"type":"function","name":"pwd","parameters":{"type":"object"}}],"tool_choice":"required","text":{"format":{"type":"json_schema","schema":{"type":"object"}}}}),
         ),
         (
             "anthropic",
@@ -624,7 +676,13 @@ async fn translated_generation_delivers_terminal_wire_after_tail_usage() {
         if protocol == "openai" {
             assert_eq!(
                 body["request"]["generationConfig"]["thinkingConfig"]["thinkingBudget"],
-                0
+                24576
+            );
+            assert_eq!(body["request"]["generationConfig"]["temperature"], 0.3);
+            assert_eq!(body["request"]["generationConfig"]["topP"], 0.8);
+            assert_eq!(
+                body["request"]["toolConfig"]["functionCallingConfig"]["mode"],
+                "ANY"
             );
             assert_eq!(
                 body["request"]["generationConfig"]["responseSchema"],
@@ -653,4 +711,256 @@ async fn translated_generation_delivers_terminal_wire_after_tail_usage() {
         drop(stream);
         released(&fixture).await;
     }
+}
+
+#[tokio::test]
+async fn optional_search_preserves_functions_and_unspecified_output_limit() {
+    use gateway_core::{
+        engine::provider::ProviderRequest,
+        operation::{GenerateRequest, Operation, ProtocolPayload},
+    };
+    let upstream = MockServer::start().await;
+    Mock::given(path("/v1internal:streamGenerateContent"))
+        .and(body_partial_json(json!({"request":{"tools":[{"functionDeclarations":[{"name":"pwd"}]}]}})))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            "data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"ok\"}]},\"finishReason\":\"STOP\"}]}}\n\n",
+            "text/event-stream",
+        ))
+        .expect(4).mount(&upstream).await;
+    let search = json!({"type":"web_search"});
+    let function = json!({"type":"function","name":"pwd","parameters":{"type":"object"}});
+    for choice in [
+        json!(null),
+        json!("auto"),
+        json!("required"),
+        json!({"type":"allowed_tools","mode":"required","tools":[search,function]}),
+    ] {
+        let fixture = Fixture::new(&upstream.uri());
+        let mut body = json!({"model":"fixture-model","input":"hello","tools":[search,function],"tool_choice":choice});
+        if choice == "required" {
+            body["max_output_tokens"] = json!(null);
+        }
+        let operation = Operation::Generate(GenerateRequest::from_protocol_payload(
+            ProtocolPayload::json_object("openai", body.as_object().unwrap().clone()).unwrap(),
+        ));
+        let stream = fixture
+            .provider
+            .clone()
+            .execute(
+                ProviderRequest::new(operation, request(false).candidate().clone()),
+                context(frozen_profile(), CancellationToken::new()),
+            )
+            .await
+            .unwrap();
+        stream.try_collect::<Vec<_>>().await.unwrap();
+        released(&fixture).await;
+    }
+    for request in upstream.received_requests().await.unwrap() {
+        let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
+        assert!(
+            body["request"]["generationConfig"]
+                .get("maxOutputTokens")
+                .is_none()
+        );
+        assert!(
+            body["request"]["generationConfig"]
+                .get("thinkingConfig")
+                .is_none()
+        );
+    }
+}
+
+#[tokio::test]
+async fn invalid_required_search_is_rejected_before_sending_and_releases_lease() {
+    use gateway_core::{
+        engine::provider::ProviderRequest,
+        operation::{GenerateRequest, Operation, ProtocolPayload},
+    };
+    let upstream = MockServer::start().await;
+    let fixture = Fixture::new(&upstream.uri());
+    {
+        let mut catalog = fixture.store.primary().catalog.lock().unwrap();
+        let (_, bytes) = catalog.as_mut().unwrap();
+        let mut value: serde_json::Value = serde_json::from_slice(bytes).unwrap();
+        value["webSearchModelIds"] = json!(["fixture-model"]);
+        *bytes = value.to_string().into();
+    }
+    let search = json!({"type":"web_search"});
+    for (tools, message) in [
+        (json!([]), "The selected web search tool must be declared."),
+        (
+            json!([search, search]),
+            "Select one web search declaration.",
+        ),
+        (
+            json!([{"type":"web_search","external_web_access":false}]),
+            "Antigravity web search requires live external web access.",
+        ),
+        (
+            json!([{"type":"web_search","external_web_access":"cached"}]),
+            "Antigravity web search requires live external web access.",
+        ),
+        (
+            json!([{"type":"web_search","user_location":{"type":"approximate","country":"US"}}]),
+            "Antigravity cannot honor the specified web search options.",
+        ),
+    ] {
+        let body =
+            json!({"model":"fixture-model","input":"hello","tools":tools,"tool_choice":search});
+        let operation = Operation::Generate(GenerateRequest::from_protocol_payload(
+            ProtocolPayload::json_object("openai", body.as_object().unwrap().clone()).unwrap(),
+        ));
+        let error = fixture
+            .provider
+            .clone()
+            .execute(
+                ProviderRequest::new(operation, request(false).candidate().clone()),
+                context(frozen_profile(), CancellationToken::new()),
+            )
+            .await
+            .err()
+            .expect("invalid search request");
+        assert_eq!(error.kind(), ProviderErrorKind::InvalidRequest);
+        assert_eq!(error.send_state(), UpstreamSendState::NotSent);
+        assert_eq!(
+            gateway_core::error::GatewayError::from_provider(&error).client_message(),
+            message
+        );
+        released(&fixture).await;
+    }
+    assert!(upstream.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn required_search_uses_catalog_target_and_delivers_grounded_terminal() {
+    use gateway_core::{
+        engine::provider::ProviderRequest,
+        event::GatewayEvent,
+        operation::{GenerateRequest, Operation, ProtocolPayload},
+        routing::{ConfigRevision, ProviderModel, PublicModelId, RoutingContext, RuntimeSnapshot},
+    };
+    let server = MockServer::start().await;
+    let fixture = Fixture::new(&server.uri());
+    {
+        let mut catalog = fixture.store.primary().catalog.lock().unwrap();
+        let (_, bytes) = catalog.as_mut().unwrap();
+        let mut value: serde_json::Value = serde_json::from_slice(bytes).unwrap();
+        value["webSearchModelIds"] = json!(["search-only", "not-selected"]);
+        *bytes = value.to_string().into();
+    }
+    let kind = ProviderKind::new("antigravity").unwrap();
+    let models = fixture.provider.query_model_capabilities().await.unwrap();
+    assert!(
+        !models
+            .iter()
+            .any(|m| m.upstream_model().as_str() == "search-only")
+    );
+    let snapshot = RuntimeSnapshot::new(
+        ConfigRevision::new(1).unwrap(),
+        AccountSelectionPolicy::new(
+            RotationStrategy::Smart,
+            std::num::NonZeroU32::new(1).unwrap(),
+            std::time::Duration::ZERO,
+        ),
+        vec![kind.clone()],
+        models
+            .iter()
+            .map(|m| {
+                ProviderModel::new(
+                    kind.clone(),
+                    m.upstream_model().clone(),
+                    m.capabilities().clone(),
+                )
+            })
+            .collect(),
+        vec![],
+    )
+    .unwrap();
+    let search = json!({"type":"web_search","filters":{"allowed_domains":["example.org"]}});
+    let choice = json!({"type":"allowed_tools","mode":"required","tools":[{"type":"web_search"}]});
+    let body = json!({"model":"fixture-model","input":"你好","tool_choice":choice,"tools":[search,{"type":"function","name":"pwd"}],"include":["web_search_call.action.sources"]});
+    let op = Operation::Generate(GenerateRequest::from_protocol_payload(
+        ProtocolPayload::json_object("openai", body.as_object().unwrap().clone()).unwrap(),
+    ));
+    let plan = snapshot
+        .plan(
+            &PublicModelId::new("fixture-model").unwrap(),
+            &op,
+            fixture.store.account_scope(),
+            &RoutingContext::default(),
+        )
+        .unwrap();
+    let candidate = &plan.candidates()[0];
+    assert_eq!(candidate.upstream_model().unwrap().as_str(), "search-only");
+    Mock::given(path("/v1internal:generateContent")).and(body_partial_json(json!({
+        "model":"search-only","requestType":"web_search","request":{"tools":[{"googleSearch":{"includedDomains":["example.org"]}}],"contents":[{"role":"user","parts":[{"text":"你好"}]}]}
+    }))).respond_with(ResponseTemplate::new(200).set_body_json(json!({"response":{
+        "responseId":"r","candidates":[{"content":{"parts":[{"text":"前 "},{"text":"答案"}]},"finishReason":"STOP",
+        "groundingMetadata":{"webSearchQueries":["你好"],"groundingChunks":[{"web":{"uri":"https://example.org","title":"来源"}}],
+        "groundingSupports":[{"segment":{"partIndex":1,"endIndex":6},"groundingChunkIndices":[0]}]}}],"usageMetadata":{"promptTokenCount":5,"candidatesTokenCount":2}}}))).expect(1).mount(&server).await;
+    let attempt = RequestAttemptContext::new(
+        ModelRequestId::new("req_search").unwrap(),
+        ClientApiKeyId::new("key_search").unwrap(),
+    )
+    .with_request_profile(Some(frozen_profile().into()))
+    .with_pricing(std::sync::Arc::new(std::collections::BTreeMap::from([(
+        "antigravity".into(),
+        std::collections::BTreeMap::from([("search-only".into(), crate::billing_tests::pricing())]),
+    )])));
+    let mut stream = fixture
+        .provider
+        .clone()
+        .execute(
+            ProviderRequest::new(op, candidate.clone()),
+            crate::support::context_with_request(attempt, CancellationToken::new()),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        stream.metadata().upstream_model().unwrap().as_str(),
+        "search-only"
+    );
+    let mut costs = Vec::new();
+    let mut wire = Vec::new();
+    while let Some(event) = stream.next().await {
+        let event = event.unwrap();
+        for fact in event.canonical_facts() {
+            if let GatewayEvent::CalculatedCost(cost) = fact {
+                costs.push(cost.total().amount().canonical());
+            }
+        }
+        let terminal = event
+            .canonical_facts()
+            .iter()
+            .any(|f| matches!(f, GatewayEvent::Completed(_)));
+        for translated in stream.translate_native_response(event, terminal).unwrap() {
+            if let Some(frame) = translated.wire_event() {
+                assert_eq!(frame.data()["type"] == "response.completed", terminal);
+                wire.push(frame.data().clone());
+            }
+        }
+    }
+    assert_eq!(costs, ["0.000039"]);
+    drop(stream);
+    released(&fixture).await;
+    for (i, event) in wire.iter().enumerate() {
+        assert_eq!(event["sequence_number"], i)
+    }
+    let response = &wire.last().unwrap()["response"];
+    assert_eq!(response["model"], "fixture-model");
+    assert_eq!(response["usage"]["total_tokens"], 7);
+    let output = &response["output"];
+    assert_eq!(
+        output[0]["action"]["sources"][0]["url"],
+        "https://example.org"
+    );
+    let citation = &output[1]["content"][0]["annotations"][0];
+    assert_eq!(citation["start_index"], 2);
+    assert_eq!(citation["end_index"], 4);
+    assert_eq!(citation["url"], "https://example.org");
+    assert!(
+        wire.iter()
+            .any(|v| v["type"] == "response.output_text.annotation.added"
+                && &v["annotation"] == citation)
+    );
 }

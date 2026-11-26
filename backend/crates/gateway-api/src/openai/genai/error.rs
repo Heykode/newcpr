@@ -55,17 +55,3 @@ pub(crate) async fn project_error_response(response: Response) -> Response {
 pub(in crate::openai) fn error_frame(status: StatusCode, message: &str) -> Bytes {
     Bytes::from(format!("data: {}\n\n", payload(status, message)))
 }
-
-pub(in crate::openai) fn stream_error(value: &Value) -> Bytes {
-    let error = value
-        .pointer("/response/error")
-        .or_else(|| value.get("error"));
-    if let Some(error) = error.filter(|error| error.get("code").is_some_and(Value::is_number)) {
-        return Bytes::from(format!("data: {}\n\n", json!({"error":error})));
-    }
-    let message = error
-        .and_then(|e| e.get("message"))
-        .and_then(Value::as_str)
-        .unwrap_or("The gateway could not complete the request.");
-    error_frame(StatusCode::INTERNAL_SERVER_ERROR, message)
-}

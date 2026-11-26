@@ -45,9 +45,10 @@ impl AntigravityProvider {
         model: &UpstreamModelId,
         ctx: &AttemptContext,
         affinity_key: Option<&ProviderSessionAffinityKey>,
+        search: bool,
     ) -> Result<SelectedAccount, ProviderError> {
         let policy = ctx.account_selection_policy();
-        let select = |queue| self.select_with_queue(model, ctx, queue, affinity_key);
+        let select = |queue| self.select_with_queue(model, ctx, queue, affinity_key, search);
         let result = match select(policy.queue_policy()).await {
             Err(SelectionError::Queue(reason)) if ctx.required_account().is_none() => {
                 policy
@@ -79,6 +80,7 @@ impl AntigravityProvider {
         ctx: &AttemptContext,
         queue: ConcurrencyQueuePolicy,
         affinity_key: Option<&ProviderSessionAffinityKey>,
+        search: bool,
     ) -> Result<SelectedAccount, SelectionError> {
         let budget = ctx
             .account_wait_budget()
@@ -97,7 +99,7 @@ impl AntigravityProvider {
                 accounts,
                 mut projects,
                 mut selection,
-            } = self.load_candidates(model, ctx).await?;
+            } = self.load_candidates(model, ctx, search).await?;
             let affinity = match affinity_key.filter(|_| !ctx.is_diagnostic_required_account()) {
                 Some(key) => Some(ProviderSessionAffinityState::new(
                     key,

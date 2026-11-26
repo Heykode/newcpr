@@ -242,7 +242,10 @@ Core 只理解 `Operation`、能力要求、Provider 候选、稳定错误和 ca
   可以透出，但账号指纹会先脱敏。
 - response ID 是不透明 UTF-8 bytes，不假设 UUID、固定长度或跨 Provider 可复用。
 - 请求画像以配置为启动基线；三平台的后台OAuth、刷新、目录、额度及资料操作读取全局画像，生成请求可由下游Key覆盖。同一轮操作冻结身份，版本检查只更新对应平台的运行时发布资料，不回写 `config.yaml`。
-- Antigravity原生GenAI保留wire；兼容Responses/Chat/Messages由Provider转换。按目录先解析思考档位，再核对实际型号的账号/分组权限。服务端系统提示词替换客户端系统指令；不支持`previous_response_id`续接。
+- Antigravity 原生 GenAI 保留 wire，HTTP 交付 owner 不为该协议插入 SSE 心跳；兼容 Responses/Chat/Messages 由 Provider 转换，Responses 生成参数直接映射 GenAI，不继承 Messages 的默认上限和推理约束。
+- Core 根据授权成员裁剪基础模型目录，再按实际型号/账号检查输出上限；强制搜索将候选限定在同时允许原型号和搜索目标的同账号、同分组。Provider 使用目录首个搜索目标，完整 JSON 经 grounding 转成来源和引用事件，计费仍按实际型号。
+- 常规 AGY 生成/计数使用服务端系统提示词，独立搜索使用固定指令；转换入口仍拒绝非 null `previous_response_id`。内部转换错误保留 source，公开提示不泄露原始内容。
+- AGY quota worker 先读取轻量版本，再按成功生成完成时间查询活动；额度文档保存同次目录确认的模型组成员，Admin/PG 用明确型号集聚合窗口 Token，整号预测与恢复继续只接受 AccountWide。
 
 ### 账号出站代理
 

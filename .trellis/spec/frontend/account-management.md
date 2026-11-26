@@ -1279,6 +1279,6 @@ prefix for backend routes and rewrite Cookie Path and relative Location, includi
 
 - 平台选项包含Antigravity；账号入口、重授权、刷新和导出按后端capabilities，不按平台名猜测。选中账号缺失或不支持导出时阻止执行；打开确认窗和确认时都校验，跨页缓存保留。
 - Codex固定15套餐独立保留；AGY/xAI套餐不混入Codex下拉列表。账号生图预设仅向OpenAI提供；混合平台批选不附加OpenAI预设。
-- 额度分组与窗口使用统一国际化presenter，未知组名/时长保留fallback，不改写上游额度；AGY本地近七日用量独立展示。
+- 额度分组与窗口使用统一国际化presenter，未知组名/时长保留fallback，不改写上游额度；已知窗口Token为0时显示0，缺少归属保持未知，不能互相替换。AGY本地近七日用量独立展示。
 - 三平台全局/下游Key身份使用同一编辑器合同，未知UA补配套头，Key只发实际改变的覆盖值；安装种子与null清除语义不变。
 - 浏览器覆盖AGY授权/文件入口、Key共享、已知/未知自定义UA，以及桌面/窄屏额度与设置；不能以静态类型通过代替交互验证。

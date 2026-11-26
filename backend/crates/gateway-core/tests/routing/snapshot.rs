@@ -1281,8 +1281,8 @@ fn revision(value: u64) -> ConfigRevision {
 fn group_model_access_requires_a_common_group_for_account_and_mapped_model() {
     use gateway_core::{
         account::{AccountModelAccess, AccountModelAccessMode, ProviderAccountId},
+        error::RoutingError,
         routing::AccountGroupId,
-        validation::RoutingError,
     };
     let group = |n| AccountGroupId::new(format!("grp_{n:032x}")).unwrap();
     let account = |id| ProviderAccountId::new(id).unwrap();
@@ -1681,25 +1681,28 @@ fn reasoning_groups_resolve_before_account_and_group_model_policies() {
             GenerateRequest, Operation, ProtocolPayload, RawJsonPayload, TokenCountRequest,
         },
         routing::{
-            ClientRoutingScope, FrozenAccountScope, ProviderModel, ReasoningModelVariant,
-            RoutingContext, RoutingGroupSnapshot, RuntimeAccount, RuntimeAccountDirectory,
-            RuntimeSnapshot,
+            AccountModelMetadata, ClientRoutingScope, FrozenAccountScope, ProviderModel,
+            ReasoningModelVariant, RoutingContext, RoutingGroupSnapshot, RuntimeAccount,
+            RuntimeAccountDirectory, RuntimeSnapshot,
         },
     };
     use std::collections::BTreeSet;
     let provider = ProviderKind::new("alpha").unwrap();
     let declared = ProviderAccountId::new("acct_declared").unwrap();
     let other = ProviderAccountId::new("acct_other").unwrap();
+    let high_only = ProviderAccountId::new("acct_high").unwrap();
     let group = gateway_core::routing::AccountGroupId::new(format!("grp_{:032x}", 1)).unwrap();
     let scope = Arc::new(FrozenAccountScope::new(
         Arc::new(
             RuntimeAccountDirectory::new(BTreeMap::from_iter(
-                [declared.clone(), other.clone()].into_iter().map(|id| {
-                    (
-                        id,
-                        RuntimeAccount::new(provider.clone(), BTreeSet::from([group.clone()])),
-                    )
-                }),
+                [declared.clone(), other.clone(), high_only.clone()]
+                    .into_iter()
+                    .map(|id| {
+                        (
+                            id,
+                            RuntimeAccount::new(provider.clone(), BTreeSet::from([group.clone()])),
+                        )
+                    }),
             ))
             .with_group_model_access(BTreeMap::from([(
                 group.clone(),
@@ -1723,6 +1726,7 @@ fn reasoning_groups_resolve_before_account_and_group_model_policies() {
             None,
         )
         .with_generation_protocol("genai")
+        .with_translated_generation_protocols(["openai"])
         .with_upstream_feature_validation()
     };
     let variants = BTreeMap::from_iter(["medium", "high"].map(|level| {
@@ -1730,7 +1734,11 @@ fn reasoning_groups_resolve_before_account_and_group_model_policies() {
             level.into(),
             ReasoningModelVariant {
                 model: UpstreamModelId::new(format!("family-{level}")).unwrap(),
-                accounts: BTreeSet::from([declared.clone()]),
+                accounts: if level == "medium" {
+                    BTreeSet::from([declared.clone()])
+                } else {
+                    BTreeSet::from([declared.clone(), high_only.clone()])
+                },
             },
         )
     }));
@@ -1743,22 +1751,93 @@ fn reasoning_groups_resolve_before_account_and_group_model_policies() {
                 provider.clone(),
                 UpstreamModelId::new("family").unwrap(),
                 caps().with_reasoning_variants(variants),
+            )
+            .with_presentation(
+                ModelPresentation::default()
+                    .with_reasoning(Some("high".into()), vec!["medium".into(), "high".into()]),
             ),
             ProviderModel::new(
                 provider.clone(),
                 UpstreamModelId::new("family-medium").unwrap(),
-                caps(),
+                caps()
+                    .with_dedicated_web_search(BTreeMap::from([(
+                        declared.clone(),
+                        UpstreamModelId::new("search").unwrap(),
+                    )]))
+                    .with_account_metadata(BTreeMap::from([
+                        (
+                            declared.clone(),
+                            AccountModelMetadata {
+                                context_window_tokens: Some(1000),
+                                max_context_window_tokens: Some(1500),
+                                image_input: true,
+                                description: Some("Medium".into()),
+                                max_output_tokens: Some(25),
+                            },
+                        ),
+                        (other.clone(), AccountModelMetadata::default()),
+                    ])),
             ),
             ProviderModel::new(
                 provider.clone(),
                 UpstreamModelId::new("family-high").unwrap(),
-                caps(),
+                caps().with_account_metadata(BTreeMap::from([
+                    (
+                        declared.clone(),
+                        AccountModelMetadata {
+                            max_context_window_tokens: Some(2000),
+                            ..Default::default()
+                        },
+                    ),
+                    (
+                        high_only.clone(),
+                        AccountModelMetadata {
+                            context_window_tokens: Some(800),
+                            max_context_window_tokens: Some(1800),
+                            image_input: true,
+                            description: Some("High".into()),
+                            max_output_tokens: Some(100),
+                        },
+                    ),
+                ])),
             ),
+            ProviderModel::new(
+                provider.clone(),
+                UpstreamModelId::new("pinned").unwrap(),
+                caps(),
+            )
+            .with_presentation(ModelPresentation::default()),
         ],
         vec![],
     )
     .unwrap()
-    .with_model_mappings(BTreeMap::from([("alias".into(), "family".into())]));
+    .with_model_mappings(BTreeMap::from([
+        ("alias".into(), "family".into()),
+        ("pinned".into(), "family-medium".into()),
+    ]));
+    let search_body = serde_json::json!({"input":"query","tools":[{"type":"web_search"}],"tool_choice":"required"});
+    let search = Operation::Generate(GenerateRequest::from_protocol_payload(
+        ProtocolPayload::json_object("openai", search_body.as_object().unwrap().clone()).unwrap(),
+    ));
+    assert!(matches!(
+        snapshot.plan(
+            &PublicModelId::new("family-medium").unwrap(),
+            &search,
+            scope.clone(),
+            &RoutingContext::default()
+        ),
+        Err(RoutingError::GroupModelDenied)
+    ));
+    let old_account = Arc::new(scope.restricted_to_accounts(&BTreeSet::from([other.clone()])));
+    assert!(matches!(
+        snapshot.plan(
+            &PublicModelId::new("family-medium").unwrap(),
+            &search,
+            old_account,
+            &RoutingContext::default()
+        ),
+        Err(RoutingError::WebSearchUnavailable)
+    ));
     let operation = |level: &str, count: bool| {
         let body = serde_json::json!({"contents":[], "generationConfig":{"thinkingConfig":{"thinkingLevel":level}}});
         if count {
@@ -1784,6 +1863,93 @@ fn reasoning_groups_resolve_before_account_and_group_model_policies() {
         }
     };
     let base = PublicModelId::new("family").unwrap();
+    let profiles = snapshot.public_model_profiles_for_scope(&scope);
+    assert_eq!(
+        profiles
+            .iter()
+            .map(|profile| profile.model().as_str())
+            .collect::<Vec<_>>(),
+        ["alias", "family"]
+    );
+    for profile in &profiles {
+        assert_eq!(profile.presentation().context_window_tokens(), Some(1000));
+        assert_eq!(
+            profile.presentation().max_context_window_tokens(),
+            Some(1500)
+        );
+        assert!(profile.presentation().image_input());
+        assert_eq!(profile.presentation().description(), Some("Medium"));
+        assert_eq!(
+            profile.presentation().supported_reasoning_efforts(),
+            ["medium"]
+        );
+        assert_eq!(
+            profile.presentation().default_reasoning_effort(),
+            Some("medium")
+        );
+    }
+    let all = FrozenAccountScope::new(
+        Arc::clone(scope.directory()),
+        ClientRoutingScope::all_accounts(),
+    );
+    let mixed = snapshot.public_model_profiles_for_scope(&all);
+    assert!(mixed.iter().all(|p| !p.presentation().image_input()
+        && p.presentation().context_window_tokens().is_none()
+        && p.presentation().max_context_window_tokens() == Some(1500)
+        && p.presentation().description().is_none()));
+    let only_high_scope = all.restricted_to_accounts(&BTreeSet::from([high_only]));
+    let only_high = snapshot.public_model_profiles_for_scope(&only_high_scope);
+    assert_eq!(only_high.len(), 2);
+    for profile in only_high {
+        assert_eq!(
+            profile.presentation().supported_reasoning_efforts(),
+            ["high"]
+        );
+        assert_eq!(profile.presentation().context_window_tokens(), Some(800));
+        assert_eq!(
+            profile.presentation().max_context_window_tokens(),
+            Some(1800)
+        );
+        assert!(profile.presentation().image_input());
+        assert_eq!(profile.presentation().description(), Some("High"));
+    }
+    // 显式输出只约束返回已知上限的账号，旧目录仍能由上游校验
+    let output_request = |tokens| {
+        let body = serde_json::json!({"contents":[],"generationConfig":{"maxOutputTokens":tokens,"thinkingConfig":{"thinkingLevel":"MEDIUM"}}});
+        Operation::Generate(GenerateRequest::from_protocol_payload(
+            ProtocolPayload::json_object("genai", body.as_object().unwrap().clone()).unwrap(),
+        ))
+    };
+    assert!(
+        snapshot
+            .plan(
+                &base,
+                &output_request(25),
+                scope.clone(),
+                &RoutingContext::default()
+            )
+            .is_ok()
+    );
+    assert!(
+        snapshot
+            .plan(
+                &base,
+                &output_request(26),
+                scope.clone(),
+                &RoutingContext::default()
+            )
+            .is_err()
+    );
+    let direct = snapshot
+        .plan(
+            &PublicModelId::new("family-medium").unwrap(),
+            &output_request(26),
+            scope.clone(),
+            &RoutingContext::default(),
+        )
+        .unwrap();
+    assert!(!direct.candidates()[0].account_scope().allows(&declared));
+    assert!(direct.candidates()[0].account_scope().allows(&other));
     for count in [false, true] {
         for name in ["family", "alias"] {
             for level in ["MEDIUM", "medium"] {
@@ -1895,6 +2061,11 @@ fn reasoning_groups_resolve_before_account_and_group_model_policies() {
     );
     assert!(
         snapshot
+            .public_model_profiles_for_scope(&blocked)
+            .is_empty()
+    );
+    assert!(
+        snapshot
             .plan(
                 &base,
                 &operation("MEDIUM", false),
@@ -1903,4 +2074,141 @@ fn reasoning_groups_resolve_before_account_and_group_model_policies() {
             )
             .is_err()
     );
+}
+
+#[test]
+fn dedicated_search_requires_both_models_in_the_same_account_and_group() {
+    use gateway_core::{
+        account::{AccountModelAccess, AccountModelAccessMode},
+        operation::{GenerateRequest, Operation, ProtocolPayload},
+        routing::{
+            AccountGroupId, AccountModelMetadata, ClientRoutingScope, FrozenAccountScope,
+            ProviderModel, RoutingContext, RoutingGroupSnapshot, RuntimeAccount,
+            RuntimeAccountDirectory, RuntimeSnapshot,
+        },
+    };
+    use std::collections::BTreeSet;
+    let provider = ProviderKind::new("antigravity").unwrap();
+    let account = ProviderAccountId::new("acct_search").unwrap();
+    let other = ProviderAccountId::new("acct_other").unwrap();
+    let original_group = AccountGroupId::new(format!("grp_{:032x}", 1)).unwrap();
+    let search_group = AccountGroupId::new(format!("grp_{:032x}", 2)).unwrap();
+    let caps = || {
+        ModelCapabilities::new([OperationKind::Generate].into(), None)
+            .with_generation_protocol("genai")
+            .with_translated_generation_protocols(["openai"])
+            .with_upstream_feature_validation()
+    };
+    let snapshot = RuntimeSnapshot::new(
+        revision(1),
+        super::scheduling(),
+        vec![provider.clone()],
+        vec![
+            ProviderModel::new(
+                provider.clone(),
+                UpstreamModelId::new("coding").unwrap(),
+                caps()
+                    .with_account_metadata(BTreeMap::from([
+                        (account.clone(), AccountModelMetadata::default()),
+                        (other.clone(), AccountModelMetadata::default()),
+                    ]))
+                    .with_dedicated_web_search(BTreeMap::from([(
+                        account.clone(),
+                        UpstreamModelId::new("search").unwrap(),
+                    )])),
+            ),
+            ProviderModel::new(
+                provider.clone(),
+                UpstreamModelId::new("search").unwrap(),
+                caps().with_account_metadata(BTreeMap::from([(
+                    account.clone(),
+                    AccountModelMetadata {
+                        max_output_tokens: Some(40),
+                        ..Default::default()
+                    },
+                )])),
+            ),
+        ],
+        vec![],
+    )
+    .unwrap();
+    let access = |models: &[&str]| {
+        AccountModelAccess::new(
+            AccountModelAccessMode::Allowlist,
+            models.iter().map(|v| (*v).to_owned()).collect(),
+        )
+        .unwrap()
+    };
+    for together in [false, true] {
+        let directory = RuntimeAccountDirectory::new(BTreeMap::from([
+            (
+                account.clone(),
+                RuntimeAccount::new(
+                    provider.clone(),
+                    [original_group.clone(), search_group.clone()].into(),
+                ),
+            ),
+            (
+                other.clone(),
+                RuntimeAccount::new(provider.clone(), [original_group.clone()].into()),
+            ),
+        ]))
+        .with_group_model_access(BTreeMap::from([
+            (
+                original_group.clone(),
+                access(if together {
+                    &["coding", "search"]
+                } else {
+                    &["coding"]
+                }),
+            ),
+            (search_group.clone(), access(&["search"])),
+        ]));
+        let scope = FrozenAccountScope::new(
+            Arc::new(directory),
+            ClientRoutingScope::restricted(
+                vec![
+                    RoutingGroupSnapshot::new(original_group.clone(), "Coding".into()),
+                    RoutingGroupSnapshot::new(search_group.clone(), "Search".into()),
+                ],
+                [original_group.clone(), search_group.clone()].into(),
+                [provider.clone()].into(),
+            )
+            .unwrap(),
+        );
+        for limit in [40, 41] {
+            let body = serde_json::json!({"input":"query", "tools":[{"type":"web_search"}], "tool_choice":"required", "max_output_tokens":limit});
+            let operation = Operation::Generate(GenerateRequest::from_protocol_payload(
+                ProtocolPayload::json_object("openai", body.as_object().unwrap().clone()).unwrap(),
+            ));
+            let plan = snapshot.plan(
+                &PublicModelId::new("coding").unwrap(),
+                &operation,
+                Arc::new(scope.clone()),
+                &RoutingContext::default(),
+            );
+            if !together || limit > 40 {
+                assert!(plan.is_err());
+                continue;
+            }
+            let plan = plan.unwrap();
+            assert_eq!(plan.candidates().len(), 1);
+            let selected = &plan.candidates()[0];
+            assert_eq!(selected.upstream_model().unwrap().as_str(), "search");
+            assert!(selected.account_scope().allows(&account));
+            assert!(!selected.account_scope().allows(&other));
+            let fixed_other =
+                Arc::new(scope.restricted_to_accounts(&BTreeSet::from([other.clone()])));
+            assert!(
+                snapshot
+                    .plan(
+                        &PublicModelId::new("coding").unwrap(),
+                        &operation,
+                        fixed_other,
+                        &RoutingContext::default()
+                    )
+                    .is_err()
+            );
+        }
+    }
 }

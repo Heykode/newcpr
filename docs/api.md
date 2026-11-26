@@ -1171,10 +1171,26 @@ HTTP 返回 `429`，`error.code` 为 `key_daily_budget_exceeded` 或 `key_weekly
 | POST | `/v1beta/models/{model}:countTokens` | Token计数 |
 
 基础模型组按 `generationConfig.thinkingConfig.thinkingLevel` 解析真实型号，随后核对账号与分组模型权限；
-显式完整型号不因正文中的另一档位重定向。目录不根据价目表虚构模型。
-Responses、Chat Completions、Messages 可调用已获授权的AGY模型；兼容转换不支持 `previous_response_id` 续接。
-AGY生成使用服务端系统提示词，取代客户端系统指令；全局及Key画像覆盖共同决定最终内容。
+显式完整型号不因正文中的另一档位重定向。Codex 客户端目录也按当前 Key 的实际可用成员裁剪推理档位，
+图片能力取交集，上下文取共同安全范围；型号映射使用目标画像。显式输出上限按实际型号与候选账号校验，未知上限交上游验证。
+Responses、Chat Completions、Messages 可调用已获授权的 AGY 模型；兼容转换不支持非 null `previous_response_id` 续接。
+Responses 生成参数直接映射到 GenAI：省略或 null 的 `max_output_tokens` 不补默认上限，推理预算不继承 Messages 专有约束，采样与 JSON Schema 保留。
+AGY 常规生成和计数使用服务端系统提示词，取代客户端系统指令；全局及 Key 画像覆盖共同决定最终内容。
+原生 GenAI SSE 在首帧前及帧间不插入网关心跳，首帧前失败保留对应 HTTP 错误；Responses/Chat/Messages 保留原有保活。
+
+Responses 可声明可选 `web_search` 并同时使用函数工具；只有明确要求搜索才派发独立搜索。
+搜索目标来自账号目录 `webSearchModelIds`，同一账号及授权该账号的同一分组必须同时允许原型号和搜索型号。
+无搜索目录、缺失或重复工具声明、不支持的强制选项会明确拒绝，不退回普通生成。
+独立搜索要求最后输入项为用户文本，仅发送该查询，使用固定搜索系统指令；支持实时联网和
+`filters.allowed_domains` / `filters.blocked_domains`，只支持文本输出。显式禁用实时联网、位置及其他未支持选项会拒绝。
+返回正文 URL 引用；通过 `include: ["web_search_call.action.sources"]` 可取得来源列表。
+上游搜索返回完整 JSON，再转换为下游 JSON/SSE；本地费用和记录基于实际搜索型号与真实 usage。
+已有账号需刷新目录取得搜索目标。
+
 账号目录/详情的 `usagePeriod=recent_week` 表示部署时区当天及前六天的本地统计，独立于模型分组额度周期。
+额度刷新会用同次目录确认模型组完整成员；5 小时/周窗口只汇总这些型号的本地 Token，已知无用量显示 0，成员无法确认仍为未知。
+模型组用量不参与整号容量预测、自动恢复或分组监控。健康账号只在快照满五分钟且之后有成功生成时补查，
+首次观测、凭据变更、耗尽复查及手动刷新继续保留。
 `capabilities` 描述刷新、重授权、凭据导出、模型目录下载和额度/资料操作能力；批量导出在读取任何明文凭据前检查全部所选账号。
 
 ## 8. 运行设置

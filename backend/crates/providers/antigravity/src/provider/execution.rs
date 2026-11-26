@@ -40,7 +40,10 @@ impl AntigravityProvider {
         let started = Instant::now();
         let affinity =
             super::affinity::session_key(request.operation(), ctx.client_api_key_ref(), &model);
-        let selected = self.select_account(&model, &ctx, affinity.as_ref()).await?;
+        let search = request.operation().requires_web_search();
+        let selected = self
+            .select_account(&model, &ctx, affinity.as_ref(), search)
+            .await?;
         let selection = ProviderSelectionObservation::new(
             u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
             selected.capacity,
@@ -127,7 +130,7 @@ impl AntigravityProvider {
                         // 固定探测使用该账号实际授权的项目，包括尚无公开目录的停用账号
                         Project::Discover => resource.account_info(token).await?.project,
                     };
-                    resource.generate(&project, model.as_str(), token, &body, stream, &headers).await
+                    resource.generate(&project, model.as_str(), token, &body, if search { crate::transport::GenerateMode::WebSearch } else { stream.into() }, &headers).await
                 } => response,
             };
             let response = match response {

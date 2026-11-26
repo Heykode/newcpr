@@ -1823,6 +1823,108 @@ fn client_catalog_forwards_scope_maps_whole_objects_and_omits_unroutable_models(
     }
 }
 
+#[test]
+fn client_catalog_fallback_uses_only_authorized_reasoning_members() {
+    use gateway_core::routing::{
+        AccountModelMetadata, ModelPresentation, PublicModelDescriptor, ReasoningModelVariant,
+    };
+    let provider = ProviderKind::new("openai").unwrap();
+    let account = ProviderAccountId::new("acct_start").unwrap();
+    let other = ProviderAccountId::new("acct_other").unwrap();
+    let caps = || ModelCapabilities::new([OperationKind::Generate].into(), None);
+    let snapshot = RuntimeSnapshot::new(
+        ConfigRevision::new(1).unwrap(),
+        AccountSelectionPolicy::new(
+            RotationStrategy::Smart,
+            std::num::NonZeroU32::new(1).unwrap(),
+            Duration::from_millis(1),
+        ),
+        vec![provider.clone()],
+        vec![
+            ProviderModel::new(
+                provider.clone(),
+                UpstreamModelId::new("family").unwrap(),
+                caps().with_reasoning_variants(BTreeMap::from([
+                    (
+                        "medium".into(),
+                        ReasoningModelVariant {
+                            model: UpstreamModelId::new("family-medium").unwrap(),
+                            accounts: [account.clone()].into(),
+                        },
+                    ),
+                    (
+                        "high".into(),
+                        ReasoningModelVariant {
+                            model: UpstreamModelId::new("family-high").unwrap(),
+                            accounts: [other.clone()].into(),
+                        },
+                    ),
+                ])),
+            )
+            .with_presentation(
+                ModelPresentation::default()
+                    .with_reasoning(Some("high".into()), vec!["medium".into(), "high".into()]),
+            ),
+            ProviderModel::new(
+                provider.clone(),
+                UpstreamModelId::new("family-medium").unwrap(),
+                caps().with_account_metadata(BTreeMap::from([(
+                    account,
+                    AccountModelMetadata {
+                        context_window_tokens: Some(1000),
+                        max_context_window_tokens: Some(1500),
+                        image_input: true,
+                        description: Some("Scoped model".into()),
+                        max_output_tokens: Some(100),
+                    },
+                )])),
+            ),
+            ProviderModel::new(
+                provider.clone(),
+                UpstreamModelId::new("family-high").unwrap(),
+                caps().with_account_metadata(BTreeMap::from([(
+                    other,
+                    AccountModelMetadata::default(),
+                )])),
+            ),
+        ],
+        vec![ClientPolicy::new(
+            ClientApiKeyId::new("key_catalog_scope").unwrap(),
+            PlaintextClientApiKey::new("sk_catalog_scope").unwrap(),
+            account_scope(&provider, "acct_start"),
+            true,
+            RateLimits::unlimited(),
+        )],
+    )
+    .unwrap()
+    .with_model_mappings(BTreeMap::from([("alias".into(), "family".into())]));
+    let service = DefaultExecutionService::new(
+        RuntimeSnapshotHandle::new(snapshot),
+        Arc::new(TrackingExecutionStore::default()),
+        ProviderRegistry::new([Arc::new(FailingProvider) as Arc<dyn Provider>]).unwrap(),
+        Arc::new(UnusedAdmissions),
+        Arc::new(UnusedCircuits),
+        Arc::new(UnusedContinuation),
+        Arc::new(RecordingClientApiKeyUsage::default()),
+    );
+    let client = service.authenticate("sk_catalog_scope").unwrap();
+    let models = block_on(service.client_model_catalog(&client, "codex", "0.154.0")).unwrap();
+    assert_eq!(models.len(), 2);
+    for model in models {
+        let PublicModelDescriptor::Adapted(profile) = model else {
+            panic!("adapted catalog expected")
+        };
+        assert!(["family", "alias"].contains(&profile.model().as_str()));
+        let presentation = profile.presentation();
+        assert_eq!(presentation.supported_reasoning_efforts(), ["medium"]);
+        assert_eq!(presentation.default_reasoning_effort(), Some("medium"));
+        assert_eq!(presentation.context_window_tokens(), Some(1000));
+        assert_eq!(presentation.max_context_window_tokens(), Some(1500));
+        assert!(presentation.image_input());
+        assert_eq!(presentation.description(), Some("Scoped model"));
+    }
+}
+
 #[async_trait]
 impl Provider for FailingProvider {
     fn name(&self) -> &'static str {

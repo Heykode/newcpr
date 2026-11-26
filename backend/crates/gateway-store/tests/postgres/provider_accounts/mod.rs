@@ -382,6 +382,7 @@ async fn model_success_rates_preserve_usage_across_window_and_rolling_reads() {
         .execute(&database.pool).await.unwrap();
     let windows = [
         AccountUsageWindowQuery {
+            models: None,
             account_id: "acct_health".to_owned(),
             key: "whole".to_owned(),
             range: TimeRange {
@@ -390,6 +391,7 @@ async fn model_success_rates_preserve_usage_across_window_and_rolling_reads() {
             },
         },
         AccountUsageWindowQuery {
+            models: None,
             account_id: "acct_health".to_owned(),
             key: "boundary".to_owned(),
             range: TimeRange {
@@ -925,6 +927,21 @@ async fn core_quota_batch_reads_only_observed_accounts_in_one_contract_call() {
         .expect("read quota batch");
     observations.sort_by(|left, right| left.account_id.cmp(&right.account_id));
 
+    let ids = [
+        "acct_quota_a",
+        "acct_quota_empty",
+        "acct_quota_b",
+        "acct_missing",
+    ]
+    .map(|id| ProviderAccountId::new(id).unwrap());
+    let mut versions = repository.get_quota_versions(&ids).await.unwrap();
+    versions.sort_by(|left, right| left.account_id.cmp(&right.account_id));
+    assert_eq!(versions.len(), observations.len());
+    for (version, observation) in versions.iter().zip(&observations) {
+        assert_eq!(version.account_id, observation.account_id);
+        assert_eq!(version.credential_revision, observation.expected_revision);
+        assert_eq!(version.observed_at, observation.observed_at);
+    }
     assert_eq!(observations.len(), 2);
     assert_eq!(observations[0].account_id.as_str(), "acct_quota_a");
     assert_eq!(observations[0].expected_revision, revision);
@@ -2186,36 +2203,57 @@ async fn terminal_admin_quota_window_usage_prefers_provider_total_and_falls_back
     .await
     .expect("separate provider total from fallback components");
 
-    let mut usage = admin_account_store(&database.pool)
-        .load_account_usage_by_windows(&[
-            AccountUsageWindowQuery {
-                account_id: "acct_quota_window".to_owned(),
-                key: "short".to_owned(),
-                range: TimeRange {
-                    start: now - TimeDelta::hours(1),
-                    end: now + TimeDelta::minutes(1),
-                },
-            },
-            AccountUsageWindowQuery {
-                account_id: "acct_quota_window".to_owned(),
-                key: "long".to_owned(),
-                range: TimeRange {
-                    start: now - TimeDelta::hours(7),
-                    end: now + TimeDelta::minutes(1),
-                },
-            },
-        ])
+    let short = TimeRange {
+        start: now - TimeDelta::hours(5),
+        end: now + TimeDelta::minutes(1),
+    };
+    let week = TimeRange {
+        start: now - TimeDelta::weeks(1),
+        end: short.end,
+    };
+    let query = |key: &str, range: TimeRange, models| AccountUsageWindowQuery {
+        account_id: "acct_quota_window".to_owned(),
+        key: key.to_owned(),
+        range,
+        models,
+    };
+    let older = Some(["gpt-window-older".to_owned()].into());
+    let windows = [
+        query("short", short, None),
+        query("long", week, None),
+        query("model-short", short, older.clone()),
+        query("model-week", week, older),
+    ];
+    let store = admin_account_store(&database.pool);
+    let usage = store.load_account_usage_by_windows(&windows).await.unwrap();
+    for (key, requests, tokens) in [("model-short", 0, 0), ("model-week", 1, 20)] {
+        let result = usage.iter().find(|result| result.key == key).unwrap();
+        assert_eq!(
+            (result.usage.request_count, result.usage.total_tokens),
+            (requests, Some(tokens))
+        );
+    }
+    let error = store
+        .load_quota_forecast_history(&windows[3])
         .await
-        .expect("load quota window usage");
-    usage.sort_by(|left, right| left.key.cmp(&right.key));
-
-    assert_eq!(usage[0].key, "long");
-    assert_eq!(usage[0].usage.total_tokens, Some(720));
-    assert_eq!(usage[0].usage.models.len(), 2);
+        .unwrap_err();
     assert_eq!(
-        usage[0]
-            .usage
-            .models
+        error.kind(),
+        gateway_admin::ports::store::AdminStoreErrorKind::Invalid
+    );
+    super::drain_analytics(&database.pool).await;
+    assert_eq!(
+        store.load_account_usage_by_windows(&windows).await.unwrap(),
+        usage
+    );
+    let account_usage = |key: &str| &usage.iter().find(|result| result.key == key).unwrap().usage;
+    let long = account_usage("long");
+    let short = account_usage("short");
+
+    assert_eq!(long.total_tokens, Some(720));
+    assert_eq!(long.models.len(), 2);
+    assert_eq!(
+        long.models
             .iter()
             .map(|model| (model.model.as_str(), model.total_tokens))
             .collect::<Vec<_>>(),
@@ -2224,19 +2262,18 @@ async fn terminal_admin_quota_window_usage_prefers_provider_total_and_falls_back
             ("gpt-window-recent", Some(700)),
         ],
     );
-    assert_eq!(usage[0].usage.costs.len(), 1);
-    assert_eq!(usage[0].usage.costs[0].currency, "USD");
-    assert_eq!(usage[0].usage.costs[0].amount.as_str(), "3.75");
-    assert_eq!(usage[0].usage.models[0].costs[0].amount.as_str(), "2.5");
-    assert_eq!(usage[0].usage.models[1].costs[0].amount.as_str(), "1.25");
-    assert_eq!(usage[1].key, "short");
-    assert_eq!(usage[1].usage.total_tokens, Some(700));
-    assert_eq!(usage[1].usage.costs.len(), 1);
-    assert_eq!(usage[1].usage.costs[0].currency, "USD");
-    assert_eq!(usage[1].usage.costs[0].amount.as_str(), "1.25");
-    assert_eq!(usage[1].usage.models.len(), 1);
-    assert_eq!(usage[1].usage.models[0].model, "gpt-window-recent");
-    assert_eq!(usage[1].usage.models[0].total_tokens, Some(700));
+    assert_eq!(long.costs.len(), 1);
+    assert_eq!(long.costs[0].currency, "USD");
+    assert_eq!(long.costs[0].amount.as_str(), "3.75");
+    assert_eq!(long.models[0].costs[0].amount.as_str(), "2.5");
+    assert_eq!(long.models[1].costs[0].amount.as_str(), "1.25");
+    assert_eq!(short.total_tokens, Some(700));
+    assert_eq!(short.costs.len(), 1);
+    assert_eq!(short.costs[0].currency, "USD");
+    assert_eq!(short.costs[0].amount.as_str(), "1.25");
+    assert_eq!(short.models.len(), 1);
+    assert_eq!(short.models[0].model, "gpt-window-recent");
+    assert_eq!(short.models[0].total_tokens, Some(700));
 
     database.close().await;
 }
@@ -2295,6 +2332,7 @@ async fn terminal_admin_quota_window_usage_should_include_only_statusless_websoc
 
     let usage = admin_account_store(&database.pool)
         .load_account_usage_by_windows(&[AccountUsageWindowQuery {
+            models: None,
             account_id: "acct_quota_window_websocket".to_owned(),
             key: "statusless".to_owned(),
             range: TimeRange {

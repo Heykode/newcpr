@@ -14,11 +14,18 @@ use url::Url;
 use super::failure::{network, sent, successful, unsent};
 use super::headers::RequestHeader;
 use crate::profile::ClientProfile;
+// Desktop 独立搜索使用固定任务指令，常规生成与计数使用账号画像
+static SEARCH_INSTRUCTION: std::sync::LazyLock<&RawValue> = std::sync::LazyLock::new(|| {
+    serde_json::from_str(r#"{"parts":[{"text":"Search the web for the query and return a concise answer grounded in the sources."}]}"#).expect("valid static search instruction")
+});
+
 const MAX_CONTROL_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
 
 #[derive(Serialize, Deserialize)]
 pub(crate) struct Catalog {
     pub(crate) project: String,
+    #[serde(rename = "webSearchModelIds", default)]
+    pub(crate) web_search_models: Vec<String>,
     pub(crate) models: BTreeMap<String, Model>,
     #[serde(rename = "groupedModels", default)]
     pub(crate) grouped_models: serde_json::Value,
@@ -30,6 +37,29 @@ pub(crate) struct Model {
     pub(crate) name: String,
     #[serde(rename = "quotaInfo", default)]
     pub(crate) quota: Option<super::account::ModelQuota>,
+    #[serde(default)]
+    pub(crate) description: Option<String>,
+    #[serde(rename = "tagDescription", default)]
+    pub(crate) tag_description: Option<String>,
+    #[serde(rename = "maxTokens", default)]
+    pub(crate) context_window: Option<u64>,
+    #[serde(rename = "maxOutputTokens", default)]
+    pub(crate) max_output_tokens: Option<u64>,
+    #[serde(rename = "supportsImages", default)]
+    pub(crate) supports_images: Option<bool>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum GenerateMode {
+    Json,
+    Stream,
+    WebSearch,
+}
+
+impl From<bool> for GenerateMode {
+    fn from(stream: bool) -> Self {
+        if stream { Self::Stream } else { Self::Json }
+    }
 }
 
 pub(crate) struct CloudCodeClient {
@@ -102,6 +132,8 @@ impl CloudCodeClient {
     ) -> Result<Catalog, ProviderError> {
         #[derive(Deserialize)]
         struct Models {
+            #[serde(rename = "webSearchModelIds", default)]
+            web_search_models: Vec<String>,
             models: BTreeMap<String, Model>,
             #[serde(rename = "groupedModels", default)]
             grouped_models: serde_json::Value,
@@ -123,6 +155,7 @@ impl CloudCodeClient {
             project,
             models: models.models,
             grouped_models: models.grouped_models,
+            web_search_models: models.web_search_models,
         })
     }
 
@@ -132,17 +165,24 @@ impl CloudCodeClient {
         model: &str,
         token: &str,
         body: &[u8],
-        stream: bool,
+        mode: GenerateMode,
         headers: &[RequestHeader],
     ) -> Result<Response, ProviderError> {
         #[derive(Serialize)]
         struct Envelope<'a> {
             project: &'a str,
             model: &'a str,
+            #[serde(rename = "requestType", skip_serializing_if = "Option::is_none")]
+            request_type: Option<&'static str>,
             request: BTreeMap<String, &'a RawValue>,
         }
-        let request = self.request_body(body)?;
-        let (send, media) = if stream {
+        let instruction = if mode == GenerateMode::WebSearch {
+            *SEARCH_INSTRUCTION
+        } else {
+            &self.system_instruction
+        };
+        let request = Self::request_body(body, instruction)?;
+        let (send, media) = if mode == GenerateMode::Stream {
             (
                 self.post("streamGenerateContent", token)
                     .query(&[("alt", "sse")]),
@@ -155,6 +195,7 @@ impl CloudCodeClient {
             send.json(&Envelope {
                 project,
                 model,
+                request_type: (mode == GenerateMode::WebSearch).then_some("web_search"),
                 request,
             }),
             token,
@@ -170,7 +211,7 @@ impl CloudCodeClient {
         body: &[u8],
         headers: &[RequestHeader],
     ) -> Result<Response, ProviderError> {
-        let mut request = self.request_body(body)?;
+        let mut request = Self::request_body(body, &self.system_instruction)?;
         // Desktop 的计数封套只接受 Vertex CountTokensRequest，没有项目和生成控制字段
         for field in [
             "model",
@@ -195,14 +236,14 @@ impl CloudCodeClient {
     }
 
     fn request_body<'a>(
-        &'a self,
         body: &'a [u8],
+        instruction: &'a RawValue,
     ) -> Result<BTreeMap<String, &'a RawValue>, ProviderError> {
         let mut request: BTreeMap<String, &RawValue> = serde_json::from_slice(body)
             .map_err(|e| unsent(Kind::InvalidRequest).with_source(e))?;
         // 生成和计数共享同一身份策略，其他字段保留原始 JSON 表达
         request.remove("system_instruction");
-        request.insert("systemInstruction".to_owned(), &self.system_instruction);
+        request.insert("systemInstruction".to_owned(), instruction);
         Ok(request)
     }
 

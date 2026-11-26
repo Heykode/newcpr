@@ -516,6 +516,7 @@ impl DefaultAccountsService {
             let usage = self
                 .accounts
                 .load_quota_learning_usage(&AccountUsageWindowQuery {
+                    models: None,
                     account_id: account_id.to_string(),
                     key: observation.window_key.clone(),
                     range: TimeRange {
@@ -573,12 +574,11 @@ impl DefaultAccountsService {
         for (item, quota) in accounts.iter().zip(quotas) {
             for window in &mut quota.windows {
                 if window.local_usage.is_none()
-                    && window.local_usage_attribution == QuotaLocalUsageAttribution::AccountWide
+                    && window.local_usage_attribution != QuotaLocalUsageAttribution::Unavailable
                 {
-                    let key = (item.account.id.clone(), window.key.clone());
-                    if let Some(usage) = usage_by_window.get(&key) {
-                        window.local_usage = Some(usage.clone());
-                    }
+                    window.local_usage = usage_by_window
+                        .get(&(item.account.id.clone(), window.key.clone()))
+                        .cloned();
                 }
             }
         }
@@ -626,6 +626,7 @@ impl DefaultAccountsService {
                 state.windows.iter().filter_map(|window| {
                     let start = window.started_at?;
                     window.active.then(|| AccountUsageWindowQuery {
+                        models: None,
                         account_id: state.account_id.clone(),
                         key: format!("{}:{}", state.account_id, window.window_key),
                         range: TimeRange { start, end: now },
@@ -824,6 +825,7 @@ impl AccountsService for DefaultAccountsService {
                 state.windows.iter().filter_map(|window| {
                     let start = window.started_at?;
                     window.active.then(|| AccountUsageWindowQuery {
+                        models: None,
                         account_id: state.account_id.clone(),
                         key: format!("{}:{}", state.account_id, window.window_key),
                         range: TimeRange { start, end: now },
@@ -1930,15 +1932,18 @@ fn quota_usage_window(
     account_id: &str,
     window: &ProviderQuotaWindow,
 ) -> Option<AccountUsageWindowQuery> {
-    if window.local_usage_attribution != QuotaLocalUsageAttribution::AccountWide {
-        return None;
-    }
+    let models = match &window.local_usage_attribution {
+        QuotaLocalUsageAttribution::AccountWide => None,
+        QuotaLocalUsageAttribution::Models(ids) => Some(ids.clone()),
+        QuotaLocalUsageAttribution::Unavailable => return None,
+    };
     let reset_at = window.reset_at?;
     let seconds = i64::try_from(window.window_seconds?).ok()?;
     let start = reset_at.checked_sub_signed(Duration::try_seconds(seconds)?)?;
     let range = TimeRange::new(start, reset_at).ok()?;
     // 上游百分比以该 reset 边界定义；以当前时间回推会让本地 Token 属于另一窗口。
     Some(AccountUsageWindowQuery {
+        models,
         account_id: account_id.to_owned(),
         key: window.key.clone(),
         range,
