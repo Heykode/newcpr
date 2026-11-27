@@ -82,6 +82,13 @@ pub async fn run() -> Result<(), BootstrapError> {
             .with_log_files(host.log_file_maintenance()),
     )
     .await?;
+    store
+        .import_legacy_openai_settings(
+            openai.wire_profile.residency.clone(),
+            openai.wire_profile.account_routing_override.clone(),
+            openai.ws_pool.runtime_settings(),
+        )
+        .await?;
     host.report_startup_ready("Store");
     host.set_operational_diagnostics(store.operational_diagnostics());
     let request_tuning = RequestTuningHandle::default();

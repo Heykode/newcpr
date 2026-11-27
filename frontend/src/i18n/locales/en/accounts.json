@@ -55,6 +55,8 @@
         "hours": "{duration} h limit",
         "minutes": "{duration} min limit"
       },
+      "googleAiCredits": "Google AI credits",
+      "codexCredits": "Codex credits",
       "autoUsePoints": "Automatically use credits",
       "autoUsePointsHelp": "Use available credits when the subscription limit is reached",
       "groups": {

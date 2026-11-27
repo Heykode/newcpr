@@ -9,7 +9,7 @@ use std::sync::{
 };
 use tokio::sync::Notify;
 
-use super::{CodexWebSocketPool, state::WebSocketPoolSlot};
+use super::{CodexWebSocketPool, CodexWebSocketPoolKey, state::WebSocketPoolSlot};
 use crate::transport::websocket::CodexWebSocketExchangeError;
 
 struct Capacity {
@@ -54,6 +54,14 @@ pub(crate) async fn acquire(
     proxy: Option<&OutboundProxy>,
     pool: Option<&CodexWebSocketPool>,
 ) -> Result<Option<ProxyConnectionPermit>, CodexWebSocketExchangeError> {
+    acquire_for_key(proxy, pool, None).await
+}
+
+pub(super) async fn acquire_for_key(
+    proxy: Option<&OutboundProxy>,
+    pool: Option<&CodexWebSocketPool>,
+    retry_key: Option<&CodexWebSocketPoolKey>,
+) -> Result<Option<ProxyConnectionPermit>, CodexWebSocketExchangeError> {
     let Some(proxy) = proxy else {
         return Ok(None);
     };
@@ -84,6 +92,18 @@ pub(crate) async fn acquire(
         if let Some(pool) = pool {
             let retired = {
                 let mut state = pool.lock_state();
+                // A matching socket may have returned while waiting for this physical budget.
+                // Give pool admission the first look before choosing an eviction victim.
+                if retry_key.is_some_and(|key| {
+                    state.slots.contains_key(key)
+                        || state
+                            .egress_config
+                            .as_ref()
+                            .is_some_and(|config| key.unavailable_egress(config).is_some())
+                        || pool.account_limit(key.account_id()).is_none()
+                }) {
+                    return Ok(None);
+                }
                 let oldest = state
                     .slots
                     .iter()

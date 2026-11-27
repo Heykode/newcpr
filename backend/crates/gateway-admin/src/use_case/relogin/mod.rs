@@ -1235,7 +1235,7 @@ impl ReloginService for DefaultReloginService {
                 },
                 plan_type_display: plan_type
                     .as_deref()
-                    .map(|plan| self.provider.plan_type_display(plan)),
+                    .and_then(|plan| self.provider.plan_type_display(plan)),
                 plan_type,
                 workspace_id: credential.map(|value| value.workspace_id.clone()),
                 credential_status: match credential {
@@ -1274,7 +1274,7 @@ impl ReloginService for DefaultReloginService {
                             plan_type_display: account
                                 .plan_type
                                 .as_deref()
-                                .map(|plan| self.provider.plan_type_display(plan)),
+                                .and_then(|plan| self.provider.plan_type_display(plan)),
                             enabled: account.enabled,
                             status: projection.status.as_str(),
                             error_reason: projection.error_reason.map(|reason| reason.as_str()),

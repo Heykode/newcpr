@@ -272,6 +272,38 @@ pub(crate) fn derive_messages_session_affinity(
     )
 }
 
+/// Chat keeps explicit account routing while conversion and native turn ownership stay separate.
+pub(crate) fn derive_chat_session_affinity(
+    payload: &gateway_core::operation::ProtocolPayload,
+    client_api_key_id: &ClientApiKeyId,
+) -> Option<CodexSessionAffinity> {
+    if payload.protocol() != gateway_protocol::chat_completions::CHAT_PROTOCOL {
+        return None;
+    }
+    let body = payload.body();
+    let context = payload.context();
+    let session = gateway_protocol::openai::codex_account_session_id(body, context);
+    let mut affinity = if let Some(session) = session.as_ref() {
+        session_affinity(
+            "root-session",
+            session.clone(),
+            Some(session.clone()),
+            client_api_key_id,
+        )?
+    } else {
+        let hint = gateway_protocol::openai::OpenAiSchedulingSessionHint::from_context(context)?;
+        scheduling_hint_affinity(&hint, client_api_key_id)?
+    };
+    let thread = gateway_protocol::openai::codex_account_thread_id(body, context);
+    affinity.follow_only = match session.as_ref().zip(thread.as_ref()) {
+        Some((session, thread)) => session != thread,
+        None => gateway_protocol::openai::codex_responses_request_semantics(body, context)
+            .subagent_kind
+            .is_some(),
+    };
+    Some(affinity)
+}
+
 pub(crate) fn derive_codex_session_affinity(
     request: &CodexResponsesRequest,
     client_api_key_id: &ClientApiKeyId,

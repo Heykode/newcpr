@@ -144,7 +144,7 @@ async function main() {
         const desktopGroups = page.locator(`tr[data-row-key="${rows[0].id}"]`).getByRole('button', { name: /^查看账号分组/ })
         await desktopGroups.waitFor()
         await assertGroupBounds(desktopGroups, 2)
-        const longPlan = page.locator(`tr[data-row-key="${rows[1].id}"] [data-account-plan-mark] span`)
+        const longPlan = page.locator(`tr[data-row-key="${rows[1].id}"] [data-account-plan-mark]`)
         await longPlan.waitFor()
         assert.ok(await longPlan.evaluate(el => el.clientHeight > Number.parseFloat(getComputedStyle(el).lineHeight)
           && el.scrollHeight <= el.clientHeight + 1 && el.scrollWidth <= el.clientWidth + 1), 'long plan wraps within its column')
@@ -337,7 +337,7 @@ async function main() {
       assert.equal(reads.at(-1).page, '1', 'clearing search returns to the first page')
       await page.getByRole('combobox', { name: '按套餐筛选', exact: true }).click()
       await Promise.all([
-        page.waitForResponse(response => response.url().includes('/api/admin/accounts?') && response.url().includes('planType=plus')),
+        page.waitForResponse(response => response.url().includes('/api/admin/accounts?') && new URL(response.url()).searchParams.get('planType') === 'openai:plus'),
         page.getByRole('option', { name: 'Plus', exact: true }).click(),
       ])
       await Promise.all([

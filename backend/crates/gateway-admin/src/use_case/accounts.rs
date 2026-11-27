@@ -1341,8 +1341,10 @@ impl AccountsService for DefaultAccountsService {
                 ));
             }
             if command.auto_use_quota_credits.is_some()
-                && (item.account.provider_kind.as_str() != "openai"
-                    || item.account.authentication_kind != "oauth")
+                && (!matches!(
+                    item.account.provider_kind.as_str(),
+                    "openai" | "antigravity"
+                ) || item.account.authentication_kind != "oauth")
             {
                 return Err(AdminError::invalid("该账号不支持使用额度点数"));
             }
@@ -1919,6 +1921,7 @@ fn empty_quota() -> ProviderQuota {
     ProviderQuota {
         paused_windows: Vec::new(),
         credits: None,
+        plan_type_display: None,
         plan_type: None,
         observed_at: None,
         refresh_token_expires_at: None,

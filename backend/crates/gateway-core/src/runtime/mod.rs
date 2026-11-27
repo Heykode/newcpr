@@ -92,6 +92,7 @@ pub struct RequestTuningHandle {
     openai_turn_state_policy: Arc<RwLock<OpenAiTurnStatePolicy>>,
     excel_image_transport: Arc<RwLock<Option<crate::routing::ExcelImageTransport>>>,
     account_concurrency: AccountConcurrencyHandle,
+    openai_websocket_pool: Arc<RwLock<Option<crate::settings::OpenAiWebSocketPoolSettings>>>,
 }
 
 impl RequestTuningHandle {
@@ -102,7 +103,20 @@ impl RequestTuningHandle {
             openai_turn_state_policy: Arc::new(RwLock::new(OpenAiTurnStatePolicy::default())),
             excel_image_transport: Arc::default(),
             account_concurrency: AccountConcurrencyHandle::default(),
+            openai_websocket_pool: Arc::default(),
         }
+    }
+
+    #[must_use]
+    pub fn openai_websocket_pool(&self) -> Option<crate::settings::OpenAiWebSocketPoolSettings> {
+        *read_unpoisoned(&self.openai_websocket_pool)
+    }
+
+    pub fn publish_openai_websocket_pool(
+        &self,
+        settings: crate::settings::OpenAiWebSocketPoolSettings,
+    ) {
+        *write_unpoisoned(&self.openai_websocket_pool) = Some(settings);
     }
 
     #[must_use]
@@ -436,6 +450,8 @@ impl RuntimeSnapshotPublisher {
         };
         let revision = snapshot.revision();
         self.request_tuning.publish(snapshot.request_tuning());
+        self.request_tuning
+            .publish_openai_websocket_pool(snapshot.openai_websocket_pool());
         self.request_tuning
             .publish_excel_image_transport(snapshot.excel_image_transport().cloned());
         self.request_tuning

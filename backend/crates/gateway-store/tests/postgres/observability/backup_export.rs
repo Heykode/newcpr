@@ -34,6 +34,10 @@ async fn business_backup_restore_preserves_ledgers_and_global_usage_without_deta
         .bind(&alignment).execute(&db.pool).await.unwrap();
     sqlx::query("insert into client_key_charge_events(request_id,client_api_key_id,amount_usd,completed_at) values('charge_before_backup','backup_key',2.5,now())")
         .execute(&db.pool).await.unwrap();
+    let openai_request = serde_json::json!({"requestCountry":{"mode":"custom","country":"CA"},"oauthGuardianReviewModel":false,"residency":null,"accountRoutingOverride":"fixture-route"});
+    let openai_pool = serde_json::json!({"enabled":false,"maxAgeMs":120000,"fastPathBudgetMs":400,"idleTimeoutMs":45000,"streamIdleTimeoutMs":0});
+    sqlx::query("update runtime_settings set openai_request_settings_json=$1, openai_websocket_pool_json=$2, openai_runtime_settings_imported=true where id=1")
+        .bind(&openai_request).bind(&openai_pool).execute(&db.pool).await.unwrap();
     let identity: String = sqlx::query_scalar(
         "select to_jsonb(a)::text from provider_accounts a where id='acct_observe'",
     )
@@ -123,6 +127,15 @@ async fn business_backup_restore_preserves_ledgers_and_global_usage_without_deta
         .await
         .unwrap();
         assert_eq!(restored_sharing, sharing);
+        let (restored_request, restored_pool, imported): (serde_json::Value, serde_json::Value, bool) =
+            sqlx::query_as("select openai_request_settings_json, openai_websocket_pool_json, openai_runtime_settings_imported from runtime_settings where id=1")
+                .fetch_one(&db.pool).await.unwrap();
+        assert_eq!(restored_request, openai_request);
+        assert_eq!(restored_pool, openai_pool);
+        assert!(
+            imported,
+            "restoration must not reimport stale YAML on next startup"
+        );
         drain_analytics(&db.pool).await;
         let restored = repo
             .usage_summary(range, UsageRecordFilter::default())

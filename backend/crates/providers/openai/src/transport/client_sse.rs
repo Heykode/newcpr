@@ -1,7 +1,7 @@
 use gateway_core::diagnostics::{StreamCapture, StreamFormat, TraceContext, diagnostic_json};
 
 use std::{
-    sync::Arc,
+    sync::{Arc, OnceLock},
     time::{Duration, Instant},
 };
 
@@ -415,7 +415,8 @@ impl CodexBackendClient {
                 .oauth_guardian_role()
                 .is_some_and(gateway_protocol::openai::CodexGuardianRole::uses_sampler_transport);
         let body = if compressed {
-            zstd::stream::encode_all(std::io::Cursor::new(body), 3)
+            compress_request_body(body)
+                .await
                 .map_err(CodexClientError::RequestCompression)?
         } else {
             body
@@ -973,7 +974,8 @@ impl CodexBackendClient {
         let runtime = self.egress_runtime.as_ref();
         if exact
             && let Some((pool, key)) = self.websocket_pool.as_ref().zip(original_key.as_ref())
-            && let Some(owner) = pool.routing_owner(key, request.previous_response_id())
+            && let Some(owner) =
+                pool.routing_owner(key, request.previous_response_id(), self.privacy.is_some())
             && let Some(routing) = &owner.routing
         {
             let mut selected = routing.egress.clone();
@@ -1408,6 +1410,23 @@ fn observe_http_sse_rate_limits(
             }
         },
     ))
+}
+
+async fn compress_request_body(body: Vec<u8>) -> std::io::Result<Vec<u8>> {
+    // 压缩不能占用 Tokio worker；先限并发再提交，取消后由工作线程持有名额直到结束
+    static WORKERS: OnceLock<tokio::sync::Semaphore> = OnceLock::new();
+    let workers = WORKERS.get_or_init(|| {
+        tokio::sync::Semaphore::new(
+            std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get),
+        )
+    });
+    let permit = workers.acquire().await.map_err(std::io::Error::other)?;
+    tokio_util::task::AbortOnDropHandle::new(tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        zstd::stream::encode_all(std::io::Cursor::new(body), 3)
+    }))
+    .await
+    .map_err(std::io::Error::other)?
 }
 
 async fn append_http_sse_rate_limit_updates(

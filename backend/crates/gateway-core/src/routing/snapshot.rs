@@ -35,8 +35,8 @@ pub struct SnapshotSettingsFacts {
     excel_image_transport: Option<super::ExcelImageTransport>,
     responses_max_decompressed_body_bytes: u64,
     request_location: Option<crate::account::RequestLocation>,
-    openai_oauth_guardian_review_model: bool,
-    openai_request_country: crate::account::OpenAiRequestCountry,
+    openai_request_settings: crate::settings::OpenAiRequestSettings,
+    openai_websocket_pool: crate::settings::OpenAiWebSocketPoolSettings,
     max_concurrent_per_account: u32,
     openai_guardian_reserved_concurrency: u32,
     session_affinity_ttl_hours: u32,
@@ -73,13 +73,29 @@ impl SnapshotSettingsFacts {
     }
 
     #[must_use]
+    pub fn with_openai_runtime_settings(
+        mut self,
+        request: crate::settings::OpenAiRequestSettings,
+        pool: crate::settings::OpenAiWebSocketPoolSettings,
+    ) -> Self {
+        self.openai_request_settings = request;
+        self.openai_websocket_pool = pool;
+        self
+    }
+
+    #[must_use]
+    pub fn openai_websocket_pool(&self) -> crate::settings::OpenAiWebSocketPoolSettings {
+        self.openai_websocket_pool
+    }
+
+    #[must_use]
     pub fn with_openai_request_settings(
         mut self,
         guardian: bool,
         country: crate::account::OpenAiRequestCountry,
     ) -> Self {
-        self.openai_oauth_guardian_review_model = guardian;
-        self.openai_request_country = country;
+        self.openai_request_settings.oauth_guardian_review_model = guardian;
+        self.openai_request_settings.request_country = country;
         self
     }
 
@@ -158,8 +174,8 @@ impl SnapshotSettingsFacts {
             codex_quota_overdraft_enabled: false,
             codex_quota_overdraft_probe_model: "gpt-6-astra".to_owned(),
             request_location: None,
-            openai_oauth_guardian_review_model: true,
-            openai_request_country: Default::default(),
+            openai_request_settings: Default::default(),
+            openai_websocket_pool: Default::default(),
             request_interval_ms,
             rotation_strategy: rotation_strategy.into(),
             quota_reset_window_weights: Default::default(),
@@ -583,6 +599,16 @@ async fn compile_runtime_snapshot(
     refresh_catalog: bool,
     privacy_compiler: Option<&dyn crate::settings::privacy::PrivacyPolicyCompiler>,
 ) -> Result<RuntimeSnapshot, RuntimeSnapshotCompileError> {
+    facts
+        .settings
+        .openai_request_settings
+        .validate()
+        .map_err(|_| RuntimeSnapshotCompileError::InvalidData)?;
+    facts
+        .settings
+        .openai_websocket_pool
+        .validate()
+        .map_err(|_| RuntimeSnapshotCompileError::InvalidData)?;
     let registered_providers = provider_kinds.iter().cloned().collect::<BTreeSet<_>>();
 
     // Only read failures retain model facts; a successful empty catalog withdraws them.
@@ -913,9 +939,9 @@ async fn compile_runtime_snapshot(
                 codex_quota_overdraft_probe_model,
             )
             .with_request_location(facts.settings.request_location)
-            .with_openai_request_settings(
-                facts.settings.openai_oauth_guardian_review_model,
-                facts.settings.openai_request_country,
+            .with_openai_runtime_settings(
+                facts.settings.openai_request_settings,
+                facts.settings.openai_websocket_pool,
             )
             .with_account_concurrency_limits(account_limits)
     })
@@ -936,8 +962,8 @@ pub struct RuntimeSnapshot {
     codex_quota_overdraft_probe_model: UpstreamModelId,
     responses_max_decompressed_body_bytes: std::num::NonZeroUsize,
     request_location: Option<crate::account::RequestLocation>,
-    openai_oauth_guardian_review_model: bool,
-    openai_request_country: crate::account::OpenAiRequestCountry,
+    openai_request_settings: crate::settings::OpenAiRequestSettings,
+    openai_websocket_pool: crate::settings::OpenAiWebSocketPoolSettings,
     revision: ConfigRevision,
     account_selection_policy: AccountSelectionPolicy,
     providers: Arc<BTreeSet<ProviderKind>>,
@@ -985,16 +1011,32 @@ impl RuntimeSnapshot {
 
     #[must_use]
     pub const fn oauth_guardian_review_model(&self) -> bool {
-        self.openai_oauth_guardian_review_model
+        self.openai_request_settings.oauth_guardian_review_model
     }
+    #[must_use]
+    pub fn with_openai_runtime_settings(
+        mut self,
+        request: crate::settings::OpenAiRequestSettings,
+        pool: crate::settings::OpenAiWebSocketPoolSettings,
+    ) -> Self {
+        self.openai_request_settings = request;
+        self.openai_websocket_pool = pool;
+        self
+    }
+
+    #[must_use]
+    pub fn openai_websocket_pool(&self) -> crate::settings::OpenAiWebSocketPoolSettings {
+        self.openai_websocket_pool
+    }
+
     #[must_use]
     pub fn with_openai_request_settings(
         mut self,
         guardian: bool,
         country: crate::account::OpenAiRequestCountry,
     ) -> Self {
-        self.openai_oauth_guardian_review_model = guardian;
-        self.openai_request_country = country;
+        self.openai_request_settings.oauth_guardian_review_model = guardian;
+        self.openai_request_settings.request_country = country;
         self
     }
 
@@ -1168,8 +1210,8 @@ impl RuntimeSnapshot {
             .expect("positive default limit"),
             revision,
             request_location: None,
-            openai_oauth_guardian_review_model: true,
-            openai_request_country: Default::default(),
+            openai_request_settings: Default::default(),
+            openai_websocket_pool: Default::default(),
             account_selection_policy,
             providers: Arc::new(provider_set),
             provider_models: Arc::new(model_map),
@@ -1491,6 +1533,58 @@ impl RuntimeSnapshot {
             .collect()
     }
 
+    /// 复用执行计划筛选目录来源，保留元数据供客户端投影，不按展示状态裁剪模型
+    #[must_use]
+    pub fn model_metadata_for_operation(
+        &self,
+        scope: &Arc<FrozenAccountScope>,
+        operation: &Operation,
+    ) -> Vec<super::ExecutableModelMetadata<'_>> {
+        let mut entries = Vec::new();
+        for model in self.public_models_for_scope(scope) {
+            let Ok(plan) = self.plan(
+                &model,
+                operation,
+                Arc::clone(scope),
+                &RoutingContext::default(),
+            ) else {
+                continue;
+            };
+            let mut sources = Vec::new();
+            for candidate in plan.candidates() {
+                let Some((target, capabilities)) = candidate.upstream_model().and_then(|target| {
+                    self.provider_models
+                        .get(candidate.provider())?
+                        .get_key_value(target)
+                }) else {
+                    continue;
+                };
+                if capabilities.account_metadata.is_empty() {
+                    sources.push(super::ModelMetadataSource {
+                        target,
+                        metadata: None,
+                    });
+                } else {
+                    sources.extend(capabilities.account_metadata.iter().filter_map(
+                        |(account, metadata)| {
+                            candidate
+                                .account_scope()
+                                .allows_model(account, target.as_str())
+                                .then_some(super::ModelMetadataSource {
+                                    target,
+                                    metadata: Some(metadata),
+                                })
+                        },
+                    ));
+                }
+            }
+            if !sources.is_empty() {
+                entries.push(super::ExecutableModelMetadata { model, sources });
+            }
+        }
+        entries
+    }
+
     /// 合并冻结账号范围内实际存在 Provider 的公开模型画像。
     #[must_use]
     pub fn public_model_profiles_for_scope(
@@ -1499,7 +1593,7 @@ impl RuntimeSnapshot {
     ) -> Vec<super::PublicModelProfile> {
         let mut profiles = BTreeMap::new();
         for provider in scope.provider_kinds() {
-            for profile in self.profiles_for_provider_scope(provider, scope) {
+            for profile in self.profiles_for_provider_scope(provider, scope, None) {
                 if !self.catalog_model_allowed_for_scope(provider, profile.model(), scope) {
                     continue;
                 }
@@ -1518,8 +1612,18 @@ impl RuntimeSnapshot {
         &self,
         provider: &ProviderKind,
         scope: &FrozenAccountScope,
+        protocol: Option<&str>,
     ) -> Vec<super::PublicModelProfile> {
         let mut profiles = self.public_model_profiles_for_provider(provider);
+        if let Some(protocol) = protocol {
+            profiles.retain(|profile| {
+                let target = self.mapped_model(profile.model.as_str());
+                self.provider_models
+                    .get(provider)
+                    .and_then(|models| models.get(target.as_str()))
+                    .is_some_and(|model| model.supports_generation_protocol(protocol))
+            });
+        }
         profiles.retain_mut(|profile| {
             let target = self.mapped_model(profile.model.as_str());
             let Some(group) = self.model_group(provider, &target) else {
@@ -1820,6 +1924,7 @@ impl RuntimeSnapshot {
             || account_scope.provider_kinds().clone(),
             |provider| BTreeSet::from([provider.clone()]),
         );
+        let search = operation.requires_web_search();
         let mut invalid_variant = false;
         let mut group_model_denied = false;
         let mut search_unavailable = false;
@@ -1835,161 +1940,188 @@ impl RuntimeSnapshot {
             {
                 continue;
             }
-            let mut candidate_scope = Arc::clone(&account_scope);
-            let upstream_model = if let Some(group) =
-                self.model_group(provider, upstream_model.as_str())
-            {
+            let group = self.model_group(provider, upstream_model.as_str());
+            let group_search_targets = group
+                .and_then(|group| group.dedicated_web_search.as_deref())
+                .filter(|_| operation.is_native_web_search());
+            let mut search_variants = None;
+            let source = if let Some(group) = group {
                 if group.match_operation(operation, &requirements).is_none() {
                     continue;
                 }
-                let effort = operation.requested_reasoning_effort();
-                let Some(variant) = effort
-                    .as_ref()
-                    .and_then(|effort| group.reasoning_variants.get(effort))
-                else {
-                    invalid_variant = true;
-                    continue;
-                };
-                // 空集合在 restricted_to 中表示不收窄，必须先拒绝没有来源的档位
-                if variant.accounts.is_empty() {
-                    continue;
-                }
-                candidate_scope = Arc::new(account_scope.restricted_to_accounts(&variant.accounts));
-                &variant.model
-            } else {
-                &upstream_model
-            };
-            if enforce_account_model_policy
-                && candidate_scope.groups_deny_model(Some(upstream_model.as_str()))
-            {
-                group_model_denied = true;
-                continue;
-            }
-            if enforce_account_model_policy
-                && !candidate_scope.allows_provider_model(provider, upstream_model.as_str())
-            {
-                continue;
-            }
-            let capabilities = self
-                .provider_models
-                .get(provider)
-                .and_then(|models| models.get(upstream_model));
-            if operation.requires_native_protocol()
-                && capabilities.and_then(|model| model.generation_protocol)
-                    != Some(operation.protocol())
-            {
-                continue;
-            }
-            if direct_model.is_some() && capabilities.is_none() {
-                continue;
-            }
-            let emulated_features = match capabilities {
-                Some(capabilities) => {
-                    let Some(emulated) = capabilities.match_operation(operation, &requirements)
+                if group_search_targets.is_some() {
+                    // 独立搜索只执行搜索型号，任一获准的具体成员都能证明同账号的分组资格
+                    search_variants = Some(group.reasoning_variants.values());
+                    None
+                } else {
+                    let effort = operation.requested_reasoning_effort();
+                    let Some(variant) = effort
+                        .as_ref()
+                        .and_then(|level| group.reasoning_variants.get(level))
                     else {
+                        invalid_variant = true;
                         continue;
                     };
-                    emulated
+                    Some((&variant.model, Some(&variant.accounts)))
                 }
-                // Fixed-account diagnostics ask the provider directly; disabled accounts
-                // may never have contributed their models to the public catalog.
-                None if enforce_account_model_policy
-                    && (known_model || self.exhaustive_provider_catalogs.contains(provider)) =>
+            } else {
+                Some((&upstream_model, None))
+            };
+            let sources = source.into_iter().chain(
+                search_variants
+                    .into_iter()
+                    .flatten()
+                    .map(|variant| (&variant.model, Some(&variant.accounts))),
+            );
+            let mut targets = BTreeMap::<_, BTreeSet<_>>::new();
+            for (upstream_model, accounts) in sources {
+                if accounts.is_some_and(BTreeSet::is_empty) {
+                    continue;
+                }
+                let mut candidate_scope = accounts.map_or_else(
+                    || Arc::clone(&account_scope),
+                    |accounts| Arc::new(account_scope.restricted_to_accounts(accounts)),
+                );
+                if enforce_account_model_policy
+                    && candidate_scope.groups_deny_model(Some(upstream_model.as_str()))
+                {
+                    group_model_denied = true;
+                    continue;
+                }
+                // 强制 Provider 路由也不能扩大 Key 授权；管理诊断的目标账号由探测入口固定
+                if enforce_account_model_policy
+                    && !candidate_scope.allows_provider_model(provider, upstream_model.as_str())
                 {
                     continue;
                 }
-                None => BTreeSet::new(),
-            };
-            // 原生输出上限属于具体型号与账号，适配器账号沿用自己的能力合同
-            if let (Some(requested), Some(model)) =
-                (requirements.requested_output_tokens(), capabilities)
-            {
-                let mut excluded = model
-                    .account_metadata
-                    .iter()
-                    .filter_map(|(id, metadata)| {
-                        (metadata
-                            .max_output_tokens
-                            .is_some_and(|limit| requested > limit)
-                            && candidate_scope.allows(id))
-                        .then_some(id)
-                    })
-                    .peekable();
-                if excluded.peek().is_some() {
-                    let mut narrowed = candidate_scope.as_ref().clone();
-                    narrowed.exclude_accounts(excluded.cloned());
-                    if !narrowed.allows_provider_model(provider, upstream_model.as_str()) {
-                        continue;
-                    }
-                    candidate_scope = Arc::new(narrowed);
+                let capabilities = self
+                    .provider_models
+                    .get(provider)
+                    .and_then(|models| models.get(upstream_model));
+                // 原生入口不能借同名模型、发现型目录的匿名透传或插件声明跨协议分派
+                if operation.requires_native_protocol()
+                    && capabilities.and_then(|model| model.generation_protocol)
+                        != Some(operation.protocol())
+                {
+                    continue;
                 }
-            }
-            if operation.requires_web_search()
-                && let Some(model) = capabilities
-                && let Some(search_models) = &model.dedicated_web_search
-            {
-                // 仅目录中同时拥有请求型号和搜索目标的账号可执行本次搜索
-                let mut targets = BTreeMap::<_, BTreeSet<_>>::new();
-                for account in model.account_metadata.keys() {
-                    if !candidate_scope.allows_model(account, upstream_model.as_str()) {
-                        continue;
+                // 直连模型需要原生能力，不能借用插件为同名模型声明的账号与能力。
+                if direct_model.is_some() && capabilities.is_none() {
+                    continue;
+                }
+                let emulated_features = match capabilities {
+                    Some(capabilities) => {
+                        let Some(emulated) = capabilities.match_operation(operation, &requirements)
+                        else {
+                            continue;
+                        };
+                        emulated
                     }
-                    let Some(target) = search_models.get(account) else {
-                        search_unavailable = true;
-                        continue;
-                    };
-                    if !candidate_scope.allows_model_pair(
-                        account,
-                        upstream_model.as_str(),
-                        target.as_str(),
-                    ) {
-                        group_model_denied |=
-                            candidate_scope.groups_deny_model(Some(target.as_str()));
-                        continue;
-                    }
-                    let limit = self
-                        .provider_models
-                        .get(provider)
-                        .and_then(|models| models.get(target))
-                        .and_then(|model| model.account_metadata.get(account))
-                        .and_then(|meta| meta.max_output_tokens);
-                    if requirements
-                        .requested_output_tokens()
-                        .zip(limit)
-                        .is_some_and(|(requested, limit)| requested > limit)
+                    // Fixed-account diagnostics ask the provider directly; disabled accounts
+                    // may never have contributed their models to the public catalog.
+                    None if enforce_account_model_policy
+                        && (known_model
+                            || self.exhaustive_provider_catalogs.contains(provider)) =>
                     {
                         continue;
                     }
-                    targets.entry(target).or_default().insert(account.clone());
+                    None => BTreeSet::new(),
+                };
+                // 原生输出上限属于具体型号与账号，适配器账号沿用自己的能力合同
+                if let (Some(requested), Some(model)) =
+                    (requirements.requested_output_tokens(), capabilities)
+                {
+                    let mut excluded = model
+                        .account_metadata
+                        .iter()
+                        .filter_map(|(id, metadata)| {
+                            (metadata
+                                .max_output_tokens
+                                .is_some_and(|limit| requested > limit)
+                                && candidate_scope.allows(id))
+                            .then_some(id)
+                        })
+                        .peekable();
+                    if excluded.peek().is_some() {
+                        let mut narrowed = candidate_scope.as_ref().clone();
+                        narrowed.exclude_accounts(excluded.cloned());
+                        if !narrowed.allows_provider_model(provider, upstream_model.as_str()) {
+                            continue;
+                        }
+                        candidate_scope = Arc::new(narrowed);
+                    }
                 }
-                for (target, accounts) in targets {
-                    candidates.push(ProviderCandidate {
-                        requires_direct_authentication: direct_model.is_some(),
-                        provider: provider.clone(),
-                        upstream_model: Some(target.clone()),
-                        model_presentation: self
-                            .provider_model_presentations
+                if let Some(model) = capabilities
+                    && let Some(search_models) = group_search_targets
+                        .or(model.dedicated_web_search.as_deref().filter(|_| search))
+                {
+                    // 仅目录中同时拥有请求型号和搜索目标的账号可执行本次搜索
+                    for account in model.account_metadata.keys() {
+                        if !candidate_scope.allows_model(account, upstream_model.as_str()) {
+                            continue;
+                        }
+                        let Some(target) = search_models.get(account) else {
+                            search_unavailable = true;
+                            continue;
+                        };
+                        if !candidate_scope.allows_model_pair(
+                            account,
+                            upstream_model.as_str(),
+                            target.as_str(),
+                        ) {
+                            group_model_denied |=
+                                candidate_scope.groups_deny_model(Some(target.as_str()));
+                            continue;
+                        }
+                        let limit = self
+                            .provider_models
                             .get(provider)
                             .and_then(|models| models.get(target))
-                            .cloned(),
-                        emulated_features: emulated_features.clone(),
-                        account_scope: Arc::new(candidate_scope.restricted_to_accounts(&accounts)),
-                    });
+                            .and_then(|model| model.account_metadata.get(account))
+                            .and_then(|meta| meta.max_output_tokens);
+                        if requirements
+                            .requested_output_tokens()
+                            .zip(limit)
+                            .is_some_and(|(requested, limit)| requested > limit)
+                        {
+                            continue;
+                        }
+                        targets
+                            .entry((target, emulated_features.clone()))
+                            .or_default()
+                            .insert(account.clone());
+                    }
+                    continue;
                 }
-                continue;
+                candidates.push(ProviderCandidate {
+                    dedicated_web_search: false,
+                    requires_direct_authentication: direct_model.is_some(),
+                    provider: provider.clone(),
+                    upstream_model: Some(upstream_model.clone()),
+                    model_presentation: self
+                        .provider_model_presentations
+                        .get(provider)
+                        .and_then(|models| models.get(upstream_model))
+                        .cloned(),
+                    emulated_features,
+                    account_scope: candidate_scope,
+                });
             }
-            candidates.push(ProviderCandidate {
-                requires_direct_authentication: direct_model.is_some(),
-                provider: provider.clone(),
-                model_presentation: self
-                    .provider_model_presentations
-                    .get(provider)
-                    .and_then(|models| models.get(upstream_model))
-                    .cloned(),
-                upstream_model: Some(upstream_model.clone()),
-                emulated_features,
-                account_scope: candidate_scope,
-            });
+            for ((target, emulated_features), accounts) in targets {
+                candidates.push(ProviderCandidate {
+                    dedicated_web_search: true,
+                    requires_direct_authentication: direct_model.is_some(),
+                    provider: provider.clone(),
+                    upstream_model: Some(target.clone()),
+                    model_presentation: self
+                        .provider_model_presentations
+                        .get(provider)
+                        .and_then(|models| models.get(target))
+                        .cloned(),
+                    emulated_features,
+                    account_scope: Arc::new(account_scope.restricted_to_accounts(&accounts)),
+                });
+            }
         }
 
         if !known_model && candidates.len() > 1 {
@@ -2038,7 +2170,7 @@ impl RuntimeSnapshot {
             max_attempts: self.request_tuning.max_attempts(),
             request_tuning: self.request_tuning,
             request_location: self.request_location.clone(),
-            request_country: self.openai_request_country.clone(),
+            openai_request_settings: self.openai_request_settings.clone(),
             account_scope,
             candidates: Arc::from(candidates),
         })
@@ -2073,6 +2205,7 @@ impl RuntimeSnapshot {
             });
         }
         let candidate = ProviderCandidate {
+            dedicated_web_search: false,
             requires_direct_authentication: false,
             provider: provider.clone(),
             model_presentation: None,
@@ -2092,7 +2225,7 @@ impl RuntimeSnapshot {
             max_attempts: self.request_tuning.max_attempts(),
             request_tuning: self.request_tuning,
             request_location: self.request_location.clone(),
-            request_country: self.openai_request_country.clone(),
+            openai_request_settings: self.openai_request_settings.clone(),
             account_scope,
             candidates: Arc::from([candidate]),
         })

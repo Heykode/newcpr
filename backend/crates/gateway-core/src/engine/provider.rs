@@ -41,6 +41,7 @@ pub struct ProviderCallMetadata {
     upstream_request_id: Option<OpaqueUpstreamValue>,
     transport: UpstreamTransport,
     selection_observation: Option<ProviderSelectionObservation>,
+    observed_plan: Option<(Option<String>, Option<String>)>,
     credential_revision: Option<crate::account::CredentialRevision>,
 }
 
@@ -75,6 +76,15 @@ impl ProviderSelectionObservation {
 }
 
 impl ProviderCallMetadata {
+    pub fn with_observed_plan(mut self, plan: Option<(Option<String>, Option<String>)>) -> Self {
+        self.observed_plan = plan;
+        self
+    }
+
+    pub fn observed_plan(&self) -> Option<&(Option<String>, Option<String>)> {
+        self.observed_plan.as_ref()
+    }
+
     #[must_use]
     pub const fn with_credential_revision(
         mut self,
@@ -103,6 +113,7 @@ impl ProviderCallMetadata {
             upstream_request_id: None,
             transport,
             selection_observation: None,
+            observed_plan: None,
             credential_revision: None,
         }
     }
@@ -121,6 +132,7 @@ impl ProviderCallMetadata {
             upstream_request_id: None,
             transport,
             selection_observation: None,
+            observed_plan: None,
             credential_revision: None,
         }
     }

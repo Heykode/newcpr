@@ -45,7 +45,10 @@ pub(crate) async fn models(
 
     if anthropic {
         return model_protocol_response(
-            anthropic_models_response(service.public_models(&client), &query),
+            match service.messages_model_catalog(&client).await {
+                Ok(models) => anthropic_models_response(models, &query),
+                Err(_) => catalog_unavailable_response(),
+            },
             true,
         )
         .await;
@@ -153,7 +156,15 @@ pub(crate) async fn model_detail(
         return model_protocol_response(model_not_found_response().into_response(), anthropic)
             .await;
     };
-    if !service.contains_public_model(&client, &public_model) {
+    let visible = if anthropic {
+        match service.messages_model_catalog(&client).await {
+            Ok(models) => models.iter().any(|model| model == public_model.as_str()),
+            Err(_) => return model_protocol_response(catalog_unavailable_response(), true).await,
+        }
+    } else {
+        service.contains_public_model(&client, &public_model)
+    };
+    if !visible {
         return model_protocol_response(model_not_found_response().into_response(), anthropic)
             .await;
     }

@@ -33,6 +33,36 @@ use gateway_admin::{
     ports::store::{AdminStoreResult, ObservabilityStore, SettingsStore},
 };
 
+#[tokio::test]
+async fn usage_history_preserves_observed_subscription_description_over_current_plan_label() {
+    let now = Utc::now();
+    let store = Arc::new(FixtureObservabilityStore::new(observation_range(now)));
+    let mut record = total_record(
+        "request_historical_description",
+        Some("antigravity"),
+        "unavailable",
+        now,
+    );
+    record.provider_account_plan_type = Some("google-ai-pro".to_owned());
+    record.provider_account_plan_type_display =
+        Some("Historical subscription description".to_owned());
+    store.replace_usage_records(vec![record]);
+    let services = observability_services_with_calculated_billing(store).await;
+    let page = services
+        .observability()
+        .usage_records(usage_query(now))
+        .await
+        .unwrap();
+    assert_eq!(
+        page.items[0].provider_account_plan_type.as_deref(),
+        Some("google-ai-pro")
+    );
+    assert_eq!(
+        page.items[0].provider_account_plan_type_display.as_deref(),
+        Some("Historical subscription description")
+    );
+}
+
 #[test]
 fn external_observability_range_accepts_exactly_366_days() {
     let end = Utc::now();
@@ -1069,8 +1099,8 @@ impl SettingsStore for FixtureSettingsStore {
     async fn load_runtime_settings(&self) -> AdminStoreResult<RuntimeSettings> {
         Ok(RuntimeSettings {
             request_profiles: Default::default(),
-            openai_oauth_guardian_review_model: true,
-            openai_request_country: Default::default(),
+            openai_request_settings: Default::default(),
+            openai_websocket_pool: Default::default(),
             codex_privacy_policy: Default::default(),
 
             account_affinity: Default::default(),
@@ -1261,6 +1291,7 @@ fn health_metric_point(bucket_start: DateTime<Utc>, metrics: RequestMetrics) -> 
 
 fn diagnostic(name: &str, request_count: u64) -> DiagnosticObservation {
     DiagnosticObservation {
+        account_plan_type_display: None,
         account_provider_kind: None,
         account_authentication_kind: None,
         account_plan_type: None,

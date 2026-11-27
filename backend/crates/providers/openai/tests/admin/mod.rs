@@ -1043,8 +1043,10 @@ async fn openai_admin_projects_free_plan_from_cached_quota_when_account_claims_o
         Some("free")
     );
     assert_eq!(
-        admin.plan_type_display(quota.plan_type.as_deref().expect("plan")),
-        "Free"
+        admin
+            .plan_type_display(quota.plan_type.as_deref().expect("plan"))
+            .as_deref(),
+        Some("Free")
     );
 }
 
@@ -3467,7 +3469,11 @@ async fn plan_display_uses_pro_short_names_and_codex_status_labels_for_other_kno
         ("SCI_PLUS", "Academic Researchers Plus"),
         ("Future_Plan", "Future_Plan"),
     ] {
-        assert_eq!(admin.plan_type_display(raw), display, "{raw}");
+        assert_eq!(
+            admin.plan_type_display(raw).as_deref(),
+            Some(display),
+            "{raw}"
+        );
     }
 }
 
@@ -3510,12 +3516,12 @@ async fn codex_plan_filters_cover_every_display_alias_without_merging_pro_tiers(
             assert!(
                 actual
                     .iter()
-                    .all(|alias| admin.plan_type_display(alias) == *display)
+                    .all(|alias| admin.plan_type_display(alias).as_deref() == Some(*display))
             );
         }
     }
     for unknown in ["", "future-plan", "supergrok"] {
         assert!(admin.plan_type_aliases(unknown).is_none());
-        assert_eq!(admin.plan_type_display(unknown), unknown);
+        assert_eq!(admin.plan_type_display(unknown).as_deref(), Some(unknown));
     }
 }

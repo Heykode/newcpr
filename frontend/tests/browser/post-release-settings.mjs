@@ -13,8 +13,8 @@ async function main() {
   const originalUa = 'codex_cli_rs/0.146.0 (Linux 6.8.0; x86_64) unknown'
   let settings = {
     configRevision: 1,
-    openaiOauthGuardianReviewModel: true,
-    openaiRequestCountry: { mode: 'follow_location' },
+    openaiRequestSettings: { requestCountry: { mode: 'follow_location' }, oauthGuardianReviewModel: true, residency: 'us', accountRoutingOverride: null },
+    openaiWebsocketPool: { enabled: true, maxAgeMs: 3300000, fastPathBudgetMs: 800, idleTimeoutMs: 300000, streamIdleTimeoutMs: 300000 },
     modelMappings: {},
     refreshMarginSeconds: 300,
     refreshConcurrency: 4,

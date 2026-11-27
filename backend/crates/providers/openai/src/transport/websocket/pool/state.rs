@@ -29,7 +29,7 @@ pub struct CodexWebSocketPoolKey {
     client_scope: String,
     conversation_id: String,
     connection_profile: String,
-    response_exclusions: Vec<String>,
+    response_exclusions: Vec<(&'static str, String)>,
     installation_id: Option<String>,
     routing_affinity_id: Option<Uuid>,
     pub(super) downstream_connection_id: String,
@@ -145,11 +145,15 @@ impl CodexWebSocketPoolKey {
 
     /// 上游只在握手时读取响应排除项，精确续接也必须匹配最终发出的头值
     pub(crate) fn with_response_exclusions(mut self, opening_headers: &[(String, String)]) -> Self {
-        self.response_exclusions = opening_headers
-            .iter()
-            .filter(|(name, _)| name.eq_ignore_ascii_case("x-codex-exclude"))
-            .map(|(_, value)| value.clone())
-            .collect();
+        self.response_exclusions.clear();
+        for header in ["x-codex-exclude", "x-codex-exclude-stream-fields"] {
+            self.response_exclusions.extend(
+                opening_headers
+                    .iter()
+                    .filter(|(name, _)| name.eq_ignore_ascii_case(header))
+                    .map(|(_, value)| (header, value.clone())),
+            );
+        }
         self
     }
 
@@ -181,7 +185,7 @@ impl CodexWebSocketPoolKey {
         self
     }
 
-    pub(super) fn matches_routing_owner(&self, other: &Self) -> bool {
+    pub(super) fn matches_routing_owner(&self, other: &Self, exclusions_may_change: bool) -> bool {
         // Exact response ownership survives a downstream reconnect. Independent
         // chains still use the full key, including the downstream lane.
         self.fedramp_routing == other.fedramp_routing
@@ -189,7 +193,8 @@ impl CodexWebSocketPoolKey {
             && self.account_id == other.account_id
             && self.client_scope == other.client_scope
             && self.conversation_id == other.conversation_id
-            && self.response_exclusions == other.response_exclusions
+            && (self.response_exclusions == other.response_exclusions
+                || (exclusions_may_change && self.installation_id == other.installation_id))
             && self.routing_affinity_id == other.routing_affinity_id
             && self
                 .routing
@@ -248,7 +253,11 @@ impl CodexWebSocketPoolKey {
                 .into_iter()
                 .chain((!self.client_scope.is_empty()).then_some(self.client_scope.as_str()))
                 .chain((!routing_affinity.is_empty()).then_some(routing_affinity.as_str()))
-                .chain(self.response_exclusions.iter().map(String::as_str)),
+                .chain(
+                    self.response_exclusions
+                        .iter()
+                        .flat_map(|(name, value)| [*name, value.as_str()]),
+                ),
         )
     }
 
@@ -270,6 +279,7 @@ const MAX_CONTINUATION_TOMBSTONES: usize = 4_096;
 
 #[derive(Default)]
 pub(super) struct WebSocketPoolState {
+    pub(super) opening_by_account: HashMap<String, usize>,
     pub(super) slots: HashMap<CodexWebSocketPoolKey, WebSocketPoolSlot>,
     pub(super) downstream_connections: HashMap<String, gateway_core::lifecycle::CancellationToken>,
     pub(super) egress_config: Option<Arc<ProviderEgressConfig>>,
@@ -346,7 +356,23 @@ pub(crate) struct CodexWebSocketConnectionMetadata {
     pub(crate) diagnostics: CodexUpstreamDiagnostics,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) struct WebSocketConnectionLifetime {
+    pub(crate) max_age: Duration,
+    pub(crate) idle_timeout: Duration,
+}
+
+impl From<super::CodexWebSocketPoolConfig> for WebSocketConnectionLifetime {
+    fn from(config: super::CodexWebSocketPoolConfig) -> Self {
+        Self {
+            max_age: config.max_age,
+            idle_timeout: config.idle_timeout,
+        }
+    }
+}
+
 pub(crate) struct PooledWebSocketConnection {
+    pub(crate) lifetime: WebSocketConnectionLifetime,
     pub(crate) websocket: PumpedWebSocket,
     pub(crate) metadata: CodexWebSocketConnectionMetadata,
     pub(crate) continuation: WebSocketContinuationState,
@@ -392,6 +418,7 @@ impl WebSocketPoolSlot {
 }
 
 pub(super) struct WebSocketPoolConnecting {
+    pub(super) max_age: Duration,
     pub(super) id: Uuid,
     pub(super) started_at: Instant,
     pub(super) outcome: watch::Sender<WebSocketPoolConnectOutcome>,
@@ -416,6 +443,7 @@ impl WebSocketPoolConnecting {
 
 #[derive(Clone)]
 pub(super) struct WebSocketPoolReservation {
+    pub(super) max_age: Duration,
     pub(super) id: Uuid,
     pub(super) reserved_at: Instant,
     pub(super) latest_response_id: Option<String>,
@@ -436,9 +464,9 @@ pub(super) async fn close_pooled_connections(connections: Vec<PooledWebSocketCon
 pub(super) fn should_close_idle_connection(
     connection: &PooledWebSocketConnection,
     now: Instant,
-    max_age: Duration,
 ) -> bool {
-    connection.websocket.is_closed() || now.duration_since(connection.created_at) >= max_age
+    connection.websocket.is_closed()
+        || now.duration_since(connection.created_at) >= connection.lifetime.max_age
 }
 
 fn short_sha256<'a>(parts: impl IntoIterator<Item = &'a str>) -> String {

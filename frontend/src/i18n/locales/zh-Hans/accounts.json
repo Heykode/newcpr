@@ -55,6 +55,8 @@
         "hours": "{duration}小时额度",
         "minutes": "{duration}分钟额度"
       },
+      "googleAiCredits": "Google AI 点数",
+      "codexCredits": "Codex 点数",
       "autoUsePoints": "自动使用额度点数",
       "autoUsePointsHelp": "订阅额度耗尽后，使用可用点数继续请求",
       "groups": {

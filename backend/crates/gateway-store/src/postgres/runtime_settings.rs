@@ -37,8 +37,8 @@ pub struct RuntimeSettings {
     pub refresh_concurrency: u32,
     pub max_concurrent_per_account: u32,
     pub openai_guardian_reserved_concurrency: u32,
-    pub openai_oauth_guardian_review_model: bool,
-    pub openai_request_country: gateway_core::account::OpenAiRequestCountry,
+    pub openai_request_settings: gateway_core::settings::OpenAiRequestSettings,
+    pub openai_websocket_pool: gateway_core::settings::OpenAiWebSocketPoolSettings,
     pub account_warmup_enabled: bool,
     pub account_warmup_cron: String,
     pub account_warmup_model: Option<String>,
@@ -122,8 +122,8 @@ pub struct RuntimeSettingsUpdate {
     pub refresh_concurrency: u32,
     pub max_concurrent_per_account: u32,
     pub openai_guardian_reserved_concurrency: u32,
-    pub openai_oauth_guardian_review_model: bool,
-    pub openai_request_country: gateway_core::account::OpenAiRequestCountry,
+    pub openai_request_settings: gateway_core::settings::OpenAiRequestSettings,
+    pub openai_websocket_pool: gateway_core::settings::OpenAiWebSocketPoolSettings,
     pub account_warmup_enabled: bool,
     pub account_warmup_cron: String,
     pub account_warmup_model: Option<String>,
@@ -193,6 +193,8 @@ impl RuntimeSettingsUpdate {
             .is_err()
             || !valid_required_model_name(&self.codex_quota_overdraft_probe_model)
             || RotationStrategy::parse(&self.rotation_strategy).is_none()
+            || self.openai_request_settings.validate().is_err()
+            || self.openai_websocket_pool.validate().is_err()
             || !self.request_tuning.validate()
         {
             return Err(StoreError::InvalidData {
@@ -218,6 +220,41 @@ pub struct PgRuntimeSettingsRepository {
 }
 
 impl PgRuntimeSettingsRepository {
+    pub async fn import_legacy_openai_settings(
+        &self,
+        residency: Option<String>,
+        account_routing_override: Option<String>,
+        pool: gateway_core::settings::OpenAiWebSocketPoolSettings,
+    ) -> StoreResult<()> {
+        gateway_core::settings::OpenAiRequestSettings {
+            residency: residency.clone(),
+            account_routing_override: account_routing_override.clone(),
+            ..Default::default()
+        }
+        .validate()
+        .map_err(|field| StoreError::InvalidData {
+            entity: "runtime settings",
+            message: field.into(),
+        })?;
+        pool.validate().map_err(|field| StoreError::InvalidData {
+            entity: "runtime settings",
+            message: field.into(),
+        })?;
+        sqlx::query("update runtime_settings set
+            openai_request_settings_json = openai_request_settings_json || jsonb_build_object('residency', $1::text, 'accountRoutingOverride', $2::text),
+            openai_websocket_pool_json = $3::jsonb || jsonb_strip_nulls(jsonb_build_object(
+                'maxAgeMs', request_tuning_json->'websocketMaxAgeMs',
+                'streamIdleTimeoutMs', request_tuning_json->'websocketStreamIdleTimeoutMs')),
+            request_tuning_json = request_tuning_json - 'websocketMaxAgeMs' - 'websocketStreamIdleTimeoutMs',
+            openai_runtime_settings_imported = true,
+            config_revision = config_revision + 1, settings_revision = config_revision + 1,
+            updated_at = now()
+            where id=1 and not openai_runtime_settings_imported")
+            .bind(residency).bind(account_routing_override).bind(sqlx::types::Json(pool))
+            .execute(&self.pool).await.map_err(|error| postgres_unavailable("import legacy OpenAI settings").with_source(error))?;
+        Ok(())
+    }
+
     #[must_use]
     pub const fn new(pool: PgPool) -> Self {
         Self { pool }
@@ -252,7 +289,7 @@ pub(crate) async fn load_runtime_settings_from_pool(pool: &PgPool) -> StoreResul
                     rotation_strategy, quota_reset_window_weights_json, model_mappings_json, usage_retention_days, ops_event_retention_days,
                     audit_retention_days, min_codex_desktop_version,
                     min_codex_cli_version, request_tuning_json, updated_at, turn_state_probe_concurrency,
-                    openai_guardian_reserved_concurrency, openai_oauth_guardian_review_model, openai_request_country_json,
+                    openai_guardian_reserved_concurrency, openai_request_settings_json, openai_websocket_pool_json,
                     account_warmup_enabled, account_warmup_cron, account_warmup_model, codex_quota_overdraft_enabled, codex_quota_overdraft_probe_model, session_affinity_ttl_hours, account_affinity
              from runtime_settings where id = 1",
         )
@@ -267,6 +304,28 @@ pub(crate) async fn load_runtime_settings_from_pool(pool: &PgPool) -> StoreResul
 }
 
 impl ProviderRuntimePolicyPort for PgRuntimeSettingsRepository {
+    fn load_openai_request_settings(
+        &self,
+    ) -> futures::future::BoxFuture<
+        '_,
+        Result<gateway_core::settings::OpenAiRequestSettings, ProviderStoreError>,
+    > {
+        Box::pin(async move {
+            let value = sqlx::query_scalar::<
+                _,
+                sqlx::types::Json<gateway_core::settings::OpenAiRequestSettings>,
+            >(
+                "select openai_request_settings_json from runtime_settings where id=1"
+            )
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|source| {
+                provider_unavailable("load OpenAI request settings").with_source(source)
+            })?;
+            Ok(value.0)
+        })
+    }
+
     fn load_request_profile<'a>(
         &'a self,
         provider: &'a gateway_core::routing::ProviderKind,
@@ -374,7 +433,7 @@ pub(crate) async fn load_runtime_settings_in_transaction(
                 rotation_strategy, quota_reset_window_weights_json, model_mappings_json, usage_retention_days, ops_event_retention_days,
                 audit_retention_days, min_codex_desktop_version,
                 min_codex_cli_version, request_tuning_json, updated_at, turn_state_probe_concurrency,
-                openai_guardian_reserved_concurrency, openai_oauth_guardian_review_model, openai_request_country_json,
+                openai_guardian_reserved_concurrency, openai_request_settings_json, openai_websocket_pool_json,
                 account_warmup_enabled, account_warmup_cron, account_warmup_model, codex_quota_overdraft_enabled, codex_quota_overdraft_probe_model, session_affinity_ttl_hours, account_affinity
          from runtime_settings where id = 1",
     )
@@ -401,6 +460,8 @@ pub(crate) async fn update_runtime_settings_in_transaction(
     .map_err(|_| postgres_unavailable("lock image policy settings"))?;
     let previous = previous.map(|value| value.0).unwrap_or_default();
     let mut tuning = update.request_tuning.clone();
+    tuning.websocket_max_age_ms = None;
+    tuning.websocket_stream_idle_timeout_ms = None;
     tuning.account_error_protection = tuning
         .account_error_protection
         .or(previous.account_error_protection);
@@ -464,8 +525,9 @@ pub(crate) async fn update_runtime_settings_in_transaction(
                  session_affinity_ttl_hours = coalesce($26, session_affinity_ttl_hours),
                  account_affinity = coalesce($27, account_affinity),
                  quota_reset_window_weights_json = $28,
-                 openai_oauth_guardian_review_model = $29,
-                 openai_request_country_json = $30,
+                 openai_request_settings_json = $29,
+                 openai_websocket_pool_json = $30,
+                 openai_runtime_settings_imported = true,
                  codex_privacy_policy_json = coalesce($31, codex_privacy_policy_json),
                  updated_at = now()
 	             where id = 1
@@ -502,8 +564,8 @@ pub(crate) async fn update_runtime_settings_in_transaction(
     .bind(update.session_affinity_ttl_hours.map(i64::from))
     .bind(update.account_affinity.map(|mode| mode.as_str()))
     .bind(sqlx::types::Json(update.quota_reset_window_weights))
-    .bind(update.openai_oauth_guardian_review_model)
-    .bind(sqlx::types::Json(&update.openai_request_country))
+    .bind(sqlx::types::Json(&update.openai_request_settings))
+    .bind(sqlx::types::Json(&update.openai_websocket_pool))
     .bind(update.codex_privacy_policy.as_ref().map(sqlx::types::Json))
     .fetch_optional(&mut **transaction)
     .await
@@ -581,8 +643,9 @@ struct RuntimeSettingsRow {
         sqlx::types::Json<BTreeMap<String, serde_json::Map<String, serde_json::Value>>>,
     codex_privacy_policy_json:
         sqlx::types::Json<gateway_core::settings::privacy::CodexPrivacyPolicy>,
-    openai_oauth_guardian_review_model: bool,
-    openai_request_country_json: sqlx::types::Json<gateway_core::account::OpenAiRequestCountry>,
+    openai_request_settings_json: sqlx::types::Json<gateway_core::settings::OpenAiRequestSettings>,
+    openai_websocket_pool_json:
+        sqlx::types::Json<gateway_core::settings::OpenAiWebSocketPoolSettings>,
     config_revision: i64,
     settings_revision: i64,
     admin_api_key: Option<String>,
@@ -620,8 +683,8 @@ fn runtime_settings_from_row(row: RuntimeSettingsRow) -> StoreResult<RuntimeSett
     Ok(RuntimeSettings {
         request_profiles: super::client_keys::decode_request_profiles(row.request_profiles_json.0)?,
         codex_privacy_policy: row.codex_privacy_policy_json.0,
-        openai_oauth_guardian_review_model: row.openai_oauth_guardian_review_model,
-        openai_request_country: row.openai_request_country_json.0,
+        openai_request_settings: row.openai_request_settings_json.0,
+        openai_websocket_pool: row.openai_websocket_pool_json.0,
         account_affinity: gateway_core::account::AccountAffinity::parse(&row.account_affinity)
             .ok_or_else(|| StoreError::InvalidData {
                 entity: "runtime settings",

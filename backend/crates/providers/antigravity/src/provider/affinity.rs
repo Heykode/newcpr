@@ -5,7 +5,7 @@ use gateway_core::{
     operation::Operation, policy::ClientApiKeyId, provider_ports::ProviderSessionAffinityKey,
     routing::UpstreamModelId,
 };
-use gateway_protocol::{anthropic, genai, openai};
+use gateway_protocol::{chat_completions::CHAT_PROTOCOL, genai};
 use serde_json::{Map, Value};
 use sha2::{Digest as _, Sha256};
 
@@ -19,13 +19,8 @@ pub(super) fn session_key(
     };
     let payload = generate.protocol_payload();
     let session = match payload.protocol() {
-        openai::OPENAI_PROTOCOL => {
-            openai::codex_account_session_id(payload.body(), payload.context())
-        }
-        anthropic::ANTHROPIC_PROTOCOL => anthropic::claude_session_id(
-            payload.body(),
-            header(payload.context(), "x-claude-code-session-id").as_deref(),
-        ),
+        CHAT_PROTOCOL => header(payload.context(), "x-http-session-id")
+            .or_else(|| header(payload.context(), "x-session-id")),
         genai::GENAI_PROTOCOL => header(payload.context(), "x-http-session-id")
             .or_else(|| header(payload.context(), "x-session-id"))
             .or_else(|| {
@@ -50,6 +45,17 @@ pub(super) fn session_key(
         hash.update(part.as_bytes());
     }
     ProviderSessionAffinityKey::try_new(hex::encode(hash.finalize())).ok()
+}
+
+// AGY 使用 FNV-1a 64 位有符号十进制串，网关从隔离后的会话键派生
+pub(super) fn upstream_session_id(key: &ProviderSessionAffinityKey) -> String {
+    let hash = key
+        .expose_to_store()
+        .bytes()
+        .fold(0xcbf29ce484222325u64, |hash, byte| {
+            (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3)
+        });
+    (hash as i64).to_string()
 }
 
 fn header(context: &Map<String, Value>, name: &str) -> Option<String> {

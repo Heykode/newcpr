@@ -501,6 +501,13 @@ fn decompress_permessage_deflate(payload: &[u8]) -> Vec<u8> {
 }
 
 async fn write_server_text_frame(stream: &mut TcpStream, payload: &str) {
+    stream
+        .write_all(&server_text_frame(payload))
+        .await
+        .expect("write server text frame");
+}
+
+fn server_text_frame(payload: &str) -> Vec<u8> {
     let payload = payload.as_bytes();
     let mut frame = Vec::with_capacity(payload.len() + 10);
     frame.push(0x81);
@@ -524,10 +531,7 @@ async fn write_server_text_frame(stream: &mut TcpStream, payload: &str) {
         }
     }
     frame.extend_from_slice(payload);
-    stream
-        .write_all(&frame)
-        .await
-        .expect("write completed frame");
+    frame
 }
 
 fn large_upload_client(addr: std::net::SocketAddr) -> (CodexBackendClient, CodexResponsesRequest) {
@@ -670,19 +674,25 @@ async fn partial_upload_honors_peer_reply_and_keeps_bare_disconnect_ambiguous() 
 
 #[tokio::test]
 async fn upload_timeout_delivers_buffered_upstream_error() {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let listener = tokio::net::TcpSocket::new_v4().unwrap();
+    listener.set_recv_buffer_size(256 * 1024).unwrap();
+    listener.bind(([127, 0, 0, 1], 0).into()).unwrap();
+    let listener = listener.listen(1).unwrap();
     let (client, request) = large_upload_client(listener.local_addr().unwrap());
     let (release, released) = tokio::sync::oneshot::channel();
     let server = tokio::spawn(async move {
         let (mut socket, _) = listener.accept().await.unwrap();
         upgrade_raw_socket(&mut socket, false).await;
-        assert_eq!(read_client_frame(&mut socket).await.first_byte, 0x01);
-        write_server_text_frame(
-            &mut socket,
+        // 首字节确认上传已开始。先把错误和 Ping 连续写出，再读取首片以解除背压。
+        let mut opcode = [0];
+        assert_eq!(socket.peek(&mut opcode).await.unwrap(), 1);
+        assert_eq!(opcode, [0x01]);
+        let mut reply = server_text_frame(
             r#"{"type":"error","error":{"code":"rate_limit_exceeded","message":"quota"}}"#,
-        )
-        .await;
-        socket.write_all(&[0x89, 1, b'p']).await.unwrap();
+        );
+        reply.extend_from_slice(&[0x89, 1, b'p']);
+        socket.write_all(&reply).await.unwrap();
+        assert_eq!(read_client_frame(&mut socket).await.first_byte, 0x01);
         timeout(Duration::from_secs(10), async {
             loop {
                 let frame = read_client_frame(&mut socket).await;

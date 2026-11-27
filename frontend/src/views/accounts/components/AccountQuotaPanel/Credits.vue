@@ -17,6 +17,7 @@ const props = defineProps<{
 const emit = defineEmits<{ accountUpdated: [account: Account] }>()
 const { loading, run } = useAsyncAction()
 const pending = shallowRef<boolean | null>(null)
+const creditsLabel = computed(() => t(props.account.provider === 'antigravity' ? 'accounts.quota.googleAiCredits' : 'accounts.quota.codexCredits'))
 const credits = computed(() => props.account.quota.credits)
 
 async function toggleCredits(enabled: boolean) {
@@ -57,9 +58,9 @@ const hasBalance = computed(() => !credits.value?.unlimited && balanceDisplay.va
     v-bind="$attrs"
     class="flex min-w-0 flex-wrap items-baseline gap-y-1"
     :class="compact ? 'justify-start gap-x-1.5 text-[10px]' : 'justify-between gap-x-4 rounded-cp bg-cp-fill-quaternary px-4 py-3.5 text-cp-sm'"
-    aria-label="Codex 点数"
+    :aria-label="creditsLabel"
   >
-    <span class="font-heavy text-cp-text">Codex 点数</span>
+    <span class="font-heavy text-cp-text">{{ creditsLabel }}</span>
     <span class="flex min-w-0 items-baseline gap-1.5">
       <strong
         class="min-w-0 text-right font-heavy wrap-anywhere"
@@ -70,7 +71,7 @@ const hasBalance = computed(() => !credits.value?.unlimited && balanceDisplay.va
       <span v-if="hasBalance" class="shrink-0 text-cp-text-tertiary" :class="compact ? 'text-[10px]' : 'text-cp-xs'">{{ t('accounts.quota.point') }}</span>
     </span>
   </div>
-  <div v-if="editable && account.provider === 'openai' && account.authenticationKind === 'oauth'" class="flex items-center justify-between gap-4 rounded-cp bg-cp-fill-quaternary px-4 py-3.5">
+  <div v-if="editable && (account.provider === 'openai' || account.provider === 'antigravity') && account.authenticationKind === 'oauth'" class="flex items-center justify-between gap-4 rounded-cp bg-cp-fill-quaternary px-4 py-3.5">
     <span class="min-w-0">
       <span class="block text-cp-sm font-heavy">{{ t('accounts.quota.autoUsePoints') }}</span>
       <span class="mt-1 block text-cp-xs text-cp-text-secondary">{{ t('accounts.quota.autoUsePointsHelp') }}</span>

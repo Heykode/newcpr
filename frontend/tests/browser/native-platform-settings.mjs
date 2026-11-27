@@ -2,20 +2,25 @@
 import assert from 'node:assert/strict'
 import { mkdir } from 'node:fs/promises'
 import process from 'node:process'
-import { pathToFileURL } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
+import { createServer } from 'vite'
 
 async function main() {
   const { chromium } = await import(process.env.PLAYWRIGHT_MODULE ? pathToFileURL(process.env.PLAYWRIGHT_MODULE).href : 'playwright')
   const browser = await chromium.launch({ headless: true })
   const output = process.env.QA_OUTPUT_DIR || '/tmp/cpr-native-platform-settings'
   await mkdir(output, { recursive: true })
-  const base = process.env.QA_BASE_URL || 'http://127.0.0.1:5177'
+  const server = await createServer({ root: fileURLToPath(new URL('../..', import.meta.url)), server: { host: '127.0.0.1', port: 0 }, plugins: [{ name: 'isolated-native-settings', configResolved(config) {
+    config.server.proxy = {}
+  } }] })
+  await server.listen()
+  const base = `http://127.0.0.1:${server.httpServer.address().port}`
   const now = new Date().toISOString()
   const errors = []
   const unexpected = []
   const writes = []
   const agy = { client: 'desktop', platform: 'linux', versionMode: 'latest', clientVersion: null, arch: 'x64', systemPrompt: null }
-  let settings = { configRevision: 1, openaiOauthGuardianReviewModel: true, openaiRequestCountry: { mode: 'follow_location' }, modelMappings: {}, refreshMarginSeconds: 300, refreshConcurrency: 4, maxConcurrentPerAccount: 5, requestIntervalMs: 0, sessionAffinityTtlHours: 24, accountAffinity: 'strict', rotationStrategy: 'smart', usageRetentionDays: 31, opsEventRetentionDays: 30, auditRetentionDays: 90, providerRequestProfiles: {}, codexPrivacyPolicy: { enabled: false, onError: 'skip_rule', rules: [] }, updatedAt: now }
+  let settings = { configRevision: 1, openaiRequestSettings: { requestCountry: { mode: 'follow_location' }, oauthGuardianReviewModel: true, residency: 'us', accountRoutingOverride: null }, openaiWebsocketPool: { enabled: true, maxAgeMs: 3300000, fastPathBudgetMs: 800, idleTimeoutMs: 300000, streamIdleTimeoutMs: 300000 }, modelMappings: {}, refreshMarginSeconds: 300, refreshConcurrency: 4, maxConcurrentPerAccount: 5, requestIntervalMs: 0, sessionAffinityTtlHours: 24, accountAffinity: 'strict', rotationStrategy: 'smart', usageRetentionDays: 31, opsEventRetentionDays: 30, auditRetentionDays: 90, providerRequestProfiles: {}, codexPrivacyPolicy: { enabled: false, onError: 'skip_rule', rules: [] }, updatedAt: now }
   const price = { multiplierBps: 10000, bands: { standard: { input: '1', output: '2', cacheRead: '0.1', cacheWrite: '0' } } }
   const pricing = { defaults: { openai: { 'fixture-model': price }, antigravity: { 'fixture-gemini': price } }, synced: {}, overrides: {}, supportedBands: { openai: ['standard', 'fast', 'ultrafast', 'image'], xai: ['standard'], antigravity: ['standard'] }, syncedAt: null, syncedAtDisplay: null }
   let page
@@ -92,6 +97,25 @@ async function main() {
     assert.equal(settings.providerRequestProfiles.antigravity.systemPrompt, 'Synthetic edited server instruction')
     for (const width of [1440, 390, 320]) {
       await page.setViewportSize({ width, height: 1000 })
+      await scope.getByRole('radio', { name: '通用与 Codex 配置', exact: true }).click()
+      const common = page.getByRole('region', { name: '通用与 Codex 配置', exact: true })
+      await common.getByRole('textbox', { name: '数据驻留', exact: true }).fill('')
+      await common.getByRole('textbox', { name: '账号路由', exact: true }).fill(width === 390 ? '' : 'us_cr')
+      const values = { 连接最大寿命: 66000, 建连等待时间: 432, 空闲回收时间: 77000, 流式空闲超时: 0 }
+      for (const [label, value] of Object.entries(values))
+        await common.getByRole('spinbutton', { name: label, exact: true }).fill(String(value))
+      await Promise.all([page.waitForResponse(response => response.url().endsWith('/api/admin/settings/update') && response.status() === 200), page.getByRole('button', { name: '保存全部设置', exact: true }).click()])
+      assert.equal(settings.openaiRequestSettings.residency, null)
+      assert.equal(settings.openaiRequestSettings.accountRoutingOverride, width === 390 ? null : 'us_cr')
+      assert.deepEqual(settings.openaiWebsocketPool, { enabled: true, maxAgeMs: 66000, fastPathBudgetMs: 432, idleTimeoutMs: 77000, streamIdleTimeoutMs: 0 })
+      assert(!('websocketMaxAgeMs' in settings.requestTuning))
+      await page.reload()
+      await common.locator('input[aria-label="连接最大寿命"]:enabled').waitFor()
+      assert.equal(await common.getByRole('textbox', { name: '数据驻留', exact: true }).inputValue(), '')
+      assert.equal(await common.getByRole('spinbutton', { name: '建连等待时间', exact: true }).inputValue(), '432')
+      await common.getByRole('spinbutton', { name: '建连等待时间', exact: true }).scrollIntoViewIfNeeded()
+      await page.screenshot({ path: `${output}/openai-pool-${width}.png` })
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true)
       await scope.getByRole('radio', { name: '工作区隐私', exact: true }).click()
       await page.getByRole('button', { name: '添加规则', exact: true }).click()
       const dialog = page.getByRole('dialog')
@@ -111,6 +135,16 @@ async function main() {
       await priceDialog.getByRole('textbox', { name: '上游模型 ID', exact: true }).fill(`fixture-${width}`)
       for (const label of ['输入单价', '输出单价', '缓存读取单价', '缓存写入单价'])
         await priceDialog.getByRole('textbox', { name: label, exact: true }).fill('1.25')
+      for (const label of ['输入单价', '输出单价', '缓存读取单价', '缓存写入单价']) {
+        const visible = await priceDialog.getByRole('textbox', { name: label, exact: true }).evaluate((input) => {
+          const style = getComputedStyle(input)
+          const context = document.createElement('canvas').getContext('2d')
+          context.font = style.font
+          const available = input.clientWidth - Number.parseFloat(style.paddingLeft) - Number.parseFloat(style.paddingRight)
+          return available >= context.measureText(input.value).width
+        })
+        assert.ok(visible, `${width}: price value is fully visible beside its unit`)
+      }
       const invalidLabels = await page.locator('label[for]').evaluateAll(labels => labels.filter((label) => {
         const target = document.getElementById(label.htmlFor)
         return target && target.getAttribute('role') === 'radiogroup'
@@ -134,7 +168,10 @@ async function main() {
     }
     throw error
   }
-  finally { await browser.close() }
+  finally {
+    await browser.close()
+    await server.close()
+  }
 }
 main().catch((error) => {
   console.error(error)

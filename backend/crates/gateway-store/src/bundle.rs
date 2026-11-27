@@ -7,6 +7,7 @@ use super::*;
 
 /// 已完成连接、迁移与 hydration 的 Store 能力集合。
 pub struct StoreBundle {
+    runtime_settings: postgres::PgRuntimeSettingsRepository,
     request_analytics: postgres::PgRequestAnalyticsRepository,
     admin_ports: AdminStorePorts,
     core_ports: CoreStorePorts,
@@ -18,6 +19,17 @@ pub struct StoreBundle {
 }
 
 impl StoreBundle {
+    pub async fn import_legacy_openai_settings(
+        &self,
+        residency: Option<String>,
+        routing: Option<String>,
+        pool: gateway_core::settings::OpenAiWebSocketPoolSettings,
+    ) -> StoreResult<()> {
+        self.runtime_settings
+            .import_legacy_openai_settings(residency, routing, pool)
+            .await
+    }
+
     pub fn request_analytics_worker(
         &self,
         projector: Arc<dyn gateway_admin::ports::store::UsageBillingProjector>,
@@ -320,6 +332,7 @@ pub async fn initialize(mut config: StoreConfig) -> StoreResult<StoreBundle> {
         ));
     }
     Ok(StoreBundle {
+        runtime_settings: postgres::PgRuntimeSettingsRepository::new(pool.clone()),
         request_analytics,
         operational_diagnostics,
         admin_ports,

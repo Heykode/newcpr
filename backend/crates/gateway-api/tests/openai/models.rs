@@ -206,6 +206,20 @@ impl ExecutionService for ModelsExecution {
         version: &'a str,
     ) -> BoxFuture<'a, Result<Vec<PublicModelDescriptor>, ProviderCatalogUnavailable>> {
         Box::pin(async move {
+            if protocol == "anthropic" {
+                assert_eq!(version, "");
+                return self.native.clone().unwrap_or_else(|| {
+                    Ok(["model-a", "model-b"]
+                        .into_iter()
+                        .map(|id| {
+                            PublicModelDescriptor::Adapted(PublicModelProfile::new(
+                                PublicModelId::new(id).unwrap(),
+                                ModelPresentation::default(),
+                            ))
+                        })
+                        .collect())
+                });
+            }
             assert_eq!(protocol, "codex");
             self.requested_versions
                 .lock()
@@ -787,4 +801,46 @@ async fn models_should_authenticate_before_applying_the_version_gate() {
         .expect("unauthenticated models response");
 
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn anthropic_menu_and_detail_hide_non_messages_models() {
+    let execution = Arc::new(ModelsExecution {
+        client: authenticated_client("sk_models_test"),
+        presentation: None,
+        native: Some(Ok(vec![])),
+        requested_versions: Mutex::default(),
+    });
+    let router = api_router(execution).await;
+    for (path, expected) in [
+        ("/v1/models", StatusCode::OK),
+        ("/v1/models/model-a", StatusCode::NOT_FOUND),
+    ] {
+        let response = router
+            .clone()
+            .oneshot(
+                Request::get(path)
+                    .header("x-api-key", "sk_models_test")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected);
+        let body: serde_json::Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        if expected == StatusCode::OK {
+            assert_eq!(body["data"], serde_json::json!([]));
+        }
+    }
+    let response = router
+        .oneshot(authorized_request("/v1/models/model-a"))
+        .await
+        .unwrap();
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "generic OpenAI catalog remains independent"
+    );
 }

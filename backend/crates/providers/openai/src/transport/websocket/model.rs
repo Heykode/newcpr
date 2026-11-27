@@ -44,6 +44,7 @@ pub(crate) struct ResponseCreateOpening {
     pub(crate) connection: CodexWebSocketConnection,
     pub(super) continuation: WebSocketContinuationRequirement,
     pub(super) codex_search_declared: bool,
+    pub(super) generate: bool,
 }
 
 /// 当前 WebSocket 请求对 previous response 状态的要求。

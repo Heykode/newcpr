@@ -24,6 +24,7 @@ use std::time::Duration;
 
 pub(super) struct SelectedAccount {
     pub(super) account: ProviderAccount,
+    pub(super) observed_plan: Option<(Option<String>, Option<String>)>,
     pub(super) capacity: Option<AccountCapacitySnapshot>,
     pub(super) material: Material,
     pub(super) project: Project,
@@ -98,6 +99,7 @@ impl AntigravityProvider {
             let CandidatePool {
                 accounts,
                 mut projects,
+                mut quotas,
                 mut selection,
             } = self.load_candidates(model, ctx, search).await?;
             let affinity = match affinity_key.filter(|_| !ctx.is_diagnostic_required_account()) {
@@ -178,9 +180,12 @@ impl AntigravityProvider {
                             || ctx
                                 .account_state_owner()
                                 .is_some_and(|owner| !owner.matches(&self.kind, account.id()));
-                        let selected = self
+                        let mut selected = self
                             .load_selected(account, project, lease, capacity, account_switch, ctx)
                             .await?;
+                        selected.observed_plan = quotas
+                            .remove(account.id())
+                            .map(|quota| (quota.plan_type, quota.plan_display));
                         let binding = affinity.as_ref().map(|affinity| {
                             affinity.claim_binding(
                                 account.id(),
@@ -279,6 +284,7 @@ impl AntigravityProvider {
         let material = self.credentials.material(&current)?;
         Ok(SelectedAccount {
             account: current.account,
+            observed_plan: None,
             capacity,
             material,
             project,

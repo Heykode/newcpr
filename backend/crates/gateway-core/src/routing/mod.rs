@@ -16,9 +16,10 @@ pub use crate::account::scope::{
 };
 pub use crate::identity::ProviderKind;
 pub use catalog::{
-    AccountModelMetadata, ProviderCatalogGeneration, ProviderCatalogPort,
-    ProviderCatalogUnavailable, ProviderModelCapabilities, ProviderModelDescriptor,
-    PublicModelDescriptor, ReasoningModelVariant,
+    AccountModelMetadata, AgentModelListing, ExecutableModelMetadata, ModelMetadataSource,
+    ProviderCatalogGeneration, ProviderCatalogPort, ProviderCatalogUnavailable,
+    ProviderModelCapabilities, ProviderModelDescriptor, PublicModelDescriptor,
+    ReasoningModelVariant,
 };
 pub use snapshot::RuntimeSnapshot;
 
@@ -749,6 +750,13 @@ impl ModelCapabilities {
         self
     }
 
+    pub(crate) fn supports_generation_protocol(&self, protocol: &str) -> bool {
+        self.operations.contains(&OperationKind::Generate)
+            && (self.generation_protocol.is_none()
+                || self.generation_protocol == Some(protocol)
+                || self.translated_generation_protocols.contains(protocol))
+    }
+
     fn match_operation(
         &self,
         operation: &crate::operation::Operation,
@@ -760,12 +768,15 @@ impl ModelCapabilities {
             return None;
         }
         if matches!(operation, crate::operation::Operation::Generate(_))
-            && self.generation_protocol.is_some_and(|protocol| {
-                protocol != operation.protocol()
-                    && !self
-                        .translated_generation_protocols
-                        .contains(operation.protocol())
-            })
+            && !self.supports_generation_protocol(operation.protocol())
+        {
+            return None;
+        }
+        if matches!(operation, crate::operation::Operation::CountTokens(_))
+            && operation.protocol() != "token-count"
+            && self
+                .generation_protocol
+                .is_some_and(|p| p != operation.protocol())
         {
             return None;
         }
@@ -868,6 +879,7 @@ pub struct RoutingContext {
 /// 已绑定 Provider 的请求候选；模型端点携带真实上游模型，原生端点不虚构模型。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderCandidate {
+    dedicated_web_search: bool,
     requires_direct_authentication: bool,
     provider: ProviderKind,
     upstream_model: Option<UpstreamModelId>,
@@ -877,6 +889,12 @@ pub struct ProviderCandidate {
 }
 
 impl ProviderCandidate {
+    /// 搜索目标和账号范围已经由目录解析，Provider 依此选择上游请求类型
+    #[must_use]
+    pub const fn uses_dedicated_web_search(&self) -> bool {
+        self.dedicated_web_search
+    }
+
     pub const fn requires_direct_authentication(&self) -> bool {
         self.requires_direct_authentication
     }
@@ -916,7 +934,7 @@ pub struct RoutingPlan {
     codex_quota_overdraft_enabled: bool,
     codex_quota_overdraft_probe_model: UpstreamModelId,
     request_location: Option<crate::account::RequestLocation>,
-    request_country: crate::account::OpenAiRequestCountry,
+    openai_request_settings: crate::settings::OpenAiRequestSettings,
     config_revision: ConfigRevision,
     account_selection_policy: AccountSelectionPolicy,
     operation: OperationKind,
@@ -938,8 +956,12 @@ impl RoutingPlan {
     }
 
     #[must_use]
+    pub fn openai_request_settings(&self) -> &crate::settings::OpenAiRequestSettings {
+        &self.openai_request_settings
+    }
+
     pub fn request_country(&self) -> &crate::account::OpenAiRequestCountry {
-        &self.request_country
+        &self.openai_request_settings.request_country
     }
     #[must_use]
     pub fn account_error_protection(&self) -> Arc<crate::account::CompiledAccountErrorProtection> {

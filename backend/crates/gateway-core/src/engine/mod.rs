@@ -375,7 +375,7 @@ pub struct RequestAttemptContext {
     codex_quota_overdraft_probe_model: crate::routing::UpstreamModelId,
     config_revision: crate::routing::ConfigRevision,
     request_location: Option<crate::account::RequestLocation>,
-    request_country: crate::account::OpenAiRequestCountry,
+    openai_request_settings: crate::settings::OpenAiRequestSettings,
     request_id: ModelRequestId,
     client_api_key_ref: ClientApiKeyId,
     timing_started_at: Instant,
@@ -457,8 +457,17 @@ impl RequestAttemptContext {
     }
 
     #[must_use]
+    pub fn with_openai_request_settings(
+        mut self,
+        settings: crate::settings::OpenAiRequestSettings,
+    ) -> Self {
+        self.openai_request_settings = settings;
+        self
+    }
+
+    #[must_use]
     pub fn with_request_country(mut self, country: crate::account::OpenAiRequestCountry) -> Self {
-        self.request_country = country;
+        self.openai_request_settings.request_country = country;
         self
     }
 
@@ -490,7 +499,7 @@ impl RequestAttemptContext {
             config_revision: crate::routing::ConfigRevision::new(1)
                 .expect("valid initial config revision"),
             request_location: None,
-            request_country: Default::default(),
+            openai_request_settings: Default::default(),
             request_profile: None,
             timing_started_at: Instant::now(),
             trace: crate::diagnostics::TraceContext::default(),
@@ -616,8 +625,12 @@ impl AttemptContext {
     }
 
     #[must_use]
+    pub fn openai_request_settings(&self) -> &crate::settings::OpenAiRequestSettings {
+        &self.request.openai_request_settings
+    }
+
     pub fn request_country(&self) -> &crate::account::OpenAiRequestCountry {
-        &self.request.request_country
+        &self.request.openai_request_settings.request_country
     }
 
     #[must_use]
@@ -888,6 +901,8 @@ pub struct NewModelRequest {
 /// 每次真实上游发送前对同一 `model_requests` 行的更新。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AttemptRecord {
+    /// Provider 在选择账号时取得的套餐事实；None 表示没有独立观测。
+    pub observed_plan: Option<(Option<String>, Option<String>)>,
     pub request_id: ModelRequestId,
     pub attempt_count: NonZeroU32,
     pub trigger: AttemptTrigger,

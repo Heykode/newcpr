@@ -74,6 +74,7 @@ mod affinity_modes;
 mod affinity_recovery;
 mod cache_diagnostics;
 mod cache_preference;
+mod chat;
 mod compact;
 mod excel_encrypted_content;
 mod fast_mode;
@@ -84,7 +85,6 @@ mod guardian_routing;
 mod identity_isolation;
 mod image_account_eligibility;
 mod messages;
-mod messages_affinity;
 mod metadata_recovery;
 mod model_account_eligibility;
 mod native_encrypted_history;
@@ -103,6 +103,7 @@ mod selection_retry;
 mod streamed_errors;
 mod timing;
 mod tls_recovery;
+mod transport;
 mod turn_affinity;
 mod turn_state;
 mod upstream_affinity;
@@ -697,6 +698,26 @@ fn context_with_policy(
             .with_account_scope(account_scope),
         None,
         cancellation,
+    )
+}
+
+fn context_with_request_settings(
+    request_id: &str,
+    settings: gateway_core::settings::OpenAiRequestSettings,
+) -> AttemptContext {
+    AttemptContext::new(
+        RequestAttemptContext::new(
+            ModelRequestId::new(request_id).unwrap(),
+            ClientApiKeyId::new("key_openai_contract").unwrap(),
+        )
+        .with_openai_request_settings(settings),
+        NonZeroU32::MIN,
+        SystemTime::now() + Duration::from_secs(30),
+        account_policy(),
+        AccountAttemptContext::new(BTreeSet::<ProviderAccountId>::new(), None, None)
+            .with_account_scope(contract_account_scope()),
+        None,
+        CancellationToken::new(),
     )
 }
 

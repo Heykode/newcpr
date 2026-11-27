@@ -584,6 +584,7 @@ async fn diagnostics_should_fallback_to_name_then_ref_for_missing_snapshots() {
         .insert_model_request_with_first_attempt(
             new_request("req_snap_legacy", started_at + chrono::Duration::seconds(1)),
             ModelRequestAttemptStart {
+                observed_plan: None,
                 account_selection_wait_ms: None,
                 capacity_used_slots: None,
                 capacity_total_slots: None,
@@ -886,6 +887,7 @@ async fn api_key_diagnostics_keeps_snapshot_after_delete_and_falls_back_for_lega
         request.client_api_key_id = Some("key_diag".to_owned());
         request.client_api_key_ref = "key_diag".to_owned();
         let attempt = ModelRequestAttemptStart {
+            observed_plan: None,
             account_selection_wait_ms: None,
             capacity_used_slots: None,
             capacity_total_slots: None,
@@ -1253,6 +1255,7 @@ fn new_request(id: &str, started_at: DateTime<Utc>) -> NewModelRequest {
 
 fn attempt(id: &str, count: u32, account_id: &str) -> ModelRequestAttemptStart {
     ModelRequestAttemptStart {
+        observed_plan: None,
         account_selection_wait_ms: None,
         capacity_used_slots: None,
         capacity_total_slots: None,
@@ -1365,4 +1368,122 @@ async fn seed_api_key(pool: &PgPool, id: &str, name: &str, now: DateTime<Utc>) {
     .execute(pool)
     .await
     .expect("seed api key");
+}
+
+#[tokio::test]
+async fn observed_plan_descriptions_survive_retry_account_changes_and_deletion() {
+    let Some(database) = TestDatabase::create("observed_plan_history").await else {
+        return;
+    };
+    let now = Utc::now();
+    for account in ["acct_plan_a", "acct_plan_b"] {
+        seed_account(&database.pool, account, "Plan history", None, "oauth", now).await;
+    }
+    let store = PgExecutionStore::new(database.pool.clone());
+    let mut first = attempt("req_plan_history", 1, "acct_plan_a");
+    first.observed_plan = Some((
+        Some("google-tier-a".into()),
+        Some("Google subscription A".into()),
+    ));
+    store
+        .insert_model_request_with_first_attempt(new_request("req_plan_history", now), first)
+        .await
+        .unwrap();
+    let saved: (Option<String>, Option<String>) = sqlx::query_as("select provider_account_plan_type_snapshot, provider_account_plan_type_display_snapshot from request_analytics_source where id='req_plan_history'")
+        .fetch_one(&database.pool).await.unwrap();
+    assert_eq!(
+        saved,
+        (
+            Some("google-tier-a".into()),
+            Some("Google subscription A".into())
+        )
+    );
+    PgOpsEventRepository::new(database.pool.clone())
+        .append_ops_event(OpsEvent {
+            id: "event_plan_history".into(),
+            model_request_id: Some("req_plan_history".into()),
+            attempt_index: Some(1),
+            level: OpsEventLevel::Warning,
+            component: "provider".into(),
+            operation: "responses".into(),
+            provider_kind: Some("openai".into()),
+            provider_account_id: Some("acct_plan_a".into()),
+            provider_account_ref: Some("acct_plan_a".into()),
+            upstream_model_id: None,
+            failure_kind: "transport".into(),
+            upstream_send_state: Some("not_sent".into()),
+            raw_upstream_error: None,
+            status_code: None,
+            provider_error_code: None,
+            retry_after_ms: None,
+            upstream_request_id: None,
+            latency_ms: None,
+            message: "Retry selected account".into(),
+            created_at: now,
+        })
+        .await
+        .unwrap();
+    let mut second = attempt("req_plan_history", 2, "acct_plan_b");
+    second.observed_plan = Some((
+        Some("google-tier-b".into()),
+        Some("Google subscription B".into()),
+    ));
+    store.begin_model_request_attempt(second).await.unwrap();
+    finalize_request(&database.pool, "req_plan_history", now).await;
+    sqlx::query("delete from provider_accounts where id in ('acct_plan_a','acct_plan_b')")
+        .execute(&database.pool)
+        .await
+        .unwrap();
+    super::drain_analytics(&database.pool).await;
+    let repository = observability_repository(&database.pool);
+    let records = repository
+        .list_usage_records(usage_query(now, UsageRecordFilter::default()))
+        .await
+        .unwrap();
+    assert_eq!(
+        records.items[0].provider_account_plan_type.as_deref(),
+        Some("google-tier-b")
+    );
+    assert_eq!(
+        records.items[0]
+            .provider_account_plan_type_display
+            .as_deref(),
+        Some("Google subscription B")
+    );
+    let events = repository
+        .list_ops_errors(OpsErrorQuery {
+            range: range_around(now),
+            filter: Default::default(),
+            current_page: 1,
+            page_size: ObservabilityPageSize::new(10).unwrap(),
+        })
+        .await
+        .unwrap();
+    let event = events
+        .items
+        .iter()
+        .find(|event| event.event_id == "event_plan_history")
+        .unwrap();
+    assert_eq!(
+        event.provider_account_plan_type.as_deref(),
+        Some("google-tier-a")
+    );
+    assert_eq!(
+        event.provider_account_plan_type_display.as_deref(),
+        Some("Google subscription A")
+    );
+    let diagnostics = repository
+        .usage_diagnostics(
+            range_around(now),
+            UsageRecordFilter::default(),
+            DiagnosticDimension::Account,
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        diagnostics.items[0].account_plan_type_display.as_deref(),
+        Some("Google subscription B")
+    );
+    database.close().await;
 }

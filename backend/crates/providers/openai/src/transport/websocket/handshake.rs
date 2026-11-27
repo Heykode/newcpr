@@ -108,6 +108,7 @@ impl CodexWebSocketConnection {
             connection: Self::responses(base_url, websocket_key, business_headers),
             continuation: WebSocketContinuationRequirement::from_request(request),
             codex_search_declared: crate::compat::declares_hosted_search(request.body()),
+            generate: request.generate(),
         }
     }
 }

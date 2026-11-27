@@ -1,17 +1,6 @@
-//! Chat Completions compatibility over the existing Responses executor.
+//! Chat 入口与交付，协议转换由所选 Provider 完成。
 
-use axum::body::Bytes;
-use serde_json::Value;
-
+pub(in crate::openai) mod delivery;
 mod http;
-pub(in crate::openai) mod request;
-pub(in crate::openai) mod response;
-
+pub(in crate::openai) use delivery::chat_error_frame;
 pub(crate) use http::chat_completions;
-
-pub(in crate::openai) fn chat_error_frame(data: &Value) -> Bytes {
-    let error = data
-        .pointer("/response/error")
-        .or_else(|| data.get("error"));
-    Bytes::from(format!("data: {}\n\n", serde_json::json!({"error": error})))
-}

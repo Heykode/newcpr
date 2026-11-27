@@ -796,12 +796,45 @@
       "limitsHelp": "最多 32 条规则，每条 8 个条件，每个条件 16 个候选值，所有规则文本与探测模型合计不超过 64 KiB UTF-8"
     },
     "units": {
+      "days": "天",
+      "copies": "份",
       "seconds": "秒",
       "inSeconds": "{label}（秒）"
     },
     "resetPriority": {
       "description": "按所选窗口的重置时间和系数排序",
       "windowHelp": "系数决定各窗口的相对占比，0 表示忽略该窗口，全部为 0 时按最近的有效重置时间排序"
+    },
+    "requestOptions": {
+      "title": "请求设置",
+      "residency": "数据驻留",
+      "residencyPlaceholder": "us",
+      "accountRoutingOverride": "账号路由",
+      "accountRoutingPlaceholder": "us / us_cr",
+      "residencyHelp": "默认 us，按填写值发送数据驻留请求头，留空则删除此请求头",
+      "accountRoutingOverrideHelp": "默认留空，可填写 us 或 us_cr，按填写值发送账号路由请求头，留空则删除此请求头",
+      "description": "配置发往上游的请求参数",
+      "guardian": "使用专用审核模型",
+      "guardianHelp": "同步审核优先使用 codex-auto-review；关闭或账号不支持时沿用请求模型。"
+    },
+    "websocketPool": {
+      "title": "连接池",
+      "description": "管理上游连接的建连、超时与回收",
+      "maxAgeMs": "连接最大寿命",
+      "fastPathBudgetMs": "建连等待时间",
+      "idleTimeoutMs": "空闲回收时间",
+      "streamIdleTimeoutMs": "流式空闲超时",
+      "maxAgeMsHelp": "单条上游 WebSocket 连接的最长使用时间，默认 3300000 毫秒（55 分钟），必须大于零\n\n到期后停止复用，正在生成的响应仍可完成\n\n修改仅对新建连接生效，现有连接保留创建时的寿命",
+      "fastPathBudgetMsHelp": "允许回退 HTTP 的请求等待 WebSocket 建连的时间，默认 800 毫秒，范围 1–15000 毫秒\n\n超时后本次请求改走 HTTP/SSE，已开始的建连继续在后台完成\n\n调大可给高延迟线路更多建连时间，也会延长回退前的等待，新请求使用新值",
+      "idleTimeoutMsHelp": "连接归还连接池后允许连续空闲的时间，默认 300000 毫秒（5 分钟），必须大于零\n\n仅回收未绑定活跃客户端 WebSocket 的空闲连接，Ping/Pong 不会重置计时\n\n修改仅对新建连接生效，现有连接保留原期限",
+      "streamIdleTimeoutMsHelp": "等待下一条上游业务消息的最长时间，默认 300000 毫秒（5 分钟），填 0 仍使用此默认值\n\n收到业务消息后重新计时，Ping/Pong 不会重置计时，超时会中止当前上游响应并关闭连接\n\n新请求及 WebSocket 下一轮使用新值，正在执行的轮次保持原值",
+      "invalidPositive": "请输入大于零的整数",
+      "invalidBudget": "请输入 1–15000 之间的整数",
+      "invalidTimeout": "请输入大于或等于零的整数",
+      "accountOpenings": "同时建连名额按各账号的有效并发分别计算；建好、失败或取消后释放。已建连接不占建连名额。",
+      "enabled": "启用 WebSocket 连接池",
+      "unit": "单位：毫秒",
+      "invalidSettings": "连接寿命和空闲回收须为正整数，建连等待须为 1–15000 毫秒，流式空闲超时须为非负整数。"
     }
   }
 }

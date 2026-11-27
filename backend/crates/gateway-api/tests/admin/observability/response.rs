@@ -830,6 +830,7 @@ async fn diagnostics_should_keep_stable_key_and_display_name_contract() {
         .lock()
         .expect("diagnostics")
         .push(DiagnosticObservation {
+            account_plan_type_display: None,
             key: "acct_diag".to_owned(),
             name: "diag@example.invalid".to_owned(),
             account_provider_kind: Some("openai".to_owned()),
@@ -908,6 +909,7 @@ async fn key_model_diagnostics_require_admin_and_project_pagination_and_cost_cov
         .lock()
         .unwrap()
         .extend((0..3).map(|index| DiagnosticObservation {
+            account_plan_type_display: None,
             key: serde_json::json!(["key_synthetic", format!("model-{index}")]).to_string(),
             name: format!("Named Key → model-{index}"),
             account_provider_kind: None,

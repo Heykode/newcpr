@@ -290,6 +290,7 @@ async fn linked_accounts_share_plan_resolution_and_only_read_cached_quota() {
         provider.set_quota(ProviderQuota {
             paused_windows: Default::default(),
             credits: None,
+            plan_type_display: None,
             plan_type: cached.map(str::to_owned),
             observed_at: None,
             refresh_token_expires_at: None,
@@ -395,4 +396,61 @@ async fn credential_import_keeps_proxy_reserved_until_commit_and_releases_on_err
             assert_eq!(&events[..expected.len()], expected);
         }
     }
+}
+
+#[tokio::test]
+async fn linked_antigravity_accounts_preserve_google_subscription_description() {
+    use super::accounts::{FakeProviderAdmin, events};
+    use gateway_admin::model::{PageSize, provider_credentials::ProviderQuota};
+    use std::sync::Arc;
+    let provider = FakeProviderAdmin::new("antigravity", events());
+    provider.set_quota(ProviderQuota {
+        paused_windows: Default::default(),
+        credits: None,
+        plan_type: Some("google-ai-pro".to_owned()),
+        plan_type_display: Some("Google AI Pro subscription".to_owned()),
+        observed_at: None,
+        refresh_token_expires_at: None,
+        windows: vec![],
+        limit_reached: false,
+        provider_data: None,
+    });
+    let services = super::AdminHarness::new()
+        .provider(provider.clone())
+        .proxies(Arc::new(TestProxies {
+            accounts: Some(vec![ProxyAccountRef {
+                id: "acct_google_plan".to_owned(),
+                name: "Google plan".to_owned(),
+                email: None,
+                provider_kind: "antigravity".to_owned(),
+                authentication_kind: "oauth".to_owned(),
+                plan_type: Some("google-ai-pro".to_owned()),
+                plan_type_display: None,
+                groups: vec![],
+                enabled: true,
+            }]),
+            ..Default::default()
+        }))
+        .build()
+        .await;
+    let result = services
+        .proxies()
+        .list_accounts(ProxyAccountListQuery {
+            proxy_id: "proxy_plan".to_owned(),
+            page: 1,
+            page_size: PageSize::new(20).unwrap(),
+            search: String::new(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        result.items[0].plan_type_display.as_deref(),
+        Some("Google AI Pro subscription")
+    );
+    assert!(
+        provider
+            .quota_requests()
+            .iter()
+            .all(|request| !request.refresh)
+    );
 }

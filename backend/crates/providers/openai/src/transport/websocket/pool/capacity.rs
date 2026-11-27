@@ -1,4 +1,4 @@
-//! Account capacity includes idle, busy, opening and retiring connections.
+//! Account opening limits and physical WebSocket retirement.
 
 use tokio::{task::JoinHandle, time::Instant};
 use uuid::Uuid;
@@ -29,31 +29,6 @@ impl CodexWebSocketPool {
                 .and_then(|snapshot| snapshot.limit_for(account_id))
                 .map(|limit| limit.get() as usize),
         }
-    }
-
-    pub(super) fn account_slots(state: &WebSocketPoolState, account_id: &str) -> usize {
-        state
-            .slots
-            .keys()
-            .filter(|key| key.account_id() == account_id)
-            .count()
-    }
-
-    pub(super) fn account_retained_slots(state: &WebSocketPoolState, account_id: &str) -> usize {
-        state
-            .slots
-            .iter()
-            .filter(|(key, slot)| {
-                key.account_id() == account_id
-                    && match slot {
-                        WebSocketPoolSlot::Closing(_) => false,
-                        WebSocketPoolSlot::Connecting(connecting) => {
-                            !connecting.cancellation.is_cancelled()
-                        }
-                        _ => true,
-                    }
-            })
-            .count()
     }
 
     pub(super) fn retire_connection(
@@ -89,35 +64,6 @@ impl CodexWebSocketPool {
             .slots
             .insert(key.clone(), WebSocketPoolSlot::Closing(id));
         RetiredConnection { key, id, websocket }
-    }
-
-    pub(super) fn retire_oldest_idle(
-        state: &mut WebSocketPoolState,
-        account_id: &str,
-        keep: Option<&CodexWebSocketPoolKey>,
-    ) -> Option<RetiredConnection> {
-        let key = state
-            .slots
-            .iter()
-            .filter_map(|(key, slot)| match slot {
-                WebSocketPoolSlot::Idle { connection, .. }
-                    if key.account_id() == account_id && keep != Some(key) =>
-                {
-                    Some((key.clone(), connection.created_at))
-                }
-                _ => None,
-            })
-            .min_by_key(|(_, created_at)| *created_at)
-            .map(|(key, _)| key)?;
-        let Some(WebSocketPoolSlot::Idle { connection, .. }) = state.slots.remove(&key) else {
-            return None;
-        };
-        Some(Self::retire_connection(
-            state,
-            key,
-            *connection,
-            Some("account_capacity_reclaimed"),
-        ))
     }
 
     pub(super) fn start_closing(&self, connections: Vec<RetiredConnection>) -> Vec<JoinHandle<()>> {
@@ -189,24 +135,5 @@ impl CodexWebSocketPool {
             state.slots.remove(&key);
         }
         self.capacity_changed.send_replace(());
-    }
-
-    pub(super) fn trim_account_idle(
-        &self,
-        state: &mut WebSocketPoolState,
-        account_id: &str,
-        keep: Option<&CodexWebSocketPoolKey>,
-    ) -> Vec<RetiredConnection> {
-        let limit = self.account_limit(account_id).unwrap_or(0);
-        let retained = Self::account_retained_slots(state, account_id);
-        let mut close = Vec::new();
-        for _ in limit..retained {
-            if let Some(retired) = Self::retire_oldest_idle(state, account_id, keep) {
-                close.push(retired);
-            } else {
-                break;
-            }
-        }
-        close
     }
 }

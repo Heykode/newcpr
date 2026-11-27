@@ -7,6 +7,33 @@ use tokio_tungstenite::{WebSocketStream, tungstenite::protocol::Role};
 use super::*;
 use crate::transport::websocket::pump::{PumpLogContext, PumpedWebSocket};
 
+// Test adapters live under the existing private test module.
+impl CodexWebSocketPool {
+    pub(crate) async fn acquire(
+        &self,
+        key: &CodexWebSocketPoolKey,
+        required_response_id: Option<&str>,
+        requires_search: bool,
+    ) -> WebSocketPoolAcquire {
+        self.acquire_for_route(key, required_response_id, requires_search, None)
+            .await
+            .expect("direct pool acquisition")
+    }
+
+    pub(super) fn acquire_once(
+        &self,
+        key: &CodexWebSocketPoolKey,
+        required_response_id: Option<&str>,
+        requires_search: bool,
+    ) -> (
+        Option<WebSocketPoolAcquire>,
+        Vec<capacity::RetiredConnection>,
+    ) {
+        let (ready, close) = self.acquire_step(key, required_response_id, requires_search, false);
+        (ready.ok(), close)
+    }
+}
+
 fn pool(limit: u32) -> (CodexWebSocketPool, AccountConcurrencyHandle) {
     let limits = AccountConcurrencyHandle::default();
     publish(&limits, 1, limit);
@@ -73,23 +100,58 @@ fn client_scope_fences_routing_owner_and_logical_connection_matches() {
         .with_downstream_connection_id("new-downstream")
         .with_egress_key("proxy");
     assert_ne!(owner, reconnected);
-    assert!(owner.matches_routing_owner(&reconnected));
+    assert!(owner.matches_routing_owner(&reconnected, false));
     assert!(owner.same_logical_connection(&reconnected));
     let excluded = reconnected
         .clone()
         .with_response_exclusions(&[("x-codex-exclude".into(), "output".into())]);
-    assert!(!owner.matches_routing_owner(&excluded));
-    assert!(!excluded.matches_routing_owner(&owner));
+    assert!(!owner.matches_routing_owner(&excluded, false));
+    assert!(!excluded.matches_routing_owner(&owner, false));
+    assert!(owner.matches_routing_owner(&excluded, true));
+    assert!(
+        !owner.matches_routing_owner(&excluded.clone().with_installation_id(Some("other")), true)
+    );
     assert!(!owner.same_logical_connection(&excluded));
     assert_ne!(owner.stable_hash(), excluded.stable_hash());
 
     for scope in ["client-key-b", ""] {
         let other = reconnected.clone().with_client_scope(scope);
-        assert!(!owner.matches_routing_owner(&other));
-        assert!(!other.matches_routing_owner(&owner));
+        assert!(!owner.matches_routing_owner(&other, false));
+        assert!(!owner.matches_routing_owner(&other, true));
+        assert!(!other.matches_routing_owner(&owner, false));
         assert!(!owner.same_logical_connection(&other));
         assert!(!other.same_logical_connection(&owner));
     }
+}
+
+#[tokio::test]
+async fn unprojected_exclusions_cannot_select_between_two_response_owners() {
+    let (pool, _) = pool(2);
+    let key = key(1);
+    let first = key
+        .clone()
+        .with_response_exclusions(&[("x-codex-exclude".into(), "first".into())]);
+    let second = key
+        .clone()
+        .with_response_exclusions(&[("x-codex-exclude".into(), "second".into())]);
+    let mut peers = Vec::new();
+    for owner in [&first, &second] {
+        let (mut connection, lease, peer) = connected(&pool, owner).await;
+        connection
+            .continuation
+            .record_completed("response-shared".to_owned());
+        lease.put(connection).await;
+        peers.push(peer);
+    }
+    assert!(
+        pool.routing_owner(&key, Some("response-shared"), true)
+            .is_none()
+    );
+    assert_eq!(
+        pool.routing_owner(&second, Some("response-shared"), false),
+        Some(second)
+    );
+    pool.shutdown().await;
 }
 
 #[tokio::test]
@@ -104,7 +166,7 @@ async fn profile_update_preserves_the_exact_response_socket() {
     lease.put(connection).await;
     for next in [key(1).with_connection_profile("profile-two"), key(1)] {
         assert_eq!(
-            pool.routing_owner(&next, Some("response-owned")),
+            pool.routing_owner(&next, Some("response-owned"), false),
             Some(owner.clone()),
         );
         match pool.acquire(&next, Some("response-owned"), false).await {
@@ -132,7 +194,7 @@ async fn client_scope_isolates_live_sockets_but_keeps_same_client_exact_owner() 
     lease.put(connection).await;
     let other = owner.clone().with_client_scope("client-key-b");
     assert!(
-        pool.routing_owner(&other, Some("response-shared"))
+        pool.routing_owner(&other, Some("response-shared"), false)
             .is_none()
     );
     assert!(matches!(
@@ -148,7 +210,7 @@ async fn client_scope_isolates_live_sockets_but_keeps_same_client_exact_owner() 
         .with_connection_profile("new-profile")
         .with_downstream_connection_id("new-downstream");
     assert_eq!(
-        pool.routing_owner(&reconnected, Some("response-shared")),
+        pool.routing_owner(&reconnected, Some("response-shared"), false),
         Some(owner)
     );
     match pool
@@ -209,9 +271,7 @@ async fn client_scope_isolates_tombstones_and_preserves_same_client_reconnect_lo
         .continuation
         .record_completed("response-shared".to_owned());
     lease.put(connection).await;
-    let replacement = pool.acquire(&key(2), None, false).await;
-    assert!(matches!(replacement, WebSocketPoolAcquire::Connect(_)));
-    drop(replacement);
+    pool.evict_account("account").await;
 
     let reconnected = owner
         .with_connection_profile("new-profile")
@@ -282,6 +342,7 @@ async fn connected_with_buffer(
     let (stream, peer) = tokio::io::duplex(buffer_size);
     let socket = WebSocketStream::from_raw_socket(stream, Role::Client, None).await;
     let connection = PooledWebSocketConnection {
+        lifetime: CodexWebSocketPoolConfig::default().into(),
         websocket: PumpedWebSocket::new(
             Box::new(socket),
             PumpLogContext::new(None, None),
@@ -331,20 +392,20 @@ async fn account_capacity_reservation_is_atomic_across_sessions_profiles_and_egr
         }
     }
     assert_eq!(leases.len(), 5);
-    assert_eq!(
-        CodexWebSocketPool::account_slots(&pool.lock_state(), "account"),
-        5
-    );
+    assert_eq!(pool.lock_state().slots.len(), 5);
     drop(leases);
-    assert_eq!(
-        CodexWebSocketPool::account_slots(&pool.lock_state(), "account"),
-        0
-    );
+    assert_eq!(pool.lock_state().slots.len(), 0);
 }
 
 #[tokio::test]
 async fn account_capacity_does_not_impose_a_global_opening_limit() {
-    let pool = CodexWebSocketPool::new(Duration::from_secs(60));
+    let limits = AccountConcurrencyHandle::new(
+        ConfigRevision::new(1).unwrap(),
+        (0..32)
+            .map(|i| (format!("account-{i}"), NonZeroU32::new(1).unwrap()))
+            .collect(),
+    );
+    let pool = CodexWebSocketPool::new(Duration::from_secs(60)).with_account_concurrency(limits);
     let leases = (0..32)
         .map(|index| {
             opening(
@@ -402,28 +463,41 @@ async fn account_capacity_cancelled_waiter_does_not_leave_a_slot() {
 }
 
 #[tokio::test]
-async fn account_capacity_counts_idle_busy_and_opening_together() {
+async fn account_opening_limit_preserves_busy_and_idle_connections() {
     let (pool, _) = pool(3);
-    let (idle, idle_lease, _idle_peer) = connected(&pool, &key(1)).await;
+    let (_first, first_lease, _first_peer) = connected(&pool, &key(1)).await;
+    let (_second, second_lease, _second_peer) = connected(&pool, &key(2)).await;
+    let (mut idle, idle_lease, _idle_peer) = connected(&pool, &key(3)).await;
+    idle.continuation.record_completed("response-c".to_owned());
     idle_lease.put(idle).await;
-    let (_busy, busy_lease, _busy_peer) = connected(&pool, &key(2)).await;
-    let connecting = opening(&pool, &key(3));
-    assert_eq!(pool.lock_state().slots.len(), 3);
-    let (decision, close) = pool.acquire_once(&key(4), None, false);
-    assert!(decision.is_none());
-    assert_eq!(close.len(), 1);
-    // Retiring idle still occupies capacity until the actual close completes.
-    assert!(pool.acquire_once(&key(5), None, false).0.is_none());
-    assert_eq!(pool.lock_state().slots.len(), 3);
-    pool.close_retired_connections(close).await;
-    drop(opening(&pool, &key(4)));
-    drop(connecting);
-    drop(busy_lease);
+    let (_fourth, fourth_lease, _fourth_peer) = connected(&pool, &key(4)).await;
+    assert_eq!(pool.lock_state().slots.len(), 4);
+    let attempts = [5, 6, 7].map(|index| opening(&pool, &key(index)));
+    let (decision, close) = pool.acquire_once(&key(8), None, false);
+    assert!(decision.is_none() && close.is_empty());
+    match pool.acquire(&key(3), Some("response-c"), false).await {
+        WebSocketPoolAcquire::Reused { connection, lease } => lease.put(*connection).await,
+        _ => panic!("C must remain reusable even when all handshake permits are occupied"),
+    }
+    let [failed, cancelled, other] = attempts;
+    failed.failed().await;
+    let replacement = opening(&pool, &key(8));
+    drop(cancelled);
+    let next = opening(&pool, &key(9));
+    assert!(pool.acquire_once(&key(10), None, false).0.is_none());
+    drop((
+        other,
+        replacement,
+        next,
+        first_lease,
+        second_lease,
+        fourth_lease,
+    ));
     pool.shutdown().await;
 }
 
 #[tokio::test]
-async fn account_capacity_shrink_keeps_busy_responses_and_retires_only_excess_returns() {
+async fn account_limit_shrink_preserves_completed_connections_and_exact_owner() {
     let (pool, limits) = pool(3);
     let (first, first_lease, _first_peer) = connected(&pool, &key(1)).await;
     let (second, second_lease, _second_peer) = connected(&pool, &key(2)).await;
@@ -440,7 +514,7 @@ async fn account_capacity_shrink_keeps_busy_responses_and_retires_only_excess_re
     first_lease.put(first).await;
     second_lease.put(second).await;
     third_lease.put(third).await;
-    assert_eq!(pool.lock_state().slots.len(), 1);
+    assert_eq!(pool.lock_state().slots.len(), 3);
     match pool.acquire(&key(3), Some("response-third"), false).await {
         WebSocketPoolAcquire::Reused { connection, lease } => lease.put(*connection).await,
         _ => panic!("remaining exact continuation must keep its owner"),
@@ -449,7 +523,7 @@ async fn account_capacity_shrink_keeps_busy_responses_and_retires_only_excess_re
 }
 
 #[tokio::test]
-async fn account_capacity_simultaneous_returns_do_not_retire_more_than_the_excess() {
+async fn account_limit_shrink_allows_simultaneous_returns() {
     let (pool, limits) = pool(3);
     let (first, first_lease, _first_peer) = connected(&pool, &key(1)).await;
     let (second, second_lease, _second_peer) = connected(&pool, &key(2)).await;
@@ -466,12 +540,12 @@ async fn account_capacity_simultaneous_returns_do_not_retire_more_than_the_exces
         .values()
         .filter(|slot| matches!(slot, WebSocketPoolSlot::Idle { .. }))
         .count();
-    assert_eq!(retained, 1);
+    assert_eq!(retained, 3);
     pool.shutdown().await;
 }
 
 #[tokio::test(start_paused = true)]
-async fn account_capacity_shrink_resolves_exact_owner_before_trimming_other_idle_sockets() {
+async fn account_limit_shrink_allows_exact_owner_reuse() {
     let (pool, limits) = pool(2);
     let (mut first, first_lease, _first_peer) = connected(&pool, &key(1)).await;
     first
@@ -508,14 +582,16 @@ async fn account_capacity_shrink_resolves_exact_owner_before_trimming_other_idle
         .unwrap();
 }
 
-#[tokio::test]
-async fn account_capacity_reclaimed_continuation_has_a_tombstone() {
+#[tokio::test(start_paused = true)]
+async fn expired_continuation_still_has_a_tombstone() {
     let (pool, _) = pool(1);
     let (mut connection, lease, _peer) = connected(&pool, &key(1)).await;
     connection
         .continuation
         .record_completed("response-1".to_owned());
     lease.put(connection).await;
+    tokio::time::advance(Duration::from_secs(61)).await;
+    pool.maintain_idle_connections().await;
     let new_opening = pool.acquire(&key(2), None, false).await;
     assert!(matches!(new_opening, WebSocketPoolAcquire::Connect(_)));
     assert!(matches!(
@@ -527,7 +603,7 @@ async fn account_capacity_reclaimed_continuation_has_a_tombstone() {
 
 #[tokio::test(start_paused = true)]
 async fn account_capacity_maintenance_does_not_erase_busy_or_cancelled_opening_reservations() {
-    let (pool, _) = pool(2);
+    let (pool, _) = pool(1);
     let (_connection, busy, _peer) = connected(&pool, &key(1)).await;
     let connecting = opening(&pool, &key(2));
     tokio::time::advance(Duration::from_secs(61)).await;

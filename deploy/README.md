@@ -61,9 +61,13 @@ chmod 0770 .runtime/data .runtime/logs
 `config.yaml` 通过 Compose `configs` 只读挂载。普通 Compose 对本地文件保留宿主机的
 UID/GID 和 mode，因此配置由当前用户持有，并只向容器组 `10001` 开放读取权限。
 
-模板中的 `openai` / `xai` 只保留请求画像启动基线。OpenAI 的上游地址、WebSocket 池、额度刷新
-与 OAuth 设置，以及 xAI 的 OAuth、额度和模型目录策略，均由各自 Provider 使用代码内默认值管理；
-模板不重复列出这些默认项。运行后，Provider 检查官方版本并更新运行时请求画像，
+模板中的 `openai` / `xai` 保留请求画像启动基线。v3.57.0 的 OpenAI 请求设置和 WebSocket 池
+改为管理端在线配置，分别持久化为 `openaiRequestSettings` 与 `openaiWebsocketPool`。首次升级时导入旧 YAML
+中的 residency、account_routing_override 与 ws_pool；已有数据库连接寿命和流空闲超时优先，
+原国家策略及 Guardian 值保留。一次导入完成后数据库权威，重启不会再用 YAML 覆盖在线修改。
+池设置保留 enabled，并提供连接寿命、响应预算、空闲寿命和流空闲超时；同时建连上限仍按每账号
+有效并发计算，建好、失败或取消即释放名额。普通请求并发不变。上游地址、额度刷新与 OAuth
+等未在线化项仍由 Provider 默认值管理。运行后，Provider 检查官方版本并更新运行时请求画像，
 不回写 `config.yaml`；检查失败时继续使用上一份有效画像。OpenAI 启动即检查，完成后每小时检查；
 同版本缓存每日续期并保留原核验时间。固定自定义 UA 不会因自动检查改变。版本检查不等于重新核验 TLS。
 

@@ -38,8 +38,8 @@ async fn response_json(response: axum::response::Response) -> Value {
 fn update_body() -> Value {
     let mut body = json!({
         "configRevision": 7,
-        "openaiOauthGuardianReviewModel": true,
-        "openaiRequestCountry": {"mode": "follow_location"},
+        "openaiRequestSettings": gateway_core::settings::OpenAiRequestSettings::default(),
+        "openaiWebsocketPool": gateway_core::settings::OpenAiWebSocketPoolSettings::default(),
         "excelDefaultModels": ["gpt-5.6-sol", "gpt-6-astra"],
         "turnStateInjectionEnabled": false,
         "turnStateModels": ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra"],
@@ -443,8 +443,8 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
         request_profiles: Default::default(),
 
         codex_privacy_policy: Default::default(),
-        openai_oauth_guardian_review_model: true,
-        openai_request_country: Default::default(),
+        openai_request_settings: Default::default(),
+        openai_websocket_pool: Default::default(),
 
         turn_state_probe_proxy_id: None,
         turn_state_probe_concurrency: 3,
@@ -573,8 +573,10 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
         },
         "updatedAt": "2026-08-02T10:30:00Z"
     });
-    expected["openaiOauthGuardianReviewModel"] = json!(true);
-    expected["openaiRequestCountry"] = json!({"mode": "follow_location"});
+    expected["openaiRequestSettings"] =
+        json!(gateway_core::settings::OpenAiRequestSettings::default());
+    expected["openaiWebsocketPool"] =
+        json!(gateway_core::settings::OpenAiWebSocketPoolSettings::default());
     expected["configRevision"] = json!(7);
     expected["providerRequestProfiles"] = json!({});
     expected["codexPrivacyPolicy"] = json!({"enabled": false, "onError": "skip_rule", "rules": []});
@@ -627,8 +629,8 @@ fn settings_request_and_response_fields_should_stay_in_lockstep() {
     let settings = RuntimeSettings {
         request_profiles: Default::default(),
         codex_privacy_policy: Default::default(),
-        openai_oauth_guardian_review_model: true,
-        openai_request_country: Default::default(),
+        openai_request_settings: Default::default(),
+        openai_websocket_pool: Default::default(),
 
         account_affinity: Default::default(),
         session_affinity_ttl_hours: 24,

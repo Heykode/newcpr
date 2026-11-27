@@ -131,9 +131,9 @@ WebSocket message 和 frame 不设置网关私有长度上限；协议可接受�
 | --- | --- | --- |
 | `POST` | `/v1/responses` | OpenAI Responses JSON；`stream=true` 返回 SSE，否则返回完整 JSON |
 | `GET` | `/v1/responses` | 通过 HTTP Upgrade 建立 Responses WebSocket |
-| `POST` | `/v1/chat/completions` | Chat 请求转 Responses，再将 JSON/SSE 结果转回 Chat；共用原执行链路 |
-| `POST` | `/v1/messages` | Anthropic Messages JSON/SSE，原生 OAuth 账号经 Responses 执行后转换回 Messages |
-| `POST` | `/v1/messages/count_tokens` | 当前账号模型的本地输入 Token 估算，返回 `input_tokens` |
+| `POST` | `/v1/chat/completions` | 原始 Chat 路由和选号后直转目标协议，返回 Chat JSON/SSE |
+| `POST` | `/v1/messages` | 原生 Messages 入口；当前内置 OAuth 账号没有可执行目标 |
+| `POST` | `/v1/messages/count_tokens` | 原生 Messages Token 计数；当前内置 OAuth 账号不支持 |
 | `POST` | `/v1/responses/compact` | 显式上下文压缩；模型准入后走独立 HTTP JSON，不自动调用 |
 | `POST` | `/v1/alpha/search` | Codex standalone web search；JSON 请求与响应正文原样转发 |
 | `POST` | `/v1/images/generations` | 通过 OpenAI Provider 发起图像生成；JSON 请求与响应正文原样转发 |
@@ -146,28 +146,9 @@ WebSocket message 和 frame 不设置网关私有长度上限；协议可接受�
 
 ### Messages 请求
 
-`POST /v1/messages` 接受非空 `model`、非空 `messages` 和非负整数 `max_tokens`。
-`stream=true` 返回 `message_start`、内容块、`message_delta` 和 `message_stop` 事件，不追加 `[DONE]`；
-非流式返回完整 Messages JSON。沿用客户端鉴权、分组、模型、账号选择、重试和交付边界，
-不会因协议转换再选择一个账号。文本、图片、工具调用/结果与推理内容按官方映射转换；
-无法对应的扩展字段可能降级，保留全部 Responses 语义时应使用 Responses 入口。
-每轮上下文由客户端提交，Messages 不提供服务端历史续接或 WebSocket 入口。
-
-会话亲和优先读取 `x-claude-code-session-id`，再读取 `metadata.user_id` JSON 字符串的
-`session_id`，最后兼容旧 `_session_<id>` 后缀。会话最多 256 字节且不含控制字符。
-相同 Client Key 下沿用 `accountAffinity` 模式及现有换号预算；不同 Key 隔离。
-普通用户标识和对话正文不绑定账号，也不建立 Codex turn 或原生续接归属。
-
-`/v1/messages/count_tokens` 使用同一鉴权、模型及账号准入，将 Messages 内容投影后由本地
-BPE tokenizer 估算可提取文本和工具内容。它不发送上游生成请求，不产生上游成功用量反馈，
-不保证涵盖图片、音频、二进制文档及隐藏推理成本，也不等同于最终账单。
-两入口沿用 Responses 的解压上限、截止与取消控制。错误、提交或结算失败不交付成功终态。
-
-若客户端自动追加 `/v1/messages`，Base URL 填服务根地址；自动追加 `/responses` 或
-`/chat/completions` 的客户端填带 `/v1` 的地址。浏览器 CORS 允许 `x-api-key`、
-`anthropic-version` 和 `anthropic-beta`。仅 Messages 转 Codex OAuth 后省略转换得到的
-`service_tier:auto/default`，保留有效的 `priority/flex`；原生 Responses 保留客户端显式档位。
-Messages 请求日志读取显式 `output_config.effort`，不以 thinking token 预算猜测 effort。
+Messages 入口保留鉴权、协议校验、错误信封和 CORS，但当前 Codex/xAI/AGY OAuth 账号均不执行该原生协议，也不执行 Messages count_tokens。不会再转为 Responses 或 GenAI。
+`/v1/models` 携带 `anthropic-version` 或 `x-api-key` 时，列表及详情仅返回 Messages 可执行模型；当前 OAuth-only 组合可返回空列表。分页默认 20，范围 1..1000，支持 after_id/before_id。普通 OpenAI 目录独立。
+Authorization 优先于备用 Key 头，缺失/无效鉴权不能被空目录掩盖。
 
 ### Live 请求
 
@@ -190,45 +171,13 @@ OpenAI Provider 沿用既有 WebSocket/HTTP 选择，将上游请求副本规范
 
 ### Chat 兼容边界
 
-Chat 请求、非流式结果和流式结果转换采用官方 CPR v3.35.1 的实现，固定上游
-`d89db84a77d0143a91770b66bec47ab8f2e57a35`。旧 CPA Chat 转换已移除。
+采用官方 v3.57.0 固定目标 `db22550e6172e7a3537eb53441ae9ce73bc50cd5`。Chat 原始正文参与路由和选号，随后由 Codex/xAI 直接转换为 Responses，或由 AGY 转换为 GenAI。不会为转换再次选号。
+默认 stream=false；流式与非流式都保留请求模型身份。工具、结构化输出、reasoning_effort、文件/图片和搜索字段按公共校验及所选目标的具体能力处理，目标不支持的参数返回字段错误；不能把转换支持当作上游模型支持。
+`stream_options.include_usage` 控制流式用量分片。Chat 正文中的 `use_websocket` 不是该转换协议的传输开关；上游 HTTP/WS 由 Provider 的连接池配置及选择策略决定。普通账号并发、身份、出口和亲和仍由原链路控制。
 
-链路为：`/v1/chat/completions` -> Responses 正文 -> 现有 Generate 执行器 ->
-账号调度与身份处理 -> Provider 选择 WS 或 HTTP SSE -> 转回 Chat JSON/SSE。
-Chat 默认 `stream=false`，只决定下游是否聚合；不强制上游 HTTP，也不保证每次必走 WS。
-原鉴权、模型范围、账号选择、并发、粘性、代理身份和结算继续由公共执行链路负责。
-Chat 不再识别旧扩展 `use_websocket`；`stream_options.include_usage` 只决定下游用量分片。
-
-支持文本和图片输入、标准 function 工具定义及多轮工具结果、并行调用、结构化输出、
-平铺 `reasoning_effort`、拒绝信息、缓存和推理用量。可选 null 字段按未提供处理。
-`max_completion_tokens` 优先于 `max_tokens`；具体长度、采样参数是否被上游接受仍由
-既有 Provider 处理，不能把协议字段映射当作上游支持。未知顶层扩展忽略，不转发到上游。
-`metadata`、`prompt_cache_options` 和 `moderation` 接受对象。
-
-按官方范围，不再接受旧 Chat 的 custom、web_search、image_generation 工具声明、
-文件输入、公开推理历史别名、嵌套 `reasoning` 和 `web_search_options`。
-音频、多候选、非空 stop、非空旧式 functions 和 Responses 专用续接字段也返回 400。
-完整工具、加密推理和专用续接语义使用原生 `/v1/responses`，该接口不受此替换影响。
-
-输出只投影官方支持的文本、拒绝及普通 function 调用；不再返回旧 `images`、
-custom 函数外壳或 `reasoning_content` 扩展。未知辅助事件可忽略，无法表达的业务输出
-明确失败。工具 ID、名称、字符串参数、重复身份、正文结构、快照前缀和结束原因
-使用官方校验规则。`incomplete` 只把 `max_output_tokens` 映射为 `length`、
-`content_filter` 映射为同名结束原因；其他原因不能伪装成正常完成。
-
-Chat ID、创建时间和模型来自网关请求，整段响应固定，不随上游 response ID 改变。
-`response.created` 可以先输出 assistant 角色分片。正文、拒绝和工具参数增量按官方逻辑
-去重；终态后的辅助事件可忽略，继续产生业务输出则报错。私密推理不转换成公开正文。
-缺少完整用量时不填造计费数据，用量结算仍由原执行器完成。
-
-提交前转换失败返回 JSON 502；流式提交后失败发送 Chat error 分片和 `[DONE]`。
-成功 finish 和 usage 要等原执行会话确认完成后才交付，取消、提交失败、缺失终态、
-损坏 SSE 和收尾失败不能伪造成功。Chat 的非流式汇总也采用官方实现：终态缺少输出时，
-只使用同一响应中索引连续、无冲突的完成项补齐；非空终态保持权威，不拼接旧增量。
-完成项不完整或冲突时沿官方公共汇总错误返回 500。原生 Responses 的原有恢复策略不变。
-
-本次不修改 New API 的源码或线上渠道。下游若依赖旧 Chat 扩展，需要改用官方支持的
-Chat 参数或原生 Responses。验证范围和源文件差异见 `docs/chat-official-parity.md`。
+API 接收 Provider 返回的 Chat wire，并用官方累加器及交付校验器检查身份、工具、终态、usage 和 DONE。未知辅助事件按目标转换合同处理，终态后继续产生业务输出失败。缺少用量保持未知，结算不造数。
+HTTP 提交前保留可下发的上游状态、正文和头；转换/无效响应失败沿官方错误边界返回。提交后只发送 Chat error 和一次 DONE。成功 finish/usage 等待执行收尾，不在取消、提交失败或缺少终态时伪造成功。
+API 的旧 Chat→Responses 转换及旧拒绝字段清单已退役。原生 Responses 的独立恢复规则保持。具体接入与验证见 `docs/chat-official-parity.md`。
 
 ### 显式上下文压缩
 
@@ -284,6 +233,7 @@ Responses 不透传下游的逐跳头、反代元数据（如 `cf-*`、`x-forwar
 合法 UUID 加规范 u64 的窗口保留后缀，context window 独立映射。显式缓存键独立于线程，
 同 scope 的相同原值映射相同；没有传缓存键时不补造。turn 引用和加密内容保持原值。
 Responses 转发当前请求回传的 turn-state；不从历史会话补取，明确换号时清除。
+`x-codex-turn-id` 按普通业务扩展头透传，不再提取为内部轮次字段；正文、`client_metadata` 和 `x-codex-turn-metadata` 的轮次信息继续有效。
 WS 握手的轮次状态与元数据头仅用于首次执行，当前帧的状态优先；帧元数据和原始请求头分别转发。
 Beta 和计时选项按收到的请求头透传。轮次状态不授予未知 response ID 或其他账号状态的使用权。
 
@@ -1170,22 +1120,11 @@ HTTP 返回 `429`，`error.code` 为 `key_daily_budget_exceeded` 或 `key_weekly
 | POST | `/v1beta/models/{model}:streamGenerateContent?alt=sse` | SSE生成 |
 | POST | `/v1beta/models/{model}:countTokens` | Token计数 |
 
-基础模型组按 `generationConfig.thinkingConfig.thinkingLevel` 解析真实型号，随后核对账号与分组模型权限；
-显式完整型号不因正文中的另一档位重定向。Codex 客户端目录也按当前 Key 的实际可用成员裁剪推理档位，
-图片能力取交集，上下文取共同安全范围；型号映射使用目标画像。显式输出上限按实际型号与候选账号校验，未知上限交上游验证。
-Responses、Chat Completions、Messages 可调用已获授权的 AGY 模型；兼容转换不支持非 null `previous_response_id` 续接。
-Responses 生成参数直接映射到 GenAI：省略或 null 的 `max_output_tokens` 不补默认上限，推理预算不继承 Messages 专有约束，采样与 JSON Schema 保留。
-AGY 常规生成和计数使用服务端系统提示词，取代客户端系统指令；全局及 Key 画像覆盖共同决定最终内容。
-原生 GenAI SSE 在首帧前及帧间不插入网关心跳，首帧前失败保留对应 HTTP 错误；Responses/Chat/Messages 保留原有保活。
-
-Responses 可声明可选 `web_search` 并同时使用函数工具；只有明确要求搜索才派发独立搜索。
-搜索目标来自账号目录 `webSearchModelIds`，同一账号及授权该账号的同一分组必须同时允许原型号和搜索型号。
-无搜索目录、缺失或重复工具声明、不支持的强制选项会明确拒绝，不退回普通生成。
-独立搜索要求最后输入项为用户文本，仅发送该查询，使用固定搜索系统指令；支持实时联网和
-`filters.allowed_domains` / `filters.blocked_domains`，只支持文本输出。显式禁用实时联网、位置及其他未支持选项会拒绝。
-返回正文 URL 引用；通过 `include: ["web_search_call.action.sources"]` 可取得来源列表。
-上游搜索返回完整 JSON，再转换为下游 JSON/SSE；本地费用和记录基于实际搜索型号与真实 usage。
-已有账号需刷新目录取得搜索目标。
+基础模型组按实际目录和思考档位解析执行型号；模型及账号范围检查保持。GenAI 客户端目录保留原始模型及 agent 菜单的分组顺序；Codex 菜单不再显示只有 AGY 可执行的模型。
+基础模型组的非流式独立搜索可以不指定思考档位：仅限 `generateContent`、唯一工具为 `googleSearch` 或 `google_search` 对象，且未提供 `thinkingConfig`。目录须声明搜索目标，同一账号及分组必须同时允许至少一个具体成员型号和搜索目标；不能拼接不同账号的权限。显式完整型号仍按该型号普通生成，混合工具、流式或显式无效档位不适用此例外。
+AGY 支持原生 GenAI 与 Chat；原生 Responses/Messages 转换已退役。生成和计数先放平台系统提示词，再保留客户端系统指令、全局/项目规则、工具说明和元数据。
+原生 GenAI SSE 不插入网关心跳，首帧前失败保留 HTTP 错误。搜索按目标原生工具和目录权限执行，不再提供旧 Responses web_search 独立转换入口。
+账号页展示 Google AI 点数及自动使用开关；默认不开启。套餐显示优先 Google 订阅描述，原始套餐 ID 继续用于策略；新用量/错误历史保存当时显示名，旧记录静态回退。
 
 账号目录/详情的 `usagePeriod=recent_week` 表示部署时区当天及前六天的本地统计，独立于模型分组额度周期。
 额度刷新会用同次目录确认模型组完整成员；5 小时/周窗口只汇总这些型号的本地 Token，已知无用量显示 0，成员无法确认仍为未知。
@@ -1229,8 +1168,8 @@ sessionAffinityTtlHours
 accountAffinity
 providerRequestProfiles
 codexPrivacyPolicy
-openaiOauthGuardianReviewModel
-openaiRequestCountry
+openaiRequestSettings
+openaiWebsocketPool
 requestIntervalMs
 rotationStrategy
 quotaResetWindowWeights
@@ -1248,7 +1187,10 @@ requestTuning
 从 v3.55.2 起，该字段投影独立的设置编辑版本；修改价目、轮换管理 Key 或修改其他路由资源不会使设置草稿误冲突。真实运行设置变更仍推进编辑版本并拒绝过期草稿。
 缺少版本号的旧页面或脚本需要重新读取设置并携带该字段，不能以服务端当前值代填绕过保护。
 
-全量保存必须包含布尔 `openaiOauthGuardianReviewModel` 和 `openaiRequestCountry` 对象；旧页面须刷新后再保存。
+全量保存必须包含 `openaiRequestSettings` 与 `openaiWebsocketPool`；旧页面须刷新。
+请求组包含 requestCountry、oauthGuardianReviewModel、residency（默认 us）与 accountRoutingOverride（默认 null）。两种头覆盖接受 null 显式清空，新请求和后台操作读取保存值。
+连接池组包含 enabled、maxAgeMs（默认 3300000）、fastPathBudgetMs（默认 800，1..15000）、idleTimeoutMs（默认 300000，非零）、streamIdleTimeoutMs（默认 300000，0 表示传输默认）。已创建连接保留创建时寿命；在线修改不重建共享池。每账号有效并发只限制同时建连，成功/失败/取消释放，普通请求并发独立不变。
+旧 YAML 及旧数据库 tuning 在首次启动一次导入，之后数据库权威。enabled=false 保留，不提供全局 maxConnecting 覆盖账号上限。
 Guardian 开关默认 true，仅结构化同步审核且有权限的原生账号优先使用 `codex-auto-review`，不覆盖显式模型映射或已确认的续接模型。
 国家策略为 `{"mode":"follow_location"}`（默认，代理位置优先于已启用全局位置，无位置发送 null）、`{"mode":"default"}`（发送 null）、`{"mode":"passthrough"}`（保留原字段）或 `{"mode":"custom","country":"JP"}`（两个大写 ASCII 字母）。策略仅用于 Codex OAuth 账号，在实际选号后应用于原生 HTTP/WS 正文的顶层 `request_country`。透传保留客户端显式 null 或字段缺失，不改写 `client_metadata` 中的同名字段。时区和搜索位置覆盖独立处理；Excel 沿用独立映射，本地没有上游 API Key 账号运行路径。
 本地自动重置卡 `AutoResetConfig.onLowWeeklyQuota` 与全局 UA `/api/admin/settings/openai-user-agent` 仍使用各自接口，不复制官方完整 settings 结构。
@@ -1699,7 +1641,8 @@ OpenAI 账号队满或超时后的重选记录为 `account.queue.reselect`；绑
 
 - 严格会话主账号仍启用且在授权池内，但模型权限或套餐不支持本次原生生图时，根线程和后代可临时借用合格账号；后续聊天保留原绑定。主账号只是繁忙、冷却或无额度时不能据此借号，required 和原生续接归属也不放宽。
 - Guardian 同步审核的严格父账号不在专用模型候选中时，使用客户端原模型并跟随父账号。
-- 最终握手全部 `x-codex-exclude` 值参与 WS 池身份。值改变后的精确连接续接要求客户端完整重放；普通请求使用匹配的新连接。
+- 最终握手全部 `x-codex-exclude` 和 `x-codex-exclude-stream-fields` 的头名及值参与 WS 池身份，包括重复和空值。排除项改变后的精确连接续接要求客户端完整重放；普通请求使用匹配的新连接。
+- 握手 `x-models-etag` 只在该连接第一次实际生成时确认，`generate=false` 预热不消耗它，后续复用不重复确认旧目录。
 - 同用户、同工作区重新授权保留额度快照、耗尽、窗口提示、暂停与预热进度；更换身份清除。凭据版本仍前进，旧请求不能覆盖新凭据事实。
 - 停用的 OAuth 账号继续初始/周期额度维护，刷新成功保持停用。账号仍待恢复时显示最新实际比例，缺失为 null，不把所有窗口强制显示为 100%。
 - `usage_limit_reached` 的正 `limit_window_minutes` 只匹配唯一通用窗口，同时保留其他触顶窗口。无法匹配时按有效未来拒绝边界复查，必须明确放行并覆盖所有已知通用窗口且比例已知、未触顶。明确放行下，同窗口两次新鲜、已知未满观测可解除限制，即使 reset 继续向后移动。旧时钟、缺比例、再次拒绝和触顶均不能凑恢复证据。

@@ -61,8 +61,8 @@ async function main() {
         auditRetentionDays: 90,
         requestTuning: {},
         modelMappings: {},
-        openaiOauthGuardianReviewModel: true,
-        openaiRequestCountry: { mode: 'follow_location' },
+        openaiRequestSettings: { requestCountry: { mode: 'follow_location' }, oauthGuardianReviewModel: true, residency: 'us', accountRoutingOverride: null },
+        openaiWebsocketPool: { enabled: true, maxAgeMs: 3300000, fastPathBudgetMs: 800, idleTimeoutMs: 300000, streamIdleTimeoutMs: 300000 },
       }
       page.on('pageerror', error => errors.push(error.message))
       await page.route('**/*', async (route) => {

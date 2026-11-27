@@ -334,12 +334,6 @@ const tuningValues = {
         <h3 class="mb-0 mt-3 text-sm font-medium text-cp-text-secondary sm:col-span-2">
           原生 Codex 上游连接
         </h3>
-        <BaseFormItem label="WebSocket 连接最长寿命" description="单位：秒">
-          <BaseInput :model-value="units.maxAgeSeconds.input.value" step="any" aria-label="WebSocket 连接最长寿命" type="number" @update:model-value="units.maxAgeSeconds.setInput" />
-        </BaseFormItem>
-        <BaseFormItem label="WebSocket 无数据等待时间" description="单位：秒">
-          <BaseInput :model-value="units.idleSeconds.input.value" step="any" aria-label="WebSocket 无数据等待时间" type="number" @update:model-value="units.idleSeconds.setInput" />
-        </BaseFormItem>
         <BaseFormItem label="WebSocket 失败保护阈值" description="窗口内连续失败达到此次数后暂停，默认 3 次">
           <BaseInput v-model="tuningValues.websocketFailureThreshold.value" aria-label="WebSocket 失败保护阈值" type="number" />
         </BaseFormItem>

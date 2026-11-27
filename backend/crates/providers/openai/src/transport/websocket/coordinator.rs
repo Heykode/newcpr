@@ -21,6 +21,7 @@ mod connection_budget_tests {
             ),
             continuation: WebSocketContinuationRequirement::NewChain,
             codex_search_declared: false,
+            generate: true,
         }
     }
 
@@ -389,13 +390,13 @@ pub(crate) async fn prepare_response_create_request_with_pool(
             () = async { match &downstream_cancellation {
                 Some(token) => token.cancelled().await,
                 None => std::future::pending().await,
-            }} => WebSocketPoolAcquire::Bypass(WebSocketPoolBypassReason::Disabled),
-            acquired = pool.acquire(&key, required_response_id, request.codex_search_declared) => acquired,
+            }} => Ok(WebSocketPoolAcquire::Bypass(WebSocketPoolBypassReason::Disabled)),
+            acquired = pool.acquire_for_route(&key, required_response_id, request.codex_search_declared, request.connection().outbound_proxy.as_ref()) => acquired,
         }
     })
     .await
     {
-        WebSocketFastPath::Ready(acquired) => acquired,
+        WebSocketFastPath::Ready(acquired) => acquired?,
         WebSocketFastPath::Missed => return Ok(WebSocketFastPath::Missed),
     };
     match acquired {
@@ -544,7 +545,7 @@ async fn prepare_unpooled_websocket(
 async fn prepare_pooled_websocket(
     request: &super::model::ResponseCreateOpening,
     pool: &CodexWebSocketPool,
-    connect_lease: WebSocketPoolConnectLease,
+    mut connect_lease: WebSocketPoolConnectLease,
     breaker: &WebSocketOriginBreaker,
     origin_key: &str,
     decision_deadline: Option<TokioInstant>,
@@ -560,32 +561,7 @@ async fn prepare_pooled_websocket(
     };
     let fast_path_budget = decision_deadline
         .map(|deadline| deadline.saturating_duration_since(connect_lease.started_at()));
-    let proxy_permit = match wait_for_fast_path(
-        connect_lease.started_at(),
-        fast_path_budget,
-        Box::pin(super::pool::proxy_capacity::acquire(
-            request.connection().outbound_proxy.as_ref(),
-            Some(pool),
-        )),
-    )
-    .await
-    {
-        WebSocketFastPath::Ready(Ok(permit)) => permit,
-        WebSocketFastPath::Ready(Err(error)) => {
-            if let Some(permit) = permit {
-                permit.cancel();
-            }
-            connect_lease.failed().await;
-            return Err(error);
-        }
-        WebSocketFastPath::Missed => {
-            if let Some(permit) = permit {
-                permit.cancel();
-            }
-            connect_lease.failed().await;
-            return Ok(WebSocketFastPath::Missed);
-        }
-    };
+    let proxy_permit = connect_lease.proxy_permit.take();
     let mut waiter = start_pooled_websocket_connect(
         request.connection().clone(),
         pool.clone(),
@@ -834,6 +810,7 @@ async fn connect_websocket_connection(
             metadata: websocket_connection_metadata(connection, &response),
             continuation: WebSocketContinuationState::default(),
             created_at: tokio::time::Instant::now(),
+            lifetime: super::pool::CodexWebSocketPoolConfig::default().into(),
             initial_search_declared: None,
         },
         started_at.elapsed(),
@@ -953,6 +930,7 @@ pub(crate) async fn execute_prepared_response_create_request_stream(
         mut metadata,
         continuation,
         created_at,
+        lifetime,
         initial_search_declared,
     } = connection;
     // Only the current exchange owns an active exit reference. Idle sockets do not.
@@ -1015,7 +993,9 @@ pub(crate) async fn execute_prepared_response_create_request_stream(
     let connection_local_available = lease.is_some() && !websocket.is_closed();
     let pool_return = lease.map(|lease| WebSocketStreamPoolReturn {
         lease,
+        reused,
         created_at,
+        lifetime,
         continuation,
         initial_search_declared: initial_search_declared
             .unwrap_or(request.opening.codex_search_declared),
@@ -1024,7 +1004,7 @@ pub(crate) async fn execute_prepared_response_create_request_stream(
         websocket,
         metadata,
         pool_return,
-        reused,
+        request.opening.generate,
         stream_idle_timeout,
         trace,
         response_control,

@@ -636,6 +636,7 @@ mod provider {
             quota: ProviderQuota {
                 paused_windows: Default::default(),
                 credits: None,
+                plan_type_display: None,
                 plan_type: None,
                 observed_at: None,
                 refresh_token_expires_at: None,

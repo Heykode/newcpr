@@ -126,11 +126,26 @@ pub(crate) fn authenticate_messages_client(
     service: &OpenAiService,
     headers: &HeaderMap,
 ) -> Result<AuthenticatedClient, ClientAccessError> {
+    authenticate_with_key_header(service, headers, "x-api-key")
+}
+
+pub(crate) fn authenticate_genai_client(
+    service: &OpenAiService,
+    headers: &HeaderMap,
+) -> Result<AuthenticatedClient, ClientAccessError> {
+    authenticate_with_key_header(service, headers, "x-goog-api-key")
+}
+
+fn authenticate_with_key_header(
+    service: &OpenAiService,
+    headers: &HeaderMap,
+    header_name: &'static str,
+) -> Result<AuthenticatedClient, ClientAccessError> {
     if headers.contains_key(AUTHORIZATION) {
         return authenticate_client(service, headers);
     }
     let key = headers
-        .get("x-api-key")
+        .get(header_name)
         .ok_or(ClientApiKeyAuthError::MissingAuthorization)?
         .to_str()
         .map_err(|_| ClientApiKeyAuthError::MalformedAuthorization)?;

@@ -174,20 +174,22 @@ impl CodexWebSocketPool {
                 WebSocketPoolSlot::Idle {
                     connection,
                     idle_since,
-                } if should_close_idle_connection(connection, now, self.max_age())
+                } if should_close_idle_connection(connection, now)
                     || (!state.has_downstream_binding(key)
-                        && now.duration_since(*idle_since) >= self.config.idle_timeout)
-                    || state.downstream_closed(key) =>
+                        && now.duration_since(*idle_since) >= connection.lifetime.idle_timeout)
+                    || state.downstream_closed(key)
+                    || self.account_limit(key.account_id()).is_none()
+                    || !self.effective_config().enabled =>
                 {
                     Some(key.clone())
                 }
                 WebSocketPoolSlot::Busy(reservation)
-                    if now.duration_since(reservation.reserved_at) >= self.max_age() =>
+                    if now.duration_since(reservation.reserved_at) >= reservation.max_age =>
                 {
                     Some(key.clone())
                 }
                 WebSocketPoolSlot::Connecting(connecting)
-                    if now.duration_since(connecting.started_at) >= self.max_age() =>
+                    if now.duration_since(connecting.started_at) >= connecting.max_age =>
                 {
                     Some(key.clone())
                 }
@@ -206,10 +208,12 @@ impl CodexWebSocketPool {
                     let observation = if connection.websocket.is_closed() {
                         connection.websocket.observation()
                     } else {
-                        let reason = if state.downstream_closed(&key) {
+                        let reason = if self.account_limit(key.account_id()).is_none() {
+                            "account_unavailable"
+                        } else if state.downstream_closed(&key) {
                             "downstream_connection_closed"
                         } else if !state.has_downstream_binding(&key)
-                            && now.duration_since(idle_since) >= self.config.idle_timeout
+                            && now.duration_since(idle_since) >= connection.lifetime.idle_timeout
                         {
                             "idle_timeout_expired"
                         } else {
@@ -218,6 +222,7 @@ impl CodexWebSocketPool {
                         connection.websocket.observation().with_exit_reason(reason)
                     };
                     let reason = match observation.exit_reason() {
+                        "account_unavailable" => Some("account_unavailable"),
                         "max_age_expired" => Some("max_age_expired"),
                         "idle_timeout_expired" => Some("idle_timeout_expired"),
                         "downstream_connection_closed" => Some("downstream_connection_closed"),
@@ -239,9 +244,7 @@ impl CodexWebSocketPool {
                 }
                 Some(WebSocketPoolSlot::Connecting(connecting)) => {
                     connecting.cancel(None);
-                    // Keep the reservation until the opening task observes the
-                    // cancellation and releases it. The account slot remains
-                    // occupied while a raced opening can still complete.
+                    // Keep same-key ownership until the cancelled opening finishes.
                     state
                         .slots
                         .insert(key, WebSocketPoolSlot::Connecting(connecting));
@@ -251,14 +254,6 @@ impl CodexWebSocketPool {
                 }
                 None => {}
             }
-        }
-        let account_ids = state
-            .slots
-            .keys()
-            .map(|key| key.account_id().to_owned())
-            .collect::<std::collections::BTreeSet<_>>();
-        for account_id in account_ids {
-            close.extend(self.trim_account_idle(&mut state, &account_id, None));
         }
         close
     }

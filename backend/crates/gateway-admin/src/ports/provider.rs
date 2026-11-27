@@ -391,8 +391,8 @@ pub trait ProviderAdmin: Send + Sync {
     }
 
     /// 提供最终套餐展示名称；未覆盖时采用通用的大驼峰格式。
-    fn plan_type_display(&self, plan_type: &str) -> String {
-        default_plan_type_display(plan_type)
+    fn plan_type_display(&self, plan_type: &str) -> Option<String> {
+        Some(default_plan_type_display(plan_type))
     }
 
     /// 返回与套餐列同名的全部原始类型；未提供筛选目录时不接受套餐组查询。
@@ -709,8 +709,14 @@ impl ProviderAdminRegistry {
         plan_type: &mut Option<String>,
         quota: Option<&ProviderQuota>,
     ) -> Option<String> {
-        if let Some(quota) = quota {
-            quota.fill_missing_plan_type(plan_type);
+        if let Some(quota) = quota
+            && let Some(display) = crate::model::provider_credentials::resolve_observed_plan(
+                plan_type,
+                quota.plan_type.as_deref(),
+                quota.plan_type_display.as_deref(),
+            )
+        {
+            return Some(display.to_owned());
         }
         self.plan_type_display(provider_kind, plan_type.as_deref())
     }
@@ -752,10 +758,10 @@ impl ProviderAdminRegistry {
         let provider = ProviderKind::new(provider_kind.to_owned())
             .ok()
             .and_then(|kind| self.providers.get(&kind));
-        Some(provider.map_or_else(
-            || default_plan_type_display(plan_type),
+        provider.map_or_else(
+            || Some(default_plan_type_display(plan_type)),
             |provider| provider.plan_type_display(plan_type),
-        ))
+        )
     }
 
     /// 返回所有已注册 Provider 的 Dashboard 上游身份画像。

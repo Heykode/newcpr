@@ -1,0 +1,2245 @@
+use gateway_core::policy::ClientApiKeyId;
+mod chat;
+
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::num::NonZeroU32;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, SystemTime};
+
+use futures::{StreamExt, stream};
+use gateway_core::account::{
+    AccountFeedbackStats, AccountSelectionPolicy, CredentialRevision, ProviderAccountStore,
+    RotationStrategy,
+};
+use gateway_core::engine::continuation::{
+    ContinuationBinding, NativeContinuationPin, PreviousResponseId,
+};
+use gateway_core::engine::provider::{Provider, ProviderRequest};
+use gateway_core::engine::{
+    AccountAttemptContext, AttemptContext, ContinuationAttempt, ModelRequestId,
+};
+use gateway_core::error::{
+    ClientVisibleUpstreamError, ContinuationFailure, OpaqueUpstreamValue, ProviderError,
+    ProviderErrorKind,
+};
+use gateway_core::event::{GatewayEvent, UpstreamHttpVersion};
+use gateway_core::lifecycle::CancellationToken;
+use gateway_core::operation::{
+    Feature, GenerateRequest, Operation, OperationKind, ProtocolPayload, ProviderSessionState,
+};
+use gateway_core::routing::{
+    ClientRoutingScope, ConfigRevision, FrozenAccountScope, ModelCapabilities, ProviderKind,
+    ProviderModel, PublicModelId, RoutingContext, RuntimeAccount, RuntimeAccountDirectory,
+    RuntimeSnapshot, SupportLevel, UpstreamModelId,
+};
+use gateway_core::upstream::UpstreamSendState;
+use provider_xai::{
+    GrokBuildProvider, GrokCredentialCatalogCache, GrokCredentialFailure,
+    GrokCredentialFeedbackFuture, GrokCredentialRecovery, GrokCredentialRecoveryOutcome,
+    GrokCredentialRepository, GrokInferenceClientCacheStatus, GrokInferenceDnsObservation,
+    GrokInferenceDnsSource, GrokInferenceRequest, GrokInferenceResponse, GrokInferenceTransport,
+    GrokInferenceTransportError, GrokInferenceTransportErrorKind, GrokInferenceTransportFuture,
+    GrokInferenceTransportMetrics, GrokModelCatalogRequest, GrokModelCatalogTransport,
+    GrokModelCatalogTransportError, GrokModelCatalogTransportErrorKind,
+    GrokModelCatalogTransportFuture, GrokModelCatalogTransportResponse, GrokSessionBinding,
+    GrokSessionSelection, GrokSessionSelector, GrokSessionSelectorError, GrokSessionSelectorFuture,
+    SecretValue, SelectedGrokSession,
+};
+use serde_json::{Map, Value, json};
+
+use crate::support::{
+    MemoryGrokCatalogCache, MemoryProviderAccountStore, account_id, create_input, seed_input,
+};
+
+const MODEL: &str = "grok-4.5";
+const CATALOG_FIXTURE: &[u8] =
+    include_bytes!("../../transport/catalog/fixtures/official_grok_models_snapshot.json");
+
+fn observed_transport_metrics() -> GrokInferenceTransportMetrics {
+    GrokInferenceTransportMetrics::default()
+        .with_headers_ms(42)
+        .with_client_cache_status(GrokInferenceClientCacheStatus::Miss)
+        .with_dns(GrokInferenceDnsObservation::new(
+            GrokInferenceDnsSource::System,
+            7,
+        ))
+}
+
+const CATALOG_WITHOUT_FEATURE_METADATA: &[u8] = br#"{
+  "object": "list",
+  "data": [{
+    "id": "grok-catalog-entry",
+    "model": "grok-catalog-entry",
+    "contextWindow": 1000000,
+    "maxCompletionTokens": 131072,
+    "apiBackend": "responses",
+    "supportedInApi": true,
+    "supportsReasoningEffort": true
+  }]
+}"#;
+const CATALOG_WITH_FEATURE_REASONING_OPTIONS: &[u8] = br#"{
+  "object": "list",
+  "data": [{
+    "id": "grok-4.5",
+    "model": "grok-4.5",
+    "contextWindow": 500000,
+    "maxCompletionTokens": 131072,
+    "apiBackend": "responses",
+    "supportedInApi": true,
+    "reasoningEfforts": ["high", {"value": "medium", "default": true}, "low"],
+    "features": {
+      "reasoning": true,
+      "reasoningEffortOptions": {
+        "supportedEfforts": ["low", "medium", "high", "xhigh"],
+        "defaultEffort": "high"
+      }
+    },
+    "supportsReasoningEffort": true,
+    "streamToolCalls": true
+  }]
+}"#;
+const SUCCESS_SSE: &[u8] = concat!(
+    "event: response.created\n",
+    "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_xai\",\"model\":\"grok-4.5\"}}\n\n",
+    "event: response.content_part.added\n",
+    "data: {\"type\":\"response.content_part.added\",\"output_index\":0,\"content_index\":0,\"part\":{\"type\":\"output_text\"}}\n\n",
+    "event: response.output_text.delta\n",
+    "data: {\"type\":\"response.output_text.delta\",\"output_index\":0,\"content_index\":0,\"delta\":\"hello\"}\n\n",
+    "event: response.completed\n",
+    "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_xai\",\"model\":\"grok-4.5\",\"status\":\"completed\"}}\n\n",
+)
+.as_bytes();
+
+fn stateful_sse(encrypted_content: &str) -> Vec<u8> {
+    format!(
+        concat!(
+            "event: response.created\n",
+            "data: {{\"type\":\"response.created\",\"response\":{{\"id\":\"resp_state\",\"model\":\"grok-4.5\"}}}}\n\n",
+            "event: response.output_item.done\n",
+            "data: {{\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{{\"id\":\"reason_account_bound\",\"type\":\"reasoning\",\"status\":\"completed\",\"summary\":[],\"content\":null,\"encrypted_content\":\"{}\"}}}}\n\n",
+            "event: response.completed\n",
+            "data: {{\"type\":\"response.completed\",\"response\":{{\"id\":\"resp_state\",\"model\":\"grok-4.5\",\"status\":\"completed\"}}}}\n\n"
+        ),
+        encrypted_content
+    )
+    .into_bytes()
+}
+
+struct StubSelector {
+    calls: AtomicUsize,
+    feedback: Mutex<Vec<GrokCredentialFailure>>,
+    error: Mutex<Option<GrokSessionSelectorError>>,
+    required_accounts: Mutex<Vec<Option<gateway_core::account::ProviderAccountId>>>,
+    upstream_models: Mutex<Vec<String>>,
+}
+
+impl StubSelector {
+    fn success() -> Arc<Self> {
+        Arc::new(Self {
+            calls: AtomicUsize::new(0),
+            feedback: Mutex::new(Vec::new()),
+            error: Mutex::new(None),
+            required_accounts: Mutex::new(Vec::new()),
+            upstream_models: Mutex::new(Vec::new()),
+        })
+    }
+
+    fn failing(error: GrokSessionSelectorError) -> Arc<Self> {
+        Arc::new(Self {
+            calls: AtomicUsize::new(0),
+            feedback: Mutex::new(Vec::new()),
+            error: Mutex::new(Some(error)),
+            required_accounts: Mutex::new(Vec::new()),
+            upstream_models: Mutex::new(Vec::new()),
+        })
+    }
+}
+
+impl GrokSessionSelector for StubSelector {
+    fn select(&self, request: GrokSessionSelection) -> GrokSessionSelectorFuture<'_> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        self.upstream_models
+            .lock()
+            .expect("upstream models")
+            .push(request.upstream_model().as_str().to_owned());
+        let error = self.error.lock().expect("selector error").take();
+        let required_account = request.required_account().cloned();
+        self.required_accounts
+            .lock()
+            .expect("required accounts")
+            .push(required_account.clone());
+        Box::pin(async move {
+            if let Some(error) = error {
+                return Err(error);
+            }
+            let id = account_id("provider");
+            if request.excluded_accounts().contains(&id)
+                || required_account
+                    .as_ref()
+                    .is_some_and(|required| required != &id)
+            {
+                return Err(GrokSessionSelectorError::NoEligibleSession);
+            }
+            SelectedGrokSession::new(
+                id,
+                CredentialRevision::new(1).expect("revision"),
+                SecretValue::new("oauth-access"),
+                SecretValue::new("verified-user"),
+                Some(SecretValue::new("user@example.com")),
+                GrokSessionBinding::new("acct_provider").expect("binding"),
+                (),
+            )
+            .map_err(|_| GrokSessionSelectorError::InvalidSession)
+        })
+    }
+
+    fn record_failure<'a>(
+        &'a self,
+        _: &'a SelectedGrokSession,
+        failure: GrokCredentialFailure,
+    ) -> GrokCredentialFeedbackFuture<'a> {
+        Box::pin(async move {
+            self.feedback.lock().expect("feedback").push(failure);
+        })
+    }
+}
+
+enum InferenceMode {
+    Success,
+    SuccessWithMetrics(GrokInferenceTransportMetrics),
+    SuccessBody(Vec<u8>),
+    Error(GrokInferenceTransportError),
+    StreamError(GrokInferenceTransportError),
+}
+
+struct StubInferenceTransport {
+    calls: AtomicUsize,
+    requests: Mutex<Vec<GrokInferenceRequest>>,
+    modes: Mutex<VecDeque<InferenceMode>>,
+}
+
+impl StubInferenceTransport {
+    fn success() -> Arc<Self> {
+        Arc::new(Self {
+            calls: AtomicUsize::new(0),
+            requests: Mutex::new(Vec::new()),
+            modes: Mutex::new(VecDeque::from([InferenceMode::Success])),
+        })
+    }
+
+    fn success_with_metrics(metrics: GrokInferenceTransportMetrics) -> Arc<Self> {
+        Arc::new(Self {
+            calls: AtomicUsize::new(0),
+            requests: Mutex::new(Vec::new()),
+            modes: Mutex::new(VecDeque::from([InferenceMode::SuccessWithMetrics(metrics)])),
+        })
+    }
+
+    fn error(error: GrokInferenceTransportError) -> Arc<Self> {
+        Arc::new(Self {
+            calls: AtomicUsize::new(0),
+            requests: Mutex::new(Vec::new()),
+            modes: Mutex::new(VecDeque::from([InferenceMode::Error(error)])),
+        })
+    }
+
+    fn stream_error(error: GrokInferenceTransportError) -> Arc<Self> {
+        Arc::new(Self {
+            calls: AtomicUsize::new(0),
+            requests: Mutex::new(Vec::new()),
+            modes: Mutex::new(VecDeque::from([InferenceMode::StreamError(error)])),
+        })
+    }
+
+    fn sequence(modes: impl IntoIterator<Item = InferenceMode>) -> Arc<Self> {
+        Arc::new(Self {
+            calls: AtomicUsize::new(0),
+            requests: Mutex::new(Vec::new()),
+            modes: Mutex::new(modes.into_iter().collect()),
+        })
+    }
+}
+
+impl GrokInferenceTransport for StubInferenceTransport {
+    fn execute(&self, request: GrokInferenceRequest) -> GrokInferenceTransportFuture<'_> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        self.requests.lock().expect("requests").push(request);
+        let mode = self
+            .modes
+            .lock()
+            .expect("modes")
+            .pop_front()
+            .expect("one transport mode");
+        Box::pin(async move {
+            match mode {
+                InferenceMode::Success => Ok(GrokInferenceResponse::new(
+                    Box::pin(stream::iter([Ok(bytes::Bytes::from_static(SUCCESS_SSE))])),
+                    UpstreamHttpVersion::Http2,
+                    200,
+                    None,
+                )),
+                InferenceMode::SuccessWithMetrics(metrics) => Ok(GrokInferenceResponse::new(
+                    Box::pin(stream::iter([Ok(bytes::Bytes::from_static(SUCCESS_SSE))])),
+                    UpstreamHttpVersion::Http2,
+                    200,
+                    None,
+                )
+                .with_transport_metrics(metrics)),
+                InferenceMode::SuccessBody(body) => Ok(GrokInferenceResponse::new(
+                    Box::pin(stream::iter([Ok(bytes::Bytes::from(body))])),
+                    UpstreamHttpVersion::Http2,
+                    200,
+                    None,
+                )),
+                InferenceMode::Error(error) => Err(error),
+                InferenceMode::StreamError(error) => Ok(GrokInferenceResponse::new(
+                    Box::pin(stream::iter([Err(error)])),
+                    UpstreamHttpVersion::Http2,
+                    200,
+                    None,
+                )),
+            }
+        })
+    }
+}
+
+struct StaticCatalogTransport;
+
+impl GrokModelCatalogTransport for StaticCatalogTransport {
+    fn execute(&self, _: GrokModelCatalogRequest) -> GrokModelCatalogTransportFuture<'_> {
+        Box::pin(async {
+            Ok(GrokModelCatalogTransportResponse::new(
+                CATALOG_FIXTURE,
+                None,
+            ))
+        })
+    }
+}
+
+struct CatalogWithoutFeatureMetadataTransport;
+
+impl GrokModelCatalogTransport for CatalogWithoutFeatureMetadataTransport {
+    fn execute(&self, _: GrokModelCatalogRequest) -> GrokModelCatalogTransportFuture<'_> {
+        Box::pin(async {
+            Ok(GrokModelCatalogTransportResponse::new(
+                CATALOG_WITHOUT_FEATURE_METADATA,
+                None,
+            ))
+        })
+    }
+}
+
+struct CatalogWithFeatureReasoningOptionsTransport;
+
+impl GrokModelCatalogTransport for CatalogWithFeatureReasoningOptionsTransport {
+    fn execute(&self, _: GrokModelCatalogRequest) -> GrokModelCatalogTransportFuture<'_> {
+        Box::pin(async {
+            Ok(GrokModelCatalogTransportResponse::new(
+                CATALOG_WITH_FEATURE_REASONING_OPTIONS,
+                None,
+            ))
+        })
+    }
+}
+
+struct UnavailableCatalogTransport;
+
+impl GrokModelCatalogTransport for UnavailableCatalogTransport {
+    fn execute(&self, _: GrokModelCatalogRequest) -> GrokModelCatalogTransportFuture<'_> {
+        Box::pin(async {
+            Err(GrokModelCatalogTransportError::new(
+                GrokModelCatalogTransportErrorKind::Unavailable,
+            ))
+        })
+    }
+}
+
+struct StubRecovery {
+    calls: AtomicUsize,
+    outcome: GrokCredentialRecoveryOutcome,
+}
+
+impl StubRecovery {
+    fn new(outcome: GrokCredentialRecoveryOutcome) -> Arc<Self> {
+        Arc::new(Self {
+            calls: AtomicUsize::new(0),
+            outcome,
+        })
+    }
+}
+
+#[async_trait::async_trait]
+impl GrokCredentialRecovery for StubRecovery {
+    async fn recover_unauthorized(
+        &self,
+        _: &gateway_core::account::ProviderAccountId,
+        _: CredentialRevision,
+    ) -> GrokCredentialRecoveryOutcome {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        self.outcome
+    }
+}
+
+async fn provider(
+    selector: Arc<StubSelector>,
+    transport: Arc<StubInferenceTransport>,
+) -> GrokBuildProvider {
+    provider_with_recovery(
+        selector,
+        transport,
+        StubRecovery::new(GrokCredentialRecoveryOutcome::Unavailable),
+    )
+    .await
+}
+
+async fn provider_with_recovery(
+    selector: Arc<StubSelector>,
+    transport: Arc<StubInferenceTransport>,
+    recovery: Arc<StubRecovery>,
+) -> GrokBuildProvider {
+    provider_with_catalog_transport(
+        selector,
+        transport,
+        recovery,
+        Arc::new(StaticCatalogTransport),
+    )
+    .await
+}
+
+async fn provider_with_catalog_transport(
+    selector: Arc<dyn GrokSessionSelector>,
+    transport: Arc<StubInferenceTransport>,
+    recovery: Arc<StubRecovery>,
+    catalog_transport: Arc<dyn GrokModelCatalogTransport>,
+) -> GrokBuildProvider {
+    let store = MemoryProviderAccountStore::shared();
+    let account_store: Arc<dyn ProviderAccountStore> = store.clone();
+    let repository = GrokCredentialRepository::new(account_store);
+    seed_input(
+        &store,
+        &create_input("catalog-provider", "subject-provider"),
+    )
+    .await
+    .expect("catalog account");
+    let cache: Arc<dyn GrokCredentialCatalogCache> = MemoryGrokCatalogCache::shared();
+    let catalog = Arc::new(crate::support::grok_catalog_service(
+        repository,
+        catalog_transport,
+        cache,
+    ));
+    GrokBuildProvider::new(
+        selector,
+        transport,
+        catalog,
+        recovery,
+        Arc::new(AccountFeedbackStats::default()),
+        crate::support::xai_wire_profile(),
+    )
+    .expect("official xAI provider configuration")
+}
+
+async fn mapped_transport_error(
+    error: GrokInferenceTransportError,
+    body_stream: bool,
+) -> ProviderError {
+    let selector = StubSelector::success();
+    let transport = if body_stream {
+        StubInferenceTransport::stream_error(error)
+    } else {
+        StubInferenceTransport::error(error)
+    };
+    let provider = provider(selector, transport).await;
+    let mut stream = provider
+        .execute(
+            provider_request("xai"),
+            context(CancellationToken::new(), None),
+        )
+        .await
+        .expect("stream");
+    next_provider_error(&mut stream).await
+}
+
+#[tokio::test]
+async fn invalid_encrypted_reasoning_is_returned_without_rewriting_or_retry() {
+    let transport = StubInferenceTransport::sequence([
+        InferenceMode::Error(
+            GrokInferenceTransportError::new(
+                GrokInferenceTransportErrorKind::InvalidRequest,
+                UpstreamSendState::Sent,
+            )
+            .with_status(400)
+            .with_upstream_code(OpaqueUpstreamValue::new("reasoning_decode_failed")),
+        ),
+        InferenceMode::Success,
+    ]);
+    let provider = provider(StubSelector::success(), transport.clone()).await;
+    let operation = Operation::Generate(GenerateRequest::from_protocol_payload(
+        ProtocolPayload::json_object(
+            "openai",
+            Map::from_iter([
+                ("model".to_owned(), json!("client-model")),
+                (
+                    "input".to_owned(),
+                    json!([
+                        {
+                            "type": "reasoning",
+                            "id": "reason_stale",
+                            "summary": [{"type": "summary_text", "text": "keep summary"}],
+                            "content": null,
+                            "encrypted_content": "stale-ciphertext"
+                        },
+                        {"type": "message", "role": "user", "content": "continue"}
+                    ]),
+                ),
+            ]),
+        )
+        .expect("OpenAI payload"),
+    ));
+    let mut stream = provider
+        .execute(
+            provider_request_with_operation("xai", operation),
+            context(CancellationToken::new(), None),
+        )
+        .await
+        .expect("retrying stream");
+    let error = next_provider_error(&mut stream).await;
+    assert_eq!(error.kind(), ProviderErrorKind::InvalidRequest);
+    let requests = transport.requests.lock().expect("requests");
+    assert_eq!(requests.len(), 1);
+    let sent: Value = serde_json::from_slice(requests[0].body()).unwrap();
+    assert_eq!(sent["input"][0]["encrypted_content"], "stale-ciphertext");
+}
+
+async fn next_provider_error(
+    stream: &mut gateway_core::engine::provider::ProviderStream,
+) -> ProviderError {
+    loop {
+        match stream.next().await.expect("error event") {
+            Ok(event) => assert!(!event.has_client_event()),
+            Err(error) => return error,
+        }
+    }
+}
+
+async fn collect_provider_state(
+    stream: &mut gateway_core::engine::provider::ProviderStream,
+) -> Option<ProviderSessionState> {
+    let mut state = None;
+    while let Some(event) = stream.next().await {
+        let mut event = event.expect("successful Provider event");
+        if let Some(update) = event.take_session_update() {
+            state = Some(update);
+        }
+    }
+    state
+}
+
+fn operation() -> Operation {
+    let payload = ProtocolPayload::json_object(
+        "openai",
+        Map::from_iter([
+            ("model".to_owned(), json!("client-model")),
+            ("input".to_owned(), json!("hello")),
+        ]),
+    )
+    .expect("OpenAI payload");
+    Operation::Generate(GenerateRequest::from_protocol_payload(payload))
+}
+
+fn object(value: serde_json::Value) -> Map<String, serde_json::Value> {
+    let serde_json::Value::Object(object) = value else {
+        panic!("request body must be an object");
+    };
+    object
+}
+
+fn provider_request(provider_kind: &str) -> ProviderRequest {
+    provider_request_with_operation(provider_kind, operation())
+}
+
+fn provider_request_with_operation(provider_kind: &str, operation: Operation) -> ProviderRequest {
+    provider_request_with_upstream_model(provider_kind, MODEL, operation)
+}
+
+fn provider_request_with_upstream_model(
+    provider_kind: &str,
+    upstream_model: &str,
+    operation: Operation,
+) -> ProviderRequest {
+    let provider = ProviderKind::new(provider_kind).expect("provider");
+    let provider_model = ProviderModel::new(
+        provider.clone(),
+        UpstreamModelId::new(upstream_model).expect("model"),
+        ModelCapabilities::new(BTreeSet::from([OperationKind::Generate]), Some(131_072))
+            .with_feature(Feature::Tools, SupportLevel::Native)
+            .with_feature(Feature::NativeContinuation, SupportLevel::Native),
+    );
+    let account_scope = Arc::new(FrozenAccountScope::new(
+        Arc::new(RuntimeAccountDirectory::new(BTreeMap::from([(
+            account_id("provider"),
+            RuntimeAccount::new(provider.clone(), BTreeSet::new()),
+        )]))),
+        ClientRoutingScope::all_accounts(),
+    ));
+    let snapshot = RuntimeSnapshot::new(
+        ConfigRevision::new(1).expect("revision"),
+        selection_policy(),
+        vec![provider],
+        vec![provider_model],
+        vec![],
+    )
+    .expect("snapshot");
+    let plan = snapshot
+        .plan(
+            &PublicModelId::new(upstream_model).expect("model"),
+            &operation,
+            account_scope,
+            &RoutingContext::default(),
+        )
+        .expect("routing plan");
+    ProviderRequest::new(operation, plan.candidates()[0].clone())
+}
+
+fn selection_policy() -> AccountSelectionPolicy {
+    AccountSelectionPolicy::new(
+        RotationStrategy::Smart,
+        NonZeroU32::new(2).expect("limit"),
+        Duration::ZERO,
+    )
+}
+
+fn context(
+    cancellation: CancellationToken,
+    continuation: Option<ContinuationBinding>,
+) -> AttemptContext {
+    context_with_required(cancellation, continuation, None)
+}
+
+fn context_with_required(
+    cancellation: CancellationToken,
+    continuation: Option<ContinuationBinding>,
+    required_account: Option<gateway_core::account::ProviderAccountId>,
+) -> AttemptContext {
+    context_with_recovery_state(cancellation, continuation, required_account, false)
+}
+
+fn context_with_recovery_state(
+    cancellation: CancellationToken,
+    continuation: Option<ContinuationBinding>,
+    required_account: Option<gateway_core::account::ProviderAccountId>,
+    recovery_attempted: bool,
+) -> AttemptContext {
+    let account_state_owner = continuation
+        .as_ref()
+        .and_then(ContinuationBinding::pinned)
+        .map(gateway_core::engine::ProviderAccountStateOwner::from_continuation);
+    AttemptContext::new(
+        gateway_core::engine::RequestAttemptContext::new(
+            ModelRequestId::new("req_xai").expect("request ID"),
+            gateway_core::policy::ClientApiKeyId::new("key_xai_contract").expect("client key id"),
+        ),
+        NonZeroU32::new(1).expect("attempt"),
+        SystemTime::now() + Duration::from_secs(30),
+        selection_policy(),
+        AccountAttemptContext::new(BTreeSet::new(), required_account, account_state_owner)
+            .with_credential_recovery_attempted(recovery_attempted),
+        continuation,
+        cancellation,
+    )
+}
+
+fn context_with_continuation_attempt(
+    continuation: ContinuationBinding,
+    attempt: ContinuationAttempt,
+) -> AttemptContext {
+    context(CancellationToken::new(), Some(continuation)).with_continuation_attempt(attempt)
+}
+
+#[tokio::test]
+async fn native_model_alias_is_preserved_for_account_selection() {
+    let selector = StubSelector::success();
+    let provider = provider(selector.clone(), StubInferenceTransport::success()).await;
+    let mut stream = provider
+        .execute(
+            provider_request_with_upstream_model("xai", "grok-4.6-latest", operation()),
+            context(CancellationToken::new(), None),
+        )
+        .await
+        .expect("provider stream");
+    while let Some(event) = stream.next().await {
+        event.expect("provider event");
+    }
+
+    assert_eq!(
+        selector
+            .upstream_models
+            .lock()
+            .expect("upstream models")
+            .as_slice(),
+        ["grok-4.6-latest"]
+    );
+}
+
+fn operation_with_state(body: serde_json::Value, state: ProviderSessionState) -> Operation {
+    let serde_json::Value::Object(body) = body else {
+        panic!("request body must be an object");
+    };
+    let request = GenerateRequest::from_protocol_payload(
+        ProtocolPayload::json_object("openai", body).expect("OpenAI payload"),
+    )
+    .with_provider_session_state(state);
+    Operation::Generate(request)
+}
+
+#[tokio::test]
+async fn execute_forwards_required_account_to_selector() {
+    let selector = StubSelector::success();
+    let transport = StubInferenceTransport::success();
+    let provider = provider(selector.clone(), transport).await;
+    let required = account_id("provider");
+    let stream = provider
+        .execute(
+            provider_request("xai"),
+            context_with_required(CancellationToken::new(), None, Some(required.clone())),
+        )
+        .await
+        .expect("required account stream");
+
+    assert_eq!(stream.metadata().provider_account_id(), &required);
+    assert_eq!(
+        selector
+            .required_accounts
+            .lock()
+            .expect("required accounts")
+            .as_slice(),
+        &[Some(required)]
+    );
+}
+
+#[tokio::test]
+async fn execute_returns_cold_stream_and_records_selected_account() {
+    let selector = StubSelector::success();
+    let transport = StubInferenceTransport::success_with_metrics(observed_transport_metrics());
+    let provider = provider(selector, transport.clone()).await;
+    let mut stream = provider
+        .execute(
+            provider_request("xai"),
+            context(CancellationToken::new(), None),
+        )
+        .await
+        .expect("provider stream");
+    assert_eq!(transport.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        stream.metadata().provider_account_id(),
+        &account_id("provider")
+    );
+    let events = stream.by_ref().collect::<Vec<_>>().await;
+    assert_eq!(transport.calls.load(Ordering::SeqCst), 1);
+    assert!(events.iter().all(Result::is_ok));
+    let observation = events[0]
+        .as_ref()
+        .expect("response observation")
+        .response_observation()
+        .expect("transport facts");
+    assert_eq!(observation.transport().as_str(), "http_sse");
+    assert_eq!(observation.http_version(), Some(UpstreamHttpVersion::Http2));
+    assert_eq!(observation.status_code(), Some(200));
+    assert_eq!(observation.timings().headers_ms, Some(42));
+    let metadata: serde_json::Value = serde_json::from_str(
+        observation
+            .provider_metadata()
+            .expect("xAI transport metadata")
+            .as_json(),
+    )
+    .expect("valid metadata JSON");
+    assert_eq!(
+        metadata,
+        json!({
+            "schemaVersion": 2,
+            "clientCache": "miss",
+            "dnsSource": "system",
+            "dnsMs": 7
+        })
+    );
+    assert!(
+        events
+            .iter()
+            .filter_map(|event| event.as_ref().ok())
+            .flat_map(|event| event.canonical_facts())
+            .any(|event| matches!(event, GatewayEvent::Completed(_)))
+    );
+}
+
+#[tokio::test]
+async fn transport_error_observation_should_retain_available_metrics() {
+    let transport = StubInferenceTransport::error(
+        GrokInferenceTransportError::new(
+            GrokInferenceTransportErrorKind::Unavailable,
+            UpstreamSendState::Sent,
+        )
+        .with_status(503)
+        .with_transport_metrics(observed_transport_metrics()),
+    );
+    let provider = provider(StubSelector::success(), transport).await;
+    let mut stream = provider
+        .execute(
+            provider_request("xai"),
+            context(CancellationToken::new(), None),
+        )
+        .await
+        .expect("provider stream");
+
+    let event = stream
+        .next()
+        .await
+        .expect("observation event")
+        .expect("observation must succeed");
+    let observation = event.response_observation().expect("transport observation");
+    assert_eq!(observation.status_code(), Some(503));
+    assert_eq!(observation.timings().headers_ms, Some(42));
+    let metadata: serde_json::Value = serde_json::from_str(
+        observation
+            .provider_metadata()
+            .expect("xAI transport metadata")
+            .as_json(),
+    )
+    .expect("valid metadata JSON");
+    assert_eq!(metadata["clientCache"], "miss");
+    assert_eq!(metadata["dnsSource"], "system");
+    assert_eq!(metadata["dnsMs"], 7);
+
+    let error = next_provider_error(&mut stream).await;
+    assert_eq!(error.kind(), ProviderErrorKind::Unavailable);
+}
+
+#[tokio::test]
+async fn billing_observation_should_persist_the_final_response_tier_before_completion() {
+    for (actual, expected_cost) in [("priority", 400_000_000), ("default", 200_000_000)] {
+        let body = format!(
+            concat!(
+                "event: response.created\ndata: {{\"type\":\"response.created\",\"response\":{{\"id\":\"resp_tier\",\"model\":\"grok-4.6\",\"service_tier\":\"priority\"}}}}\n\n",
+                "event: response.completed\ndata: {{\"type\":\"response.completed\",\"response\":{{\"id\":\"resp_tier\",\"model\":\"grok-4.6\",\"service_tier\":\"{}\",\"status\":\"completed\",\"output\":[],\"usage\":{{\"input_tokens\":10000,\"output_tokens\":0}}}}}}\n\n"
+            ),
+            actual
+        );
+        let transport =
+            StubInferenceTransport::sequence([InferenceMode::SuccessBody(body.into_bytes())]);
+        let provider = provider(StubSelector::success(), transport).await;
+        let mut stream = provider
+            .execute(
+                provider_request("xai"),
+                context(CancellationToken::new(), None),
+            )
+            .await
+            .expect("provider stream");
+        let mut tier = None;
+        let mut cost = None;
+        let mut completed = false;
+        while let Some(event) = stream.next().await {
+            let event = event.expect("provider event");
+            if let Some(value) = event
+                .response_observation()
+                .and_then(|value| value.service_tier())
+            {
+                tier = Some(value.to_owned());
+            }
+            for fact in event.canonical_facts() {
+                match fact {
+                    GatewayEvent::CalculatedCost(value) => {
+                        cost = Some(value.total().amount().scaled())
+                    }
+                    GatewayEvent::Completed(_) => completed = true,
+                    _ => {}
+                }
+            }
+            if completed {
+                break;
+            }
+        }
+        assert!(completed);
+        assert_eq!(tier.as_deref(), Some(actual));
+        assert_eq!(cost, Some(expected_cost));
+    }
+}
+
+#[tokio::test]
+async fn inference_request_uses_oauth_headers_and_no_api_key() {
+    let transport = StubInferenceTransport::success();
+    let provider = provider(StubSelector::success(), transport.clone()).await;
+    let mut stream = provider
+        .execute(
+            provider_request("xai"),
+            context(CancellationToken::new(), None),
+        )
+        .await
+        .expect("stream");
+    while stream.next().await.is_some() {}
+    let requests = transport.requests.lock().expect("requests");
+    let request = &requests[0];
+    assert_eq!(
+        request.endpoint().as_str(),
+        "https://cli-chat-proxy.grok.com/v1/responses"
+    );
+    assert!(
+        request
+            .headers()
+            .iter()
+            .any(|header| header.name() == "authorization")
+    );
+    assert!(
+        !request
+            .headers()
+            .iter()
+            .any(|header| header.name() == "x-api-key")
+    );
+    drop(provider);
+}
+
+#[tokio::test]
+async fn transport_diagnostic_survives_provider_mapping_without_enabling_replay() {
+    let transport = StubInferenceTransport::stream_error(
+        GrokInferenceTransportError::new(
+            GrokInferenceTransportErrorKind::Transport,
+            UpstreamSendState::Sent,
+        )
+        .with_diagnostic(
+            gateway_core::error::ProviderDiagnostic::new("xAI HTTP body read failed")
+                .with_classification("receive", "http_body_failed"),
+        ),
+    );
+    let provider = provider(StubSelector::success(), transport).await;
+    let mut stream = provider
+        .execute(
+            provider_request("xai"),
+            context(CancellationToken::new(), None),
+        )
+        .await
+        .expect("stream");
+    let error = next_provider_error(&mut stream).await;
+    let diagnostic = error.diagnostic().expect("preserved transport diagnosis");
+    assert_eq!(diagnostic.code(), Some("http_body_failed"));
+    assert_eq!(diagnostic.stage(), Some("receive"));
+    assert_eq!(diagnostic.as_str(), "xAI HTTP body read failed");
+    assert_eq!(error.send_state(), UpstreamSendState::Sent);
+    assert!(!error.replay_is_safe());
+}
+
+#[tokio::test]
+async fn unauthorized_transport_feedback_is_bound_to_selected_account() {
+    let selector = StubSelector::success();
+    let transport = StubInferenceTransport::error(GrokInferenceTransportError::new(
+        GrokInferenceTransportErrorKind::Unauthorized,
+        UpstreamSendState::Sent,
+    ));
+    let provider = provider(selector.clone(), transport).await;
+    let mut stream = provider
+        .execute(
+            provider_request("xai"),
+            context_with_recovery_state(CancellationToken::new(), None, None, true),
+        )
+        .await
+        .expect("stream");
+    let error = next_provider_error(&mut stream).await;
+    assert_eq!(error.kind(), ProviderErrorKind::Unauthorized);
+    assert_eq!(
+        selector.feedback.lock().expect("feedback").as_slice(),
+        &[GrokCredentialFailure::Unauthorized]
+    );
+}
+
+#[tokio::test]
+async fn first_unauthorized_should_refresh_and_request_one_same_account_retry() {
+    let selector = StubSelector::success();
+    let transport = StubInferenceTransport::error(
+        GrokInferenceTransportError::new(
+            GrokInferenceTransportErrorKind::Unauthorized,
+            UpstreamSendState::Sent,
+        )
+        .with_status(401)
+        .with_credential_recovery(),
+    );
+    let recovery = StubRecovery::new(GrokCredentialRecoveryOutcome::Recovered);
+    let provider = provider_with_recovery(selector.clone(), transport, recovery.clone()).await;
+    let mut stream = provider
+        .execute(
+            provider_request("xai"),
+            context(CancellationToken::new(), None),
+        )
+        .await
+        .expect("stream");
+
+    let error = next_provider_error(&mut stream).await;
+
+    assert_eq!(error.kind(), ProviderErrorKind::Unauthorized);
+    assert!(error.replay_is_safe());
+    assert!(error.retries_same_account());
+    assert_eq!(recovery.calls.load(Ordering::SeqCst), 1);
+    assert!(selector.feedback.lock().expect("feedback").is_empty());
+}
+
+#[tokio::test]
+async fn unavailable_unauthorized_recovery_records_temporary_credential_feedback() {
+    let selector = StubSelector::success();
+    let transport = StubInferenceTransport::error(
+        GrokInferenceTransportError::new(
+            GrokInferenceTransportErrorKind::Unauthorized,
+            UpstreamSendState::Sent,
+        )
+        .with_status(401)
+        .with_credential_recovery(),
+    );
+    let recovery = StubRecovery::new(GrokCredentialRecoveryOutcome::Unavailable);
+    let provider = provider_with_recovery(selector.clone(), transport, recovery.clone()).await;
+    let mut stream = provider
+        .execute(
+            provider_request("xai"),
+            context(CancellationToken::new(), None),
+        )
+        .await
+        .expect("stream");
+
+    let error = next_provider_error(&mut stream).await;
+
+    assert_eq!(error.kind(), ProviderErrorKind::Unauthorized);
+    assert!(!error.retries_same_account());
+    assert_eq!(recovery.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        selector.feedback.lock().expect("feedback").as_slice(),
+        &[GrokCredentialFailure::Unauthorized]
+    );
+}
+
+#[tokio::test]
+async fn explicit_http_429_marks_provider_error_replay_safe() {
+    let error = mapped_transport_error(
+        GrokInferenceTransportError::new(
+            GrokInferenceTransportErrorKind::RateLimited,
+            UpstreamSendState::Sent,
+        )
+        .with_status(429),
+        false,
+    )
+    .await;
+
+    assert_eq!(error.upstream_status(), Some(429));
+    assert!(error.replay_is_safe());
+}
+
+#[tokio::test]
+async fn explicit_quota_http_429_marks_provider_error_replay_safe() {
+    let error = mapped_transport_error(
+        GrokInferenceTransportError::new(
+            GrokInferenceTransportErrorKind::QuotaExhausted,
+            UpstreamSendState::Sent,
+        )
+        .with_status(429),
+        false,
+    )
+    .await;
+
+    assert_eq!(error.kind(), ProviderErrorKind::QuotaExhausted);
+    assert_eq!(error.upstream_status(), Some(429));
+    assert!(error.replay_is_safe());
+}
+
+#[tokio::test]
+async fn unknown_http_402_is_retryable_with_payment_quota_feedback() {
+    let selector = StubSelector::success();
+    let transport = StubInferenceTransport::error(
+        GrokInferenceTransportError::new(
+            GrokInferenceTransportErrorKind::PaymentRequired,
+            UpstreamSendState::Sent,
+        )
+        .with_status(402),
+    );
+    let provider = provider(selector.clone(), transport).await;
+    let mut stream = provider
+        .execute(
+            provider_request("xai"),
+            context(CancellationToken::new(), None),
+        )
+        .await
+        .expect("stream");
+
+    let error = next_provider_error(&mut stream).await;
+
+    assert_eq!(error.kind(), ProviderErrorKind::PermissionDenied);
+    assert!(error.replay_is_safe());
+    assert_eq!(
+        selector.feedback.lock().expect("feedback").as_slice(),
+        &[GrokCredentialFailure::PaymentRequired { retry_after: None }]
+    );
+}
+
+#[tokio::test]
+async fn model_quota_transport_failure_preserves_model_scoped_feedback() {
+    let selector = StubSelector::success();
+    let transport = StubInferenceTransport::error(
+        GrokInferenceTransportError::new(
+            GrokInferenceTransportErrorKind::ModelQuotaExhausted,
+            UpstreamSendState::Sent,
+        )
+        .with_status(403),
+    );
+    let provider = provider(selector.clone(), transport).await;
+    let mut stream = provider
+        .execute(
+            provider_request("xai"),
+            context(CancellationToken::new(), None),
+        )
+        .await
+        .expect("stream");
+
+    let error = next_provider_error(&mut stream).await;
+
+    assert_eq!(error.kind(), ProviderErrorKind::QuotaExhausted);
+    assert!(error.replay_is_safe());
+    assert_eq!(
+        selector.feedback.lock().expect("feedback").as_slice(),
+        &[GrokCredentialFailure::ModelQuotaExhausted {
+            upstream_model: UpstreamModelId::new("grok-4.5").expect("model"),
+            retry_after: None,
+        }]
+    );
+}
+
+#[tokio::test]
+async fn free_quota_sse_failure_marks_the_account_exhausted() {
+    let selector = StubSelector::success();
+    let body = concat!(
+        "event: response.created\n",
+        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_free_quota\",\"model\":\"grok-4.5\"}}\n\n",
+        "event: response.failed\n",
+        "data: {\"type\":\"response.failed\",\"error\":{\"code\":\"subscription:free-usage-exhausted\",\"message\":\"You have used all your free usage\"}}\n\n",
+    )
+    .as_bytes()
+    .to_vec();
+    let transport = StubInferenceTransport::sequence([InferenceMode::SuccessBody(body)]);
+    let provider = provider(selector.clone(), transport).await;
+    let mut stream = provider
+        .execute(
+            provider_request("xai"),
+            context(CancellationToken::new(), None),
+        )
+        .await
+        .expect("stream");
+
+    let error = next_provider_error(&mut stream).await;
+
+    assert_eq!(error.kind(), ProviderErrorKind::QuotaExhausted);
+    assert_eq!(
+        selector.feedback.lock().expect("feedback").as_slice(),
+        &[GrokCredentialFailure::FreeQuotaExhausted]
+    );
+}
+
+#[tokio::test]
+async fn free_model_quota_sse_failure_is_classified_for_resettable_account_cooldown() {
+    let selector = StubSelector::success();
+    let body = concat!(
+        "event: response.created\n",
+        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_model_quota\",\"model\":\"grok-4.5\"}}\n\n",
+        "event: response.failed\n",
+        "data: {\"type\":\"response.failed\",\"error\":{\"status\":null,\"contentType\":null,\"body\":null,\"code\":\"subscription_free_usage_exhausted\",\"type\":null,\"message\":\"You've used all the included free usage for model grok-4.5-0722 for now. Usage resets over a rolling 24-hour window \u{2014} tokens (actual/limit): 500505/500000. Upgrade to a Grok subscription for higher limits: https://grok.com/supergrok\"}}\n\n",
+    )
+    .as_bytes()
+    .to_vec();
+    let transport = StubInferenceTransport::sequence([InferenceMode::SuccessBody(body)]);
+    let provider = provider(selector.clone(), transport).await;
+    let mut stream = provider
+        .execute(
+            provider_request("xai"),
+            context(CancellationToken::new(), None),
+        )
+        .await
+        .expect("stream");
+
+    let error = next_provider_error(&mut stream).await;
+
+    assert_eq!(error.kind(), ProviderErrorKind::QuotaExhausted);
+    assert_eq!(
+        error.upstream_code().map(|code| code.as_str()),
+        Some("subscription_free_usage_exhausted")
+    );
+    assert_eq!(
+        selector.feedback.lock().expect("feedback").as_slice(),
+        &[GrokCredentialFailure::ModelQuotaExhausted {
+            upstream_model: UpstreamModelId::new("grok-4.5").expect("model"),
+            retry_after: None,
+        }]
+    );
+}
+
+#[tokio::test]
+async fn model_access_denial_is_retryable_without_credential_recovery() {
+    let selector = StubSelector::success();
+    let transport = StubInferenceTransport::error(
+        GrokInferenceTransportError::new(
+            GrokInferenceTransportErrorKind::ModelAccessDenied,
+            UpstreamSendState::Sent,
+        )
+        .with_status(403),
+    );
+    let provider = provider(selector.clone(), transport).await;
+    let mut stream = provider
+        .execute(
+            provider_request("xai"),
+            context(CancellationToken::new(), None),
+        )
+        .await
+        .expect("stream");
+
+    let error = next_provider_error(&mut stream).await;
+
+    assert_eq!(error.kind(), ProviderErrorKind::PermissionDenied);
+    assert!(error.replay_is_safe());
+    assert_eq!(
+        selector.feedback.lock().expect("feedback").as_slice(),
+        &[GrokCredentialFailure::ModelAccessDenied {
+            upstream_model: UpstreamModelId::new("grok-4.5").expect("model"),
+            retry_after: None,
+        }]
+    );
+}
+
+#[tokio::test]
+async fn safety_rejection_does_not_rotate_or_mutate_account_state() {
+    let selector = StubSelector::success();
+    let transport = StubInferenceTransport::error(
+        GrokInferenceTransportError::new(
+            GrokInferenceTransportErrorKind::SafetyRejected,
+            UpstreamSendState::Sent,
+        )
+        .with_status(403),
+    );
+    let provider = provider(selector.clone(), transport).await;
+    let mut stream = provider
+        .execute(
+            provider_request("xai"),
+            context(CancellationToken::new(), None),
+        )
+        .await
+        .expect("stream");
+
+    let error = next_provider_error(&mut stream).await;
+
+    assert_eq!(error.kind(), ProviderErrorKind::PermissionDenied);
+    assert!(!error.replay_is_safe());
+    assert!(selector.feedback.lock().expect("feedback").is_empty());
+}
+
+#[tokio::test]
+async fn transport_error_should_preserve_client_visible_upstream_detail() {
+    let detail = ClientVisibleUpstreamError::new(
+        "You have run out of credits",
+        Some("personal_team_blocked_spending_limit".to_owned()),
+        Some("insufficient_quota".to_owned()),
+    );
+    let error = mapped_transport_error(
+        GrokInferenceTransportError::new(
+            GrokInferenceTransportErrorKind::QuotaExhausted,
+            UpstreamSendState::Sent,
+        )
+        .with_status(402)
+        .with_client_visible_upstream_error(detail),
+        false,
+    )
+    .await;
+    let detail = error
+        .client_visible_upstream_error()
+        .expect("mapped client-visible detail");
+
+    assert_eq!(
+        (detail.message(), detail.code(), detail.error_type()),
+        (
+            "You have run out of credits",
+            Some("personal_team_blocked_spending_limit"),
+            Some("insufficient_quota"),
+        )
+    );
+}
+
+#[tokio::test]
+async fn explicit_http_408_does_not_mark_provider_error_replay_safe() {
+    let error = mapped_transport_error(
+        GrokInferenceTransportError::new(
+            GrokInferenceTransportErrorKind::Timeout,
+            UpstreamSendState::Sent,
+        )
+        .with_status(408),
+        false,
+    )
+    .await;
+
+    assert_eq!(error.kind(), ProviderErrorKind::Timeout);
+    assert!(!error.replay_is_safe());
+}
+
+#[tokio::test]
+async fn generic_http_403_cools_account_and_allows_next_account_replay() {
+    let selector = StubSelector::success();
+    let transport = StubInferenceTransport::error(
+        GrokInferenceTransportError::new(
+            GrokInferenceTransportErrorKind::PermissionDenied,
+            UpstreamSendState::Sent,
+        )
+        .with_status(403),
+    );
+    let provider = provider(selector.clone(), transport.clone()).await;
+    let mut stream = provider
+        .execute(
+            provider_request("xai"),
+            context(CancellationToken::new(), None),
+        )
+        .await
+        .expect("stream");
+    let error = next_provider_error(&mut stream).await;
+
+    assert_eq!(error.kind(), ProviderErrorKind::PermissionDenied);
+    assert!(error.replay_is_safe());
+    assert_eq!(selector.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(transport.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        selector.feedback.lock().expect("feedback").as_slice(),
+        &[GrokCredentialFailure::AccessDenied]
+    );
+}
+
+#[tokio::test]
+async fn generic_http_500_allows_next_account_replay() {
+    let error = mapped_transport_error(
+        GrokInferenceTransportError::new(
+            GrokInferenceTransportErrorKind::Unavailable,
+            UpstreamSendState::Sent,
+        )
+        .with_status(500),
+        false,
+    )
+    .await;
+
+    assert_eq!(error.kind(), ProviderErrorKind::Unavailable);
+    assert!(error.replay_is_safe());
+}
+
+#[tokio::test]
+async fn rate_limit_wording_on_http_400_stays_request_scoped() {
+    let selector = StubSelector::success();
+    let transport = StubInferenceTransport::error(
+        GrokInferenceTransportError::new(
+            GrokInferenceTransportErrorKind::InvalidRequest,
+            UpstreamSendState::Sent,
+        )
+        .with_status(400)
+        .with_upstream_code(OpaqueUpstreamValue::new("rate_limit")),
+    );
+    let provider = provider(selector.clone(), transport).await;
+    let mut stream = provider
+        .execute(
+            provider_request("xai"),
+            context(CancellationToken::new(), None),
+        )
+        .await
+        .expect("stream");
+    let error = next_provider_error(&mut stream).await;
+
+    assert_eq!(error.kind(), ProviderErrorKind::InvalidRequest);
+    assert!(!error.replay_is_safe());
+    assert!(selector.feedback.lock().expect("feedback").is_empty());
+}
+
+#[tokio::test]
+async fn model_capacity_on_http_400_cools_scope_and_allows_replay() {
+    let selector = StubSelector::success();
+    let transport = StubInferenceTransport::error(
+        GrokInferenceTransportError::new(
+            GrokInferenceTransportErrorKind::RateLimited,
+            UpstreamSendState::Sent,
+        )
+        .with_status(400)
+        .with_upstream_code(OpaqueUpstreamValue::new("model_capacity")),
+    );
+    let provider = provider(selector.clone(), transport).await;
+    let mut stream = provider
+        .execute(
+            provider_request("xai"),
+            context(CancellationToken::new(), None),
+        )
+        .await
+        .expect("stream");
+    let error = next_provider_error(&mut stream).await;
+
+    assert_eq!(error.kind(), ProviderErrorKind::RateLimited);
+    assert!(error.replay_is_safe());
+    assert_eq!(
+        selector.feedback.lock().expect("feedback").as_slice(),
+        &[GrokCredentialFailure::ModelCapacity {
+            upstream_model: UpstreamModelId::new("grok-4.5").expect("model"),
+        }]
+    );
+}
+
+#[tokio::test]
+async fn body_stream_error_does_not_mark_provider_error_replay_safe() {
+    let error = mapped_transport_error(
+        GrokInferenceTransportError::new(
+            GrokInferenceTransportErrorKind::RateLimited,
+            UpstreamSendState::Sent,
+        )
+        .with_status(429),
+        true,
+    )
+    .await;
+
+    assert_eq!(error.upstream_status(), Some(429));
+    assert!(!error.replay_is_safe());
+}
+
+#[tokio::test]
+async fn accepted_stream_without_terminal_marks_only_the_selected_account_interrupted() {
+    let selector = StubSelector::success();
+    let transport = StubInferenceTransport::stream_error(GrokInferenceTransportError::new(
+        GrokInferenceTransportErrorKind::Transport,
+        UpstreamSendState::Sent,
+    ));
+    let provider = provider(selector.clone(), transport).await;
+    let mut stream = provider
+        .execute(
+            provider_request("xai"),
+            context(CancellationToken::new(), None),
+        )
+        .await
+        .expect("stream");
+
+    let error = next_provider_error(&mut stream).await;
+
+    assert_eq!(error.kind(), ProviderErrorKind::Transport);
+    assert_eq!(
+        selector.feedback.lock().expect("feedback").as_slice(),
+        &[GrokCredentialFailure::StreamInterrupted]
+    );
+}
+
+#[tokio::test]
+async fn selector_capacity_failure_occurs_before_visible_upstream_send() {
+    let selector = StubSelector::failing(GrokSessionSelectorError::CapacityUnavailable {
+        retry_after: Some(Duration::from_millis(20)),
+    });
+    let transport = StubInferenceTransport::success();
+    let provider = provider(selector, transport.clone()).await;
+    let error = match provider
+        .execute(
+            provider_request("xai"),
+            context(CancellationToken::new(), None),
+        )
+        .await
+    {
+        Ok(_) => panic!("capacity must fail"),
+        Err(error) => error,
+    };
+    assert_eq!(error.kind(), ProviderErrorKind::Unavailable);
+    assert_eq!(error.send_state(), UpstreamSendState::NotSent);
+    assert_eq!(transport.calls.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn selection_failures_carry_a_distinguishable_client_error_code() {
+    let cases = [
+        (
+            GrokSessionSelectorError::AccountCoolingDown {
+                retry_after: Some(Duration::from_secs(12)),
+            },
+            "account_cooling_down",
+        ),
+        (
+            GrokSessionSelectorError::CapacityUnavailable {
+                retry_after: Some(Duration::from_millis(20)),
+            },
+            "account_capacity_busy",
+        ),
+        (
+            GrokSessionSelectorError::NoEligibleSession,
+            "no_eligible_account",
+        ),
+        (
+            GrokSessionSelectorError::Unavailable,
+            "account_selector_unavailable",
+        ),
+    ];
+    for (failure, expected_code) in cases {
+        let transport = StubInferenceTransport::success();
+        let provider = provider(StubSelector::failing(failure), transport.clone()).await;
+        let error = match provider
+            .execute(
+                provider_request("xai"),
+                context(CancellationToken::new(), None),
+            )
+            .await
+        {
+            Ok(_) => panic!("selection must fail"),
+            Err(error) => error,
+        };
+        let detail = error
+            .client_visible_upstream_error()
+            .expect("client visible detail");
+        assert_eq!(error.kind(), ProviderErrorKind::Unavailable);
+        assert_eq!(detail.code(), Some(expected_code));
+        assert_eq!(detail.error_type(), Some("account_unavailable_error"));
+        assert_eq!(transport.calls.load(Ordering::SeqCst), 0);
+        if expected_code == "account_cooling_down" {
+            assert!(
+                detail.message().contains("retry in 13 seconds."),
+                "{}",
+                detail.message()
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn native_previous_response_is_rejected_before_selection() {
+    let selector = StubSelector::success();
+    let provider = provider(selector.clone(), StubInferenceTransport::success()).await;
+    let pin = NativeContinuationPin::new(
+        PreviousResponseId::new("resp_previous"),
+        PreviousResponseId::new("resp_upstream_previous"),
+        gateway_core::policy::ClientApiKeyId::new("key_xai_contract").expect("client key id"),
+        ProviderKind::new("openai").expect("provider"),
+        account_id("provider"),
+    );
+    let error = match provider
+        .execute(
+            provider_request("xai"),
+            context(
+                CancellationToken::new(),
+                Some(ContinuationBinding::Pinned(pin)),
+            ),
+        )
+        .await
+    {
+        Ok(_) => panic!("continuation owned by another Provider must fail"),
+        Err(error) => error,
+    };
+
+    assert_eq!(error.kind(), ProviderErrorKind::InvalidRequest);
+    assert_eq!(
+        error.continuation_failure(),
+        Some(ContinuationFailure::HistoryUnavailable)
+    );
+    assert_eq!(selector.calls.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn native_previous_response_pins_account_and_sends_upstream_handle() {
+    let selector = StubSelector::success();
+    let transport = StubInferenceTransport::success();
+    let provider = provider(selector.clone(), transport.clone()).await;
+    let pin = NativeContinuationPin::new(
+        PreviousResponseId::new("resp_previous"),
+        PreviousResponseId::new("resp_upstream_previous"),
+        gateway_core::policy::ClientApiKeyId::new("key_xai_contract").expect("client key id"),
+        ProviderKind::new("xai").expect("provider"),
+        account_id("provider"),
+    );
+    let mut stream = provider
+        .execute(
+            provider_request("xai"),
+            context(
+                CancellationToken::new(),
+                Some(ContinuationBinding::Pinned(pin)),
+            ),
+        )
+        .await
+        .expect("native continuation stream");
+    while stream.next().await.is_some() {}
+
+    let requests = transport.requests.lock().expect("requests");
+    let body: serde_json::Value = serde_json::from_slice(requests[0].body()).expect("request body");
+    assert_eq!(
+        body.get("previous_response_id")
+            .and_then(serde_json::Value::as_str),
+        Some("resp_upstream_previous")
+    );
+    assert_eq!(
+        selector
+            .required_accounts
+            .lock()
+            .expect("required accounts")
+            .as_slice(),
+        &[Some(account_id("provider"))]
+    );
+}
+
+#[tokio::test]
+async fn native_previous_response_does_not_allow_quota_or_rate_limit_account_rotation() {
+    let transport = StubInferenceTransport::error(
+        GrokInferenceTransportError::new(
+            GrokInferenceTransportErrorKind::RateLimited,
+            UpstreamSendState::Sent,
+        )
+        .with_status(429),
+    );
+    let provider = provider(StubSelector::success(), transport).await;
+    let pin = NativeContinuationPin::new(
+        PreviousResponseId::new("resp_previous"),
+        PreviousResponseId::new("resp_upstream_previous"),
+        gateway_core::policy::ClientApiKeyId::new("key_xai_contract").expect("client key id"),
+        ProviderKind::new("xai").expect("provider"),
+        account_id("provider"),
+    );
+    let mut stream = provider
+        .execute(
+            provider_request("xai"),
+            context(
+                CancellationToken::new(),
+                Some(ContinuationBinding::Pinned(pin)),
+            ),
+        )
+        .await
+        .expect("native continuation stream");
+
+    let error = next_provider_error(&mut stream).await;
+
+    assert_eq!(error.kind(), ProviderErrorKind::RateLimited);
+    assert!(!error.replay_is_safe());
+}
+
+#[tokio::test]
+async fn external_previous_response_is_rejected_before_selection() {
+    let selector = StubSelector::success();
+    let provider = provider(selector.clone(), StubInferenceTransport::success()).await;
+    let binding =
+        ContinuationBinding::External(PreviousResponseId::new("external-provider-response"));
+    let error = match provider
+        .execute(
+            provider_request("xai"),
+            context(CancellationToken::new(), Some(binding)),
+        )
+        .await
+    {
+        Ok(_) => panic!("xAI external continuation must fail"),
+        Err(error) => error,
+    };
+    assert_eq!(error.kind(), ProviderErrorKind::InvalidRequest);
+    assert_eq!(selector.calls.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn connection_state_inherits_session_and_recovers_reasoning_on_pinned_account() {
+    use base64::Engine as _;
+
+    let encrypted_content =
+        base64::engine::general_purpose::STANDARD_NO_PAD.encode((0_u8..=127).collect::<Vec<_>>());
+    let transport = StubInferenceTransport::sequence([
+        InferenceMode::SuccessBody(stateful_sse(&encrypted_content)),
+        InferenceMode::Error(
+            GrokInferenceTransportError::new(
+                GrokInferenceTransportErrorKind::InvalidRequest,
+                UpstreamSendState::Sent,
+            )
+            .with_status(400)
+            .with_upstream_code(OpaqueUpstreamValue::new("reasoning_decode_failed")),
+        ),
+        InferenceMode::Success,
+    ]);
+    let selector = StubSelector::success();
+    let provider = provider(selector.clone(), transport.clone()).await;
+    let first_operation = Operation::Generate(GenerateRequest::from_protocol_payload(
+        ProtocolPayload::json_object(
+            "openai",
+            Map::from_iter([
+                ("model".to_owned(), json!("client-model")),
+                ("store".to_owned(), json!(true)),
+                ("prompt_cache_key".to_owned(), json!("conversation-42")),
+                (
+                    "input".to_owned(),
+                    json!([{"type":"message","role":"user","content":"first"}]),
+                ),
+            ]),
+        )
+        .expect("OpenAI payload"),
+    ));
+    let mut first = provider
+        .execute(
+            provider_request_with_operation("xai", first_operation),
+            context(CancellationToken::new(), None),
+        )
+        .await
+        .expect("first stream");
+    let state = collect_provider_state(&mut first)
+        .await
+        .expect("connection session state");
+
+    let pin = NativeContinuationPin::new(
+        PreviousResponseId::new("resp_gateway_first"),
+        PreviousResponseId::new("resp_state"),
+        gateway_core::policy::ClientApiKeyId::new("key_xai_contract").expect("client key id"),
+        ProviderKind::new("xai").expect("provider"),
+        account_id("provider"),
+    );
+    let continued_operation = operation_with_state(
+        json!({
+            "model": "client-model",
+            "previous_response_id": "resp_gateway_first",
+            "input": [{"type":"message","role":"user","content":"second"}]
+        }),
+        state.clone(),
+    );
+    let mut continued = provider
+        .execute(
+            provider_request_with_operation("xai", continued_operation),
+            context(
+                CancellationToken::new(),
+                Some(ContinuationBinding::Pinned(pin.clone())),
+            ),
+        )
+        .await
+        .expect("continued stream");
+    let error = next_provider_error(&mut continued).await;
+    assert_eq!(
+        error.continuation_failure(),
+        Some(ContinuationFailure::HistoryUnavailable)
+    );
+    assert!(error.replay_is_safe());
+
+    let recovery_operation = operation_with_state(
+        json!({
+            "model": "client-model",
+            "previous_response_id": "resp_gateway_first",
+            "input": [{"type":"message","role":"user","content":"second"}]
+        }),
+        state,
+    );
+    let mut recovered = provider
+        .execute(
+            provider_request_with_operation("xai", recovery_operation),
+            context_with_continuation_attempt(
+                ContinuationBinding::Pinned(pin),
+                ContinuationAttempt::ReplayOwner,
+            ),
+        )
+        .await
+        .expect("recovery stream");
+    while recovered.next().await.is_some() {}
+
+    let requests = transport.requests.lock().expect("requests");
+    let first_body: serde_json::Value =
+        serde_json::from_slice(requests[0].body()).expect("first body");
+    let continued_body: serde_json::Value =
+        serde_json::from_slice(requests[1].body()).expect("continued body");
+    let recovery_body: serde_json::Value =
+        serde_json::from_slice(requests[2].body()).expect("recovery body");
+    assert_eq!(
+        continued_body
+            .get("prompt_cache_key")
+            .and_then(serde_json::Value::as_str),
+        first_body
+            .get("prompt_cache_key")
+            .and_then(serde_json::Value::as_str)
+    );
+    assert_eq!(
+        continued_body
+            .get("previous_response_id")
+            .and_then(serde_json::Value::as_str),
+        Some("resp_state")
+    );
+    assert!(recovery_body.get("previous_response_id").is_none());
+    assert!(recovery_body.get("prompt_cache_key").is_none());
+    assert_eq!(
+        recovery_body.pointer("/input/1/encrypted_content"),
+        Some(&json!(encrypted_content))
+    );
+    assert_eq!(selector.calls.load(Ordering::SeqCst), 3);
+}
+
+#[tokio::test]
+async fn missing_native_response_should_be_replay_safe_for_the_same_account() {
+    let transport = StubInferenceTransport::error(
+        GrokInferenceTransportError::new(
+            GrokInferenceTransportErrorKind::InvalidRequest,
+            UpstreamSendState::Sent,
+        )
+        .with_status(404)
+        .with_upstream_code(OpaqueUpstreamValue::new("not_found")),
+    );
+    let provider = provider(StubSelector::success(), transport).await;
+    let state = ProviderSessionState::new(
+        "xai",
+        Map::from_iter([
+            ("account_id".to_owned(), json!("acct_provider")),
+            ("session_id".to_owned(), json!("cache-session")),
+            ("response_stored".to_owned(), json!(true)),
+            ("transcript".to_owned(), json!([])),
+        ]),
+    )
+    .expect("session state");
+    let pin = NativeContinuationPin::new(
+        PreviousResponseId::new("resp_gateway_first"),
+        PreviousResponseId::new("resp_upstream_first"),
+        gateway_core::policy::ClientApiKeyId::new("key_xai_contract").expect("client key id"),
+        ProviderKind::new("xai").expect("provider"),
+        account_id("provider"),
+    );
+    let operation = operation_with_state(
+        json!({
+            "model": "client-model",
+            "previous_response_id": "resp_gateway_first",
+            "input": [{"type":"message","role":"user","content":"second"}]
+        }),
+        state,
+    );
+    let mut stream = provider
+        .execute(
+            provider_request_with_operation("xai", operation),
+            context(
+                CancellationToken::new(),
+                Some(ContinuationBinding::Pinned(pin)),
+            ),
+        )
+        .await
+        .expect("native continuation stream");
+
+    let error = next_provider_error(&mut stream).await;
+
+    assert_eq!(
+        error.continuation_failure(),
+        Some(ContinuationFailure::HistoryUnavailable)
+    );
+    assert!(error.replay_is_safe());
+}
+
+#[tokio::test]
+async fn cancellation_before_poll_never_calls_transport() {
+    let transport = StubInferenceTransport::success();
+    let provider = provider(StubSelector::success(), transport.clone()).await;
+    let cancellation = CancellationToken::new();
+    let mut stream = provider
+        .execute(provider_request("xai"), context(cancellation.clone(), None))
+        .await
+        .expect("prepared stream");
+    cancellation.cancel();
+    let error = stream
+        .next()
+        .await
+        .expect("cancel event")
+        .expect_err("cancelled");
+    assert_eq!(error.kind(), ProviderErrorKind::Cancelled);
+    assert_eq!(transport.calls.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn provider_rejects_target_owned_by_other_provider() {
+    let selector = StubSelector::success();
+    let provider = provider(selector.clone(), StubInferenceTransport::success()).await;
+    let error = match provider
+        .execute(
+            provider_request("openai"),
+            context(CancellationToken::new(), None),
+        )
+        .await
+    {
+        Ok(_) => panic!("provider mismatch must fail"),
+        Err(error) => error,
+    };
+    assert_eq!(error.kind(), ProviderErrorKind::InvalidRequest);
+    assert_eq!(selector.calls.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn provider_compiles_realtime_catalog_capabilities() {
+    let provider = provider(StubSelector::success(), StubInferenceTransport::success()).await;
+    let capabilities = provider
+        .query_model_capabilities()
+        .await
+        .expect("capabilities");
+    assert_eq!(capabilities.len(), 1);
+    assert_eq!(capabilities[0].upstream_model().as_str(), MODEL);
+    assert!(
+        capabilities[0]
+            .capabilities()
+            .match_requirements(&gateway_core::operation::CapabilityRequirements::new(
+                OperationKind::Generate
+            ))
+            .is_some()
+    );
+    let presentation = capabilities[0]
+        .presentation()
+        .expect("Grok model presentation");
+    assert_eq!(presentation.display_name(), Some("Grok 4.5"));
+    assert!(presentation.reasoning_summary());
+    assert_eq!(
+        presentation.supported_reasoning_efforts(),
+        ["low", "medium", "high", "xhigh"]
+    );
+    assert_eq!(presentation.context_window_tokens(), Some(1_000_000));
+    assert_eq!(presentation.max_context_window_tokens(), Some(1_000_000));
+    assert!(presentation.agent_tools());
+}
+
+#[tokio::test]
+async fn provider_publishes_default_codex_profile_when_catalog_is_unavailable() {
+    let provider = provider_with_catalog_transport(
+        StubSelector::success(),
+        StubInferenceTransport::success(),
+        StubRecovery::new(GrokCredentialRecoveryOutcome::Unavailable),
+        Arc::new(UnavailableCatalogTransport),
+    )
+    .await;
+    let capabilities = provider
+        .query_model_capabilities()
+        .await
+        .expect("fallback capabilities");
+
+    assert_eq!(capabilities.len(), 1);
+    assert_eq!(capabilities[0].upstream_model().as_str(), MODEL);
+    let presentation = capabilities[0]
+        .presentation()
+        .expect("fallback Grok model presentation");
+    assert_eq!(presentation.display_name(), Some("Grok 4.5"));
+    assert_eq!(presentation.default_reasoning_effort(), None);
+    assert!(presentation.supported_reasoning_efforts().is_empty());
+    assert!(!presentation.reasoning_summary());
+    assert_eq!(presentation.context_window_tokens(), Some(500_000));
+    assert_eq!(presentation.max_context_window_tokens(), Some(500_000));
+    assert!(presentation.agent_tools());
+    assert!(presentation.parallel_tool_calls());
+}
+
+#[tokio::test]
+async fn provider_publishes_reasoning_efforts_from_feature_options() {
+    let provider = provider_with_catalog_transport(
+        StubSelector::success(),
+        StubInferenceTransport::success(),
+        StubRecovery::new(GrokCredentialRecoveryOutcome::Unavailable),
+        Arc::new(CatalogWithFeatureReasoningOptionsTransport),
+    )
+    .await;
+    let capabilities = provider
+        .query_model_capabilities()
+        .await
+        .expect("capabilities");
+    let presentation = capabilities[0]
+        .presentation()
+        .expect("Grok model presentation");
+
+    assert_eq!(presentation.default_reasoning_effort(), Some("high"));
+    assert_eq!(
+        presentation.supported_reasoning_efforts(),
+        ["low", "medium", "high", "xhigh"]
+    );
+}
+
+#[tokio::test]
+async fn missing_catalog_tool_metadata_keeps_build_tools_routable() {
+    let provider = provider_with_catalog_transport(
+        StubSelector::success(),
+        StubInferenceTransport::success(),
+        StubRecovery::new(GrokCredentialRecoveryOutcome::Unavailable),
+        Arc::new(CatalogWithoutFeatureMetadataTransport),
+    )
+    .await;
+    let capabilities = provider
+        .query_model_capabilities()
+        .await
+        .expect("capabilities");
+    assert!(
+        capabilities[0]
+            .capabilities()
+            .match_requirements(
+                &gateway_core::operation::CapabilityRequirements::new(OperationKind::Generate,)
+                    .require(Feature::Tools)
+            )
+            .is_some()
+    );
+}
+
+#[tokio::test]
+async fn missing_catalog_feature_metadata_keeps_build_responses_routable() {
+    let provider = provider_with_catalog_transport(
+        StubSelector::success(),
+        StubInferenceTransport::success(),
+        StubRecovery::new(GrokCredentialRecoveryOutcome::Unavailable),
+        Arc::new(CatalogWithoutFeatureMetadataTransport),
+    )
+    .await;
+    let capabilities = provider
+        .query_model_capabilities()
+        .await
+        .expect("capabilities");
+
+    assert!(
+        capabilities[0]
+            .capabilities()
+            .match_requirements(
+                &gateway_core::operation::CapabilityRequirements::new(OperationKind::Generate)
+                    .require(Feature::Vision)
+                    .require(Feature::JsonSchema)
+            )
+            .is_some()
+    );
+}
+
+#[tokio::test]
+async fn native_xai_rejects_generate_false_before_upstream_io_or_usage() {
+    for store in [false, true] {
+        let transport = StubInferenceTransport::success();
+        let selector = StubSelector::success();
+        let provider = provider(Arc::clone(&selector), transport.clone()).await;
+        let request = Operation::Generate(GenerateRequest::from_protocol_payload(
+            ProtocolPayload::json_object(
+                "openai",
+                object(json!({
+                    "model": MODEL,
+                    "input": "hello",
+                    "generate": false,
+                    "store": store
+                })),
+            )
+            .unwrap(),
+        ));
+        let error = match provider
+            .execute(
+                provider_request_with_operation("xai", request),
+                context(CancellationToken::new(), None),
+            )
+            .await
+        {
+            Ok(_) => panic!("non-generating requests must fail before a usage-producing stream"),
+            Err(error) => error,
+        };
+        assert_eq!(error.kind(), ProviderErrorKind::Unsupported);
+        assert_eq!(error.send_state(), UpstreamSendState::NotSent);
+        let detail = error
+            .client_visible_upstream_error()
+            .expect("prewarm rejection must explain the unsupported request");
+        assert_eq!(detail.code(), Some("unsupported_prewarm"));
+        assert_eq!(detail.error_type(), Some("invalid_request_error"));
+        assert!(detail.message().contains("generate=false"));
+        assert_eq!(selector.calls.load(Ordering::SeqCst), 0);
+        assert_eq!(transport.calls.load(Ordering::SeqCst), 0);
+        assert!(transport.requests.lock().unwrap().is_empty());
+    }
+}
+
+#[tokio::test]
+async fn native_xai_preserves_generate_true_and_omitted_requests() {
+    for generate in [None, Some(true)] {
+        let transport = StubInferenceTransport::success();
+        let provider = provider(StubSelector::success(), transport.clone()).await;
+        let mut body = object(json!({"model": MODEL, "input": "hello"}));
+        if let Some(generate) = generate {
+            body.insert("generate".to_owned(), json!(generate));
+        }
+        let operation = Operation::Generate(GenerateRequest::from_protocol_payload(
+            ProtocolPayload::json_object("openai", body).unwrap(),
+        ));
+        let mut stream = provider
+            .execute(
+                provider_request_with_operation("xai", operation),
+                context(CancellationToken::new(), None),
+            )
+            .await
+            .expect("ordinary generation remains supported");
+        let mut completed = false;
+        while let Some(event) = stream.next().await {
+            completed |= event
+                .expect("normal upstream response")
+                .into_parts()
+                .0
+                .iter()
+                .any(|event| matches!(event, GatewayEvent::Completed(_)));
+        }
+        assert!(completed);
+        assert_eq!(transport.calls.load(Ordering::SeqCst), 1);
+        let requests = transport.requests.lock().unwrap();
+        let sent: Value = serde_json::from_slice(requests[0].body()).unwrap();
+        assert_eq!(sent.get("generate").and_then(Value::as_bool), generate);
+    }
+}
+
+#[tokio::test]
+async fn native_same_account_replay_preserves_complete_output_items() {
+    let output = json!([
+        {"id":"native_reasoning","type":"reasoning","status":"completed","encrypted_content":"opaque-not-validated","summary":[],"future_flag":true},
+        {"id":"native_function","type":"function_call","status":"completed","call_id":"call_1","name":"functions.native-tool","arguments":"{ \"value\": 1.0 }","future_flag":true},
+        {"id":"native_extension","type":"future_native_item","native_payload":{"n":42}}
+    ]);
+    let wire = [
+        json!({"type":"response.created","response":{"id":"resp_full","model":MODEL}}),
+        json!({"type":"response.completed","response":{"id":"resp_full","model":MODEL,"status":"completed","output":output}})
+    ].into_iter().map(|event| format!("event: {}\ndata: {}\n\n",event["type"].as_str().unwrap(),event)).collect::<String>();
+    let transport = StubInferenceTransport::sequence([
+        InferenceMode::SuccessBody(wire.into_bytes()),
+        InferenceMode::Success,
+    ]);
+    let provider = provider(StubSelector::success(), transport.clone()).await;
+    let first = Operation::Generate(GenerateRequest::from_protocol_payload(
+        ProtocolPayload::json_object("openai", object(json!({"input":"first","store":false})))
+            .unwrap(),
+    ));
+    let mut stream = provider
+        .execute(
+            provider_request_with_operation("xai", first),
+            context(CancellationToken::new(), None),
+        )
+        .await
+        .unwrap();
+    let state = collect_provider_state(&mut stream).await.unwrap();
+    let captured: Vec<_> = state.payload()["transcript"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|item| item.pointer("/account_output/item"))
+        .cloned()
+        .collect();
+    assert_eq!(captured, output.as_array().unwrap().clone());
+    let pin = NativeContinuationPin::new(
+        PreviousResponseId::new("gateway_previous"),
+        PreviousResponseId::new("resp_full"),
+        ClientApiKeyId::new("key_xai_contract").unwrap(),
+        ProviderKind::new("xai").unwrap(),
+        account_id("provider"),
+    );
+    let second = operation_with_state(
+        json!({"previous_response_id":"gateway_previous","input":"second"}),
+        state,
+    );
+    let mut stream = provider
+        .execute(
+            provider_request_with_operation("xai", second),
+            context(
+                CancellationToken::new(),
+                Some(ContinuationBinding::Pinned(pin)),
+            ),
+        )
+        .await
+        .unwrap();
+    while let Some(event) = stream.next().await {
+        event.unwrap();
+    }
+    let requests = transport.requests.lock().unwrap();
+    let sent: Value = serde_json::from_slice(requests[1].body()).unwrap();
+    assert!(sent.get("previous_response_id").is_none());
+    assert_eq!(
+        &sent["input"].as_array().unwrap()[1..4],
+        output.as_array().unwrap()
+    );
+    assert_eq!(sent["input"][4]["content"], "second");
+}
+
+#[tokio::test]
+async fn continuation_should_inherit_unchanged_instructions_and_replay_changed_instructions() {
+    for (stored, instructions) in [
+        (true, Some("original")),
+        (true, Some("replacement")),
+        (true, None),
+        (false, Some("original")),
+    ] {
+        let transport =
+            StubInferenceTransport::sequence([InferenceMode::Success, InferenceMode::Success]);
+        let provider = provider(StubSelector::success(), transport.clone()).await;
+        let first_body = json!({
+            "model": "client-model", "instructions": "original", "store": stored,
+            "input": [{"type": "message", "role": "user", "content": "first"}]
+        });
+        let operation = Operation::Generate(GenerateRequest::from_protocol_payload(
+            ProtocolPayload::json_object("openai", first_body.as_object().expect("body").clone())
+                .expect("payload"),
+        ));
+        let mut first = provider
+            .execute(
+                provider_request_with_operation("xai", operation),
+                context(CancellationToken::new(), None),
+            )
+            .await
+            .expect("first stream");
+        let state = collect_provider_state(&mut first)
+            .await
+            .expect("session state");
+        let pin = NativeContinuationPin::new(
+            PreviousResponseId::new("resp_previous"),
+            PreviousResponseId::new("resp_upstream_previous"),
+            gateway_core::policy::ClientApiKeyId::new("key_xai_contract").expect("client key"),
+            ProviderKind::new("xai").expect("provider"),
+            account_id("provider"),
+        );
+        let mut continued = provider
+            .execute(
+                provider_request_with_operation(
+                    "xai",
+                    operation_with_state(
+                        json!({
+                            "model": "client-model", "instructions": instructions,
+                            "previous_response_id": "resp_previous",
+                            "input": [{"type": "message", "role": "user", "content": "second"}]
+                        }),
+                        state,
+                    ),
+                ),
+                context(
+                    CancellationToken::new(),
+                    Some(ContinuationBinding::Pinned(pin)),
+                ),
+            )
+            .await
+            .expect("continued stream");
+        let next_state = collect_provider_state(&mut continued)
+            .await
+            .expect("next state");
+        assert_eq!(
+            next_state.payload().get("instructions"),
+            Some(&json!(instructions))
+        );
+        let requests = transport.requests.lock().expect("requests");
+        let body: Value = serde_json::from_slice(requests[1].body()).expect("upstream body");
+        if stored && instructions == Some("original") {
+            assert_eq!(
+                body.get("previous_response_id"),
+                Some(&json!("resp_upstream_previous"))
+            );
+            assert!(body.get("instructions").is_none());
+            assert_eq!(
+                body.get("input").and_then(Value::as_array).map(Vec::len),
+                Some(1)
+            );
+        } else {
+            assert!(body.get("previous_response_id").is_none());
+            assert_eq!(body.get("instructions"), Some(&json!(instructions)));
+            assert_eq!(body.pointer("/input/0/content"), Some(&json!("first")));
+            assert_eq!(
+                body.get("input")
+                    .and_then(Value::as_array)
+                    .and_then(|items| items.last())
+                    .and_then(|item| item.get("content")),
+                Some(&json!("second"))
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn explicit_compact_is_unsupported_without_account_selection_or_transport() {
+    let selector = StubSelector::success();
+    let calls = selector.clone();
+    let transport = StubInferenceTransport::success();
+    let provider = provider(selector, transport.clone()).await;
+    let operation = Operation::Compact(gateway_core::operation::CompactRequest::from_raw_json(
+        gateway_core::operation::RawJsonPayload::new(
+            "openai",
+            bytes::Bytes::from(json!({"model":MODEL,"input":[]}).to_string()),
+        )
+        .unwrap(),
+    ));
+    let error = provider
+        .execute(
+            ProviderRequest::new(operation, provider_request("xai").candidate().clone()),
+            context(CancellationToken::new(), None),
+        )
+        .await
+        .err()
+        .unwrap();
+    assert_eq!(error.kind(), ProviderErrorKind::Unsupported);
+    assert_eq!(error.send_state(), UpstreamSendState::NotSent);
+    assert_eq!(calls.calls.load(Ordering::SeqCst), 0);
+    assert!(transport.requests.lock().unwrap().is_empty());
+}

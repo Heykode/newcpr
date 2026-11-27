@@ -693,13 +693,11 @@ pub(super) fn compile_model_capabilities(model: &CodexCatalogModel) -> ProviderM
     // Catalog membership is enough to publish Generate. `supported_in_api` is advisory;
     // the upstream response is authoritative for normal and diagnostic requests.
     let capabilities = ModelCapabilities::new(
-        BTreeSet::from([
-            OperationKind::Generate,
-            OperationKind::Compact,
-            OperationKind::CountTokens,
-        ]),
+        BTreeSet::from([OperationKind::Generate, OperationKind::Compact]),
         None,
     )
+    .with_generation_protocol(OPENAI_PROTOCOL)
+    .with_translated_generation_protocols([gateway_protocol::chat_completions::CHAT_PROTOCOL])
     .with_upstream_feature_validation();
     ProviderModelCapabilities::new(model.request_model().clone(), capabilities)
         .with_presentation(codex_model_presentation(model))
@@ -755,11 +753,12 @@ pub(super) fn selected_transport(
     request: &CodexResponsesRequest,
     guardian_role: Option<CodexGuardianRole>,
 ) -> CodexProviderTransport {
-    // 专用 sampler 的 HTTP 请求可能没有传输标记。显式 WS 和物理入站连接仍沿用原合同
-    let dedicated_http = guardian_role.is_some_and(CodexGuardianRole::uses_sampler_transport)
-        && !request.use_websocket
+    // 后台压缩和专用 sampler 沿用 HTTP。显式 WS 与已有连接仍沿用原合同。
+    let dedicated_http = !request.use_websocket
         && !request.websocket_frame
-        && request.downstream_websocket_connection_id.is_none();
+        && request.downstream_websocket_connection_id.is_none()
+        && (guardian_role.is_some_and(CodexGuardianRole::uses_sampler_transport)
+            || request.semantics().compact);
     if request.force_http_sse || dedicated_http {
         CodexProviderTransport::HttpOnly
     } else {

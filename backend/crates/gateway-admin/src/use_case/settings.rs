@@ -462,6 +462,14 @@ impl SettingsService for DefaultSettingsService {
 }
 
 fn validate_settings(command: &ReplaceRuntimeSettings) -> Result<(), AdminError> {
+    command
+        .openai_request_settings
+        .validate()
+        .map_err(AdminError::invalid)?;
+    command
+        .openai_websocket_pool
+        .validate()
+        .map_err(AdminError::invalid)?;
     let unique_turn_state_models = command
         .turn_state_models
         .as_deref()

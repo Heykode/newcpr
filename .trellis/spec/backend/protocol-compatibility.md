@@ -103,12 +103,19 @@ wire payload; synthetic success is not proof of a particular production 500 caus
 
 ## Official Chat Request Contract
 
-The user authorized replacing CPA Chat conversion with official CPR on 2026-10-29.
-Use the pinned upstream request converter in gateway-api/openai/chat/request.rs.
-Flat reasoning_effort maps to Responses reasoning.effort. Non-null nested reasoning,
-reasoning_content and Responses-only continuation fields are rejected; optional null
-values follow official defaults. Do not restore old aliases or custom tools.
-Keep native Responses request normalization independent.
+The v3.57.0 integration uses the pinned `gateway-protocol/src/chat_completions/`
+parsers and converters. API ingress keeps the Chat protocol and raw request; the
+selected Provider converts directly to its native target and returns Chat wire.
+Do not restore the retired API-owned Responses converter or use its old tests as
+the current request contract. Keep native Responses normalization independent.
+
+Chat ingress must retain validated supplemental scheduling hints through
+`OpenAiRequestHeaders::session_context`, without forwarding those local headers.
+Before target conversion, Codex selection derives explicit account sessions and
+supplemental hints in the existing tenant-scoped namespaces and applies the current
+strict/preferred/relaxed policy. This is account affinity, not native response or
+WebSocket ownership. Request observations and actual admission must use the same
+key; checking only the ingress context cannot prove that the selector consumes it.
 
 ## Downstream Environment and WS Error Projection
 
@@ -180,75 +187,36 @@ or multipart image editing. These contracts extend, not replace,
 
 ## Ownership
 
-- `gateway-api/openai/chat/{request,response}.rs` owns the copied official JSON
-  conversions, never networking, account selection, persistence or billing.
-- `gateway-api/openai/chat` decodes and calls the existing model-aware Generate
-  service. HTTP delivery uses the same pending execution and cancellation driver.
-- `Operation::Compact` is explicit and model-aware. It must not use model-less
-  standalone endpoint admission or silently become a Generate operation.
-- Images multipart normalization feeds the existing raw JSON image path.
+- `gateway-protocol/chat_completions` owns pure Chat request/response conversion.
+- API retains Chat wire for routing and delegates target conversion to the selected Provider.
+  Codex/xAI target Responses; AGY targets GenAI. No second account selection is allowed.
+- `gateway-api/openai/chat/delivery.rs` owns the official Chat accumulator and delivery validator;
+  `openai/encoding.rs` invokes it on actual encoded frames. Native Responses retains its separate path.
+- Local ExecutionSession owns admission, deadline, cancellation, usage, cost and finalization.
+  Raw Provider events carry canonical observations before translation; one-to-many translation keeps
+  the terminal envelope on the last wire event only.
 
 ## Delivery
 
-- Chat defaults to buffered delivery. Downstream stream and upstream transport are
-  independent. Conversion must not add internal HTTP round trips.
-- The official converter ignores the old Chat-only use_websocket extension.
-  Native Responses transport controls remain unchanged.
-- Use official ChatIdentity based on the gateway request ID, creation time and
-  requested model; do not switch identity when an upstream response changes.
-- Preserve official text/refusal/function validation, snapshot prefix checks,
-  duplicate identities, argument strings and incomplete reason handling.
-  Do not restore CPA image/custom/reasoning output or digest-based extensions.
-- response.created can emit the initial assistant role chunk. Unknown auxiliary
-  events can be skipped, including after terminal; business events after terminal fail.
-- Before commit, output conversion failures return JSON 502. After commit, return
-  Chat error SSE and DONE. Never emit success finish/usage before the original
-  execution finalizes; verify trailing raw SSE, cancellation and commit failure.
-- Preserve absent usage without invented counters. Canonical accounting stays in
-  the engine. Native Responses keeps its transparent event/error behavior.
-- Chat uses the copied official collect_response helper before projection. Empty
-  terminal output can use only complete, contiguous, nonconflicting done items
-  from the same response. Do not apply legacy delta recovery to Chat.
-  Native Responses keeps its separate existing recovery path.
-- Do not scan buffered Chat events for capacity failures before that collector.
-  A collected wire failure without a terminal returns the official collection
-  error (500, invalid_upstream_response), whereas an actual provider HTTP capacity
-  failure still uses engine_error_response's official 503 projection. A valid
-  terminal must not be overridden by a separate scan. Cover both error and
-  response.failed with slow_down/server_is_overloaded, plus a noncapacity control.
-  The delivery_parity buffered_wire_failure, buffered_terminal and streamed_capacity
-  tests own these assertions; assert body, status, headers and one-time finalization.
-- Match official delivery.rs projection_error and invalid_response messages, not
-  just the presence of an error. Projection uses the official projection message
-  and converter code; framing/EOF uses the official delivery message and
-  invalid_upstream_response. Before commitment return JSON 502; after commitment
-  send error SSE without successful finish/usage. Missing stream terminals must
-  not fall through to the native Responses internal_error branch.
-- Source equality of the request/response codec is not endpoint parity. Audit
-  admission, first-event waits, upstream HTTP failures and finalization separately.
-  After successful admission, Chat uses the official 15-second initial keepalive
-  and optional Chat error encoder while native Responses keeps the default encoder.
-  Poll the same pending future without restarting it; a heartbeat records HTTP
-  status but must not commit business delivery or synthesize a successful result.
-- Before HTTP commitment, preserve client-visible upstream bytes, content type,
-  status and forwardable headers through engine_error_response. Do not rebuild a
-  Chat-only generic error and discard recovery fields. Keep existing capacity
-  projection and failure-request-ID precedence over opening IDs.
-- After initial keepalive, use the copied official chat_error_frame for Chat
-  errors, preserve recovery fields and emit exactly one DONE. Ordinary errors retain
-  Retry-After; capacity projection removes Retry-After and retry-after-ms from
-  client headers and nested error headers while keeping original diagnostic facts.
-  Do not send response.failed to Chat. Admission rejection still returns its
-  original HTTP error, and native Responses retains its existing SSE contract.
-- Regress a four-minute first-event wait, both early and late errors, JSON and
-  non-JSON bodies, capacity projection, cancellation and admission rejection at
-  the endpoint. Exercise native Responses alongside Chat; codec-only tests do not
-  cover these integration boundaries.
-- For future upstream synchronization use docs/upstream-integration-checklist.md
-  and update docs/chat-official-parity.md with the pinned source and remaining
-  runtime differences. A matching helper cannot prove equivalence when a caller
-  short-circuits before it. Do not label the native connection-draining 503 as
-  identical to the official middleware-fault 502; neither changes Chat conversion.
+- Chat defaults to buffered output; downstream stream and upstream transport are independent.
+  Provider receives the original Chat fields, including local transport context. Do not restore the
+  retired API-owned Chat-to-Responses conversion or old converter rejection lists.
+- Request-specific ChatIdentity stays fixed across the response. Preserve official validation of
+  tools, identities, snapshots, incomplete reasons, usage and malformed wire.
+- Streaming requires an initial valid chunk, one finish per choice, usage only after finish and one
+  DONE. Business output after finish fails. Validate a whole terminal batch before committing it.
+- Before HTTP commitment preserve upstream status, body, allowed headers and request identifiers;
+  projection/invalid wire failures use the official error boundary. After commitment send Chat error
+  SSE plus one DONE, without successful finish/usage. Never substitute Responses error frames.
+- The buffered path consumes Chat wire in ChatAccumulator. Provider converters own source-protocol
+  collection. Native Responses keeps its existing snapshot and recovery behavior.
+- Successful terminal delivery waits for execution finalization. Missing terminal, body drop,
+  commit failure, cancellation or malformed trailing SSE cannot become success.
+- Wait for the same pending execution; after admission Chat retains the 15-second initial keepalive.
+  Heartbeats record HTTP status, not business commitment or successful execution.
+- Real source/target wire tests belong to Provider/protocol suites. API tests provide Chat wire and
+  verify HTTP status, full body, headers, finalization, cancellation and sibling Responses behavior.
+  Follow docs/upstream-integration-checklist.md; do not claim parity from codec equality alone.
 
 ## Compaction
 
@@ -352,45 +320,14 @@ or multipart image editing. These contracts extend, not replace,
 
 ## Official Chat Parity
 
-### Source and Allowed Adaptation
+The current fixed upstream is `db22550e6172e7a3537eb53441ae9ce73bc50cd5` (v3.57.0 plus
+release-channel metadata). `docs/chat-official-parity.md` records the current runtime bindings.
+The former v3.35.1 API converter and its rejection list are historical, not current requirements.
 
-Pinned upstream: zyycn/codex-proxy-rs
-d89db84a77d0143a91770b66bec47ab8f2e57a35 (v3.35.1).
-Copy request.rs and response.rs; only map TokenUsage cached_input_tokens to
-cached_tokens and reasoning_output_tokens to reasoning_tokens. Formatting is
-allowed. NewCPR uses native ExecutionSession instead of upstream plugin middleware;
-this is an executor binding, not permission to change the official codec.
-
-### Validation Matrix
-
-| Input/state | Required result |
-| --- | --- |
-| Standard text/image input/function call history | Official Responses conversion |
-| Optional null fields | Official absent-value defaults |
-| Chat custom/search/image-generation tool declarations | Request error before account execution |
-| Chat file or public reasoning-history extensions | Official unsupported request error |
-| Invalid tool ID/name/argument types or conflicting identity | Conversion error, never success |
-| Unknown/missing incomplete reason | Conversion error, never stop |
-| Unknown auxiliary events before/after terminal | Ignore, retain one finish/usage |
-| Business output after terminal or conflicting snapshot | Conversion error |
-| Terminal-first reply followed by finalization failure | No successful finish/usage |
-| Raw SSE split across UTF-8 boundaries | Decode incrementally without corruption |
-| Malformed trailing SSE | Failure, not a successful terminal |
-| Wire failure followed by engine failure | One error and one DONE |
-| Body dropped | Cancel and finalize the original execution |
-| Native Responses custom/search/image tools | Original transparent behavior |
-
-### Required Tests and Limits
-
-Port upstream request/response tests to a native executor fixture. Cover atomic
-delivery batches, eligible pending-commit deferral, auth before decompression,
-headers/context, commit failure, cancellation, keepalive, EOF and single finalization.
-Run native Responses and actual provider HTTP/WS regressions separately.
-Do not preserve obsolete CPA-only acceptance tests as a product contract.
-
-A mocked completion does not prove real account permission, cache-hit improvement
-or reduced account risk. Detailed provenance and binding differences are recorded
-in docs/chat-official-parity.md.
+Keep the copied shared parser and per-target converters, target-specific parameter errors,
+function/custom tools and stream/JSON usage contracts. The local OAuth registry has no native
+Messages execution target; retaining a pure protocol converter does not enable an upstream API Key
+account. Native Responses, HTTP/WS, Excel/State and scheduling require their own regressions.
 
 ## Buffered Output Recovery
 
@@ -522,33 +459,17 @@ events, then use the existing encoder and single execution finalization.
   account health, original response bodies, atomic terminal delivery, complete message
   IDs versus references/opaque history, and lossless versus unrecognized reasoning parts.
 
-## Anthropic Messages ingress (official v3.45.1)
+## Anthropic Messages ingress
 
-- `/v1/messages` and `/v1/messages/count_tokens` use the official `gateway-protocol::anthropic`
-  validation/converters. Existing Authorization has precedence; x-api-key is a fallback only when
-  Authorization is absent. Errors use the Messages envelope; CORS allows anthropic-version/beta.
-- Native OAuth generation converts Messages to Responses before the existing provider selection
-  and transport chain. Preserve local account identity, egress, leases, Excel and State. Strip
-  Anthropic source headers at the cross-protocol boundary; never select a second account for conversion.
-- Before conversion, resolve explicit Claude sessions with the official parser:
-  `x-claude-code-session-id`, then JSON `metadata.user_id.session_id`, then legacy
-  `_session_<id>`. Enforce 256 bytes/no control characters. Hash with Client Key in
-  the `claude-session` namespace; ordinary user IDs and content do not bind accounts.
-  Selection and safe observation use that same identity. Apply existing affinity
-  modes/retry budgets; do not create OpenAI turn aliases, root ownership or native
-  continuation state. There is no plugin attempt-rewrite path in this runtime.
-- Source usage, costs and observations reach Core before response translation. One source event can
-  produce several Messages events; keep canonical completion on the last event only. Streaming ends
-  with message_stop, without OpenAI DONE; verify execution completion before sending that terminal.
-  Raw native JSON and SSE retain their bytes. Earlier message_delta is not itself the success terminal.
-- CountTokens uses the official local BPE path for OAuth, with CPU semaphore, cancellation and deadline.
-  Started/Completed facts share the raw-count envelope to fit the local stream validator. No upstream
-  request or upstream-success feedback is generated; the selected account lease is still released.
-- `/v1/models` and model detail use Anthropic shapes only with anthropic-version or x-api-key headers;
-  list defaults to 20, supports 1..1000 and after_id/before_id. Invalid cursors/limits use protocol errors.
-- Native Responses preserve explicit service_tier=auto/default/priority/flex. Only Messages-to-Codex-OAuth conversion omits auto/default after translation; do not restore global stripping in the native normalizer.
-- The approved boundary excludes plugin runtime and upstream API-key accounts, including their dedicated CPR-to-CPR forwarding. Public protocol fixes in mixed commits still apply; historical exclusions do not establish a permanent ban on all peer-related changes.
-  Their exclusion does not remove shared native protocol fixes.
+- Preserve native Messages validation, authentication precedence, error envelopes and CORS.
+  Responses/Messages/GenAI do not convert into one another. Chat alone supports target conversion.
+- The included Codex, xAI and AGY OAuth accounts do not execute Messages or Messages count_tokens.
+  Reject unsupported operations before upstream I/O; do not restore the retired OAuth local-BPE path.
+- Anthropic `/v1/models` and detail call the protocol-scoped catalog with `anthropic`, sort before
+  cursor pagination, and return only executable models. An empty OAuth-only menu is valid. Generic
+  OpenAI discovery remains independent. Errors use the Messages envelope.
+- Native Responses preserves explicit service_tier; translated Codex Chat omits auto/default.
+  Observations still report the original protocol rather than relabeling converted Chat as Responses.
 
 ### Protocol observations and session ownership (v3.45.2)
 
@@ -577,6 +498,8 @@ events, then use the existing encoder and single execution finalization.
 - 显式 Guardian 角色头优先；自动 reviewer 标记仅在实际专用模型上生成。
   classifier/housekeeper 保留其 sampler 传输；普通与 reviewer HTTP 正文使用 zstd，
   不再按小正文大小跳过，classifier/housekeeper 不压缩。WS 消息压缩仍按原独立规则。
+  HTTP zstd 压缩在 blocking pool 执行，提交前按可用 CPU 数限制并发；取消等待或尚未启动任务可释放资源，已运行任务持有许可直到真实结束，不能声称取消会强杀工作线程。Excel 的独立压缩合同保留。
+- `x-codex-turn-id` 作为普通扩展头透传，不再提取为 typed context.turn_id，也不在 HTTP、WS 或 Live 额外屏蔽；正文、client_metadata 和标准 x-codex-turn-metadata 中的轮次身份继续按既有合同解析。
 - 所选 OAuth ID token（缺失时 access token）的 FedRAMP claim 决定受管理标记；
   下游不能覆盖该账号的 true。无 claim 的同账号扩展按既有透传合同处理。
   模型目录、预热、Images/Search 和 Live 辅助调用复用账号客户端及池隔离。
@@ -587,9 +510,12 @@ events, then use the existing encoder and single execution finalization.
   成功重放只关联真正要求恢复的同 Key/会话 failed 或 incomplete 记录，
   不改写原错误终态与计费事实。
 
-## Antigravity Responses 与 GenAI 参数
+## Antigravity GenAI 与 Chat
 
-- Responses→GenAI复用Messages内容映射，生成参数直接投影：省略/null输出上限不补默认，推理预算不受Messages强制工具或续轮规则裁剪，采样与JSON Schema保留。
-- 搜索工具选择由公共openai::web_search解析器统一解释。可选搜索不破坏函数工具，强制搜索声明缺失/歧义需明确报错；Provider只支持经检查的实时文本查询与域名过滤。
-- GenAI原生HTTP SSE不注入心跳，首帧前失败保留HTTP错误；Responses/Chat/Messages保留既有保活。转换失败保留私有source和发送状态，不向下游输出原始诊断。
-- 系统提示、previous_response_id和上游完整JSON搜索的边界遵循native-platforms.md，不因转换参数修复而宣称这些限制已消除。
+- AGY accepts native GenAI and Chat; Responses/Messages compatibility is retired by approved scope.
+- Platform system text is prepended to client system parts without losing metadata. Generation and
+  countTokens share this rule. Do not replace client global/project/tool instructions wholesale.
+- Native GenAI retains JSON bytes and SSE frames; no gateway heartbeat before or between GenAI frames.
+  Chat retains its own finalization, keepalive and conversion-error boundary.
+- Search follows the selected target's native tools and catalog permissions. Do not document the
+  removed Responses web_search adapter as an available endpoint.

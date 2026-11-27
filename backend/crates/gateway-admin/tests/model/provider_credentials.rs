@@ -116,6 +116,7 @@ fn usage_quota(windows: Vec<ProviderQuotaWindow>) -> ProviderQuota {
     ProviderQuota {
         paused_windows: Default::default(),
         credits: None,
+        plan_type_display: None,
         plan_type: None,
         observed_at: None,
         refresh_token_expires_at: None,
@@ -167,6 +168,7 @@ fn dashboard_quota_should_preserve_unknown_and_actual_window_facts() {
     let mut quota = ProviderQuota {
         paused_windows: Default::default(),
         credits: None,
+        plan_type_display: None,
         plan_type: None,
         observed_at: None,
         refresh_token_expires_at: None,
@@ -259,7 +261,7 @@ fn pending_mutation_v1_should_round_trip_all_targets_and_owners() {
                 let with_proxy = expected
                     .with_outbound_proxy(Some(
                         gateway_core::account::OutboundProxy::parse(
-                            "http://user:secret@proxy.example:8080",
+                            "http://user:$TEST_PASSWORD@proxy.example:8080",
                         )
                         .unwrap()
                         .with_max_websocket_connections(16),

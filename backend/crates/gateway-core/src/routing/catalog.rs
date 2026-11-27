@@ -19,14 +19,41 @@ pub struct ReasoningModelVariant {
     pub accounts: BTreeSet<ProviderAccountId>,
 }
 
+/// 上游账号的聊天菜单声明，未声明时仍可按模型 ID 发现
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum AgentModelListing {
+    #[default]
+    Unspecified,
+    Hidden,
+    Listed {
+        order: usize,
+        display_name: String,
+    },
+}
+
 /// 具体型号在单个账号目录中声明的能力与说明
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AccountModelMetadata {
+    pub agent_listing: AgentModelListing,
     pub description: Option<String>,
     pub context_window_tokens: Option<u64>,
     pub max_context_window_tokens: Option<u64>,
     pub image_input: bool,
     pub max_output_tokens: Option<u64>,
+}
+
+/// 可执行公开模型及当前账号范围内的目录来源，不应用客户端展示规则
+#[derive(Debug)]
+pub struct ExecutableModelMetadata<'a> {
+    pub model: PublicModelId,
+    pub sources: Vec<ModelMetadataSource<'a>>,
+}
+
+/// 来源只暴露目标型号与元数据，不暴露账号身份；未声明账号级元数据时为 None
+#[derive(Debug)]
+pub struct ModelMetadataSource<'a> {
+    pub target: &'a UpstreamModelId,
+    pub metadata: Option<&'a AccountModelMetadata>,
 }
 
 impl ModelPresentation {

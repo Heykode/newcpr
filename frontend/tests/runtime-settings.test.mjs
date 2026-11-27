@@ -90,7 +90,7 @@ test('runtime display units preserve saved bytes and milliseconds without a glob
     const units = query.state.unitFields
     assert.equal(units.intervalSeconds.input.value, '0.05')
     assert.equal(units.bodyMiB.input.value, String(initial.responsesMaxDecompressedBodyBytes / 1048576))
-    assert.equal(units.maxAgeSeconds.input.value, '3300')
+    assert.equal(query.state.form.openaiWebsocketPool.maxAgeMs, 3300000)
     await query.state.saveSettings()
     assert.equal(query.requests.at(-1).responsesMaxDecompressedBodyBytes, initial.responsesMaxDecompressedBodyBytes)
     assert.equal(query.requests.at(-1).requestIntervalMs, 50)
@@ -98,14 +98,14 @@ test('runtime display units preserve saved bytes and milliseconds without a glob
     units.intervalSeconds.input.value = '1.001'
     units.bodyMiB.input.value = '1.5'
     units.prefetchKiB.input.value = '0.5'
-    units.idleSeconds.input.value = '10.001'
+    query.state.form.openaiWebsocketPool.streamIdleTimeoutMs = 10001
     await query.state.saveSettings()
     const saved = query.requests.at(-1)
     assert.equal(saved.requestIntervalMs, 1001)
     assert.equal(saved.responsesMaxDecompressedBodyBytes, 1572864)
     assert.equal(saved.requestTuning.websocketLargeRequestThresholdBytes, undefined)
     assert.equal(saved.requestTuning.streamPrefetchBytes, 512)
-    assert.equal(saved.requestTuning.websocketStreamIdleTimeoutMs, 10001)
+    assert.equal(saved.openaiWebsocketPool.streamIdleTimeoutMs, 10001)
   }
   finally { query.stop() }
 })
@@ -115,7 +115,7 @@ test('unit drafts reject empty and sub-byte or sub-millisecond inputs instead of
   const query = mountSettings(settings(), warning => warnings.push(warning))
   try {
     await query.state.loadSettings()
-    for (const [key, raw] of [['bodyMiB', ''], ['intervalSeconds', '0.0001'], ['maxAgeSeconds', 'NaN'], ['prefetchKiB', '0.0001']]) {
+    for (const [key, raw] of [['bodyMiB', ''], ['intervalSeconds', '0.0001'], ['failureWindowSeconds', 'NaN'], ['prefetchKiB', '0.0001']]) {
       query.state.unitFields[key].input.value = raw
       await query.state.saveSettings()
       assert.equal(query.requests.length, 0)
@@ -348,8 +348,8 @@ function mountSettings(initial, onWarning = assert.fail, apiOverrides = {}) {
 
 function settings() {
   return {
-    openaiOauthGuardianReviewModel: true,
-    openaiRequestCountry: { mode: 'follow_location' },
+    openaiRequestSettings: { requestCountry: { mode: 'follow_location' }, oauthGuardianReviewModel: true, residency: 'us', accountRoutingOverride: null },
+    openaiWebsocketPool: { enabled: true, maxAgeMs: 3300000, fastPathBudgetMs: 800, idleTimeoutMs: 300000, streamIdleTimeoutMs: 300000 },
     configRevision: 7,
     modelMappings: { 'client-model': 'upstream-model' },
     refreshMarginSeconds: 1800,
@@ -621,7 +621,8 @@ test('runtime settings load and save without a global WS opening limit', async (
     const initial = {
       ...settings(),
       requestTuning: { maxRequestAttempts: 8, websocketHttpFallbackEnabled: false },
-      requestTuningDefaults: { websocketMaxAgeMs: 60_000 },
+      requestTuningDefaults: { websocketMaxAgeMs: 1 },
+      openaiWebsocketPool: { ...settings().openaiWebsocketPool, maxAgeMs: 60000 },
     }
     if (legacy) {
       initial.requestTuning.websocketMaxConnecting = 4
@@ -633,7 +634,8 @@ test('runtime settings load and save without a global WS opening limit', async (
       await query.state.loadSettings()
       assert.equal(query.state.form.requestTuning.maxRequestAttempts, 8)
       assert.equal(Object.hasOwn(query.state.form.requestTuning, 'websocketHttpFallbackEnabled'), false)
-      assert.equal(query.state.form.requestTuning.websocketMaxAgeMs, 60_000)
+      assert.equal(query.state.form.openaiWebsocketPool.maxAgeMs, 60_000)
+      assert.equal(Object.hasOwn(query.state.form.requestTuning, 'websocketMaxAgeMs'), false)
       assert.equal(query.state.form.requestTuning.websocketMaxRetries, 5)
       assert.equal(Object.hasOwn(query.state.form.requestTuning, 'websocketMaxConnecting'), false)
 
@@ -670,8 +672,6 @@ test('inherited runtime defaults never add the removed global WS opening limit',
       maxRequestAttempts: 32,
       websocketMaxRetries: 5,
       streamPrefetchBytes: 128 * 1024,
-      websocketMaxAgeMs: 55 * 60 * 1_000,
-      websocketStreamIdleTimeoutMs: 300_000,
       websocketFailureThreshold: 3,
       websocketFailureWindowMs: 30_000,
       websocketFailureOpenDurationMs: 30_000,
@@ -1229,6 +1229,37 @@ test('quota reset weights persist independently across strategies and validate c
     assert.equal(warnings.length, 24)
     await query.state.saveSettings()
     assert.equal(query.requests.length, saved + 1)
+  }
+  finally { query.stop() }
+})
+
+test('OpenAI platform settings roundtrip cleared headers and reject invalid connection budgets', async () => {
+  const warnings = []
+  const query = mountSettings(settings(), value => warnings.push(value))
+  try {
+    await query.state.loadSettings()
+    query.state.form.openaiRequestSettings.residency = null
+    query.state.form.openaiRequestSettings.accountRoutingOverride = 'us_cr'
+    query.state.form.openaiRequestSettings.oauthGuardianReviewModel = false
+    query.state.form.openaiWebsocketPool.enabled = false
+    query.state.form.openaiWebsocketPool.fastPathBudgetMs = 1234
+    await query.state.saveSettings()
+    assert.equal(query.requests.at(-1).openaiRequestSettings.residency, null)
+    assert.equal(query.requests.at(-1).openaiRequestSettings.accountRoutingOverride, 'us_cr')
+    assert.equal(query.requests.at(-1).openaiWebsocketPool.enabled, false)
+    await query.state.loadSettings()
+    assert.equal(query.state.form.openaiWebsocketPool.fastPathBudgetMs, 1234)
+    for (const [key, value] of [['fastPathBudgetMs', 0], ['fastPathBudgetMs', 15001], ['maxAgeMs', 0], ['idleTimeoutMs', -1], ['streamIdleTimeoutMs', 0.5], ['maxAgeMs', Number.NaN]]) {
+      const previous = query.state.form.openaiWebsocketPool[key]
+      query.state.form.openaiWebsocketPool[key] = value
+      await query.state.saveSettings()
+      assert.equal(query.requests.length, 1)
+      query.state.form.openaiWebsocketPool[key] = previous
+    }
+    assert.equal(warnings.length, 6)
+    query.state.form.openaiWebsocketPool.streamIdleTimeoutMs = 0
+    await query.state.saveSettings()
+    assert.equal(query.requests.at(-1).openaiWebsocketPool.streamIdleTimeoutMs, 0)
   }
   finally { query.stop() }
 })

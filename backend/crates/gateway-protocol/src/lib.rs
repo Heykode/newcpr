@@ -7,9 +7,14 @@ pub mod openai;
 
 /// Anthropic Messages wire contract.
 pub mod anthropic;
+/// Direct Chat conversion for each supported upstream protocol.
+pub mod chat_completions;
 /// Protocol-specific request facts.
 pub mod request;
 
 mod capabilities;
 pub mod genai;
 pub mod peer;
+
+/// Shared HTTP transport boundaries.
+pub mod http;

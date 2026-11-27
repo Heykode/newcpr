@@ -7,7 +7,9 @@ use tokio_util::{
 };
 use uuid::Uuid;
 
-use super::state::{CodexWebSocketPoolKey, PooledWebSocketConnection, WebSocketPoolReservation};
+use super::state::{
+    CodexWebSocketPoolKey, PooledWebSocketConnection, WebSocketPoolReservation, WebSocketPoolState,
+};
 use super::{CodexWebSocketPool, WebSocketPoolBypassReason};
 use crate::transport::egress::CodexEgressError;
 use crate::transport::websocket::pump::{
@@ -58,29 +60,42 @@ impl WebSocketPoolConnectWaiter {
 }
 
 pub(crate) struct WebSocketPoolConnectLease {
+    pub(super) lifetime: super::state::WebSocketConnectionLifetime,
     pool: CodexWebSocketPool,
     key: CodexWebSocketPoolKey,
     pub(super) id: Uuid,
     pub(super) started_at: Instant,
     pub(super) outcome: watch::Sender<WebSocketPoolConnectOutcome>,
     pub(super) cancellation: CancellationToken,
+    pub(crate) proxy_permit: Option<super::proxy_capacity::ProxyConnectionPermit>,
     // slot 分配时即注册，封闭 acquire 与后台 task spawn 之间的 shutdown 竞态。
     _task_registration: TaskTrackerToken,
     armed: bool,
 }
 
 impl WebSocketPoolConnectLease {
-    pub(super) fn reserve(pool: CodexWebSocketPool, key: CodexWebSocketPoolKey) -> Self {
+    /// The same lock protects both the opening count and the exact pool key reservation.
+    pub(super) fn reserve(
+        pool: CodexWebSocketPool,
+        state: &mut WebSocketPoolState,
+        key: &CodexWebSocketPoolKey,
+    ) -> Self {
+        *state
+            .opening_by_account
+            .entry(key.account_id().to_owned())
+            .or_default() += 1;
         let (outcome, _) = watch::channel(WebSocketPoolConnectOutcome::Pending);
         let cancellation = pool.shutdown.child_token();
         let task_registration = pool.tasks.token();
         Self {
+            lifetime: pool.effective_config().into(),
             pool,
-            key,
+            key: key.clone(),
             id: Uuid::new_v4(),
             started_at: Instant::now(),
             outcome,
             cancellation,
+            proxy_permit: None,
             _task_registration: task_registration,
             armed: true,
         }
@@ -107,11 +122,12 @@ impl WebSocketPoolConnectLease {
 
     pub(crate) async fn connected_reserved(
         mut self,
-        connection: PooledWebSocketConnection,
+        mut connection: PooledWebSocketConnection,
     ) -> Result<
         (Box<PooledWebSocketConnection>, WebSocketPoolLease),
         (JoinHandle<()>, Option<CodexEgressError>),
     > {
+        connection.lifetime = self.lifetime;
         let result = self
             .pool
             .finish_connect_reserved(&self.key, self.id, connection)
@@ -155,12 +171,22 @@ impl WebSocketPoolConnectLease {
 
 impl Drop for WebSocketPoolConnectLease {
     fn drop(&mut self) {
-        if !self.armed {
-            return;
+        if self.armed {
+            self.publish_failure(None);
+            self.cancellation.cancel();
+            self.pool.fail_connect_now(&self.key, self.id);
         }
-        self.publish_failure(None);
-        self.cancellation.cancel();
-        self.pool.fail_connect_now(&self.key, self.id);
+        let mut state = self.pool.lock_state();
+        let counts = &mut state.opening_by_account;
+        let account = self.key.account_id();
+        let count = counts
+            .get_mut(account)
+            .expect("opening lease owns one permit");
+        *count -= 1;
+        if *count == 0 {
+            counts.remove(account);
+        }
+        self.pool.capacity_changed.send_replace(());
     }
 }
 
@@ -178,12 +204,14 @@ impl WebSocketPoolLease {
         pool: CodexWebSocketPool,
         key: CodexWebSocketPoolKey,
         latest_response_id: Option<&str>,
+        max_age: std::time::Duration,
     ) -> Self {
         let task_registration = pool.tasks.token();
         Self {
             pool,
             key,
             reservation: WebSocketPoolReservation {
+                max_age,
                 id: Uuid::new_v4(),
                 reserved_at: Instant::now(),
                 latest_response_id: latest_response_id.map(str::to_string),

@@ -155,7 +155,7 @@ pub(super) fn decode_request(
     };
     validation.map_err(|error| {
         invalid(match error {
-            anthropic::TranslationError::InvalidRequest(message) => message,
+            anthropic::MessageError::InvalidRequest(message) => message,
             _ => "Messages request is invalid.",
         })
     })?;

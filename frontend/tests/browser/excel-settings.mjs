@@ -8,8 +8,8 @@ import { createServer } from 'vite'
 const root = fileURLToPath(new URL('../..', import.meta.url))
 const initial = {
   configRevision: 1,
-  openaiOauthGuardianReviewModel: true,
-  openaiRequestCountry: { mode: 'follow_location' },
+  openaiRequestSettings: { requestCountry: { mode: 'follow_location' }, oauthGuardianReviewModel: true, residency: 'us', accountRoutingOverride: null },
+  openaiWebsocketPool: { enabled: true, maxAgeMs: 3300000, fastPathBudgetMs: 800, idleTimeoutMs: 300000, streamIdleTimeoutMs: 300000 },
   excelDefaultModels: ['synthetic-model'],
   modelMappings: { 'client-model': 'upstream-model' },
   refreshMarginSeconds: 1800,

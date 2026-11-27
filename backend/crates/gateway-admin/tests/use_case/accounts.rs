@@ -399,13 +399,13 @@ impl ProviderAdmin for FakeProviderAdmin {
             .map_err(ProviderAdminError::new)
     }
 
-    fn plan_type_display(&self, plan_type: &str) -> String {
-        match plan_type {
+    fn plan_type_display(&self, plan_type: &str) -> Option<String> {
+        Some(match plan_type {
             "prolite" => "ProLite".to_owned(),
             "pro" => "Pro".to_owned(),
             "promax" => "ProMax".to_owned(),
             _ => format!("{} display: {plan_type}", self.kind),
-        }
+        })
     }
 
     fn plan_type_aliases(&self, plan_type: &str) -> Option<Vec<String>> {
@@ -1490,8 +1490,8 @@ impl SettingsStore for StaticSettingsStore {
     async fn load_runtime_settings(&self) -> AdminStoreResult<RuntimeSettings> {
         Ok(RuntimeSettings {
             request_profiles: Default::default(),
-            openai_oauth_guardian_review_model: true,
-            openai_request_country: Default::default(),
+            openai_request_settings: Default::default(),
+            openai_websocket_pool: Default::default(),
             codex_privacy_policy: Default::default(),
 
             turn_state_probe_proxy_id: None,
@@ -2590,6 +2590,7 @@ async fn accounts_list_should_degrade_quota_failure_to_empty_window_without_drop
     openai.set_quota(ProviderQuota {
         paused_windows: Default::default(),
         credits: None,
+        plan_type_display: None,
         plan_type: None,
         observed_at: Some(Utc::now()),
         refresh_token_expires_at: None,
@@ -2891,6 +2892,7 @@ async fn accounts_list_should_not_derive_rate_limited_from_provider_quota_view()
     provider.set_quota(ProviderQuota {
         paused_windows: Default::default(),
         credits: None,
+        plan_type_display: None,
         plan_type: None,
         observed_at: Some(Utc::now()),
         refresh_token_expires_at: None,
@@ -3006,6 +3008,7 @@ async fn accounts_list_should_not_derive_exhaustion_from_provider_quota_view() {
     provider.set_quota(ProviderQuota {
         paused_windows: Default::default(),
         credits: None,
+        plan_type_display: None,
         plan_type: None,
         observed_at: Some(Utc::now()),
         refresh_token_expires_at: None,
@@ -3994,6 +3997,7 @@ async fn accounts_list_should_attach_local_usage_to_quota_windows() {
     provider.set_quota(ProviderQuota {
         paused_windows: Default::default(),
         credits: None,
+        plan_type_display: None,
         plan_type: None,
         observed_at: Some(Utc::now()),
         refresh_token_expires_at: None,
@@ -4155,6 +4159,7 @@ async fn account_windows_attach_only_the_usage_allowed_by_the_provider() {
     let mut quota = ProviderQuota {
         paused_windows: Default::default(),
         credits: None,
+        plan_type_display: None,
         plan_type: None,
         observed_at: Some(Utc::now()),
         refresh_token_expires_at: None,
@@ -4468,6 +4473,7 @@ fn empty_quota() -> ProviderQuota {
     ProviderQuota {
         paused_windows: Default::default(),
         credits: None,
+        plan_type_display: None,
         plan_type: None,
         observed_at: None,
         refresh_token_expires_at: None,

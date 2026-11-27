@@ -16,15 +16,14 @@ use gateway_core::metering::{
 };
 use gateway_core::upstream::UpstreamSendState;
 use gateway_protocol::openai::events::{TokenUsage, billable_usage_is_complete, extract_usage};
-use gateway_protocol::openai::sse::{SseEvent, SseEventDecoder};
+use gateway_protocol::openai::sse::{SseEventDecoder, SseFrame};
 use serde_json::Value;
 
 use super::GrokInferenceTransportErrorKind;
-use super::request::{GrokResponseTransform, GrokResponsesRequest};
+use super::request::GrokResponsesRequest;
 use super::{classify_grok_quota_failure, scrub_account_fingerprints};
 
 const CONTENTS_PER_OUTPUT: u32 = 1_024;
-const GROK_PING_SSE_COMMENT: &[u8] = b": ping\n\n";
 pub use crate::billing::grok_billing_breakdown_with_tier;
 /// 按 xAI Provider 当前受控价格规则计算费用明细。
 #[must_use]
@@ -43,8 +42,7 @@ pub fn grok_billing_breakdown(
 pub struct GrokCanonicalDecoder {
     pricing: Option<gateway_core::metering::ModelPriceOverride>,
     decoder: SseEventDecoder,
-    response_transform: GrokResponseTransform,
-    fallback_model: String,
+    upstream_model: String,
     response_id: Option<String>,
     started: bool,
     completed: bool,
@@ -67,12 +65,11 @@ impl GrokCanonicalDecoder {
         self
     }
 
-    pub fn new(fallback_model: impl Into<String>) -> Self {
+    pub fn new(upstream_model: impl Into<String>) -> Self {
         Self {
             pricing: None,
             decoder: SseEventDecoder::default(),
-            response_transform: GrokResponseTransform::default(),
-            fallback_model: fallback_model.into(),
+            upstream_model: upstream_model.into(),
             response_id: None,
             started: false,
             completed: false,
@@ -88,9 +85,8 @@ impl GrokCanonicalDecoder {
     /// 创建在 canonical 与 wire 投影处理每个上游 event 前先还原请求级 tool 别名的
     /// 解码器。
     #[must_use]
-    pub fn for_request(fallback_model: impl Into<String>, request: &GrokResponsesRequest) -> Self {
+    pub fn for_request(upstream_model: impl Into<String>, request: &GrokResponsesRequest) -> Self {
         Self {
-            response_transform: request.response_transform(),
             requires_provider_cost: request.body().get("tool_choice").and_then(Value::as_str)
                 != Some("none")
                 && request
@@ -105,7 +101,7 @@ impl GrokCanonicalDecoder {
                             )
                         })
                     }),
-            ..Self::new(fallback_model)
+            ..Self::new(upstream_model)
         }
     }
 
@@ -116,162 +112,105 @@ impl GrokCanonicalDecoder {
     }
 
     pub fn push(&mut self, chunk: &[u8]) -> Result<Vec<ProviderEvent>, ProviderError> {
-        let events = self.decoder.push(chunk).map_err(protocol_error)?;
-        self.decode(events)
+        let frames = self.decoder.push_frames(chunk);
+        self.decode(frames)
     }
 
     pub fn finish(&mut self) -> Result<Vec<ProviderEvent>, ProviderError> {
-        let events = self.decoder.finish().map_err(protocol_error)?;
-        let output = self.decode(events)?;
+        let frames = self.decoder.finish_frames();
+        let events = self.decode(frames)?;
         if !self.completed {
             return Err(protocol_error_marker());
         }
-        Ok(output)
+        Ok(events)
     }
 
-    pub(crate) fn finish_without_terminal(&mut self) -> Result<Vec<ProviderEvent>, ProviderError> {
-        let events = self.decoder.finish().map_err(protocol_error)?;
-        self.decode(events)
-    }
-
-    /// 取走本批解码帧里是否已出现首个非前导输出事件（结构帧也算），用于首字计时。
-    pub fn take_output_start(&mut self) -> bool {
-        std::mem::take(&mut self.output_start_seen)
-    }
-
-    fn decode(&mut self, events: Vec<SseEvent>) -> Result<Vec<ProviderEvent>, ProviderError> {
+    fn decode(&mut self, frames: Vec<SseFrame>) -> Result<Vec<ProviderEvent>, ProviderError> {
         let mut output = Vec::new();
-        for event in events {
-            if event
-                .event
-                .as_deref()
-                .is_some_and(|event_type| event_type.trim() == "response.doom_loop_check")
-            {
+        for frame in frames {
+            let (raw, events) = frame.into_parts();
+            let raw = bytes::Bytes::from(raw);
+            if events.is_empty() {
+                output.push(ProviderEvent::wire(
+                    ProtocolWireEvent::raw_sse(OPENAI_PROTOCOL, raw).map_err(protocol_error)?,
+                ));
                 continue;
             }
-            if event.data.trim() == "[DONE]" {
-                if !self.completed {
-                    return Err(protocol_error_marker());
-                }
-                continue;
-            }
-            let parsed = serde_json::from_str::<Value>(&event.data);
-            if event
-                .event
-                .as_deref()
-                .is_some_and(|event_type| event_type.trim() == "ping")
-                && parsed
-                    .as_ref()
-                    .ok()
-                    .and_then(|value| value.get("type").and_then(Value::as_str))
-                    .is_none_or(|event_type| event_type == "ping")
-            {
-                let wire = ProtocolWireEvent::raw_sse(
-                    OPENAI_PROTOCOL,
-                    bytes::Bytes::from_static(GROK_PING_SSE_COMMENT),
-                )
-                .map_err(|_| protocol_error_marker())?;
-                output.push(ProviderEvent::wire(wire));
-                continue;
-            }
-            let Ok(value) = parsed else {
-                continue;
-            };
-            let body_type = value.get("type").and_then(Value::as_str);
-            if body_type == Some("response.doom_loop_check") {
-                continue;
-            }
-            let Some(event_type) = body_type.or(event.event.as_deref()) else {
-                let Ok(transformed) = self.response_transform.rewrite_stream_event("", value)
-                else {
+            for (index, event) in events.into_iter().enumerate() {
+                let Ok(value) = serde_json::from_str::<Value>(&event.data) else {
+                    if index == 0 {
+                        output.push(ProviderEvent::wire(
+                            ProtocolWireEvent::raw_sse(OPENAI_PROTOCOL, raw.clone())
+                                .map_err(protocol_error)?,
+                        ));
+                    }
                     continue;
                 };
-                for (index, transformed) in transformed.into_iter().enumerate() {
-                    let mut value = transformed.into_value();
-                    self.response_transform.resequence_stream_value(&mut value);
-                    let wire = ProtocolWireEvent::json_with_sse_metadata(
-                        OPENAI_PROTOCOL,
-                        None,
-                        value,
-                        (index == 0).then(|| event.id.clone()).flatten(),
-                        (index == 0).then_some(event.retry).flatten(),
-                    )
-                    .map_err(|_| protocol_error_marker())?;
-                    output.push(ProviderEvent::wire(wire));
+                let event_type = value
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .or(event.event.as_deref())
+                    .unwrap_or_default()
+                    .to_owned();
+                if let Some(response) = value.get("response") {
+                    if let Some(tier) = response.get("service_tier").and_then(Value::as_str) {
+                        self.response_service_tier = Some(tier.trim().to_owned());
+                    }
+                    self.requires_provider_cost |= !token_only_response(response);
                 }
-                continue;
-            };
-            let event_type = event_type.to_owned();
-            // 工具转换可能隐藏注入的调用，计费事实必须从转换前的上游事件读取。
-            if let Some(response) = value.get("response") {
-                if let Some(tier) = response.get("service_tier").and_then(Value::as_str) {
-                    self.response_service_tier = Some(tier.trim().to_owned());
+                if let Some(item) = value.get("item") {
+                    self.requires_provider_cost |= !token_only_output(item);
                 }
-                self.requires_provider_cost |= !token_only_response(response);
-            }
-            if let Some(item) = value.get("item") {
-                self.requires_provider_cost |= !token_only_output(item);
-            }
-            // 无法转换的上游帧（多为畸形帧）直接丢弃，保持已开始的客户端流不中断。
-            let Ok(transformed) = self
-                .response_transform
-                .rewrite_stream_event(&event_type, value)
-            else {
-                continue;
-            };
-            for (index, transformed) in transformed.into_iter().enumerate() {
-                let transformed_type = transformed.event_type().to_owned();
-                if !client_visible_event(&transformed_type) {
-                    continue;
-                }
-                // 首个非前导、非失败事件（结构帧也算）开启首字计时。
-                self.output_start_seen |= !matches!(
-                    transformed_type.as_str(),
-                    "response.created" | "response.in_progress" | "response.failed" | "error"
-                );
-                let mut value = transformed.into_value();
-                self.response_transform.resequence_stream_value(&mut value);
-                let mut canonical = Vec::new();
-                // 终态事件（completed/incomplete）fail-closed：用量/计费校验失败即断流。
-                // 其余内容事件容忍字段校验失败——正常上游变体（空 delta、重复 index、
-                // 缺字段等）不打断已开始的客户端流：跳过 canonical 提取、wire 原样转发。
-                // 真·上游错误（response.failed/error）为非 Protocol 类别，按终态传播。
-                let terminal_event = matches!(
-                    transformed_type.as_str(),
+                self.output_start_seen |= !event_type.is_empty()
+                    && !matches!(
+                        event_type.as_str(),
+                        "response.created" | "response.in_progress" | "response.failed" | "error"
+                    );
+                let mut facts = Vec::new();
+                // 已知终态必须包含有效计量；其他原生扩展不依赖观察器是否理解
+                let terminal = matches!(
+                    event_type.as_str(),
                     "response.completed" | "response.incomplete"
                 );
-                match self.decode_event(&transformed_type, &value, &mut canonical) {
+                match self.decode_event(&event_type, &value, &mut facts) {
                     Ok(()) => {}
-                    Err(error)
-                        if !terminal_event && error.kind() == ProviderErrorKind::Protocol =>
-                    {
-                        canonical.clear();
+                    Err(error) if !terminal && error.kind() == ProviderErrorKind::Protocol => {
+                        facts.clear()
                     }
                     Err(error) => return Err(error),
                 }
-                let wire_event = if transformed_type == event_type {
-                    event.event.clone()
+                let wire = if index == 0 {
+                    ProtocolWireEvent::json_with_raw_sse_metadata(
+                        OPENAI_PROTOCOL,
+                        event.event,
+                        value,
+                        raw.clone(),
+                        event.id,
+                        event.retry,
+                    )
                 } else {
-                    Some(transformed_type)
-                };
-                let wire = ProtocolWireEvent::json_with_sse_metadata(
-                    OPENAI_PROTOCOL,
-                    wire_event,
-                    value,
-                    (index == 0).then(|| event.id.clone()).flatten(),
-                    (index == 0).then_some(event.retry).flatten(),
-                )
-                .map_err(|_| protocol_error_marker())?;
-                output.push(if canonical.is_empty() {
+                    ProtocolWireEvent::json_with_sse_metadata(
+                        OPENAI_PROTOCOL,
+                        event.event,
+                        value,
+                        event.id,
+                        event.retry,
+                    )
+                }
+                .map_err(protocol_error)?;
+                output.push(if facts.is_empty() {
                     ProviderEvent::wire(wire)
                 } else {
-                    ProviderEvent::canonical_with_wire(canonical, wire)
+                    ProviderEvent::canonical_with_wire(facts, wire)
                 });
             }
         }
         Ok(output)
     }
 
+    pub fn take_output_start(&mut self) -> bool {
+        std::mem::take(&mut self.output_start_seen)
+    }
     fn decode_event(
         &mut self,
         event_type: &str,
@@ -332,7 +271,7 @@ impl GrokCanonicalDecoder {
             .get("model")
             .and_then(Value::as_str)
             .filter(|model| !model.is_empty())
-            .unwrap_or(&self.fallback_model)
+            .unwrap_or(&self.upstream_model)
             .to_owned();
         self.response_id = Some(response_id.clone());
         self.started = true;
@@ -359,9 +298,7 @@ impl GrokCanonicalDecoder {
         let item = value.get("item").ok_or_else(protocol_error_marker)?;
         let output_index = event_index(value, "output_index")?;
         match item.get("type").and_then(Value::as_str) {
-            Some(
-                "function_call" | "custom_tool_call" | "tool_search_call" | "apply_patch_call",
-            ) => {
+            Some("function_call" | "custom_tool_call") => {
                 let index = content_index(output_index, 0)?;
                 self.add_content(index, ContentKind::ToolCall, output)?;
                 let call_id = item
@@ -401,9 +338,7 @@ impl GrokCanonicalDecoder {
         let item = value.get("item").ok_or_else(protocol_error_marker)?;
         match item.get("type").and_then(Value::as_str) {
             Some("message" | "reasoning") => return Ok(()),
-            Some(
-                "function_call" | "custom_tool_call" | "tool_search_call" | "apply_patch_call",
-            ) => {}
+            Some("function_call" | "custom_tool_call") => {}
             Some(_) | None => return Ok(()),
         }
         let output_index = event_index(value, "output_index")?;
@@ -539,7 +474,7 @@ impl GrokCanonicalDecoder {
             .get("model")
             .and_then(Value::as_str)
             .filter(|model| !model.is_empty())
-            .unwrap_or(&self.fallback_model)
+            .unwrap_or(&self.upstream_model)
             .to_owned();
         if let Some(cost) = provider_reported_cost(response)? {
             output.push(GatewayEvent::ProviderCost(cost));
@@ -547,7 +482,7 @@ impl GrokCanonicalDecoder {
             && let Some(cost) = usage.and_then(|usage| {
                 calculated_cost(
                     response,
-                    &model,
+                    &self.upstream_model,
                     usage,
                     self.response_service_tier(),
                     self.pricing.as_ref(),
@@ -609,11 +544,6 @@ impl GrokCanonicalDecoder {
             Err(protocol_error_marker())
         }
     }
-}
-
-fn client_visible_event(event_type: &str) -> bool {
-    event_type == "error"
-        || (event_type.starts_with("response.") && event_type != "response.doom_loop_check")
 }
 
 fn response_object(value: &Value) -> Option<&Value> {
@@ -691,7 +621,10 @@ fn provider_reported_cost(response: &Value) -> Result<Option<ProviderReportedCos
         return Ok(None);
     };
     let ticks = value.as_u64().ok_or_else(protocol_error_marker)?;
-    // 明确返回的零费用也是上游账单事实，不能当作缺失而改用本地估算。
+    // 官方 REST 将未报告费用补为 0；正数才是可用的上游费用事实。
+    if ticks == 0 {
+        return Ok(None);
+    }
     ProviderReportedCost::from_usd_ticks(u128::from(ticks))
         .map(Some)
         .map_err(protocol_error)
@@ -761,7 +694,9 @@ fn incomplete_finish_reason(response: &Value) -> FinishReason {
         .pointer("/incomplete_details/reason")
         .and_then(Value::as_str)
     {
-        Some("max_output_tokens" | "max_tokens") => FinishReason::Length,
+        Some("max_output_tokens" | "max_tokens" | "max_prompt_tokens" | "max_time_limit") => {
+            FinishReason::Length
+        }
         Some("content_filter") => FinishReason::ContentFilter,
         _ => FinishReason::Other,
     }

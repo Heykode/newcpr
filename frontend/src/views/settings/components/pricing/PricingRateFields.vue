@@ -26,7 +26,7 @@ function preview(field: keyof TokenPrices) {
 </script>
 
 <template>
-  <div class="grid grid-cols-2 gap-x-4 gap-y-5 sm:gap-x-6">
+  <div class="grid grid-cols-1 gap-x-4 gap-y-5 sm:grid-cols-2 sm:gap-x-6">
     <div v-for="field in priceFields" :key="field.key" class="min-w-0">
       <BaseFormItem v-if="custom" :label="field.label">
         <BaseInput
@@ -37,7 +37,11 @@ function preview(field: keyof TokenPrices) {
           placeholder="0.00"
           :disabled="disabled"
           @update:model-value="$emit('change', field.key, $event)"
-        />
+        >
+          <template #suffix>
+            <span class="text-cp-xs">USD / 1M</span>
+          </template>
+        </BaseInput>
       </BaseFormItem>
       <div v-else>
         <div class="mb-2 text-cp leading-none font-medium text-cp-text-secondary">

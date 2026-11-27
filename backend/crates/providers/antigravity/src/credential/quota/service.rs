@@ -29,6 +29,13 @@ use std::{
     time::{Duration, SystemTime},
 };
 
+pub(crate) struct CandidateQuota {
+    pub(crate) exhausted: bool,
+    pub(crate) signals: Option<AccountQuotaSignals>,
+    pub(crate) plan_type: Option<String>,
+    pub(crate) plan_display: Option<String>,
+}
+
 pub(crate) struct QuotaService {
     kind: ProviderKind,
     accounts: Arc<dyn ProviderAccountStore>,
@@ -49,7 +56,7 @@ impl QuotaService {
         let authorized: BTreeMap<_, _> = accounts
             .iter()
             .filter(|a| a.provider_kind == self.kind && a.authentication_kind == "oauth")
-            .map(|a| (a.id.as_str(), a.credential_revision.get()))
+            .map(|a| (a.id.as_str(), a))
             .collect();
         let ids = authorized
             .keys()
@@ -72,9 +79,12 @@ impl QuotaService {
         let now = SystemTime::now();
         for (owners, catalog) in catalogs {
             for owner in owners {
-                if authorized.get(owner.account_id.as_str()) != Some(&owner.revision.get()) {
+                let Some(account) = authorized
+                    .get(owner.account_id.as_str())
+                    .filter(|a| a.credential_revision.get() == owner.revision.get())
+                else {
                     continue;
-                }
+                };
                 let observation = quotas
                     .get(&owner.account_id)
                     .filter(|q| q.expected_revision == owner.revision);
@@ -83,9 +93,14 @@ impl QuotaService {
                     .models
                     .keys()
                     .map(|model| {
-                        let quota = observation
-                            .zip(document.as_ref())
-                            .and_then(|(o, d)| d.model_observation(model, o.observed_at, now));
+                        let quota = observation.zip(document.as_ref()).and_then(|(o, d)| {
+                            d.model_observation(
+                                model,
+                                account.auto_use_quota_credits,
+                                o.observed_at,
+                                now,
+                            )
+                        });
                         (model.clone(), quota)
                     })
                     .collect();
@@ -163,8 +178,13 @@ impl QuotaService {
             client.quota_summary(&material.access_token, &info.project),
         )
         .map_err(upstream)?;
+        let (tier, plan_description) = match info.paid_tier {
+            Some(paid) => (Some(paid.tier), paid.description),
+            None => (info.current_tier, None),
+        };
         let doc = Document {
-            tier: info.paid_tier.or(info.current_tier),
+            tier,
+            plan_description,
             bucket_models: super::document::bucket_models(&summary, &catalog),
             summary,
             models: catalog
@@ -198,7 +218,11 @@ impl QuotaService {
             ),
             plan_type: plan.clone(),
             observed_at,
-            state: doc.access(observed_at),
+            state: doc.access_with_credits(
+                doc.access(observed_at),
+                current.account.auto_use_quota_credits(),
+                observed_at,
+            ),
         };
         if self
             .accounts
@@ -225,21 +249,34 @@ impl QuotaService {
         &self,
         accounts: &[ProviderAccount],
         model: &str,
-    ) -> Result<BTreeMap<ProviderAccountId, (bool, Option<AccountQuotaSignals>)>, ProviderAdminError>
-    {
-        let revisions: BTreeMap<_, _> = accounts
-            .iter()
-            .map(|a| (a.id().clone(), a.revision()))
-            .collect();
-        let ids: Vec<_> = revisions.keys().cloned().collect();
+    ) -> Result<BTreeMap<ProviderAccountId, CandidateQuota>, ProviderAdminError> {
+        let owners: BTreeMap<_, _> = accounts.iter().map(|a| (a.id().clone(), a)).collect();
+        let ids: Vec<_> = owners.keys().cloned().collect();
         let observations = self.accounts.get_quotas(&ids).await.map_err(unavailable)?;
         let now = SystemTime::now();
         observations
             .into_iter()
-            .filter(|o| revisions.get(&o.account_id) == Some(&o.expected_revision))
-            .map(|o| {
-                let result = parse(&o)?.model_signals(model, o.observed_at, now);
-                Ok((o.account_id, result))
+            .filter_map(|o| {
+                owners
+                    .get(&o.account_id)
+                    .filter(|a| a.revision() == o.expected_revision)
+                    .map(|account| (o, account))
+            })
+            .map(|(o, account)| {
+                let document = parse(&o)?;
+                let (exhausted, signals) = document.model_signals(
+                    model,
+                    account.auto_use_quota_credits(),
+                    o.observed_at,
+                    now,
+                );
+                let quota = CandidateQuota {
+                    exhausted,
+                    signals,
+                    plan_type: document.plan_type(),
+                    plan_display: document.plan_display().map(str::to_owned),
+                };
+                Ok((o.account_id, quota))
             })
             .collect()
     }

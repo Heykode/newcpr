@@ -411,6 +411,33 @@ async fn inline_authentication_headers_are_redacted_without_losing_error_context
     assert!(text.contains("model=gpt-test"));
 }
 
+#[tokio::test]
+async fn google_key_headers_are_redacted_in_structured_export_records() {
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.insert_session("valid-session");
+    let mut error = ops_error_record();
+    error.raw_upstream_error = Some(
+        json!({
+            "objectHeaders": {"X-Goog-Api-Key":"$TEST_GOOGLE_OBJECT"},
+            "tupleHeaders": [["x-goog-api-key", "$TEST_GOOGLE_TUPLE"]],
+            "namedHeaders": [{"name":"x-goog-api-key", "value":"$TEST_GOOGLE_NAMED"}],
+            "inlineHeaders": "x-goog-api-key: $TEST_GOOGLE_INLINE\nupstream timeout",
+            "message":"quota unavailable"
+        })
+        .to_string(),
+    );
+    fixture.ops_errors.lock().unwrap().push(error);
+    let (status, _, file) = export(&fixture, "?requestId=req_err", true).await;
+    assert_eq!(status, StatusCode::OK);
+    let text = file.to_string();
+    assert!(
+        !text.contains("$TEST_GOOGLE_"),
+        "Google key header values must be redacted"
+    );
+    assert!(text.contains("quota unavailable"));
+    assert!(text.contains("upstream timeout"));
+}
+
 fn ops_error_record() -> gateway_admin::model::observability::OpsError {
     use gateway_admin::model::observability::OpsError;
     OpsError {

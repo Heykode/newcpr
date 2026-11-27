@@ -168,6 +168,12 @@ fn is_audited_private_test(member: &str, relative: &Path, item: &Item) -> bool {
                 && module.content.is_some()
                 && matches!(module.vis, syn::Visibility::Inherited)
         }
+        // Persisted legacy session decoding stays private to the xAI continuation owner.
+        ("crates/providers/xai", Some("provider/continuation.rs"), Item::Mod(module)) => {
+            module.ident == "tests"
+                && module.content.is_some()
+                && matches!(module.vis, syn::Visibility::Inherited)
+        }
         // These owner-local tests cover redacted export data and decoder diagnostics
         // without exporting wire internals or trace mutation APIs.
         ("crates/gateway-api", Some("admin/accounts/wire.rs"), Item::Mod(module)) => {

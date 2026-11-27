@@ -891,6 +891,7 @@ pub struct ProviderQuota {
     pub paused_windows: Vec<String>,
     /// 上游额度响应明确提供的套餐，可用于补全账号展示。
     pub plan_type: Option<String>,
+    pub plan_type_display: Option<String>,
     pub observed_at: Option<DateTime<Utc>>,
     pub refresh_token_expires_at: Option<DateTime<Utc>>,
     pub windows: Vec<ProviderQuotaWindow>,
@@ -1048,6 +1049,22 @@ pub struct ConsumeProviderResetCredit {
 pub struct ProviderResetCreditResult {
     pub code: String,
     pub credit: Option<ProviderResetCredit>,
+}
+
+/// 用额度观测补齐缺失的套餐 ID，只采用与账号套餐相符的描述
+pub fn resolve_observed_plan<'a>(
+    account_plan_type: &mut Option<String>,
+    observed_type: Option<&str>,
+    observed_display: Option<&'a str>,
+) -> Option<&'a str> {
+    let observed_type = explicit_plan_type(observed_type);
+    if explicit_plan_type(account_plan_type.as_deref()).is_none() {
+        *account_plan_type = observed_type.map(str::to_owned);
+    }
+    observed_display.filter(|_| {
+        observed_type
+            .is_none_or(|id| Some(id.trim()) == account_plan_type.as_deref().map(str::trim))
+    })
 }
 
 impl ProviderQuota {

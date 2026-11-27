@@ -1,13 +1,15 @@
-use std::{net::SocketAddr, time::SystemTime};
+use std::net::SocketAddr;
 
-use super::{request::convert_request, response::ChatIdentity};
 use axum::{
     body::Bytes,
     extract::{Extension, State, connect_info::ConnectInfo},
-    http::{HeaderMap, StatusCode, header::CONTENT_ENCODING},
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
 use gateway_core::engine::execution::ClientTransport;
+use gateway_core::operation::{GenerateRequest, Operation, ProtocolPayload};
+use gateway_protocol::chat_completions::{CHAT_PROTOCOL, parse_request};
+use serde_json::Value;
 
 use crate::ApiState;
 use crate::openai::{
@@ -15,8 +17,9 @@ use crate::openai::{
     encoding::HttpResponseFormat,
     error::{gateway_error_response, protocol_error_response, runtime_unavailable_response},
     responses::{
-        collect_execution_response_as, decode_object_with_headers, decompress_request_body_limit,
-        request_client_context, stream_execution_response_as,
+        DecodedResponsesRequest, OpenAiRequestHeaders, ProtocolError, ProtocolErrorBody,
+        collect_execution_response_as, decompress_request_body_limit, request_client_context,
+        stream_execution_response_as,
     },
 };
 
@@ -42,22 +45,40 @@ pub(crate) async fn chat_completions(
             return protocol_error_response(StatusCode::BAD_REQUEST, error.protocol_body());
         }
     };
-    let chat = match convert_request(&body) {
-        Ok(chat) => chat,
+    let chat = match parse_request(&body) {
+        Ok(body) => body,
         Err(error) => {
-            return protocol_error_response(StatusCode::BAD_REQUEST, error.protocol_body());
+            return protocol_error_response(
+                StatusCode::BAD_REQUEST,
+                ProtocolErrorBody {
+                    error: ProtocolError {
+                        kind: "invalid_request_error",
+                        code: error.code(),
+                        message: error.to_string(),
+                        param: error.parameter().map(str::to_owned),
+                    },
+                },
+            );
         }
     };
-    let mut decoded_headers = headers.clone();
-    decoded_headers.remove(CONTENT_ENCODING);
-    let decoded = match decode_object_with_headers(chat.body, &decoded_headers) {
-        Ok(decoded) => decoded,
-        Err(error) => {
-            return protocol_error_response(StatusCode::BAD_REQUEST, error.protocol_body());
-        }
-    };
-    let streaming = decoded.metadata().stream();
-    let requested_model = decoded.metadata().requested_model().to_owned();
+    let requested_model = chat["model"].as_str().unwrap_or_default().to_owned();
+    let streaming = chat.get("stream").and_then(Value::as_bool).unwrap_or(false);
+    let context = OpenAiRequestHeaders::from_headers(&headers).session_context();
+    let payload =
+        match ProtocolPayload::from_json_bytes(CHAT_PROTOCOL, Bytes::copy_from_slice(&body)) {
+            Ok(payload) => payload.with_context(context),
+            Err(_) => {
+                return protocol_error_response(
+                    StatusCode::BAD_REQUEST,
+                    crate::openai::responses::RequestDecodeError::ExpectedObject.protocol_body(),
+                );
+            }
+        };
+    let decoded = DecodedResponsesRequest::from_protocol_operation(
+        Operation::Generate(GenerateRequest::from_protocol_payload(payload)),
+        requested_model,
+        streaming,
+    );
     let (client_ip, user_agent) = request_client_context(
         &headers,
         connect_info.map(|Extension(ConnectInfo(address))| address),
@@ -92,18 +113,7 @@ pub(crate) async fn chat_completions(
     }), headers.iter().map(|(name, value)| (name.as_str(), value.as_bytes())));
     trace.capture("client.request.body", &body);
     let request_id = started.request_id;
-    let format = HttpResponseFormat::Chat {
-        include_usage: chat.include_usage,
-        identity: ChatIdentity {
-            id: format!("chatcmpl-{}", request_id.as_str()),
-            created: started
-                .created_at
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs(),
-            model: requested_model,
-        },
-    };
+    let format = HttpResponseFormat::Chat;
     let response = if streaming {
         stream_execution_response_as(started.session, guard, format).await
     } else {

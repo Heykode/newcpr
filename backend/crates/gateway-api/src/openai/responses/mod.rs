@@ -12,14 +12,13 @@ pub(crate) use http::responses;
 pub(super) use http::{PendingExecution, request_client_context};
 pub use http::{collect_execution_response, stream_execution_response};
 pub(in crate::openai) use http::{collect_execution_response_as, stream_execution_response_as};
+pub(in crate::openai) use request::decompress_request_body_limit;
 pub(crate) use request::passthrough_request_headers;
 pub use request::{
     ContinuationIntent, DecodedResponsesRequest, OpenAiRequestHeaders, ResponsesRequestMetadata,
     decode_request_with_headers,
 };
-pub(in crate::openai) use request::{decode_object_with_headers, decompress_request_body_limit};
 pub use response::OpenAiResponsesEncoder;
-pub(in crate::openai) use response::collect_response;
 pub(crate) use websocket::responses_websocket;
 pub use websocket::{ResponseCreateFrameError, decode_response_create_with_context};
 
@@ -38,47 +37,7 @@ pub(super) fn response_connection_options(headers: &[ProviderResponseHeader]) ->
 }
 
 pub(super) fn response_header_is_forwardable(name: &str, connection_options: &[String]) -> bool {
-    let name = name.trim().to_ascii_lowercase();
-    if connection_options
-        .iter()
-        .any(|option| option.eq_ignore_ascii_case(&name))
-        || name.starts_with("sec-websocket-")
-    {
-        return false;
-    }
-
-    !matches!(
-        name.as_str(),
-        "connection"
-            | "keep-alive"
-            | "proxy-connection"
-            | "te"
-            | "trailer"
-            | "transfer-encoding"
-            | "upgrade"
-            | "content-length"
-            | "content-type"
-            | "content-encoding"
-            | "authorization"
-            | "x-api-key"
-            | "www-authenticate"
-            | "authentication-info"
-            | "proxy-authenticate"
-            | "proxy-authorization"
-            | "proxy-authentication-info"
-            | "cookie"
-            | "cookie2"
-            | "set-cookie"
-            | "set-cookie2"
-            | "chatgpt-account-id"
-            | "chatgpt-organization-id"
-            | "chatgpt-org-id"
-            | "chatgpt-project-id"
-            | "openai-organization"
-            | "openai-project"
-            | "x-openai-organization"
-            | "x-openai-project"
-            | "x-codex-installation-id"
-            | "x-codex-turn-metadata"
-    )
+    gateway_protocol::http::response_header_is_forwardable(name, connection_options)
+        && !gateway_protocol::openai::is_private_response_header(name)
+        && !name.trim().eq_ignore_ascii_case("x-goog-api-key")
 }

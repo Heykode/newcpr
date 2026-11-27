@@ -1,4 +1,4 @@
-//! Native execution fixture for the unmodified upstream Chat protocol tests.
+//! API lifecycle fixture accepting already translated Chat wire from Core.
 
 use std::sync::{
     Arc, Mutex,

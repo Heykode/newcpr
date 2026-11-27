@@ -21,6 +21,17 @@ async fn native_upgrade_preserves_every_existing_setting_and_defaults_sharing_of
             .into(),
         ..sqlx::migrate::Migrator::DEFAULT
     };
+    // This invariant belongs to the 0101/0102 native-platform upgrade.
+    // Current runtime reads below use the latest schema after this assertion.
+    let native_upgrade = sqlx::migrate::Migrator {
+        migrations: super::TEST_MIGRATOR
+            .iter()
+            .filter(|m| m.version <= 102)
+            .cloned()
+            .collect::<Vec<_>>()
+            .into(),
+        ..sqlx::migrate::Migrator::DEFAULT
+    };
     for mode in ["strict", "preferred", "relaxed"] {
         let Some(db) = TestDatabase::create_with_migrator("native_upgrade", &old).await else {
             return;
@@ -39,7 +50,7 @@ async fn native_upgrade_preserves_every_existing_setting_and_defaults_sharing_of
                 .fetch_one(&db.pool)
                 .await
                 .unwrap();
-        super::TEST_MIGRATOR.run(&db.pool).await.unwrap();
+        native_upgrade.run(&db.pool).await.unwrap();
         let after: Value =
             sqlx::query_scalar("select to_jsonb(s) from runtime_settings s where id=1")
                 .fetch_one(&db.pool)
@@ -73,19 +84,20 @@ async fn native_upgrade_preserves_every_existing_setting_and_defaults_sharing_of
             Some(json!({"enabled":false,"sharePool":false,"shareQuota":false,"sharePlans":false}))
         );
         assert_eq!(key_after, key_before);
-        let snapshot = PgRuntimeSnapshotRepository::new(db.pool.clone())
-            .load_runtime_snapshot()
-            .await
-            .unwrap();
-        assert_eq!(snapshot.settings.account_affinity.as_str(), mode);
-        assert_eq!(snapshot.settings.session_affinity_ttl_hours, 37);
-        super::TEST_MIGRATOR.run(&db.pool).await.unwrap();
+        native_upgrade.run(&db.pool).await.unwrap();
         let repeated: Value =
             sqlx::query_scalar("select to_jsonb(s) from runtime_settings s where id=1")
                 .fetch_one(&db.pool)
                 .await
                 .unwrap();
         assert_eq!(repeated, after);
+        super::TEST_MIGRATOR.run(&db.pool).await.unwrap();
+        let snapshot = PgRuntimeSnapshotRepository::new(db.pool.clone())
+            .load_runtime_snapshot()
+            .await
+            .unwrap();
+        assert_eq!(snapshot.settings.account_affinity.as_str(), mode);
+        assert_eq!(snapshot.settings.session_affinity_ttl_hours, 37);
         db.close().await;
     }
 }

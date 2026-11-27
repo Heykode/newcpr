@@ -23,14 +23,15 @@ impl AntigravityProvider {
         request: ProviderRequest,
         ctx: AttemptContext,
     ) -> Result<ProviderStream, ProviderError> {
-        if !matches!(
-            request.operation().protocol(),
-            GENAI_PROTOCOL
-                | "token-count"
-                | gateway_protocol::openai::OPENAI_PROTOCOL
-                | gateway_protocol::anthropic::ANTHROPIC_PROTOCOL
-        ) {
-            return Err(unsent(Kind::Unsupported));
+        match request.operation() {
+            Operation::Generate(_)
+                if matches!(
+                    request.operation().protocol(),
+                    GENAI_PROTOCOL | gateway_protocol::chat_completions::CHAT_PROTOCOL
+                ) => {}
+            Operation::CountTokens(count)
+                if matches!(count.payload().protocol(), GENAI_PROTOCOL | "token-count") => {}
+            _ => return Err(unsent(Kind::Unsupported)),
         }
         let model = request
             .candidate()
@@ -40,7 +41,7 @@ impl AntigravityProvider {
         let started = Instant::now();
         let affinity =
             super::affinity::session_key(request.operation(), ctx.client_api_key_ref(), &model);
-        let search = request.operation().requires_web_search();
+        let search = request.candidate().uses_dedicated_web_search();
         let selected = self
             .select_account(&model, &ctx, affinity.as_ref(), search)
             .await?;
@@ -65,7 +66,8 @@ impl AntigravityProvider {
                 .map_err(|_| unsent(Kind::ProviderInfrastructureUnavailable))?,
         )
         .with_credential_revision(selected.account.revision())
-        .with_selection_observation(selection);
+        .with_selection_observation(selection)
+        .with_observed_plan(selected.observed_plan);
         let cancellation = ctx.cancellation().clone();
         let deadline = ctx.deadline();
         let started_at = ctx.timing_started_at();
@@ -81,7 +83,15 @@ impl AntigravityProvider {
                 .and_then(|models| models.get(model.as_str())),
         );
         let operation = request.operation().clone();
-        let (operation, translator) = super::translation::prepare(operation)?;
+        let (operation, translator, count_translator) =
+            if matches!(operation, Operation::CountTokens(_)) {
+                let (operation, translator) = super::count::prepare(operation)?;
+                (operation, None, translator)
+            } else {
+                let (operation, translator) =
+                    super::chat::prepare(operation, &ctx, affinity.as_ref())?;
+                (operation, translator, None)
+            };
         let headers =
             crate::transport::request_headers(&operation, Vec::new(), selected.account_switch);
         if operation.protocol() != GENAI_PROTOCOL {
@@ -155,6 +165,10 @@ impl AntigravityProvider {
         };
         let stream = ProviderStream::new(metadata, Box::pin(events), selected.lease);
         let stream = match translator {
+            Some(translator) => stream.with_native_response_translator(translator),
+            None => stream,
+        };
+        let stream = match count_translator {
             Some(translator) => stream.with_native_response_translator(translator),
             None => stream,
         };

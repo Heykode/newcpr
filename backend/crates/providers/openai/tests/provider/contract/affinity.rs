@@ -64,6 +64,52 @@ async fn selection_keys(
 }
 
 #[tokio::test]
+async fn chat_preserves_explicit_account_affinity_before_target_conversion() {
+    let accounts = Arc::new(MemoryAccountStore::default());
+    create_account(&accounts, "acct_scope_old").await;
+    let bindings = Arc::new(MemorySessionAffinity::default());
+    let server = MockServer::start().await;
+    let provider =
+        provider_with_affinity_and_base_url(&accounts, Arc::clone(&bindings), server.uri());
+    for explicit_session in [false, true] {
+        let mut protocol_context = hint_context("x-session-id", "chat-root");
+        if explicit_session {
+            protocol_context.insert("session_id".into(), json!("explicit-chat-root"));
+        }
+        let native = generation(json!({"input":"hello"}), protocol_context.clone());
+        let expected = affinity(&provider, &native, "key_openai_contract").unwrap();
+        let chat = Operation::Generate(GenerateRequest::from_protocol_payload(
+            ProtocolPayload::json_object(
+                gateway_protocol::chat_completions::CHAT_PROTOCOL,
+                json!({"model":"gpt-5.4","messages":[{"role":"user","content":"hello"}]})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            )
+            .unwrap()
+            .with_context(protocol_context),
+        ));
+        let lookups = selection_keys(
+            &provider,
+            &bindings,
+            chat.clone(),
+            context("req_chat_affinity", CancellationToken::new()),
+        )
+        .await;
+        assert_eq!(
+            lookups.first(),
+            Some(&expected),
+            "Chat must use the existing account binding"
+        );
+        assert_eq!(
+            affinity(&provider, &chat, "key_openai_contract"),
+            Some(expected)
+        );
+        assert!(server.received_requests().await.unwrap().is_empty());
+    }
+}
+
+#[tokio::test]
 async fn scheduling_hint_is_stable_across_content_changes_but_keeps_legacy_migration() {
     let accounts = Arc::new(MemoryAccountStore::default());
     create_account(&accounts, "acct_scope_old").await;

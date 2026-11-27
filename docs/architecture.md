@@ -13,7 +13,7 @@ Codex Proxy RS 是单进程、单副本运行的多 Provider AI 网关，同时�
 - OpenAI、xAI 与 Antigravity 三个编译期 Provider；
 - PostgreSQL 持久化、Redis 协调状态以及 S3/R2 数据库备份。
 
-`/v1/chat/completions` 在协议层转换后共用 Responses 执行链路。系统不存在 Provider Instance 层，也不支持通过复制应用容器进行多副本
+`/v1/chat/completions` 保留原始协议参加路由，在选中 Provider 和账号后直接转换为其原生协议，返回 Chat wire。系统不存在 Provider Instance 层，也不支持通过复制应用容器进行多副本
 扩容。Client Key 限定账号分组，而不是绑定某个 Provider；一次请求的 Provider 候选由账号范围、模型
 能力和运行时健康共同决定。
 
@@ -221,6 +221,7 @@ Responses 按 Provider 声明的目录完整性编译候选。全局模型映射
 原样交给候选 Provider。OpenAI 在即时和等待选号中检查该账号自己的有效目录：按账号、
 credential revision、套餐取最近成功目录，已知缺少模型时排除。成功拉取或收到匹配 ETag 满一小时后后台复查；
 刷新通知、失败或等待期间继续保留排除，没有同身份目录才交由上游验证。
+WS 握手中的模型 ETag 只交给该连接第一次实际生成；`generate=false` 预热不消耗它，后续复用不重复确认旧 ETag。每次响应正文里的模型与 ETag 事件仍独立处理。
 人工白名单显式允许目录外模型的合同保留，健康、额度、亲和、续接归属和等待预算仍生效。
 账号目录持久化在 PostgreSQL，后台有界并发刷新；启动恢复和客户端目录读取不等待远端网络。
 Excel 模型合成来源不充当原生模型资格证据，混合目录保留分别检查。
@@ -238,13 +239,12 @@ Core 只理解 `Operation`、能力要求、Provider 候选、稳定错误和 ca
 - Responses 的业务扩展头保留原始多值字节；传输与反代请求头分类由 `gateway-protocol` 统一定义，
   API 入站与 OpenAI Provider 编码共同使用。下游链路元数据和压缩协商不跨越该边界，
   上游认证、请求画像与传输字段仍由 Provider 生成；响应方向的诊断头不受请求过滤规则影响。
-- xAI 是翻译边界。Provider 把 Grok wire 转换为 Responses wire；上游结构化错误的 message/code/type
-  可以透出，但账号指纹会先脱敏。
+- xAI 原生 Responses 保留原始 wire，Chat 使用专用转换。上游结构化错误的 message/code/type 可以透出，账号指纹先脱敏；已删除旧工具改写、自动密文恢复及压缩补偿。
 - response ID 是不透明 UTF-8 bytes，不假设 UUID、固定长度或跨 Provider 可复用。
 - 请求画像以配置为启动基线；三平台的后台OAuth、刷新、目录、额度及资料操作读取全局画像，生成请求可由下游Key覆盖。同一轮操作冻结身份，版本检查只更新对应平台的运行时发布资料，不回写 `config.yaml`。
-- Antigravity 原生 GenAI 保留 wire，HTTP 交付 owner 不为该协议插入 SSE 心跳；兼容 Responses/Chat/Messages 由 Provider 转换，Responses 生成参数直接映射 GenAI，不继承 Messages 的默认上限和推理约束。
-- Core 根据授权成员裁剪基础模型目录，再按实际型号/账号检查输出上限；强制搜索将候选限定在同时允许原型号和搜索目标的同账号、同分组。Provider 使用目录首个搜索目标，完整 JSON 经 grounding 转成来源和引用事件，计费仍按实际型号。
-- 常规 AGY 生成/计数使用服务端系统提示词，独立搜索使用固定指令；转换入口仍拒绝非 null `previous_response_id`。内部转换错误保留 source，公开提示不泄露原始内容。
+- Antigravity 原生 GenAI 保留 wire，不插入网关 SSE 心跳；Chat 在选号后直转 GenAI。Responses/Messages 转换已退役，当前内置 OAuth 账号没有 Messages 执行目标。
+- Core 根据授权成员裁剪基础模型目录，再按实际型号/账号检查输出上限；强制搜索将候选限定在同时允许原型号和搜索目标的同账号、同分组。基础模型组的非流式单一搜索工具请求可用任一获准具体成员证明资格，由 Core 合并同账号搜索候选并标记 `dedicated_web_search`；AGY 执行器消费该标记，显式完整型号保留普通生成。完整 JSON 经 grounding 转成来源和引用事件，计费仍按实际型号。
+- AGY 生成和计数都前置平台系统提示词，并保留客户端系统指令和元数据。内部转换错误保留 source，公开提示不泄露原始内容。
 - AGY quota worker 先读取轻量版本，再按成功生成完成时间查询活动；额度文档保存同次目录确认的模型组成员，Admin/PG 用明确型号集聚合窗口 Token，整号预测与恢复继续只接受 AccountWide。
 
 ### 账号出站代理

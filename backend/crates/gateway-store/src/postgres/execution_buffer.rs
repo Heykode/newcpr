@@ -746,6 +746,14 @@ fn attempt_bytes(attempt: &AttemptRecord) -> usize {
             .upstream_model_id
             .as_ref()
             .map(|model| model.as_str()),
+        attempt
+            .observed_plan
+            .as_ref()
+            .and_then(|plan| plan.0.as_deref()),
+        attempt
+            .observed_plan
+            .as_ref()
+            .and_then(|plan| plan.1.as_deref()),
         Some(attempt.upstream_transport.as_str()),
         attempt.http_version.as_deref(),
     ]))

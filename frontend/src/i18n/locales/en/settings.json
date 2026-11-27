@@ -796,12 +796,45 @@
       "limitsHelp": "Up to 32 rules, 8 conditions per rule, and 16 values per condition, all rule text and the probe model share a 64 KiB UTF-8 limit"
     },
     "units": {
+      "days": "days",
+      "copies": "backups",
       "seconds": "seconds",
       "inSeconds": "{label} (seconds)"
     },
     "resetPriority": {
       "description": "Rank by reset times and weights of the selected windows",
       "windowHelp": "Weights control each window's relative influence; 0 ignores a window, and all zeros use the earliest valid reset time"
+    },
+    "requestOptions": {
+      "title": "Request settings",
+      "residency": "Data residency",
+      "residencyPlaceholder": "us",
+      "accountRoutingOverride": "Account routing",
+      "accountRoutingPlaceholder": "us / us_cr",
+      "residencyHelp": "Defaults to us, sends the residency header as entered, clearing the field removes the header",
+      "accountRoutingOverrideHelp": "Defaults to blank, reference values are us and us_cr, sends the routing header as entered, clearing the field removes the header",
+      "description": "Configure parameters sent to the upstream provider",
+      "guardian": "Use the dedicated review model",
+      "guardianHelp": "Prefer codex-auto-review for synchronous reviews; use the requested model when disabled or unavailable."
+    },
+    "websocketPool": {
+      "title": "Connection pool",
+      "description": "Manage upstream connection timing and reuse",
+      "maxAgeMs": "Maximum lifetime",
+      "fastPathBudgetMs": "Connection wait budget",
+      "idleTimeoutMs": "Idle recycle timeout",
+      "streamIdleTimeoutMs": "Stream idle timeout",
+      "maxAgeMsHelp": "Maximum lifetime of an upstream WebSocket connection, default 3300000 ms (55 minutes), must be positive\n\nExpired connections stop being reused after active responses finish\n\nChanges apply to new connections, existing connections keep their original lifetime",
+      "fastPathBudgetMsHelp": "How long requests that allow HTTP fallback wait for a WebSocket connection, default 800 ms, range 1–15000 ms\n\nWhen the budget expires, the request uses HTTP/SSE while the opening continues in the background\n\nA larger budget allows more time on slow networks but delays fallback, new requests use the new value",
+      "idleTimeoutMsHelp": "Allowed idle time after a connection returns to the pool, default 300000 ms (5 minutes), must be positive\n\nOnly idle connections without an active client WebSocket binding are recycled, Ping/Pong does not reset the timer\n\nChanges apply to new connections, existing connections keep their original timeout",
+      "streamIdleTimeoutMsHelp": "Maximum wait for the next upstream business message, default 300000 ms (5 minutes), 0 also uses this default\n\nBusiness messages reset the timer, Ping/Pong does not, a timeout aborts the upstream response and closes the connection\n\nNew requests and the next WebSocket turn use the new value, active turns keep the previous value",
+      "invalidPositive": "Enter a positive integer",
+      "invalidBudget": "Enter an integer from 1 to 15000",
+      "invalidTimeout": "Enter a non-negative integer",
+      "accountOpenings": "Each account limits simultaneous connection attempts by its effective concurrency. Slots are released on success, failure or cancellation. Established connections do not occupy these slots.",
+      "enabled": "Enable WebSocket connection pooling",
+      "unit": "Unit: milliseconds",
+      "invalidSettings": "Lifetime and idle collection must be positive integers, connection wait must be 1–15000 ms, and stream idle timeout must be a nonnegative integer."
     }
   }
 }

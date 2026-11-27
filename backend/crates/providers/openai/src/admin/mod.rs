@@ -375,8 +375,8 @@ impl ProviderAdmin for OpenAiAdminProvider {
         Ok(view)
     }
 
-    fn plan_type_display(&self, plan_type: &str) -> String {
-        plans::display_name(plan_type).to_owned()
+    fn plan_type_display(&self, plan_type: &str) -> Option<String> {
+        Some(plans::display_name(plan_type).to_owned())
     }
 
     fn plan_type_aliases(&self, plan_type: &str) -> Option<Vec<String>> {
@@ -1395,6 +1395,7 @@ fn account_matches_record(account: &ProviderAccount, record: &AccountRecord) -> 
 fn empty_quota() -> ProviderQuota {
     ProviderQuota {
         paused_windows: Vec::new(),
+        plan_type_display: None,
         plan_type: None,
         observed_at: None,
         refresh_token_expires_at: None,
@@ -1469,6 +1470,7 @@ fn project_quota_snapshot(snapshot: CodexAccountQuotaSnapshot) -> ProviderQuota 
     let limit_reached = quota_windows_limit_reached(&windows);
     ProviderQuota {
         paused_windows: Vec::new(),
+        plan_type_display: None,
         plan_type: snapshot.plan_type().map(str::to_owned),
         observed_at: Some(DateTime::<Utc>::from(snapshot.observed_at())),
         refresh_token_expires_at: None,
