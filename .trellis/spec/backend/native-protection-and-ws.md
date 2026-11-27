@@ -118,7 +118,8 @@
    owner lookup, including forced keys and egress routing. Changed values cannot
    reuse an old exact connection; unchanged values preserve normal reuse.
    Preserve empty and repeated values; changing only the header name is also a different identity.
-   Handshake models ETag is delivered only on the first actual generation. Warmup
+   With active privacy rules, the preliminary egress lookup may use a unique scoped response owner. Physical checkout still matches the final exclusion headers.
+   Handshake models ETag is delivered only on the first actual generation, using `generate` from the projected upstream frame. Warmup
    preserves the pooled ETag without delivering it; later reuse cannot reconfirm it.
 5. Good: peer rejection while uploading is observed promptly. Base: small payload
    stays below the configured compression threshold. Bad: replay after metadata.

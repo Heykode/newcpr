@@ -22,11 +22,11 @@
 | 编号 | 接入及验收范围 |
 | --- | --- |
 | E01 | OpenAI 最终 opening headers→pool/state.rs→Eq/Hash/精确归属/出口诊断。两种排除头名称和全部值参与连接身份；变化后精确续接沿既有 ReplayRequired→previous_response_not_found 要求完整重放，不能复用旧 socket。保留账号、线程、凭据、下游 owner、出口和物理容量。 |
-| E02 | client_sse.rs→coordinator.rs 将实际 generate 标记传给 exchange/stream.rs。预热仅去掉本次交付副本 ETag；首次生成去掉池内副本 ETag，当前交付保留。响应正文和 turn-state 仍按轮次处理。ETag 回归包含 0/2 次预热及各 40 轮复用。 |
+| E02 | client_sse.rs 完成正文与隐私规则投影后，response_create_opening 冻结出站 generate 标记，经 coordinator.rs 传给 exchange/stream.rs。预热仅去掉本次交付副本 ETag；首次生成去掉池内副本 ETag，当前交付保留。响应正文和 turn-state 仍按轮次处理。ETag 回归包含 0/2 次预热及各 40 轮复用。 |
 | E03 | API GenAI 解码生成 stream 上下文→protocol::is_standalone_web_search→Core Operation→RuntimeSnapshot::plan_inner→ProviderCandidate→AGY execution。仅基础模型组、非流式、唯一 googleSearch/google_search 对象、没有 thinkingConfig 可免档位；同账号须同时拥有获准具体成员和搜索目标。显式型号保持 agent，选定搜索候选才使用 web_search。无搜索资格、分组拒绝、非法档位分别沿原 RoutingError 分类；不跨账号拼接能力、不绕过输出上限。Chat 强制搜索继续通过真实路由生成候选。 |
 | E04 | API OpenAiRequestHeaders 不再生成 context.turn_id，普通 opaque 头保留；OpenAI HTTP/WS headers 和 Live bootstrap/sideband/hangup 不额外丢弃此头。正文、client_metadata、标准 turn metadata 解析及本地身份隔离保持。入口和实际 HTTP/WS/Live 回环均检查。 |
 | E05 | Codex HTTP 压缩分支→compress_request_body→Semaphore→spawn_blocking→AbortOnDropHandle。排队取消不发送上游；实际压缩结束前许可仍由工作线程持有；错误仍为 RequestCompression，原发送状态/重试规则不变。Excel 与 Guardian sampler 免压缩分支保留。 |
-| E06 | 官方把插件 middleware 前后双解码改为可重用请求。NewCPR 没有该 middleware：Responses HTTP 在鉴权后直接 decode_request_with_headers_limit，GenAI/Chat 按现有入口单次构造请求，WS 每帧只解码一次。本次不引入插件或另建缓存；原生入口验证不被插件专属排除吞掉。 |
+| E06 | 官方把插件 middleware 前后双解码改为可重用请求。NewCPR 没有该 middleware：Responses HTTP 在鉴权后直接 decode_request_with_headers_limit，GenAI/Chat 各构造一次网关请求，WS 每帧调用一次入口解码。Chat 与固定官方版本都先解析正文校验字段，再由 from_json_bytes 解析并保留原始字节。本次不引入插件或另建缓存；原生入口验证不被插件专属排除吞掉。 |
 | E07 | README、API/架构、当前规范、release/version.yaml/notes.md 同步。published 保持为空；v3.57.1 升级计划仍为源码 v3.55.3 起的 0103/0104，已有迁移字节不变，recovery=manual。不是已核对生产或已部署的声明。 |
 | E08 | 本地 settings/index.vue 已有 RuntimeSettingsCard、OpenAiRequestSettingsCard 和独立功能卡片，请求解压上限由 RuntimeSettingsCard 的 responsesMaxDecompressedBodyBytes 承担，客户端版本卡仍在同页独立显示。官方导航卡片移动和三语言文案不机械套入不同布局，无前端运行时代码变更。 |
 
@@ -61,6 +61,13 @@
 前端运行时代码无变更，复用上一轮合格的构建和浏览器证据。隔离模拟上游测试不代表真实付费上游验证。
 
 本记录证明上述源码接入及隔离验证，不代替 GitHub 发布、验证镜像或生产部署记录。
+
+## 提交后复查
+
+- E01：本地出口选择曾用隐私改写前的排除头查找已有连接。隔离 IPv6 回环复现了每次新建出口时，即使最终握手排除头相同，连接本地的 `previous_response_id` 仍会丢失。现在先用响应 ID 和原账号、客户端、会话及出口范围定位唯一候选，再按最终握手头领取物理连接。更改最终排除头仍要求重放。此处修复的是 NewCPR 出口选择与官方排除头规则的衔接。
+- E02：固定官方版本和首次移植均在正文隐私规则执行后读取原始请求的 `generate`。隔离回环确认，规则把正式请求改成预热时会提前交付握手 ETag，反向改写会错过首次交付。现在使用实际发给上游的 `response.create` 的值。
+- OVH 在本批首次提交上分别复现上述两项失败。修复回归使用模拟上游读取实际握手头和帧，验证预热、首次生成、后续复用，以及每次新建出口下排除头相同和不同时的续接结果。
+- OpenAI Provider 整套首轮另有一条已有大帧上传用例在等待 Pong 时先读到了末帧，单跑通过。调整模拟上游的接收缓冲，并在读到首字节时一次写入错误和 Ping。保留 Pong 必须先于末帧、上传超时后仍交付原错误的断言。最终 350 项 Provider 单元测试、1369 项集成测试全部通过，workspace fmt 和 Provider 全目标、全特性 Clippy 通过。10 个变更 Rust 文件与隔离验证源码逐项哈希一致。
 
 ## 全部官方路径处置
 

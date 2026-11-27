@@ -185,7 +185,7 @@ impl CodexWebSocketPoolKey {
         self
     }
 
-    pub(super) fn matches_routing_owner(&self, other: &Self) -> bool {
+    pub(super) fn matches_routing_owner(&self, other: &Self, exclusions_may_change: bool) -> bool {
         // Exact response ownership survives a downstream reconnect. Independent
         // chains still use the full key, including the downstream lane.
         self.fedramp_routing == other.fedramp_routing
@@ -193,7 +193,8 @@ impl CodexWebSocketPoolKey {
             && self.account_id == other.account_id
             && self.client_scope == other.client_scope
             && self.conversation_id == other.conversation_id
-            && self.response_exclusions == other.response_exclusions
+            && (self.response_exclusions == other.response_exclusions
+                || (exclusions_may_change && self.installation_id == other.installation_id))
             && self.routing_affinity_id == other.routing_affinity_id
             && self
                 .routing

@@ -100,23 +100,58 @@ fn client_scope_fences_routing_owner_and_logical_connection_matches() {
         .with_downstream_connection_id("new-downstream")
         .with_egress_key("proxy");
     assert_ne!(owner, reconnected);
-    assert!(owner.matches_routing_owner(&reconnected));
+    assert!(owner.matches_routing_owner(&reconnected, false));
     assert!(owner.same_logical_connection(&reconnected));
     let excluded = reconnected
         .clone()
         .with_response_exclusions(&[("x-codex-exclude".into(), "output".into())]);
-    assert!(!owner.matches_routing_owner(&excluded));
-    assert!(!excluded.matches_routing_owner(&owner));
+    assert!(!owner.matches_routing_owner(&excluded, false));
+    assert!(!excluded.matches_routing_owner(&owner, false));
+    assert!(owner.matches_routing_owner(&excluded, true));
+    assert!(
+        !owner.matches_routing_owner(&excluded.clone().with_installation_id(Some("other")), true)
+    );
     assert!(!owner.same_logical_connection(&excluded));
     assert_ne!(owner.stable_hash(), excluded.stable_hash());
 
     for scope in ["client-key-b", ""] {
         let other = reconnected.clone().with_client_scope(scope);
-        assert!(!owner.matches_routing_owner(&other));
-        assert!(!other.matches_routing_owner(&owner));
+        assert!(!owner.matches_routing_owner(&other, false));
+        assert!(!owner.matches_routing_owner(&other, true));
+        assert!(!other.matches_routing_owner(&owner, false));
         assert!(!owner.same_logical_connection(&other));
         assert!(!other.same_logical_connection(&owner));
     }
+}
+
+#[tokio::test]
+async fn unprojected_exclusions_cannot_select_between_two_response_owners() {
+    let (pool, _) = pool(2);
+    let key = key(1);
+    let first = key
+        .clone()
+        .with_response_exclusions(&[("x-codex-exclude".into(), "first".into())]);
+    let second = key
+        .clone()
+        .with_response_exclusions(&[("x-codex-exclude".into(), "second".into())]);
+    let mut peers = Vec::new();
+    for owner in [&first, &second] {
+        let (mut connection, lease, peer) = connected(&pool, owner).await;
+        connection
+            .continuation
+            .record_completed("response-shared".to_owned());
+        lease.put(connection).await;
+        peers.push(peer);
+    }
+    assert!(
+        pool.routing_owner(&key, Some("response-shared"), true)
+            .is_none()
+    );
+    assert_eq!(
+        pool.routing_owner(&second, Some("response-shared"), false),
+        Some(second)
+    );
+    pool.shutdown().await;
 }
 
 #[tokio::test]
@@ -131,7 +166,7 @@ async fn profile_update_preserves_the_exact_response_socket() {
     lease.put(connection).await;
     for next in [key(1).with_connection_profile("profile-two"), key(1)] {
         assert_eq!(
-            pool.routing_owner(&next, Some("response-owned")),
+            pool.routing_owner(&next, Some("response-owned"), false),
             Some(owner.clone()),
         );
         match pool.acquire(&next, Some("response-owned"), false).await {
@@ -159,7 +194,7 @@ async fn client_scope_isolates_live_sockets_but_keeps_same_client_exact_owner() 
     lease.put(connection).await;
     let other = owner.clone().with_client_scope("client-key-b");
     assert!(
-        pool.routing_owner(&other, Some("response-shared"))
+        pool.routing_owner(&other, Some("response-shared"), false)
             .is_none()
     );
     assert!(matches!(
@@ -175,7 +210,7 @@ async fn client_scope_isolates_live_sockets_but_keeps_same_client_exact_owner() 
         .with_connection_profile("new-profile")
         .with_downstream_connection_id("new-downstream");
     assert_eq!(
-        pool.routing_owner(&reconnected, Some("response-shared")),
+        pool.routing_owner(&reconnected, Some("response-shared"), false),
         Some(owner)
     );
     match pool

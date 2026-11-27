@@ -974,7 +974,8 @@ impl CodexBackendClient {
         let runtime = self.egress_runtime.as_ref();
         if exact
             && let Some((pool, key)) = self.websocket_pool.as_ref().zip(original_key.as_ref())
-            && let Some(owner) = pool.routing_owner(key, request.previous_response_id())
+            && let Some(owner) =
+                pool.routing_owner(key, request.previous_response_id(), self.privacy.is_some())
             && let Some(routing) = &owner.routing
         {
             let mut selected = routing.egress.clone();
@@ -1088,7 +1089,6 @@ impl CodexBackendClient {
                 } = *route;
                 let exchange = execute_prepared_response_create_request_stream(
                     &websocket_request,
-                    request.generate(),
                     prepared,
                     context.response_control.cloned(),
                     context

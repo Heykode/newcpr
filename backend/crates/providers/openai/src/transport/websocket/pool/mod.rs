@@ -108,19 +108,22 @@ impl CodexWebSocketPool {
         &self,
         key: &CodexWebSocketPoolKey,
         response_id: Option<&str>,
+        exclusions_may_change: bool,
     ) -> Option<CodexWebSocketPoolKey> {
         let response_id = response_id?;
         let state = self.lock_state();
         if state.shutting_down || !self.effective_config().enabled {
             return None;
         }
-        state.slots.iter().find_map(|(candidate, slot)| {
-            if !candidate.matches_routing_owner(key) {
-                return None;
-            }
-            let matches = slot.latest_response_id() == Some(response_id);
-            matches.then(|| candidate.clone())
-        })
+        // 出口选择先于隐私规则。这里只定位唯一的旧出口与画像，不领取 socket；
+        // acquire 仍按最终握手排除头及 response ID 严格校验原连接。
+        let mut owners = state.slots.iter().filter_map(|(candidate, slot)| {
+            (slot.latest_response_id() == Some(response_id)
+                && candidate.matches_routing_owner(key, exclusions_may_change))
+            .then_some(candidate)
+        });
+        let owner = owners.next()?;
+        (!exclusions_may_change || owners.next().is_none()).then(|| owner.clone())
     }
 
     /// 构造连接池策略和状态；生产容量由账号运行快照提供。

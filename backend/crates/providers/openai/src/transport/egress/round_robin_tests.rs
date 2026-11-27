@@ -800,3 +800,5 @@ fn local_ws_failures_do_not_penalize_the_proxy() {
         vec![SessionProxyOutcome::NetworkFailure]
     );
 }
+
+mod projected_ws;
