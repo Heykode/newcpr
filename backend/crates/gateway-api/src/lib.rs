@@ -212,6 +212,7 @@ pub fn initialize_with_timezone(
                     axum::http::header::AUTHORIZATION,
                     axum::http::header::CONTENT_TYPE,
                     HeaderName::from_static("x-api-key"),
+                    HeaderName::from_static("x-goog-api-key"),
                     HeaderName::from_static("anthropic-version"),
                     HeaderName::from_static("anthropic-beta"),
                     request_id_header.clone(),

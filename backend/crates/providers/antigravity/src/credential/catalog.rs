@@ -13,7 +13,8 @@ use gateway_core::{
     error::{ProviderError, ProviderErrorKind as Kind},
     operation::OperationKind,
     routing::{
-        AccountModelMetadata, ModelCapabilities, ProviderModelCapabilities, UpstreamModelId,
+        AccountModelMetadata, AgentModelListing, ModelCapabilities, ProviderModelCapabilities,
+        UpstreamModelId,
     },
 };
 use std::{
@@ -191,7 +192,7 @@ impl CatalogService {
             }
             for (key, model) in catalog.models {
                 let id = UpstreamModelId::new(key).map_err(|_| unsent(Kind::Protocol))?;
-                let metadata = account_metadata(model);
+                let metadata = account_metadata(&id, model, catalog.agent_model_order.as_ref());
                 members.entry(id).or_default().extend(
                     accounts
                         .iter()
@@ -205,10 +206,7 @@ impl CatalogService {
         )
         .with_dedicated_web_search(search_models)
         .with_generation_protocol(gateway_protocol::genai::GENAI_PROTOCOL)
-        .with_translated_generation_protocols([
-            gateway_protocol::openai::OPENAI_PROTOCOL,
-            gateway_protocol::anthropic::ANTHROPIC_PROTOCOL,
-        ])
+        .with_translated_generation_protocols([gateway_protocol::chat_completions::CHAT_PROTOCOL])
         .with_upstream_feature_validation();
         let mut models = BTreeMap::new();
         for (id, metadata) in members {
@@ -313,7 +311,26 @@ impl CatalogService {
     }
 }
 
-fn account_metadata(model: Model) -> AccountModelMetadata {
+fn account_metadata(
+    id: &UpstreamModelId,
+    model: Model,
+    agent_order: Option<&BTreeMap<String, usize>>,
+) -> AccountModelMetadata {
+    let agent_listing = match agent_order {
+        None => AgentModelListing::Unspecified,
+        Some(order) => match order.get(id.as_str()) {
+            Some(&order) => AgentModelListing::Listed {
+                order,
+                display_name: if model.name.trim().is_empty() {
+                    id.as_str().to_owned()
+                } else {
+                    model.name
+                },
+            },
+            None => AgentModelListing::Hidden,
+        },
+    };
+
     let description = model
         .description
         .as_deref()
@@ -331,6 +348,7 @@ fn account_metadata(model: Model) -> AccountModelMetadata {
     // AGY 只声明一个上下文窗口，默认值与可覆盖上限都取 maxTokens
     let context_window = model.context_window.filter(|n| *n > 0);
     AccountModelMetadata {
+        agent_listing,
         description,
         context_window_tokens: context_window,
         max_context_window_tokens: context_window,

@@ -103,6 +103,7 @@ mod selection_retry;
 mod streamed_errors;
 mod timing;
 mod tls_recovery;
+mod transport;
 mod turn_affinity;
 mod turn_state;
 mod upstream_affinity;

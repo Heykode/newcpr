@@ -12,14 +12,13 @@ pub(crate) use http::responses;
 pub(super) use http::{PendingExecution, request_client_context};
 pub use http::{collect_execution_response, stream_execution_response};
 pub(in crate::openai) use http::{collect_execution_response_as, stream_execution_response_as};
+pub(in crate::openai) use request::decompress_request_body_limit;
 pub(crate) use request::passthrough_request_headers;
 pub use request::{
     ContinuationIntent, DecodedResponsesRequest, OpenAiRequestHeaders, ResponsesRequestMetadata,
     decode_request_with_headers,
 };
-pub(in crate::openai) use request::{decode_object_with_headers, decompress_request_body_limit};
 pub use response::OpenAiResponsesEncoder;
-pub(in crate::openai) use response::collect_response;
 pub(crate) use websocket::responses_websocket;
 pub use websocket::{ResponseCreateFrameError, decode_response_create_with_context};
 
@@ -61,6 +60,7 @@ pub(super) fn response_header_is_forwardable(name: &str, connection_options: &[S
             | "content-encoding"
             | "authorization"
             | "x-api-key"
+            | "x-goog-api-key"
             | "www-authenticate"
             | "authentication-info"
             | "proxy-authenticate"

@@ -72,6 +72,7 @@ pub const DONE_SSE_FRAME: &str = "data: [DONE]\n\n";
 /// 用于处理任意分块边界的增量 SSE 解码器。
 #[derive(Debug)]
 pub struct SseEventDecoder {
+    max_bytes: usize,
     pending: Vec<u8>,
     /// `pending` 中已确认不含帧分隔符的前缀长度。新数据到达时从该边界
     /// 回退分隔符最大跨界宽度继续扫描，大帧跨多个 chunk 不会被反复重扫。
@@ -85,17 +86,24 @@ pub struct SseEventDecoder {
 
 impl Default for SseEventDecoder {
     fn default() -> Self {
+        Self::with_max_event_bytes(MAX_SSE_EVENT_BUFFER_BYTES)
+    }
+}
+
+impl SseEventDecoder {
+    /// 按上游合同设置单事件缓冲上限
+    #[must_use]
+    pub fn with_max_event_bytes(max_bytes: usize) -> Self {
         Self {
+            max_bytes,
             pending: Vec::new(),
             scanned: 0,
             opaque_frame: false,
             stream_start: true,
         }
     }
-}
 
-impl SseEventDecoder {
-    /// 返回从 `consumed` 起的下一个完整帧结束位置（含分隔符），并推进扫描边界。
+    /// 返回从 `consumed` 起的下一个完整帧结束位置（含分隔符），并推进扫描边界
     fn next_frame_end(&mut self, consumed: usize) -> Option<usize> {
         // `\r\n\r\n` 分隔符可能跨 chunk 边界，扫描起点回退 3 字节。
         let from = self.scanned.saturating_sub(3).max(consumed);
@@ -128,15 +136,19 @@ impl SseEventDecoder {
         while let Some(end) = self.next_frame_end(consumed) {
             let frame = std::str::from_utf8(&self.pending[consumed..end])
                 .map_err(|error| SseError::ParseError(error.to_string()))?;
-            events.extend(parse_sse_events_inner(frame, self.stream_start)?);
+            events.extend(parse_sse_events_inner(
+                frame,
+                self.stream_start,
+                self.max_bytes,
+            )?);
             self.stream_start = false;
             consumed = end;
         }
 
         self.commit_consumed(consumed);
-        if self.pending.len() > MAX_SSE_EVENT_BUFFER_BYTES {
+        if self.pending.len() > self.max_bytes {
             return Err(SseError::BufferExceeded {
-                max_bytes: MAX_SSE_EVENT_BUFFER_BYTES,
+                max_bytes: self.max_bytes,
             });
         }
         Ok(events)
@@ -158,12 +170,14 @@ impl SseEventDecoder {
 
         while let Some(end) = self.next_frame_end(consumed) {
             let raw = self.pending[consumed..end].to_vec();
-            let events = if raw.len() > MAX_SSE_EVENT_BUFFER_BYTES {
+            let events = if raw.len() > self.max_bytes {
                 Vec::new()
             } else {
                 std::str::from_utf8(&raw)
                     .ok()
-                    .and_then(|frame| parse_sse_events_inner(frame, self.stream_start).ok())
+                    .and_then(|frame| {
+                        parse_sse_events_inner(frame, self.stream_start, self.max_bytes).ok()
+                    })
                     .unwrap_or_default()
             };
             self.stream_start = false;
@@ -172,7 +186,7 @@ impl SseEventDecoder {
         }
 
         self.commit_consumed(consumed);
-        if self.pending.len() > MAX_SSE_EVENT_BUFFER_BYTES {
+        if self.pending.len() > self.max_bytes {
             self.opaque_frame = true;
             self.flush_opaque_prefix(&mut frames);
         }
@@ -188,7 +202,7 @@ impl SseEventDecoder {
         let pending = std::mem::take(&mut self.pending);
         let frame = std::str::from_utf8(&pending)
             .map_err(|error| SseError::ParseError(error.to_string()))?;
-        let events = parse_sse_events_inner(frame, self.stream_start)?;
+        let events = parse_sse_events_inner(frame, self.stream_start, self.max_bytes)?;
         self.stream_start = false;
         Ok(events)
     }
@@ -203,12 +217,14 @@ impl SseEventDecoder {
             return Vec::new();
         }
         let raw = std::mem::take(&mut self.pending);
-        let events = if self.opaque_frame || raw.len() > MAX_SSE_EVENT_BUFFER_BYTES {
+        let events = if self.opaque_frame || raw.len() > self.max_bytes {
             Vec::new()
         } else {
             std::str::from_utf8(&raw)
                 .ok()
-                .and_then(|frame| parse_sse_events_inner(frame, self.stream_start).ok())
+                .and_then(|frame| {
+                    parse_sse_events_inner(frame, self.stream_start, self.max_bytes).ok()
+                })
                 .unwrap_or_default()
         };
         self.stream_start = false;
@@ -441,10 +457,14 @@ impl EventBuilder {
 
 /// 解析 SSE 事件流。
 pub fn parse_sse_events(input: &str) -> Result<Vec<SseEvent>, SseError> {
-    parse_sse_events_inner(input, true)
+    parse_sse_events_inner(input, true, MAX_SSE_EVENT_BUFFER_BYTES)
 }
 
-fn parse_sse_events_inner(input: &str, strip_leading_bom: bool) -> Result<Vec<SseEvent>, SseError> {
+fn parse_sse_events_inner(
+    input: &str,
+    strip_leading_bom: bool,
+    max_bytes: usize,
+) -> Result<Vec<SseEvent>, SseError> {
     let mut events = Vec::new();
     let mut builder = EventBuilder::default();
     let mut saw_sse_syntax = false;
@@ -464,7 +484,7 @@ fn parse_sse_events_inner(input: &str, strip_leading_bom: bool) -> Result<Vec<Ss
             }
             continue;
         }
-        track_event_buffer_bytes(&mut event_buffer_bytes, raw_line)?;
+        track_event_buffer_bytes(&mut event_buffer_bytes, raw_line, max_bytes)?;
         if line.starts_with(':') {
             saw_sse_syntax = true;
             continue;
@@ -544,15 +564,17 @@ fn sse_id_is_representable(value: &str) -> bool {
     sse_field_value_is_single_line(value) && !value.contains('\0')
 }
 
-fn track_event_buffer_bytes(current_bytes: &mut usize, line: &str) -> Result<(), SseError> {
+fn track_event_buffer_bytes(
+    current_bytes: &mut usize,
+    line: &str,
+    max_bytes: usize,
+) -> Result<(), SseError> {
     let line_separator_bytes = usize::from(*current_bytes != 0);
     *current_bytes = current_bytes
         .saturating_add(line_separator_bytes)
         .saturating_add(line.len());
-    if *current_bytes > MAX_SSE_EVENT_BUFFER_BYTES {
-        return Err(SseError::BufferExceeded {
-            max_bytes: MAX_SSE_EVENT_BUFFER_BYTES,
-        });
+    if *current_bytes > max_bytes {
+        return Err(SseError::BufferExceeded { max_bytes });
     }
     Ok(())
 }

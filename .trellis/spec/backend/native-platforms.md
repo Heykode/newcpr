@@ -6,7 +6,7 @@
 ## 平台与请求
 
 - Antigravity使用Google OAuth/PKCE，凭据提交仍使用本地账号身份、revision及Store事务；真实目录决定模型可用性，价格表不创建可用模型。
-- GenAI模型列表、详情、generateContent、streamGenerateContent与countTokens使用原生权限与协议；兼容Responses/Chat/Messages走同一Core生命周期。常规生成/计数由服务端系统提示词覆盖客户端系统指令；独立搜索使用固定搜索指令。转换入口拒绝非null previous_response_id。
+- GenAI模型列表、详情、generateContent、streamGenerateContent与countTokens使用原生权限与协议；Chat 使用原始协议参与路由，选中 AGY 后直接转换为 GenAI。AGY 拒绝原生 Responses 和 Messages。生成和计数都先放平台提示词，随后保留客户端系统指令、工具说明和元数据。独立搜索使用搜索提示词。
 - 思考档位先解析为目录中的实际型号再核对账号/分组权限；显式型号保留。不支持的档位不能偷偷选择别的模型。
 - 原始JSON校验后交付原始字节；SSE保留原始帧、独立usage和EOF。原生GenAI首帧前及帧间不插入网关SSE心跳，首帧前失败保留HTTP错误；其他协议保活与取消/结算仍由统一交付owner管理。
 - 管理固定账号探针可检查目录未收录型号；普通请求必须遵守账号目录和人工模型限制，两者不能共用绕过。

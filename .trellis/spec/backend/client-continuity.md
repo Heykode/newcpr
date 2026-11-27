@@ -237,30 +237,22 @@ editing prior entries.
   preserving opaque business bytes; see `protocol-compatibility.md`.
   This does not add per-request identity storage, network probes or a second
   device-generation mechanism.
-- WebSocket pool capacity is per account, across sessions, profiles, upstream
-  hosts, proxies and IPv6 routes within the process. Count idle, busy, opening
-  and closing ownership together for admission. Do not reintroduce a global
-  opening semaphore or a separate static IPv6 connection cap.
-- Publish effective account concurrency (override, otherwise the global account
-  default) from the consistent runtime snapshot after commit, including disabled
-  accounts used by diagnostics. Old request snapshots must not raise live pool
-  limits. Missing, suspended or unpublished production capacity fails closed.
-- On a capacity decrease, reclaim excess idle sockets; busy responses finish
-  before retirement. Closing sockets still consume admission capacity but do
-  not count as connections that need further retirement. Never erase a busy
-  reservation merely because its age has passed the connection lifetime.
-- A cancelled opening also retains admission capacity until its lease finishes
-  and any raced socket is destroyed, but is no longer a retained connection.
-  Repeated retirement must preserve an already-published local egress error.
-  New same-key requests wait for that ownership to end instead of subscribing
-  to the cancelled opening; existing waiters retain its original failure.
-  Do not evict another idle owner when existing retiring slots will provide the
-  requested capacity; repeated capacity polls must not progressively erase
-  unrelated continuations.
-- Resolve the exact continuation owner before selecting idle eviction victims.
-  Capacity eviction records a tombstone. Ready reusable sockets do not wait on
-  other sockets' closing handshakes. Keep closing bounded and retain ownership
-  until the underlying transport has stopped.
+- Bound simultaneous Codex WebSocket openings per account across sessions, profiles,
+  hosts and egress routes within the process. Read the effective limit from the
+  live account snapshot. Missing accounts and expired or unpublished snapshots
+  fail closed. A limit decrease applies to subsequent openings and preserves
+  existing exact owners. Ordinary request admission has its own lease.
+- An opening owns one account permit until handoff, failure or cancellation
+  completes. A pending proxy wait takes no account opening permit. Physical
+  proxy permits follow the underlying socket until destruction. Established
+  idle sockets are reclaimed by timeout, age, disconnect, explicit retirement
+  or proxy pressure. A new unrelated chain alone leaves them available for reuse.
+- Keep the exact key reserved while a cancelled opening unwinds and while its
+  socket closes. New same-key calls wait for ownership to end, and existing
+  waiters retain the original local egress failure across repeated retirement.
+  A different key can start a handshake as soon as an account permit is free.
+  Retired continuations record a tombstone. A response already generating finishes
+  before retirement. Keep physical close bounded.
 - Capacity waits inherit request cancellation and the existing optional-HTTP
   decision deadline. Shared opening and request deadlines are combined without
   resetting or double-charging the wait budget. A disabled HTTP fallback must
@@ -330,8 +322,8 @@ editing prior entries.
 | ZIP contains duplicate nested Core entries | MissingCore; never select an arbitrary entry |
 | Same revision becomes readable after a revision-query failure | Recompile and clear suspension before grace expires |
 | Older/conflicting publication is rejected | Retain the latest snapshot only within the original grace period |
-| A replacement is waiting while an owner is closing | Keep other idle continuations when pending retirement supplies capacity |
-| Account eviction races with successful opening | Keep the opening/closing slot until its socket stops |
+| An owner is closing | Fence that key until destruction and preserve unrelated continuations |
+| Account eviction races with successful opening | Close the rejected socket under its original key and release the handshake permit |
 | Capacity queue leaves less than a normal handshake budget | Foreground fallback may proceed; healthy opening does not trip the breaker |
 
 ## 5. Good / Base / Bad Cases
@@ -357,8 +349,8 @@ editing prior entries.
   non-streaming delivery, quotas, proxy separation, cancellation and backpressure.
 - API authentication, preview/save, defaults/null handling and forbidden fields.
 - Account capacity: more than sixteen independent accounts opening together,
-  atomic same-account reservation across routing keys, idle/busy/opening/closing
-  accounting, live increases/decreases, simultaneous returns, cancellation,
+  atomic same-account opening reservations across routing keys, live limit changes,
+  completed sockets beyond the opening limit, simultaneous returns, cancellation,
   bounded close/shutdown, exact-owner preservation and eviction tombstones.
 - Frontend typecheck/lint/build; never treat a missing database environment as
   evidence of successful persistence integration tests.
@@ -375,12 +367,9 @@ editing prior entries.
   before waiting for network close acknowledgement. `advance` and a single
   `yield_now` do not establish an I/O completion barrier; paused-clock automatic
   advancement can otherwise expire the server fixture before a real Close arrives.
-- Hold a close flush pending across multiple capacity polls and assert only the
-  necessary idle owner is retired. After release, assert other exact
-  continuations remain reusable.
-- Race account retirement against an already-created opening socket, assert
-  no replacement is admitted before destruction, and preserve typed local
-  failure through repeated retirement and maintenance.
+- Hold a close flush pending and verify other keys can open and reuse idle sockets.
+  Race account retirement against a successful handshake and verify only the exact
+  key waits for destruction. Preserve the original typed local failure throughout.
 - Exercise queued capacity followed by both healthy and genuinely slow/failing
   openings. Assert breaker state as well as foreground HTTP fallback timing.
 - Run both library and integration tests (`cargo test --workspace --lib --test

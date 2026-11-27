@@ -1491,6 +1491,58 @@ impl RuntimeSnapshot {
             .collect()
     }
 
+    /// 复用执行计划筛选目录来源，保留元数据供客户端投影，不按展示状态裁剪模型
+    #[must_use]
+    pub fn model_metadata_for_operation(
+        &self,
+        scope: &Arc<FrozenAccountScope>,
+        operation: &Operation,
+    ) -> Vec<super::ExecutableModelMetadata<'_>> {
+        let mut entries = Vec::new();
+        for model in self.public_models_for_scope(scope) {
+            let Ok(plan) = self.plan(
+                &model,
+                operation,
+                Arc::clone(scope),
+                &RoutingContext::default(),
+            ) else {
+                continue;
+            };
+            let mut sources = Vec::new();
+            for candidate in plan.candidates() {
+                let Some((target, capabilities)) = candidate.upstream_model().and_then(|target| {
+                    self.provider_models
+                        .get(candidate.provider())?
+                        .get_key_value(target)
+                }) else {
+                    continue;
+                };
+                if capabilities.account_metadata.is_empty() {
+                    sources.push(super::ModelMetadataSource {
+                        target,
+                        metadata: None,
+                    });
+                } else {
+                    sources.extend(capabilities.account_metadata.iter().filter_map(
+                        |(account, metadata)| {
+                            candidate
+                                .account_scope()
+                                .allows_model(account, target.as_str())
+                                .then_some(super::ModelMetadataSource {
+                                    target,
+                                    metadata: Some(metadata),
+                                })
+                        },
+                    ));
+                }
+            }
+            if !sources.is_empty() {
+                entries.push(super::ExecutableModelMetadata { model, sources });
+            }
+        }
+        entries
+    }
+
     /// 合并冻结账号范围内实际存在 Provider 的公开模型画像。
     #[must_use]
     pub fn public_model_profiles_for_scope(
@@ -1499,7 +1551,7 @@ impl RuntimeSnapshot {
     ) -> Vec<super::PublicModelProfile> {
         let mut profiles = BTreeMap::new();
         for provider in scope.provider_kinds() {
-            for profile in self.profiles_for_provider_scope(provider, scope) {
+            for profile in self.profiles_for_provider_scope(provider, scope, None) {
                 if !self.catalog_model_allowed_for_scope(provider, profile.model(), scope) {
                     continue;
                 }
@@ -1518,8 +1570,18 @@ impl RuntimeSnapshot {
         &self,
         provider: &ProviderKind,
         scope: &FrozenAccountScope,
+        protocol: Option<&str>,
     ) -> Vec<super::PublicModelProfile> {
         let mut profiles = self.public_model_profiles_for_provider(provider);
+        if let Some(protocol) = protocol {
+            profiles.retain(|profile| {
+                let target = self.mapped_model(profile.model.as_str());
+                self.provider_models
+                    .get(provider)
+                    .and_then(|models| models.get(target.as_str()))
+                    .is_some_and(|model| model.supports_generation_protocol(protocol))
+            });
+        }
         profiles.retain_mut(|profile| {
             let target = self.mapped_model(profile.model.as_str());
             let Some(group) = self.model_group(provider, &target) else {

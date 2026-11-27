@@ -17,7 +17,7 @@ use serde_json::{Map, Value, json};
 
 use crate::{
     ApiState,
-    openai::auth::{authenticate_client, client_access_error_response},
+    openai::auth::{authenticate_genai_client, client_access_error_response},
 };
 
 pub(super) const MODELS_PATH: &str = "/v1beta/models";
@@ -69,11 +69,12 @@ async fn query_response(
     model: Option<String>,
     query: ModelsQuery,
 ) -> Response {
-    let client = match authenticate_client(state.openai(), &headers) {
+    let client = match authenticate_genai_client(state.openai(), &headers) {
         Ok(client) => client,
         Err(error) => return client_access_error_response(error),
     };
-    match catalog(&client) {
+    let agent_menu = model.is_none() && super::agent_menu::uses_agent_menu(&headers);
+    match catalog(&client, agent_menu) {
         Ok(models) => match model {
             Some(model) => models
                 .into_iter()
@@ -91,7 +92,7 @@ async fn query_response(
     }
 }
 
-fn catalog(client: &AuthenticatedClient) -> Result<Vec<Value>, ()> {
+fn catalog(client: &AuthenticatedClient, agent_menu: bool) -> Result<Vec<Value>, ()> {
     let generate = Operation::Generate(
         GenerateRequest::from_protocol_payload(
             ProtocolPayload::json_object(GENAI_PROTOCOL, Map::new()).map_err(|_| ())?,
@@ -108,11 +109,22 @@ fn catalog(client: &AuthenticatedClient) -> Result<Vec<Value>, ()> {
     let snapshot = client.snapshot();
     let scope = client.policy().account_scope();
     let counted = snapshot.public_models_for_operation(scope, &count);
-    Ok(snapshot
-        .public_models_for_operation(scope, &generate)
+    let models = if agent_menu {
+        super::agent_menu::model_menu(snapshot.model_metadata_for_operation(scope, &generate))
+    } else {
+        snapshot
+            .public_models_for_operation(scope, &generate)
+            .into_iter()
+            .map(|model| {
+                let name = model.as_str().to_owned();
+                (model, name)
+            })
+            .collect()
+    };
+    Ok(models
         .into_iter()
-        .filter(|model| super::valid_segment(model.as_str()))
-        .map(|model| {
+        .filter(|(model, _)| super::valid_segment(model.as_str()))
+        .map(|(model, name)| {
             let mut methods = vec!["generateContent", "streamGenerateContent"];
             if counted.binary_search(&model).is_ok() {
                 methods.push("countTokens");
@@ -120,7 +132,7 @@ fn catalog(client: &AuthenticatedClient) -> Result<Vec<Value>, ()> {
             // 上游尚未提供完整 Gemini 元数据，未知版本与 Token 上限保持缺失
             json!({
                 "name": format!("models/{}", model.as_str()),
-                "displayName": model.as_str(),
+                "displayName": name,
                 "supportedGenerationMethods": methods,
             })
         })

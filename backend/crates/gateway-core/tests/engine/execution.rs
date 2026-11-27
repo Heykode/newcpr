@@ -1871,6 +1871,7 @@ fn client_catalog_fallback_uses_only_authorized_reasoning_members() {
                 caps().with_account_metadata(BTreeMap::from([(
                     account,
                     AccountModelMetadata {
+                        agent_listing: Default::default(),
                         context_window_tokens: Some(1000),
                         max_context_window_tokens: Some(1500),
                         image_input: true,

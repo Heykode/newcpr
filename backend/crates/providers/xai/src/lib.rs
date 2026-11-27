@@ -5,7 +5,6 @@ mod billing;
 pub mod config;
 pub mod credential;
 mod provider;
-mod reasoning_replay;
 pub mod transport;
 
 use std::path::Path;
@@ -62,8 +61,7 @@ pub use transport::{
     GrokBillingTransportError, GrokBillingTransportErrorKind, GrokBillingTransportFuture,
     GrokBillingTransportResponse, GrokCanonicalDecoder, GrokCatalogApiBackend,
     GrokCatalogCapabilities, GrokCatalogCapabilityEvidence, GrokCatalogLimits, GrokCatalogMetadata,
-    GrokCatalogModel, GrokCatalogReasoningEffort, GrokClientIdentity, GrokCompactionDecodeError,
-    GrokCompactionRequest, GrokCompactionSummaryDecoder, GrokCredentialFailure,
+    GrokCatalogModel, GrokCatalogReasoningEffort, GrokClientIdentity, GrokCredentialFailure,
     GrokCredentialFeedbackFuture, GrokDnsResolutionError, GrokDnsResolutionPlan,
     GrokDnsResolutionPolicy, GrokEndpointPolicy, GrokHeader, GrokHeaderValue,
     GrokInferenceChunkStream, GrokInferenceClientCacheStatus, GrokInferenceDnsObservation,

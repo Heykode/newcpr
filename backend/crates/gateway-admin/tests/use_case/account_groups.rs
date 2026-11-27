@@ -384,6 +384,7 @@ async fn monitor_reuses_persisted_reference_after_peer_deletion_without_ratio_ta
     let quota = ProviderQuota {
         paused_windows: Default::default(),
         credits: None,
+        plan_type_display: None,
         plan_type: Some("plus".to_owned()),
         observed_at: Some(Utc::now()),
         refresh_token_expires_at: None,
@@ -689,6 +690,7 @@ async fn monitor_updates_unused_fraction_without_relearning_from_unaligned_list_
     let mut quota = ProviderQuota {
         paused_windows: Default::default(),
         credits: None,
+        plan_type_display: None,
         plan_type: Some("plus".to_owned()),
         observed_at: Some(Utc::now()),
         refresh_token_expires_at: None,

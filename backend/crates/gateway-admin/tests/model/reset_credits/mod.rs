@@ -146,6 +146,7 @@ fn automatic_quota(
     use gateway_admin::model::provider_credentials::*;
     ProviderQuota {
         paused_windows: Default::default(),
+        plan_type_display: None,
         plan_type: None,
         observed_at: Some(now),
         refresh_token_expires_at: None,

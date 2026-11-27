@@ -270,6 +270,7 @@ const MAX_CONTINUATION_TOMBSTONES: usize = 4_096;
 
 #[derive(Default)]
 pub(super) struct WebSocketPoolState {
+    pub(super) opening_by_account: HashMap<String, usize>,
     pub(super) slots: HashMap<CodexWebSocketPoolKey, WebSocketPoolSlot>,
     pub(super) downstream_connections: HashMap<String, gateway_core::lifecycle::CancellationToken>,
     pub(super) egress_config: Option<Arc<ProviderEgressConfig>>,

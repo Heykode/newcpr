@@ -195,6 +195,63 @@ async fn quota_and_catalog_refresh_use_current_global_identity() {
 }
 
 #[tokio::test]
+async fn account_and_request_plans_use_the_desktop_description_for_every_tier() {
+    use crate::support::{context, request};
+    use gateway_core::engine::provider::Provider as _;
+
+    let server = MockServer::start().await;
+    upstream(&server, json!(1.0), Duration::ZERO).await;
+    let f = Fixture::new(&server.uri());
+    let account = f.store.primary().loaded.lock().unwrap().account.clone();
+    for (paid_id, description) in [
+        (Some("free-tier"), Some("Google's free plan")),
+        (Some("g1-pro-tier"), Some("Pro subscription")),
+        (Some("g1-ultra-tier"), Some("Ultra subscription")),
+        (Some("future-tier"), Some("A future plan")),
+        (Some("future-tier"), Some("Updated description")),
+        (Some("future-tier"), None),
+        (None, None),
+    ] {
+        let paid = paid_id.map(|id| {
+            json!({
+                "id": id, "name": "Different Google name", "description": description
+            })
+        });
+        Mock::given(path("/v1internal:loadCodeAssist"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "cloudaicompanionProject": "p",
+                "paidTier": paid,
+                "currentTier": {"id":"free-tier","description":"Current tier only"}
+            })))
+            .with_priority(1)
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        f.quota.refresh(account.id()).await.unwrap();
+        let view = f.quota.read(account.id()).await.unwrap();
+        assert_eq!(view.plan_type.as_deref(), paid_id.or(Some("free-tier")));
+        assert_eq!(view.plan_type_display.as_deref(), description);
+        let stream = f
+            .provider
+            .clone()
+            .execute(
+                request(false),
+                context(
+                    crate::profile::Selection::default()
+                        .resolve("2.34.0")
+                        .frozen(),
+                    CancellationToken::new(),
+                ),
+            )
+            .await
+            .unwrap();
+        let (id, display) = stream.metadata().observed_plan().unwrap();
+        assert_eq!(*id, view.plan_type);
+        assert_eq!(display.as_deref(), description);
+    }
+}
+
+#[tokio::test]
 async fn quota_refresh_projects_paid_plan_without_exhausting_other_models() {
     let server = MockServer::start().await;
     upstream(&server, json!(0.0), Duration::ZERO).await;
@@ -233,10 +290,14 @@ async fn quota_refresh_projects_paid_plan_without_exhausting_other_models() {
         .scheduling(std::slice::from_ref(&account), "other-model")
         .await
         .unwrap();
-    assert!(gemini[account.id()].0);
-    assert!(!claude[account.id()].0);
+    assert!(gemini[account.id()].exhausted);
+    assert!(!claude[account.id()].exhausted);
     assert_eq!(
-        claude[account.id()].1.as_ref().unwrap().remaining_rank(),
+        claude[account.id()]
+            .signals
+            .as_ref()
+            .unwrap()
+            .remaining_rank(),
         Some(8000)
     );
     {
@@ -248,8 +309,8 @@ async fn quota_refresh_projects_paid_plan_without_exhausting_other_models() {
         .scheduling(std::slice::from_ref(&account), "fixture-model")
         .await
         .unwrap();
-    assert!(!expired[account.id()].0);
-    assert!(expired[account.id()].1.is_none());
+    assert!(!expired[account.id()].exhausted);
+    assert!(expired[account.id()].signals.is_none());
 }
 
 #[tokio::test]
@@ -268,7 +329,7 @@ async fn unknown_quota_preserves_only_observed_windows_without_inventing_percent
             .scheduling(std::slice::from_ref(&account), "fixture-model")
             .await
             .unwrap()[account.id()]
-        .0
+        .exhausted
     );
 }
 
@@ -464,4 +525,73 @@ async fn peer_model_facts_keep_membership_quota_and_revision_separate() {
             .unwrap()
             .is_empty()
     );
+}
+
+#[tokio::test]
+async fn google_one_credits_require_opt_in_and_sufficient_balance() {
+    use crate::support::{context, request};
+    use futures::TryStreamExt;
+    use gateway_core::engine::provider::Provider;
+    for (balance, usable) in [("9", false), ("10", true)] {
+        let server = MockServer::start().await;
+        Mock::given(path("/v1internal:loadCodeAssist")).respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "cloudaicompanionProject":"p","paidTier":{"id":"g1-pro-tier","availableCredits":[
+                {"creditType":"GOOGLE_ONE_AI","creditAmount":balance,"minimumCreditAmountForUsage":"10"}]}
+        }))).mount(&server).await;
+        Mock::given(path("/v1internal:fetchAvailableModels")).respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "models":{"fixture-model":{"displayName":"Gemini","quotaInfo":{"remainingFraction":0,"resetTime":"2099-01-01T00:00:00Z"}}}
+        }))).mount(&server).await;
+        Mock::given(path("/v1internal:retrieveUserQuotaSummary"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"groups":[]})))
+            .mount(&server)
+            .await;
+        Mock::given(path("/v1internal:generateContent")).and(wiremock::matchers::body_partial_json(json!({"enabledCreditTypes":["GOOGLE_ONE_AI"]})))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"response":{"candidates":[{"content":{"parts":[{"text":"ok"}]},"finishReason":"STOP"}]}})))
+            .expect(u64::from(usable)).mount(&server).await;
+        let fixture = Fixture::new(&server.uri());
+        let primary = fixture.store.primary();
+        for enabled in [false, true, false] {
+            let account = {
+                let mut loaded = primary.loaded.lock().unwrap();
+                loaded.account = loaded.account.clone().with_auto_use_quota_credits(enabled);
+                loaded.account.clone()
+            };
+            fixture.quota.refresh(account.id()).await.unwrap();
+            let credits = fixture
+                .quota
+                .read(account.id())
+                .await
+                .unwrap()
+                .credits
+                .unwrap();
+            assert_eq!(credits.balance.as_deref(), Some(balance));
+            assert_eq!(credits.has_credits, usable);
+            let quota = fixture
+                .quota
+                .scheduling(std::slice::from_ref(&account), "fixture-model")
+                .await
+                .unwrap()
+                .remove(account.id())
+                .unwrap();
+            assert_eq!(quota.exhausted, !(enabled && usable));
+            let result = fixture
+                .provider
+                .clone()
+                .execute(
+                    request(false),
+                    context(
+                        crate::profile::Selection::default()
+                            .resolve("2.34.0")
+                            .frozen(),
+                        CancellationToken::new(),
+                    ),
+                )
+                .await;
+            if enabled && usable {
+                result.unwrap().try_collect::<Vec<_>>().await.unwrap();
+            } else {
+                assert!(result.is_err());
+            }
+        }
+    }
 }

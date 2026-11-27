@@ -93,7 +93,9 @@ const lastRefreshed = computed(() => props.account.quota.refreshedAtRelative
 
     <div class="grid min-h-0 gap-3">
       <AccountQuotaCredits
-        v-if="account.provider === 'openai'"
+        :editable="account.provider === 'antigravity'"
+        @account-updated="emit('accountUpdated', $event)"
+        v-if="account.provider === 'openai' || account.provider === 'antigravity'"
         :class="mobile ? 'w-full min-w-0' : 'max-sm:w-[calc(100vw-5.5rem)]'"
         :account="account"
       />

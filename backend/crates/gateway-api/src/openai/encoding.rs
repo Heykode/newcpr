@@ -6,20 +6,17 @@ use gateway_core::{
     event::ProviderEvent,
 };
 use gateway_protocol::openai::{
-    output_recovery::recover_response_output,
-    sse::{SseEventDecoder, response_failed_sse_event_with_id_and_param},
+    output_recovery::recover_response_output, sse::response_failed_sse_event_with_id_and_param,
 };
 use serde_json::{Value, json};
 
 use super::{
-    chat::response::{ChatIdentity, ChatStreamEncoder, project_response},
+    chat::delivery::{ChatEncoder, validate_response},
     error::{client_error_code, gateway_error_contract},
     responses::{OpenAiResponsesEncoder, ProtocolError, ProtocolErrorBody, ResponseEncodeError},
 };
 
 // Official chat_completions/delivery.rs distinguishes projection from framing failures.
-const CHAT_PROJECTION_ERROR: &str =
-    "The gateway could not project the upstream response to Chat Completions.";
 const CHAT_DELIVERY_ERROR: &str = "The gateway could not deliver the Chat response.";
 
 #[derive(Clone, Default)]
@@ -30,10 +27,7 @@ pub(in crate::openai) enum HttpResponseFormat {
     MessageTokenCount,
     GenAi,
     GenAiTokenCount,
-    Chat {
-        include_usage: bool,
-        identity: ChatIdentity,
-    },
+    Chat,
 }
 
 impl HttpResponseFormat {
@@ -44,9 +38,7 @@ impl HttpResponseFormat {
 
 pub(in crate::openai) struct HttpResponseEncoder {
     responses: OpenAiResponsesEncoder,
-    chat: Option<ChatStreamEncoder>,
-    chat_identity: Option<ChatIdentity>,
-    decoder: SseEventDecoder,
+    chat: Option<ChatEncoder>,
     messages: Option<super::messages_response::MessagesEncoder>,
     token_count: bool,
     genai: Option<super::genai_response::GenAiEncoder>,
@@ -56,26 +48,7 @@ impl HttpResponseEncoder {
     pub(in crate::openai) fn new(format: &HttpResponseFormat) -> Self {
         Self {
             responses: OpenAiResponsesEncoder::new(),
-            chat: match format {
-                HttpResponseFormat::Responses
-                | HttpResponseFormat::Messages
-                | HttpResponseFormat::MessageTokenCount
-                | HttpResponseFormat::GenAi
-                | HttpResponseFormat::GenAiTokenCount => None,
-                HttpResponseFormat::Chat {
-                    include_usage,
-                    identity,
-                } => Some(ChatStreamEncoder::new(identity.clone(), *include_usage)),
-            },
-            chat_identity: match format {
-                HttpResponseFormat::Chat { identity, .. } => Some(identity.clone()),
-                HttpResponseFormat::Responses
-                | HttpResponseFormat::Messages
-                | HttpResponseFormat::MessageTokenCount
-                | HttpResponseFormat::GenAi
-                | HttpResponseFormat::GenAiTokenCount => None,
-            },
-            decoder: SseEventDecoder::default(),
+            chat: matches!(format, HttpResponseFormat::Chat).then(ChatEncoder::default),
             messages: format
                 .is_messages()
                 .then(super::messages_response::MessagesEncoder::default),
@@ -127,25 +100,10 @@ impl HttpResponseEncoder {
         if let Some(messages) = self.messages.as_mut() {
             return Ok(messages.push_sse(event));
         }
-        let Some(chat) = self.chat.as_mut() else {
-            return Ok(self.responses.push_sse(event));
-        };
-        let mut output = Vec::new();
-        for bytes in self.responses.push_sse(event) {
-            for event in self
-                .decoder
-                .push(&bytes)
-                .map_err(|_| invalid_chat_response())?
-            {
-                let data =
-                    serde_json::from_str(&event.data).map_err(|_| invalid_chat_response())?;
-                output.extend(
-                    chat.push_event(event.event.as_deref(), &data)
-                        .map_err(HttpEncodeError::Chat)?,
-                );
-            }
-        }
-        Ok(output)
+        Ok(match self.chat.as_mut() {
+            Some(chat) => chat.push(event),
+            None => self.responses.push_sse(event),
+        })
     }
 
     pub(in crate::openai) fn is_completed(&self) -> bool {
@@ -155,10 +113,9 @@ impl HttpResponseEncoder {
         if let Some(messages) = &self.messages {
             return messages.is_completed();
         }
-        self.chat.as_ref().map_or_else(
-            || self.responses.is_completed(),
-            ChatStreamEncoder::is_completed,
-        )
+        self.chat
+            .as_ref()
+            .map_or_else(|| self.responses.is_completed(), |chat| chat.completed)
     }
 
     pub(in crate::openai) fn has_wire_failure(&self) -> bool {
@@ -168,28 +125,14 @@ impl HttpResponseEncoder {
         if let Some(messages) = &self.messages {
             return messages.has_wire_failure();
         }
-        self.chat.as_ref().map_or_else(
-            || self.responses.has_wire_failure(),
-            ChatStreamEncoder::has_wire_failure,
-        )
+        self.chat
+            .as_ref()
+            .map_or_else(|| self.responses.has_wire_failure(), |chat| chat.failed)
     }
 
     pub(in crate::openai) fn finish_sse(&mut self) -> Result<(), HttpEncodeError> {
         if let Some(genai) = self.genai.as_mut() {
             return genai.finish().map_err(HttpEncodeError::Responses);
-        }
-        if let Some(chat) = self.chat.as_mut() {
-            for event in self.decoder.finish().map_err(|_| invalid_chat_response())? {
-                let data =
-                    serde_json::from_str(&event.data).map_err(|_| invalid_chat_response())?;
-                if !chat
-                    .push_event(event.event.as_deref(), &data)
-                    .map_err(HttpEncodeError::Chat)?
-                    .is_empty()
-                {
-                    return Err(invalid_chat_response());
-                }
-            }
         }
         Ok(())
     }
@@ -206,10 +149,36 @@ impl HttpResponseEncoder {
             return super::messages_response::collect(events, self.token_count)
                 .map_err(HttpEncodeError::Responses);
         }
-        if let Some(identity) = &self.chat_identity {
-            let response =
-                super::responses::collect_response(events).map_err(HttpEncodeError::Responses)?;
-            return project_response(&response, identity).map_err(HttpEncodeError::Chat);
+        if self.chat.is_some() {
+            let mut accumulator = gateway_protocol::chat_completions::ChatAccumulator::default();
+            let mut raw = None;
+            let mut chunks = false;
+            for wire in events
+                .iter()
+                .filter_map(ProviderEvent::wire_event)
+                .filter(|wire| wire.protocol() == gateway_protocol::chat_completions::CHAT_PROTOCOL)
+            {
+                if let Some(body) = wire.raw_json_body() {
+                    if chunks || raw.replace(body).is_some() {
+                        return Err(HttpEncodeError::ChatDelivery);
+                    }
+                } else {
+                    if raw.is_some() {
+                        return Err(HttpEncodeError::ChatDelivery);
+                    }
+                    chunks = true;
+                    accumulator
+                        .push(wire.data())
+                        .map_err(|_| HttpEncodeError::ChatDelivery)?;
+                }
+            }
+            if let Some(raw) = raw {
+                validate_response(raw).map_err(|_| HttpEncodeError::ChatDelivery)?;
+                return serde_json::from_slice(raw).map_err(|_| HttpEncodeError::ChatDelivery);
+            }
+            return accumulator
+                .finish()
+                .map_err(|_| HttpEncodeError::ChatDelivery);
         }
         for event in events {
             self.responses.observe_event(event);
@@ -275,14 +244,9 @@ fn chat_sse_frame(value: Value) -> Bytes {
     Bytes::from(format!("data: {value}\n\n"))
 }
 
-fn invalid_chat_response() -> HttpEncodeError {
-    HttpEncodeError::ChatDelivery
-}
-
 #[derive(Debug)]
 pub(in crate::openai) enum HttpEncodeError {
     Responses(ResponseEncodeError),
-    Chat(ProtocolErrorBody),
     ChatDelivery,
 }
 
@@ -290,14 +254,6 @@ impl HttpEncodeError {
     pub(in crate::openai) fn protocol_body(&self) -> ProtocolErrorBody {
         match self {
             Self::Responses(error) => error.protocol_body(),
-            Self::Chat(error) => ProtocolErrorBody {
-                error: ProtocolError {
-                    kind: "server_error",
-                    code: error.error.code,
-                    message: CHAT_PROJECTION_ERROR.to_owned(),
-                    param: None,
-                },
-            },
             Self::ChatDelivery => ProtocolErrorBody {
                 error: ProtocolError {
                     kind: "server_error",
@@ -311,7 +267,6 @@ impl HttpEncodeError {
 
     pub(in crate::openai) fn gateway_error(&self) -> GatewayError {
         let (message, code) = match self {
-            Self::Chat(error) => (CHAT_PROJECTION_ERROR, error.error.code),
             Self::ChatDelivery => (CHAT_DELIVERY_ERROR, "invalid_upstream_response"),
             Self::Responses(_) => (
                 "upstream response could not be converted to the requested format",

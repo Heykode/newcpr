@@ -61,6 +61,7 @@ pub(super) fn quota(windows: Vec<ProviderQuotaWindow>) -> ProviderQuota {
     ProviderQuota {
         paused_windows: Default::default(),
         credits: None,
+        plan_type_display: None,
         plan_type: None,
         observed_at: Some(now()),
         refresh_token_expires_at: None,

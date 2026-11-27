@@ -522,17 +522,6 @@ pub(super) fn decode_request_inner(
     decode_request_object(object, request_headers, RequestDecodeSource::Http)
 }
 
-pub(in crate::openai) fn decode_object_with_headers(
-    object: Map<String, Value>,
-    headers: &HeaderMap,
-) -> Result<DecodedResponsesRequest, RequestDecodeError> {
-    decode_request_object(
-        object,
-        &OpenAiRequestHeaders::from_headers(headers),
-        RequestDecodeSource::Http,
-    )
-}
-
 /// 解码已解析的顶层 object；按下游传输来源恢复连接级协议上下文。
 pub(super) fn decode_request_object(
     mut object: Map<String, Value>,

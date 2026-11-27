@@ -1768,6 +1768,7 @@ fn reasoning_groups_resolve_before_account_and_group_model_policies() {
                         (
                             declared.clone(),
                             AccountModelMetadata {
+                                agent_listing: Default::default(),
                                 context_window_tokens: Some(1000),
                                 max_context_window_tokens: Some(1500),
                                 image_input: true,
@@ -1792,6 +1793,7 @@ fn reasoning_groups_resolve_before_account_and_group_model_policies() {
                     (
                         high_only.clone(),
                         AccountModelMetadata {
+                            agent_listing: Default::default(),
                             context_window_tokens: Some(800),
                             max_context_window_tokens: Some(1800),
                             image_input: true,

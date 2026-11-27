@@ -38,7 +38,10 @@ async fn renewed_auth_opens_new_chains_but_preserves_the_exact_inflight_owner() 
         first.close(None).await.unwrap();
         second.close(None).await.unwrap();
     });
-    let pool = Arc::new(CodexWebSocketPool::new(Duration::from_mins(1)));
+    let pool = Arc::new(
+        CodexWebSocketPool::new(Duration::from_mins(1))
+            .with_account_concurrency(account_capacity(&[("chatgpt-account", 1)])),
+    );
     let backend = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         format!("http://{addr}"),

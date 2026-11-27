@@ -3,17 +3,6 @@
 use super::*;
 use gateway_core::error::ProviderDiagnostic;
 
-pub(super) fn is_invalid_encrypted_content_failure(error: &GrokInferenceTransportError) -> bool {
-    error.kind() == GrokInferenceTransportErrorKind::InvalidRequest
-        && error.status() == Some(400)
-        && error.upstream_code().is_some_and(|code| {
-            matches!(
-                code.as_str(),
-                REASONING_DECODE_FAILED_CODE | "invalid_encrypted_content"
-            )
-        })
-}
-
 pub(super) enum InferenceBoundary {
     Response(Result<crate::transport::GrokInferenceResponse, GrokInferenceTransportError>),
     Cancelled,
@@ -368,18 +357,29 @@ pub(super) fn ensure_sent_context(context: &AttemptContext) -> Result<(), Provid
 
 pub(super) fn map_request_error(error: GrokRequestEncodeError) -> ProviderError {
     let kind = match error {
-        GrokRequestEncodeError::InvalidProtocolPayload
-        | GrokRequestEncodeError::InvalidRequestNormalization
-        | GrokRequestEncodeError::InvalidRequestField { .. } => ProviderErrorKind::InvalidRequest,
+        GrokRequestEncodeError::Chat(error) => {
+            return ProviderError::invalid_request(error.safe_message())
+                .with_request_details(error.code(), error.parameter())
+                .with_source(error);
+        }
+        GrokRequestEncodeError::InvalidProtocolPayload => ProviderErrorKind::InvalidRequest,
+        GrokRequestEncodeError::UnsupportedPrewarm => ProviderErrorKind::Unsupported,
         GrokRequestEncodeError::Serialization => ProviderErrorKind::Protocol,
     };
     let provider_error = provider_error(kind, UpstreamSendState::NotSent);
-    if kind != ProviderErrorKind::InvalidRequest {
+    if !matches!(
+        kind,
+        ProviderErrorKind::InvalidRequest | ProviderErrorKind::Unsupported
+    ) {
         return provider_error;
     }
+    let code = match error {
+        GrokRequestEncodeError::UnsupportedPrewarm => "unsupported_prewarm",
+        _ => "invalid_request_normalization",
+    };
     provider_error.with_client_visible_upstream_error(ClientVisibleUpstreamError::new(
         error.to_string(),
-        Some("invalid_request_normalization".to_owned()),
+        Some(code.to_owned()),
         Some("invalid_request_error".to_owned()),
     ))
 }

@@ -14,21 +14,52 @@ use url::Url;
 use super::failure::{network, sent, successful, unsent};
 use super::headers::RequestHeader;
 use crate::profile::ClientProfile;
+
 // Desktop 独立搜索使用固定任务指令，常规生成与计数使用账号画像
 static SEARCH_INSTRUCTION: std::sync::LazyLock<&RawValue> = std::sync::LazyLock::new(|| {
     serde_json::from_str(r#"{"parts":[{"text":"Search the web for the query and return a concise answer grounded in the sources."}]}"#).expect("valid static search instruction")
 });
 
+const GENERATION_TIMEOUT: Duration = Duration::from_secs(600);
 const MAX_CONTROL_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
 
 #[derive(Serialize, Deserialize)]
 pub(crate) struct Catalog {
     pub(crate) project: String,
+    #[serde(
+        rename = "agentModelOrder",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub(crate) agent_model_order: Option<BTreeMap<String, usize>>,
     #[serde(rename = "webSearchModelIds", default)]
     pub(crate) web_search_models: Vec<String>,
     pub(crate) models: BTreeMap<String, Model>,
     #[serde(rename = "groupedModels", default)]
     pub(crate) grouped_models: serde_json::Value,
+}
+
+#[derive(Deserialize)]
+struct AgentModelSort {
+    #[serde(default)]
+    groups: Vec<AgentModelSortGroup>,
+}
+
+#[derive(Deserialize)]
+struct AgentModelSortGroup {
+    #[serde(rename = "modelIds", default)]
+    model_ids: Vec<String>,
+}
+
+fn agent_model_order(sorts: Vec<AgentModelSort>) -> BTreeMap<String, usize> {
+    let mut order = BTreeMap::new();
+    for group in sorts.into_iter().flat_map(|sort| sort.groups) {
+        for id in group.model_ids {
+            let index = order.len();
+            order.entry(id).or_insert(index);
+        }
+    }
+    order
 }
 
 #[derive(Serialize, Deserialize)]
@@ -66,6 +97,7 @@ pub(crate) struct CloudCodeClient {
     client: Client,
     origin: Url,
     system_instruction: Box<RawValue>,
+    use_quota_credits: bool,
 }
 
 impl CloudCodeClient {
@@ -74,7 +106,7 @@ impl CloudCodeClient {
         proxy: Option<&OutboundProxy>,
         profile: &ClientProfile,
     ) -> Result<Self, ProviderError> {
-        Self::with_client(origin, Self::build_client(proxy, profile)?, profile)
+        Self::with_client(origin, Self::build_client(proxy, profile)?, profile, false)
     }
 
     pub(super) fn build_client(
@@ -87,6 +119,8 @@ impl CloudCodeClient {
             .use_rustls_tls()
             .http1_only()
             .http1_title_case_headers()
+            .pool_max_idle_per_host(100)
+            .read_timeout(GENERATION_TIMEOUT)
             .redirect(reqwest::redirect::Policy::none())
             .retry(reqwest::retry::never())
             .user_agent(profile.user_agent())
@@ -100,10 +134,12 @@ impl CloudCodeClient {
         origin: &Url,
         client: Client,
         profile: &ClientProfile,
+        use_quota_credits: bool,
     ) -> Result<Self, ProviderError> {
         Ok(Self {
             client,
             origin: origin.clone(),
+            use_quota_credits,
             system_instruction: RawValue::from_string(
                 json!({"parts":[{"text":profile.system_prompt}]}).to_string(),
             )
@@ -132,6 +168,8 @@ impl CloudCodeClient {
     ) -> Result<Catalog, ProviderError> {
         #[derive(Deserialize)]
         struct Models {
+            #[serde(rename = "agentModelSorts", default)]
+            agent_model_sorts: Option<Vec<AgentModelSort>>,
             #[serde(rename = "webSearchModelIds", default)]
             web_search_models: Vec<String>,
             models: BTreeMap<String, Model>,
@@ -140,6 +178,7 @@ impl CloudCodeClient {
         }
         let models: Models = control(
             self.post("fetchAvailableModels", token)
+                .timeout(Duration::from_secs(20))
                 .json(&json!({"project":project})),
             token,
         )
@@ -153,6 +192,7 @@ impl CloudCodeClient {
         }
         Ok(Catalog {
             project,
+            agent_model_order: models.agent_model_sorts.map(agent_model_order),
             models: models.models,
             grouped_models: models.grouped_models,
             web_search_models: models.web_search_models,
@@ -172,16 +212,20 @@ impl CloudCodeClient {
         struct Envelope<'a> {
             project: &'a str,
             model: &'a str,
-            #[serde(rename = "requestType", skip_serializing_if = "Option::is_none")]
-            request_type: Option<&'static str>,
-            request: BTreeMap<String, &'a RawValue>,
+            #[serde(rename = "userAgent")]
+            user_agent: &'static str,
+            #[serde(rename = "requestType")]
+            request_type: &'static str,
+            #[serde(rename = "enabledCreditTypes", skip_serializing_if = "Option::is_none")]
+            enabled_credit_types: Option<[&'static str; 1]>,
+            request: &'a RawValue,
         }
         let instruction = if mode == GenerateMode::WebSearch {
             *SEARCH_INSTRUCTION
         } else {
             &self.system_instruction
         };
-        let request = Self::request_body(body, instruction)?;
+        let request = super::request::request_body(body, instruction, false)?;
         let (send, media) = if mode == GenerateMode::Stream {
             (
                 self.post("streamGenerateContent", token)
@@ -189,14 +233,26 @@ impl CloudCodeClient {
                 "text/event-stream",
             )
         } else {
-            (self.post("generateContent", token), "application/json")
+            (
+                self.post("generateContent", token)
+                    .timeout(GENERATION_TIMEOUT),
+                "application/json",
+            )
         };
         self.send(
             send.json(&Envelope {
                 project,
                 model,
-                request_type: (mode == GenerateMode::WebSearch).then_some("web_search"),
-                request,
+                user_agent: "antigravity",
+                request_type: if mode == GenerateMode::WebSearch {
+                    "web_search"
+                } else {
+                    "agent"
+                },
+                enabled_credit_types: self
+                    .use_quota_credits
+                    .then_some([super::account::GOOGLE_ONE_AI]),
+                request: &request,
             }),
             token,
             headers,
@@ -211,40 +267,21 @@ impl CloudCodeClient {
         body: &[u8],
         headers: &[RequestHeader],
     ) -> Result<Response, ProviderError> {
-        let mut request = Self::request_body(body, &self.system_instruction)?;
         // Desktop 的计数封套只接受 Vertex CountTokensRequest，没有项目和生成控制字段
-        for field in [
-            "model",
-            "safetySettings",
-            "safety_settings",
-            "toolConfig",
-            "tool_config",
-            "labels",
-            "sessionId",
-            "session_id",
-        ] {
-            request.remove(field);
+        let request = super::request::request_body(body, &self.system_instruction, true)?;
+        #[derive(Serialize)]
+        struct Envelope<'a> {
+            request: &'a RawValue,
         }
         self.send(
             self.post("countTokens", token)
-                .json(&json!({"request":request})),
+                .timeout(GENERATION_TIMEOUT)
+                .json(&Envelope { request: &request }),
             token,
             headers,
             "application/json",
         )
         .await
-    }
-
-    fn request_body<'a>(
-        body: &'a [u8],
-        instruction: &'a RawValue,
-    ) -> Result<BTreeMap<String, &'a RawValue>, ProviderError> {
-        let mut request: BTreeMap<String, &RawValue> = serde_json::from_slice(body)
-            .map_err(|e| unsent(Kind::InvalidRequest).with_source(e))?;
-        // 生成和计数共享同一身份策略，其他字段保留原始 JSON 表达
-        request.remove("system_instruction");
-        request.insert("systemInstruction".to_owned(), instruction);
-        Ok(request)
     }
 
     async fn send(
@@ -284,13 +321,7 @@ pub(super) async fn control<T: DeserializeOwned>(
     token: &str,
 ) -> Result<T, ProviderError> {
     let mut response = successful(
-        super::response::decode(
-            request
-                .timeout(Duration::from_secs(15))
-                .send()
-                .await
-                .map_err(network)?,
-        ),
+        super::response::decode(request.send().await.map_err(network)?),
         token,
     )
     .await?;

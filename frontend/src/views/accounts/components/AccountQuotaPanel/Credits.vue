@@ -70,7 +70,7 @@ const hasBalance = computed(() => !credits.value?.unlimited && balanceDisplay.va
       <span v-if="hasBalance" class="shrink-0 text-cp-text-tertiary" :class="compact ? 'text-[10px]' : 'text-cp-xs'">{{ t('accounts.quota.point') }}</span>
     </span>
   </div>
-  <div v-if="editable && account.provider === 'openai' && account.authenticationKind === 'oauth'" class="flex items-center justify-between gap-4 rounded-cp bg-cp-fill-quaternary px-4 py-3.5">
+  <div v-if="editable && (account.provider === 'openai' || account.provider === 'antigravity') && account.authenticationKind === 'oauth'" class="flex items-center justify-between gap-4 rounded-cp bg-cp-fill-quaternary px-4 py-3.5">
     <span class="min-w-0">
       <span class="block text-cp-sm font-heavy">{{ t('accounts.quota.autoUsePoints') }}</span>
       <span class="mt-1 block text-cp-xs text-cp-text-secondary">{{ t('accounts.quota.autoUsePointsHelp') }}</span>

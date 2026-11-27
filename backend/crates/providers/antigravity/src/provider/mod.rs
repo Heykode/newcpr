@@ -2,10 +2,11 @@
 
 mod affinity;
 mod candidates;
+mod chat;
+mod count;
 mod execution;
 mod feedback;
 mod selection;
-mod translation;
 pub(crate) mod workers;
 
 use crate::{
@@ -128,5 +129,3 @@ fn unavailable(error: impl Into<ErrorSource>) -> ProviderError {
     crate::transport::unsent(ProviderErrorKind::ProviderInfrastructureUnavailable)
         .with_source(error)
 }
-
-mod web_search;

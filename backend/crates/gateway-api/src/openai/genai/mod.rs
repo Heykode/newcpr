@@ -1,8 +1,9 @@
 //! GenAI 原生接口沿本地统一执行和交付链路处理。
+mod agent_menu;
 mod error;
 mod models;
 use super::{
-    auth::{authenticate_client, client_access_error_response},
+    auth::{authenticate_genai_client, client_access_error_response},
     encoding::HttpResponseFormat,
     error::gateway_error_response,
     responses::{
@@ -168,7 +169,7 @@ async fn generate(
 ) -> Response {
     use gateway_core::engine::execution::ClientTransport;
     let service = state.openai();
-    let client = match authenticate_client(service, &headers) {
+    let client = match authenticate_genai_client(service, &headers) {
         Ok(client) => client,
         Err(error) => return client_access_error_response(error),
     };
@@ -242,7 +243,7 @@ async fn generate(
     super::with_model_request_id(response, &started.request_id)
 }
 async fn metric(State(state): State<ApiState>, headers: HeaderMap) -> Response {
-    match authenticate_client(state.openai(), &headers) {
+    match authenticate_genai_client(state.openai(), &headers) {
         Ok(_) => Json(json!({})).into_response(),
         Err(error) => client_access_error_response(error),
     }

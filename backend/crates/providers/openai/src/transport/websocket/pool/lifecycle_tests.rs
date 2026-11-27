@@ -189,6 +189,31 @@ async fn discard_aborts_blocked_data_and_control_writes_before_releasing_capacit
 }
 
 #[tokio::test(start_paused = true)]
+async fn waiting_for_a_full_proxy_does_not_reserve_an_account_opening() {
+    let proxy = gateway_core::account::OutboundProxy::parse(&format!(
+        "http://proxy-{}.invalid:8080",
+        uuid::Uuid::new_v4()
+    ))
+    .unwrap()
+    .with_max_websocket_connections(1);
+    let pool = pool();
+    let held = super::proxy_capacity::acquire(Some(&proxy), None)
+        .await
+        .unwrap();
+    let route = key(1).with_proxy_capacity(Some(&proxy));
+    let mut blocked = Box::pin(pool.acquire_for_route(&route, None, false, Some(&proxy)));
+    assert!(futures::poll!(blocked.as_mut()).is_pending());
+    let direct = opening(&pool, &key(2));
+    drop(held);
+    assert!(futures::poll!(blocked.as_mut()).is_pending());
+    drop(direct);
+    let granted = blocked.await.unwrap();
+    assert!(matches!(granted, WebSocketPoolAcquire::Connect(_)));
+    drop(granted);
+    pool.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
 async fn proxy_capacity_waits_for_actual_socket_destruction() {
     let proxy = gateway_core::account::OutboundProxy::parse(&format!(
         "http://proxy-{}.invalid:8080",
@@ -285,11 +310,11 @@ fn assert_closing(pool: &CodexWebSocketPool, key: &CodexWebSocketPoolKey) {
         state.slots.get(key),
         Some(WebSocketPoolSlot::Closing(_))
     ));
-    assert_eq!(CodexWebSocketPool::account_slots(&state, "account"), 1);
+    assert_eq!(state.slots.len(), 1);
 }
 
 #[tokio::test(start_paused = true)]
-async fn discard_retains_capacity_until_the_socket_is_destroyed() {
+async fn discard_retains_exact_owner_until_the_socket_is_destroyed() {
     let pool = pool();
     let (connection, lease, control) = connected(&pool, &key(1)).await;
     let observation = connection.websocket.observation();
@@ -297,18 +322,10 @@ async fn discard_retains_capacity_until_the_socket_is_destroyed() {
     assert_closing(&pool, &key(1));
     assert!(!control.destroyed.is_cancelled());
 
-    let next_key = key(2);
-    let mut waiting = Box::pin(pool.acquire(&next_key, None, false));
-    assert!(futures::poll!(waiting.as_mut()).is_pending());
-    let next = timeout(Duration::from_secs(1), waiting)
-        .await
-        .expect("capacity released");
-    assert!(
-        control.destroyed.is_cancelled(),
-        "new admission must follow socket destruction"
-    );
-    assert!(matches!(next, WebSocketPoolAcquire::Connect(_)));
+    let next = opening(&pool, &key(2));
+    assert!(pool.acquire_once(&key(1), None, false).0.is_none());
     closing.await.expect("close task");
+    assert!(control.destroyed.is_cancelled());
     drop(next);
     pool.shutdown().await;
 }
@@ -345,21 +362,19 @@ async fn cancelled_discard_waiter_leaves_a_managed_abort() {
     assert_closing(&pool, &key(1));
     assert!(!control.destroyed.is_cancelled());
 
-    let next_key = key(2);
-    let next = timeout(
+    let next = opening(&pool, &key(2));
+    timeout(
         WEBSOCKET_CLOSE_TIMEOUT + Duration::from_secs(1),
-        pool.acquire(&next_key, None, false),
+        control.destroyed.cancelled(),
     )
     .await
-    .expect("detached close must release capacity");
-    assert!(control.destroyed.is_cancelled());
-    assert!(matches!(next, WebSocketPoolAcquire::Connect(_)));
+    .expect("detached close still destroys the socket");
     drop(next);
     pool.shutdown().await;
 }
 
 #[tokio::test(start_paused = true)]
-async fn cancelled_opening_success_is_closed_before_its_capacity_is_released() {
+async fn cancelled_opening_releases_permit_while_its_rejected_socket_closes() {
     let pool = pool();
     let connect_lease = opening(&pool, &key(1));
     let shared = match pool.acquire_once(&key(1), None, false).0 {
@@ -385,31 +400,28 @@ async fn cancelled_opening_success_is_closed_before_its_capacity_is_released() {
     );
     control.close_started.cancelled().await;
     assert_closing(&pool, &key(1));
-    assert!(pool.acquire_once(&key(2), None, false).0.is_none());
+    let next = opening(&pool, &key(2));
     assert!(!control.destroyed.is_cancelled());
 
     control.release_close();
     closing.await.expect("rejected socket closes");
     assert!(control.destroyed.is_cancelled());
-    drop(opening(&pool, &key(2)));
+    drop(next);
     pool.shutdown().await;
 }
 
 #[tokio::test(start_paused = true)]
-async fn dropped_busy_lease_aborts_the_socket_before_releasing_capacity() {
+async fn dropped_busy_lease_aborts_socket_and_fences_same_key() {
     let pool = pool();
     let (connection, lease, control) = connected(&pool, &key(1)).await;
     drop(lease);
     assert_closing(&pool, &key(1));
     assert!(!control.destroyed.is_cancelled());
-    assert!(pool.acquire_once(&key(2), None, false).0.is_none());
-
-    let next_key = key(2);
-    let next = timeout(Duration::from_secs(1), pool.acquire(&next_key, None, false))
+    let next = opening(&pool, &key(2));
+    assert!(pool.acquire_once(&key(1), None, false).0.is_none());
+    timeout(Duration::from_secs(1), control.destroyed.cancelled())
         .await
-        .expect("aborted pump releases capacity");
-    assert!(control.destroyed.is_cancelled());
-    assert!(matches!(next, WebSocketPoolAcquire::Connect(_)));
+        .expect("aborted pump is destroyed");
     drop(next);
     drop(connection);
     pool.shutdown().await;
@@ -431,7 +443,7 @@ async fn idle_shutdown_bounds_close_without_a_retirement_task() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn capacity_wait_retires_only_one_idle_owner_while_close_is_pending() {
+async fn new_opening_preserves_all_idle_continuations() {
     let pool = pool_with_limit(3);
     let mut controls = Vec::new();
     for index in 1..=3 {
@@ -442,45 +454,12 @@ async fn capacity_wait_retires_only_one_idle_owner_while_close_is_pending() {
         lease.put(connection).await;
         controls.push((index, control));
     }
-    let next_key = key(4);
-    let mut waiting = Box::pin(pool.acquire(&next_key, None, false));
-    assert!(futures::poll!(waiting.as_mut()).is_pending());
-    tokio::task::yield_now().await;
-    for _ in 0..3 {
-        tokio::time::advance(Duration::from_millis(60)).await;
-        assert!(futures::poll!(waiting.as_mut()).is_pending());
-        let state = pool.lock_state();
-        assert_eq!(
-            state
-                .slots
-                .values()
-                .filter(|slot| matches!(slot, WebSocketPoolSlot::Closing(_)))
-                .count(),
-            1,
-            "a pending close already provides the replacement's future capacity",
-        );
-        assert_eq!(
-            state
-                .slots
-                .values()
-                .filter(|slot| matches!(slot, WebSocketPoolSlot::Idle { .. }))
-                .count(),
-            2,
-        );
-    }
-    for (_, control) in &controls {
-        control.release_close();
-    }
-    let next = timeout(Duration::from_secs(1), waiting)
-        .await
-        .expect("closing owner releases capacity");
-    assert!(matches!(next, WebSocketPoolAcquire::Connect(_)));
-    assert_eq!(pool.lock_state().slots.len(), 3);
+    let next = opening(&pool, &key(4));
+    assert_eq!(pool.lock_state().slots.len(), 4);
     drop(next);
     for (index, control) in controls {
-        if control.close_started.is_cancelled() {
-            continue;
-        }
+        assert!(!control.close_started.is_cancelled());
+        control.release_close();
         match pool
             .acquire(&key(index), Some(&format!("response-{index}")), false)
             .await
@@ -495,15 +474,12 @@ async fn capacity_wait_retires_only_one_idle_owner_while_close_is_pending() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn account_eviction_counts_raced_opening_until_its_socket_is_destroyed() {
+async fn account_eviction_fences_raced_socket_but_frees_opening_permit() {
     let pool = pool();
     let first = opening(&pool, &key(1));
     let (connection, control) = connection();
     pool.evict_account("account").await;
-    assert_eq!(
-        CodexWebSocketPool::account_slots(&pool.lock_state(), "account"),
-        1
-    );
+    assert_eq!(pool.lock_state().slots.len(), 1);
     let closing = match first.connected_reserved(connection).await {
         Err((closing, _)) => closing,
         Ok(_) => panic!("evicted opening cannot deliver a socket"),
@@ -511,16 +487,10 @@ async fn account_eviction_counts_raced_opening_until_its_socket_is_destroyed() {
     control.close_started.cancelled().await;
     assert_closing(&pool, &key(1));
     assert!(!control.destroyed.is_cancelled());
-    let next_key = key(2);
-    let mut waiting = Box::pin(pool.acquire(&next_key, None, false));
-    assert!(futures::poll!(waiting.as_mut()).is_pending());
+    let next = opening(&pool, &key(2));
     control.release_close();
-    let next = timeout(Duration::from_secs(1), waiting)
-        .await
-        .expect("socket destruction releases capacity");
-    assert!(control.destroyed.is_cancelled());
-    assert!(matches!(next, WebSocketPoolAcquire::Connect(_)));
     closing.await.expect("retired opening closes");
+    assert!(control.destroyed.is_cancelled());
     drop(next);
     pool.shutdown().await;
 }
@@ -571,7 +541,7 @@ async fn same_key_after_eviction_waits_for_cancelled_opening_to_release_capacity
 
 #[tokio::test(start_paused = true)]
 async fn cancelled_opening_does_not_trigger_another_idle_retirement() {
-    let pool = pool_with_limit(2);
+    let pool = pool();
     let (connection, lease, control) = connected(&pool, &key(1)).await;
     lease.put(connection).await;
     let connecting = opening(&pool, &key(2));
@@ -622,7 +592,7 @@ async fn repeated_retirement_preserves_the_original_local_opening_failure() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn downstream_cancellation_closes_idle_socket_without_releasing_capacity_early() {
+async fn downstream_cancellation_owns_idle_socket_until_closed() {
     let pool = pool();
     let key = key(1).with_downstream_connection_id("downstream-a");
     let cancellation = gateway_core::lifecycle::CancellationToken::new();
@@ -648,10 +618,7 @@ async fn cancelled_busy_downstream_retires_only_on_return() {
     cancellation.cancel();
     tokio::task::yield_now().await;
     assert!(!control.close_started.is_cancelled());
-    assert_eq!(
-        CodexWebSocketPool::account_slots(&pool.lock_state(), "account"),
-        1
-    );
+    assert_eq!(pool.lock_state().slots.len(), 1);
     let returning = tokio::spawn(async move {
         lease.put(connection).await;
     });
@@ -778,10 +745,7 @@ async fn bound_idle_socket_survives_idle_timeout_until_downstream_closes() {
     tokio::time::advance(Duration::from_secs(301)).await;
     pool.maintain_idle_connections().await;
     assert!(!socket.close_started.is_cancelled());
-    assert_eq!(
-        CodexWebSocketPool::account_slots(&pool.lock_state(), "account"),
-        1
-    );
+    assert_eq!(pool.lock_state().slots.len(), 1);
     cancellation.cancel();
     socket.close_started.cancelled().await;
     socket.release_close();

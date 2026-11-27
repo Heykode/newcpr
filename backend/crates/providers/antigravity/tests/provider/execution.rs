@@ -200,7 +200,7 @@ async fn mock_project(upstream: &MockServer) {
 }
 
 #[tokio::test]
-async fn model_group_menu_routes_responses_and_native_generation_to_declared_members() {
+async fn model_group_menu_routes_chat_and_native_generation_to_declared_members() {
     use gateway_core::{
         engine::provider::ProviderRequest,
         operation::{GenerateRequest, Operation, ProtocolPayload},
@@ -332,14 +332,23 @@ async fn model_group_menu_routes_responses_and_native_generation_to_declared_mem
         released(&fixture).await;
     }
     Mock::given(path("/v1internal:streamGenerateContent"))
-        .and(body_partial_json(json!({"model":"gemini-4-hydrogen-high","request":{"contents":[{"role":"user","parts":[{"inlineData":{"mimeType":"image/png","data":"AA=="}}]}]}})))
+        .and(body_partial_json(json!({"model":"gemini-4-hydrogen-high","request":{"contents":[
+            {"role":"user","parts":[{"inlineData":{"mimeType":"image/png","data":"AA=="}}]},
+            {"role":"model","parts":[{"functionCall":{"name":"capture","id":"c","args":{}}}]},
+            {"role":"user","parts":[{"functionResponse":{"name":"capture","id":"c","response":{"output":"ok"},"parts":[{"inlineData":{"mimeType":"image/png","data":"AQ=="}}]}}]}
+        ]}})))
         .respond_with(ResponseTemplate::new(200).set_body_raw(
             "data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"OK\"}]},\"finishReason\":\"STOP\"}]}}\n\n",
             "text/event-stream",
         )).expect(1).mount(&upstream).await;
-    let body = json!({"model":group.upstream_model().as_str(),"input":[{"role":"user","content":[{"type":"input_image","image_url":"data:image/png;base64,AA=="}]}],"reasoning":{"effort":"high"}});
+    let body = json!({"model":group.upstream_model().as_str(),"stream":true,"messages":[
+        {"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,AA=="}}]},
+        {"role":"assistant","tool_calls":[{"id":"c","type":"function","function":{"name":"capture","arguments":"{}"}}]},
+        {"role":"tool","tool_call_id":"c","content":[{"type":"text","text":"ok"},{"type":"image_url","image_url":{"url":"data:image/png;base64,AQ=="}}]}
+    ],"reasoning_effort":"high"});
     let operation = Operation::Generate(GenerateRequest::from_protocol_payload(
-        ProtocolPayload::json_object("openai", body.as_object().unwrap().clone()).unwrap(),
+        ProtocolPayload::json_object("chat_completions", body.as_object().unwrap().clone())
+            .unwrap(),
     ));
     let plan = snapshot
         .plan(
@@ -608,7 +617,51 @@ async fn rate_limit_feedback_uses_model_scope_and_the_full_upstream_retry_delay(
 }
 
 #[tokio::test]
-async fn translated_generation_delivers_terminal_wire_after_tail_usage() {
+async fn other_native_harnesses_are_rejected_without_synthetic_prewarm_or_account_selection() {
+    use gateway_core::{
+        engine::provider::ProviderRequest,
+        operation::{GenerateRequest, Operation, ProtocolPayload},
+    };
+    let upstream = MockServer::start().await;
+    let fixture = Fixture::new(&upstream.uri());
+    for (protocol, body) in [
+        (
+            "openai",
+            json!({"model":"fixture-model","generate":false,"input":[]}),
+        ),
+        (
+            "openai",
+            json!({"model":"fixture-model","previous_response_id":"foreign","input":[]}),
+        ),
+        (
+            "anthropic",
+            json!({"model":"fixture-model","messages":[{"role":"user","content":"hello"}]}),
+        ),
+    ] {
+        let operation = Operation::Generate(GenerateRequest::from_protocol_payload(
+            ProtocolPayload::json_object(protocol, body.as_object().unwrap().clone()).unwrap(),
+        ));
+        let error = fixture
+            .provider
+            .clone()
+            .execute(
+                ProviderRequest::new(operation, request(false).candidate().clone()),
+                context(frozen_profile(), CancellationToken::new()),
+            )
+            .await
+            .err()
+            .expect("foreign native harness cannot be translated");
+        assert_eq!(error.kind(), ProviderErrorKind::Unsupported);
+        assert_eq!(error.send_state(), UpstreamSendState::NotSent);
+        assert!(error.continuation_recovery_disposition().is_none());
+    }
+    assert!(upstream.received_requests().await.unwrap().is_empty());
+    assert_eq!(fixture.store.scheduling_reads.load(Ordering::SeqCst), 0);
+    assert_eq!(fixture.store.active_leases(), 0);
+}
+
+#[tokio::test]
+async fn chat_direct_genai_keeps_json_sse_usage_and_releases_the_native_lease() {
     use gateway_core::{
         engine::provider::ProviderRequest,
         event::GatewayEvent,
@@ -616,105 +669,120 @@ async fn translated_generation_delivers_terminal_wire_after_tail_usage() {
     };
     let upstream = MockServer::start().await;
     Mock::given(method("POST")).and(path("/v1internal:streamGenerateContent"))
-        .and(header("user-agent", "antigravity/cli/1.5.14 (aidev_client; os_type=linux; arch=amd64; auth_method=consumer)"))
         .and(body_partial_json(json!({"request":{"contents":[{"role":"user","parts":[{"text":"hello"}]}]}})))
         .respond_with(ResponseTemplate::new(200).set_body_raw(concat!(
             "data: {\"response\":{\"responseId\":\"r\",\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"ok\"}]},\"finishReason\":\"STOP\"}]}}\n\n",
             "data: {\"response\":{\"usageMetadata\":{\"promptTokenCount\":7,\"candidatesTokenCount\":2}}}\n\n"
-        ),"text/event-stream")).expect(2).mount(&upstream).await;
-    for (protocol, body) in [
-        (
-            "openai",
-            json!({"model":"fixture-model","input":"hello","max_output_tokens":100,"reasoning":{"effort":"high"},"temperature":0.3,"top_p":0.8,"tools":[{"type":"function","name":"pwd","parameters":{"type":"object"}}],"tool_choice":"required","text":{"format":{"type":"json_schema","schema":{"type":"object"}}}}),
-        ),
-        (
-            "anthropic",
-            json!({"model":"fixture-model","messages":[{"role":"user","content":"hello"}],"max_tokens":100}),
-        ),
-    ] {
+        ),"text/event-stream")).expect(1).mount(&upstream).await;
+    Mock::given(method("POST")).and(path("/v1internal:generateContent"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"response":{
+            "responseId":"r","candidates":[{"content":{"parts":[{"text":"ok"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":7,"candidatesTokenCount":2}
+        }}))).expect(1).mount(&upstream).await;
+    for streaming in [false, true] {
         let fixture = Fixture::new(&upstream.uri());
+        let mut body = json!({"model":"fixture-model","stream":streaming,"messages":[{"role":"user","content":"hello"}],"max_completion_tokens":100,"reasoning_effort":"high","temperature":0.3,"top_p":0.8,"tools":[{"type":"function","function":{"name":"pwd","parameters":{"type":"object"}}}],"tool_choice":"required","response_format":{"type":"json_schema","json_schema":{"name":"result","schema":{"type":"object"}}}});
+        body["messages"].as_array_mut().unwrap().insert(
+            0,
+            json!({"role":"system","content":"Preserve the caller's project rules."}),
+        );
+        if streaming {
+            body["stream_options"] = json!({"include_usage":true});
+        }
         let operation = Operation::Generate(GenerateRequest::from_protocol_payload(
-            ProtocolPayload::json_object(protocol, body.as_object().unwrap().clone()).unwrap(),
+            ProtocolPayload::json_object("chat_completions", body.as_object().unwrap().clone())
+                .unwrap(),
         ));
-        let request = ProviderRequest::new(operation, request(false).candidate().clone());
         let mut profile = crate::profile::ClientProfile::from_frozen(&frozen_profile()).unwrap();
         profile.system_prompt = "Frozen AGY prompt".into();
+        let request_context = RequestAttemptContext::new(
+            ModelRequestId::new("req_chat").unwrap(),
+            ClientApiKeyId::new("key_fixture").unwrap(),
+        )
+        .with_request_profile(Some(profile.frozen().into()));
         let mut stream = fixture
             .provider
             .clone()
-            .execute(request, context(profile.frozen(), CancellationToken::new()))
+            .execute(
+                ProviderRequest::new(operation, request(false).candidate().clone()),
+                crate::support::context_with_request(request_context, CancellationToken::new()),
+            )
             .await
             .unwrap();
-        let mut output = Vec::new();
+        let mut accumulator = gateway_protocol::chat_completions::ChatAccumulator::default();
+        let mut result = None;
+        let mut terminal_count = 0;
         while let Some(event) = stream.next().await {
             let event = event.unwrap();
             let terminal = event
                 .canonical_facts()
                 .iter()
-                .any(|f| matches!(f, GatewayEvent::Completed(_)));
-            output.extend(stream.translate_native_response(event, terminal).unwrap());
+                .any(|fact| matches!(fact, GatewayEvent::Completed(_)));
+            for event in stream.translate_native_response(event, terminal).unwrap() {
+                assert!(
+                    !event
+                        .session_update()
+                        .is_some_and(|state| state.prefers_websocket_reconnect())
+                );
+                assert!(event.session_update().is_none());
+                terminal_count += usize::from(
+                    event
+                        .canonical_facts()
+                        .iter()
+                        .any(|fact| matches!(fact, GatewayEvent::Completed(_))),
+                );
+                if let Some(wire) = event.wire_event() {
+                    assert_eq!(wire.protocol(), "chat_completions");
+                    if streaming {
+                        accumulator.push(wire.data()).unwrap();
+                    } else {
+                        result = Some(
+                            serde_json::from_slice::<serde_json::Value>(
+                                wire.raw_json_body().unwrap(),
+                            )
+                            .unwrap(),
+                        );
+                    }
+                }
+            }
         }
-        let last = output.last().unwrap();
-        assert!(
-            last.canonical_facts()
-                .iter()
-                .any(|f| matches!(f, GatewayEvent::Completed(_)))
-        );
+        assert_eq!(terminal_count, 1);
+        let result = result.unwrap_or_else(|| accumulator.finish().unwrap());
+        assert_eq!(result["choices"][0]["message"]["content"], "ok");
+        assert_eq!(result["choices"][0]["finish_reason"], "stop");
+        assert_eq!(result["usage"]["prompt_tokens"], 7);
+        assert_eq!(result["usage"]["completion_tokens"], 2);
         let sent = upstream.received_requests().await.unwrap();
         let body: serde_json::Value = serde_json::from_slice(&sent.last().unwrap().body).unwrap();
-        assert_eq!(body["request"]["generationConfig"]["maxOutputTokens"], 100);
+        assert!(body["request"].get("input").is_none());
         assert_eq!(
             body["request"]["systemInstruction"]["parts"][0]["text"],
             "Frozen AGY prompt"
         );
-        assert!(
-            output
-                .iter()
-                .filter_map(|event| event.response_observation())
-                .any(|observation| observation.timings().first_token_ms.is_some())
+        assert_eq!(
+            body["request"]["systemInstruction"]["parts"][1]["text"],
+            "Preserve the caller's project rules."
         );
-        if protocol == "openai" {
-            assert_eq!(
-                body["request"]["generationConfig"]["thinkingConfig"]["thinkingBudget"],
-                24576
-            );
-            assert_eq!(body["request"]["generationConfig"]["temperature"], 0.3);
-            assert_eq!(body["request"]["generationConfig"]["topP"], 0.8);
-            assert_eq!(
-                body["request"]["toolConfig"]["functionCallingConfig"]["mode"],
-                "ANY"
-            );
-            assert_eq!(
-                body["request"]["generationConfig"]["responseSchema"],
-                json!({"type":"object"})
-            );
-        } else {
-            assert_eq!(
-                output[0].wire_event().unwrap().data()["message"]["model"],
-                "fixture-model"
-            );
-        }
-        let wire = last.wire_event().unwrap();
-        assert_eq!(wire.protocol(), protocol);
-        if protocol == "openai" {
-            assert_eq!(wire.data()["type"], "response.completed");
-            assert_eq!(wire.data()["response"]["usage"]["input_tokens"], 7);
-        } else {
-            assert_eq!(wire.data()["type"], "message_stop");
-            assert!(
-                output
-                    .iter()
-                    .filter_map(|e| e.wire_event())
-                    .any(|w| w.data()["usage"]["input_tokens"] == 7)
-            );
-        }
+        assert_eq!(body["request"]["generationConfig"]["maxOutputTokens"], 100);
+        assert_eq!(
+            body["request"]["generationConfig"]["thinkingConfig"]["thinkingBudget"],
+            24576
+        );
+        assert_eq!(
+            body["request"]["toolConfig"]["functionCallingConfig"]["mode"],
+            "ANY"
+        );
+        assert_eq!(
+            body["request"]["generationConfig"]["responseJsonSchema"],
+            json!({"type":"object"})
+        );
         drop(stream);
         released(&fixture).await;
     }
+    upstream.verify().await;
 }
 
 #[tokio::test]
-async fn optional_search_preserves_functions_and_unspecified_output_limit() {
+async fn chat_preserves_functions_without_inventing_generation_limits() {
     use gateway_core::{
         engine::provider::ProviderRequest,
         operation::{GenerateRequest, Operation, ProtocolPayload},
@@ -726,22 +794,18 @@ async fn optional_search_preserves_functions_and_unspecified_output_limit() {
             "data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"ok\"}]},\"finishReason\":\"STOP\"}]}}\n\n",
             "text/event-stream",
         ))
-        .expect(4).mount(&upstream).await;
-    let search = json!({"type":"web_search"});
-    let function = json!({"type":"function","name":"pwd","parameters":{"type":"object"}});
-    for choice in [
-        json!(null),
-        json!("auto"),
-        json!("required"),
-        json!({"type":"allowed_tools","mode":"required","tools":[search,function]}),
-    ] {
+        .expect(2).mount(&upstream).await;
+    let function =
+        json!({"type":"function","function":{"name":"pwd","parameters":{"type":"object"}}});
+    for explicit_null_limit in [false, true] {
         let fixture = Fixture::new(&upstream.uri());
-        let mut body = json!({"model":"fixture-model","input":"hello","tools":[search,function],"tool_choice":choice});
-        if choice == "required" {
-            body["max_output_tokens"] = json!(null);
+        let mut body = json!({"model":"fixture-model","stream":true,"messages":[{"role":"user","content":"hello"}],"tools":[function]});
+        if explicit_null_limit {
+            body["max_completion_tokens"] = json!(null);
         }
         let operation = Operation::Generate(GenerateRequest::from_protocol_payload(
-            ProtocolPayload::json_object("openai", body.as_object().unwrap().clone()).unwrap(),
+            ProtocolPayload::json_object("chat_completions", body.as_object().unwrap().clone())
+                .unwrap(),
         ));
         let stream = fixture
             .provider
@@ -771,7 +835,7 @@ async fn optional_search_preserves_functions_and_unspecified_output_limit() {
 }
 
 #[tokio::test]
-async fn invalid_required_search_is_rejected_before_sending_and_releases_lease() {
+async fn unsupported_chat_search_options_fail_before_sending_and_release_the_lease() {
     use gateway_core::{
         engine::provider::ProviderRequest,
         operation::{GenerateRequest, Operation, ProtocolPayload},
@@ -785,30 +849,14 @@ async fn invalid_required_search_is_rejected_before_sending_and_releases_lease()
         value["webSearchModelIds"] = json!(["fixture-model"]);
         *bytes = value.to_string().into();
     }
-    let search = json!({"type":"web_search"});
-    for (tools, message) in [
-        (json!([]), "The selected web search tool must be declared."),
-        (
-            json!([search, search]),
-            "Select one web search declaration.",
-        ),
-        (
-            json!([{"type":"web_search","external_web_access":false}]),
-            "Antigravity web search requires live external web access.",
-        ),
-        (
-            json!([{"type":"web_search","external_web_access":"cached"}]),
-            "Antigravity web search requires live external web access.",
-        ),
-        (
-            json!([{"type":"web_search","user_location":{"type":"approximate","country":"US"}}]),
-            "Antigravity cannot honor the specified web search options.",
-        ),
+    for options in [
+        json!({"user_location":{"type":"approximate","approximate":{"country":"US"}}}),
+        json!({"search_context_size":"high"}),
     ] {
-        let body =
-            json!({"model":"fixture-model","input":"hello","tools":tools,"tool_choice":search});
+        let body = json!({"model":"fixture-model","messages":[{"role":"user","content":"hello"}],"web_search_options":options});
         let operation = Operation::Generate(GenerateRequest::from_protocol_payload(
-            ProtocolPayload::json_object("openai", body.as_object().unwrap().clone()).unwrap(),
+            ProtocolPayload::json_object("chat_completions", body.as_object().unwrap().clone())
+                .unwrap(),
         ));
         let error = fixture
             .provider
@@ -819,12 +867,16 @@ async fn invalid_required_search_is_rejected_before_sending_and_releases_lease()
             )
             .await
             .err()
-            .expect("invalid search request");
+            .expect("unsupported search options cannot silently disappear");
         assert_eq!(error.kind(), ProviderErrorKind::InvalidRequest);
         assert_eq!(error.send_state(), UpstreamSendState::NotSent);
+        assert!(error.error_details().is_some());
+        let public = gateway_core::error::GatewayError::from_provider(&error);
+        assert_eq!(public.client_error_code(), Some("unsupported_parameter"));
+        let field = options.as_object().unwrap().keys().next().unwrap();
         assert_eq!(
-            gateway_core::error::GatewayError::from_provider(&error).client_message(),
-            message
+            public.client_error_param(),
+            Some(format!("web_search_options.{field}").as_str())
         );
         released(&fixture).await;
     }
@@ -832,7 +884,7 @@ async fn invalid_required_search_is_rejected_before_sending_and_releases_lease()
 }
 
 #[tokio::test]
-async fn required_search_uses_catalog_target_and_delivers_grounded_terminal() {
+async fn chat_search_uses_catalog_target_and_delivers_grounded_terminal() {
     use gateway_core::{
         engine::provider::ProviderRequest,
         event::GatewayEvent,
@@ -859,8 +911,8 @@ async fn required_search_uses_catalog_target_and_delivers_grounded_terminal() {
         ConfigRevision::new(1).unwrap(),
         AccountSelectionPolicy::new(
             RotationStrategy::Smart,
-            std::num::NonZeroU32::new(1).unwrap(),
-            std::time::Duration::ZERO,
+            NonZeroU32::new(2).unwrap(),
+            Duration::ZERO,
         ),
         vec![kind.clone()],
         models
@@ -876,11 +928,10 @@ async fn required_search_uses_catalog_target_and_delivers_grounded_terminal() {
         vec![],
     )
     .unwrap();
-    let search = json!({"type":"web_search","filters":{"allowed_domains":["example.org"]}});
-    let choice = json!({"type":"allowed_tools","mode":"required","tools":[{"type":"web_search"}]});
-    let body = json!({"model":"fixture-model","input":"你好","tool_choice":choice,"tools":[search,{"type":"function","name":"pwd"}],"include":["web_search_call.action.sources"]});
+    let body = json!({"model":"fixture-model","stream":true,"stream_options":{"include_usage":true},"messages":[{"role":"user","content":"你好"}],"web_search_options":{}});
     let op = Operation::Generate(GenerateRequest::from_protocol_payload(
-        ProtocolPayload::json_object("openai", body.as_object().unwrap().clone()).unwrap(),
+        ProtocolPayload::json_object("chat_completions", body.as_object().unwrap().clone())
+            .unwrap(),
     ));
     let plan = snapshot
         .plan(
@@ -893,74 +944,46 @@ async fn required_search_uses_catalog_target_and_delivers_grounded_terminal() {
     let candidate = &plan.candidates()[0];
     assert_eq!(candidate.upstream_model().unwrap().as_str(), "search-only");
     Mock::given(path("/v1internal:generateContent")).and(body_partial_json(json!({
-        "model":"search-only","requestType":"web_search","request":{"tools":[{"googleSearch":{"includedDomains":["example.org"]}}],"contents":[{"role":"user","parts":[{"text":"你好"}]}]}
+        "model":"search-only","requestType":"web_search","request":{"tools":[{"googleSearch":{}}],"contents":[{"role":"user","parts":[{"text":"你好"}]}]}
     }))).respond_with(ResponseTemplate::new(200).set_body_json(json!({"response":{
         "responseId":"r","candidates":[{"content":{"parts":[{"text":"前 "},{"text":"答案"}]},"finishReason":"STOP",
         "groundingMetadata":{"webSearchQueries":["你好"],"groundingChunks":[{"web":{"uri":"https://example.org","title":"来源"}}],
         "groundingSupports":[{"segment":{"partIndex":1,"endIndex":6},"groundingChunkIndices":[0]}]}}],"usageMetadata":{"promptTokenCount":5,"candidatesTokenCount":2}}}))).expect(1).mount(&server).await;
-    let attempt = RequestAttemptContext::new(
-        ModelRequestId::new("req_search").unwrap(),
-        ClientApiKeyId::new("key_search").unwrap(),
-    )
-    .with_request_profile(Some(frozen_profile().into()))
-    .with_pricing(std::sync::Arc::new(std::collections::BTreeMap::from([(
-        "antigravity".into(),
-        std::collections::BTreeMap::from([("search-only".into(), crate::billing_tests::pricing())]),
-    )])));
     let mut stream = fixture
         .provider
         .clone()
         .execute(
             ProviderRequest::new(op, candidate.clone()),
-            crate::support::context_with_request(attempt, CancellationToken::new()),
+            context(frozen_profile(), CancellationToken::new()),
         )
         .await
         .unwrap();
-    assert_eq!(
-        stream.metadata().upstream_model().unwrap().as_str(),
-        "search-only"
-    );
-    let mut costs = Vec::new();
     let mut wire = Vec::new();
     while let Some(event) = stream.next().await {
         let event = event.unwrap();
-        for fact in event.canonical_facts() {
-            if let GatewayEvent::CalculatedCost(cost) = fact {
-                costs.push(cost.total().amount().canonical());
-            }
-        }
         let terminal = event
             .canonical_facts()
             .iter()
             .any(|f| matches!(f, GatewayEvent::Completed(_)));
         for translated in stream.translate_native_response(event, terminal).unwrap() {
             if let Some(frame) = translated.wire_event() {
-                assert_eq!(frame.data()["type"] == "response.completed", terminal);
+                assert_eq!(frame.protocol(), "chat_completions");
                 wire.push(frame.data().clone());
             }
         }
     }
-    assert_eq!(costs, ["0.000039"]);
-    drop(stream);
-    released(&fixture).await;
-    for (i, event) in wire.iter().enumerate() {
-        assert_eq!(event["sequence_number"], i)
+    let mut accumulator = gateway_protocol::chat_completions::ChatAccumulator::default();
+    for chunk in &wire {
+        accumulator.push(chunk).unwrap();
     }
-    let response = &wire.last().unwrap()["response"];
+    let response = accumulator.finish().unwrap();
     assert_eq!(response["model"], "fixture-model");
     assert_eq!(response["usage"]["total_tokens"], 7);
-    let output = &response["output"];
-    assert_eq!(
-        output[0]["action"]["sources"][0]["url"],
-        "https://example.org"
-    );
-    let citation = &output[1]["content"][0]["annotations"][0];
+    let citation = &response["choices"][0]["message"]["annotations"][0]["url_citation"];
     assert_eq!(citation["start_index"], 2);
     assert_eq!(citation["end_index"], 4);
     assert_eq!(citation["url"], "https://example.org");
-    assert!(
-        wire.iter()
-            .any(|v| v["type"] == "response.output_text.annotation.added"
-                && &v["annotation"] == citation)
-    );
+    server.verify().await;
+    drop(stream);
+    released(&fixture).await;
 }

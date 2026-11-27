@@ -1439,7 +1439,15 @@ impl ExecutionService for DefaultExecutionService {
                     )
                     .await?
                 else {
-                    for profile in client.snapshot.profiles_for_provider_scope(kind, scope) {
+                    for profile in client.snapshot.profiles_for_provider_scope(
+                        kind,
+                        scope,
+                        Some(if protocol == "codex" {
+                            "openai"
+                        } else {
+                            protocol
+                        }),
+                    ) {
                         if !client.snapshot.catalog_model_allowed_for_scope(
                             kind,
                             profile.model(),

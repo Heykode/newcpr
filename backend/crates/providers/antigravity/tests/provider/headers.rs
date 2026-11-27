@@ -15,9 +15,11 @@ use crate::support::{Fixture, context, request};
 async fn native_and_translated_requests_forward_business_headers_with_account_identity() {
     let server = MockServer::start().await;
     let fixture = Fixture::new(&server.uri());
-    let profile = crate::profile::default_profile(
-        &crate::profile::ReleaseService::new(crate::support::profile::cache()).unwrap(),
-    )
+    let profile = crate::profile::Selection::parse(&crate::profile::object(json!({
+        "client":"cli", "platform":"linux", "versionMode":"fixed", "clientVersion":"1.5.17"
+    })))
+    .unwrap()
+    .resolve("1.5.17")
     .frozen();
     let ctx = || {
         context(
@@ -52,6 +54,8 @@ async fn native_and_translated_requests_forward_business_headers_with_account_id
         "x-goog-api-key",
         "x-goog-user-project",
         "x-goog-api-client",
+        "x-goog-ext-525006001-bin",
+        "x-api-key",
         "content-encoding",
         "content-length",
         "x-request-id",
@@ -74,12 +78,8 @@ async fn native_and_translated_requests_forward_business_headers_with_account_id
             json!({"contents":[]}),
         ),
         (
-            gateway_protocol::openai::OPENAI_PROTOCOL,
-            json!({"input":[]}),
-        ),
-        (
-            gateway_protocol::anthropic::ANTHROPIC_PROTOCOL,
-            json!({"messages":[]}),
+            gateway_protocol::chat_completions::CHAT_PROTOCOL,
+            json!({"model":"fixture-model","messages":[{"role":"user","content":"hello"}]}),
         ),
     ] {
         let input = super::affinity::session_request(protocol, body, metadata.clone());
@@ -114,7 +114,7 @@ async fn native_and_translated_requests_forward_business_headers_with_account_id
         .await
         .unwrap();
     let requests = server.received_requests().await.unwrap();
-    assert_eq!(requests.len(), 4);
+    assert_eq!(requests.len(), 3);
     for request in requests {
         let values: Vec<_> = request
             .headers
@@ -126,11 +126,9 @@ async fn native_and_translated_requests_forward_business_headers_with_account_id
         assert_eq!(request.headers["traceparent"], "original-trace");
         assert_eq!(request.headers["authorization"], "Bearer fixture-access");
         assert_eq!(request.headers["content-type"], "application/json");
-        assert!(
-            request.headers["user-agent"]
-                .to_str()
-                .unwrap()
-                .starts_with("antigravity/hub/")
+        assert_eq!(
+            request.headers["user-agent"],
+            "antigravity/cli/1.5.17 (aidev_client; os_type=linux; arch=amd64; cl=1029496841; auth_method=consumer)"
         );
         for name in forbidden {
             if !matches!(name, "authorization" | "user-agent" | "content-length") {

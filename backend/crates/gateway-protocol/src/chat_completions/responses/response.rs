@@ -2,21 +2,12 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use bytes::Bytes;
-use gateway_protocol::openai::events::{billable_usage_is_complete, extract_usage};
-use gateway_protocol::openai::sse::encode_sse_event;
+use crate::openai::events::{billable_usage_is_complete, extract_usage};
 use serde::Serialize;
 use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
 
-use crate::openai::responses::{ProtocolError, ProtocolErrorBody};
-
-#[derive(Debug, Clone, Serialize)]
-pub(in crate::openai) struct ChatIdentity {
-    pub id: String,
-    pub created: u64,
-    pub model: String,
-}
+use crate::chat_completions::{ChatError as ProtocolErrorBody, ChatIdentity};
 
 #[derive(Serialize)]
 struct Envelope<'a> {
@@ -35,7 +26,7 @@ struct Envelope<'a> {
 }
 
 /// 输入已由现有 Responses collector 聚合，投影不再恢复或重建缺失的 output
-pub(in crate::openai) fn project_response(
+pub fn project_response(
     response: &Value,
     identity: &ChatIdentity,
 ) -> Result<Value, ProtocolErrorBody> {
@@ -211,7 +202,7 @@ enum Terminal {
 }
 
 /// 只保存身份关联与快照去重所需内容；终态帧由外层受管 body 决定何时交付
-pub(in crate::openai) struct ChatStreamEncoder {
+pub struct ChatStreamEncoder {
     identity: ChatIdentity,
     include_usage: bool,
     role_sent: bool,
@@ -221,7 +212,7 @@ pub(in crate::openai) struct ChatStreamEncoder {
 }
 
 impl ChatStreamEncoder {
-    pub(in crate::openai) fn new(identity: ChatIdentity, include_usage: bool) -> Self {
+    pub fn new(identity: ChatIdentity, include_usage: bool) -> Self {
         Self {
             identity,
             include_usage,
@@ -232,19 +223,15 @@ impl ChatStreamEncoder {
         }
     }
 
-    pub(in crate::openai) fn is_completed(&self) -> bool {
-        self.terminal == Some(Terminal::Completed)
-    }
-
-    pub(in crate::openai) fn has_wire_failure(&self) -> bool {
+    fn has_wire_failure(&self) -> bool {
         self.terminal == Some(Terminal::Failed)
     }
 
-    pub(in crate::openai) fn push_event(
+    pub fn push_event(
         &mut self,
         event_type: Option<&str>,
         data: &Value,
-    ) -> Result<Vec<Bytes>, ProtocolErrorBody> {
+    ) -> Result<Vec<Value>, ProtocolErrorBody> {
         let event_type = event_type.or_else(|| data.get("type").and_then(Value::as_str));
         if self.has_wire_failure() {
             return Ok(Vec::new());
@@ -427,7 +414,7 @@ impl ChatStreamEncoder {
                 {
                     error["type"] = json!("server_error");
                 }
-                frames.push(sse_frame(&json!({"error": error})));
+                frames.push(json!({"error": error}));
                 self.terminal = Some(Terminal::Failed);
             }
             // 辅助事件可随上游演进；实际 output item 和 content part 仍逐项检查可表达性
@@ -441,6 +428,15 @@ impl ChatStreamEncoder {
         Ok(frames)
     }
 
+    /// 只有已经消费成功或错误终态的流才允许结束
+    pub fn finish(&mut self) -> Result<Vec<Value>, ProtocolErrorBody> {
+        if self.terminal.is_some() {
+            Ok(Vec::new())
+        } else {
+            Err(ProtocolErrorBody::IncompleteStream)
+        }
+    }
+
     fn text_event(
         &mut self,
         data: &Value,
@@ -448,7 +444,7 @@ impl ChatStreamEncoder {
         text: &str,
         snapshot: bool,
         metadata: &Value,
-        frames: &mut Vec<Bytes>,
+        frames: &mut Vec<Value>,
     ) -> Result<(), ProtocolErrorBody> {
         let mut content_chars = self.content_chars;
         let part = self.event_part(data, kind)?;
@@ -508,7 +504,7 @@ impl ChatStreamEncoder {
         part: (bool, u64),
         text: &str,
         snapshot: bool,
-        frames: &mut Vec<Bytes>,
+        frames: &mut Vec<Value>,
     ) -> Result<(), ProtocolErrorBody> {
         let has_text = self.output.values().any(|item| {
             matches!(&item.output,
@@ -573,7 +569,7 @@ impl ChatStreamEncoder {
         index: u64,
         snapshot: &Value,
         terminal: bool,
-        frames: &mut Vec<Bytes>,
+        frames: &mut Vec<Value>,
     ) -> Result<(), ProtocolErrorBody> {
         let id = optional_id(snapshot, "id")?;
         let kind = required_str(snapshot, "type")?;
@@ -706,7 +702,7 @@ impl ChatStreamEncoder {
         Ok(found)
     }
 
-    fn delta(&self, delta: Value) -> Result<Bytes, ProtocolErrorBody> {
+    fn delta(&self, delta: Value) -> Result<Value, ProtocolErrorBody> {
         delta_frame(&self.identity, self.include_usage, delta)
     }
 
@@ -715,7 +711,7 @@ impl ChatStreamEncoder {
         choices: Value,
         usage: Option<Value>,
         response: Option<&Value>,
-    ) -> Result<Bytes, ProtocolErrorBody> {
+    ) -> Result<Value, ProtocolErrorBody> {
         chunk_frame(&self.identity, choices, usage, response)
     }
 }
@@ -964,7 +960,7 @@ fn logprobs_frame(
     include_usage: bool,
     kind: PartKind,
     values: Vec<Value>,
-) -> Result<Bytes, ProtocolErrorBody> {
+) -> Result<Value, ProtocolErrorBody> {
     chunk_frame(
         identity,
         json!([{"index":0, "delta":{}, "finish_reason":null,
@@ -1084,7 +1080,7 @@ fn delta_frame(
     identity: &ChatIdentity,
     include_usage: bool,
     delta: Value,
-) -> Result<Bytes, ProtocolErrorBody> {
+) -> Result<Value, ProtocolErrorBody> {
     chunk_frame(
         identity,
         json!([{"index": 0, "delta": delta, "finish_reason": null, "logprobs": null}]),
@@ -1098,7 +1094,7 @@ fn chunk_frame(
     choices: Value,
     usage: Option<Value>,
     response: Option<&Value>,
-) -> Result<Bytes, ProtocolErrorBody> {
+) -> Result<Value, ProtocolErrorBody> {
     let value = serde_json::to_value(Envelope {
         identity,
         object: "chat.completion.chunk",
@@ -1109,11 +1105,7 @@ fn chunk_frame(
         moderation: response.map(project_moderation).transpose()?.flatten(),
     })
     .map_err(|_| invalid_response())?;
-    Ok(sse_frame(&value))
-}
-
-fn sse_frame(value: &Value) -> Bytes {
-    Bytes::from(encode_sse_event("", &value.to_string()))
+    Ok(value)
 }
 
 fn required_str<'a>(value: &'a Value, field: &str) -> Result<&'a str, ProtocolErrorBody> {
@@ -1146,12 +1138,5 @@ fn required_index(value: &Value, field: &str) -> Result<u64, ProtocolErrorBody> 
 }
 
 fn invalid_response() -> ProtocolErrorBody {
-    ProtocolErrorBody {
-        error: ProtocolError {
-            kind: "server_error",
-            code: "invalid_upstream_response",
-            message: "The upstream response cannot be represented as a Chat completion.".to_owned(),
-            param: None,
-        },
-    }
+    ProtocolErrorBody::InvalidResponse
 }

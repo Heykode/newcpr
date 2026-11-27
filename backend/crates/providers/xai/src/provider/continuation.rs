@@ -1,4 +1,4 @@
-//! xAI continuation 与 reasoning replay 状态处理。
+//! xAI 原生续接、账号归属与完整历史重放
 
 use super::*;
 
@@ -7,6 +7,8 @@ pub(super) struct XaiSessionState {
     pub(super) account_id: String,
     pub(super) session_id: Option<String>,
     pub(super) transcript: Vec<XaiReplayItem>,
+    pub(super) instructions: Option<Value>,
+    pub(super) response_stored: bool,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -20,6 +22,8 @@ pub(super) enum XaiReplayItem {
 pub(super) struct GrokSessionCapture {
     pub(super) previous: Option<XaiSessionState>,
     pub(super) request_input: Vec<Value>,
+    pub(super) instructions: Option<Value>,
+    pub(super) response_stored: bool,
     pub(super) account_id: String,
     pub(super) session_id: Option<String>,
     pub(super) output_items: BTreeMap<u32, Value>,
@@ -112,6 +116,15 @@ pub(super) fn apply_continuation(
             if !pin.matches(&provider, account) {
                 return Err(invalid_continuation());
             }
+            if previous_session.is_some_and(|state| !state.response_stored)
+                || request.instructions()
+                    != previous_session.and_then(|state| state.instructions.as_ref())
+            {
+                let previous = previous_session.ok_or_else(invalid_continuation)?;
+                return apply_replay(request, previous, account, current_input);
+            }
+            // Grok 原生续接继承首轮指令，不允许同时提交 instructions
+            request.clear_instructions();
             request.set_previous_response_id(Some(pin.upstream_response_id().as_str().to_owned()));
             Ok(())
         }
@@ -122,13 +135,7 @@ pub(super) fn apply_continuation(
             {
                 return Err(invalid_continuation());
             }
-            let mut input = replay_input_for_account(previous, account.as_str(), true);
-            input.reserve(current_input.len());
-            input.extend(current_input.iter().cloned());
-            request.set_replay_input(input).map_err(map_request_error)?;
-            request.set_previous_response_id(None);
-            request.inherit_session(None);
-            Ok(())
+            apply_replay(request, previous, account, current_input)
         }
         ContinuationAttempt::None | ContinuationAttempt::RotateForClientReplay => {
             Err(invalid_continuation())
@@ -136,25 +143,33 @@ pub(super) fn apply_continuation(
     }
 }
 
-pub(super) fn replay_input_for_account(
-    state: &XaiSessionState,
-    account_id: &str,
-    force_portable: bool,
-) -> Vec<Value> {
+fn apply_replay(
+    request: &mut GrokResponsesRequest,
+    previous: &XaiSessionState,
+    account: &gateway_core::account::ProviderAccountId,
+    current_input: &[Value],
+) -> Result<(), ProviderError> {
+    let mut input = replay_input_for_account(previous, account.as_str());
+    input.reserve(current_input.len());
+    input.extend(current_input.iter().cloned());
+    request.set_replay_input(input);
+    request.set_previous_response_id(None);
+    request.inherit_session(None);
+    Ok(())
+}
+
+pub(super) fn replay_input_for_account(state: &XaiSessionState, account_id: &str) -> Vec<Value> {
     state
         .transcript
         .iter()
         .filter_map(|item| match item {
-            XaiReplayItem::ClientInput(value) | XaiReplayItem::SanitizedOutput(value) => {
-                Some(value.clone())
-            }
+            XaiReplayItem::ClientInput(value) => Some(value.clone()),
+            XaiReplayItem::SanitizedOutput(value) => Some(value.clone()),
             XaiReplayItem::AccountOutput {
                 account_id: owner,
                 item,
-            } if owner == account_id && !force_portable => {
-                portable_output_item(item.clone(), false)
-            }
-            XaiReplayItem::AccountOutput { item, .. } => portable_output_item(item.clone(), true),
+            } if owner == account_id => Some(item.clone()),
+            XaiReplayItem::AccountOutput { item, .. } => output_for_another_account(item.clone()),
         })
         .collect()
 }
@@ -167,14 +182,14 @@ pub(super) fn project_transcript_to_account(transcript: &mut Vec<XaiReplayItem>,
                 account_id: owner,
                 item,
             } if owner != account_id => {
-                portable_output_item(item, true).map(XaiReplayItem::SanitizedOutput)
+                output_for_another_account(item).map(XaiReplayItem::SanitizedOutput)
             }
             item => Some(item),
         })
         .collect();
 }
 
-pub(super) fn portable_output_item(mut item: Value, strip_opaque: bool) -> Option<Value> {
+fn output_for_another_account(mut item: Value) -> Option<Value> {
     let Value::Object(object) = &mut item else {
         return None;
     };
@@ -188,14 +203,7 @@ pub(super) fn portable_output_item(mut item: Value, strip_opaque: bool) -> Optio
     object.remove("id");
     object.remove("status");
     if is_reasoning {
-        if strip_opaque
-            || object
-                .get("encrypted_content")
-                .and_then(Value::as_str)
-                .is_some_and(|value| !valid_reasoning_ciphertext(value))
-        {
-            object.remove("encrypted_content");
-        }
+        object.remove("encrypted_content");
         if object.get("encrypted_content").is_none() && !has_readable_reasoning(object) {
             return None;
         }
@@ -265,6 +273,8 @@ pub(super) fn attach_xai_session_update(
         account_id: capture.account_id,
         session_id: capture.session_id,
         transcript,
+        instructions: capture.instructions,
+        response_stored: capture.response_stored,
     };
     if let Some(update) = encode_xai_session_state(state)? {
         events[terminal_index].attach_session_update(update);
@@ -284,8 +294,8 @@ pub(super) fn capture_output_item(event: &ProviderEvent, capture: &mut GrokSessi
         && let Some(item) = wire
             .data()
             .get("item")
+            .filter(|item| item.is_object())
             .cloned()
-            .and_then(|item| portable_output_item(item, false))
     {
         let index = wire
             .data()
@@ -313,8 +323,8 @@ pub(super) fn capture_output_item(event: &ProviderEvent, capture: &mut GrokSessi
             if capture.output_items.contains_key(&index) {
                 continue;
             }
-            if let Some(item) = portable_output_item(item.clone(), false) {
-                capture.output_items.insert(index, item);
+            if item.is_object() {
+                capture.output_items.insert(index, item.clone());
             }
         }
     }

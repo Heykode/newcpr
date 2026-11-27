@@ -529,6 +529,7 @@ struct ProviderErrorUpstreamValues {
 #[derive(Clone, Default)]
 struct ProviderErrorFailureObservation {
     invalid_request_message: Option<&'static str>,
+    invalid_request_details: Option<RequestErrorDetails>,
     unreachable_proxy: Option<crate::upstream::ProxyEndpoint>,
     continuation_unavailable_reason: Option<&'static str>,
     connection: Option<ProviderConnectionObservation>,
@@ -537,7 +538,24 @@ struct ProviderErrorFailureObservation {
 #[derive(Clone)]
 struct AtomicClientEvents(Vec<ProviderEvent>);
 
+/// 本地校验显式提供的协议字段，不从任意错误来源或请求值反推
+#[derive(Clone)]
+struct RequestErrorDetails {
+    code: &'static str,
+    parameter: Option<String>,
+}
+
 impl ProviderError {
+    /// 附加本地请求校验的安全机器码与协议字段路径，禁止传入字段值
+    #[must_use]
+    pub fn with_request_details(mut self, code: &'static str, parameter: Option<&str>) -> Self {
+        self.failure_observation_mut().invalid_request_details = Some(RequestErrorDetails {
+            code,
+            parameter: parameter.map(str::to_owned),
+        });
+        self
+    }
+
     #[must_use]
     pub fn with_upstream_failure_fields(
         mut self,
@@ -1263,6 +1281,7 @@ pub struct GatewayError {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct GatewayClientErrorDetails {
+    parameter: Option<String>,
     code: Option<&'static str>,
     retry_after: Option<Duration>,
 }
@@ -1410,6 +1429,17 @@ impl GatewayError {
             Some(diagnostic) => gateway.with_diagnostic(diagnostic.clone()),
             None => gateway,
         };
+        let mut gateway = gateway;
+        if gateway.kind() == GatewayErrorKind::InvalidRequest
+            && let Some(details) = error
+                .failure_observation
+                .as_ref()
+                .and_then(|observation| observation.invalid_request_details.as_ref())
+        {
+            let client = gateway.client_details.get_or_insert_with(Default::default);
+            client.code = Some(details.code);
+            client.parameter.clone_from(&details.parameter);
+        }
         match error.client_visible_upstream_error() {
             Some(upstream) => gateway.with_client_visible_upstream_error(upstream.clone()),
             None => gateway,
@@ -1471,6 +1501,7 @@ impl GatewayError {
         self.client_visible_upstream_error
             .as_ref()
             .and_then(|error| error.param())
+            .or_else(|| self.client_details.as_ref()?.parameter.as_deref())
     }
 
     /// 返回原上游结构化 error code；没有时调用方应回退稳定网关 code。

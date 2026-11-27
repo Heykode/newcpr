@@ -209,9 +209,7 @@ async fn client_scope_isolates_tombstones_and_preserves_same_client_reconnect_lo
         .continuation
         .record_completed("response-shared".to_owned());
     lease.put(connection).await;
-    let replacement = pool.acquire(&key(2), None, false).await;
-    assert!(matches!(replacement, WebSocketPoolAcquire::Connect(_)));
-    drop(replacement);
+    pool.evict_account("account").await;
 
     let reconnected = owner
         .with_connection_profile("new-profile")
@@ -331,20 +329,20 @@ async fn account_capacity_reservation_is_atomic_across_sessions_profiles_and_egr
         }
     }
     assert_eq!(leases.len(), 5);
-    assert_eq!(
-        CodexWebSocketPool::account_slots(&pool.lock_state(), "account"),
-        5
-    );
+    assert_eq!(pool.lock_state().slots.len(), 5);
     drop(leases);
-    assert_eq!(
-        CodexWebSocketPool::account_slots(&pool.lock_state(), "account"),
-        0
-    );
+    assert_eq!(pool.lock_state().slots.len(), 0);
 }
 
 #[tokio::test]
 async fn account_capacity_does_not_impose_a_global_opening_limit() {
-    let pool = CodexWebSocketPool::new(Duration::from_secs(60));
+    let limits = AccountConcurrencyHandle::new(
+        ConfigRevision::new(1).unwrap(),
+        (0..32)
+            .map(|i| (format!("account-{i}"), NonZeroU32::new(1).unwrap()))
+            .collect(),
+    );
+    let pool = CodexWebSocketPool::new(Duration::from_secs(60)).with_account_concurrency(limits);
     let leases = (0..32)
         .map(|index| {
             opening(
@@ -402,28 +400,41 @@ async fn account_capacity_cancelled_waiter_does_not_leave_a_slot() {
 }
 
 #[tokio::test]
-async fn account_capacity_counts_idle_busy_and_opening_together() {
+async fn account_opening_limit_preserves_busy_and_idle_connections() {
     let (pool, _) = pool(3);
-    let (idle, idle_lease, _idle_peer) = connected(&pool, &key(1)).await;
+    let (_first, first_lease, _first_peer) = connected(&pool, &key(1)).await;
+    let (_second, second_lease, _second_peer) = connected(&pool, &key(2)).await;
+    let (mut idle, idle_lease, _idle_peer) = connected(&pool, &key(3)).await;
+    idle.continuation.record_completed("response-c".to_owned());
     idle_lease.put(idle).await;
-    let (_busy, busy_lease, _busy_peer) = connected(&pool, &key(2)).await;
-    let connecting = opening(&pool, &key(3));
-    assert_eq!(pool.lock_state().slots.len(), 3);
-    let (decision, close) = pool.acquire_once(&key(4), None, false);
-    assert!(decision.is_none());
-    assert_eq!(close.len(), 1);
-    // Retiring idle still occupies capacity until the actual close completes.
-    assert!(pool.acquire_once(&key(5), None, false).0.is_none());
-    assert_eq!(pool.lock_state().slots.len(), 3);
-    pool.close_retired_connections(close).await;
-    drop(opening(&pool, &key(4)));
-    drop(connecting);
-    drop(busy_lease);
+    let (_fourth, fourth_lease, _fourth_peer) = connected(&pool, &key(4)).await;
+    assert_eq!(pool.lock_state().slots.len(), 4);
+    let attempts = [5, 6, 7].map(|index| opening(&pool, &key(index)));
+    let (decision, close) = pool.acquire_once(&key(8), None, false);
+    assert!(decision.is_none() && close.is_empty());
+    match pool.acquire(&key(3), Some("response-c"), false).await {
+        WebSocketPoolAcquire::Reused { connection, lease } => lease.put(*connection).await,
+        _ => panic!("C must remain reusable even when all handshake permits are occupied"),
+    }
+    let [failed, cancelled, other] = attempts;
+    failed.failed().await;
+    let replacement = opening(&pool, &key(8));
+    drop(cancelled);
+    let next = opening(&pool, &key(9));
+    assert!(pool.acquire_once(&key(10), None, false).0.is_none());
+    drop((
+        other,
+        replacement,
+        next,
+        first_lease,
+        second_lease,
+        fourth_lease,
+    ));
     pool.shutdown().await;
 }
 
 #[tokio::test]
-async fn account_capacity_shrink_keeps_busy_responses_and_retires_only_excess_returns() {
+async fn account_limit_shrink_preserves_completed_connections_and_exact_owner() {
     let (pool, limits) = pool(3);
     let (first, first_lease, _first_peer) = connected(&pool, &key(1)).await;
     let (second, second_lease, _second_peer) = connected(&pool, &key(2)).await;
@@ -440,7 +451,7 @@ async fn account_capacity_shrink_keeps_busy_responses_and_retires_only_excess_re
     first_lease.put(first).await;
     second_lease.put(second).await;
     third_lease.put(third).await;
-    assert_eq!(pool.lock_state().slots.len(), 1);
+    assert_eq!(pool.lock_state().slots.len(), 3);
     match pool.acquire(&key(3), Some("response-third"), false).await {
         WebSocketPoolAcquire::Reused { connection, lease } => lease.put(*connection).await,
         _ => panic!("remaining exact continuation must keep its owner"),
@@ -449,7 +460,7 @@ async fn account_capacity_shrink_keeps_busy_responses_and_retires_only_excess_re
 }
 
 #[tokio::test]
-async fn account_capacity_simultaneous_returns_do_not_retire_more_than_the_excess() {
+async fn account_limit_shrink_allows_simultaneous_returns() {
     let (pool, limits) = pool(3);
     let (first, first_lease, _first_peer) = connected(&pool, &key(1)).await;
     let (second, second_lease, _second_peer) = connected(&pool, &key(2)).await;
@@ -466,12 +477,12 @@ async fn account_capacity_simultaneous_returns_do_not_retire_more_than_the_exces
         .values()
         .filter(|slot| matches!(slot, WebSocketPoolSlot::Idle { .. }))
         .count();
-    assert_eq!(retained, 1);
+    assert_eq!(retained, 3);
     pool.shutdown().await;
 }
 
 #[tokio::test(start_paused = true)]
-async fn account_capacity_shrink_resolves_exact_owner_before_trimming_other_idle_sockets() {
+async fn account_limit_shrink_allows_exact_owner_reuse() {
     let (pool, limits) = pool(2);
     let (mut first, first_lease, _first_peer) = connected(&pool, &key(1)).await;
     first
@@ -508,14 +519,16 @@ async fn account_capacity_shrink_resolves_exact_owner_before_trimming_other_idle
         .unwrap();
 }
 
-#[tokio::test]
-async fn account_capacity_reclaimed_continuation_has_a_tombstone() {
+#[tokio::test(start_paused = true)]
+async fn expired_continuation_still_has_a_tombstone() {
     let (pool, _) = pool(1);
     let (mut connection, lease, _peer) = connected(&pool, &key(1)).await;
     connection
         .continuation
         .record_completed("response-1".to_owned());
     lease.put(connection).await;
+    tokio::time::advance(Duration::from_secs(61)).await;
+    pool.maintain_idle_connections().await;
     let new_opening = pool.acquire(&key(2), None, false).await;
     assert!(matches!(new_opening, WebSocketPoolAcquire::Connect(_)));
     assert!(matches!(
@@ -527,7 +540,7 @@ async fn account_capacity_reclaimed_continuation_has_a_tombstone() {
 
 #[tokio::test(start_paused = true)]
 async fn account_capacity_maintenance_does_not_erase_busy_or_cancelled_opening_reservations() {
-    let (pool, _) = pool(2);
+    let (pool, _) = pool(1);
     let (_connection, busy, _peer) = connected(&pool, &key(1)).await;
     let connecting = opening(&pool, &key(2));
     tokio::time::advance(Duration::from_secs(61)).await;

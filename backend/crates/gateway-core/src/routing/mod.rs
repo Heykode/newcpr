@@ -16,9 +16,10 @@ pub use crate::account::scope::{
 };
 pub use crate::identity::ProviderKind;
 pub use catalog::{
-    AccountModelMetadata, ProviderCatalogGeneration, ProviderCatalogPort,
-    ProviderCatalogUnavailable, ProviderModelCapabilities, ProviderModelDescriptor,
-    PublicModelDescriptor, ReasoningModelVariant,
+    AccountModelMetadata, AgentModelListing, ExecutableModelMetadata, ModelMetadataSource,
+    ProviderCatalogGeneration, ProviderCatalogPort, ProviderCatalogUnavailable,
+    ProviderModelCapabilities, ProviderModelDescriptor, PublicModelDescriptor,
+    ReasoningModelVariant,
 };
 pub use snapshot::RuntimeSnapshot;
 
@@ -749,6 +750,13 @@ impl ModelCapabilities {
         self
     }
 
+    pub(crate) fn supports_generation_protocol(&self, protocol: &str) -> bool {
+        self.operations.contains(&OperationKind::Generate)
+            && (self.generation_protocol.is_none()
+                || self.generation_protocol == Some(protocol)
+                || self.translated_generation_protocols.contains(protocol))
+    }
+
     fn match_operation(
         &self,
         operation: &crate::operation::Operation,
@@ -760,12 +768,15 @@ impl ModelCapabilities {
             return None;
         }
         if matches!(operation, crate::operation::Operation::Generate(_))
-            && self.generation_protocol.is_some_and(|protocol| {
-                protocol != operation.protocol()
-                    && !self
-                        .translated_generation_protocols
-                        .contains(operation.protocol())
-            })
+            && !self.supports_generation_protocol(operation.protocol())
+        {
+            return None;
+        }
+        if matches!(operation, crate::operation::Operation::CountTokens(_))
+            && operation.protocol() != "token-count"
+            && self
+                .generation_protocol
+                .is_some_and(|p| p != operation.protocol())
         {
             return None;
         }

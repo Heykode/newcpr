@@ -317,7 +317,7 @@ fn encoding_error_response(error: &HttpEncodeError, format: &HttpResponseFormat)
             (_, HttpResponseFormat::Responses) => StatusCode::INTERNAL_SERVER_ERROR,
             (
                 _,
-                HttpResponseFormat::Chat { .. }
+                HttpResponseFormat::Chat
                 | HttpResponseFormat::Messages
                 | HttpResponseFormat::MessageTokenCount
                 | HttpResponseFormat::GenAi

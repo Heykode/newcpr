@@ -160,6 +160,7 @@ async fn fixture(sharing: ClientPeerSharing, plaintext: &str) -> (AdminTestFixtu
     );
     *fixture.provider_quota.lock().unwrap() = Some(ProviderQuota {
         paused_windows: Vec::new(),
+        plan_type_display: None,
         plan_type: Some("pro".into()),
         observed_at: Some(now),
         refresh_token_expires_at: None,

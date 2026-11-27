@@ -77,7 +77,7 @@ pub(super) fn push_targets(
                 plan_type: current.and_then(|account| account.plan_type.clone()),
                 plan_type_display: current
                     .and_then(|account| account.plan_type.as_deref())
-                    .map(|plan| provider.plan_type_display(plan)),
+                    .and_then(|plan| provider.plan_type_display(plan)),
                 switch_workspace: target.workspace_id != credential.workspace_id,
                 available: current.is_some_and(|account| {
                     target.matches_account(account)

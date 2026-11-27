@@ -98,15 +98,14 @@ use crate::transport::{
 };
 
 mod cache_diagnostics;
+mod chat;
 mod compact;
-mod count_tokens;
 mod encrypted_history;
 mod excel;
 mod execution;
 mod failure;
 mod guardian;
 mod live;
-mod messages;
 mod observation;
 mod quality_probe;
 mod request_proxy;
@@ -585,9 +584,6 @@ impl Provider for CodexProvider {
                 UpstreamSendState::NotSent,
             ));
         }
-        if let Operation::CountTokens(count) = request.operation() {
-            return self.execute_count_tokens(count, candidate, context).await;
-        }
         if let Operation::GenerateImage(image) = request.operation() {
             return self.execute_image(image, candidate, context).await;
         }
@@ -608,76 +604,50 @@ impl Provider for CodexProvider {
                 UpstreamSendState::NotSent,
             ));
         };
-        let is_messages = generate.protocol_payload().protocol()
-            == gateway_protocol::anthropic::ANTHROPIC_PROTOCOL;
-        // Capture explicit source-protocol identity before conversion drops metadata.
-        let messages_affinity = crate::credential::derive_messages_session_affinity(
-            generate.protocol_payload(),
-            context.client_api_key_ref(),
-        )
-        .map(|affinity| {
-            affinity.with_policy(context.account_selection_policy().account_affinity())
-        });
-        let mut messages_translator = None;
+        let upstream_model = candidate.upstream_model().ok_or_else(chat::request_error)?;
+        let is_chat = generate.protocol_payload().protocol()
+            == gateway_protocol::chat_completions::CHAT_PROTOCOL;
+        let mut selected_chat = None;
+        let mut translator = None;
         let translated;
-        let generate = if generate.protocol_payload().protocol()
-            == gateway_protocol::anthropic::ANTHROPIC_PROTOCOL
-        {
-            let original = generate.protocol_payload().body();
-            messages_translator = Some(messages::ResponsesResponseTranslator::new(original));
-            let mut body = gateway_protocol::anthropic::messages_to_responses_request(original)
-                .map_err(|error| {
-                    provider_error(
-                        ProviderErrorKind::InvalidRequest,
-                        UpstreamSendState::NotSent,
-                    )
-                    .with_source(error)
-                })?;
-            // 仅转换生成的 OAuth 默认档位省略；原生 Responses 保留调用方声明。
-            if matches!(
-                body.get("service_tier").and_then(Value::as_str),
-                Some("auto" | "default")
-            ) {
-                body.shift_remove("service_tier");
+        let generate = if is_chat {
+            if context.continuation().is_some()
+                || generate.provider_session_state(PROVIDER_NAME).is_some()
+            {
+                return Err(chat::request_error());
             }
-            let mut context = generate.protocol_payload().context().clone();
-            messages::retain_target_headers(&mut context);
-            translated = Operation::Generate(generate.clone())
-                .replace_protocol_wire(None, context)
-                .map_err(|_| {
-                    provider_error(
-                        ProviderErrorKind::InvalidRequest,
-                        UpstreamSendState::NotSent,
-                    )
-                })?
-                .translate_protocol_wire(
-                    OPENAI_PROTOCOL,
-                    serde_json::to_vec(&body)
-                        .map_err(|_| {
-                            provider_error(ProviderErrorKind::Protocol, UpstreamSendState::NotSent)
-                        })?
-                        .into(),
-                )
-                .map_err(|_| {
-                    provider_error(
-                        ProviderErrorKind::InvalidRequest,
-                        UpstreamSendState::NotSent,
-                    )
-                })?;
+            let started = Instant::now();
+            let lease = self
+                .selector
+                .select(&SelectCodexCredential {
+                    upstream_model: upstream_model.as_str(),
+                    request_url: &self.responses_url,
+                    attempt: &context,
+                    session_affinity_key: None,
+                    guardian: false,
+                })
+                .await
+                .map_err(map_selection_error)?;
+            selected_chat = Some((
+                lease,
+                u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+            ));
+            let (operation, encoder) = chat::prepare(generate, upstream_model, &context)?;
+            translator = Some(encoder);
+            translated = operation;
             let Operation::Generate(generate) = &translated else {
                 unreachable!()
             };
             generate
-        } else {
+        } else if generate.protocol_payload().protocol() == OPENAI_PROTOCOL {
             generate
-        };
-        let quota_overdraft_probe = generate.codex_quota_overdraft_probe();
-        let Some(upstream_model) = candidate.upstream_model() else {
+        } else {
             return Err(provider_error(
-                ProviderErrorKind::Protocol,
+                ProviderErrorKind::Unsupported,
                 UpstreamSendState::NotSent,
             ));
         };
+        let quota_overdraft_probe = generate.codex_quota_overdraft_probe();
         let previous_session = decode_openai_session_state(generate);
         // Validate replay before account selection can mutate the shared binding.
         let native_scope = if let Some(continuation) =
@@ -756,7 +726,8 @@ impl Provider for CodexProvider {
             context.is_quality_check(),
             context.request_id().as_str(),
         )?;
-        let quota_overdraft_eligible = context.codex_quota_overdraft_enabled()
+        let quota_overdraft_eligible = !is_chat
+            && context.codex_quota_overdraft_enabled()
             && crate::transport::request::quota_overdraft::eligible(&upstream_request);
         let quota_overdraft_turn = quota_overdraft_eligible.then(|| {
             crate::transport::request::quota_overdraft::CodexQuotaOverdraftTurn::for_request(
@@ -809,7 +780,7 @@ impl Provider for CodexProvider {
         if let Some(identity) = &self.session_identity {
             identity.prepare_local_conversation(&mut upstream_request);
         }
-        let session_affinity = (!is_messages)
+        let session_affinity = (!is_chat)
             .then(|| derive_codex_session_affinity(&upstream_request, context.client_api_key_ref()))
             .flatten()
             .map(|affinity| {
@@ -837,7 +808,7 @@ impl Provider for CodexProvider {
         let cyber_policy_session_key =
             derive_codex_cyber_policy_session_key(&upstream_request, context.client_api_key_ref());
         let guardian = upstream_request.guardian_parent_thread_id().is_some();
-        let cache_preference = (!is_messages
+        let cache_preference = (!is_chat
             && session_affinity
                 .as_ref()
                 .and_then(CodexSessionAffinity::key)
@@ -855,7 +826,6 @@ impl Provider for CodexProvider {
             .as_ref()
             .filter(|affinity| affinity.key().is_some() || guardian)
             .or(cache_preference.as_ref())
-            .or(messages_affinity.as_ref())
             .or(session_affinity.as_ref());
         if context.continuation_attempt() == ContinuationAttempt::RotateForClientReplay
             && (account_affinity
@@ -872,24 +842,29 @@ impl Provider for CodexProvider {
         let transport_affinity_key =
             derive_codex_transport_key(&upstream_request, context.client_api_key_ref());
 
-        let selection_started_at = Instant::now();
-        let lease = self
-            .selector
-            .select_with_cyber_policy(
-                &SelectCodexCredential {
-                    upstream_model: upstream_model.as_str(),
-                    request_url: &self.responses_url,
-                    attempt: &context,
-                    session_affinity_key: account_affinity.and_then(CodexSessionAffinity::key),
-                    guardian,
-                },
-                cyber_policy_session_key.as_ref(),
-                account_affinity,
-            )
-            .await
-            .map_err(map_selection_error)?;
-        let account_selection_wait_ms =
-            u64::try_from(selection_started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
+        let (lease, account_selection_wait_ms) = if let Some(selected) = selected_chat {
+            selected
+        } else {
+            let selection_started_at = Instant::now();
+            let lease = self
+                .selector
+                .select_with_cyber_policy(
+                    &SelectCodexCredential {
+                        upstream_model: upstream_model.as_str(),
+                        request_url: &self.responses_url,
+                        attempt: &context,
+                        session_affinity_key: account_affinity.and_then(CodexSessionAffinity::key),
+                        guardian,
+                    },
+                    cyber_policy_session_key.as_ref(),
+                    account_affinity,
+                )
+                .await
+                .map_err(map_selection_error)?;
+            let account_selection_wait_ms =
+                u64::try_from(selection_started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
+            (lease, account_selection_wait_ms)
+        };
         if context.continuation_attempt() == ContinuationAttempt::RotateForClientReplay {
             // Core 已确认允许换号；选号器迁移共享绑定后，完整历史仍须由客户端提供
             // 不将旧账号的 previous_response_id 或增量输入发送给替代账号
@@ -1269,7 +1244,7 @@ impl Provider for CodexProvider {
             session_capture,
         });
         let stream = ProviderStream::new(metadata, events, lease);
-        let stream = if let Some(translator) = messages_translator.take() {
+        let stream = if let Some(translator) = translator {
             stream.with_native_response_translator(translator)
         } else {
             stream

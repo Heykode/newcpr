@@ -244,6 +244,7 @@ fn representative_quota_should_prefer_short_window_and_highest_usage() {
     let quota = ProviderQuota {
         paused_windows: Default::default(),
         credits: None,
+        plan_type_display: None,
         plan_type: None,
         observed_at: None,
         refresh_token_expires_at: None,
@@ -267,6 +268,7 @@ fn representative_quota_should_prefer_account_wide_window_over_model_specific_wi
     let quota = ProviderQuota {
         paused_windows: Default::default(),
         credits: None,
+        plan_type_display: None,
         plan_type: None,
         observed_at: None,
         refresh_token_expires_at: None,
@@ -306,6 +308,7 @@ fn usage_window_should_not_use_daily_rolling_usage_for_weekly_statistics() {
     let quota = ProviderQuota {
         paused_windows: Default::default(),
         credits: None,
+        plan_type_display: None,
         plan_type: None,
         observed_at: None,
         refresh_token_expires_at: None,
@@ -346,6 +349,7 @@ fn exhausted_quota_keeps_measured_usage_without_a_confirmed_reached_window() {
     let mut quota = ProviderQuota {
         paused_windows: Default::default(),
         credits: None,
+        plan_type_display: None,
         plan_type: None,
         observed_at: None,
         refresh_token_expires_at: None,
@@ -376,6 +380,7 @@ fn exhausted_quota_should_preserve_the_provider_identified_reached_window() {
     let mut quota = ProviderQuota {
         paused_windows: Default::default(),
         credits: None,
+        plan_type_display: None,
         plan_type: None,
         observed_at: None,
         refresh_token_expires_at: None,
@@ -418,6 +423,7 @@ fn account_exhaustion_preserves_measured_and_unknown_window_usage() {
     let mut quota = ProviderQuota {
         paused_windows: Vec::new(),
         credits: None,
+        plan_type_display: None,
         plan_type: None,
         observed_at: None,
         refresh_token_expires_at: None,
