@@ -307,6 +307,7 @@ async fn connected_with_buffer(
     let (stream, peer) = tokio::io::duplex(buffer_size);
     let socket = WebSocketStream::from_raw_socket(stream, Role::Client, None).await;
     let connection = PooledWebSocketConnection {
+        lifetime: CodexWebSocketPoolConfig::default().into(),
         websocket: PumpedWebSocket::new(
             Box::new(socket),
             PumpLogContext::new(None, None),

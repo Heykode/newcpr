@@ -23,8 +23,8 @@ use super::ClientApiKeySnapshot;
 pub struct SnapshotRuntimeSettings {
     pub codex_privacy_policy: gateway_core::settings::privacy::CodexPrivacyPolicy,
     pub pricing: gateway_core::metering::PricingOverrides,
-    pub openai_oauth_guardian_review_model: bool,
-    pub openai_request_country: gateway_core::account::OpenAiRequestCountry,
+    pub openai_request_settings: gateway_core::settings::OpenAiRequestSettings,
+    pub openai_websocket_pool: gateway_core::settings::OpenAiWebSocketPoolSettings,
     pub request_profiles:
         BTreeMap<gateway_core::routing::ProviderKind, gateway_core::account::OpaqueProviderData>,
     pub responses_max_decompressed_body_bytes: u64,
@@ -180,9 +180,9 @@ impl SnapshotStorePort for PgRuntimeSnapshotRepository {
                 data.settings.responses_max_decompressed_body_bytes,
             )
             .with_request_location(data.settings.request_tuning.effective_request_location())
-            .with_openai_request_settings(
-                data.settings.openai_oauth_guardian_review_model,
-                data.settings.openai_request_country,
+            .with_openai_runtime_settings(
+                data.settings.openai_request_settings,
+                data.settings.openai_websocket_pool,
             )
             .with_excel_image_transport(data.settings.request_tuning.excel_image_transport.clone())
             .with_account_error_protection(
@@ -192,7 +192,10 @@ impl SnapshotStorePort for PgRuntimeSnapshotRepository {
                     .clone()
                     .unwrap_or_default(),
             )
-            .with_request_tuning(to_core_request_tuning(data.settings.request_tuning))
+            .with_request_tuning(to_core_request_tuning(
+                data.settings.request_tuning,
+                data.settings.openai_websocket_pool,
+            ))
             .with_openai_guardian_reserved_concurrency(
                 data.settings.openai_guardian_reserved_concurrency,
             )
@@ -283,6 +286,7 @@ fn core_revision(revision: Revision) -> Result<ConfigRevision, SnapshotStoreErro
 
 fn to_core_request_tuning(
     overrides: RequestTuningOverrides,
+    pool: gateway_core::settings::OpenAiWebSocketPoolSettings,
 ) -> gateway_core::routing::RequestTuning {
     let defaults = gateway_core::routing::RequestTuning::default();
     gateway_core::routing::RequestTuning {
@@ -301,12 +305,8 @@ fn to_core_request_tuning(
         smart_scheduling: overrides
             .smart_scheduling
             .unwrap_or(defaults.smart_scheduling),
-        websocket_max_age_ms: overrides
-            .websocket_max_age_ms
-            .unwrap_or(defaults.websocket_max_age_ms),
-        websocket_stream_idle_timeout_ms: overrides
-            .websocket_stream_idle_timeout_ms
-            .unwrap_or(defaults.websocket_stream_idle_timeout_ms),
+        websocket_max_age_ms: pool.max_age_ms,
+        websocket_stream_idle_timeout_ms: pool.stream_idle_timeout_ms,
         websocket_failure_threshold: overrides
             .websocket_failure_threshold
             .unwrap_or(defaults.websocket_failure_threshold),
@@ -388,8 +388,9 @@ async fn load_settings(
             sqlx::types::Json<gateway_core::settings::privacy::CodexPrivacyPolicy>,
         pricing_overrides_json: sqlx::types::Json<gateway_core::metering::PricingOverrides>,
         pricing_synced_json: sqlx::types::Json<gateway_core::metering::PricingOverrides>,
-        openai_oauth_guardian_review_model: bool,
-        openai_request_country: sqlx::types::Json<gateway_core::account::OpenAiRequestCountry>,
+        openai_request_settings: sqlx::types::Json<gateway_core::settings::OpenAiRequestSettings>,
+        openai_websocket_pool:
+            sqlx::types::Json<gateway_core::settings::OpenAiWebSocketPoolSettings>,
         request_profiles:
             sqlx::types::Json<BTreeMap<String, serde_json::Map<String, serde_json::Value>>>,
         config_revision: i64,
@@ -413,7 +414,7 @@ async fn load_settings(
     }
     let row = sqlx::query_as::<_, SettingsRow>(
         "select codex_privacy_policy_json, pricing_overrides_json, pricing_synced_json, coalesce((select jsonb_object_agg(provider_kind, configuration_json) from provider_outbound_user_agents where mode = 'configuration'), '{}'::jsonb) as request_profiles,
-                openai_oauth_guardian_review_model, openai_request_country_json as openai_request_country, config_revision, refresh_margin_seconds, refresh_concurrency,
+                openai_request_settings_json as openai_request_settings, openai_websocket_pool_json as openai_websocket_pool, config_revision, refresh_margin_seconds, refresh_concurrency,
                 max_concurrent_per_account, request_interval_ms, rotation_strategy, quota_reset_window_weights_json,
                 model_mappings_json, min_codex_desktop_version,
                 min_codex_cli_version, request_tuning_json,
@@ -437,8 +438,8 @@ async fn load_settings(
                 row.pricing_synced_json.0,
                 &row.pricing_overrides_json.0,
             ),
-            openai_oauth_guardian_review_model: row.openai_oauth_guardian_review_model,
-            openai_request_country: row.openai_request_country.0,
+            openai_request_settings: row.openai_request_settings.0,
+            openai_websocket_pool: row.openai_websocket_pool.0,
             request_profiles: super::client_keys::decode_request_profiles(row.request_profiles.0)?,
             account_affinity: gateway_core::account::AccountAffinity::parse(&row.account_affinity)
                 .ok_or_else(|| invalid("invalid account affinity"))?,

@@ -11,7 +11,7 @@ use gateway_protocol::openai::{
 use serde_json::{Value, json};
 
 use super::{
-    chat::delivery::{ChatEncoder, validate_response},
+    chat::delivery::{ChatDeliveryValidator, ChatEncoder, validate_response},
     error::{client_error_code, gateway_error_contract},
     responses::{OpenAiResponsesEncoder, ProtocolError, ProtocolErrorBody, ResponseEncodeError},
 };
@@ -39,6 +39,7 @@ impl HttpResponseFormat {
 pub(in crate::openai) struct HttpResponseEncoder {
     responses: OpenAiResponsesEncoder,
     chat: Option<ChatEncoder>,
+    chat_delivery: Option<ChatDeliveryValidator>,
     messages: Option<super::messages_response::MessagesEncoder>,
     token_count: bool,
     genai: Option<super::genai_response::GenAiEncoder>,
@@ -49,6 +50,8 @@ impl HttpResponseEncoder {
         Self {
             responses: OpenAiResponsesEncoder::new(),
             chat: matches!(format, HttpResponseFormat::Chat).then(ChatEncoder::default),
+            chat_delivery: matches!(format, HttpResponseFormat::Chat)
+                .then(ChatDeliveryValidator::default),
             messages: format
                 .is_messages()
                 .then(super::messages_response::MessagesEncoder::default),
@@ -100,10 +103,18 @@ impl HttpResponseEncoder {
         if let Some(messages) = self.messages.as_mut() {
             return Ok(messages.push_sse(event));
         }
-        Ok(match self.chat.as_mut() {
+        let frames = match self.chat.as_mut() {
             Some(chat) => chat.push(event),
             None => self.responses.push_sse(event),
-        })
+        };
+        if let Some(validator) = self.chat_delivery.as_mut() {
+            for frame in &frames {
+                validator
+                    .validate_frame(frame)
+                    .map_err(|_| HttpEncodeError::ChatDelivery)?;
+            }
+        }
+        Ok(frames)
     }
 
     pub(in crate::openai) fn is_completed(&self) -> bool {
@@ -133,6 +144,14 @@ impl HttpResponseEncoder {
     pub(in crate::openai) fn finish_sse(&mut self) -> Result<(), HttpEncodeError> {
         if let Some(genai) = self.genai.as_mut() {
             return genai.finish().map_err(HttpEncodeError::Responses);
+        }
+        if let Some(validator) = self.chat_delivery.as_mut() {
+            validator
+                .validate_frame(gateway_protocol::openai::sse::DONE_SSE_FRAME.as_bytes())
+                .map_err(|_| HttpEncodeError::ChatDelivery)?;
+            validator
+                .finish_delivery()
+                .map_err(|_| HttpEncodeError::ChatDelivery)?;
         }
         Ok(())
     }

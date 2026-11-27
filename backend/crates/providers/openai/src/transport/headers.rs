@@ -54,7 +54,7 @@ pub fn build_codex_model_headers(
     Ok(headers)
 }
 
-/// Core 默认客户端身份，用于模型接口及 OAuth refresh；raw token exchange 不使用。
+/// Core 默认客户端身份，用于模型接口、OAuth refresh 和授权码交换。
 pub fn build_codex_profile_headers(profile: &CodexWireProfile) -> CodexClientResult<HeaderMap> {
     let mut headers = HeaderMap::new();
     headers.insert(

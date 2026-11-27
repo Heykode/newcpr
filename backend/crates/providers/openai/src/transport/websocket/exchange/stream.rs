@@ -29,6 +29,8 @@ use super::{
 };
 
 pub(in crate::transport::websocket) struct WebSocketStreamPoolReturn {
+    pub(in crate::transport::websocket) lifetime:
+        super::super::pool::state::WebSocketConnectionLifetime,
     pub(in crate::transport::websocket) lease: WebSocketPoolLease,
     pub(in crate::transport::websocket) created_at: tokio::time::Instant,
     pub(in crate::transport::websocket) continuation: WebSocketContinuationState,
@@ -611,6 +613,7 @@ async fn finish_stream_websocket(
             metadata: reusable_websocket_metadata(metadata),
             continuation,
             created_at: pool_return.created_at,
+            lifetime: pool_return.lifetime,
             initial_search_declared: Some(pool_return.initial_search_declared),
         })
         .await;

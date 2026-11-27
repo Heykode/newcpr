@@ -34,7 +34,9 @@ pub use codex::{
     codex_turn_id, context_turn_metadata, observed_turn_metadata, turn_metadata_session_id,
     turn_metadata_thread_id, turn_metadata_turn_id,
 };
-pub use headers::{is_transport_managed_request_header, parse_retry_after_seconds};
+pub use headers::{
+    is_private_response_header, is_transport_managed_request_header, parse_retry_after_seconds,
+};
 pub use scheduling::{
     OPENAI_SCHEDULING_SESSION_HINT_CONTEXT_KEY, OPENAI_SCHEDULING_SESSION_HINT_HEADERS,
     OpenAiSchedulingSessionHint, is_openai_scheduling_session_hint_header,

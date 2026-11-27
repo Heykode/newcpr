@@ -35,8 +35,8 @@ pub struct SnapshotSettingsFacts {
     excel_image_transport: Option<super::ExcelImageTransport>,
     responses_max_decompressed_body_bytes: u64,
     request_location: Option<crate::account::RequestLocation>,
-    openai_oauth_guardian_review_model: bool,
-    openai_request_country: crate::account::OpenAiRequestCountry,
+    openai_request_settings: crate::settings::OpenAiRequestSettings,
+    openai_websocket_pool: crate::settings::OpenAiWebSocketPoolSettings,
     max_concurrent_per_account: u32,
     openai_guardian_reserved_concurrency: u32,
     session_affinity_ttl_hours: u32,
@@ -73,13 +73,29 @@ impl SnapshotSettingsFacts {
     }
 
     #[must_use]
+    pub fn with_openai_runtime_settings(
+        mut self,
+        request: crate::settings::OpenAiRequestSettings,
+        pool: crate::settings::OpenAiWebSocketPoolSettings,
+    ) -> Self {
+        self.openai_request_settings = request;
+        self.openai_websocket_pool = pool;
+        self
+    }
+
+    #[must_use]
+    pub fn openai_websocket_pool(&self) -> crate::settings::OpenAiWebSocketPoolSettings {
+        self.openai_websocket_pool
+    }
+
+    #[must_use]
     pub fn with_openai_request_settings(
         mut self,
         guardian: bool,
         country: crate::account::OpenAiRequestCountry,
     ) -> Self {
-        self.openai_oauth_guardian_review_model = guardian;
-        self.openai_request_country = country;
+        self.openai_request_settings.oauth_guardian_review_model = guardian;
+        self.openai_request_settings.request_country = country;
         self
     }
 
@@ -158,8 +174,8 @@ impl SnapshotSettingsFacts {
             codex_quota_overdraft_enabled: false,
             codex_quota_overdraft_probe_model: "gpt-6-astra".to_owned(),
             request_location: None,
-            openai_oauth_guardian_review_model: true,
-            openai_request_country: Default::default(),
+            openai_request_settings: Default::default(),
+            openai_websocket_pool: Default::default(),
             request_interval_ms,
             rotation_strategy: rotation_strategy.into(),
             quota_reset_window_weights: Default::default(),
@@ -583,6 +599,16 @@ async fn compile_runtime_snapshot(
     refresh_catalog: bool,
     privacy_compiler: Option<&dyn crate::settings::privacy::PrivacyPolicyCompiler>,
 ) -> Result<RuntimeSnapshot, RuntimeSnapshotCompileError> {
+    facts
+        .settings
+        .openai_request_settings
+        .validate()
+        .map_err(|_| RuntimeSnapshotCompileError::InvalidData)?;
+    facts
+        .settings
+        .openai_websocket_pool
+        .validate()
+        .map_err(|_| RuntimeSnapshotCompileError::InvalidData)?;
     let registered_providers = provider_kinds.iter().cloned().collect::<BTreeSet<_>>();
 
     // Only read failures retain model facts; a successful empty catalog withdraws them.
@@ -913,9 +939,9 @@ async fn compile_runtime_snapshot(
                 codex_quota_overdraft_probe_model,
             )
             .with_request_location(facts.settings.request_location)
-            .with_openai_request_settings(
-                facts.settings.openai_oauth_guardian_review_model,
-                facts.settings.openai_request_country,
+            .with_openai_runtime_settings(
+                facts.settings.openai_request_settings,
+                facts.settings.openai_websocket_pool,
             )
             .with_account_concurrency_limits(account_limits)
     })
@@ -936,8 +962,8 @@ pub struct RuntimeSnapshot {
     codex_quota_overdraft_probe_model: UpstreamModelId,
     responses_max_decompressed_body_bytes: std::num::NonZeroUsize,
     request_location: Option<crate::account::RequestLocation>,
-    openai_oauth_guardian_review_model: bool,
-    openai_request_country: crate::account::OpenAiRequestCountry,
+    openai_request_settings: crate::settings::OpenAiRequestSettings,
+    openai_websocket_pool: crate::settings::OpenAiWebSocketPoolSettings,
     revision: ConfigRevision,
     account_selection_policy: AccountSelectionPolicy,
     providers: Arc<BTreeSet<ProviderKind>>,
@@ -985,16 +1011,32 @@ impl RuntimeSnapshot {
 
     #[must_use]
     pub const fn oauth_guardian_review_model(&self) -> bool {
-        self.openai_oauth_guardian_review_model
+        self.openai_request_settings.oauth_guardian_review_model
     }
+    #[must_use]
+    pub fn with_openai_runtime_settings(
+        mut self,
+        request: crate::settings::OpenAiRequestSettings,
+        pool: crate::settings::OpenAiWebSocketPoolSettings,
+    ) -> Self {
+        self.openai_request_settings = request;
+        self.openai_websocket_pool = pool;
+        self
+    }
+
+    #[must_use]
+    pub fn openai_websocket_pool(&self) -> crate::settings::OpenAiWebSocketPoolSettings {
+        self.openai_websocket_pool
+    }
+
     #[must_use]
     pub fn with_openai_request_settings(
         mut self,
         guardian: bool,
         country: crate::account::OpenAiRequestCountry,
     ) -> Self {
-        self.openai_oauth_guardian_review_model = guardian;
-        self.openai_request_country = country;
+        self.openai_request_settings.oauth_guardian_review_model = guardian;
+        self.openai_request_settings.request_country = country;
         self
     }
 
@@ -1168,8 +1210,8 @@ impl RuntimeSnapshot {
             .expect("positive default limit"),
             revision,
             request_location: None,
-            openai_oauth_guardian_review_model: true,
-            openai_request_country: Default::default(),
+            openai_request_settings: Default::default(),
+            openai_websocket_pool: Default::default(),
             account_selection_policy,
             providers: Arc::new(provider_set),
             provider_models: Arc::new(model_map),
@@ -2100,7 +2142,7 @@ impl RuntimeSnapshot {
             max_attempts: self.request_tuning.max_attempts(),
             request_tuning: self.request_tuning,
             request_location: self.request_location.clone(),
-            request_country: self.openai_request_country.clone(),
+            openai_request_settings: self.openai_request_settings.clone(),
             account_scope,
             candidates: Arc::from(candidates),
         })
@@ -2154,7 +2196,7 @@ impl RuntimeSnapshot {
             max_attempts: self.request_tuning.max_attempts(),
             request_tuning: self.request_tuning,
             request_location: self.request_location.clone(),
-            request_country: self.openai_request_country.clone(),
+            openai_request_settings: self.openai_request_settings.clone(),
             account_scope,
             candidates: Arc::from([candidate]),
         })

@@ -199,6 +199,7 @@ async fn merged_model_less_first_attempt_should_match_sequential_semantics() {
         deadline_at: started_at + Duration::seconds(30),
     };
     let attempt = ModelRequestAttemptStart {
+        observed_plan: None,
         account_selection_wait_ms: None,
         capacity_used_slots: None,
         capacity_total_slots: None,
@@ -266,6 +267,7 @@ async fn merged_model_less_first_attempt_should_match_sequential_semantics() {
         .unwrap();
     let second = repository
         .begin_model_request_attempt(ModelRequestAttemptStart {
+            observed_plan: None,
             account_selection_wait_ms: None,
             capacity_used_slots: None,
             capacity_total_slots: None,
@@ -478,6 +480,7 @@ async fn billing_snapshot_upgrade_preserves_legacy_request_and_cumulative_totals
         "select to_jsonb(mr) - 'billing_snapshot_json' - 'purchase_identity_id'
                                - 'client_api_key_name_snapshot'
                                - 'provider_account_plan_type_snapshot'
+                               - 'provider_account_plan_type_display_snapshot'
          from model_requests mr",
     )
     .fetch_one(&database.pool)
@@ -498,6 +501,16 @@ async fn billing_snapshot_upgrade_preserves_legacy_request_and_cumulative_totals
             .fetch_one(&database.pool)
             .await
             .unwrap();
+    let plan_display: Option<String> = sqlx::query_scalar(
+        "select provider_account_plan_type_display_snapshot from model_requests",
+    )
+    .fetch_one(&database.pool)
+    .await
+    .unwrap();
+    assert!(
+        plan_display.is_none(),
+        "legacy requests must not fabricate a historical subscription description"
+    );
     let costs_after: Value =
         sqlx::query_scalar("select to_jsonb(c) from account_cumulative_costs c")
             .fetch_one(&database.pool)

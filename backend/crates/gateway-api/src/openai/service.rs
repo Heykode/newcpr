@@ -65,6 +65,25 @@ impl OpenAiService {
             .await
     }
 
+    pub(crate) async fn messages_model_catalog(
+        &self,
+        client: &AuthenticatedClient,
+    ) -> Result<Vec<String>, ProviderCatalogUnavailable> {
+        let entries = self
+            .execution
+            .client_model_catalog(client, "anthropic", "")
+            .await?;
+        let mut models: Vec<_> = entries
+            .into_iter()
+            .map(|entry| match entry {
+                PublicModelDescriptor::Adapted(profile) => profile.model().as_str().to_owned(),
+                PublicModelDescriptor::Native { model, .. } => model.as_str().to_owned(),
+            })
+            .collect();
+        models.sort_unstable();
+        Ok(models)
+    }
+
     pub(crate) fn contains_public_model(
         &self,
         client: &AuthenticatedClient,

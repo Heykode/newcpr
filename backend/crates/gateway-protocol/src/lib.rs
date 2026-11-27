@@ -15,3 +15,6 @@ pub mod request;
 mod capabilities;
 pub mod genai;
 pub mod peer;
+
+/// Shared HTTP transport boundaries.
+pub mod http;

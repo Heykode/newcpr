@@ -44,7 +44,7 @@ function setMode(mode: OpenAiRequestCountry['mode'] | undefined) {
       <BaseFormItem :label="t('settings.location.countryMode')">
         <BaseSelect :model-value="country.mode" :aria-label="t('settings.location.countryMode')" :disabled="disabled" :options="modes" @update:model-value="setMode" />
       </BaseFormItem>
-      <BaseFormItem v-if="country.mode === 'custom'" :label="t('settings.location.customCountryCode')" prop="openaiRequestCountry.country" :rules="{ required: true, pattern: /^[A-Z]{2}$/, message: t('settings.location.invalidCountryCode'), trigger: 'blur' }">
+      <BaseFormItem v-if="country.mode === 'custom'" :label="t('settings.location.customCountryCode')" prop="openaiRequestSettings.requestCountry.country" :rules="{ required: true, pattern: /^[A-Z]{2}$/, message: t('settings.location.invalidCountryCode'), trigger: 'blur' }">
         <BaseInput v-model="country.country" :aria-label="t('settings.location.customCountryCode')" placeholder="US" :disabled="disabled" />
       </BaseFormItem>
     </div>

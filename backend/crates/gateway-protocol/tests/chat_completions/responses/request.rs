@@ -318,3 +318,17 @@ fn files_and_audio_are_preserved_as_inputs_instead_of_losing_the_user_turn() {
         );
     }
 }
+
+#[test]
+fn maps_inline_user_pdf_without_reencoding_its_data() {
+    let data = "data:application/pdf;base64,JVBERi0xLjQ=";
+    let converted = convert(json!({"model":"model-a","messages":[
+        {"role":"user","content":[{"type":"text","text":"Read the attachment"},
+            {"type":"file","file":{"filename":"document.pdf","file_data":data}}]}
+    ]}));
+    assert_eq!(
+        converted["input"][0]["content"],
+        json!([{"type":"input_text","text":"Read the attachment"},
+            {"type":"input_file","filename":"document.pdf","file_data":data}])
+    );
+}

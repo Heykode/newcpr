@@ -1,12 +1,12 @@
 import type { ProtectionDraft } from '../components/error-protection/form'
 import type { rotationOptions } from '../constants'
 import type { CodexPrivacyPolicy, ProviderRequestProfiles } from '@/api'
-import type { AccountAffinity, OpenAiRequestCountry, RequestTuning } from '@/api/modules/settings'
+import type { AccountAffinity, RequestTuning } from '@/api/modules/settings'
 import { cloneDeep } from 'es-toolkit'
 import { computed, reactive, ref, shallowRef } from 'vue'
 import { getSettings, updateSettings } from '@/api'
 import { defaultRequestLocation } from '@/api/modules/proxies'
-import { defaultResetWindowWeights, defaultSmartScheduling } from '@/api/modules/settings'
+import { defaultOpenAiRequestSettings, defaultOpenAiWebSocketPool, defaultResetWindowWeights, defaultSmartScheduling } from '@/api/modules/settings'
 import { ApiError } from '@/api/request'
 import { toast } from '@/components/base/BaseToast'
 
@@ -42,8 +42,6 @@ const requestTuningFallbacks: RequestTuning = {
   maxRequestAttempts: 32,
   websocketMaxRetries: 5,
   streamPrefetchBytes: 128 * 1024,
-  websocketMaxAgeMs: 55 * 60 * 1_000,
-  websocketStreamIdleTimeoutMs: 300_000,
   websocketFailureThreshold: 3,
   websocketFailureWindowMs: 30_000,
   websocketFailureOpenDurationMs: 30_000,
@@ -82,8 +80,8 @@ export function useSettingsForm() {
   const form = reactive({
     codexPrivacyPolicy: { enabled: false, onError: 'skip_rule', rules: [] } as CodexPrivacyPolicy,
     providerRequestProfiles: {} as ProviderRequestProfiles,
-    openaiOauthGuardianReviewModel: true,
-    openaiRequestCountry: { mode: 'follow_location' } as OpenAiRequestCountry,
+    openaiRequestSettings: defaultOpenAiRequestSettings(),
+    openaiWebsocketPool: defaultOpenAiWebSocketPool(),
     accountErrorProtection: defaultProtection(),
     excelDefaultModels: DEFAULT_EXCEL_MODELS_INPUT,
     responsesMaxDecompressedBodyBytes: 64 * 1024 * 1024,
@@ -169,8 +167,8 @@ export function useSettingsForm() {
     form.responsesMaxDecompressedBodyBytes
       = data.responsesMaxDecompressedBodyBytes ?? 64 * 1024 * 1024
     form.accountAffinity = data.accountAffinity ?? 'strict'
-    form.openaiOauthGuardianReviewModel = data.openaiOauthGuardianReviewModel
-    form.openaiRequestCountry = structuredClone(data.openaiRequestCountry)
+    form.openaiRequestSettings = cloneDeep(data.openaiRequestSettings)
+    form.openaiWebsocketPool = cloneDeep(data.openaiWebsocketPool)
     form.refreshMarginSeconds = data.refreshMarginSeconds
     form.refreshConcurrency = data.refreshConcurrency
     form.maxConcurrentPerAccount = data.maxConcurrentPerAccount
@@ -263,7 +261,14 @@ export function useSettingsForm() {
   }
 
   async function saveSettings() {
-    if (form.openaiRequestCountry.mode === 'custom' && !/^[A-Z]{2}$/.test(form.openaiRequestCountry.country)) {
+    const pool = form.openaiWebsocketPool
+    if (![pool.maxAgeMs, pool.fastPathBudgetMs, pool.idleTimeoutMs, pool.streamIdleTimeoutMs].every(Number.isSafeInteger)
+      || pool.maxAgeMs <= 0 || pool.idleTimeoutMs <= 0 || pool.streamIdleTimeoutMs < 0
+      || pool.fastPathBudgetMs < 1 || pool.fastPathBudgetMs > 15000) {
+      toast.warning(t('settings.websocketPool.invalidSettings'))
+      return
+    }
+    if (form.openaiRequestSettings.requestCountry.mode === 'custom' && !/^[A-Z]{2}$/.test(form.openaiRequestSettings.requestCountry.country)) {
       toast.warning(t('settings.location.invalidCountryCode'))
       return
     }
@@ -437,8 +442,8 @@ export function useSettingsForm() {
         excelDefaultModels,
         responsesMaxDecompressedBodyBytes: form.responsesMaxDecompressedBodyBytes,
         modelMappings: mappingPayload(),
-        openaiOauthGuardianReviewModel: form.openaiOauthGuardianReviewModel,
-        openaiRequestCountry: { ...form.openaiRequestCountry },
+        openaiRequestSettings: cloneDeep(form.openaiRequestSettings),
+        openaiWebsocketPool: cloneDeep(form.openaiWebsocketPool),
         refreshMarginSeconds,
         refreshConcurrency,
         maxConcurrentPerAccount,

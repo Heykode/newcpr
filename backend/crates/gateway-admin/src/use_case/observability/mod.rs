@@ -402,12 +402,12 @@ impl ObservabilityService for DefaultObservabilityService {
                     key: item.key,
                     name: item.name,
                     account_authentication_kind: item.account_authentication_kind,
-                    account_plan_type_display: item.account_provider_kind.as_deref().and_then(
-                        |provider| {
+                    account_plan_type_display: item.account_plan_type_display.or_else(|| {
+                        item.account_provider_kind.as_deref().and_then(|provider| {
                             self.providers
                                 .plan_type_display(provider, item.account_plan_type.as_deref())
-                        },
-                    ),
+                        })
+                    }),
                     account_plan_type: item.account_plan_type,
                     request_count: item.request_count,
                     success_count: item.success_count,
@@ -456,9 +456,13 @@ impl ObservabilityService for DefaultObservabilityService {
             .map_err(|error| map_store_error(error, "operations errors"))?;
         for error in &mut page.items {
             error.provider_account_plan_type_display =
-                error.provider_kind.as_deref().and_then(|provider| {
-                    self.providers
-                        .plan_type_display(provider, error.provider_account_plan_type.as_deref())
+                error.provider_account_plan_type_display.take().or_else(|| {
+                    error.provider_kind.as_deref().and_then(|provider| {
+                        self.providers.plan_type_display(
+                            provider,
+                            error.provider_account_plan_type.as_deref(),
+                        )
+                    })
                 });
         }
         Ok(page)
@@ -869,10 +873,16 @@ impl DefaultObservabilityService {
     /// 不支持的来源或费用规则失败）只保留该条已存的总额，不影响整页返回。
     fn enrich_list_records(&self, records: &mut [crate::model::observability::UsageListRecord]) {
         for record in records {
-            record.provider_account_plan_type_display =
-                record.provider_kind.as_deref().and_then(|provider| {
-                    self.providers
-                        .plan_type_display(provider, record.provider_account_plan_type.as_deref())
+            record.provider_account_plan_type_display = record
+                .provider_account_plan_type_display
+                .take()
+                .or_else(|| {
+                    record.provider_kind.as_deref().and_then(|provider| {
+                        self.providers.plan_type_display(
+                            provider,
+                            record.provider_account_plan_type.as_deref(),
+                        )
+                    })
                 });
             let Some(UsageBilling::Total { source, total }) = record.billing.as_ref() else {
                 continue;

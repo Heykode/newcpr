@@ -559,8 +559,8 @@ pub(super) fn settings_with_margin(refresh_margin_seconds: u64) -> RuntimeSettin
     RuntimeSettingsUpdate {
         request_profile_updates: Default::default(),
         codex_privacy_policy: None,
-        openai_oauth_guardian_review_model: true,
-        openai_request_country: Default::default(),
+        openai_request_settings: Default::default(),
+        openai_websocket_pool: Default::default(),
 
         turn_state_probe_proxy_id: None,
         turn_state_probe_concurrency: None,
@@ -1084,8 +1084,8 @@ async fn request_tuning_overrides_should_round_trip() {
         websocket_max_retries: Some(9),
 
         stream_prefetch_bytes: Some(256 * 1024),
-        websocket_max_age_ms: Some(60_000),
-        websocket_stream_idle_timeout_ms: Some(120_000),
+        websocket_max_age_ms: None,
+        websocket_stream_idle_timeout_ms: None,
         websocket_failure_threshold: Some(3),
         websocket_failure_window_ms: Some(30_000),
         websocket_failure_open_duration_ms: Some(45_000),
@@ -1765,6 +1765,113 @@ async fn quota_reset_weights_upgrade_and_persist_through_runtime_snapshot() {
             .unwrap();
         assert_eq!(snapshot.settings.quota_reset_window_weights, weights);
         assert_eq!(snapshot.settings.rotation_strategy, strategy);
+    }
+    database.close().await;
+}
+
+#[tokio::test]
+async fn openai_settings_upgrade_imports_legacy_values_once_and_preserves_edits() {
+    use gateway_core::{
+        account::OpenAiRequestCountry, provider_ports::ProviderRuntimePolicyPort,
+        settings::OpenAiWebSocketPoolSettings,
+    };
+    let old = sqlx::migrate::Migrator {
+        migrations: super::TEST_MIGRATOR
+            .iter()
+            .filter(|migration| migration.version <= 102)
+            .cloned()
+            .collect::<Vec<_>>()
+            .into(),
+        ..sqlx::migrate::Migrator::DEFAULT
+    };
+    let Some(database) = TestDatabase::create_with_migrator("openai_runtime_upgrade", &old).await
+    else {
+        return;
+    };
+    sqlx::query("update runtime_settings set openai_request_country_json='{\"mode\":\"custom\",\"country\":\"CA\"}', openai_oauth_guardian_review_model=false, request_tuning_json='{\"websocketMaxAgeMs\":90000,\"websocketStreamIdleTimeoutMs\":0,\"maxRequestAttempts\":9}'")
+        .execute(&database.pool).await.unwrap();
+    super::TEST_MIGRATOR.run(&database.pool).await.unwrap();
+    let repository = PgRuntimeSettingsRepository::new(database.pool.clone());
+    let defaults = repository.load_runtime_settings().await.unwrap();
+    assert_eq!(
+        defaults.openai_request_settings.residency.as_deref(),
+        Some("us")
+    );
+    assert!(!defaults.openai_request_settings.oauth_guardian_review_model);
+    assert_eq!(
+        defaults.openai_request_settings.request_country,
+        OpenAiRequestCountry::Custom {
+            country: "CA".into()
+        }
+    );
+    let legacy = OpenAiWebSocketPoolSettings {
+        enabled: false,
+        max_age_ms: 120000,
+        fast_path_budget_ms: 321,
+        idle_timeout_ms: 654000,
+        stream_idle_timeout_ms: 777000,
+    };
+    repository
+        .import_legacy_openai_settings(None, Some("us_cr".into()), legacy)
+        .await
+        .unwrap();
+    let imported = repository.load_runtime_settings().await.unwrap();
+    assert_eq!(imported.openai_request_settings.residency, None);
+    assert_eq!(
+        imported
+            .openai_request_settings
+            .account_routing_override
+            .as_deref(),
+        Some("us_cr")
+    );
+    assert_eq!(
+        imported.openai_websocket_pool,
+        OpenAiWebSocketPoolSettings {
+            max_age_ms: 90000,
+            stream_idle_timeout_ms: 0,
+            ..legacy
+        }
+    );
+    assert_eq!(imported.request_tuning.max_request_attempts, Some(9));
+    assert_eq!(imported.request_tuning.websocket_max_age_ms, None);
+    let mut update = settings_with_margin(100);
+    update.openai_request_settings = imported.openai_request_settings.clone();
+    update.openai_request_settings.account_routing_override = None;
+    update.openai_websocket_pool = OpenAiWebSocketPoolSettings {
+        fast_path_budget_ms: 1234,
+        ..Default::default()
+    };
+    repository.update_runtime_settings(update).await.unwrap();
+    let saved = repository.load_runtime_settings().await.unwrap();
+    let restarted = PgRuntimeSettingsRepository::new(database.pool.clone());
+    restarted
+        .import_legacy_openai_settings(Some("ignored".into()), Some("ignored".into()), legacy)
+        .await
+        .unwrap();
+    assert_eq!(restarted.load_runtime_settings().await.unwrap(), saved);
+    assert_eq!(
+        restarted.load_openai_request_settings().await.unwrap(),
+        saved.openai_request_settings
+    );
+    let snapshot = PgRuntimeSnapshotRepository::new(database.pool.clone())
+        .load_runtime_snapshot()
+        .await
+        .unwrap();
+    assert_eq!(
+        snapshot.settings.openai_websocket_pool,
+        saved.openai_websocket_pool
+    );
+    assert_eq!(
+        snapshot.settings.openai_request_settings,
+        saved.openai_request_settings
+    );
+    for invalid in [
+        json!({"fastPathBudgetMs": 15001}),
+        json!({"maxAgeMs": 0}),
+        json!({"enabled": "false"}),
+        json!({"maxConnecting": 8}),
+    ] {
+        assert!(sqlx::query("update runtime_settings set openai_websocket_pool_json=openai_websocket_pool_json || $1").bind(invalid).execute(&database.pool).await.is_err());
     }
     database.close().await;
 }

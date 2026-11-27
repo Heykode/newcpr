@@ -284,8 +284,8 @@ test('runtime save keeps custom parameters and silently rereads server state aft
   const updates = []
   const server = {
     configRevision: 7,
-    openaiOauthGuardianReviewModel: true,
-    openaiRequestCountry: { mode: 'follow_location' },
+    openaiRequestSettings: { requestCountry: { mode: 'follow_location' }, oauthGuardianReviewModel: true, residency: 'us', accountRoutingOverride: null },
+    openaiWebsocketPool: { enabled: true, maxAgeMs: 3300000, fastPathBudgetMs: 800, idleTimeoutMs: 300000, streamIdleTimeoutMs: 300000 },
     refreshMarginSeconds: 60,
     refreshConcurrency: 8,
     maxConcurrentPerAccount: 20,

@@ -42,7 +42,7 @@ pub fn grok_billing_breakdown(
 pub struct GrokCanonicalDecoder {
     pricing: Option<gateway_core::metering::ModelPriceOverride>,
     decoder: SseEventDecoder,
-    fallback_model: String,
+    upstream_model: String,
     response_id: Option<String>,
     started: bool,
     completed: bool,
@@ -65,11 +65,11 @@ impl GrokCanonicalDecoder {
         self
     }
 
-    pub fn new(fallback_model: impl Into<String>) -> Self {
+    pub fn new(upstream_model: impl Into<String>) -> Self {
         Self {
             pricing: None,
             decoder: SseEventDecoder::default(),
-            fallback_model: fallback_model.into(),
+            upstream_model: upstream_model.into(),
             response_id: None,
             started: false,
             completed: false,
@@ -85,7 +85,7 @@ impl GrokCanonicalDecoder {
     /// 创建在 canonical 与 wire 投影处理每个上游 event 前先还原请求级 tool 别名的
     /// 解码器。
     #[must_use]
-    pub fn for_request(fallback_model: impl Into<String>, request: &GrokResponsesRequest) -> Self {
+    pub fn for_request(upstream_model: impl Into<String>, request: &GrokResponsesRequest) -> Self {
         Self {
             requires_provider_cost: request.body().get("tool_choice").and_then(Value::as_str)
                 != Some("none")
@@ -101,7 +101,7 @@ impl GrokCanonicalDecoder {
                             )
                         })
                     }),
-            ..Self::new(fallback_model)
+            ..Self::new(upstream_model)
         }
     }
 
@@ -271,7 +271,7 @@ impl GrokCanonicalDecoder {
             .get("model")
             .and_then(Value::as_str)
             .filter(|model| !model.is_empty())
-            .unwrap_or(&self.fallback_model)
+            .unwrap_or(&self.upstream_model)
             .to_owned();
         self.response_id = Some(response_id.clone());
         self.started = true;
@@ -298,9 +298,7 @@ impl GrokCanonicalDecoder {
         let item = value.get("item").ok_or_else(protocol_error_marker)?;
         let output_index = event_index(value, "output_index")?;
         match item.get("type").and_then(Value::as_str) {
-            Some(
-                "function_call" | "custom_tool_call" | "tool_search_call" | "apply_patch_call",
-            ) => {
+            Some("function_call" | "custom_tool_call") => {
                 let index = content_index(output_index, 0)?;
                 self.add_content(index, ContentKind::ToolCall, output)?;
                 let call_id = item
@@ -340,9 +338,7 @@ impl GrokCanonicalDecoder {
         let item = value.get("item").ok_or_else(protocol_error_marker)?;
         match item.get("type").and_then(Value::as_str) {
             Some("message" | "reasoning") => return Ok(()),
-            Some(
-                "function_call" | "custom_tool_call" | "tool_search_call" | "apply_patch_call",
-            ) => {}
+            Some("function_call" | "custom_tool_call") => {}
             Some(_) | None => return Ok(()),
         }
         let output_index = event_index(value, "output_index")?;
@@ -478,7 +474,7 @@ impl GrokCanonicalDecoder {
             .get("model")
             .and_then(Value::as_str)
             .filter(|model| !model.is_empty())
-            .unwrap_or(&self.fallback_model)
+            .unwrap_or(&self.upstream_model)
             .to_owned();
         if let Some(cost) = provider_reported_cost(response)? {
             output.push(GatewayEvent::ProviderCost(cost));
@@ -486,7 +482,7 @@ impl GrokCanonicalDecoder {
             && let Some(cost) = usage.and_then(|usage| {
                 calculated_cost(
                     response,
-                    &model,
+                    &self.upstream_model,
                     usage,
                     self.response_service_tier(),
                     self.pricing.as_ref(),
@@ -625,7 +621,10 @@ fn provider_reported_cost(response: &Value) -> Result<Option<ProviderReportedCos
         return Ok(None);
     };
     let ticks = value.as_u64().ok_or_else(protocol_error_marker)?;
-    // 明确返回的零费用也是上游账单事实，不能当作缺失而改用本地估算。
+    // 官方 REST 将未报告费用补为 0；正数才是可用的上游费用事实。
+    if ticks == 0 {
+        return Ok(None);
+    }
     ProviderReportedCost::from_usd_ticks(u128::from(ticks))
         .map(Some)
         .map_err(protocol_error)
@@ -695,7 +694,9 @@ fn incomplete_finish_reason(response: &Value) -> FinishReason {
         .pointer("/incomplete_details/reason")
         .and_then(Value::as_str)
     {
-        Some("max_output_tokens" | "max_tokens") => FinishReason::Length,
+        Some("max_output_tokens" | "max_tokens" | "max_prompt_tokens" | "max_time_limit") => {
+            FinishReason::Length
+        }
         Some("content_filter") => FinishReason::ContentFilter,
         _ => FinishReason::Other,
     }

@@ -809,6 +809,7 @@ async fn connect_websocket_connection(
             metadata: websocket_connection_metadata(connection, &response),
             continuation: WebSocketContinuationState::default(),
             created_at: tokio::time::Instant::now(),
+            lifetime: super::pool::CodexWebSocketPoolConfig::default().into(),
             initial_search_declared: None,
         },
         started_at.elapsed(),
@@ -928,6 +929,7 @@ pub(crate) async fn execute_prepared_response_create_request_stream(
         mut metadata,
         continuation,
         created_at,
+        lifetime,
         initial_search_declared,
     } = connection;
     // Only the current exchange owns an active exit reference. Idle sockets do not.
@@ -991,6 +993,7 @@ pub(crate) async fn execute_prepared_response_create_request_stream(
     let pool_return = lease.map(|lease| WebSocketStreamPoolReturn {
         lease,
         created_at,
+        lifetime,
         continuation,
         initial_search_declared: initial_search_declared
             .unwrap_or(request.opening.codex_search_declared),

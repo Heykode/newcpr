@@ -186,3 +186,60 @@ async fn compaction_preserves_websocket_requirements_and_explicit_preference() {
         .expect("WS request completes");
     }
 }
+
+#[tokio::test]
+async fn websocket_handshake_uses_current_request_settings_without_rebuilding_provider() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_provider_contract").await;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        let mut observed = Vec::new();
+        for _ in 0..2 {
+            let (socket, _) = listener.accept().await.unwrap();
+            let mut headers = None;
+            let mut socket =
+                crate::transport::accept_codex_test_websocket_with(socket, |request, _| {
+                    headers = Some(request.headers().clone());
+                })
+                .await;
+            socket.next().await.unwrap().unwrap();
+            socket.send(Message::text(json!({"type":"response.completed","response":{"id":"resp_settings","model":"gpt-5.4","status":"completed","output":[]}}).to_string())).await.unwrap();
+            observed.push(headers.unwrap());
+            socket.close(None).await.unwrap();
+        }
+        observed
+    });
+    let provider = provider_with_base_url(&store, base_url);
+    for (residency, routing) in [(Some("fixture-region"), Some("us_cr")), (None, None)] {
+        let settings = gateway_core::settings::OpenAiRequestSettings {
+            residency: residency.map(str::to_owned),
+            account_routing_override: routing.map(str::to_owned),
+            ..Default::default()
+        };
+        let mut stream = provider
+            .execute(
+                planned_request(
+                    "openai",
+                    Operation::Generate(request(
+                        compaction_body(),
+                        Map::from_iter([("use_websocket".into(), json!(true))]),
+                    )),
+                ),
+                context_with_request_settings("req_online_ws_settings", settings),
+            )
+            .await
+            .unwrap();
+        while let Some(event) = stream.next().await {
+            event.unwrap();
+        }
+    }
+    let observed = server.await.unwrap();
+    assert_eq!(
+        observed[0]["x-openai-internal-codex-residency"],
+        "fixture-region"
+    );
+    assert_eq!(observed[0]["x-openai-account-routing-override"], "us_cr");
+    assert!(!observed[1].contains_key("x-openai-internal-codex-residency"));
+    assert!(!observed[1].contains_key("x-openai-account-routing-override"));
+}

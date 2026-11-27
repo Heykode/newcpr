@@ -13,7 +13,7 @@ Codex Proxy RS 是单进程、单副本运行的多 Provider AI 网关，同时�
 - OpenAI、xAI 与 Antigravity 三个编译期 Provider；
 - PostgreSQL 持久化、Redis 协调状态以及 S3/R2 数据库备份。
 
-`/v1/chat/completions` 在协议层转换后共用 Responses 执行链路。系统不存在 Provider Instance 层，也不支持通过复制应用容器进行多副本
+`/v1/chat/completions` 保留原始协议参加路由，在选中 Provider 和账号后直接转换为其原生协议，返回 Chat wire。系统不存在 Provider Instance 层，也不支持通过复制应用容器进行多副本
 扩容。Client Key 限定账号分组，而不是绑定某个 Provider；一次请求的 Provider 候选由账号范围、模型
 能力和运行时健康共同决定。
 
@@ -238,13 +238,12 @@ Core 只理解 `Operation`、能力要求、Provider 候选、稳定错误和 ca
 - Responses 的业务扩展头保留原始多值字节；传输与反代请求头分类由 `gateway-protocol` 统一定义，
   API 入站与 OpenAI Provider 编码共同使用。下游链路元数据和压缩协商不跨越该边界，
   上游认证、请求画像与传输字段仍由 Provider 生成；响应方向的诊断头不受请求过滤规则影响。
-- xAI 是翻译边界。Provider 把 Grok wire 转换为 Responses wire；上游结构化错误的 message/code/type
-  可以透出，但账号指纹会先脱敏。
+- xAI 原生 Responses 保留原始 wire，Chat 使用专用转换。上游结构化错误的 message/code/type 可以透出，账号指纹先脱敏；已删除旧工具改写、自动密文恢复及压缩补偿。
 - response ID 是不透明 UTF-8 bytes，不假设 UUID、固定长度或跨 Provider 可复用。
 - 请求画像以配置为启动基线；三平台的后台OAuth、刷新、目录、额度及资料操作读取全局画像，生成请求可由下游Key覆盖。同一轮操作冻结身份，版本检查只更新对应平台的运行时发布资料，不回写 `config.yaml`。
-- Antigravity 原生 GenAI 保留 wire，HTTP 交付 owner 不为该协议插入 SSE 心跳；兼容 Responses/Chat/Messages 由 Provider 转换，Responses 生成参数直接映射 GenAI，不继承 Messages 的默认上限和推理约束。
+- Antigravity 原生 GenAI 保留 wire，不插入网关 SSE 心跳；Chat 在选号后直转 GenAI。Responses/Messages 转换已退役，当前内置 OAuth 账号没有 Messages 执行目标。
 - Core 根据授权成员裁剪基础模型目录，再按实际型号/账号检查输出上限；强制搜索将候选限定在同时允许原型号和搜索目标的同账号、同分组。Provider 使用目录首个搜索目标，完整 JSON 经 grounding 转成来源和引用事件，计费仍按实际型号。
-- 常规 AGY 生成/计数使用服务端系统提示词，独立搜索使用固定指令；转换入口仍拒绝非 null `previous_response_id`。内部转换错误保留 source，公开提示不泄露原始内容。
+- AGY 生成和计数都前置平台系统提示词，并保留客户端系统指令和元数据。内部转换错误保留 source，公开提示不泄露原始内容。
 - AGY quota worker 先读取轻量版本，再按成功生成完成时间查询活动；额度文档保存同次目录确认的模型组成员，Admin/PG 用明确型号集聚合窗口 Token，整号预测与恢复继续只接受 AccountWide。
 
 ### 账号出站代理

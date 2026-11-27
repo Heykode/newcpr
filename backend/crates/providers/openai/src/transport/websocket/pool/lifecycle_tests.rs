@@ -132,6 +132,7 @@ fn connection_with_proxy_permit(
 ) -> (PooledWebSocketConnection, Arc<SocketControl>) {
     let control = Arc::new(SocketControl::default());
     let connection = PooledWebSocketConnection {
+        lifetime: super::CodexWebSocketPoolConfig::default().into(),
         websocket: PumpedWebSocket::new(
             Box::new(ControlledSocket(Arc::clone(&control))),
             PumpLogContext::new(None, None),
@@ -749,5 +750,56 @@ async fn bound_idle_socket_survives_idle_timeout_until_downstream_closes() {
     cancellation.cancel();
     socket.close_started.cancelled().await;
     socket.release_close();
+    pool.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn online_pool_changes_preserve_existing_lifetimes_and_account_opening_limits() {
+    use gateway_core::{runtime::RequestTuningHandle, settings::OpenAiWebSocketPoolSettings};
+    let handle = RequestTuningHandle::default();
+    let original = OpenAiWebSocketPoolSettings {
+        max_age_ms: 60000,
+        idle_timeout_ms: 60000,
+        ..Default::default()
+    };
+    handle.publish_openai_websocket_pool(original);
+    let pool = pool_with_limit(2).with_request_tuning_without_account_concurrency(handle.clone());
+    let (old, old_lease, old_control) = connected(&pool, &key(1)).await;
+    old_lease.put(old).await;
+    let opening_old = opening(&pool, &key(2));
+    let changed = OpenAiWebSocketPoolSettings {
+        max_age_ms: 1000,
+        idle_timeout_ms: 500,
+        fast_path_budget_ms: 222,
+        stream_idle_timeout_ms: 333,
+        ..original
+    };
+    handle.publish_openai_websocket_pool(changed);
+    let (old_opened, control) = connection();
+    let (old_opened, lease) = opening_old
+        .connected_reserved(old_opened)
+        .await
+        .unwrap_or_else(|_| panic!("original opening"));
+    assert_eq!(old_opened.lifetime.max_age, Duration::from_secs(60));
+    lease.put(*old_opened).await;
+    let (new, new_lease, new_control) = connected(&pool, &key(3)).await;
+    assert_eq!(new.lifetime.max_age, Duration::from_secs(1));
+    new_lease.put(new).await;
+    assert_eq!(pool.fast_path_budget(), Duration::from_millis(222));
+    assert_eq!(pool.stream_idle_timeout(), Some(Duration::from_millis(333)));
+    assert_eq!(pool.lock_state().slots.len(), 3);
+    tokio::time::advance(Duration::from_secs(2)).await;
+    pool.maintain_idle_connections().await;
+    assert!(!old_control.close_started.is_cancelled());
+    assert!(!control.close_started.is_cancelled());
+    new_control.close_started.cancelled().await;
+    let first = opening(&pool, &key(4));
+    let second = opening(&pool, &key(5));
+    assert!(pool.acquire_once(&key(6), None, false).0.is_none());
+    drop(first);
+    drop(second);
+    old_control.release_close();
+    control.release_close();
+    new_control.release_close();
     pool.shutdown().await;
 }

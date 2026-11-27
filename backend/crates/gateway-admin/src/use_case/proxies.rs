@@ -236,7 +236,8 @@ impl ProxiesService for DefaultProxiesService {
             .map(|mut account| async {
                 // 与账号目录一致，缺失套餐时读取已有额度快照；限制并发且不触发上游刷新。
                 let mut cached_quota = None;
-                if explicit_plan_type(account.plan_type.as_deref()).is_none()
+                if (account.provider_kind == "antigravity"
+                    || explicit_plan_type(account.plan_type.as_deref()).is_none())
                     && let Ok(kind) = ProviderKind::new(account.provider_kind.clone())
                     && let Ok(provider) = self.providers.require(&kind)
                     && let Ok(account_id) = ProviderAccountId::new(account.id.clone())

@@ -347,7 +347,23 @@ pub(crate) struct CodexWebSocketConnectionMetadata {
     pub(crate) diagnostics: CodexUpstreamDiagnostics,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) struct WebSocketConnectionLifetime {
+    pub(crate) max_age: Duration,
+    pub(crate) idle_timeout: Duration,
+}
+
+impl From<super::CodexWebSocketPoolConfig> for WebSocketConnectionLifetime {
+    fn from(config: super::CodexWebSocketPoolConfig) -> Self {
+        Self {
+            max_age: config.max_age,
+            idle_timeout: config.idle_timeout,
+        }
+    }
+}
+
 pub(crate) struct PooledWebSocketConnection {
+    pub(crate) lifetime: WebSocketConnectionLifetime,
     pub(crate) websocket: PumpedWebSocket,
     pub(crate) metadata: CodexWebSocketConnectionMetadata,
     pub(crate) continuation: WebSocketContinuationState,
@@ -393,6 +409,7 @@ impl WebSocketPoolSlot {
 }
 
 pub(super) struct WebSocketPoolConnecting {
+    pub(super) max_age: Duration,
     pub(super) id: Uuid,
     pub(super) started_at: Instant,
     pub(super) outcome: watch::Sender<WebSocketPoolConnectOutcome>,
@@ -417,6 +434,7 @@ impl WebSocketPoolConnecting {
 
 #[derive(Clone)]
 pub(super) struct WebSocketPoolReservation {
+    pub(super) max_age: Duration,
     pub(super) id: Uuid,
     pub(super) reserved_at: Instant,
     pub(super) latest_response_id: Option<String>,
@@ -437,9 +455,9 @@ pub(super) async fn close_pooled_connections(connections: Vec<PooledWebSocketCon
 pub(super) fn should_close_idle_connection(
     connection: &PooledWebSocketConnection,
     now: Instant,
-    max_age: Duration,
 ) -> bool {
-    connection.websocket.is_closed() || now.duration_since(connection.created_at) >= max_age
+    connection.websocket.is_closed()
+        || now.duration_since(connection.created_at) >= connection.lifetime.max_age
 }
 
 fn short_sha256<'a>(parts: impl IntoIterator<Item = &'a str>) -> String {

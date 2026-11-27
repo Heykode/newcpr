@@ -944,8 +944,15 @@ impl Provider for ScriptedProvider {
                     Box::pin(futures::stream::iter(items)),
                     TrackedLease(Arc::clone(&self.released_leases)),
                 )
-                .with_native_response_translator(MessagesTranslator(
-                    gateway_protocol::anthropic::ResponsesToMessagesStream::new(&Map::new()),
+                .with_native_response_translator(ChatTranslator(
+                    gateway_protocol::chat_completions::responses::ChatStreamEncoder::new(
+                        gateway_protocol::chat_completions::ChatIdentity {
+                            id: "chatcmpl_fixture".into(),
+                            created: 1,
+                            model: "gpt-5".into(),
+                        },
+                        true,
+                    ),
                 )))
             }
             Script::Error(error) => Err(error),
@@ -7642,13 +7649,13 @@ fn transport_keepalive_cannot_change_an_already_finalized_failure_to_http_200() 
     assert_eq!(state.recorded_statuses, vec![504]);
 }
 
-struct MessagesTranslator(gateway_protocol::anthropic::ResponsesToMessagesStream);
-impl gateway_core::engine::provider::NativeResponseTranslator for MessagesTranslator {
+struct ChatTranslator(gateway_protocol::chat_completions::responses::ChatStreamEncoder);
+impl gateway_core::engine::provider::NativeResponseTranslator for ChatTranslator {
     fn source_protocol(&self) -> &str {
         "openai"
     }
     fn target_protocol(&self) -> &str {
-        "anthropic"
+        "chat_completions"
     }
     fn translate(
         &mut self,
@@ -7657,12 +7664,12 @@ impl gateway_core::engine::provider::NativeResponseTranslator for MessagesTransl
         let protocol_error =
             || ProviderError::new(ProviderErrorKind::Protocol, UpstreamSendState::Sent);
         self.0
-            .push(event.data())
+            .push_event(event.event_type(), event.data())
             .map_err(|_| protocol_error())?
             .into_iter()
             .map(|value| {
                 ProtocolWireEvent::json(
-                    "anthropic",
+                    "chat_completions",
                     value["type"].as_str().map(str::to_owned),
                     value,
                 )
@@ -7677,11 +7684,12 @@ fn native_translation_failure_after_commit_releases_lease_without_replay() {
     block_on(async {
         let body = json!({"model":"gpt-5","max_tokens":128,"messages":[{"role":"user","content":"hello"}]});
         let operation = Operation::Generate(GenerateRequest::from_protocol_payload(
-            ProtocolPayload::json_object("anthropic", body.as_object().unwrap().clone()).unwrap(),
+            ProtocolPayload::json_object("chat_completions", body.as_object().unwrap().clone())
+                .unwrap(),
         ));
         let route_plan = plan(&operation);
         let wire = |kind: &str| {
-            ProtocolWireEvent::json("openai", Some(kind.to_owned()), json!({"type":kind})).unwrap()
+            ProtocolWireEvent::json("openai", Some(kind.to_owned()), json!({"type":kind,"response":{"id":"resp_one","model":"gpt-5","status":"in_progress","output":[]}})).unwrap()
         };
         let (coordinator, _, provider) = coordinator(vec![Script::TranslatedStream {
             items: vec![
@@ -7725,7 +7733,7 @@ fn native_translation_failure_after_commit_releases_lease_without_replay() {
 }
 
 #[test]
-fn translated_messages_preserve_source_usage_when_observation_writes_fail() {
+fn translated_chat_preserves_source_usage_when_observation_writes_fail() {
     for failure in [
         None,
         Some(StoreWriteFailure::Commit),
@@ -7734,7 +7742,8 @@ fn translated_messages_preserve_source_usage_when_observation_writes_fail() {
         let store = Arc::new(failure.map_or_else(FakeStore::default, FakeStore::failing));
         let body = json!({"model":"gpt-5","max_tokens":128,"messages":[{"role":"user","content":"hello"}]});
         let operation = Operation::Generate(GenerateRequest::from_protocol_payload(
-            ProtocolPayload::json_object("anthropic", body.as_object().unwrap().clone()).unwrap(),
+            ProtocolPayload::json_object("chat_completions", body.as_object().unwrap().clone())
+                .unwrap(),
         ));
         let route_plan = plan(&operation);
         let meta = ResponseMeta::new("resp_translated", "gpt-5");
@@ -7776,7 +7785,11 @@ fn translated_messages_preserve_source_usage_when_observation_writes_fail() {
             events
                 .iter()
                 .filter_map(ProviderEvent::wire_event)
-                .filter(|wire| wire.data()["type"] == "message_stop")
+                .filter(|wire| wire
+                    .data()
+                    .pointer("/choices/0/finish_reason")
+                    .and_then(Value::as_str)
+                    == Some("stop"))
                 .count(),
             1
         );

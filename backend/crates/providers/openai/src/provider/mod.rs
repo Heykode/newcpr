@@ -193,14 +193,17 @@ impl CodexProvider {
         &self,
         context: &AttemptContext,
     ) -> Result<CodexBackendClient, ProviderError> {
-        match context.request_profile() {
+        let profile = match context.request_profile() {
             Some(snapshot) => CodexWireProfileState::from_request_snapshot(snapshot)
-                .map(|profile| self.client.with_request_profile(profile))
+                .map(|state| state.snapshot())
                 .map_err(|_| {
                     provider_error(ProviderErrorKind::Protocol, UpstreamSendState::NotSent)
-                }),
-            None => Ok(self.client.clone()),
-        }
+                })?,
+            None => self.client.profile_state().snapshot(),
+        };
+        Ok(self.client.with_request_profile(CodexWireProfileState::new(
+            profile.with_request_settings(context.openai_request_settings()),
+        )))
     }
 
     #[must_use]

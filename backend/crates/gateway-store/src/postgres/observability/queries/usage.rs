@@ -182,6 +182,7 @@ fn usage_list_record_select() -> String {
             mr.provider_account_email_snapshot as provider_account_email,
             account.custom_name as provider_account_custom_name,
             mr.provider_account_plan_type_snapshot as provider_account_plan_type,
+       mr.provider_account_plan_type_display_snapshot as provider_account_plan_type_display,
             mr.provider_account_authentication_kind_snapshot
               as provider_account_authentication_kind,
             mr.upstream_model_id, mr.upstream_transport, mr.service_tier,
@@ -740,12 +741,13 @@ pub(crate) async fn usage_diagnostics(
                          historical.provider_account_name_snapshot, aggregated.dimension_name) as display_name,
                 historical.provider_kind as account_provider_kind,
                 historical.provider_account_authentication_kind_snapshot as account_authentication_kind,
+                historical.provider_account_plan_type_display_snapshot as account_plan_type_display,
                 historical.provider_account_plan_type_snapshot as account_plan_type
            from aggregated
            join selected_dimensions selected using (dimension_name)
            left join lateral (
              select provider_kind, provider_account_authentication_kind_snapshot,
-                    provider_account_plan_type_snapshot, provider_account_email_snapshot,
+                    provider_account_plan_type_display_snapshot, provider_account_plan_type_snapshot, provider_account_email_snapshot,
                     provider_account_name_snapshot
              from model_requests
              where provider_account_ref = aggregated.dimension_name and ",
@@ -775,6 +777,7 @@ pub(crate) async fn usage_diagnostics(
                 account_provider_kind: get(row, "account_provider_kind")?,
                 account_authentication_kind: get(row, "account_authentication_kind")?,
                 account_plan_type: get(row, "account_plan_type")?,
+                account_plan_type_display: get(row, "account_plan_type_display")?,
                 request_count: unsigned(row, "request_count")?,
                 success_count: unsigned(row, "success_count")?,
                 failure_count: unsigned(row, "failure_count")?,

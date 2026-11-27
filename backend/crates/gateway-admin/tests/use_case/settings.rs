@@ -73,8 +73,8 @@ async fn settings_should_reject_invalid_margin_or_probe_concurrency_before_store
                 },
                 ReplaceRuntimeSettings {
                     request_profile_updates: Default::default(),
-                    openai_oauth_guardian_review_model: true,
-                    openai_request_country: Default::default(),
+                    openai_request_settings: Default::default(),
+                    openai_websocket_pool: Default::default(),
                     codex_privacy_policy: Default::default(),
 
                     expected_revision: gateway_admin::model::Revision::new(7).unwrap(),
@@ -159,8 +159,8 @@ async fn settings_should_reject_invalid_account_busy_wait_before_store_call() {
                     },
                     ReplaceRuntimeSettings {
                         request_profile_updates: Default::default(),
-                        openai_oauth_guardian_review_model: true,
-                        openai_request_country: Default::default(),
+                        openai_request_settings: Default::default(),
+                        openai_websocket_pool: Default::default(),
                         codex_privacy_policy: Default::default(),
 
                         expected_revision: gateway_admin::model::Revision::new(7).unwrap(),

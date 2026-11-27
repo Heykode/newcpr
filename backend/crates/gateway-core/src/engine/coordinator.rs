@@ -1137,7 +1137,7 @@ where
                     self.plan.config_revision(),
                 )
                 .with_request_location(self.plan.request_location().cloned())
-                .with_request_country(self.plan.request_country().clone())
+                .with_openai_request_settings(self.plan.openai_request_settings().clone())
                 .with_timing_started_at(self.observation.timing_started_at)
                 .with_trace(self.trace.clone()),
             next_attempt,
@@ -1331,6 +1331,7 @@ where
             ));
         }
         let attempt_record = AttemptRecord {
+            observed_plan: metadata.observed_plan().cloned(),
             request_id: self.request_id.clone(),
             attempt_count: next_attempt,
             trigger,

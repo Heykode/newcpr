@@ -45,8 +45,6 @@ export interface RequestTuning {
   maxRequestAttempts: number
   websocketMaxRetries: number
   streamPrefetchBytes: number
-  websocketMaxAgeMs: number
-  websocketStreamIdleTimeoutMs: number
   websocketFailureThreshold: number
   websocketFailureWindowMs: number
   websocketFailureOpenDurationMs: number
@@ -82,11 +80,31 @@ export type AccountAffinity = 'strict' | 'preferred' | 'relaxed'
 
 export type OpenAiRequestCountry = { mode: 'follow_location' | 'default' | 'passthrough' } | { mode: 'custom', country: string }
 
+export interface OpenAiRequestSettings {
+  requestCountry: OpenAiRequestCountry
+  oauthGuardianReviewModel: boolean
+  residency: string | null
+  accountRoutingOverride: string | null
+}
+export interface OpenAiWebSocketPoolSettings {
+  enabled: boolean
+  maxAgeMs: number
+  fastPathBudgetMs: number
+  idleTimeoutMs: number
+  streamIdleTimeoutMs: number
+}
+export function defaultOpenAiRequestSettings(): OpenAiRequestSettings {
+  return { requestCountry: { mode: 'follow_location' }, oauthGuardianReviewModel: true, residency: 'us', accountRoutingOverride: null }
+}
+export function defaultOpenAiWebSocketPool(): OpenAiWebSocketPoolSettings {
+  return { enabled: true, maxAgeMs: 3300000, fastPathBudgetMs: 800, idleTimeoutMs: 300000, streamIdleTimeoutMs: 300000 }
+}
+
 export interface RuntimeSettings {
   providerRequestProfiles: ProviderRequestProfiles
   codexPrivacyPolicy: CodexPrivacyPolicy
-  openaiOauthGuardianReviewModel: boolean
-  openaiRequestCountry: OpenAiRequestCountry
+  openaiRequestSettings: OpenAiRequestSettings
+  openaiWebsocketPool: OpenAiWebSocketPoolSettings
   configRevision: number
   excelDefaultModels?: string[]
   turnStateInjectionEnabled?: boolean

@@ -61,6 +61,7 @@ async fn admitted_key_names_survive_rename_delete_and_remain_searchable() {
         .insert_model_request_with_first_attempt(
             admitted_request("req_history_merged", now),
             ModelRequestAttemptStart {
+                observed_plan: None,
                 model_request_id: "req_history_merged".to_owned(),
                 attempt_count: 1,
                 provider_kind: "openai".to_owned(),

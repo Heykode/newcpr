@@ -1,57 +1,35 @@
-//! OpenAI 请求头的业务协议与传输边界。
+//! Codex 头部规则在公共 HTTP 传输边界上保留本地下游身份隔离。
+pub use crate::http::parse_retry_after_seconds;
 
-/// 解析 HTTP 和流内错误共用的 Retry-After，保留零延迟并向上取整剩余秒数。
-pub fn parse_retry_after_seconds(value: &str) -> Option<u64> {
-    let now = std::time::SystemTime::now();
-    let value = value.trim();
-    if !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit()) {
-        return value.parse().ok();
-    }
-    let remaining = httpdate::parse_http_date(value)
-        .ok()?
-        .duration_since(now)
-        .unwrap_or_default();
-    Some(
-        remaining
-            .as_secs()
-            .saturating_add(u64::from(remaining.subsec_nanos() != 0)),
-    )
-}
-
-use super::is_openai_scheduling_session_hint_header;
-
-/// 判断小写请求头是否由传输层管理或仅供本地调度，不得作为业务扩展头透传。
-///
-/// API 入站和 Provider 编码共用此分类；`Connection` 动态声明的逐跳头由入站额外剥离。
-/// 只用于请求方向，不影响上游响应中的代理诊断信息。
+/// 本地反代元数据与调度提示不作为上游业务扩展头。
 #[must_use]
 pub fn is_transport_managed_request_header(name: &str) -> bool {
-    // 代理命名空间描述的是下游链路；包括未知扩展也不能冒充上游连接事实。
-    name.starts_with("cf-")
+    crate::http::is_transport_managed_request_header(name)
+        || name.starts_with("cf-")
         || name.starts_with("x-forwarded-")
-        || name.starts_with("sec-websocket-")
-        || is_openai_scheduling_session_hint_header(name)
+        || super::is_openai_scheduling_session_hint_header(name)
         || matches!(
             name,
-            "connection"
-                | "keep-alive"
-                | "proxy-connection"
-                | "proxy-authenticate"
-                | "proxy-authorization"
-                | "te"
-                | "trailer"
-                | "transfer-encoding"
-                | "upgrade"
-                | "host"
-                | "content-length"
-                // 请求实体与响应压缩能力属于各段 transport，不能继承下游协商。
-                | "content-encoding"
-                | "accept-encoding"
-                | "forwarded"
-                | "via"
-                | "cdn-loop"
-                | "x-real-ip"
-                | "true-client-ip"
-                | "x-request-id"
+            "forwarded" | "via" | "cdn-loop" | "x-real-ip" | "true-client-ip"
         )
+}
+
+/// 账号与安装身份不能随上游响应下发给客户端
+#[must_use]
+pub fn is_private_response_header(name: &str) -> bool {
+    let name = name.trim();
+    [
+        "chatgpt-account-id",
+        "chatgpt-organization-id",
+        "chatgpt-org-id",
+        "chatgpt-project-id",
+        "openai-organization",
+        "openai-project",
+        "x-openai-organization",
+        "x-openai-project",
+        "x-codex-installation-id",
+        "x-codex-turn-metadata",
+    ]
+    .iter()
+    .any(|private| name.eq_ignore_ascii_case(private))
 }

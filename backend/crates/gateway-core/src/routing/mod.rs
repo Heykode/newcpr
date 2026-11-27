@@ -927,7 +927,7 @@ pub struct RoutingPlan {
     codex_quota_overdraft_enabled: bool,
     codex_quota_overdraft_probe_model: UpstreamModelId,
     request_location: Option<crate::account::RequestLocation>,
-    request_country: crate::account::OpenAiRequestCountry,
+    openai_request_settings: crate::settings::OpenAiRequestSettings,
     config_revision: ConfigRevision,
     account_selection_policy: AccountSelectionPolicy,
     operation: OperationKind,
@@ -949,8 +949,12 @@ impl RoutingPlan {
     }
 
     #[must_use]
+    pub fn openai_request_settings(&self) -> &crate::settings::OpenAiRequestSettings {
+        &self.openai_request_settings
+    }
+
     pub fn request_country(&self) -> &crate::account::OpenAiRequestCountry {
-        &self.request_country
+        &self.openai_request_settings.request_country
     }
     #[must_use]
     pub fn account_error_protection(&self) -> Arc<crate::account::CompiledAccountErrorProtection> {

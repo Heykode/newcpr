@@ -466,17 +466,14 @@ async fn refresh_and_code_exchange_track_the_same_online_global_profile() {
             exchange.headers["originator"],
             profile.snapshot().originator
         );
-        for name in [
-            "version",
-            "authorization",
-            "chatgpt-account-id",
-            "x-openai-internal-codex-residency",
-        ] {
+        for name in ["version", "authorization", "chatgpt-account-id"] {
             assert!(!exchange.headers.contains_key(name), "raw exchange: {name}");
         }
         for name in ["authorization", "chatgpt-account-id", "version"] {
             assert!(!refresh.headers.contains_key(name), "refresh: {name}");
         }
+        assert_eq!(refresh.headers["x-openai-internal-codex-residency"], "us");
+        assert_eq!(exchange.headers["x-openai-internal-codex-residency"], "us");
     }
 }
 
@@ -1096,4 +1093,76 @@ async fn authentication_requests_track_global_identity_and_releases() {
         Err(AuthorizationCodeExchangeError::Unavailable)
     ));
     assert_eq!(server.received_requests().await.unwrap().len(), 4);
+}
+
+struct OnlineRequestSettings(std::sync::Mutex<gateway_core::settings::OpenAiRequestSettings>);
+impl gateway_core::provider_ports::ProviderRuntimePolicyPort for OnlineRequestSettings {
+    fn load_openai_request_settings(
+        &self,
+    ) -> futures::future::BoxFuture<
+        '_,
+        Result<
+            gateway_core::settings::OpenAiRequestSettings,
+            gateway_core::provider_ports::ProviderStoreError,
+        >,
+    > {
+        let settings = self.0.lock().unwrap().clone();
+        Box::pin(async move { Ok(settings) })
+    }
+    fn load_refresh_policy(
+        &self,
+    ) -> futures::future::BoxFuture<
+        '_,
+        Result<
+            gateway_core::provider_ports::ProviderRefreshPolicy,
+            gateway_core::provider_ports::ProviderStoreError,
+        >,
+    > {
+        Box::pin(async { panic!("refresh policy is not used by token requests") })
+    }
+}
+
+#[tokio::test]
+async fn background_token_requests_use_online_routing_settings_and_explicit_clear() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST")).and(path("/oauth/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"access_token":"fixture-access","refresh_token":"fixture-refresh","id_token":"header.e30.signature"})))
+        .expect(4).mount(&server).await;
+    let policy = std::sync::Arc::new(OnlineRequestSettings(std::sync::Mutex::new(
+        Default::default(),
+    )));
+    let client = client(&server).with_runtime_policy(policy.clone());
+    for (residency, routing) in [(Some("fixture-region"), Some("us_cr")), (None, None)] {
+        *policy.0.lock().unwrap() = gateway_core::settings::OpenAiRequestSettings {
+            residency: residency.map(str::to_owned),
+            account_routing_override: routing.map(str::to_owned),
+            ..Default::default()
+        };
+        client.refresh("fixture-refresh").await.unwrap();
+        client
+            .exchange_authorization_code(AuthorizationCodeGrant {
+                code: SecretString::from("fixture-code"),
+                code_verifier: SecretString::from("fixture-verifier"),
+            })
+            .await
+            .unwrap();
+        let requests = server.received_requests().await.unwrap();
+        for request in requests.iter().rev().take(2) {
+            assert_eq!(
+                request
+                    .headers
+                    .get("x-openai-internal-codex-residency")
+                    .map(|v| v.to_str().unwrap()),
+                residency
+            );
+            assert_eq!(
+                request
+                    .headers
+                    .get("x-openai-account-routing-override")
+                    .map(|v| v.to_str().unwrap()),
+                routing
+            );
+            assert!(!request.headers.contains_key("chatgpt-account-id"));
+        }
+    }
 }

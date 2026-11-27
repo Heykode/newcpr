@@ -175,6 +175,7 @@ impl ContinuationRequestObservation {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModelRequestAttemptStart {
+    pub observed_plan: Option<(Option<String>, Option<String>)>,
     pub model_request_id: String,
     pub attempt_count: u32,
     pub provider_kind: String,
@@ -525,14 +526,15 @@ impl ModelRequestRepository for PgExecutionStore {
                attempt_count, upstream_send_state, account_selection_wait_ms,
                capacity_used_slots, capacity_total_slots
                , continuation_affinity_hash, continuation_previous_response_id_hash,
-               continuation_requested, client_api_key_name_snapshot
+               continuation_requested, client_api_key_name_snapshot, provider_account_plan_type_display_snapshot
              ) select
                $1, $2, $3, $4, $5, $6, $7, $8,
                $9, $10, $11, $12, $13::inet, $14, $15,
                $16, $17, $18, $19, $20, $21, $22, $23,
                $24, $25, $26,
-               account.name, account.email, account.authentication_kind, account.plan_type,
-               $27, $28, $29, 1, 'not_sent', $30, $31, $32, $33, $34, $35, client_key.name
+               account.name, account.email, account.authentication_kind,
+               case when $36::jsonb is null then account.plan_type else $36::jsonb ->> 0 end,
+               $27, $28, $29, 1, 'not_sent', $30, $31, $32, $33, $34, $35, client_key.name, $36::jsonb ->> 1
              from (values (true)) as seed(present)
              left join provider_accounts account on account.id = $25
              left join client_api_keys client_key on client_key.id = $3",
@@ -584,6 +586,7 @@ impl ModelRequestRepository for PgExecutionStore {
         .bind(request.continuation.affinity_hash)
         .bind(request.continuation.previous_response_id_hash)
         .bind(request.continuation.requested)
+        .bind(attempt.observed_plan.map(sqlx::types::Json))
         .execute(&self.pool)
         .await
         .map_err(|error| {
@@ -607,11 +610,13 @@ impl ModelRequestRepository for PgExecutionStore {
                  provider_account_ref = $4,
                  (provider_account_name_snapshot,
                   provider_account_email_snapshot,
-                  provider_account_authentication_kind_snapshot,
-                  provider_account_plan_type_snapshot) = (
-                   select name, email, authentication_kind, plan_type
+                  provider_account_authentication_kind_snapshot) = (
+                   select name, email, authentication_kind
                    from provider_accounts where id = $3
                  ),
+                 provider_account_plan_type_snapshot = case when $12::jsonb is null
+                   then (select plan_type from provider_accounts where id = $3) else $12::jsonb ->> 0 end,
+                 provider_account_plan_type_display_snapshot = $12::jsonb ->> 1,
                  upstream_model_id = $5,
                  upstream_transport = $6,
                  http_version = $7,
@@ -649,6 +654,7 @@ impl ModelRequestRepository for PgExecutionStore {
             attempt.capacity_total_slots,
             "capacity_total_slots",
         )?)
+        .bind(attempt.observed_plan.map(sqlx::types::Json))
         .fetch_optional(&self.pool)
         .await
         .map_err(|error| postgres_unavailable("begin model request attempt").with_source(error))?
@@ -1507,6 +1513,7 @@ fn validate_routing_snapshot(scope: &str, refs: &[String], names: &Value) -> Sto
 
 fn attempt_start_row(attempt: CoreAttemptRecord) -> ModelRequestAttemptStart {
     ModelRequestAttemptStart {
+        observed_plan: attempt.observed_plan,
         model_request_id: attempt.request_id.as_str().to_owned(),
         attempt_count: attempt.attempt_count.get(),
         provider_kind: attempt.provider_kind.as_str().to_owned(),

@@ -251,6 +251,17 @@ impl Default for CodexWebSocketPoolSettings {
 }
 
 impl CodexWebSocketPoolSettings {
+    /// Used once to import the old YAML into persisted platform settings.
+    pub fn runtime_settings(&self) -> gateway_core::settings::OpenAiWebSocketPoolSettings {
+        gateway_core::settings::OpenAiWebSocketPoolSettings {
+            enabled: self.enabled,
+            max_age_ms: self.max_age_ms,
+            fast_path_budget_ms: self.fast_path_budget_ms,
+            idle_timeout_ms: self.idle_timeout_ms,
+            stream_idle_timeout_ms: self.stream_idle_timeout_ms,
+        }
+    }
+
     fn validate(&self) -> Result<(), OpenAiConfigError> {
         if self.fast_path_budget_ms == 0
             || Duration::from_millis(self.fast_path_budget_ms) > WEBSOCKET_CONNECT_TIMEOUT
@@ -357,13 +368,17 @@ pub struct CodexWireProfileConfig {
     pub os_version: String,
     pub arch: String,
     pub terminal: String,
-    #[serde(default)]
+    #[serde(default = "default_residency")]
     pub residency: Option<String>,
     #[serde(default)]
     pub account_routing_override: Option<String>,
     #[serde(default)]
     pub location: CodexRequestLocation,
     pub verified_at: DateTime<Utc>,
+}
+
+fn default_residency() -> Option<String> {
+    Some("us".to_owned())
 }
 
 impl Default for CodexWireProfileConfig {
@@ -380,7 +395,7 @@ impl Default for CodexWireProfileConfig {
             os_version: environment.os_version.to_owned(),
             arch: environment.arch.to_owned(),
             terminal: baseline::TERMINAL.to_owned(),
-            residency: None,
+            residency: default_residency(),
             account_routing_override: None,
             location: CodexRequestLocation::default(),
             verified_at: release.core.verified_at(),

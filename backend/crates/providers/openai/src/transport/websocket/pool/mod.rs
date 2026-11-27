@@ -8,7 +8,7 @@ mod lifecycle_tests;
 pub(crate) mod proxy_capacity;
 #[cfg(test)]
 mod proxy_capacity_tests;
-mod state;
+pub(in crate::transport::websocket) mod state;
 mod supervisor;
 #[cfg(test)]
 mod tests;
@@ -111,7 +111,7 @@ impl CodexWebSocketPool {
     ) -> Option<CodexWebSocketPoolKey> {
         let response_id = response_id?;
         let state = self.lock_state();
-        if state.shutting_down || !self.config.enabled {
+        if state.shutting_down || !self.effective_config().enabled {
             return None;
         }
         state.slots.iter().find_map(|(candidate, slot)| {
@@ -166,11 +166,24 @@ impl CodexWebSocketPool {
         self
     }
 
-    fn max_age(&self) -> Duration {
-        self.request_tuning
-            .as_ref()
-            .map(|handle| Duration::from_millis(handle.load().websocket_max_age_ms))
-            .unwrap_or(self.config.max_age)
+    fn effective_config(&self) -> CodexWebSocketPoolConfig {
+        let mut config = self.config;
+        if let Some(handle) = &self.request_tuning {
+            if let Some(settings) = handle.openai_websocket_pool() {
+                config.enabled = settings.enabled;
+                config.max_age = Duration::from_millis(settings.max_age_ms);
+                config.fast_path_budget = Duration::from_millis(settings.fast_path_budget_ms);
+                config.idle_timeout = Duration::from_millis(settings.idle_timeout_ms);
+                config.stream_idle_timeout = (settings.stream_idle_timeout_ms != 0)
+                    .then(|| Duration::from_millis(settings.stream_idle_timeout_ms));
+            } else {
+                let tuning = handle.load();
+                config.max_age = Duration::from_millis(tuning.websocket_max_age_ms);
+                config.stream_idle_timeout = (tuning.websocket_stream_idle_timeout_ms != 0)
+                    .then(|| Duration::from_millis(tuning.websocket_stream_idle_timeout_ms));
+            }
+        }
+        config
     }
 
     /// Attach authoritative account limits when embedding the standalone transport.
@@ -181,18 +194,12 @@ impl CodexWebSocketPool {
     }
 
     pub(crate) fn fast_path_budget(&self) -> Duration {
-        self.config.fast_path_budget
+        self.effective_config().fast_path_budget
     }
 
     /// 等待下一条上游消息的空闲超时；`None` 或零值使用默认 300 秒。
     pub(crate) fn stream_idle_timeout(&self) -> Option<Duration> {
-        self.request_tuning
-            .as_ref()
-            .map(|handle| {
-                let timeout = handle.load().websocket_stream_idle_timeout_ms;
-                (timeout != 0).then_some(Duration::from_millis(timeout))
-            })
-            .unwrap_or(self.config.stream_idle_timeout)
+        self.effective_config().stream_idle_timeout
     }
 
     /// 注册由连接池生命周期托管的 opening 任务。
@@ -259,7 +266,7 @@ impl CodexWebSocketPool {
         let mut close = Vec::new();
         let acquire = (|| {
             let mut state = self.lock_state();
-            if !self.config.enabled || state.shutting_down {
+            if !self.effective_config().enabled || state.shutting_down {
                 return Ok(WebSocketPoolAcquire::Bypass(
                     WebSocketPoolBypassReason::Disabled,
                 ));
@@ -353,10 +360,10 @@ impl CodexWebSocketPool {
                     };
                     // 零成本探活：后台 pump 已实时感知连接死亡（RST/Close/EOF/失活），
                     // 复用前只需读取 is_closed 标志，避免复用到静默死连接后卡到超时。
-                    let expired = connection.created_at.elapsed() >= self.max_age();
+                    let expired = connection.created_at.elapsed() >= connection.lifetime.max_age;
                     let closed = connection.websocket.is_closed();
                     let idle_expired = !state.has_downstream_binding(&key)
-                        && idle_since.elapsed() >= self.config.idle_timeout;
+                        && idle_since.elapsed() >= connection.lifetime.idle_timeout;
                     let downstream_closed = state.downstream_closed(&key);
                     // Hosted search must be initialized by the socket's first payload.
                     // A generate=false prewarm is a payload; handshake-only is not.
@@ -385,6 +392,7 @@ impl CodexWebSocketPool {
                             self.clone(),
                             key.clone(),
                             connection.continuation.latest_response_id(),
+                            connection.lifetime.max_age,
                         )
                         .with_websocket(&connection.websocket);
                         state
@@ -464,6 +472,7 @@ impl CodexWebSocketPool {
             state.slots.insert(
                 key,
                 WebSocketPoolSlot::Connecting(WebSocketPoolConnecting {
+                    max_age: lease.lifetime.max_age,
                     id: lease.id,
                     started_at: lease.started_at,
                     outcome: lease.outcome.clone(),
@@ -487,9 +496,9 @@ impl CodexWebSocketPool {
         let mut close = Vec::new();
         {
             let mut state = self.lock_state();
-            let expired = connection
-                .as_ref()
-                .is_some_and(|connection| connection.created_at.elapsed() >= self.max_age());
+            let expired = connection.as_ref().is_some_and(|connection| {
+                connection.created_at.elapsed() >= connection.lifetime.max_age
+            });
             let key = state
                 .slots
                 .get_key_value(key)
@@ -511,7 +520,7 @@ impl CodexWebSocketPool {
                     || account_unavailable
                     || state.downstream_closed(&key)
                     || state.shutting_down
-                    || !self.config.enabled)
+                    || !self.effective_config().enabled)
             {
                 if let Some(connection) = connection.take() {
                     close.push(Self::retire_connection(
@@ -622,9 +631,14 @@ impl CodexWebSocketPool {
         );
         let cancelled = matches!(state.slots.get(key),
             Some(WebSocketPoolSlot::Connecting(connecting)) if connecting.cancellation.is_cancelled());
-        if owns_connect && !cancelled && !state.shutting_down && self.config.enabled {
-            let lease = WebSocketPoolLease::reserve(self.clone(), key.clone(), None)
-                .with_websocket(&connection.websocket);
+        if owns_connect && !cancelled && !state.shutting_down && self.effective_config().enabled {
+            let lease = WebSocketPoolLease::reserve(
+                self.clone(),
+                key.clone(),
+                None,
+                connection.lifetime.max_age,
+            )
+            .with_websocket(&connection.websocket);
             state.slots.insert(
                 key.clone(),
                 WebSocketPoolSlot::Busy(lease.reservation.clone()),

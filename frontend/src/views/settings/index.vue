@@ -230,7 +230,7 @@ watch(
           <RequestProfileCard v-else v-model="form.providerRequestProfiles" :provider="provider" :active="section === 'runtime' && configurationScope === 'common' && !loading" :disabled="loading || saving" />
         </section>
 
-        <OpenAiRequestSettingsCard v-model:guardian="form.openaiOauthGuardianReviewModel" v-model:country="form.openaiRequestCountry" :disabled="loading || saving" />
+        <OpenAiRequestSettingsCard v-model="form.openaiRequestSettings" v-model:pool="form.openaiWebsocketPool" :disabled="loading || saving" />
 
         <ModelAliasesCard
           :mappings="mappings"

@@ -1490,8 +1490,8 @@ impl SettingsStore for StaticSettingsStore {
     async fn load_runtime_settings(&self) -> AdminStoreResult<RuntimeSettings> {
         Ok(RuntimeSettings {
             request_profiles: Default::default(),
-            openai_oauth_guardian_review_model: true,
-            openai_request_country: Default::default(),
+            openai_request_settings: Default::default(),
+            openai_websocket_pool: Default::default(),
             codex_privacy_policy: Default::default(),
 
             turn_state_probe_proxy_id: None,

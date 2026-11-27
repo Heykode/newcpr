@@ -60,6 +60,7 @@ impl WebSocketPoolConnectWaiter {
 }
 
 pub(crate) struct WebSocketPoolConnectLease {
+    pub(super) lifetime: super::state::WebSocketConnectionLifetime,
     pool: CodexWebSocketPool,
     key: CodexWebSocketPoolKey,
     pub(super) id: Uuid,
@@ -87,6 +88,7 @@ impl WebSocketPoolConnectLease {
         let cancellation = pool.shutdown.child_token();
         let task_registration = pool.tasks.token();
         Self {
+            lifetime: pool.effective_config().into(),
             pool,
             key: key.clone(),
             id: Uuid::new_v4(),
@@ -120,11 +122,12 @@ impl WebSocketPoolConnectLease {
 
     pub(crate) async fn connected_reserved(
         mut self,
-        connection: PooledWebSocketConnection,
+        mut connection: PooledWebSocketConnection,
     ) -> Result<
         (Box<PooledWebSocketConnection>, WebSocketPoolLease),
         (JoinHandle<()>, Option<CodexEgressError>),
     > {
+        connection.lifetime = self.lifetime;
         let result = self
             .pool
             .finish_connect_reserved(&self.key, self.id, connection)
@@ -201,12 +204,14 @@ impl WebSocketPoolLease {
         pool: CodexWebSocketPool,
         key: CodexWebSocketPoolKey,
         latest_response_id: Option<&str>,
+        max_age: std::time::Duration,
     ) -> Self {
         let task_registration = pool.tasks.token();
         Self {
             pool,
             key,
             reservation: WebSocketPoolReservation {
+                max_age,
                 id: Uuid::new_v4(),
                 reserved_at: Instant::now(),
                 latest_response_id: latest_response_id.map(str::to_string),

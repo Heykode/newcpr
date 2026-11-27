@@ -1,3 +1,23 @@
+# v3.57.0
+
+## 更新内容
+
+- 接入官方固定目标 `db22550e6172e7a3537eb53441ae9ce73bc50cd5` 的适用原生更新。
+- Chat 保留原始协议参加路由，选中账号后直接转换至 Codex Responses、xAI Responses 或 AGY GenAI；同步工具、结构化输出、流式交付校验、真实用量和错误边界。
+- 按已确认的官方兼容变化，原生 Responses 仅使用 Codex/xAI，AGY 提供 GenAI/Chat；内置 OAuth 账号不再执行 Messages 或 Messages Token 计数。客户端专用模型菜单只显示对应协议可执行模型。
+- AGY 保留客户端系统指令并前置平台提示词；展示 Google AI 点数、自动使用开关和 Google 订阅描述，请求及错误历史保存当时的套餐显示名。
+- OpenAI 请求国家策略、审核模型、residency、路由覆盖和连接池参数支持在线保存。首次升级导入旧配置，之后数据库值权威；显式清空请求头有效，重启立即读取保存值。
+- WebSocket 按每个账号有效并发限制同时建连；成功、失败、取消都释放建连名额。普通请求并发不变，存活连接数量不再占用建连名额，保留空闲、寿命、断开和物理出口容量回收。
+- xAI 原生 Responses 保留原始 SSE、工具和动态型号；Chat 使用专用转换。旧会话缺少 response_stored 时按 false 读取，不假定上游已经保存响应。
+- 修复 Chat 显式会话亲和遗漏、Google 鉴权头诊断脱敏、启动连接池设置发布和交付终态校验；保留本地 Excel/State、严格排队、Fast/Ultra Fast、多标签及 Codex 15 套餐。
+
+## 升级边界
+
+新增 `0103_request_plan_display.sql`、`0104_openai_runtime_settings.sql`；从源码基线 v3.55.3 升级使用 `--migration-plan v3.57.0`。这不表示已核对生产当前版本。旧 YAML 的请求头与 ws_pool 在首次启动导入，旧数据库 requestTuning 中的寿命/流式超时优先；管理端刷新后按新版设置结构保存。原有 enabled=false 策略保留，无全局 maxConnecting 设置覆盖账号建连上限。
+
+历史套餐字段为空的旧记录仅按原始套餐静态回退，不冒充历史快照。迁移后失败采用人工恢复，不能自动跨 schema 回滚。
+插件专属运行时、上游 API Key 账号和主动互联转发继续排除，OAuth 账号池只读共享保留。`published` 为空，本次源码提交不表示已推送、发布或部署。接入与验证见 [v3.57.0 记录](../docs/upstream-v3570-native-parity.md)。
+
 # v3.55.3
 
 ## 更新内容

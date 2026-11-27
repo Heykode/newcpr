@@ -81,14 +81,22 @@ const TIMEZONE_OPTIONS = [
         </BaseFormItem>
 
         <BaseFormItem label="备份过期天数" description="超过此天数自动删除，0 = 永不过期">
-          <BaseInput v-model="schedule.retentionDays" aria-label="备份过期天数" type="number" min="0" />
+          <BaseInput v-model="schedule.retentionDays" aria-label="备份过期天数" type="number" min="0">
+            <template #suffix>
+              {{ t('settings.units.days') }}
+            </template>
+          </BaseInput>
         </BaseFormItem>
 
         <BaseFormItem
           label="最大保留份数"
           description="最多保留的备份数量，0 = 不限制"
         >
-          <BaseInput v-model="schedule.retentionCount" aria-label="最大保留份数" type="number" min="0" />
+          <BaseInput v-model="schedule.retentionCount" aria-label="最大保留份数" type="number" min="0">
+            <template #suffix>
+              {{ t('settings.units.copies') }}
+            </template>
+          </BaseInput>
         </BaseFormItem>
       </BaseForm>
     </div>

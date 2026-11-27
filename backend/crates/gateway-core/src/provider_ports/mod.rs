@@ -1607,6 +1607,12 @@ fn invalid_refresh_policy(operation: &'static str) -> ProviderStoreError {
 }
 
 pub trait ProviderRuntimePolicyPort: Send + Sync {
+    fn load_openai_request_settings(
+        &self,
+    ) -> BoxFuture<'_, Result<crate::settings::OpenAiRequestSettings, ProviderStoreError>> {
+        Box::pin(async { Ok(Default::default()) })
+    }
+
     fn load_request_profile<'a>(
         &'a self,
         _provider: &'a ProviderKind,

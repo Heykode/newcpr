@@ -2,7 +2,6 @@ use gateway_core::error::ProviderError;
 use gateway_core::event::{ContentKind, FinishReason, GatewayEvent, ProviderEvent};
 use gateway_core::operation::{GenerateRequest, ProtocolPayload};
 use gateway_core::policy::ClientApiKeyId;
-use gateway_protocol::openai::sse::{encode_sse_event, encode_sse_event_with_metadata};
 use serde_json::Value;
 
 use provider_xai::{
@@ -33,7 +32,12 @@ fn terminal_cost_events(
         cached_tokens = cached_tokens,
         provider_cost = provider_cost,
     );
-    decode_canonical(body.as_bytes()).expect("canonical cost response")
+    GrokCanonicalDecoder::new(model)
+        .push(body.as_bytes())
+        .expect("canonical cost response")
+        .into_iter()
+        .flat_map(|event| event.into_parts().0)
+        .collect()
 }
 
 fn decode_canonical(body: &[u8]) -> Result<Vec<GatewayEvent>, ProviderError> {
@@ -240,11 +244,54 @@ fn decoder_should_price_official_grok_45_build_free_variant() {
 }
 
 #[test]
-fn zero_provider_cost_should_remain_an_authoritative_zero() {
-    let events = terminal_cost_events("grok-4.5", 1, 0, 1, Some(0));
+fn zero_provider_cost_should_use_available_token_pricing() {
+    for (model, calculated) in [("grok-4.5", Some(80_000)), ("grok-future", None)] {
+        let events = terminal_cost_events(model, 1, 0, 1, Some(0));
 
-    assert_eq!(calculated_cost_ticks(&events), None);
-    assert_eq!(provider_cost_ticks(&events), Some(0));
+        assert_eq!(
+            (calculated_cost_ticks(&events), provider_cost_ticks(&events)),
+            (calculated, None),
+            "{model}"
+        );
+    }
+}
+
+fn pricing_events(response: Value, request: Option<&GrokResponsesRequest>) -> Vec<GatewayEvent> {
+    pricing_events_with_override(response, request, None)
+}
+
+fn pricing_events_with_override(
+    mut response: Value,
+    request: Option<&GrokResponsesRequest>,
+    pricing: Option<gateway_core::metering::ModelPriceOverride>,
+) -> Vec<GatewayEvent> {
+    response["id"] = serde_json::json!("resp_pricing");
+    response["model"] = serde_json::json!("grok-4.6");
+    response["status"] = serde_json::json!("completed");
+    let created = serde_json::json!({"type": "response.created", "response": {"id": "resp_pricing", "model": "grok-4.6", "service_tier": "priority"}});
+    let completed = serde_json::json!({"type": "response.completed", "response": response});
+    let body = format!(
+        "event: response.created\ndata: {created}\n\nevent: response.completed\ndata: {completed}\n\n"
+    );
+    let mut decoder = request
+        .map_or_else(
+            || GrokCanonicalDecoder::new("grok-4.6"),
+            |request| GrokCanonicalDecoder::for_request("grok-4.6", request),
+        )
+        .with_pricing(pricing);
+    let events = decoder
+        .push(body.as_bytes())
+        .expect("计费未知时仍应交付响应");
+    let facts: Vec<_> = events
+        .into_iter()
+        .flat_map(|event| event.into_parts().0)
+        .collect();
+    assert!(
+        facts
+            .iter()
+            .any(|event| matches!(event, GatewayEvent::Completed(_)))
+    );
+    facts
 }
 
 #[test]
@@ -281,44 +328,13 @@ fn billing_should_price_grok_46_cache_and_priority_at_the_context_boundary() {
     assert_eq!(priority.multiplier_percent(), 200);
 }
 
-fn pricing_events(
-    mut response: Value,
-    request: Option<&GrokResponsesRequest>,
-) -> Vec<GatewayEvent> {
-    response["id"] = serde_json::json!("resp_pricing");
-    response["model"] = serde_json::json!("grok-4.6");
-    response["status"] = serde_json::json!("completed");
-    let created = serde_json::json!({"type": "response.created", "response": {"id": "resp_pricing", "model": "grok-4.6", "service_tier": "priority"}});
-    let completed = serde_json::json!({"type": "response.completed", "response": response});
-    let body = format!(
-        "event: response.created\ndata: {created}\n\nevent: response.completed\ndata: {completed}\n\n"
-    );
-    let mut decoder = request.map_or_else(
-        || GrokCanonicalDecoder::new("grok-4.6"),
-        |request| GrokCanonicalDecoder::for_request("grok-4.6", request),
-    );
-    let events = decoder
-        .push(body.as_bytes())
-        .expect("计费未知时仍应交付响应");
-    let facts: Vec<_> = events
-        .into_iter()
-        .flat_map(|event| event.into_parts().0)
-        .collect();
-    assert!(
-        facts
-            .iter()
-            .any(|event| matches!(event, GatewayEvent::Completed(_)))
-    );
-    facts
-}
-
 #[test]
 fn billing_should_use_the_final_response_tier_and_preserve_provider_cost() {
     for (tier, ticks, calculated, provider) in [
         ("priority", None, Some(400_000_000), None),
         ("default", None, Some(200_000_000), None),
         ("future", None, None, None),
-        ("priority", Some(0), None, Some(0)),
+        ("priority", Some(0), Some(400_000_000), None),
         ("priority", Some(123), None, Some(123)),
     ] {
         let mut response = serde_json::json!({"service_tier": tier, "output": [], "usage": {"input_tokens": 10_000, "output_tokens": 0}});
@@ -344,16 +360,22 @@ fn billing_should_require_provider_totals_for_server_tools() {
         "image_generation_call",
         "future_tool_call",
     ] {
-        let response = serde_json::json!({"output": [{"type": kind, "id": "tool_1", "status": "completed"}], "usage": {"input_tokens": 100, "output_tokens": 1}});
-        assert_eq!(
-            calculated_cost_ticks(&pricing_events(response, None)),
-            None,
-            "{kind}"
-        );
+        for ticks in [None, Some(0)] {
+            let mut response = serde_json::json!({"output": [{"type": kind, "id": "tool_1", "status": "completed"}], "usage": {"input_tokens": 100, "output_tokens": 1}});
+            if let Some(ticks) = ticks {
+                response["usage"]["cost_in_usd_ticks"] = serde_json::json!(ticks);
+            }
+            let events = pricing_events(response, None);
+            assert_eq!(
+                (calculated_cost_ticks(&events), provider_cost_ticks(&events)),
+                (None, None),
+                "{kind}: {ticks:?}"
+            );
+        }
     }
     let request =
         tool_request(serde_json::json!({"input": "查资料", "tools": [{"type": "web_search"}]}));
-    // 工具结果可能被上游省略，允许调用收费工具时不能仅靠空 output 认定没有附加费。
+    // 工具结果可能被上游省略，允许调用收费工具时不能仅靠空 output 认定没有附加费
     let mut response =
         serde_json::json!({"output": [], "usage": {"input_tokens": 100, "output_tokens": 1}});
     assert_eq!(
@@ -361,9 +383,10 @@ fn billing_should_require_provider_totals_for_server_tools() {
         None
     );
     response["usage"]["cost_in_usd_ticks"] = serde_json::json!(0);
+    let events = pricing_events(response, Some(&request));
     assert_eq!(
-        provider_cost_ticks(&pricing_events(response, Some(&request))),
-        Some(0)
+        (calculated_cost_ticks(&events), provider_cost_ticks(&events)),
+        (None, None)
     );
     let response = serde_json::json!({"output": [], "usage": {"input_tokens": 100, "output_tokens": 1, "num_server_side_tool_calls": 1}});
     assert_eq!(calculated_cost_ticks(&pricing_events(response, None)), None);
@@ -511,469 +534,6 @@ fn decoder_should_normalize_function_call_and_tool_finish() {
 }
 
 #[test]
-fn decoder_should_restore_namespace_custom_search_and_apply_patch_wire_events() {
-    let request = tool_request(serde_json::json!({
-        "model": "client",
-        "input": "use tools",
-        "tools": [
-            {"type": "namespace", "name": "workspace", "tools": [{
-                "type": "function", "name": "read", "parameters": {"type": "object"}
-            }]},
-            {"type": "custom", "name": "render"},
-            {"type": "tool_search", "execution": "client"},
-            {"type": "apply_patch"}
-        ]
-    }));
-    let body = concat!(
-        "event: response.created\n",
-        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_tools\"}}\n\n",
-        "event: response.output_item.added\n",
-        "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"item_fn\",\"type\":\"function_call\",\"call_id\":\"call_fn\",\"name\":\"workspace__read\"}}\n\n",
-        "event: response.output_item.done\n",
-        "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"item_fn\",\"type\":\"function_call\",\"call_id\":\"call_fn\",\"name\":\"workspace__read\",\"arguments\":\"{\\\"path\\\":\\\"a.txt\\\"}\"}}\n\n",
-        "event: response.output_item.added\n",
-        "data: {\"type\":\"response.output_item.added\",\"output_index\":1,\"item\":{\"id\":\"item_custom\",\"type\":\"function_call\",\"call_id\":\"call_custom\",\"name\":\"render\"}}\n\n",
-        "event: response.function_call_arguments.delta\n",
-        "data: {\"type\":\"response.function_call_arguments.delta\",\"item_id\":\"item_custom\",\"call_id\":\"call_custom\",\"output_index\":1,\"delta\":\"{\\\"input\\\":\\\"raw\\\"}\"}\n\n",
-        "event: response.function_call_arguments.done\n",
-        "data: {\"type\":\"response.function_call_arguments.done\",\"item_id\":\"item_custom\",\"call_id\":\"call_custom\",\"output_index\":1,\"arguments\":\"{\\\"input\\\":\\\"raw\\\"}\"}\n\n",
-        "event: response.output_item.done\n",
-        "data: {\"type\":\"response.output_item.done\",\"output_index\":1,\"item\":{\"id\":\"item_custom\",\"type\":\"function_call\",\"call_id\":\"call_custom\",\"name\":\"render\",\"arguments\":\"{\\\"input\\\":\\\"raw\\\"}\"}}\n\n",
-        "event: response.output_item.added\n",
-        "data: {\"type\":\"response.output_item.added\",\"output_index\":2,\"item\":{\"id\":\"item_search\",\"type\":\"function_call\",\"call_id\":\"call_search\",\"name\":\"xai_proxy_tool_search\"}}\n\n",
-        "event: response.output_item.done\n",
-        "data: {\"type\":\"response.output_item.done\",\"output_index\":2,\"item\":{\"id\":\"item_search\",\"type\":\"function_call\",\"call_id\":\"call_search\",\"name\":\"xai_proxy_tool_search\",\"arguments\":\"{\\\"goal\\\":\\\"files\\\"}\"}}\n\n",
-        "event: response.output_item.added\n",
-        "data: {\"type\":\"response.output_item.added\",\"output_index\":3,\"item\":{\"id\":\"item_patch\",\"type\":\"function_call\",\"call_id\":\"call_patch\",\"name\":\"xai_proxy_apply_patch\"}}\n\n",
-        "event: response.function_call_arguments.done\n",
-        "data: {\"type\":\"response.function_call_arguments.done\",\"item_id\":\"item_patch\",\"call_id\":\"call_patch\",\"output_index\":3,\"arguments\":\"{\\\"operation\\\":{\\\"type\\\":\\\"delete_file\\\",\\\"path\\\":\\\"old.txt\\\"}}\"}\n\n",
-        "event: response.output_item.done\n",
-        "data: {\"type\":\"response.output_item.done\",\"output_index\":3,\"item\":{\"id\":\"item_patch\",\"type\":\"function_call\",\"call_id\":\"call_patch\",\"name\":\"xai_proxy_apply_patch\",\"arguments\":\"{\\\"operation\\\":{\\\"type\\\":\\\"delete_file\\\",\\\"path\\\":\\\"old.txt\\\"}}\"}}\n\n",
-        "event: response.completed\n",
-        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_tools\",\"status\":\"completed\",\"tools\":[{\"type\":\"function\",\"name\":\"workspace__read\"}]}}\n\n",
-    );
-    let events = GrokCanonicalDecoder::for_request("grok-4.5", &request)
-        .push(body.as_bytes())
-        .expect("translated tool stream");
-    let wire = wire_events(&events);
-
-    assert!(wire.iter().any(|event| {
-        event.data().pointer("/item/name") == Some(&serde_json::json!("read"))
-            && event.data().pointer("/item/namespace") == Some(&serde_json::json!("workspace"))
-    }));
-    assert!(wire.iter().any(|event| {
-        event.event_type() == Some("response.custom_tool_call_input.done")
-            && event.data().pointer("/input") == Some(&serde_json::json!("raw"))
-    }));
-    assert!(wire.iter().any(|event| {
-        event.data().pointer("/item/type") == Some(&serde_json::json!("tool_search_call"))
-            && event.data().pointer("/item/arguments/goal") == Some(&serde_json::json!("files"))
-    }));
-    assert_eq!(
-        wire.iter()
-            .filter(|event| event.data().pointer("/item/type")
-                == Some(&serde_json::json!("apply_patch_call")))
-            .count(),
-        2
-    );
-    assert_eq!(
-        wire.last()
-            .and_then(|event| event.data().pointer("/response/tools/0/type")),
-        Some(&serde_json::json!("namespace"))
-    );
-}
-
-#[test]
-fn decoder_should_restore_custom_apply_patch_arguments_as_raw_input() {
-    let patch = concat!(
-        "*** Begin Patch\n",
-        "*** Update File: src/lib.rs\n",
-        "@@\n",
-        "-let path = \"old\\\\name\";\n",
-        "+let path = \"new\\\\name\";\n",
-        "*** End Patch\n",
-    );
-    let request = tool_request(serde_json::json!({
-        "model": "client",
-        "input": "edit",
-        "tools": [{"type": "custom", "name": "apply_patch"}]
-    }));
-    let arguments =
-        serde_json::to_string(&serde_json::json!({"patch": patch})).expect("apply_patch arguments");
-    let arguments_json = serde_json::to_string(&arguments).expect("arguments JSON string");
-    let body = format!(
-        concat!(
-            "event: response.created\n",
-            "data: {{\"type\":\"response.created\",\"response\":{{\"id\":\"resp_custom_patch\"}}}}\n\n",
-            "event: response.output_item.added\n",
-            "data: {{\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{{\"id\":\"item_custom_patch\",\"type\":\"function_call\",\"call_id\":\"call_custom_patch\",\"name\":\"apply_patch\"}}}}\n\n",
-            "event: response.function_call_arguments.delta\n",
-            "data: {{\"type\":\"response.function_call_arguments.delta\",\"item_id\":\"item_custom_patch\",\"call_id\":\"call_custom_patch\",\"output_index\":0,\"delta\":{arguments_json}}}\n\n",
-            "event: response.function_call_arguments.done\n",
-            "data: {{\"type\":\"response.function_call_arguments.done\",\"item_id\":\"item_custom_patch\",\"call_id\":\"call_custom_patch\",\"output_index\":0,\"arguments\":{arguments_json}}}\n\n",
-            "event: response.output_item.done\n",
-            "data: {{\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{{\"id\":\"item_custom_patch\",\"type\":\"function_call\",\"call_id\":\"call_custom_patch\",\"name\":\"apply_patch\",\"arguments\":{arguments_json}}}}}\n\n",
-            "event: response.completed\n",
-            "data: {{\"type\":\"response.completed\",\"response\":{{\"id\":\"resp_custom_patch\",\"status\":\"completed\"}}}}\n\n",
-        ),
-        arguments_json = arguments_json,
-    );
-
-    let events = GrokCanonicalDecoder::for_request("grok-4.5", &request)
-        .push(body.as_bytes())
-        .expect("custom apply_patch stream");
-    let wire = wire_events(&events);
-
-    assert!(wire.iter().any(|event| {
-        event.event_type() == Some("response.custom_tool_call_input.delta")
-            && event.data().pointer("/delta") == Some(&serde_json::json!(patch))
-    }));
-    assert!(wire.iter().any(|event| {
-        event.event_type() == Some("response.custom_tool_call_input.done")
-            && event.data().pointer("/input") == Some(&serde_json::json!(patch))
-    }));
-    assert!(wire.iter().any(|event| {
-        event.event_type() == Some("response.output_item.done")
-            && event.data().pointer("/item/type") == Some(&serde_json::json!("custom_tool_call"))
-            && event.data().pointer("/item/input") == Some(&serde_json::json!(patch))
-    }));
-}
-
-#[test]
-fn decoder_should_buffer_only_custom_arguments_until_the_done_event() {
-    let request = tool_request(serde_json::json!({
-        "model": "client",
-        "input": "render",
-        "tools": [{"type": "custom", "name": "render"}]
-    }));
-    let mut decoder = GrokCanonicalDecoder::for_request("grok-4.5", &request);
-    decoder
-        .push(
-            concat!(
-                "event: response.created\n",
-                "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_render\",\"model\":\"grok-4.5\"}}\n\n",
-            )
-            .as_bytes(),
-        )
-        .expect("custom response created");
-    let added = decoder
-        .push(
-            concat!(
-                "event: response.output_item.added\n",
-                "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"item_render\",\"type\":\"function_call\",\"call_id\":\"call_render\",\"name\":\"render\"}}\n\n",
-            )
-            .as_bytes(),
-        )
-        .expect("custom item added");
-    let first_delta = decoder
-        .push(
-            concat!(
-                "event: response.function_call_arguments.delta\n",
-                "data: {\"type\":\"response.function_call_arguments.delta\",\"item_id\":\"item_render\",\"call_id\":\"call_render\",\"output_index\":0,\"delta\":\"{\\\"input\\\":\\\"hel\"}\n\n",
-            )
-            .as_bytes(),
-        )
-        .expect("first custom argument delta");
-    let second_delta = decoder
-        .push(
-            concat!(
-                "event: response.function_call_arguments.delta\n",
-                "data: {\"type\":\"response.function_call_arguments.delta\",\"item_id\":\"item_render\",\"call_id\":\"call_render\",\"output_index\":0,\"delta\":\"lo\\\"}\"}\n\n",
-            )
-            .as_bytes(),
-        )
-        .expect("second custom argument delta");
-    let done = decoder
-        .push(
-            concat!(
-                "event: response.function_call_arguments.done\n",
-                "data: {\"type\":\"response.function_call_arguments.done\",\"item_id\":\"item_render\",\"call_id\":\"call_render\",\"output_index\":0,\"arguments\":\"{\\\"input\\\":\\\"hello\\\"}\"}\n\n",
-            )
-            .as_bytes(),
-        )
-        .expect("custom argument done");
-
-    assert!(wire_events(&added).iter().any(|event| {
-        event.event_type() == Some("response.output_item.added")
-            && event.data().pointer("/item/type") == Some(&serde_json::json!("custom_tool_call"))
-    }));
-    assert!(first_delta.is_empty());
-    assert!(second_delta.is_empty());
-    assert!(wire_events(&done).iter().any(|event| {
-        event.event_type() == Some("response.custom_tool_call_input.done")
-            && event.data().get("input") == Some(&serde_json::json!("hello"))
-    }));
-}
-
-#[test]
-fn decoder_should_normalize_schema_integer_arguments_and_resequence_split_events() {
-    let request = tool_request(serde_json::json!({
-        "model": "client",
-        "input": "wait",
-        "tools": [{
-            "type": "function",
-            "name": "wait",
-            "parameters": {
-                "$ref": "#/$defs/Args",
-                "$defs": {
-                    "Args": {
-                        "type": "object",
-                        "properties": {
-                            "timeout_ms": {"allOf": [{"type": "integer"}]},
-                            "fractional": {"type": "integer"},
-                            "unsafe": {"type": "integer"},
-                            "list": {
-                                "type": "array",
-                                "prefixItems": [{"type": "integer"}],
-                                "items": {"type": "number"}
-                            },
-                            "extra": {
-                                "type": "object",
-                                "additionalProperties": {"type": "integer"}
-                            }
-                        }
-                    },
-                    "Unused": {"type": "integer"}
-                }
-            }
-        }]
-    }));
-    let arguments = concat!(
-        "{\"timeout_ms\":60000.0,\"fractional\":1.5,",
-        "\"unsafe\":9007199254740992.0,\"list\":[2.0,3.0],",
-        "\"extra\":{\"retries\":4.0},\"untyped\":7.0}"
-    );
-    let body = [
-        encode_sse_event(
-            "response.created",
-            &serde_json::json!({
-                "type": "response.created",
-                "response": {"id": "resp_integer"}
-            })
-            .to_string(),
-        ),
-        encode_sse_event(
-            "response.output_item.added",
-            &serde_json::json!({
-                "type": "response.output_item.added",
-                "sequence_number": 40.0,
-                "output_index": 0,
-                "item": {
-                    "id": "item_wait",
-                    "type": "function_call",
-                    "call_id": "call_wait",
-                    "name": "wait"
-                }
-            })
-            .to_string(),
-        ),
-        encode_sse_event(
-            "",
-            &serde_json::json!({
-                "sequence_number": "invalid",
-                "future": true
-            })
-            .to_string(),
-        ),
-        encode_sse_event(
-            "response.function_call_arguments.delta",
-            &serde_json::json!({
-                "type": "response.function_call_arguments.delta",
-                "sequence_number": 91,
-                "item_id": "item_wait",
-                "call_id": "call_wait",
-                "output_index": 0,
-                "delta": arguments
-            })
-            .to_string(),
-        ),
-        encode_sse_event_with_metadata(
-            "response.function_call_arguments.done",
-            &serde_json::json!({
-                "type": "response.function_call_arguments.done",
-                "sequence_number": 120,
-                "item_id": "item_wait",
-                "call_id": "call_wait",
-                "output_index": 0,
-                "arguments": arguments
-            })
-            .to_string(),
-            Some("evt_arguments_done"),
-            Some(250),
-        ),
-        encode_sse_event(
-            "response.output_item.done",
-            &serde_json::json!({
-                "type": "response.output_item.done",
-                "sequence_number": 200,
-                "output_index": 0,
-                "item": {
-                    "id": "item_wait",
-                    "type": "function_call",
-                    "call_id": "call_wait",
-                    "name": "wait",
-                    "arguments": arguments
-                }
-            })
-            .to_string(),
-        ),
-    ]
-    .concat();
-
-    let events = GrokCanonicalDecoder::for_request("grok-4.5", &request)
-        .push(body.as_bytes())
-        .expect("integer argument stream");
-    let wire = wire_events(&events);
-    let sequences = wire
-        .iter()
-        .filter_map(|event| event.data().get("sequence_number")?.as_u64())
-        .collect::<Vec<_>>();
-
-    assert_eq!(sequences, vec![40, 41, 42, 43, 44]);
-    assert!(wire.iter().any(|event| {
-        event.event_type().is_none()
-            && event.data().get("future") == Some(&serde_json::json!(true))
-            && event.data().get("sequence_number") == Some(&serde_json::json!(41))
-    }));
-
-    let argument_events = wire
-        .iter()
-        .filter(|event| {
-            matches!(
-                event.event_type(),
-                Some(
-                    "response.function_call_arguments.delta"
-                        | "response.function_call_arguments.done"
-                        | "response.output_item.done"
-                )
-            )
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(argument_events.len(), 3);
-    for event in &argument_events {
-        let raw = event
-            .data()
-            .pointer(if event.event_type() == Some("response.output_item.done") {
-                "/item/arguments"
-            } else if event.event_type() == Some("response.function_call_arguments.delta") {
-                "/delta"
-            } else {
-                "/arguments"
-            })
-            .and_then(Value::as_str)
-            .expect("normalized arguments");
-        let normalized = serde_json::from_str::<Value>(raw).expect("argument JSON");
-        assert_eq!(
-            normalized.pointer("/timeout_ms"),
-            Some(&serde_json::json!(60000))
-        );
-        assert_eq!(
-            normalized.pointer("/fractional"),
-            Some(&serde_json::json!(1.5))
-        );
-        assert_eq!(
-            normalized.pointer("/unsafe"),
-            Some(&serde_json::json!(9007199254740992.0))
-        );
-        assert_eq!(normalized.pointer("/list/0"), Some(&serde_json::json!(2)));
-        assert_eq!(normalized.pointer("/list/1"), Some(&serde_json::json!(3.0)));
-        assert_eq!(
-            normalized.pointer("/extra/retries"),
-            Some(&serde_json::json!(4))
-        );
-        assert_eq!(
-            normalized.pointer("/untyped"),
-            Some(&serde_json::json!(7.0))
-        );
-    }
-    assert_eq!(argument_events[0].sse_id(), Some("evt_arguments_done"));
-    assert_eq!(argument_events[0].sse_retry(), Some(250));
-    assert_eq!(argument_events[1].sse_id(), None);
-    assert_eq!(argument_events[1].sse_retry(), None);
-}
-
-#[test]
-fn decoder_should_fail_open_after_the_function_argument_buffer_limit() {
-    let request = tool_request(serde_json::json!({
-        "model": "client",
-        "input": "wait",
-        "tools": [{
-            "type": "function",
-            "name": "wait",
-            "parameters": {
-                "type": "object",
-                "properties": {"timeout_ms": {"type": "integer"}}
-            }
-        }]
-    }));
-    let arguments = format!(
-        "{{\"timeout_ms\":1.0,\"padding\":\"{}\"}}",
-        "x".repeat((1 << 20) + 1)
-    );
-    let mut decoder = GrokCanonicalDecoder::for_request("grok-4.5", &request);
-    let added = encode_sse_event(
-        "response.output_item.added",
-        &serde_json::json!({
-            "type": "response.output_item.added",
-            "output_index": 0,
-            "item": {
-                "id": "item_large",
-                "type": "function_call",
-                "call_id": "call_large",
-                "name": "wait"
-            }
-        })
-        .to_string(),
-    );
-    decoder
-        .push(added.as_bytes())
-        .expect("large function item added");
-
-    let delta = encode_sse_event(
-        "response.function_call_arguments.delta",
-        &serde_json::json!({
-            "type": "response.function_call_arguments.delta",
-            "item_id": "item_large",
-            "call_id": "call_large",
-            "output_index": 0,
-            "delta": arguments
-        })
-        .to_string(),
-    );
-    let delta = decoder
-        .push(delta.as_bytes())
-        .expect("oversized arguments should pass through");
-    let delta_wire = wire_events(&delta);
-    assert_eq!(delta_wire.len(), 1);
-    assert_eq!(
-        delta_wire[0].data().get("delta").and_then(Value::as_str),
-        Some(arguments.as_str())
-    );
-
-    let done = encode_sse_event(
-        "response.function_call_arguments.done",
-        &serde_json::json!({
-            "type": "response.function_call_arguments.done",
-            "item_id": "item_large",
-            "call_id": "call_large",
-            "output_index": 0,
-            "arguments": arguments
-        })
-        .to_string(),
-    );
-    let done = decoder
-        .push(done.as_bytes())
-        .expect("oversized arguments done");
-    let normalized = wire_events(&done)[0]
-        .data()
-        .get("arguments")
-        .and_then(Value::as_str)
-        .and_then(|arguments| serde_json::from_str::<Value>(arguments).ok())
-        .expect("normalized final arguments");
-    assert_eq!(normalized.get("timeout_ms"), Some(&serde_json::json!(1)));
-}
-
-#[test]
 fn decoder_should_coalesce_reasoning_item_part_and_summary_index() {
     let body = concat!(
         "event: response.created\n",
@@ -1005,11 +565,11 @@ fn decoder_should_preserve_unknown_events_as_openai_wire() {
         "event: response.created\n",
         "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_1\"}}\n\n",
         "event: xai.internal.trace\n",
-        "data: {\"type\":\"xai.internal.trace\",\"secret\":\"must-not-reach-client\"}\n\n",
+        "data: {\"type\":\"xai.internal.trace\",\"secret\":\"native-wire-field\"}\n\n",
         "event: response.doom_loop_check \n",
-        "data: {\"type\":\"response.backend_tool_call.started\",\"secret\":\"drop-header\"}\n\n",
+        "data: {\"type\":\"response.backend_tool_call.started\",\"secret\":\"native-header\"}\n\n",
         "event: response.backend_tool_call.started\n",
-        "data: {\"type\":\"response.doom_loop_check\",\"secret\":\"drop-body\"}\n\n",
+        "data: {\"type\":\"response.doom_loop_check\",\"secret\":\"native-body\"}\n\n",
         "event: response.backend_tool_call.started\n",
         "id: evt_future\n",
         "retry: 1250\n",
@@ -1022,45 +582,24 @@ fn decoder_should_preserve_unknown_events_as_openai_wire() {
         .expect("unknown wire event");
     let wire = wire_events(&events);
 
-    assert_eq!(wire.len(), 3);
-    assert_eq!(wire[1].protocol(), "openai");
+    assert_eq!(wire.len(), 6);
+    let bytes: Vec<u8> = wire
+        .iter()
+        .flat_map(|event| event.raw_sse_frame().unwrap().to_vec())
+        .collect();
+    assert_eq!(bytes, body.as_bytes());
+    assert_eq!(wire[4].protocol(), "openai");
     assert_eq!(
-        wire[1].event_type(),
+        wire[4].event_type(),
         Some("response.backend_tool_call.started")
     );
-    assert_eq!(wire[1].sse_id(), Some("evt_future"));
-    assert_eq!(wire[1].sse_retry(), Some(1_250));
+    assert_eq!(wire[4].sse_id(), Some("evt_future"));
+    assert_eq!(wire[4].sse_retry(), Some(1_250));
     assert_eq!(
-        wire[1].data().pointer("/future/nested"),
+        wire[4].data().pointer("/future/nested"),
         Some(&serde_json::json!([1, true]))
     );
     assert!(events[1].canonical_facts().is_empty());
-}
-
-#[test]
-fn decoder_should_rewrite_grok_ping_frames_as_sse_comments() {
-    let body = concat!(
-        "event: response.created\n",
-        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_ping\"}}\n\n",
-        "event: ping\n",
-        "data: {\"type\":\"ping\",\"x-opencode-type\":\"inference-cost\",\"cost\":2.75}\n\n",
-        "event: ping\n",
-        "data: {not-json}\n\n",
-        "event: response.completed\n",
-        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_ping\",\"status\":\"completed\"}}\n\n",
-    );
-
-    let events = GrokCanonicalDecoder::new("fallback")
-        .push(body.as_bytes())
-        .expect("ping-filtered response");
-    let wire = wire_events(&events);
-    let ping_comments = wire
-        .iter()
-        .filter(|event| event.raw_sse_frame().map(AsRef::as_ref) == Some(b": ping\n\n".as_slice()))
-        .count();
-
-    assert_eq!(ping_comments, 2);
-    assert!(wire.iter().all(|event| event.event_type() != Some("ping")));
 }
 
 #[test]
@@ -1090,46 +629,6 @@ fn decoder_should_preserve_image_and_hosted_tool_items_without_inventing_facts()
             .pointer("/item/future"),
         Some(&serde_json::json!(true))
     );
-}
-
-#[test]
-fn decoder_should_hide_injected_search_calls_and_compact_later_output_indexes() {
-    let request = tool_request(serde_json::json!({
-        "model": "client",
-        "prompt_cache_key": "cache-session",
-        "input": "hello"
-    }));
-    let body = concat!(
-        "event: response.created\n",
-        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_cache\",\"tools\":[{\"type\":\"web_search\"},{\"type\":\"x_search\"}]}}\n\n",
-        "event: response.output_item.added\n",
-        "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"function_call\",\"id\":\"item_xs\",\"call_id\":\"xs_call_1\",\"name\":\"x_semantic_search\",\"arguments\":\"{}\"}}\n\n",
-        "event: response.function_call_arguments.delta\n",
-        "data: {\"type\":\"response.function_call_arguments.delta\",\"output_index\":0,\"item_id\":\"item_xs\",\"call_id\":\"xs_call_1\",\"delta\":\"{}\"}\n\n",
-        "event: response.output_item.done\n",
-        "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"type\":\"function_call\",\"id\":\"item_xs\",\"call_id\":\"xs_call_1\",\"name\":\"x_semantic_search\",\"arguments\":\"{}\"}}\n\n",
-        "event: response.output_item.added\n",
-        "data: {\"type\":\"response.output_item.added\",\"output_index\":1,\"item\":{\"type\":\"image_generation_call\",\"id\":\"image_visible\"}}\n\n",
-        "event: response.completed\n",
-        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_cache\",\"status\":\"completed\",\"tools\":[{\"type\":\"web_search\"},{\"type\":\"x_search\"}],\"output\":[{\"type\":\"function_call\",\"call_id\":\"xs_call_1\",\"name\":\"x_semantic_search\",\"arguments\":\"{}\"},{\"type\":\"image_generation_call\",\"id\":\"image_visible\"}]}}\n\n",
-    );
-
-    let events = GrokCanonicalDecoder::for_request("grok-4.5", &request)
-        .push(body.as_bytes())
-        .expect("filtered cache route response");
-    let wire = wire_events(&events);
-
-    assert_eq!(wire.len(), 3);
-    assert_eq!(
-        wire[1].data().get("output_index"),
-        Some(&serde_json::json!(0))
-    );
-    assert_eq!(
-        wire[2].data().pointer("/response/output/0/id"),
-        Some(&serde_json::json!("image_visible"))
-    );
-    assert_eq!(wire[2].data().pointer("/response/output/1"), None);
-    assert_eq!(wire[2].data().pointer("/response/tools"), None);
 }
 
 #[test]
@@ -1333,4 +832,119 @@ fn decoder_should_omit_client_details_for_unstructured_failures() {
         error.upstream_code().map(|code| code.as_str()),
         Some("internal_error")
     );
+}
+
+#[test]
+fn native_sse_preserves_unknown_malformed_ping_and_tool_frames_byte_for_byte() {
+    let raw = concat!(
+        "event: response.created\r\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"r\",\"model\":\"grok-4.7\"}}\r\n\r\n",
+        ": keep-alive\n\n",
+        "event: ping\ndata: {\"type\":\"ping\",\"x\":true}\n\n",
+        "event: response.doom_loop_check\nid: native-id\nretry: 42\ndata: {\"type\":\"response.doom_loop_check\",\"unknown\": [1,2]}\n\n",
+        "event: future\ndata: {broken json\n\n",
+        "retry: not-a-number\ndata: no schema\n\n",
+        "event: response.output_item.done\ndata: {\"type\":\"response.output_item.done\",\"output_index\":7,\"sequence_number\":100,\"item\":{\"id\":\"fc1\",\"type\":\"function_call\",\"name\":\"xai_proxy_apply_patch\",\"call_id\":\"c1\",\"arguments\":\"{ \\\"n\\\":1.0 }\"}}\n\n",
+        "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"r\",\"status\":\"completed\",\"output\":[]}}\n\n",
+        "data: [DONE]\n\n"
+    );
+    let mut decoder = GrokCanonicalDecoder::new("grok-4.7");
+    let mut events = Vec::new();
+    for chunk in raw.as_bytes().chunks(13) {
+        events.extend(decoder.push(chunk).unwrap());
+    }
+    events.extend(decoder.finish().unwrap());
+    let preserved: Vec<u8> = wire_events(&events)
+        .into_iter()
+        .flat_map(|wire| {
+            assert_eq!(wire.protocol(), "openai");
+            wire.raw_sse_frame().unwrap().to_vec()
+        })
+        .collect();
+    assert_eq!(preserved, raw.as_bytes());
+    let native = wire_events(&events)
+        .into_iter()
+        .find(|wire| wire.data().get("output_index") == Some(&serde_json::json!(7)))
+        .unwrap();
+    assert_eq!(native.data()["sequence_number"], 100);
+    assert_eq!(native.data()["item"]["name"], "xai_proxy_apply_patch");
+}
+
+#[test]
+fn decoder_should_bill_the_sent_model_independently_of_the_response_model() {
+    for (sent, returned, reported_cost, expected_cost) in [
+        ("grok-4.5", Some("grok-future"), None, Some(2_175_000)),
+        ("grok-4.5", Some("grok-4.3"), None, Some(2_175_000)),
+        ("grok-4.5", None, None, Some(2_175_000)),
+        ("grok-future", Some("grok-4.5"), None, None),
+        ("grok-latest", Some("grok-4.3"), Some(0), None),
+        ("grok-4.5", Some("grok-future"), Some(123), None),
+        ("grok-4.5", Some("grok-future"), Some(0), Some(2_175_000)),
+    ] {
+        let created = serde_json::json!({"type":"response.created","response":{"id":"resp_model_cost","model":returned}});
+        let mut completed = serde_json::json!({
+            "type":"response.completed",
+            "response":{
+                "id":"resp_model_cost","model":returned,"status":"completed","output":[],
+                "usage":{"input_tokens":100,"output_tokens":10,"input_tokens_details":{"cached_tokens":25},"total_tokens":110}
+            }
+        });
+        if let Some(ticks) = reported_cost {
+            completed["response"]["usage"]["cost_in_usd_ticks"] = serde_json::json!(ticks);
+        }
+        let body = format!("data: {created}\n\ndata: {completed}\n\n");
+        let mut decoder = GrokCanonicalDecoder::new(sent);
+        let events = decoder.push(body.as_bytes()).expect("model cost response");
+        let facts: Vec<_> = events
+            .into_iter()
+            .flat_map(|event| event.into_parts().0)
+            .collect();
+        assert_eq!(
+            calculated_cost_ticks(&facts),
+            expected_cost,
+            "{sent} -> {returned:?}"
+        );
+        assert_eq!(
+            provider_cost_ticks(&facts),
+            reported_cost.filter(|ticks| *ticks > 0)
+        );
+        assert!(facts.iter().any(|event| matches!(
+            event,
+            GatewayEvent::Completed(meta) if meta.model() == Some(returned.unwrap_or(sent))
+        )));
+    }
+}
+
+#[test]
+fn decoder_should_classify_incomplete_reasons_and_preserve_native_wire() {
+    for (reason, expected) in [
+        ("max_output_tokens", FinishReason::Length),
+        ("max_tokens", FinishReason::Length),
+        ("max_prompt_tokens", FinishReason::Length),
+        ("max_time_limit", FinishReason::Length),
+        ("content_filter", FinishReason::ContentFilter),
+        ("future_reason", FinishReason::Other),
+    ] {
+        let created = serde_json::json!({"type":"response.created","response":{"id":"resp_short"}});
+        let incomplete = serde_json::json!({
+            "type":"response.incomplete",
+            "response":{
+                "id":"resp_short","status":"incomplete",
+                "incomplete_details":{"reason":reason}
+            }
+        });
+        let body = format!("data: {created}\n\ndata: {incomplete}\n\n");
+        let events = GrokCanonicalDecoder::new("fallback")
+            .push(body.as_bytes())
+            .expect("incomplete response");
+        let completed = events
+            .iter()
+            .flat_map(ProviderEvent::canonical_facts)
+            .find_map(|fact| match fact {
+                GatewayEvent::Completed(meta) => meta.finish_reason(),
+                _ => None,
+            });
+
+        assert_eq!(completed, Some(expected), "{reason}");
+        assert_eq!(wire_events(&events).last().unwrap().data(), &incomplete);
+    }
 }

@@ -174,21 +174,22 @@ impl CodexWebSocketPool {
                 WebSocketPoolSlot::Idle {
                     connection,
                     idle_since,
-                } if should_close_idle_connection(connection, now, self.max_age())
+                } if should_close_idle_connection(connection, now)
                     || (!state.has_downstream_binding(key)
-                        && now.duration_since(*idle_since) >= self.config.idle_timeout)
+                        && now.duration_since(*idle_since) >= connection.lifetime.idle_timeout)
                     || state.downstream_closed(key)
-                    || self.account_limit(key.account_id()).is_none() =>
+                    || self.account_limit(key.account_id()).is_none()
+                    || !self.effective_config().enabled =>
                 {
                     Some(key.clone())
                 }
                 WebSocketPoolSlot::Busy(reservation)
-                    if now.duration_since(reservation.reserved_at) >= self.max_age() =>
+                    if now.duration_since(reservation.reserved_at) >= reservation.max_age =>
                 {
                     Some(key.clone())
                 }
                 WebSocketPoolSlot::Connecting(connecting)
-                    if now.duration_since(connecting.started_at) >= self.max_age() =>
+                    if now.duration_since(connecting.started_at) >= connecting.max_age =>
                 {
                     Some(key.clone())
                 }
@@ -212,7 +213,7 @@ impl CodexWebSocketPool {
                         } else if state.downstream_closed(&key) {
                             "downstream_connection_closed"
                         } else if !state.has_downstream_binding(&key)
-                            && now.duration_since(idle_since) >= self.config.idle_timeout
+                            && now.duration_since(idle_since) >= connection.lifetime.idle_timeout
                         {
                             "idle_timeout_expired"
                         } else {

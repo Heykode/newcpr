@@ -2,6 +2,7 @@
 
 use bytes::Bytes;
 use gateway_core::event::{GatewayEvent, ProviderEvent};
+use gateway_protocol::openai::sse::{parse_sse_events, sse_frame_is_done};
 use serde_json::Value;
 
 pub(in crate::openai) fn chat_error_frame(data: &Value) -> Bytes {
@@ -78,5 +79,76 @@ impl ChatEncoder {
             output.append(&mut self.terminal);
         }
         output
+    }
+}
+
+#[derive(Default)]
+pub(in crate::openai) struct ChatDeliveryValidator {
+    id: Option<String>,
+    finished: bool,
+    done: bool,
+}
+
+impl ChatDeliveryValidator {
+    pub(in crate::openai) fn validate_frame(&mut self, bytes: &[u8]) -> Result<(), ()> {
+        if self.done {
+            return Err(());
+        }
+        let text = std::str::from_utf8(bytes).map_err(|_| ())?;
+        if sse_frame_is_done(text) {
+            if !self.finished {
+                return Err(());
+            }
+            self.done = true;
+            return Ok(());
+        }
+        for event in parse_sse_events(text).map_err(|_| ())? {
+            let value: Value = serde_json::from_str(&event.data).map_err(|_| ())?;
+            if value.get("error").is_some_and(Value::is_object) {
+                self.finished = true;
+                continue;
+            }
+            if value.get("object").and_then(Value::as_str) != Some("chat.completion.chunk") {
+                return Err(());
+            }
+            let id = value.get("id").and_then(Value::as_str).ok_or(())?;
+            // 首帧必须留有提交锚点，终态不能替代被中间件移除的首个业务帧
+            if self.id.is_none()
+                && value
+                    .pointer("/choices/0/finish_reason")
+                    .is_some_and(Value::is_string)
+            {
+                return Err(());
+            }
+            if self.id.as_deref().is_some_and(|expected| expected != id) {
+                return Err(());
+            }
+            self.id.get_or_insert_with(|| id.to_owned());
+            let choices = value.get("choices").and_then(Value::as_array).ok_or(())?;
+            if choices.is_empty() {
+                if !self.finished || !value.get("usage").is_some_and(Value::is_object) {
+                    return Err(());
+                }
+                continue;
+            }
+            if self.finished
+                || choices.len() != 1
+                || choices[0].get("index").and_then(Value::as_u64) != Some(0)
+            {
+                return Err(());
+            }
+            self.finished = choices[0]
+                .get("finish_reason")
+                .is_some_and(Value::is_string);
+        }
+        Ok(())
+    }
+
+    pub(in crate::openai) fn finish_delivery(&self) -> Result<(), ()> {
+        if self.finished && self.done {
+            Ok(())
+        } else {
+            Err(())
+        }
     }
 }

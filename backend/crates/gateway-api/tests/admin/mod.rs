@@ -504,8 +504,8 @@ impl SettingsStore for MemorySettingsStore {
                 .codex_privacy_policy
                 .clone()
                 .unwrap_or_else(|| settings.codex_privacy_policy.clone()),
-            openai_oauth_guardian_review_model: true,
-            openai_request_country: Default::default(),
+            openai_request_settings: Default::default(),
+            openai_websocket_pool: Default::default(),
 
             account_affinity: command
                 .account_affinity
@@ -1846,8 +1846,8 @@ fn test_runtime_settings() -> RuntimeSettings {
     RuntimeSettings {
         request_profiles: Default::default(),
         codex_privacy_policy: Default::default(),
-        openai_oauth_guardian_review_model: true,
-        openai_request_country: Default::default(),
+        openai_request_settings: Default::default(),
+        openai_websocket_pool: Default::default(),
 
         account_affinity: Default::default(),
         session_affinity_ttl_hours: 24,

@@ -212,3 +212,134 @@ impl ClientAdmissionPort for RecordingAdmissions {
         })
     }
 }
+
+#[test]
+fn initial_runtime_publication_uses_persisted_openai_pool_before_any_settings_refresh() {
+    futures::executor::block_on(async {
+        use gateway_core::engine::continuation::{
+            NativeContinuationPin, NativeContinuationPort, NativeContinuationStoreError,
+            PreviousResponseId,
+        };
+        use gateway_core::engine::execution::{
+            ClientApiKeyUsageSink, ProviderCircuitDecision, ProviderCircuitError,
+            ProviderCircuitPort,
+        };
+        use gateway_core::routing::snapshot::{
+            SnapshotFacts, SnapshotSettingsFacts, SnapshotStoreError, SnapshotStorePort,
+        };
+        use gateway_core::routing::{ConfigRevision, ProviderKind};
+        use gateway_core::runtime::{
+            RequestTuningHandle, SnapshotRevisionStream, SnapshotSubscriptionError,
+            SnapshotSubscriptionPort,
+        };
+        use gateway_core::settings::OpenAiWebSocketPoolSettings;
+        use std::sync::Arc;
+        struct Ports(OpenAiWebSocketPoolSettings);
+        impl SnapshotStorePort for Ports {
+            fn load_snapshot_facts(
+                &self,
+            ) -> BoxFuture<'_, Result<SnapshotFacts, SnapshotStoreError>> {
+                Box::pin(async move {
+                    Ok(SnapshotFacts::new(
+                        ConfigRevision::new(1).unwrap(),
+                        ConfigRevision::new(1).unwrap(),
+                        SnapshotSettingsFacts::new(3, 0, "smart", Default::default(), None, None)
+                            .with_openai_runtime_settings(Default::default(), self.0),
+                        vec![],
+                        vec![],
+                        vec![],
+                        vec![],
+                    ))
+                })
+            }
+            fn current_config_revision(
+                &self,
+            ) -> BoxFuture<'_, Result<ConfigRevision, SnapshotStoreError>> {
+                Box::pin(async { Ok(ConfigRevision::new(1).unwrap()) })
+            }
+        }
+        impl SnapshotSubscriptionPort for Ports {
+            fn publish_snapshot_revision(
+                &self,
+                _: ConfigRevision,
+            ) -> BoxFuture<'_, Result<(), SnapshotSubscriptionError>> {
+                Box::pin(async { Ok(()) })
+            }
+            fn subscribe_snapshot_revisions(
+                &self,
+            ) -> BoxFuture<'_, Result<SnapshotRevisionStream, SnapshotSubscriptionError>>
+            {
+                Box::pin(async {
+                    Ok(Box::pin(futures::stream::pending()) as SnapshotRevisionStream)
+                })
+            }
+        }
+        impl ProviderCircuitPort for Ports {
+            fn decision<'a>(
+                &'a self,
+                _: &'a ProviderKind,
+            ) -> BoxFuture<'a, Result<ProviderCircuitDecision, ProviderCircuitError>> {
+                unreachable!()
+            }
+            fn observe_failure<'a>(
+                &'a self,
+                _: &'a ProviderKind,
+            ) -> BoxFuture<'a, Result<(), ProviderCircuitError>> {
+                unreachable!()
+            }
+            fn observe_success<'a>(
+                &'a self,
+                _: &'a ProviderKind,
+            ) -> BoxFuture<'a, Result<(), ProviderCircuitError>> {
+                unreachable!()
+            }
+        }
+        impl NativeContinuationPort for Ports {
+            fn resolve<'a>(
+                &'a self,
+                _: &'a ClientApiKeyId,
+                _: &'a PreviousResponseId,
+            ) -> BoxFuture<'a, Result<Option<NativeContinuationPin>, NativeContinuationStoreError>>
+            {
+                unreachable!()
+            }
+            fn record<'a>(
+                &'a self,
+                _: NativeContinuationPin,
+            ) -> BoxFuture<'a, Result<(), NativeContinuationStoreError>> {
+                unreachable!()
+            }
+        }
+        impl ClientApiKeyUsageSink for Ports {
+            fn record_used(&self, _: &ClientApiKeyId) {}
+        }
+        let settings = OpenAiWebSocketPoolSettings {
+            enabled: false,
+            max_age_ms: 60000,
+            fast_path_budget_ms: 123,
+            idle_timeout_ms: 456000,
+            stream_idle_timeout_ms: 789000,
+        };
+        let ports = Arc::new(Ports(settings));
+        let tuning = RequestTuningHandle::default();
+        let bundle = gateway_core::initialize_with_request_tuning(
+            gateway_core::CoreStorePorts::new(
+                Arc::new(RecoveryStore::success(0)),
+                (
+                    Arc::new(RecordingAdmissions::default()),
+                    Arc::new(ScriptedRecoveries::new(Ok(vec![]))),
+                ),
+                ports.clone(),
+                ports.clone(),
+                (ports.clone(), ports.clone()),
+                ports,
+            ),
+            gateway_core::engine::provider::ProviderRegistry::default(),
+            tuning.clone(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(tuning.openai_websocket_pool(), Some(settings));
+        drop(bundle);
+    });
+}

@@ -22,16 +22,21 @@ impl CodexWireProfileState {
         policy: &dyn ProviderRuntimePolicyPort,
     ) -> Result<CodexWireProfile, ErrorSource> {
         let provider = ProviderKind::new("openai").map_err(ErrorSource::new)?;
-        let Some(configuration) = policy
+        let settings = policy
+            .load_openai_request_settings()
+            .await
+            .map_err(ErrorSource::new)?;
+        let profile = match policy
             .load_request_profile(&provider)
             .await
             .map_err(ErrorSource::new)?
-        else {
-            return Ok(self.snapshot());
+        {
+            Some(configuration) => RequestProfileSelection::parse(&configuration)
+                .and_then(|selection| selection.resolve(self))
+                .map_err(ErrorSource::new)?,
+            None => self.snapshot(),
         };
-        RequestProfileSelection::parse(&configuration)
-            .and_then(|selection| selection.resolve(self))
-            .map_err(ErrorSource::new)
+        Ok(profile.with_request_settings(&settings))
     }
 }
 
@@ -49,6 +54,15 @@ enum ParsedSelection {
 }
 
 impl CodexWireProfile {
+    pub(crate) fn with_request_settings(
+        mut self,
+        settings: &gateway_core::settings::OpenAiRequestSettings,
+    ) -> Self {
+        self.residency = settings.residency.clone();
+        self.account_routing_override = settings.account_routing_override.clone();
+        self
+    }
+
     pub(crate) fn effective_installation_id(
         &self,
         client_key_id: &gateway_core::policy::ClientApiKeyId,
