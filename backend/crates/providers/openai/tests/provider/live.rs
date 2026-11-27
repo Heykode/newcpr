@@ -357,6 +357,7 @@ fn live_protocol_headers() -> Vec<gateway_core::operation::ProviderHttpHeader> {
         ("openai-alpha", "live-test"),
         ("voice-session-id", "voice-product-session"),
         ("x-session-id", "realtime-api-session"),
+        ("x-codex-turn-id", "live-turn-reference"),
         ("session-id", "client-session"),
         ("thread-id", "client-session"),
         ("x-test-business", "first"),
@@ -372,6 +373,7 @@ fn live_protocol_headers() -> Vec<gateway_core::operation::ProviderHttpHeader> {
 fn assert_live_correlation(headers: &reqwest::header::HeaderMap) {
     assert_eq!(headers["voice-session-id"], "voice-product-session");
     assert_eq!(headers["x-session-id"], "realtime-api-session");
+    assert_eq!(headers["x-codex-turn-id"], "live-turn-reference");
     let session = headers["session-id"].to_str().unwrap();
     assert_ne!(session, "client-session");
     uuid::Uuid::parse_str(session).unwrap();

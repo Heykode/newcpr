@@ -41,7 +41,7 @@ impl AntigravityProvider {
         let started = Instant::now();
         let affinity =
             super::affinity::session_key(request.operation(), ctx.client_api_key_ref(), &model);
-        let search = request.operation().requires_web_search();
+        let search = request.candidate().uses_dedicated_web_search();
         let selected = self
             .select_account(&model, &ctx, affinity.as_ref(), search)
             .await?;

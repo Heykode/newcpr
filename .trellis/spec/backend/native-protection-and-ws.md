@@ -114,9 +114,12 @@
    HTTP recovery after an explicit early rejection is not cancelled by the expired
    connection-only budget. Required warmup stays WebSocket; connection-local
    continuation asks the client for full replay.
-4. Identity/error matrix: all final `x-codex-exclude` values partition reuse and exact
+4. Identity/error matrix: all final `x-codex-exclude` and `x-codex-exclude-stream-fields` names and values partition reuse and exact
    owner lookup, including forced keys and egress routing. Changed values cannot
    reuse an old exact connection; unchanged values preserve normal reuse.
+   Preserve empty and repeated values; changing only the header name is also a different identity.
+   Handshake models ETag is delivered only on the first actual generation. Warmup
+   preserves the pooled ETag without delivering it; later reuse cannot reconfirm it.
 5. Good: peer rejection while uploading is observed promptly. Base: small payload
    stays below the configured compression threshold. Bad: replay after metadata.
 6. Tests: partial upload/peer reply, ambiguous disconnect, Ping, compression,

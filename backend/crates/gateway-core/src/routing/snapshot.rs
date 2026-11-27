@@ -1924,6 +1924,7 @@ impl RuntimeSnapshot {
             || account_scope.provider_kinds().clone(),
             |provider| BTreeSet::from([provider.clone()]),
         );
+        let search = operation.requires_web_search();
         let mut invalid_variant = false;
         let mut group_model_denied = false;
         let mut search_unavailable = false;
@@ -1939,161 +1940,188 @@ impl RuntimeSnapshot {
             {
                 continue;
             }
-            let mut candidate_scope = Arc::clone(&account_scope);
-            let upstream_model = if let Some(group) =
-                self.model_group(provider, upstream_model.as_str())
-            {
+            let group = self.model_group(provider, upstream_model.as_str());
+            let group_search_targets = group
+                .and_then(|group| group.dedicated_web_search.as_deref())
+                .filter(|_| operation.is_native_web_search());
+            let mut search_variants = None;
+            let source = if let Some(group) = group {
                 if group.match_operation(operation, &requirements).is_none() {
                     continue;
                 }
-                let effort = operation.requested_reasoning_effort();
-                let Some(variant) = effort
-                    .as_ref()
-                    .and_then(|effort| group.reasoning_variants.get(effort))
-                else {
-                    invalid_variant = true;
-                    continue;
-                };
-                // 空集合在 restricted_to 中表示不收窄，必须先拒绝没有来源的档位
-                if variant.accounts.is_empty() {
-                    continue;
-                }
-                candidate_scope = Arc::new(account_scope.restricted_to_accounts(&variant.accounts));
-                &variant.model
-            } else {
-                &upstream_model
-            };
-            if enforce_account_model_policy
-                && candidate_scope.groups_deny_model(Some(upstream_model.as_str()))
-            {
-                group_model_denied = true;
-                continue;
-            }
-            if enforce_account_model_policy
-                && !candidate_scope.allows_provider_model(provider, upstream_model.as_str())
-            {
-                continue;
-            }
-            let capabilities = self
-                .provider_models
-                .get(provider)
-                .and_then(|models| models.get(upstream_model));
-            if operation.requires_native_protocol()
-                && capabilities.and_then(|model| model.generation_protocol)
-                    != Some(operation.protocol())
-            {
-                continue;
-            }
-            if direct_model.is_some() && capabilities.is_none() {
-                continue;
-            }
-            let emulated_features = match capabilities {
-                Some(capabilities) => {
-                    let Some(emulated) = capabilities.match_operation(operation, &requirements)
+                if group_search_targets.is_some() {
+                    // 独立搜索只执行搜索型号，任一获准的具体成员都能证明同账号的分组资格
+                    search_variants = Some(group.reasoning_variants.values());
+                    None
+                } else {
+                    let effort = operation.requested_reasoning_effort();
+                    let Some(variant) = effort
+                        .as_ref()
+                        .and_then(|level| group.reasoning_variants.get(level))
                     else {
+                        invalid_variant = true;
                         continue;
                     };
-                    emulated
+                    Some((&variant.model, Some(&variant.accounts)))
                 }
-                // Fixed-account diagnostics ask the provider directly; disabled accounts
-                // may never have contributed their models to the public catalog.
-                None if enforce_account_model_policy
-                    && (known_model || self.exhaustive_provider_catalogs.contains(provider)) =>
+            } else {
+                Some((&upstream_model, None))
+            };
+            let sources = source.into_iter().chain(
+                search_variants
+                    .into_iter()
+                    .flatten()
+                    .map(|variant| (&variant.model, Some(&variant.accounts))),
+            );
+            let mut targets = BTreeMap::<_, BTreeSet<_>>::new();
+            for (upstream_model, accounts) in sources {
+                if accounts.is_some_and(BTreeSet::is_empty) {
+                    continue;
+                }
+                let mut candidate_scope = accounts.map_or_else(
+                    || Arc::clone(&account_scope),
+                    |accounts| Arc::new(account_scope.restricted_to_accounts(accounts)),
+                );
+                if enforce_account_model_policy
+                    && candidate_scope.groups_deny_model(Some(upstream_model.as_str()))
+                {
+                    group_model_denied = true;
+                    continue;
+                }
+                // 强制 Provider 路由也不能扩大 Key 授权；管理诊断的目标账号由探测入口固定
+                if enforce_account_model_policy
+                    && !candidate_scope.allows_provider_model(provider, upstream_model.as_str())
                 {
                     continue;
                 }
-                None => BTreeSet::new(),
-            };
-            // 原生输出上限属于具体型号与账号，适配器账号沿用自己的能力合同
-            if let (Some(requested), Some(model)) =
-                (requirements.requested_output_tokens(), capabilities)
-            {
-                let mut excluded = model
-                    .account_metadata
-                    .iter()
-                    .filter_map(|(id, metadata)| {
-                        (metadata
-                            .max_output_tokens
-                            .is_some_and(|limit| requested > limit)
-                            && candidate_scope.allows(id))
-                        .then_some(id)
-                    })
-                    .peekable();
-                if excluded.peek().is_some() {
-                    let mut narrowed = candidate_scope.as_ref().clone();
-                    narrowed.exclude_accounts(excluded.cloned());
-                    if !narrowed.allows_provider_model(provider, upstream_model.as_str()) {
-                        continue;
-                    }
-                    candidate_scope = Arc::new(narrowed);
+                let capabilities = self
+                    .provider_models
+                    .get(provider)
+                    .and_then(|models| models.get(upstream_model));
+                // 原生入口不能借同名模型、发现型目录的匿名透传或插件声明跨协议分派
+                if operation.requires_native_protocol()
+                    && capabilities.and_then(|model| model.generation_protocol)
+                        != Some(operation.protocol())
+                {
+                    continue;
                 }
-            }
-            if operation.requires_web_search()
-                && let Some(model) = capabilities
-                && let Some(search_models) = &model.dedicated_web_search
-            {
-                // 仅目录中同时拥有请求型号和搜索目标的账号可执行本次搜索
-                let mut targets = BTreeMap::<_, BTreeSet<_>>::new();
-                for account in model.account_metadata.keys() {
-                    if !candidate_scope.allows_model(account, upstream_model.as_str()) {
-                        continue;
+                // 直连模型需要原生能力，不能借用插件为同名模型声明的账号与能力。
+                if direct_model.is_some() && capabilities.is_none() {
+                    continue;
+                }
+                let emulated_features = match capabilities {
+                    Some(capabilities) => {
+                        let Some(emulated) = capabilities.match_operation(operation, &requirements)
+                        else {
+                            continue;
+                        };
+                        emulated
                     }
-                    let Some(target) = search_models.get(account) else {
-                        search_unavailable = true;
-                        continue;
-                    };
-                    if !candidate_scope.allows_model_pair(
-                        account,
-                        upstream_model.as_str(),
-                        target.as_str(),
-                    ) {
-                        group_model_denied |=
-                            candidate_scope.groups_deny_model(Some(target.as_str()));
-                        continue;
-                    }
-                    let limit = self
-                        .provider_models
-                        .get(provider)
-                        .and_then(|models| models.get(target))
-                        .and_then(|model| model.account_metadata.get(account))
-                        .and_then(|meta| meta.max_output_tokens);
-                    if requirements
-                        .requested_output_tokens()
-                        .zip(limit)
-                        .is_some_and(|(requested, limit)| requested > limit)
+                    // Fixed-account diagnostics ask the provider directly; disabled accounts
+                    // may never have contributed their models to the public catalog.
+                    None if enforce_account_model_policy
+                        && (known_model
+                            || self.exhaustive_provider_catalogs.contains(provider)) =>
                     {
                         continue;
                     }
-                    targets.entry(target).or_default().insert(account.clone());
+                    None => BTreeSet::new(),
+                };
+                // 原生输出上限属于具体型号与账号，适配器账号沿用自己的能力合同
+                if let (Some(requested), Some(model)) =
+                    (requirements.requested_output_tokens(), capabilities)
+                {
+                    let mut excluded = model
+                        .account_metadata
+                        .iter()
+                        .filter_map(|(id, metadata)| {
+                            (metadata
+                                .max_output_tokens
+                                .is_some_and(|limit| requested > limit)
+                                && candidate_scope.allows(id))
+                            .then_some(id)
+                        })
+                        .peekable();
+                    if excluded.peek().is_some() {
+                        let mut narrowed = candidate_scope.as_ref().clone();
+                        narrowed.exclude_accounts(excluded.cloned());
+                        if !narrowed.allows_provider_model(provider, upstream_model.as_str()) {
+                            continue;
+                        }
+                        candidate_scope = Arc::new(narrowed);
+                    }
                 }
-                for (target, accounts) in targets {
-                    candidates.push(ProviderCandidate {
-                        requires_direct_authentication: direct_model.is_some(),
-                        provider: provider.clone(),
-                        upstream_model: Some(target.clone()),
-                        model_presentation: self
-                            .provider_model_presentations
+                if let Some(model) = capabilities
+                    && let Some(search_models) = group_search_targets
+                        .or(model.dedicated_web_search.as_deref().filter(|_| search))
+                {
+                    // 仅目录中同时拥有请求型号和搜索目标的账号可执行本次搜索
+                    for account in model.account_metadata.keys() {
+                        if !candidate_scope.allows_model(account, upstream_model.as_str()) {
+                            continue;
+                        }
+                        let Some(target) = search_models.get(account) else {
+                            search_unavailable = true;
+                            continue;
+                        };
+                        if !candidate_scope.allows_model_pair(
+                            account,
+                            upstream_model.as_str(),
+                            target.as_str(),
+                        ) {
+                            group_model_denied |=
+                                candidate_scope.groups_deny_model(Some(target.as_str()));
+                            continue;
+                        }
+                        let limit = self
+                            .provider_models
                             .get(provider)
                             .and_then(|models| models.get(target))
-                            .cloned(),
-                        emulated_features: emulated_features.clone(),
-                        account_scope: Arc::new(candidate_scope.restricted_to_accounts(&accounts)),
-                    });
+                            .and_then(|model| model.account_metadata.get(account))
+                            .and_then(|meta| meta.max_output_tokens);
+                        if requirements
+                            .requested_output_tokens()
+                            .zip(limit)
+                            .is_some_and(|(requested, limit)| requested > limit)
+                        {
+                            continue;
+                        }
+                        targets
+                            .entry((target, emulated_features.clone()))
+                            .or_default()
+                            .insert(account.clone());
+                    }
+                    continue;
                 }
-                continue;
+                candidates.push(ProviderCandidate {
+                    dedicated_web_search: false,
+                    requires_direct_authentication: direct_model.is_some(),
+                    provider: provider.clone(),
+                    upstream_model: Some(upstream_model.clone()),
+                    model_presentation: self
+                        .provider_model_presentations
+                        .get(provider)
+                        .and_then(|models| models.get(upstream_model))
+                        .cloned(),
+                    emulated_features,
+                    account_scope: candidate_scope,
+                });
             }
-            candidates.push(ProviderCandidate {
-                requires_direct_authentication: direct_model.is_some(),
-                provider: provider.clone(),
-                model_presentation: self
-                    .provider_model_presentations
-                    .get(provider)
-                    .and_then(|models| models.get(upstream_model))
-                    .cloned(),
-                upstream_model: Some(upstream_model.clone()),
-                emulated_features,
-                account_scope: candidate_scope,
-            });
+            for ((target, emulated_features), accounts) in targets {
+                candidates.push(ProviderCandidate {
+                    dedicated_web_search: true,
+                    requires_direct_authentication: direct_model.is_some(),
+                    provider: provider.clone(),
+                    upstream_model: Some(target.clone()),
+                    model_presentation: self
+                        .provider_model_presentations
+                        .get(provider)
+                        .and_then(|models| models.get(target))
+                        .cloned(),
+                    emulated_features,
+                    account_scope: Arc::new(account_scope.restricted_to_accounts(&accounts)),
+                });
+            }
         }
 
         if !known_model && candidates.len() > 1 {
@@ -2177,6 +2205,7 @@ impl RuntimeSnapshot {
             });
         }
         let candidate = ProviderCandidate {
+            dedicated_web_search: false,
             requires_direct_authentication: false,
             provider: provider.clone(),
             model_presentation: None,

@@ -32,6 +32,7 @@ pub(in crate::transport::websocket) struct WebSocketStreamPoolReturn {
     pub(in crate::transport::websocket) lifetime:
         super::super::pool::state::WebSocketConnectionLifetime,
     pub(in crate::transport::websocket) lease: WebSocketPoolLease,
+    pub(in crate::transport::websocket) reused: bool,
     pub(in crate::transport::websocket) created_at: tokio::time::Instant,
     pub(in crate::transport::websocket) continuation: WebSocketContinuationState,
     pub(in crate::transport::websocket) initial_search_declared: bool,
@@ -70,7 +71,7 @@ pub(in crate::transport::websocket) async fn stream_websocket_response(
     mut websocket: PumpedWebSocket,
     mut metadata: CodexWebSocketConnectionMetadata,
     pool_return: Option<WebSocketStreamPoolReturn>,
-    reused_connection: bool,
+    generate: bool,
     stream_idle_timeout: Option<Duration>,
     trace: TraceContext,
     response_control: Option<ResponseControl>,
@@ -81,7 +82,17 @@ pub(in crate::transport::websocket) async fn stream_websocket_response(
         .as_ref()
         .and_then(ResponseControl::connection_cancellation);
     let websocket_connection_id = websocket.connection_id();
-    let response_metadata = metadata.clone();
+    let mut response_metadata = metadata.clone();
+    // 握手 ETag 留给首次生成；预热时保留池中快照，生成时只保留本次交付的副本
+    let omit_etag = if generate {
+        &mut metadata.response_metadata
+    } else {
+        &mut response_metadata.response_metadata
+    };
+    omit_etag.models_etag = None;
+    omit_etag
+        .client_headers
+        .retain(|(name, _)| !name.eq_ignore_ascii_case("x-models-etag"));
     let rate_limit_updates = Arc::new(Mutex::new(Vec::new()));
     let rate_limit_updates_for_task = Arc::clone(&rate_limit_updates);
     let response_metadata_updates = Arc::new(Mutex::new(CodexWebSocketResponseMetadataUpdate {
@@ -104,7 +115,6 @@ pub(in crate::transport::websocket) async fn stream_websocket_response(
             websocket,
             metadata,
             pool_return,
-            reused_connection,
             stream_idle_timeout,
             first_reply: Some(first_reply),
             delivery: WebSocketStreamDelivery {
@@ -156,7 +166,6 @@ struct WebSocketStreamForwardState {
     websocket: PumpedWebSocket,
     metadata: CodexWebSocketConnectionMetadata,
     pool_return: Option<WebSocketStreamPoolReturn>,
-    reused_connection: bool,
     stream_idle_timeout: Option<Duration>,
     rate_limit_updates: CodexWebSocketRateLimitUpdates,
     response_metadata_updates: CodexWebSocketResponseMetadataUpdates,
@@ -212,7 +221,6 @@ async fn forward_websocket_response_stream(state: WebSocketStreamForwardState) {
         mut websocket,
         mut metadata,
         pool_return,
-        reused_connection,
         stream_idle_timeout,
         rate_limit_updates,
         response_metadata_updates,
@@ -220,6 +228,7 @@ async fn forward_websocket_response_stream(state: WebSocketStreamForwardState) {
     } = state;
     let trace = &delivery.trace;
     let mut session_proxy = session_proxy;
+    let reused_connection = pool_return.as_ref().is_some_and(|pool| pool.reused);
     let mut pool_return = pool_return;
     let mut continuation = pool_return
         .as_mut()

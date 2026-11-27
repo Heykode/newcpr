@@ -37,6 +37,7 @@ const DOWNSTREAM_TRANSPORT_HEADERS: &[(&str, &str)] = &[
 ];
 
 const OPAQUE_BUSINESS_HEADERS: &[(&str, &str)] = &[
+    ("x-codex-turn-id", "synthetic-turn"),
     ("X-Grok-Model-Override", "synthetic-model"),
     ("x-grok-session-id", "synthetic-session"),
     ("X-XAI-Token-Auth", "synthetic-token-auth"),
@@ -428,7 +429,6 @@ async fn backend_websocket_should_forward_context_headers_and_preserve_payload_f
     }
     for forbidden in [
         "x-codex-installation-id",
-        "x-codex-turn-id",
         "x-openai-internal-codex-residency",
         "accept",
         "content-type",
@@ -876,7 +876,6 @@ async fn backend_http_should_send_codex_context_without_browser_headers() {
     }
     for forbidden in [
         "x-codex-installation-id",
-        "x-codex-turn-id",
         "x-openai-internal-codex-residency",
         "sec-ch-ua",
         "sec-ch-ua-mobile",
@@ -956,7 +955,6 @@ async fn backend_http_should_ignore_unrepresentable_protocol_headers_without_blo
     for omitted in [
         "session-id",
         "thread-id",
-        "x-codex-turn-id",
         "x-codex-window-id",
         "x-codex-turn-state",
         "x-codex-turn-metadata",
@@ -1022,6 +1020,73 @@ async fn backend_http_should_zstd_compress_codex_responses_request_body() {
         serde_json::from_slice(&decompressed).expect("decompressed body should be valid JSON");
     assert_eq!(json["model"], "gpt-test");
     assert_eq!(json["instructions"], instructions);
+}
+
+#[test]
+fn queued_compression_yields_to_cancellation_and_releases_capacity() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .max_blocking_threads(1)
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let request = read_http_request_with_body(&mut stream).await;
+            write_completed_sse_response(&mut stream).await;
+            request
+        });
+        let mut request = codex_request("gpt-test", "compress after cancellation", Vec::new());
+        request.force_http_sse = true;
+        let client = CodexBackendClient::new(
+            reqwest::Client::builder().no_proxy().build().unwrap(),
+            format!("http://{address}"),
+            test_wire_profile(),
+        );
+
+        // 占满 blocking pool，只有真正让出 reactor 的压缩任务才能被此定时器取消
+        let (started, ready) = tokio::sync::oneshot::channel();
+        let (release, wait) = std::sync::mpsc::channel::<()>();
+        let blocker = tokio::task::spawn_blocking(move || {
+            started.send(()).unwrap();
+            let _ = wait.recv();
+        });
+        ready.await.unwrap();
+        assert!(
+            timeout(
+                Duration::from_millis(50),
+                client.create_response(&request, request_context("req_cancel_compression", None)),
+            )
+            .await
+            .is_err()
+        );
+        assert!(
+            !server.is_finished(),
+            "cancelled preparation must not send upstream"
+        );
+        drop(release);
+        blocker.await.unwrap();
+
+        timeout(
+            Duration::from_secs(5),
+            client.create_response(
+                &request,
+                request_context("req_after_compression_cancel", None),
+            ),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let raw = server.await.unwrap();
+        let separator = raw.windows(4).position(|part| part == b"\r\n\r\n").unwrap();
+        let body = zstd::stream::decode_all(&raw[separator + 4..]).unwrap();
+        assert_eq!(
+            serde_json::from_slice::<Value>(&body).unwrap()["instructions"],
+            "compress after cancellation"
+        );
+    });
 }
 
 #[tokio::test]

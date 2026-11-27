@@ -945,6 +945,16 @@ impl Operation {
         })
     }
 
+    /// 原生单次搜索可通过账号的搜索目标解析未选档的模型组
+    #[must_use]
+    pub fn is_native_web_search(&self) -> bool {
+        matches!(self, Self::Generate(request) if {
+            let payload = request.protocol_payload();
+            payload.protocol() == gateway_protocol::genai::GENAI_PROTOCOL
+                && gateway_protocol::genai::is_standalone_web_search(payload.body(), payload.context())
+        })
+    }
+
     /// 仅提取本次正文明确声明的推理档位，路由不继承 Provider 会话默认值
     pub(crate) fn requested_reasoning_effort(&self) -> Option<String> {
         let observation = match self {

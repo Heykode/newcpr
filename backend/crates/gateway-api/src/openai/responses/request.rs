@@ -44,7 +44,6 @@ pub struct OpenAiRequestHeaders {
     thread_id: Option<String>,
     scheduling_session_hint: Option<OpenAiSchedulingSessionHint>,
     client_request_id: Option<String>,
-    turn_id: Option<String>,
 
     responses_lite: Option<String>,
     memgen_request: Option<String>,
@@ -85,7 +84,6 @@ impl OpenAiRequestHeaders {
             thread_id: header_string(headers, "thread-id"),
             scheduling_session_hint: scheduling_session_hint(headers),
             client_request_id: header_string(headers, "x-client-request-id"),
-            turn_id: header_string(headers, "x-codex-turn-id"),
             responses_lite: header_string(headers, X_OPENAI_INTERNAL_CODEX_RESPONSES_LITE_HEADER),
             memgen_request: header_string(headers, X_OPENAI_MEMGEN_REQUEST_HEADER),
             subagent: header_string(headers, OPENAI_SUBAGENT_KEY),
@@ -217,7 +215,6 @@ impl OpenAiRequestHeaders {
             "client_request_id",
             self.client_request_id.as_ref(),
         );
-        insert_protocol_context(&mut context, "turn_id", self.turn_id.as_ref());
         insert_protocol_context(&mut context, "responses_lite", self.responses_lite.as_ref());
         insert_protocol_context(&mut context, "memgen_request", self.memgen_request.as_ref());
         if !self.passthrough_headers.is_empty() {

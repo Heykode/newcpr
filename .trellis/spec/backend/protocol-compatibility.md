@@ -498,6 +498,8 @@ events, then use the existing encoder and single execution finalization.
 - 显式 Guardian 角色头优先；自动 reviewer 标记仅在实际专用模型上生成。
   classifier/housekeeper 保留其 sampler 传输；普通与 reviewer HTTP 正文使用 zstd，
   不再按小正文大小跳过，classifier/housekeeper 不压缩。WS 消息压缩仍按原独立规则。
+  HTTP zstd 压缩在 blocking pool 执行，提交前按可用 CPU 数限制并发；取消等待或尚未启动任务可释放资源，已运行任务持有许可直到真实结束，不能声称取消会强杀工作线程。Excel 的独立压缩合同保留。
+- `x-codex-turn-id` 作为普通扩展头透传，不再提取为 typed context.turn_id，也不在 HTTP、WS 或 Live 额外屏蔽；正文、client_metadata 和标准 x-codex-turn-metadata 中的轮次身份继续按既有合同解析。
 - 所选 OAuth ID token（缺失时 access token）的 FedRAMP claim 决定受管理标记；
   下游不能覆盖该账号的 true。无 claim 的同账号扩展按既有透传合同处理。
   模型目录、预热、Images/Search 和 Live 辅助调用复用账号客户端及池隔离。

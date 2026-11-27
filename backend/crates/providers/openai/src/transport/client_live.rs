@@ -46,7 +46,7 @@ impl CodexBackendClient {
                         || crate::compat::provider_managed_header(name.as_str())))
                 || matches!(
                     name.as_str(),
-                    "x-codex-routing-hint" | "x-codex-turn-state" | "x-codex-turn-id"
+                    "x-codex-routing-hint" | "x-codex-turn-state"
                 )
             {
                 continue;

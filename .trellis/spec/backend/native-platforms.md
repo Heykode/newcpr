@@ -7,7 +7,7 @@
 
 - Antigravity使用Google OAuth/PKCE，凭据提交仍使用本地账号身份、revision及Store事务；真实目录决定模型可用性，价格表不创建可用模型。
 - GenAI模型列表、详情、generateContent、streamGenerateContent与countTokens使用原生权限与协议；Chat 使用原始协议参与路由，选中 AGY 后直接转换为 GenAI。AGY 拒绝原生 Responses 和 Messages。生成和计数都先放平台提示词，随后保留客户端系统指令、工具说明和元数据。搜索工具遵循原生 GenAI/Chat 的转换合同。
-- 思考档位先解析为目录中的实际型号再核对账号/分组权限；显式型号保留。不支持的档位不能偷偷选择别的模型。
+- 普通基础模型组请求先按思考档位解析实际型号，再核对账号/分组权限；显式型号保留。不支持的档位不能偷偷选择别的模型。例外仅为原生非流式独立搜索：唯一工具为 googleSearch/google_search 对象且未提供 thinkingConfig，可用同账号的任一获准具体成员证明分组资格，路由到目录声明且同账号/分组允许的搜索目标。混合工具、流式及显式 thinkingConfig 不走该例外；Provider 使用 Core 的 dedicated_web_search 标记，不根据工具重复猜测执行类型。
 - 原始JSON校验后交付原始字节；SSE保留原始帧、独立usage和EOF。原生GenAI首帧前及帧间不插入网关SSE心跳，首帧前失败保留HTTP错误；其他协议保活与取消/结算仍由统一交付owner管理。
 - GenAI 的 x-goog-api-key 只用于网关 Client Key 鉴权，不发往上游；诊断导出在纯文本、JSON 对象、头部二元组及 name/value 对象中均须脱敏，不能只更新文本正则。
 - 管理固定账号探针可检查目录未收录型号；普通请求必须遵守账号目录和人工模型限制，两者不能共用绕过。

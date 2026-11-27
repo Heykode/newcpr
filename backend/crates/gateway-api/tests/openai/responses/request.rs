@@ -4,11 +4,53 @@ use axum::http::{HeaderMap, HeaderValue, header::CONTENT_ENCODING};
 use gateway_api::openai::responses::{RequestDecodeError, decode_request_with_headers};
 use serde_json::json;
 
-use super::openai_wire_body;
+use super::{openai_protocol_context, openai_wire_body};
 
 const ENCODINGS: [&str; 3] = ["gzip", "deflate", "zstd"];
 const REQUEST: &[u8] = br#"{"model":"gpt-test","input":"hello","future_field":{"value":1}}"#;
 const DECOMPRESSED_LIMIT: u64 = 64 * 1024 * 1024;
+
+#[test]
+fn legacy_turn_header_is_opaque_without_replacing_body_or_standard_metadata() {
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    use gateway_protocol::openai::codex::codex_turn_id;
+
+    for (extra, metadata, expected) in [
+        (json!({}), None, None),
+        (json!({"turn_id":"body-turn"}), None, Some("body-turn")),
+        (
+            json!({"client_metadata":{"turn_id":"client-turn"}}),
+            None,
+            Some("client-turn"),
+        ),
+        (
+            json!({}),
+            Some(r#"{"turn_id":"standard-turn"}"#),
+            Some("standard-turn"),
+        ),
+    ] {
+        let mut request_headers = HeaderMap::new();
+        request_headers.insert("x-codex-turn-id", HeaderValue::from_static("legacy-turn"));
+        if let Some(metadata) = metadata {
+            request_headers.insert("x-codex-turn-metadata", HeaderValue::from_static(metadata));
+        }
+        let mut body = json!({"model":"gpt-test","input":"hello"});
+        body.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        let decoded =
+            decode_request_with_headers(body.to_string().as_bytes(), &request_headers).unwrap();
+        let context = openai_protocol_context(&decoded);
+        assert!(!context.contains_key("turn_id"));
+        assert_eq!(
+            codex_turn_id(openai_wire_body(&decoded), context).as_deref(),
+            expected
+        );
+        let opaque = context["opaque_request_headers"].as_array().unwrap();
+        assert!(opaque.contains(&json!(["x-codex-turn-id", STANDARD.encode(b"legacy-turn")])));
+        assert_eq!(openai_wire_body(&decoded), body.as_object().unwrap());
+    }
+}
 
 pub(super) fn encode_body(encoding: &str, mut data: impl Read) -> Vec<u8> {
     match encoding {
