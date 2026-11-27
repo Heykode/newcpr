@@ -478,6 +478,21 @@ impl Provider for CodexProvider {
                 ..Default::default()
             };
         };
+        if request.protocol_payload().protocol()
+            == gateway_protocol::chat_completions::CHAT_PROTOCOL
+        {
+            return ProviderRequestObservation {
+                continuation: ContinuationRequestObservation {
+                    affinity_hash: crate::credential::derive_chat_session_affinity(
+                        request.protocol_payload(),
+                        client_api_key_id,
+                    )
+                    .and_then(|affinity| affinity.persistence_hash().map(ToOwned::to_owned)),
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+        }
         if request.protocol_payload().protocol() == gateway_protocol::anthropic::ANTHROPIC_PROTOCOL
         {
             return ProviderRequestObservation {
@@ -607,6 +622,13 @@ impl Provider for CodexProvider {
         let upstream_model = candidate.upstream_model().ok_or_else(chat::request_error)?;
         let is_chat = generate.protocol_payload().protocol()
             == gateway_protocol::chat_completions::CHAT_PROTOCOL;
+        let chat_affinity = crate::credential::derive_chat_session_affinity(
+            generate.protocol_payload(),
+            context.client_api_key_ref(),
+        )
+        .map(|affinity| {
+            affinity.with_policy(context.account_selection_policy().account_affinity())
+        });
         let mut selected_chat = None;
         let mut translator = None;
         let translated;
@@ -619,13 +641,19 @@ impl Provider for CodexProvider {
             let started = Instant::now();
             let lease = self
                 .selector
-                .select(&SelectCodexCredential {
-                    upstream_model: upstream_model.as_str(),
-                    request_url: &self.responses_url,
-                    attempt: &context,
-                    session_affinity_key: None,
-                    guardian: false,
-                })
+                .select_with_cyber_policy(
+                    &SelectCodexCredential {
+                        upstream_model: upstream_model.as_str(),
+                        request_url: &self.responses_url,
+                        attempt: &context,
+                        session_affinity_key: chat_affinity
+                            .as_ref()
+                            .and_then(CodexSessionAffinity::key),
+                        guardian: false,
+                    },
+                    None,
+                    chat_affinity.as_ref(),
+                )
                 .await
                 .map_err(map_selection_error)?;
             selected_chat = Some((
@@ -826,6 +854,7 @@ impl Provider for CodexProvider {
             .as_ref()
             .filter(|affinity| affinity.key().is_some() || guardian)
             .or(cache_preference.as_ref())
+            .or(chat_affinity.as_ref())
             .or(session_affinity.as_ref());
         if context.continuation_attempt() == ContinuationAttempt::RotateForClientReplay
             && (account_affinity

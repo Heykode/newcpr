@@ -89,6 +89,7 @@ fn secret(key: &str) -> bool {
             | "authorization"
             | "proxyauthorization"
             | "xapikey"
+            | "xgoogapikey"
             | "cookie"
             | "cookie2"
             | "setcookie"

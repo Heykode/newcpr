@@ -7,6 +7,33 @@ use tokio_tungstenite::{WebSocketStream, tungstenite::protocol::Role};
 use super::*;
 use crate::transport::websocket::pump::{PumpLogContext, PumpedWebSocket};
 
+// Test adapters live under the existing private test module.
+impl CodexWebSocketPool {
+    pub(crate) async fn acquire(
+        &self,
+        key: &CodexWebSocketPoolKey,
+        required_response_id: Option<&str>,
+        requires_search: bool,
+    ) -> WebSocketPoolAcquire {
+        self.acquire_for_route(key, required_response_id, requires_search, None)
+            .await
+            .expect("direct pool acquisition")
+    }
+
+    pub(super) fn acquire_once(
+        &self,
+        key: &CodexWebSocketPoolKey,
+        required_response_id: Option<&str>,
+        requires_search: bool,
+    ) -> (
+        Option<WebSocketPoolAcquire>,
+        Vec<capacity::RetiredConnection>,
+    ) {
+        let (ready, close) = self.acquire_step(key, required_response_id, requires_search, false);
+        (ready.ok(), close)
+    }
+}
+
 fn pool(limit: u32) -> (CodexWebSocketPool, AccountConcurrencyHandle) {
     let limits = AccountConcurrencyHandle::default();
     publish(&limits, 1, limit);

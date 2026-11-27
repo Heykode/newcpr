@@ -83,6 +83,7 @@ fn source_tree_should_match_frozen_machine_manifest() {
         "src/openai/compact/mod.rs",
         "src/openai/encoding.rs",
         "src/openai/genai/mod.rs",
+        "src/openai/genai/agent_menu.rs",
         "src/openai/genai/error.rs",
         "src/openai/genai/models.rs",
         "src/openai/genai_response.rs",

@@ -6,11 +6,10 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
-use base64::{Engine as _, engine::general_purpose::STANDARD};
 use gateway_core::engine::execution::ClientTransport;
 use gateway_core::operation::{GenerateRequest, Operation, ProtocolPayload};
 use gateway_protocol::chat_completions::{CHAT_PROTOCOL, parse_request};
-use serde_json::{Map, Value, json};
+use serde_json::Value;
 
 use crate::ApiState;
 use crate::openai::{
@@ -18,8 +17,9 @@ use crate::openai::{
     encoding::HttpResponseFormat,
     error::{gateway_error_response, protocol_error_response, runtime_unavailable_response},
     responses::{
-        DecodedResponsesRequest, ProtocolError, ProtocolErrorBody, collect_execution_response_as,
-        decompress_request_body_limit, request_client_context, stream_execution_response_as,
+        DecodedResponsesRequest, OpenAiRequestHeaders, ProtocolError, ProtocolErrorBody,
+        collect_execution_response_as, decompress_request_body_limit, request_client_context,
+        stream_execution_response_as,
     },
 };
 
@@ -63,28 +63,7 @@ pub(crate) async fn chat_completions(
     };
     let requested_model = chat["model"].as_str().unwrap_or_default().to_owned();
     let streaming = chat.get("stream").and_then(Value::as_bool).unwrap_or(false);
-    let mut context = Map::new();
-    let passthrough: Vec<_> =
-        crate::openai::responses::passthrough_request_headers(&headers, false)
-            .map(|(name, value)| json!([name.as_str(), STANDARD.encode(value.as_bytes())]))
-            .collect();
-    for (key, aliases) in [
-        ("session_id", &["session-id", "session_id"][..]),
-        ("thread_id", &["thread-id"]),
-        ("turn_metadata", &["x-codex-turn-metadata"]),
-    ] {
-        if let Some(value) = aliases.iter().find_map(|name| {
-            passthrough
-                .iter()
-                .find(|pair| pair[0].as_str() == Some(*name))
-                .and_then(|_| headers.get(*name)?.to_str().ok())
-        }) {
-            context.insert(key.into(), value.into());
-        }
-    }
-    if !passthrough.is_empty() {
-        context.insert("opaque_request_headers".into(), passthrough.into());
-    }
+    let context = OpenAiRequestHeaders::from_headers(&headers).session_context();
     let payload =
         match ProtocolPayload::from_json_bytes(CHAT_PROTOCOL, Bytes::copy_from_slice(&body)) {
             Ok(payload) => payload.with_context(context),

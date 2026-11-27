@@ -8,6 +8,8 @@ pub(super) struct XaiSessionState {
     pub(super) session_id: Option<String>,
     pub(super) transcript: Vec<XaiReplayItem>,
     pub(super) instructions: Option<Value>,
+    // Legacy sessions did not record storage; replay their history instead of guessing a pin.
+    #[serde(default)]
     pub(super) response_stored: bool,
 }
 
@@ -345,4 +347,70 @@ pub(super) fn protocol_not_sent() -> ProviderError {
 
 pub(super) fn protocol_sent() -> ProviderError {
     provider_error(ProviderErrorKind::Protocol, UpstreamSendState::Sent)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn decode(payload: Value) -> Result<Option<XaiSessionState>, ProviderError> {
+        let state = ProviderSessionState::new(
+            XAI_PROVIDER_NAME,
+            payload.as_object().expect("session object").clone(),
+        )
+        .unwrap();
+        let request = GenerateRequest::from_protocol_payload(
+            gateway_core::operation::ProtocolPayload::json_object(
+                gateway_protocol::openai::OPENAI_PROTOCOL,
+                serde_json::json!({"model":"grok-4.5","input":"next"})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            )
+            .unwrap(),
+        )
+        .with_provider_session_state(state);
+        decode_xai_session_state(&request)
+    }
+
+    #[test]
+    fn legacy_session_without_storage_evidence_remains_replayable() {
+        // The previous release persisted exactly these fields and defaulted store to false.
+        let legacy = serde_json::json!({
+            "account_id":"synthetic-owner",
+            "session_id":"synthetic-session",
+            "transcript":[{"client_input":{"role":"user","content":"first"}}]
+        });
+        let state = decode(legacy).expect("legacy session must decode").unwrap();
+        assert!(
+            !state.response_stored,
+            "missing evidence must not assert upstream storage"
+        );
+        assert!(state.instructions.is_none());
+        assert_eq!(
+            replay_input_for_account(&state, "synthetic-owner"),
+            vec![serde_json::json!({"role":"user","content":"first"})]
+        );
+    }
+
+    #[test]
+    fn session_storage_evidence_preserves_explicit_values_and_rejects_invalid_types() {
+        for stored in [true, false] {
+            let state = decode(serde_json::json!({
+                "account_id":"synthetic-owner", "session_id":null, "transcript":[],
+                "instructions":"current rules", "response_stored":stored
+            }))
+            .unwrap()
+            .unwrap();
+            assert_eq!(state.response_stored, stored);
+            assert_eq!(state.instructions, Some(serde_json::json!("current rules")));
+        }
+        assert!(
+            decode(serde_json::json!({
+                "account_id":"synthetic-owner", "session_id":null, "transcript":[],
+                "response_stored":"unknown"
+            }))
+            .is_err()
+        );
+    }
 }

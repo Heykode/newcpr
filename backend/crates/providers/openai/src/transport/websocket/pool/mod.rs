@@ -200,18 +200,6 @@ impl CodexWebSocketPool {
         drop(self.tasks.spawn(future));
     }
 
-    #[cfg(test)]
-    pub(crate) async fn acquire(
-        &self,
-        key: &CodexWebSocketPoolKey,
-        required_response_id: Option<&str>,
-        requires_search: bool,
-    ) -> WebSocketPoolAcquire {
-        self.acquire_for_route(key, required_response_id, requires_search, None)
-            .await
-            .expect("direct pool acquisition")
-    }
-
     pub(crate) async fn acquire_for_route(
         &self,
         key: &CodexWebSocketPoolKey,
@@ -256,20 +244,6 @@ impl CodexWebSocketPool {
                 _ = tokio::time::sleep(Duration::from_millis(50)) => {}
             }
         }
-    }
-
-    #[cfg(test)]
-    fn acquire_once(
-        &self,
-        key: &CodexWebSocketPoolKey,
-        required_response_id: Option<&str>,
-        requires_search: bool,
-    ) -> (
-        Option<WebSocketPoolAcquire>,
-        Vec<capacity::RetiredConnection>,
-    ) {
-        let (ready, close) = self.acquire_step(key, required_response_id, requires_search, false);
-        (ready.ok(), close)
     }
 
     fn acquire_step(

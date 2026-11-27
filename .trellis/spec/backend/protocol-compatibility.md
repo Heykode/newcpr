@@ -103,12 +103,19 @@ wire payload; synthetic success is not proof of a particular production 500 caus
 
 ## Official Chat Request Contract
 
-The user authorized replacing CPA Chat conversion with official CPR on 2026-10-29.
-Use the pinned upstream request converter in gateway-api/openai/chat/request.rs.
-Flat reasoning_effort maps to Responses reasoning.effort. Non-null nested reasoning,
-reasoning_content and Responses-only continuation fields are rejected; optional null
-values follow official defaults. Do not restore old aliases or custom tools.
-Keep native Responses request normalization independent.
+The v3.57.0 integration uses the pinned `gateway-protocol/src/chat_completions/`
+parsers and converters. API ingress keeps the Chat protocol and raw request; the
+selected Provider converts directly to its native target and returns Chat wire.
+Do not restore the retired API-owned Responses converter or use its old tests as
+the current request contract. Keep native Responses normalization independent.
+
+Chat ingress must retain validated supplemental scheduling hints through
+`OpenAiRequestHeaders::session_context`, without forwarding those local headers.
+Before target conversion, Codex selection derives explicit account sessions and
+supplemental hints in the existing tenant-scoped namespaces and applies the current
+strict/preferred/relaxed policy. This is account affinity, not native response or
+WebSocket ownership. Request observations and actual admission must use the same
+key; checking only the ingress context cannot prove that the selector consumes it.
 
 ## Downstream Environment and WS Error Projection
 
