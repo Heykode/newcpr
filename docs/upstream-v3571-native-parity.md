@@ -27,7 +27,7 @@
 | E04 | API OpenAiRequestHeaders 不再生成 context.turn_id，普通 opaque 头保留；OpenAI HTTP/WS headers 和 Live bootstrap/sideband/hangup 不额外丢弃此头。正文、client_metadata、标准 turn metadata 解析及本地身份隔离保持。入口和实际 HTTP/WS/Live 回环均检查。 |
 | E05 | Codex HTTP 压缩分支→compress_request_body→Semaphore→spawn_blocking→AbortOnDropHandle。排队取消不发送上游；实际压缩结束前许可仍由工作线程持有；错误仍为 RequestCompression，原发送状态/重试规则不变。Excel 与 Guardian sampler 免压缩分支保留。 |
 | E06 | 官方把插件 middleware 前后双解码改为可重用请求。NewCPR 没有该 middleware：Responses HTTP 在鉴权后直接 decode_request_with_headers_limit，GenAI/Chat 各构造一次网关请求，WS 每帧调用一次入口解码。Chat 与固定官方版本都先解析正文校验字段，再由 from_json_bytes 解析并保留原始字节。本次不引入插件或另建缓存；原生入口验证不被插件专属排除吞掉。 |
-| E07 | README、API/架构、当前规范、release/version.yaml/notes.md 同步。published 保持为空；v3.57.1 升级计划仍为源码 v3.55.3 起的 0103/0104，已有迁移字节不变，recovery=manual。不是已核对生产或已部署的声明。 |
+| E07 | README、API/架构、当前规范、release/version.yaml/notes.md 同步。published 保持为空；v3.57.1 源码接入时的升级计划以 v3.55.3 为起点，仅含 0103/0104；发布前按实际运行基线修订为 v3.54.5 起的 0101–0104，已有迁移字节不变，recovery=manual。源码接入和计划修订不代表已经部署。 |
 | E08 | 本地 settings/index.vue 已有 RuntimeSettingsCard、OpenAiRequestSettingsCard 和独立功能卡片，请求解压上限由 RuntimeSettingsCard 的 responsesMaxDecompressedBodyBytes 承担，客户端版本卡仍在同页独立显示。官方导航卡片移动和三语言文案不机械套入不同布局，无前端运行时代码变更。 |
 
 ## 保留差异
@@ -112,3 +112,9 @@
 | `frontend/src/views/settings/index.vue` | E08 · 无需迁移 | frontend/src/views/settings/index.vue 及既有独立设置卡片；保留本地语言文件 |
 | `release/notes.md` | E07 · 接入 | release/notes.md |
 | `release/version.yaml` | E07 · 接入 | release/version.yaml；版本 3.57.1，published 保持为空 |
+
+## 累积发布计划核对
+
+发布前只读核对的应用运行版本为 v3.54.5，源码提交 `4455001ad21ad2b4044148a061d16a3f4ece1170`，尚未应用 0101/0102。v3.57.1 计划改为从该版本直接升级，包含 0101–0104，准确绑定迁移树 `2fd74c411348df0a064cec355b90d5ab03fb9936` → `0719d33a1d5063807fc418898e620852e53115d8`。旧 SQL 不变，仅新增四条 SQL 及冻结摘要，失败采用人工恢复。该计划修订不改变上述功能和测试结论，实际部署结果另行核对。
+
+累计计划已按实际旧镜像源码与目标源码核对准确新增路径及迁移树，旧 SQL 未改写。指定隔离 Linux 验证主机的部署工具 23 项回归通过；本次只修改计划和说明，复用已完成的业务代码验证。

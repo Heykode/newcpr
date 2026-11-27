@@ -1,9 +1,11 @@
 {
-  "from_version": "3.55.3",
+  "from_version": "3.54.5",
   "to_version": "3.57.1",
-  "from_migrations_tree": "d9e0233eaf90d4372e1ab4f1d4233acd6db8a9c8",
+  "from_migrations_tree": "2fd74c411348df0a064cec355b90d5ab03fb9936",
   "to_migrations_tree": "0719d33a1d5063807fc418898e620852e53115d8",
   "added": [
+    "0101_native_platform_settings.sql",
+    "0102_native_peer_sharing.sql",
     "0103_request_plan_display.sql",
     "0104_openai_runtime_settings.sql"
   ],
