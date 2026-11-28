@@ -1721,19 +1721,19 @@ impl RuntimeSnapshot {
                 .values()
                 .any(|variant| self.variant_allowed(provider, variant, scope));
         }
+        let eligible = |account: &ProviderAccountId| {
+            scope.directory().account(account).is_some_and(|entry| {
+                entry.provider_kind() == provider
+                    && (provider.as_str() != "openai" || entry.uses_native_upstream(&upstream))
+            }) && scope.allows_model(account, &upstream)
+        };
         match self
             .model_catalog_accounts
             .get(provider)
             .and_then(|models| models.get(&upstream))
         {
-            Some(accounts) => accounts.iter().any(|account| {
-                scope
-                    .directory()
-                    .account(account)
-                    .is_some_and(|entry| entry.provider_kind() == provider)
-                    && scope.allows_model(account, &upstream)
-            }),
-            None => scope.allows_provider_model(provider, &upstream),
+            Some(accounts) => accounts.iter().any(eligible),
+            None => scope.allowed_account_ids().any(eligible),
         }
     }
 

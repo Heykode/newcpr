@@ -138,7 +138,16 @@ pub(super) fn client_scope(accounts: &[ProviderAccount]) -> FrozenAccountScope {
                             ProviderKind::new("openai").expect("provider"),
                             Default::default(),
                         )
-                        .with_model_access(account.model_access().clone()),
+                        .with_model_access(account.model_access().clone())
+                        .with_excel_models(
+                            if account.responses_upstream()
+                                == gateway_core::account::ResponsesUpstream::Excel
+                            {
+                                account.excel_models().as_slice().iter().cloned().collect()
+                            } else {
+                                Default::default()
+                            },
+                        ),
                     )
                 })
                 .collect(),

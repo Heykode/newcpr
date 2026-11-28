@@ -12,6 +12,7 @@ use futures::{StreamExt, stream};
 use gateway_core::account::AccountCatalogObservation;
 use gateway_core::account::{
     CredentialRevision, CredentialState, OpaqueProviderData, ProviderAccount, ProviderAccountId,
+    ResponsesUpstream,
 };
 use gateway_core::provider_ports::{
     ProviderCatalogCacheKey, ProviderCatalogCachePort, ProviderCatalogScope,
@@ -407,7 +408,7 @@ impl CodexCredentialCatalogService {
             for id in &content.ids {
                 if let Some(account) = members
                     .iter()
-                    .find(|account| scope.allows_model(account, id))
+                    .find(|account| native_catalog_source(scope, account, id))
                 {
                     candidates.insert(account.clone());
                 }
@@ -416,13 +417,24 @@ impl CodexCredentialCatalogService {
         let ids = candidates.into_iter().collect::<Vec<_>>();
         let mut accounts = self.repository.list_for_accounts(&ids).await?;
         let now = SystemTime::now();
-        // 代表账号刚被停用或轮换时，仅这一次扩大本地资格查询，仍不查询上游
+        // 代表账号刚被停用、轮换或改为退役路由时，扩大本地资格查询，不查询上游。
         if accounts.len() != ids.len()
             || accounts.iter().any(|a| {
                 !eligible_catalog_account(a, now)
                     || !snapshot
                         .entries
                         .contains_key(&CodexCatalogScope::for_account(a))
+                    || (a.responses_upstream() == ResponsesUpstream::Excel
+                        && snapshot
+                            .entries
+                            .get(&CodexCatalogScope::for_account(a))
+                            .is_some_and(|entry| {
+                                entry.content.ids.iter().any(|model| {
+                                    native_catalog_source(scope, a.id(), model)
+                                        && a.responses_upstream_for_model(model)
+                                            != ResponsesUpstream::Codex
+                                })
+                            }))
             })
         {
             let ids = snapshot
@@ -445,7 +457,10 @@ impl CodexCredentialCatalogService {
             available = true;
 
             for (position, model) in entry.content.models.iter().enumerate() {
-                if !scope.allows_model(account.id(), model.request_model().as_str()) {
+                let id = model.request_model().as_str();
+                if !native_catalog_source(scope, account.id(), id)
+                    || account.responses_upstream_for_model(id) != ResponsesUpstream::Codex
+                {
                     continue;
                 }
                 let order = (
@@ -856,6 +871,18 @@ fn validate_response_etag(etag: &str) -> Result<(), CodexCredentialCatalogError>
         return Err(CodexCredentialCatalogError::InvalidEtag);
     }
     Ok(())
+}
+
+fn native_catalog_source(
+    scope: &FrozenAccountScope,
+    account: &ProviderAccountId,
+    model: &str,
+) -> bool {
+    scope.allows_model(account, model)
+        && scope
+            .directory()
+            .account(account)
+            .is_some_and(|entry| entry.uses_native_upstream(model))
 }
 
 fn eligible_catalog_account(account: &ProviderAccount, now: SystemTime) -> bool {
