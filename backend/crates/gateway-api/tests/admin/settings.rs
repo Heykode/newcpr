@@ -40,7 +40,6 @@ fn update_body() -> Value {
         "configRevision": 7,
         "openaiRequestSettings": gateway_core::settings::OpenAiRequestSettings::default(),
         "openaiWebsocketPool": gateway_core::settings::OpenAiWebSocketPoolSettings::default(),
-        "excelDefaultModels": ["gpt-5.6-sol", "gpt-6-astra"],
         "turnStateInjectionEnabled": false,
         "turnStateModels": ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra"],
         "turnStateProbeProxyId": null,
@@ -93,15 +92,7 @@ fn update_body() -> Value {
     body["accountWarmupModel"] = Value::Null;
     body["codexQuotaOverdraftEnabled"] = json!(false);
     body["codexQuotaOverdraftProbeModel"] = json!("gpt-6-astra");
-    body["requestTuning"]["excelImageRelayBytes"] = Value::Null;
     body["requestTuning"]["smartScheduling"] = Value::Null;
-    body["requestTuning"]["excelImageRelayRequests"] = Value::Null;
-    body["requestTuning"]["excelImageRelayDownloads"] = Value::Null;
-    body["requestTuning"]["excelImageRelayEntries"] = Value::Null;
-    body["requestTuning"]["excelImageRelayTtlMinutes"] = Value::Null;
-    body["requestTuning"]["excelImageMaxBytes"] = Value::Null;
-    body["requestTuning"]["excelImageTotalBytes"] = Value::Null;
-    body["requestTuning"]["excelImageMaxCount"] = Value::Null;
     body
 }
 
@@ -488,7 +479,6 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
         audit_retention_days: 91,
         request_tuning: RequestTuningOverrides {
             account_error_protection: None,
-            excel_image_transport: Some(gateway_core::routing::ExcelImageTransport::Native {}),
             smart_scheduling: None,
             openai_request_location: None,
             max_account_switches: Some(7),
@@ -502,17 +492,6 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
             websocket_failure_open_duration_ms: Some(45_000),
             rate_limit_cooldown_seconds: Some(60),
             max_retry_after_seconds: Some(400),
-            excel_image_relay_bytes: Some(64 * 1024 * 1024),
-            excel_image_max_bytes: Some(8 * 1024 * 1024),
-            excel_image_total_bytes: Some(16 * 1024 * 1024),
-            excel_image_max_count: Some(32),
-            excel_image_limit_policy: Some(gateway_core::routing::ExcelImageLimitPolicy::Warn),
-            excel_image_warning_remaining: Some(8),
-            excel_image_compact_reserve: Some(3),
-            excel_image_relay_requests: Some(128),
-            excel_image_relay_downloads: Some(32),
-            excel_image_relay_entries: Some(128),
-            excel_image_relay_ttl_minutes: Some(45),
             openai_location_override_enabled: Some(true),
             max_waiting_per_key: Some(8),
             key_concurrency_wait_timeout_seconds: Some(30),
@@ -529,7 +508,6 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
 
     let value = serde_json::to_value(RuntimeSettingsView::from(settings)).expect("serialize view");
     let mut expected = json!({
-        "excelDefaultModels": ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra"],
         "turnStateInjectionEnabled": false,
         "turnStateModels": ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra"],
         "turnStateProbeProxyId": null,
@@ -588,21 +566,9 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
     expected["accountWarmupModel"] = Value::Null;
     expected["codexQuotaOverdraftEnabled"] = json!(false);
     expected["codexQuotaOverdraftProbeModel"] = json!("gpt-6-astra");
-    expected["requestTuning"]["excelImageTransport"] = json!({"mode":"native"});
-    expected["requestTuning"]["excelImageRelayBytes"] = json!(67108864);
     expected["quotaResetWindowWeightsDefaults"] =
         json!({"fiveHour": 0.0, "weekly": 0.0, "monthly": 0.0});
     expected["requestTuning"]["smartScheduling"] = Value::Null;
-    expected["requestTuning"]["excelImageRelayRequests"] = json!(128);
-    expected["requestTuning"]["excelImageRelayDownloads"] = json!(32);
-    expected["requestTuning"]["excelImageRelayEntries"] = json!(128);
-    expected["requestTuning"]["excelImageRelayTtlMinutes"] = json!(45);
-    expected["requestTuning"]["excelImageMaxBytes"] = json!(8388608);
-    expected["requestTuning"]["excelImageTotalBytes"] = json!(16777216);
-    expected["requestTuning"]["excelImageMaxCount"] = json!(32);
-    expected["requestTuning"]["excelImageLimitPolicy"] = json!("warn");
-    expected["requestTuning"]["excelImageWarningRemaining"] = json!(8);
-    expected["requestTuning"]["excelImageCompactReserve"] = json!(3);
     assert_eq!(value, expected);
 }
 
@@ -852,45 +818,12 @@ async fn settings_post_and_reload_should_omit_legacy_global_opening_limit() {
 }
 
 #[tokio::test]
-async fn excel_image_settings_round_trip_and_reject_invalid_origin_without_mutation() {
+async fn retired_default_models_do_not_block_a_native_settings_update() {
     let fixture = AdminTestFixture::new().await;
     fixture.auth.insert_session("valid-session");
-    for policy in [
-        json!({"mode":"relay","publicUrl":"https://images.example.com"}),
-        json!({"mode":"native"}),
-        Value::Null,
-    ] {
-        let mut body = with_current_revision(&fixture, update_body()).await;
-        body["requestTuning"]["excelImageTransport"] = policy.clone();
-        let response = app(fixture.state())
-            .oneshot(request(
-                Method::POST,
-                "/api/admin/settings/update",
-                Some(body.clone()),
-            ))
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-        let response = app(fixture.state())
-            .oneshot(request(Method::GET, "/api/admin/settings", None))
-            .await
-            .unwrap();
-        let data = response_json(response).await["data"].clone();
-        assert_eq!(data["requestTuning"]["excelImageTransport"], policy);
-        assert_eq!(data["rotationStrategy"], body["rotationStrategy"]);
-        assert_eq!(data["requestIntervalMs"], body["requestIntervalMs"]);
-    }
-    let before = response_json(
-        app(fixture.state())
-            .oneshot(request(Method::GET, "/api/admin/settings", None))
-            .await
-            .unwrap(),
-    )
-    .await["data"]
-        .clone();
-    let mut body = update_body();
-    body["requestTuning"]["excelImageTransport"] =
-        json!({"mode":"relay","publicUrl":"http://images.example.com"});
+    let mut body = with_current_revision(&fixture, update_body()).await;
+    body["excelDefaultModels"] = json!(["retired-model"]);
+    body["requestTuning"]["websocketMaxRetries"] = json!(2);
     let response = app(fixture.state())
         .oneshot(request(
             Method::POST,
@@ -899,16 +832,14 @@ async fn excel_image_settings_round_trip_and_reject_invalid_origin_without_mutat
         ))
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    let after = response_json(
-        app(fixture.state())
-            .oneshot(request(Method::GET, "/api/admin/settings", None))
-            .await
-            .unwrap(),
-    )
-    .await["data"]
-        .clone();
-    assert_eq!(before, after);
+    assert_eq!(response.status(), StatusCode::OK);
+    let response = app(fixture.state())
+        .oneshot(request(Method::GET, "/api/admin/settings", None))
+        .await
+        .unwrap();
+    let data = &response_json(response).await["data"];
+    assert!(data.get("excelDefaultModels").is_none());
+    assert_eq!(data["requestTuning"]["websocketMaxRetries"], 2);
 }
 
 #[tokio::test]

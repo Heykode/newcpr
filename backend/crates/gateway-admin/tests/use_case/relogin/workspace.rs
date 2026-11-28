@@ -373,19 +373,6 @@ async fn push(h: &Harness, id: &str, target: &AccountRecord, switch_workspace: b
                 form: None,
                 template: None,
                 custom_name: Some("Must not rename existing".into()),
-                excel: Some(
-                    gateway_admin::model::relogin_templates::ExcelImportSettings {
-                        excel_recovery: None,
-                        responses_upstream: gateway_core::account::ResponsesUpstream::Excel,
-                        excel_models_follow_global: true,
-                        excel_cache_creation_as_input: Default::default(),
-                        excel_ignore_encrypted_content: Default::default(),
-                        request_proxy_source: Default::default(),
-                        excel_auto_disable_on_403: Default::default(),
-                        excel_403_action: Default::default(),
-                        excel_models: None,
-                    },
-                ),
             },
             &BTreeMap::from([(
                 id.into(),

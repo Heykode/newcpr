@@ -48,8 +48,6 @@ export interface MihomoStatus {
   nodeStates: MihomoNode[]
   countryFilter: CountryFilter
   countryCodes: string[]
-  bpsWarmPool: WarmStatus
-  bpsIpWarmPool: WarmStatus
   codexWarmPool: WarmStatus
   codexIpWarmPool: WarmStatus
 }

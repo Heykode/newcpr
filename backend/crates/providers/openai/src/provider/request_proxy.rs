@@ -1,4 +1,4 @@
-//! Account exit selection shared by Codex and Excel; preserves scheduling identity.
+//! Native account exit selection; preserves scheduling identity.
 use super::*;
 use gateway_core::account::ResponsesUpstream;
 
@@ -7,7 +7,6 @@ impl CodexProvider {
         &self,
         context: &AttemptContext,
         account: &ProviderAccount,
-        excel: bool,
         session: Option<&str>,
     ) -> Result<CodexBackendClient, ProviderError> {
         use gateway_core::provider_ports::session_proxy::RequestProxySource;
@@ -38,11 +37,7 @@ impl CodexProvider {
             identity
         ])
         .to_string();
-        let route = if excel {
-            ResponsesUpstream::Excel
-        } else {
-            ResponsesUpstream::Codex
-        };
+        let route = ResponsesUpstream::Codex;
         let exit = pool
             .acquire(source, route, &scope, transient)
             .map_err(|error| unavailable(&error.to_string()).with_source(error))?;

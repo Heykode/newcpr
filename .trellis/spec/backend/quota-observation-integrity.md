@@ -40,7 +40,6 @@ malformed terminals and explicit failed statuses are not success.
   window or independently change its access state.
 - Carry the image endpoint context through both successful JSON responses and
   `OpenAiFailureContext`; preserve capture time and passive-write authority.
-  Excel compact remains text; Excel image follows its image endpoint.
 - Verify parser positive/negative cases, ordinary premium headers exhausting
   core quota, and image generation/edit success/failure in the existing Provider
   tests. The old global active-limit reassignment rule is retired; do not restore

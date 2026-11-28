@@ -93,8 +93,6 @@ const countryProgress = computed(() => {
 const counts = computed(() => [
   { name: 'Codex · Mihomo', value: state.value?.codexWarmPool },
   { name: 'Codex · 普通代理', value: state.value?.codexIpWarmPool },
-  { name: 'Excel · Mihomo', value: state.value?.bpsWarmPool },
-  { name: 'Excel · 普通代理', value: state.value?.bpsIpWarmPool },
 ])
 function lines() {
   return input.value.split(/\r?\n/).map(s => s.trim()).filter(Boolean)

@@ -76,7 +76,6 @@ mod cache_diagnostics;
 mod cache_preference;
 mod chat;
 mod compact;
-mod excel_encrypted_content;
 mod fast_mode;
 mod freeze_recovery;
 mod generate_compat;

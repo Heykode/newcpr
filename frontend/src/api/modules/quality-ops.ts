@@ -17,14 +17,12 @@ export interface QualityRuleConfig {
   judgeGroupId: string
   judgeModel: string
   judgePrompt: string
-  failureAction: 'none' | 'disable_scheduling' | 'remove_groups' | 'enable_excel' | 'apply_account_template'
+  failureAction: 'none' | 'disable_scheduling' | 'remove_groups' | 'apply_account_template'
   failureTemplate?: AccountTemplate | null
   failureGroupIds: string[]
   autoRestore: boolean
-  disableExcelOnNativeRecovery: boolean
   excelFailureThreshold: number
   failureThreshold?: number | null
-  excelRecoveryThreshold?: number
 }
 
 export interface QualityRule {
@@ -125,7 +123,9 @@ export interface QualityRun {
   unknown: number
   requestErrors: number
   action?: string | null
-  config?: QualityRuleConfig
+  config?: Omit<QualityRuleConfig, 'failureAction'> & {
+    failureAction: QualityRuleConfig['failureAction'] | 'enable_excel'
+  }
   answers?: QualityAnswer[]
 }
 

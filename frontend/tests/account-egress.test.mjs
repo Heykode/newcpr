@@ -99,7 +99,7 @@ test('all OpenAI enrollment modes carry the same egress settings independently o
       const settings = accountImportSettings(form)
       assert.equal(settings.egressMode, 'random_ipv6_reuse')
       assert.equal(settings.requestProxySource, 'account')
-      assert.equal(settings.responsesUpstream, excelEnabled ? 'excel' : 'codex')
+      assert.equal('responsesUpstream' in settings, false)
       assert.equal('outboundProxyId' in settings, false, 'proxy ID remains the import request field, not settings')
       form.proxyMode = 'mihomo'
       const managed = accountImportSettings(form)

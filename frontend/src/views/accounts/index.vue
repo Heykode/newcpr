@@ -230,8 +230,6 @@ const {
   handleRefresh,
   handleRefreshQuota,
   handleToggleEnabled,
-  handleToggleExcel,
-  togglingExcelAccountIds,
 } = useAccountMutations({
   accounts,
   selectedIds,
@@ -281,23 +279,9 @@ const {
   purchaseCycleStart: batchPurchaseCycleStart,
   updatePurchaseCost: batchUpdatePurchaseCost,
   updateCustomName: batchUpdateCustomName,
-  excelAvailable: batchExcelAvailable,
   requestProxyAvailable: batchRequestProxyAvailable,
   schedulingEnabled: batchSchedulingEnabled,
-  excelEnabled: batchExcelEnabled,
-  excelModels: batchExcelModels,
-  excelModelsFollowGlobal: batchExcelModelsFollowGlobal,
-  excelCacheCreationAsInput: batchExcelCacheCreationAsInput,
-  excelIgnoreEncryptedContent: batchExcelIgnoreEncryptedContent,
   requestProxySource: batchRequestProxySource,
-  excel403Action: batchExcel403Action,
-  excelRecoveryEnabled: batchExcelRecoveryEnabled,
-  excelRecoveryInterval: batchExcelRecoveryInterval,
-  updateExcelRecovery: batchUpdateExcelRecovery,
-  updateExcelCacheCreationAsInput: batchUpdateExcelCacheCreationAsInput,
-  updateExcelIgnoreEncryptedContent: batchUpdateExcelIgnoreEncryptedContent,
-  updateExcel403Action: batchUpdateExcel403Action,
-  updateExcelModels: batchUpdateExcelModels,
   concurrencyLimit: batchConcurrencyLimit,
   weight: batchWeight,
   modelAccess: batchModelAccess,
@@ -308,7 +292,6 @@ const {
   proxyId: batchProxyId,
   selectedGroupIds: batchGroupIds,
   updateEnabled: batchUpdateEnabled,
-  updateExcelEnabled: batchUpdateExcelEnabled,
   updateConcurrencyLimit: batchUpdateConcurrencyLimit,
   updateWeight: batchUpdateWeight,
   updateGroups: batchUpdateGroups,
@@ -334,15 +317,7 @@ const {
   purchaseCycleStart: editingPurchaseCycleStart,
   editingAccount,
   schedulingEnabled,
-  excelEnabled,
-  excelModels,
-  excelModelsFollowGlobal,
-  excelCacheCreationAsInput,
-  excelIgnoreEncryptedContent,
   requestProxySource,
-  excel403Action,
-  excelRecoveryEnabled,
-  excelRecoveryInterval,
   concurrencyLimit: editingConcurrencyLimit,
   weight: editingWeight,
   modelAccess: editingModelAccess,
@@ -650,7 +625,6 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
                 :deleting="deletingAccount"
                 :recovering="recoveringAccountIds.has(row.id)"
                 :refreshing="refreshingAccountIds.has(row.id)"
-                :toggling-excel="togglingExcelAccountIds.has(row.id)"
                 :toggling-quality="togglingQualityIds.has(row.id)"
                 :quality-disabled="batchQualityBusy"
                 :testing="testingAccountId === row.id"
@@ -664,7 +638,6 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
                 @reauthorize="openReauthorizeAccount"
                 @test="openConnectionTest"
                 @export-model-catalog="handleExportModelCatalog"
-                @toggle-excel="handleToggleExcel"
                 @toggle-quality="toggleQuality"
                 @relogin="requestRelogin"
               />
@@ -772,15 +745,7 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
       v-model:custom-name="editingCustomName"
       v-model="showEditModal"
       v-model:enabled="schedulingEnabled"
-      v-model:excel-enabled="excelEnabled"
-      v-model:excel-models="excelModels"
-      v-model:excel-models-follow-global="excelModelsFollowGlobal"
-      v-model:excel-cache-creation-as-input="excelCacheCreationAsInput"
-      v-model:excel-ignore-encrypted-content="excelIgnoreEncryptedContent"
       v-model:request-proxy-source="requestProxySource"
-      v-model:excel-403-action="excel403Action"
-      v-model:excel-recovery-enabled="excelRecoveryEnabled"
-      v-model:excel-recovery-interval="excelRecoveryInterval"
       v-model:concurrency-limit="editingConcurrencyLimit"
       v-model:weight="editingWeight"
       v-model:model-access="editingModelAccess"
@@ -820,20 +785,7 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
       v-model:update-custom-name="batchUpdateCustomName"
       v-model="showBatchEditModal"
       v-model:enabled="batchSchedulingEnabled"
-      v-model:excel-enabled="batchExcelEnabled"
-      v-model:excel-models="batchExcelModels"
       v-model:request-proxy-source="batchRequestProxySource"
-      v-model:excel-models-follow-global="batchExcelModelsFollowGlobal"
-      v-model:excel-cache-creation-as-input="batchExcelCacheCreationAsInput"
-      v-model:excel-ignore-encrypted-content="batchExcelIgnoreEncryptedContent"
-      v-model:excel-403-action="batchExcel403Action"
-      v-model:excel-recovery-enabled="batchExcelRecoveryEnabled"
-      v-model:excel-recovery-interval="batchExcelRecoveryInterval"
-      v-model:update-excel-cache-creation-as-input="batchUpdateExcelCacheCreationAsInput"
-      v-model:update-excel-ignore-encrypted-content="batchUpdateExcelIgnoreEncryptedContent"
-      v-model:update-excel-403-action="batchUpdateExcel403Action"
-      v-model:update-excel-recovery="batchUpdateExcelRecovery"
-      v-model:update-excel-models="batchUpdateExcelModels"
       v-model:concurrency-limit="batchConcurrencyLimit"
       v-model:weight="batchWeight"
       v-model:model-access="batchModelAccess"
@@ -842,7 +794,6 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
       v-model:proxy-id="batchProxyId"
       v-model:selected-group-ids="batchGroupIds"
       v-model:update-enabled="batchUpdateEnabled"
-      v-model:update-excel-enabled="batchUpdateExcelEnabled"
       v-model:update-concurrency-limit="batchUpdateConcurrencyLimit"
       v-model:update-weight="batchUpdateWeight"
       v-model:update-groups="batchUpdateGroups"
@@ -851,7 +802,6 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
       :catalog-account-id="batchCatalogAccountId"
       :provider="batchProvider"
       :has-updates="batchHasUpdates"
-      :excel-available="batchExcelAvailable"
       :request-proxy-available="batchRequestProxyAvailable"
       :selected-count="batchEditingCount"
       :groups="groups"

@@ -190,16 +190,6 @@ async fn runtime_snapshot_compiles_account_busy_wait_defaults_overrides_and_froz
     let location = gateway_core::account::RequestLocation::default();
     let expected = RequestTuning {
         openai_location_override_enabled: true,
-        excel_image_relay_bytes: 128 * 1024 * 1024,
-        excel_image_max_bytes: 8 * 1024 * 1024,
-        excel_image_total_bytes: 16 * 1024 * 1024,
-        excel_image_max_count: 32,
-        excel_image_limit_policy: gateway_core::routing::ExcelImageLimitPolicy::AutoCompact,
-        excel_image_warning_remaining: 9,
-        excel_image_compact_reserve: 4,
-        excel_image_relay_requests: 128,
-        excel_image_relay_downloads: 3,
-        excel_image_relay_entries: 25,
         account_busy_wait_enabled: true,
         max_waiting_per_account: 7,
         account_concurrency_wait_timeout_seconds: 120,
@@ -210,19 +200,6 @@ async fn runtime_snapshot_compiles_account_busy_wait_defaults_overrides_and_froz
         ..RequestTuning::default()
     };
     let overrides = RequestTuningOverrides {
-        excel_image_transport: Some(gateway_core::routing::ExcelImageTransport::Relay {
-            public_url: "https://images.example.com".into(),
-        }),
-        excel_image_relay_bytes: Some(expected.excel_image_relay_bytes),
-        excel_image_max_bytes: Some(expected.excel_image_max_bytes),
-        excel_image_total_bytes: Some(expected.excel_image_total_bytes),
-        excel_image_max_count: Some(expected.excel_image_max_count),
-        excel_image_limit_policy: Some(expected.excel_image_limit_policy),
-        excel_image_warning_remaining: Some(expected.excel_image_warning_remaining),
-        excel_image_compact_reserve: Some(expected.excel_image_compact_reserve),
-        excel_image_relay_requests: Some(expected.excel_image_relay_requests),
-        excel_image_relay_downloads: Some(expected.excel_image_relay_downloads),
-        excel_image_relay_entries: Some(expected.excel_image_relay_entries),
         openai_request_location: Some(location.clone()),
         openai_location_override_enabled: Some(true),
         account_busy_wait_enabled: Some(expected.account_busy_wait_enabled),
@@ -250,11 +227,6 @@ async fn runtime_snapshot_compiles_account_busy_wait_defaults_overrides_and_froz
         .expect("compile enabled wait settings");
     assert_eq!(enabled.request_tuning(), expected);
     assert_eq!(enabled.request_location(), Some(&location));
-    assert_eq!(
-        enabled.excel_image_transport(),
-        overrides.excel_image_transport.as_ref()
-    );
-    assert!(defaults.excel_image_transport().is_none());
 
     sqlx::query(
         "update runtime_settings set request_tuning_json = $1, config_revision = config_revision + 1 where id = 1",

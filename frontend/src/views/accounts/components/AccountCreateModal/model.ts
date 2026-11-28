@@ -2,12 +2,9 @@ import type { AccountModelAccess } from '@/api'
 import type { AccountTemplate } from '@/api/modules/account-templates'
 import type { QualityRuleTemplate } from '@/api/modules/quality-ops'
 import type { AccountEgressDraft, AccountEgressPatch } from '@/utils/account-egress'
-import type { Excel403Action } from '@/utils/excel-settings'
 import type { RequestProxySource } from '@/utils/request-proxy-source'
 import { accountEgressPatch, sameAccountEgress } from '@/utils/account-egress'
 import { normalizeAccountName } from '@/utils/account-name'
-import { DEFAULT_EXCEL_MODELS_INPUT } from '@/utils/excel-defaults'
-import { excelRecoverySettings, excelSettings } from '@/utils/excel-settings'
 import { accountModelAccessError } from '../../utils/modelAccess'
 import { purchaseCostPatch } from '../../utils/purchaseCost'
 import { parseAccountSchedulingForm } from '../../utils/schedulingForm'
@@ -25,16 +22,7 @@ export interface AccountCreateForm {
   customName: string
   provider: AccountCreateProvider | ''
   enabled: boolean
-  applyExcel: boolean
   requestProxySource: RequestProxySource
-  excelEnabled: boolean
-  excelModelsFollowGlobal: boolean
-  excelCacheCreationAsInput: boolean
-  excelIgnoreEncryptedContent?: boolean
-  excel403Action: Excel403Action
-  excelRecoveryEnabled: boolean
-  excelRecoveryInterval: string
-  excelModels: string
   concurrencyLimit: string
   weight: string
   modelAccess?: AccountModelAccess
@@ -61,15 +49,7 @@ export function emptyAccountCreateForm(): AccountCreateForm {
     customName: '',
     provider: '',
     enabled: true,
-    applyExcel: false,
     requestProxySource: 'account',
-    excelEnabled: false,
-    excelModelsFollowGlobal: true,
-    excelCacheCreationAsInput: true,
-    excel403Action: 'none',
-    excelRecoveryEnabled: false,
-    excelRecoveryInterval: '60',
-    excelModels: DEFAULT_EXCEL_MODELS_INPUT,
     concurrencyLimit: '',
     weight: '1',
     groupIds: [],
@@ -124,13 +104,6 @@ export function accountImportSettings(form: AccountCreateForm, provider = form.p
     enabled: form.enabled,
     ...(requestProxySource === undefined ? {} : { requestProxySource }),
     ...(egressMode === undefined ? {} : { egressMode }),
-    ...(form.applyExcel && provider === 'openai'
-      ? {
-          ...excelSettings(form.excelEnabled, form.excelModelsFollowGlobal, form.excelModels, form.excelCacheCreationAsInput, form.excel403Action),
-          ...(form.excelIgnoreEncryptedContent === undefined ? {} : { excelIgnoreEncryptedContent: form.excelEnabled && form.excelIgnoreEncryptedContent }),
-          excelRecovery: excelRecoverySettings(form.excelRecoveryEnabled, form.excelRecoveryInterval),
-        }
-      : {}),
     ...scheduling.values,
     groupIds: [...new Set(form.groupIds)],
     ...(form.modelAccess ? { modelAccess: { ...form.modelAccess, models: [...form.modelAccess.models] } } : {}),

@@ -98,213 +98,17 @@ impl CodexBackendClient {
         upstream_request: &CodexResponsesRequest,
         context: CodexRequestContext<'_>,
     ) -> CodexClientResult<CodexBackendStreamingResponse> {
-        if upstream_request
-            .excel
-            .as_ref()
-            .and_then(|excel| excel.image_policy.as_ref())
-            .is_some_and(|policy| policy.split.is_some())
-        {
-            return super::excel::image_policy_stream::start(self, upstream_request, context).await;
-        }
-        // User images need account-scoped attachments; tool-result images must
-        // retain Base64/HTTPS because that position rejects file_id.
-        if let Some(excel) = &upstream_request.excel {
-            super::excel::images::validate_with_limits(&excel.body, true, excel.image_limits)
-                .map_err(|error| {
-                    CodexClientError::InvalidSse(
-                        gateway_protocol::openai::sse::SseError::ParseError(error.to_string()),
-                    )
-                })?;
-        }
-        if let Some(excel) = &upstream_request.excel
-            && super::excel::images::has_user_inline(&excel.body)
-        {
-            let trace = context.trace.cloned().unwrap_or_default();
-            trace.record(
-                "excel.transport",
-                serde_json::json!({"phase":"attachment_upload_started"}),
-            );
-            let images = super::excel::images::upload_inline_with_limits(
-                self,
-                &self.profile.snapshot(),
-                context,
-                &excel.endpoint,
-                &excel.body,
-                excel.replay.as_ref(),
-                excel.image_limits,
-            )
+        let mut response = self
+            .send_response_http_sse(upstream_request, context)
             .await?;
-            trace.record(
-                "excel.transport",
-                serde_json::json!({"phase":"attachment_upload_completed"}),
-            );
-            let mut uploaded = upstream_request.clone();
-            uploaded.excel.as_mut().expect("Excel request").body = images.body.clone();
-            let result = self
-                .create_prepared_response_stream(&uploaded, context, false)
-                .await;
-            if let Err(error) = &result {
-                images.observe_error(error).await;
-            }
-            return result;
+        if let Some(lease) = self.session_proxy_lease() {
+            response.body = Box::pin(response.body.map(move |item| {
+                // A response can outlive the caller's prepared client.
+                let _hold = &lease;
+                item
+            }));
         }
-        self.create_prepared_response_stream(upstream_request, context, true)
-            .await
-    }
-
-    pub(super) async fn create_prepared_response_stream(
-        &self,
-        request: &CodexResponsesRequest,
-        context: CodexRequestContext<'_>,
-        allow_proxy_retry: bool,
-    ) -> CodexClientResult<CodexBackendStreamingResponse> {
-        let response = self.send_response_http_sse(request, context).await;
-        // Reqwest's connect error establishes failure before obtaining a usable
-        // connection. Timeouts, response errors and prior uploads are not proof.
-        let definitely_unsent = matches!(&response, Err(CodexClientError::Http(error) | CodexClientError::HttpJson(error)) if error.is_connect() && !error.is_timeout());
-        if allow_proxy_retry
-            && definitely_unsent
-            && request.excel.is_some()
-            && let Some(lease) = self
-                .session_proxy
-                .as_ref()
-                .and_then(|lease| lease.retry_unsent())
-            && let Some(account) = self.egress_account.as_ref()
-        {
-            let client = self.for_session_proxy(account, lease)?;
-            let mut retried = request.clone();
-            retried.excel.as_mut().expect("Excel request").exit_lease =
-                client.session_proxy_lease();
-            context.trace.cloned().unwrap_or_default().record(
-                "excel.proxy_retry",
-                serde_json::json!({"attempt":2,"reason":"connection_not_established"}),
-            );
-            tokio::task::yield_now().await;
-            let response = client.send_response_http_sse(&retried, context).await;
-            return client
-                .finish_prepared_response(response, &retried, context)
-                .await;
-        }
-        self.finish_prepared_response(response, request, context)
-            .await
-    }
-
-    async fn finish_prepared_response(
-        &self,
-        response: CodexClientResult<CodexBackendStreamingResponse>,
-        request: &CodexResponsesRequest,
-        context: CodexRequestContext<'_>,
-    ) -> CodexClientResult<CodexBackendStreamingResponse> {
-        match response {
-            Ok(mut response) => {
-                if request.excel.is_none()
-                    && let Some(lease) = self.session_proxy_lease()
-                {
-                    response.body = Box::pin(response.body.map(move |item| {
-                        // A response can outlive the caller's prepared client.
-                        let _hold = &lease;
-                        item
-                    }));
-                }
-                Ok(self.with_excel_repair(response, request, context))
-            }
-            Err(error) => {
-                let body = match (&request.excel, &error) {
-                    (Some(excel), CodexClientError::Upstream { status, body, .. })
-                        if *status == reqwest::StatusCode::BAD_REQUEST =>
-                    {
-                        super::excel::encrypted::retry_body(&excel.body, body)
-                    }
-                    _ => None,
-                };
-                let Some(body) = body else {
-                    return Err(error);
-                };
-                // The failed HTTP body has been consumed and dropped. Reuse this
-                // pinned attempt, uploaded attachments and identity, not Core selection.
-                context.trace.cloned().unwrap_or_default().record(
-                    "excel.encrypted_recovery",
-                    serde_json::json!({"reason":"invalid_encrypted_content", "attempt":2}),
-                );
-                let mut recovered = request.clone();
-                recovered.excel.as_mut().expect("Excel request").body = body;
-                // Yield before the second send so a cancelled owner can drop us.
-                tokio::task::yield_now().await;
-                self.send_response_http_sse(&recovered, context)
-                    .await
-                    .map(|response| self.with_excel_repair(response, &recovered, context))
-            }
-        }
-    }
-
-    fn with_excel_repair(
-        &self,
-        mut response: CodexBackendStreamingResponse,
-        request: &CodexResponsesRequest,
-        context: CodexRequestContext<'_>,
-    ) -> CodexBackendStreamingResponse {
-        let Some(prepared) = request.excel.as_ref() else {
-            return response;
-        };
-        if let Some(nonce) = &request.excel_recovery_nonce {
-            response.body = super::excel::recovery::verify_stream(response.body, nonce.clone());
-        }
-        if !prepared.tools.has_client_tools() || prepared.structured.is_some() {
-            response.body = super::excel::transform_stream(response.body, prepared);
-            return response;
-        }
-        let client = self.clone();
-        let request = request.clone();
-        let authorization: Arc<str> = context.authorization.into();
-        let account: Option<Arc<str>> = context.account_id.map(Into::into);
-        let request_id: Arc<str> = context.request_id.into();
-        let trace = context.trace.cloned();
-        let updates = response.rate_limit_updates.clone();
-        response.body = super::excel::transform_stream_with_repair(
-            response.body,
-            prepared,
-            request.stream(),
-            Some(Box::new(move |body| {
-                let client = client.clone();
-                let mut request = request.clone();
-                request.excel.as_mut().expect("Excel request").body = body;
-                let authorization = authorization.clone();
-                let account = account.clone();
-                let request_id = request_id.clone();
-                let trace = trace.clone();
-                let updates = updates.clone();
-                Box::pin(async move {
-                    let mut context = CodexRequestContext::auxiliary(
-                        &authorization,
-                        account.as_deref(),
-                        &request_id,
-                        None,
-                    );
-                    context.trace = trace.as_ref();
-                    let mut response = client.send_response_http_sse(&request, context).await?;
-                    if let Some(updates) = &updates
-                        && let Some(observation) =
-                            super::rate_limits::CodexRateLimitObservation::from_headers(
-                                &response.rate_limit_headers,
-                                response.rate_limit_observed_at,
-                            )
-                    {
-                        updates.lock().await.push(observation);
-                    }
-                    let stream: CodexBackendSseStream = Box::pin(async_stream::try_stream! {
-                        while let Some(chunk) = response.body.next().await {
-                            if let (Some(target), Some(source)) = (&updates, &response.rate_limit_updates) {
-                                let observed = std::mem::take(&mut *source.lock().await);
-                                target.lock().await.extend(observed);
-                            }
-                            yield chunk?;
-                        }
-                    });
-                    Ok(stream)
-                })
-            })),
-        );
-        response
+        Ok(response)
     }
 
     async fn send_response_http_sse(
@@ -321,49 +125,22 @@ impl CodexBackendClient {
             pool.release_downstream_connections(connection_id).await;
         }
         let profile = self.profile.snapshot();
-        let excel = upstream_request.excel.as_ref();
-        let mut headers = if excel.is_some() {
-            super::excel::request_headers(context, &profile.user_agent())?
-        } else {
-            self.request_headers_for_http_response(upstream_request, context)?
-        };
-        if excel.is_some_and(|prepared| super::excel::images::has_images(&prepared.body)) {
-            headers.insert("copilot-vision-request", HeaderValue::from_static("true"));
-        }
+        let mut headers = self.request_headers_for_http_response(upstream_request, context)?;
         // 身份投影先完成，再按最终 JSON 大小决定是否使用 zstd。
         // Codex 上游只交付 SSE；即使下游请求 `stream: false`，也要上游流式执行，
         // 再由 API 层收集 canonical events 并返回完整 JSON。不能把下游的传输偏好
         // 直接透传给 Codex，否则上游会以 400 拒绝非流式请求。
-        let upstream_body = if let Some(prepared) = excel {
-            let mut body = prepared.body.clone();
-            super::excel::images::validate_with_limits(&body, true, prepared.image_limits)
-                .map_err(|error| {
-                    CodexClientError::InvalidSse(
-                        gateway_protocol::openai::sse::SseError::ParseError(error.to_string()),
-                    )
-                })?;
-            super::excel::images::normalize_message_attachments(&mut body);
-            body
-        } else {
-            let mut body = upstream_request.body().clone();
-            super::qx_application::project_response_body(&mut body, upstream_request, context);
-            normalize_generate_upstream_body(&mut body);
-            body.insert("stream".to_owned(), serde_json::Value::Bool(true));
-            body.entry("store")
-                .or_insert(serde_json::Value::Bool(false));
-            body
-        };
-        let endpoint = if let Some(prepared) = excel {
-            prepared.endpoint.clone()
-        } else {
-            endpoint_url(&self.base_url, CODEX_RESPONSES_PATH)
-        };
-        if excel.is_none()
-            && let Some(affinity) = &self.routing_affinity
-        {
+        let mut body = upstream_request.body().clone();
+        super::qx_application::project_response_body(&mut body, upstream_request, context);
+        normalize_generate_upstream_body(&mut body);
+        body.insert("stream".to_owned(), serde_json::Value::Bool(true));
+        body.entry("store")
+            .or_insert(serde_json::Value::Bool(false));
+        let endpoint = endpoint_url(&self.base_url, CODEX_RESPONSES_PATH);
+        if let Some(affinity) = &self.routing_affinity {
             affinity.apply(&endpoint, &mut headers);
         }
-        let mut upstream_body = serde_json::Value::Object(upstream_body);
+        let mut upstream_body = serde_json::Value::Object(body);
         self.apply_privacy(&mut upstream_body, &mut headers)?;
         let upstream_body = upstream_body.as_object().ok_or_else(|| {
             CodexClientError::Privacy(gateway_core::settings::privacy::PrivacyError {
@@ -377,22 +154,12 @@ impl CodexBackendClient {
             .trace
             .cloned()
             .unwrap_or_default()
-            .exchange(if excel.is_some() {
-                "excel_http_sse"
-            } else {
-                "http_sse"
-            });
-        if excel.is_some() && trace.is_enabled() {
-            trace.record(
-                "excel.request.structure",
-                super::excel::diagnostics::request_summary(upstream_body, body.len()),
-            );
-        }
+            .exchange("http_sse");
         trace.headers(
             "upstream.request.headers",
             serde_json::json!({
                 "method": "POST",
-                "endpoint": if excel.is_some() {super::excel::RESPONSES_PATH} else {CODEX_RESPONSES_PATH},
+                "endpoint": CODEX_RESPONSES_PATH,
             }),
             headers
                 .iter()
@@ -402,18 +169,13 @@ impl CodexBackendClient {
             &trace,
             "provider.request.outbound",
             upstream_body,
-            if excel.is_some() {
-                "excel_http_sse"
-            } else {
-                "http_sse"
-            },
+            "http_sse",
             Some(&headers),
         );
         trace.capture("upstream.request.body", &body);
-        let compressed = excel.is_none()
-            && !upstream_request
-                .oauth_guardian_role()
-                .is_some_and(gateway_protocol::openai::CodexGuardianRole::uses_sampler_transport);
+        let compressed = !upstream_request
+            .oauth_guardian_role()
+            .is_some_and(gateway_protocol::openai::CodexGuardianRole::uses_sampler_transport);
         let body = if compressed {
             compress_request_body(body)
                 .await
@@ -421,12 +183,6 @@ impl CodexBackendClient {
         } else {
             body
         };
-        if excel.is_some() {
-            trace.record(
-                "excel.transport",
-                serde_json::json!({"phase":"exchange_started"}),
-            );
-        }
         let headers_started_at = Instant::now();
         let response = self
             .send_profiled(&profile, false, |client| {
@@ -437,24 +193,10 @@ impl CodexBackendClient {
                     builder
                 }
             })
-            .await
-            .inspect_err(|error| {
-                if excel.is_some() {
-                    trace.record(
-                        "excel.transport.failed",
-                        super::excel::diagnostics::transport_failure(error),
-                    );
-                }
-            })?;
+            .await?;
         let upstream_headers_ms = elapsed_duration_millis(headers_started_at.elapsed());
         let http_version = http_version_name(response.version()).to_string();
         let status = response.status();
-        if excel.is_some() {
-            trace.record(
-                "excel.transport",
-                serde_json::json!({"phase":"response_headers","status":status.as_u16()}),
-            );
-        }
         trace.headers(
             "upstream.response.headers",
             serde_json::json!({
@@ -467,40 +209,19 @@ impl CodexBackendClient {
                 .map(|(name, value)| (name.as_str(), value.as_bytes())),
         );
         let diagnostics = response_meta::diagnostics(Some(status.as_u16()), response.headers());
-        let turn_state = excel
-            .is_none()
-            .then(|| response_meta::turn_state(response.headers()))
-            .flatten();
-        // The reference Excel protocol is bearer-only; never mix its cookie jar with Codex.
-        let set_cookie_headers = if excel.is_none() {
-            response_meta::set_cookie_headers(response.headers())
-        } else {
-            Vec::new()
-        };
+        let turn_state = response_meta::turn_state(response.headers());
+        let set_cookie_headers = response_meta::set_cookie_headers(response.headers());
         let rate_limit_headers = response_meta::rate_limit_headers(response.headers());
         let rate_limit_observed_at = std::time::SystemTime::now();
-        let mut response_metadata = response_meta::response_metadata(response.headers());
-        if excel.is_some() {
-            response_metadata.models_etag = None;
-            response_metadata
-                .client_headers
-                .retain(|(name, _)| name != "x-codex-turn-state");
-        }
+        let response_metadata = response_meta::response_metadata(response.headers());
         let retry_after_seconds = retry_after_seconds(response.headers(), None);
 
-        if !status.is_success()
-            || (excel.is_some()
-                && upstream_request.excel_recovery_nonce.is_some()
-                && status != reqwest::StatusCode::OK)
-        {
+        if !status.is_success() {
             let content_type = response
                 .headers()
                 .get(CONTENT_TYPE)
                 .map(|value| value.as_bytes().to_vec());
-            let mut client_headers = response_meta::client_headers(response.headers());
-            if excel.is_some() {
-                client_headers.retain(|(name, _)| name != "x-codex-turn-state");
-            }
+            let client_headers = response_meta::client_headers(response.headers());
             let raw_body = read_error_response_body(response).await.map_err(|source| {
                 CodexClientError::ErrorBodyRead {
                     source,

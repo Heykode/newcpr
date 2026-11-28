@@ -17,12 +17,11 @@ export function setFailureThreshold(config: QualityRuleConfig, value: number) {
     config.excelFailureThreshold = value
 }
 
-export function failureActionOptions(current: QualityRuleConfig['failureAction']) {
+export function failureActionOptions() {
   return [
     { value: 'none', label: '仅记录结果' },
     { value: 'disable_scheduling', label: '暂停此账号调度' },
     { value: 'remove_groups', label: '移出指定分组' },
     { value: 'apply_account_template', label: '应用账号模板' },
-    ...(current === 'enable_excel' ? [{ value: 'enable_excel', label: '开启Excel模式（旧规则）' }] : []),
   ]
 }

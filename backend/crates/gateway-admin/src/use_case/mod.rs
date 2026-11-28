@@ -416,7 +416,6 @@ async fn delete_credentials(
         account_ids,
     })
 }
-pub(crate) mod excel_recovery;
 pub mod quality_ops;
 
 pub(crate) mod error_protection;

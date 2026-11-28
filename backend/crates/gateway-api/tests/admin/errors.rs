@@ -571,7 +571,6 @@ mod provider {
             },
             usage_period: None,
             error_protection: None,
-            excel_recovery: None,
             purchase_cost: None,
             turn_state: None,
             codex_quota_overdraft: None,

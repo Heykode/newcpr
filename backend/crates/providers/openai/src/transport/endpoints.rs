@@ -6,6 +6,10 @@ pub const CODEX_RESPONSES_COMPACT_PATH: &str = "/codex/responses/compact";
 pub const CODEX_IMAGE_GENERATIONS_PATH: &str = "/codex/images/generations";
 /// `/codex/images/edits`
 pub const CODEX_IMAGE_EDITS_PATH: &str = "/codex/images/edits";
+
+pub(crate) fn is_image_path(path: &str) -> bool {
+    path.ends_with(CODEX_IMAGE_GENERATIONS_PATH) || path.ends_with(CODEX_IMAGE_EDITS_PATH)
+}
 /// `/codex/alpha/search`
 pub const CODEX_ALPHA_SEARCH_PATH: &str = "/codex/alpha/search";
 /// `/codex/realtime/calls`；语音通话 SDP 引导端点。

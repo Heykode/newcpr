@@ -306,7 +306,7 @@ test('manual push carries the complete edited account form with the confirmed ve
     outboundProxyId: 'proxy-edited',
     qualityTemplate: { id: 'quality-demo', revision: 2 },
   }
-  await pushRelogin([{ id: 'a', revision: 17 }], { id: 'template-demo', revision: 4 }, undefined, undefined, undefined, form)
+  await pushRelogin([{ id: 'a', revision: 17 }], { id: 'template-demo', revision: 4 }, undefined, undefined, form)
   assert.deepEqual(JSON.parse(JSON.stringify(calls[0].data)), {
     ids: ['a'],
     revisions: { a: 17 },

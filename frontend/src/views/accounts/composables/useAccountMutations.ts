@@ -4,7 +4,6 @@ import type { RequestOptions } from '@/api/request'
 import dayjs from 'dayjs'
 import { onScopeDispose, ref, watch } from 'vue'
 import {
-  batchUpdateAccounts,
   deleteAccounts,
   exportAccounts,
   getAccountModelCatalog,
@@ -64,7 +63,6 @@ export function useAccountMutations(options: {
     catalogDownloads.clear()
   })
   const togglingAccountIds = useIdSet<string>()
-  const togglingExcelAccountIds = useIdSet<string>()
   const recoveringAccountIds = recoveringAccounts.ids
   const refreshingAccountIds = refreshingAccounts.ids
   const refreshingQuotaAccountIds = refreshingQuotaAccounts.ids
@@ -297,22 +295,6 @@ export function useAccountMutations(options: {
     })
   }
 
-  async function handleToggleExcel(account: AccountRow, enabled: boolean) {
-    if (account.provider !== 'openai' || account.authenticationKind !== 'oauth')
-      return
-    await togglingExcelAccountIds.run(account.id, async () => {
-      const responsesUpstream = enabled ? 'excel' : 'codex'
-      try {
-        await batchUpdateAccounts({ accountIds: [account.id], responsesUpstream })
-        const current = options.accounts.value.find(item => item.id === account.id)
-        if (current)
-          await options.replaceAccount({ ...current, responsesUpstream })
-        toast.success(enabled ? 'Excel 入口已开启' : '已恢复 Codex 入口')
-      }
-      catch {}
-    })
-  }
-
   async function handleRecover(accountId: string) {
     await recoveringAccounts.run(accountId, async () => {
       try {
@@ -385,7 +367,6 @@ export function useAccountMutations(options: {
     exportingAccounts,
     exportingModelCatalogIds: exportingModelCatalogs.ids,
     togglingAccountIds: togglingAccountIds.ids,
-    togglingExcelAccountIds: togglingExcelAccountIds.ids,
     requestDeleteAccount,
     handleDelete,
     handleBatchDelete,
@@ -396,6 +377,5 @@ export function useAccountMutations(options: {
     handleRefresh,
     handleRefreshQuota,
     handleToggleEnabled,
-    handleToggleExcel,
   }
 }

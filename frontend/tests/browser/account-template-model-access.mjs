@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process'
 import { mkdir } from 'node:fs/promises'
 import process from 'node:process'
 import { pathToFileURL } from 'node:url'
-import { accounts as sampleAccounts } from '../fixtures/relogin-count-data.mjs'
+import { reloginEntries, accounts as sampleAccounts } from '../fixtures/relogin-count-data.mjs'
 
 async function main() {
   const { chromium } = await import(process.env.PLAYWRIGHT_MODULE ? pathToFileURL(process.env.PLAYWRIGHT_MODULE).href : 'playwright')
@@ -63,6 +63,10 @@ async function main() {
     await page.route('**/dev/api/**', async (route) => {
       const request = route.request()
       const pathname = new URL(request.url()).pathname.replace(/^\/dev/, '')
+      if (pathname === '/api/admin/relogin')
+        return respond(route, { items: [{ ...reloginEntries[0], poolStatus: 'absent', poolAccountIds: [], reloginAccountId: null }], settings: { concurrency: 1, paused: false } })
+      if (pathname === '/api/admin/quality-ops/templates')
+        return respond(route, [])
       if (pathname === '/api/admin/relogin/templates')
         return respond(route, [template])
       if (pathname === '/api/admin/relogin/templates/save') {
@@ -122,7 +126,7 @@ async function main() {
       await page.getByRole('button', { name: '账号模板', exact: true }).click()
       await menu.getByRole('button', { name: '管理模板', exact: true }).click()
       await dialog.getByRole('button', { name: '编辑模板', exact: true }).click()
-      await dialog.getByRole('radiogroup', { name: '模型限制模式', exact: true }).waitFor()
+      await dialog.getByRole('radiogroup', { name: '模型限制', exact: true }).waitFor()
     }
     async function saveAndClose() {
       await dialog.getByRole('button', { name: '保存模板', exact: true }).click()
@@ -230,9 +234,12 @@ async function main() {
     await dialog.getByRole('button', { name: '新建模板', exact: true }).click()
     assert.equal(await dialog.getByRole('radio', { name: '保留', exact: true }).isChecked(), true)
     await page.goto(`${base}/relogin`)
-    await page.getByRole('button', { name: '账号模板', exact: true }).click()
-    await dialog.getByRole('button', { name: '编辑模板', exact: true }).click()
-    assert.equal(await dialog.getByRole('radio', { name: '保留', exact: true }).isChecked(), true)
+    await page.getByRole('button', { name: '更多账号操作', exact: true }).click()
+    await page.getByText('推送已有凭据', { exact: true }).click()
+    await page.getByRole('button', { name: '管理账号模板', exact: true }).click()
+    const reloginTemplateDialog = page.getByRole('dialog').last()
+    await reloginTemplateDialog.getByRole('button', { name: '编辑模板', exact: true }).click()
+    assert.equal(await reloginTemplateDialog.getByRole('radio', { name: '保留', exact: true }).isChecked(), true)
     assert.equal(catalogRequests, 0, 'unbound templates must not probe account model catalogs')
     assert.ok(knownCatalogPages.includes(1) && knownCatalogPages.includes(2), 'use known model directory pages')
     assert.deepEqual(errors, [])

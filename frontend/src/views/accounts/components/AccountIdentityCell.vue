@@ -1,11 +1,10 @@
 <script setup lang="ts">
 import type { getAccounts } from '@/api'
-import { KeyRound, Table2 } from '@lucide/vue'
+import { KeyRound } from '@lucide/vue'
 import { computed } from 'vue'
 
 import ProviderIconGroup from '@/components/ProviderIconGroup.vue'
 import AccountQualityMonitorBadge from '@/components/quality-ops/AccountQualityMonitorBadge.vue'
-import { formatDateTime } from '@/utils/date'
 import { stablePresetVisualToneClass } from '../utils/visualTone'
 import AccountPlanBadge from './AccountPlanBadge.vue'
 
@@ -16,7 +15,6 @@ type AccountIdentity = Pick<AccountRow, 'id' | 'email' | 'planType' | 'planTypeD
   & Partial<Pick<AccountRow, 'accountId'>>
   & Partial<Pick<AccountRow, 'qualityMonitoring'>>
   & Partial<Pick<AccountRow, 'enabled' | 'status' | 'errorReason'>>
-  & Partial<Pick<AccountRow, 'responsesUpstream' | 'excelAutoDisabledAt' | 'excel403WarningAt' | 'excelModeDisabledAt' | 'excelRecovery'>>
 
 const props = withDefaults(
   defineProps<{
@@ -47,9 +45,6 @@ const emailText = computed(() => {
 })
 
 const customName = computed(() => props.account.customName?.trim() || null)
-const excel403WarningAt = computed(() => props.account.excel403WarningAt !== undefined
-  ? props.account.excel403WarningAt
-  : props.account.excelAutoDisabledAt)
 const displayTitle = computed(() => customName.value
   ?? (props.titleMode === 'email' ? emailText.value : emailText.value.split('@')[0]))
 
@@ -69,35 +64,9 @@ const secondaryClass = computed(() =>
 
 const metaGapClass = computed(() => props.metaSize === 'xs' ? 'gap-1' : 'gap-1.5')
 
-const verifiedExcelRecovery = computed(() => {
-  const recoveredAt = props.account.excelRecovery?.recoveredAt
-  return !!recoveredAt && props.account.responsesUpstream === 'excel'
-    && props.account.enabled === true && !props.account.excelAutoDisabledAt
-    && (!excel403WarningAt.value || Date.parse(recoveredAt) >= Date.parse(excel403WarningAt.value))
-})
-
-const avatarExcelStatus = computed(() => {
-  if (excel403WarningAt.value && !verifiedExcelRecovery.value)
-    return 'warning'
-  return props.account.responsesUpstream === 'excel' ? 'enabled' : 'default'
-})
-
 const avatarToneClass = computed(() => {
-  if (avatarExcelStatus.value === 'warning')
-    return 'border-cp-warning bg-cp-warning-container text-cp-warning-on-container'
-  if (avatarExcelStatus.value === 'enabled')
-    return 'border-cp-success bg-cp-success-container text-cp-success-on-container'
   const identity = props.account.id || props.account.email || displayTitle.value
   return `border-transparent ${stablePresetVisualToneClass(identity)}`
-})
-
-const avatarDescription = computed(() => {
-  const mode = props.account.responsesUpstream === 'excel' ? 'Excel 模式已开启' : 'Excel 模式未开启'
-  if (verifiedExcelRecovery.value)
-    return `${displayTitle.value}：${mode}。BPS 完整探测成功并恢复调度（${formatDateTime(props.account.excelRecovery!.recoveredAt!)}）。${excel403WarningAt.value ? `历史 403：${formatDateTime(excel403WarningAt.value)}。` : ''}这是最近一次探测结果，不保证后续请求不再报错。`
-  if (excel403WarningAt.value)
-    return `${displayTitle.value}：BPS 403疑似被封excel。${mode}。此账号曾因 Excel 上游 HTTP 403 触发自动暂停（${formatDateTime(excel403WarningAt.value)}）。此为历史标记，恢复调度或切换模式后仍保留，不代表当前调度状态。`
-  return `${displayTitle.value}：${mode}`
 })
 </script>
 
@@ -109,12 +78,11 @@ const avatarDescription = computed(() => {
     <span class="relative inline-flex shrink-0" :class="mobile ? 'col-start-1 row-start-3' : undefined">
       <span
         data-account-avatar
-        :data-account-excel-status="avatarExcelStatus"
         data-swipe-select-handle
         class="inline-flex items-center justify-center rounded-lg border-2"
         :class="[avatarSizeClass, avatarToneClass]"
-        :title="avatarDescription"
-        :aria-label="avatarDescription"
+        :title="displayTitle"
+        :aria-label="displayTitle"
         role="img"
       >
         <ProviderIconGroup
@@ -138,16 +106,6 @@ const avatarDescription = computed(() => {
     </span>
     <div class="min-w-0 flex-1" :class="{ contents: mobile }" data-swipe-select-ignore>
       <div class="flex min-w-0 items-center gap-2" :class="mobile ? 'col-start-2 row-start-1 min-h-8' : undefined">
-        <span
-          v-if="account.responsesUpstream === 'excel'"
-          data-account-excel-mark
-          class="inline-flex size-4 shrink-0 items-center justify-center text-cp-success"
-          title="Excel 模式已开启"
-          aria-label="Excel 模式已开启"
-          role="img"
-        >
-          <Table2 class="size-4" aria-hidden="true" />
-        </span>
         <span :title="displayTitle" class="min-w-0 truncate text-cp font-heavy text-cp-text">
           {{ displayTitle }}
         </span>
@@ -178,14 +136,6 @@ const avatarDescription = computed(() => {
         <slot name="status">
           <AccountQualityMonitorBadge v-if="account.qualityMonitoring" :account-id="account.id" :monitor="account.qualityMonitoring" class="mt-0!" />
         </slot>
-      </div>
-      <div
-        v-if="account.responsesUpstream !== 'excel' && account.excelModeDisabledAt"
-        class="mt-0.5 text-cp-xs text-cp-text-secondary"
-        :class="mobile ? 'col-span-2 col-start-2' : undefined"
-        :title="`Excel 上游返回 HTTP 403，自动关闭于 ${formatDateTime(account.excelModeDisabledAt)}`"
-      >
-        Excel 403 自动关闭
       </div>
       <div v-if="account.qualityMonitoring && !mobile">
         <AccountQualityMonitorBadge :account-id="account.id" :monitor="account.qualityMonitoring" />

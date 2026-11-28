@@ -1070,10 +1070,6 @@ where
                     &self.operation,
                     Operation::Generate(generate) if generate.quality_probe().is_some()
                 ))
-                .with_excel_recovery(match &self.operation {
-                    Operation::Generate(generate) => generate.excel_recovery_revision(),
-                    _ => None,
-                })
             }
         }
         .with_credential_recovery_attempted(pinned_account.as_ref().is_some_and(|account| {
@@ -1772,7 +1768,6 @@ where
             && !self
                 .credential_recovery_attempted_accounts
                 .contains(current.metadata.provider_account_id());
-        let recovery_probe = matches!(&self.operation, Operation::Generate(generate) if generate.excel_recovery_revision().is_some());
         let rotation_allowed = !matches!(
             error.pre_delivery_retry(),
             Some(crate::error::PreDeliveryRetry::SameAccountTransientRetry {
@@ -1780,8 +1775,7 @@ where
                 ..
             })
         );
-        let retryable = !recovery_probe
-            && !error.retry_is_prohibited()
+        let retryable = !error.retry_is_prohibited()
             && (continuation_retry
                 || same_account_retry
                 || transient_retry.is_some()

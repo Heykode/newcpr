@@ -3494,5 +3494,61 @@
     "file_sha256": "15e92e4027a6e6d0e523ed0ecc28328e72d4a690f5f2f1db52907897c3862d42",
     "line_sha256": "38b5221cd9aa5385d7a843329e9fc2ebcdd4d9eb11ea4dbfbcb7ae90334f658d",
     "reason": "Re-reviewed the matching synthetic prompt_cache_key conversation label used to prove tenant isolation. Identical to a previously reviewed line; not an authentication credential."
+  },
+  {
+    "path": "backend/crates/gateway-host/src/mihomo/tests.rs",
+    "rule": "authenticated-url",
+    "line": 24,
+    "file_sha256": "43d95a902c051a8ee2c3f99de0e0412b3956f96e56ac496ab58aedfd47d61967",
+    "line_sha256": "cbd914e4a34502f4b54aef8748141991fba97e8d22c1fe6514d96dbedc834545",
+    "reason": "Manually re-reviewed after removal of the retired Excel pool: unchanged loopback proxy factory with synthetic credentials; no real endpoint or credential. Historical review is retained."
+  },
+  {
+    "path": "backend/crates/gateway-host/src/mihomo/tests.rs",
+    "rule": "authenticated-url",
+    "line": 224,
+    "file_sha256": "43d95a902c051a8ee2c3f99de0e0412b3956f96e56ac496ab58aedfd47d61967",
+    "line_sha256": "d71fd35a201d1505a38593ed1431d183348595f33bf5d74fcacb896827c0ab53",
+    "reason": "Manually re-reviewed after removal of the retired Excel pool: unchanged documentation-domain parser normalization fixture; no real endpoint or credential. Historical review is retained."
+  },
+  {
+    "path": "backend/crates/gateway-host/src/mihomo/tests.rs",
+    "rule": "authenticated-url",
+    "line": 245,
+    "file_sha256": "43d95a902c051a8ee2c3f99de0e0412b3956f96e56ac496ab58aedfd47d61967",
+    "line_sha256": "d6f3935f8b0e8df47b35ed5d8f680b16c01057e169f634cefb1f41c005cc1f5e",
+    "reason": "Manually re-reviewed after removal of the retired Excel pool: unchanged documentation IPv6 parser-only fixture; no real endpoint or credential. Historical review is retained."
+  },
+  {
+    "path": "backend/crates/gateway-host/src/mihomo/tests.rs",
+    "rule": "authenticated-url",
+    "line": 248,
+    "file_sha256": "43d95a902c051a8ee2c3f99de0e0412b3956f96e56ac496ab58aedfd47d61967",
+    "line_sha256": "ede25af4398910b34492dda3a622aad655f97054233ecdfcf552fc354a77887d",
+    "reason": "Manually re-reviewed after removal of the retired Excel pool: unchanged placeholder host and synthetic TLS parser fixture; no real endpoint or credential. Historical review is retained."
+  },
+  {
+    "path": "backend/crates/gateway-host/src/mihomo/tests.rs",
+    "rule": "authenticated-url",
+    "line": 262,
+    "file_sha256": "43d95a902c051a8ee2c3f99de0e0412b3956f96e56ac496ab58aedfd47d61967",
+    "line_sha256": "0631835a9cbfbbf569a3ec90cc2ce7cfbb2f68ba006493604d10bea630d3f66b",
+    "reason": "Manually re-reviewed after removal of the retired Excel pool: unchanged invalid synthetic credential fixture checking error redaction; no real endpoint or credential. Historical review is retained."
+  },
+  {
+    "path": "backend/crates/gateway-host/src/mihomo/tests.rs",
+    "rule": "authenticated-url",
+    "line": 263,
+    "file_sha256": "43d95a902c051a8ee2c3f99de0e0412b3956f96e56ac496ab58aedfd47d61967",
+    "line_sha256": "ad5a015389ca8cf6de7f89155a0cf758753245d3f265663d07e7a40394b3d510",
+    "reason": "Manually re-reviewed after removal of the retired Excel pool: unchanged malformed percent-encoding parser rejection fixture; no real endpoint or credential. Historical review is retained."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/credential/native_catalog_local.rs",
+    "rule": "authenticated-url",
+    "line": 538,
+    "file_sha256": "9609515614dc4db07077ac527a29f39c8c992ed479eb025a7ea206437d086b9c",
+    "line_sha256": "df037a1268a2fe553e47104c6feee56ef05f531030847103b46d3a4582695472",
+    "reason": "Manually re-reviewed unchanged synthetic catalog proxy credentials after retirement of Excel catalog synthesis. The fixture still binds its destination to an ephemeral loopback listener. Historical reviews are retained."
   }
 ]

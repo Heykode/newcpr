@@ -883,54 +883,6 @@ for (const action of ['handleRefreshQuota', 'handleRecover']) {
 }
 
 for (const enabled of [false, true]) {
-  test(`Excel switch ${enabled ? 'on' : 'off'} only patches its own field and preserves concurrent scheduling changes`, async (t) => {
-    const h = createHarness(t)
-    const initial = accountResponse()
-    const row = {
-      ...initial.items[0],
-      provider: 'openai',
-      authenticationKind: 'oauth',
-      enabled: true,
-      responsesUpstream: enabled ? 'codex' : 'excel',
-      concurrencyLimit: 2,
-      weight: 100,
-      groups: [{ id: 'grp_test' }],
-    }
-    initial.items = [row]
-    await mountLoaded(h, initial)
-    const { state, writes, selectedIds } = toggleHarness(h, row)
-    const operation = state.handleToggleExcel(row, enabled)
-    await state.handleToggleExcel(row, enabled)
-    assert.equal(writes.length, 1, 'duplicate state switches must share the in-flight guard')
-    assert.deepEqual(structuredClone(writes[0].body), {
-      accountIds: [row.id],
-      responsesUpstream: enabled ? 'excel' : 'codex',
-    })
-    writes[0].resolve({})
-    await flushRequests()
-    const updated = {
-      ...initial,
-      items: [{
-        ...row,
-        enabled: false,
-        weight: 250,
-        concurrencyLimit: 7,
-        groups: [{ id: 'grp_changed' }],
-        responsesUpstream: enabled ? 'excel' : 'codex',
-      }],
-    }
-    await h.settle(updated)
-    await operation
-    assertResult(h.query, updated)
-    assert.equal(selectedIds.value.size, 2)
-    await state.handleToggleExcel({ ...row, provider: 'xai' }, enabled)
-    assert.equal(writes.length, 1, 'non-OpenAI accounts must not expose this mutation')
-    await state.handleToggleExcel({ ...row, authenticationKind: 'api_key' }, enabled)
-    assert.equal(writes.length, 1, 'API Key accounts must not expose this mutation')
-  })
-}
-
-for (const enabled of [false, true]) {
   test(`switch ${enabled ? 'on from paused' : 'off from normal'} rereads the filter immediately and removes only the filtered-out selection`, async (t) => {
     const h = createHarness(t)
     const initial = accountResponse()

@@ -56,7 +56,7 @@ const labels: Record<QualityEditableField, string> = {
   failureAction: '异常后的处理',
   failureTemplate: '异常处置账号模板（仅应用模板规则）',
   failureGroupIds: '处置分组（仅移出分组规则）',
-  autoRestore: '后续整轮通过后自动恢复（不适用于旧版开启 Excel）',
+  autoRestore: '后续整轮通过后自动恢复',
   excelFailureThreshold: '连续异常多少轮后执行处置',
 }
 const fields = ref<QualityEditableField[]>([])
@@ -88,7 +88,7 @@ watch(open, (value) => {
   if (!value)
     return
   const first = props.rules.find(rule => props.selectedIds.includes(rule.id))?.config ?? props.defaultConfig
-  draft.value = { ...props.defaultConfig, ...first, excelFailureThreshold: failureThreshold(first), excelRecoveryThreshold: first.excelRecoveryThreshold ?? 1, intervalSeconds: first.intervalSeconds ?? DEFAULT_QUALITY_INTERVAL_SECONDS, failureGroupIds: [...first.failureGroupIds] }
+  draft.value = { ...props.defaultConfig, ...first, excelFailureThreshold: failureThreshold(first), intervalSeconds: first.intervalSeconds ?? DEFAULT_QUALITY_INTERVAL_SECONDS, failureGroupIds: [...first.failureGroupIds] }
   fields.value = []
   pending.value = [...props.selectedIds]
   names.value = Object.fromEntries(props.rules.map(rule => [rule.id, props.accountName(rule.config.accountId)]))
@@ -176,7 +176,7 @@ onBeforeUnmount(() => {
           <AccountTemplatePicker v-else-if="field === 'failureTemplate'" v-model="selectedTemplate" label="异常处置账号模板" :disabled="saving" />
           <FormItem v-else :label="labels[field]">
             <BaseSelect v-if="field === 'detectionMode'" v-model="draft.detectionMode" :options="[{ value: 'answer', label: '题目检测' }, { value: 'state_probe', label: '状态探针' }]" />
-            <BaseSelect v-else-if="field === 'failureAction'" v-model="draft.failureAction" :options="failureActionOptions(draft.failureAction)" />
+            <BaseSelect v-else-if="field === 'failureAction'" v-model="draft.failureAction" :options="failureActionOptions()" />
             <BaseSelect v-else-if="field === 'reasoningEffort'" v-model="effort" :options="effortOptions" />
             <BaseTextarea v-else-if="field === 'prompt' || field === 'referenceAnswer' || field === 'judgePrompt'" v-model="draft[field]" :rows="3" />
             <QualityModelPicker v-else-if="field === 'model'" v-model="draft.model" :scope="modelScope" @choices="testModels = $event" />

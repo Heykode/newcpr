@@ -60,11 +60,28 @@ pub(super) struct ApplyAccountTemplateRequest {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BatchUpdateAccountsRequest {
+    // Older editors can send these alongside ordinary settings in the same patch.
+    // None of them count as an update or enter the command.
+    #[serde(rename = "responsesUpstream")]
+    _retired_route: Option<serde::de::IgnoredAny>,
+    #[serde(rename = "excelModels")]
+    _retired_models: Option<serde::de::IgnoredAny>,
+    #[serde(rename = "excelModelsFollowGlobal")]
+    _retired_follow_global: Option<serde::de::IgnoredAny>,
+    #[serde(rename = "excelCacheCreationAsInput")]
+    _retired_cache_creation: Option<serde::de::IgnoredAny>,
+    #[serde(rename = "excelIgnoreEncryptedContent")]
+    _retired_encrypted: Option<serde::de::IgnoredAny>,
+    #[serde(rename = "excelAutoDisableOn403")]
+    _retired_auto_disable: Option<serde::de::IgnoredAny>,
+    #[serde(rename = "excel403Action")]
+    _retired_action: Option<serde::de::IgnoredAny>,
+    #[serde(rename = "excelRecovery")]
+    _retired_recovery: Option<serde::de::IgnoredAny>,
     #[serde(default, deserialize_with = "deserialize_optional_nullable")]
     pub credential_proxy_id: Option<Option<String>>,
     pub quota_settings: Option<gateway_core::account::AccountQuotaSettings>,
     pub auto_use_quota_credits: Option<bool>,
-    pub excel_recovery: Option<gateway_admin::model::excel_recovery::ExcelRecoveryConfig>,
     pub purchase_cost: Option<gateway_admin::model::account_purchase::AccountPurchaseUpdate>,
     #[serde(default, deserialize_with = "deserialize_optional_nullable")]
     pub egress_mode: Option<Option<gateway_core::provider_ports::egress::EgressMode>>,
@@ -74,15 +91,8 @@ pub struct BatchUpdateAccountsRequest {
     pub account_ids: Vec<String>,
     pub enabled: Option<bool>,
     pub turn_state_injection_enabled: Option<bool>,
-    pub responses_upstream: Option<gateway_core::account::ResponsesUpstream>,
-    pub excel_models: Option<gateway_core::account::ExcelModels>,
-    pub excel_models_follow_global: Option<bool>,
-    pub excel_cache_creation_as_input: Option<bool>,
-    pub excel_ignore_encrypted_content: Option<bool>,
     pub request_proxy_source:
         Option<gateway_core::provider_ports::session_proxy::RequestProxySource>,
-    pub excel_auto_disable_on_403: Option<bool>,
-    pub excel_403_action: Option<gateway_core::account::Excel403Action>,
     #[serde(default, deserialize_with = "deserialize_optional_nullable")]
     pub concurrency_limit: Option<Option<u64>>,
     pub weight: Option<u64>,
@@ -151,20 +161,12 @@ impl BatchUpdateAccountsRequest {
         proxy_selection(self.outbound_proxy_id.clone())?;
         if self.quota_settings.is_none()
             && self.auto_use_quota_credits.is_none()
-            && self.excel_recovery.is_none()
             && self.purchase_cost.is_none()
             && self.custom_name.is_none()
             && self.egress_mode.is_none()
             && self.enabled.is_none()
             && self.turn_state_injection_enabled.is_none()
-            && self.responses_upstream.is_none()
-            && self.excel_models.is_none()
-            && self.excel_models_follow_global.is_none()
-            && self.excel_cache_creation_as_input.is_none()
-            && self.excel_ignore_encrypted_content.is_none()
             && self.request_proxy_source.is_none()
-            && self.excel_auto_disable_on_403.is_none()
-            && self.excel_403_action.is_none()
             && self.concurrency_limit.is_none()
             && self.weight.is_none()
             && self.model_access.is_none()
@@ -183,7 +185,6 @@ impl BatchUpdateAccountsRequest {
             credential_proxy_id: self.credential_proxy_id,
             quota_settings: self.quota_settings,
             auto_use_quota_credits: self.auto_use_quota_credits,
-            excel_recovery: self.excel_recovery,
             purchase_cost: self.purchase_cost,
             egress_mode: self.egress_mode,
             custom_name: self
@@ -194,14 +195,7 @@ impl BatchUpdateAccountsRequest {
             account_ids: self.account_ids,
             enabled: self.enabled,
             turn_state_injection_enabled: self.turn_state_injection_enabled,
-            responses_upstream: self.responses_upstream,
-            excel_models: self.excel_models,
-            excel_models_follow_global: self.excel_models_follow_global,
-            excel_cache_creation_as_input: self.excel_cache_creation_as_input,
-            excel_ignore_encrypted_content: self.excel_ignore_encrypted_content,
             request_proxy_source: self.request_proxy_source,
-            excel_auto_disable_on_403: self.excel_auto_disable_on_403,
-            excel_403_action: self.excel_403_action,
             concurrency_limit: self
                 .concurrency_limit
                 .map(parse_concurrency_limit)
@@ -376,19 +370,8 @@ pub struct AccountView {
     pub error_message: Option<String>,
     pub enabled: bool,
     pub turn_state_injection_enabled: bool,
-    pub responses_upstream: gateway_core::account::ResponsesUpstream,
-    pub excel_models: gateway_core::account::ExcelModels,
-    pub excel_models_follow_global: bool,
-    pub excel_cache_creation_as_input: bool,
-    pub excel_ignore_encrypted_content: bool,
     pub request_proxy_source: gateway_core::provider_ports::session_proxy::RequestProxySource,
-    pub excel_auto_disable_on_403: bool,
-    pub excel_403_action: gateway_core::account::Excel403Action,
-    pub excel_auto_disabled_at: Option<DateTime<Utc>>,
-    pub excel_403_warning_at: Option<DateTime<Utc>>,
     pub quality_monitoring: Option<gateway_admin::model::quality_ops::QualityMonitoring>,
-    pub excel_mode_disabled_at: Option<DateTime<Utc>>,
-    pub effective_excel_models: gateway_core::account::ExcelModels,
     pub turn_state: Option<AccountTurnStateView>,
     pub in_flight: Option<u64>,
     pub health_timeline: Vec<AccountHealthBucketView>,
@@ -407,7 +390,6 @@ pub struct AccountView {
     pub quota: AccountQuotaView,
     pub usage: AccountUsageView,
     pub cumulative_costs: Vec<CurrencyCostView>,
-    pub excel_recovery: Option<gateway_admin::model::excel_recovery::ExcelRecoveryView>,
     pub purchase_cost: Option<gateway_admin::model::account_purchase::AccountPurchaseView>,
 }
 

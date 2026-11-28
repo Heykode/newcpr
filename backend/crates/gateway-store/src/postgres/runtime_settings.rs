@@ -457,7 +457,7 @@ pub(crate) async fn update_runtime_settings_in_transaction(
     )
     .fetch_one(&mut **transaction)
     .await
-    .map_err(|_| postgres_unavailable("lock image policy settings"))?;
+    .map_err(|_| postgres_unavailable("lock request settings"))?;
     let previous = previous.map(|value| value.0).unwrap_or_default();
     let mut tuning = update.request_tuning.clone();
     tuning.websocket_max_age_ms = None;
@@ -465,19 +465,10 @@ pub(crate) async fn update_runtime_settings_in_transaction(
     tuning.account_error_protection = tuning
         .account_error_protection
         .or(previous.account_error_protection);
-    tuning.excel_image_limit_policy = tuning
-        .excel_image_limit_policy
-        .or(previous.excel_image_limit_policy);
-    tuning.excel_image_warning_remaining = tuning
-        .excel_image_warning_remaining
-        .or(previous.excel_image_warning_remaining);
-    tuning.excel_image_compact_reserve = tuning
-        .excel_image_compact_reserve
-        .or(previous.excel_image_compact_reserve);
     if !tuning.validate() {
         return Err(StoreError::InvalidData {
             entity: "runtime settings",
-            message: "Excel image policy thresholds are invalid".into(),
+            message: "request tuning settings are invalid".into(),
         });
     }
     if let Some(Some(id)) = &update.turn_state_probe_proxy_id {

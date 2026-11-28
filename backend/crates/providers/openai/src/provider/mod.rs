@@ -79,8 +79,7 @@ use crate::transport::profile::{
 };
 use crate::transport::protocol::responses::{
     CodexResponsesRequest, PREVIOUS_RESPONSE_NOT_FOUND_CODE, PREVIOUS_RESPONSE_NOT_FOUND_MESSAGE,
-    PreviousResponseScope, ResponseEventSignals, STREAM_REPLAY_GRACE, TransportRequirement,
-    transport_requirement,
+    PreviousResponseScope, ResponseEventSignals, TransportRequirement, transport_requirement,
 };
 use crate::transport::protocol::websocket::WEBSOCKET_CONNECTION_LIMIT_REACHED_CODE;
 use crate::transport::request::{
@@ -103,7 +102,6 @@ mod cache_diagnostics;
 mod chat;
 mod compact;
 mod encrypted_history;
-mod excel;
 mod execution;
 mod failure;
 mod guardian;
@@ -114,7 +112,6 @@ mod request_proxy;
 mod workers;
 pub(crate) use live::{CodexLiveGateway, CodexLiveRegistry};
 
-use excel::prepare_excel;
 use execution::*;
 #[doc(hidden)]
 pub use failure::openai_failure_affects_account_score;
@@ -161,10 +158,8 @@ pub struct CodexProvider {
     encrypted_history: encrypted_history::InvalidEncryptedHistory,
     stream_max_retries: u32,
     request_tuning: Option<gateway_core::runtime::RequestTuningHandle>,
-    excel_replay: Arc<dyn gateway_core::provider_ports::ProviderReplayPort>,
     session_proxy_pool:
         Option<Arc<dyn gateway_core::provider_ports::session_proxy::SessionProxyPool>>,
-    excel_image_relay: Arc<crate::transport::excel::image_relay::ImageRelay>,
     live_registry: Arc<CodexLiveRegistry>,
     live_gateway: Option<Arc<CodexLiveGateway>>,
 }
@@ -175,20 +170,6 @@ impl CodexProvider {
         pool: Option<Arc<dyn gateway_core::provider_ports::session_proxy::SessionProxyPool>>,
     ) -> Self {
         self.session_proxy_pool = pool;
-        self
-    }
-    pub(crate) fn with_excel_image_relay(
-        mut self,
-        relay: Arc<crate::transport::excel::image_relay::ImageRelay>,
-    ) -> Self {
-        self.excel_image_relay = relay;
-        self
-    }
-    pub(crate) fn with_excel_replay(
-        mut self,
-        replay: Arc<dyn gateway_core::provider_ports::ProviderReplayPort>,
-    ) -> Self {
-        self.excel_replay = replay;
         self
     }
     pub(super) fn client_for_request(
@@ -278,10 +259,6 @@ impl CodexProvider {
             encrypted_history: encrypted_history::InvalidEncryptedHistory::default(),
             stream_max_retries: _stream_max_retries,
             request_tuning: None,
-            excel_replay: Arc::new(gateway_core::provider_ports::UnavailableProviderReplay),
-            excel_image_relay: Arc::new(crate::transport::excel::image_relay::ImageRelay::new(
-                None,
-            )),
             live_registry: Arc::new(CodexLiveRegistry::default()),
             live_gateway: None,
         })
@@ -682,6 +659,15 @@ impl Provider for CodexProvider {
         };
         let quota_overdraft_probe = generate.codex_quota_overdraft_probe();
         let previous_session = decode_openai_session_state(generate);
+        // Retired Excel conversations cannot continue on the native backend. Reject
+        // before account selection can wait, acquire capacity or replace affinity.
+        if generate.native_continuation_requested()
+            && previous_session.as_ref().is_some_and(|state| {
+                state.responses_upstream == gateway_core::account::ResponsesUpstream::Excel
+            })
+        {
+            return Err(continuation_replay_required_error("upstream_changed"));
+        }
         // Validate replay before account selection can mutate the shared binding.
         let native_scope = if let Some(continuation) =
             context.continuation().and_then(ContinuationBinding::pinned)
@@ -753,7 +739,6 @@ impl Provider for CodexProvider {
         let mut upstream_request = encode_generate_request(generate, upstream_model.as_str(), None)
             .map_err(map_request_error)?;
         upstream_request.quality_probe = generate.quality_probe().cloned();
-        upstream_request.excel_recovery_nonce = generate.excel_recovery_nonce().map(str::to_owned);
         quality_probe::initialize(
             &mut upstream_request,
             context.is_quality_check(),
@@ -937,24 +922,9 @@ impl Provider for CodexProvider {
             return Err(continuation_replay_required_error("account_rotated"));
         }
         let lease = Arc::new(lease);
-        let responses_upstream = if context.is_native_quality_probe() {
-            gateway_core::account::ResponsesUpstream::Codex
-        } else {
-            lease
-                .account()
-                .responses_upstream_for_model(upstream_model.as_str())
-        };
-        let excel = responses_upstream == gateway_core::account::ResponsesUpstream::Excel;
-        if direct_model && excel {
-            return Err(provider_error(
-                ProviderErrorKind::NoEligibleAccount,
-                UpstreamSendState::NotSent,
-            ));
-        }
         let payload = generate.protocol_payload();
-        if !(!excel
-            && codex_guardian_role(payload.body(), payload.context())
-                == Some(CodexGuardianRole::Housekeeper))
+        if codex_guardian_role(payload.body(), payload.context())
+            != Some(CodexGuardianRole::Housekeeper)
             && let Some(tier) = crate::transport::protocol::responses::fast_policy_tier(
                 candidate.account_scope().fast_mode(),
                 upstream_request.service_tier(),
@@ -969,12 +939,6 @@ impl Provider for CodexProvider {
                 .insert("service_tier".into(), Value::String(tier.into()));
         }
 
-        if previous_session
-            .as_ref()
-            .is_some_and(|state| state.responses_upstream != responses_upstream)
-        {
-            return Err(continuation_replay_required_error("upstream_changed"));
-        }
         let provider_kind = ProviderKind::new(PROVIDER_NAME)
             .map_err(|_| provider_error(ProviderErrorKind::Protocol, UpstreamSendState::NotSent))?;
         let oauth_identity = matches!(
@@ -1001,9 +965,7 @@ impl Provider for CodexProvider {
         let account_scope =
             if state_owner_cross_account || (!has_explicit_state_owner && lease.account_switch()) {
                 RequestAccountScope::Different
-            } else if has_explicit_state_owner
-                || (excel && cache_preference.is_none() && lease.affinity_hit())
-            {
+            } else if has_explicit_state_owner {
                 RequestAccountScope::Same
             } else {
                 RequestAccountScope::Unknown
@@ -1041,8 +1003,7 @@ impl Provider for CodexProvider {
         {
             return Err(continuation_replay_required_error("scope_unavailable"));
         }
-        if !excel
-            && upstream_request.previous_response_id().is_some()
+        if upstream_request.previous_response_id().is_some()
             && upstream_request.generate()
             && previous_session.as_ref().is_some_and(|state| {
                 state.continuation_scope == OpenAiContinuationScope::ReplayRequired
@@ -1054,9 +1015,7 @@ impl Provider for CodexProvider {
         let before = trace
             .is_enabled()
             .then(|| crate::transport::evidence::request_state(&upstream_request));
-        let guardian_role = (!excel)
-            .then(|| upstream_request.oauth_guardian_role())
-            .flatten();
+        let guardian_role = upstream_request.oauth_guardian_role();
         let guardian_parent = (!state_owner_cross_account
             && matches!(
                 guardian_role,
@@ -1120,7 +1079,7 @@ impl Provider for CodexProvider {
             crate::compat::default_missing_format_name(upstream_request.body_mut());
             crate::compat::normalize_custom_history_ids(upstream_request.body_mut());
             crate::compat::normalize_reasoning_replay(upstream_request.body_mut());
-            if !excel {
+            {
                 crate::compat::normalize_codex_oauth_options(upstream_request.body_mut());
                 crate::compat::normalize_search_history(
                     &mut upstream_request,
@@ -1148,18 +1107,7 @@ impl Provider for CodexProvider {
             );
         }
         quality_probe::prepare(&mut upstream_request, &context, lease.account())?;
-        if excel {
-            prepare_excel(
-                &mut upstream_request,
-                &lease,
-                &context,
-                Arc::clone(&self.excel_replay),
-                &self.excel_image_relay,
-            )
-            .await?;
-        }
-        if !excel
-            && lease.account().authentication_kind() == "oauth"
+        if lease.account().authentication_kind() == "oauth"
             && let Some(turn) = quota_overdraft_turn.as_ref()
         {
             crate::transport::request::quota_overdraft::inject(&mut upstream_request, turn);
@@ -1192,12 +1140,9 @@ impl Provider for CodexProvider {
             provider_kind,
             upstream_model.clone(),
             lease.account_id().clone(),
-            UpstreamTransport::new(if excel {
-                "excel_http_sse"
-            } else {
-                transport_name(transport)
-            })
-            .map_err(|_| provider_error(ProviderErrorKind::Protocol, UpstreamSendState::NotSent))?,
+            UpstreamTransport::new(transport_name(transport)).map_err(|_| {
+                provider_error(ProviderErrorKind::Protocol, UpstreamSendState::NotSent)
+            })?,
         )
         .with_credential_revision(lease.account().revision())
         .with_selection_observation(ProviderSelectionObservation::new(
@@ -1209,7 +1154,7 @@ impl Provider for CodexProvider {
             && (!continuation_requested || previous_session.is_some()))
         .then(|| OpenAiSessionCapture {
             reviewer_model,
-            responses_upstream,
+            responses_upstream: gateway_core::account::ResponsesUpstream::Codex,
             account_id: lease.account_id().as_str().to_owned(),
             oauth_identity,
             conversation_id: upstream_request.local_conversation_id.clone(),
@@ -1251,44 +1196,34 @@ impl Provider for CodexProvider {
                     .get("session_id")
                     .and_then(Value::as_str)
             });
-        let client = self
-            .account_exit_client(&context, lease.account(), excel, session)?
-            .with_account_privacy(
-                context.privacy(),
-                context.cancellation().clone(),
-                lease.account(),
-                session_affinity_key_hash.as_deref(),
-            )
-            .with_fedramp_routing(
-                !excel
-                    && lease.authentication().oauth().is_some_and(
+        let client =
+            self.account_exit_client(&context, lease.account(), session)?
+                .with_account_privacy(
+                    context.privacy(),
+                    context.cancellation().clone(),
+                    lease.account(),
+                    session_affinity_key_hash.as_deref(),
+                )
+                .with_fedramp_routing(
+                    lease.authentication().oauth().is_some_and(
                         crate::credential::CodexOAuthSecret::has_fedramp_routing_claim,
                     ),
-            )
-            .with_routing_affinity(
-                guardian_parent
-                    .filter(|_| guardian_role == Some(CodexGuardianRole::Reviewer))
-                    .and_then(|(_, parent)| parent.affinity),
-            );
-        let client = if !excel && context.continuation_attempt() == ContinuationAttempt::None {
+                )
+                .with_routing_affinity(
+                    guardian_parent
+                        .filter(|_| guardian_role == Some(CodexGuardianRole::Reviewer))
+                        .and_then(|(_, parent)| parent.affinity),
+                );
+        let client = if context.continuation_attempt() == ContinuationAttempt::None {
             client.with_connection_budget(context.connection_budget().clone())
         } else {
             client
         };
-        if let Some(prepared) = upstream_request.excel.as_mut() {
-            prepared.exit_lease = client.session_proxy_lease();
-        }
         let events = cold_response_stream(ColdResponse {
             encrypted_history: self.encrypted_history.clone(),
             installation_id,
             client,
-            response_origin: if excel {
-                Url::parse(crate::transport::excel::RESPONSES_URL).map_err(|_| {
-                    provider_error(ProviderErrorKind::Protocol, UpstreamSendState::NotSent)
-                })?
-            } else {
-                self.responses_url.clone()
-            },
+            response_origin: self.responses_url.clone(),
             request: Arc::new(upstream_request),
             upstream_model: upstream_model.clone(),
             transport_policy: transport,

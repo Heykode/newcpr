@@ -1,7 +1,6 @@
 import type { Ref } from 'vue'
 import type { AccountModelAccess, getAccounts } from '@/api'
 import type { RequestOptions } from '@/api/request'
-import type { Excel403Action } from '@/utils/excel-settings'
 import { computed, ref, shallowRef, watch } from 'vue'
 import { batchUpdateAccounts } from '@/api'
 
@@ -10,11 +9,9 @@ import { useAsyncAction } from '@/composables/useAsyncAction'
 import { t } from '@/i18n'
 import { accountEgressPatch } from '@/utils/account-egress'
 import { normalizeAccountName } from '@/utils/account-name'
-import { DEFAULT_EXCEL_MODELS, DEFAULT_EXCEL_MODELS_INPUT } from '@/utils/excel-defaults'
-import { accountExcel403Action, excelRecoverySettings } from '@/utils/excel-settings'
 import { accountModelAccessError } from '../utils/modelAccess'
 import { purchaseCostPatch } from '../utils/purchaseCost'
-import { concurrencyLimitInput, parseAccountSchedulingForm, parseExcelModels } from '../utils/schedulingForm'
+import { concurrencyLimitInput, parseAccountSchedulingForm } from '../utils/schedulingForm'
 
 type AccountRow = Awaited<ReturnType<typeof getAccounts>>['items'][number]
 
@@ -32,23 +29,9 @@ export function useAccountBatchEditor(options: {
   const purchaseCycleStart = shallowRef('')
   const updatePurchaseCost = ref(false)
   const updateCustomName = ref(false)
-  const excelAvailable = shallowRef(false)
   const requestProxyAvailable = shallowRef(false)
   const schedulingEnabled = shallowRef(true)
-  const excelEnabled = shallowRef(false)
-  const excelModels = shallowRef(DEFAULT_EXCEL_MODELS_INPUT)
-  const excelModelsFollowGlobal = shallowRef(true)
-  const excelCacheCreationAsInput = shallowRef(false)
-  const excelIgnoreEncryptedContent = shallowRef(false)
   const requestProxySource = shallowRef<import('@/utils/request-proxy-source').RequestProxySource>('account')
-  const excel403Action = shallowRef<Excel403Action>('none')
-  const excelRecoveryEnabled = shallowRef(false)
-  const excelRecoveryInterval = shallowRef('60')
-  const updateExcelRecovery = ref(false)
-  const updateExcelCacheCreationAsInput = ref(false)
-  const updateExcelIgnoreEncryptedContent = ref(false)
-  const updateExcel403Action = ref(false)
-  const updateExcelModels = ref(false)
   const concurrencyLimit = shallowRef('')
   const weight = shallowRef('1')
   const modelAccess = ref<AccountModelAccess | undefined>()
@@ -59,7 +42,6 @@ export function useAccountBatchEditor(options: {
   const proxyId = shallowRef('')
   const selectedGroupIds = ref<string[]>([])
   const updateEnabled = ref(false)
-  const updateExcelEnabled = ref(false)
   const updateConcurrencyLimit = ref(false)
   const updateWeight = ref(false)
   const updateGroups = ref(false)
@@ -69,12 +51,6 @@ export function useAccountBatchEditor(options: {
     updateCustomName.value
     || updatePurchaseCost.value
     || updateEnabled.value
-    || (excelAvailable.value && updateExcelEnabled.value)
-    || (excelAvailable.value && updateExcelModels.value)
-    || (excelAvailable.value && updateExcelCacheCreationAsInput.value)
-    || (excelAvailable.value && updateExcelIgnoreEncryptedContent.value)
-    || (excelAvailable.value && updateExcel403Action.value)
-    || (excelAvailable.value && updateExcelRecovery.value)
     || updateConcurrencyLimit.value
     || updateWeight.value
     || updateModelAccess.value
@@ -90,12 +66,6 @@ export function useAccountBatchEditor(options: {
     purchaseCycleStart.value = ''
     updateCustomName.value = false
     updateEnabled.value = false
-    updateExcelEnabled.value = false
-    updateExcelModels.value = false
-    updateExcelCacheCreationAsInput.value = false
-    updateExcelIgnoreEncryptedContent.value = false
-    updateExcel403Action.value = false
-    updateExcelRecovery.value = false
     updateConcurrencyLimit.value = false
     updateWeight.value = false
     updateModelAccess.value = false
@@ -112,18 +82,9 @@ export function useAccountBatchEditor(options: {
     customName.value = accounts.every(account => (account.customName ?? '') === firstName) ? firstName : ''
 
     schedulingEnabled.value = accounts.every(account => account.enabled)
-    excelAvailable.value = accounts.every(account => account.provider === 'openai' && account.authenticationKind === 'oauth')
     requestProxyAvailable.value = accounts.every(account => account.provider === 'openai')
     egressMode.value = 'fixed_ipv6_reuse'
-    excelEnabled.value = accounts.every(account => account.responsesUpstream === 'excel')
-    excelModels.value = (accounts[0]?.excelModels ?? DEFAULT_EXCEL_MODELS).join(', ')
-    excelModelsFollowGlobal.value = accounts.every(account => account.excelModelsFollowGlobal ?? false)
-    excelCacheCreationAsInput.value = accounts.every(account => account.excelCacheCreationAsInput ?? false)
-    excelIgnoreEncryptedContent.value = accounts.every(account => account.excelIgnoreEncryptedContent ?? false)
     requestProxySource.value = accounts[0]?.requestProxySource ?? 'account'
-    excel403Action.value = accounts[0] ? accountExcel403Action(accounts[0]) : 'none'
-    excelRecoveryEnabled.value = accounts.every(account => account.excelRecovery?.enabled ?? false)
-    excelRecoveryInterval.value = String(accounts[0]?.excelRecovery?.intervalMinutes ?? 60)
     proxyMode.value = 'preserve'
     proxyId.value = ''
     concurrencyLimit.value = sharedConcurrencyLimit(accounts)
@@ -152,11 +113,6 @@ export function useAccountBatchEditor(options: {
       updateConcurrencyLimit.value ? concurrencyLimit.value : '',
       updateWeight.value ? weight.value : '1',
     )
-    const models = excelModelsFollowGlobal.value ? [] : parseExcelModels(excelModels.value)
-    if (excelAvailable.value && updateExcelModels.value && models === null) {
-      toast.warning('Excel 模型名称不合法，或超过 64 个')
-      return
-    }
     if (updateProxy.value && proxyMode.value === 'proxy' && !proxyId.value.trim()) {
       toast.warning('请选择代理')
       return
@@ -177,21 +133,6 @@ export function useAccountBatchEditor(options: {
         payload.purchaseCost = purchaseCostPatch(purchaseAmount.value, purchaseCycleStart.value)
       if (updateEnabled.value)
         payload.enabled = schedulingEnabled.value
-      if (excelAvailable.value && updateExcelEnabled.value)
-        payload.responsesUpstream = excelEnabled.value ? 'excel' : 'codex'
-      if (excelAvailable.value && updateExcelCacheCreationAsInput.value)
-        payload.excelCacheCreationAsInput = excelCacheCreationAsInput.value
-      if (excelAvailable.value && (updateExcelIgnoreEncryptedContent.value || (updateExcelEnabled.value && !excelEnabled.value)))
-        payload.excelIgnoreEncryptedContent = !(updateExcelEnabled.value && !excelEnabled.value) && excelIgnoreEncryptedContent.value
-      if (excelAvailable.value && updateExcel403Action.value)
-        payload.excel403Action = excel403Action.value
-      if (excelAvailable.value && updateExcelRecovery.value)
-        payload.excelRecovery = excelRecoverySettings(excelRecoveryEnabled.value, excelRecoveryInterval.value)
-      if (excelAvailable.value && updateExcelModels.value && models !== null) {
-        payload.excelModelsFollowGlobal = excelModelsFollowGlobal.value
-        if (!excelModelsFollowGlobal.value)
-          payload.excelModels = models
-      }
       if (updateConcurrencyLimit.value)
         payload.concurrencyLimit = scheduling.values.concurrencyLimit
       if (updateWeight.value)
@@ -244,11 +185,9 @@ export function useAccountBatchEditor(options: {
     editingCount.value = 0
     customName.value = ''
     schedulingEnabled.value = true
-    excelAvailable.value = false
     requestProxyAvailable.value = false
     requestProxySource.value = 'account'
     egressMode.value = 'fixed_ipv6_reuse'
-    excelEnabled.value = false
     proxyMode.value = 'preserve'
     proxyId.value = ''
     concurrencyLimit.value = ''
@@ -268,23 +207,9 @@ export function useAccountBatchEditor(options: {
     showBatchEditModal,
     editingCount,
     clear,
-    excelAvailable,
     requestProxyAvailable,
     schedulingEnabled,
-    excelEnabled,
-    excelModels,
-    excelModelsFollowGlobal,
-    excelCacheCreationAsInput,
-    excelIgnoreEncryptedContent,
     requestProxySource,
-    excel403Action,
-    excelRecoveryEnabled,
-    excelRecoveryInterval,
-    updateExcelRecovery,
-    updateExcelCacheCreationAsInput,
-    updateExcelIgnoreEncryptedContent,
-    updateExcel403Action,
-    updateExcelModels,
     concurrencyLimit,
     weight,
     modelAccess,
@@ -295,7 +220,6 @@ export function useAccountBatchEditor(options: {
     proxyId,
     selectedGroupIds,
     updateEnabled,
-    updateExcelEnabled,
     updateConcurrencyLimit,
     updateWeight,
     updateGroups,

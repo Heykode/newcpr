@@ -20,7 +20,6 @@ import SettingsCleanupSection from './components/cleanup/SettingsCleanupSection.
 import ClientVersionSettings from './components/client-version/index.vue'
 import CodexQuotaOverdraftCard from './components/CodexQuotaOverdraftCard.vue'
 import AccountErrorProtectionCard from './components/error-protection/AccountErrorProtectionCard.vue'
-import ExcelSettingsCard from './components/ExcelSettingsCard.vue'
 import ModelAliasesCard from './components/ModelAliasesCard.vue'
 import NotificationChannelsCard from './components/NotificationChannelsCard.vue'
 import OpenAiRequestSettingsCard from './components/OpenAiRequestSettingsCard.vue'
@@ -62,7 +61,6 @@ const {
   saving,
   error,
   form,
-  excelImages,
   mappings,
   addMapping,
   updateMapping,
@@ -169,7 +167,6 @@ watch(
         label="配置范围"
         :options="[
           { label: '通用与 Codex 配置', value: 'common' },
-          { label: 'Excel 配置', value: 'excel' },
           { label: '工作区隐私', value: 'privacy' },
           { label: '模型价目', value: 'pricing' },
         ]"
@@ -256,15 +253,6 @@ watch(
             {{ t('settings.access.areYouSureYouWantToDelete') }}
           </p>
         </BaseConfirmModal>
-      </div>
-      <div v-show="configurationScope === 'excel'" class="min-w-0" role="region" aria-label="Excel 配置">
-        <ExcelSettingsCard
-          v-model:models="form.excelDefaultModels"
-          v-model:request-tuning="form.requestTuning"
-          :images="excelImages"
-          :units="unitFields"
-          :disabled="loading || saving"
-        />
       </div>
       <PrivacySettings v-show="configurationScope === 'privacy'" v-model="form.codexPrivacyPolicy" :disabled="loading || saving" />
       <PricingSettings v-if="configurationScope === 'pricing'" />

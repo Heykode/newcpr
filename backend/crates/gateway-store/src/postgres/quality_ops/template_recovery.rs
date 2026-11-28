@@ -6,11 +6,38 @@ use serde_json::Value;
 
 #[derive(Deserialize, Serialize)]
 struct Ownership {
+    #[serde(deserialize_with = "read_owned_settings")]
     before: Value,
+    #[serde(deserialize_with = "read_owned_settings")]
     after: Value,
     scope: Value,
     identity: (Option<String>, Option<String>),
     model: String,
+}
+
+/// Normalize only retired settings in historical ownership snapshots. Every
+/// ordinary field remains part of the equality/CAS fence and restoration data.
+fn read_owned_settings<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Value, D::Error> {
+    let mut value = Value::deserialize(deserializer)?;
+    if let Some(snapshot) = value.as_object_mut() {
+        snapshot.remove("excel_recovery");
+        if let Some(account) = snapshot.get_mut("account").and_then(Value::as_object_mut) {
+            for key in [
+                "responses_upstream",
+                "excel_models",
+                "excel_models_follow_global",
+                "excel_cache_creation_as_input",
+                "excel_ignore_encrypted_content",
+                "excel_auto_disable_on_403",
+                "excel_403_action",
+            ] {
+                account.remove(key);
+            }
+        }
+    }
+    Ok(value)
 }
 
 pub(super) async fn snapshot(
@@ -22,21 +49,13 @@ pub(super) async fn snapshot(
         "select jsonb_build_object('account',jsonb_build_object(
             'enabled',a.enabled,'concurrency_limit',a.concurrency_limit,'weight',a.weight,
             'turn_state_injection_enabled',a.turn_state_injection_enabled,
-            'responses_upstream',a.responses_upstream,'excel_models',a.excel_models,
-            'excel_models_follow_global',a.excel_models_follow_global,
-            'excel_cache_creation_as_input',a.excel_cache_creation_as_input,
-            'excel_ignore_encrypted_content',a.excel_ignore_encrypted_content,
             'request_proxy_source',a.request_proxy_source,
-            'excel_auto_disable_on_403',a.excel_auto_disable_on_403,
-            'excel_403_action',a.excel_403_action,'model_access_json',a.model_access_json,
+            'model_access_json',a.model_access_json,
             'outbound_proxy_id',a.outbound_proxy_id,'outbound_proxy_url',a.outbound_proxy_url),
          'groups',(select coalesce(jsonb_agg(jsonb_build_object('id',g.account_group_id,
             'created_at',g.created_at) order by g.account_group_id),'[]')
             from account_group_accounts g where g.provider_account_id=a.id),
-         'egress',(select o.mode from provider_egress_account_overrides o where o.provider_account_id=a.id),
-         'excel_recovery',(select jsonb_build_object('enabled',r.enabled,
-            'interval_minutes',r.interval_minutes)
-            from account_excel_recovery r where r.account_id=a.id))
+         'egress',(select o.mode from provider_egress_account_overrides o where o.provider_account_id=a.id))
          from provider_accounts a where a.id=$1",
     )
     .bind(account)
@@ -182,21 +201,21 @@ async fn restore(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     account: &str,
     before: &Value,
-    after: &Value,
+    _after: &Value,
 ) -> AdminStoreResult<()> {
     sqlx::query(
         "update provider_accounts a set enabled=b.enabled,concurrency_limit=b.concurrency_limit,
          weight=b.weight,turn_state_injection_enabled=b.turn_state_injection_enabled,
-         responses_upstream=b.responses_upstream,excel_models=b.excel_models,
-         excel_models_follow_global=b.excel_models_follow_global,
-         excel_cache_creation_as_input=b.excel_cache_creation_as_input,
-         excel_ignore_encrypted_content=b.excel_ignore_encrypted_content,
-         request_proxy_source=b.request_proxy_source,excel_auto_disable_on_403=b.excel_auto_disable_on_403,
-         excel_403_action=b.excel_403_action,model_access_json=b.model_access_json,
+         request_proxy_source=b.request_proxy_source,model_access_json=b.model_access_json,
          outbound_proxy_id=b.outbound_proxy_id,outbound_proxy_url=b.outbound_proxy_url,
          updated_at=greatest(now(),a.updated_at)
          from jsonb_populate_record(null::provider_accounts,$2->'account') b where a.id=$1",
-    ).bind(account).bind(before).execute(&mut **tx).await.map_err(unavailable)?;
+    )
+    .bind(account)
+    .bind(before)
+    .execute(&mut **tx)
+    .await
+    .map_err(unavailable)?;
     sqlx::query("delete from account_group_accounts where provider_account_id=$1")
         .bind(account)
         .execute(&mut **tx)
@@ -219,22 +238,6 @@ async fn restore(
     .execute(&mut **tx)
     .await
     .map_err(unavailable)?;
-    if before["excel_recovery"] != after["excel_recovery"] {
-        if before["excel_recovery"].is_null() {
-            sqlx::query("delete from account_excel_recovery where account_id=$1")
-                .bind(account)
-                .execute(&mut **tx)
-                .await
-                .map_err(unavailable)?;
-        } else {
-            // Advance the generation to invalidate any in-flight recovery probe.
-            sqlx::query("update account_excel_recovery set enabled=($2->'excel_recovery'->>'enabled')::boolean,
-                interval_minutes=($2->'excel_recovery'->>'interval_minutes')::int,
-                generation=generation+1,next_probe_at=now()+make_interval(mins=>($2->'excel_recovery'->>'interval_minutes')::int)
-                where account_id=$1")
-                .bind(account).bind(before).execute(&mut **tx).await.map_err(unavailable)?;
-        }
-    }
     Ok(())
 }
 

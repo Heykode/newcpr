@@ -35,22 +35,6 @@ pub struct RequestTuningOverrides {
     pub websocket_failure_open_duration_ms: Option<u64>,
     pub rate_limit_cooldown_seconds: Option<u64>,
     pub max_retry_after_seconds: Option<u32>,
-    pub excel_image_relay_bytes: Option<u64>,
-    pub excel_image_max_bytes: Option<u64>,
-    pub excel_image_total_bytes: Option<u64>,
-    pub excel_image_max_count: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub excel_image_limit_policy: Option<gateway_core::routing::ExcelImageLimitPolicy>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub excel_image_warning_remaining: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub excel_image_compact_reserve: Option<u32>,
-    pub excel_image_relay_requests: Option<u32>,
-    pub excel_image_relay_downloads: Option<u32>,
-    pub excel_image_relay_entries: Option<u32>,
-    pub excel_image_relay_ttl_minutes: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub excel_image_transport: Option<gateway_core::routing::ExcelImageTransport>,
     pub openai_location_override_enabled: Option<bool>,
     pub openai_request_location: Option<gateway_core::account::RequestLocation>,
     pub max_waiting_per_key: Option<u32>,
@@ -93,18 +77,30 @@ impl<'de> Deserialize<'de> for RequestTuningOverrides {
             websocket_failure_open_duration_ms: Option<u64>,
             rate_limit_cooldown_seconds: Option<u64>,
             max_retry_after_seconds: Option<u32>,
-            excel_image_relay_bytes: Option<u64>,
-            excel_image_max_bytes: Option<u64>,
-            excel_image_total_bytes: Option<u64>,
-            excel_image_max_count: Option<u32>,
-            excel_image_limit_policy: Option<gateway_core::routing::ExcelImageLimitPolicy>,
-            excel_image_warning_remaining: Option<u32>,
-            excel_image_compact_reserve: Option<u32>,
-            excel_image_relay_requests: Option<u32>,
-            excel_image_relay_downloads: Option<u32>,
-            excel_image_relay_entries: Option<u32>,
-            excel_image_relay_ttl_minutes: Option<u32>,
-            excel_image_transport: Option<gateway_core::routing::ExcelImageTransport>,
+            #[serde(rename = "excelImageRelayBytes")]
+            _retired_excel_image_relay_bytes: Option<serde::de::IgnoredAny>,
+            #[serde(rename = "excelImageMaxBytes")]
+            _retired_excel_image_max_bytes: Option<serde::de::IgnoredAny>,
+            #[serde(rename = "excelImageTotalBytes")]
+            _retired_excel_image_total_bytes: Option<serde::de::IgnoredAny>,
+            #[serde(rename = "excelImageMaxCount")]
+            _retired_excel_image_max_count: Option<serde::de::IgnoredAny>,
+            #[serde(rename = "excelImageLimitPolicy")]
+            _retired_excel_image_limit_policy: Option<serde::de::IgnoredAny>,
+            #[serde(rename = "excelImageWarningRemaining")]
+            _retired_excel_image_warning_remaining: Option<serde::de::IgnoredAny>,
+            #[serde(rename = "excelImageCompactReserve")]
+            _retired_excel_image_compact_reserve: Option<serde::de::IgnoredAny>,
+            #[serde(rename = "excelImageRelayRequests")]
+            _retired_excel_image_relay_requests: Option<serde::de::IgnoredAny>,
+            #[serde(rename = "excelImageRelayDownloads")]
+            _retired_excel_image_relay_downloads: Option<serde::de::IgnoredAny>,
+            #[serde(rename = "excelImageRelayEntries")]
+            _retired_excel_image_relay_entries: Option<serde::de::IgnoredAny>,
+            #[serde(rename = "excelImageRelayTtlMinutes")]
+            _retired_excel_image_relay_ttl_minutes: Option<serde::de::IgnoredAny>,
+            #[serde(rename = "excelImageTransport")]
+            _retired_excel_image_transport: Option<serde::de::IgnoredAny>,
             openai_location_override_enabled: Option<bool>,
             openai_request_location: Option<gateway_core::account::RequestLocation>,
             max_waiting_per_key: Option<u32>,
@@ -147,18 +143,6 @@ impl<'de> Deserialize<'de> for RequestTuningOverrides {
             websocket_failure_open_duration_ms: wire.websocket_failure_open_duration_ms,
             rate_limit_cooldown_seconds: wire.rate_limit_cooldown_seconds,
             max_retry_after_seconds: wire.max_retry_after_seconds,
-            excel_image_relay_bytes: wire.excel_image_relay_bytes,
-            excel_image_max_bytes: wire.excel_image_max_bytes,
-            excel_image_total_bytes: wire.excel_image_total_bytes,
-            excel_image_max_count: wire.excel_image_max_count,
-            excel_image_limit_policy: wire.excel_image_limit_policy,
-            excel_image_warning_remaining: wire.excel_image_warning_remaining,
-            excel_image_compact_reserve: wire.excel_image_compact_reserve,
-            excel_image_relay_requests: wire.excel_image_relay_requests,
-            excel_image_relay_downloads: wire.excel_image_relay_downloads,
-            excel_image_relay_entries: wire.excel_image_relay_entries,
-            excel_image_relay_ttl_minutes: wire.excel_image_relay_ttl_minutes,
-            excel_image_transport: wire.excel_image_transport,
             openai_location_override_enabled: wire.openai_location_override_enabled,
             openai_request_location: wire.openai_request_location,
             max_waiting_per_key: wire.max_waiting_per_key,
@@ -204,71 +188,9 @@ impl RequestTuningOverrides {
         {
             return false;
         }
-        use gateway_core::routing::{
-            EXCEL_IMAGE_MAX_BYTES, EXCEL_IMAGE_MAX_COUNT, EXCEL_IMAGE_MAX_STORAGE_BYTES,
-            EXCEL_IMAGE_MAX_STORAGE_ENTRIES, EXCEL_IMAGE_MAX_TTL_MINUTES,
-        };
-        let defaults = gateway_core::routing::RequestTuning::default();
-        let image_single = self
-            .excel_image_max_bytes
-            .unwrap_or(defaults.excel_image_max_bytes);
-        let image_total = self
-            .excel_image_total_bytes
-            .unwrap_or(defaults.excel_image_total_bytes);
-        let image_storage = self
-            .excel_image_relay_bytes
-            .unwrap_or(defaults.excel_image_relay_bytes);
-        let image_count = self
-            .excel_image_max_count
-            .unwrap_or(defaults.excel_image_max_count);
-        let image_entries = self
-            .excel_image_relay_entries
-            .unwrap_or(defaults.excel_image_relay_entries);
-        let warning = self
-            .excel_image_warning_remaining
-            .unwrap_or(defaults.excel_image_warning_remaining);
-        let reserve = self
-            .excel_image_compact_reserve
-            .unwrap_or(defaults.excel_image_compact_reserve);
-        self.excel_image_transport
+        self.openai_request_location
             .as_ref()
             .is_none_or(|value| value.validate())
-            && (1..=EXCEL_IMAGE_MAX_COUNT).contains(&warning)
-            && (1..=EXCEL_IMAGE_MAX_COUNT).contains(&reserve)
-            && (self.excel_image_limit_policy
-                != Some(gateway_core::routing::ExcelImageLimitPolicy::Warn)
-                || (reserve < warning && warning < image_count))
-            && self
-                .excel_image_max_bytes
-                .is_none_or(|value| (1..=EXCEL_IMAGE_MAX_BYTES).contains(&value))
-            && self
-                .excel_image_total_bytes
-                .is_none_or(|value| (1..=EXCEL_IMAGE_MAX_BYTES).contains(&value))
-            && self
-                .excel_image_max_count
-                .is_none_or(|value| (1..=EXCEL_IMAGE_MAX_COUNT).contains(&value))
-            && self
-                .excel_image_relay_bytes
-                .is_none_or(|value| (1024 * 1024..=EXCEL_IMAGE_MAX_STORAGE_BYTES).contains(&value))
-            && self
-                .excel_image_relay_requests
-                .is_none_or(|value| (1..=512).contains(&value))
-            && self
-                .excel_image_relay_downloads
-                .is_none_or(|value| (1..=128).contains(&value))
-            && self
-                .excel_image_relay_entries
-                .is_none_or(|value| (1..=EXCEL_IMAGE_MAX_STORAGE_ENTRIES).contains(&value))
-            && self
-                .excel_image_relay_ttl_minutes
-                .is_none_or(|value| (1..=EXCEL_IMAGE_MAX_TTL_MINUTES).contains(&value))
-            && image_single <= image_total
-            && image_total <= image_storage
-            && image_count <= image_entries
-            && self
-                .openai_request_location
-                .as_ref()
-                .is_none_or(|value| value.validate())
             && self.max_waiting_per_key.is_none_or(|value| value <= 1024)
             && self
                 .key_concurrency_wait_timeout_seconds
@@ -380,7 +302,6 @@ pub struct ReplaceRuntimeSettings {
     pub expected_revision: Revision,
     pub turn_state_injection_enabled: Option<bool>,
     pub turn_state_models: Option<Vec<UpstreamModelId>>,
-    pub excel_default_models: Option<gateway_core::account::ExcelModels>,
     /// Omitted preserves the route; explicit null selects the IPv6 pool.
     pub turn_state_probe_proxy_id: Option<Option<String>>,
     pub turn_state_probe_concurrency: Option<u32>,

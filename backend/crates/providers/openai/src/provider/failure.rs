@@ -75,68 +75,28 @@ impl MappedProviderFailure {
     }
 }
 
-pub(super) enum PreCommitPoll<T> {
-    Upstream(T),
-    GraceElapsed,
-}
-
-pub(super) async fn wait_for_replay_grace(deadline: Option<Instant>) {
-    if let Some(deadline) = deadline {
-        tokio::time::sleep_until(tokio::time::Instant::from_std(deadline)).await;
-    } else {
-        std::future::pending::<()>().await;
-    }
-}
-
-/// 原生事件即时交付与 Excel 提交前缓冲。
-///
-/// 原生可替换前导立即交付，重放边界独立关闭。Excel 按原始 chunk 计数，
-/// 时间与字节阈值共同限定无感换号
-/// 窗口；任一边界到达都会提交已缓存 wire，不能因网关私有资源规则伪造上游协议
-/// 失败。一旦提交，后续事件不再具备无痕重放资格。
+/// Native preludes are delivered immediately; semantic output closes replay eligibility.
 pub(super) struct PreCommitClientEvents {
     pending: Vec<ProviderEvent>,
-    prefetched_bytes: usize,
-    replay_grace_started_at: Option<Instant>,
     committed: bool,
-    replayable_prelude: bool,
-    max_prefetch_bytes: u64,
     trace: TraceContext,
 }
 
 #[derive(Clone, Copy, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(super) enum PreCommitReleaseReason {
-    Disabled,
     SemanticOutput,
     NonReplayableEvent,
     Terminal,
-    ByteLimit,
-    GraceTimeout,
     Eof,
 }
 
 impl PreCommitClientEvents {
-    pub(super) const fn new(trace: TraceContext, max_prefetch_bytes: u64) -> Self {
+    pub(super) const fn new(trace: TraceContext) -> Self {
         Self {
             pending: Vec::new(),
-            prefetched_bytes: 0,
-            replay_grace_started_at: None,
             committed: false,
-            replayable_prelude: false,
-            max_prefetch_bytes,
             trace,
-        }
-    }
-
-    pub(super) fn with_replayable_prelude(mut self, enabled: bool) -> Self {
-        self.replayable_prelude = enabled;
-        self
-    }
-
-    pub(super) fn observe_chunk(&mut self, bytes: usize) {
-        if !self.committed {
-            self.prefetched_bytes = self.prefetched_bytes.saturating_add(bytes);
         }
     }
 
@@ -149,7 +109,6 @@ impl PreCommitClientEvents {
         if self.committed {
             return incoming;
         }
-        let starts_replay_grace = incoming.iter().any(ProviderEvent::has_client_event);
         self.pending.extend(incoming);
         if timing_signals.semantic_output {
             return self.commit_pending(PreCommitReleaseReason::SemanticOutput);
@@ -157,31 +116,13 @@ impl PreCommitClientEvents {
         if completed {
             return self.commit_pending(PreCommitReleaseReason::Terminal);
         }
-        if self.replayable_prelude {
-            if !self.pending.iter().all(is_replaceable_prelude) {
-                return self.commit_pending(PreCommitReleaseReason::NonReplayableEvent);
-            }
-            self.prefetched_bytes = 0;
-            return std::mem::take(&mut self.pending)
-                .into_iter()
-                .map(ProviderEvent::with_replayable_prelude)
-                .collect();
+        if !self.pending.iter().all(is_replaceable_prelude) {
+            return self.commit_pending(PreCommitReleaseReason::NonReplayableEvent);
         }
-        if self.max_prefetch_bytes == 0 {
-            // 分片尚未解析出客户端事件时不伪造提交；完整事件不再额外等待。
-            return if starts_replay_grace {
-                self.commit_pending(PreCommitReleaseReason::Disabled)
-            } else {
-                Vec::new()
-            };
-        }
-        if self.prefetched_bytes as u64 > self.max_prefetch_bytes {
-            return self.commit_pending(PreCommitReleaseReason::ByteLimit);
-        }
-        if starts_replay_grace && self.replay_grace_started_at.is_none() {
-            self.replay_grace_started_at = Some(Instant::now());
-        }
-        Vec::new()
+        std::mem::take(&mut self.pending)
+            .into_iter()
+            .map(ProviderEvent::with_replayable_prelude)
+            .collect()
     }
 
     pub(super) fn finish(
@@ -207,14 +148,7 @@ impl PreCommitClientEvents {
 
     pub(super) fn take_for_failure(&mut self, incoming: Vec<ProviderEvent>) -> Vec<ProviderEvent> {
         self.pending.extend(incoming);
-        self.prefetched_bytes = 0;
-        self.replay_grace_started_at = None;
         std::mem::take(&mut self.pending)
-    }
-
-    pub(super) fn replay_grace_deadline(&self) -> Option<Instant> {
-        self.replay_grace_started_at
-            .and_then(|started| started.checked_add(STREAM_REPLAY_GRACE))
     }
 
     pub(super) const fn is_committed(&self) -> bool {
@@ -224,16 +158,14 @@ impl PreCommitClientEvents {
     pub(super) fn commit_pending(&mut self, reason: PreCommitReleaseReason) -> Vec<ProviderEvent> {
         // 此处只记录释放原因；真正的客户端提交仍由 Core 裁决。
         if self.trace.is_enabled() {
-            self.trace.record("provider.precommit.released", json!({
-                "reason": reason,
-                "prefetchedBytes": self.prefetched_bytes,
-                "limitBytes": self.max_prefetch_bytes,
-                "waitMs": self.replay_grace_started_at.map_or(0, |started| started.elapsed().as_millis()),
-            }));
+            self.trace.record(
+                "provider.precommit.released",
+                json!({
+                    "reason": reason,
+                }),
+            );
         }
         self.committed = true;
-        self.prefetched_bytes = 0;
-        self.replay_grace_started_at = None;
         std::mem::take(&mut self.pending)
     }
 }
@@ -2075,105 +2007,6 @@ fn transient_http_connect(error: &reqwest::Error) -> bool {
         source = cause.source();
     }
     true
-}
-
-#[cfg(test)]
-mod excel_buffer_tests {
-    use super::*;
-
-    fn event(kind: &str) -> ProviderEvent {
-        ProviderEvent::wire(
-            ProtocolWireEvent::json(
-                "openai",
-                Some(kind.to_owned()),
-                json!({"type": kind, "response": {"output": []}}),
-            )
-            .unwrap(),
-        )
-    }
-
-    #[test]
-    fn excel_keeps_zero_byte_and_grace_release_boundaries() {
-        for (limit, bytes, reason) in [
-            (0, 100, PreCommitReleaseReason::Disabled),
-            (100, 101, PreCommitReleaseReason::ByteLimit),
-            (100, 100, PreCommitReleaseReason::GraceTimeout),
-        ] {
-            let mut delivery = PreCommitClientEvents::new(TraceContext::default(), limit);
-            delivery.observe_chunk(bytes);
-            let mut events = delivery.stage(
-                vec![event("response.created")],
-                ResponseEventSignals::default(),
-                false,
-            );
-            if matches!(reason, PreCommitReleaseReason::GraceTimeout) {
-                assert!(events.is_empty());
-                assert!(!delivery.is_committed());
-                let deadline = delivery
-                    .replay_grace_deadline()
-                    .expect("Excel grace starts on a complete event");
-                delivery.observe_chunk(0);
-                assert!(
-                    delivery
-                        .stage(
-                            vec![event("response.in_progress")],
-                            ResponseEventSignals::default(),
-                            false
-                        )
-                        .is_empty()
-                );
-                assert_eq!(delivery.replay_grace_deadline(), Some(deadline));
-                events = delivery.commit_pending(reason);
-                assert_eq!(events.len(), 2);
-            } else {
-                assert_eq!(events.len(), 1);
-            }
-            assert!(delivery.is_committed());
-            assert!(delivery.replay_grace_deadline().is_none());
-            assert!(events.iter().all(|event| !event.is_replayable_prelude()));
-        }
-    }
-
-    #[test]
-    fn excel_flushes_on_content_terminal_and_eof_and_keeps_early_failure_atomic() {
-        for tail in ["content", "terminal", "eof", "failure"] {
-            let mut delivery = PreCommitClientEvents::new(TraceContext::default(), u64::MAX);
-            delivery.observe_chunk(128);
-            assert!(
-                delivery
-                    .stage(
-                        vec![event("response.created")],
-                        ResponseEventSignals::default(),
-                        false
-                    )
-                    .is_empty()
-            );
-            let events = match tail {
-                "content" => delivery.stage(
-                    vec![event("response.output_text.delta")],
-                    ResponseEventSignals {
-                        semantic_output: true,
-                        ..Default::default()
-                    },
-                    false,
-                ),
-                "terminal" => delivery.stage(
-                    vec![event("response.completed")],
-                    ResponseEventSignals::default(),
-                    true,
-                ),
-                "eof" => delivery.finish(vec![], ResponseEventSignals::default(), false),
-                _ => delivery.take_for_failure(vec![event("error")]),
-            };
-            assert_eq!(
-                events[0].wire_event().unwrap().event_type(),
-                Some("response.created")
-            );
-            assert_eq!(events.len(), if tail == "eof" { 1 } else { 2 });
-            assert_eq!(delivery.is_committed(), tail != "failure");
-            assert!(events.iter().all(|event| !event.is_replayable_prelude()));
-        }
-    }
 }
 
 #[cfg(test)]

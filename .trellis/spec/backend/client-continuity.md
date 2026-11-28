@@ -84,7 +84,7 @@ editing prior entries.
   and CLI caches or change the generic cache contract for this feature.
 - Preserve the legacy auxiliary Desktop snapshot for consumers that require it;
   avatar downloads preserve the selected CLI/custom request identity. Include the
-  configuration document in quality/Excel recovery action fences and targeted
+  configuration document in quality recovery action fences and targeted
   UA audit fields. Business dumps include the entire table, including the new
   nullable column. Old binaries do not understand the new mode.
 - Keep current UA version/system editors and legacy auto-version semantics;
@@ -112,8 +112,7 @@ editing prior entries.
   `CodexEgressRuntime::select`, not per account or client pool. Retain the last
   source across reloads, skip disabled/cooling sources and preserve all-cooling
   error behavior. Fixed/default modes and strict WS continuations do not advance
-  it. Existing attempt pinning and safe HTTP fallback keep their source. Excel
-  HTTP/SSE reuses the same source-bound account-isolated HTTP client cache.
+  it. Existing attempt pinning and safe HTTP fallback keep their source.
   This is not a distributed cursor or an exclusive in-flight IP lease.
 
 - Account batch and template `egressMode` distinguishes omitted (preserve), null
@@ -279,7 +278,7 @@ editing prior entries.
   startup window across HTTP and fresh WS handshakes. HTTP reserves before send
   because reqwest hides cold connection versus pool reuse; WS reserves only at
   actual handshake. Reused WS sockets and waiters on another opening do not
-  consume another reservation. Live sideband and Excel retain their own paths.
+  consume another reservation. Live sideband retains its own path.
 - Recover only proven unsent failures, at most three retries with bounded
   backoff, on the selected account. Request-wide Sent/Ambiguous state, native
   continuations, retry prohibition and the business replay barrier remain binding.
@@ -435,7 +434,7 @@ time. Observe actual opening duration and its outcome independently.
   只有没有活账号引用的目标归档可在本事务替换。普通导入仍复用历史设备，不更改此规则。
 - 凭据 revision/CAS、重复账号与 pending claim 校验继续生效；失败整体回滚，成功后
   消费 claim、通知 account facts、发布 snapshot，并异步尝试初始额度观测。
-- HTTP/WS、Excel 使用的账号 client 与 session-proxy client 都给池 key 加入
+- 原生 HTTP/WS 使用的账号 client 与 session-proxy client 都给池 key 加入
   `oauth_identity_key`（本地槽位 + 上游 user + workspace）。Session continuation、
   Guardian 和头像缓存采用同一身份边界。State 由现有 binding revision 隔离旧归属。
 - 同身份 RT/profile 更新保留合法原 socket 续接；更换身份不能续用原 socket。
@@ -856,7 +855,7 @@ derive from the additional turn fields.
   current_date is preserved rather than rewritten to the gateway wall clock.
 - Native Search/images/compact use lossless known-field JSON span edits. Search
   root `id` is a thread reference; other endpoint root IDs stay unchanged. Preserve
-  duplicate keys, number lexemes and unrelated bytes. Excel keeps its own protocol.
+  duplicate keys, number lexemes and unrelated bytes.
 - Regression tests must capture real loopback HTTP/WS sends, same-account and
   cross-account/Key projections, history references, image header/body agreement,
   duplicate Search IDs, metadata objects and frozen profile publication.

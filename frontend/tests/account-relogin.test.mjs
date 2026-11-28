@@ -285,7 +285,7 @@ test('native account capabilities control refresh, reauthorization and catalog d
     ['openai', undefined, 'codex', [true, true, true]],
     ['antigravity', { credentialRefresh: true, reauthorize: true, modelCatalogDownload: false }, 'codex', [true, true, false]],
     ['xai', { credentialRefresh: false, reauthorize: false, modelCatalogDownload: false }, 'codex', [false, false, false]],
-    ['openai', { credentialRefresh: true, reauthorize: true, modelCatalogDownload: true }, 'excel', [true, true, false]],
+    ['openai', { credentialRefresh: true, reauthorize: true, modelCatalogDownload: true }, 'excel', [true, true, true]],
   ]) {
     const html = await renderToString(vue.createSSRApp(component, {
       account: { ...account, provider, authenticationKind: 'oauth', capabilities, responsesUpstream },

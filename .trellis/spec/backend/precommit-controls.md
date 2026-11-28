@@ -4,7 +4,7 @@
 
 Selective adaptations of upstream `zyycn/codex-proxy-rs` #301 (`4634d8d`) and
 #304 (`3bf7030`). Do not replace New CPR's identity, account egress, quota
-authority, finite scheduling, Excel repair, or continuation ownership contracts.
+authority, finite scheduling or continuation ownership contracts.
 
 ## Native Delivery And Timing
 
@@ -36,33 +36,20 @@ Aligned narrowly with official `743a3aba70a4f78f27fb53d80a6e719599d2fe5e`
 HTTP SSE 入口。Core 使用同一 ResponseCommit 原子冻结：首字节未提交则返回 JSON/400；
 保活或正文已经提交则保留原 SSE 错误事件，不重写 HTTP 状态、不重复发送事件。
 AttemptContext 必须从实际 NewModelRequest 接收 endpoint 与 client_transport。
-WS 客户端、Chat/Messages、Excel 和其他错误不得仅凭状态码套用这条规则。
+WS 客户端、Chat/Messages 和其他错误不得仅凭状态码套用这条规则。
 
-## Excel Settings Contract
+## Retired Buffer Settings
 
-- `RequestTuning.stream_prefetch_bytes` / `streamPrefetchBytes` remains compatible
-  and defaults to 131072 bytes. Omission/null inherits; the Web control converts
-  exact KiB by 1024 and explicitly states that only Excel uses this threshold.
-- Excel uses frozen AttemptContext tuning, never a live settings read midstream.
-  Zero releases the first complete client event; positive thresholds count raw
-  chunks and release when exceeded, at a single 2500 ms grace, or immediately on
-  semantic output, terminal or EOF. This is not a request limit or memory ceiling.
-- Incomplete chunks do not commit zero-buffer delivery. Excel released output
-  closes its existing replay boundary. Early failures preserve buffered atomic events.
-- Accept nonnegative integral bytes; reject inexact Web numbers without imposing
-  a product-specific cap or silently rounding/clamping saved settings.
-- Preserve Excel repair/metering, account identity/egress and nonstream aggregation.
-  No database migration, retry budget or transport selection change is required.
-- Trace `provider.precommit.released` retains reason, prefetchedBytes, limitBytes
-  and waitMs; native preludes do not emit buffer-release events. No raw payloads
-  or credentials may enter diagnostic traces.
+Excel-only byte/grace buffering is removed. `streamPrefetchBytes` remains readable
+for historical configuration compatibility and has no request runtime consumer or UI control.
+Native precommit release traces retain `reason`; they no longer contain Excel byte/wait fields.
 
 ## Signatures And Error Matrix
 
 `create_response_stream_with_pool_account(request, context, pool_account_id)`
 returns an unbuffered native stream; `precommit_started_at` and the transport
-prefetch parameter are removed. `PreCommitClientEvents::stage` still owns Excel
-buffering and enables immediate native delivery with `with_replayable_prelude(true)`.
+prefetch parameter are removed. `PreCommitClientEvents::stage` delivers replaceable
+native preludes immediately and commits semantic, unknown and terminal events.
 `ProviderEvent::with_replayable_prelude` is evidence consumed by Core's independent
 replay barrier, not an instruction to retry.
 
@@ -72,11 +59,10 @@ replay barrier, not an instruction to retry.
 | Native metadata after text/tool/unknown output | Immediate; replay remains closed |
 | Restartable WS connection-limit after only preludes | Typed body error; preserve raw error, status and request ID |
 | Ambiguous connection loss | Existing no-replay safety remains |
-| Excel positive threshold, below limit | Wait for semantic/terminal/EOF, byte crossing or fixed grace |
 | Native missing output_item.added | First response data starts timing; text/reasoning remain independent |
 
 Good: first prelude arrives while a oneshot gate holds the next upstream event.
-Base: Excel keeps byte/grace release and atomic failures. Bad: calling an already
+Base: Native preludes retain their replay classification. Bad: calling an already
 sent prelude committed business output or restarting retries after tool output.
 
 ## Required Regression Assertions
@@ -90,8 +76,8 @@ sent prelude committed business output or restarting retries after tool output.
 - WS body-error observations retain current failure status and request ID, while
   opening diagnostics remain separate.
 - Metadata and opaque data start response timing without inventing text/reasoning.
-- Excel zero/byte/grace/content/terminal/EOF and early atomic failure behavior stays.
-- Settings save/reload and isolated 1440/390/320 px views preserve exact values.
+- Historical buffer settings remain readable but are absent from the UI; shared
+  settings retain their save/reload and responsive-layout contracts.
 
 Wrong: removing only Provider buffering leaves transport waiting before the
 Provider sees the event. Correct: remove native waiting at both layers and keep
@@ -132,11 +118,12 @@ authoritative quota-exhaustion classification and observation clocks remain.
 Cover inherited/default/null, zero, custom values, invalid numbers, API and real
 PostgreSQL round trips, immutable snapshots, raw event preservation, HTTP/WS
 precommit recovery, semantic/tool/terminal/EOF release, timeout and late errors.
-Keep Excel, QX/CPR identity, UA changes, account proxies, and continuation tests.
+Keep QX/CPR identity, UA changes, account proxies, and continuation tests.
 
-No schema migration is required. Before a future deployment, back up runtime
-settings. An older strict binary may need only `streamPrefetchBytes` removed
-from the override JSON on rollback; do not replace the whole settings object.
+The precommit change itself does not alter the schema. The complete Excel retirement
+uses migration 0105 to clean only retired configuration and dedicated task state;
+follow the reviewed migration deployment path. Never replace the whole settings
+object when reconciling a historical configuration for an older binary.
 
 Connection-default A/B cases live in `tests/transport/http_transport_review.rs`.
 After the follow-up approval, standard HTTP follows a5a844a; source-bound IPv6

@@ -204,9 +204,6 @@ impl PgAdminAccountStore {
             .map_err(|error| admin_store_error(ENTITY, error))?;
         let mut changed_fields = vec!["credentials".to_owned()];
         if let Some(settings) = &settings {
-            if settings.excel_recovery.is_some() {
-                changed_fields.push("excel_recovery".to_owned());
-            }
             if settings.purchase_cost.is_some() {
                 changed_fields.push("purchase_cost".to_owned());
             }
@@ -223,27 +220,6 @@ impl PgAdminAccountStore {
                 .extend(["enabled", "concurrency_limit", "weight", "group_ids"].map(str::to_owned));
             if settings.turn_state_injection_enabled.is_some() {
                 changed_fields.push("turn_state_injection_enabled".to_owned());
-            }
-            if settings.responses_upstream.is_some() {
-                changed_fields.push("responses_upstream".to_owned());
-            }
-            if settings.excel_models.is_some() {
-                changed_fields.push("excel_models".to_owned());
-            }
-            if settings.excel_models_follow_global.is_some() {
-                changed_fields.push("excel_models_follow_global".to_owned());
-            }
-            if settings.excel_403_action.is_some() || settings.excel_auto_disable_on_403.is_some() {
-                changed_fields.push("excel_403_action".to_owned());
-            }
-            if settings.excel_cache_creation_as_input.is_some() {
-                changed_fields.push("excel_cache_creation_as_input".to_owned());
-            }
-            if settings.excel_ignore_encrypted_content.is_some()
-                || settings.responses_upstream
-                    == Some(gateway_core::account::ResponsesUpstream::Codex)
-            {
-                changed_fields.push("excel_ignore_encrypted_content".to_owned());
             }
             if settings.request_proxy_source.is_some() {
                 changed_fields.push("request_proxy_source".to_owned());
@@ -771,57 +747,6 @@ impl AccountStore for PgAdminAccountStore {
         Ok(costs)
     }
 
-    async fn load_excel_recovery(
-        &self,
-        account_ids: &[String],
-    ) -> AdminStoreResult<BTreeMap<String, gateway_admin::model::excel_recovery::ExcelRecoveryView>>
-    {
-        let mut values = BTreeMap::new();
-        for ids in account_ids.chunks(ADMIN_USAGE_CHUNK_SIZE) {
-            validate_admin_account_ids(ids).map_err(|error| admin_store_error(ENTITY, error))?;
-            values.extend(
-                self.query_budget
-                    .run(
-                        &self.pool,
-                        "load Excel recovery",
-                        |mut connection| async move {
-                            super::excel_recovery::load(&mut *connection, ids).await
-                        },
-                    )
-                    .await
-                    .map_err(|error| admin_store_error(ENTITY, error))?,
-            );
-        }
-        Ok(values)
-    }
-
-    async fn claim_excel_recovery(
-        &self,
-    ) -> AdminStoreResult<Option<gateway_admin::model::excel_recovery::ExcelRecoveryClaim>> {
-        super::excel_recovery::claim(&self.pool)
-            .await
-            .map_err(|error| admin_store_error(ENTITY, error))
-    }
-
-    async fn excel_recovery_current(
-        &self,
-        claim: &gateway_admin::model::excel_recovery::ExcelRecoveryClaim,
-    ) -> AdminStoreResult<bool> {
-        super::excel_recovery::current(&self.pool, claim)
-            .await
-            .map_err(|error| admin_store_error(ENTITY, error))
-    }
-
-    async fn finish_excel_recovery(
-        &self,
-        claim: &gateway_admin::model::excel_recovery::ExcelRecoveryClaim,
-        outcome: gateway_admin::model::excel_recovery::ExcelRecoveryOutcome,
-    ) -> AdminStoreResult<bool> {
-        super::excel_recovery::finish(&self.pool, claim, outcome)
-            .await
-            .map_err(|error| admin_store_error(ENTITY, error))
-    }
-
     async fn claim_codex_quota_overdraft(
         &self,
     ) -> AdminStoreResult<
@@ -1225,9 +1150,6 @@ impl AccountStore for PgAdminAccountStore {
             "weight".to_owned(),
             "groups".to_owned(),
         ];
-        if command.excel_recovery.is_some() {
-            changed_fields.push("excel_recovery".to_owned());
-        }
         if command.credential_proxy_id.is_some() {
             changed_fields.push("credential_proxy_id".to_owned());
         }
@@ -1240,31 +1162,8 @@ impl AccountStore for PgAdminAccountStore {
         if command.turn_state_injection_enabled.is_some() {
             changed_fields.push("turn_state_injection_enabled".to_owned());
         }
-        if command.responses_upstream.is_some() {
-            changed_fields.push("responses_upstream".to_owned());
-        }
-        if command.excel_models.is_some() {
-            changed_fields.push("excel_models".to_owned());
-        }
-        if command.excel_models_follow_global.is_some() {
-            changed_fields.push("excel_models_follow_global".to_owned());
-        }
-        if command.excel_cache_creation_as_input.is_some() {
-            changed_fields.push("excel_cache_creation_as_input".to_owned());
-        }
-        if command.excel_ignore_encrypted_content.is_some()
-            || command.responses_upstream == Some(gateway_core::account::ResponsesUpstream::Codex)
-        {
-            changed_fields.push("excel_ignore_encrypted_content".to_owned());
-        }
         if command.request_proxy_source.is_some() {
             changed_fields.push("request_proxy_source".to_owned());
-        }
-        if command.excel_403_action.is_some() {
-            changed_fields.push("excel_403_action".to_owned());
-        }
-        if command.excel_auto_disable_on_403.is_some() {
-            changed_fields.push("excel_auto_disable_on_403".to_owned());
         }
         if command.custom_name.is_some() {
             changed_fields.push("custom_name".to_owned());
@@ -1282,7 +1181,6 @@ impl AccountStore for PgAdminAccountStore {
                 pauses: Default::default(),
                 quota_settings: None,
                 auto_use_quota_credits: None,
-                excel_recovery: command.excel_recovery,
                 purchase_cost: command.purchase_cost,
                 egress_mode: command.egress_mode,
                 custom_name: command.custom_name,
@@ -1290,14 +1188,7 @@ impl AccountStore for PgAdminAccountStore {
                 explicit_scheduling_intent: false,
                 enabled: Some(command.enabled),
                 turn_state_injection_enabled: command.turn_state_injection_enabled,
-                responses_upstream: command.responses_upstream,
-                excel_models: command.excel_models.clone(),
-                excel_models_follow_global: command.excel_models_follow_global,
-                excel_cache_creation_as_input: command.excel_cache_creation_as_input,
-                excel_ignore_encrypted_content: command.excel_ignore_encrypted_content,
                 request_proxy_source: command.request_proxy_source,
-                excel_auto_disable_on_403: command.excel_auto_disable_on_403,
-                excel_403_action: command.excel_403_action,
                 concurrency_limit: Some(command.concurrency_limit),
                 weight: Some(command.weight),
                 model_access: command.model_access,
@@ -1380,9 +1271,6 @@ impl AccountStore for PgAdminAccountStore {
             "provider_accounts".to_owned()
         };
         let mut changed_fields = Vec::new();
-        if command.excel_recovery.is_some() {
-            changed_fields.push("excel_recovery".to_owned());
-        }
         for (changed, field) in [
             (command.purchase_cost.is_some(), "purchase_cost"),
             (
@@ -1396,27 +1284,6 @@ impl AccountStore for PgAdminAccountStore {
             ),
             (command.quota_settings.is_some(), "quota_settings"),
             (command.enabled.is_some(), "enabled"),
-            (command.responses_upstream.is_some(), "responses_upstream"),
-            (command.excel_models.is_some(), "excel_models"),
-            (
-                command.excel_models_follow_global.is_some(),
-                "excel_models_follow_global",
-            ),
-            (
-                command.excel_cache_creation_as_input.is_some(),
-                "excel_cache_creation_as_input",
-            ),
-            (
-                command.excel_ignore_encrypted_content.is_some()
-                    || command.responses_upstream
-                        == Some(gateway_core::account::ResponsesUpstream::Codex),
-                "excel_ignore_encrypted_content",
-            ),
-            (
-                command.excel_auto_disable_on_403.is_some(),
-                "excel_auto_disable_on_403",
-            ),
-            (command.excel_403_action.is_some(), "excel_403_action"),
             (
                 command.turn_state_injection_enabled.is_some(),
                 "turn_state_injection_enabled",
@@ -1446,7 +1313,6 @@ impl AccountStore for PgAdminAccountStore {
                 pauses,
                 quota_settings: command.quota_settings,
                 auto_use_quota_credits: command.auto_use_quota_credits,
-                excel_recovery: command.excel_recovery,
                 purchase_cost: command.purchase_cost,
                 egress_mode: command.egress_mode,
                 custom_name: command.custom_name,
@@ -1454,14 +1320,7 @@ impl AccountStore for PgAdminAccountStore {
                 explicit_scheduling_intent: true,
                 enabled: command.enabled,
                 turn_state_injection_enabled: command.turn_state_injection_enabled,
-                responses_upstream: command.responses_upstream,
-                excel_models: command.excel_models.clone(),
-                excel_models_follow_global: command.excel_models_follow_global,
-                excel_cache_creation_as_input: command.excel_cache_creation_as_input,
-                excel_ignore_encrypted_content: command.excel_ignore_encrypted_content,
                 request_proxy_source: command.request_proxy_source,
-                excel_auto_disable_on_403: command.excel_auto_disable_on_403,
-                excel_403_action: command.excel_403_action,
                 concurrency_limit: command.concurrency_limit,
                 weight: command.weight,
                 model_access: command.model_access,

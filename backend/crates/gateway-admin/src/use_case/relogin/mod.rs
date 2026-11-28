@@ -563,7 +563,6 @@ impl DefaultReloginService {
         context: &MutationContext,
     ) -> Result<(), AdminError> {
         let custom_name = options.custom_name.as_deref();
-        let new_account_excel = options.excel.as_ref();
         entry.validate_totp()?;
         if entry.manual_push_context.is_some() && entry.target.is_none() {
             return Err(AdminError::conflict("指定账号任务缺少目标，不能新建账号"));
@@ -696,7 +695,6 @@ impl DefaultReloginService {
                 _ => inherited_proxy,
             };
             if custom_name.is_some()
-                || new_account_excel.is_some()
                 || egress::import_egress_mode(entry).is_some()
                 || egress::maintenance_proxy_id(entry, None).is_some()
             {
@@ -704,7 +702,6 @@ impl DefaultReloginService {
                     settings.get_or_insert_with(|| crate::model::accounts::AccountImportSettings {
                         credential_proxy_id: None,
                         template_proxy_mode: None,
-                        excel_recovery: None,
                         purchase_cost: None,
                         clear_outbound_proxy: false,
                         egress_mode: None,
@@ -712,24 +709,14 @@ impl DefaultReloginService {
                         custom_name: None,
                         enabled: true,
                         turn_state_injection_enabled: None,
-                        responses_upstream: None,
-                        excel_models: None,
-                        excel_models_follow_global: None,
-                        excel_cache_creation_as_input: Default::default(),
-                        excel_ignore_encrypted_content: Default::default(),
                         request_proxy_source: Default::default(),
-                        excel_auto_disable_on_403: Default::default(),
-                        excel_403_action: Default::default(),
                         concurrency_limit: None,
                         weight: crate::model::accounts::AccountWeight::DEFAULT,
                         group_ids: Vec::new(),
                     });
-                // Egress or Excel overrides must not clear the enrollment name.
+                // Egress overrides must not clear the enrollment name.
                 if let Some(name) = custom_name {
                     settings.custom_name = Some(name.to_owned());
-                }
-                if let Some(excel) = new_account_excel {
-                    excel.apply(settings);
                 }
             }
             if legacy_template
@@ -1411,7 +1398,6 @@ impl ReloginService for DefaultReloginService {
             crate::model::relogin_templates::ReloginNewAccountOptions {
                 template,
                 custom_name,
-                excel: None,
                 form: None,
             },
             &BTreeMap::new(),
@@ -1430,9 +1416,6 @@ impl ReloginService for DefaultReloginService {
     ) -> Result<Vec<ReloginBatchResult>, AdminError> {
         let mut new_account = new_account;
         validate_ids(ids)?;
-        if let Some(excel) = &new_account.excel {
-            excel.validate()?;
-        }
         new_account.custom_name =
             crate::model::accounts::normalize_custom_name(new_account.custom_name.as_deref())?;
         let _gate = self.gate.lock().await;

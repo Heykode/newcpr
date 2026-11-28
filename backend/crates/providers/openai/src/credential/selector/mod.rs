@@ -41,7 +41,6 @@ use super::types::{
 
 mod admission;
 mod capacity_wait;
-mod excel_auth;
 mod model_eligibility;
 mod projection;
 
@@ -245,7 +244,6 @@ pub struct CodexCredentialSelector {
     cooldowns: Arc<dyn ProviderCooldownPort>,
     cookie_policy: CodexCookiePolicy,
     risk_recovery: Mutex<HashMap<String, RiskRecoveryState>>,
-    excel_auth_blocks: Mutex<HashMap<ProviderAccountId, excel_auth::ExcelAuthBlock>>,
     account_feedback: Arc<AccountFeedbackStats>,
     account_concurrency: AccountConcurrencyHandle,
     scheduling_projection: super::scheduling_projection::SchedulingProjectionCache,
@@ -427,7 +425,6 @@ impl CodexCredentialSelector {
             cooldowns,
             cookie_policy,
             risk_recovery: Mutex::new(HashMap::new()),
-            excel_auth_blocks: Mutex::new(HashMap::new()),
             account_feedback,
             account_concurrency: AccountConcurrencyHandle::default(),
             scheduling_projection: Default::default(),
@@ -448,9 +445,8 @@ impl CodexCredentialSelector {
     ) -> bool {
         let upstream = Self::request_upstream(account, request);
         account.provider() == &self.provider_kind
-            // Model-resolved Excel routes retain their own eligibility contract.
-            && !(upstream == gateway_core::account::ResponsesUpstream::Codex
-                && account.authentication_kind() == CODEX_AUTHENTICATION_KIND_OAUTH
+            && upstream == gateway_core::account::ResponsesUpstream::Codex
+            && !(account.authentication_kind() == CODEX_AUTHENTICATION_KIND_OAUTH
                 && request.upstream_model.is_some_and(|model| {
                     let model = model.rsplit('/').next().unwrap_or(model);
                     model.eq_ignore_ascii_case("grok")
@@ -459,7 +455,6 @@ impl CodexCredentialSelector {
                             .is_some_and(|prefix| prefix.eq_ignore_ascii_case("grok-"))
                 }))
             && (!request.image_request
-                || upstream == gateway_core::account::ResponsesUpstream::Excel
                 || account.authentication_kind() != CODEX_AUTHENTICATION_KIND_OAUTH
                 || !account
                     .plan_type()
@@ -471,29 +466,8 @@ impl CodexCredentialSelector {
                         .is_some_and(|plan| plan.trim().eq_ignore_ascii_case("free"))))
             && request
                 .attempt
-                .excel_recovery_revision()
-                .is_none_or(|revision| {
-                    account.revision().get() == revision
-                        && account.responses_upstream()
-                            == gateway_core::account::ResponsesUpstream::Excel
-                        && upstream == gateway_core::account::ResponsesUpstream::Excel
-                })
-            && (request.attempt.is_diagnostic_required_account()
-                || request.attempt.is_quality_retest()
-                || self.excel_auth_block(account).is_none())
-            && request
-                .attempt
                 .provider_route()
                 .is_none_or(|route| route == upstream.as_str())
-            && (upstream != gateway_core::account::ResponsesUpstream::Excel
-                || (request
-                    .request_url
-                    .path()
-                    .ends_with(crate::transport::endpoints::CODEX_RESPONSES_PATH)
-                    || request.request_url.path().ends_with("/responses/compact")
-                    || crate::transport::excel::image_generation::is_image_path(
-                        request.request_url.path(),
-                    )))
             && (request.attempt.is_diagnostic_required_account()
                 || request.attempt.account_scope().is_some_and(|scope| {
                     match (
@@ -501,9 +475,7 @@ impl CodexCredentialSelector {
                         request.upstream_model,
                     ) {
                         (_, Some(model)) => scope.allows_model(account.id(), model),
-                        (true, None) => {
-                            scope.allows_unidentified_model(account.id())
-                        }
+                        (true, None) => scope.allows_unidentified_model(account.id()),
                         (false, None) => scope.allows(account.id()),
                     }
                 }))
@@ -803,7 +775,6 @@ impl CodexCredentialSelector {
         } else {
             false
         };
-        self.retain_excel_auth_blocks(&accounts);
         // Only pinned diagnostics or verified quality recovery can load disabled rows.
         if (diagnostic || quality_recovery)
             && let Some(required) = request.attempt.required_account()
@@ -1167,10 +1138,6 @@ impl CodexCredentialSelector {
             let allows_account_state_mutation = context
                 .eligibility
                 .allows_account_state_mutation(account.enabled());
-            if !diagnostic && self.excel_auth_block(account).is_some() {
-                excluded.insert(account.id().clone());
-                continue;
-            }
             // Snapshot conflicts must not consume capacity or the request interval.
             let (account, runtime) = match self.repository.reload_selected_credential(account).await
             {
@@ -1316,11 +1283,6 @@ impl CodexCredentialSelector {
                     {
                         drop(guard);
                         return Err(binding_unavailable());
-                    }
-                    if !diagnostic && self.excel_auth_block(&account).is_some() {
-                        drop(guard);
-                        excluded.insert(account.id().clone());
-                        continue;
                     }
                     if quality_recovery
                         && !self
@@ -1894,10 +1856,8 @@ impl CodexCredentialSelector {
         guardian_parent_record_key: Option<&ProviderSessionAffinityKey>,
         session_binding_ttl: Duration,
     ) {
-        if self.excel_auth_block(account).is_none() {
-            self.restore_recoverable_account_state(account, request_started_at, false)
-                .await;
-        }
+        self.restore_recoverable_account_state(account, request_started_at, false)
+            .await;
         self.risk_recovery
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -1933,16 +1893,8 @@ impl CodexCredentialSelector {
         account: &ProviderAccount,
         request_started_at: SystemTime,
     ) {
-        let block = self.excel_auth_block(account);
         self.restore_recoverable_account_state(account, request_started_at, true)
             .await;
-        if let Some(block) = block
-            && let Ok(current) = self.current_account(account.id()).await
-            && current.revision() == account.revision()
-            && current.credential_state() == CredentialState::Ready
-        {
-            self.clear_excel_auth_block(account, block);
-        }
         self.risk_recovery
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -1961,7 +1913,6 @@ impl CodexCredentialSelector {
         if current.provider() != &self.provider_kind
             || current.revision() != account.revision()
             || (!allow_disabled && !current.enabled())
-            || (!allow_disabled && self.excel_auth_block(&current).is_some())
         {
             return;
         }
@@ -2022,18 +1973,6 @@ impl CodexCredentialSelector {
             .await
             .map_err(|source| CredentialSelectionError::Store(Some(source.into())))?
             .ok_or(CredentialSelectionError::InvalidCredential(None))
-    }
-
-    pub(crate) async fn apply_excel_403_action(
-        &self,
-        account: &ProviderAccount,
-        model: Option<&str>,
-    ) -> Result<bool, CredentialSelectionError> {
-        self.repository
-            .store()
-            .apply_excel_403_action_for_model(account, model.unwrap_or_default())
-            .await
-            .map_err(|source| CredentialSelectionError::Store(Some(source.into())))
     }
 
     pub async fn capture_response_cookies(

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { AccountRow } from '../constants'
 import type { AccountReloginAction } from '@/api/modules/relogin'
-import { ClipboardCheck, Download, KeyRound, Pencil, RefreshCw, RotateCcw, Table2, Trash2, Wifi } from '@lucide/vue'
+import { ClipboardCheck, Download, KeyRound, Pencil, RefreshCw, RotateCcw, Trash2, Wifi } from '@lucide/vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
 
 import BaseMenuItem from '@/components/base/BaseMenuItem.vue'
@@ -14,7 +14,6 @@ defineProps<{
   deleting: boolean
   recovering: boolean
   refreshing: boolean
-  togglingExcel?: boolean
   togglingQuality?: boolean
   qualityDisabled?: boolean
   testing: boolean
@@ -29,7 +28,6 @@ const emit = defineEmits<{
   test: [account: AccountRow]
   refresh: [accountId: string]
   reauthorize: [account: AccountRow]
-  toggleExcel: [account: AccountRow, enabled: boolean]
   toggleQuality: [account: AccountRow]
   relogin: [account: AccountRow]
   exportModelCatalog: [account: AccountRow]
@@ -80,7 +78,7 @@ const emit = defineEmits<{
         </span>
       </BaseMenuItem>
       <BaseMenuItem
-        v-if="(account.capabilities?.modelCatalogDownload ?? (account.provider === 'openai' && account.authenticationKind === 'oauth')) && account.responsesUpstream !== 'excel'"
+        v-if="(account.capabilities?.modelCatalogDownload ?? (account.provider === 'openai' && account.authenticationKind === 'oauth'))"
         :loading="exportingModelCatalog"
         :disabled="exportingModelCatalog"
         @click.stop="emit('exportModelCatalog', account)"
@@ -119,17 +117,6 @@ const emit = defineEmits<{
           <RotateCcw class="size-3.5 text-cp-text-quaternary" />
         </template>
         恢复状态
-      </BaseMenuItem>
-      <BaseMenuItem
-        v-if="account.provider === 'openai' && account.authenticationKind === 'oauth'"
-        :loading="togglingExcel"
-        :disabled="togglingExcel"
-        @click.stop="emit('toggleExcel', account, account.responsesUpstream !== 'excel')"
-      >
-        <template #icon>
-          <Table2 class="size-3.5 text-cp-text-quaternary" />
-        </template>
-        {{ account.responsesUpstream === 'excel' ? '关闭 Excel 入口' : '开启 Excel 入口' }}
       </BaseMenuItem>
       <BaseMenuItem
         v-if="relogin"

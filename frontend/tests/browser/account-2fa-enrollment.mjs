@@ -37,6 +37,8 @@ async function main() {
     let accountReads = 0
     page.on('pageerror', error => errors.push(error.message))
     const fulfill = (route, data) => route.fulfill({ json: { code: 200, message: 'ok', data } })
+    await page.route('**/dev/api/admin/relogin/templates', route => fulfill(route, []))
+    await page.route('**/dev/api/admin/quality-ops/templates', route => fulfill(route, []))
     await page.route('**/dev/api/admin/proxies?*', route => fulfill(route, {
       items: [],
       page: { page: 1, pageSize: 200, total: 0, totalPages: 0 },
@@ -78,12 +80,8 @@ async function main() {
     await page.goto(`${base}/accounts`)
     await page.getByRole('button', { name: '导入账号', exact: true }).click()
     const dialog = page.getByRole('dialog')
-    await dialog.getByRole('button', { name: 'OpenAI', exact: true }).click()
-    await dialog.getByRole('checkbox', { name: '指定 Excel 设置', exact: true }).locator('..').click()
-    assert.equal(await dialog.getByRole('switch', { name: '缓存写入按普通输入计费', exact: true }).isChecked(), true)
-    await dialog.getByRole('switch', { name: '切换 Excel 入口', exact: true }).locator('..').click()
-    await dialog.getByRole('combobox', { name: 'Excel遇到HTTP 403', exact: true }).click()
-    await page.getByRole('option', { name: '关闭Excel模式', exact: true }).click()
+    await dialog.getByRole('button', { name: 'Codex', exact: true }).click()
+    assert.equal(await dialog.getByRole('switch', { name: '切换 Excel 入口', exact: true }).count(), 0)
     await dialog.getByRole('button', { name: '继续导入', exact: true }).click()
     await dialog.getByRole('radio', { name: '2FA', exact: true }).click()
     const material = [
@@ -116,8 +114,8 @@ async function main() {
     await dialog.waitFor({ state: 'hidden' })
     assert.equal(submissions.length, 1)
     assert.equal(submissions[0].text, material)
-    assert.equal(submissions[0].settings.excel403Action, 'disable_excel')
-    assert.equal(submissions[0].settings.excelCacheCreationAsInput, true)
+    assert.equal('excel403Action' in submissions[0].settings, false)
+    assert.equal('excelCacheCreationAsInput' in submissions[0].settings, false)
     const progress = page.getByRole('region', { name: '2FA导入进度' })
     await progress.getByText('等待登录验证并入池', { exact: true }).waitFor()
     const beforeCompletion = accountReads
@@ -128,7 +126,7 @@ async function main() {
     await page.waitForTimeout(500)
     assert.ok(accountReads > beforeCompletion, 'settled enrollment refreshes the pool')
     await page.getByRole('button', { name: '导入账号', exact: true }).click()
-    await dialog.getByRole('button', { name: 'OpenAI', exact: true }).click()
+    await dialog.getByRole('button', { name: 'Codex', exact: true }).click()
     await dialog.getByRole('button', { name: '继续导入', exact: true }).click()
     await dialog.getByRole('radio', { name: '2FA', exact: true }).click()
     assert.equal(await dialog.getByRole('textbox', { name: '2FA 账号', exact: true }).inputValue(), '')
@@ -136,7 +134,7 @@ async function main() {
     reloginPage = true
     await page.setViewportSize({ width: 1440, height: 900 })
     await page.goto(`${base}/relogin`)
-    assert.equal(await page.getByRole('button', { name: '导出JSON', exact: true }).isDisabled(), true)
+    assert.equal(await page.getByRole('button', { name: '导出JSON', exact: true }).count(), 0)
     for (const entry of reloginEntries.slice(0, 2))
       await page.locator(`tr[data-row-key="${entry.id}"]`).getByRole('checkbox').first().locator('..').click()
     const confirm = page.getByRole('alertdialog')

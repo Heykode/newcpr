@@ -17,7 +17,7 @@ function load(path, dependencies = {}) {
   const { outputText } = ts.transpileModule(readFileSync(new URL(path, import.meta.url), 'utf8'), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2024 },
   })
-  runInNewContext(outputText, { exports, TextEncoder, AbortController, require: name => dependencies[name] ?? (name.endsWith('/utils/purchaseCost') ? load('../src/views/accounts/utils/purchaseCost.ts') : name === '@/utils/excel-defaults' ? load('../src/utils/excel-defaults.ts') : require(name)) })
+  runInNewContext(outputText, { exports, TextEncoder, AbortController, require: name => dependencies[name] ?? (name.endsWith('/utils/purchaseCost') ? load('../src/views/accounts/utils/purchaseCost.ts') : require(name)) })
   return exports
 }
 
@@ -35,9 +35,6 @@ test('a committed single-account save finishes before slow or failed list reload
   })
   const { useAccountEditor } = load('../src/views/accounts/composables/useAccountEditor.ts', {
     vue,
-    '@/utils/excel-settings': load('../src/utils/excel-settings.ts', {
-      '@/views/accounts/utils/schedulingForm': load('../src/views/accounts/utils/schedulingForm.ts'),
-    }),
     '@/api': { updateAccount: async payload => updates.push(structuredClone(payload)) },
     '@/components/base/BaseToast': { toast },
     '@/composables/useAsyncAction': asyncAction,

@@ -214,7 +214,7 @@ async fn unlisted_native_models_still_reach_upstream_and_complete() {
 }
 
 #[tokio::test]
-async fn model_guard_preserves_configured_excel_preparation_in_both_selectors() {
+async fn retired_excel_route_is_rejected_in_both_selectors() {
     for wait in [false, true] {
         for websocket in [false, true] {
             for model in ["gpt-5.4", "grok-configured"] {
@@ -230,22 +230,16 @@ async fn model_guard_preserves_configured_excel_preparation_in_both_selectors() 
                 leases.capacity.enabled.store(true, Ordering::SeqCst);
                 let upstream = MockServer::start().await;
                 let provider = provider(&store, leases, upstream.uri());
-                let stream = provider
+                let error = provider
                     .execute(
                         planned_request_with_model("openai", operation(model, websocket), model),
                         attempt(wait),
                     )
                     .await
-                    .unwrap_or_else(|error| {
-                        panic!("model={model}, wait={wait}, websocket={websocket}: {error:?}")
-                    });
-                assert_eq!(stream.metadata().transport().as_str(), "excel_http_sse");
-                assert_eq!(
-                    stream.metadata().provider_account_id().as_str(),
-                    "acct_scope_old"
-                );
-                // Preparation is enough to verify route preservation; never poll the real Excel endpoint.
-                drop(stream);
+                    .err()
+                    .expect("retired route must be rejected before sending");
+                assert_eq!(error.kind(), ProviderErrorKind::NoEligibleAccount);
+                assert_eq!(error.send_state(), UpstreamSendState::NotSent);
                 assert!(upstream.received_requests().await.unwrap().is_empty());
             }
         }
@@ -734,7 +728,7 @@ async fn unknown_plan_uses_its_own_catalog_entitlements() {
     }
 }
 #[tokio::test]
-async fn excel_exemption_follows_the_actual_route_not_the_account_setting() {
+async fn retired_excel_route_never_bypasses_native_catalog_eligibility() {
     for wait in [false, true] {
         let store = Arc::new(MemoryAccountStore::default());
         create_account(&store, "acct_scope_old").await;
@@ -778,19 +772,16 @@ async fn excel_exemption_follows_the_actual_route_not_the_account_setting() {
             .expect("native route still requires native catalog eligibility");
         assert_eq!(error.kind(), ProviderErrorKind::NoEligibleAccount);
         assert!(leases.requests.lock().unwrap().is_empty());
-        let stream = provider
+        let error = provider
             .execute(
                 planned_request_with_model("openai", operation("gpt-5.4", false), "gpt-5.4"),
                 attempt(wait),
             )
             .await
-            .expect("configured Excel route retains its own model contract");
-        assert_eq!(stream.metadata().transport().as_str(), "excel_http_sse");
-        assert_eq!(
-            stream.metadata().provider_account_id().as_str(),
-            "acct_scope_old"
-        );
-        drop(stream);
+            .err()
+            .expect("retired Excel route cannot be selected");
+        assert_eq!(error.kind(), ProviderErrorKind::NoEligibleAccount);
+        assert!(leases.requests.lock().unwrap().is_empty());
         assert!(
             server
                 .received_requests()
@@ -803,16 +794,10 @@ async fn excel_exemption_follows_the_actual_route_not_the_account_setting() {
 }
 
 #[tokio::test]
-async fn failed_native_catalog_cannot_turn_excel_synthetic_models_into_refusal_evidence() {
+async fn failed_native_catalog_leaves_unknown_models_for_upstream_validation() {
     for wait in [false, true] {
         let store = Arc::new(MemoryAccountStore::default());
         create_account(&store, "acct_scope_old").await;
-        store.set_responses_upstream("acct_scope_old", ResponsesUpstream::Excel);
-        store.set_excel_encrypted_content_policy(
-            "acct_scope_old",
-            false,
-            vec!["gpt-5.4".to_owned()],
-        );
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/codex/models"))
@@ -836,8 +821,8 @@ async fn failed_native_catalog_cannot_turn_excel_synthetic_models_into_refusal_e
             Arc::default(),
             NonZeroU32::MIN,
         );
-        catalog.refresh_catalogs().await.unwrap();
-        provider.query_model_capabilities().await.unwrap();
+        assert!(catalog.refresh_catalogs().await.is_err());
+        assert!(provider.query_model_capabilities().await.is_err());
         let mut stream = provider
             .execute(
                 planned_request_with_model("openai", operation("gpt-future", false), "gpt-future"),

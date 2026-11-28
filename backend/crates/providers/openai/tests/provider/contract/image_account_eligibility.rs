@@ -228,7 +228,7 @@ async fn eligible_image_requests_send_with_matching_allowlist_or_unrestricted_sc
 }
 
 #[tokio::test]
-async fn free_excel_image_account_keeps_its_separate_route() {
+async fn retired_excel_image_account_cannot_send_to_native_backend() {
     let store = Arc::new(MemoryAccountStore::default());
     let mut free = profile("acct_free_excel_image");
     free.plan_type = Some("free".to_owned());
@@ -261,29 +261,10 @@ async fn free_excel_image_account_keeps_its_separate_route() {
             ),
         )
         .await
-        .expect("Excel image remains eligible");
-    assert_eq!(stream.metadata().transport().as_str(), "http_json");
-    // Preparation is lazy; do not poll the real Excel endpoint.
-    drop(stream);
-    // Native images are opaque here; this rejection proves Excel's parser owns
-    // the route even when the selected account has a Free plan.
-    let rejected = provider
-        .execute(
-            planned_provider_endpoint_request(
-                "openai",
-                image_operation(br#"{"model":"gpt-image-2","prompt":"test","size":"unsupported"}"#),
-            ),
-            context_with_account_scope(
-                "req_free_excel_image_invalid",
-                CancellationToken::new(),
-                image_scope("acct_free_excel_image", AccountModelAccess::all()),
-            ),
-        )
-        .await
         .err()
-        .expect("Excel image validation applies before sending");
-    assert_eq!(rejected.kind(), ProviderErrorKind::InvalidRequest);
-    assert_eq!(rejected.send_state(), UpstreamSendState::NotSent);
+        .expect("retired image route must be rejected");
+    assert_eq!(stream.kind(), ProviderErrorKind::NoEligibleAccount);
+    assert_eq!(stream.send_state(), UpstreamSendState::NotSent);
     assert!(server.received_requests().await.unwrap().is_empty());
 }
 

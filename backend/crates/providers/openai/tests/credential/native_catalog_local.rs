@@ -123,7 +123,7 @@ async fn write_catalog(stream: &mut tokio::net::TcpStream) {
 }
 
 #[tokio::test]
-async fn native_catalog_intersects_excel_capabilities_after_cache_without_changing_routing() {
+async fn retired_excel_configuration_does_not_restrict_native_catalog_capabilities() {
     use gateway_core::account::{
         AccountModelAccess, AccountModelAccessMode, CredentialState, ExcelModels, QuotaState,
         ResponsesUpstream,
@@ -164,13 +164,10 @@ async fn native_catalog_intersects_excel_capabilities_after_cache_without_changi
         }
     };
     assert_eq!(read(&native_scope).await, original);
-    let mut restricted = original.clone();
-    restricted["multi_agent_version"] = Value::Null;
-    restricted["multi_agent_reasoning_effort"] = Value::Null;
-    assert_eq!(read(&mixed_scope).await, restricted);
+    assert_eq!(read(&mixed_scope).await, original);
     assert_eq!(read(&native_scope).await, original);
 
-    // A temporary credential failure must not advertise v2 for an Excel route.
+    // Stale retired configuration must not cap native capabilities during account changes.
     let expired = excel.clone().with_account_facts(
         true,
         CredentialState::Expired,
@@ -179,7 +176,7 @@ async fn native_catalog_intersects_excel_capabilities_after_cache_without_changi
         None,
     );
     replace_account_facts(&store, expired).await;
-    assert_eq!(read(&mixed_scope).await, restricted);
+    assert_eq!(read(&mixed_scope).await, original);
     store.set_enabled(excel.id(), false).await.unwrap();
     assert_eq!(read(&mixed_scope).await, original);
     replace_account_facts(
@@ -192,7 +189,7 @@ async fn native_catalog_intersects_excel_capabilities_after_cache_without_changi
     .await;
     assert_eq!(read(&mixed_scope).await, original);
     replace_account_facts(&store, excel.clone()).await;
-    assert_eq!(read(&mixed_scope).await, restricted);
+    assert_eq!(read(&mixed_scope).await, original);
     store.set_responses_upstream(excel.id().as_str(), ResponsesUpstream::Codex);
     assert_eq!(read(&mixed_scope).await, original);
     assert_eq!(server.received_requests().await.unwrap().len(), 1);
@@ -223,7 +220,7 @@ async fn native_catalog_excel_switch_does_not_reuse_synthesized_capabilities() {
     service.refresh_account_catalog(account.id()).await.unwrap();
     let models = service.client_model_catalog(&scope).await.unwrap();
     let descriptor: Value = serde_json::from_slice(models[0].payload.body()).unwrap();
-    assert_eq!(descriptor.get("multi_agent_version"), Some(&Value::Null));
+    assert_eq!(descriptor, fixture["models"][0]);
     store.set_responses_upstream(account.id().as_str(), ResponsesUpstream::Codex);
     service.refresh_account_catalog(account.id()).await.unwrap();
     let models = service.client_model_catalog(&scope).await.unwrap();

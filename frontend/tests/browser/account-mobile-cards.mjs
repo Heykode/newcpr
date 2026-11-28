@@ -130,7 +130,7 @@ async function main() {
       await first().getByText(rows[0].customName, { exact: true }).waitFor()
       await first().getByText(rows[0].email, { exact: true }).waitFor()
       await first().locator('[data-account-totp-mark]').waitFor()
-      await first().locator('[data-account-excel-mark]').waitFor()
+      assert.equal(await first().locator('[data-account-excel-mark]').count(), 0)
       await first().getByRole('link', { name: /监测/ }).waitFor()
       assert.equal(await first().getByRole('progressbar').count(), 2)
       assert.equal(await first().getByRole('checkbox').isChecked(), false)

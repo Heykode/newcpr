@@ -15,9 +15,9 @@
 ## 身份、隐私和调度
 
 - 三平台后台操作读取全局画像，同轮冻结；下游Key覆盖仅用于对应模型请求。OpenAI解析器与前端选项共享recognizedUserAgentPrefixes；未知UA需配套originator/Core version。
-- 保留持久设备、安装种子、账号出口、Excel/State和精确WS owner。OpenAI使用Redis等待；xAI/Antigravity使用进程内等待加Store原子准入。
+- 保留持久设备、安装种子、账号出口和精确WS owner。OpenAI使用Redis等待；xAI/Antigravity使用进程内等待加Store原子准入。
 - 三平台共享strict/preferred/relaxed及TTL；临时分流不抢占主绑定，原生续接优先。只有从未绑定的WS不发失效提示；已绑定owner释放须通知空闲下游。
-- 原生隐私四步骤为project/user/git remote/commit metadata。编译结果冻结到请求快照，在HTTP、WS及Excel最终出站执行；禁用不执行。按账号/Key/会话隔离，换号/会话轮换别名，不保留已删除组合动作。
+- 原生隐私四步骤为project/user/git remote/commit metadata。编译结果冻结到请求快照，在原生HTTP、WS最终出站执行；禁用不执行。按账号/Key/会话隔离，换号/会话轮换别名，不保留已删除组合动作。
 
 ## 设置、价目与只读共享
 

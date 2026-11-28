@@ -12,7 +12,6 @@ use gateway_admin::{
 use sqlx::{PgPool, Row as _};
 
 mod group_rules;
-mod native_recovery;
 mod overload_streak;
 mod policy;
 mod rule_templates;
@@ -252,17 +251,15 @@ impl PgQualityOpsStore {
         } else {
             config.failure_template = None;
         }
-        if config.detection_mode == QualityDetectionMode::StateProbe
-            || config.failure_action == QualityFailureAction::EnableExcel
-        {
+        if config.detection_mode == QualityDetectionMode::StateProbe {
             let valid: bool = sqlx::query_scalar(
                 "select exists(select 1 from provider_accounts a where id=$1
-                 and provider_kind='openai' and authentication_kind='oauth'
-                 and (not $2 or $3=any(case when excel_models_follow_global then
-                 (select excel_default_models from runtime_settings where id=1) else excel_models end)))")
-                .bind(&config.account_id)
-                .bind(config.failure_action == QualityFailureAction::EnableExcel)
-                .bind(&config.model).fetch_one(&mut *tx).await.map_err(unavailable)?;
+                 and provider_kind='openai' and authentication_kind='oauth')",
+            )
+            .bind(&config.account_id)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(unavailable)?;
             if !valid {
                 return Err(conflict());
             }

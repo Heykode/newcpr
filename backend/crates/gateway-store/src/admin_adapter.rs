@@ -147,9 +147,7 @@ impl SettingsStore for AdminSettingsStoreAdapter {
                 request_profile_updates: command.request_profile_updates,
                 codex_privacy_policy: command.codex_privacy_policy,
                 account_affinity: command.account_affinity,
-                excel_default_models: command
-                    .excel_default_models
-                    .unwrap_or(current.settings.excel_default_models),
+                excel_default_models: current.settings.excel_default_models,
                 turn_state_injection_enabled: command.turn_state_injection_enabled,
                 turn_state_probe_proxy_id: command.turn_state_probe_proxy_id,
                 turn_state_probe_concurrency: command.turn_state_probe_concurrency,
@@ -207,7 +205,6 @@ impl SettingsStore for AdminSettingsStoreAdapter {
                 "1",
                 vec![
                     "model_mappings_json".to_owned(),
-                    "excel_default_models".to_owned(),
                     "turn_state_injection_enabled".to_owned(),
                     "turn_state_models".to_owned(),
                     "turn_state_probe_proxy_id".to_owned(),

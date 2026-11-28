@@ -5,7 +5,6 @@ mod auth;
 mod backup;
 mod client_keys;
 mod error_protection;
-mod excel_recovery;
 mod import_tasks;
 mod notifications;
 mod observability;

@@ -19,7 +19,7 @@ function loadModule(filename, dependencies = {}) {
     TextEncoder,
     structuredClone,
     exports,
-    require: name => dependencies[name] ?? (name === '@/components/request-profile/changes' ? loadModule(new URL('../src/components/request-profile/changes.ts', import.meta.url)) : name === '../utils/warmup-schedule' ? loadModule(new URL('../src/views/settings/utils/warmup-schedule.ts', import.meta.url)) : name === '../components/error-protection/form' ? loadModule(new URL('../src/views/settings/components/error-protection/form.ts', import.meta.url)) : name === '@/utils/excel-defaults' ? loadModule(new URL('../src/utils/excel-defaults.ts', import.meta.url)) : require(name)),
+    require: name => dependencies[name] ?? (name === '@/components/request-profile/changes' ? loadModule(new URL('../src/components/request-profile/changes.ts', import.meta.url)) : name === '../utils/warmup-schedule' ? loadModule(new URL('../src/views/settings/utils/warmup-schedule.ts', import.meta.url)) : name === '../components/error-protection/form' ? loadModule(new URL('../src/views/settings/components/error-protection/form.ts', import.meta.url)) : require(name)),
   }, { filename: String(filename) })
   return exports
 }
@@ -83,6 +83,7 @@ test('runtime display units preserve saved bytes and milliseconds without a glob
   const initial = settings()
   initial.requestIntervalMs = 50
   initial.responsesMaxDecompressedBodyBytes = 64 * 1024 * 1024 + 1
+  initial.requestTuning = { ...initial.requestTuning, streamPrefetchBytes: 513 }
   initial.disableFast = true
   const query = mountSettings(initial)
   try {
@@ -97,14 +98,14 @@ test('runtime display units preserve saved bytes and milliseconds without a glob
     assert.equal(Object.hasOwn(query.requests.at(-1), 'disableFast'), false)
     units.intervalSeconds.input.value = '1.001'
     units.bodyMiB.input.value = '1.5'
-    units.prefetchKiB.input.value = '0.5'
+    assert.equal(Object.hasOwn(units, 'prefetchKiB'), false)
     query.state.form.openaiWebsocketPool.streamIdleTimeoutMs = 10001
     await query.state.saveSettings()
     const saved = query.requests.at(-1)
     assert.equal(saved.requestIntervalMs, 1001)
     assert.equal(saved.responsesMaxDecompressedBodyBytes, 1572864)
     assert.equal(saved.requestTuning.websocketLargeRequestThresholdBytes, undefined)
-    assert.equal(saved.requestTuning.streamPrefetchBytes, 512)
+    assert.equal(saved.requestTuning.streamPrefetchBytes, 513)
     assert.equal(saved.openaiWebsocketPool.streamIdleTimeoutMs, 10001)
   }
   finally { query.stop() }
@@ -115,7 +116,7 @@ test('unit drafts reject empty and sub-byte or sub-millisecond inputs instead of
   const query = mountSettings(settings(), warning => warnings.push(warning))
   try {
     await query.state.loadSettings()
-    for (const [key, raw] of [['bodyMiB', ''], ['intervalSeconds', '0.0001'], ['failureWindowSeconds', 'NaN'], ['prefetchKiB', '0.0001']]) {
+    for (const [key, raw] of [['bodyMiB', ''], ['intervalSeconds', '0.0001'], ['failureWindowSeconds', 'NaN'], ['bodyMiB', '0.000000001']]) {
       query.state.unitFields[key].input.value = raw
       await query.state.saveSettings()
       assert.equal(query.requests.length, 0)
@@ -126,94 +127,6 @@ test('unit drafts reject empty and sub-byte or sub-millisecond inputs instead of
     assert.equal(warnings.length, 4)
   }
   finally { query.stop() }
-})
-
-test('Excel image policy defaults off and roundtrips without changing scheduling', async () => {
-  for (const mode of ['off', 'auto_compact', 'warn']) {
-    const initial = settings()
-    const query = mountSettings(initial)
-    try {
-      await query.state.loadSettings()
-      assert.equal(query.state.form.requestTuning.excelImageLimitPolicy, 'off')
-      assert.equal(query.state.form.requestTuning.excelImageWarningRemaining, 8)
-      assert.equal(query.state.form.requestTuning.excelImageCompactReserve, 3)
-      query.state.form.requestTuning.excelImageLimitPolicy = mode
-      await query.state.saveSettings()
-      assert.equal(query.requests[0].requestTuning.excelImageLimitPolicy, mode)
-      assert.equal(query.requests[0].rotationStrategy, initial.rotationStrategy)
-    }
-    finally { query.stop() }
-  }
-})
-
-test('Excel warning thresholds reject unsafe combinations before saving', async () => {
-  for (const [warning, reserve] of [[3, 3], [8, 0], [20, 3]]) {
-    const warnings = []
-    const query = mountSettings(settings(), message => warnings.push(message))
-    try {
-      await query.state.loadSettings()
-      Object.assign(query.state.form.requestTuning, {
-        excelImageLimitPolicy: 'warn',
-        excelImageMaxCount: 20,
-        excelImageWarningRemaining: warning,
-        excelImageCompactReserve: reserve,
-      })
-      await query.state.saveSettings()
-      assert.equal(query.requests.length, 0)
-      assert.equal(warnings.length, 1)
-    }
-    finally { query.stop() }
-  }
-})
-
-test('Excel image transport preserves explicit modes and inherited startup settings', async () => {
-  for (const transport of [null, { mode: 'native' }, { mode: 'relay', publicUrl: 'https://images.example.com' }]) {
-    const initial = settings()
-    initial.requestTuning = { excelImageTransport: transport }
-    const query = mountSettings(initial)
-    try {
-      await query.state.loadSettings()
-      assert.deepEqual(JSON.parse(JSON.stringify(query.state.form.requestTuning.excelImageTransport)), transport)
-      await query.state.saveSettings()
-      assert.deepEqual(query.requests[0].requestTuning.excelImageTransport, transport)
-      assert.equal(query.requests[0].rotationStrategy, initial.rotationStrategy)
-    }
-    finally { query.stop() }
-  }
-})
-
-test('Excel relay requires a public HTTPS origin before settings can be saved', async () => {
-  for (const publicUrl of ['', 'http://images.example.com', 'https://images.example.com/path', 'https://user@example.com', 'https://images.example.com?x=1', 'https://images.example.com#part', 'https://127.0.0.1', 'https://host.local']) {
-    const warnings = []
-    const query = mountSettings(settings(), message => warnings.push(message))
-    try {
-      await query.state.loadSettings()
-      query.state.form.requestTuning.excelImageTransport = { mode: 'relay', publicUrl }
-      await query.state.saveSettings()
-      assert.equal(query.requests.length, 0, publicUrl)
-      assert.equal(warnings.length, 1, publicUrl)
-    }
-    finally { query.stop() }
-  }
-})
-
-test('Excel global defaults fill omission without replacing saved or explicitly empty models', async () => {
-  for (const models of [undefined, [], ['custom-model'], ['gpt-5.6-sol', 'gpt-6-astra']]) {
-    const initial = settings()
-    if (models !== undefined)
-      initial.excelDefaultModels = models
-    const query = mountSettings(initial)
-    try {
-      await query.state.loadSettings()
-      const expected = models ?? ['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra']
-      assert.equal(query.state.form.excelDefaultModels, expected.join(', '))
-      await query.state.saveSettings()
-      assert.deepEqual(query.requests[0].excelDefaultModels, expected)
-    }
-    finally {
-      query.stop()
-    }
-  }
 })
 
 test('affinity and binding TTL roundtrip without changing smart scheduling or reserved concurrency', async () => {
@@ -307,7 +220,6 @@ function mountSettings(initial, onWarning = assert.fail, apiOverrides = {}) {
     }),
     '@/utils/location': loadModule(new URL('../src/utils/location.ts', import.meta.url)),
     './useRuntimeUnits': loadModule(new URL('../src/views/settings/composables/useRuntimeUnits.ts', import.meta.url), { vue }),
-    './useExcelImageSettings': loadModule(new URL('../src/views/settings/composables/useExcelImageSettings.ts', import.meta.url), { vue }),
     '@/api/modules/settings': loadModule(new URL('../src/api/modules/settings.ts', import.meta.url), {
       '../request': () => { throw new Error('unexpected real API request') },
     }),
@@ -457,28 +369,6 @@ test('smart defaults and drafts are isolated; validation and save reload preserv
   }
 })
 
-test('global Excel defaults roundtrip exact models including explicit empty and reject invalid IDs', async () => {
-  const warnings = []
-  const query = mountSettings(settings(), message => warnings.push(message))
-  try {
-    await query.state.loadSettings()
-    assert.equal(query.state.form.excelDefaultModels, 'gpt-6-astra, gpt-5.6-sol, gpt-5.6-terra')
-    query.state.form.excelDefaultModels = 'gpt-6-astra, gpt-6-astra'
-    await query.state.saveSettings()
-    assert.deepEqual(query.requests.at(-1).excelDefaultModels, ['gpt-6-astra'])
-    query.state.form.excelDefaultModels = 'invalid/model'
-    await query.state.saveSettings()
-    assert.equal(query.requests.length, 1)
-    assert.equal(warnings.length, 1)
-    query.state.form.excelDefaultModels = ''
-    await query.state.saveSettings()
-    assert.deepEqual(query.requests.at(-1).excelDefaultModels, [])
-    await query.state.loadSettings()
-    assert.equal(query.state.form.excelDefaultModels, '')
-  }
-  finally { query.stop() }
-})
-
 test('location remains opt-in and custom location round trips without changing other tuning', async () => {
   const query = mountSettings(settings())
   try {
@@ -529,45 +419,6 @@ test('location normalizes enabled input and ignores incomplete disabled drafts',
     await query.state.loadSettings()
     query.state.form.requestTuning.openaiLocationOverrideEnabled = true
     assert.deepEqual({ ...query.state.form.requestTuning.openaiRequestLocation }, saved)
-  }
-  finally { query.stop() }
-})
-
-test('stream prefetch inherits defaults and round trips zero and exact custom bytes', async () => {
-  for (const [overrides, defaults, expected] of [
-    [{}, {}, 128 * 1024],
-    [{ streamPrefetchBytes: null }, { streamPrefetchBytes: 256 * 1024 }, 256 * 1024],
-    [{ streamPrefetchBytes: 0 }, { streamPrefetchBytes: 256 * 1024 }, 0],
-  ]) {
-    const query = mountSettings({ ...settings(), requestTuning: overrides, requestTuningDefaults: defaults })
-    try {
-      await query.state.loadSettings()
-      assert.equal(query.state.form.requestTuning.streamPrefetchBytes, expected)
-      for (const value of [expected, 0, 1, 512, 262144, 128 * 1024 * 1024, Number.MAX_SAFE_INTEGER]) {
-        query.state.form.requestTuning.streamPrefetchBytes = value
-        await query.state.saveSettings()
-        assert.equal(query.requests.at(-1).requestTuning.streamPrefetchBytes, value)
-        await query.state.loadSettings()
-        assert.equal(query.state.form.requestTuning.streamPrefetchBytes, value)
-      }
-    }
-    finally { query.stop() }
-  }
-})
-
-test('stream prefetch rejects only invalid or inexact byte numbers before saving', async () => {
-  const warnings = []
-  const query = mountSettings(settings(), message => warnings.push(message))
-  try {
-    await query.state.loadSettings()
-    for (const value of [-1, 0.5, Number.MAX_SAFE_INTEGER + 1, Number.NaN, Number.POSITIVE_INFINITY]) {
-      query.state.form.requestTuning.streamPrefetchBytes = value
-      await query.state.saveSettings()
-    }
-    assert.equal(query.requests.length, 0)
-    assert.equal(warnings.length, 5)
-    const component = readFileSync(new URL('../src/views/settings/components/ExcelSettingsCard.vue', import.meta.url), 'utf8')
-    assert.match(component, /model-value="units\.prefetchKiB\.input\.value"[^>]+step="any"/)
   }
   finally { query.stop() }
 })
@@ -677,18 +528,6 @@ test('inherited runtime defaults never add the removed global WS opening limit',
       websocketFailureOpenDurationMs: 30_000,
       rateLimitCooldownSeconds: 60,
       maxRetryAfterSeconds: 240,
-      excelImageRelayBytes: 1024 * 1024 * 1024,
-      excelImageRelayRequests: 128,
-      excelImageRelayDownloads: 32,
-      excelImageRelayEntries: 512,
-      excelImageMaxBytes: 20 * 1024 * 1024,
-      excelImageTotalBytes: 32 * 1024 * 1024,
-      excelImageMaxCount: 20,
-      excelImageLimitPolicy: 'off',
-      excelImageWarningRemaining: 8,
-      excelImageCompactReserve: 3,
-      excelImageRelayTtlMinutes: 30,
-      excelImageTransport: null,
       openaiLocationOverrideEnabled: false,
       openaiRequestLocation: { country: 'US', region: 'Ohio', city: 'Piketon', timezone: 'America/New_York' },
       maxWaitingPerKey: 0,
@@ -698,78 +537,6 @@ test('inherited runtime defaults never add the removed global WS opening limit',
       maxWaitingPerAccount: 10,
       accountQueueTimeoutSeconds: 30,
     })
-  }
-  finally {
-    query.stop()
-  }
-})
-
-test('Excel image budgets roundtrip independently and reject invalid limits', async () => {
-  const warnings = []
-  const query = mountSettings(settings(), message => warnings.push(message))
-  try {
-    await query.state.loadSettings()
-    for (const [field, value] of [
-      ['excelImageRelayBytes', 64 * 1024 * 1024],
-      ['excelImageRelayRequests', 8],
-      ['excelImageRelayDownloads', 4],
-      ['excelImageRelayEntries', 64],
-      ['excelImageRelayTtlMinutes', 90],
-      ['excelImageMaxBytes', 8 * 1024 * 1024],
-      ['excelImageTotalBytes', 16 * 1024 * 1024],
-      ['excelImageMaxCount', 32],
-    ]) {
-      query.state.form.requestTuning[field] = value
-    }
-    await query.state.saveSettings()
-    await query.state.loadSettings()
-    assert.equal(query.state.form.requestTuning.excelImageRelayBytes, 64 * 1024 * 1024)
-    assert.equal(query.state.form.requestTuning.excelImageRelayDownloads, 4)
-    assert.equal(query.state.form.requestTuning.excelImageRelayRequests, 8)
-    assert.equal(query.state.form.requestTuning.excelImageRelayEntries, 64)
-    assert.equal(query.state.form.requestTuning.excelImageRelayTtlMinutes, 90)
-    assert.equal(query.state.form.requestTuning.excelImageMaxBytes, 8 * 1024 * 1024)
-    assert.equal(query.state.form.requestTuning.excelImageTotalBytes, 16 * 1024 * 1024)
-    assert.equal(query.state.form.requestTuning.excelImageMaxCount, 32)
-    assert.equal(query.requests[0].requestTuning.rateLimitCooldownSeconds, 60)
-    assert.equal(query.requests[0].maxConcurrentPerAccount, 5)
-    for (const [field, invalid] of [
-      ['excelImageRelayBytes', 1024],
-      ['excelImageRelayBytes', 262144 * 1024 * 1024 + 1],
-      ['excelImageRelayDownloads', 0],
-      ['excelImageRelayDownloads', 129],
-      ['excelImageRelayRequests', 0],
-      ['excelImageRelayRequests', 513],
-      ['excelImageRelayEntries', 0],
-      ['excelImageRelayEntries', 1048577],
-      ['excelImageRelayTtlMinutes', 0],
-      ['excelImageRelayTtlMinutes', 10081],
-      ['excelImageMaxBytes', 0],
-      ['excelImageMaxBytes', 512 * 1024 * 1024 + 1],
-      ['excelImageTotalBytes', 0],
-      ['excelImageTotalBytes', 512 * 1024 * 1024 + 1],
-      ['excelImageMaxCount', 0],
-      ['excelImageMaxCount', 65537],
-    ]) {
-      const before = query.state.form.requestTuning[field]
-      query.state.form.requestTuning[field] = invalid
-      await query.state.saveSettings()
-      assert.equal(query.requests.length, 1)
-      query.state.form.requestTuning[field] = before
-    }
-    assert.equal(warnings.length, 16)
-    for (const [field, invalid] of [
-      ['excelImageRelayBytes', 1024 * 1024],
-      ['excelImageRelayEntries', 16],
-      ['excelImageTotalBytes', 4 * 1024 * 1024],
-    ]) {
-      const before = query.state.form.requestTuning[field]
-      query.state.form.requestTuning[field] = invalid
-      await query.state.saveSettings()
-      assert.equal(query.requests.length, 1)
-      query.state.form.requestTuning[field] = before
-    }
-    assert.equal(warnings.length, 19)
   }
   finally {
     query.stop()
@@ -1006,149 +773,6 @@ test('settings controls and API type no longer expose the global WS opening limi
   assert.doesNotMatch(api, /websocketHttpFallbackEnabled/)
 })
 
-test('Excel controls are isolated and shared retries remain in the common configuration', () => {
-  const common = readFileSync(new URL('../src/views/settings/components/RuntimeSettingsCard.vue', import.meta.url), 'utf8')
-  const excel = readFileSync(new URL('../src/views/settings/components/ExcelSettingsCard.vue', import.meta.url), 'utf8')
-  const page = readFileSync(new URL('../src/views/settings/index.vue', import.meta.url), 'utf8')
-  assert.doesNotMatch(common, /excelImage|imageRelayUrl|imageMode/)
-  for (const key of ['websocketMaxRetries', 'maxAccountSwitches', 'maxRequestAttempts', 'rateLimitCooldownSeconds']) {
-    assert.match(common, new RegExp(`v-model="tuningValues\\.${key}\\.value"`))
-    assert.doesNotMatch(excel, new RegExp(key))
-  }
-  assert.match(page, /v-show="configurationScope === 'common'"/)
-  assert.match(page, /v-show="configurationScope === 'excel'"/)
-  assert.equal((page.match(/v-model:models="form\.excelDefaultModels"/g) ?? []).length, 1)
-  assert.match(page, /保存全部设置/)
-  assert.match(excel, /链接有效期不是模型记忆图片的时长/)
-})
-
-test('Excel MiB display roundtrips exact legacy byte values without rounding', async () => {
-  for (const bytes of [1, 1024 * 1024 - 1, 20 * 1024 * 1024 + 1, 128 * 1024 * 1024]) {
-    const initial = settings()
-    initial.requestTuning = { excelImageMaxBytes: bytes, excelImageTotalBytes: 128 * 1024 * 1024 }
-    const query = mountSettings(initial)
-    try {
-      await query.state.loadSettings()
-      const field = query.state.excelImages.fields.find(field => field.key === 'excelImageMaxBytes')
-      assert.equal(Number(field.input.value) * 1024 * 1024, bytes)
-      const displayed = field.input.value
-      field.input.value = displayed
-      assert.equal(field.error.value, '')
-      await query.state.saveSettings()
-      await query.state.loadSettings()
-      assert.equal(query.requests[0].requestTuning.excelImageMaxBytes, bytes)
-      assert.equal(Number(field.input.value) * 1024 * 1024, bytes)
-    }
-    finally { query.stop() }
-  }
-})
-
-test('editing Excel MiB changes only the intended byte field, not shared or native settings', async () => {
-  const initial = settings()
-  initial.requestTuning = {
-    websocketMaxRetries: 7,
-    maxAccountSwitches: 4,
-    maxRequestAttempts: 9,
-    rateLimitCooldownSeconds: 37,
-    websocketMaxAgeMs: 123456,
-    openaiLocationOverrideEnabled: false,
-    excelImageTransport: null,
-  }
-  const query = mountSettings(initial)
-  try {
-    await query.state.loadSettings()
-    const before = JSON.parse(JSON.stringify(query.state.form.requestTuning))
-    const field = query.state.excelImages.fields.find(field => field.key === 'excelImageMaxBytes')
-    field.input.value = '20.5'
-    assert.equal(query.state.form.requestTuning.excelImageMaxBytes, 21495808)
-    await query.state.saveSettings()
-    const after = query.requests[0].requestTuning
-    assert.deepEqual(after, { ...before, excelImageMaxBytes: 21495808, accountErrorProtection: { enabled: false, rules: [], threshold: 12, windowSeconds: 600, durationSeconds: 7200, probeEnabled: true, probeModel: null } })
-    for (const key of ['modelMappings', 'rotationStrategy', 'refreshMarginSeconds', 'refreshConcurrency', 'maxConcurrentPerAccount', 'requestIntervalMs'])
-      assert.deepEqual(query.requests[0][key], initial[key])
-    await query.state.saveSettings()
-    assert.deepEqual(query.requests[1], { ...query.requests[0], configRevision: 8 })
-  }
-  finally { query.stop() }
-})
-
-test('invalid Excel display drafts block stale-value saves and recover after correction', async () => {
-  const warnings = []
-  const query = mountSettings(settings(), message => warnings.push(message))
-  try {
-    await query.state.loadSettings()
-    const field = query.state.excelImages.fields.find(field => field.key === 'excelImageMaxBytes')
-    const initial = query.state.form.requestTuning.excelImageMaxBytes
-    const invalid = ['', ' ', '0', '-1', '513', 'Infinity', 'NaN', '0.00000001']
-    for (const raw of invalid) {
-      field.input.value = raw
-      assert.ok(field.error.value, raw)
-      await query.state.saveSettings()
-      assert.equal(query.requests.length, 0)
-      assert.equal(query.state.form.requestTuning.excelImageMaxBytes, initial)
-    }
-    assert.equal(warnings.length, invalid.length)
-    field.input.value = '8'
-    assert.equal(field.error.value, '')
-    await query.state.saveSettings()
-    assert.equal(query.requests[0].requestTuning.excelImageMaxBytes, 8 * 1024 * 1024)
-  }
-  finally { query.stop() }
-})
-
-test('Excel reference maxima save and reload without changing shared retry controls', async () => {
-  const query = mountSettings(settings())
-  try {
-    await query.state.loadSettings()
-    const before = query.state.form.requestTuning.websocketMaxRetries
-    const limits = {
-      excelImageMaxBytes: 512 * 1024 * 1024,
-      excelImageTotalBytes: 512 * 1024 * 1024,
-      excelImageMaxCount: 65536,
-      excelImageRelayBytes: 262144 * 1024 * 1024,
-      excelImageRelayEntries: 1048576,
-      excelImageRelayTtlMinutes: 10080,
-    }
-    Object.assign(query.state.form.requestTuning, limits)
-    await query.state.saveSettings()
-    assert.equal(query.requests.length, 1)
-    for (const [key, maximum] of Object.entries(limits)) {
-      assert.equal(query.requests[0].requestTuning[key], maximum)
-      assert.equal(query.state.form.requestTuning[key], maximum)
-    }
-    assert.equal(query.requests[0].requestTuning.websocketMaxRetries, before)
-  }
-  finally { query.stop() }
-})
-
-test('Excel image mode toggling preserves draft relay address and does not rewrite limits', async () => {
-  const query = mountSettings(settings())
-  try {
-    await query.state.loadSettings()
-    const images = query.state.excelImages
-    const before = JSON.parse(JSON.stringify(query.state.form.requestTuning))
-    images.mode.value = 'relay'
-    images.relayUrl.value = 'https://synthetic-images.example.com'
-    for (const mode of ['native', 'inherit', 'native']) {
-      images.mode.value = mode
-      assert.equal(images.mode.value, mode)
-      images.mode.value = 'relay'
-      assert.equal(images.relayUrl.value, 'https://synthetic-images.example.com')
-    }
-    images.mode.value = 'inherit'
-    assert.deepEqual(JSON.parse(JSON.stringify(query.state.form.requestTuning)), before)
-    await query.state.saveSettings()
-    assert.equal(query.requests[0].requestTuning.excelImageTransport, null)
-    const count = images.fields.find(field => field.key === 'excelImageMaxCount')
-    count.input.value = ''
-    assert.ok(images.errors.value.length)
-    await query.state.loadSettings()
-    assert.equal(count.input.value, '20')
-    assert.equal(images.errors.value.length, 0)
-  }
-  finally { query.stop() }
-})
-
 test('error protection is opt-in, validates rules, and saves independently from scheduling', async () => {
   const warnings = []
   const query = mountSettings(settings(), message => warnings.push(message))
@@ -1260,6 +884,25 @@ test('OpenAI platform settings roundtrip cleared headers and reject invalid conn
     query.state.form.openaiWebsocketPool.streamIdleTimeoutMs = 0
     await query.state.saveSettings()
     assert.equal(query.requests.at(-1).openaiWebsocketPool.streamIdleTimeoutMs, 0)
+  }
+  finally { query.stop() }
+})
+
+test('retired Excel settings are discarded while native retry and scheduling controls survive', async () => {
+  const initial = settings()
+  initial.excelDefaultModels = ['legacy-model']
+  initial.requestTuning = { ...initial.requestTuning, maxRequestAttempts: 7, websocketMaxRetries: 3, excelImageTransport: { mode: 'relay', publicUrl: 'https://images.example.com' }, excelImageMaxCount: 20 }
+  const query = mountSettings(initial)
+  try {
+    await query.state.loadSettings()
+    await query.state.saveSettings()
+    const saved = query.requests[0]
+    assert.equal('excelDefaultModels' in saved, false)
+    assert.equal(Object.keys(saved.requestTuning).some(key => key.startsWith('excel')), false)
+    assert.equal(saved.requestTuning.maxRequestAttempts, 7)
+    assert.equal(saved.requestTuning.websocketMaxRetries, 3)
+    assert.equal(saved.maxConcurrentPerAccount, initial.maxConcurrentPerAccount)
+    assert.equal(saved.rotationStrategy, initial.rotationStrategy)
   }
   finally { query.stop() }
 })

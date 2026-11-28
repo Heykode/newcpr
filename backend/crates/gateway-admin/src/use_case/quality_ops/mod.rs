@@ -136,11 +136,6 @@ fn validate_config(config: &QualityRuleConfig, require_account: bool) -> Result<
             "状态探针每轮固定一次，两次请求串行执行",
         ));
     }
-    if config.failure_action == QualityFailureAction::EnableExcel && config.auto_restore {
-        return Err(AdminError::invalid(
-            "旧版开启Excel规则不支持自动恢复账号配置",
-        ));
-    }
     if config.failure_action == QualityFailureAction::ApplyAccountTemplate {
         let template = config
             .failure_template
@@ -152,31 +147,12 @@ fn validate_config(config: &QualityRuleConfig, require_account: bool) -> Result<
         }
         template.config.settings()?;
     }
-    // Retain the legacy field for stored template compatibility; template actions
-    // ignore it and use auto_restore exclusively.
-    if config.disable_excel_on_native_recovery
-        && (config.detection_mode != QualityDetectionMode::StateProbe
-            || !matches!(
-                config.failure_action,
-                QualityFailureAction::EnableExcel | QualityFailureAction::ApplyAccountTemplate
-            ))
-    {
-        return Err(AdminError::invalid(
-            "原生恢复后关闭Excel仅适用于旧版状态探针开启Excel规则",
-        ));
-    }
     if !(1..=100).contains(&config.excel_failure_threshold)
         || config
             .failure_threshold
             .is_some_and(|value| !(1..=100).contains(&value))
     {
         return Err(AdminError::invalid("连续异常阈值必须为 1–100 轮"));
-    }
-    if config
-        .excel_recovery_threshold
-        .is_some_and(|value| !(1..=100).contains(&value))
-    {
-        return Err(AdminError::invalid("连续正常阈值必须为 1–100 轮"));
     }
     let groups = config
         .failure_group_ids
@@ -322,24 +298,11 @@ impl QualityOpsService {
             .map_err(|error| map_store_error(error, "quality account"))?
             .ok_or_else(|| AdminError::not_found("账号不存在"))?;
         let state_probe = config.detection_mode == QualityDetectionMode::StateProbe;
-        if state_probe || config.failure_action == QualityFailureAction::EnableExcel {
-            if account.account.provider_kind.as_str() != "openai"
-                || account.account.authentication_kind != "oauth"
-            {
-                return Err(AdminError::invalid(
-                    "状态探针和开启Excel模式仅支持OpenAI OAuth账号",
-                ));
-            }
-            if config.failure_action == QualityFailureAction::EnableExcel
-                && !account
-                    .account
-                    .effective_excel_models
-                    .contains(&config.model)
-            {
-                return Err(AdminError::invalid(
-                    "被测模型不在账号有效Excel模型列表，请先在账号设置中配置",
-                ));
-            }
+        if state_probe
+            && (account.account.provider_kind.as_str() != "openai"
+                || account.account.authentication_kind != "oauth")
+        {
+            return Err(AdminError::invalid("状态探针仅支持OpenAI OAuth账号"));
         }
         // Validate an answer operation without sending an upstream request.
         self.providers
@@ -1124,15 +1087,6 @@ mod tests {
                 .is_none()
         );
         for invalid in [0, 101, 255] {
-            config.excel_recovery_threshold = Some(invalid);
-            assert!(validate(&config).is_err());
-        }
-        for valid in [1, 2, 100] {
-            config.excel_recovery_threshold = Some(valid);
-            assert!(validate(&config).is_ok());
-        }
-        config.excel_recovery_threshold = None;
-        for invalid in [0, 101, 255] {
             config.excel_failure_threshold = invalid;
             assert!(validate(&config).is_err());
         }
@@ -1155,27 +1109,29 @@ mod tests {
     }
 
     #[test]
-    fn quality_state_probe_needs_no_judge_and_rejects_parallel_samples_or_auto_restore() {
-        let value = serde_json::json!({
+    fn retired_excel_rule_becomes_record_only_without_reviving_recovery() {
+        let mut config: QualityRuleConfig = serde_json::from_value(serde_json::json!({
             "detectionMode": "state_probe", "accountId": "account", "model": "model",
             "enabled": true, "cron": "0 */6 * * *", "timezone": "UTC", "repetitions": 1,
-            "failureAction": "enable_excel"
-        });
-        let mut config: QualityRuleConfig = serde_json::from_value(value).unwrap();
+            "failureAction": "enable_excel", "disableExcelOnNativeRecovery": true,
+            "excelRecoveryThreshold": 8, "excelFailureThreshold": 3
+        }))
+        .unwrap();
+        assert_eq!(config.failure_action, QualityFailureAction::None);
+        assert!(!config.disable_excel_on_native_recovery);
+        assert_eq!(config.excel_recovery_threshold, None);
+        assert_eq!(config.excel_failure_threshold, 3);
         assert!(validate(&config).is_ok());
         config.repetitions = 2;
-        assert!(validate(&config).is_err());
+        assert!(
+            validate(&config).is_err(),
+            "native state probes remain serial"
+        );
         config.repetitions = 1;
-        config.auto_restore = true;
-        assert!(validate(&config).is_err());
-        config.auto_restore = false;
-        config.disable_excel_on_native_recovery = true;
-        assert!(validate(&config).is_ok());
-        config.failure_action = QualityFailureAction::None;
-        assert!(validate(&config).is_err());
-        config.failure_action = QualityFailureAction::EnableExcel;
-        config.detection_mode = QualityDetectionMode::Answer;
-        assert!(validate(&config).is_err());
+        let value = serde_json::to_value(config).unwrap();
+        assert_eq!(value["failureAction"], "none");
+        assert!(value.get("disableExcelOnNativeRecovery").is_none());
+        assert!(value.get("excelRecoveryThreshold").is_none());
     }
 
     #[test]

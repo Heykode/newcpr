@@ -232,21 +232,6 @@ fn is_audited_private_test(member: &str, relative: &Path, item: &Item) -> bool {
                 && module.content.is_none()
                 && matches!(module.vis, syn::Visibility::Inherited)
         }
-        ("crates/providers/openai", Some("transport/excel/images.rs"), Item::Fn(function)) => {
-            matches!(
-                function.sig.ident.to_string().as_str(),
-                "validate" | "validate_references" | "decoded_budget_user" | "collect_user"
-            )
-        }
-        ("crates/providers/openai", Some("transport/excel/replay.rs"), Item::Fn(function)) => {
-            function.sig.ident == "restore"
-        }
-        // Fresh quota reset evidence stays private to its recovery owner.
-        ("crates/providers/openai", Some("credential/quota/recovery.rs"), Item::Mod(module)) => {
-            module.ident == "reset_tests"
-                && module.content.is_some()
-                && matches!(module.vis, syn::Visibility::Inherited)
-        }
         // Cleanup clock/cancellation transitions require owner-local tests without
         // exposing the batch runner or adding production clock controls.
         ("crates/gateway-store", Some("postgres/log_cleanup/worker.rs"), Item::Mod(module)) => {
@@ -281,10 +266,10 @@ fn is_audited_private_test(member: &str, relative: &Path, item: &Item) -> bool {
                 && module.content.is_some()
                 && matches!(module.vis, syn::Visibility::Inherited)
         }
-        // Keep logging markers and Excel's private delivery state unexported;
+        // Keep logging markers private;
         // these exact inline modules test their contracts without production hooks.
         ("crates/providers/openai", Some("provider/failure.rs"), Item::Mod(module)) => {
-            (module.ident == "quality_logging_tests" || module.ident == "excel_buffer_tests")
+            module.ident == "quality_logging_tests"
                 && module.content.is_some()
                 && matches!(module.vis, syn::Visibility::Inherited)
         }
@@ -331,32 +316,6 @@ fn is_audited_private_test(member: &str, relative: &Path, item: &Item) -> bool {
                 && module.content.is_none()
                 && matches!(module.vis, syn::Visibility::Inherited)
         }
-        // Protocol authorization, bounded attachment parsing and immutable replay
-        // are private implementation details, not production test APIs.
-        (
-            "crates/providers/openai",
-            Some(
-                "provider/excel.rs"
-                | "transport/excel/catalog.rs"
-                | "transport/excel/events.rs"
-                | "transport/excel/history_messages.rs"
-                | "transport/excel/repair.rs"
-                | "transport/excel/request.rs"
-                | "transport/excel/replay.rs"
-                | "transport/excel/tools.rs"
-                | "transport/excel/images.rs"
-                | "transport/excel/image_cache.rs"
-                | "transport/excel/diagnostics.rs"
-                | "transport/excel/image_relay.rs"
-                | "transport/excel/usage.rs"
-                | "transport/excel/stream.rs",
-            ),
-            Item::Mod(module),
-        ) => {
-            module.ident == "tests"
-                && module.content.is_some()
-                && matches!(module.vis, syn::Visibility::Inherited)
-        }
         // Live claim ownership and frozen header profiles are private state;
         // keep their tests private instead of exporting mutation hooks.
         (
@@ -366,17 +325,6 @@ fn is_audited_private_test(member: &str, relative: &Path, item: &Item) -> bool {
         ) => {
             module.ident == "tests"
                 && module.content.is_some()
-                && matches!(module.vis, syn::Visibility::Inherited)
-        }
-        ("crates/providers/openai", Some("transport/excel/mod.rs"), Item::Mod(module)) => {
-            matches!(
-                module.ident.to_string().as_str(),
-                "tests"
-                    | "tool_compat_tests"
-                    | "image_tests"
-                    | "history_tests"
-                    | "protocol_compat_tests"
-            ) && module.content.is_none()
                 && matches!(module.vis, syn::Visibility::Inherited)
         }
         (
@@ -637,7 +585,7 @@ fn egress_private_tests_require_exact_owner_and_test_only_gate() {
 fn provider_failure_tests_require_exact_private_owner_and_inline_test_gate() {
     let owner = "crates/providers/openai";
     let path = Path::new("provider/failure.rs");
-    for name in ["quality_logging_tests", "excel_buffer_tests"] {
+    for name in ["quality_logging_tests"] {
         let item: Item = syn::parse_str(&format!("#[cfg(test)] mod {name} {{}}")).unwrap();
         assert!(is_audited_private_test(owner, path, &item));
         assert!(!is_audited_private_test("crates/gateway-core", path, &item));
@@ -722,34 +670,6 @@ fn cleanup_private_tests_require_exact_owner_and_do_not_expose_test_apis() {
         "#[cfg(any(test, feature = \"production\"))] mod tests {}",
         "#[cfg(test)] #[path = \"fixture.rs\"] mod tests {}",
         "#[cfg_attr(test, path = \"fixture.rs\")] mod tests;",
-    ] {
-        let item: Item = syn::parse_str(source).unwrap();
-        assert!(!is_audited_private_test(owner, path, &item), "{source}");
-    }
-}
-
-#[test]
-fn quota_reset_private_tests_require_exact_owner_and_do_not_expose_test_apis() {
-    let owner = "crates/providers/openai";
-    let path = Path::new("credential/quota/recovery.rs");
-    let item: Item = syn::parse_str("#[cfg(test)] mod reset_tests {}").unwrap();
-    assert!(is_audited_private_test(owner, path, &item));
-    assert!(!is_audited_private_test("crates/gateway-core", path, &item));
-    assert!(!is_audited_private_test(
-        owner,
-        Path::new("credential/quota/mod.rs"),
-        &item
-    ));
-    for source in [
-        "mod reset_tests {}",
-        "#[cfg(test)] mod reset_tests;",
-        "#[cfg(test)] pub(crate) mod reset_tests {}",
-        "#[cfg(test)] pub mod reset_tests {}",
-        "#[cfg(test)] mod other {}",
-        "#[cfg(test)] pub fn reset_tests() {}",
-        "#[cfg(any(test, feature = \"production\"))] mod reset_tests {}",
-        "#[cfg(test)] #[path = \"fixture.rs\"] mod reset_tests {}",
-        "#[cfg_attr(test, path = \"fixture.rs\")] mod reset_tests;",
     ] {
         let item: Item = syn::parse_str(source).unwrap();
         assert!(!is_audited_private_test(owner, path, &item), "{source}");
@@ -872,7 +792,7 @@ fn private_inline_tests_do_not_allow_other_production_modules_or_functions() {
         Path::new("runtime/mod.rs"),
         &item,
     ));
-    assert!(is_audited_private_test(
+    assert!(!is_audited_private_test(
         "crates/providers/openai",
         Path::new("transport/excel/replay.rs"),
         &item,
@@ -906,44 +826,9 @@ fn private_inline_tests_do_not_allow_other_production_modules_or_functions() {
 }
 
 #[test]
-fn excel_and_live_private_tests_require_exact_owner_and_do_not_expose_test_apis() {
+fn live_private_tests_require_exact_owner_and_do_not_expose_test_apis() {
     let owner = "crates/providers/openai";
-    for name in ["tool_compat_tests", "image_tests", "history_tests"] {
-        let file = Path::new("transport/excel/mod.rs");
-        let item: Item = syn::parse_str(&format!("#[cfg(test)] mod {name};")).unwrap();
-        assert!(is_audited_private_test(owner, file, &item));
-        assert!(!is_audited_private_test(
-            owner,
-            Path::new("transport/excel/tools.rs"),
-            &item
-        ));
-        for source in [
-            format!("#[cfg(test)] pub mod {name};"),
-            format!("#[cfg(test)] mod {name} {{}}"),
-            format!("mod {name};"),
-        ] {
-            let item: Item = syn::parse_str(&source).unwrap();
-            assert!(!is_audited_private_test(owner, file, &item));
-        }
-    }
-    for relative in [
-        "provider/excel.rs",
-        "provider/live.rs",
-        "transport/client_live.rs",
-        "transport/excel/catalog.rs",
-        "transport/excel/history_messages.rs",
-        "transport/excel/repair.rs",
-        "transport/excel/request.rs",
-        "transport/excel/replay.rs",
-        "transport/excel/tools.rs",
-        "transport/excel/images.rs",
-        "transport/excel/image_cache.rs",
-        "transport/excel/diagnostics.rs",
-        "transport/excel/image_relay.rs",
-        "transport/excel/usage.rs",
-        "transport/excel/stream.rs",
-        "transport/excel/mod.rs",
-    ] {
+    for relative in ["provider/live.rs", "transport/client_live.rs"] {
         let path = Path::new(relative);
         let declaration = if relative.ends_with("/mod.rs") {
             "#[cfg(test)] mod tests;"

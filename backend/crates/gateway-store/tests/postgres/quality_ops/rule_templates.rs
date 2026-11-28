@@ -224,15 +224,9 @@ async fn rule_template_application_preserves_accounts_and_history_and_survives_c
     assert_eq!(original.id, replaced.id);
     assert!(!replaced.config.enabled);
     assert_eq!(store.runs(&replaced.id).await.unwrap().len(), 1);
+    let detail = store.detail(&old_run.id).await.unwrap().unwrap();
     assert_eq!(
-        store
-            .detail(&old_run.id)
-            .await
-            .unwrap()
-            .unwrap()
-            .config
-            .unwrap()
-            .prompt,
+        serde_json::to_value(detail.config.unwrap()).unwrap()["prompt"],
         original.config.prompt
     );
     store

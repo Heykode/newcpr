@@ -33,8 +33,13 @@ const fn default_stream_max_retries() -> u64 {
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct OpenAiConfig {
-    #[serde(default)]
-    pub excel_image_relay_public_url: Option<String>,
+    // Accept only this known retired key while keeping all other settings strict.
+    #[serde(
+        default,
+        rename = "excel_image_relay_public_url",
+        deserialize_with = "discard_retired_setting"
+    )]
+    legacy_image_relay: (),
     #[serde(default)]
     pub api: CodexApiConfig,
     #[serde(default)]
@@ -63,13 +68,6 @@ impl OpenAiConfig {
         self.quota.validate()?;
         self.auth.validate()?;
         self.wire_profile.validate()?;
-        if self
-            .excel_image_relay_public_url
-            .as_deref()
-            .is_some_and(|url| !crate::transport::excel::image_relay::validate_origin(url))
-        {
-            return Err(OpenAiConfigError::InvalidExcelImageRelay);
-        }
         self.identity_secret_path = runtime_data_dir.join("identity_hmac_secret");
         Ok(())
     }
@@ -135,7 +133,7 @@ impl OpenAiConfig {
 impl Default for OpenAiConfig {
     fn default() -> Self {
         Self {
-            excel_image_relay_public_url: None,
+            legacy_image_relay: (),
             api: CodexApiConfig::default(),
             ws_pool: CodexWebSocketPoolSettings::default(),
             quota: CodexQuotaSettings::default(),
@@ -489,8 +487,6 @@ impl From<CodexWireProfileConfig> for CodexWireProfile {
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum OpenAiConfigError {
-    #[error("Excel image relay requires a public HTTPS origin")]
-    InvalidExcelImageRelay,
     #[error("OpenAI configuration field is invalid: {0}")]
     InvalidField(&'static str),
 }
@@ -502,4 +498,11 @@ fn numeric_dotted_version(value: &str) -> bool {
         .filter(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
         .count();
     valid_parts >= 2 && valid_parts == value.split('.').count()
+}
+
+fn discard_retired_setting<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<(), D::Error> {
+    let _ = serde::de::IgnoredAny::deserialize(deserializer)?;
+    Ok(())
 }

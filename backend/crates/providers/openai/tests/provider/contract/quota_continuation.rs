@@ -609,6 +609,17 @@ async fn native_queue_recovery_checks_an_immediate_spare_in_each_affinity_mode()
             .await
             .err()
             .unwrap();
+        if previous_route == "excel" {
+            assert_eq!(native.send_state(), UpstreamSendState::NotSent);
+            assert_eq!(
+                native
+                    .client_visible_upstream_error()
+                    .and_then(|e| e.code()),
+                Some("previous_response_not_found")
+            );
+            assert!(leases.capacity.waits.lock().unwrap().is_empty());
+            continue;
+        }
         assert_eq!(
             native.kind(),
             ProviderErrorKind::ConcurrencyQueueTimeout,

@@ -143,10 +143,10 @@ export interface ReloginNewAccountForm {
   outboundProxyId?: string
   qualityTemplate?: Pick<import('./quality-ops').QualityRuleTemplate, 'id' | 'revision'>
 }
-export function pushRelogin(rows: Pick<ReloginEntry, 'id' | 'revision'>[], template?: AccountTemplateSelection, customName?: string, selections?: Record<string, ReloginPushSelection>, newAccountExcel?: import('@/utils/excel-settings').ExcelSettings, newAccount?: ReloginNewAccountForm) {
+export function pushRelogin(rows: Pick<ReloginEntry, 'id' | 'revision'>[], template?: AccountTemplateSelection, customName?: string, selections?: Record<string, ReloginPushSelection>, newAccount?: ReloginNewAccountForm) {
   const ids = rows.map(row => row.id)
   const revisions = Object.fromEntries(rows.map(row => [row.id, row.revision]))
-  return request<ReloginBatchResult[]>({ url: '/api/admin/relogin/push', method: 'POST', data: { ids, revisions, ...(template ? { template } : {}), ...(customName ? { customName } : {}), ...(selections ? { selections } : {}), ...(newAccountExcel ? { newAccountExcel } : {}), ...(newAccount ? { newAccount } : {}) }, timeout: 120000 })
+  return request<ReloginBatchResult[]>({ url: '/api/admin/relogin/push', method: 'POST', data: { ids, revisions, ...(template ? { template } : {}), ...(customName ? { customName } : {}), ...(selections ? { selections } : {}), ...(newAccount ? { newAccount } : {}) }, timeout: 120000 })
 }
 export function deleteRelogin(ids: string[]) {
   return request<void>({ url: '/api/admin/relogin/delete', method: 'POST', data: { ids } })

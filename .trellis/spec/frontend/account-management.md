@@ -31,7 +31,7 @@
   or selection implicitly. Editing, deleting and menus reuse the existing handlers.
 - Reuse `AccountIdentityCell.mobile`, quota summary `comfortable`, action sizes and
   `AccountGroupMarks.layout = 'wrap'`. Their defaults preserve desktop appearance.
-  Keep full email wrapping, monitoring, Excel and 2FA indicators. Extra columns,
+  Keep full email wrapping, monitoring and 2FA indicators. Extra columns,
   including purchase cost and relogin count, remain in each card's expanded details.
 - Keep mobile metadata compact: provider avatar, plan, status and monitoring share
   one strip below the ordinary-weight email, with a reserved scheduling-switch column.
@@ -50,7 +50,7 @@
   not merely cell bounds or inherited classes.
 - `AccountQuotaPanel.mobile` owns its frame and width. It has a fragment root, so
   passing a class from the caller cannot remove its desktop padding. Mobile metadata
-  must wrap, and balances/Excel details use container width, not old table offsets.
+  must wrap, and balances/details use container width, not old table offsets.
 - Browser tests must select `[data-account-card]` on mobile, and still assert actual
   table headers/cells on desktop. Check 320/390/430/767px, both themes, expanded bounds,
   cancel paths, batch editing, unknown quota/capacity, and quota refresh without a GET.
@@ -62,14 +62,13 @@
   consumer before ordering/grouping. If no account-wide usage is known, show
   model-group windows so native Antigravity quotas remain visible. Do not invent
   account-wide totals from model windows or convert unknown usage into zero.
-- Preserve credits, overdraft, refresh, profile, reset/settings actions and Excel
-  notes. With no applicable windows, retain the existing unobserved state.
+- Preserve credits, overdraft, refresh, profile and reset/settings actions. With no applicable windows, retain the existing unobserved state.
   Verify mixed/model-only/empty data and desktop/mobile presentation.
 
 ## Account Menus And Quota Settings
 
 - Account row menus reuse `RowActionMenu` on desktop and mobile. Keep immediate
-  relogin, Excel, quality, catalog export and their existing disabled/busy guards;
+  relogin, quality, catalog export and their existing disabled/busy guards;
   menu keyboard support must not change action payloads or select the account row.
 - Quota settings keep the bucket title and compact warmup switch on one row.
   Limit/model controls use `validateEvent=false`; editing clears the field error
@@ -98,7 +97,7 @@
 
 - The template picker belongs to `AccountSetupFields`, before editable settings,
   not the credential-entry step. Selection copies scheduling/groups and present
-  optional model/Excel fields; it never replaces account name or purchase metadata.
+  optional model fields; it never replaces account name or purchase metadata.
 - Account and monitoring templates share one responsive first-step row: equal-width
   controls on desktop and stacked controls on narrow screens. A monitoring selection
   is revision-fenced and is applied only after the account commit is known. Credential
@@ -164,7 +163,7 @@ falling back to the durable account ID after deletion.
 
 ### 1. Scope / Trigger
 Quota refresh/recovery may update a complete returned row without a list reload.
-Partial scheduling/Excel toggles retain their authoritative reread path.
+Partial scheduling toggles retain their authoritative reread path.
 
 ### 2. Signatures
 `replaceAccount(account, { authoritative: true, previous })` carries the row captured
@@ -215,7 +214,7 @@ Never infer principal identity from email or erase usage while editing a price.
 
 - `AccountOutboundField` is shared by editing, bulk editing, onboarding and templates.
   It selects direct, a saved proxy by name, Mihomo pool
-  or IPv6 pool. Excel selects the upstream, independently of egress.
+  or IPv6 pool. Request exit selection remains independent from the removed Excel route.
 - Ordinary proxy-pool allocation is no longer offered in either egress selector.
   A saved `proxy_pool` value remains visible as a disabled current-setting option
   until explicitly changed; never silently convert it to direct or guess a proxy ID.
@@ -267,55 +266,19 @@ Never infer principal identity from email or erase usage while editing a price.
   same-endpoint proxies, one GET per editor open, and unchanged template/batch
   opt-ins at desktop and narrow widths.
 
-## 2FA Enrollment and Excel Policy
+## 2FA Enrollment
 
-- Account avatar frames carry Excel status: yellow historical warning takes precedence
-  over green Excel-enabled status; otherwise retain the stable default identity color.
-  Use a constant two-pixel border (transparent by default), preserving avatar dimensions,
-  provider icons, 2FA marks, swipe handles and independent quality-monitoring badges.
-  Keep the visible yellow account-name warning removed; retain
-  `BPS 403疑似被封excel`, timestamp and actual Excel mode in tooltip/accessible text.
-  A separate non-interactive 16px green `Table2` marker immediately before the name
-  reflects only `responsesUpstream === 'excel'`, with `Excel 模式已开启` tooltip and
-  accessible text. Preserve it for paused accounts and historical warnings; hide it
-  for absent/Codex mode, including automatic mode closure. It indicates configured
-  mode, not health or eligibility for every model. Reuse existing successful row
-  updates; failed mutations must not change it or trigger additional reads.
-  The persistent `excel403WarningAt` timestamp is independent of enabled/route state; resuming
-  scheduling or leaving Excel must not hide it. Fall back to legacy pause metadata
-  only when the new response field is absent, not when it explicitly returns null.
-  Tooltips describe historical evidence, never a confirmed ban or current pause.
-- Share the exact `Excel遇到HTTP 403` label and three options through
-  `Excel403ActionSelect`: `不自动处理`, `暂停账号调度`, `关闭Excel模式`.
-  Single edits send changed fields only, batches retain explicit opt-in, and old
-  boolean projections are readable. New billing drafts default true; old false stays false.
+- Keep ordinary avatar styling, 2FA and independent quality badges; no Excel indicators.
 - OpenAI import adds the 2FA mode, durable enrollment submission and progress display.
   Clear password/TOTP text only after accepted submission; never persist it in browser
   storage. Reuse the login library list for safe progress and refresh pool on settlement.
   Cancel/stale reads on disposal, avoid overlapping polls and display read failures.
 - The replacement checkbox must use `show-label`; its `label` prop alone is accessibility
-  text. All five import modes must fit at 320px without truncation. The shared 403
-  select occupies full form width; do not modify global base controls for one form.
+  text. All five import modes must fit at 320px without truncation. Do not modify
+  global base controls for one form.
 - Relogin exports capture selected IDs before confirmation and require a second explicit
   click. Cancel never reads secrets. Export one file per action, with errors surfaced.
-- Synthetic browser coverage: `browser/account-2fa-enrollment.mjs` and
-  `browser/account-excel.mjs`; live login compatibility is a separate verification.
-
-## Excel Model Inheritance
-
-- Global `excelDefaultModels` starts with `gpt-5.6-sol` and `gpt-6-astra`.
-  Account `excelModelsFollowGlobal` selects inherited or custom lists independently
-  of its Excel enable switch. Show `effectiveExcelModels` in account details.
-- Share `ExcelModelFields` across editing, templates, import and relogin push.
-  Never submit stale custom text when following global. Single edits submit only
-  changed fields; batch edits keep independent opt-in checkboxes.
-- Legacy accounts/templates retain their stored values. New account database
-  defaults inherit; import omission preserves existing configuration.
-  Relogin `newAccountExcel` applies only to new accounts and overrides templates.
-  Existing and automatic relogin retain Excel configuration.
-- `BaseCheckbox.label` is accessibility-only unless `showLabel` is supplied.
-  Standalone opt-in controls must show their label; verify small-screen screenshots
-  and modal footer bounds after responsive layout settles.
+- Synthetic browser coverage: `browser/account-2fa-enrollment.mjs`; live login compatibility is a separate verification.
 
 ## Account Model Access
 
@@ -907,7 +870,7 @@ real row and checks both themes at 1440/390/320px for clipping and overflow.
 - Keep the key badge independent from the account action's busy/blocked state.
   The menu uses a bounded current-page action query, immutable clicked target
   and version, independent error state, and cancellation for reads only.
-- The account-menu `立即重登` action sits immediately below the Excel entry and
+- The account-menu `立即重登` action retains its existing operation guards and
   queues login plus automatic settlement to the selected account on one click; no
   second confirmation dialog. Preserve the request revision and backend target fences.
   Show progress, block duplicate submissions, refresh account
@@ -1052,25 +1015,6 @@ declared/absent models and both themes at 1440/390/320px. No production requests
 
 Wrong: export the last globally cached plan catalog for a clicked account.
 Correct: pass only that row's ID and download the selected-account native result.
-
-## Excel Encrypted Message Omission
-
-`excelIgnoreEncryptedContent` is an account-level, default-off, lossy option.
-Display it only in supported OAuth account edit/batch edit dialogs. The shared
-fields component needs an explicit `encryptedContentAvailable` capability so
-import/template forms never show an unbound, unsaved switch.
-
-Single edits load missing values as false and omit unchanged values in patches.
-Batch edits use an independent `updateExcelIgnoreEncryptedContent` opt-in that
-resets each time the dialog opens or closes. An explicit route change to Codex
-clears the option; changing this option alone never switches routes. Preserve
-the saved value during unrelated edits and when old clients omit the field.
-
-Warn that only marked encrypted message parts on actual Excel requests are
-replaced by an omission notice: this is not decryption or plaintext recovery.
-Native Codex requests and plaintext-only content remain outside its scope.
-Cover save/readback, opt-in reset, disabled route behavior and 1440/390/320px
-layouts with synthetic fixtures; never enable production accounts for UI QA.
 
 ## Concurrency Detail Refresh
 

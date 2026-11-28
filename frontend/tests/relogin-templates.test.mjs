@@ -15,14 +15,11 @@ function load(path, dependencies = {}) {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2024 },
   })
   const exports = {}
-  runInNewContext(outputText, { exports, TextEncoder, require: name => dependencies[name] ?? (name === '@/utils/excel-defaults' ? load('../src/utils/excel-defaults.ts') : require(name)) })
+  runInNewContext(outputText, { exports, TextEncoder, require: name => dependencies[name] ?? (require(name)) })
   return exports
 }
 const { templateForm, templateConfig } = load('../src/components/account-templates/template-form.ts', {
   '@/views/accounts/utils/modelAccess': load('../src/views/accounts/utils/modelAccess.ts'),
-  '@/utils/excel-settings': load('../src/utils/excel-settings.ts', {
-    '@/views/accounts/utils/schedulingForm': load('../src/views/accounts/utils/schedulingForm.ts'),
-  }),
   '@/views/accounts/utils/schedulingForm': load('../src/views/accounts/utils/schedulingForm.ts'),
 })
 
@@ -64,7 +61,6 @@ test('template model restrictions reuse exact ID and nonempty-list validation', 
 
 test('managed exit templates do not require or toggle Excel', () => {
   const form = templateForm({ name: 'Native proxy', requestProxySource: 'mihomo' })
-  assert.equal(form.applyExcel, false)
   assert.equal(form.proxyMode, 'mihomo')
   const config = templateConfig(form)
   assert.equal(config.requestProxySource, 'mihomo')
@@ -82,17 +78,10 @@ test('templates roundtrip scheduling, groups and proxy without sharing mutable a
   form.groupIds.push('group-b')
   assert.deepEqual(config.groupIds, ['group-a'])
   const blank = templateForm()
-  assert.equal(blank.excelModels, 'gpt-6-astra, gpt-5.6-sol, gpt-5.6-terra')
   blank.name = '  Defaults  '
   assert.deepEqual(JSON.parse(JSON.stringify(templateConfig(blank))), {
     name: 'Defaults',
     enabled: true,
-    responsesUpstream: 'codex',
-    excelModelsFollowGlobal: true,
-    excelCacheCreationAsInput: true,
-    excelIgnoreEncryptedContent: false,
-    excel403Action: 'none',
-    excelRecovery: { enabled: false, intervalMinutes: 60 },
     concurrencyLimit: null,
     weight: 1,
     groupIds: [],
@@ -121,51 +110,6 @@ test('IPv6 templates distinguish preserve, inherit and all existing modes', () =
   assert.equal(inherit.outboundProxyId, null)
 })
 
-test('recovery templates preserve legacy omissions and explicitly roundtrip enabled or disabled', () => {
-  const legacy = templateForm({ name: 'Legacy Excel', responsesUpstream: 'excel' })
-  assert.equal('excelRecovery' in templateConfig(legacy), false)
-  for (const enabled of [true, false]) {
-    const form = templateForm({ name: 'Recovery', responsesUpstream: 'excel', excelRecovery: { enabled, intervalMinutes: 17 } })
-    assert.deepEqual(structuredClone(templateConfig(form).excelRecovery), { enabled, intervalMinutes: 17 })
-    form.applyExcel = false
-    assert.equal('excelRecovery' in templateConfig(form), false)
-  }
-  legacy.preserveExcelRecovery = false
-  assert.deepEqual(structuredClone(templateConfig(legacy).excelRecovery), { enabled: false, intervalMinutes: 60 })
-})
-
-test('Excel templates preserve legacy omission and roundtrip global/custom/empty lists', () => {
-  const legacy = templateConfig(templateForm({ name: 'Legacy' }))
-  assert.equal('responsesUpstream' in legacy, false)
-  assert.equal('excelModelsFollowGlobal' in legacy, false)
-  const form = templateForm()
-  form.name = 'Excel'
-  form.excelEnabled = true
-  assert.equal(templateConfig(form).responsesUpstream, 'excel')
-  assert.equal(templateConfig(form).excelModelsFollowGlobal, true)
-  assert.equal('excelModels' in templateConfig(form), false)
-  assert.equal(templateConfig(form).excelCacheCreationAsInput, true)
-  form.excelCacheCreationAsInput = true
-  assert.equal(templateConfig(form).excelCacheCreationAsInput, true)
-  assert.equal(templateConfig(form).excel403Action, 'none')
-  form.excel403Action = 'pause_account'
-  assert.equal(templateConfig(form).excel403Action, 'pause_account')
-  assert.equal(templateForm(templateConfig(form)).excel403Action, 'pause_account')
-  form.excelEnabled = false
-  assert.equal(templateConfig(form).excel403Action, 'none')
-  assert.equal(templateConfig(form).excelCacheCreationAsInput, true)
-  form.excelEnabled = true
-  form.excelModelsFollowGlobal = false
-  form.excelModels = 'gpt-6-astra, gpt-6-astra'
-  assert.equal(JSON.stringify(templateConfig(form).excelModels), '["gpt-6-astra"]')
-  form.excelModels = ''
-  assert.equal(JSON.stringify(templateConfig(form).excelModels), '[]')
-  form.excelModels = 'invalid/model'
-  assert.throws(() => templateConfig(form))
-  form.excelModelsFollowGlobal = true
-  assert.doesNotThrow(() => templateConfig(form))
-})
-
 test('template validation reuses account scheduling limits and rejects missing proxy and invalid names', () => {
   for (const values of [
     { name: '' },
@@ -179,24 +123,6 @@ test('template validation reuses account scheduling limits and rejects missing p
   ]) {
     assert.throws(() => templateConfig({ ...templateForm(), name: 'Test', ...values }))
   }
-})
-
-test('encrypted history omission is opt-in, roundtrips and is absent without Excel settings', () => {
-  const form = templateForm()
-  form.name = 'Encrypted history'
-  form.excelEnabled = true
-  assert.equal(form.excelIgnoreEncryptedContent, false)
-  for (const enabled of [true, false]) {
-    form.excelIgnoreEncryptedContent = enabled
-    assert.equal(templateConfig(form).excelIgnoreEncryptedContent, enabled)
-    assert.equal(templateForm(templateConfig(form)).excelIgnoreEncryptedContent, enabled)
-  }
-  form.excelIgnoreEncryptedContent = true
-  form.excelEnabled = false
-  assert.equal(templateConfig(form).excelIgnoreEncryptedContent, false)
-  form.applyExcel = false
-  assert.equal('excelIgnoreEncryptedContent' in templateConfig(form), false)
-  assert.equal(templateForm({ name: 'Legacy' }).excelIgnoreEncryptedContent, false)
 })
 
 test('push snapshots template revision and remains backward compatible without one', async () => {
@@ -277,4 +203,12 @@ test('credential maintenance template choice preserves keep, follow and separate
     assert.equal(templateForm(config).credentialProxyId, choice)
     assert.equal(config.outboundProxyId, null)
   }
+})
+
+test('retired template fields cannot survive editing and ordinary settings stay intact', () => {
+  const config = { name: 'Saved template', enabled: true, concurrencyLimit: 3, weight: 10, groupIds: ['group-a'], preserveOutboundProxy: true, outboundProxyId: null, requestProxySource: 'account', responsesUpstream: 'excel', excelModels: ['legacy'], excelRecovery: { enabled: true, intervalMinutes: 5 }, excelIgnoreEncryptedContent: true }
+  const saved = templateConfig(templateForm(config))
+  assert.equal(Object.keys(saved).some(key => key.startsWith('excel') || key === 'responsesUpstream'), false)
+  for (const key of ['name', 'enabled', 'concurrencyLimit', 'weight', 'groupIds', 'preserveOutboundProxy', 'outboundProxyId', 'requestProxySource'])
+    assert.deepEqual(JSON.parse(JSON.stringify(saved[key])), config[key])
 })

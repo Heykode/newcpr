@@ -546,11 +546,6 @@ pub async fn initialize_with_timezone(
         providers: registry.clone(),
         probe: probe.clone(),
     });
-    let excel_recovery = Arc::new(use_case::excel_recovery::ExcelRecoveryService {
-        accounts: store.accounts(),
-        providers: registry.clone(),
-        probe: probe.clone(),
-    });
     let codex_quota_overdraft = Arc::new(
         use_case::codex_quota_overdraft::CodexQuotaOverdraftService {
             accounts: store.accounts(),
@@ -651,7 +646,6 @@ pub async fn initialize_with_timezone(
         codex_quota_overdraft,
     )?);
     worker_contributions.push(workers::error_protection::contribution(error_protection)?);
-    worker_contributions.push(workers::excel_recovery::contribution(excel_recovery)?);
     worker_contributions.push(workers::reset_credits::contribution(reset_credits)?);
     worker_contributions.push(workers::notifications::contribution(notifications)?);
     Ok(AdminBundle {

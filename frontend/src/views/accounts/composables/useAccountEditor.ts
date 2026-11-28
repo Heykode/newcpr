@@ -1,7 +1,6 @@
 import type { Ref } from 'vue'
 import type { AccountModelAccess, getAccounts } from '@/api'
 import type { AccountEgressDraft, AccountEgressReadState } from '@/utils/account-egress'
-import type { Excel403Action } from '@/utils/excel-settings'
 import { onScopeDispose, ref, shallowRef, watch } from 'vue'
 
 import { updateAccount } from '@/api'
@@ -10,11 +9,9 @@ import { toast } from '@/components/base/BaseToast'
 import { useAsyncAction } from '@/composables/useAsyncAction'
 import { accountEgressFromAccount, accountEgressPatch, sameAccountEgress } from '@/utils/account-egress'
 import { normalizeAccountName } from '@/utils/account-name'
-import { DEFAULT_EXCEL_MODELS, DEFAULT_EXCEL_MODELS_INPUT } from '@/utils/excel-defaults'
-import { accountExcel403Action, excelRecoverySettings } from '@/utils/excel-settings'
 import { accountModelAccessError } from '../utils/modelAccess'
 import { purchaseCostPatch, trimAmount } from '../utils/purchaseCost'
-import { concurrencyLimitInput, parseAccountSchedulingForm, parseExcelModels } from '../utils/schedulingForm'
+import { concurrencyLimitInput, parseAccountSchedulingForm } from '../utils/schedulingForm'
 
 type AccountRow = Awaited<ReturnType<typeof getAccounts>>['items'][number]
 
@@ -32,22 +29,7 @@ export function useAccountEditor(options: {
   let initialPurchase = ''
   let initialCustomName = ''
   const schedulingEnabled = shallowRef(true)
-  const excelEnabled = shallowRef(false)
-  let initialExcelEnabled = false
-  const excelModels = shallowRef(DEFAULT_EXCEL_MODELS_INPUT)
-  const excelModelsFollowGlobal = shallowRef(true)
-  const excelCacheCreationAsInput = shallowRef(false)
-  const excelIgnoreEncryptedContent = shallowRef(false)
   const requestProxySource = shallowRef<import('@/utils/request-proxy-source').RequestProxySource>('account')
-  const excel403Action = shallowRef<Excel403Action>('none')
-  const excelRecoveryEnabled = shallowRef(false)
-  const excelRecoveryInterval = shallowRef('60')
-  let initialExcelRecovery = ''
-  let initialExcelCacheCreationAsInput = false
-  let initialExcelIgnoreEncryptedContent = false
-  let initialExcel403Action: Excel403Action = 'none'
-  let initialExcelModelsFollowGlobal = true
-  let initialExcelModels = ''
   const concurrencyLimit = shallowRef('')
   const weight = shallowRef('1')
   const modelAccess = ref<AccountModelAccess | undefined>()
@@ -110,22 +92,7 @@ export function useAccountEditor(options: {
     customName.value = account.customName ?? ''
     initialCustomName = customName.value
     schedulingEnabled.value = account.enabled
-    excelEnabled.value = account.responsesUpstream === 'excel'
-    initialExcelEnabled = excelEnabled.value
-    excelModels.value = (account.excelModels ?? DEFAULT_EXCEL_MODELS).join(', ')
-    excelModelsFollowGlobal.value = account.excelModelsFollowGlobal ?? false
-    excelCacheCreationAsInput.value = account.excelCacheCreationAsInput ?? false
-    excelIgnoreEncryptedContent.value = account.excelIgnoreEncryptedContent ?? false
     requestProxySource.value = account.requestProxySource ?? 'account'
-    excel403Action.value = accountExcel403Action(account)
-    excelRecoveryEnabled.value = account.excelRecovery?.enabled ?? false
-    excelRecoveryInterval.value = String(account.excelRecovery?.intervalMinutes ?? 60)
-    initialExcelRecovery = JSON.stringify([excelRecoveryEnabled.value, excelRecoveryInterval.value])
-    initialExcelCacheCreationAsInput = excelCacheCreationAsInput.value
-    initialExcelIgnoreEncryptedContent = excelIgnoreEncryptedContent.value
-    initialExcel403Action = excel403Action.value
-    initialExcelModelsFollowGlobal = excelModelsFollowGlobal.value
-    initialExcelModels = excelModels.value
     concurrencyLimit.value = concurrencyLimitInput(account.concurrencyLimit)
     weight.value = String(account.weight)
     modelAccess.value = account.modelAccess
@@ -147,12 +114,6 @@ export function useAccountEditor(options: {
       return
     }
     const scheduling = parseAccountSchedulingForm(concurrencyLimit.value, weight.value)
-    const excelAvailable = editingAccount.value?.provider === 'openai' && editingAccount.value.authenticationKind === 'oauth'
-    const models = !excelAvailable || excelModelsFollowGlobal.value ? [] : parseExcelModels(excelModels.value)
-    if (models === null) {
-      toast.warning('Excel 模型最多 64 个，每个名称最多 128 个字母、数字、点、下划线或连字符')
-      return
-    }
     if (!scheduling.valid) {
       toast.warning(scheduling.message)
       return
@@ -180,24 +141,6 @@ export function useAccountEditor(options: {
         payload.customName = name
       if (modelAccess.value && JSON.stringify(modelAccess.value) !== initialModelAccess)
         payload.modelAccess = { ...modelAccess.value, models: [...modelAccess.value.models] }
-      if (editingAccount.value?.provider === 'openai' && editingAccount.value.authenticationKind === 'oauth'
-        && excelEnabled.value !== initialExcelEnabled) {
-        payload.responsesUpstream = excelEnabled.value ? 'excel' : 'codex'
-      }
-      if (excelAvailable && (excelModelsFollowGlobal.value !== initialExcelModelsFollowGlobal
-        || (!excelModelsFollowGlobal.value && excelModels.value !== initialExcelModels))) {
-        payload.excelModelsFollowGlobal = excelModelsFollowGlobal.value
-        if (!excelModelsFollowGlobal.value)
-          payload.excelModels = models
-      }
-      if (excelAvailable && excelCacheCreationAsInput.value !== initialExcelCacheCreationAsInput)
-        payload.excelCacheCreationAsInput = excelCacheCreationAsInput.value
-      if (excelAvailable && (excelIgnoreEncryptedContent.value !== initialExcelIgnoreEncryptedContent || (initialExcelEnabled && !excelEnabled.value)))
-        payload.excelIgnoreEncryptedContent = excelEnabled.value && excelIgnoreEncryptedContent.value
-      if (excelAvailable && (excel403Action.value !== initialExcel403Action || (initialExcelEnabled && !excelEnabled.value)))
-        payload.excel403Action = excelEnabled.value ? excel403Action.value : 'none'
-      if (excelAvailable && JSON.stringify([excelRecoveryEnabled.value, excelRecoveryInterval.value]) !== initialExcelRecovery)
-        payload.excelRecovery = excelRecoverySettings(excelRecoveryEnabled.value, excelRecoveryInterval.value)
       await updateAccount(payload)
       showEditModal.value = false
       toast.success('账号已更新')
@@ -218,22 +161,7 @@ export function useAccountEditor(options: {
     applyInitialEgress(undefined)
     egressReadState.value = { loading: false, error: false }
     schedulingEnabled.value = true
-    excelEnabled.value = false
-    initialExcelEnabled = false
-    excelModels.value = DEFAULT_EXCEL_MODELS_INPUT
-    excelModelsFollowGlobal.value = true
-    excelCacheCreationAsInput.value = false
-    excelIgnoreEncryptedContent.value = false
     requestProxySource.value = 'account'
-    excel403Action.value = 'none'
-    excelRecoveryEnabled.value = false
-    excelRecoveryInterval.value = '60'
-    initialExcelRecovery = ''
-    initialExcelCacheCreationAsInput = false
-    initialExcelIgnoreEncryptedContent = false
-    initialExcel403Action = 'none'
-    initialExcelModelsFollowGlobal = true
-    initialExcelModels = ''
     concurrencyLimit.value = ''
     weight.value = '1'
     modelAccess.value = undefined
@@ -248,15 +176,7 @@ export function useAccountEditor(options: {
     showEditModal,
     editingAccount,
     schedulingEnabled,
-    excelEnabled,
-    excelModels,
-    excelModelsFollowGlobal,
-    excelCacheCreationAsInput,
-    excelIgnoreEncryptedContent,
     requestProxySource,
-    excel403Action,
-    excelRecoveryEnabled,
-    excelRecoveryInterval,
     concurrencyLimit,
     weight,
     modelAccess,

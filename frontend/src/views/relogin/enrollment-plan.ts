@@ -21,15 +21,6 @@ const settingKeys = [
   'concurrencyLimit',
   'purchaseAmount',
   'purchaseCycleStart',
-  'applyExcel',
-  'excelEnabled',
-  'excelModelsFollowGlobal',
-  'excelCacheCreationAsInput',
-  'excelIgnoreEncryptedContent',
-  'excel403Action',
-  'excelRecoveryEnabled',
-  'excelRecoveryInterval',
-  'excelModels',
 ] as const
 
 export function enrollmentSettings(form: AccountCreateForm) {

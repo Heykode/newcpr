@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import type { AccountGroup, AccountModelAccess } from '@/api'
-import type { Excel403Action } from '@/utils/excel-settings'
 
 import BaseButton from '@/components/base/BaseButton.vue'
 
@@ -15,7 +14,6 @@ defineProps<{
   groupsLoading: boolean
   saving: boolean
   hasUpdates: boolean
-  excelAvailable: boolean
   requestProxyAvailable: boolean
   provider?: string
   catalogAccountId?: string
@@ -32,20 +30,7 @@ const purchaseCycleStart = defineModel<string>('purchaseCycleStart', { default: 
 const updatePurchaseCost = defineModel<boolean>('updatePurchaseCost', { default: false })
 const updateCustomName = defineModel<boolean>('updateCustomName', { required: true })
 const enabled = defineModel<boolean>('enabled', { required: true })
-const excelEnabled = defineModel<boolean>('excelEnabled', { required: true })
-const excelModels = defineModel<string>('excelModels', { required: true })
-const excelModelsFollowGlobal = defineModel<boolean>('excelModelsFollowGlobal', { default: true })
-const excelCacheCreationAsInput = defineModel<boolean>('excelCacheCreationAsInput', { default: false })
-const excelIgnoreEncryptedContent = defineModel<boolean>('excelIgnoreEncryptedContent', { default: false })
 const requestProxySource = defineModel<import('@/utils/request-proxy-source').RequestProxySource>('requestProxySource', { default: 'account' })
-const excel403Action = defineModel<Excel403Action>('excel403Action', { default: 'none' })
-const excelRecoveryEnabled = defineModel<boolean>('excelRecoveryEnabled', { default: false })
-const excelRecoveryInterval = defineModel<string>('excelRecoveryInterval', { default: '60' })
-const updateExcelRecovery = defineModel<boolean>('updateExcelRecovery', { default: false })
-const updateExcelCacheCreationAsInput = defineModel<boolean>('updateExcelCacheCreationAsInput', { default: false })
-const updateExcelIgnoreEncryptedContent = defineModel<boolean>('updateExcelIgnoreEncryptedContent', { default: false })
-const updateExcel403Action = defineModel<boolean>('updateExcel403Action', { default: false })
-const updateExcelModels = defineModel<boolean>('updateExcelModels', { required: true })
 const concurrencyLimit = defineModel<string>('concurrencyLimit', { required: true })
 const weight = defineModel<string>('weight', { required: true })
 const modelAccess = defineModel<AccountModelAccess | undefined>('modelAccess', { required: true })
@@ -54,7 +39,6 @@ const proxyMode = defineModel<string>('proxyMode', { required: true })
 const proxyId = defineModel<string>('proxyId', { required: true })
 const selectedGroupIds = defineModel<string[]>('selectedGroupIds', { required: true })
 const updateEnabled = defineModel<boolean>('updateEnabled', { required: true })
-const updateExcelEnabled = defineModel<boolean>('updateExcelEnabled', { required: true })
 const updateConcurrencyLimit = defineModel<boolean>('updateConcurrencyLimit', { required: true })
 const updateWeight = defineModel<boolean>('updateWeight', { required: true })
 const updateGroups = defineModel<boolean>('updateGroups', { required: true })
@@ -74,20 +58,7 @@ const egressMode = defineModel<string>('egressMode', { required: true })
       v-model:custom-name="customName"
       v-model:update-custom-name="updateCustomName"
       v-model:enabled="enabled"
-      v-model:excel-enabled="excelEnabled"
-      v-model:excel-models="excelModels"
-      v-model:excel-models-follow-global="excelModelsFollowGlobal"
-      v-model:excel-cache-creation-as-input="excelCacheCreationAsInput"
-      v-model:excel-ignore-encrypted-content="excelIgnoreEncryptedContent"
       v-model:request-proxy-source="requestProxySource"
-      v-model:excel-403-action="excel403Action"
-      v-model:excel-recovery-enabled="excelRecoveryEnabled"
-      v-model:excel-recovery-interval="excelRecoveryInterval"
-      v-model:update-excel-cache-creation-as-input="updateExcelCacheCreationAsInput"
-      v-model:update-excel-ignore-encrypted-content="updateExcelIgnoreEncryptedContent"
-      v-model:update-excel-403-action="updateExcel403Action"
-      v-model:update-excel-recovery="updateExcelRecovery"
-      v-model:update-excel-models="updateExcelModels"
       v-model:concurrency-limit="concurrencyLimit"
       v-model:weight="weight"
       v-model:model-access="modelAccess"
@@ -97,19 +68,16 @@ const egressMode = defineModel<string>('egressMode', { required: true })
       v-model:proxy-id="proxyId"
       v-model:egress-mode="egressMode"
       v-model:update-enabled="updateEnabled"
-      v-model:update-excel-enabled="updateExcelEnabled"
       v-model:update-concurrency-limit="updateConcurrencyLimit"
       v-model:update-weight="updateWeight"
       v-model:update-groups="updateGroups"
       v-model:update-proxy="updateProxy"
       :provider="provider"
-      encrypted-content-available
       name-available
       model-access-available
       :model-account-id="catalogAccountId"
       :groups="groups"
       :groups-loading="groupsLoading"
-      :excel-available="excelAvailable"
       :request-proxy-available="requestProxyAvailable"
       :disabled="saving"
       batch

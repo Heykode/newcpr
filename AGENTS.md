@@ -27,7 +27,7 @@ Managed by Trellis. Edits outside this block are preserved; edits inside may be 
   not a destination for new changes.
 - Verify the remote, branch and worktree before editing or publishing. Adapt
   legacy behavior to this repository's existing account identity, egress,
-  scheduling, Excel, managed state and database contracts; do not import the
+  scheduling, managed state and database contracts; do not import the
   retired repository's history or overwrite unrelated worktree changes.
 - This target clarification does not authorize deployment or unfreeze excluded
   development branches.

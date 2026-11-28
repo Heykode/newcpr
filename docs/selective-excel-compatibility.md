@@ -1,5 +1,7 @@
 # Selective Excel compatibility and account refresh
 
+> Historical integration record. BPS Excel is now retired; its transport and tests below describe the recorded revision. Account row refresh remains independent. See `excel-removal.md`.
+
 This adaptation covers Sub2API PRs #229, #231/#232 and #195. It does not
 introduce #234 IP-401 tolerance, #250 feature search, or new settings.
 

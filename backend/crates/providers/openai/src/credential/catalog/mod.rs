@@ -51,7 +51,6 @@ pub struct CodexCatalogScope {
     account_id: ProviderAccountId,
     revision: CredentialRevision,
     plan: Option<String>,
-    adapter: Option<String>,
 }
 
 impl CodexCatalogScope {
@@ -60,9 +59,6 @@ impl CodexCatalogScope {
         Self {
             account_id: account.id().clone(),
             revision: account.revision(),
-            adapter: (account.responses_upstream()
-                == gateway_core::account::ResponsesUpstream::Excel)
-                .then(|| account.excel_models().as_slice().join("\0")),
             plan: account
                 .plan_type()
                 .map(str::trim)
@@ -78,10 +74,6 @@ impl CodexCatalogScope {
         digest.update(self.account_id.as_str());
         digest.update([0]);
         digest.update(self.plan.as_deref().unwrap_or_default());
-        if let Some(adapter) = &self.adapter {
-            digest.update([0]);
-            digest.update(adapter);
-        }
         ProviderCatalogScope::new(format!(
             "account:{}:{}",
             hex::encode(digest.finalize()),
@@ -321,7 +313,6 @@ struct CatalogCacheState {
     generation: u64,
     snapshot: Option<Arc<CodexCredentialCatalogSnapshot>>,
     pending: BTreeMap<CodexCatalogScope, String>,
-    excel_accounts: BTreeSet<ProviderAccountId>,
 }
 
 struct FetchedAccountModels {
@@ -373,29 +364,6 @@ impl CodexCredentialCatalogService {
     pub fn with_egress_runtime(mut self, runtime: Arc<CodexEgressRuntime>) -> Self {
         self.egress_runtime = Some(runtime);
         self
-    }
-
-    fn record_excel_accounts(
-        &self,
-        accounts: &[ProviderAccount],
-        replace_all: bool,
-    ) -> Result<(), CodexCredentialCatalogError> {
-        let mut cache = self
-            .cache
-            .write()
-            .map_err(|_| CodexCredentialCatalogError::Cache)?;
-        if replace_all {
-            cache.excel_accounts.clear();
-        }
-        for account in accounts {
-            cache.excel_accounts.remove(account.id());
-            if account.enabled()
-                && account.responses_upstream() == gateway_core::account::ResponsesUpstream::Excel
-            {
-                cache.excel_accounts.insert(account.id().clone());
-            }
-        }
-        Ok(())
     }
 
     fn backend_client_with_profile(&self, profile: CodexWireProfile) -> CodexBackendClient {
@@ -505,33 +473,7 @@ impl CodexCredentialCatalogService {
                 payload: model.document().clone(),
             })
             .collect::<Vec<_>>();
-        let excel_ids = self
-            .cache
-            .read()
-            .map_err(|_| CodexCredentialCatalogError::Cache)?
-            .excel_accounts
-            .iter()
-            .filter(|id| scope.allows(id))
-            .cloned()
-            .collect::<Vec<_>>();
-        let excel_accounts = self.repository.list_for_accounts(&excel_ids).await?;
-        let excel_models = excel_accounts
-            .iter()
-            .filter(|a| {
-                a.enabled()
-                    && a.responses_upstream() == gateway_core::account::ResponsesUpstream::Excel
-            })
-            .flat_map(|a| {
-                a.excel_models()
-                    .as_slice()
-                    .iter()
-                    .filter(|model| {
-                        a.model_access().allows(model) && scope.allows_model(a.id(), model)
-                    })
-                    .cloned()
-            })
-            .collect();
-        excel_catalog_capabilities(&descriptors, &excel_models)
+        Ok(descriptors)
     }
 
     #[must_use]
@@ -652,7 +594,6 @@ impl CodexCredentialCatalogService {
             .map_err(CredentialRepositoryError::from)?
             .filter(|account| account.provider().as_str() == "openai")
             .ok_or(CodexCredentialCatalogError::NoEligibleCredential)?;
-        self.record_excel_accounts(std::slice::from_ref(&account), false)?;
         let scope = CodexCatalogScope::for_account(&account);
         let client = self.discovery_client().await?;
         let revision = self.state_revision()?;
@@ -814,16 +755,8 @@ impl CodexCredentialCatalogService {
                 .await;
             let (models, document, etag) = match result {
                 Ok(snapshot) => snapshot.into_parts(),
-                Err(_)
-                    if account.responses_upstream()
-                        == gateway_core::account::ResponsesUpstream::Excel
-                        && !account.excel_models().as_slice().is_empty() =>
-                {
-                    (Vec::new(), bytes::Bytes::from_static(&[3]), None)
-                }
                 Err(error) => return Err(catalog_client_error(error)),
             };
-            let models = adapter_catalog_models(models, account)?;
             Ok(FetchedAccountModels {
                 models,
                 document,
@@ -957,53 +890,4 @@ fn is_bridge_model(model: &CodexCatalogModel) -> bool {
     serde_json::from_slice::<serde_json::Value>(model.document().body())
         .ok()
         .is_some_and(|value| value["source"] == "excel_bridge")
-}
-
-fn adapter_catalog_models(
-    mut models: Vec<CodexCatalogModel>,
-    account: &ProviderAccount,
-) -> Result<Vec<CodexCatalogModel>, CodexCredentialCatalogError> {
-    if account.responses_upstream() == gateway_core::account::ResponsesUpstream::Excel {
-        models.retain(|model| {
-            !account
-                .excel_models()
-                .contains(model.request_model().as_str())
-        });
-        for model in account.excel_models().as_slice() {
-            models.push(
-                crate::transport::catalog::excel_bridge_model(model)
-                    .map_err(|_| CodexCredentialCatalogError::InvalidCredentialData)?,
-            );
-        }
-    }
-    Ok(models)
-}
-
-fn excel_catalog_capabilities(
-    models: &[ProviderModelDescriptor],
-    excel_models: &BTreeSet<String>,
-) -> Result<Vec<ProviderModelDescriptor>, CodexCredentialCatalogError> {
-    let mut models = models.to_vec();
-    for model in &mut models {
-        if !excel_models.contains(model.model.as_str()) {
-            continue;
-        }
-        let mut document: serde_json::Map<String, serde_json::Value> =
-            serde_json::from_slice(model.payload.body())
-                .map_err(|_| CodexCredentialCatalogError::InvalidCredentialData)?;
-        document.insert("multi_agent_version".into(), serde_json::Value::Null);
-        document.insert(
-            "multi_agent_reasoning_effort".into(),
-            serde_json::Value::Null,
-        );
-        model.payload = gateway_core::operation::RawJsonPayload::new(
-            model.payload.protocol(),
-            serde_json::to_vec(&document)
-                .map_err(|_| CodexCredentialCatalogError::InvalidCredentialData)?
-                .into(),
-        )
-        .map_err(|_| CodexCredentialCatalogError::InvalidCredentialData)?
-        .with_context(model.payload.context().clone());
-    }
-    Ok(models)
 }

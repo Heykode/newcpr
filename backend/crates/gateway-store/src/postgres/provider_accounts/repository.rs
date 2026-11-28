@@ -895,9 +895,6 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
                 if let Some(cost) = &settings.purchase_cost {
                     super::purchase_costs::update(&mut transaction, &unique_ids, cost).await?;
                 }
-                if let Some(config) = settings.excel_recovery {
-                    super::excel_recovery::update(&mut transaction, &unique_ids, config).await?;
-                }
                 let proxy_selection =
                     if template_proxy_mode == Some(ImportTemplateProxyMode::Replace) {
                         Some(match &command.outbound_proxy {
@@ -924,14 +921,7 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
                         concurrency_limit: Some(settings.concurrency_limit),
                         weight: Some(settings.weight),
                         turn_state_injection_enabled: settings.turn_state_injection_enabled,
-                        responses_upstream: settings.responses_upstream,
-                        excel_models: settings.excel_models.as_ref(),
-                        excel_models_follow_global: settings.excel_models_follow_global,
-                        excel_cache_creation_as_input: settings.excel_cache_creation_as_input,
-                        excel_ignore_encrypted_content: settings.excel_ignore_encrypted_content,
                         request_proxy_source: settings.request_proxy_source,
-                        excel_auto_disable_on_403: settings.excel_auto_disable_on_403,
-                        excel_403_action: settings.excel_403_action,
                         model_access: settings.model_access.as_ref(),
                         outbound_proxy: proxy_selection.as_ref(),
                     },
@@ -1161,17 +1151,10 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
             let preserve_recovery = !command.explicit_scheduling_intent
                 && command.egress_mode.is_none()
                 && command.outbound_proxy.is_none()
-                && command.responses_upstream.is_none()
                 && command.model_access.is_none()
                 && command.turn_state_injection_enabled.is_none()
-                && command.excel_models.is_none()
-                && command.excel_models_follow_global.is_none()
-                && command.excel_cache_creation_as_input.is_none()
-                && command.excel_ignore_encrypted_content.is_none()
                 && command.request_proxy_source.is_none()
-                && command.excel_auto_disable_on_403.is_none()
-                && command.excel_403_action.is_none()
-                && command.excel_recovery.is_none();
+;
             let recovery_owners = if preserve_recovery {
                 super::super::quality_ops::capture_edit_owners(
                     &mut transaction,
@@ -1208,14 +1191,7 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
                     concurrency_limit: command.concurrency_limit,
                     weight: command.weight,
                     turn_state_injection_enabled: command.turn_state_injection_enabled,
-                    responses_upstream: command.responses_upstream,
-                    excel_models: command.excel_models.as_ref(),
-                    excel_models_follow_global: command.excel_models_follow_global,
-                    excel_cache_creation_as_input: command.excel_cache_creation_as_input,
-                    excel_ignore_encrypted_content: command.excel_ignore_encrypted_content,
                     request_proxy_source: command.request_proxy_source,
-                    excel_auto_disable_on_403: command.excel_auto_disable_on_403,
-                    excel_403_action: command.excel_403_action,
                     model_access: command.model_access.as_ref(),
                     outbound_proxy: command.outbound_proxy.as_ref(),
                 },
@@ -1244,10 +1220,6 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
             }
             if let Some(cost) = &command.purchase_cost {
                 super::purchase_costs::update(&mut transaction, &command.account_ids, cost).await?;
-            }
-            if let Some(config) = command.excel_recovery {
-                super::excel_recovery::update(&mut transaction, &command.account_ids, config)
-                    .await?;
             }
             append_admin_audit_event_in_transaction(&mut transaction, command.audit, revision)
                 .await?;
@@ -1642,22 +1614,12 @@ pub(crate) async fn apply_account_template_in_transaction(
             concurrency_limit: Some(settings.concurrency_limit),
             weight: Some(settings.weight),
             turn_state_injection_enabled: settings.turn_state_injection_enabled,
-            responses_upstream: settings.responses_upstream,
-            excel_models: settings.excel_models.as_ref(),
-            excel_models_follow_global: settings.excel_models_follow_global,
-            excel_cache_creation_as_input: settings.excel_cache_creation_as_input,
-            excel_ignore_encrypted_content: settings.excel_ignore_encrypted_content,
             request_proxy_source: settings.request_proxy_source,
-            excel_auto_disable_on_403: settings.excel_auto_disable_on_403,
-            excel_403_action: settings.excel_403_action,
             model_access: settings.model_access.as_ref(),
             outbound_proxy: (!config.preserve_outbound_proxy).then_some(&proxy),
         },
     )
     .await?;
-    if let Some(config) = settings.excel_recovery {
-        super::excel_recovery::update(transaction, &ids, config).await?;
-    }
     replace_account_group_assignments_in_transaction(transaction, &ids, &settings.group_ids).await
 }
 
@@ -1669,14 +1631,7 @@ struct AccountSchedulingPatch<'a> {
     concurrency_limit: Option<Option<AccountConcurrencyLimit>>,
     weight: Option<AccountWeight>,
     turn_state_injection_enabled: Option<bool>,
-    responses_upstream: Option<gateway_core::account::ResponsesUpstream>,
-    excel_models: Option<&'a gateway_core::account::ExcelModels>,
-    excel_models_follow_global: Option<bool>,
-    excel_cache_creation_as_input: Option<bool>,
-    excel_ignore_encrypted_content: Option<bool>,
     request_proxy_source: Option<gateway_core::provider_ports::session_proxy::RequestProxySource>,
-    excel_auto_disable_on_403: Option<bool>,
-    excel_403_action: Option<gateway_core::account::Excel403Action>,
     model_access: Option<&'a gateway_core::account::AccountModelAccess>,
     outbound_proxy: Option<&'a gateway_admin::model::proxies::AccountProxySelection>,
 }
@@ -1694,20 +1649,10 @@ async fn update_provider_accounts_scheduling_in_transaction(
         concurrency_limit,
         weight,
         turn_state_injection_enabled,
-        responses_upstream,
-        excel_models,
-        excel_models_follow_global,
-        excel_cache_creation_as_input,
-        excel_ignore_encrypted_content,
         request_proxy_source,
-        excel_auto_disable_on_403,
-        excel_403_action,
         model_access,
         outbound_proxy,
     } = patch;
-    let excel_403_action =
-        gateway_core::account::Excel403Action::resolve(excel_403_action, excel_auto_disable_on_403)
-            .map_err(invalid)?;
     lock_account_egress_in_transaction(transaction).await?;
     if enabled.is_some() && explicit_scheduling_intent {
         sqlx::query(
@@ -1720,44 +1665,22 @@ async fn update_provider_accounts_scheduling_in_transaction(
             postgres_unavailable("release quality scheduling ownership").with_source(error)
         })?;
     }
-    let upstream = excel_models
-        .map(|_| gateway_core::account::ResponsesUpstream::Excel)
-        .or(excel_models_follow_global.map(|_| gateway_core::account::ResponsesUpstream::Excel))
-        .or(excel_cache_creation_as_input
-            .filter(|enabled| *enabled)
-            .map(|_| gateway_core::account::ResponsesUpstream::Excel))
-        .or(excel_ignore_encrypted_content
-            .filter(|enabled| *enabled)
-            .map(|_| gateway_core::account::ResponsesUpstream::Excel))
-        .or(excel_auto_disable_on_403
-            .filter(|enabled| *enabled)
-            .map(|_| gateway_core::account::ResponsesUpstream::Excel))
-        .or(excel_403_action
-            .filter(|action| *action != gateway_core::account::Excel403Action::None)
-            .map(|_| gateway_core::account::ResponsesUpstream::Excel))
-        .or(responses_upstream);
     let mut openai_ids = Vec::new();
-    if upstream.is_some() || request_proxy_source.is_some() {
+    if request_proxy_source.is_some() {
         let identities = sqlx::query(
-            "select id, provider_kind, authentication_kind from provider_accounts
+            "select id, provider_kind from provider_accounts
              where id = any($1::text[]) for update",
         )
         .bind(account_ids)
         .fetch_all(&mut **transaction)
         .await
         .map_err(|error| {
-            postgres_unavailable("validate account responses upstream").with_source(error)
+            postgres_unavailable("validate account request proxy").with_source(error)
         })?;
         for row in identities {
             let provider: String = get(&row, "provider_kind")?;
             if provider == "openai" {
                 openai_ids.push(get::<String>(&row, "id")?);
-            }
-            let authentication: String = get(&row, "authentication_kind")?;
-            if upstream
-                .is_some_and(|upstream| !upstream.supports_account(&provider, &authentication))
-            {
-                return Err(invalid("Excel upstream requires an OpenAI OAuth account"));
             }
             if request_proxy_source.is_some_and(|source| !source.supports_provider(&provider)) {
                 return Err(invalid("request proxy pools require an OpenAI account"));
@@ -1801,22 +1724,8 @@ async fn update_provider_accounts_scheduling_in_transaction(
              outbound_proxy_url = case when $7 then $8 else outbound_proxy_url end,
              outbound_proxy_id = case when $7 then $9 else outbound_proxy_id end,
              model_access_json = coalesce($10, model_access_json),
-             responses_upstream = coalesce($11, responses_upstream),
-             excel_models = case when $13 is true then excel_models else coalesce($12, excel_models) end,
-             excel_models_follow_global = coalesce($13, case when $12::text[] is not null then false else excel_models_follow_global end),
-             excel_cache_creation_as_input = coalesce($14, excel_cache_creation_as_input),
-             excel_ignore_encrypted_content = case when $11 = 'codex' then false
-                else coalesce($16, excel_ignore_encrypted_content) end,
-             request_proxy_source = coalesce($17, request_proxy_source),
-             excel_auto_disabled_at = case when $2 is true then null
-                when $11 is not null and $11 <> responses_upstream then null
-                else excel_auto_disabled_at end,
-             excel_auto_disable_on_403 = case when $11 = 'codex' then false
-                when $15::text is not null then $15 = 'pause_account'
-                else excel_auto_disable_on_403 end,
-             excel_403_action = case when $11 = 'codex' then 'none'
-                else coalesce($15::text, excel_403_action) end,
-             excel_mode_disabled_at = case when $11 = 'excel' then null else excel_mode_disabled_at end
+             request_proxy_source = coalesce($11, request_proxy_source),
+             excel_auto_disabled_at = case when $2 is true then null else excel_auto_disabled_at end
          where id = any($1::text[])
          returning id",
     )
@@ -1839,16 +1748,15 @@ async fn update_provider_accounts_scheduling_in_transaction(
     )
     .bind(proxy_id)
     .bind(model_access.map(sqlx::types::Json))
-    .bind(responses_upstream.map(gateway_core::account::ResponsesUpstream::as_str))
-    .bind(excel_models.map(gateway_core::account::ExcelModels::as_slice))
-    .bind(excel_models_follow_global)
-    .bind(excel_cache_creation_as_input)
-    .bind(excel_403_action.map(gateway_core::account::Excel403Action::as_str))
-    .bind(excel_ignore_encrypted_content)
-    .bind(request_proxy_source.map(gateway_core::provider_ports::session_proxy::RequestProxySource::as_str))
+    .bind(
+        request_proxy_source
+            .map(gateway_core::provider_ports::session_proxy::RequestProxySource::as_str),
+    )
     .fetch_all(&mut **transaction)
     .await
-    .map_err(|error| postgres_unavailable("set provider accounts state in admin transaction").with_source(error))?
+    .map_err(|error| {
+        postgres_unavailable("set provider accounts state in admin transaction").with_source(error)
+    })?
     .into_iter()
     .collect::<BTreeSet<_>>();
     let expected = account_ids.iter().cloned().collect::<BTreeSet<_>>();

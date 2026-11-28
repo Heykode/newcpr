@@ -66,10 +66,6 @@ export function applyQualityPatch(source: QualityRuleConfig, patch: QualityPatch
     next.repetitions = 1
     next.reasoningEffort = null
   }
-  if (action === 'enable_excel')
-    next.autoRestore = false
-  if (mode !== 'state_probe' || action !== 'enable_excel')
-    next.disableExcelOnNativeRecovery = false
   if (action !== 'apply_account_template')
     delete next.failureTemplate
   if (action === 'apply_account_template' && !next.failureTemplate)

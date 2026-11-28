@@ -38,7 +38,6 @@ pub struct RuntimeSettingsView {
     pub config_revision: u64,
     pub turn_state_injection_enabled: bool,
     pub turn_state_models: Vec<String>,
-    pub excel_default_models: gateway_core::account::ExcelModels,
     pub turn_state_probe_proxy_id: Option<String>,
     pub turn_state_probe_concurrency: u32,
     pub responses_max_decompressed_body_bytes: u64,
@@ -79,7 +78,12 @@ pub struct UpdateRuntimeSettingsRequest {
     pub config_revision: u64,
     pub turn_state_injection_enabled: Option<bool>,
     pub turn_state_models: Option<Vec<String>>,
-    pub excel_default_models: Option<gateway_core::account::ExcelModels>,
+    #[serde(
+        default,
+        rename = "excelDefaultModels",
+        deserialize_with = "gateway_admin::model::relogin_templates::discard_retired_setting"
+    )]
+    _retired_excel_models: Option<()>,
     #[serde(default, deserialize_with = "deserialize_probe_proxy_selection")]
     pub turn_state_probe_proxy_id: Option<Option<String>>,
     pub turn_state_probe_concurrency: Option<u32>,
@@ -267,7 +271,6 @@ impl UpdateRuntimeSettingsRequest {
             openai_websocket_pool: self.openai_websocket_pool,
             expected_revision: gateway_admin::model::Revision::new(self.config_revision)
                 .map_err(|_| WireValidationError::new("configRevision"))?,
-            excel_default_models: self.excel_default_models,
             turn_state_injection_enabled: self.turn_state_injection_enabled,
             turn_state_probe_proxy_id: self.turn_state_probe_proxy_id,
             turn_state_probe_concurrency: self.turn_state_probe_concurrency,
@@ -326,7 +329,6 @@ impl From<RuntimeSettings> for RuntimeSettingsView {
             config_revision: settings.config_revision.get(),
             openai_request_settings: settings.openai_request_settings,
             openai_websocket_pool: settings.openai_websocket_pool,
-            excel_default_models: settings.excel_default_models,
             turn_state_injection_enabled: settings.turn_state_injection_enabled,
             turn_state_probe_proxy_id: settings.turn_state_probe_proxy_id,
             turn_state_probe_concurrency: settings.turn_state_probe_concurrency,

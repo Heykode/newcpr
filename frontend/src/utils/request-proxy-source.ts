@@ -1,4 +1,4 @@
-// Applied to account requests on either the native Codex or Excel route.
+// Applied to native Codex account requests.
 export type RequestProxySource = 'account' | 'mihomo' | 'proxy_pool'
 
 export const requestProxySources = [

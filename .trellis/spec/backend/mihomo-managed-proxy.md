@@ -2,7 +2,7 @@
 
 ## 1. Scope / Trigger
 
-Account-opted-in Codex/Excel session exits, Mihomo management, and a separate ordinary
+Account-opted-in Codex session exits, Mihomo management, and a separate ordinary
 proxy pool. Reference Sub2API commit `030c1fd776f1e4523728665c0a6127a0f4dbac33`.
 This does not restore State collection or change native Codex transport decisions.
 
@@ -20,8 +20,7 @@ This does not restore State collection or change native Codex transport decision
 
 ## 3. Contracts
 
-An already-resolved Codex or Excel route can apply a managed source, independently
-of the Excel switch. The default `account` source preserves the account proxy/IPv6 path. Omitted
+An already-resolved Codex route can apply a managed source. The default `account` source preserves the account proxy/IPv6 path. Omitted
 patches preserve stored values; changing source never mutates identity,
 credentials, groups, weights, billing, affinity or cache keys.
 
@@ -36,7 +35,7 @@ cleanup; idle pooled sockets must not retain an active reference. Preserve exact
 continuation ownership and actual-egress pool keys. No new native replay is added.
 Report completion before yielding the final SSE event; consumers may never poll
 again. Business 400/401/403/429 responses do not mark a node unhealthy. At most
-one Excel switch to an already-qualified exit is allowed after definite connect failure,
+one definitely-unsent switch to an already-qualified exit is allowed after definite connect failure,
 not a timeout, not after uploads, and not with concurrent session references.
 
 Keep the Host implementation private; export management/pool traits via
@@ -58,8 +57,8 @@ stdin handle because Tokio `Child::wait` closes stdin still owned by the child.
 | Stale probe or retired generation feedback | Cannot revive a current failed node |
 | Cancelled response | Release lease, do not fabricate network failure |
 | Source is `account` | Existing transport and scheduling unchanged |
-| Excel is off and source is managed | Native HTTP/SSE/WS still uses the selected pool |
-| Excel node fails | Codex qualification, cooling and sessions remain independent |
+| Source is managed | Native HTTP/SSE/WS uses the selected pool |
+| Retired Excel route is requested | Reject without borrowing a native pool |
 
 ## 5. Good / Base / Bad Cases
 
@@ -88,7 +87,7 @@ candidate rejection, disabled-node rejection, restore and parent-drop cleanup.
 Store tests must execute migration and source roundtrip in temporary PostgreSQL.
 App integration also requires temporary loopback Redis, not just PostgreSQL.
 Provider tests cover terminal/drop lifetime and no business-error penalization,
-alongside full Excel and existing IPv6 regressions. Run architecture checks without
+alongside native delivery and existing IPv6 regressions. Run architecture checks without
 loosening their allowlists. Frontend checks cover edit/batch/template roundtrips,
 management writes, visible labels and desktop/mobile layout.
 

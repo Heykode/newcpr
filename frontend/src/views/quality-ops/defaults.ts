@@ -23,9 +23,7 @@ export function newQualityConfig(timezone: string): QualityRuleConfig {
     failureTemplate: null,
     failureGroupIds: [],
     autoRestore: false,
-    disableExcelOnNativeRecovery: false,
     excelFailureThreshold: 2,
-    excelRecoveryThreshold: 2,
   }
 }
 
@@ -36,9 +34,7 @@ export function qualityConfigDraft(config: Partial<QualityRuleConfig>, timezone:
     detectionMode: config.detectionMode ?? 'answer',
     model: config.model ?? '',
     intervalSeconds: config.intervalSeconds ?? null,
-    disableExcelOnNativeRecovery: config.disableExcelOnNativeRecovery ?? false,
     excelFailureThreshold: config.excelFailureThreshold ?? 1,
-    excelRecoveryThreshold: config.excelRecoveryThreshold ?? 1,
     failureGroupIds: [...(config.failureGroupIds ?? [])],
   }
 }

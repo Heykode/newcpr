@@ -7,7 +7,6 @@ use std::{
 
 mod auth_recovery;
 mod excel;
-mod excel_recovery;
 mod model_access;
 mod peer_sharing;
 mod plan_filters;
@@ -93,7 +92,6 @@ async fn optional_oauth_names_persist_and_bulk_import_preserves_individual_names
     let settings = AccountImportSettings {
         credential_proxy_id: None,
         template_proxy_mode: None,
-        excel_recovery: None,
         purchase_cost: None,
         clear_outbound_proxy: false,
         egress_mode: None,
@@ -101,14 +99,7 @@ async fn optional_oauth_names_persist_and_bulk_import_preserves_individual_names
         custom_name: Some("Single only".into()),
         enabled: true,
         turn_state_injection_enabled: None,
-        responses_upstream: None,
-        excel_models_follow_global: None,
-        excel_cache_creation_as_input: None,
-        excel_ignore_encrypted_content: None,
         request_proxy_source: None,
-        excel_auto_disable_on_403: None,
-        excel_403_action: None,
-        excel_models: None,
         concurrency_limit: None,
         weight: gateway_core::account::AccountWeight::DEFAULT,
         group_ids: vec![],
@@ -195,7 +186,6 @@ async fn custom_names_are_atomic_searchable_and_preserve_account_identity() {
         credential_proxy_id: None,
         quota_settings: Default::default(),
         auto_use_quota_credits: None,
-        excel_recovery: None,
         purchase_cost: None,
         egress_mode: None,
         model_access: Default::default(),
@@ -203,14 +193,7 @@ async fn custom_names_are_atomic_searchable_and_preserve_account_identity() {
         account_ids: ids.clone(),
         enabled: None,
         turn_state_injection_enabled: None,
-        responses_upstream: Default::default(),
-        excel_models_follow_global: Default::default(),
-        excel_cache_creation_as_input: Default::default(),
-        excel_ignore_encrypted_content: Default::default(),
         request_proxy_source: Default::default(),
-        excel_auto_disable_on_403: Default::default(),
-        excel_403_action: Default::default(),
-        excel_models: Default::default(),
         concurrency_limit: None,
         weight: None,
         group_ids: None,
@@ -265,7 +248,6 @@ async fn custom_names_are_atomic_searchable_and_preserve_account_identity() {
             .batch_update_accounts(
                 BatchUpdateAccounts {
                     auto_use_quota_credits: None,
-                    excel_recovery: None,
                     purchase_cost: None,
                     model_access: Default::default(),
                     custom_name: Some(Some("Not committed".into())),
@@ -303,7 +285,6 @@ async fn custom_names_are_atomic_searchable_and_preserve_account_identity() {
             .batch_update_accounts(
                 BatchUpdateAccounts {
                     auto_use_quota_credits: None,
-                    excel_recovery: None,
                     purchase_cost: None,
                     model_access: Default::default(),
                     custom_name: name.clone(),
@@ -452,7 +433,7 @@ async fn model_success_rates_preserve_usage_across_window_and_rolling_reads() {
 }
 
 #[tokio::test]
-async fn custom_names_and_excel_omission_survive_reimport_rotation_and_credential_refresh() {
+async fn custom_names_and_retired_storage_survive_reimport_rotation_and_credential_refresh() {
     use gateway_admin::model::accounts::AccountImportSettings;
     let Some(database) = TestDatabase::create("custom_name_retention").await else {
         return;
@@ -474,7 +455,6 @@ async fn custom_names_and_excel_omission_survive_reimport_rotation_and_credentia
                 settings: Some(AccountImportSettings {
                     credential_proxy_id: None,
                     template_proxy_mode: None,
-                    excel_recovery: None,
                     purchase_cost: None,
                     clear_outbound_proxy: false,
                     egress_mode: None,
@@ -482,14 +462,7 @@ async fn custom_names_and_excel_omission_survive_reimport_rotation_and_credentia
                     custom_name: name.map(str::to_owned),
                     enabled: true,
                     turn_state_injection_enabled: None,
-                    responses_upstream: Default::default(),
-                    excel_models_follow_global: Default::default(),
-                    excel_cache_creation_as_input: Default::default(),
-                    excel_ignore_encrypted_content: (index == 0).then_some(true),
                     request_proxy_source: None,
-                    excel_auto_disable_on_403: Default::default(),
-                    excel_403_action: Default::default(),
-                    excel_models: Default::default(),
                     concurrency_limit: None,
                     weight: gateway_core::account::AccountWeight::DEFAULT,
                     group_ids: vec![],
@@ -502,7 +475,8 @@ async fn custom_names_and_excel_omission_survive_reimport_rotation_and_credentia
             .await
             .unwrap();
         if index == 0 {
-            sqlx::query("update provider_accounts set excel_403_warning_at=$2 where id=$1")
+            // Seed a legacy stored value directly: new imports no longer set it.
+            sqlx::query("update provider_accounts set excel_403_warning_at=$2, excel_ignore_encrypted_content=true where id=$1")
                 .bind(id)
                 .bind(warning_at)
                 .execute(&database.pool)
@@ -1547,7 +1521,6 @@ async fn disabled_accounts_are_exclusive_in_status_filters_counts_and_sorting() 
                 .update_account(
                     UpdateAccount {
                         credential_proxy_id: None,
-                        excel_recovery: None,
                         purchase_cost: None,
                         egress_mode: None,
                         model_access: Default::default(),
@@ -1555,14 +1528,7 @@ async fn disabled_accounts_are_exclusive_in_status_filters_counts_and_sorting() 
                         account_id: id.clone(),
                         enabled,
                         turn_state_injection_enabled: Some(false),
-                        responses_upstream: Default::default(),
-                        excel_models_follow_global: Default::default(),
-                        excel_cache_creation_as_input: Default::default(),
-                        excel_ignore_encrypted_content: Default::default(),
                         request_proxy_source: Default::default(),
-                        excel_auto_disable_on_403: Default::default(),
-                        excel_403_action: Default::default(),
-                        excel_models: Default::default(),
                         concurrency_limit: None,
                         weight: gateway_core::account::AccountWeight::DEFAULT,
                         group_ids: Vec::new(),
@@ -2377,7 +2343,6 @@ async fn terminal_admin_mutations_keep_revision_account_and_audit_atomic() {
         .update_account(
             UpdateAccount {
                 credential_proxy_id: None,
-                excel_recovery: None,
                 purchase_cost: None,
                 egress_mode: None,
                 model_access: Default::default(),
@@ -2386,14 +2351,7 @@ async fn terminal_admin_mutations_keep_revision_account_and_audit_atomic() {
                 account_id: "acct_terminal_mutation".to_owned(),
                 enabled: false,
                 turn_state_injection_enabled: None,
-                responses_upstream: Default::default(),
-                excel_models_follow_global: Default::default(),
-                excel_cache_creation_as_input: Default::default(),
-                excel_ignore_encrypted_content: Default::default(),
                 request_proxy_source: Default::default(),
-                excel_auto_disable_on_403: Default::default(),
-                excel_403_action: Default::default(),
-                excel_models: Default::default(),
                 concurrency_limit: None,
                 weight: gateway_core::account::AccountWeight::DEFAULT,
                 group_ids: Vec::new(),
@@ -2476,7 +2434,6 @@ async fn account_proxy_edits_preserve_credentials_and_clear_egress_without_audit
     };
     let command = UpdateAccount {
         credential_proxy_id: None,
-        excel_recovery: None,
         purchase_cost: None,
         egress_mode: None,
         model_access: Default::default(),
@@ -2484,14 +2441,7 @@ async fn account_proxy_edits_preserve_credentials_and_clear_egress_without_audit
         account_id: "acct_proxy".to_owned(),
         enabled: true,
         turn_state_injection_enabled: Some(false),
-        responses_upstream: Default::default(),
-        excel_models_follow_global: Default::default(),
-        excel_cache_creation_as_input: Default::default(),
-        excel_ignore_encrypted_content: Default::default(),
         request_proxy_source: Default::default(),
-        excel_auto_disable_on_403: Default::default(),
-        excel_403_action: Default::default(),
-        excel_models: Default::default(),
         concurrency_limit: None,
         weight: gateway_core::account::AccountWeight::DEFAULT,
         group_ids: vec![],
@@ -2514,7 +2464,6 @@ async fn account_proxy_edits_preserve_credentials_and_clear_egress_without_audit
     store
         .update_account(
             UpdateAccount {
-                excel_recovery: None,
                 purchase_cost: None,
                 model_access: Default::default(),
                 outbound_proxy: Some(gateway_admin::model::proxies::AccountProxySelection::Url(
@@ -2533,7 +2482,6 @@ async fn account_proxy_edits_preserve_credentials_and_clear_egress_without_audit
     store
         .update_account(
             UpdateAccount {
-                excel_recovery: None,
                 purchase_cost: None,
                 model_access: Default::default(),
                 outbound_proxy: Some(gateway_admin::model::proxies::AccountProxySelection::Direct),
@@ -2644,7 +2592,6 @@ async fn account_enable_preserves_facts_and_explicit_recovery_clears_them() {
                 credential_proxy_id: None,
                 quota_settings: Default::default(),
                 auto_use_quota_credits: None,
-                excel_recovery: None,
                 purchase_cost: None,
                 egress_mode: None,
                 model_access: Default::default(),
@@ -2652,14 +2599,7 @@ async fn account_enable_preserves_facts_and_explicit_recovery_clears_them() {
                 account_ids: vec!["acct_recovery".to_owned()],
                 enabled: Some(true),
                 turn_state_injection_enabled: None,
-                responses_upstream: Default::default(),
-                excel_models_follow_global: Default::default(),
-                excel_cache_creation_as_input: Default::default(),
-                excel_ignore_encrypted_content: Default::default(),
                 request_proxy_source: Default::default(),
-                excel_auto_disable_on_403: Default::default(),
-                excel_403_action: Default::default(),
-                excel_models: Default::default(),
                 concurrency_limit: None,
                 weight: None,
                 group_ids: None,
@@ -2790,7 +2730,6 @@ async fn terminal_batch_update_replaces_state_and_groups_once_or_rolls_back_ever
                 credential_proxy_id: None,
                 quota_settings: Default::default(),
                 auto_use_quota_credits: None,
-                excel_recovery: None,
                 purchase_cost: None,
                 egress_mode: None,
                 model_access: Default::default(),
@@ -2799,14 +2738,7 @@ async fn terminal_batch_update_replaces_state_and_groups_once_or_rolls_back_ever
                 account_ids: account_ids.clone(),
                 enabled: Some(false),
                 turn_state_injection_enabled: Some(true),
-                responses_upstream: Default::default(),
-                excel_models_follow_global: Default::default(),
-                excel_cache_creation_as_input: Default::default(),
-                excel_ignore_encrypted_content: Default::default(),
                 request_proxy_source: Default::default(),
-                excel_auto_disable_on_403: Default::default(),
-                excel_403_action: Default::default(),
-                excel_models: Default::default(),
                 concurrency_limit: Some(gateway_core::account::AccountConcurrencyLimit::new(7)),
                 weight: Some(gateway_core::account::AccountWeight::new(25).expect("weight")),
                 group_ids: Some(vec![AccountGroupId::new(GROUP_ID).expect("group ID")]),
@@ -2847,7 +2779,6 @@ async fn terminal_batch_update_replaces_state_and_groups_once_or_rolls_back_ever
                 credential_proxy_id: None,
                 quota_settings: Default::default(),
                 auto_use_quota_credits: None,
-                excel_recovery: None,
                 purchase_cost: None,
                 egress_mode: None,
                 model_access: Default::default(),
@@ -2856,14 +2787,7 @@ async fn terminal_batch_update_replaces_state_and_groups_once_or_rolls_back_ever
                 account_ids: account_ids.clone(),
                 enabled: Some(true),
                 turn_state_injection_enabled: Some(false),
-                responses_upstream: Default::default(),
-                excel_models_follow_global: Default::default(),
-                excel_cache_creation_as_input: Default::default(),
-                excel_ignore_encrypted_content: Default::default(),
                 request_proxy_source: Default::default(),
-                excel_auto_disable_on_403: Default::default(),
-                excel_403_action: Default::default(),
-                excel_models: Default::default(),
                 concurrency_limit: None,
                 weight: Some(gateway_core::account::AccountWeight::DEFAULT),
                 group_ids: Some(vec![
@@ -3083,7 +3007,6 @@ async fn authorization_create_returns_existing_account_id_when_identity_is_upser
         settings: Some(gateway_admin::model::accounts::AccountImportSettings {
             credential_proxy_id: None,
             template_proxy_mode: None,
-            excel_recovery: None,
             purchase_cost: None,
             clear_outbound_proxy: false,
             egress_mode: None,
@@ -3091,14 +3014,7 @@ async fn authorization_create_returns_existing_account_id_when_identity_is_upser
             custom_name: None,
             enabled: false,
             turn_state_injection_enabled: Some(true),
-            responses_upstream: Default::default(),
-            excel_models_follow_global: Default::default(),
-            excel_cache_creation_as_input: Default::default(),
-            excel_ignore_encrypted_content: Default::default(),
             request_proxy_source: Default::default(),
-            excel_auto_disable_on_403: Default::default(),
-            excel_403_action: Default::default(),
-            excel_models: Default::default(),
             concurrency_limit: None,
             weight: gateway_core::account::AccountWeight::new(9).expect("weight"),
             group_ids: Vec::new(),
@@ -3666,7 +3582,6 @@ async fn provider_account_admin_mutations_are_scoped_audited_and_atomic() {
             pauses: Default::default(),
             quota_settings: Default::default(),
             auto_use_quota_credits: None,
-            excel_recovery: None,
             purchase_cost: None,
             egress_mode: None,
             explicit_scheduling_intent: true,
@@ -3676,14 +3591,7 @@ async fn provider_account_admin_mutations_are_scoped_audited_and_atomic() {
             account_ids: vec!["acct_admin_a".to_owned()],
             enabled: Some(false),
             turn_state_injection_enabled: None,
-            responses_upstream: Default::default(),
-            excel_models_follow_global: Default::default(),
-            excel_cache_creation_as_input: Default::default(),
-            excel_ignore_encrypted_content: Default::default(),
             request_proxy_source: Default::default(),
-            excel_auto_disable_on_403: Default::default(),
-            excel_403_action: Default::default(),
-            excel_models: Default::default(),
             concurrency_limit: None,
             weight: Some(gateway_core::account::AccountWeight::DEFAULT),
             group_ids: Some(Vec::new()),
@@ -4263,7 +4171,6 @@ async fn proxy_edit_preserves_an_inflight_token_refresh() {
         .update_account(
             UpdateAccount {
                 credential_proxy_id: None,
-                excel_recovery: None,
                 purchase_cost: None,
                 egress_mode: None,
                 model_access: Default::default(),
@@ -4271,14 +4178,7 @@ async fn proxy_edit_preserves_an_inflight_token_refresh() {
                 account_id: id.as_str().to_owned(),
                 enabled: true,
                 turn_state_injection_enabled: Some(false),
-                responses_upstream: Default::default(),
-                excel_models_follow_global: Default::default(),
-                excel_cache_creation_as_input: Default::default(),
-                excel_ignore_encrypted_content: Default::default(),
                 request_proxy_source: Default::default(),
-                excel_auto_disable_on_403: Default::default(),
-                excel_403_action: Default::default(),
-                excel_models: Default::default(),
                 concurrency_limit: None,
                 weight: gateway_core::account::AccountWeight::DEFAULT,
                 group_ids: vec![],
@@ -4341,7 +4241,6 @@ async fn account_import_settings_apply_atomically_to_new_and_existing_identities
     let settings = AccountImportSettings {
         credential_proxy_id: None,
         template_proxy_mode: None,
-        excel_recovery: None,
         purchase_cost: None,
         clear_outbound_proxy: false,
         egress_mode: None,
@@ -4349,14 +4248,7 @@ async fn account_import_settings_apply_atomically_to_new_and_existing_identities
         custom_name: None,
         enabled: false,
         turn_state_injection_enabled: Some(true),
-        responses_upstream: Default::default(),
-        excel_models_follow_global: Default::default(),
-        excel_cache_creation_as_input: Default::default(),
-        excel_ignore_encrypted_content: Default::default(),
         request_proxy_source: Default::default(),
-        excel_auto_disable_on_403: Default::default(),
-        excel_403_action: Default::default(),
-        excel_models: Default::default(),
         concurrency_limit: Some(AccountConcurrencyLimit::new(3).expect("concurrency")),
         weight: AccountWeight::new(7).expect("weight"),
         group_ids: vec![AccountGroupId::new(GROUP_ID).expect("group ID")],
@@ -4407,17 +4299,9 @@ async fn account_import_settings_apply_atomically_to_new_and_existing_identities
         .import_provider_accounts(ImportProviderAccounts {
             outbound_proxy: None,
             settings: Some(AccountImportSettings {
-                excel_recovery: None,
                 purchase_cost: None,
                 turn_state_injection_enabled: Some(false),
-                responses_upstream: Default::default(),
-                excel_models_follow_global: Default::default(),
-                excel_cache_creation_as_input: Default::default(),
-                excel_ignore_encrypted_content: Default::default(),
                 request_proxy_source: Default::default(),
-                excel_auto_disable_on_403: Default::default(),
-                excel_403_action: Default::default(),
-                excel_models: Default::default(),
                 group_ids: vec![
                     AccountGroupId::new("grp_00000000000000000000000000000092")
                         .expect("missing group"),
@@ -4478,7 +4362,6 @@ async fn account_import_state_setting_preserves_omission_and_applies_explicit_va
         let settings = AccountImportSettings {
             credential_proxy_id: None,
             template_proxy_mode: None,
-            excel_recovery: None,
             purchase_cost: None,
             clear_outbound_proxy: false,
             egress_mode: None,
@@ -4486,14 +4369,7 @@ async fn account_import_state_setting_preserves_omission_and_applies_explicit_va
             custom_name: None,
             enabled: true,
             turn_state_injection_enabled: state,
-            responses_upstream: Default::default(),
-            excel_models_follow_global: Default::default(),
-            excel_cache_creation_as_input: Default::default(),
-            excel_ignore_encrypted_content: Default::default(),
             request_proxy_source: Default::default(),
-            excel_auto_disable_on_403: Default::default(),
-            excel_403_action: Default::default(),
-            excel_models: Default::default(),
             concurrency_limit: None,
             weight: gateway_core::account::AccountWeight::DEFAULT,
             group_ids: vec![],
@@ -4553,21 +4429,13 @@ async fn disabling_quota_credits_revokes_credit_only_access_even_with_a_late_obs
             credential_proxy_id: None,
             quota_settings: Default::default(),
             auto_use_quota_credits: Some(enabled),
-            excel_recovery: None,
             purchase_cost: None,
             egress_mode: None,
             custom_name: None,
             account_ids: vec![input.id.clone()],
             enabled: None,
             turn_state_injection_enabled: None,
-            responses_upstream: None,
-            excel_models: None,
-            excel_models_follow_global: None,
-            excel_cache_creation_as_input: None,
-            excel_ignore_encrypted_content: None,
             request_proxy_source: None,
-            excel_auto_disable_on_403: None,
-            excel_403_action: None,
             concurrency_limit: None,
             weight: None,
             model_access: None,

@@ -16,14 +16,13 @@ function load(path, dependencies = {}) {
   const { outputText } = ts.transpileModule(readFileSync(new URL(path, import.meta.url), 'utf8'), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2024 },
   })
-  runInNewContext(outputText, { exports, TextEncoder, AbortController, require: name => dependencies[name] ?? (name.endsWith('/utils/purchaseCost') ? load('../src/views/accounts/utils/purchaseCost.ts') : name === '@/utils/excel-defaults' ? load('../src/utils/excel-defaults.ts') : require(name)) })
+  runInNewContext(outputText, { exports, TextEncoder, AbortController, require: name => dependencies[name] ?? (name.endsWith('/utils/purchaseCost') ? load('../src/views/accounts/utils/purchaseCost.ts') : require(name)) })
   return exports
 }
 const names = load('../src/utils/account-name.ts')
 const scheduling = load('../src/views/accounts/utils/schedulingForm.ts')
 const modelAccess = load('../src/views/accounts/utils/modelAccess.ts')
 const creation = load('../src/views/accounts/components/AccountCreateModal/model.ts', {
-  '@/utils/excel-settings': load('../src/utils/excel-settings.ts', { '@/views/accounts/utils/schedulingForm': scheduling }),
   '../../utils/schedulingForm': scheduling,
   '../../utils/modelAccess': modelAccess,
   '@/utils/account-name': names,
@@ -77,7 +76,6 @@ test('single editor only submits a changed name and preserves concurrent externa
   })
   const { useAccountEditor } = load('../src/views/accounts/composables/useAccountEditor.ts', {
     vue,
-    '@/utils/excel-settings': load('../src/utils/excel-settings.ts', { '@/views/accounts/utils/schedulingForm': scheduling }),
     '@/api': { updateAccount: async payload => requests.push(structuredClone(payload)) },
     '@/components/base/BaseToast': { toast: { warning() {}, success() {} } },
     '@/composables/useAsyncAction': asyncAction,

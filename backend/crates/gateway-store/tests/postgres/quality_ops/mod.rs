@@ -8,9 +8,9 @@ use gateway_store::postgres::quality_ops::PgQualityOpsStore;
 
 mod group_safety;
 mod groups;
-mod native_recovery;
 mod overload;
 mod policy;
+mod retire_excel;
 mod rule_templates;
 mod templates;
 
@@ -747,8 +747,6 @@ async fn quality_replaced_identity_cannot_be_paused_by_an_old_answer() {
 #[tokio::test]
 async fn quality_recovery_never_undoes_an_independent_excel_403_pause() {
     use QualityVerdict::{Correct, Incorrect};
-    use gateway_core::account::{ProviderAccountId, ProviderAccountStore};
-    use gateway_store::postgres::PgProviderAccountRepository;
     let Some(db) = TestDatabase::create("quality_excel403").await else {
         return;
     };
@@ -769,14 +767,9 @@ async fn quality_recovery_never_undoes_an_independent_excel_403_pause() {
         .await
         .unwrap();
     scheduled_round(&store, &rule, &[Incorrect]).await;
-    let repository = PgProviderAccountRepository::new(db.pool.clone());
-    let account = repository
-        .get_account(&ProviderAccountId::new("acct_quality_a").unwrap())
-        .await
-        .unwrap()
-        .unwrap();
-    assert!(repository.apply_excel_403_action(&account).await.unwrap());
-    assert!(!repository.apply_excel_403_action(&account).await.unwrap());
+    // Compatibility: an independently paused legacy account must not be re-enabled.
+    sqlx::query("update provider_accounts set enabled=false,excel_auto_disabled_at=now(),excel_403_warning_at=now() where id='acct_quality_a'")
+        .execute(&db.pool).await.unwrap();
     let run = scheduled_round(&store, &rule, &[Correct]).await;
     assert_eq!(run.action.as_deref(), Some("ownership_released"));
     assert!(!enabled(&db).await);
@@ -810,7 +803,6 @@ async fn quality_account_rename_keeps_recovery_ownership() {
         .update_account(
             UpdateAccount {
                 credential_proxy_id: None,
-                excel_recovery: None,
                 purchase_cost: None,
                 egress_mode: None,
                 account_id: "acct_quality_a".into(),
@@ -821,14 +813,7 @@ async fn quality_account_rename_keeps_recovery_ownership() {
                 group_ids: Vec::new(),
                 outbound_proxy: None,
                 turn_state_injection_enabled: None,
-                responses_upstream: None,
-                excel_models: None,
-                excel_models_follow_global: None,
-                excel_cache_creation_as_input: None,
-                excel_ignore_encrypted_content: None,
                 request_proxy_source: None,
-                excel_auto_disable_on_403: None,
-                excel_403_action: Default::default(),
                 model_access: None,
             },
             &context(),

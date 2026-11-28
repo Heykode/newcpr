@@ -1,5 +1,7 @@
 # Excel 上游
 
+> 历史设计：BPS Excel 已在当前移除变更中退役，本文仅供历史追溯。当前行为和兼容边界以 [移除说明](./excel-removal.md) 为准。
+
 功能标识：`excel-upstream`。未来停用或单独删除时，遵循
 [Excel 功能停用与移除](./excel-removal.md)，不要整次回退并恢复旧 State。
 
