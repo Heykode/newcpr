@@ -445,6 +445,9 @@ PostgreSQL 周期对账才是正确性基础。
 PostgreSQL schema 由迁移目录按编号管理。已应用迁移按字节冻结，后续 schema 变化只能新增编号迁移，
 详见 [迁移规则](../backend/migrations/README.md)。
 
+GenAI 模型发现经 API `openai/genai/models` → `OpenAiService::genai_model_catalog` → Core `client_model_catalog` → Antigravity `CatalogService`。Provider 读取持久目录并按冻结账号范围选择一个完整来源，Core 负责可路由性与别名，API 按原生生成/计数能力、模型 ID、AGY 聊天及生图菜单过滤和分页。未知模型字段原样保留，公开目录剔除配额；列表、详情不会访问上游或执行计费请求。
+目录持久化保存完整外层声明和模型对象，业务读取名称、输出上限、搜索目标与分组时不改写原对象。配额读取对已知字段保持严格解析，异常快照不部分发布；旧缓存可读，完整声明由既有后台或显式目录刷新补齐。
+
 ## 9. Credential、额度与主动重置
 
 credential 与 quota 是两组独立事实：credential refresh 不等于 quota refresh，额度接口的 401/403

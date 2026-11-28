@@ -215,8 +215,14 @@ async fn model_group_menu_routes_chat_and_native_generation_to_declared_members(
             "models": {
                 "gemini-4-hydrogen-medium": {"displayName":"Hydrogen Medium","maxTokens":1048576,"maxOutputTokens":65536,"supportsImages":true,"tagDescription":"Leaving on Nov 30."},
                 "gemini-4-hydrogen-high": {"displayName":"Hydrogen High","maxTokens":900000,"maxOutputTokens":262144,"supportsImages":true,"tagDescription":"Leaving on Nov 30."},
-                "gemini-4-hydrogen-sonar": {"displayName":"Hydrogen Sonar"}
+                "gemini-4-hydrogen-sonar": {"displayName":"Hydrogen Sonar"},
+                "gemini-3.1-flash-image": {"displayName":"Image"}
             },
+            "imageGenerationModelIds": ["gemini-3.1-flash-image"],
+            "agentModelSorts": [{"groups": [
+                {"modelIds":["gemini-4-hydrogen-medium"]},
+                {"modelIds":["gemini-4-hydrogen-high","gemini-4-hydrogen-medium","absent"]}
+            ]}],
             "groupedModels": {
                 "gemini-4-hydrogen": {"displayName":"Gemini 4 Hydrogen","supportedThinkingLevels":[
                     {"thinkingSuffix":"MEDIUM"}, {"thinkingSuffix":"high"},
@@ -235,7 +241,7 @@ async fn model_group_menu_routes_chat_and_native_generation_to_declared_members(
         .unwrap();
     let kind = ProviderKind::new("antigravity").unwrap();
     let models = fixture.provider.query_model_capabilities().await.unwrap();
-    assert_eq!(models.len(), 4);
+    assert_eq!(models.len(), 5);
     let group = models
         .iter()
         .find(|model| model.upstream_model().as_str() == "gemini-4-hydrogen")
@@ -277,7 +283,11 @@ async fn model_group_menu_routes_chat_and_native_generation_to_declared_members(
     )
     .unwrap();
     let profiles = snapshot.public_model_profiles_for_scope(&fixture.store.account_scope());
-    let menu = profiles[0].presentation();
+    let menu = profiles
+        .iter()
+        .find(|p| p.model().as_str() == "gemini-4-hydrogen")
+        .unwrap()
+        .presentation();
     assert!(menu.image_input());
     assert_eq!(menu.context_window_tokens(), Some(900000));
     assert_eq!(
@@ -285,6 +295,47 @@ async fn model_group_menu_routes_chat_and_native_generation_to_declared_members(
         menu.context_window_tokens()
     );
     assert_eq!(menu.description(), Some("Leaving on Nov 30."));
+    use gateway_core::routing::AgentModelListing;
+    let discovery = Operation::Generate(
+        GenerateRequest::from_protocol_payload(
+            ProtocolPayload::json_object("genai", Default::default()).unwrap(),
+        )
+        .requiring_native_protocol(),
+    );
+    let entries = snapshot.model_metadata_for_operation(&fixture.store.account_scope(), &discovery);
+    assert_eq!(
+        entries
+            .iter()
+            .map(|entry| (
+                entry.model.as_str(),
+                &entry.sources[0].metadata.unwrap().agent_listing,
+            ))
+            .collect::<Vec<_>>(),
+        [
+            (
+                "gemini-3.1-flash-image",
+                &AgentModelListing::Listed {
+                    order: 3,
+                    display_name: "Image".into(),
+                }
+            ),
+            (
+                "gemini-4-hydrogen-high",
+                &AgentModelListing::Listed {
+                    order: 1,
+                    display_name: "Hydrogen High".into(),
+                }
+            ),
+            (
+                "gemini-4-hydrogen-medium",
+                &AgentModelListing::Listed {
+                    order: 0,
+                    display_name: "Hydrogen Medium".into(),
+                }
+            ),
+            ("gemini-4-hydrogen-sonar", &AgentModelListing::Hidden),
+        ]
+    );
     for stream in [false, true] {
         let response = json!({"response":{"candidates":[{"content":{"parts":[{"text":"OK"}]},"finishReason":"STOP"}]}});
         let path_name = if stream {

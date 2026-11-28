@@ -1120,7 +1120,13 @@ HTTP 返回 `429`，`error.code` 为 `key_daily_budget_exceeded` 或 `key_weekly
 | POST | `/v1beta/models/{model}:streamGenerateContent?alt=sse` | SSE生成 |
 | POST | `/v1beta/models/{model}:countTokens` | Token计数 |
 
-基础模型组按实际目录和思考档位解析执行型号；模型及账号范围检查保持。GenAI 客户端目录保留原始模型及 agent 菜单的分组顺序；Codex 菜单不再显示只有 AGY 可执行的模型。
+基础模型组按实际目录和思考档位解析执行型号；模型及账号范围检查保持。Codex 菜单不再显示只有 AGY 可执行的模型。
+
+GenAI 列表和详情经 `ExecutionService::client_model_catalog` 读取当前 Key 授权范围内的完整原生模型对象，保留未知扩展字段，仅投影 `name: models/{id}` 与 `supportedGenerationMethods`。同名模型选择一个完整的授权账号来源，不跨账号混拼；`quotaInfo` 不进入公开目录。缺少版本、上下文及输出上限时不补默认值。
+列表和详情只提供上游实际型号及可映射到它的别名，不额外补充本地合成基础模型组或映射到这些组的别名。显式基础模型组生成请求仍按合法思考档位路由；依赖发现列表的客户端应选用返回的具体型号。
+普通列表按模型 ID 排序；AGY 桌面端/CLI 列表按 `agentModelSorts` 排序，并追加 `imageGenerationModelIds` 中的生图型号、去重。声明之外的辅助型号不进入选择器，其详情及直接调用仍校验账号权限。客户端如何合并聊天型号、显示思考强度、生图分类和标签，取决于客户端自身支持。
+分页默认 50 条，上限 1000；`pageSize=0` 使用默认值，`pageToken` 要求保持相同分页大小。列表和详情均重新鉴权并读取本地目录，不触发上游查询。目录读取失败或原生协议对象无效时，返回 HTTP `503`、Google RPC 状态 `UNAVAILABLE` 和消息 `Model catalog is unavailable.`。目录读取成功但找不到所请求的模型时，详情返回 `404 NOT_FOUND`。
+旧版持久目录仍可读取；刷新成功前无法补回曾被旧解析器丢弃的扩展字段和生图声明。旧 `agentModelOrder` 不替代新上游声明，刷新前按具体型号发现，刷新后按新目录排序。
 基础模型组的非流式独立搜索可以不指定思考档位：仅限 `generateContent`、唯一工具为 `googleSearch` 或 `google_search` 对象，且未提供 `thinkingConfig`。目录须声明搜索目标，同一账号及分组必须同时允许至少一个具体成员型号和搜索目标；不能拼接不同账号的权限。显式完整型号仍按该型号普通生成，混合工具、流式或显式无效档位不适用此例外。
 AGY 支持原生 GenAI 与 Chat；原生 Responses/Messages 转换已退役。生成和计数先放平台系统提示词，再保留客户端系统指令、全局/项目规则、工具说明和元数据。
 原生 GenAI SSE 不插入网关心跳，首帧前失败保留 HTTP 错误。搜索按目标原生工具和目录权限执行，不再提供旧 Responses web_search 独立转换入口。

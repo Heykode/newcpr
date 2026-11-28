@@ -595,3 +595,51 @@ async fn google_one_credits_require_opt_in_and_sufficient_balance() {
         }
     }
 }
+
+#[tokio::test]
+async fn malformed_model_quota_does_not_publish_partial_quota_or_catalog() {
+    let server = MockServer::start().await;
+    let fixture = Fixture::new(&server.uri());
+    let account = fixture
+        .store
+        .primary()
+        .loaded
+        .lock()
+        .unwrap()
+        .account
+        .clone();
+    upstream(&server, json!(0.5), Duration::ZERO).await;
+    fixture.quota.refresh(account.id()).await.unwrap();
+    let quota = fixture.store.primary().quota.lock().unwrap().clone();
+    let catalog = fixture.store.primary().catalog.lock().unwrap().clone();
+    server.reset().await;
+    Mock::given(path("/v1internal:loadCodeAssist"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(json!({"cloudaicompanionProject":"fixture-project"})),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(path("/v1internal:retrieveUserQuotaSummary"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"groups":[]})))
+        .mount(&server)
+        .await;
+    Mock::given(path("/v1internal:fetchAvailableModels"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"models":{
+            "fixture-model":{"displayName":"Changed", "quotaInfo":{"remainingFraction":"invalid"}},
+            "other-model":{"quotaInfo":{"remainingFraction":0}}
+        }})))
+        .mount(&server)
+        .await;
+    assert!(fixture.quota.refresh(account.id()).await.is_err());
+    assert_eq!(*fixture.store.primary().quota.lock().unwrap(), quota);
+    let current = fixture.store.primary().catalog.lock().unwrap();
+    let (before, before_body) = catalog.as_ref().unwrap();
+    let (after, after_body) = current.as_ref().unwrap();
+    assert_eq!(after_body, before_body);
+    assert_eq!(after.account_id, before.account_id);
+    assert_eq!(after.revision, before.revision);
+    assert_eq!(after.plan, before.plan);
+    assert_eq!(after.etag, before.etag);
+    assert_eq!(after.observed_at, before.observed_at);
+}

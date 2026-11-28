@@ -181,6 +181,10 @@ fn agent_menu_client() -> AuthenticatedClient {
             BTreeMap::from([(account.clone(), listed(1, "Bee"))]),
         ),
         (
+            "gemini-3.1-flash-image",
+            BTreeMap::from([(account.clone(), listed(2, "Image"))]),
+        ),
+        (
             "model-hidden",
             BTreeMap::from([
                 (
@@ -224,6 +228,20 @@ fn agent_menu_client() -> AuthenticatedClient {
     super::super::authenticated_client_from_snapshot(KEY, snapshot)
 }
 
+fn catalog_client() -> AuthenticatedClient {
+    let source = client();
+    let snapshot =
+        source
+            .snapshot()
+            .as_ref()
+            .clone()
+            .with_model_mappings(std::collections::BTreeMap::from([(
+                "alias-a".into(),
+                "model-a".into(),
+            )]));
+    super::super::authenticated_client_from_snapshot(KEY, snapshot)
+}
+
 async fn agent_query(router: &axum::Router, path: &str, user_agent: &str) -> Value {
     let response = router
         .clone()
@@ -238,6 +256,84 @@ async fn agent_query(router: &axum::Router, path: &str, user_agent: &str) -> Val
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     serde_json::from_slice(&to_bytes(response.into_body(), 8192).await.unwrap()).unwrap()
+}
+
+#[tokio::test]
+async fn native_catalog_preserves_metadata_and_aliases_for_every_client() {
+    use gateway_core::{operation::RawJsonPayload, routing::PublicModelDescriptor};
+    let document = json!({
+        "displayName":"Upstream Model", "tagTitle":"New", "tagDescription":"Leaving on Nov 30.",
+        "maxTokens":1048576, "maxOutputTokens":65536,
+        "future":{"capability":true},
+    });
+    let payload = RawJsonPayload::new(
+        GENAI_PROTOCOL,
+        serde_json::to_vec(&document).unwrap().into(),
+    )
+    .unwrap();
+    let router = api_router(Arc::new(Execution {
+        client: Some(catalog_client()),
+        catalog: Some(Ok(["model-a", "model-b", "model-c", "alias-a"]
+            .into_iter()
+            .map(|id| PublicModelDescriptor::Native {
+                model: PublicModelId::new(id).unwrap(),
+                payload: payload.clone(),
+            })
+            .collect())),
+        ..Default::default()
+    }))
+    .await;
+    for agent in [
+        "ordinary",
+        "antigravity/hub/2.34.0",
+        "antigravity/cli/1.5.18",
+    ] {
+        let first = agent_query(&router, "/v1beta/models?pageSize=2", agent).await;
+        let second = agent_query(
+            &router,
+            &format!(
+                "/v1beta/models?pageSize=2&pageToken={}",
+                first["nextPageToken"].as_str().unwrap()
+            ),
+            agent,
+        )
+        .await;
+        assert!(second.get("nextPageToken").is_none());
+        let entries = first["models"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .chain(second["models"].as_array().unwrap());
+        assert_eq!(
+            entries
+                .clone()
+                .map(|v| v["name"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            [
+                "models/alias-a",
+                "models/model-a",
+                "models/model-b",
+                "models/model-c"
+            ]
+        );
+        for entry in entries {
+            let detail = agent_query(
+                &router,
+                &format!("/v1beta/{}", entry["name"].as_str().unwrap()),
+                agent,
+            )
+            .await;
+            assert_eq!(entry, &detail);
+            for (key, expected) in document.as_object().unwrap() {
+                assert_eq!(&entry[key], expected, "{key}");
+            }
+            assert_eq!(
+                entry["supportedGenerationMethods"],
+                json!(["generateContent", "streamGenerateContent", "countTokens"])
+            );
+            assert!(entry.get("inputTokenLimit").is_none());
+        }
+    }
 }
 
 #[tokio::test]
@@ -277,7 +373,7 @@ async fn agent_menus_apply_scoped_visibility_names_and_order_before_pagination()
             names(&second),
             vec![
                 (json!("models/model-b"), json!("Bee")),
-                (json!("models/model-fallback"), json!("model-fallback")),
+                (json!("models/gemini-3.1-flash-image"), json!("Image")),
             ]
         );
         let third = agent_query(
@@ -291,7 +387,10 @@ async fn agent_menus_apply_scoped_visibility_names_and_order_before_pagination()
         .await;
         assert_eq!(
             names(&third),
-            vec![(json!("models/model-plain"), json!("model-plain"))]
+            vec![
+                (json!("models/model-fallback"), json!("model-fallback")),
+                (json!("models/model-plain"), json!("model-plain")),
+            ]
         );
         assert!(third.get("nextPageToken").is_none());
         let detail = agent_query(&router, "/v1beta/models/model-hidden", agent).await;
@@ -305,4 +404,60 @@ async fn agent_menus_apply_scoped_visibility_names_and_order_before_pagination()
             .iter()
             .any(|model| model["name"] == "models/model-hidden")
     );
+}
+
+#[tokio::test]
+async fn native_catalog_returns_unavailable_for_read_and_payload_errors() {
+    use gateway_core::operation::RawJsonPayload;
+    let entry = |protocol, body: &'static [u8]| {
+        Ok(vec![PublicModelDescriptor::Native {
+            model: PublicModelId::new("model-a").unwrap(),
+            payload: RawJsonPayload::new(protocol, bytes::Bytes::from_static(body)).unwrap(),
+        }])
+    };
+    for catalog in [
+        Err(ProviderCatalogUnavailable),
+        entry("codex", b"{}"),
+        entry(GENAI_PROTOCOL, b"[]"),
+    ] {
+        let router = api_router(Arc::new(Execution {
+            client: Some(client()),
+            catalog: Some(catalog),
+            ..Default::default()
+        }))
+        .await;
+        for path in ["/v1beta/models", "/v1beta/models/model-a"] {
+            let (status, body) = query(&router, path, true).await;
+            assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{path}");
+            assert_eq!(
+                body,
+                json!({"error":{"code":503,"status":"UNAVAILABLE","message":"Model catalog is unavailable."}}),
+                "{path}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn native_catalog_filters_unexecutable_models() {
+    use gateway_core::operation::RawJsonPayload;
+    let router = api_router(Arc::new(Execution {
+        client: Some(client()),
+        catalog: Some(Ok(["model-a", "not-authorized", "unreachable/name"]
+            .into_iter()
+            .map(|id| PublicModelDescriptor::Native {
+                model: PublicModelId::new(id).unwrap(),
+                payload: RawJsonPayload::new(GENAI_PROTOCOL, bytes::Bytes::from_static(b"{}"))
+                    .unwrap(),
+            })
+            .collect())),
+        ..Default::default()
+    }))
+    .await;
+    let (status, body) = query(&router, "/v1beta/models", true).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["models"].as_array().unwrap().len(), 1);
+    assert_eq!(body["models"][0]["name"], "models/model-a");
+    let (status, _) = query(&router, "/v1beta/models/not-authorized", true).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
 }
