@@ -87,8 +87,8 @@ async fn query_response(
             None => paginate(models, query),
         },
         Err(()) => error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Could not read model catalog.",
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Model catalog is unavailable.",
         ),
     }
 }

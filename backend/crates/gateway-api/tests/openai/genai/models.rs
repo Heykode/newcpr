@@ -273,15 +273,13 @@ async fn native_catalog_preserves_metadata_and_aliases_for_every_client() {
     .unwrap();
     let router = api_router(Arc::new(Execution {
         client: Some(catalog_client()),
-        catalog: Some(
-            ["model-a", "model-b", "model-c", "alias-a"]
-                .into_iter()
-                .map(|id| PublicModelDescriptor::Native {
-                    model: PublicModelId::new(id).unwrap(),
-                    payload: payload.clone(),
-                })
-                .collect(),
-        ),
+        catalog: Some(Ok(["model-a", "model-b", "model-c", "alias-a"]
+            .into_iter()
+            .map(|id| PublicModelDescriptor::Native {
+                model: PublicModelId::new(id).unwrap(),
+                payload: payload.clone(),
+            })
+            .collect())),
         ..Default::default()
     }))
     .await;
@@ -409,36 +407,50 @@ async fn agent_menus_apply_scoped_visibility_names_and_order_before_pagination()
 }
 
 #[tokio::test]
-async fn native_catalog_rejects_foreign_payloads_and_filters_unexecutable_models() {
-    use gateway_core::{operation::RawJsonPayload, routing::PublicModelDescriptor};
-    for (protocol, body) in [("codex", "{}"), (GENAI_PROTOCOL, "[]")] {
+async fn native_catalog_returns_unavailable_for_read_and_payload_errors() {
+    use gateway_core::operation::RawJsonPayload;
+    let entry = |protocol, body: &'static [u8]| {
+        Ok(vec![PublicModelDescriptor::Native {
+            model: PublicModelId::new("model-a").unwrap(),
+            payload: RawJsonPayload::new(protocol, bytes::Bytes::from_static(body)).unwrap(),
+        }])
+    };
+    for catalog in [
+        Err(ProviderCatalogUnavailable),
+        entry("codex", b"{}"),
+        entry(GENAI_PROTOCOL, b"[]"),
+    ] {
         let router = api_router(Arc::new(Execution {
             client: Some(client()),
-            catalog: Some(vec![PublicModelDescriptor::Native {
-                model: PublicModelId::new("model-a").unwrap(),
-                payload: RawJsonPayload::new(protocol, bytes::Bytes::from(body)).unwrap(),
-            }]),
+            catalog: Some(catalog),
             ..Default::default()
         }))
         .await;
         for path in ["/v1beta/models", "/v1beta/models/model-a"] {
             let (status, body) = query(&router, path, true).await;
-            assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
-            assert_eq!(body["error"]["message"], "Could not read model catalog.");
+            assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{path}");
+            assert_eq!(
+                body,
+                json!({"error":{"code":503,"status":"UNAVAILABLE","message":"Model catalog is unavailable."}}),
+                "{path}"
+            );
         }
     }
+}
+
+#[tokio::test]
+async fn native_catalog_filters_unexecutable_models() {
+    use gateway_core::operation::RawJsonPayload;
     let router = api_router(Arc::new(Execution {
         client: Some(client()),
-        catalog: Some(
-            ["model-a", "not-authorized", "unreachable/name"]
-                .into_iter()
-                .map(|id| PublicModelDescriptor::Native {
-                    model: PublicModelId::new(id).unwrap(),
-                    payload: RawJsonPayload::new(GENAI_PROTOCOL, bytes::Bytes::from_static(b"{}"))
-                        .unwrap(),
-                })
-                .collect(),
-        ),
+        catalog: Some(Ok(["model-a", "not-authorized", "unreachable/name"]
+            .into_iter()
+            .map(|id| PublicModelDescriptor::Native {
+                model: PublicModelId::new(id).unwrap(),
+                payload: RawJsonPayload::new(GENAI_PROTOCOL, bytes::Bytes::from_static(b"{}"))
+                    .unwrap(),
+            })
+            .collect())),
         ..Default::default()
     }))
     .await;
