@@ -30,8 +30,12 @@ pub struct AccountImportSettingsRequest {
         skip_serializing_if = "Option::is_none"
     )]
     pub credential_proxy_id: Option<Option<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub excel_recovery: Option<gateway_admin::model::excel_recovery::ExcelRecoveryConfig>,
+    #[serde(
+        default,
+        skip_serializing,
+        deserialize_with = "gateway_admin::model::relogin_templates::discard_retired_setting"
+    )]
+    pub excel_recovery: Option<()>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub purchase_cost: Option<gateway_admin::model::account_purchase::AccountPurchaseUpdate>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -47,15 +51,49 @@ pub struct AccountImportSettingsRequest {
     pub enabled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub turn_state_injection_enabled: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing,
+        deserialize_with = "gateway_admin::model::relogin_templates::discard_retired_setting"
+    )]
     pub responses_upstream: Option<gateway_core::account::ResponsesUpstream>,
+    #[serde(
+        default,
+        skip_serializing,
+        deserialize_with = "gateway_admin::model::relogin_templates::discard_retired_setting"
+    )]
     pub excel_models: Option<gateway_core::account::ExcelModels>,
+    #[serde(
+        default,
+        skip_serializing,
+        deserialize_with = "gateway_admin::model::relogin_templates::discard_retired_setting"
+    )]
     pub excel_models_follow_global: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing,
+        deserialize_with = "gateway_admin::model::relogin_templates::discard_retired_setting"
+    )]
     pub excel_cache_creation_as_input: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing,
+        deserialize_with = "gateway_admin::model::relogin_templates::discard_retired_setting"
+    )]
     pub excel_ignore_encrypted_content: Option<bool>,
     pub request_proxy_source:
         Option<gateway_core::provider_ports::session_proxy::RequestProxySource>,
+    #[serde(
+        default,
+        skip_serializing,
+        deserialize_with = "gateway_admin::model::relogin_templates::discard_retired_setting"
+    )]
     pub excel_auto_disable_on_403: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing,
+        deserialize_with = "gateway_admin::model::relogin_templates::discard_retired_setting"
+    )]
     pub excel_403_action: Option<gateway_core::account::Excel403Action>,
     #[serde(deserialize_with = "deserialize_required_nullable")]
     pub concurrency_limit: Option<u64>,
@@ -83,21 +121,13 @@ impl AccountImportSettingsRequest {
         Ok(gateway_admin::model::accounts::AccountImportSettings {
             credential_proxy_id: self.credential_proxy_id,
             template_proxy_mode: None,
-            excel_recovery: self.excel_recovery,
             purchase_cost: self.purchase_cost,
             clear_outbound_proxy: self.clear_outbound_proxy,
             egress_mode: self.egress_mode,
             custom_name: parse_custom_name(self.custom_name.as_deref())?,
             enabled: self.enabled,
             turn_state_injection_enabled: self.turn_state_injection_enabled,
-            responses_upstream: self.responses_upstream,
-            excel_models: self.excel_models,
-            excel_models_follow_global: self.excel_models_follow_global,
-            excel_cache_creation_as_input: self.excel_cache_creation_as_input,
-            excel_ignore_encrypted_content: self.excel_ignore_encrypted_content,
             request_proxy_source: self.request_proxy_source,
-            excel_auto_disable_on_403: self.excel_auto_disable_on_403,
-            excel_403_action: self.excel_403_action,
             concurrency_limit: parse_concurrency_limit(self.concurrency_limit)?,
             weight: parse_account_weight(self.weight)?,
             model_access: self.model_access,
@@ -319,7 +349,12 @@ pub struct UpdateAccountRequest {
         skip_serializing_if = "Option::is_none"
     )]
     pub credential_proxy_id: Option<Option<String>>,
-    pub excel_recovery: Option<gateway_admin::model::excel_recovery::ExcelRecoveryConfig>,
+    #[serde(
+        default,
+        skip_serializing,
+        deserialize_with = "gateway_admin::model::relogin_templates::discard_retired_setting"
+    )]
+    pub excel_recovery: Option<()>,
     pub purchase_cost: Option<gateway_admin::model::account_purchase::AccountPurchaseUpdate>,
     #[serde(
         default,
@@ -335,14 +370,49 @@ pub struct UpdateAccountRequest {
     pub account_id: String,
     pub enabled: bool,
     pub turn_state_injection_enabled: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing,
+        deserialize_with = "gateway_admin::model::relogin_templates::discard_retired_setting"
+    )]
     pub responses_upstream: Option<gateway_core::account::ResponsesUpstream>,
+    #[serde(
+        default,
+        skip_serializing,
+        deserialize_with = "gateway_admin::model::relogin_templates::discard_retired_setting"
+    )]
     pub excel_models: Option<gateway_core::account::ExcelModels>,
+    #[serde(
+        default,
+        skip_serializing,
+        deserialize_with = "gateway_admin::model::relogin_templates::discard_retired_setting"
+    )]
     pub excel_models_follow_global: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing,
+        deserialize_with = "gateway_admin::model::relogin_templates::discard_retired_setting"
+    )]
     pub excel_cache_creation_as_input: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing,
+        deserialize_with = "gateway_admin::model::relogin_templates::discard_retired_setting"
+    )]
     pub excel_ignore_encrypted_content: Option<bool>,
     pub request_proxy_source:
         Option<gateway_core::provider_ports::session_proxy::RequestProxySource>,
+    #[serde(
+        default,
+        skip_serializing,
+        deserialize_with = "gateway_admin::model::relogin_templates::discard_retired_setting"
+    )]
     pub excel_auto_disable_on_403: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing,
+        deserialize_with = "gateway_admin::model::relogin_templates::discard_retired_setting"
+    )]
     pub excel_403_action: Option<gateway_core::account::Excel403Action>,
     #[serde(deserialize_with = "deserialize_required_nullable")]
     pub concurrency_limit: Option<u64>,
@@ -371,7 +441,6 @@ impl UpdateAccountRequest {
         self.validate()?;
         Ok(UpdateAccount {
             credential_proxy_id: self.credential_proxy_id,
-            excel_recovery: self.excel_recovery,
             purchase_cost: self.purchase_cost,
             egress_mode: self.egress_mode,
             custom_name: self
@@ -382,14 +451,7 @@ impl UpdateAccountRequest {
             account_id: self.account_id,
             enabled: self.enabled,
             turn_state_injection_enabled: self.turn_state_injection_enabled,
-            responses_upstream: self.responses_upstream,
-            excel_models: self.excel_models,
-            excel_models_follow_global: self.excel_models_follow_global,
-            excel_cache_creation_as_input: self.excel_cache_creation_as_input,
-            excel_ignore_encrypted_content: self.excel_ignore_encrypted_content,
             request_proxy_source: self.request_proxy_source,
-            excel_auto_disable_on_403: self.excel_auto_disable_on_403,
-            excel_403_action: self.excel_403_action,
             concurrency_limit: parse_concurrency_limit(self.concurrency_limit)?,
             weight: parse_account_weight(self.weight)?,
             model_access: self.model_access,

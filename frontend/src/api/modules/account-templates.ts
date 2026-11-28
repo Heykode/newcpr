@@ -1,6 +1,5 @@
 import type { RequestOptions } from '../request'
 import type { AccountModelAccess } from './accounts'
-import type { Excel403Action, ExcelRecoveryConfig } from '@/utils/excel-settings'
 import request from '../request'
 
 export interface AccountTemplateConfig {
@@ -11,14 +10,6 @@ export interface AccountTemplateConfig {
   egressMode?: string | null
   name: string
   enabled: boolean
-  responsesUpstream?: 'codex' | 'excel' | null
-  excelModelsFollowGlobal?: boolean | null
-  excelCacheCreationAsInput?: boolean | null
-  excelIgnoreEncryptedContent?: boolean | null
-  excelAutoDisableOn403?: boolean | null
-  excel403Action?: Excel403Action
-  excelRecovery?: ExcelRecoveryConfig
-  excelModels?: string[] | null
   turnStateInjectionEnabled?: boolean | null
   concurrencyLimit: number | null
   weight: number

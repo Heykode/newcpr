@@ -51,7 +51,6 @@ async fn model_policy_patch_preserves_identity_state_groups_and_egress() {
         credential_proxy_id: None,
         quota_settings: Default::default(),
         auto_use_quota_credits: None,
-        excel_recovery: None,
         purchase_cost: None,
         egress_mode: None,
         account_ids: vec!["acct_models".into()],
@@ -59,14 +58,7 @@ async fn model_policy_patch_preserves_identity_state_groups_and_egress() {
         custom_name: None,
         enabled: None,
         turn_state_injection_enabled: None,
-        responses_upstream: Default::default(),
-        excel_models_follow_global: Default::default(),
-        excel_cache_creation_as_input: Default::default(),
-        excel_ignore_encrypted_content: Default::default(),
         request_proxy_source: Default::default(),
-        excel_auto_disable_on_403: Default::default(),
-        excel_403_action: Default::default(),
-        excel_models: Default::default(),
         concurrency_limit: None,
         weight: None,
         group_ids: None,
@@ -132,7 +124,6 @@ async fn model_policy_patch_preserves_identity_state_groups_and_egress() {
             .batch_update_accounts(
                 BatchUpdateAccounts {
                     auto_use_quota_credits: None,
-                    excel_recovery: None,
                     purchase_cost: None,
                     model_access: Some(AccountModelAccess::all()),
                     group_ids: Some(vec![
@@ -160,7 +151,6 @@ async fn model_policy_patch_preserves_identity_state_groups_and_egress() {
         .batch_update_accounts(
             BatchUpdateAccounts {
                 auto_use_quota_credits: None,
-                excel_recovery: None,
                 purchase_cost: None,
                 model_access: Some(AccountModelAccess::all()),
                 ..command

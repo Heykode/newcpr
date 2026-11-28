@@ -527,7 +527,6 @@ async fn native_ws_releases_preludes_and_preserves_explicit_recovery() {
         } else {
             assert_eq!(events.len(), 1);
             assert_eq!(events[0]["data"]["reason"], "terminal");
-            assert_eq!(events[0]["data"]["limitBytes"], 0);
         }
         server.await.unwrap();
     }

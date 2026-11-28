@@ -23,8 +23,6 @@ test('new rules and templates share reference probe defaults without applying a 
   assert.equal(config.intervalSeconds, 120)
   assert.equal(config.repetitions, 1)
   assert.equal(config.excelFailureThreshold, 2)
-  assert.equal(config.excelRecoveryThreshold, 2)
-  assert.equal(config.disableExcelOnNativeRecovery, false)
   assert.equal(config.failureAction, 'none')
   assert.equal(config.failureTemplate, null)
   config.failureGroupIds.push('fixture')
@@ -39,17 +37,15 @@ test('editing legacy rules or templates never adopts new mode schedule or recove
   assert.equal(draft.intervalSeconds, null)
   assert.equal(draft.cron, legacy.cron)
   assert.equal(draft.timezone, 'UTC')
-  assert.equal(draft.disableExcelOnNativeRecovery, false)
   assert.equal(draft.excelFailureThreshold, 1)
-  assert.equal(draft.excelRecoveryThreshold, 1)
   draft.failureGroupIds.push('new-group')
   assert.deepEqual(legacy.failureGroupIds, ['old-group'])
 })
 
 test('explicit saved thresholds and custom schedules survive editing and template reuse', () => {
-  const config = { ...newQualityConfig('UTC'), model: 'custom', intervalSeconds: 17, excelFailureThreshold: 7, excelRecoveryThreshold: 4, disableExcelOnNativeRecovery: false }
+  const config = { ...newQualityConfig('UTC'), model: 'custom', intervalSeconds: 17, excelFailureThreshold: 7 }
   assert.deepEqual(plain(qualityConfigDraft(config, 'Asia/Shanghai')), plain(config))
   const oldProbe = { ...config }
   delete oldProbe.excelRecoveryThreshold
-  assert.equal(qualityConfigDraft(oldProbe, 'UTC').excelRecoveryThreshold, 1)
+  assert.equal(qualityConfigDraft(oldProbe, 'UTC').excelRecoveryThreshold, undefined)
 })

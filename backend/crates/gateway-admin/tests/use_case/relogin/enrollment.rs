@@ -11,9 +11,6 @@ fn intent() -> ReloginEnrollment {
     let mut settings = template_config().settings().unwrap();
     settings.purchase_cost = Some(purchase_cost("50.125"));
     settings.custom_name = Some("Imported via 2FA".into());
-    settings.responses_upstream = Some(gateway_core::account::ResponsesUpstream::Excel);
-    settings.excel_403_action = Some(gateway_core::account::Excel403Action::DisableExcel);
-    settings.excel_cache_creation_as_input = Some(true);
     ReloginEnrollment::new(settings, None, context("enroll-account")).unwrap()
 }
 
@@ -360,9 +357,10 @@ fn legacy_enrollment_without_purchase_cost_still_restores_other_settings() {
     let restored = replay.settings().unwrap();
     assert!(restored.purchase_cost.is_none());
     assert_eq!(restored.custom_name.as_deref(), Some("Imported via 2FA"));
+    assert_eq!(restored.weight, intent().settings().unwrap().weight);
     assert_eq!(
-        restored.responses_upstream,
-        Some(gateway_core::account::ResponsesUpstream::Excel)
+        restored.concurrency_limit,
+        intent().settings().unwrap().concurrency_limit
     );
 }
 

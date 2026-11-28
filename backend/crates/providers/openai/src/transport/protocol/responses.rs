@@ -117,9 +117,6 @@ impl ResponseTimingMetrics {
     }
 }
 
-/// Excel Provider precommit grace; native Responses delivery never waits on it.
-pub(crate) const STREAM_REPLAY_GRACE: std::time::Duration = std::time::Duration::from_millis(2_500);
-
 // 同一来源的多个头照常透传，只有值一致才能用来决定本地传输策略
 fn explicit_guardian_role<'a>(
     first: &[u8],
@@ -156,9 +153,6 @@ pub struct CodexResponsesRequest {
     pub(crate) requested_reasoning_effort: Option<String>,
     pub(crate) quality_probe: Option<gateway_core::operation::quality_probe::QualityProbeStep>,
     pub(crate) quota_overdraft_active: bool,
-    /// Trusted recovery expectation, never read from or serialized into client JSON.
-    pub(crate) excel_recovery_nonce: Option<String>,
-    pub(crate) excel: Option<crate::transport::excel::ExcelPreparedRequest>,
     /// 上游请求体（唯一真相源）。
     body: Map<String, Value>,
     /// API 边界保存、Provider 逐条恢复的普通客户端请求头。
@@ -315,9 +309,6 @@ impl TransportRequirement {
 
 /// 将已完成 history preparation 的请求规范化为唯一 transport requirement。
 pub fn transport_requirement(request: &CodexResponsesRequest) -> TransportRequirement {
-    if request.excel.is_some() {
-        return TransportRequirement::HttpRequired;
-    }
     if !request.generate() && !request.store() {
         return TransportRequirement::ExplicitWebSocketWarmup;
     }
@@ -717,10 +708,8 @@ impl CodexResponsesRequest {
     pub fn from_body(body: Map<String, Value>) -> Self {
         Self {
             requested_reasoning_effort: None,
-            excel: None,
             quality_probe: None,
             quota_overdraft_active: false,
-            excel_recovery_nonce: None,
             body,
             passthrough_headers: HeaderMap::new(),
             guardian_role: None,

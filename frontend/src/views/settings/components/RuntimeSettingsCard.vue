@@ -97,7 +97,7 @@ const tuningValues = {
 <template>
   <BaseCard
     title="通用与 Codex 配置"
-    description="请求节奏、并发、重试和账号切换为共用参数，Excel 请求继续遵循；原生 Codex 连接参数另列。"
+    description="配置请求节奏、并发、重试、账号切换和 Codex 连接参数。"
   >
     <BaseForm class="max-w-6xl sm:grid-cols-2">
       <BaseFormItem prop="accountAffinity" label="账号亲和模式" description="适用于 Codex、xAI 与 Antigravity">
@@ -311,9 +311,9 @@ const tuningValues = {
 
       <BaseForm v-if="advancedOpen" class="mt-4 max-w-6xl sm:grid-cols-2">
         <h3 class="m-0 text-sm font-medium text-cp-text-secondary sm:col-span-2">
-          共享重试与限流（Codex / Excel）
+          重试与限流
         </h3>
-        <BaseFormItem prop="requestTuning.websocketMaxRetries" label="同账号传输失败重试次数" description="用于 WS 传输恢复和 Excel 可安全重试的首包前错误（含接口 429），范围 0–100；Excel 还受总路由尝试次数限制">
+        <BaseFormItem prop="requestTuning.websocketMaxRetries" label="同账号传输失败重试次数" description="用于同账号 WS 传输恢复，范围 0–100；仍受总路由尝试次数限制">
           <BaseInput v-model="tuningValues.websocketMaxRetries.value" aria-label="同账号传输失败重试次数" type="number" />
         </BaseFormItem>
         <BaseFormItem prop="requestTuning.maxAccountSwitches" label="单个请求最多切换账号次数" description="本次请求失败后最多切换到其他账号的次数，范围 0–31">

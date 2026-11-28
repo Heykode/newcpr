@@ -281,7 +281,7 @@ Responses WebSocket 仅接受文本 `response.create`，同一连接串行执行
 OpenAI 后台按账号、凭据版本和套餐保存成功目录，重启先从数据库恢复，不等待全池联网；
 客户端读取只检查本地资格，不按 `client_version` 触发远端查询。账号失败保留其最后成功目录，
 成功空目录撤回旧条目；当前授权范围没有可用目录时返回 `503 model_catalog_unavailable`。
-同名模型取合法来源的完整对象，不跨账号拼接字段。Excel 配置模型继续独立适配。
+同名模型取合法来源的完整对象，不跨账号拼接字段。旧 Excel 合成目录不授予原生模型权限。
 
 Codex 专用目录中的 `context_window` 与 `max_context_window` 分别表示默认上下文窗口和可覆盖上限。
 OpenAI Provider 独立传递上游目录中的对应字段；任一值未知时，对应字段仍存在且为 `null`，
@@ -1198,7 +1198,7 @@ requestTuning
 连接池组包含 enabled、maxAgeMs（默认 3300000）、fastPathBudgetMs（默认 800，1..15000）、idleTimeoutMs（默认 300000，非零）、streamIdleTimeoutMs（默认 300000，0 表示传输默认）。已创建连接保留创建时寿命；在线修改不重建共享池。每账号有效并发只限制同时建连，成功/失败/取消释放，普通请求并发独立不变。
 旧 YAML 及旧数据库 tuning 在首次启动一次导入，之后数据库权威。enabled=false 保留，不提供全局 maxConnecting 覆盖账号上限。
 Guardian 开关默认 true，仅结构化同步审核且有权限的原生账号优先使用 `codex-auto-review`，不覆盖显式模型映射或已确认的续接模型。
-国家策略为 `{"mode":"follow_location"}`（默认，代理位置优先于已启用全局位置，无位置发送 null）、`{"mode":"default"}`（发送 null）、`{"mode":"passthrough"}`（保留原字段）或 `{"mode":"custom","country":"JP"}`（两个大写 ASCII 字母）。策略仅用于 Codex OAuth 账号，在实际选号后应用于原生 HTTP/WS 正文的顶层 `request_country`。透传保留客户端显式 null 或字段缺失，不改写 `client_metadata` 中的同名字段。时区和搜索位置覆盖独立处理；Excel 沿用独立映射，本地没有上游 API Key 账号运行路径。
+国家策略为 `{"mode":"follow_location"}`（默认，代理位置优先于已启用全局位置，无位置发送 null）、`{"mode":"default"}`（发送 null）、`{"mode":"passthrough"}`（保留原字段）或 `{"mode":"custom","country":"JP"}`（两个大写 ASCII 字母）。策略仅用于 Codex OAuth 账号，在实际选号后应用于原生 HTTP/WS 正文的顶层 `request_country`。透传保留客户端显式 null 或字段缺失，不改写 `client_metadata` 中的同名字段。时区和搜索位置覆盖独立处理；本地没有上游 API Key 账号运行路径。
 本地自动重置卡 `AutoResetConfig.onLowWeeklyQuota` 与全局 UA `/api/admin/settings/openai-user-agent` 仍使用各自接口，不复制官方完整 settings 结构。
 
 `rotationStrategy` 可取 `smart`、`quota_reset_priority`、`round_robin`、`sticky`。
@@ -1634,7 +1634,7 @@ OpenAI 账号队满或超时后的重选记录为 `account.queue.reselect`；绑
 - Key 画像的 `installationSeed` 替代 `installationId`；支持 `inherit.installationSeed`。种子只参与 Key+账号的确定性派生，不发送到上游。迁移0086保留旧值作为种子，因此旧 Key 的有效上游身份会变化，账号持久设备号不变。
 - `requestTuning` 增加 `switchAccountOnQueueFailure=false`。开启后，允许换号的请求在账号队满/超时后只做一次立即选号。严格根请求成功准入 B 后绑定 B；Preferred 保留旧软绑定；真实 owner、required 账号和普通严格子线程仍不可跨号；满足生图资格借号条件的子请求使用本次借号决策并保留主绑定。
 - Key/账号等待秒数分别使用 `keyQueueTimeoutSeconds` / `accountQueueTimeoutSeconds`，范围1..120；旧名称作为输入 alias 接受，新响应只使用新名称。升级将旧值大于120的部分限至120，并保留显式关闭和人数设置。
-- OAuth Responses 按官方移除不支持的顶层选项，归一化 token 上限别名，保留有效上下文选项与业务嵌套字段。Excel 等本地独立路由不套用 OAuth 清理。
+- OAuth Responses 按官方移除不支持的顶层选项，归一化 token 上限别名，保留有效上下文选项与业务嵌套字段。此清理仅用于对应的 OAuth 请求。
 
 ### 错误来源与交付诊断
 

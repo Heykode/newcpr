@@ -180,8 +180,6 @@ pub struct MihomoStatus {
     pub node_states: Vec<MihomoNode>,
     pub country_filter: CountryFilter,
     pub country_codes: Vec<String>,
-    pub bps_warm_pool: MihomoWarmStatus,
-    pub bps_ip_warm_pool: MihomoWarmStatus,
     pub codex_warm_pool: MihomoWarmStatus,
     pub codex_ip_warm_pool: MihomoWarmStatus,
 }

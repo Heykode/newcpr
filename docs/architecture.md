@@ -224,7 +224,7 @@ credential revision、套餐取最近成功目录，已知缺少模型时排除�
 WS 握手中的模型 ETag 只交给该连接第一次实际生成；`generate=false` 预热不消耗它，后续复用不重复确认旧 ETag。每次响应正文里的模型与 ETag 事件仍独立处理。
 人工白名单显式允许目录外模型的合同保留，健康、额度、亲和、续接归属和等待预算仍生效。
 账号目录持久化在 PostgreSQL，后台有界并发刷新；启动恢复和客户端目录读取不等待远端网络。
-Excel 模型合成来源不充当原生模型资格证据，混合目录保留分别检查。
+旧 Excel 合成来源不充当原生模型资格证据，不再合成 Excel 模型。
 Images 与 standalone Search 是 OpenAI Provider 自有端点：两者都不参与文本模型映射，只在 Client Key
 的账号范围确实包含 OpenAI 账号时生成单一 OpenAI 候选。Images 不要求模型字段；Search body 中的模型
 及其他字段保持原始 bytes 并由上游解释。
@@ -463,7 +463,7 @@ credential 与 quota 是两组独立事实：credential refresh 不等于 quota 
   Cookie/principal、额度耗尽与重置证据；普通 RT 续期保留身份和资料。设备重绑、凭据 CAS、
   State binding revision 在同一 PG 事务内完成，活账号重复身份回滚，目标仅有历史设备归档时允许重绑。
 - `oauth_identity_key` 将本地 ID、上游 user 和 workspace 纳入账号/session-proxy client 的池 key，
-  以及 Session continuation、Guardian 与头像缓存；Excel 复用账号 client，托管 State 保留既有 revision 防线。
+  以及 Session continuation、Guardian 与头像缓存；历史 State 保留既有 revision 防线。
 - 普通 Responses、文本与额度刷新按头名前缀分桶：通用 `x-codex-primary-*`、
   `x-codex-secondary-*` 更新 Codex 额度，即使 active-limit 为 `premium` 也不迁移。
   仅图片生成/编辑端点在活动计量项没有独立 key 时迁移通用窗口，成功与失败路径一致；
@@ -604,7 +604,7 @@ docker compose -f deploy/compose.yaml config --quiet
 逻辑账号身份按每帧 metadata 优先解析，传输身份仍单独派生；内容偏好不进入 continuation observation、
 turn alias、会话恢复或账号状态所有权。Preferred 缓存读写失败只停用本次请求的偏好，适用于投影、
 直接选号、等待重查和准入；CAS 冲突释放槽并重选，不当作存储故障放行。cache preference 的分流
-不产生真实 `account_switch`，Excel 也不能仅凭这类 `affinity_hit` 推断状态属于所选账号。
+不产生真实 `account_switch`，也不能仅凭这类 `affinity_hit` 推断旧状态属于所选账号。
 本地 Guardian 父线程成功记录独立保留；内容偏好没有主绑定完成回写。
 
 ## 官方 v3.42.0 原生合同
@@ -629,7 +629,7 @@ turn alias、会话恢复或账号状态所有权。Preferred 缓存读写失败
 ## 官方 v3.45.1 原生接入
 
 - Messages 入口完成鉴权、解压和验证后，进入现有 Core 执行链。Provider 将请求转 Responses，
-  使用已选账号的身份、出口、Excel/State 和传输；源用量先记入观测，再由官方转换器生成目标事件。
+  使用已选账号的身份、出口和原生传输；源用量先记入观测，再由官方转换器生成目标事件。
   一个源事件可产生多个目标事件，终态只在最后交付；提交/结算失败不能留下成功的 message_stop。
 - CountTokens 也是独立 Operation，复用模型/账号准入，使用有并发界限的本地 tokenizer 任务，
   支持截止和取消，不调用上游推理、不写入虚假上游成功用量。
@@ -680,7 +680,7 @@ Core 将本请求确认不可达的代理入口传入 Provider 直接及等待�
 
 请求国家策略属于 Codex OAuth 原生出站准备，使用已经冻结的配置和选号后的代理位置。
 `provider-openai` 在 OAuth 归一化分支内调用 `apply_request_country`，代理位置优先于已启用
-的全局位置；一般时区和结构化位置对齐独立执行。Excel 使用自己的请求映射。
+的全局位置；一般时区和结构化位置对齐独立执行。
 
 账号与分组复用现有 `AccountModelAccessField`，后端仍按账号与分组的权限交集判断。
 概览和分析统计复用 `UsageRecordsTable` 与 128px 时间列，不再通过页面专属参数决定时间格式。
@@ -691,6 +691,6 @@ Core 将本请求确认不可达的代理入口传入 Provider 直接及等待�
 
 ### v3.54.5 原生路径边界
 
-严格 Images 借号把实际执行账号与会话主绑定分别交给同一准入 CAS；本地 Redis 代次、队列容量、Excel 路由和身份防线继续生效。Guardian 专用模型计划在 Core 执行入口核对严格父绑定的候选范围，不合格则重建原模型计划。WS 池同时核对最终响应排除头与原账号、出口、线程、凭据身份；上传由 pump 同时处理写入、读取和控制帧。
+严格 Images 借号把实际执行账号与会话主绑定分别交给同一准入 CAS；本地 Redis 代次、队列容量、退役路由隔离和身份防线继续生效。Guardian 专用模型计划在 Core 执行入口核对严格父绑定的候选范围，不合格则重建原模型计划。WS 池同时核对最终响应排除头与原账号、出口、线程、凭据身份；上传由 pump 同时处理写入、读取和控制帧。
 
 配额限制时长随拒绝事实保存于 `quota_limit_window_minutes`，各账号查询统一解析。PostgreSQL 分别保护文档与访问时钟；同身份重授权保留事实但推进凭据版本。后台维护包括停用 OAuth 账号，客户端选号与预热不因此放宽。恢复规则和失败边界见 [账号 API](api.md#v3545-配额与原生调度补充)。

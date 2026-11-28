@@ -260,6 +260,15 @@ async fn shared_template_import_settings_apply_to_new_and_existing_accounts() {
     };
     catalog.save_template(&template, None).await.unwrap();
     let frozen = catalog.templates().await.unwrap().remove(0);
+    let stored = serde_json::to_value(&frozen.config).unwrap();
+    for key in [
+        "responsesUpstream",
+        "excelModelsFollowGlobal",
+        "excelCacheCreationAsInput",
+        "excelIgnoreEncryptedContent",
+    ] {
+        assert!(stored.get(key).is_none(), "retired template field {key}");
+    }
     let result = repository
         .import_provider_accounts(ImportProviderAccounts {
             settings: Some(frozen.config.settings().unwrap()),
@@ -282,7 +291,7 @@ async fn shared_template_import_settings_apply_to_new_and_existing_accounts() {
                     responses_upstream, excel_cache_creation_as_input, excel_ignore_encrypted_content
              from provider_accounts where id=$1"
         ).bind(id).fetch_one(&database.pool).await.unwrap();
-        assert_eq!(row, (false, Some(4), 23, true, "excel".into(), false, true));
+        assert_eq!(row, (false, Some(4), 23, true, "codex".into(), true, false));
         let current = repository.load_provider_account(id).await.unwrap().unwrap();
         assert_eq!(
             Some(current.summary.model_access),
@@ -331,8 +340,8 @@ async fn shared_template_import_settings_apply_to_new_and_existing_accounts() {
                 if index == 0 { Some(4) } else { None },
                 if index == 0 { 23 } else { 31 },
                 true,
-                "excel".into(),
-                true
+                "codex".into(),
+                false
             )
         );
         assert_eq!(

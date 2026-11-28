@@ -41,15 +41,6 @@ function base(overrides = {}) {
 }
 const rule = (id, config = base()) => ({ id, revision: 8, config })
 
-test('legacy Excel-only recovery fields are preserved but no longer offered for bulk editing', () => {
-  const probe = base({ detectionMode: 'state_probe', failureAction: 'enable_excel', excelRecoveryThreshold: 2, disableExcelOnNativeRecovery: true })
-  const edited = applyQualityPatch(probe, { model: 'changed', excelRecoveryThreshold: 5, disableExcelOnNativeRecovery: false })
-  assert.equal(edited.excelRecoveryThreshold, 2)
-  assert.equal(edited.disableExcelOnNativeRecovery, true)
-  assert.deepEqual(plain(buildQualityPatch(['excelRecoveryThreshold', 'disableExcelOnNativeRecovery'], probe)), {})
-  assert.equal(applyQualityPatch(probe, { failureAction: 'none' }).disableExcelOnNativeRecovery, false)
-})
-
 test('only checked fields are included and account identity cannot be patched', () => {
   const draft = base({ intervalSeconds: 75, model: 'another-model' })
   const patch = buildQualityPatch(['intervalSeconds'], draft)
@@ -83,14 +74,6 @@ test('answer-only edits do not change probe rules or erase their question drafts
   assert.equal(converted.prompt, 'own question')
 })
 
-test('Excel threshold applies only to Excel actions and never enables automatic closing', () => {
-  assert.equal(applyQualityPatch(base(), { excelFailureThreshold: 8 }).excelFailureThreshold, 3)
-  const next = applyQualityPatch(base({ autoRestore: true }), { failureAction: 'enable_excel', excelFailureThreshold: 8 })
-  assert.equal(next.excelFailureThreshold, 8)
-  assert.equal(next.autoRestore, false)
-  assert.equal(applyQualityPatch(next, { autoRestore: true }).autoRestore, false)
-})
-
 test('pause and remove thresholds are explicit while old hidden Excel values stay ignored', () => {
   for (const failureAction of ['disable_scheduling', 'remove_groups']) {
     const old = base({ failureAction, excelFailureThreshold: 7 })
@@ -120,10 +103,10 @@ test('template action reuses threshold and preserves each unselected template', 
   assert.deepEqual(plain(buildQualityPatch(['failureTemplate'], source)), { failureTemplate: template })
 })
 
-test('new rules choose templates instead of standalone Excel while legacy rules remain editable', () => {
+test('new rules choose templates instead of standalone Excel without standalone Excel actions', () => {
   assert.equal(actions.failureActionOptions('none').some(value => value.value === 'enable_excel'), false)
   assert.equal(actions.failureActionOptions('none').some(value => value.value === 'apply_account_template'), true)
-  assert.equal(actions.failureActionOptions('enable_excel').some(value => value.value === 'enable_excel'), true)
+  assert.equal(actions.failureActionOptions().some(value => value.value === 'enable_excel'), false)
 })
 
 test('batch refreshes revisions, preserves fresh unrelated values and retries failures only', async () => {

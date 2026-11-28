@@ -844,3 +844,195 @@ async fn anthropic_menu_and_detail_hide_non_messages_models() {
         "generic OpenAI catalog remains independent"
     );
 }
+
+struct FallbackModelsProvider;
+
+#[async_trait::async_trait]
+impl gateway_core::engine::provider::Provider for FallbackModelsProvider {
+    fn name(&self) -> &'static str {
+        "openai"
+    }
+
+    fn catalog_generation(&self) -> gateway_core::routing::ProviderCatalogGeneration {
+        gateway_core::routing::ProviderCatalogGeneration::default()
+    }
+
+    async fn query_model_capabilities(
+        &self,
+    ) -> Result<
+        Vec<gateway_core::routing::ProviderModelCapabilities>,
+        gateway_core::error::ProviderError,
+    > {
+        Ok(Vec::new())
+    }
+
+    async fn execute(
+        &self,
+        _: gateway_core::engine::provider::ProviderRequest,
+        _: gateway_core::engine::AttemptContext,
+    ) -> Result<gateway_core::engine::provider::ProviderStream, gateway_core::error::ProviderError>
+    {
+        panic!("model discovery must not execute a generation request")
+    }
+}
+
+fn retired_route_models_execution(mixed_sources: bool) -> Arc<dyn ExecutionService> {
+    use std::{
+        collections::{BTreeMap, BTreeSet},
+        num::NonZeroU32,
+        time::Duration,
+    };
+
+    use gateway_core::{
+        account::{AccountSelectionPolicy, ProviderAccountId, RotationStrategy},
+        engine::{execution::DefaultExecutionService, provider::ProviderRegistry},
+        operation::OperationKind,
+        policy::{ClientApiKeyId, ClientPolicy, PlaintextClientApiKey, RateLimits},
+        routing::{
+            ClientRoutingScope, ConfigRevision, FrozenAccountScope, ModelCapabilities,
+            ProviderKind, ProviderModel, RuntimeAccount, RuntimeAccountDirectory, RuntimeSnapshot,
+            UpstreamModelId,
+        },
+        runtime::RuntimeSnapshotHandle,
+    };
+
+    let provider = ProviderKind::new("openai").unwrap();
+    let mut accounts = BTreeMap::from([(
+        ProviderAccountId::new("acct_retired_route").unwrap(),
+        RuntimeAccount::new(provider.clone(), BTreeSet::new())
+            .with_excel_models(BTreeSet::from(["model-a".to_owned()])),
+    )]);
+    if mixed_sources {
+        accounts.insert(
+            ProviderAccountId::new("acct_native_route").unwrap(),
+            RuntimeAccount::new(provider.clone(), BTreeSet::new()),
+        );
+    }
+    let directory = Arc::new(RuntimeAccountDirectory::new(accounts));
+    let scope = Arc::new(FrozenAccountScope::new(
+        directory.clone(),
+        ClientRoutingScope::all_accounts(),
+    ));
+    let capabilities = ModelCapabilities::new([OperationKind::Generate].into(), None)
+        .with_generation_protocol("openai")
+        .with_translated_generation_protocols(["anthropic"]);
+    let snapshot = RuntimeSnapshot::new(
+        ConfigRevision::new(1).unwrap(),
+        AccountSelectionPolicy::new(RotationStrategy::Smart, NonZeroU32::MIN, Duration::ZERO),
+        vec![provider.clone()],
+        ["model-a", "model-b"]
+            .into_iter()
+            .map(|model| {
+                ProviderModel::new(
+                    provider.clone(),
+                    UpstreamModelId::new(model).unwrap(),
+                    capabilities.clone(),
+                )
+                .with_presentation(ModelPresentation::default())
+            })
+            .collect(),
+        vec![ClientPolicy::new(
+            ClientApiKeyId::new("key_models_routes").unwrap(),
+            PlaintextClientApiKey::new("sk_models_test").unwrap(),
+            scope,
+            true,
+            RateLimits::unlimited(),
+        )],
+    )
+    .unwrap()
+    .with_account_directory(directory)
+    .with_model_mappings(BTreeMap::from([(
+        "alias-a".to_owned(),
+        "model-a".to_owned(),
+    )]));
+    Arc::new(DefaultExecutionService::new(
+        RuntimeSnapshotHandle::new(snapshot),
+        Arc::new(super::UnusedExecutionStore),
+        ProviderRegistry::new([
+            Arc::new(FallbackModelsProvider) as Arc<dyn gateway_core::engine::provider::Provider>
+        ])
+        .unwrap(),
+        Arc::new(super::UnusedAdmissions),
+        Arc::new(super::UnusedCircuits),
+        Arc::new(super::UnusedContinuation),
+        Arc::new(super::IgnoredClientApiKeyUsage),
+    ))
+}
+
+async fn assert_retired_route_http_catalog(protocol: &str) {
+    for mixed_sources in [false, true] {
+        let router = api_router(retired_route_models_execution(mixed_sources)).await;
+        let request = |path: &str| {
+            let request = Request::get(path);
+            let request = if protocol == "anthropic" {
+                request.header("x-api-key", "sk_models_test")
+            } else {
+                request.header(AUTHORIZATION, "Bearer sk_models_test")
+            };
+            request.body(Body::empty()).unwrap()
+        };
+        let path = if protocol == "codex" {
+            "/v1/models?client_version=0.166.0"
+        } else {
+            "/v1/models"
+        };
+        let response = router.clone().oneshot(request(path)).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "{protocol}");
+        let body: serde_json::Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        let (collection, field) = if protocol == "codex" {
+            ("models", "slug")
+        } else {
+            ("data", "id")
+        };
+        let mut ids = body[collection]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|model| model[field].as_str().unwrap())
+            .collect::<Vec<_>>();
+        ids.sort_unstable();
+        let expected = if mixed_sources {
+            vec!["alias-a", "model-a", "model-b"]
+        } else {
+            vec!["model-b"]
+        };
+        assert_eq!(ids, expected, "{protocol}, mixed sources: {mixed_sources}");
+
+        if protocol != "codex" {
+            for model in ["model-a", "alias-a", "model-b"] {
+                let response = router
+                    .clone()
+                    .oneshot(request(&format!("/v1/models/{model}")))
+                    .await
+                    .unwrap();
+                let expected = if mixed_sources || model == "model-b" {
+                    StatusCode::OK
+                } else {
+                    StatusCode::NOT_FOUND
+                };
+                assert_eq!(
+                    response.status(),
+                    expected,
+                    "{protocol}, {model}, mixed sources: {mixed_sources}"
+                );
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn retired_excel_routes_do_not_leak_into_openai_http_catalog() {
+    assert_retired_route_http_catalog("openai").await;
+}
+
+#[tokio::test]
+async fn retired_excel_routes_do_not_leak_into_codex_fallback_http_catalog() {
+    assert_retired_route_http_catalog("codex").await;
+}
+
+#[tokio::test]
+async fn retired_excel_routes_do_not_leak_into_anthropic_http_catalog() {
+    assert_retired_route_http_catalog("anthropic").await;
+}

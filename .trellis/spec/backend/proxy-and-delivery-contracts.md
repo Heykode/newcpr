@@ -32,7 +32,7 @@
   dial stage, including timeouts; local target DNS and CA failures must not inherit
   a stale proxy-stage accusation.
 - NewCPR account and managed exits both carry diagnostics. Keep source-bound
-  IPv6 errors and connection-budget behavior; preserve Excel actual HTTP rejection
+  IPv6 errors and connection-budget behavior. Preserve upstream HTTP rejection
   status when passing the selected account into the shared error mapper.
 - Preparation uses the same safe diagnostic mapper in account exit and Live
   paths. Never render raw reqwest/URL credentials as a new diagnostic message.
@@ -61,11 +61,11 @@
   documents in the same message, do not forward the tail or return the connection
   to the pool. Never synthesize success or replay a possibly executed request.
 - Native WS forwards parsed lifecycle/metadata immediately, regardless of the
-  Excel prefetch setting. Check connection-limit errors at the first non-prelude
+  legacy prefetch setting. Check connection-limit errors at the first non-prelude
   body frame without pre-reading. Forwarding replaceable preludes leaves the
   independent replay barrier open; business, unknown and terminal events close
   it permanently. Preserve retry proof/budgets, cancellation, exact continuation,
-  warmup, outgoing identity and Excel's separate Provider buffering.
+  warmup and outgoing identity.
 
 ## WebSocket Context Window Boundaries
 

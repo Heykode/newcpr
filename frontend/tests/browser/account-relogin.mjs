@@ -60,7 +60,8 @@ async function main() {
         await menu(0).click()
         await page.screenshot({ path: `${output}/menu-${theme}-${width}.png`, fullPage: true })
         const menuText = (await actionsMenu.textContent()) ?? ''
-        assert.ok(menuText.indexOf('立即重登') > menuText.indexOf('Excel 入口'))
+        assert.ok(menuText.includes('立即重登'))
+        assert.equal(menuText.includes('Excel 入口'), false)
         assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1))
         await page.keyboard.press('Escape')
       }

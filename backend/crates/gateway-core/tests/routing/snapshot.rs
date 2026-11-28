@@ -294,6 +294,150 @@ fn discovered_models_require_an_authorized_discovering_account() {
 }
 
 #[test]
+fn retired_excel_models_are_hidden_from_public_catalogs_and_details() {
+    use gateway_core::account::{AccountModelAccess, AccountModelAccessMode};
+
+    struct Catalog {
+        provider: &'static str,
+        scoped_sources: bool,
+    }
+    impl ProviderCatalogPort for Catalog {
+        fn catalog_generations(&self) -> BTreeMap<ProviderKind, ProviderCatalogGeneration> {
+            [(
+                ProviderKind::new(self.provider).unwrap(),
+                ProviderCatalogGeneration::new(1),
+            )]
+            .into()
+        }
+
+        fn query_model_capabilities(
+            &self,
+            _: &ProviderKind,
+        ) -> BoxFuture<'_, Result<Vec<ProviderModelCapabilities>, ProviderCatalogUnavailable>>
+        {
+            Box::pin(async move {
+                Ok(["retired-model", "native-model"]
+                    .into_iter()
+                    .map(|model| {
+                        let capability = ProviderModelCapabilities::new(
+                            UpstreamModelId::new(model).unwrap(),
+                            super::capabilities(),
+                        )
+                        .with_presentation(ModelPresentation::new(Some(model.into()), None));
+                        if self.scoped_sources {
+                            capability.with_catalog_accounts(
+                                ["acct_retired", "acct_native", "acct_denied"]
+                                    .map(|id| ProviderAccountId::new(id).unwrap())
+                                    .into(),
+                            )
+                        } else {
+                            capability
+                        }
+                    })
+                    .collect())
+            })
+        }
+    }
+
+    for provider in ["openai", "xai", "antigravity"] {
+        for scoped_sources in [false, true] {
+            let accounts = [
+                "acct_retired",
+                "acct_native",
+                "acct_denied",
+                "acct_unpublished",
+            ]
+            .map(|id| {
+                let account = SnapshotProviderAccountFacts::new(
+                    ProviderAccountId::new(id).unwrap(),
+                    provider,
+                );
+                match id {
+                    "acct_retired" => account.with_excel_models(["retired-model".into()].into()),
+                    "acct_denied" => account.with_model_access(
+                        AccountModelAccess::new(
+                            AccountModelAccessMode::Denylist,
+                            vec!["retired-model".into()],
+                        )
+                        .unwrap(),
+                    ),
+                    _ => account,
+                }
+            });
+            let facts = SnapshotFacts::new(
+                revision(1),
+                revision(1),
+                SnapshotSettingsFacts::new(
+                    3,
+                    0,
+                    "smart",
+                    [("retired-alias".into(), "retired-model".into())].into(),
+                    None,
+                    None,
+                ),
+                vec![],
+                vec![],
+                accounts.into(),
+                vec![],
+            );
+            let snapshot = block_on(
+                RuntimeSnapshotCompiler::new(
+                    Arc::new(TestSnapshotStore::new(Ok(facts))),
+                    Arc::new(Catalog {
+                        provider,
+                        scoped_sources,
+                    }),
+                )
+                .compile(),
+            )
+            .unwrap();
+            for (ids, visible) in [
+                (vec!["acct_retired"], provider != "openai"),
+                (vec!["acct_native"], true),
+                (vec!["acct_denied"], false),
+                (vec!["acct_unpublished"], !scoped_sources),
+                (vec!["acct_retired", "acct_native"], true),
+                (vec!["acct_retired", "acct_denied"], provider != "openai"),
+            ] {
+                let ids = ids
+                    .into_iter()
+                    .map(|id| ProviderAccountId::new(id).unwrap())
+                    .collect();
+                let scope = snapshot.all_account_scope().restricted_to_accounts(&ids);
+                let listed = snapshot.public_models_for_scope(&scope);
+                let profiles = snapshot.public_model_profiles_for_scope(&scope);
+                for name in ["retired-model", "retired-alias"] {
+                    let model = PublicModelId::new(name).unwrap();
+                    assert_eq!(
+                        listed.contains(&model),
+                        visible,
+                        "list: {provider}, sources={scoped_sources}, {ids:?}, {name}"
+                    );
+                    assert_eq!(
+                        snapshot.contains_public_model_for_scope(&model, &scope),
+                        visible,
+                        "detail: {provider}, sources={scoped_sources}, {ids:?}, {name}"
+                    );
+                    assert_eq!(
+                        profiles.iter().any(|profile| profile.model() == &model),
+                        visible,
+                        "profile: {provider}, sources={scoped_sources}, {ids:?}, {name}"
+                    );
+                }
+                let native = PublicModelId::new("native-model").unwrap();
+                let native_visible = !scoped_sources
+                    || !ids.contains(&ProviderAccountId::new("acct_unpublished").unwrap());
+                assert_eq!(listed.contains(&native), native_visible);
+                assert_eq!(
+                    snapshot.contains_public_model_for_scope(&native, &scope),
+                    native_visible
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn state_probe_concurrency_defaults_and_snapshot_bounds_are_enforced() {
     assert_eq!(
         gateway_core::routing::OpenAiTurnStatePolicy::default().probe_concurrency(),

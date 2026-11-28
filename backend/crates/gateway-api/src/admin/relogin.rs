@@ -110,7 +110,8 @@ struct NewAccountForm {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct PushRequest {
     new_account: Option<NewAccountForm>,
-    new_account_excel: Option<gateway_admin::model::relogin_templates::ExcelImportSettings>,
+    #[serde(default, rename = "newAccountExcel")]
+    _retired_excel: Option<serde::de::IgnoredAny>,
     custom_name: Option<String>,
     ids: Vec<String>,
     revisions: std::collections::BTreeMap<String, u64>,
@@ -501,7 +502,6 @@ where
             gateway_admin::model::relogin_templates::ReloginNewAccountOptions {
                 template: request.template,
                 custom_name: request.custom_name,
-                excel: request.new_account_excel,
                 form: request
                     .new_account
                     .map(|form| {

@@ -1,7 +1,6 @@
 import type { RequestOptions } from '../request'
 import type { AccountGroupRef } from './account-groups'
 import type { QualityMonitoring } from './quality-ops'
-import type { Excel403Action, ExcelRecoveryConfig, ExcelRecoveryView } from '@/utils/excel-settings'
 import { API_BASE_URL } from '../constants'
 import request from '../request'
 
@@ -218,8 +217,6 @@ export interface AccountHealthBucket {
   nonCompletionCount: number
 }
 
-export type ResponsesUpstream = 'codex' | 'excel'
-
 export interface AccountQuotaBucketSettings {
   limitPercent: number | null
   warmup: { model: string } | null
@@ -238,6 +235,7 @@ export interface AccountCapabilities {
   subscription: boolean
   avatar: boolean
   resetCredits: boolean
+  automaticReset: boolean
   consumeResetCredit: boolean
 }
 
@@ -270,20 +268,8 @@ export interface Account {
   errorMessage: string | null
   enabled: boolean
   turnStateInjectionEnabled: boolean
-  responsesUpstream?: ResponsesUpstream
-  excelModels?: string[]
-  excelModelsFollowGlobal?: boolean
-  excelCacheCreationAsInput?: boolean
-  excelIgnoreEncryptedContent?: boolean
   requestProxySource?: import('@/utils/request-proxy-source').RequestProxySource
-  excelAutoDisableOn403?: boolean
-  excel403Action?: Excel403Action
-  excelAutoDisabledAt?: string | null
-  excel403WarningAt?: string | null
-  excelRecovery?: ExcelRecoveryView | null
   qualityMonitoring?: QualityMonitoring | null
-  excelModeDisabledAt?: string | null
-  effectiveExcelModels?: string[]
   turnState?: {
     enabled?: boolean
     requiredModels: string[]
@@ -560,21 +546,13 @@ interface AccountResetCreditConsumeParam extends AccountIdParam {
 interface AccountUpdateParam {
   credentialProxyId?: string | null
   purchaseCost?: AccountPurchaseUpdate
-  excelRecovery?: ExcelRecoveryConfig
   egressMode?: string | null
   customName?: string | null
   outboundProxyId?: string
   accountId: string
   enabled: boolean
   turnStateInjectionEnabled?: boolean
-  responsesUpstream?: ResponsesUpstream
-  excelModels?: string[]
-  excelModelsFollowGlobal?: boolean
-  excelCacheCreationAsInput?: boolean
-  excelIgnoreEncryptedContent?: boolean
   requestProxySource?: import('@/utils/request-proxy-source').RequestProxySource
-  excelAutoDisableOn403?: boolean
-  excel403Action?: Excel403Action
   concurrencyLimit: number | null
   weight: number
   modelAccess?: AccountModelAccess
@@ -585,21 +563,13 @@ interface AccountBatchUpdateParam {
   quotaSettings?: Record<string, AccountQuotaBucketSettings>
   autoUseQuotaCredits?: boolean
   purchaseCost?: AccountPurchaseUpdate
-  excelRecovery?: ExcelRecoveryConfig
   egressMode?: string | null
   customName?: string | null
   outboundProxyId?: string
   accountIds: string[]
   enabled?: boolean
   turnStateInjectionEnabled?: boolean
-  responsesUpstream?: ResponsesUpstream
-  excelModels?: string[]
-  excelModelsFollowGlobal?: boolean
-  excelCacheCreationAsInput?: boolean
-  excelIgnoreEncryptedContent?: boolean
   requestProxySource?: import('@/utils/request-proxy-source').RequestProxySource
-  excelAutoDisableOn403?: boolean
-  excel403Action?: Excel403Action
   concurrencyLimit?: number | null
   weight?: number
   modelAccess?: AccountModelAccess
@@ -615,20 +585,12 @@ interface AccountDeleteParams {
 export interface AccountImportSettings {
   credentialProxyId?: string | null
   purchaseCost?: AccountPurchaseUpdate
-  excelRecovery?: ExcelRecoveryConfig
   clearOutboundProxy?: boolean
   egressMode?: string | null
   customName?: string
   enabled: boolean
   turnStateInjectionEnabled?: boolean
-  responsesUpstream?: ResponsesUpstream
-  excelModels?: string[]
-  excelModelsFollowGlobal?: boolean
-  excelCacheCreationAsInput?: boolean
-  excelIgnoreEncryptedContent?: boolean
   requestProxySource?: import('@/utils/request-proxy-source').RequestProxySource
-  excelAutoDisableOn403?: boolean
-  excel403Action?: Excel403Action
   concurrencyLimit: number | null
   weight: number
   modelAccess?: AccountModelAccess

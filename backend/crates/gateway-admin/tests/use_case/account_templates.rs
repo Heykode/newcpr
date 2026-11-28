@@ -172,7 +172,6 @@ async fn import_templates_keep_legacy_optional_fields_and_explicit_proxy_semanti
         );
         assert_eq!(settings.turn_state_injection_enabled, None);
         assert_eq!(settings.model_access, None);
-        assert_eq!(settings.responses_upstream, None);
     }
 }
 

@@ -12,7 +12,6 @@ use std::collections::BTreeSet;
 pub struct ReloginNewAccountOptions {
     pub template: Option<ReloginTemplateSelection>,
     pub custom_name: Option<String>,
-    pub excel: Option<ExcelImportSettings>,
     pub form: Option<ReloginNewAccountForm>,
 }
 
@@ -21,75 +20,6 @@ pub struct ReloginNewAccountForm {
     pub settings: AccountImportSettings,
     pub outbound_proxy_id: Option<String>,
     pub quality_template: Option<super::quality_ops::QualityTemplateSelection>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ExcelImportSettings {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub excel_recovery: Option<super::excel_recovery::ExcelRecoveryConfig>,
-    pub responses_upstream: gateway_core::account::ResponsesUpstream,
-    pub excel_models_follow_global: bool,
-    #[serde(default = "default_cache_creation_as_input")]
-    pub excel_cache_creation_as_input: bool,
-    #[serde(default)]
-    pub excel_ignore_encrypted_content: bool,
-    #[serde(default)]
-    pub request_proxy_source:
-        Option<gateway_core::provider_ports::session_proxy::RequestProxySource>,
-    #[serde(default)]
-    pub excel_auto_disable_on_403: Option<bool>,
-    pub excel_403_action: Option<gateway_core::account::Excel403Action>,
-    pub excel_models: Option<gateway_core::account::ExcelModels>,
-}
-
-impl ExcelImportSettings {
-    pub fn validate(&self) -> Result<(), AdminError> {
-        if let Some(config) = self.excel_recovery {
-            config.validate().map_err(AdminError::invalid)?;
-        }
-        gateway_core::account::Excel403Action::resolve(
-            self.excel_403_action,
-            self.excel_auto_disable_on_403,
-        )
-        .map_err(AdminError::invalid)?;
-        if !self.excel_models_follow_global && self.excel_models.is_none() {
-            return Err(AdminError::invalid("自定义模式必须提供 Excel 模型列表"));
-        }
-        Ok(())
-    }
-
-    pub fn apply(&self, settings: &mut AccountImportSettings) {
-        if let Some(config) = self.excel_recovery {
-            settings.excel_recovery = Some(config);
-        }
-        settings.responses_upstream = Some(self.responses_upstream);
-        settings.excel_cache_creation_as_input = Some(self.excel_cache_creation_as_input);
-        settings.excel_ignore_encrypted_content = Some(self.excel_ignore_encrypted_content);
-        if let Some(source) = self.request_proxy_source {
-            settings.request_proxy_source = Some(source);
-        }
-        let action =
-            self.excel_403_action
-                .unwrap_or(if self.excel_auto_disable_on_403.unwrap_or(false) {
-                    gateway_core::account::Excel403Action::PauseAccount
-                } else {
-                    gateway_core::account::Excel403Action::None
-                });
-        settings.excel_auto_disable_on_403 =
-            Some(action == gateway_core::account::Excel403Action::PauseAccount);
-        settings.excel_403_action = self.excel_403_action;
-        settings.excel_models_follow_global = Some(self.excel_models_follow_global);
-        settings.excel_models = if self.excel_models_follow_global {
-            None
-        } else {
-            self.excel_models.clone()
-        };
-    }
-}
-
-fn default_cache_creation_as_input() -> bool {
-    true
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -101,8 +31,12 @@ pub struct ReloginTemplateConfig {
         skip_serializing_if = "Option::is_none"
     )]
     pub credential_proxy_id: Option<Option<String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub excel_recovery: Option<super::excel_recovery::ExcelRecoveryConfig>,
+    #[serde(
+        default,
+        skip_serializing,
+        deserialize_with = "discard_retired_setting"
+    )]
+    pub excel_recovery: Option<()>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_access: Option<gateway_core::account::AccountModelAccess>,
     #[serde(
@@ -115,20 +49,49 @@ pub struct ReloginTemplateConfig {
     pub enabled: bool,
     #[serde(default)]
     pub turn_state_injection_enabled: Option<bool>,
-    #[serde(default)]
+    #[serde(
+        default,
+        skip_serializing,
+        deserialize_with = "discard_retired_setting"
+    )]
     pub responses_upstream: Option<gateway_core::account::ResponsesUpstream>,
-    #[serde(default)]
+    #[serde(
+        default,
+        skip_serializing,
+        deserialize_with = "discard_retired_setting"
+    )]
     pub excel_models: Option<gateway_core::account::ExcelModels>,
-    #[serde(default)]
+    #[serde(
+        default,
+        skip_serializing,
+        deserialize_with = "discard_retired_setting"
+    )]
     pub excel_models_follow_global: Option<bool>,
-    #[serde(default)]
+    #[serde(
+        default,
+        skip_serializing,
+        deserialize_with = "discard_retired_setting"
+    )]
     pub excel_cache_creation_as_input: Option<bool>,
-    #[serde(default)]
+    #[serde(
+        default,
+        skip_serializing,
+        deserialize_with = "discard_retired_setting"
+    )]
     pub excel_ignore_encrypted_content: Option<bool>,
     pub request_proxy_source:
         Option<gateway_core::provider_ports::session_proxy::RequestProxySource>,
-    #[serde(default)]
+    #[serde(
+        default,
+        skip_serializing,
+        deserialize_with = "discard_retired_setting"
+    )]
     pub excel_auto_disable_on_403: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing,
+        deserialize_with = "discard_retired_setting"
+    )]
     pub excel_403_action: Option<gateway_core::account::Excel403Action>,
     pub concurrency_limit: Option<u32>,
     pub weight: u16,
@@ -140,17 +103,9 @@ pub struct ReloginTemplateConfig {
 
 impl ReloginTemplateConfig {
     pub fn settings(&self) -> Result<AccountImportSettings, AdminError> {
-        if let Some(config) = self.excel_recovery {
-            config.validate().map_err(AdminError::invalid)?;
-        }
         if self.preserve_outbound_proxy && self.outbound_proxy_id.is_some() {
             return Err(AdminError::invalid("保持原代理与指定代理不能同时设置"));
         }
-        gateway_core::account::Excel403Action::resolve(
-            self.excel_403_action,
-            self.excel_auto_disable_on_403,
-        )
-        .map_err(AdminError::invalid)?;
         if self.name.trim().is_empty()
             || self.name.len() > 128
             || self.name.chars().any(char::is_control)
@@ -178,7 +133,6 @@ impl ReloginTemplateConfig {
         Ok(AccountImportSettings {
             credential_proxy_id: self.credential_proxy_id.clone(),
             template_proxy_mode: None,
-            excel_recovery: self.excel_recovery,
             purchase_cost: None,
             clear_outbound_proxy: !self.preserve_outbound_proxy && self.outbound_proxy_id.is_none(),
             egress_mode: self.egress_mode,
@@ -186,14 +140,7 @@ impl ReloginTemplateConfig {
             custom_name: None,
             enabled: self.enabled,
             turn_state_injection_enabled: self.turn_state_injection_enabled,
-            responses_upstream: self.responses_upstream,
-            excel_models: self.excel_models.clone(),
-            excel_models_follow_global: self.excel_models_follow_global,
-            excel_cache_creation_as_input: self.excel_cache_creation_as_input,
-            excel_ignore_encrypted_content: self.excel_ignore_encrypted_content,
             request_proxy_source: self.request_proxy_source,
-            excel_auto_disable_on_403: self.excel_auto_disable_on_403,
-            excel_403_action: self.excel_403_action,
             concurrency_limit: self
                 .concurrency_limit
                 .map(|value| {
@@ -256,4 +203,13 @@ where
     D: serde::Deserializer<'de>,
 {
     Option::<String>::deserialize(deserializer).map(Some)
+}
+
+/// Only explicitly named retired fields use this reader; unknown fields still fail closed.
+pub fn discard_retired_setting<'de, D, T: Default>(deserializer: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let _ = serde::de::IgnoredAny::deserialize(deserializer)?;
+    Ok(T::default())
 }

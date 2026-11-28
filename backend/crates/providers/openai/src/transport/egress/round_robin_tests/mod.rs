@@ -254,12 +254,11 @@ async fn reordered_pool_follows_last_address_and_removed_cursor_starts_at_front(
 }
 
 #[tokio::test]
-async fn excel_ipv6_http_sse_reuses_connections_but_isolates_accounts() {
+async fn native_ipv6_http_sse_reuses_connections_but_isolates_accounts() {
     use crate::{
         config::OpenAiConfig,
         transport::{
             CodexBackendClient, CodexBackendTransport, CodexRequestContext,
-            excel::{ClientTools, ExcelPreparedRequest, RESPONSES_PATH, prepare_request},
             protocol::responses::CodexResponsesRequest,
         },
     };
@@ -283,7 +282,7 @@ async fn excel_ipv6_http_sse_reuses_connections_but_isolates_accounts() {
             assert!(bytes.len() < 64 * 1024);
             if let Some(end) = bytes.windows(4).position(|part| part == b"\r\n\r\n") {
                 let head = std::str::from_utf8(&bytes[..end]).unwrap();
-                assert!(head.starts_with("POST /basispoints/api/responses HTTP/1.1"));
+                assert!(head.starts_with("POST /codex/responses HTTP/1.1"));
                 assert!(!head.to_ascii_lowercase().contains("upgrade: websocket"));
                 let length: usize = head
                     .lines()
@@ -340,22 +339,7 @@ async fn excel_ipv6_http_sse_reuses_connections_but_isolates_accounts() {
                 .unwrap()
                 .clone(),
         );
-        // Excel must still choose HTTP even when downstream originally asked for WS.
-        request.use_websocket = true;
-        let tools = ClientTools::default();
-        request.excel = Some(ExcelPreparedRequest {
-            image_policy: None,
-            exit_lease: None,
-            body: prepare_request(request.body(), &tools, &BTreeMap::new(), None).unwrap(),
-            tools,
-            structured: None,
-            _image_lease: None,
-            image_limits: Default::default(),
-            completed: Default::default(),
-            usage: Default::default(),
-            replay: None,
-            endpoint: format!("{base}{RESPONSES_PATH}"),
-        });
+        request.force_http_sse = true;
         for account in [&accounts[0], &accounts[0], &accounts[1]] {
             let response = timeout(
                 Duration::from_secs(5),

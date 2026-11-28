@@ -67,7 +67,7 @@ task cancellation and ordinary missing-entry/revision fences.
   Workspace selection preserves intent; Ready enrollment resumes push after pause
   without logging in again. Cancel, manual queue/push and successful settlement clear it.
 - New-account push must retain the enrollment's custom name when no replacement name
-  is supplied. Inheriting egress or applying Excel options never implies clearing a
+  is supplied. Inheriting egress never implies clearing a
   name. Test the complete queued-login-to-import path with a name and absent,
   inherited, direct and managed-proxy egress, comparing all committed settings with
   the original submission and checking the proxy used during login as well as import.

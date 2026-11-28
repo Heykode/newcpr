@@ -45,14 +45,14 @@ Desktop account rows and mobile cards share quality switching and monitoring res
 
 ### 5. Good / Base / Bad Cases
 - Good: green normal result beside paused monitoring with a link to detailed history.
-- Base: no quality rule means no badge; existing account health and Excel labels remain.
+- Base: no quality rule means no badge; ordinary account health labels remain.
 - Bad: infer restoration from a correct verdict or overwrite config from an old account row.
 
 ### 6. Tests Required
 Node tests cover colors, intent/CAS, dedup, disposal and deletion option handling.
 Browser account-quality-controls covers template failure after success, cancellation,
 first enable, switches/conflicts, single/batch checkbox resets, both themes and 1440/390/320px.
-Retain quality-template/group, Excel and mobile-card browser regressions.
+Retain quality-template/group and mobile-card browser regressions.
 
 ### 7. Wrong vs Correct
 Wrong: use one color for lifecycle and verdict, or post the entire stale rule to toggle it.
@@ -143,7 +143,7 @@ Wrong: enforce predefined selection. Correct: suggestions assist the existing st
 - `qualityMonitoring` comes from the existing account list refresh. Status precedence:
   disabled -> monitoring paused, running -> detecting, pending -> queued, otherwise
   monitoring. No rule means no badge. The badge links by accountId/ruleId to history.
-  Preserve Excel historical warnings and ordinary account status independently.
+  Preserve ordinary account status independently from quality verdicts.
 - Template editing/deletion is not live propagation. Label source snapshots as
   source templates, distinctly from failure-remediation account templates.
 - Cancel/fence reads on close/unmount, keep mutation baselines isolated from polling,
@@ -157,8 +157,8 @@ Wrong: enforce predefined selection. Correct: suggestions assist the existing st
 ## Detection Rules
 
 - New remediation uses `apply_account_template` and the shared versioned
-  `AccountTemplatePicker`, with a full-settings summary. Show `enable_excel` only
-  when editing that legacy action; never silently convert a saved rule.
+  `AccountTemplatePicker`, with a full-settings summary. The backend normalizes retired
+  `enable_excel` rules to `none`; no Excel action or recovery control is offered.
 - Single/bulk edits reuse the existing threshold. `failureTemplate` is opt-in in
   batch patches: preserve per-rule selections when unchecked, reject missing
   templates for the selected action. Full-template autoRestore requires explicit opt-in
@@ -166,10 +166,7 @@ Wrong: enforce predefined selection. Correct: suggestions assist the existing st
 - Keep historical template names/revisions from `QualityRun.config`, not today's
   template catalog. A changed/deleted selection remains explicit until reselected;
   catalog failure has retry and aborts on unmount.
-- Template `excelIgnoreEncryptedContent` is an explicit lossy option, default
-  false; serialize false when the template explicitly turns Excel off. Disabling
-  inclusion of Excel settings omits the entire optional group. Reuse existing
-  IPv6 fields and preserve omission versus null.
+- Reuse existing IPv6 fields and preserve omission versus null; strip retired template fields.
 
 - Keep a standalone sidebar route, compact overview, rule list, history table and
   editing/detail side panels. Reuse CPR controls and themes.
@@ -233,16 +230,8 @@ Wrong: enforce predefined selection. Correct: suggestions assist the existing st
 - Render probe normal/suspect/inconclusive labels from the persisted run mode,
   with transport/status/length evidence and a clear heuristic limitation. Never
   render raw State or Cookie. Cancelled or paused states remain neutral.
-- Legacy `enable_excel` is available in both modes and disables whole-config restore.
-  State-probe template/Excel actions offer `disableExcelOnNativeRecovery`, checked
-  in new drafts only; saved configs missing it remain false. Normalize it off for
-  answer or unrelated actions. The enabled option shows `excelRecoveryThreshold`.
-  Mirror it through templates, groups and selective bulk patches. Explain native
-  probing continues after Excel, and recovery closes only this rule's unchanged
-  owned route, never the rest of its template or manual/403 suspension.
-  Retain historical pause labels; new Excel activation does not pause the rule.
 - Browser regressions cover mode switching, preserved question drafts, judge-free
-  saves, Excel action, paused results and 1440/390/320px probe panels.
+  saves, ordinary template actions, paused results and 1440/390/320px probe panels.
 
 ## Selective Batch Editing
 
@@ -254,19 +243,11 @@ Wrong: enforce predefined selection. Correct: suggestions assist the existing st
 - Keep successful and failed outcomes distinct. Remove successes from pending
   selection so retries only save unfinished rules. Stopping or unmounting prevents
   subsequent saves but does not claim an in-flight mutation was cancelled.
-- Question-only fields do not overwrite probe drafts. Group removal and Excel
-  thresholds apply only to the matching final action. Excel never enables automatic
-  restore even when that field is selected in a mixed batch.
-- New Excel failure/recovery threshold editors default to 2 and accept 1–100 rounds;
-  legacy configs missing either field retain 1. Selective patches change only opted-in
-  fields. Show reset-on-save semantics: abnormal rounds reset the healthy count,
-  normal rounds reset the abnormal count, other unknown/errors hold both. Explicit
-  overload resets healthy progress and uses the fixed-two-round rule below. Changing frequency
-  and native recovery are separately opted in. Do not add an account-edit shortcut;
-  reuse quality operations and monitoring templates with existing bulk application.
-- Browser regressions cover partial success/retry, failed refresh, fresh unrelated
-  values, empty field opt-ins on reopen and 1440/390/320px layouts. Interact with the
-  visible labels of shared checkbox/switch controls and assert their checked state.
+- Question-only fields do not overwrite probe drafts. Group removal and template
+  thresholds apply only to the matching final action. Auto-restore keeps explicit opt-in.
+- New template failure thresholds default to 2 and accept 1–100 rounds; legacy missing
+  values retain 1. Preserve reset-on-save, correct-round reset, unknown/error holds and
+  the separate fixed-two-round overload rule. Do not add account-edit shortcuts.
 
 
 ## Explicit Overload Presentation

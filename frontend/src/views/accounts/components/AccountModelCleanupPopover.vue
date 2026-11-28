@@ -19,19 +19,22 @@ const wouldEmpty = computed(() => selectedModels.value.length === props.modelCou
 
 watch(open, async (opened) => {
   selected.value = []
+  if (!opened)
+    return
   await nextTick()
-  if (opened) {
+  if (open.value)
     content.value?.querySelector<HTMLInputElement>('input')?.focus()
-  }
-  else {
-    if (!props.disabled)
-      (trigger.value?.$el as HTMLElement | undefined)?.focus()
-    emit('closed')
-  }
 })
 watch([() => props.models, () => props.disabled], () => {
   open.value = false
 })
+
+function closed() {
+  // Wait until the focused panel is removed, and preserve focus moved outside.
+  if (!props.disabled && document.activeElement === document.body)
+    (trigger.value?.$el as HTMLElement | undefined)?.focus()
+  emit('closed')
+}
 
 function select(id: string, checked: boolean) {
   selected.value = checked ? [...selected.value, id] : selected.value.filter(value => value !== id)
@@ -64,7 +67,7 @@ useEventListener(content, 'keydown', keydown)
 </script>
 
 <template>
-  <BasePopover v-model="open" placement="bottom-end" :disabled="disabled">
+  <BasePopover v-model="open" placement="bottom-end" :disabled="disabled" @closed="closed">
     <template #trigger>
       <BaseIconButton ref="trigger" label="清理目录缺失模型" size="sm" :aria-expanded="open" :aria-controls="open ? id : undefined" aria-haspopup="dialog" :pressed="open" :disabled="disabled" @keydown="keydown">
         <BrushCleaning class="size-3.5" aria-hidden="true" />

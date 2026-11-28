@@ -123,7 +123,7 @@ async fn write_catalog(stream: &mut tokio::net::TcpStream) {
 }
 
 #[tokio::test]
-async fn native_catalog_intersects_excel_capabilities_after_cache_without_changing_routing() {
+async fn retired_excel_configuration_does_not_restrict_native_catalog_capabilities() {
     use gateway_core::account::{
         AccountModelAccess, AccountModelAccessMode, CredentialState, ExcelModels, QuotaState,
         ResponsesUpstream,
@@ -164,13 +164,10 @@ async fn native_catalog_intersects_excel_capabilities_after_cache_without_changi
         }
     };
     assert_eq!(read(&native_scope).await, original);
-    let mut restricted = original.clone();
-    restricted["multi_agent_version"] = Value::Null;
-    restricted["multi_agent_reasoning_effort"] = Value::Null;
-    assert_eq!(read(&mixed_scope).await, restricted);
+    assert_eq!(read(&mixed_scope).await, original);
     assert_eq!(read(&native_scope).await, original);
 
-    // A temporary credential failure must not advertise v2 for an Excel route.
+    // Stale retired configuration must not cap native capabilities during account changes.
     let expired = excel.clone().with_account_facts(
         true,
         CredentialState::Expired,
@@ -179,7 +176,7 @@ async fn native_catalog_intersects_excel_capabilities_after_cache_without_changi
         None,
     );
     replace_account_facts(&store, expired).await;
-    assert_eq!(read(&mixed_scope).await, restricted);
+    assert_eq!(read(&mixed_scope).await, original);
     store.set_enabled(excel.id(), false).await.unwrap();
     assert_eq!(read(&mixed_scope).await, original);
     replace_account_facts(
@@ -192,14 +189,14 @@ async fn native_catalog_intersects_excel_capabilities_after_cache_without_changi
     .await;
     assert_eq!(read(&mixed_scope).await, original);
     replace_account_facts(&store, excel.clone()).await;
-    assert_eq!(read(&mixed_scope).await, restricted);
+    assert_eq!(read(&mixed_scope).await, original);
     store.set_responses_upstream(excel.id().as_str(), ResponsesUpstream::Codex);
     assert_eq!(read(&mixed_scope).await, original);
     assert_eq!(server.received_requests().await.unwrap().len(), 1);
 }
 
 #[tokio::test]
-async fn native_catalog_excel_switch_does_not_reuse_synthesized_capabilities() {
+async fn retired_excel_catalog_switch_preserves_other_native_models() {
     use gateway_core::account::{ExcelModels, ResponsesUpstream};
     use serde_json::{Value, json};
 
@@ -213,6 +210,12 @@ async fn native_catalog_excel_switch_does_not_reuse_synthesized_capabilities() {
     let mut fixture: Value = serde_json::from_slice(OFFICIAL_FIXTURE).unwrap();
     fixture["models"][0]["multi_agent_version"] = json!("v2");
     fixture["models"][0]["multi_agent_reasoning_effort"] = json!("xhigh");
+    let mut retained = fixture["models"][0].clone();
+    retained["slug"] = json!("gpt-native-retained");
+    fixture["models"]
+        .as_array_mut()
+        .unwrap()
+        .push(retained.clone());
     let server = MockServer::start().await;
     Mock::given(path("/codex/models"))
         .respond_with(ResponseTemplate::new(200).set_body_json(fixture.clone()))
@@ -222,17 +225,77 @@ async fn native_catalog_excel_switch_does_not_reuse_synthesized_capabilities() {
     let service = service_with_catalog_cache(&store, server.uri(), catalog_cache());
     service.refresh_account_catalog(account.id()).await.unwrap();
     let models = service.client_model_catalog(&scope).await.unwrap();
+    assert_eq!(models.len(), 1);
     let descriptor: Value = serde_json::from_slice(models[0].payload.body()).unwrap();
-    assert_eq!(descriptor.get("multi_agent_version"), Some(&Value::Null));
+    assert_eq!(descriptor, retained);
     store.set_responses_upstream(account.id().as_str(), ResponsesUpstream::Codex);
     service.refresh_account_catalog(account.id()).await.unwrap();
+    // An already frozen request cannot acquire a newly enabled route.
     let models = service.client_model_catalog(&scope).await.unwrap();
+    assert_eq!(models.len(), 1);
+    let native_account = store.account(account.id().as_str()).unwrap();
+    let models = service
+        .client_model_catalog(&client_scope(std::slice::from_ref(&native_account)))
+        .await
+        .unwrap();
+    assert_eq!(models.len(), 2);
     let descriptor: Value = serde_json::from_slice(models[0].payload.body()).unwrap();
     assert_eq!(descriptor, fixture["models"][0]);
     assert_eq!(
         store.account(account.id().as_str()).unwrap().revision(),
         account.revision()
     );
+}
+
+#[tokio::test]
+async fn retired_excel_catalog_keeps_another_native_source_for_identical_documents() {
+    use gateway_core::account::{ExcelModels, ResponsesUpstream};
+    use serde_json::json;
+
+    let store = Arc::new(MemoryAccountStore::default());
+    let first = seed_account(&store, "acct_a_retired_catalog").await;
+    let second = seed_account(&store, "acct_z_native_catalog").await;
+    let stale_scope = client_scope(&[first.clone(), second.clone()]);
+    let server = MockServer::start().await;
+    Mock::given(path("/codex/models"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"models":[
+            {"slug":"gpt-5.4","display_name":"Native model","multi_agent_version":"v2"},
+            {"slug":"gpt-native-retained","display_name":"Retained model"}
+        ]})))
+        .expect(2)
+        .mount(&server)
+        .await;
+    let service = service_with_catalog_cache(&store, server.uri(), catalog_cache());
+    service.refresh_catalogs().await.unwrap();
+    let first = first
+        .with_responses_upstream(ResponsesUpstream::Excel)
+        .with_excel_models(ExcelModels::try_from(vec!["gpt-5.4".into()]).unwrap());
+    replace_account_facts(&store, first.clone()).await;
+
+    for scope in [
+        client_scope(std::slice::from_ref(&first)),
+        client_scope(&[first.clone(), second.clone()]),
+        stale_scope,
+    ] {
+        let models = service.client_model_catalog(&scope).await.unwrap();
+        let ids = models
+            .iter()
+            .map(|model| model.model.as_str())
+            .collect::<Vec<_>>();
+        if scope.allows(second.id()) {
+            assert!(
+                ids.contains(&"gpt-5.4"),
+                "another native source must remain visible"
+            );
+        } else {
+            assert!(
+                !ids.contains(&"gpt-5.4"),
+                "retired-only model must be hidden"
+            );
+        }
+        assert!(ids.contains(&"gpt-native-retained"));
+    }
+    assert_eq!(server.received_requests().await.unwrap().len(), 2);
 }
 
 #[tokio::test]

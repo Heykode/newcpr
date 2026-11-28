@@ -65,14 +65,6 @@ pub(crate) fn websocket_event_frame(value: &Value, raw: &str) -> Option<String> 
     Some(encode_sse_event(event, raw))
 }
 
-/// Keep configured prefetch thresholds in the original SSE byte units.
-pub(crate) fn websocket_prefetch_len(raw: &[u8]) -> usize {
-    std::str::from_utf8(raw)
-        .ok()
-        .and_then(websocket_event_to_sse_frame)
-        .map_or(raw.len(), |frame| frame.len())
-}
-
 pub(crate) fn websocket_event_type(value: &Value) -> Option<&str> {
     value.get("type").and_then(Value::as_str)
 }

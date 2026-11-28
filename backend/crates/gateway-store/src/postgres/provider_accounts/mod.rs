@@ -62,7 +62,6 @@ mod admin_adapter;
 mod admin_queries;
 mod core_adapter;
 mod devices;
-mod excel_recovery;
 mod mapping;
 mod model_catalogs;
 mod purchase_costs;

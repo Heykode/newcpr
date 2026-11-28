@@ -1,30 +1,12 @@
-# Excel settings presentation
+# Excel 管理入口退役
 
-## Scope
+账号、批量编辑、导入、模板、重登和设置页不再显示或提交 Excel 配置。
+精确丢弃旧模板中的退役字段，普通代理、并发、权重、分组、模型权限和 2FA 均保留。
 
-`views/settings/index.vue` keeps one runtime form and save action. Common/Codex and Excel scopes use `v-show` so switching does not reset drafts. Backup routing is unchanged.
+- 通用重试、冷却、队列与运行设置继续由原组件负责，不改变默认值或保存单位。
+- `useRuntimeUnits` 保留通用单位换算、无效草稿校验和精度；不恢复 Excel 设置卡。
+- 历史日志中的 Excel 传输值和历史质检结果保留可读映射。
+- 不显示旧 Excel 头像标记；2FA、普通头像和独立质检标记保持原有布局。
+- 验证普通模板、导入、批量操作和质检的桌面/移动视图，以及旧字段不再提交。
 
-- Common retries (`websocketMaxRetries`), account switches, routing attempts and cooldown stay in `RuntimeSettingsCard`, even when Excel also consumes them. Do not duplicate or introduce Excel-only copies.
-- `ExcelSettingsCard` owns Excel models, image controls and the Excel-only precommit threshold. Account/template policy stays account-scoped.
-- `useExcelImageSettings` handles display units and invalid drafts, not backend behavior. MiB converts to existing integer byte fields without rounding existing values. Empty or invalid drafts block saves; loading saved state clears drafts.
-- Keep native-attachment image limits visible; only relay-specific resources are conditional. Inherited transport remains `null`, not an implicit mode change.
-- Use existing controls and the same settings API; never alter scheduling, fingerprints, egress, limits or defaults as a UI cleanup.
-
-Runtime byte limits display MiB; millisecond settings display seconds with decimals;
-Excel precommit remains KiB. Existing API and database units stay unchanged.
-`useRuntimeUnits` preserves incomplete drafts and blocks invalid saves, using exact
-decimal conversion to avoid rounding 1.001 seconds. Reading old values must not round
-or trigger an automatic save. Unit fields expose setters so child controls do not mutate props.
-
-## Reference Capacity Bounds
-
-- #204 changes same-meaning configurable maxima, not defaults or saved values:
-  per-image/total 512 MiB, count 65536, storage 262144 MiB, entries 1048576,
-  TTL 10080 minutes. Admin and provider clamps must match the UI exactly.
-- Preserve relational checks and byte precision. CPR-specific relay request/download
-  bounds remain 512/128; they are not the reference project's shared ingress budget.
-- Boundary tests must use each new maximum plus one, not the superseded limits.
-
-## Verification
-
-Run `tests/runtime-settings.test.mjs`, the full Node test suite, type checking and ESLint. `tests/browser/excel-settings.mjs` exercises the real settings page at desktop/mobile sizes in light/dark themes using synthetic API data. All external/API network requests are blocked; screenshots belong outside the repository. Unrelated admin cards are stubbed explicitly, not counted as verified by this runner.
+后端兼容与迁移边界见 `docs/excel-removal.md`。

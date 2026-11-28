@@ -12,7 +12,6 @@ import { useAccountGroupCatalog } from '@/composables/useAccountGroupCatalog'
 import { useProxyCatalog } from '@/composables/useProxyCatalog'
 import { t } from '@/i18n'
 import { errorMessage } from '@/utils/async'
-import { accountExcel403Action, excel403ActionLabel } from '@/utils/excel-settings'
 import AccountTemplatesModal from './AccountTemplatesModal.vue'
 
 const props = withDefaults(defineProps<{ disabled: boolean, label?: string, manage?: boolean, summary?: boolean, compact?: boolean }>(), { label: '新增账号模板', manage: false, summary: true, compact: false })
@@ -110,42 +109,11 @@ onScopeDispose(() => controller?.abort())
         </dd>
       </template>
       <dt>IPv6 出口策略</dt><dd>{{ egressLabel }}</dd>
-      <template v-if="selected.config.excelIgnoreEncryptedContent != null">
-        <dt>忽略加密历史</dt><dd>{{ selected.config.excelIgnoreEncryptedContent ? '开启（有损省略）' : '关闭' }}</dd>
-      </template>
-      <template v-if="selected.config.excel403Action != null || selected.config.excelAutoDisableOn403 != null">
-        <dt>Excel遇到HTTP 403</dt>
-        <dd>{{ excel403ActionLabel(accountExcel403Action(selected.config)) }}</dd>
-      </template>
-      <template v-if="selected.config.excelRecovery">
-        <dt>Excel 暂停恢复探测</dt>
-        <dd>{{ selected.config.excelRecovery.enabled ? `开启，每 ${selected.config.excelRecovery.intervalMinutes} 分钟` : '关闭' }}</dd>
-      </template>
       <dt class="text-cp-text-secondary">
         {{ t('accounts.scheduling.scheduling') }}
       </dt><dd class="m-0">
         {{ selected.config.enabled ? '启用' : '暂停' }}
       </dd>
-      <template v-if="selected.config.responsesUpstream != null">
-        <dt class="text-cp-text-secondary">
-          Excel 入口
-        </dt>
-        <dd class="m-0">
-          {{ selected.config.responsesUpstream === 'excel' ? '开启' : '关闭' }}
-        </dd>
-      </template>
-      <template v-if="selected.config.excelModelsFollowGlobal != null || selected.config.excelModels != null">
-        <dt class="text-cp-text-secondary">
-          Excel 模型
-        </dt>
-        <dd class="m-0 break-all">
-          {{ selected.config.excelModelsFollowGlobal ? '跟随全局' : (selected.config.excelModels ?? []).join(', ') || '无' }}
-        </dd>
-      </template>
-      <template v-if="selected.config.excelCacheCreationAsInput != null">
-        <dt>缓存写入按输入计费</dt>
-        <dd>{{ selected.config.excelCacheCreationAsInput ? '开启' : '关闭' }}</dd>
-      </template>
       <dt class="text-cp-text-secondary">
         账号并发
       </dt><dd class="m-0">

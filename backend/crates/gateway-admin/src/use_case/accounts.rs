@@ -608,7 +608,6 @@ impl DefaultAccountsService {
             health_usage,
             mut cumulative_costs,
             mut purchase_costs,
-            mut excel_recoveries,
             mut codex_quota_overdraft,
         ) = futures::try_join!(
             self.accounts.load_account_usage(rolling_range, &ids),
@@ -616,7 +615,6 @@ impl DefaultAccountsService {
                 .load_account_health_timeline(account_health_range(now), &ids),
             self.accounts.load_account_cumulative_costs(&ids),
             self.accounts.load_account_purchase_costs(&ids),
-            self.accounts.load_excel_recovery(&ids),
             self.accounts.load_codex_quota_overdraft(&ids),
         )
         .map_err(|error| map_store_error(error, "account usage"))?;
@@ -709,7 +707,6 @@ impl DefaultAccountsService {
                 .account_capabilities(account_id, &stored.account.authentication_kind),
             error_protection: protections.remove(account_id.as_str()).map(Into::into),
             codex_quota_overdraft: overdraft,
-            excel_recovery: excel_recoveries.remove(account_id.as_str()),
             purchase_cost: purchase_costs.remove(account_id.as_str()),
             turn_state: None,
             effective_concurrency_limit: stored
@@ -807,7 +804,6 @@ impl AccountsService for DefaultAccountsService {
             health_usage,
             mut cumulative_costs,
             mut purchase_costs,
-            mut excel_recoveries,
             mut codex_quota_overdraft,
         ) = futures::try_join!(
             self.load_lookback_usage(&page.items, now),
@@ -815,7 +811,6 @@ impl AccountsService for DefaultAccountsService {
                 .load_account_health_timeline(account_health_range(now), &ids),
             self.accounts.load_account_cumulative_costs(&ids),
             self.accounts.load_account_purchase_costs(&ids),
-            self.accounts.load_excel_recovery(&ids),
             self.accounts.load_codex_quota_overdraft(&ids),
         )
         .map_err(|error| map_store_error(error, "account usage"))?;
@@ -921,7 +916,6 @@ impl AccountsService for DefaultAccountsService {
                     capabilities,
                     error_protection: protections.remove(&item.account.id).map(Into::into),
                     codex_quota_overdraft: overdraft,
-                    excel_recovery: excel_recoveries.remove(&item.account.id),
                     purchase_cost: purchase_costs.remove(&item.account.id),
                     turn_state: None,
                     effective_concurrency_limit: item
@@ -1113,7 +1107,6 @@ impl AccountsService for DefaultAccountsService {
                         credential_proxy_id: None,
                         quota_settings: None,
                         auto_use_quota_credits: None,
-                        excel_recovery: None,
                         purchase_cost: None,
                         egress_mode: None,
                         model_access: None,
@@ -1121,14 +1114,7 @@ impl AccountsService for DefaultAccountsService {
                         account_ids: vec![account_id.to_string()],
                         enabled: Some(true),
                         turn_state_injection_enabled: None,
-                        responses_upstream: None,
-                        excel_models: None,
-                        excel_models_follow_global: None,
-                        excel_cache_creation_as_input: Default::default(),
-                        excel_ignore_encrypted_content: Default::default(),
                         request_proxy_source: Default::default(),
-                        excel_auto_disable_on_403: Default::default(),
-                        excel_403_action: Default::default(),
                         concurrency_limit: None,
                         weight: None,
                         group_ids: None,
@@ -1172,37 +1158,6 @@ impl AccountsService for DefaultAccountsService {
         }
         if command.egress_mode.is_some() && item.account.provider_kind.as_str() != "openai" {
             return Err(AdminError::invalid("IPv6 出口策略仅支持 OpenAI 账号"));
-        }
-        if let Some(upstream) = command
-            .excel_models
-            .as_ref()
-            .map(|_| gateway_core::account::ResponsesUpstream::Excel)
-            .or(command
-                .excel_models_follow_global
-                .map(|_| gateway_core::account::ResponsesUpstream::Excel))
-            .or(command
-                .excel_cache_creation_as_input
-                .filter(|enabled| *enabled)
-                .map(|_| gateway_core::account::ResponsesUpstream::Excel))
-            .or(command
-                .excel_ignore_encrypted_content
-                .filter(|enabled| *enabled)
-                .map(|_| gateway_core::account::ResponsesUpstream::Excel))
-            .or(command
-                .excel_auto_disable_on_403
-                .filter(|enabled| *enabled)
-                .map(|_| gateway_core::account::ResponsesUpstream::Excel))
-            .or(command
-                .excel_403_action
-                .filter(|action| *action != gateway_core::account::Excel403Action::None)
-                .map(|_| gateway_core::account::ResponsesUpstream::Excel))
-            .or(command.responses_upstream)
-            && !upstream.supports_account(
-                item.account.provider_kind.as_str(),
-                &item.account.authentication_kind,
-            )
-        {
-            return Err(AdminError::invalid("Excel 入口仅支持 OpenAI OAuth 账号"));
         }
         let enabled = command.enabled;
         let result = self
@@ -1301,37 +1256,6 @@ impl AccountsService for DefaultAccountsService {
                 !source.supports_provider(item.account.provider_kind.as_str())
             }) {
                 return Err(AdminError::invalid("账号请求代理池仅支持 OpenAI 账号"));
-            }
-            if let Some(upstream) = command
-                .excel_models
-                .as_ref()
-                .map(|_| gateway_core::account::ResponsesUpstream::Excel)
-                .or(command
-                    .excel_models_follow_global
-                    .map(|_| gateway_core::account::ResponsesUpstream::Excel))
-                .or(command
-                    .excel_cache_creation_as_input
-                    .filter(|enabled| *enabled)
-                    .map(|_| gateway_core::account::ResponsesUpstream::Excel))
-                .or(command
-                    .excel_ignore_encrypted_content
-                    .filter(|enabled| *enabled)
-                    .map(|_| gateway_core::account::ResponsesUpstream::Excel))
-                .or(command
-                    .excel_auto_disable_on_403
-                    .filter(|enabled| *enabled)
-                    .map(|_| gateway_core::account::ResponsesUpstream::Excel))
-                .or(command
-                    .excel_403_action
-                    .filter(|action| *action != gateway_core::account::Excel403Action::None)
-                    .map(|_| gateway_core::account::ResponsesUpstream::Excel))
-                .or(command.responses_upstream)
-                && !upstream.supports_account(
-                    item.account.provider_kind.as_str(),
-                    &item.account.authentication_kind,
-                )
-            {
-                return Err(AdminError::invalid("Excel 入口仅支持 OpenAI OAuth 账号"));
             }
             if command.turn_state_injection_enabled == Some(true)
                 && item.account.provider_kind.as_str() != "openai"

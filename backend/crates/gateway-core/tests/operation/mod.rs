@@ -71,8 +71,6 @@ fn client_json_cannot_forge_excel_recovery_or_native_quality_markers() {
         "excel_recovery_nonce":"forged", "excelRecoveryNonce":"forged",
         "quality_retest":true, "quality_probe":{},
     }));
-    assert_eq!(request.excel_recovery_revision(), None);
-    assert_eq!(request.excel_recovery_nonce(), None);
     assert!(request.quality_probe().is_none());
 }
 

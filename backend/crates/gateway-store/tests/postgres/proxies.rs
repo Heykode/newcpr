@@ -40,7 +40,6 @@ fn success() -> ProxyTestResult {
 fn update(account_id: &str, selection: AccountProxySelection) -> UpdateAccount {
     UpdateAccount {
         credential_proxy_id: None,
-        excel_recovery: None,
         purchase_cost: None,
         egress_mode: None,
         model_access: Default::default(),
@@ -48,14 +47,7 @@ fn update(account_id: &str, selection: AccountProxySelection) -> UpdateAccount {
         account_id: account_id.to_owned(),
         enabled: true,
         turn_state_injection_enabled: Some(false),
-        responses_upstream: Default::default(),
-        excel_models_follow_global: Default::default(),
-        excel_cache_creation_as_input: Default::default(),
-        excel_ignore_encrypted_content: Default::default(),
         request_proxy_source: Default::default(),
-        excel_auto_disable_on_403: Default::default(),
-        excel_403_action: Default::default(),
-        excel_models: Default::default(),
         concurrency_limit: None,
         weight: AccountWeight::DEFAULT,
         group_ids: vec![],
@@ -543,7 +535,6 @@ async fn partial_batch_proxy_updates_preserve_credentials_groups_and_unselected_
         credential_proxy_id: None,
         quota_settings: Default::default(),
         auto_use_quota_credits: None,
-        excel_recovery: None,
         purchase_cost: None,
         egress_mode: None,
         model_access: Default::default(),
@@ -551,14 +542,7 @@ async fn partial_batch_proxy_updates_preserve_credentials_groups_and_unselected_
         account_ids: vec!["acct_partial_one".to_owned(), "acct_partial_two".to_owned()],
         enabled: None,
         turn_state_injection_enabled: None,
-        responses_upstream: Default::default(),
-        excel_models_follow_global: Default::default(),
-        excel_cache_creation_as_input: Default::default(),
-        excel_ignore_encrypted_content: Default::default(),
         request_proxy_source: Default::default(),
-        excel_auto_disable_on_403: Default::default(),
-        excel_403_action: Default::default(),
-        excel_models: Default::default(),
         concurrency_limit: None,
         weight: None,
         group_ids: None,
@@ -1519,7 +1503,6 @@ async fn legacy_urls_join_one_catalog_entry_and_invalid_batch_rolls_back() {
                     credential_proxy_id: None,
                     quota_settings: Default::default(),
                     auto_use_quota_credits: None,
-                    excel_recovery: None,
                     purchase_cost: None,
                     egress_mode: None,
                     model_access: Default::default(),
@@ -1527,14 +1510,7 @@ async fn legacy_urls_join_one_catalog_entry_and_invalid_batch_rolls_back() {
                     account_ids: vec!["acct_one".to_owned(), "acct_missing".to_owned()],
                     enabled: Some(false),
                     turn_state_injection_enabled: None,
-                    responses_upstream: Default::default(),
-                    excel_models_follow_global: Default::default(),
-                    excel_cache_creation_as_input: Default::default(),
-                    excel_ignore_encrypted_content: Default::default(),
                     request_proxy_source: Default::default(),
-                    excel_auto_disable_on_403: Default::default(),
-                    excel_403_action: Default::default(),
-                    excel_models: Default::default(),
                     concurrency_limit: Some(None),
                     weight: Some(AccountWeight::DEFAULT),
                     group_ids: Some(vec![]),
@@ -1579,9 +1555,8 @@ async fn migration_backfills_shared_proxies_without_changing_credentials() {
             .await
             .unwrap();
     }
-    // Recreate the pre-0005 fixture without the newer column-dependent trigger.
-    sqlx::raw_sql("drop trigger invalidate_excel_recovery on provider_accounts;
-        alter table runtime_settings drop column turn_state_probe_proxy_id;
+    // Recreate the pre-0005 fixture; migration 0105 already retired the Excel trigger.
+    sqlx::raw_sql("alter table runtime_settings drop column turn_state_probe_proxy_id;
         alter table provider_accounts drop column outbound_proxy_id; drop table outbound_proxies;
         update provider_accounts set outbound_proxy_url = 'http://user:$secret@127.0.0.1:8080/' where id <> 'acct_direct';")
         .execute(&database.pool).await.unwrap();

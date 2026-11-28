@@ -421,8 +421,6 @@ impl MihomoManagement for ManagedMihomo {
                 .split_whitespace()
                 .map(str::to_owned)
                 .collect(),
-            bps_warm_pool: pool::lock(&self.pools.managed).status(std::time::Instant::now()),
-            bps_ip_warm_pool: pool::lock(&self.pools.regular).status(std::time::Instant::now()),
             codex_warm_pool: pool::lock(&self.pools.codex_managed)
                 .status(std::time::Instant::now()),
             codex_ip_warm_pool: pool::lock(&self.pools.codex_regular)

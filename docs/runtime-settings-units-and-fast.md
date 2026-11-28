@@ -8,7 +8,7 @@
 | --- | --- |
 | 解压上限、大请求 HTTP 阈值 | Web 以 MiB 展示和输入，API/数据库仍保存整数字节；保留旧值精度 |
 | 请求间隔、WS 寿命/空闲/故障窗口/暂停 | Web 以秒输入，支持小数；内部继续使用毫秒 |
-| Excel 提交前缓冲 | 原控件移到 Excel 菜单，继续使用 KiB；原生 Codex 不读取这一缓冲阈值 |
+| 旧 `streamPrefetchBytes` | 设置接口兼容旧值；管理页不提供输入框，原生 Codex 不读取这一缓冲阈值 |
 | 全局关闭 Fast | 删除 Web/API/Store/Snapshot/Plan/AttemptContext/Provider 的全局覆盖路径 |
 | 分组 Fast | 沿用已具备的 default/enabled/disabled；Disabled 优先；不修改账号范围和其他档位策略 |
 
@@ -56,5 +56,5 @@ UA 差异仅审查：官方 `transport/profile/selection.rs` 提供 Desktop/CLI�
 ## 验证范围
 
 隔离 Linux 执行，禁止本机或生产测试。覆盖单位保存往返、空草稿、精度边界、
-Excel 菜单可见性、分组 Fast wire 行为、API 字段移除、真实数据库迁移及其他设置保留。
+退役控件缺席与旧值保留、分组 Fast wire 行为、API 字段移除、真实数据库迁移及其他设置保留。
 具体执行结果记录在本地任务验收记录。

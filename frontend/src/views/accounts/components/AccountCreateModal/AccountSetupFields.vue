@@ -3,7 +3,6 @@ import type { AccountCreateForm } from './model'
 import type { AccountGroup } from '@/api'
 import { useTemplateRef } from 'vue'
 import AccountTemplatePicker from '@/components/account-templates/AccountTemplatePicker.vue'
-import BaseCheckbox from '@/components/base/BaseCheckbox.vue'
 import QualityTemplatePicker from '@/components/quality-ops/QualityTemplatePicker.vue'
 import { t } from '@/i18n'
 import AccountPurchaseFields from '../AccountPurchaseFields.vue'
@@ -43,25 +42,10 @@ defineExpose({ validate: () => settingsRef.value?.validate() })
       />
       <QualityTemplatePicker v-model="form.qualityTemplate" label="导入监测模板" manage :disabled="disabled" />
     </div>
-    <BaseCheckbox
-      v-if="form.provider === 'openai' || form.provider === 'batch'"
-      v-model="form.applyExcel"
-      label="指定 Excel 设置"
-      show-label
-      :disabled="disabled"
-    />
     <AccountSettingsFields
       ref="settingsFields"
       v-model:custom-name="form.customName"
       v-model:enabled="form.enabled"
-      v-model:excel-enabled="form.excelEnabled"
-      v-model:excel-models="form.excelModels"
-      v-model:excel-models-follow-global="form.excelModelsFollowGlobal"
-      v-model:excel-cache-creation-as-input="form.excelCacheCreationAsInput"
-      v-model:excel-ignore-encrypted-content="form.excelIgnoreEncryptedContent"
-      v-model:excel-403-action="form.excel403Action"
-      v-model:excel-recovery-enabled="form.excelRecoveryEnabled"
-      v-model:excel-recovery-interval="form.excelRecoveryInterval"
       v-model:request-proxy-source="form.requestProxySource"
       v-model:concurrency-limit="form.concurrencyLimit"
       v-model:weight="form.weight"
@@ -73,8 +57,6 @@ defineExpose({ validate: () => settingsRef.value?.validate() })
       v-model:egress-mode="form.egressMode"
       :provider="form.provider"
       :credential-egress="form.provider === 'openai'"
-      :excel-available="form.applyExcel && (form.provider === 'openai' || form.provider === 'batch')"
-      encrypted-content-available
       :request-proxy-available="form.provider === 'openai' || form.provider === 'batch'"
       name-available
       model-access-available

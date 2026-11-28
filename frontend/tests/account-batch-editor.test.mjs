@@ -9,7 +9,7 @@ import * as vue from 'vue'
 import { createTestRequire as createRequire } from './helpers/i18n.mjs'
 
 const require = createRequire(import.meta.url)
-const updateFields = ['updateEnabled', 'updateExcelEnabled', 'updateExcelModels', 'updateConcurrencyLimit', 'updateWeight', 'updateGroups', 'updateProxy', 'updateCustomName', 'updateModelAccess']
+const updateFields = ['updateEnabled', 'updateConcurrencyLimit', 'updateWeight', 'updateGroups', 'updateProxy', 'updateCustomName', 'updateModelAccess']
 
 function loadModule(filename, dependencies = {}) {
   const exports = {}
@@ -18,7 +18,7 @@ function loadModule(filename, dependencies = {}) {
   })
   runInNewContext(outputText, {
     exports,
-    require: name => dependencies[name] ?? (name === '@/utils/excel-defaults' ? loadModule(new URL('../src/utils/excel-defaults.ts', import.meta.url)) : require(name)),
+    require: name => dependencies[name] ?? (require(name)),
     TextEncoder,
     Blob,
   }, { filename: String(filename) })
@@ -80,7 +80,6 @@ function mountEditor(t, options = {}) {
     '@/components/base/BaseToast': { toast },
     '@/composables/useAsyncAction': asyncAction,
     '../utils/schedulingForm': schedulingForm,
-    '@/utils/excel-settings': loadModule(new URL('../src/utils/excel-settings.ts', import.meta.url), { '@/views/accounts/utils/schedulingForm': schedulingForm }),
     '../utils/modelAccess': loadModule(new URL('../src/views/accounts/utils/modelAccess.ts', import.meta.url)),
     '../utils/purchaseCost': loadModule(new URL('../src/views/accounts/utils/purchaseCost.ts', import.meta.url)),
     '@/utils/account-name': loadModule(new URL('../src/utils/account-name.ts', import.meta.url)),
@@ -104,37 +103,11 @@ function mountEditor(t, options = {}) {
 }
 
 function assertNoUpdates(state) {
-  assert.equal(state.updateExcelRecovery.value, false)
   assert.equal(state.updatePurchaseCost.value, false)
   for (const field of updateFields)
     assert.equal(state[field].value, false, `${field} must require a fresh opt-in`)
   assert.equal(state.hasUpdates.value, false)
-  assert.equal(state.updateExcelCacheCreationAsInput.value, false)
-  assert.equal(state.updateExcel403Action.value, false)
-  assert.equal(state.updateExcelIgnoreEncryptedContent.value, false)
 }
-
-test('Excel recovery batch requires an explicit fresh opt-in and never changes scheduling or route', async (t) => {
-  const { state, requests, selectedIds } = mountEditor(t)
-  state.open()
-  state.excelRecoveryEnabled.value = true
-  state.excelRecoveryInterval.value = '5'
-  assert.equal(state.hasUpdates.value, false)
-  state.updateExcelRecovery.value = true
-  await state.save()
-  assert.deepEqual(requests, [{ accountIds: ['account-a'], excelRecovery: { enabled: true, intervalMinutes: 5 } }])
-  selectedIds.value = new Set(['account-a'])
-  state.open()
-  assertNoUpdates(state)
-  state.updateExcelRecovery.value = true
-  state.excelRecoveryInterval.value = '0'
-  await state.save()
-  assert.equal(requests.length, 1)
-  state.excelRecoveryInterval.value = '10080'
-  state.excelRecoveryEnabled.value = false
-  await state.save()
-  assert.deepEqual(requests[1].excelRecovery, { enabled: false, intervalMinutes: 10080 })
-})
 
 test('purchase cost is opt-in, per account, preserves other settings and resets on reopen', async (t) => {
   const { state, requests, selectedIds } = mountEditor(t)
@@ -180,7 +153,6 @@ test('Managed exits remain available for native non-OAuth OpenAI accounts', asyn
   const { state, accounts, requests } = mountEditor(t)
   accounts.value = accounts.value.map(account => ({ ...account, authenticationKind: 'api_key', responsesUpstream: 'codex' }))
   state.open()
-  assert.equal(state.excelAvailable.value, false)
   assert.equal(state.requestProxyAvailable.value, true)
   state.updateProxy.value = true
   state.proxyMode.value = 'proxy_pool'
@@ -247,98 +219,6 @@ test('IPv6 batch atomically removes proxy and proxy selection ignores hidden IPv
   assert.deepEqual(requests[1], { accountIds: ['account-a'], requestProxySource: 'account', egressMode: 'fixed_ipv6_reuse', outboundProxyId: '' })
 })
 
-test('encrypted content omission needs fresh batch opt-in and clears when Excel is closed', async (t) => {
-  const { state, accounts, selectedIds, requests } = mountEditor(t, { accounts: [account('account-a', { responsesUpstream: 'excel' })] })
-  state.open()
-  assert.equal(state.excelIgnoreEncryptedContent.value, false)
-  state.excelIgnoreEncryptedContent.value = true
-  assert.equal(state.hasUpdates.value, false)
-  state.updateExcelIgnoreEncryptedContent.value = true
-  assert.equal(state.hasUpdates.value, true)
-  await state.save()
-  assert.deepEqual(requests[0], { accountIds: ['account-a'], excelIgnoreEncryptedContent: true })
-  await vue.nextTick()
-  assert.equal(state.updateExcelIgnoreEncryptedContent.value, true)
-  state.clear()
-  assertNoUpdates(state)
-  accounts.value[0].excelIgnoreEncryptedContent = true
-  selectedIds.value = new Set(['account-a'])
-  state.open()
-  assert.equal(state.excelIgnoreEncryptedContent.value, true)
-  state.updateWeight.value = true
-  await state.save()
-  assert.equal('excelIgnoreEncryptedContent' in requests.at(-1), false)
-  selectedIds.value = new Set(['account-a'])
-  state.open()
-  state.updateExcelIgnoreEncryptedContent.value = true
-  state.excelIgnoreEncryptedContent.value = false
-  await state.save()
-  assert.deepEqual(requests.at(-1), { accountIds: ['account-a'], excelIgnoreEncryptedContent: false })
-  selectedIds.value = new Set(['account-a'])
-  state.open()
-  state.updateExcelEnabled.value = true
-  state.excelEnabled.value = false
-  await state.save()
-  assert.equal(requests.at(-1).responsesUpstream, 'codex')
-  assert.equal(requests.at(-1).excelIgnoreEncryptedContent, false)
-})
-
-test('Excel batch defaults preserve saved and empty lists and reset every opt-in on reopen', async (t) => {
-  const { state, accounts, requests } = mountEditor(t, { accounts: [account('account-a', { excelModels: undefined, responsesUpstream: 'excel' })] })
-  state.open()
-  assert.equal(state.excelModels.value, 'gpt-6-astra, gpt-5.6-sol, gpt-5.6-terra')
-  state.excel403Action.value = 'pause_account'
-  state.updateExcel403Action.value = true
-  state.updateExcelModels.value = true
-  state.showBatchEditModal.value = false
-  await vue.nextTick()
-  state.open()
-  assertNoUpdates(state)
-  assert.equal(state.excel403Action.value, 'none')
-  accounts.value[0].excelModels = ['custom-model']
-  state.open()
-  assert.equal(state.excelModels.value, 'custom-model')
-  accounts.value[0].excelModels = []
-  state.open()
-  assert.equal(state.excelModels.value, '')
-  state.updateExcelModels.value = true
-  await state.save()
-  assert.deepEqual(requests[0], { accountIds: ['account-a'], excelModelsFollowGlobal: false, excelModels: [] })
-})
-
-test('Excel 403 setting saves on its own only after explicit batch opt-in', async (t) => {
-  const { state, requests } = mountEditor(t, { accounts: [account('account-a', { responsesUpstream: 'excel' })] })
-  state.open()
-  state.excel403Action.value = 'pause_account'
-  assert.equal(state.hasUpdates.value, false)
-  state.updateExcel403Action.value = true
-  assert.equal(state.hasUpdates.value, true)
-  await state.save()
-  assert.deepEqual(requests[0], { accountIds: ['account-a'], excel403Action: 'pause_account' })
-})
-
-test('Excel cache billing is separately opted in and does not implicitly switch routes', async (t) => {
-  const editor = mountEditor(t, { accounts: [account('account-a', { responsesUpstream: 'excel' })] })
-  const { state } = editor
-  state.open()
-  assert.equal(state.excelCacheCreationAsInput.value, false)
-  state.excelCacheCreationAsInput.value = true
-  assert.equal(state.hasUpdates.value, false)
-  state.updateExcelCacheCreationAsInput.value = true
-  await state.save()
-  assert.deepEqual(editor.requests, [{ accountIds: ['account-a'], excelCacheCreationAsInput: true }])
-  await vue.nextTick()
-  assert.equal(state.updateExcelCacheCreationAsInput.value, true)
-  state.clear()
-  assertNoUpdates(state)
-  editor.selectedIds.value = new Set(['account-a'])
-  state.open()
-  state.updateExcelCacheCreationAsInput.value = true
-  state.excelCacheCreationAsInput.value = false
-  await state.save()
-  assert.deepEqual(editor.requests[1], { accountIds: ['account-a'], excelCacheCreationAsInput: false })
-})
-
 test('a committed batch save completes before slow or failed list reloads', async (t) => {
   let release
   const pending = new Promise(resolve => release = resolve)
@@ -370,35 +250,6 @@ function assertNoRequest(editor) {
   assert.deepEqual(editor.messages.success, [])
   assert.equal(editor.state.saving.value, false)
 }
-
-test('Excel model lists require opt-in and can be cleared without changing the route', async (t) => {
-  const editor = mountEditor(t)
-  const { state } = editor
-  state.open()
-  state.excelModels.value = 'invalid/model'
-  state.updateWeight.value = true
-  await state.save()
-  assert.deepEqual(editor.requests[0], { accountIds: ['account-a'], weight: 17 })
-  await vue.nextTick()
-  editor.selectedIds.value = new Set(['account-a'])
-  state.open()
-  assertNoUpdates(state)
-  state.updateExcelModels.value = true
-  state.excelModels.value = 'gpt-5.6-sol, gpt-6-astra, gpt-5.6-sol'
-  await state.save()
-  assert.deepEqual(editor.requests[1], {
-    accountIds: ['account-a'],
-    excelModels: ['gpt-5.6-sol', 'gpt-6-astra'],
-    excelModelsFollowGlobal: false,
-  })
-  await vue.nextTick()
-  editor.selectedIds.value = new Set(['account-a'])
-  state.open()
-  state.updateExcelModels.value = true
-  state.excelModels.value = ''
-  await state.save()
-  assert.deepEqual(editor.requests[2], { accountIds: ['account-a'], excelModels: [], excelModelsFollowGlobal: false })
-})
 
 test('model restrictions are opt-in, validate only when checked and clear explicitly', async (t) => {
   const editor = mountEditor(t, {
@@ -462,29 +313,11 @@ test('custom names require opt-in, support clear, and ignore unchecked invalid t
   assert.deepEqual(editor.requests, [{ accountIds: ['account-a'], weight: 17 }])
 })
 
-test('Excel batch update is opt-in and does not change ordinary scheduling', async (t) => {
-  const editor = mountEditor(t)
-  editor.state.open()
-  assert.equal(editor.state.excelAvailable.value, true)
-  assert.equal(editor.state.updateExcelEnabled.value, false)
-  editor.state.excelEnabled.value = true
-  assert.equal(editor.state.hasUpdates.value, false)
-  editor.state.updateExcelEnabled.value = true
-  await editor.state.save()
-  assert.deepEqual(editor.requests, [{
-    accountIds: ['account-a'],
-    responsesUpstream: 'excel',
-  }])
-})
-
 test('mixed providers cannot apply Excel settings but retain weight editing', async (t) => {
   const editor = mountEditor(t, {
     accounts: [account('account-a'), account('account-b', { provider: 'xai' })],
   })
   editor.state.open()
-  assert.equal(editor.state.excelAvailable.value, false)
-  editor.state.updateExcelEnabled.value = true
-  editor.state.excelEnabled.value = true
   assert.equal(editor.state.hasUpdates.value, false)
   editor.state.updateWeight.value = true
   editor.state.weight.value = '20'
@@ -493,21 +326,6 @@ test('mixed providers cannot apply Excel settings but retain weight editing', as
     accountIds: ['account-a', 'account-b'],
     weight: 20,
   }])
-})
-
-test('Excel batch changes require known OAuth authentication for every selected account', async (t) => {
-  for (const authenticationKind of ['api_key', undefined]) {
-    const editor = mountEditor(t, {
-      accounts: [account('account-a'), account('account-b', { authenticationKind })],
-    })
-    editor.state.open()
-    assert.equal(editor.state.excelAvailable.value, false)
-    editor.state.updateExcelEnabled.value = true
-    editor.state.excelEnabled.value = true
-    assert.equal(editor.state.hasUpdates.value, false)
-    await editor.state.save()
-    assert.equal(editor.requests.length, 0)
-  }
 })
 
 test('batch editor requires fresh opt-ins initially, on every open and after closing', async (t) => {
@@ -623,8 +441,6 @@ test('saving without opt-ins warns and never validates stale values or sends a r
 test('every single field and combination sends exactly the opted-in patch after other fields are unchecked', async (t) => {
   const patches = [
     { enabled: false },
-    { responsesUpstream: 'codex', excelIgnoreEncryptedContent: false },
-    { excelModels: ['gpt-5.6-sol'], excelModelsFollowGlobal: false },
     { concurrencyLimit: 6 },
     { weight: 23 },
     { groupIds: ['group-new', 'group-other'] },

@@ -483,7 +483,7 @@ async function executeConfirmed() {
             qualityTemplate: accountImportQualityTemplate(pushForm.value),
           }
         : undefined
-      batchReport(await pushRelogin(pushable.value, template, undefined, Object.keys(selections).length ? selections : undefined, undefined, newAccount))
+      batchReport(await pushRelogin(pushable.value, template, undefined, Object.keys(selections).length ? selections : undefined, newAccount))
     }
     else {
       await deleteRelogin(pendingRows.value.map(row => row.id))

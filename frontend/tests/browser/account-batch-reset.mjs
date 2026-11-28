@@ -45,6 +45,7 @@ async function main() {
       case '/api/admin/auth/status': return fulfill(route, { authenticated: true })
       case '/api/admin/auth/refresh': return fulfill(route, { authenticated: true })
       case '/api/admin/system/version': return fulfill(route, { version: 'local-fixture', buildType: 'test' })
+      case '/api/admin/system/update/detail': return fulfill(route, { currentVersion: 'local-fixture', hasUpdate: false, updateSupported: false })
       case '/api/admin/accounts':
         return fulfill(route, {
           items: fixtureAccounts,

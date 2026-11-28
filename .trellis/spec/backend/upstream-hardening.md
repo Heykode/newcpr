@@ -5,8 +5,7 @@
 Applies to the local adaptation of upstream #298, #291, #286, #287, #295,
 the verified gaps in #297, #225 and #224, and the approved non-plugin
 v3.24.1 changes pinned at `eea16f5275cc20c8893ee9b568301152f329089d`.
-Preserve the local Excel,
-QX identity, finite concurrency, Redis wait ownership and transport policies.
+Preserve the local QX identity, finite concurrency, Redis wait ownership and transport policies.
 This contract does not authorize production changes or wholesale upstream merges.
 
 ## 2. Signatures
@@ -94,8 +93,8 @@ Only explicitly marked replaceable native HTTP SSE/WS preludes (`response.create
 events, semantic output and terminal failures reach the replay barrier. A prelude
 marker is not replay authorization: preserve provider replay proof, attempt limits,
 hard continuation owners and the prohibition on `UpstreamSendState::Ambiguous`.
-Native events are forwarded immediately regardless of configured prefetch bytes;
-only Excel retains that buffering setting. HTTP response commitment is distinct
+Native events are forwarded immediately regardless of saved prefetch bytes.
+HTTP response commitment is distinct
 from the monotonic business replay barrier.
 Keep raw WS text separate from raw SSE; never infer success from opaque frames.
 Filter protocol metadata headers in active, settlement and idle phases, retaining
@@ -114,7 +113,7 @@ connection reads its own limit. After successful oversized HTTP fallback, reques
 downstream reconnection only after its matching terminal was written and the input
 queue is empty. The hint is transient, never persisted, and not restricted by UA.
 HTTP `store:false` still requires full replay for downstream WS deltas. Existing
-sent-frame 1009 recovery and Excel replay contracts remain separately enforced.
+sent-frame 1009 recovery remains enforced. Retired Excel sessions must not continue on Codex.
 
 ## 4. Validation Matrix
 

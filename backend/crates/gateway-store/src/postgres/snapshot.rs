@@ -184,7 +184,6 @@ impl SnapshotStorePort for PgRuntimeSnapshotRepository {
                 data.settings.openai_request_settings,
                 data.settings.openai_websocket_pool,
             )
-            .with_excel_image_transport(data.settings.request_tuning.excel_image_transport.clone())
             .with_account_error_protection(
                 data.settings
                     .request_tuning
@@ -322,39 +321,6 @@ fn to_core_request_tuning(
         max_retry_after_seconds: overrides
             .max_retry_after_seconds
             .unwrap_or(defaults.max_retry_after_seconds),
-        excel_image_relay_bytes: overrides
-            .excel_image_relay_bytes
-            .unwrap_or(defaults.excel_image_relay_bytes),
-        excel_image_max_bytes: overrides
-            .excel_image_max_bytes
-            .unwrap_or(defaults.excel_image_max_bytes),
-        excel_image_total_bytes: overrides
-            .excel_image_total_bytes
-            .unwrap_or(defaults.excel_image_total_bytes),
-        excel_image_max_count: overrides
-            .excel_image_max_count
-            .unwrap_or(defaults.excel_image_max_count),
-        excel_image_limit_policy: overrides
-            .excel_image_limit_policy
-            .unwrap_or(defaults.excel_image_limit_policy),
-        excel_image_warning_remaining: overrides
-            .excel_image_warning_remaining
-            .unwrap_or(defaults.excel_image_warning_remaining),
-        excel_image_compact_reserve: overrides
-            .excel_image_compact_reserve
-            .unwrap_or(defaults.excel_image_compact_reserve),
-        excel_image_relay_downloads: overrides
-            .excel_image_relay_downloads
-            .unwrap_or(defaults.excel_image_relay_downloads),
-        excel_image_relay_requests: overrides
-            .excel_image_relay_requests
-            .unwrap_or(defaults.excel_image_relay_requests),
-        excel_image_relay_entries: overrides
-            .excel_image_relay_entries
-            .unwrap_or(defaults.excel_image_relay_entries),
-        excel_image_relay_ttl_minutes: overrides
-            .excel_image_relay_ttl_minutes
-            .unwrap_or(defaults.excel_image_relay_ttl_minutes),
         openai_location_override_enabled: overrides
             .openai_location_override_enabled
             .unwrap_or(defaults.openai_location_override_enabled),

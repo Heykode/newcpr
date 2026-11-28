@@ -22,7 +22,8 @@ async function main() {
   const base = process.env.QA_BASE_URL || `http://127.0.0.1:${server.httpServer.address().port}`
   const output = process.env.QA_OUTPUT_DIR || '/tmp/cpr-model-access-qa'
   await mkdir(output, { recursive: true })
-  const page = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1440, height: 1000 }, reducedMotion: 'reduce' })
+  const reducedMotion = process.env.QA_REDUCED_MOTION || 'reduce'
+  const page = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1440, height: 1000 }, reducedMotion })
   const accounts = fixtures.map(account => ({
     ...structuredClone(account),
     turnStateInjectionEnabled: false,
@@ -93,16 +94,26 @@ async function main() {
     await first().getByRole('button', { name: '编辑账号', exact: true }).click()
     await dialog.getByRole('radio', { name: '不限制', exact: true }).waitFor()
   }
+  async function openCatalogHelp() {
+    const help = dialog.getByRole('button', { name: '模型目录说明', exact: true })
+    // Viewport changes can dismiss hover content. Reopen with keyboard focus,
+    // without a click toggling the panel closed after its delayed focus open.
+    await page.mouse.move(0, 0)
+    await dialog.getByRole('textbox', { name: '搜索或添加模型', exact: true }).focus()
+    await help.focus()
+    await page.waitForFunction(() => {
+      const trigger = document.querySelector('button[aria-label="模型目录说明"]')
+      return trigger === document.activeElement && trigger?.getAttribute('aria-expanded') === 'true'
+    })
+    await page.getByRole('tooltip').filter({ hasText: '目录仅提供模型 ID' }).waitFor()
+    return help
+  }
   async function layouts(label) {
     for (const width of [1440, 390, 320]) {
       await page.setViewportSize({ width, height: width < 500 ? 844 : 1000 })
       assert.ok(await dialog.evaluate(element => element.scrollWidth <= element.clientWidth + 1))
       if (label === 'catalog-help') {
-        const help = dialog.getByRole('button', { name: '模型目录说明', exact: true })
-        await help.scrollIntoViewIfNeeded()
-        await help.focus()
-        if (await help.getAttribute('aria-expanded') !== 'true')
-          await help.click()
+        await openCatalogHelp()
         const tooltip = page.getByRole('tooltip').filter({ hasText: '目录仅提供模型 ID' })
         await tooltip.waitFor()
         const bounds = await tooltip.boundingBox()
@@ -121,14 +132,9 @@ async function main() {
     await dialog.getByRole('radio', { name: '白名单', exact: true }).click()
     await dialog.getByRole('checkbox', { name: 'model-a', exact: true }).locator('..').click()
     await dialog.getByText(observedAtDisplay, { exact: true }).waitFor()
-    const help = dialog.getByRole('button', { name: '模型目录说明', exact: true })
-    await help.click()
-    await page.getByRole('tooltip').filter({ hasText: '目录仅提供模型 ID' }).waitFor()
     await layouts('catalog-help')
-    await help.focus()
-    if (await help.getAttribute('aria-expanded') !== 'true')
-      await help.click()
-    await page.getByRole('tooltip').filter({ hasText: '目录仅提供模型 ID' }).waitFor()
+    const help = await openCatalogHelp()
+    assert.equal(await help.getAttribute('aria-expanded'), 'true', 'help must be open when Escape is sent')
     await help.press('Escape')
     await page.waitForTimeout(450)
     assert.equal(await help.getAttribute('aria-expanded'), 'false')
@@ -154,10 +160,9 @@ async function main() {
     await close()
     catalogMissing = true
     await open()
-    const missing = dialog.getByRole('checkbox', { name: 'model-a', exact: true }).locator('..')
-    await dialog.locator('[title="当前目录未返回，仍可保存"]').waitFor()
-    await missing.getAttribute('title').then(title => assert.equal(title, '当前目录未返回，仍可保存'))
-    assert.equal(await dialog.getByRole('checkbox', { name: 'model-a', exact: true }).isChecked(), true)
+    const missing = dialog.getByRole('group', { name: '自定义', exact: true }).getByRole('checkbox', { name: 'model-a', exact: true })
+    await missing.waitFor()
+    assert.equal(await missing.isChecked(), true)
     await layouts('missing-model')
     const cleanup = page.getByRole('button', { name: '清理目录缺失模型', exact: true })
     await cleanup.click()
@@ -169,6 +174,32 @@ async function main() {
     await cleanupDialog.waitFor({ state: 'hidden' })
     assert.equal(await dialog.isVisible(), true, 'Escape closes cleanup only')
     assert.equal(await cleanup.evaluate(element => element === document.activeElement), true)
+    await cleanup.click()
+    assert.equal(await cleanupDialog.getByRole('checkbox').isChecked(), false, 'reopening clears the draft selection')
+    await cleanupDialog.getByRole('button', { name: '取消', exact: true }).click()
+    await cleanupDialog.waitFor({ state: 'detached' })
+    assert.equal(await cleanup.evaluate(element => element === document.activeElement), true, 'cancel restores the cleanup trigger')
+
+    await cleanup.click()
+    await cleanupDialog.getByRole('checkbox').waitFor()
+    const search = dialog.getByRole('textbox', { name: '搜索或添加模型', exact: true })
+    await search.click()
+    await cleanupDialog.waitFor({ state: 'detached' })
+    assert.equal(await search.evaluate(element => element === document.activeElement), true, 'outside clicks keep focus on the chosen input')
+
+    await cleanup.click()
+    await cleanupDialog.getByRole('checkbox').waitFor()
+    await cleanupDialog.getByRole('button', { name: '取消', exact: true }).evaluate(async (button) => {
+      button.click()
+      await new Promise(resolve => requestAnimationFrame(resolve))
+      document.querySelector('button[aria-label="清理目录缺失模型"]').click()
+    })
+    await page.waitForTimeout(250)
+    assert.equal(await cleanup.getAttribute('aria-expanded'), 'true', 'a rapid reopen stays open')
+    assert.equal(await cleanupDialog.getByRole('checkbox').evaluate(element => element === document.activeElement), true, 'a stale exit does not steal focus from the reopened panel')
+    await cleanupDialog.getByRole('checkbox').press('Escape')
+    await cleanupDialog.waitFor({ state: 'detached' })
+    assert.equal(await cleanup.evaluate(element => element === document.activeElement), true)
     await dialog.getByRole('checkbox', { name: 'model-b', exact: true }).locator('..').click()
     const updatesBeforeCleanup = updates.length
     await cleanup.click()
@@ -178,7 +209,7 @@ async function main() {
     assert.equal(await dialog.getByRole('checkbox', { name: 'model-a', exact: true }).count(), 0)
     assert.equal(await dialog.getByRole('checkbox', { name: 'model-b', exact: true }).isChecked(), true)
     assert.equal(updates.length, updatesBeforeCleanup, 'cleanup only updates the unsaved form')
-    assert.equal(await dialog.getByRole('button', { name: '刷新模型', exact: true }).evaluate(element => element === document.activeElement), true)
+    await page.waitForFunction(() => document.activeElement?.getAttribute('aria-label') === '刷新模型', undefined, { timeout: 3000 })
     await close()
     catalogMissing = false
     catalogFails = true
@@ -186,7 +217,7 @@ async function main() {
     await dialog.getByRole('alert').filter({ hasText: '模型列表加载失败' }).waitFor()
     assert.equal(await dialog.getByText(observedAtDisplay, { exact: true }).count(), 0, 'failed initial load must not reuse the previous editor timestamp')
     assert.equal(await dialog.getByRole('checkbox', { name: 'model-a', exact: true }).isChecked(), true)
-    assert.equal(await dialog.getByRole('checkbox', { name: 'model-a', exact: true }).locator('..').getAttribute('title'), 'model-a')
+    assert.equal(await dialog.getByRole('group', { name: '可选模型', exact: true }).getByRole('checkbox', { name: 'model-a', exact: true }).isChecked(), true)
     const input = dialog.getByRole('textbox', { name: '搜索或添加模型', exact: true })
     await input.fill('model-*')
     await input.press('Enter')
@@ -232,7 +263,7 @@ async function main() {
     assert.equal(await dialog.getByRole('button', { name: '继续导入', exact: true }).isEnabled(), true)
     await layouts('import')
     assert.deepEqual(errors, [])
-    process.stdout.write(`${JSON.stringify({ result: 'passed', updates: updates.length, catalogRequests, output })}\n`)
+    process.stdout.write(`${JSON.stringify({ result: 'passed', reducedMotion, updates: updates.length, catalogRequests, output })}\n`)
   }
   catch (error) {
     await page.screenshot({ path: `${output}/failure.png`, fullPage: true })

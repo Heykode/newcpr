@@ -57,6 +57,7 @@ const props = withDefaults(
   },
 )
 
+const emit = defineEmits<{ closed: [] }>()
 const open = defineModel<boolean>({ default: false })
 const attrs = useAttrs()
 
@@ -291,6 +292,11 @@ function closePopover() {
   open.value = false
 }
 
+function afterLeave() {
+  if (!open.value)
+    emit('closed')
+}
+
 function togglePopover() {
   if (!supportsClickTrigger()) {
     return
@@ -434,6 +440,7 @@ onBeforeUnmount(() => {
         :name="transition"
         @before-enter="restorePosition"
         @before-leave="freezeLeavePosition"
+        @after-leave="afterLeave"
         @leave-cancelled="restorePosition"
       >
         <div

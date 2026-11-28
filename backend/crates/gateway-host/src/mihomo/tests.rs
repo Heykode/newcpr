@@ -156,7 +156,7 @@ async fn official_kernel_relays_reloads_rejects_and_stops() {
 }
 
 fn populate(pools: &ExitPools, dynamic: bool) {
-    let mut state = lock(&pools.managed);
+    let mut state = lock(&pools.codex_managed);
     let now = Instant::now();
     state.replace(
         vec![
@@ -375,7 +375,7 @@ fn empty_or_cold_pool_fails_closed_without_allocating_a_session() {
         pools
             .acquire(
                 RequestProxySource::Account,
-                gateway_core::account::ResponsesUpstream::Excel,
+                gateway_core::account::ResponsesUpstream::Codex,
                 "x",
                 false
             )
@@ -386,14 +386,14 @@ fn empty_or_cold_pool_fails_closed_without_allocating_a_session() {
         pools
             .acquire(
                 RequestProxySource::Mihomo,
-                gateway_core::account::ResponsesUpstream::Excel,
+                gateway_core::account::ResponsesUpstream::Codex,
                 "x",
                 false
             )
             .err(),
         Some(SessionProxyError::Unavailable)
     );
-    lock(&pools.managed).replace(
+    lock(&pools.codex_managed).replace(
         vec![("a".into(), proxy(19000), false, true)],
         true,
         Instant::now(),
@@ -402,14 +402,14 @@ fn empty_or_cold_pool_fails_closed_without_allocating_a_session() {
         pools
             .acquire(
                 RequestProxySource::Mihomo,
-                gateway_core::account::ResponsesUpstream::Excel,
+                gateway_core::account::ResponsesUpstream::Codex,
                 "x",
                 false
             )
             .err(),
         Some(SessionProxyError::Warming)
     );
-    assert!(lock(&pools.managed).loads().is_empty());
+    assert!(lock(&pools.codex_managed).loads().is_empty());
 }
 
 #[test]
@@ -419,7 +419,7 @@ fn concurrent_session_references_release_only_on_last_clone() {
     let one = pools
         .acquire(
             RequestProxySource::Mihomo,
-            gateway_core::account::ResponsesUpstream::Excel,
+            gateway_core::account::ResponsesUpstream::Codex,
             "account/key/session",
             false,
         )
@@ -428,24 +428,24 @@ fn concurrent_session_references_release_only_on_last_clone() {
     let two = pools
         .acquire(
             RequestProxySource::Mihomo,
-            gateway_core::account::ResponsesUpstream::Excel,
+            gateway_core::account::ResponsesUpstream::Codex,
             "account/key/session",
             false,
         )
         .unwrap();
     assert_eq!(one.node_id(), two.node_id());
-    assert_eq!(lock(&pools.managed).loads()[one.node_id()].0, 2);
+    assert_eq!(lock(&pools.codex_managed).loads()[one.node_id()].0, 2);
     let id = one.node_id().to_owned();
     drop(one);
-    assert_eq!(lock(&pools.managed).loads()[&id].0, 2);
+    assert_eq!(lock(&pools.codex_managed).loads()[&id].0, 2);
     drop(clone);
-    assert_eq!(lock(&pools.managed).loads()[&id].0, 1);
+    assert_eq!(lock(&pools.codex_managed).loads()[&id].0, 1);
     drop(two);
-    assert_eq!(lock(&pools.managed).loads()[&id].0, 0);
+    assert_eq!(lock(&pools.codex_managed).loads()[&id].0, 0);
 }
 
 #[test]
-fn codex_and_excel_health_and_sessions_are_independent() {
+fn retired_route_cannot_allocate_or_poison_native_sessions() {
     use gateway_core::account::ResponsesUpstream;
     let pools = ExitPools::default();
     populate(&pools, false);
@@ -467,17 +467,16 @@ fn codex_and_excel_health_and_sessions_are_independent() {
             false,
         )
         .unwrap();
-    let excel = pools
+    let retired = pools
         .acquire(
             RequestProxySource::Mihomo,
             ResponsesUpstream::Excel,
             "same-account/session",
             false,
         )
-        .unwrap();
+        .err();
     assert_eq!(codex.node_id(), "codex-only");
-    assert_ne!(codex.node_id(), excel.node_id());
-    excel.report(SessionProxyOutcome::StreamFailure);
+    assert_eq!(retired, Some(SessionProxyError::Unavailable));
     let next = pools
         .acquire(
             RequestProxySource::Mihomo,
@@ -507,7 +506,7 @@ fn codex_and_excel_health_and_sessions_are_independent() {
         )
         .unwrap();
     assert_eq!(regular.node_id(), "codex-only");
-    drop((codex, next, excel, regular));
+    drop((codex, next, regular));
     assert_eq!(lock(&pools.codex_managed).loads()["codex-only"].0, 0);
 }
 
@@ -518,7 +517,7 @@ fn failed_session_drains_then_rebinds_without_poisoning_other_exit() {
     let one = pools
         .acquire(
             RequestProxySource::Mihomo,
-            gateway_core::account::ResponsesUpstream::Excel,
+            gateway_core::account::ResponsesUpstream::Codex,
             "session",
             false,
         )
@@ -529,7 +528,7 @@ fn failed_session_drains_then_rebinds_without_poisoning_other_exit() {
         pools
             .acquire(
                 RequestProxySource::Mihomo,
-                gateway_core::account::ResponsesUpstream::Excel,
+                gateway_core::account::ResponsesUpstream::Codex,
                 "session",
                 false
             )
@@ -540,13 +539,13 @@ fn failed_session_drains_then_rebinds_without_poisoning_other_exit() {
     let two = pools
         .acquire(
             RequestProxySource::Mihomo,
-            gateway_core::account::ResponsesUpstream::Excel,
+            gateway_core::account::ResponsesUpstream::Codex,
             "session",
             false,
         )
         .unwrap();
     assert_ne!(two.node_id(), id);
-    assert!(!lock(&pools.managed).exits[two.node_id()].cooling(Instant::now()));
+    assert!(!lock(&pools.codex_managed).exits[two.node_id()].cooling(Instant::now()));
 }
 
 #[test]
@@ -558,19 +557,19 @@ fn transient_bindings_do_not_accumulate_and_pools_are_isolated() {
             pools
                 .acquire(
                     RequestProxySource::Mihomo,
-                    gateway_core::account::ResponsesUpstream::Excel,
+                    gateway_core::account::ResponsesUpstream::Codex,
                     &format!("anonymous-{n}"),
                     true,
                 )
                 .unwrap(),
         );
     }
-    assert!(lock(&pools.managed).loads().is_empty());
+    assert!(lock(&pools.codex_managed).loads().is_empty());
     assert_eq!(
         pools
             .acquire(
                 RequestProxySource::ProxyPool,
-                gateway_core::account::ResponsesUpstream::Excel,
+                gateway_core::account::ResponsesUpstream::Codex,
                 "anonymous-1",
                 true
             )
@@ -583,26 +582,26 @@ fn transient_bindings_do_not_accumulate_and_pools_are_isolated() {
 fn expired_health_cannot_be_used_until_background_revalidation() {
     let pools = ExitPools::default();
     populate(&pools, false);
-    for exit in lock(&pools.managed).exits.values_mut() {
+    for exit in lock(&pools.codex_managed).exits.values_mut() {
         exit.verified_until = Some(Instant::now());
     }
     assert_eq!(
         pools
             .acquire(
                 RequestProxySource::Mihomo,
-                gateway_core::account::ResponsesUpstream::Excel,
+                gateway_core::account::ResponsesUpstream::Codex,
                 "session",
                 false
             )
             .err(),
         Some(SessionProxyError::Warming)
     );
-    qualify(&mut lock(&pools.managed), "a", Ok(()), Instant::now());
+    qualify(&mut lock(&pools.codex_managed), "a", Ok(()), Instant::now());
     assert!(
         pools
             .acquire(
                 RequestProxySource::Mihomo,
-                gateway_core::account::ResponsesUpstream::Excel,
+                gateway_core::account::ResponsesUpstream::Codex,
                 "session",
                 false
             )
@@ -617,13 +616,13 @@ fn dynamic_window_and_deleted_node_reject_late_feedback() {
     let lease = pools
         .acquire(
             RequestProxySource::Mihomo,
-            gateway_core::account::ResponsesUpstream::Excel,
+            gateway_core::account::ResponsesUpstream::Codex,
             "session",
             false,
         )
         .unwrap();
     let id = lease.node_id().to_owned();
-    let mut state = lock(&pools.managed);
+    let mut state = lock(&pools.codex_managed);
     let before = state.exits[&id].generation;
     let future = Instant::now() + Duration::from_secs(1201);
     state.status(future);
@@ -635,7 +634,7 @@ fn dynamic_window_and_deleted_node_reject_late_feedback() {
     assert!(state.exits[&id].generation > before);
     drop(state);
     lease.report(SessionProxyOutcome::StreamFailure);
-    assert_eq!(lock(&pools.managed).exits[&id].failures, 0);
+    assert_eq!(lock(&pools.codex_managed).exits[&id].failures, 0);
 }
 
 #[test]
@@ -645,17 +644,17 @@ fn stream_cooldown_survives_successful_short_probe_and_duplicate_report() {
     let lease = pools
         .acquire(
             RequestProxySource::Mihomo,
-            gateway_core::account::ResponsesUpstream::Excel,
+            gateway_core::account::ResponsesUpstream::Codex,
             "session",
             false,
         )
         .unwrap();
     let id = lease.node_id().to_owned();
     lease.report(SessionProxyOutcome::StreamFailure);
-    let deadline = lock(&pools.managed).exits[&id].retry_after.unwrap();
+    let deadline = lock(&pools.codex_managed).exits[&id].retry_after.unwrap();
     assert!(deadline > Instant::now() + Duration::from_secs(295));
     lease.report(SessionProxyOutcome::Completed);
-    let mut state = lock(&pools.managed);
+    let mut state = lock(&pools.codex_managed);
     qualify(&mut state, &id, Ok(()), Instant::now());
     assert_eq!(state.exits[&id].retry_after, Some(deadline));
     assert!(!state.exits[&id].ready(Instant::now()));
@@ -668,18 +667,18 @@ fn stale_probe_cannot_undo_failure_or_release_a_new_probe() {
     let lease = pools
         .acquire(
             RequestProxySource::Mihomo,
-            gateway_core::account::ResponsesUpstream::Excel,
+            gateway_core::account::ResponsesUpstream::Codex,
             "session",
             false,
         )
         .unwrap();
     let id = lease.node_id().to_owned();
     let (generation, revision) = {
-        let state = lock(&pools.managed);
+        let state = lock(&pools.codex_managed);
         (state.exits[&id].generation, state.exits[&id].revision)
     };
     lease.report(SessionProxyOutcome::NetworkFailure);
-    let mut state = lock(&pools.managed);
+    let mut state = lock(&pools.codex_managed);
     let h = state.exits.get_mut(&id).unwrap();
     let current = (h.generation, h.revision);
     h.probing = true;
@@ -697,13 +696,13 @@ fn upstream_server_error_changes_score_without_quarantining_node() {
     let lease = pools
         .acquire(
             RequestProxySource::Mihomo,
-            gateway_core::account::ResponsesUpstream::Excel,
+            gateway_core::account::ResponsesUpstream::Codex,
             "session",
             false,
         )
         .unwrap();
     lease.report(SessionProxyOutcome::UpstreamFailure);
-    let state = lock(&pools.managed);
+    let state = lock(&pools.codex_managed);
     assert!(state.exits[lease.node_id()].ready(Instant::now()));
     assert_eq!(state.exits[lease.node_id()].failures, 0);
 }
@@ -715,7 +714,7 @@ fn unsent_retry_rebinds_once_without_double_releasing_new_session() {
     let first = pools
         .acquire(
             RequestProxySource::Mihomo,
-            gateway_core::account::ResponsesUpstream::Excel,
+            gateway_core::account::ResponsesUpstream::Codex,
             "session",
             false,
         )
@@ -727,9 +726,9 @@ fn unsent_retry_rebinds_once_without_double_releasing_new_session() {
     assert!(first.retry_unsent().is_none());
     let node = second.node_id().to_owned();
     drop(first);
-    assert_eq!(lock(&pools.managed).loads()[&node].0, 1);
+    assert_eq!(lock(&pools.codex_managed).loads()[&node].0, 1);
     drop(second);
-    assert_eq!(lock(&pools.managed).loads()[&node].0, 0);
+    assert_eq!(lock(&pools.codex_managed).loads()[&node].0, 0);
 }
 
 #[test]
@@ -739,7 +738,7 @@ fn unsent_retry_never_moves_a_concurrently_active_session() {
     let first = pools
         .acquire(
             RequestProxySource::Mihomo,
-            gateway_core::account::ResponsesUpstream::Excel,
+            gateway_core::account::ResponsesUpstream::Codex,
             "session",
             false,
         )
@@ -747,14 +746,17 @@ fn unsent_retry_never_moves_a_concurrently_active_session() {
     let concurrent = pools
         .acquire(
             RequestProxySource::Mihomo,
-            gateway_core::account::ResponsesUpstream::Excel,
+            gateway_core::account::ResponsesUpstream::Codex,
             "session",
             false,
         )
         .unwrap();
     first.report(SessionProxyOutcome::NetworkFailure);
     assert!(first.retry_unsent().is_none());
-    assert_eq!(lock(&pools.managed).loads()[concurrent.node_id()].0, 2);
+    assert_eq!(
+        lock(&pools.codex_managed).loads()[concurrent.node_id()].0,
+        2
+    );
 }
 
 #[test]

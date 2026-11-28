@@ -11,7 +11,6 @@ pub mod diagnostics;
 pub mod egress;
 pub mod endpoints;
 pub(crate) mod evidence;
-pub(crate) mod excel;
 pub mod headers;
 pub mod privacy;
 pub mod profile;

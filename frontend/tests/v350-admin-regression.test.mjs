@@ -23,7 +23,7 @@ function loadText(text, dependencies = {}, globals = {}) {
     exports,
     TextEncoder,
     structuredClone,
-    require: name => dependencies[name] ?? (name === '@/components/request-profile/changes' ? load('components/request-profile/changes.ts') : name === '../utils/warmup-schedule' ? load('views/settings/utils/warmup-schedule.ts') : name === '../components/error-protection/form' ? load('views/settings/components/error-protection/form.ts') : name === '@/utils/excel-defaults' ? load('utils/excel-defaults.ts') : require(name)),
+    require: name => dependencies[name] ?? (name === '@/components/request-profile/changes' ? load('components/request-profile/changes.ts') : name === '../utils/warmup-schedule' ? load('views/settings/utils/warmup-schedule.ts') : name === '../components/error-protection/form' ? load('views/settings/components/error-protection/form.ts') : require(name)),
     AbortController,
     Blob,
     setTimeout,
@@ -299,7 +299,6 @@ test('runtime save keeps custom parameters and silently rereads server state aft
   }
   const settings = load('views/settings/composables/useSettingsForm.ts', {
     './useRuntimeUnits': load('views/settings/composables/useRuntimeUnits.ts', { vue }),
-    './useExcelImageSettings': load('views/settings/composables/useExcelImageSettings.ts', { vue }),
     '@/api/modules/settings': load('api/modules/settings.ts', { '../request': () => {} }),
     '@/api/modules/proxies': load('api/modules/proxies.ts', { '../request': () => { throw new Error('unexpected real API request') } }),
     '@/utils/location': load('utils/location.ts'),

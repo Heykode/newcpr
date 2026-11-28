@@ -3,16 +3,12 @@ import type { AccountRow } from '../constants'
 import type { AccountGroup, AccountModelAccess } from '@/api'
 
 import type { AccountEgressReadState } from '@/utils/account-egress'
-import type { Excel403Action } from '@/utils/excel-settings'
 import { useTemplateRef } from 'vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 
 import BaseModal from '@/components/base/BaseModal/index.vue'
 import ProviderIconGroup from '@/components/ProviderIconGroup.vue'
 import { t } from '@/i18n'
-import { formatDateTime } from '@/utils/date'
-import { DEFAULT_EXCEL_MODELS_INPUT } from '@/utils/excel-defaults'
-import { excelRecoveryResultLabel } from '@/utils/excel-settings'
 import AccountIdentityCell from './AccountIdentityCell.vue'
 import AccountPlanBadge from './AccountPlanBadge.vue'
 import AccountPurchaseFields from './AccountPurchaseFields.vue'
@@ -35,15 +31,7 @@ const customName = defineModel<string>('customName', { required: true })
 const purchaseAmount = defineModel<string>('purchaseAmount', { default: '' })
 const purchaseCycleStart = defineModel<string>('purchaseCycleStart', { default: '' })
 const enabled = defineModel<boolean>('enabled', { required: true })
-const excelEnabled = defineModel<boolean>('excelEnabled', { default: false })
-const excelModels = defineModel<string>('excelModels', { default: DEFAULT_EXCEL_MODELS_INPUT })
-const excelModelsFollowGlobal = defineModel<boolean>('excelModelsFollowGlobal', { default: true })
-const excelCacheCreationAsInput = defineModel<boolean>('excelCacheCreationAsInput', { default: false })
-const excelIgnoreEncryptedContent = defineModel<boolean>('excelIgnoreEncryptedContent', { default: false })
 const requestProxySource = defineModel<import('@/utils/request-proxy-source').RequestProxySource>('requestProxySource', { default: 'account' })
-const excel403Action = defineModel<Excel403Action>('excel403Action', { default: 'none' })
-const excelRecoveryEnabled = defineModel<boolean>('excelRecoveryEnabled', { default: false })
-const excelRecoveryInterval = defineModel<string>('excelRecoveryInterval', { default: '60' })
 const concurrencyLimit = defineModel<string>('concurrencyLimit', { required: true })
 const weight = defineModel<string>('weight', { required: true })
 const modelAccess = defineModel<AccountModelAccess | undefined>('modelAccess', { required: true })
@@ -89,15 +77,7 @@ async function requestSave() {
         ref="settingsFields"
         v-model:custom-name="customName"
         v-model:enabled="enabled"
-        v-model:excel-enabled="excelEnabled"
-        v-model:excel-models="excelModels"
-        v-model:excel-models-follow-global="excelModelsFollowGlobal"
-        v-model:excel-cache-creation-as-input="excelCacheCreationAsInput"
-        v-model:excel-ignore-encrypted-content="excelIgnoreEncryptedContent"
         v-model:request-proxy-source="requestProxySource"
-        v-model:excel-403-action="excel403Action"
-        v-model:excel-recovery-enabled="excelRecoveryEnabled"
-        v-model:excel-recovery-interval="excelRecoveryInterval"
         v-model:concurrency-limit="concurrencyLimit"
         v-model:weight="weight"
         v-model:model-access="modelAccess"
@@ -108,12 +88,10 @@ async function requestSave() {
         v-model:egress-mode="egressMode"
         :provider="account.provider"
         :credential-egress="account.provider === 'openai'"
-        encrypted-content-available
         name-available
         model-access-available
         :groups="groups"
         :groups-loading="groupsLoading"
-        :excel-available="account.provider === 'openai' && account.authenticationKind === 'oauth'"
         :request-proxy-available="account.provider === 'openai'"
         :preserve-proxy="false"
         :egress-read-state="egressReadState"
@@ -123,11 +101,6 @@ async function requestSave() {
         :account-id="account.id"
       />
       <AccountPurchaseFields v-model:amount="purchaseAmount" v-model:cycle-start="purchaseCycleStart" :disabled="saving || !account.purchaseCost" />
-      <div v-if="account.excelRecovery && account.provider === 'openai'" class="grid gap-1 text-cp-xs text-cp-text-secondary">
-        <span>Excel 恢复探测：{{ excelRecoveryResultLabel(account.excelRecovery.lastResult) }}</span>
-        <span v-if="account.excelRecovery.lastProbeAt">上次：{{ formatDateTime(account.excelRecovery.lastProbeAt) }} · {{ account.excelRecovery.lastModel }}</span>
-        <span v-if="account.excelRecovery.enabled && !account.enabled && account.responsesUpstream === 'excel'">下次计划：{{ formatDateTime(account.excelRecovery.nextProbeAt) }}（凭据有效时执行，扫描或排队可能延后）</span>
-      </div>
     </div>
 
     <template #footer>

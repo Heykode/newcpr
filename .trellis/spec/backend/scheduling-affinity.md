@@ -261,8 +261,8 @@ on CAS conflict, `guard.release().await?` before refreshing the current selectio
    Redis admission CAS and release acquired capacity on conflict. Child follow,
    queue budget and queue-failure reselect use the current borrow decision.
    Busy/disabled/quota/cooldown/auth-protection alone does not authorize borrowing.
-   Recheck eligibility before admission and during waits. Excel keeps its existing
-   image route; exact continuation and required accounts cannot borrow.
+   Recheck eligibility before admission and during waits. Retired routes cannot
+   serve images; exact continuation and required accounts cannot borrow.
 4. Errors: missing/unavailable binding storage is not authorization; CAS conflict
    reselects without sending. Eligible busy children wait for their primary.
    Strict Guardian whose parent is outside the direct model scope uses the original

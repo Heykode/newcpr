@@ -15,7 +15,6 @@ impl CodexCredentialCatalogService {
             .await
             .map_err(|_| CodexCredentialCatalogError::Cache)?;
         let accounts = self.repository.list_for_provider(false).await?;
-        self.record_excel_accounts(&accounts, true)?;
         let current = accounts
             .into_iter()
             .map(|a| (a.id().clone(), a))
@@ -39,16 +38,7 @@ impl CodexCredentialCatalogService {
                 }) else {
                     continue;
                 };
-                let content = if account.responses_upstream()
-                    == gateway_core::account::ResponsesUpstream::Excel
-                {
-                    Arc::new(CatalogContent::new(
-                        adapter_catalog_models(models.clone(), account)?,
-                        &group.document,
-                    ))
-                } else {
-                    native_content.clone()
-                };
+                let content = native_content.clone();
                 if content.models.is_empty() {
                     continue;
                 }
@@ -94,7 +84,6 @@ impl CodexCredentialCatalogService {
             .list_for_accounts(accounts)
             .await
             .inspect_err(|_| self.schedule_refresh())?;
-        self.record_excel_accounts(&current, false)?;
         let current = current
             .iter()
             .filter(|a| eligible_catalog_account(a, SystemTime::now()))
@@ -263,7 +252,6 @@ impl CodexCredentialCatalogService {
         let revision = self.state_revision()?;
         let now = SystemTime::now();
         let accounts = self.repository.list_for_provider(false).await?;
-        self.record_excel_accounts(&accounts, true)?;
         let current: BTreeMap<_, _> = accounts
             .into_iter()
             .filter(|a| eligible_catalog_account(a, now))

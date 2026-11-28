@@ -280,13 +280,13 @@ impl ProviderAdmin for OpenAiAdminProvider {
     }
 
     fn peer_model_eligible(&self, account: &AccountRecord, model: &str) -> Option<bool> {
-        let account = account_from_record(account).ok()?;
-        if account.responses_upstream_for_model(model)
-            == gateway_core::account::ResponsesUpstream::Excel
+        if account.responses_upstream == gateway_core::account::ResponsesUpstream::Excel
+            && account.effective_excel_models.contains(model)
         {
-            // Excel 执行不消耗本地 OAuth 额度，不能用 OAuth 观测宣称该模型可用。
-            return None;
+            // Retired routes cannot advertise native OAuth quota eligibility.
+            return Some(false);
         }
+        let account = account_from_record(account).ok()?;
         let model = model.rsplit('/').next().unwrap_or(model);
         Some(
             account.authentication_kind() == crate::credential::CODEX_AUTHENTICATION_KIND_OAUTH
@@ -453,14 +453,6 @@ impl ProviderAdmin for OpenAiAdminProvider {
                 ));
         }
         build_connection_test_operation(upstream_model, input_text, stream)
-    }
-
-    fn excel_recovery_operation(
-        &self,
-        upstream_model: &UpstreamModelId,
-        input_text: &str,
-    ) -> Result<Operation, ProviderAdminError> {
-        build_connection_test_operation_with_effort(upstream_model, input_text, true, Some("low"))
     }
 
     fn dashboard_wire_profile(&self) -> Option<DashboardWireProfile> {
@@ -1035,16 +1027,7 @@ impl ProviderAdmin for OpenAiAdminProvider {
 
         let account = self.account(account_id).await?;
         if account.responses_upstream() == gateway_core::account::ResponsesUpstream::Excel {
-            return Ok(account
-                .excel_models()
-                .as_slice()
-                .iter()
-                .map(|id| QualityModelChoice {
-                    id: id.clone(),
-                    name: id.clone(),
-                    reasoning_efforts: None,
-                })
-                .collect());
+            return Ok(Vec::new());
         }
         if !exact {
             let models = match self
@@ -1097,9 +1080,7 @@ impl ProviderAdmin for OpenAiAdminProvider {
         let account = self.account(account_id).await?;
         if account.responses_upstream() == gateway_core::account::ResponsesUpstream::Excel {
             return Err(provider_admin_error(ProviderAdminErrorKind::Unsupported)
-                .with_public_message(
-                    "Excel 入口不提供 Codex 原生模型目录；账号测试使用 Excel 模型列表",
-                ));
+                .with_public_message("已退役入口不提供模型目录"));
         }
         let (models, observed_at) = self
             .catalog

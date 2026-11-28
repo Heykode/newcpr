@@ -33,8 +33,6 @@ pub(super) fn endpoint_requested_model_body(
 pub(super) struct OpenAiResponseObservationState {
     quality_probe: bool,
     transport: CodexBackendTransport,
-    excel: bool,
-    excel_usage: Option<crate::transport::excel::usage::ExcelUsagePolicy>,
     diagnostics: CodexUpstreamDiagnostics,
     response_metadata: CodexResponseMetadata,
     metrics: CodexTransportMetrics,
@@ -96,11 +94,6 @@ impl OpenAiResponseObservationState {
         Self {
             quality_probe: request.quality_probe.is_some(),
             transport: response.transport,
-            excel: request.excel.is_some(),
-            excel_usage: request
-                .excel
-                .as_ref()
-                .map(|prepared| prepared.usage.clone()),
             diagnostics: response.diagnostics.clone(),
             response_metadata,
             metrics: response.transport_metrics.clone(),
@@ -140,7 +133,6 @@ impl OpenAiResponseObservationState {
             self.websocket_pool_decision,
             self.timings,
         )?;
-        observation = response_route_observation(observation, self.excel);
         if self.transport == CodexBackendTransport::WebSocket
             && let Some(status) = failure.and_then(ProviderError::upstream_status)
         {
@@ -295,9 +287,6 @@ impl OpenAiResponseObservationState {
             )),
         );
         metadata.insert("requestSummary".to_owned(), self.request_summary.clone());
-        if let Some(usage) = &self.excel_usage {
-            metadata.insert("excelBilling".to_owned(), usage.metadata());
-        }
         if let Some(service_tier) = &self.requested_service_tier {
             metadata.insert(
                 "requestedServiceTier".to_owned(),
@@ -326,17 +315,6 @@ impl OpenAiResponseObservationState {
             metadata.insert("eventStatusCode".to_owned(), json!(200_u16));
         }
         bounded_observation_metadata(metadata)
-    }
-}
-
-pub(super) fn response_route_observation(
-    observation: ProviderResponseObservation,
-    excel: bool,
-) -> ProviderResponseObservation {
-    if excel && let Ok(transport) = UpstreamTransport::new("excel_http_sse") {
-        observation.with_transport(transport)
-    } else {
-        observation
     }
 }
 
@@ -502,16 +480,6 @@ pub(super) fn openai_response_request_summary(
         summary["effectiveReasoningEffort"] = body
             .get("reasoning")
             .and_then(|reasoning| reasoning.get("effort"))
-            .cloned()
-            .unwrap_or(Value::Null);
-    }
-    if let Some(prepared) = &request.excel {
-        summary["requestedReasoningEffort"] = crate::transport::excel::reasoning_effort(body)
-            .ok()
-            .map_or(Value::Null, |(requested, _)| json!(requested));
-        summary["effectiveReasoningEffort"] = prepared
-            .body
-            .get("reasoning_effort")
             .cloned()
             .unwrap_or(Value::Null);
     }

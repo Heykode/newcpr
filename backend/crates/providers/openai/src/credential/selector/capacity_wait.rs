@@ -1098,7 +1098,6 @@ impl CodexCredentialSelector {
         {
             accounts.push(account);
         }
-        self.retain_excel_auth_blocks(&accounts);
         Ok(accounts)
     }
 
@@ -1719,12 +1718,6 @@ impl CodexCredentialSelector {
             )?;
             return Ok(None);
         }
-        if !request.attempt.is_quality_retest()
-            && self.excel_auth_block(&candidate.account).is_some()
-        {
-            drop(guard);
-            return Ok(None);
-        }
         let cookies = runtime
             .cookies
             .into_iter()
@@ -1832,12 +1825,6 @@ impl CodexCredentialSelector {
                 .await?
         {
             return Err(binding_unavailable());
-        }
-        if !request.attempt.is_quality_retest()
-            && self.excel_auth_block(&candidate.account).is_some()
-        {
-            drop(guard);
-            return Ok(None);
         }
         Ok(Some(CodexCredentialLease {
             session_binding_ttl: request

@@ -98,6 +98,7 @@ async function main() {
     for (const width of [1440, 390, 320]) {
       await page.setViewportSize({ width, height: 1000 })
       await scope.getByRole('radio', { name: '通用与 Codex 配置', exact: true }).click()
+      assert.equal(await scope.getByRole('radio', { name: 'Excel 配置', exact: true }).count(), 0)
       const common = page.getByRole('region', { name: '通用与 Codex 配置', exact: true })
       await common.getByRole('textbox', { name: '数据驻留', exact: true }).fill('')
       await common.getByRole('textbox', { name: '账号路由', exact: true }).fill(width === 390 ? '' : 'us_cr')

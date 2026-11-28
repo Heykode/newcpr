@@ -98,7 +98,6 @@ async fn fixture(sharing: ClientPeerSharing, plaintext: &str) -> (AdminTestFixtu
             in_flight: None,
             health_timeline: Vec::new(),
             cumulative_costs: Vec::new(),
-            excel_recovery: None,
             purchase_cost: None,
             plan_type_display: None,
             usage: None,

@@ -33,8 +33,6 @@ async function main() {
     dynamicProxies: 1,
     countryFilter: { mode: 'exclude', codes: ['CN', 'HK'], allowUnknown: false, dynamicProviderManaged: true },
     countryCodes: ['US', 'GB', 'JP', 'SG', 'DE', 'HK', 'CN'],
-    bpsWarmPool: warm,
-    bpsIpWarmPool: warm,
     codexWarmPool: warm,
     codexIpWarmPool: warm,
     subscriptionItems: [{ id: 'fixture-source', label: '测试订阅', enabled: true, nodes: 32, cached: true, updatedAt: '2026-09-28T00:00:00Z' }],
@@ -132,6 +130,9 @@ async function main() {
         await page.getByRole('button', { name: tab, exact: true }).click()
         await page.getByText('Mihomo v1.19.31', { exact: true }).waitFor()
         if (filename === 'kernel') {
+          for (const name of ['Codex · Mihomo', 'Codex · 普通代理'])
+            assert.equal(await page.getByText(name, { exact: true }).isVisible(), true)
+          assert.equal(await page.getByText(/^Excel · /).count(), 0)
           assert.equal(await page.getByText('允许未知地区', { exact: true }).isVisible(), true)
           assert.equal(await page.getByText('动态代理地区由供应商管理', { exact: true }).isVisible(), true)
           assert.equal(await page.getByRole('checkbox', { name: '美国 US', exact: true }).count(), 1)

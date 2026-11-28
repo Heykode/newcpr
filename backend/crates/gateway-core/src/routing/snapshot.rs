@@ -32,7 +32,6 @@ pub struct SnapshotSettingsFacts {
     pricing: crate::metering::PricingOverrides,
     request_profiles: BTreeMap<ProviderKind, crate::account::OpaqueProviderData>,
     account_error_protection: crate::account::AccountErrorProtection,
-    excel_image_transport: Option<super::ExcelImageTransport>,
     responses_max_decompressed_body_bytes: u64,
     request_location: Option<crate::account::RequestLocation>,
     openai_request_settings: crate::settings::OpenAiRequestSettings,
@@ -127,15 +126,6 @@ impl SnapshotSettingsFacts {
     }
 
     #[must_use]
-    pub fn with_excel_image_transport(
-        mut self,
-        policy: Option<super::ExcelImageTransport>,
-    ) -> Self {
-        self.excel_image_transport = policy;
-        self
-    }
-
-    #[must_use]
     pub const fn with_responses_max_decompressed_body_bytes(mut self, bytes: u64) -> Self {
         self.responses_max_decompressed_body_bytes = bytes;
         self
@@ -164,7 +154,6 @@ impl SnapshotSettingsFacts {
             codex_privacy_policy: Default::default(),
             request_profiles: BTreeMap::new(),
             account_error_protection: Default::default(),
-            excel_image_transport: None,
             responses_max_decompressed_body_bytes:
                 super::DEFAULT_RESPONSES_MAX_DECOMPRESSED_BODY_BYTES,
             max_concurrent_per_account,
@@ -753,14 +742,6 @@ async fn compile_runtime_snapshot(
 
     let model_mappings = facts.settings.model_mappings;
     let request_tuning = facts.settings.request_tuning;
-    if facts
-        .settings
-        .excel_image_transport
-        .as_ref()
-        .is_some_and(|policy| !policy.validate())
-    {
-        return Err(RuntimeSnapshotCompileError::InvalidData);
-    }
     let min_client_versions = CodexClientMinVersions::new(
         facts
             .settings
@@ -932,7 +913,6 @@ async fn compile_runtime_snapshot(
             .with_account_error_protection(facts.settings.account_error_protection)
             .with_request_profiles(facts.settings.request_profiles)
             .with_request_tuning(request_tuning)
-            .with_excel_image_transport(facts.settings.excel_image_transport)
             .with_openai_turn_state_policy(turn_state_policy)
             .with_codex_quota_overdraft(
                 facts.settings.codex_quota_overdraft_enabled,
@@ -957,7 +937,6 @@ pub struct RuntimeSnapshot {
     pricing: Arc<crate::metering::PricingOverrides>,
     request_profiles: BTreeMap<ProviderKind, crate::account::OpaqueProviderData>,
     account_error_protection: Arc<crate::account::CompiledAccountErrorProtection>,
-    excel_image_transport: Option<super::ExcelImageTransport>,
     codex_quota_overdraft_enabled: bool,
     codex_quota_overdraft_probe_model: UpstreamModelId,
     responses_max_decompressed_body_bytes: std::num::NonZeroUsize,
@@ -1060,20 +1039,6 @@ impl RuntimeSnapshot {
     #[must_use]
     pub fn account_error_protection(&self) -> Arc<crate::account::CompiledAccountErrorProtection> {
         Arc::clone(&self.account_error_protection)
-    }
-
-    #[must_use]
-    pub fn excel_image_transport(&self) -> Option<&super::ExcelImageTransport> {
-        self.excel_image_transport.as_ref()
-    }
-
-    #[must_use]
-    pub fn with_excel_image_transport(
-        mut self,
-        policy: Option<super::ExcelImageTransport>,
-    ) -> Self {
-        self.excel_image_transport = policy;
-        self
     }
 
     #[must_use]
@@ -1200,7 +1165,6 @@ impl RuntimeSnapshot {
             account_error_protection: Arc::new(
                 crate::account::AccountErrorProtection::default().compile(),
             ),
-            excel_image_transport: None,
             codex_quota_overdraft_enabled: false,
             codex_quota_overdraft_probe_model: UpstreamModelId::new("gpt-6-astra")
                 .expect("valid default overdraft probe model"),
@@ -1757,19 +1721,19 @@ impl RuntimeSnapshot {
                 .values()
                 .any(|variant| self.variant_allowed(provider, variant, scope));
         }
+        let eligible = |account: &ProviderAccountId| {
+            scope.directory().account(account).is_some_and(|entry| {
+                entry.provider_kind() == provider
+                    && (provider.as_str() != "openai" || entry.uses_native_upstream(&upstream))
+            }) && scope.allows_model(account, &upstream)
+        };
         match self
             .model_catalog_accounts
             .get(provider)
             .and_then(|models| models.get(&upstream))
         {
-            Some(accounts) => accounts.iter().any(|account| {
-                scope
-                    .directory()
-                    .account(account)
-                    .is_some_and(|entry| entry.provider_kind() == provider)
-                    && scope.allows_model(account, &upstream)
-            }),
-            None => scope.allows_provider_model(provider, &upstream),
+            Some(accounts) => accounts.iter().any(eligible),
+            None => scope.allowed_account_ids().any(eligible),
         }
     }
 

@@ -4,7 +4,6 @@ import { Pencil, Plus, RefreshCw, Trash2, X } from '@lucide/vue'
 import { computed, onScopeDispose, ref, shallowRef, watch } from 'vue'
 import { deleteAccountTemplate, getAccountTemplates, saveAccountTemplate } from '@/api/modules/account-templates'
 import BaseButton from '@/components/base/BaseButton.vue'
-import BaseCheckbox from '@/components/base/BaseCheckbox.vue'
 import BaseConfirmModal from '@/components/base/BaseConfirmModal.vue'
 import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
@@ -135,15 +134,7 @@ onScopeDispose(() => {
         v-model:credential-proxy-id="form.credentialProxyId"
         v-model:enabled="form.enabled"
         v-model:model-access="form.modelAccess"
-        v-model:excel-enabled="form.excelEnabled"
         v-model:request-proxy-source="form.requestProxySource"
-        v-model:excel-models="form.excelModels"
-        v-model:excel-models-follow-global="form.excelModelsFollowGlobal"
-        v-model:excel-cache-creation-as-input="form.excelCacheCreationAsInput"
-        v-model:excel-ignore-encrypted-content="form.excelIgnoreEncryptedContent"
-        v-model:excel-403-action="form.excel403Action"
-        v-model:excel-recovery-enabled="form.excelRecoveryEnabled"
-        v-model:excel-recovery-interval="form.excelRecoveryInterval"
         v-model:concurrency-limit="form.concurrencyLimit"
         v-model:weight="form.weight"
         v-model:selected-group-ids="form.groupIds"
@@ -156,15 +147,10 @@ onScopeDispose(() => {
         model-access-available
         known-model-catalog
         preserve-model-access
-        :excel-available="form.applyExcel"
-        encrypted-content-available
         :groups="groups"
         :groups-loading="groupsLoading"
         :disabled="busy"
-        @update:excel-recovery-enabled="form.preserveExcelRecovery = false"
-        @update:excel-recovery-interval="form.preserveExcelRecovery = false"
       />
-      <BaseCheckbox v-model="form.applyExcel" label="模板包含 Excel 设置" show-label :disabled="busy" />
       <div v-for="id in missingGroups" :key="id" class="flex min-w-0 items-center gap-2 text-cp-sm text-cp-warning">
         <span class="min-w-0 flex-1 break-all">未识别分组：{{ id }}</span>
         <BaseIconButton :label="`移除未识别分组 ${id}`" :disabled="busy" @click="form.groupIds = form.groupIds.filter(value => value !== id)">

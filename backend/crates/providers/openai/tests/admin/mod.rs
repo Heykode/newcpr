@@ -773,6 +773,19 @@ async fn openai_admin_provider_projects_cached_quota_models_and_canonical_export
     .expect("OpenAI bundle");
     let admin = bundle.admin_provider();
 
+    let mut legacy = record.clone();
+    legacy.responses_upstream = gateway_core::account::ResponsesUpstream::Excel;
+    legacy.effective_excel_models = vec!["legacy-only".to_owned()].try_into().unwrap();
+    assert_eq!(
+        admin.peer_model_eligible(&legacy, "legacy-only"),
+        Some(false)
+    );
+    assert_eq!(admin.peer_model_eligible(&legacy, "gpt-5.4"), Some(true));
+    assert_eq!(
+        admin.peer_model_eligible(&record, "legacy-only"),
+        Some(true)
+    );
+
     let operation = admin
         .connection_test_operation(
             &UpstreamModelId::new("gpt-5.4").expect("upstream model"),
@@ -816,26 +829,6 @@ async fn openai_admin_provider_projects_cached_quota_models_and_canonical_export
             .get("stream")
             .and_then(Value::as_bool),
         Some(false)
-    );
-    let recovery_operation = admin
-        .excel_recovery_operation(
-            &UpstreamModelId::new("gpt-5.4").expect("upstream model"),
-            "Reply with exactly this nonce and nothing else: fixture",
-        )
-        .expect("Excel recovery operation");
-    let Operation::Generate(recovery_request) = recovery_operation else {
-        panic!("Excel recovery must be a generate operation");
-    };
-    let recovery_encoded =
-        provider_openai::encode_generate_request(&recovery_request, "gpt-5.4", &Default::default())
-            .expect("Excel recovery request");
-    assert_eq!(
-        recovery_encoded
-            .body()
-            .get("reasoning")
-            .and_then(|value| value.get("effort"))
-            .and_then(Value::as_str),
-        Some("low")
     );
     assert!(
         !non_stream_request

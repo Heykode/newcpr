@@ -752,11 +752,6 @@ pub(super) struct FakeAccountStore {
     list_queries: Mutex<Vec<AccountListQuery>>,
     pub(super) deletion_library:
         Mutex<Option<Arc<dyn gateway_admin::ports::relogin::ReloginStore>>>,
-    pub(super) recovery_claim:
-        Mutex<Option<gateway_admin::model::excel_recovery::ExcelRecoveryClaim>>,
-    pub(super) recovery_current: std::sync::atomic::AtomicBool,
-    pub(super) recovery_results:
-        Mutex<Vec<gateway_admin::model::excel_recovery::ExcelRecoveryOutcome>>,
     events: EventLog,
     pub(super) accounts: Mutex<Vec<AccountRecord>>,
     account_after_probe: Mutex<Option<AccountRecord>>,
@@ -801,9 +796,6 @@ impl FakeAccountStore {
             events,
             accounts: Mutex::new(vec![account]),
             deletion_library: Mutex::default(),
-            recovery_claim: Mutex::default(),
-            recovery_current: std::sync::atomic::AtomicBool::new(true),
-            recovery_results: Mutex::default(),
             account_after_probe: Mutex::new(None),
             fail_commit: Mutex::new(false),
             rotation_updates: Mutex::new(Vec::new()),
@@ -918,30 +910,6 @@ impl FakeAccountStore {
 
 #[async_trait]
 impl AccountStore for FakeAccountStore {
-    async fn claim_excel_recovery(
-        &self,
-    ) -> AdminStoreResult<Option<gateway_admin::model::excel_recovery::ExcelRecoveryClaim>> {
-        Ok(self.recovery_claim.lock().unwrap().take())
-    }
-
-    async fn excel_recovery_current(
-        &self,
-        _: &gateway_admin::model::excel_recovery::ExcelRecoveryClaim,
-    ) -> AdminStoreResult<bool> {
-        Ok(self
-            .recovery_current
-            .load(std::sync::atomic::Ordering::SeqCst))
-    }
-
-    async fn finish_excel_recovery(
-        &self,
-        _: &gateway_admin::model::excel_recovery::ExcelRecoveryClaim,
-        outcome: gateway_admin::model::excel_recovery::ExcelRecoveryOutcome,
-    ) -> AdminStoreResult<bool> {
-        self.recovery_results.lock().unwrap().push(outcome);
-        Ok(outcome == gateway_admin::model::excel_recovery::ExcelRecoveryOutcome::Recovered)
-    }
-
     async fn load_turn_state_status(
         &self,
         account_ids: &[String],
@@ -2208,7 +2176,6 @@ async fn accounts_update_should_commit_then_release_disabled_account_and_publish
             &context("update-request"),
             UpdateAccount {
                 credential_proxy_id: None,
-                excel_recovery: None,
                 purchase_cost: None,
                 egress_mode: None,
                 model_access: Default::default(),
@@ -2217,14 +2184,7 @@ async fn accounts_update_should_commit_then_release_disabled_account_and_publish
                 account_id: "acct_test".to_owned(),
                 enabled: false,
                 turn_state_injection_enabled: Some(false),
-                responses_upstream: Default::default(),
-                excel_models_follow_global: Default::default(),
-                excel_cache_creation_as_input: Default::default(),
-                excel_ignore_encrypted_content: Default::default(),
                 request_proxy_source: Default::default(),
-                excel_auto_disable_on_403: Default::default(),
-                excel_403_action: Default::default(),
-                excel_models: Default::default(),
                 concurrency_limit: None,
                 weight: gateway_core::account::AccountWeight::DEFAULT,
                 group_ids: Vec::new(),
@@ -2260,7 +2220,6 @@ async fn accounts_update_should_not_notify_provider_when_store_commit_fails() {
             &context("update-failure"),
             UpdateAccount {
                 credential_proxy_id: None,
-                excel_recovery: None,
                 purchase_cost: None,
                 egress_mode: None,
                 model_access: Default::default(),
@@ -2269,14 +2228,7 @@ async fn accounts_update_should_not_notify_provider_when_store_commit_fails() {
                 account_id: "acct_test".to_owned(),
                 enabled: false,
                 turn_state_injection_enabled: Some(false),
-                responses_upstream: Default::default(),
-                excel_models_follow_global: Default::default(),
-                excel_cache_creation_as_input: Default::default(),
-                excel_ignore_encrypted_content: Default::default(),
                 request_proxy_source: Default::default(),
-                excel_auto_disable_on_403: Default::default(),
-                excel_403_action: Default::default(),
-                excel_models: Default::default(),
                 concurrency_limit: None,
                 weight: gateway_core::account::AccountWeight::DEFAULT,
                 group_ids: Vec::new(),
@@ -2319,7 +2271,6 @@ async fn accounts_batch_update_should_commit_once_and_notify_each_provider() {
                 credential_proxy_id: None,
                 quota_settings: Default::default(),
                 auto_use_quota_credits: None,
-                excel_recovery: None,
                 purchase_cost: None,
                 egress_mode: None,
                 model_access: Default::default(),
@@ -2328,14 +2279,7 @@ async fn accounts_batch_update_should_commit_once_and_notify_each_provider() {
                 account_ids: vec!["acct_openai".to_owned(), "acct_xai".to_owned()],
                 enabled: Some(false),
                 turn_state_injection_enabled: None,
-                responses_upstream: Default::default(),
-                excel_models_follow_global: Default::default(),
-                excel_cache_creation_as_input: Default::default(),
-                excel_ignore_encrypted_content: Default::default(),
                 request_proxy_source: Default::default(),
-                excel_auto_disable_on_403: Default::default(),
-                excel_403_action: Default::default(),
-                excel_models: Default::default(),
                 concurrency_limit: None,
                 weight: Some(gateway_core::account::AccountWeight::DEFAULT),
                 group_ids: Some(Vec::new()),
@@ -4897,7 +4841,6 @@ pub(super) fn import_settings() -> gateway_admin::model::accounts::AccountImport
     gateway_admin::model::accounts::AccountImportSettings {
         credential_proxy_id: None,
         template_proxy_mode: None,
-        excel_recovery: None,
         purchase_cost: None,
         clear_outbound_proxy: false,
         egress_mode: None,
@@ -4905,14 +4848,7 @@ pub(super) fn import_settings() -> gateway_admin::model::accounts::AccountImport
         custom_name: None,
         enabled: false,
         turn_state_injection_enabled: None,
-        responses_upstream: Default::default(),
-        excel_models_follow_global: Default::default(),
-        excel_cache_creation_as_input: Default::default(),
-        excel_ignore_encrypted_content: Default::default(),
         request_proxy_source: Default::default(),
-        excel_auto_disable_on_403: Default::default(),
-        excel_403_action: Default::default(),
-        excel_models: Default::default(),
         concurrency_limit: Some(
             gateway_core::account::AccountConcurrencyLimit::new(3).expect("concurrency"),
         ),

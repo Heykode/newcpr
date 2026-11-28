@@ -14,12 +14,9 @@ import { requestProfileChanges } from '@/components/request-profile/changes'
 import { useAsyncAction } from '@/composables/useAsyncAction'
 import { t } from '@/i18n'
 import { errorMessage } from '@/utils/async'
-import { DEFAULT_EXCEL_MODELS, DEFAULT_EXCEL_MODELS_INPUT } from '@/utils/excel-defaults'
 import { normalizeRequestLocation, requestLocationError } from '@/utils/location'
-import { parseExcelModels } from '@/views/accounts/utils/schedulingForm'
 import { cloneProtectionRules, protectionSettingsError, trimProtectionText } from '../components/error-protection/form'
 import { validWarmupExpressions, warmupScheduleBytes } from '../utils/warmup-schedule'
-import { useExcelImageSettings } from './useExcelImageSettings'
 import { useRuntimeUnits } from './useRuntimeUnits'
 
 function defaultProtection(): ProtectionDraft {
@@ -47,18 +44,6 @@ const requestTuningFallbacks: RequestTuning = {
   websocketFailureOpenDurationMs: 30_000,
   rateLimitCooldownSeconds: 60,
   maxRetryAfterSeconds: 240,
-  excelImageRelayBytes: 1024 * 1024 * 1024,
-  excelImageMaxBytes: 20 * 1024 * 1024,
-  excelImageTotalBytes: 32 * 1024 * 1024,
-  excelImageMaxCount: 20,
-  excelImageLimitPolicy: 'off',
-  excelImageWarningRemaining: 8,
-  excelImageCompactReserve: 3,
-  excelImageRelayRequests: 128,
-  excelImageRelayDownloads: 32,
-  excelImageRelayEntries: 512,
-  excelImageRelayTtlMinutes: 30,
-  excelImageTransport: null,
   openaiLocationOverrideEnabled: false,
   openaiRequestLocation: null,
   maxWaitingPerKey: 0,
@@ -83,7 +68,6 @@ export function useSettingsForm() {
     openaiRequestSettings: defaultOpenAiRequestSettings(),
     openaiWebsocketPool: defaultOpenAiWebSocketPool(),
     accountErrorProtection: defaultProtection(),
-    excelDefaultModels: DEFAULT_EXCEL_MODELS_INPUT,
     responsesMaxDecompressedBodyBytes: 64 * 1024 * 1024,
     accountAffinity: 'strict' as AccountAffinity,
     refreshMarginSeconds: null as number | null,
@@ -110,7 +94,6 @@ export function useSettingsForm() {
 
   const runtimeUnits = useRuntimeUnits(form)
   const unitFields = runtimeUnits.fields
-  const excelImages = useExcelImageSettings(computed(() => form.requestTuning))
 
   const savedDraft = shallowRef('')
   const savedLocation = shallowRef(defaultRequestLocation())
@@ -118,7 +101,6 @@ export function useSettingsForm() {
     form,
     mappings: mappings.value,
     units: runtimeUnits.snapshot(),
-    images: excelImages.fields.map(field => field.input.value),
   })
   const hasChanges = computed(() => savedDraft.value !== '' && savedDraft.value !== draftSnapshot())
 
@@ -163,7 +145,6 @@ export function useSettingsForm() {
     form.codexPrivacyPolicy = cloneDeep(data.codexPrivacyPolicy ?? { enabled: false, onError: 'skip_rule', rules: [] })
     form.providerRequestProfiles = cloneDeep(data.providerRequestProfiles ?? {})
     savedProfiles.value = cloneDeep(form.providerRequestProfiles)
-    form.excelDefaultModels = (data.excelDefaultModels ?? DEFAULT_EXCEL_MODELS).join(', ')
     form.responsesMaxDecompressedBodyBytes
       = data.responsesMaxDecompressedBodyBytes ?? 64 * 1024 * 1024
     form.accountAffinity = data.accountAffinity ?? 'strict'
@@ -205,7 +186,6 @@ export function useSettingsForm() {
       ...(tuning.openaiRequestLocation ?? defaultRequestLocation()),
     }
     savedLocation.value = { ...form.requestTuning.openaiRequestLocation }
-    excelImages.resetDrafts()
     runtimeUnits.reset()
     mappings.value = Object.entries(data.modelMappings || {}).map(([requestedModel, upstreamModel]) => ({
       requestedModel,
@@ -274,15 +254,6 @@ export function useSettingsForm() {
     }
     if (saving.value || loading.value)
       return
-    if (excelImages.errors.value.length) {
-      toast.warning(excelImages.errors.value[0])
-      return
-    }
-    const excelDefaultModels = parseExcelModels(form.excelDefaultModels)
-    if (excelDefaultModels === null) {
-      toast.warning('Excel 模型名称不合法，或超过 64 个')
-      return
-    }
     if (form.accountAffinity !== 'strict' && form.accountAffinity !== 'relaxed' && form.accountAffinity !== 'preferred') {
       toast.warning('请选择有效的账号亲和模式')
       return
@@ -340,38 +311,6 @@ export function useSettingsForm() {
       toast.warning('上游建议等待上限须为 0–4294967295 的整数秒')
       return
     }
-    if (!['off', 'auto_compact', 'warn'].includes(tuning.excelImageLimitPolicy)
-      || !Number.isInteger(tuning.excelImageWarningRemaining) || tuning.excelImageWarningRemaining < 1 || tuning.excelImageWarningRemaining > 65536
-      || !Number.isInteger(tuning.excelImageCompactReserve) || tuning.excelImageCompactReserve < 1 || tuning.excelImageCompactReserve > 65536
-      || (tuning.excelImageLimitPolicy === 'warn'
-        && !(tuning.excelImageCompactReserve < tuning.excelImageWarningRemaining && tuning.excelImageWarningRemaining < tuning.excelImageMaxCount))) {
-      toast.warning('Excel 图片预警需要：1 ≤ 压缩预留 < 预警余量 < 图片数量上限')
-      return
-    }
-    if (!Number.isSafeInteger(tuning.streamPrefetchBytes) || tuning.streamPrefetchBytes < 0) {
-      toast.warning('提交前缓冲阈值须对应非负、安全整数的字节数；0 为立即透传')
-      return
-    }
-    const imageTransport = tuning.excelImageTransport
-    if (imageTransport?.mode === 'relay') {
-      const origin = imageTransport.publicUrl.trim()
-      let valid = false
-      try {
-        const parsed = new URL(origin)
-        const invalidCharacter = [...origin].some(character => character === '\\' || character.charCodeAt(0) <= 32 || character.charCodeAt(0) === 127)
-        valid = origin.length <= 2048 && !invalidCharacter
-          && parsed.protocol === 'https:' && !parsed.username && !parsed.password
-          && !origin.includes('?') && !origin.includes('#') && parsed.pathname === '/'
-          && parsed.hostname.includes('.') && !/^[\d.]+$/u.test(parsed.hostname)
-          && !parsed.hostname.endsWith('.localhost') && !parsed.hostname.endsWith('.local')
-      }
-      catch { /* Invalid origins are rejected before saving. */ }
-      if (!valid) {
-        toast.warning('HTTPS 中转需要有效的公网域名，不得包含路径、账号密码、查询参数或片段')
-        return
-      }
-      tuning.excelImageTransport = { mode: 'relay', publicUrl: origin }
-    }
     if (!Object.values(form.quotaResetWindowWeights).every(value => Number.isFinite(value) && value >= 0 && value <= 10 && Math.round(value * 10) / 10 === value)) {
       toast.warning('额度调度系数须为 0–10，最多一位小数')
       return
@@ -387,26 +326,6 @@ export function useSettingsForm() {
     if (![...smartWeights, ...Object.values(tuning.smartScheduling.resetWindowWeights)].every(value => Number.isFinite(value) && value >= 0 && value <= 10 && Math.round(value * 10) / 10 === value)
       || !smartWeights.some(value => value > 0)) {
       toast.warning('智能调度权重须为 0–10，最多一位小数，且不能全部为 0')
-      return
-    }
-    if (!Number.isInteger(tuning.excelImageMaxBytes) || tuning.excelImageMaxBytes < 1 || tuning.excelImageMaxBytes > 512 * 1024 * 1024
-      || !Number.isInteger(tuning.excelImageTotalBytes) || tuning.excelImageTotalBytes < 1 || tuning.excelImageTotalBytes > 512 * 1024 * 1024
-      || !Number.isInteger(tuning.excelImageMaxCount) || tuning.excelImageMaxCount < 1 || tuning.excelImageMaxCount > 65536) {
-      toast.warning('单张图片和每请求图片总大小须为 1 字节至 512 MiB，图片数量须为 1–65536 张')
-      return
-    }
-    if (!Number.isInteger(tuning.excelImageRelayBytes) || tuning.excelImageRelayBytes < 1024 * 1024 || tuning.excelImageRelayBytes > 262144 * 1024 * 1024
-      || !Number.isInteger(tuning.excelImageRelayRequests) || tuning.excelImageRelayRequests < 1 || tuning.excelImageRelayRequests > 512
-      || !Number.isInteger(tuning.excelImageRelayDownloads) || tuning.excelImageRelayDownloads < 1 || tuning.excelImageRelayDownloads > 128
-      || !Number.isInteger(tuning.excelImageRelayEntries) || tuning.excelImageRelayEntries < 1 || tuning.excelImageRelayEntries > 1048576
-      || !Number.isInteger(tuning.excelImageRelayTtlMinutes) || tuning.excelImageRelayTtlMinutes < 1 || tuning.excelImageRelayTtlMinutes > 10080) {
-      toast.warning('暂存容量须为 1–262144 MiB，在途请求数须为 1–512，下载并发须为 1–128，暂存图片数须为 1–1048576，链接有效期须为 1–10080 分钟')
-      return
-    }
-    if (tuning.excelImageTotalBytes < tuning.excelImageMaxBytes
-      || tuning.excelImageRelayBytes < tuning.excelImageTotalBytes
-      || tuning.excelImageRelayEntries < tuning.excelImageMaxCount) {
-      toast.warning('每请求图片总大小不得小于单张上限，进程暂存容量不得小于每请求总大小，暂存图片数不得小于每请求图片数上限')
       return
     }
     if (!Number.isInteger(form.responsesMaxDecompressedBodyBytes)
@@ -439,7 +358,6 @@ export function useSettingsForm() {
         configRevision: configRevision.value,
         codexPrivacyPolicy: cloneDeep(form.codexPrivacyPolicy),
         providerRequestProfiles: requestProfileChanges(savedProfiles.value, form.providerRequestProfiles),
-        excelDefaultModels,
         responsesMaxDecompressedBodyBytes: form.responsesMaxDecompressedBodyBytes,
         modelMappings: mappingPayload(),
         openaiRequestSettings: cloneDeep(form.openaiRequestSettings),
@@ -466,9 +384,6 @@ export function useSettingsForm() {
         requestTuning: {
           ...form.requestTuning,
           accountErrorProtection: { ...form.accountErrorProtection, rules: cloneProtectionRules(form.accountErrorProtection.rules), threshold: form.accountErrorProtection.threshold!, windowSeconds: form.accountErrorProtection.windowSeconds!, durationSeconds: form.accountErrorProtection.durationSeconds!, probeModel: trimProtectionText(form.accountErrorProtection.probeModel) || null },
-          excelImageTransport: form.requestTuning.excelImageTransport
-            ? { ...form.requestTuning.excelImageTransport }
-            : null,
           smartScheduling: { ...form.requestTuning.smartScheduling, resetWindowWeights: { ...form.requestTuning.smartScheduling.resetWindowWeights } },
           openaiRequestLocation: { ...requestLocation },
         },
@@ -492,7 +407,6 @@ export function useSettingsForm() {
     saving,
     error,
     form,
-    excelImages,
     mappings,
     addMapping,
     updateMapping,

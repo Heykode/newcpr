@@ -73,7 +73,6 @@ fn source_tree_should_match_frozen_machine_manifest() {
         "src/admin/wire.rs",
         "src/diagnostics.rs",
         "src/health.rs",
-        "src/image_relay.rs",
         "src/lib.rs",
         "src/time.rs",
         "src/openai/auth.rs",

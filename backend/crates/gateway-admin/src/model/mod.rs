@@ -12,7 +12,6 @@ pub mod client_keys;
 pub mod codex_quota_overdraft;
 pub mod diagnostics;
 pub mod egress;
-pub mod excel_recovery;
 pub mod group_monitor;
 pub mod group_monitor_quota;
 pub mod import_tasks;

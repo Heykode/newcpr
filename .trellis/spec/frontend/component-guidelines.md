@@ -99,6 +99,14 @@ Questions to answer:
   single-root wrappers may forward undeclared listeners to their `BaseModal` root.
 - Verify non-reduced-motion exit frames, rapid reopen and sensitive-content
   removal in desktop/mobile browsers, plus composable cleanup regressions.
+- `BasePopover.closed` fires after the panel's leave transition completes, only
+  while still closed. Consumers restore focus after that event, without taking
+  focus away from another control selected by the user. A disabled cleanup trigger
+  returns focus to its caller's available fallback. Cover normal/reduced motion,
+  cancellation, outside clicks and rapid reopen in browser regressions.
+- Hover/click help tests must verify the panel is open at the moment Escape is
+  sent. Viewport changes can dismiss hover content; avoid mixing delayed focus
+  opening with a click that toggles it closed.
 
 ### 界面文案与校验时机
 

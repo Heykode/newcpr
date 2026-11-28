@@ -205,7 +205,6 @@ pub async fn initialize_with_request_tuning(
     }
     request_tuning.publish(initial.request_tuning());
     request_tuning.publish_openai_websocket_pool(initial.openai_websocket_pool());
-    request_tuning.publish_excel_image_transport(initial.excel_image_transport().cloned());
     request_tuning.publish_openai_turn_state_policy(initial.openai_turn_state_policy().clone());
     if let Some(store) = &ports.account_error_protection {
         store

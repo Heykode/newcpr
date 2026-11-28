@@ -148,8 +148,7 @@ impl CodexProvider {
         context: AttemptContext,
         mut request: RawJsonEndpointRequest,
     ) -> Result<ProviderStream, ProviderError> {
-        let image_request =
-            crate::transport::excel::image_generation::is_image_path(request.endpoint_path);
+        let image_request = crate::transport::endpoints::is_image_path(request.endpoint_path);
         let search_request = request.endpoint_path == CODEX_ALPHA_SEARCH_PATH;
         let endpoint_model = (image_request || search_request)
             .then(|| observation::endpoint_requested_model_body(&request.body))
@@ -194,59 +193,11 @@ impl CodexProvider {
         let account_selection_wait_ms =
             u64::try_from(selection_started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
         let lease = Arc::new(lease);
-        let mut excel = if request.endpoint_path
-            == crate::transport::endpoints::CODEX_RESPONSES_COMPACT_PATH
-            && request.upstream_model.as_ref().is_some_and(|model| {
-                lease.account().responses_upstream_for_model(model.as_str())
-                    == gateway_core::account::ResponsesUpstream::Excel
-            }) {
-            Some(
-                super::compact::prepare_excel_compact(
-                    &request.body,
-                    &lease,
-                    &context,
-                    Arc::clone(&self.excel_replay),
-                    &self.excel_image_relay,
-                )
-                .await?,
-            )
-        } else {
-            None
-        };
-        let excel_image =
-            if crate::transport::excel::image_generation::is_image_path(request.endpoint_path)
-                && lease.account().responses_upstream()
-                    == gateway_core::account::ResponsesUpstream::Excel
-            {
-                if !matches!(
-                    lease.authentication(),
-                    crate::credential::CodexRuntimeAuthentication::OAuth(_)
-                ) || lease.account().upstream_account_id().is_none()
-                {
-                    return Err(super::excel::request_error(
-                        crate::transport::excel::ExcelRequestError::Image,
-                    ));
-                }
-                let prepared = crate::transport::excel::image_generation::PreparedImage::parse(
-                    &request.body,
-                    request.endpoint_path,
-                )
-                .map_err(super::excel::request_error)?;
-                request.response_origin =
-                    Url::parse(&prepared.endpoint).expect("fixed Excel image endpoint");
-                Some(prepared)
-            } else {
-                None
-            };
         let allows_account_state_mutation = lease.allows_account_state_mutation();
         let provider_kind = ProviderKind::new(PROVIDER_NAME)
             .map_err(|_| provider_error(ProviderErrorKind::Protocol, UpstreamSendState::NotSent))?;
-        let transport = UpstreamTransport::new(if excel.is_some() {
-            "excel_http_sse"
-        } else {
-            HTTP_JSON_TRANSPORT
-        })
-        .map_err(|_| provider_error(ProviderErrorKind::Protocol, UpstreamSendState::NotSent))?;
+        let transport = UpstreamTransport::new(HTTP_JSON_TRANSPORT)
+            .map_err(|_| provider_error(ProviderErrorKind::Protocol, UpstreamSendState::NotSent))?;
         let metadata = match request.upstream_model.as_ref() {
             Some(model) => ProviderCallMetadata::new(
                 provider_kind,
@@ -280,7 +231,7 @@ impl CodexProvider {
         });
         let mut body =
             crate::transport::request::scope_raw_json_to_account(&request.body, &installation_id);
-        if excel.is_none() && excel_image.is_none() {
+        {
             let identity = crate::transport::qx_application::AccountCorrelation::new(
                 context.client_api_key_ref().as_str(),
                 &installation_id,
@@ -297,29 +248,19 @@ impl CodexProvider {
         let session = session_affinity
             .as_ref()
             .and_then(CodexSessionAffinity::persistence_hash);
-        let client = self
-            .account_exit_client(
-                &context,
-                lease.account(),
-                excel.is_some() || excel_image.is_some(),
-                session,
-            )?
-            .with_account_privacy(
-                context.privacy(),
-                context.cancellation().clone(),
-                lease.account(),
-                session,
-            )
-            .with_fedramp_routing(
-                excel.is_none()
-                    && excel_image.is_none()
-                    && lease.authentication().oauth().is_some_and(
+        let client =
+            self.account_exit_client(&context, lease.account(), session)?
+                .with_account_privacy(
+                    context.privacy(),
+                    context.cancellation().clone(),
+                    lease.account(),
+                    session,
+                )
+                .with_fedramp_routing(
+                    lease.authentication().oauth().is_some_and(
                         crate::credential::CodexOAuthSecret::has_fedramp_routing_claim,
                     ),
-            );
-        if let Some(prepared) = excel.as_mut().and_then(|request| request.excel.as_mut()) {
-            prepared.exit_lease = client.session_proxy_lease();
-        }
+                );
         let events = cold_json_response_stream(ColdJsonResponse {
             installation_id,
             client,
@@ -334,8 +275,6 @@ impl CodexProvider {
             quota: Arc::clone(&self.quota),
             lease: Arc::clone(&lease),
             upstream_model: request.upstream_model,
-            excel,
-            excel_image,
         });
         let stream = ProviderStream::new(metadata, events, lease);
         Ok(if allows_account_state_mutation {
@@ -398,8 +337,6 @@ pub(super) struct ColdJsonResponse {
     pub(super) quota: Arc<CodexCredentialQuotaService>,
     pub(super) lease: Arc<CodexCredentialLease>,
     pub(super) upstream_model: Option<UpstreamModelId>,
-    pub(super) excel: Option<CodexResponsesRequest>,
-    pub(super) excel_image: Option<crate::transport::excel::image_generation::PreparedImage>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -536,7 +473,6 @@ pub(super) fn terminal_response_output(event: &ProviderEvent) -> Option<&[Value]
 
 pub(super) enum CodexHandshakeAttemptError {
     Client(CodexClientError),
-    Provider(Box<MappedProviderFailure>),
     Cancelled,
     Timeout,
 }
@@ -570,7 +506,6 @@ pub(super) fn map_handshake_attempt_error(
 ) -> MappedProviderFailure {
     match error {
         CodexHandshakeAttemptError::Client(error) => map_handshake_error(error, account),
-        CodexHandshakeAttemptError::Provider(failure) => *failure,
         CodexHandshakeAttemptError::Cancelled => MappedProviderFailure::plain(provider_error(
             ProviderErrorKind::Cancelled,
             UpstreamSendState::Ambiguous,
@@ -604,26 +539,6 @@ pub(super) async fn create_json_attempt(
     request_context.cookie_header = cookie_header.map(ExposeSecret::expose_secret);
     request_context.turn_metadata = request.turn_metadata.as_deref();
     request_context.account_selection = account_selection;
-    if let Some(image) = &request.excel_image {
-        request_context.cookie_header = None;
-        return tokio::select! {
-            biased;
-            _ = request.context.cancellation().cancelled() => Err(CodexHandshakeAttemptError::Cancelled),
-            _ = request.context.deadline().wait() => Err(CodexHandshakeAttemptError::Timeout),
-            response = request.client.post_excel_image(image, request_context) =>
-                response.map_err(CodexHandshakeAttemptError::Client),
-        };
-    }
-    if let Some(excel) = &request.excel {
-        request_context.cookie_header = None;
-        return tokio::select! {
-            biased;
-            _ = request.context.cancellation().cancelled() => Err(CodexHandshakeAttemptError::Cancelled),
-            _ = request.context.deadline().wait() => Err(CodexHandshakeAttemptError::Timeout),
-            response = super::compact::collect_excel_compact(&request.client, account, excel, request_context) =>
-                response.map_err(CodexHandshakeAttemptError::Provider),
-        };
-    }
     tokio::select! {
         biased;
         _ = request.context.cancellation().cancelled() => Err(CodexHandshakeAttemptError::Cancelled),
@@ -654,11 +569,7 @@ pub(super) fn cold_json_response_stream(request: ColdJsonResponse) -> EventStrea
             upstream_model: None,
         };
         let active_account = request.lease.account().clone();
-        let cookie_header = if request.excel.is_some() || request.excel_image.is_some() {
-            None
-        } else {
-            build_cookie_header(request.lease.cookies())?
-        };
+        let cookie_header = build_cookie_header(request.lease.cookies())?;
         let authorization = request
             .lease
             .authentication()
@@ -688,24 +599,11 @@ pub(super) fn cold_json_response_stream(request: ColdJsonResponse) -> EventStrea
                 error,
             );
         }
-        let response = match response.map_err(|error| super::excel::classify_failure(
-            map_handshake_attempt_error(error, &active_account), request.excel.is_some() || request.excel_image.is_some(),
-        )) {
+        let response = match response.map_err(|error| map_handshake_attempt_error(error, &active_account)) {
             Ok(response) => response,
             Err(mut failure) => {
-                super::excel::observe_http_rejection(
-                    &request.selector, &active_account, &mut failure,
-                    request.excel.is_some(), allows_account_state_mutation,
-                    failure_context.is_diagnostic,
-                    request.upstream_model.as_ref().map(UpstreamModelId::as_str),
-                ).await;
-                if request.excel.is_some() || request.excel_image.is_some() {
-                    super::excel::apply_initial_retry_policy(
-                        &mut failure, request.context.request_tuning().websocket_max_retries,
-                    );
-                }
                 if let Some(observation) = failure.observation.take() {
-                    yield ProviderEvent::observation(response_route_observation(observation, request.excel.is_some()));
+                    yield ProviderEvent::observation(observation);
                 }
                 apply_failure(&failure_context, &active_account, &failure).await;
                 Err(failure.error)?;
@@ -731,7 +629,7 @@ pub(super) fn cold_json_response_stream(request: ColdJsonResponse) -> EventStrea
             i64::try_from(request.context.timing_started_at().elapsed().as_millis())
                 .unwrap_or(i64::MAX),
         );
-        if let Some(mut observation) = codex_response_observation(
+        if let Some(observation) = codex_response_observation(
             CodexBackendTransport::HttpJson,
             &response.diagnostics,
             &response.response_metadata,
@@ -739,9 +637,6 @@ pub(super) fn cold_json_response_stream(request: ColdJsonResponse) -> EventStrea
             None,
             openai_response_timings(&metrics, &response.response_metadata),
         ) {
-            if request.excel.is_some() {
-                observation = response_route_observation(observation, true);
-            }
             yield ProviderEvent::observation(observation);
         }
         if allows_account_state_mutation {
@@ -875,13 +770,11 @@ pub(super) fn cold_response_stream_once(response: ColdResponse) -> EventStream {
             cyber_policy_scope: cyber_policy_scope.as_ref(),
             is_diagnostic: lease.is_diagnostic(),
             allows_account_state_mutation,
-            upstream_model: request.excel.is_none().then_some(&upstream_model),
+            upstream_model: Some(&upstream_model),
         };
         let mut active_account = lease.account().clone();
         let cookie_header = if request.quality_probe.is_some() {
             super::quality_probe::cookie_header(&request, &client, lease.account())?
-        } else if request.excel.is_some() {
-            None
         } else {
             build_cookie_header(lease.cookies())?
         };
@@ -932,7 +825,7 @@ pub(super) fn cold_response_stream_once(response: ColdResponse) -> EventStream {
             _ => None,
         };
         if let Err(CodexHandshakeAttemptError::Client(error)) = &response {
-            if request.excel.is_none() && matches!(error, CodexClientError::WebSocket(_)) {
+            if matches!(error, CodexClientError::WebSocket(_)) {
                 client.report_session_proxy_stream_error(error);
             }
             log_client_upstream_error(
@@ -940,27 +833,17 @@ pub(super) fn cold_response_stream_once(response: ColdResponse) -> EventStream {
                 error,
             );
         }
-        let response = response.map_err(|error| super::excel::classify_failure(map_handshake_attempt_error(error, &active_account), request.excel.is_some()));
+        let response = response.map_err(|error| map_handshake_attempt_error(error, &active_account));
         let response = match response {
             Ok(response) => response,
             Err(mut failure) => {
-                if request.excel.is_none()
-                    && client.has_connection_budget()
+                if client.has_connection_budget()
                     && matches!(failure.error.kind(), ProviderErrorKind::Transport | ProviderErrorKind::Timeout)
                     && failure.error.send_state() == UpstreamSendState::NotSent
                     && failure.error.replay_is_safe()
                     && matches!(failure.error.pre_delivery_retry(), Some(gateway_core::error::PreDeliveryRetry::SameAccountTransientRetry { .. }))
                 {
                     failure.error = failure.error.with_connection_retry(AttemptTransport::Fallback);
-                }
-                super::excel::observe_http_rejection(
-                    &selector, &active_account, &mut failure,
-                    request.excel.is_some(), allows_account_state_mutation,
-                    failure_context.is_diagnostic,
-                    Some(upstream_model.as_str()),
-                ).await;
-                if request.excel.is_some() {
-                    super::excel::apply_initial_retry_policy(&mut failure, stream_max_retries);
                 }
                 if let Some(policy) = websocket_failure_policy {
                     apply_websocket_recovery_policy(
@@ -989,10 +872,7 @@ pub(super) fn cold_response_stream_once(response: ColdResponse) -> EventStream {
                     }, None);
                 }
                 if let Some(observation) = failure.observation.take() {
-                    yield ProviderEvent::observation(response_route_observation(
-                        observation,
-                        request.excel.is_some(),
-                    ));
+                    yield ProviderEvent::observation(observation);
                 }
                 apply_failure(&failure_context, &active_account, &failure)
                 .await;
@@ -1018,9 +898,7 @@ pub(super) fn cold_response_stream_once(response: ColdResponse) -> EventStream {
         if let Some(capture) = session_capture.as_mut() {
             capture.oversized_http = response.transport_metrics.decision
                 == Some(CodexTransportDecision::Http2WebSocketMessageTooLarge);
-            capture.continuation_scope = Some(if request.excel.is_some() {
-                OpenAiContinuationScope::ReplayRequired
-            } else if capture.response_store {
+            capture.continuation_scope = Some(if capture.response_store {
                 OpenAiContinuationScope::Persisted
             } else if response.transport == CodexBackendTransport::WebSocket
                 && response.connection_local_continuation
@@ -1038,8 +916,7 @@ pub(super) fn cold_response_stream_once(response: ColdResponse) -> EventStream {
         if let Some(observation) = observation_state.observation(None) {
             yield ProviderEvent::observation(observation);
         }
-        if request.excel.is_none()
-            && let Some(etag) = response.response_metadata.models_etag.as_deref()
+        if let Some(etag) = response.response_metadata.models_etag.as_deref()
             && let Err(error) = catalog.observe_response_etag(&active_account, etag)
         {
             tracing::warn!(
@@ -1106,19 +983,10 @@ pub(super) fn cold_response_stream_once(response: ColdResponse) -> EventStream {
             .with_requested_service_tier(request.service_tier())
             .with_request_tool_pricing(upstream_model.as_str(), request.tools())
             .with_raw_sse_passthrough();
-        let mut pre_commit_events = PreCommitClientEvents::new(
-            trace,
-            context.request_tuning().stream_prefetch_bytes,
-        )
-        // Native delivery follows upstream CPR: forwarding a replaceable prelude
-        // does not close replay. Excel retains its independent buffered contract.
-        .with_replayable_prelude(request.excel.is_none());
+        let mut pre_commit_events = PreCommitClientEvents::new(trace);
         let mut quota_success = false;
         loop {
             if context.deadline().is_elapsed() {
-                for event in super::excel::failed_repair_metering(&request, context.pricing()) {
-                    yield event;
-                }
                 if allows_account_state_mutation {
                     synchronize_passive_quota(
                         &quota,
@@ -1132,7 +1000,6 @@ pub(super) fn cold_response_stream_once(response: ColdResponse) -> EventStream {
                 Err(provider_error(ProviderErrorKind::Timeout, UpstreamSendState::Sent))?;
                 return;
             }
-            let replay_grace_deadline = pre_commit_events.replay_grace_deadline();
             let next = tokio::select! {
                 biased;
                 _ = cancellation.cancelled() => Err(MappedProviderFailure::plain(provider_error(
@@ -1143,11 +1010,10 @@ pub(super) fn cold_response_stream_once(response: ColdResponse) -> EventStream {
                     ProviderErrorKind::Timeout,
                     UpstreamSendState::Sent,
                 ))),
-                _ = wait_for_replay_grace(replay_grace_deadline) => Ok(PreCommitPoll::GraceElapsed),
                 chunk = body.next() => match chunk {
-                    Some(Ok(chunk)) => Ok(PreCommitPoll::Upstream(Some(chunk))),
+                    Some(Ok(chunk)) => Ok(Some(chunk)),
                     Some(Err(error)) => {
-                        if request.excel.is_none() {
+                        {
                             client.report_session_proxy_stream_error(&error);
                         }
                         log_client_upstream_error(
@@ -1158,33 +1024,14 @@ pub(super) fn cold_response_stream_once(response: ColdResponse) -> EventStream {
                             ),
                             &error,
                         );
-                        Err(if request.excel.as_ref().is_some_and(|prepared| prepared.usage.repair_started()) {
-                            super::excel::map_repair_failure(error)
-                        } else {
-                            map_stream_error(error)
-                        })
+                        Err(map_stream_error(error))
                     }
-                    None => Ok(PreCommitPoll::Upstream(None)),
+                    None => Ok(None),
                 },
             };
             let next = match next {
-                Ok(PreCommitPoll::Upstream(next)) => next,
-                Ok(PreCommitPoll::GraceElapsed) => {
-                    for event in pre_commit_events.commit_pending(PreCommitReleaseReason::GraceTimeout) {
-                        yield event;
-                    }
-                    continue;
-                }
+                Ok(next) => next,
                 Err(mut failure) => {
-                    super::excel::observe_http_rejection(
-                        &selector, &active_account, &mut failure,
-                        request.excel.is_some(), allows_account_state_mutation,
-                        failure_context.is_diagnostic,
-                        Some(upstream_model.as_str()),
-                    ).await;
-                    for event in super::excel::failed_repair_metering(&request, context.pricing()) {
-                        yield event;
-                    }
                     let updates = take_rate_limit_updates(rate_limit_updates.as_ref()).await;
                     let rate_limits_changed = if updates.is_empty() {
                         false
@@ -1252,12 +1099,6 @@ pub(super) fn cold_response_stream_once(response: ColdResponse) -> EventStream {
                 }
             };
             let Some(chunk) = next else { break; };
-            if chunk.is_empty() && request.excel.as_ref().is_some_and(|prepared| prepared.usage.repair_started()) {
-                for event in super::excel::failed_repair_metering(&request, context.pricing()) {
-                    yield event;
-                }
-                continue;
-            }
             let updates = take_rate_limit_updates(rate_limit_updates.as_ref()).await;
             let rate_limits_changed = if updates.is_empty() {
                 false
@@ -1268,11 +1109,6 @@ pub(super) fn cold_response_stream_once(response: ColdResponse) -> EventStream {
             let first_event_changed =
                 observation_state.observe_stream_chunk(&chunk, context.timing_started_at());
             let websocket = response_transport == CodexBackendTransport::WebSocket;
-            let chunk_len = if websocket {
-                crate::transport::protocol::websocket::websocket_prefetch_len(&chunk)
-            } else {
-                chunk.len()
-            };
             let decoded = if websocket {
                 decoder.push_websocket(std::str::from_utf8(&chunk).map_err(|_| {
                     provider_error(ProviderErrorKind::Protocol, UpstreamSendState::Sent)
@@ -1293,7 +1129,6 @@ pub(super) fn cold_response_stream_once(response: ColdResponse) -> EventStream {
             )
             .await;
             let metadata_changed = metadata_merge.unwrap_or(false);
-            pre_commit_events.observe_chunk(chunk_len);
             let service_tier_changed = observation_state
                 .observe_upstream_service_tier(decoder.response_service_tier());
             let terminal_failure = canonical_failure.map(|(error, semantic_output_seen)| {
@@ -1308,20 +1143,19 @@ pub(super) fn cold_response_stream_once(response: ColdResponse) -> EventStream {
                 );
                 let atomic_upstream_failure = matches!(&error, CodexCanonicalError::Upstream(_));
                 (
-                    super::excel::classify_stream_failure(map_canonical_error(
+                    map_canonical_error(
                         error,
                         &failure_diagnostics,
                         &failure_set_cookie_headers,
                         ReplayBoundary::from_semantic_output(
-                            semantic_output_seen || pre_commit_events.is_committed()
-                                || request.excel.as_ref().is_some_and(|prepared| prepared.usage.repair_started()),
+                            semantic_output_seen || pre_commit_events.is_committed(),
                         ),
-                    ), request.excel.is_some(), atomic_upstream_failure),
+                    ),
                     atomic_upstream_failure,
                 )
             });
             let timing_signals = decoder.take_timing_signals();
-            if request.excel.is_none() {
+            {
                 for fact in events.iter().flat_map(ProviderEvent::canonical_facts) {
                     if let GatewayEvent::Started(meta) = fact {
                         guardian_routing.remember(context.client_api_key_ref(), &active_account, meta.response_id(), routing_affinity.as_ref());
@@ -1338,7 +1172,7 @@ pub(super) fn cold_response_stream_once(response: ColdResponse) -> EventStream {
                 .flat_map(ProviderEvent::canonical_facts)
                 .any(|event| matches!(event, GatewayEvent::Completed(_)));
             let quota_completed = terminal_failure.is_none() && passive_quota_success(&events);
-            if completed && terminal_failure.is_none() && request.excel.is_none() {
+            if completed && terminal_failure.is_none() {
                 client.report_session_proxy_completed();
             }
             quota_success |= quota_completed;
@@ -1378,11 +1212,6 @@ pub(super) fn cold_response_stream_once(response: ColdResponse) -> EventStream {
                 context.trace().record("provider.account_failure", serde_json::json!({
                     "durationMs": started.elapsed().as_millis(),
                 }));
-            }
-            if request.excel.as_ref().is_some_and(|excel| {
-                excel.replay.as_ref().is_none_or(|replay| !replay.is_persisted())
-            }) && completed {
-                session_capture = None;
             }
             attach_openai_session_update(&mut events, &mut session_capture);
             if allows_account_state_mutation && completed && terminal_failure.is_none() {
@@ -1427,9 +1256,6 @@ pub(super) fn cold_response_stream_once(response: ColdResponse) -> EventStream {
                 yield ProviderEvent::observation(observation);
             }
             if let Some((mut failure, atomic_upstream_failure)) = terminal_failure {
-                for event in super::excel::failed_repair_metering(&request, context.pricing()) {
-                    yield event;
-                }
                 let failure_after_commit =
                     timing_signals.semantic_output || pre_commit_events.is_committed();
                 if failure_after_commit {
@@ -1473,14 +1299,14 @@ pub(super) fn cold_response_stream_once(response: ColdResponse) -> EventStream {
             );
             let atomic_upstream_failure = matches!(&error, CodexCanonicalError::Upstream(_));
             (
-                super::excel::classify_stream_failure(map_canonical_error(
+                map_canonical_error(
                     error,
                     &failure_diagnostics,
                     &failure_set_cookie_headers,
                     ReplayBoundary::from_semantic_output(
                         semantic_output_seen || pre_commit_events.is_committed(),
                     ),
-                ), request.excel.is_some(), atomic_upstream_failure),
+                ),
                 atomic_upstream_failure,
             )
         });
@@ -1502,7 +1328,7 @@ pub(super) fn cold_response_stream_once(response: ColdResponse) -> EventStream {
             .flat_map(ProviderEvent::canonical_facts)
             .any(|event| matches!(event, GatewayEvent::Completed(_)));
         quota_success |= terminal_failure.is_none() && passive_quota_success(&events);
-        if completed && terminal_failure.is_none() && request.excel.is_none() {
+        if completed && terminal_failure.is_none() {
             client.report_session_proxy_completed();
         }
         if allows_account_state_mutation {
@@ -1532,11 +1358,6 @@ pub(super) fn cold_response_stream_once(response: ColdResponse) -> EventStream {
         )
         .await
         .unwrap_or(false);
-        if request.excel.as_ref().is_some_and(|excel| {
-            excel.replay.as_ref().is_none_or(|replay| !replay.is_persisted())
-        }) && completed {
-            session_capture = None;
-        }
         attach_openai_session_update(&mut events, &mut session_capture);
         let terminal_changed = completed
             && observation_state.mark_completed(terminal_response_is_incomplete(&events));

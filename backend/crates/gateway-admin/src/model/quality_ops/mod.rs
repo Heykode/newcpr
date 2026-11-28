@@ -3,6 +3,9 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+mod history;
+pub use history::QualityRunConfig;
+
 pub const QUALITY_MAX_WORKERS: i64 = 10;
 
 #[derive(Debug, Clone, Serialize)]
@@ -85,10 +88,10 @@ pub enum QualityDetectionMode {
 #[serde(rename_all = "snake_case")]
 pub enum QualityFailureAction {
     #[default]
+    #[serde(alias = "enable_excel")]
     None,
     DisableScheduling,
     RemoveGroups,
-    EnableExcel,
     ApplyAccountTemplate,
 }
 
@@ -125,7 +128,11 @@ pub struct QualityRuleConfig {
     pub failure_group_ids: Vec<String>,
     #[serde(default)]
     pub auto_restore: bool,
-    #[serde(default)]
+    #[serde(
+        default,
+        skip_serializing,
+        deserialize_with = "super::relogin_templates::discard_retired_setting"
+    )]
     pub disable_excel_on_native_recovery: bool,
     #[serde(default = "default_excel_failure_threshold")]
     pub excel_failure_threshold: u8,
@@ -133,7 +140,11 @@ pub struct QualityRuleConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failure_threshold: Option<u8>,
     /// Omitted legacy configs retain single-success restoration.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing,
+        deserialize_with = "super::relogin_templates::discard_retired_setting"
+    )]
     pub excel_recovery_threshold: Option<u8>,
 }
 
@@ -256,7 +267,7 @@ pub struct QualityRun {
     pub request_errors: u32,
     pub action: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub config: Option<QualityRuleConfig>,
+    pub config: Option<QualityRunConfig>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub answers: Vec<QualityAnswer>,
 }

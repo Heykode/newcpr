@@ -4,13 +4,13 @@ use serde_json::{Value, json};
 
 const GROUP: &str = "grp_00000000000000000000000000000001";
 
-async fn template(db: &TestDatabase) -> ReloginTemplate {
+pub(super) async fn template(db: &TestDatabase) -> ReloginTemplate {
     sqlx::query("insert into account_groups(id,name,color,enabled,created_at,updated_at) values($1,'Template group','#FFFFFFFF',true,now(),now())")
         .bind(GROUP).execute(&db.pool).await.unwrap();
     let template: ReloginTemplate = serde_json::from_value(json!({
         "id": "quality-template", "revision": 1,
         "config": {
-            "name": "Excel remediation", "enabled": true, "concurrencyLimit": 7,
+            "name": "Account remediation", "enabled": true, "concurrencyLimit": 7,
             "weight": 19, "groupIds": [GROUP], "outboundProxyId": null,
             "responsesUpstream": "excel", "excelModelsFollowGlobal": false,
             "excelModels": ["fixture-model"], "excelCacheCreationAsInput": false,
@@ -32,7 +32,11 @@ async fn template(db: &TestDatabase) -> ReloginTemplate {
     template
 }
 
-async fn save(store: &PgQualityOpsStore, template: &ReloginTemplate, threshold: u8) -> QualityRule {
+pub(super) async fn save(
+    store: &PgQualityOpsStore,
+    template: &ReloginTemplate,
+    threshold: u8,
+) -> QualityRule {
     let mut config = config("acct_quality_a");
     config.failure_action = QualityFailureAction::ApplyAccountTemplate;
     config.failure_template = Some(template.clone());
@@ -219,21 +223,26 @@ async fn template_threshold_snapshot_and_complete_application_are_atomic() {
     let run = store.detail(&claim.run_id).await.unwrap().unwrap();
     assert_eq!(run.action.as_deref(), Some("template_applied"));
     assert_eq!(
-        run.config.unwrap().failure_template.as_ref(),
-        Some(&authoritative)
+        serde_json::to_value(run.config.unwrap()).unwrap()["failureTemplate"],
+        serde_json::to_value(&authoritative).unwrap()
     );
     let applied = snapshot(&db).await;
     let account = &applied["account"];
     assert_eq!(account["enabled"], true);
     assert_eq!(account["concurrency_limit"], 7);
     assert_eq!(account["weight"], 19);
-    assert_eq!(account["responses_upstream"], "excel");
-    assert_eq!(account["excel_models"], json!(["fixture-model"]));
-    assert_eq!(account["excel_models_follow_global"], false);
-    assert_eq!(account["excel_cache_creation_as_input"], false);
-    assert_eq!(account["excel_ignore_encrypted_content"], true);
+    // Retired template fields never change the account's native route or legacy data.
+    for field in [
+        "responses_upstream",
+        "excel_models",
+        "excel_models_follow_global",
+        "excel_cache_creation_as_input",
+        "excel_ignore_encrypted_content",
+        "excel_403_action",
+    ] {
+        assert_eq!(account[field], before["account"][field], "preserve {field}");
+    }
     assert_eq!(account["request_proxy_source"], "mihomo");
-    assert_eq!(account["excel_403_action"], "pause_account");
     assert_eq!(applied["groups"][0]["account_group_id"], GROUP);
     assert_eq!(applied["egress"]["mode"], "unchanged");
     assert_eq!(
@@ -489,11 +498,6 @@ async fn template_recovery_restores_complete_configuration_and_preserves_credent
         let store = setup(&db).await;
         let mut template = template(&db).await;
         template.config.enabled = false;
-        template.config.excel_recovery =
-            Some(gateway_admin::model::excel_recovery::ExcelRecoveryConfig {
-                enabled: true,
-                interval_minutes: 10,
-            });
         sqlx::query("update account_relogin_templates set config=$1")
             .bind(serde_json::to_value(&template.config).unwrap())
             .execute(&db.pool)
@@ -516,8 +520,6 @@ async fn template_recovery_restores_complete_configuration_and_preserves_credent
                 .as_deref(),
             Some("template_applied")
         );
-        let recovery: (bool, i32) = sqlx::query_as("select enabled,interval_minutes from account_excel_recovery where account_id='acct_quality_a'").fetch_one(&db.pool).await.unwrap();
-        assert_eq!(recovery, (true, 10));
         assert_eq!(snapshot(&db).await["account"]["enabled"], false);
         assert!(
             store.rules().await.unwrap()[0].config.enabled,
@@ -706,7 +708,7 @@ async fn proxy_conflicts_roll_back_all_template_changes_but_keep_the_result() {
     assert_eq!(
         snapshot(&db).await,
         before,
-        "Excel, groups, proxy, weight and revision must all roll back"
+        "Account settings, groups, proxy, weight and revision must all roll back"
     );
     assert_eq!(
         sqlx::query_scalar::<_, i64>("select revision from provider_egress_settings where id=1")
@@ -818,7 +820,7 @@ async fn template_egress_modes_keep_preserve_inherit_and_explicit_semantics() {
 }
 
 #[tokio::test]
-async fn template_vetoes_preexisting_403_and_stale_claims_but_allows_independent_actions() {
+async fn template_vetoes_independent_pause_and_stale_claims_but_allows_independent_actions() {
     let Some(db) = TestDatabase::create("quality_template_fences").await else {
         return;
     };
@@ -826,7 +828,7 @@ async fn template_vetoes_preexisting_403_and_stale_claims_but_allows_independent
     let template = template(&db).await;
     let rule = save(&store, &template, 1).await;
     sqlx::query(
-        "update provider_accounts set excel_mode_disabled_at=now() where id='acct_quality_a'",
+        "update provider_accounts set excel_auto_disabled_at=now() where id='acct_quality_a'",
     )
     .execute(&db.pool)
     .await
@@ -837,11 +839,11 @@ async fn template_vetoes_preexisting_403_and_stale_claims_but_allows_independent
             .await
             .action
             .as_deref(),
-        Some("excel_blocked_403")
+        Some("template_blocked_account")
     );
     assert_eq!(snapshot(&db).await, before);
     sqlx::query(
-        "update provider_accounts set excel_mode_disabled_at=null where id='acct_quality_a'",
+        "update provider_accounts set excel_auto_disabled_at=null where id='acct_quality_a'",
     )
     .execute(&db.pool)
     .await
@@ -932,12 +934,7 @@ async fn template_recovery_waits_for_missing_references_and_retains_existing_rec
     sqlx::query("insert into account_excel_recovery(account_id,enabled,interval_minutes,next_probe_at) values('acct_quality_a',false,17,now())")
         .execute(&db.pool).await.unwrap();
     let before = snapshot(&db).await;
-    let mut template = template(&db).await;
-    template.config.excel_recovery =
-        Some(gateway_admin::model::excel_recovery::ExcelRecoveryConfig {
-            enabled: true,
-            interval_minutes: 10,
-        });
+    let template = template(&db).await;
     sqlx::query("update account_relogin_templates set config=$1")
         .bind(serde_json::to_value(&template.config).unwrap())
         .execute(&db.pool)
@@ -984,10 +981,7 @@ async fn template_recovery_waits_for_missing_references_and_retains_existing_rec
     let recovered: (bool, i32, i64) = sqlx::query_as("select enabled,interval_minutes,generation from account_excel_recovery where account_id='acct_quality_a'")
         .fetch_one(&db.pool).await.unwrap();
     assert_eq!((recovered.0, recovered.1), (false, 17));
-    assert!(
-        recovered.2 > 1,
-        "invalidate probes claimed before configuration restoration"
-    );
+    assert_eq!(recovered.2, 1, "retired probe state is no longer mutated");
     db.close().await;
 }
 
@@ -1142,7 +1136,7 @@ async fn ordinary_account_edits_preserve_template_recovery_only_for_unchanged_po
         "unchanged",
         "weight",
         "groups",
-        "route",
+        "proxy",
         "prior_edit",
     ] {
         let Some(db) = TestDatabase::create("quality_edit_restore").await else {
@@ -1187,16 +1181,8 @@ async fn ordinary_account_edits_preserve_template_recovery_only_for_unchanged_po
                     model_access: None,
                     outbound_proxy: None,
                     turn_state_injection_enabled: None,
-                    responses_upstream: (change == "route")
-                        .then_some(gateway_core::account::ResponsesUpstream::Excel),
-                    excel_models: None,
-                    excel_models_follow_global: None,
-                    excel_cache_creation_as_input: None,
-                    excel_ignore_encrypted_content: None,
-                    request_proxy_source: None,
-                    excel_auto_disable_on_403: None,
-                    excel_403_action: None,
-                    excel_recovery: None,
+                    request_proxy_source: (change == "proxy")
+                        .then_some(gateway_core::account::RequestProxySource::Account),
                 },
                 &context(),
             )

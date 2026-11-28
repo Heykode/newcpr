@@ -10,7 +10,7 @@ use gateway_admin::{
     ports::proxy::ProxyStore,
 };
 use gateway_core::{
-    account::{AccountStatus, OutboundProxy, ProviderAccountStore, ResponsesUpstream},
+    account::{AccountStatus, OutboundProxy, ProviderAccountStore},
     provider_ports::session_proxy::RequestProxySource,
     runtime::AccountConcurrencyHandle,
 };
@@ -35,11 +35,8 @@ impl Drop for Flight {
     }
 }
 
-async fn protocol(client: &reqwest::Client, route: ResponsesUpstream) -> Result<(), &'static str> {
-    let endpoint = match route {
-        ResponsesUpstream::Codex => "https://chatgpt.com/backend-api/codex/responses",
-        ResponsesUpstream::Excel => "https://bps.openai.com/basispoints/api/responses",
-    };
+async fn protocol(client: &reqwest::Client) -> Result<(), &'static str> {
+    let endpoint = "https://chatgpt.com/backend-api/codex/responses";
     let response = client
         .post(endpoint)
         .header("Accept", "application/json")
@@ -95,7 +92,6 @@ async fn candidate(
     pool: Arc<Mutex<PoolState>>,
     id: String,
     build: Arc<super::ClientBuilder>,
-    route: ResponsesUpstream,
 ) -> bool {
     let (proxy, generation, revision, recover) = {
         let mut state = lock(&pool);
@@ -133,7 +129,7 @@ async fn candidate(
         let mut needed = if recover { 2 } else { 1 };
         let mut last = "network_error";
         for _ in 0..3 {
-            match protocol(&client, route).await {
+            match protocol(&client).await {
                 Ok(()) => {
                     observations.push(true);
                     success += 1;
@@ -172,12 +168,7 @@ async fn candidate(
     successful
 }
 
-async fn refill(
-    pool: Arc<Mutex<PoolState>>,
-    target: usize,
-    build: Arc<super::ClientBuilder>,
-    route: ResponsesUpstream,
-) {
+async fn refill(pool: Arc<Mutex<PoolState>>, target: usize, build: Arc<super::ClientBuilder>) {
     lock(&pool).target = target.min(4096);
     if target == 0 {
         return;
@@ -210,7 +201,7 @@ async fn refill(
         stream::iter(
             refresh
                 .into_iter()
-                .map(|id| candidate(pool.clone(), id, build.clone(), route)),
+                .map(|id| candidate(pool.clone(), id, build.clone())),
         )
         .buffer_unordered(4)
         .collect::<Vec<_>>()
@@ -255,7 +246,7 @@ async fn refill(
             }
             let mut race = stream::iter(
                 ids.into_iter()
-                    .map(|id| candidate(pool.clone(), id, build.clone(), route)),
+                    .map(|id| candidate(pool.clone(), id, build.clone())),
             )
             .buffer_unordered(4);
             let mut won = false;
@@ -295,7 +286,7 @@ impl ManagedMihomo {
                 let run = async {
                     let list = accounts.list_accounts().await.map_err(|_| ())?;
                     let limit_snapshot = limits.load().map_err(|_| ())?;
-                    let mut targets = [[0_usize; 2]; 2];
+                    let mut targets = [0_usize; 2];
                     for account in list {
                         if account.provider().as_str() != "openai"
                             || account.status_projection(SystemTime::now(), None).status
@@ -312,13 +303,9 @@ impl ManagedMihomo {
                             RequestProxySource::ProxyPool => 1,
                             RequestProxySource::Account => continue,
                         };
-                        // Excel accounts may still use Codex for models outside their allowlist.
-                        targets[0][source] = targets[0][source].saturating_add(count);
-                        if account.responses_upstream() == ResponsesUpstream::Excel {
-                            targets[1][source] = targets[1][source].saturating_add(count);
-                        }
+                        targets[source] = targets[source].saturating_add(count);
                     }
-                    if (targets[0][1] > 0 || targets[1][1] > 0)
+                    if targets[1] > 0
                         && static_read
                             .is_none_or(|t: Instant| t.elapsed() >= Duration::from_secs(15))
                     {
@@ -353,11 +340,10 @@ impl ManagedMihomo {
                         match refreshed {
                             Ok(exits) => {
                                 lock(&service.pools.codex_regular).replace(
-                                    exits.clone(),
+                                    exits,
                                     true,
                                     Instant::now(),
                                 );
-                                lock(&service.pools.regular).replace(exits, true, Instant::now());
                             }
                             Err(()) => tracing::warn!(
                                 "managed proxy static membership refresh failed; retaining previous snapshot"
@@ -367,28 +353,14 @@ impl ManagedMihomo {
                     service.publish_exits().await;
                     tokio::join!(
                         refill(
-                            service.pools.managed.clone(),
-                            targets[1][0],
-                            service.build_client.clone(),
-                            ResponsesUpstream::Excel
-                        ),
-                        refill(
-                            service.pools.regular.clone(),
-                            targets[1][1],
-                            service.build_client.clone(),
-                            ResponsesUpstream::Excel
-                        ),
-                        refill(
                             service.pools.codex_managed.clone(),
-                            targets[0][0],
+                            targets[0],
                             service.build_client.clone(),
-                            ResponsesUpstream::Codex
                         ),
                         refill(
                             service.pools.codex_regular.clone(),
-                            targets[0][1],
+                            targets[1],
                             service.build_client.clone(),
-                            ResponsesUpstream::Codex
                         )
                     );
                     Ok::<_, ()>(())
@@ -424,7 +396,6 @@ impl ManagedMihomo {
                 Some((id, proxy, is_dynamic, !is_dynamic))
             })
             .collect::<Vec<_>>();
-        lock(&self.pools.codex_managed).replace(exits.clone(), running, Instant::now());
-        lock(&self.pools.managed).replace(exits, running, Instant::now());
+        lock(&self.pools.codex_managed).replace(exits, running, Instant::now());
     }
 }

@@ -43,7 +43,7 @@ options still follow the existing normalization; never accept this marker from J
 
 No existing tools means `tool_choice=none`; existing tools retain their choice,
 including required/function choices. Do not modify native previous-response
-continuations, Excel, malformed tool structures or already-declared search.
+continuations, malformed tool structures or already-declared search.
 Preserve original history/IDs and idempotence. HTTP/WS capture tests verify the
 wire payload; synthetic success is not proof of a particular production 500 cause.
 
@@ -69,7 +69,7 @@ wire payload; synthetic success is not proof of a particular production 500 caus
 - Native OAuth Generate maps trimmed `minimal` to `none` after selected-account
   scoping, for HTTP and WS alike. This is an explicitly approved alias, not a
   capability promise for all models. Preserve missing/other efforts, summaries,
-  immutable ingress, Excel's separate mapping and account selection inputs.
+  immutable ingress and account selection inputs.
   Persist requested/effective efforts through existing requestSummary fields.
 - Adapted from ranxi2001/sub2api production `17c88b0124d6703ef8ff3d229f461c35ff0a4e82`:
   explicit invalid_encrypted_content can trigger one same-lease recovery before
@@ -93,7 +93,7 @@ wire payload; synthetic success is not proof of a particular production 500 caus
   must not populate it. New ciphertext and other scopes remain untouched.
 - Test real loopback HTTP 400/SSE and WS, immutable input and wire identity,
   one-shot termination, cancellation/zero buffer/post-output behavior, cache
-  isolation/expiry, original/effective effort reporting and Excel regressions.
+  isolation/expiry, original/effective effort reporting and retired-route isolation.
   Direct test-host capability probes do not prove candidate production deployment.
 - Private recovery-clock and request-normalization unit modules must be registered
   by exact owner/name in the App architecture audit. Preserve test-only/private
@@ -327,7 +327,7 @@ The former v3.35.1 API converter and its rejection list are historical, not curr
 Keep the copied shared parser and per-target converters, target-specific parameter errors,
 function/custom tools and stream/JSON usage contracts. The local OAuth registry has no native
 Messages execution target; retaining a pure protocol converter does not enable an upstream API Key
-account. Native Responses, HTTP/WS, Excel/State and scheduling require their own regressions.
+account. Native Responses, HTTP/WS and scheduling require their own regressions.
 
 ## Buffered Output Recovery
 
@@ -498,7 +498,7 @@ events, then use the existing encoder and single execution finalization.
 - 显式 Guardian 角色头优先；自动 reviewer 标记仅在实际专用模型上生成。
   classifier/housekeeper 保留其 sampler 传输；普通与 reviewer HTTP 正文使用 zstd，
   不再按小正文大小跳过，classifier/housekeeper 不压缩。WS 消息压缩仍按原独立规则。
-  HTTP zstd 压缩在 blocking pool 执行，提交前按可用 CPU 数限制并发；取消等待或尚未启动任务可释放资源，已运行任务持有许可直到真实结束，不能声称取消会强杀工作线程。Excel 的独立压缩合同保留。
+  HTTP zstd 压缩在 blocking pool 执行，提交前按可用 CPU 数限制并发；取消等待或尚未启动任务可释放资源，已运行任务持有许可直到真实结束，不能声称取消会强杀工作线程。
 - `x-codex-turn-id` 作为普通扩展头透传，不再提取为 typed context.turn_id，也不在 HTTP、WS 或 Live 额外屏蔽；正文、client_metadata 和标准 x-codex-turn-metadata 中的轮次身份继续按既有合同解析。
 - 所选 OAuth ID token（缺失时 access token）的 FedRAMP claim 决定受管理标记；
   下游不能覆盖该账号的 true。无 claim 的同账号扩展按既有透传合同处理。
@@ -506,7 +506,7 @@ events, then use the existing encoder and single execution finalization.
 - WS opening 不携带 turn-state；在连接就绪后编码本次 payload、填开始时间，
   编码失败丢弃已检出的连接；请求证据来自最终发送正文。
 - HTTP/SSE 回退产生 ReplayRequired 的续接在确认归属后以 NotSent 拒绝，
-  返回 previous_response_not_found 供完整历史重放；Excel 保留既有合同。
+  返回 previous_response_not_found 供完整历史重放；历史 Excel 状态不得转给原生上游续接。
   成功重放只关联真正要求恢复的同 Key/会话 failed 或 incomplete 记录，
   不改写原错误终态与计费事实。
 

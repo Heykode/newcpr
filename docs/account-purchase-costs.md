@@ -13,7 +13,7 @@
 
 金额沿用 CPR 既有累计消费的成功交付、已知费用和币种判断。它不是官方额度百分比，
 也不新增收费或影响 API Key 计费、定价、模型限制、调度、指纹、UA、代理或出口。
-原生 Codex 与 Excel 的已确认美元消费都按现有口径入账，未知费用不猜测为零。
+原生 Codex 的已确认美元消费按现有口径入账；已有 Excel 历史消费保留，未知费用不猜测为零。
 
 ## 设置方式
 
@@ -62,6 +62,6 @@
 
 - PostgreSQL：`gateway-store` 的 `provider_accounts::purchase_costs` 及原累计消费测试。
 - API：账号 `purchase_costs` wire 测试与账号管理回归。
-- 前端：`account-purchase-cost.test.mjs`、批量编辑、原出口／Excel／模型限制回归。
+- 前端：`account-purchase-cost.test.mjs`、批量编辑、原出口及模型限制回归。
 - 浏览器：`tests/browser/account-purchase-cost.mjs`，使用隔离合成数据验证单个编辑、
   批量修改、导入字段和 1440／390／320 像素明暗主题布局，不连接生产或调用上游。

@@ -102,8 +102,7 @@ fn encrypted_reasoning(item: &Value) -> Option<&str> {
 }
 
 fn eligible(request: &CodexResponsesRequest) -> bool {
-    request.excel.is_none()
-        && request.quality_probe.is_none()
+    request.quality_probe.is_none()
         && request.generate()
         && !matches!(
             transport_requirement(request),

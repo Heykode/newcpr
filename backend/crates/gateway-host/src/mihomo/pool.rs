@@ -1,4 +1,4 @@
-//! BPS session/quality semantics adapted from Sub2API bps*.go.
+//! Account proxy session leases and background qualification.
 use super::state::digest;
 use gateway_admin::model::mihomo::MihomoWarmStatus;
 use gateway_core::{
@@ -307,19 +307,8 @@ pub(super) fn lock<T>(value: &Mutex<T>) -> MutexGuard<'_, T> {
 
 #[derive(Clone, Default)]
 pub struct ExitPools {
-    pub(super) managed: Arc<Mutex<PoolState>>,
-    pub(super) regular: Arc<Mutex<PoolState>>,
     pub(super) codex_managed: Arc<Mutex<PoolState>>,
     pub(super) codex_regular: Arc<Mutex<PoolState>>,
-}
-
-impl ExitPools {
-    pub(super) fn route_pools(&self, route: ResponsesUpstream) -> [&Arc<Mutex<PoolState>>; 2] {
-        match route {
-            ResponsesUpstream::Excel => [&self.managed, &self.regular],
-            ResponsesUpstream::Codex => [&self.codex_managed, &self.codex_regular],
-        }
-    }
 }
 
 struct Lease {
@@ -454,10 +443,12 @@ impl SessionProxyPool for ExitPools {
         if scope.is_empty() {
             return Err(SessionProxyError::Identity);
         }
-        let pools = self.route_pools(route);
+        if route != ResponsesUpstream::Codex {
+            return Err(SessionProxyError::Unavailable);
+        }
         let pool = match source {
-            RequestProxySource::Mihomo => pools[0],
-            RequestProxySource::ProxyPool => pools[1],
+            RequestProxySource::Mihomo => &self.codex_managed,
+            RequestProxySource::ProxyPool => &self.codex_regular,
             RequestProxySource::Account => return Err(SessionProxyError::Unavailable),
         };
         let mut state = lock(pool);

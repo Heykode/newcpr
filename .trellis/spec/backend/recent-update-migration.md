@@ -4,7 +4,7 @@
 
 NewCPR is the only implementation and release target. Retired QX is a read-only
 behavioral reference, not a merge parent. Preserve NewCPR's account device
-identities, account egress, native TLS, Excel transport, managed state, quality
+identities, account egress, native TLS, retired-route and state isolation, quality
 jobs, cost accounting, log cleanup and existing template catalog.
 
 ## Affinity And Recovery
@@ -110,6 +110,6 @@ Run full workspace tests with isolated PostgreSQL and Redis, not silent store
 skips. Cover old/new binding formats, stale generations, strict/relaxed roots,
 Guardian reservation, Fast legacy updates, refresh classification, Live ownership,
 budget settlement, administrator renewal and import-template revision conflicts.
-Keep the existing identity, Excel, managed-state and retention regressions.
+Keep the identity, retired-route and state isolation, and retention regressions.
 Frontend validation includes lint, typecheck, build, tests and desktop/mobile UI.
 Local mocks do not establish production risk-control or upstream acceptance.

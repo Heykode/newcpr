@@ -55,7 +55,6 @@ pub use transport::{
 
 /// OpenAI 初始化后交给组装根的最小能力集。
 pub struct ProviderBundle {
-    image_relay: Arc<dyn gateway_core::provider_ports::TemporaryImageSource>,
     core_provider: Arc<dyn Provider>,
     admin_provider: Arc<dyn ProviderAdmin>,
     worker_contributions: Vec<WorkerContribution>,
@@ -84,20 +83,6 @@ async fn initialize_with_request_tuning_mode(
     request_tuning: RequestTuningHandle,
     enforce_account_concurrency: bool,
 ) -> Result<ProviderBundle, OpenAiInitializeError> {
-    if config
-        .excel_image_relay_public_url
-        .as_deref()
-        .is_some_and(|url| !transport::excel::image_relay::validate_origin(url))
-    {
-        return Err(OpenAiInitializeError::Config(
-            OpenAiConfigError::InvalidExcelImageRelay,
-        ));
-    }
-    let image_relay = Arc::new(
-        transport::excel::image_relay::ImageRelay::new(config.excel_image_relay_public_url.clone())
-            .with_request_tuning(request_tuning.clone()),
-    );
-    image_relay.start_cleanup();
     let provider_kind =
         ProviderKind::new("openai").map_err(|_| OpenAiInitializeError::InvalidProviderKind)?;
     let accounts: Arc<dyn ProviderAccountStore> = ports.accounts();
@@ -255,9 +240,7 @@ async fn initialize_with_request_tuning_mode(
     .map_err(OpenAiInitializeError::Provider)?
     .with_default_http_client()
     .with_request_tuning(request_tuning.clone())
-    .with_excel_replay(ports.replay())
     .with_session_proxy_pool(ports.session_proxy_pool())
-    .with_excel_image_relay(Arc::clone(&image_relay))
     .with_session_identity(session_identity);
     let core_provider = match &egress_runtime {
         Some(runtime) => core_provider.with_egress_runtime(Arc::clone(runtime)),
@@ -344,7 +327,6 @@ async fn initialize_with_request_tuning_mode(
     .map_err(|_| OpenAiInitializeError::Worker)?;
 
     Ok(ProviderBundle {
-        image_relay,
         core_provider,
         admin_provider,
         worker_contributions,
@@ -352,9 +334,6 @@ async fn initialize_with_request_tuning_mode(
 }
 
 impl ProviderBundle {
-    pub fn image_relay(&self) -> Arc<dyn gateway_core::provider_ports::TemporaryImageSource> {
-        Arc::clone(&self.image_relay)
-    }
     #[must_use]
     pub fn core_provider(&self) -> Arc<dyn Provider> {
         Arc::clone(&self.core_provider)

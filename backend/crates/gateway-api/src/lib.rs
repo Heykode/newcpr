@@ -32,7 +32,6 @@ use crate::openai::service::OpenAiService;
 pub mod admin;
 mod diagnostics;
 mod health;
-mod image_relay;
 pub mod openai;
 mod time;
 pub use time::{RelativeTimeUnit, RelativeTimeView};
@@ -117,15 +116,6 @@ pub struct ApiBundle {
 }
 
 impl ApiBundle {
-    /// Capability URLs must not enter the normal URI access trace.
-    pub fn with_image_relay(
-        mut self,
-        source: Arc<dyn gateway_core::provider_ports::TemporaryImageSource>,
-    ) -> Self {
-        self.router = self.router.merge(image_relay::router(source));
-        self
-    }
-
     #[must_use]
     pub fn with_operational_diagnostics(
         mut self,

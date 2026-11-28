@@ -88,7 +88,7 @@ async function main() {
           assert.equal(target.ruleId, current?.id ?? null)
           assert.equal(target.revision, current?.revision ?? null)
           if (target.accountId === accounts[1].id && rejectSecond)
-            return { accountId: target.accountId, ruleId: null, success: false, message: '账号已开启Excel模式，不能启用状态探针' }
+            return { accountId: target.accountId, ruleId: null, success: false, message: '该账号不支持状态探针' }
           const rule = { id: current?.id ?? `rule-${target.accountId}`, revision: (current?.revision ?? 0) + 1, config: { ...template.config, accountId: target.accountId }, nextRunAt: now, running: false, pending: false, lastStatus: null, lastRunAt: null, sourceTemplate: { id: template.id, revision: template.revision, name: template.name } }
           rules = [...rules.filter(item => item.id !== rule.id), rule]
           return { accountId: target.accountId, ruleId: rule.id, success: true, message: null }
@@ -129,7 +129,7 @@ async function main() {
     assert.equal(templates[0].config.intervalSeconds, 120)
     assert.equal(templates[0].config.detectionMode, 'state_probe')
     assert.equal(templates[0].config.excelFailureThreshold, 2)
-    assert.equal(templates[0].config.excelRecoveryThreshold, 2)
+    assert.equal('excelRecoveryThreshold' in templates[0].config, false)
     await bounds('catalog')
     await page.getByRole('button', { name: '切换暗黑模式', exact: true }).click()
     await page.getByRole('button', { name: '切换浅色模式', exact: true }).waitFor()
@@ -170,7 +170,7 @@ async function main() {
     assert.equal(rules.length, 2)
     await row(0).getByRole('link', { name: /^监测中/ }).waitFor()
     await row(1).getByRole('link', { name: /^监测中/ }).waitFor()
-    assert.ok(rules.every(rule => rule.config.excelRecoveryThreshold === 2 && rule.config.excelFailureThreshold === 2))
+    assert.ok(rules.every(rule => !('excelRecoveryThreshold' in rule.config) && rule.config.excelFailureThreshold === 2))
     await open()
     await choose()
     await page.getByText('监测模板已应用 2 个账号', { exact: true }).last().waitFor()

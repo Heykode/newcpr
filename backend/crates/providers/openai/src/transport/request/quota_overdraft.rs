@@ -33,7 +33,7 @@ impl CodexQuotaOverdraftTurn {
 }
 
 pub(crate) fn eligible(request: &CodexResponsesRequest) -> bool {
-    if !request.generate() || request.semantics().compact || request.excel.is_some() {
+    if !request.generate() || request.semantics().compact {
         return false;
     }
     let input = request.input();

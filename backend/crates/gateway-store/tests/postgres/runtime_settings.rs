@@ -599,66 +599,6 @@ pub(super) fn settings_with_margin(refresh_margin_seconds: u64) -> RuntimeSettin
     }
 }
 
-#[tokio::test]
-async fn image_policy_settings_survive_legacy_updates_and_reach_runtime_snapshot() {
-    use gateway_core::routing::ExcelImageLimitPolicy;
-    let Some(database) = TestDatabase::create("image_policy").await else {
-        return;
-    };
-    let repository = PgRuntimeSettingsRepository::new(database.pool.clone());
-    let mut update = settings_with_margin(3_600);
-    update.request_tuning.excel_image_limit_policy = Some(ExcelImageLimitPolicy::Warn);
-    update.request_tuning.excel_image_warning_remaining = Some(9);
-    update.request_tuning.excel_image_compact_reserve = Some(4);
-    repository.update_runtime_settings(update).await.unwrap();
-    repository
-        .update_runtime_settings(settings_with_margin(3_600))
-        .await
-        .unwrap();
-    let settings = repository.load_runtime_settings().await.unwrap();
-    assert_eq!(
-        settings.request_tuning.excel_image_limit_policy,
-        Some(ExcelImageLimitPolicy::Warn)
-    );
-    assert_eq!(
-        settings.request_tuning.excel_image_warning_remaining,
-        Some(9)
-    );
-    assert_eq!(settings.request_tuning.excel_image_compact_reserve, Some(4));
-    let snapshot = PgRuntimeSnapshotRepository::new(database.pool.clone())
-        .load_runtime_snapshot()
-        .await
-        .unwrap();
-    assert_eq!(
-        snapshot.settings.request_tuning.excel_image_limit_policy,
-        Some(ExcelImageLimitPolicy::Warn)
-    );
-    assert_eq!(
-        snapshot
-            .settings
-            .request_tuning
-            .excel_image_warning_remaining,
-        Some(9)
-    );
-    assert_eq!(
-        snapshot.settings.request_tuning.excel_image_compact_reserve,
-        Some(4)
-    );
-    let mut disabled = settings_with_margin(3_600);
-    disabled.request_tuning.excel_image_limit_policy = Some(ExcelImageLimitPolicy::Off);
-    repository.update_runtime_settings(disabled).await.unwrap();
-    assert_eq!(
-        repository
-            .load_runtime_settings()
-            .await
-            .unwrap()
-            .request_tuning
-            .excel_image_limit_policy,
-        Some(ExcelImageLimitPolicy::Off)
-    );
-    database.close().await;
-}
-
 #[test]
 fn runtime_settings_validate_probe_concurrency_bounds() {
     for (value, valid) in [
@@ -1063,9 +1003,6 @@ async fn request_tuning_overrides_should_round_trip() {
     let mut update = settings_with_margin(3_600);
     update.request_tuning = RequestTuningOverrides {
         account_error_protection: None,
-        excel_image_transport: Some(gateway_core::routing::ExcelImageTransport::Relay {
-            public_url: "https://images.example.com".into(),
-        }),
         smart_scheduling: Some(
             serde_json::from_value(serde_json::json!({
                 "loadWeight": 2.5, "quotaWeight": 0.4, "healthWeight": 1,
@@ -1091,17 +1028,6 @@ async fn request_tuning_overrides_should_round_trip() {
         websocket_failure_open_duration_ms: Some(45_000),
         rate_limit_cooldown_seconds: Some(60),
         max_retry_after_seconds: Some(400),
-        excel_image_relay_bytes: Some(64 * 1024 * 1024),
-        excel_image_max_bytes: Some(8 * 1024 * 1024),
-        excel_image_total_bytes: Some(16 * 1024 * 1024),
-        excel_image_max_count: Some(32),
-        excel_image_limit_policy: None,
-        excel_image_warning_remaining: None,
-        excel_image_compact_reserve: None,
-        excel_image_relay_requests: Some(128),
-        excel_image_relay_downloads: Some(32),
-        excel_image_relay_entries: Some(128),
-        excel_image_relay_ttl_minutes: Some(45),
         account_busy_wait_enabled: Some(true),
         switch_account_on_queue_failure: None,
         max_waiting_per_account: Some(4),

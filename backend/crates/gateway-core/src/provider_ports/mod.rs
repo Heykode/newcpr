@@ -17,14 +17,7 @@ use crate::policy::ClientApiKeyId;
 use crate::routing::UpstreamModelId;
 use crate::validation::{IdentifierError, validate_text};
 
-mod image_relay;
-mod replay;
-pub use image_relay::{TemporaryImage, TemporaryImageSource};
 mod user_agent;
-pub use replay::{
-    MAX_PROVIDER_REPLAY_BYTES, PROVIDER_REPLAY_TTL_SECONDS, PROVIDER_TOOL_REPLAY_IDLE_SECONDS,
-    ProviderReplayPort, UnavailableProviderReplay,
-};
 pub use user_agent::ProviderUserAgentOverride;
 
 mod capacity_wait;
@@ -1946,7 +1939,6 @@ pub trait OAuthPendingFlowPort: Send + Sync {
 /// Provider 只能按能力取用端口，无法取得 Redis client 或 repository 集合。
 #[derive(Clone)]
 pub struct ProviderStorePorts {
-    replay: Arc<dyn ProviderReplayPort>,
     accounts: Arc<dyn ProviderAccountStore>,
     leases: Arc<dyn ProviderLeasePort>,
     session_affinity: Arc<dyn ProviderSessionAffinityPort>,
@@ -1981,7 +1973,6 @@ impl ProviderStorePorts {
     ) -> Self {
         Self {
             accounts,
-            replay: Arc::new(UnavailableProviderReplay),
             leases,
             session_affinity,
             session_exclusions,
@@ -2015,17 +2006,6 @@ impl ProviderStorePorts {
     #[must_use]
     pub fn session_proxy_pool(&self) -> Option<Arc<dyn session_proxy::SessionProxyPool>> {
         self.session_proxy_pool.clone()
-    }
-
-    #[must_use]
-    pub fn with_replay(mut self, replay: Arc<dyn ProviderReplayPort>) -> Self {
-        self.replay = replay;
-        self
-    }
-
-    #[must_use]
-    pub fn replay(&self) -> Arc<dyn ProviderReplayPort> {
-        Arc::clone(&self.replay)
     }
 
     #[must_use]

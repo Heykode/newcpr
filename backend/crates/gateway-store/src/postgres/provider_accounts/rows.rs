@@ -247,35 +247,6 @@ impl ImportProviderAccounts {
             {
                 return Err(invalid("request proxy pools require an OpenAI account"));
             }
-            if let Some(upstream) = self.settings.as_ref().and_then(|s| {
-                s.excel_models
-                    .as_ref()
-                    .map(|_| gateway_core::account::ResponsesUpstream::Excel)
-                    .or(s
-                        .excel_models_follow_global
-                        .map(|_| gateway_core::account::ResponsesUpstream::Excel))
-                    .or(s
-                        .excel_cache_creation_as_input
-                        .filter(|enabled| *enabled)
-                        .map(|_| gateway_core::account::ResponsesUpstream::Excel))
-                    .or(s
-                        .excel_ignore_encrypted_content
-                        .filter(|enabled| *enabled)
-                        .map(|_| gateway_core::account::ResponsesUpstream::Excel))
-                    .or(s
-                        .excel_auto_disable_on_403
-                        .filter(|enabled| *enabled)
-                        .map(|_| gateway_core::account::ResponsesUpstream::Excel))
-                    .or(s
-                        .excel_403_action
-                        .filter(|action| *action != gateway_core::account::Excel403Action::None)
-                        .map(|_| gateway_core::account::ResponsesUpstream::Excel))
-                    .or(s.responses_upstream)
-            }) && !upstream
-                .supports_account(&account.provider_kind, &account.authentication_kind)
-            {
-                return Err(invalid("Excel upstream requires an OpenAI OAuth account"));
-            }
             if !self.scope.contains(account) {
                 return Err(invalid(
                     "imported account is outside the Provider admin scope",
@@ -319,7 +290,6 @@ pub struct BatchUpdateProviderAccountsAdmin {
     pub pauses: gateway_admin::model::accounts::PreparedQuotaPauses,
     pub quota_settings: Option<gateway_core::account::AccountQuotaSettings>,
     pub auto_use_quota_credits: Option<bool>,
-    pub excel_recovery: Option<gateway_admin::model::excel_recovery::ExcelRecoveryConfig>,
     pub purchase_cost: Option<gateway_admin::model::account_purchase::AccountPurchaseUpdate>,
     pub egress_mode: Option<Option<gateway_core::provider_ports::egress::EgressMode>>,
     /// Full edit forms echo enabled; only explicit commands own an unchanged pause.
@@ -329,15 +299,8 @@ pub struct BatchUpdateProviderAccountsAdmin {
     pub account_ids: Vec<String>,
     pub enabled: Option<bool>,
     pub turn_state_injection_enabled: Option<bool>,
-    pub responses_upstream: Option<gateway_core::account::ResponsesUpstream>,
-    pub excel_models: Option<gateway_core::account::ExcelModels>,
-    pub excel_models_follow_global: Option<bool>,
-    pub excel_cache_creation_as_input: Option<bool>,
-    pub excel_ignore_encrypted_content: Option<bool>,
     pub request_proxy_source:
         Option<gateway_core::provider_ports::session_proxy::RequestProxySource>,
-    pub excel_auto_disable_on_403: Option<bool>,
-    pub excel_403_action: Option<gateway_core::account::Excel403Action>,
     pub concurrency_limit: Option<Option<AccountConcurrencyLimit>>,
     pub weight: Option<AccountWeight>,
     pub model_access: Option<gateway_core::account::AccountModelAccess>,

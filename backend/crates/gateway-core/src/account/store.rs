@@ -236,21 +236,6 @@ pub trait ProviderAccountStore: Send + Sync {
 
     async fn update_account(&self, update: ProviderAccountUpdate) -> Result<(), StoreError>;
 
-    /// Apply the selected Excel HTTP 403 action, fenced against credential and policy changes.
-    /// Pause scheduling or disable Excel without cancelling already-running requests.
-    async fn apply_excel_403_action(&self, account: &ProviderAccount) -> Result<bool, StoreError> {
-        let _ = account;
-        Ok(false)
-    }
-
-    async fn apply_excel_403_action_for_model(
-        &self,
-        account: &ProviderAccount,
-        _model: &str,
-    ) -> Result<bool, StoreError> {
-        self.apply_excel_403_action(account).await
-    }
-
     async fn set_enabled(
         &self,
         account: &ProviderAccountId,

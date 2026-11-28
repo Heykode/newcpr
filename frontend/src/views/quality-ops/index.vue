@@ -130,10 +130,6 @@ const selectedTemplate = computed({
   set: (value) => { draft.value.failureTemplate = value },
 })
 const isProbe = computed(() => draft.value.detectionMode === 'state_probe')
-watch(() => draft.value.failureAction, (action) => {
-  if (action === 'enable_excel')
-    draft.value.autoRestore = false
-})
 
 function modeLabel(mode?: QualityRuleConfig['detectionMode']) {
   return mode === 'state_probe' ? '状态探针' : '题目检测'
@@ -457,10 +453,6 @@ async function save() {
     config.repetitions = 1
     config.reasoningEffort = null
   }
-  if (config.failureAction === 'enable_excel')
-    config.autoRestore = false
-  if (config.detectionMode !== 'state_probe' || config.failureAction !== 'enable_excel')
-    config.disableExcelOnNativeRecovery = false
   if (config.failureAction !== 'apply_account_template')
     delete config.failureTemplate
   const accountIds = editing.value ? [config.accountId] : [...selectedAccounts.value]
@@ -1027,12 +1019,12 @@ onBeforeUnmount(() => {
             {{ isProbe ? '异常后的处理' : '答错后的处理' }}
           </h3>
           <FormItem :label="t('settings.privacy.rules.processingMethod')">
-            <BaseSelect v-model="draft.failureAction" :options="failureActionOptions(draft.failureAction)" />
+            <BaseSelect v-model="draft.failureAction" :options="failureActionOptions()" />
           </FormItem>
           <QualityCatalogPicker v-if="draft.failureAction === 'remove_groups'" v-model:selected-values="draft.failureGroupIds" multiple label="处置分组" :load-page="actionGroupPage" />
           <AccountTemplatePicker v-if="draft.failureAction === 'apply_account_template'" v-model="selectedTemplate" label="异常处置账号模板" :disabled="busy" />
           <p v-if="draft.failureAction === 'apply_account_template'" class="text-xs text-cp-text-secondary">
-            达到阈值后完整应用模板，包含调度、并发、权重、分组、代理及所选 Excel/IPv6 设置；Excel 是否开启由模板决定。模板修改后需重新选择确认。
+            达到阈值后完整应用模板，包含调度、并发、权重、分组、代理及所选 IPv6 设置。模板修改后需重新选择确认。
           </p>
           <div v-if="usesFailureThreshold(draft.failureAction)" class="grid gap-2 text-cp-sm">
             <span>连续异常多少轮后执行处置</span>
@@ -1044,12 +1036,12 @@ onBeforeUnmount(() => {
           <p v-if="draft.failureAction === 'apply_account_template'" class="text-xs text-cp-text-secondary">
             开启自动恢复后，后续整轮通过会恢复本规则应用前的账号配置；后续人工修改会终止本规则的恢复权限。旧处置未保存原配置时不会推测恢复。
           </p>
-          <BaseSwitch v-if="draft.failureAction !== 'enable_excel'" v-model="draft.autoRestore" label="后续整轮通过后自动恢复" show-label />
+          <BaseSwitch v-model="draft.autoRestore" label="后续整轮通过后自动恢复" show-label />
           <p class="text-xs text-cp-text-secondary">
             探针和题目检测均适用：过载→过载、过载→异常或异常→过载，累计 2 轮归入异常并执行所选动作；过载→正常会清零。仅明确的上游服务器过载计入，额度耗尽、普通 503、认证或判题错误不计入。
           </p>
           <p v-if="isProbe" class="text-xs text-cp-text-secondary">
-            即使账号已开启 Excel，状态探针也继续检测原生 Codex 通道。
+            状态探针检测原生 Codex 通道。
           </p>
           <p class="text-xs text-cp-text-secondary">
             {{ isProbe ? '其他无法判断结果不执行处置。换票和过载仅作为本规则的处置依据，不等于模型能力的完整评估。' : '明确答错或达到两轮的过载异常触发处置，其他网络或判题错误不计入。只撤销本规则的改动，不解除其他停用原因。' }}

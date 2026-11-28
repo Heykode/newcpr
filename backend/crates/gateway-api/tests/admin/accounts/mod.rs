@@ -21,7 +21,6 @@ mod purchase_costs {
             assert!(batch.validate().is_ok());
             assert!(batch.enabled.is_none());
             assert!(batch.egress_mode.is_none());
-            assert!(batch.responses_upstream.is_none());
             let single: UpdateAccountRequest=serde_json::from_value(json!({"accountId":"acct_test","purchaseCost":purchase,"enabled":true,"concurrencyLimit":null,"weight":1,"groupIds":[]})).unwrap();
             assert!(single.validate().is_ok());
             assert_eq!(single.purchase_cost, batch.purchase_cost);
@@ -375,6 +374,31 @@ mod batch_update {
     use serde_json::json;
 
     #[test]
+    fn retired_batch_fields_do_not_block_or_replace_an_ordinary_patch() {
+        let retired = json!({
+            "accountIds": ["acct_test"],
+            "responsesUpstream": "excel",
+            "excelModels": [],
+            "excelModelsFollowGlobal": true,
+            "excelCacheCreationAsInput": false,
+            "excelIgnoreEncryptedContent": true,
+            "excelAutoDisableOn403": false,
+            "excel403Action": null,
+            "excelRecovery": {}
+        });
+        let mut mixed = retired.clone();
+        mixed["concurrencyLimit"] = json!(3);
+        let request: BatchUpdateAccountsRequest = serde_json::from_value(mixed.clone()).unwrap();
+        request.validate().unwrap();
+        assert_eq!(request.concurrency_limit, Some(Some(3)));
+
+        let retired_only: BatchUpdateAccountsRequest = serde_json::from_value(retired).unwrap();
+        assert_eq!(retired_only.validate().unwrap_err().field(), "fields");
+        mixed["excelModelsTypo"] = json!([]);
+        assert!(serde_json::from_value::<BatchUpdateAccountsRequest>(mixed).is_err());
+    }
+
+    #[test]
     fn single_edit_and_import_preserve_egress_patch_three_states() {
         use gateway_api::admin::accounts::AccountImportSettingsRequest;
         use gateway_core::provider_ports::egress::EgressMode;
@@ -453,33 +477,6 @@ mod batch_update {
             assert!(
                 serde_json::from_value::<BatchUpdateAccountsRequest>(json!({
                     "accountIds": ["acct_test"], "egressMode": value
-                }))
-                .is_err()
-            );
-        }
-    }
-
-    #[test]
-    fn encrypted_content_patch_accepts_only_boolean_and_preserves_omission() {
-        for enabled in [false, true] {
-            let request: BatchUpdateAccountsRequest = serde_json::from_value(json!({
-                "accountIds":["acct_test"], "excelIgnoreEncryptedContent":enabled
-            }))
-            .unwrap();
-            request.validate().unwrap();
-            assert_eq!(request.excel_ignore_encrypted_content, Some(enabled));
-            assert!(request.responses_upstream.is_none());
-            assert!(request.weight.is_none());
-        }
-        let omitted: BatchUpdateAccountsRequest = serde_json::from_value(json!({
-            "accountIds":["acct_test"], "enabled":true
-        }))
-        .unwrap();
-        assert!(omitted.excel_ignore_encrypted_content.is_none());
-        for invalid in [json!("true"), json!(1), json!([]), json!({})] {
-            assert!(
-                serde_json::from_value::<BatchUpdateAccountsRequest>(json!({
-                    "accountIds":["acct_test"], "excelIgnoreEncryptedContent":invalid
                 }))
                 .is_err()
             );
@@ -1045,7 +1042,7 @@ mod response {
     }
 
     #[tokio::test]
-    async fn account_routes_preserve_excel_403_warning_after_scheduling_and_route_recovery() {
+    async fn account_routes_omit_retired_excel_fields_without_mutating_stored_state() {
         let fixture = AdminTestFixture::new().await;
         fixture.auth.insert_session("valid-session");
         let warning_at = "2026-09-27T00:00:00Z"
@@ -1057,6 +1054,8 @@ mod response {
         ] {
             let mut account = account_fixture();
             account.account.enabled = true;
+            account.capabilities.model_catalog_download = true;
+            account.capabilities.credential_refresh = true;
             account.account.responses_upstream = upstream;
             account.account.excel_auto_disabled_at = None;
             account.account.excel_403_warning_at = Some(warning_at);
@@ -1071,11 +1070,22 @@ mod response {
                 (Method::POST, "/api/admin/accounts/quota/refresh", false),
             ] {
                 let value = account_response(&fixture, method, path, is_list).await;
-                let actual: Option<chrono::DateTime<Utc>> =
-                    serde_json::from_value(value["excel403WarningAt"].clone()).unwrap();
-                assert_eq!(actual, Some(warning_at));
+                for key in [
+                    "responsesUpstream",
+                    "excel403WarningAt",
+                    "excelAutoDisabledAt",
+                ] {
+                    assert!(value.get(key).is_none(), "retired field {key}");
+                }
                 assert_eq!(value["enabled"], true);
-                assert!(value["excelAutoDisabledAt"].is_null());
+                let native = upstream == gateway_core::account::ResponsesUpstream::Codex;
+                assert_eq!(value["capabilities"]["modelCatalogDownload"], native);
+                assert_eq!(value["capabilities"]["automaticReset"], native);
+                assert_eq!(value["capabilities"]["credentialRefresh"], true);
+                let stored = fixture.account.lock().unwrap();
+                let stored = &stored.as_ref().unwrap().account;
+                assert_eq!(stored.responses_upstream, upstream);
+                assert_eq!(stored.excel_403_warning_at, Some(warning_at));
             }
         }
     }
@@ -1844,7 +1854,6 @@ mod response {
             },
             usage_period: None,
             error_protection: None,
-            excel_recovery: None,
             purchase_cost: None,
             turn_state: None,
             codex_quota_overdraft: None,

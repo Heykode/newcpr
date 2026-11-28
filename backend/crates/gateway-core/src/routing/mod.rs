@@ -1,14 +1,7 @@
 //! Provider、模型目录、精确模型映射与请求级候选计划。
 
 mod catalog;
-mod excel_images;
 pub mod snapshot;
-
-pub use excel_images::{
-    EXCEL_IMAGE_MAX_BYTES, EXCEL_IMAGE_MAX_COUNT, EXCEL_IMAGE_MAX_STORAGE_BYTES,
-    EXCEL_IMAGE_MAX_STORAGE_ENTRIES, EXCEL_IMAGE_MAX_TTL_MINUTES, ExcelImageLimitPolicy,
-    ExcelImageTransport,
-};
 
 pub use crate::account::scope::{
     AccountGroupId, AccountRoutingScopeKind, AccountRoutingSnapshot, ClientRoutingScope,
@@ -133,28 +126,6 @@ pub struct RequestTuning {
     pub rate_limit_cooldown_seconds: u64,
     #[serde(default = "default_max_retry_after_seconds")]
     pub max_retry_after_seconds: u32,
-    #[serde(default = "default_excel_image_relay_bytes")]
-    pub excel_image_relay_bytes: u64,
-    #[serde(default = "default_excel_image_max_bytes")]
-    pub excel_image_max_bytes: u64,
-    #[serde(default = "default_excel_image_total_bytes")]
-    pub excel_image_total_bytes: u64,
-    #[serde(default = "default_excel_image_max_count")]
-    pub excel_image_max_count: u32,
-    #[serde(default)]
-    pub excel_image_limit_policy: ExcelImageLimitPolicy,
-    #[serde(default = "default_excel_image_warning_remaining")]
-    pub excel_image_warning_remaining: u32,
-    #[serde(default = "default_excel_image_compact_reserve")]
-    pub excel_image_compact_reserve: u32,
-    #[serde(default = "default_excel_image_relay_requests")]
-    pub excel_image_relay_requests: u32,
-    #[serde(default = "default_excel_image_relay_downloads")]
-    pub excel_image_relay_downloads: u32,
-    #[serde(default = "default_excel_image_relay_entries")]
-    pub excel_image_relay_entries: u32,
-    #[serde(default = "default_excel_image_relay_ttl_minutes")]
-    pub excel_image_relay_ttl_minutes: u32,
     #[serde(default)]
     pub openai_location_override_enabled: bool,
     #[serde(default)]
@@ -185,43 +156,6 @@ const fn default_stream_prefetch_bytes() -> u64 {
 
 const fn default_max_retry_after_seconds() -> u32 {
     240
-}
-
-const fn default_excel_image_relay_bytes() -> u64 {
-    1024 * 1024 * 1024
-}
-
-const fn default_excel_image_max_bytes() -> u64 {
-    20 * 1024 * 1024
-}
-const fn default_excel_image_total_bytes() -> u64 {
-    32 * 1024 * 1024
-}
-const fn default_excel_image_max_count() -> u32 {
-    20
-}
-
-const fn default_excel_image_warning_remaining() -> u32 {
-    8
-}
-const fn default_excel_image_compact_reserve() -> u32 {
-    3
-}
-
-const fn default_excel_image_relay_downloads() -> u32 {
-    32
-}
-
-const fn default_excel_image_relay_requests() -> u32 {
-    128
-}
-
-const fn default_excel_image_relay_entries() -> u32 {
-    512
-}
-
-const fn default_excel_image_relay_ttl_minutes() -> u32 {
-    30
 }
 
 const fn default_account_max_waiting() -> u32 {
@@ -258,17 +192,6 @@ impl RequestTuning {
             websocket_failure_open_duration_ms: 30_000,
             rate_limit_cooldown_seconds: 60,
             max_retry_after_seconds: default_max_retry_after_seconds(),
-            excel_image_relay_bytes: default_excel_image_relay_bytes(),
-            excel_image_max_bytes: default_excel_image_max_bytes(),
-            excel_image_total_bytes: default_excel_image_total_bytes(),
-            excel_image_max_count: default_excel_image_max_count(),
-            excel_image_limit_policy: ExcelImageLimitPolicy::Off,
-            excel_image_warning_remaining: default_excel_image_warning_remaining(),
-            excel_image_compact_reserve: default_excel_image_compact_reserve(),
-            excel_image_relay_requests: default_excel_image_relay_requests(),
-            excel_image_relay_downloads: default_excel_image_relay_downloads(),
-            excel_image_relay_entries: default_excel_image_relay_entries(),
-            excel_image_relay_ttl_minutes: default_excel_image_relay_ttl_minutes(),
             openai_location_override_enabled: false,
             max_waiting_per_key: 0,
             key_concurrency_wait_timeout_seconds: 30,

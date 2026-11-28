@@ -7,8 +7,6 @@ import request from '../request'
 
 export type RotationStrategy = 'smart' | 'quota_reset_priority' | 'round_robin' | 'sticky'
 
-export type ExcelImageTransport = { mode: 'native' } | { mode: 'relay', publicUrl: string }
-
 export interface ResetWindowWeights { fiveHour: number, weekly: number, monthly: number }
 
 export function defaultResetWindowWeights(): ResetWindowWeights {
@@ -50,18 +48,6 @@ export interface RequestTuning {
   websocketFailureOpenDurationMs: number
   rateLimitCooldownSeconds: number
   maxRetryAfterSeconds: number
-  excelImageRelayBytes: number
-  excelImageMaxBytes: number
-  excelImageTotalBytes: number
-  excelImageMaxCount: number
-  excelImageLimitPolicy: 'off' | 'auto_compact' | 'warn'
-  excelImageWarningRemaining: number
-  excelImageCompactReserve: number
-  excelImageRelayRequests: number
-  excelImageRelayDownloads: number
-  excelImageRelayEntries: number
-  excelImageRelayTtlMinutes: number
-  excelImageTransport: ExcelImageTransport | null
   openaiLocationOverrideEnabled: boolean
   openaiRequestLocation: RequestLocation | null
   maxWaitingPerKey: number
@@ -106,7 +92,6 @@ export interface RuntimeSettings {
   openaiRequestSettings: OpenAiRequestSettings
   openaiWebsocketPool: OpenAiWebSocketPoolSettings
   configRevision: number
-  excelDefaultModels?: string[]
   turnStateInjectionEnabled?: boolean
   turnStateModels?: string[]
   turnStateProbeProxyId?: string | null

@@ -5,8 +5,6 @@ import { computed, shallowRef } from 'vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
 
 import { t } from '@/i18n'
-import { formatDateTime } from '@/utils/date'
-import { DEFAULT_EXCEL_MODELS } from '@/utils/excel-defaults'
 import { formatRelativeTime } from '@/utils/relative-time'
 import { groupedAccountQuotaWindows, orderedPanelQuotaWindows, panelQuotaWindows } from '../../constants'
 import AccountPlanBadge from '../AccountPlanBadge.vue'
@@ -114,40 +112,6 @@ const lastRefreshed = computed(() => props.account.quota.refreshedAtRelative
         {{ t('accounts.quota.unobserved') }}
       </p>
     </div>
-
-    <p v-if="!account.enabled && account.responsesUpstream === 'excel' && account.excelAutoDisabledAt" class="m-0 break-words border-t border-cp-border-secondary pt-3 text-cp-sm text-cp-text-secondary">
-      Excel 上游 HTTP 403，已自动暂停此账号调度：{{ formatDateTime(account.excelAutoDisabledAt) }}。Excel 设置保持不变，处理后请手动启用账号调度。
-    </p>
-    <p v-if="account.responsesUpstream !== 'excel' && account.excelModeDisabledAt" class="m-0 break-words border-t border-cp-border-secondary pt-3 text-cp-sm text-cp-text-secondary">
-      Excel 因上游 HTTP 403 自动关闭：{{ formatDateTime(account.excelModeDisabledAt) }}
-    </p>
-    <dl v-if="account.responsesUpstream === 'excel'" class="m-0 grid min-w-0 grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-2 border-t border-cp-border-secondary pt-3 text-cp-sm" :class="mobile ? undefined : 'max-sm:w-[calc(100vw-5.5rem)]'">
-      <dt class="text-cp-text-tertiary">
-        生成入口
-      </dt>
-      <dd class="m-0 text-right text-cp-green-text">
-        Excel
-      </dd>
-      <dt class="text-cp-text-tertiary">
-        {{ t('usage.error.upstreamTransport') }}
-      </dt>
-      <dd class="m-0 text-right text-cp-text">
-        HTTP / SSE
-      </dd>
-      <dt class="text-cp-text-tertiary">
-        Excel 模型
-      </dt>
-      <dd class="m-0 break-all text-right font-mono text-cp-text">
-        {{ account.excelModelsFollowGlobal ? '跟随全局' : '自定义' }} ·
-        {{ (account.effectiveExcelModels ?? account.excelModels ?? DEFAULT_EXCEL_MODELS).join(', ') || '无' }}
-      </dd>
-      <dt class="text-cp-text-tertiary">
-        缓存写入计费
-      </dt>
-      <dd class="m-0">
-        {{ account.excelCacheCreationAsInput ? '按普通输入' : '按缓存写入' }}
-      </dd>
-    </dl>
   </section>
 
   <AccountProfileModal

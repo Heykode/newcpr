@@ -90,7 +90,6 @@ pub(super) fn account_view(
         usage_period,
         cumulative_costs,
         purchase_cost,
-        excel_recovery,
         quota,
         in_flight,
         health_timeline,
@@ -110,13 +109,12 @@ pub(super) fn account_view(
     quota.overdraft =
         codex_quota_overdraft.map(|state| codex_quota_overdraft_view(state, timezone));
     AccountView {
-        capabilities: capabilities.into(),
+        capabilities: AccountCapabilitiesView::for_account(capabilities, &account),
         quota_settings: account.quota_settings,
         quota_settings_supported: capabilities.quota_settings_supported,
         auto_use_quota_credits: account.auto_use_quota_credits,
         error_protection,
         purchase_cost,
-        excel_recovery,
         id: account.id.clone(),
         name: account.name,
         custom_name: account.custom_name,
@@ -152,19 +150,8 @@ pub(super) fn account_view(
         error_message: projection.error_message,
         enabled: account.enabled,
         turn_state_injection_enabled: account.turn_state_injection_enabled,
-        responses_upstream: account.responses_upstream,
-        excel_models: account.excel_models,
-        excel_models_follow_global: account.excel_models_follow_global,
-        excel_cache_creation_as_input: account.excel_cache_creation_as_input,
-        excel_ignore_encrypted_content: account.excel_ignore_encrypted_content,
         request_proxy_source: account.request_proxy_source,
-        excel_auto_disable_on_403: account.excel_auto_disable_on_403,
-        excel_403_action: account.excel_403_action,
-        excel_auto_disabled_at: account.excel_auto_disabled_at,
-        excel_403_warning_at: account.excel_403_warning_at,
         quality_monitoring: account.quality_monitoring,
-        excel_mode_disabled_at: account.excel_mode_disabled_at,
-        effective_excel_models: account.effective_excel_models,
         turn_state: turn_state.map(|status| {
             let gateway_admin::model::accounts::AccountTurnStateStatus {
                 enabled,

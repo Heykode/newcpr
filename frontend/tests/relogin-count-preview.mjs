@@ -31,6 +31,9 @@ async function main() {
               case '/api/admin/system/version':
                 data = { version: 'local-sample', buildType: 'test' }
                 break
+              case '/api/admin/system/update/detail':
+                data = { policy: { channel: 'stable', availableChannels: ['stable'] }, currentVersion: 'local-sample', hasUpdate: false, updateSupported: false }
+                break
               case '/api/admin/accounts': {
                 const items = (process.env.QA_MOBILE_ACCOUNTS ? mobileAccounts : accounts).map(account => ({ ...account }))
                 const stateModelCount = Number(process.env.QA_STATE_MODEL_COUNT || 0)

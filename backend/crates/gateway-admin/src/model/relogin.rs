@@ -199,20 +199,20 @@ impl ReloginEnrollment {
         let result = Self {
             config: super::relogin_templates::ReloginTemplateConfig {
                 credential_proxy_id: settings.credential_proxy_id,
-                excel_recovery: settings.excel_recovery,
+                excel_recovery: None,
                 model_access: None,
                 egress_mode: settings.egress_mode,
                 name: "2FA account import".to_owned(),
                 enabled: settings.enabled,
                 turn_state_injection_enabled: settings.turn_state_injection_enabled,
-                responses_upstream: settings.responses_upstream,
-                excel_models: settings.excel_models,
-                excel_models_follow_global: settings.excel_models_follow_global,
-                excel_cache_creation_as_input: settings.excel_cache_creation_as_input,
-                excel_ignore_encrypted_content: settings.excel_ignore_encrypted_content,
+                responses_upstream: None,
+                excel_models: None,
+                excel_models_follow_global: None,
+                excel_cache_creation_as_input: None,
+                excel_ignore_encrypted_content: None,
                 request_proxy_source: settings.request_proxy_source,
-                excel_auto_disable_on_403: settings.excel_auto_disable_on_403,
-                excel_403_action: settings.excel_403_action,
+                excel_auto_disable_on_403: None,
+                excel_403_action: None,
                 concurrency_limit: settings.concurrency_limit.map(|limit| limit.get()),
                 weight: settings.weight.get(),
                 group_ids: settings
@@ -248,11 +248,6 @@ impl ReloginEnrollment {
             cost.validate()?;
         }
         let mut settings = self.config.settings()?;
-        gateway_core::account::Excel403Action::resolve(
-            settings.excel_403_action,
-            settings.excel_auto_disable_on_403,
-        )
-        .map_err(AdminError::invalid)?;
         settings.custom_name = self.custom_name.clone();
         settings.purchase_cost = self.purchase_cost.clone();
         settings.model_access = self.model_access.clone();

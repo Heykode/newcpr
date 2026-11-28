@@ -155,7 +155,6 @@ pub async fn run() -> Result<(), BootstrapError> {
         host.connection_lifecycle(),
         timezone,
     )?
-    .with_image_relay(openai.image_relay())
     .with_operational_diagnostics(store.operational_diagnostics());
     host.report_startup_ready("API");
 

@@ -27,7 +27,7 @@ account edits while a remediation template owns the account configuration.
   After a plain name/cost/unchanged-form save, advance the owner's audit baseline only
   if all managed settings remain equal. Preserve the serialized scope format and live
   claim fence; an in-flight check still cannot act using pre-edit evidence.
-- Explicit scheduling intent and optional route/proxy/egress/model/State/Excel patches
+- Explicit scheduling intent and optional proxy/egress/model/State patches
   retain intent fences even for same-value writes. Actual enabled/weight/concurrency/
   group changes fail the snapshot equality check. Never revive an already-invalid owner.
 - Unchanged group memberships keep created_at: delete only removed IDs, insert missing
@@ -85,8 +85,8 @@ AdminAuth/no-store POST `/api/admin/quality-ops/models` takes
 `ProviderAdmin::quality_model_choices(account_id, exact)` owns provider-specific discovery.
 
 ### Contracts
-One explicit account reads its own native catalog/egress. Excel uses configured models,
-never Codex fallback. Aggregate reads are cache-only, with 100 candidates per page and
+One explicit account reads its own native catalog/egress. Retired Excel accounts
+return no model suggestions; they never borrow another account's catalog. Aggregate reads are cache-only, with 100 candidates per page and
 no pool-wide HTTP fanout. Only exact evidence supplies reasoningEfforts; aggregate is null.
 An absent in-memory snapshot is not proof of an empty backing cache: fall back to
 the existing read_account_catalog cache-only method, never a refresh-on-miss API.
@@ -102,7 +102,7 @@ account's capability evidence or query all upstream accounts for a dropdown.
 
 ### Tests Required
 Fake-provider exact/cache-only pagination; native loopback selected credential and zero
-aggregate requests; Excel isolation; API auth/no-store/scope; UI pagination/cancellation.
+aggregate requests; retired-route isolation; API auth/no-store/scope; UI pagination/cancellation.
 Cover an uninitialized in-memory catalog with both empty and populated backing caches;
 neither aggregate read may send an upstream request. Run the full Provider admin suite.
 
@@ -110,36 +110,16 @@ neither aggregate read may send an upstream request. Run the full Provider admin
 Wrong: pool sampler for exact account. Correct: account_catalog_documents for exact
 scope, cached_account_models for aggregate scopes.
 
-## Excel Paused Recovery
+## Retired Excel Configuration
 
-- `ExcelRecoveryConfig` is default-off, account-scoped, and separate from native quality rules.
-  Preserve omission in imports, old templates and selective bulk patches. Validate 1–10080 minutes.
-- Use the trusted fixed-account `AccountProbe::excel_recovery`, never a synthetic user key or
-  direct HTTP probe. Require published snapshot/credential versions, actual Excel routing, a
-  complete successful terminal and exact random nonce text. Never rotate accounts/models or
-  fall back to Codex. Ordinary requests cannot set the marker via JSON.
-- Recovery alone explicitly requests `reasoning.effort=low`; normal connection tests and
-  native quality/Codex defaults must not change. Carry expected nonce as trusted internal
-  operation metadata, not protocol JSON or prompt-string inference.
-- In the OpenAI provider, validate raw HTTP 200 SSE to EOF before Excel transformation:
-  2 MiB total, 1 MiB per line, exactly one completed terminal, final assistant/output_text
-  only (ignore reasoning), and exact trimmed nonce. Reject duplicate terminals, `error`,
-  `response.failed`, `response.incomplete`, `response.cancelled`, malformed data and
-  transport errors before or after completion. Never
-  buffer ordinary Excel streams or move wire protocol parsing into Core.
-- Durable PostgreSQL slots bound global probes to three. Request deadline is 45 seconds;
-  cancellation drains coordinator finalization before releasing the two-minute crash lease.
-  Generation, lease, identity, configuration, egress and credential fences are rechecked at commit.
-- Real runtime setting changes invalidate claims; config revision bumps from another account's
-  recovery must not cancel parallel work. Lock runtime settings before account/recovery mutation.
-- Restore only opted-in Excel manual/403 pauses with ready credentials; preserve independent
-  quality-owned pauses and quota/auth protections. Keep historic 403 evidence, clear verified
-  recovery on later pauses, and never present manual resume as a successful BPS test.
-- Tests: Admin worker nonce/failure/cancel cases, Core trusted marker/completion cases, Store
-  real migrations/admission/fences/parallel success, and frontend synthetic mobile/desktop flows.
-  Provider recovery tests must reject every failure terminal before/after the nonce completion,
-  including fragmented streams, without yielding any successful output. The HTTP gate tests
-  must cover error/cancelled tails while retaining ordinary Excel streaming behavior.
+The dedicated Excel recovery worker, probe port and enable/disable action are removed.
+In executable rules, old `enable_excel` deserializes as `none` and Excel-only recovery fields are discarded.
+Run details use a separate read-only snapshot: preserve the recorded action and known historical
+settings without making them writable. Run lists still omit configuration.
+Migration 0105 normalizes known template copies without changing ordinary IDs/revisions,
+references, settings or history. Legacy independent pause markers remain safety guards.
+Shared `excel_streak` and `excelFailureThreshold` still drive ordinary remediation;
+never remove them because of their historical names.
 
 ## Dynamic Group Rules
 
@@ -230,7 +210,7 @@ scope, cached_account_models for aggregate scopes.
 - 0, >1000, duplicate or invalid target IDs -> reject the entire application request.
 - Stale template or rule revision -> no overwrite; account-level conflicts return
   a failed result while independent successful targets remain applied.
-- Excel state probes use the trusted native override without changing the account route.
+- State probes use the trusted native override even for accounts with an old Excel route marker.
 - Read failure is not an empty authoritative catalog or an absent rule.
 
 ### 5. Good/Base/Bad Cases
@@ -271,7 +251,7 @@ scope, cached_account_models for aggregate scopes.
   reuse `start_diagnostic`, synthesize a user API key, or call upstream HTTP directly.
 - Only Core's target entry point may set the request-local `quality_retest` marker.
   The OpenAI fixed-target selector loads disabled targets and bypasses cached enabled,
-  credential health, quota, cooldown and Excel auth-block eligibility. It still requires
+  credential health, quota and cooldown eligibility. It still requires
   an existing in-scope account, live publication, matching credential revision and
   decodable credential. Judges enforce ordinary availability, including quality-owned
   pauses. Neither client JSON nor ordinary requests may request the target override.
@@ -280,8 +260,8 @@ scope, cached_account_models for aggregate scopes.
   Apply it before routing and pass the same scope to normal/queued selection. The
   original directory, other accounts, ordinary requests and client catalogs retain
   their policies; missing/out-of-scope accounts cannot gain access. This does not
-  grant upstream model entitlement. Native state probes alone bypass the Excel route;
-  answer checks and judges keep model-specific Excel routing.
+  grant upstream model entitlement. Native state probes alone bypass a historical
+  Excel route marker; answer checks and judges cannot execute the retired route.
 - Provider transport, credentials, fingerprint, UA,
   egress and request interval remain authoritative. Quality checks bypass business
   concurrency and local user-facing model policy; only target retests additionally
@@ -365,7 +345,7 @@ scope, cached_account_models for aggregate scopes.
 - Full-round pass plus opt-in auto_restore may undo only owned mutations. Explicit
   scheduling commands relinquish pause ownership, including repeated false writes;
   full account forms echoing the unchanged flag do not. Renaming must not prevent recovery.
-  Independent Excel HTTP 403 pauses supersede quality ownership even when the account
+  Historical independent Excel HTTP 403 pauses supersede quality ownership even when the account
   is already quality-paused. Do not clear auth/quota state. Group restoration requires
   the recorded remaining group IDs to be unchanged and target groups to exist; ignore
   rewritten timestamps of unchanged memberships and restore removed timestamps.
@@ -408,7 +388,7 @@ scope, cached_account_models for aggregate scopes.
 
 ### 4. Validation & Error Matrix
 - Pending, live lease, stale revision or missing rule -> existing conflict.
-- Excel account state probes remain eligible through the trusted native route.
+- Accounts with historical Excel markers remain eligible for state probes through the trusted native route.
   A route change fences account mutations, not continued detection or manual runs.
   Historical paused rules remain paused until an explicit administrator action.
 
@@ -433,7 +413,7 @@ scope, cached_account_models for aggregate scopes.
   of at most two serial HTTP SSE quality requests, 60 seconds per request, with no judge.
   Each shot shares one absolute deadline across interval waiting, preparation and
   response collection; completion of selection must not start another timeout window.
-  Excel recovery keeps 45 seconds and answer checks keep 120 seconds.
+  Answer checks keep 120 seconds.
   It uses the ordinary coordinator, fixed account, credentials, request identity, quota,
   request interval and safety gates while bypassing the business concurrency cap.
   No direct upstream client or
@@ -462,27 +442,11 @@ scope, cached_account_models for aggregate scopes.
 - Definite incorrect/degraded results and a completed explicit overload sequence
   invoke the configured policy. Other inconclusive, request errors and cancelled
   rounds do not. Existing auth and quota feedback remains unchanged.
-- Enabling Excel validates current identity, OAuth type, model allowlist, credentials,
-  quota and scheduling, and fences relevant account/proxy/UA/egress policy changes.
-  Do not use the global config revision as a fence: independent concurrent account
-  actions must not invalidate each other. A 403-disabled Excel marker vetoes auto-enable.
-- Account route mutation, audit/config publication, recovery ownership and result
-  commit are transactional. Enabling Excel no longer pauses native state probes.
-  Only Core's trusted probe operation can set `native_quality_probe`; selector
-  route freeze and actual execution both use Codex. Client JSON, judges and answer
-  checks cannot acquire this override.
-- `disableExcelOnNativeRecovery` defaults false when absent from persisted config;
-  new applicable UI drafts explicitly enable it. It is valid only for state probes
-  using enable_excel or apply_account_template. Persist `recovery.excel_owner`
-  only when this rule switches Codex to Excel, after its audit/config publication.
-  Record account identity, model and relevant policy scope, including account audit
-  revision. Correct native results may close that route only when all still match.
-  Manual/preexisting Excel, policy/identity edits, 403 protection and late results
-  must not be overwritten. Excel-only ownership cannot restore a whole template or
-  clear 403 markers; full template recovery uses its separate template_owner snapshot.
-  While ownership matches, degraded rounds do not repeatedly reapply the template.
-  Rule model/mode/action/template edits release ownership; frequency or recovery
-  checkbox edits preserve it. Closing Excel leaves the rule active for future cycles.
+- Native state probes keep their trusted fixed-account route and cannot be forged by client
+  JSON. Answer checks and judges use the ordinary native eligibility contract.
+- Ordinary template application and recovery preserve identity, model, policy-scope,
+  revision and manual-edit fences. Independent historical pauses must not be auto-cleared.
+  Old Excel-only ownership cannot reconstruct a complete ordinary template snapshot.
 - Changing detection mode clears the latest rule verdict but retains mode snapshots
   in historical runs. Keep existing owned scheduling/group recovery behavior intact.
 
@@ -496,7 +460,7 @@ retry or bypass the identity fence. Ordinary scheduled checks and quota recovery
 continue unchanged; no quota-exhaustion parking or additional scheduler is added.
 The regression asserts the reason, verdict, diagnostic and absence of retry intent.
 
-## Excel Failure Threshold
+## Template Failure Threshold
 
 - `excelFailureThreshold` defaults to 1 for legacy configs and accepts 1–100.
   New UI drafts explicitly set it to 2 without migrating saved rules/templates.
@@ -509,28 +473,10 @@ The regression asserts the reason, verdict, diagnostic and absence of retry inte
 - Evidence is scoped to account identity and the existing outbound/policy action
   scope. A changed identity, UA, proxy or egress policy cannot inherit old progress.
   Saving any rule clears progress without queueing an immediate detection.
-- Reaching the threshold calls the existing Excel enable policy, including its
-  403 veto, model/account guards and audit. Native probes continue; only the separate
-  explicit native-recovery option may reverse their owned Excel route.
+- Reaching the threshold applies the ordinary account template with its existing
+  account/reference guards and audit. Only explicit auto_restore can reverse owned settings.
 - No migration is required for the JSON addition, but old strict-config binaries
   still require stored-config reconciliation before a downgrade.
-
-## Native Recovery Threshold
-
-- Optional `excelRecoveryThreshold` accepts 1–100; missing/null keeps the legacy
-  single-success behavior and is omitted on serialization. New UI drafts set 2.
-- Count correct native rounds in `quality_rules.recovery.excel_pass_streak` only
-  after existing lease/revision/identity/model/Excel-owner guards. An incorrect
-  or explicit overloaded round resets the count; other unknown/request errors
-  neither increment nor reset it. Preserve an existing reset count as JSON zero.
-- Before the threshold, persist `excel_recovery_counted`; at the threshold, reuse
-  existing fenced Excel close/audit logic. Never close a manually enabled route,
-  clear an independent 403 pause or restore the rest of a remediation template.
-- Rule saves and ownership record/release clear the healthy count. Threshold-only
-  edits preserve valid route ownership while invalidating previous-round evidence.
-  Count survives store restarts; no schema migration or probe-wire change is needed.
-- Regressions cover old-rule single-success behavior, two normal rounds, unknown/error
-  holds, incorrect resets, persistence, threshold edits and stale-result fencing.
 
 ## Account Template Remediation
 
@@ -538,7 +484,7 @@ The regression asserts the reason, verdict, diagnostic and absence of retry inte
 - `apply_account_template` is a quality failure action, not a new scheduler or
   request path. It applies the existing full template only after the confirmed
   incorrect-round threshold or the fixed-two-round explicit overload sequence.
-  Excel on/off is determined by that template.
+  Retired Excel fields are ignored when reading old templates.
 
 ### 2. Signatures
 - `QualityRuleConfig.failure_template: Option<ReloginTemplate>` serializes as
@@ -552,8 +498,7 @@ The regression asserts the reason, verdict, diagnostic and absence of retry inte
   authoritative snapshot. Execution rechecks the version and snapshot. A catalog
   edit must not silently change an existing scheduled action.
 - Preserve omitted / null / explicit `egressMode` semantics. Full templates also
-  control enabled, concurrency, weight, groups and proxy; omitted optional Excel
-  fields preserve current values. No credential, fingerprint or transport edits.
+  control enabled, concurrency, weight, groups and proxy. No credential, fingerprint or transport edits.
 - Retain rule/lease/action-scope/identity fences, unavailable-account guards and
   independent 403 protection. Do not restore an independently paused account.
 - Lock configuration before egress and account mutation. Group/proxy references
@@ -565,8 +510,7 @@ The regression asserts the reason, verdict, diagnostic and absence of retry inte
   mutation, config publication, audit and result share one transaction.
 - Reuse `excel_streak` and `excelFailureThreshold` for pure incorrect rounds;
   the shared overload sequence can satisfy the trigger independently. Successful
-  template application clears old recovery and records route ownership if it newly
-  enables Excel for a native probe. Current template applications record before/after
+  template application clears old recovery and records before/after
   allowlisted settings in template_owner; an opted-in autoRestore can restore those
   settings after a correct round only while scope/identity/model/after still match.
   Preserve credentials, fingerprint and independent availability guards. Historic
@@ -579,14 +523,15 @@ The regression asserts the reason, verdict, diagnostic and absence of retry inte
 - Missing/stale template at finish: `template_unavailable`, no account mutation.
 - Missing group or untested proxy: `template_blocked_references`.
 - Credential/expiry/quota/independent pause: `template_blocked_account`.
-- 403-disabled Excel or disallowed model: existing `excel_blocked_*` guards.
+- Historical Excel-only model/route settings are discarded; ordinary account and
+  template reference guards continue to apply.
 - Proxy/IPv6 conflict: `template_blocked_settings`, complete savepoint rollback.
 - Success: `template_applied`; retain historical paused-action labels for old runs.
 
 ### 5. Good / Base / Bad Cases
-- Good: a confirmed degraded OAuth account receives the selected Excel/IPv6
+- Good: a confirmed degraded OAuth account receives the selected account/IPv6
   template after three incorrect rounds, with all settings published together.
-- Base: old `enable_excel`, `none`, pause and remove-groups rules stay compatible.
+- Base: old `enable_excel` becomes `none`; ordinary pause and remove-groups rules stay compatible.
 - Bad: a template with enabled=true revives a 403-paused or invalid account.
 
 ### 6. Tests Required
@@ -630,7 +575,7 @@ Scope/identity changes start fresh. Duplicate, stale or cancelled completion can
 contribute. Existing healthy native-recovery progress resets on overload.
 
 Once reached, persist aggregate `status=incorrect` and call the original policy with
-`overload_trigger=true`, satisfying the template/Excel trigger without adding another
+`overload_trigger=true`, satisfying the template trigger without adding another
 `excelFailureThreshold` or pause/group `failureThreshold` wait. Pure incorrect rounds
 retain the configured threshold.
 Keep raw answers `overloaded` and count them in `requestErrors`, not incorrect answers.

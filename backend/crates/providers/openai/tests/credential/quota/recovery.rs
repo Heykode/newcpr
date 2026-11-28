@@ -3,18 +3,12 @@
 use super::*;
 
 #[tokio::test]
-async fn excel_zero_usage_refresh_clears_only_the_cooldown_observed_before_fetch() {
+async fn native_zero_usage_refresh_does_not_clear_request_cooldowns() {
     use gateway_core::provider_ports::{ProviderCooldown, ProviderCooldownPort};
     use std::time::Duration;
 
     for worker in [false, true] {
-        for (excel_enabled, newer_failure_seconds) in [
-            (true, None),
-            (true, Some(180)),
-            (true, Some(120)),
-            (true, Some(60)),
-            (false, None),
-        ] {
+        for (excel_enabled, newer_failure_seconds) in [(false, None), (false, Some(120))] {
             let store = Arc::new(MemoryAccountStore::default());
             create_account(&store, "acct_reset_cooldown").await;
             if excel_enabled {
