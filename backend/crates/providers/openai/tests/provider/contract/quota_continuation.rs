@@ -456,7 +456,9 @@ async fn continuation_full_client_replay_selects_another_account() {
                 Some(ContinuationBinding::Pinned(pin)),
                 CancellationToken::new(),
             )
-            .with_continuation_attempt(ContinuationAttempt::RotateForClientReplay);
+            .with_continuation_attempt(ContinuationAttempt::RotateForClientReplay(
+                ClientReplayTrigger::UpstreamCapacity,
+            ));
             error = provider
                 .execute(
                     planned_request("openai", quota_continuation_operation(true)),
@@ -530,4 +532,139 @@ async fn continuation_full_client_replay_selects_another_account() {
             .unwrap()
             .unwrap();
     }
+}
+
+#[tokio::test]
+async fn native_queue_recovery_checks_an_immediate_spare_in_each_affinity_mode() {
+    use gateway_core::account::AccountAffinity::{Preferred, Relaxed, Strict};
+    use std::sync::atomic::Ordering;
+    let owner = ProviderAccountId::new("acct_scope_old").unwrap();
+    let spare = ProviderAccountId::new("acct_scope_new").unwrap();
+    let key = ClientApiKeyId::new("key_openai_contract").unwrap();
+    let pin = NativeContinuationPin::new(
+        PreviousResponseId::new("resp_previous"),
+        PreviousResponseId::new("resp_previous"),
+        key.clone(),
+        ProviderKind::new("openai").unwrap(),
+        owner.clone(),
+    );
+    let server = MockServer::start().await;
+    for (mode, switch, child, previous_route) in [
+        (Strict, false, false, "codex"),
+        (Strict, true, false, "codex"),
+        (Preferred, false, false, "codex"),
+        (Preferred, true, false, "codex"),
+        (Relaxed, false, false, "codex"),
+        (Relaxed, true, false, "codex"),
+        (Strict, true, true, "codex"),
+        (Strict, true, false, "excel"),
+    ] {
+        let store = Arc::new(MemoryAccountStore::default());
+        create_account(&store, owner.as_str()).await;
+        create_account(&store, spare.as_str()).await;
+        let leases = Arc::new(TestLeaseCoordinator::default());
+        leases.capacity.enabled.store(true, Ordering::SeqCst);
+        leases.capacity.set_load(owner.as_str(), 1);
+        let provider = super::scheduling::waiting_provider_with_affinity_and_limit(
+            &store,
+            leases.clone(),
+            server.uri(),
+            Arc::default(),
+            Arc::default(),
+            NonZeroU32::MIN,
+        );
+        let operation = Operation::Generate(GenerateRequest::from_protocol_payload(
+            ProtocolPayload::json_object("openai", json!({
+                "model":"gpt-5.4", "input":"continue", "previous_response_id":"resp_previous",
+                "session_id":"queue-root", "thread_id": if child { "queue-child" } else { "queue-root" },
+            }).as_object().unwrap().clone()).unwrap(),
+        ).with_provider_session_state(ProviderSessionState::new("openai", json!({
+            "account_id":owner.as_str(), "continuation_scope":"persisted", "responses_upstream":previous_route,
+        }).as_object().unwrap().clone()).unwrap()));
+        let select = |attempt, excluded, timeout| {
+            let ctx = AttemptContext::new(
+                RequestAttemptContext::new(
+                    ModelRequestId::new("req_queue_recovery").unwrap(),
+                    key.clone(),
+                ),
+                NonZeroU32::MIN,
+                SystemTime::now() + Duration::from_secs(10),
+                account_policy()
+                    .with_account_affinity(mode)
+                    .with_switch_account_on_queue_failure(switch),
+                AccountAttemptContext::new(excluded, None, None)
+                    .with_account_scope(contract_account_scope()),
+                Some(ContinuationBinding::Pinned(pin.clone())),
+                CancellationToken::new(),
+            )
+            .with_request_tuning(gateway_core::routing::RequestTuning {
+                account_busy_wait_enabled: true,
+                account_concurrency_wait_timeout_seconds: timeout,
+                ..Default::default()
+            })
+            .with_continuation_attempt(attempt);
+            provider.execute(planned_request("openai", operation.clone()), ctx)
+        };
+        let native = select(ContinuationAttempt::Native, BTreeSet::new(), 1)
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(
+            native.kind(),
+            ProviderErrorKind::ConcurrencyQueueTimeout,
+            "{mode:?} {child} {previous_route}"
+        );
+        assert!(native.client_visible_upstream_error().is_none());
+        let eligible = !child && previous_route == "codex";
+        assert_eq!(
+            native.continuation_recovery_disposition(),
+            Some(if eligible {
+                ContinuationRecoveryDisposition::ClientReplayRequired
+            } else {
+                ContinuationRecoveryDisposition::RetryExactConnection
+            })
+        );
+        if !eligible {
+            continue;
+        }
+        let waits = leases.capacity.waits.lock().unwrap().len();
+        assert!(waits > 0);
+        for busy in [true, false] {
+            leases.capacity.set_load(spare.as_str(), u32::from(busy));
+            let replacement = tokio::time::timeout(
+                Duration::from_secs(1),
+                select(
+                    ContinuationAttempt::RotateForClientReplay(
+                        ClientReplayTrigger::AccountQueueTimeout,
+                    ),
+                    BTreeSet::from([owner.clone()]),
+                    5,
+                ),
+            )
+            .await
+            .expect("replacement must not queue")
+            .err()
+            .unwrap();
+            assert_eq!(replacement.send_state(), UpstreamSendState::NotSent);
+            assert_eq!(
+                replacement
+                    .client_visible_upstream_error()
+                    .and_then(|e| e.code()),
+                (!busy).then_some("previous_response_not_found")
+            );
+            assert_eq!(leases.capacity.waits.lock().unwrap().len(), waits);
+            assert_eq!(
+                leases.capacity.signals.lock().unwrap()[&spare].in_flight,
+                u32::from(busy)
+            );
+        }
+    }
+    assert!(
+        server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .all(|r| !r.url.path().ends_with("/responses"))
+    );
 }

@@ -78,3 +78,32 @@
 官方 3.57.2 与本版均存在目录顶层 `project` 字段冲突。上游响应带有该字段时，它与本地保存的项目字段重名，导致目录无法读回。此条件已用合成数据验证。后续合并时以官方修复为准。
 
 `discovery_order` 只在 `agentModelSorts` 是数组时建立声明顺序。缺少声明（包括旧持久快照）时按 unspecified 展示已有具体型号，不凭空补出图像 ID；新目录刷新后才应用图像追加。原生目录的 displayName 和标签取完整来源对象，别名只改资源 name，不用另一账号的菜单字段覆盖它。生图执行能力、客户端分类和实际 Google 账号权限仍取决于真实上游及客户端，不能由发现目录修复保证。
+
+## 3.57.2 后续修复：Codex 原生续写排队超时
+
+从 NewCPR `9ba8aedd379f4959cec6914426e73e63499cdcef` 接入官方 `909b514074a90ebaa73a73c71dbbecbbe6fe91d3` 至 `01cebb810dd13dff4620dadb2022b978eebba4b8` 的唯一提交。官方版本号仍为 3.57.2。本条记录的是源码集成，生产部署单独记录。
+
+| 官方落点 | NewCPR 调用与差异 |
+| --- | --- |
+| Core `engine/mod.rs`、`coordinator.rs` | `handle_prepare_failure` 保留原账号排队超时。`prepare_unavailable_native_continuation_replay` 检查发送状态、待交付输出、已有会话和换号预算。`RotateForClientReplay` 区分本地等待超时与上游容量不足，后者沿用原有恢复规则。 |
+| OpenAI `credential/selector.rs` | 本地 `selector/mod.rs`、`selector/capacity_wait.rs` 通过原容量等待选择器的 Ready 分支获取执行租约。恢复时排除原账号，跳过 sticky 与 fallback 排队。准入及终检使用与原等待一致的实时上限，防止冻结的旧上限把已满的替代账号误判为空闲。 |
+| OpenAI `provider/mod.rs` | 本地容量等待将原账号超时包装为 `PinnedAccount`。Provider 先通过 `map_selection_error` 识别真实分类，再检查禁止重试、固定账号、会话身份、严格子线程和已保存的 Codex 状态。新路径只选择 Codex 路由，避免借 Excel 的空位误报可重发。Chat 转换在单独入口拒绝原生续写，Excel/State 继续使用原有协议。 |
+| Core 及 API 的错误出口 | 准入替代账号后显式等待 `ProviderLeaseGuard::release` 完成，再构造 `account_rotated`。调用停在传输之前，旧 ID 与增量输入都不会发给替代账号。Core 保留内部队列错误与 `NotSent`，只在成功时用 Provider 的客户端响应交付 400。没有可用账号时交付原 429。 |
+| xAI `provider/continuation.rs` | 仅适配共享枚举匹配，继续拒绝该 OpenAI 专用的恢复方式。此次官方差异没有插件、上游 API Key、AGY、数据库迁移或版本文件。 |
+| 官方两个回归、`docs/api.md`、`docs/architecture.md` | Core 新用例并入原协调器测试，Provider 用例归入 `quota_continuation` 套件。同步当前 API、架构及本地账号等待规范，新增 HTTP 与真实下游 WebSocket 错误出口回归。 |
+
+在指定测试机上，新 Core 用例首先在旧版运行代码上复现了有备用账号却没有重发提示的问题。候选代码通过全部 140 项协调器回归以及独立的 Key 排队超时回归。Provider 的续写、亲和与调度套件分别通过 5、13 和 21 项。新增用例覆盖三种亲和、普通换号开关两种取值、备用账号空闲或已满、严格子线程、Excel 上一轮状态和模拟上游零增量请求。Core 另测队满、固定账号、禁止投影及零换号预算。
+
+HTTP 错误响应与真实下游 WebSocket 路由用合成的执行错误验证了 400/429 和完整错误对象。在另一份隔离测试夹具中，同一份生产 Provider 和 Redis 准入实现连接独立 Redis 实例，覆盖冻结上限 2、实时上限 1 的情况。备用槽已满时保留超时，有空位时交付重发提示后即可立即再次取得该槽。账号数据和上游为测试夹具，未使用真实上游账号。
+
+### 后续复查
+
+再次逐项核对固定官方提交的 9 个文件及本地实际调用路径，未发现新的已确认运行缺陷或应接入功能遗漏。本次复查增加测试覆盖，不改变运行代码。
+
+`selection_retry::native_queue_timeout_recovers_through_core_and_full_client_replay` 在指定测试机通过：真实 Core 协调器调用真实 Codex Provider，三种亲和分别覆盖备用账号满载和空闲，共 6 种情况。测试先建立原账号绑定，再由 Core 自动执行超时恢复，复用已经耗尽的账号等待预算；仅入队一次、等待槽归零、备用执行槽归还，恢复阶段没有上游请求。备用空闲时，后续完整历史重发实际由备用账号执行且不携带旧 `previous_response_id`。
+
+严格模式迁移主绑定；优先模式因临时容量不足而分流时仍保留原主绑定，重发依实时可用性选到备用账号。这是固定官方选择器的既有规则，不能把一次恢复探测理解为给下一次请求预留了备用并发。
+
+原 `client_replay_rotation_without_session_identity_does_not_select_or_send` 反例同时覆盖上游容量不足与本地排队超时两个触发原因，缺少会话身份时均不得触发恢复发送。
+
+联动回归使用内存账号、亲和及租约端口和模拟 HTTP 上游，弥补原先 Core 与 Provider 分开验证的缺口。API HTTP/WS 错误出口与真实 Redis 的证据仍是分别执行的测试；未执行真实上游账号、完整 API/Core/Provider/Redis 联动或 Redis 故障期间释放的端到端测试。释放失败按原 Store 错误返回，取消由原租约清理机制处理；该部分只有源码核对，不将其记为本次故障注入验证。

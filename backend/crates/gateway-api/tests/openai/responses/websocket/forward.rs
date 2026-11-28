@@ -868,3 +868,43 @@ async fn initial_capacity_failure_offers_client_retry_with_upstream_correlation(
         }
     }
 }
+
+#[tokio::test]
+async fn native_queue_timeout_projects_the_same_recovery_on_http_and_websocket() {
+    for (admitted, status, code) in [
+        (false, 429, "concurrency_queue_timeout"),
+        (true, 400, "previous_response_not_found"),
+    ] {
+        let mut error = ProviderError::new(
+            ProviderErrorKind::ConcurrencyQueueTimeout,
+            UpstreamSendState::NotSent,
+        );
+        if admitted {
+            let message = "Previous response was not found. Retrying the full request.";
+            let kind = "invalid_request_error";
+            let body = json!({"error": {"message": message, "code":code, "type":kind}});
+            error = error
+                .with_client_visible_upstream_error(ClientVisibleUpstreamError::new(
+                    message,
+                    Some(code.into()),
+                    Some(kind.into()),
+                ))
+                .with_client_visible_upstream_response(ClientVisibleUpstreamResponse::new(
+                    status,
+                    Some(b"application/json".to_vec()),
+                    Bytes::from(body.to_string()),
+                ));
+        }
+        let error = EngineError::Provider(error);
+        let http = gateway_api::openai::error::engine_error_response(&error);
+        assert_eq!(http.status().as_u16(), status);
+        let bytes = axum::body::to_bytes(http.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["error"]["code"], code);
+        let ws = initial_error(error, vec![]).await;
+        assert_eq!(ws["status"], status);
+        assert_eq!(ws["error"], body["error"]);
+    }
+}

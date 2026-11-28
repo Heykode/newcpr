@@ -306,7 +306,7 @@ impl CodexCredentialSelector {
                 .map(|owner| owner.account().clone()),
             ContinuationAttempt::None
             | ContinuationAttempt::ReplayAny
-            | ContinuationAttempt::RotateForClientReplay => None,
+            | ContinuationAttempt::RotateForClientReplay(_) => None,
         };
         if request
             .attempt
@@ -685,7 +685,8 @@ impl CodexCredentialSelector {
                     .then(|| state.affinity.bound_account().cloned())
                     .flatten()
             });
-            if let Some(original) = original.as_ref()
+            if !request.probes_after_queue_timeout()
+                && let Some(original) = original.as_ref()
                 && (state.pinned.is_some()
                     || request
                         .attempt
@@ -886,7 +887,10 @@ impl CodexCredentialSelector {
                             }
                         }
                         raced.insert(id.clone());
-                        if original.as_ref() == Some(&id) && sticky_tried.insert(id.clone()) {
+                        if !request.probes_after_queue_timeout()
+                            && original.as_ref() == Some(&id)
+                            && sticky_tried.insert(id.clone())
+                        {
                             match self
                                 .wait_for_account(
                                     &id,
@@ -921,6 +925,12 @@ impl CodexCredentialSelector {
                         state.affinity.observe_lease_busy(&id);
                     }
                 }
+            }
+            if request.probes_after_queue_timeout() {
+                // Every ready candidate was checked. Do not take a second queue position.
+                return Err(CredentialSelectionError::AccountWait(
+                    AccountWaitFailure::Timeout,
+                ));
             }
             // Refresh facts without consuming another RR cursor. Lease-race Busy remains a
             // separate observation, not a forged in_flight signal or a business exclusion.
@@ -1788,7 +1798,9 @@ impl CodexCredentialSelector {
                 id,
                 state.pinned.is_some(),
                 state.image_primary.as_ref(),
-                None,
+                request
+                    .probes_after_queue_timeout()
+                    .then_some(gateway_core::concurrency::QueueRejection::Timeout),
                 state
                     .assignment_cursor
                     .filter(|_| immediate && state.context.preferred_account.as_ref() != Some(id)),
@@ -1846,7 +1858,7 @@ impl CodexCredentialSelector {
                 .and_then(CodexSessionAffinity::guardian_parent_record_key)
                 .cloned(),
             capacity,
-            _guard: guard,
+            guard,
         }))
     }
 }
