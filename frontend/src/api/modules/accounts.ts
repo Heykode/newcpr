@@ -235,6 +235,7 @@ export interface AccountCapabilities {
   subscription: boolean
   avatar: boolean
   resetCredits: boolean
+  automaticReset: boolean
   consumeResetCredit: boolean
 }
 

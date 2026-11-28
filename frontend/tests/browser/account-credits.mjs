@@ -33,6 +33,8 @@ async function main() {
         const row = structuredClone(accounts[0])
         row.provider = provider
         row.authenticationKind = 'oauth'
+        if (provider === 'openai')
+          row.capabilities = { automaticReset: true, resetCredits: true, quotaCredits: true }
         row.autoUseQuotaCredits = false
         const creditLabel = provider === 'antigravity' ? 'Google AI 点数' : 'Codex 点数'
         let creditWrites = 0
@@ -167,6 +169,25 @@ async function main() {
           assert.equal(await toggle.isChecked(), true, 'fresh authoritative policy wins after uncertain save')
           assert.equal(resetReads, 1)
           assert.equal(await credits.getByText('123.45', { exact: true }).count(), 1)
+
+          row.capabilities.automaticReset = false
+          row.capabilities.modelCatalogDownload = false
+          await page.reload()
+          await tableRow.getByRole('button', { name: '更多操作', exact: true }).click()
+          const menu = page.getByRole('menu', { name: '更多操作', exact: true })
+          await menu.getByRole('menuitem', { name: '测试连接', exact: true }).waitFor()
+          assert.equal(await menu.getByRole('menuitem', { name: '导出模型目录', exact: true }).count(), 0)
+          await page.keyboard.press('Escape')
+          await tableRow.getByRole('button', { name: '展开统计', exact: true }).click()
+          await panel.getByRole('button', { name: '查看主动重置卡', exact: true }).click()
+          await toggle.waitFor()
+          assert.equal(await toggle.isChecked(), true)
+          assert.equal(await auto.getByRole('button', { name: '保存自动重置', exact: true }).isDisabled(), true)
+          await toggle.locator('..').click()
+          await auto.getByRole('button', { name: '保存自动重置', exact: true }).click()
+          await auto.getByText('设置已保存；已发送的重置请求不受关闭操作影响。').waitFor()
+          assert.equal(autoPolicy.config.enabled, false)
+          assert.equal(await toggle.isDisabled(), true, 'ineligible accounts can turn an old policy off but cannot enable it')
 
           for (const [value, expected] of [
             [{ hasCredits: false, unlimited: false, balance: '0' }, '0'],

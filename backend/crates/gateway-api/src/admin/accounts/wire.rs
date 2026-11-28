@@ -1416,22 +1416,29 @@ pub struct AccountCapabilitiesView {
     pub subscription: bool,
     pub avatar: bool,
     pub reset_credits: bool,
+    pub automatic_reset: bool,
     pub consume_reset_credit: bool,
 }
 
-impl From<gateway_admin::model::accounts::ProviderAccountCapabilities> for AccountCapabilitiesView {
-    fn from(value: gateway_admin::model::accounts::ProviderAccountCapabilities) -> Self {
+impl AccountCapabilitiesView {
+    pub(super) fn for_account(
+        value: gateway_admin::model::accounts::ProviderAccountCapabilities,
+        account: &gateway_admin::model::accounts::AccountRecord,
+    ) -> Self {
+        let openai = account.provider_kind.as_str() == "openai";
+        let native = account.responses_upstream == gateway_core::account::ResponsesUpstream::Codex;
         Self {
             credential_refresh: value.credential_refresh,
             reauthorize: value.reauthorize,
             credential_export: value.credential_export,
-            model_catalog_download: value.model_catalog_download,
+            model_catalog_download: value.model_catalog_download && (!openai || native),
             quota: value.quota,
             quota_refresh: value.quota_refresh,
             profile: value.profile,
             subscription: value.subscription,
             avatar: value.avatar,
             reset_credits: value.reset_credits,
+            automatic_reset: openai && native && account.authentication_kind == "oauth",
             quota_settings_supported: value.quota_settings_supported,
             quota_credits: value.quota_credits,
             consume_reset_credit: value.consume_reset_credit,

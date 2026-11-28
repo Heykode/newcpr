@@ -280,13 +280,13 @@ impl ProviderAdmin for OpenAiAdminProvider {
     }
 
     fn peer_model_eligible(&self, account: &AccountRecord, model: &str) -> Option<bool> {
-        let account = account_from_record(account).ok()?;
-        if account.responses_upstream_for_model(model)
-            == gateway_core::account::ResponsesUpstream::Excel
+        if account.responses_upstream == gateway_core::account::ResponsesUpstream::Excel
+            && account.effective_excel_models.contains(model)
         {
             // Retired routes cannot advertise native OAuth quota eligibility.
             return Some(false);
         }
+        let account = account_from_record(account).ok()?;
         let model = model.rsplit('/').next().unwrap_or(model);
         Some(
             account.authentication_kind() == crate::credential::CODEX_AUTHENTICATION_KIND_OAUTH

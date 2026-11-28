@@ -153,7 +153,7 @@ function handleRequestConsume(creditId: string) {
     <div v-else class="grid gap-4">
       <UsageLimits :windows="account.quota.windows" />
       <AccountQuotaCredits :key="account.id" :account="account" editable @account-updated="emit('accountUpdated', $event)" />
-      <AutoReset :account-id="account.id" :native="account.authenticationKind === 'oauth'" />
+      <AutoReset :account-id="account.id" :native="account.capabilities?.automaticReset === true" />
 
       <section v-if="ambiguous" class="flex items-start gap-3 rounded-cp bg-cp-warning-container px-4 py-3.5" role="status">
         <AlertTriangle class="mt-0.5 size-4 shrink-0 text-cp-warning-on-container" />

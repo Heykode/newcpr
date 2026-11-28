@@ -1576,6 +1576,20 @@ impl UnusedProvider {
 
 #[async_trait]
 impl ProviderAdmin for UnusedProvider {
+    fn account_capabilities(
+        &self,
+        id: &ProviderAccountId,
+        _: &str,
+    ) -> gateway_admin::model::accounts::ProviderAccountCapabilities {
+        self.account
+            .lock()
+            .unwrap()
+            .as_ref()
+            .filter(|row| row.account.id == id.as_str())
+            .map(|row| row.capabilities)
+            .unwrap_or_default()
+    }
+
     fn is_direct_account(&self, authentication_kind: &str) -> bool {
         authentication_kind == "oauth"
     }

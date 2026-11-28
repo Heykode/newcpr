@@ -53,6 +53,17 @@ async function main() {
       page.on('pageerror', error => report.errors.push(error.message))
       await page.goto(`${base}usage?upstreamStatusCode=403`)
       await page.getByLabel('请求搜索', { exact: true }).waitFor()
+      const upstream = page.getByRole('combobox', { name: '上游模式', exact: true })
+      await upstream.click()
+      await Promise.all([
+        page.waitForResponse(response => response.url().includes('/usage/records?') && new URL(response.url()).searchParams.get('upstreamMode') === 'excel'),
+        page.getByRole('option', { name: 'Excel', exact: true }).click(),
+      ])
+      await upstream.click()
+      await Promise.all([
+        page.waitForResponse(response => response.url().includes('/usage/records?') && !new URL(response.url()).searchParams.has('upstreamMode')),
+        page.getByRole('option', { name: '全部', exact: true }).click(),
+      ])
       const placement = await page.locator('section[aria-label="请求筛选"]').evaluate((filters) => {
         const heading = [...document.querySelectorAll('h2')].find(element => element.textContent.trim() === '请求明细')
         const insights = [...document.querySelectorAll('h3,h2')].find(element => element.textContent.trim() === '热点诊断')
@@ -93,9 +104,14 @@ async function main() {
       await page.getByRole('option', { name: /filter-b@example.invalid/ }).click()
       await account.press('Escape')
       await page.waitForURL(url => url.searchParams.get('accountIds') === 'acct-filter-a,acct-filter-b')
-      await page.getByLabel('请求搜索', { exact: true }).fill('literal_%')
-      await page.waitForResponse(response => response.url().includes('/usage/records?') && response.url().includes('literal'))
       const endpoints = ['/usage/records', '/usage/records/summary', '/usage/insights/health', '/usage/insights/performance', '/usage/insights/cost', '/usage/insights/diagnostics']
+      await Promise.all([
+        ...endpoints.map(endpoint => page.waitForResponse((response) => {
+          const url = new URL(response.url())
+          return url.pathname.endsWith(endpoint) && url.searchParams.get('search') === 'literal_%' && url.searchParams.get('accountIds') === 'acct-filter-a,acct-filter-b'
+        })),
+        page.getByLabel('请求搜索', { exact: true }).fill('literal_%'),
+      ])
       for (const endpoint of endpoints) {
         assert(report.calls.some(call => call.path.endsWith(endpoint) && call.query.search === 'literal_%' && call.query.accountIds === 'acct-filter-a,acct-filter-b'), `${endpoint} shares filters`)
       }

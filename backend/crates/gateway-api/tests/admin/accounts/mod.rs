@@ -1054,6 +1054,8 @@ mod response {
         ] {
             let mut account = account_fixture();
             account.account.enabled = true;
+            account.capabilities.model_catalog_download = true;
+            account.capabilities.credential_refresh = true;
             account.account.responses_upstream = upstream;
             account.account.excel_auto_disabled_at = None;
             account.account.excel_403_warning_at = Some(warning_at);
@@ -1076,6 +1078,10 @@ mod response {
                     assert!(value.get(key).is_none(), "retired field {key}");
                 }
                 assert_eq!(value["enabled"], true);
+                let native = upstream == gateway_core::account::ResponsesUpstream::Codex;
+                assert_eq!(value["capabilities"]["modelCatalogDownload"], native);
+                assert_eq!(value["capabilities"]["automaticReset"], native);
+                assert_eq!(value["capabilities"]["credentialRefresh"], true);
                 let stored = fixture.account.lock().unwrap();
                 let stored = &stored.as_ref().unwrap().account;
                 assert_eq!(stored.responses_upstream, upstream);

@@ -272,7 +272,7 @@ test('real menu renders relogin only with material and exposes busy and failure 
   assert.match(await render(action({ status: 'failed', message: '<script>failed' })), /&lt;script&gt;failed/)
 })
 
-test('native account capabilities control refresh, reauthorization and catalog download without changing Excel scope', async () => {
+test('account menu uses the advertised catalog capability independently of refresh and reauthorization', async () => {
   const passthrough = vue.defineComponent({ setup: (_, { slots }) => () => vue.h('div', slots.default?.({ close() {} })) })
   const button = vue.defineComponent({ setup: (_, { slots }) => () => vue.h('button', slots.default?.()) })
   const component = load(new URL('../src/views/accounts/components/AccountTableActions.vue', import.meta.url), {
@@ -285,7 +285,7 @@ test('native account capabilities control refresh, reauthorization and catalog d
     ['openai', undefined, 'codex', [true, true, true]],
     ['antigravity', { credentialRefresh: true, reauthorize: true, modelCatalogDownload: false }, 'codex', [true, true, false]],
     ['xai', { credentialRefresh: false, reauthorize: false, modelCatalogDownload: false }, 'codex', [false, false, false]],
-    ['openai', { credentialRefresh: true, reauthorize: true, modelCatalogDownload: true }, 'excel', [true, true, true]],
+    ['openai', { credentialRefresh: true, reauthorize: true, modelCatalogDownload: false }, 'excel', [true, true, false]],
   ]) {
     const html = await renderToString(vue.createSSRApp(component, {
       account: { ...account, provider, authenticationKind: 'oauth', capabilities, responsesUpstream },

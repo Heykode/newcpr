@@ -154,10 +154,9 @@ async function main() {
     await close()
     catalogMissing = true
     await open()
-    const missing = dialog.getByRole('checkbox', { name: 'model-a', exact: true }).locator('..')
-    await dialog.locator('[title="当前目录未返回，仍可保存"]').waitFor()
-    await missing.getAttribute('title').then(title => assert.equal(title, '当前目录未返回，仍可保存'))
-    assert.equal(await dialog.getByRole('checkbox', { name: 'model-a', exact: true }).isChecked(), true)
+    const missing = dialog.getByRole('group', { name: '自定义', exact: true }).getByRole('checkbox', { name: 'model-a', exact: true })
+    await missing.waitFor()
+    assert.equal(await missing.isChecked(), true)
     await layouts('missing-model')
     const cleanup = page.getByRole('button', { name: '清理目录缺失模型', exact: true })
     await cleanup.click()
@@ -178,7 +177,7 @@ async function main() {
     assert.equal(await dialog.getByRole('checkbox', { name: 'model-a', exact: true }).count(), 0)
     assert.equal(await dialog.getByRole('checkbox', { name: 'model-b', exact: true }).isChecked(), true)
     assert.equal(updates.length, updatesBeforeCleanup, 'cleanup only updates the unsaved form')
-    assert.equal(await dialog.getByRole('button', { name: '刷新模型', exact: true }).evaluate(element => element === document.activeElement), true)
+    await page.waitForFunction(() => document.activeElement?.getAttribute('aria-label') === '刷新模型', undefined, { timeout: 3000 })
     await close()
     catalogMissing = false
     catalogFails = true
@@ -186,7 +185,7 @@ async function main() {
     await dialog.getByRole('alert').filter({ hasText: '模型列表加载失败' }).waitFor()
     assert.equal(await dialog.getByText(observedAtDisplay, { exact: true }).count(), 0, 'failed initial load must not reuse the previous editor timestamp')
     assert.equal(await dialog.getByRole('checkbox', { name: 'model-a', exact: true }).isChecked(), true)
-    assert.equal(await dialog.getByRole('checkbox', { name: 'model-a', exact: true }).locator('..').getAttribute('title'), 'model-a')
+    assert.equal(await dialog.getByRole('group', { name: '可选模型', exact: true }).getByRole('checkbox', { name: 'model-a', exact: true }).isChecked(), true)
     const input = dialog.getByRole('textbox', { name: '搜索或添加模型', exact: true })
     await input.fill('model-*')
     await input.press('Enter')

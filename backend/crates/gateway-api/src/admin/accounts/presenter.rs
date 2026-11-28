@@ -109,7 +109,7 @@ pub(super) fn account_view(
     quota.overdraft =
         codex_quota_overdraft.map(|state| codex_quota_overdraft_view(state, timezone));
     AccountView {
-        capabilities: capabilities.into(),
+        capabilities: AccountCapabilitiesView::for_account(capabilities, &account),
         quota_settings: account.quota_settings,
         quota_settings_supported: capabilities.quota_settings_supported,
         auto_use_quota_credits: account.auto_use_quota_credits,

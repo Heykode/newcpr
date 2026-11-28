@@ -773,6 +773,19 @@ async fn openai_admin_provider_projects_cached_quota_models_and_canonical_export
     .expect("OpenAI bundle");
     let admin = bundle.admin_provider();
 
+    let mut legacy = record.clone();
+    legacy.responses_upstream = gateway_core::account::ResponsesUpstream::Excel;
+    legacy.effective_excel_models = vec!["legacy-only".to_owned()].try_into().unwrap();
+    assert_eq!(
+        admin.peer_model_eligible(&legacy, "legacy-only"),
+        Some(false)
+    );
+    assert_eq!(admin.peer_model_eligible(&legacy, "gpt-5.4"), Some(true));
+    assert_eq!(
+        admin.peer_model_eligible(&record, "legacy-only"),
+        Some(true)
+    );
+
     let operation = admin
         .connection_test_operation(
             &UpstreamModelId::new("gpt-5.4").expect("upstream model"),

@@ -84,7 +84,7 @@ async function main() {
       autoRestore: false,
     }
     let rules = [{ id: 'quality-rule', revision: 1, config, nextRunAt: now, running: false, pending: false, lastStatus: 'correct', lastRunAt: now }]
-    const run = { id: 'quality-run', ruleId: 'quality-rule', accountId: config.accountId, model: config.model, status: 'correct', startedAt: now, finishedAt: now, correct: 2, incorrect: 0, unknown: 0, requestErrors: 0 }
+    const run = { id: 'quality-run', ruleId: 'quality-rule', accountId: config.accountId, model: config.model, status: 'correct', action: 'excel_disabled_native_recovered', startedAt: now, finishedAt: now, correct: 2, incorrect: 0, unknown: 0, requestErrors: 0 }
     let historyRows = [run]
     let overloadDetail = false
     let enqueues = 0
@@ -329,6 +329,7 @@ async function main() {
       await page.getByRole('button', { name: '查看结果', exact: true }).click()
       const drawer = page.getByRole('dialog', { name: '检测详情' })
       await drawer.getByText('fixture comparison').waitFor()
+      await drawer.getByText('原生通道恢复正常，已关闭本规则开启的 Excel', { exact: true }).waitFor()
       assert.equal(await page.evaluate(() => window.__qualityExecuted), undefined)
       const box = await drawer.boundingBox()
       assert.ok(box && box.x >= 0 && box.x + box.width <= width + 1)
