@@ -19,10 +19,10 @@ use crate::engine::continuation::{
 use crate::engine::provider::{Provider, ProviderCallMetadata, ProviderRequest, ProviderStream};
 use crate::engine::{
     AccountAttemptContext, AttemptContext, AttemptRecord, AttemptTransport, AttemptTrigger,
-    CommitRequirement, ContinuationAttempt, CoordinatedEvent, EngineError, ExecutionOutcome,
-    ExecutionStore, GatewayEngine, IntermediateFailure, ModelRequestFailureObservation,
-    ModelRequestFinalization, ModelRequestId, NewModelRequest, ProviderAccountStateOwner,
-    ProviderAttemptOutcome, RequestAttemptContext, UpstreamSendState,
+    ClientReplayTrigger, CommitRequirement, ContinuationAttempt, CoordinatedEvent, EngineError,
+    ExecutionOutcome, ExecutionStore, GatewayEngine, IntermediateFailure,
+    ModelRequestFailureObservation, ModelRequestFinalization, ModelRequestId, NewModelRequest,
+    ProviderAccountStateOwner, ProviderAttemptOutcome, RequestAttemptContext, UpstreamSendState,
 };
 use crate::error::{
     ContinuationRecoveryDisposition, GatewayError, GatewayErrorKind, ProviderError,
@@ -1404,9 +1404,11 @@ where
         attempt_trace: &TraceContext,
     ) -> Result<Option<PullOutcome>, EngineError> {
         record_trace_error(attempt_trace, &error);
-        if self.continuation_attempt == ContinuationAttempt::RotateForClientReplay
-            && error.continuation_recovery_disposition()
-                == Some(ContinuationRecoveryDisposition::ClientReplayRequired)
+        if matches!(
+            self.continuation_attempt,
+            ContinuationAttempt::RotateForClientReplay(_)
+        ) && error.continuation_recovery_disposition()
+            == Some(ContinuationRecoveryDisposition::ClientReplayRequired)
             && let Some(original) = self.last_retryable_failure.take()
         {
             error = original.with_client_recovery_from(error);
@@ -1453,6 +1455,14 @@ where
             return Ok(Some(PullOutcome::AttemptDiscarded));
         }
         if retry_allowed && self.prepare_unavailable_native_continuation_replay(&error) {
+            if matches!(
+                self.continuation_attempt,
+                ContinuationAttempt::RotateForClientReplay(_)
+            ) {
+                // 只有替代账号准入后才能给客户端重发提示。空池保留原账号超时。
+                self.last_retryable_failure_events.clear();
+                self.last_retryable_failure = Some(error);
+            }
             attempt_trace.record(
                 "retry.decided",
                 json!({
@@ -2074,7 +2084,9 @@ where
                     && !error.retry_is_prohibited()
                     && self.has_account_rotation_budget() =>
             {
-                self.continuation_attempt = ContinuationAttempt::RotateForClientReplay;
+                self.continuation_attempt = ContinuationAttempt::RotateForClientReplay(
+                    ClientReplayTrigger::UpstreamCapacity,
+                );
                 self.excluded_accounts
                     .insert(current.metadata.provider_account_id().clone());
             }
@@ -2112,7 +2124,9 @@ where
                 self.excluded_accounts
                     .insert(current.metadata.provider_account_id().clone());
             }
-            ContinuationAttempt::None | ContinuationAttempt::RotateForClientReplay => return false,
+            ContinuationAttempt::None | ContinuationAttempt::RotateForClientReplay(_) => {
+                return false;
+            }
         }
         true
     }
@@ -2127,13 +2141,9 @@ where
             || self.account_selection.required_account().is_some()
             || self.continuation_attempt != ContinuationAttempt::Native
             || self.current_send_state() != UpstreamSendState::NotSent
-            || self.account_switches >= self.plan.request_tuning().max_account_switches
-            || !matches!(
-                error.kind(),
-                ProviderErrorKind::NoEligibleAccount
-                    | ProviderErrorKind::AccountCapacityUnavailable
-                    | ProviderErrorKind::QuotaExhausted
-            )
+            || !self.has_account_rotation_budget()
+            || self.replay_barrier_reached
+            || self.delivery_pending
         {
             return false;
         }
@@ -2152,7 +2162,19 @@ where
             return false;
         }
 
-        self.continuation_attempt = ContinuationAttempt::ReplayAny;
+        self.continuation_attempt = match error.kind() {
+            ProviderErrorKind::ConcurrencyQueueTimeout
+                if error.send_state() == UpstreamSendState::NotSent
+                    && error.continuation_recovery_disposition()
+                        == Some(ContinuationRecoveryDisposition::ClientReplayRequired) =>
+            {
+                ContinuationAttempt::RotateForClientReplay(ClientReplayTrigger::AccountQueueTimeout)
+            }
+            ProviderErrorKind::NoEligibleAccount
+            | ProviderErrorKind::AccountCapacityUnavailable
+            | ProviderErrorKind::QuotaExhausted => ContinuationAttempt::ReplayAny,
+            _ => return false,
+        };
         self.excluded_accounts.insert(pin.account().clone());
         true
     }

@@ -16,7 +16,9 @@ use gateway_core::engine::provider::{
     ContinuationRequestObservation, EventStream, Provider, ProviderCallMetadata, ProviderRequest,
     ProviderRequestObservation, ProviderSelectionObservation, ProviderStream,
 };
-use gateway_core::engine::{AttemptContext, AttemptTransport, ContinuationAttempt};
+use gateway_core::engine::{
+    AttemptContext, AttemptTransport, ClientReplayTrigger, ContinuationAttempt,
+};
 use gateway_core::error::{
     ClientVisibleUpstreamError, ClientVisibleUpstreamResponse, ContinuationFailure,
     ContinuationRecoveryDisposition, OpaqueUpstreamValue, ProviderConnectionObservation,
@@ -859,12 +861,17 @@ impl Provider for CodexProvider {
             .or(cache_preference.as_ref())
             .or(chat_affinity.as_ref())
             .or(session_affinity.as_ref());
-        if context.continuation_attempt() == ContinuationAttempt::RotateForClientReplay
+        if let ContinuationAttempt::RotateForClientReplay(trigger) = context.continuation_attempt()
             && (account_affinity
                 .and_then(CodexSessionAffinity::key)
                 .is_none()
-                || context.account_selection_policy().account_affinity()
-                    == gateway_core::account::AccountAffinity::Relaxed)
+                || (trigger == ClientReplayTrigger::AccountQueueTimeout
+                    && !context.freeze_provider_route(
+                        gateway_core::account::ResponsesUpstream::Codex.as_str(),
+                    ))
+                || (trigger == ClientReplayTrigger::UpstreamCapacity
+                    && context.account_selection_policy().account_affinity()
+                        == gateway_core::account::AccountAffinity::Relaxed))
         {
             return Err(provider_error(
                 ProviderErrorKind::NoEligibleAccount,
@@ -892,14 +899,41 @@ impl Provider for CodexProvider {
                     account_affinity,
                 )
                 .await
-                .map_err(map_selection_error)?;
+                .map_err(|error| {
+                    // Native owner waits carry PinnedAccount. Classify the mapped queue error
+                    // so the wrapper cannot hide a timeout or lose a retry prohibition.
+                    let error = map_selection_error(error);
+                    let can_request_replay = error.kind()
+                        == ProviderErrorKind::ConcurrencyQueueTimeout
+                        && !error.retry_is_prohibited()
+                        && context.required_account().is_none()
+                        && context.continuation_attempt() == ContinuationAttempt::Native
+                        && previous_session.as_ref().is_some_and(|state| {
+                            state.responses_upstream
+                                == gateway_core::account::ResponsesUpstream::Codex
+                        })
+                        && session_affinity.as_ref().is_some_and(|affinity| {
+                            affinity.key().is_some() && !affinity.follow_only()
+                        });
+                    if can_request_replay {
+                        error.with_continuation_recovery_disposition(
+                            ContinuationRecoveryDisposition::ClientReplayRequired,
+                        )
+                    } else {
+                        error
+                    }
+                })?;
             let account_selection_wait_ms =
                 u64::try_from(selection_started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
             (lease, account_selection_wait_ms)
         };
-        if context.continuation_attempt() == ContinuationAttempt::RotateForClientReplay {
+        if matches!(
+            context.continuation_attempt(),
+            ContinuationAttempt::RotateForClientReplay(_)
+        ) {
             // Core 已确认允许换号；选号器迁移共享绑定后，完整历史仍须由客户端提供
             // 不将旧账号的 previous_response_id 或增量输入发送给替代账号
+            lease.release().await.map_err(map_selection_error)?;
             return Err(continuation_replay_required_error("account_rotated"));
         }
         let lease = Arc::new(lease);
@@ -984,7 +1018,8 @@ impl Provider for CodexProvider {
                         ContinuationAttempt::ReplayOwner | ContinuationAttempt::ReplayAny => {
                             PreviousResponseScope::ExternalUnknown
                         }
-                        ContinuationAttempt::None | ContinuationAttempt::RotateForClientReplay => {
+                        ContinuationAttempt::None
+                        | ContinuationAttempt::RotateForClientReplay(_) => {
                             PreviousResponseScope::ExternalUnknown
                         }
                     };

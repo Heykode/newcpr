@@ -326,6 +326,13 @@ impl ProviderAccountStateOwner {
     }
 }
 
+/// 换号后需要客户端提供完整历史的原因。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClientReplayTrigger {
+    UpstreamCapacity,
+    AccountQueueTimeout,
+}
+
 /// 当前 attempt 对 previous-response 的唯一处理方式。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ContinuationAttempt {
@@ -343,7 +350,7 @@ pub enum ContinuationAttempt {
     /// 该枚举本身不证明客户端 input 完整，也不授权 Provider 清除 previous-response。
     ReplayAny,
     /// 仅迁移账号绑定，随后要求客户端携带完整历史重放；不得发送当前增量输入
-    RotateForClientReplay,
+    RotateForClientReplay(ClientReplayTrigger),
 }
 
 impl ContinuationAttempt {
@@ -354,7 +361,7 @@ impl ContinuationAttempt {
             Self::Native => "native",
             Self::ReplayOwner => "replay_owner",
             Self::ReplayAny => "replay_any",
-            Self::RotateForClientReplay => "rotate_for_client_replay",
+            Self::RotateForClientReplay(_) => "rotate_for_client_replay",
         }
     }
 }

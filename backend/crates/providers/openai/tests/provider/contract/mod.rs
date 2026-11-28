@@ -18,8 +18,8 @@ use gateway_core::engine::continuation::{
 };
 use gateway_core::engine::provider::{Provider as _, ProviderRequest};
 use gateway_core::engine::{
-    AccountAttemptContext, AttemptContext, AttemptTransport, ContinuationAttempt, ModelRequestId,
-    ProviderAccountStateOwner, RequestAttemptContext,
+    AccountAttemptContext, AttemptContext, AttemptTransport, ClientReplayTrigger,
+    ContinuationAttempt, ModelRequestId, ProviderAccountStateOwner, RequestAttemptContext,
 };
 use gateway_core::error::{
     ContinuationFailure, ContinuationRecoveryDisposition, PreDeliveryRetry, ProviderErrorKind,
@@ -9433,22 +9433,27 @@ async fn client_replay_rotation_without_session_identity_does_not_select_or_send
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_provider_contract").await;
     let server = MockServer::start().await;
-    let error = provider_with_base_url(&store, server.uri())
-        .execute(
-            planned_request("openai", generate_operation()),
-            pinned_continuation_context(
-                "req_unbound_rotation",
-                "acct_provider_contract",
-                "client-previous",
-                "upstream-previous",
-                2,
-                ContinuationAttempt::RotateForClientReplay,
-            ),
-        )
-        .await
-        .err()
-        .expect("without a binding the next full request cannot follow a replacement account");
-    assert_eq!(error.kind(), ProviderErrorKind::NoEligibleAccount);
-    assert_eq!(error.send_state(), UpstreamSendState::NotSent);
+    for trigger in [
+        ClientReplayTrigger::UpstreamCapacity,
+        ClientReplayTrigger::AccountQueueTimeout,
+    ] {
+        let error = provider_with_base_url(&store, server.uri())
+            .execute(
+                planned_request("openai", generate_operation()),
+                pinned_continuation_context(
+                    "req_unbound_rotation",
+                    "acct_provider_contract",
+                    "client-previous",
+                    "upstream-previous",
+                    2,
+                    ContinuationAttempt::RotateForClientReplay(trigger),
+                ),
+            )
+            .await
+            .err()
+            .expect("client replay requires a session identity");
+        assert_eq!(error.kind(), ProviderErrorKind::NoEligibleAccount);
+        assert_eq!(error.send_state(), UpstreamSendState::NotSent);
+    }
     assert!(server.received_requests().await.unwrap().is_empty());
 }

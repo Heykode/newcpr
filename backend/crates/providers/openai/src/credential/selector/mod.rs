@@ -13,7 +13,7 @@ use gateway_core::account::{
     AccountSelector, AccountStatus, CredentialState, PreferredAccountSelection, ProviderAccount,
     ProviderAccountId, QuotaEvidence,
 };
-use gateway_core::engine::{AttemptContext, ContinuationAttempt};
+use gateway_core::engine::{AttemptContext, ClientReplayTrigger, ContinuationAttempt};
 use gateway_core::provider_ports::{
     ProviderConcurrencyPool, ProviderCooldownPort, ProviderLeaseAcquisition, ProviderLeaseGuard,
     ProviderLeasePort, ProviderLeaseRequest, ProviderSchedulingLeaseRequest,
@@ -165,6 +165,11 @@ impl CredentialSelectionInput<'_> {
                 .cache_preference_disabled
                 .load(std::sync::atomic::Ordering::Relaxed)
         })
+    }
+
+    fn probes_after_queue_timeout(&self) -> bool {
+        self.attempt.continuation_attempt()
+            == ContinuationAttempt::RotateForClientReplay(ClientReplayTrigger::AccountQueueTimeout)
     }
 
     fn follows_root(&self) -> bool {
@@ -594,6 +599,12 @@ impl CodexCredentialSelector {
         cyber_policy_session_key: Option<&ProviderSessionAffinityKey>,
     ) -> Result<CodexCredentialLease, CredentialSelectionError> {
         let selection = async {
+            if request.probes_after_queue_timeout() {
+                // Keep the live limit and post-acquisition checks used by the original wait.
+                return self
+                    .select_with_capacity_wait(request, cyber_policy_session_key, None)
+                    .await;
+            }
             let first = self
                 .select_unfrozen(request, cyber_policy_session_key, true, None)
                 .await;
@@ -604,7 +615,9 @@ impl CodexCredentialSelector {
                     && request.attempt.required_account().is_none()
                     && matches!(
                         request.attempt.continuation_attempt(),
-                        ContinuationAttempt::None | ContinuationAttempt::ReplayAny
+                        ContinuationAttempt::None
+                            | ContinuationAttempt::ReplayAny
+                            | ContinuationAttempt::RotateForClientReplay(_)
                     ) =>
                 {
                     let rejection = match reason {
@@ -930,7 +943,7 @@ impl CodexCredentialSelector {
                 .map(|owner| owner.account().clone()),
             ContinuationAttempt::None
             | ContinuationAttempt::ReplayAny
-            | ContinuationAttempt::RotateForClientReplay => None,
+            | ContinuationAttempt::RotateForClientReplay(_) => None,
         };
         let required_account = request.attempt.required_account().cloned();
         if required_account
@@ -1339,7 +1352,7 @@ impl CodexCredentialSelector {
                             .and_then(CodexSessionAffinity::guardian_parent_record_key)
                             .cloned(),
                         capacity: capacity.map(AccountCapacitySnapshot::with_acquired_request),
-                        _guard: guard,
+                        guard,
                     });
                 }
             }
@@ -2247,10 +2260,14 @@ pub struct CodexCredentialLease {
     affinity_expected_binding: ProviderSessionAffinityBinding,
     guardian_parent_record_key: Option<ProviderSessionAffinityKey>,
     capacity: Option<AccountCapacitySnapshot>,
-    _guard: Box<dyn ProviderLeaseGuard>,
+    guard: Box<dyn ProviderLeaseGuard>,
 }
 
 impl CodexCredentialLease {
+    pub(crate) async fn release(self) -> Result<(), CredentialSelectionError> {
+        Ok(self.guard.release().await?)
+    }
+
     pub(crate) const fn session_binding_ttl(&self) -> Duration {
         self.session_binding_ttl
     }
