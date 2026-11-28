@@ -18,6 +18,7 @@ async function main() {
   await mkdir(output, { recursive: true })
   const errors = []
   const unexpected = []
+  const configuration = { client: 'cli', platform: 'linux', versionMode: 'latest', cliEntry: 'tui' }
   const row = {
     id: 'key-example',
     name: 'example-key',
@@ -50,6 +51,9 @@ async function main() {
         const data = {
           '/api/admin/auth/status': { authenticated: true },
           '/api/admin/system/version': { version: 'synthetic', buildType: 'test' },
+          '/api/admin/system/update/detail': { policy: { channel: 'stable', availableChannels: ['stable'] }, currentVersion: 'synthetic', latestVersion: 'synthetic', hasUpdate: false, cached: true, updateSupported: false, warning: null },
+          '/api/admin/settings/client-profiles': { defaults: configuration, globalConfiguration: configuration, presets: [], maxVersionLag: 5, recognizedUserAgentPrefixes: [] },
+          '/api/admin/settings/client-profiles/preview': { source: 'global', configuration, userAgent: 'synthetic-cli/0.0.0', versionSource: 'official', verifiedAt: null, verifiedAtDisplay: null, checkedAt: null, checkedAtDisplay: null, error: null, codexVersion: '0.0.0', desktopVersion: null, desktopBuild: null },
           '/api/admin/client-keys': { items: [row], nextCursor: null, total: 1 },
           '/api/admin/account-groups': { items: [], page: { page: 1, pageSize: 200, total: 0, totalPages: 0 } },
           '/api/admin/client-keys/reveal': { id: row.id, plaintextKey: 'synthetic-revealed-plaintext' },
