@@ -114,3 +114,14 @@ Correct：直接使用所选 `ProviderAccount` 和冻结 client 的既有辅助 
 运行选路按具体型号和候选账号的输出上限排除超限者；未知上限仍交上游验证。
 独立搜索只能选择同账号、同授权分组同时允许的原型号与搜索目标，不扩大严格绑定范围。
 客户端目录入口回归必须覆盖实际fallback，不以snapshot helper通过替代。
+
+## Antigravity 原生 GenAI 目录
+
+固定官方目标为 `909b514074a90ebaa73a73c71dbbecbbe6fe91d3`。GenAI 列表与详情经 API service → ExecutionService → Antigravity CatalogService 读取完整模型对象；原有 Codex/Anthropic 协议过滤路径不借用此原生目录。
+
+- Catalog 外层 flatten、Model 透明对象保存未知字段。名称、输出上限、搜索目标与分组仅在业务读取时解释。quotaInfo 在持久目录和公开模型中剔除，配额仍由独立快照管理。
+- 同名模型从冻结范围允许的账号中选稳定的完整来源，不跨账号拼字段。Core 继续验证路由归属与映射；API 只重写资源名和支持方法，不伪造缺失 token 上限。
+- GenAI 列表和详情按官方原生目录提供实际型号及其别名，不为本地合成基础模型组或其别名追加 fallback。此发现合同不撤销基础组指定合法思考档位的生成路由，也不改变普通 OpenAI 模型目录。
+- AGY 菜单按 agentModelSorts、imageGenerationModelIds 顺序去重，辅助型号只允许权限内的详情和调用；分页与详情从本地目录读取。
+- 旧 agentModelOrder 快照可解析但不作为新声明；刷新前按具体型号发现，未知扩展不能恢复。已有每小时目录刷新、配额成功更新目录以及显式刷新可补齐，不清空旧成功目录或身份。
+- 回归覆盖元数据持久化、授权来源、别名/分页/详情、图像追加去重、非法协议对象、旧缓存刷新、非法已知配额及目录/凭据冲突保护。

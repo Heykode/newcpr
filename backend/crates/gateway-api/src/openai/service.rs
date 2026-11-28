@@ -65,6 +65,15 @@ impl OpenAiService {
             .await
     }
 
+    pub(crate) async fn genai_model_catalog(
+        &self,
+        client: &AuthenticatedClient,
+    ) -> Result<Vec<PublicModelDescriptor>, ProviderCatalogUnavailable> {
+        self.execution
+            .client_model_catalog(client, gateway_protocol::genai::GENAI_PROTOCOL, "")
+            .await
+    }
+
     pub(crate) async fn messages_model_catalog(
         &self,
         client: &AuthenticatedClient,

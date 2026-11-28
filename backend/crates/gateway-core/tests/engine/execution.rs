@@ -1722,6 +1722,7 @@ struct FailingProvider;
 
 struct NativeCatalogProvider {
     fail: bool,
+    protocol: &'static str,
 }
 
 #[async_trait]
@@ -1749,7 +1750,8 @@ impl Provider for NativeCatalogProvider {
     > {
         assert!(scope.allows(&ProviderAccountId::new("acct_start").expect("account")));
         assert!(!scope.allows(&ProviderAccountId::new("acct_other").expect("account")));
-        assert_eq!((protocol, version), ("codex", "0.154.0"));
+        assert_eq!(protocol, self.protocol);
+        assert_eq!(version, if protocol == "codex" { "0.154.0" } else { "" });
         if self.fail {
             return Err(gateway_core::routing::ProviderCatalogUnavailable);
         }
@@ -1759,7 +1761,7 @@ impl Provider for NativeCatalogProvider {
                 .map(|id| gateway_core::routing::ProviderModelDescriptor {
                     model: UpstreamModelId::new(id).expect("id"),
                     payload: RawJsonPayload::new(
-                        "codex",
+                        protocol,
                         serde_json::to_vec(&json!({"slug":id,"future":null}))
                             .expect("JSON")
                             .into(),
@@ -1780,7 +1782,12 @@ impl Provider for NativeCatalogProvider {
 
 #[test]
 fn client_catalog_forwards_scope_maps_whole_objects_and_omits_unroutable_models() {
-    for fail in [false, true] {
+    for (protocol, version, fail) in [
+        ("codex", "0.154.0", false),
+        ("codex", "0.154.0", true),
+        ("genai", "", false),
+        ("genai", "", true),
+    ] {
         let snapshot = start_snapshot().with_model_mappings(BTreeMap::from([
             ("alias".to_owned(), "gpt-start".to_owned()),
             ("missing-alias".to_owned(), "unavailable-model".to_owned()),
@@ -1788,15 +1795,17 @@ fn client_catalog_forwards_scope_maps_whole_objects_and_omits_unroutable_models(
         let service = DefaultExecutionService::new(
             RuntimeSnapshotHandle::new(snapshot),
             Arc::new(TrackingExecutionStore::default()),
-            ProviderRegistry::new([Arc::new(NativeCatalogProvider { fail }) as Arc<dyn Provider>])
-                .expect("registry"),
+            ProviderRegistry::new([
+                Arc::new(NativeCatalogProvider { fail, protocol }) as Arc<dyn Provider>
+            ])
+            .expect("registry"),
             Arc::new(UnusedAdmissions),
             Arc::new(UnusedCircuits),
             Arc::new(UnusedContinuation),
             Arc::new(RecordingClientApiKeyUsage::default()),
         );
         let client = service.authenticate("sk_start_test").expect("authenticate");
-        let result = block_on(service.client_model_catalog(&client, "codex", "0.154.0"));
+        let result = block_on(service.client_model_catalog(&client, protocol, version));
         if fail {
             assert!(
                 result.is_err(),
@@ -1812,6 +1821,7 @@ fn client_catalog_forwards_scope_maps_whole_objects_and_omits_unroutable_models(
                 else {
                     panic!("native required")
                 };
+                assert_eq!(payload.protocol(), protocol);
                 (model.as_str(), payload.body())
             })
             .collect::<Vec<_>>();
